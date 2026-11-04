@@ -42,6 +42,7 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { bytea } from './columns.js';
 import {
   agentRoleEnum,
   answerChannelEnum,
@@ -592,6 +593,24 @@ export const runOffers = pgTable('run_offers', {
   withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
   withdrawnReason: text('withdrawn_reason'),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
+});
+
+/**
+ * The run's planned spec (migration 0095, WP-275a, TD-031's 2026-11-04 amendment §2): written in the
+ * run's creation transaction, `sealed_spec` envelope-sealed under `APP_SECRET_KEY` with every secret
+ * `env` value removed (`storedRunSpecSchema`), and set null by `RunRepository.finish` in the run's
+ * terminal transaction. The three readable columns are what settle needs after the seal is cleared.
+ * Served by no route (`apps/server/src/run-plans-census.test.ts`).
+ */
+export const runPlans = pgTable('run_plans', {
+  runId: uuid('run_id').primaryKey(),
+  format: smallint('format').notNull(),
+  sealedSpec: bytea('sealed_spec'),
+  keyId: text('key_id').notNull(),
+  secretEnvNames: text('secret_env_names').array().notNull(),
+  reviewChecklists: jsonb('review_checklists').$type<JsonValue>(),
+  questionTimeout: text('question_timeout').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 /**

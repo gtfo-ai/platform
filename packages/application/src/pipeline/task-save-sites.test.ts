@@ -128,12 +128,16 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // parse, inside the executor's own admission transaction and under its `retryOnTaskConflict`.
   // 3 since WP-275, when transaction 2 moved to `settle.ts` with three of them: the budget pause
   // and the configuration refusal at admission, and `recordUnstarted`'s escalation stay here.
+  // Still 3 at WP-275a: `recordUnstarted` moved to `settle.ts` (`recordNotStarted`) and the refusal
+  // of an oversized run plan (`refuseOversizedPlan`, a transaction of its own under
+  // `retryOnTaskConflict`) took its place.
   ['packages/application/src/pipeline/stage-executor.ts', 3],
   // WP-275: transaction 2 as the `settleRun` command — `record`'s completed stage,
   // `recordUnsuccessful`'s overspend pause and `escalateOnRun`. The same three sites, moved, with
   // the same ending: the command owns its transaction and retries through `retryOnTaskConflict`,
   // and a spent bound escapes as `TaskConflictExhaustedError` to the job's `escalateOnConflict`.
-  ['packages/application/src/pipeline/settle.ts', 3],
+  // 4 since WP-275a: `recordNotStarted`'s escalation, moved from the job, with the same ending.
+  ['packages/application/src/pipeline/settle.ts', 4],
   ['packages/application/src/pipeline/transitions.ts', 5],
   ['packages/application/src/pipeline/task-conflict.ts', 1],
   // WP-80 (PROGRESS backlog 131): the shadow report's identifier refusal escalates its task from
@@ -191,7 +195,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2775 ms (median 1861 ms); 2× it, 15 s floor.
-  it('counts thirty-eight, which is the number the change states', () => {
+  it('counts thirty-nine, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -231,8 +235,9 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Plus two at WP-124**: `job-escalation.ts`'s escalation and amended brief, the
     // bound-and-escalate ending of a job a person waits on (backlog 366).
     // **Unchanged at WP-275**: three of the executor's six moved to `settle.ts` with transaction 2.
+    // **Plus one at WP-275a**: the refusal of an oversized run plan (`refuseOversizedPlan`).
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(38);
+    expect(total).toBe(39);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   }, 15_000);
 
@@ -291,12 +296,12 @@ const CLOSE_PARKED_CALL = /\bcloseParkedStageRow\s*\(/g;
 const ROW_CLOSED_BY_ITS_OWN_WRITE: ReadonlyMap<string, string> = new Map([
   [
     'packages/application/src/pipeline/stage-executor.ts',
-    'the start failure’s escalation writes recordStageExited failed with the run’s reason; the configuration refusal at admission calls closeParkedStageRow (WP-275: both through `escalate`, imported from settle.ts)',
+    'the configuration refusal at admission and the refusal of an oversized run plan call closeParkedStageRow (WP-275a: both through `escalate`, imported from settle.ts; the start failure’s escalation moved to settle.ts)',
   ],
   // WP-275: transaction 2 and the `escalate` helper moved here from `stage-executor.ts`.
   [
     'packages/application/src/pipeline/settle.ts',
-    'every escalation writes recordStageExited failed with the run’s reason',
+    'every escalation writes recordStageExited failed with the run’s reason, the start failure’s (`recordNotStarted`, WP-275a) included',
   ],
   [
     'packages/application/src/recovery/run-lease.ts',

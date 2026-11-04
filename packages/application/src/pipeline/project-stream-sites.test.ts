@@ -17,7 +17,8 @@
  *   `integrations/inbound.ts` (WP-15c's own loop, bounded by `DEFAULT_INBOUND_SEQUENCE_ATTEMPTS`,
  *   which predates the helper and retries a whole ingress transaction, not one append).
  * - **run stream, serialised by the row** — `pipeline/commands.ts` (a cancel from another process)
- *   and `recovery/run-lease.ts` (the lease sweep). Both read the **run** stream's sequence inside a
+ *   and `recovery/run-lease.ts` (the lease sweep) — and, since WP-275a, `pipeline/settle.ts`
+ *   (`settlementInputs`, under the settle's `for update` on the run row). All read the **run** stream's sequence inside a
  *   transaction whose first write is a compare-and-set on the `runs` row (`runs.finish` answering
  *   `won`), so the only other writer of that run's stream — the process that ran it — is refused at
  *   the same row before it appends. Not a project-stream race, and out of WP-109's scope.
@@ -49,6 +50,9 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // run stream, serialised by the `runs` row's compare-and-set
   ['packages/application/src/pipeline/commands.ts', 1],
   ['packages/application/src/recovery/run-lease.ts', 1],
+  // WP-275a: `settlementInputs` rebuilds the run's aggregate at its stream's sequence, read under
+  // the settle's `for update` on the `runs` row, before the conditional `finish`.
+  ['packages/application/src/pipeline/settle.ts', 1],
 ]);
 
 const SEQUENCE_READ = /\.\s*nextStreamSequence\s*\(/g;

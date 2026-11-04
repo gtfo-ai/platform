@@ -42,12 +42,19 @@
  * the window (standing rule 20), and it is one frame wide. Nor does a withheld frame survive the
  * process that withheld it: WP-163 (d)'s residual, stated at {@link recordCliSpawn}.
  */
-import type { Id, IsoDateTime, RunCost, RunStartFailure, TokenUsage } from '@platform/contracts';
+import type {
+  ContextPackRecord,
+  IsoDateTime,
+  RunCost,
+  RunStartFailure,
+  TokenUsage,
+} from '@platform/contracts';
+import { type CommandContext, markRunning, type Run } from '@platform/domain';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import { type RunOutcome, RunStartError, type RunStartHooks } from '../ports/runner.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
-import type { RunRepository } from './store.js';
+import { LeaseLostError, type RunLeaseFence, type RunRepository } from './store.js';
 
 /** Nothing was spent, because nothing ran. Written out so no caller invents a different zero. */
 export const NO_RUN_USAGE: TokenUsage = {
@@ -82,6 +89,12 @@ export interface CliSpawnRecord {
    * that landed at the marker itself (WP-154 (b′), {@link stoppedBeforeCliSpawn}).
    */
   readonly asked: () => boolean;
+  /**
+   * The run's aggregate as this record leaves it: `running` with `run.started` on its stream once
+   * the marker was written (WP-275b), else the claimed run it was given — what an in-process ending
+   * (the ask's) appends its terminal event after.
+   */
+  readonly run: () => Run;
 }
 
 /**
@@ -92,6 +105,13 @@ export interface CliSpawnRecord {
  * durable the moment the hook answers `true`. A second call answers `false` without writing: the
  * runner asks once, and a runner that asked twice must not start two CLIs.
  *
+ * **Since WP-275b it is the run's `starting → running`** (TD-031's 2026-11-04 amendment §4): the
+ * same transaction moves the row (`status`, `started_at`) and appends `run.started` with the run's
+ * context-pack record, so `run.started` states that the platform asked for the CLI and a run that
+ * ends before it has none. The write is **fenced** on the claim's `(epoch, owner)`: a stale fence
+ * is `lease_lost`, the transaction rolls back, and the hook answers `false` — the `spawn` frame is
+ * withheld and the settle that follows answers `lease_lost` too.
+ *
  * Residual (WP-163 (d)): `cliSpawnWithheld` is recorded in this process's memory only, so a process
  * that dies after the marker committed and before the run's ending was recorded leaves a marked,
  * unmeasured run that the lease sweep ends held — fail-closed, and as wide as the marker's commit
@@ -101,27 +121,55 @@ export const recordCliSpawn = (deps: {
   readonly unitOfWork: UnitOfWork;
   readonly runs: Pick<RunRepository, 'markCliSpawnRequested'>;
   readonly now: () => IsoDateTime;
-  readonly runId: Id;
+  /** The run as the claim left it (`starting`), whose `run.started` this record appends. */
+  readonly run: Run;
+  /** `run.started.context_pack` — the record transaction 1b stored with the run (redacted). */
+  readonly contextPack: ContextPackRecord;
+  /** The claim's fence: the marker is written only under it. */
+  readonly fence: RunLeaseFence;
+  readonly context: CommandContext;
   readonly logger?: Logger;
 }): CliSpawnRecord => {
   const logger = deps.logger ?? silentLogger;
+  const runId = deps.run.id;
   let asked = false;
   let written = false;
   let withheld = false;
+  let current = deps.run;
   return {
     hooks: {
       beforeCliSpawn: async () => {
         if (asked) {
-          logger.warn({ run_id: deps.runId }, 'a runner asked twice to start one run’s CLI');
+          logger.warn({ run_id: runId }, 'a runner asked twice to start one run’s CLI');
           return false;
         }
         asked = true;
-        written = await deps.unitOfWork.transaction(async (scope) =>
-          deps.runs.markCliSpawnRequested(scope.tx, { runId: deps.runId, at: deps.now() }),
-        );
+        try {
+          const after = await deps.unitOfWork.transaction(async (scope) => {
+            const marked = await deps.runs.markCliSpawnRequested(scope.tx, {
+              runId,
+              at: deps.now(),
+              lease: deps.fence,
+            });
+            if (!marked) return null;
+            const running = markRunning(deps.run, { contextPack: deps.contextPack }, deps.context);
+            await scope.events.append(running.events);
+            return running.aggregate;
+          });
+          // Only once the transaction committed: the marker is then durable, and so is the event.
+          written = after !== null;
+          current = after ?? current;
+        } catch (error) {
+          if (!(error instanceof LeaseLostError)) throw error;
+          logger.warn(
+            { run_id: runId, lease_epoch: deps.fence.epoch },
+            'the run is held under another claim (lease_lost); its CLI is not started',
+          );
+          return false;
+        }
         if (!written) {
           logger.warn(
-            { run_id: deps.runId },
+            { run_id: runId },
             'the run had already ended when its CLI was about to start; no CLI is started',
           );
         }
@@ -134,6 +182,7 @@ export const recordCliSpawn = (deps: {
     mayHaveReachedCli: () => written && !withheld,
     withheld: () => written && withheld,
     asked: () => asked,
+    run: () => current,
   };
 };
 

@@ -98,6 +98,7 @@ import {
   createPostgresRunCommandRepository,
 } from './postgres-run-commands.js';
 import { closeRunOffer, createPostgresRunOfferRepository } from './postgres-run-offers.js';
+import { clearRunPlanSeal, createPostgresRunPlanRepository } from './postgres-run-plans.js';
 import { takeOverLastActivitySql } from './take-over-activity.js';
 
 /** Raised when a write that had to change a row changed none. */
@@ -1713,6 +1714,9 @@ export const createPostgresPipelineStore = (
         // The winner closes the run's offer (WP-274, TD-031 §12), so the per-task index admits the
         // task's next stage offer once this transaction commits.
         await closeRunOffer(sqlOf(tx), outcome.runId, outcome.terminalReason);
+        // …and clears the run's sealed plan (WP-275a, TD-031's 2026-11-04 amendment §2): a sealed
+        // spec exists only while its run is live.
+        await clearRunPlanSeal(sqlOf(tx), outcome.runId);
         // The winner closes the run's pending commands, after the row moved (WP-85): a command
         // that held the run `for share` has committed by now and this later statement sees it.
         await closePendingRunCommands(sqlOf(tx), outcome.runId);
@@ -1816,24 +1820,74 @@ export const createPostgresPipelineStore = (
      * cancel or a sweep holding the row `for update` makes this wait and then match nothing.
      */
     markCliSpawnRequested: async (tx, marker) => {
+      // WP-275b: the same statement is the run's `starting → running` with `started_at`, and it is
+      // fenced on the claim when the caller passes one (`$4`), like `finish`.
       const result = await sqlOf(tx).query(
         `update runs
-            set cli_spawn_requested_at = $2::timestamptz
+            set cli_spawn_requested_at = $2::timestamptz, started_at = $2::timestamptz,
+                status = 'running'
           where id = $1
             and cli_spawn_requested_at is null
-            and status = any($3::run_status[])`,
-        [marker.runId, marker.at, [...ACTIVE_RUN_STATUSES]],
+            and status = any($3::run_status[])
+            and ($4::boolean is not true
+                 or (lease_epoch = $5 and lease_owner is not distinct from $6))`,
+        [
+          marker.runId,
+          marker.at,
+          [...ACTIVE_RUN_STATUSES],
+          marker.lease !== undefined,
+          marker.lease?.epoch ?? null,
+          marker.lease?.owner ?? null,
+        ],
       );
       if (result.rowCount !== 0) {
         return true;
       }
-      const { rows } = await sqlOf(tx).query<{ id: string }>('select id from runs where id = $1', [
-        marker.runId,
-      ]);
-      if (rows.length === 0) {
+      const { rows } = await sqlOf(tx).query<{ status: string; marked: boolean }>(
+        'select status, cli_spawn_requested_at is not null as marked from runs where id = $1',
+        [marker.runId],
+      );
+      const row = rows[0];
+      if (row === undefined) {
         throw new PipelineRowMissingError(`run ${marker.runId} does not exist`);
       }
+      // Live, unmarked, and still nothing written: the fence did not hold — another claim has it.
+      if (
+        marker.lease !== undefined &&
+        !row.marked &&
+        (ACTIVE_RUN_STATUSES as readonly string[]).includes(row.status)
+      ) {
+        throw new LeaseLostError(marker.runId, marker.lease);
+      }
       return false;
+    },
+    /**
+     * WP-275a's start-failure counter — the port's docblock has the rule. The entry's runs before
+     * `$4` by `created_at, id` (never `started_at`, null for an unstarted run), newest first; the
+     * count is the length of the leading run of start failures.
+     */
+    startFailures: async (tx, entry) => {
+      const { rows } = await sqlOf(tx).query<{ n: number }>(
+        `with entry_runs as (
+           select r.id, r.created_at,
+                  (r.terminal_reason = 'error_during_execution' and r.exit_detail is not null)
+                    as start_failure
+             from runs r
+             join task_stages s on s.id = r.task_stage_id
+            where r.task_id = $1 and s.stage = $2 and s.attempt = $3
+         ), before as (
+           select e.start_failure,
+                  row_number() over (order by e.created_at desc, e.id desc) as position
+             from entry_runs e, (select created_at, id from runs where id = $4) self
+            where (e.created_at, e.id) < (self.created_at, self.id)
+         )
+         select coalesce(
+                  (select min(position) - 1 from before where not start_failure),
+                  (select count(*) from before)
+                )::int as n`,
+        [entry.taskId, entry.stage, entry.attempt, entry.runId],
+      );
+      return Number(rows[0]?.n ?? 0);
     },
     /**
      * `settleRun`'s first statement (WP-275): the row `for update`, so the settle's decision holds to
@@ -2288,6 +2342,7 @@ export const createPostgresPipelineStore = (
     artifacts,
     runs,
     offers: createPostgresRunOfferRepository(),
+    runPlans: createPostgresRunPlanRepository(),
     questions,
     approvals,
     breakdown,

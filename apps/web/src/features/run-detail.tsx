@@ -176,7 +176,8 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           </h1>
           <Badge
             tone={
-              record.status === 'running'
+              // WP-275b: `starting` is a live run too — claimed, its CLI not yet asked for.
+              record.status === 'running' || record.status === 'starting'
                 ? 'accent'
                 : record.status === 'completed'
                   ? 'success'
@@ -218,7 +219,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           <Metric
             label="Elapsed"
             value={formatElapsed(record.started_at, nowMs)}
-            definition="Wall-clock time since the run started."
+            definition="Wall-clock time since the run asked for its agent; — while it is still starting."
           />
         </div>
         {/* WP-112: the hash is on the record, so whether the settings moved between this run and
@@ -306,7 +307,10 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           </Button>
           <Button
             tone="danger"
-            disabled={commands.cancel.isPending || record.status !== 'running'}
+            disabled={
+              commands.cancel.isPending ||
+              (record.status !== 'running' && record.status !== 'starting')
+            }
             onClick={() => {
               commands.cancel.mutate('cancelled from the UI');
             }}

@@ -231,8 +231,11 @@ const subjectAllows = (action: PermissionAction, subject: PermissionSubject): bo
         : true;
     case 'run':
       if (action === 'run.steer') {
-        // Steering pushes a user turn into a live session (product/18).
-        return subject.status === 'running';
+        // Steering pushes a user turn into a live session (product/18). A `starting` run — claimed,
+        // its CLI not yet asked for (WP-275b) — is steered too: the turn is recorded and its holder
+        // delivers it once the session's handle takes turns, as it did before WP-275b, when such a
+        // run already read `running`.
+        return subject.status === 'running' || subject.status === 'starting';
       }
       if (action === 'run.cancel') {
         return LIVE_RUN_STATUSES.has(subject.status);

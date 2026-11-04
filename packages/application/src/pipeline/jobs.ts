@@ -55,7 +55,7 @@ import {
   type TicketComment,
 } from '../ports/integrations/task-management.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
-import type { EnqueueResult, JobHandler, Jobs } from '../ports/jobs.js';
+import type { JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -97,6 +97,7 @@ import {
   type WindowWord,
 } from './review-threads.js';
 import type { PipelineSagaOptions } from './saga.js';
+import { enqueueStage } from './stage-enqueue.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
 import type { StoredTask, TicketStatusChange } from './store.js';
 import { confirmExcusedPaths, unconfirmedTamperReturn } from './tamper-confirmation.js';
@@ -114,11 +115,10 @@ export interface StageExecuteData {
   /** How many times a gate has answered "not yet"; absent for an agent stage. */
   readonly gate_checks?: number;
   /**
-   * How many times this stage's run failed to **start** for a transport reason (Q59(a), WP-15g).
-   *
-   * Absent for the ordinary first wake-up. It rides the payload rather than living in the executor
-   * because the process that retries may not be the one that failed, and a counter a restart forgets
-   * is an unbounded retry — the same reasoning as `gate_checks` two lines up.
+   * **Accepted and ignored** since WP-275a (TD-031's 2026-11-04 amendment §3): how many times the
+   * stage's run had failed to start, which the payload carried until the counter moved onto stored
+   * rows (`RunRepository.startFailures`). Kept for one release so a job the previous build queued
+   * still parses; nothing reads it and nothing writes it, and it is then removed.
    */
   readonly start_attempts?: number;
   /**
@@ -605,56 +605,14 @@ export const retryWindowMs = (policy: {
  */
 export const GATE_RECHECK_MS = 30_000;
 
-/**
- * How long a stage waits before trying to *start* a run again after a transport failure (Q59(a)).
- *
- * The same thirty seconds as {@link GATE_RECHECK_MS}, and for the same reason: a re-enqueue with no
- * delay spins through {@link MAX_RUN_START_ATTEMPTS} in milliseconds and escalates the task before
- * the launcher it is waiting for has finished restarting. Three attempts at this delay is the whole
- * bound — about a minute of flapping absorbed, and a launcher that is down parks the task about a
- * minute later instead of never.
- */
-export const RUN_START_RETRY_MS = 30_000;
-
-/**
- * How long a handed-back stage waits before its run is started again (WP-144 ruling (a)).
- *
- * Thirty seconds, {@link RUN_START_RETRY_MS}'s: long enough for the stopped `runner` to have exited
- * and for compose (or the operator) to have started it again, short enough that a restart costs the
- * task half a minute. Any process subscribed to `stage.execute` may take it — the job is durable.
- */
-export const SHUTDOWN_HAND_BACK_DELAY_MS = 30_000;
-
-export const enqueueStage = async (
-  jobs: Jobs,
-  job: StageExecutionJob & {
-    readonly gateChecks?: number;
-    readonly startAfter?: Date;
-    /** Backlog 490: a gate's provider outage, carried from one failed read to the next. */
-    readonly providerOutage?: { readonly since: string; readonly failures: number };
-  },
-): Promise<EnqueueResult> =>
-  jobs.enqueue<StageExecuteData>({
-    queue: JOB_QUEUES.stageExecute,
-    singletonKey: `task:${job.taskId}`,
-    ...(job.startAfter === undefined ? {} : { startAfter: job.startAfter }),
-    data: {
-      task_id: job.taskId,
-      project_id: job.projectId,
-      stage: job.stage,
-      attempt: job.attempt,
-      ...(job.gateChecks === undefined ? {} : { gate_checks: job.gateChecks }),
-      ...(job.providerOutage === undefined
-        ? {}
-        : {
-            provider_failing_since: job.providerOutage.since,
-            provider_failures: job.providerOutage.failures,
-          }),
-      ...(job.startAttempts === undefined ? {} : { start_attempts: job.startAttempts }),
-      ...(job.overrides?.model === undefined ? {} : { model: job.overrides.model }),
-      ...(job.overrides?.effort === undefined ? {} : { effort: job.overrides.effort }),
-    },
-  });
+// Moved to `./stage-enqueue.ts` at WP-275a, where `settleRun` reaches them without importing this
+// module (the follow-on enqueues of a start failure and a hand-back are the settle's now); still
+// exported from here, where every importer has always found them.
+export {
+  enqueueStage,
+  RUN_START_RETRY_MS,
+  SHUTDOWN_HAND_BACK_DELAY_MS,
+} from './stage-enqueue.js';
 
 export const enqueueReviewCommentWindow = async (
   jobs: Jobs,
@@ -726,7 +684,6 @@ export const stageExecuteHandler = (
       projectId: data.project_id,
       stage: data.stage,
       attempt: data.attempt,
-      ...(data.start_attempts === undefined ? {} : { startAttempts: data.start_attempts }),
       ...(Object.keys(overrides).length === 0 ? {} : { overrides }),
     };
 
@@ -827,57 +784,11 @@ export const stageExecuteHandler = (
         ...(observability === undefined ? {} : { observability }),
       });
       /**
-       * **A run that could not be *started* for a transport reason is re-enqueued here** (Q59(a)).
-       *
-       * The executor failed the `runs` row and left the task exactly where it was, so this is the
-       * wake-up that owes it another attempt. It is an `enqueue` and not a `throw`: throwing would
-       * hand the job to pg-boss's own retry policy, whose count this payload cannot see and whose
-       * exhaustion is a failed job that tells nobody about the task (only an administrator's list
-       * shows it, since WP-108) — which is the failure WP-15c closed. The bound
-       * travels in the payload, and the escalation at the end of it is the executor's.
-       *
-       * `stately` frees the queued slot the moment this job starts, so this enqueue is admitted;
-       * the delay is what stops it from becoming a spin.
+       * A start failure's retry (Q59(a)) and a shutdown hand-back's re-run (WP-144) are enqueued by
+       * `settleRun` **after its commit** since WP-275a (TD-031's 2026-11-04 amendment §1): one path
+       * for every caller — this job today, WP-276's claimant and a worker's `finish` after it — so
+       * nothing is re-enqueued here off the outcome any more.
        */
-      if (outcome.kind === 'retry') {
-        await enqueueStage(options.jobs, {
-          ...request,
-          startAttempts: outcome.startAttempts,
-          startAfter: new Date(Date.parse(options.clock.now()) + RUN_START_RETRY_MS),
-        });
-      }
-      /**
-       * **A run handed back by this process's stop** (WP-144): the same stage entry, again, after
-       * {@link SHUTDOWN_HAND_BACK_DELAY_MS}. This handler is still running inside the worker's
-       * drain, and pg-boss is stopped after the pipeline's workers (`apps/server/src/runtime.ts`'s
-       * order), so the enqueue lands; the bound is the executor's (`MAX_SHUTDOWN_HAND_BACKS`, read
-       * off the runs), so nothing rides the payload. The start-attempt count does not carry over:
-       * a hand-back is not a start failure.
-       */
-      if (outcome.kind === 'handed_back') {
-        /**
-         * **A dropped re-enqueue is stated, not silent** (WP-149, PROGRESS backlog 445): the queue
-         * is `stately` per task, so when another job for the task is already queued the enqueue is
-         * `coalesced` and this entry's wake-up does not exist. Nothing is lost that the bound needs
-         * — it is read off the runs, not a payload — and the queued job re-validates against the
-         * task; if it is for something else and the entry is left with an ended run and no job,
-         * the stranded-stage recovery (`recovery/stranded-stage.ts`, WP-108) finds it and escalates.
-         */
-        const requeued = await enqueueStage(options.jobs, {
-          taskId: request.taskId,
-          projectId: request.projectId,
-          stage: request.stage,
-          attempt: request.attempt,
-          ...(request.overrides === undefined ? {} : { overrides: request.overrides }),
-          startAfter: new Date(Date.parse(options.clock.now()) + SHUTDOWN_HAND_BACK_DELAY_MS),
-        });
-        if (requeued.status === 'coalesced') {
-          logger.warn(
-            { task_id: request.taskId, stage: request.stage, attempt: request.attempt },
-            'a handed-back stage was not re-enqueued: another job for the task is already queued; the stranded-stage recovery escalates the entry if that job does not run it',
-          );
-        }
-      }
       /**
        * **A wake-up for an attempt the task has left is forwarded to the one it is on** (PROGRESS
        * backlog 494). The queue is `stately` per task — one job waiting, one running — so a

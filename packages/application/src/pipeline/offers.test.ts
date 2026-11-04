@@ -4,7 +4,7 @@
  * invariant, thrown by name — never a run executed without a claim.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
-import { createRun, sequentialIds, startRun } from '@platform/domain';
+import { createRun, recordRunCreated, sequentialIds } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { OfferNotClaimedError, offerAndClaimInJob, serverLeaseOwner } from './offers.js';
 import type { RunOfferRepository } from './store.js';
@@ -18,8 +18,9 @@ const context = () => ({
   clock: { now: () => NOW },
 });
 
+/** The run as transaction 1b writes it: recorded, `created` (WP-275b). */
 const starting = () =>
-  startRun(
+  recordRunCreated(
     createRun({
       id: '00000000-0000-4000-8000-000000002741' as Id,
       taskId: '00000000-0000-4000-8000-000000002742' as Id,

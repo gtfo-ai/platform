@@ -51,8 +51,7 @@ import {
   failRun,
   finishRun,
   MAX_ASK_ANSWER_CHARS,
-  markRunning,
-  startRun,
+  recordRunCreated,
 } from '@platform/domain';
 import {
   ArtifactIdentifierSecretError,
@@ -60,7 +59,6 @@ import {
 } from '../artifacts/redaction.js';
 import { type BudgetGuard, blockingBudgetDetail, noBudgetGuard } from '../cost/guard.js';
 import { type Hold, holdDetail } from '../cost/pending.js';
-import { composeSecretRedactors } from '../integrations/redaction.js';
 import { redactTextSearchTerms } from '../knowledge/text-search-record.js';
 import {
   cliSpawnNotRequested,
@@ -73,6 +71,7 @@ import {
   unspawnedStepOf,
   unspawnedStop,
 } from '../pipeline/cli-spawn.js';
+import { questionTimeoutOf } from '../pipeline/deadline-rules.js';
 import {
   leaseExpiryAt,
   RUN_LEASE_TTL_MS,
@@ -80,7 +79,8 @@ import {
   startRunHeartbeat,
 } from '../pipeline/lease.js';
 import { offerAndClaimInJob } from '../pipeline/offers.js';
-import { injectedSecretRedactorFor } from '../pipeline/run-redaction.js';
+import { loadRunPackage, RunPlanTooLargeError, sealRunPlan } from '../pipeline/run-package.js';
+import { type RunSecretEnvironment, runRedactorFor } from '../pipeline/run-redaction.js';
 import { type ProjectSettings, settingsAdmission } from '../pipeline/settings.js';
 import { runSettingsSnapshot } from '../pipeline/settings-snapshot.js';
 import { COST_UNREPORTED, withTaskCap } from '../pipeline/stage-executor.js';
@@ -96,6 +96,7 @@ import type { Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import type { RunPlanSealer } from '../ports/run-plan-sealer.js';
 import {
   type ClaudeRunner,
   describeStartFailure,
@@ -206,6 +207,10 @@ export interface AskExecutorOptions {
    * gets, so one process has one owner string (`createPipelineRuntime`).
    */
   readonly lease?: RunLeaseOptions;
+  /** The seal over the ask run's stored plan (WP-275a) — the stage executor's. */
+  readonly runPlans: RunPlanSealer;
+  /** The secret values the read-back spec is given (WP-275a); absent is none. */
+  readonly runEnvironment?: RunSecretEnvironment;
   readonly logger?: Logger;
 }
 
@@ -349,6 +354,9 @@ const notStartedOf = (
   outcome.startFailure === undefined
     ? {}
     : { startFailure: { ...outcome.startFailure, retryable } };
+
+/** No model credential in this process — the default of a composition that names none. */
+const NO_RUN_ENVIRONMENT: RunSecretEnvironment = { env: {}, secretEnvNames: [] };
 
 export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
   const logger = options.logger ?? silentLogger;
@@ -522,7 +530,9 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
   ): Promise<
     | {
         readonly kind: 'started';
+        /** As the claim left it: `starting`, `run.started` appended at the CLI spawn marker. */
         readonly run: Run;
+        readonly contextPack: ContextPackRecord;
         readonly redactor: SecretRedactor;
         /** The claim's fence (WP-274): every later write of this run by this job carries it. */
         readonly fence: RunLeaseFence;
@@ -552,28 +562,40 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
        * carrying, and `[REDACTED:integration:anthropic_api_key]` names the credential while
        * `[REDACTED sha256:…]` does not.
        */
-      const runRedactor = composeSecretRedactors(
-        injectedSecretRedactorFor(plan.spec, logger),
+      const runRedactor = runRedactorFor(
+        { env: plan.spec.env, secretEnvNames: plan.spec.secretEnvNames },
         options.redactor,
+        logger,
+        { runId: plan.spec.runId },
       );
       const systemPrompt = runRedactor.redactText(plan.spec.systemPromptAppend);
       const userPrompt = runRedactor.redactText(plan.spec.userPrompt);
       // The pack's recorded search terms are the question's own words (WP-44): the same redactor.
       const contextPack = redactTextSearchTerms(plan.contextPack, runRedactor);
-      const created = createRun({
-        id: runId,
-        taskId: ask.taskId,
-        projectId: ask.projectId,
-        // Criterion 1, in the aggregate rather than only in the column.
-        stage: null,
-        role: ASK_ROLE,
-        mode: plan.spec.mode,
-        attempt: 1,
-        model: plan.spec.model,
-        effort: plan.spec.effort,
-        promptVersion: plan.spec.promptVersion,
+      // Sealed before the first write (WP-275a), so a refusal leaves no row behind.
+      const sealedPlan = sealRunPlan(options.runPlans, {
+        spec: plan.spec,
+        reviewChecklists: null,
+        questionTimeout: questionTimeoutOf(settings),
       });
-      const starting = startRun(created, context);
+      // WP-275b: the run enters the log in `created`, with its row and its offer — the stage
+      // executor's lifecycle (TD-031's 2026-11-04 amendment §4), at the second insert.
+      const created = recordRunCreated(
+        createRun({
+          id: runId,
+          taskId: ask.taskId,
+          projectId: ask.projectId,
+          // Criterion 1, in the aggregate rather than only in the column.
+          stage: null,
+          role: ASK_ROLE,
+          mode: plan.spec.mode,
+          attempt: 1,
+          model: plan.spec.model,
+          effort: plan.spec.effort,
+          promptVersion: plan.spec.promptVersion,
+        }),
+        context,
+      );
       await options.store.runs.insert(scope.tx, {
         id: runId,
         taskId: ask.taskId,
@@ -587,9 +609,9 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         model: plan.spec.model,
         effort: plan.spec.effort,
         promptVersion: plan.spec.promptVersion,
-        // `running`, which `markRunning` below moves the aggregate to in this same transaction: the
-        // row is written before the offer that references it (WP-274), so before the claim.
-        status: 'running',
+        // `created`, moved to `starting` by the claim below and to `running` only at the CLI spawn
+        // marker (WP-275b), so `started_at` is null until then.
+        status: 'created',
         terminalReason: null,
         sessionId: null,
         numTurns: 0,
@@ -597,7 +619,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         cost: null,
         wallMs: 0,
         createdAt: context.clock.now(),
-        startedAt: context.clock.now(),
+        startedAt: null,
         systemPrompt: systemPrompt.value,
         userPrompt: userPrompt.value,
         redactionCount: systemPrompt.count + userPrompt.count,
@@ -624,11 +646,14 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
        * hour to reach. An ask's offer is `kind: 'ask'` (TD-031 §13), outside the per-task index, so
        * it runs beside the task's stage offer as the ask ran beside the stage before.
        */
+      // WP-275a: the ask's plan, sealed, in the run row's transaction — the stage executor's rule at
+      // the second insert (standing rule 49); the ask's session runs from the read-back spec too.
+      await options.store.runPlans.insert(scope.tx, sealedPlan);
       const claimed = await offerAndClaimInJob(
         options.store.offers,
         scope.tx,
         {
-          run: starting.aggregate,
+          run: created.aggregate,
           kind: 'ask',
           offerId: context.ids.next(),
           owner: options.lease?.owner ?? null,
@@ -640,16 +665,12 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         },
         context,
       );
-      const running = markRunning(
-        claimed.run,
-        { contextPack: contextPack satisfies ContextPackRecord },
-        context,
-      );
       await options.asks.attachRun(scope.tx, ask.id, runId);
-      await scope.events.append([...starting.events, ...claimed.events, ...running.events]);
+      await scope.events.append([...created.events, ...claimed.events]);
       return {
         kind: 'started' as const,
-        run: running.aggregate,
+        run: claimed.run,
+        contextPack,
         redactor: runRedactor,
         fence: claimed.fence,
       };
@@ -961,7 +982,15 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         askedByLabel: await options.askedByLabel(admitted.ask.askedByUserId),
       });
 
-      const started = await startTheRun(admitted.ask, plan, runId, admitted.settings);
+      const started = await startTheRun(admitted.ask, plan, runId, admitted.settings).catch(
+        async (error: unknown) => {
+          // WP-275a: a plan past `RUN_PLAN_MAX_BYTES` is refused, never cut; no run was written.
+          if (!(error instanceof RunPlanTooLargeError)) throw error;
+          return options.unitOfWork.transaction(async (scope) =>
+            refuse(scope, admitted.ask.id, error.message),
+          );
+        },
+      );
       if (started.kind !== 'started') {
         logger.info(
           {
@@ -1005,11 +1034,26 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         unitOfWork: options.unitOfWork,
         runs: options.store.runs,
         now: () => options.context(admitted.ask.taskId).clock.now(),
-        runId,
+        run: started.run,
+        contextPack: started.contextPack,
+        fence: started.fence,
+        context: options.context(admitted.ask.taskId),
         logger,
       });
       try {
-        const handle = options.runner.start(plan.spec, spawn.hooks);
+        // WP-275a: the session runs from the stored plan, read back — never the planner's memory.
+        const spec = await options.unitOfWork.transaction(
+          async (scope) =>
+            (
+              await loadRunPackage(
+                { runPlans: options.store.runPlans, sealer: options.runPlans },
+                scope.tx,
+                runId,
+                options.runEnvironment ?? NO_RUN_ENVIRONMENT,
+              )
+            ).spec,
+        );
+        const handle = options.runner.start(spec, spawn.hooks);
         outcome = await handle.outcome;
         if (!spawn.mayHaveReachedCli() && !isStopEnding(outcome)) {
           throw cliSpawnNotRequested(outcome, spawn);
@@ -1040,7 +1084,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
             // sent leaves no figure, and the run is held at its reservation (WP-131).
             const requested = spawn.mayHaveReachedCli();
             const failed = failRun(
-              started.run,
+              spawn.run(),
               {
                 status: 'failed',
                 terminalReason: 'error_during_execution',
@@ -1092,7 +1136,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
 
       const recorded = await record({
         ask: admitted.ask,
-        run: started.run,
+        run: spawn.run(),
         outcome,
         stopReason,
         redactor: started.redactor,

@@ -149,9 +149,12 @@ describe('can — subject rules', () => {
     expect(can('maintainer', 'task.read', { kind: 'approval', status: 'approved' })).toBe(true);
   });
 
-  it('lets only a running run be steered, and only a finished one be retried', () => {
+  it('lets only a claimed live run be steered, and only a finished one be retried', () => {
     expect(can('member', 'run.steer', { kind: 'run', status: 'running' })).toBe(true);
-    expect(can('admin', 'run.steer', { kind: 'run', status: 'starting' })).toBe(false);
+    // WP-275b: `starting` is a claimed run whose CLI is not yet asked for — its steer is queued.
+    expect(can('member', 'run.steer', { kind: 'run', status: 'starting' })).toBe(true);
+    expect(can('admin', 'run.steer', { kind: 'run', status: 'created' })).toBe(false);
+    expect(can('admin', 'run.steer', { kind: 'run', status: 'completed' })).toBe(false);
     expect(can('member', 'run.cancel', { kind: 'run', status: 'created' })).toBe(true);
     expect(can('member', 'run.cancel', { kind: 'run', status: 'completed' })).toBe(false);
     expect(can('member', 'run.retry', { kind: 'run', status: 'failed' })).toBe(true);

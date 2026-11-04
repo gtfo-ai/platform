@@ -216,7 +216,8 @@ describe('the task command surface, on a task the pipeline drove', () => {
     held.open();
     await pipeline.waitFor('the held run to be recorded', async () => {
       const run = await client.json<RunRecord>(`/api/runs/${runId}`);
-      return run.status === 200 && run.body.status !== 'running';
+      // Terminal: since WP-275b a live run reads `created`/`starting` before `running`.
+      return run.status === 200 && !['created', 'starting', 'running'].includes(run.body.status);
     });
     const settledTask = await pipeline.task();
     expect(settledTask.state).toBe('paused');
@@ -541,7 +542,7 @@ describe('answering a question and deciding an approval', () => {
       const rows = await pipeline.query<{ n: number }>(
         `select count(*)::int as n from runs r join task_stages s on s.id = r.task_stage_id
           where r.task_id = $1 and s.stage = 'refinement' and s.attempt = 2
-            and r.status <> 'running'`,
+            and r.status not in ('created', 'starting', 'running')`,
         [parked.id],
       );
       return rows[0]?.n === 1;
@@ -903,10 +904,12 @@ describe('the run command surface', () => {
 
     // ── cancel a live run ─────────────────────────────────────────────────
     // WP-101 (TD-028 decision 11): this process holds the run's lease, so the cancel is recorded
-    // for it and answered `202` — the run still reads running until the session is stopped.
+    // for it and answered `202` — the run still reads live until the session is stopped. It reads
+    // `starting` (WP-275b): the hold is at the workspace, before the CLI spawn marker, and a run is
+    // `running` only from that marker.
     const cancelled = await send(client, `/api/runs/${runId}/cancel`, { reason: 'wrong branch' });
     expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(202);
-    expect(cancelled.body.status).toBe('running');
+    expect(cancelled.body.status).toBe('starting');
     expect(cancelled.body.command_id).toEqual(expect.any(String));
     // The task stops with it, so the pipeline does not act on an attempt nobody will finish.
     expect(cancelled.body.task_state).toBe('paused');

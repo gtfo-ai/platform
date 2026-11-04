@@ -227,7 +227,9 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
     // PROGRESS under WP-85: without the row, or without the notification, this case fails.
     const live = await app.json<RunRecord>(`/api/runs/${runId}`);
     expect(live.status, JSON.stringify(live.body)).toBe(200);
-    expect(live.body.status).toBe('running');
+    // `starting` since WP-275b: the run is held at its workspace, before its CLI spawn marker, and
+    // its steer is queued for the holder exactly as a `running` run's (`steerRunCommand`).
+    expect(live.body.status).toBe('starting');
     const steer = await app.json<{ command_id: string; performed: boolean }>(
       `/api/runs/${runId}/steer`,
       {
@@ -512,7 +514,8 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
         'select status::text as status from runs where id = $1',
         [runId],
       );
-      return row !== undefined && row.status !== 'running';
+      // A terminal status: since WP-275b a held run reads `starting` before its CLI spawn marker.
+      return row !== undefined && !['created', 'starting', 'running'].includes(row.status);
     });
     const [ended] = await pipeline.query<{ status: string }>(
       'select status::text as status from runs where id = $1',

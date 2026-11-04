@@ -9,10 +9,20 @@
  * transcript store) and heartbeats; `stalled` after no output for `stall_timeout` (default 5 min)."
  *
  * A run is the audit unit (BD-003): it carries the model, the effort, the prompt version, the
- * context pack, the usage and the cost. Every transition is logged: `run.created` when the
- * platform commits to launching (`created → starting`), `run.started` when the session is live,
- * and one of `run.finished` / `run.failed` at the end. `created` itself is a pure in-memory
- * pre-state — a run that is never started never reaches the log, so no *state change* is silent.
+ * context pack, the usage and the cost. Every transition is logged, and since WP-275b the lifecycle
+ * follows the run's **offer** (TD-031's 2026-11-04 amendment §4):
+ *
+ * | moment | status | events |
+ * |---|---|---|
+ * | the row is written with its offer | `created` (persisted) | `run.created`, `run.offered` |
+ * | the claim | `created → starting` | `run.claimed` |
+ * | the CLI spawn marker | `starting → running` | `run.started` |
+ * | a release (WP-281) | `starting → created` | `run.offer.released` |
+ * | a withdrawal (WP-276) | `created → cancelled` | `run.finished` (`cancelled`) |
+ *
+ * So `run.started` states that the platform asked for the run's CLI — WP-150's marker, the one
+ * boundary between a run that may have spent and one that cannot — and a run that ends before it
+ * (a start failure, a stop, the lease sweep, a cancel) has no `run.started` at all.
  */
 import type {
   AgentRole,
@@ -37,12 +47,19 @@ import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } f
 /** The transition table of technical/02, as data. */
 export const RUN_TRANSITIONS = {
   /**
-   * `created` is in memory only — the run enters the log at `run.created`, emitted by the
-   * transition below. A run that is never started is discarded, not cancelled, so there is no
-   * terminal edge here: nothing outside the process ever heard of it.
+   * `created` is **persisted** since WP-274 (the row is written with its offer) and the run enters
+   * the log there, at `run.created` ({@link recordRunCreated}). Its two edges are the claim
+   * (`starting`) and the offer's withdrawal (`cancelled`, WP-276: a stage left before any claimant
+   * took the run) — TD-031's 2026-11-04 amendment §4.
    */
-  created: ['starting'],
-  starting: ['running', 'failed', 'cancelled', 'timed_out'],
+  created: ['starting', 'cancelled'],
+  /**
+   * The claim held, the CLI not yet asked for. Every ending a run can reach before its spawn
+   * marker is an edge from here — a start failure (`failed`), a stop (`cancelled`, or `failed` for
+   * a hand-back), the lease sweep (`failed`), the wall clock (`timed_out`) — and so is a
+   * **release** (`created`, WP-281), which undoes the claim only.
+   */
+  starting: ['running', 'failed', 'cancelled', 'timed_out', 'created'],
   running: ['completed', 'failed', 'cancelled', 'budget_exceeded', 'timed_out', 'stalled'],
   completed: [],
   failed: [],
@@ -146,8 +163,8 @@ export const assertSingleActiveRun = (runs: readonly Run[], taskId: Id): void =>
 };
 
 /**
- * Builds the run record in memory. No event yet: nothing outside this process knows about it, and
- * a run that is never launched never happened. The log starts at `startRun`.
+ * Builds the run record in memory, in `created`. No event yet: the log starts at
+ * {@link recordRunCreated}, in the transaction that writes the row and its offer.
  */
 export const createRun = (input: CreateRunInput): Run => ({
   id: input.id,
@@ -169,16 +186,22 @@ export const createRun = (input: CreateRunInput): Run => ({
 });
 
 /**
- * The platform committed to launching the run: the workspace is being provisioned and the CLI
- * started. `created → starting`, and the run enters the log.
+ * The run's row is written with its offer (WP-275b, TD-031's 2026-11-04 amendment §4): the run
+ * enters the log here, **in `created`**, and its status does not change — the claim is what moves
+ * it (`claimRun`, `created → starting`).
  *
  * `run.created` carries the run's whole identity — stage, role, mode, attempt, model, effort,
  * prompt version — so the `runs` row can be rebuilt from the log alone. technical/02 opens with
- * "every state change is recorded as an immutable domain event"; this is the state change that
- * makes the run real.
+ * "every state change is recorded as an immutable domain event"; this is the record that makes the
+ * run real. Recorded once: a run whose stream already holds an event is refused.
  */
-export const startRun = (run: Run, context: CommandContext): RunDecision => {
-  assertRunTransition(run.status, 'starting');
+export const recordRunCreated = (run: Run, context: CommandContext): RunDecision => {
+  if (run.status !== 'created' || run.sequence !== FIRST_STREAM_SEQ) {
+    throw new InvariantViolationError(
+      'run.created',
+      `a run is recorded once, in "created" with an empty stream; this one is "${run.status}" at sequence ${run.sequence}`,
+    );
+  }
   const recorder = recorderFor(run, context);
   recorder.emit('run.created', {
     project_id: run.projectId,
@@ -193,7 +216,7 @@ export const startRun = (run: Run, context: CommandContext): RunDecision => {
     prompt_version: run.promptVersion,
   });
   return {
-    aggregate: { ...run, status: 'starting', sequence: recorder.sequence },
+    aggregate: { ...run, sequence: recorder.sequence },
     events: recorder.events,
   };
 };
@@ -209,8 +232,8 @@ const assertOfferable = (run: Run, event: string): void => {
 
 /**
  * The run is **offered** (WP-274, TD-031 decision 1): its `run_offers` row is written in the run's
- * creation transaction. **No status change** — the run state machine of technical/02 is unchanged
- * (TD-031 §1); the event is the run stream's record that the offer exists.
+ * creation transaction. **No status change** — the run is `created` and stays so until a claim;
+ * the event is the run stream's record that the offer exists.
  */
 export const offerRun = (
   run: Run,
@@ -233,8 +256,9 @@ export const offerRun = (
 
 /**
  * One claim took the run's offer (WP-274, TD-031 decision 2) — at `epoch`, which every claim of an
- * offer increments. No status change, for {@link offerRun}'s reason. The claim itself is the
- * repository's one SQL statement; this records what it answered.
+ * offer increments — and the run is **`created → starting`** (WP-275b, TD-031's 2026-11-04
+ * amendment §4). The claim itself is the repository's one SQL statement, which moves the row's
+ * status with the lease; this records what it answered.
  */
 export const claimRun = (
   run: Run,
@@ -253,6 +277,7 @@ export const claimRun = (
       `a claim's epoch is at least 1, not ${claim.epoch}`,
     );
   }
+  assertRunTransition(run.status, 'starting');
   const recorder = recorderFor(run, context);
   recorder.emit('run.claimed', {
     project_id: run.projectId,
@@ -263,10 +288,17 @@ export const claimRun = (
     worker_id: claim.workerId,
     lease_epoch: claim.epoch,
   });
-  return { aggregate: { ...run, sequence: recorder.sequence }, events: recorder.events };
+  return {
+    aggregate: { ...run, status: 'starting', sequence: recorder.sequence },
+    events: recorder.events,
+  };
 };
 
-/** The session is live: `starting → running`, and the catalogue's `run.started` is emitted. */
+/**
+ * The platform asked for the run's CLI: `starting → running`, and the catalogue's `run.started` is
+ * emitted — in the transaction that writes `runs.cli_spawn_requested_at` and `runs.started_at`
+ * (`recordCliSpawn`, WP-275b), never before.
+ */
 export const markRunning = (
   run: Run,
   input: { readonly contextPack: ContextPackRecord },
@@ -426,7 +458,7 @@ export const failRun = (run: Run, input: FailRunInput, context: CommandContext):
  *
  * It emits `run.steered`, so this file is where a reader looks for it, and the reason it is not
  * here is worth the redirection. A run's `stream_seq` is held **in memory by the stage executor
- * for the whole run**: `createRun`, `startRun` and `markRunning` advance one `Run` aggregate, and
+ * for the whole run**: `createRun`, `recordRunCreated`, `claimRun` and `markRunning` advance one `Run` aggregate, and
  * the executor appends `run.finished` from that same object minutes later. A second writer on the
  * run's stream therefore does not race — it *corrupts*: the steer takes sequence 3, the executor
  * appends its terminal event at the sequence it still believes in, and the `events_enforce_stream_seq`

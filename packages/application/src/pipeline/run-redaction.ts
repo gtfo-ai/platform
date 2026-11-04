@@ -23,6 +23,7 @@
  * warning about the credential, not a run that cannot start.
  */
 import {
+  composeSecretRedactors,
   exactSecretRedactor,
   type InjectedSecret,
   MIN_SECRET_LENGTH,
@@ -85,6 +86,25 @@ export const injectedSecretRedactorForEnvironment = (
   });
   return exactSecretRedactor(secrets);
 };
+
+/**
+ * **The run's redactor — one factory** (WP-275a, TD-031's 2026-11-04 amendment §1): TD-012 step 1
+ * (exact match of the secrets the run was given) composed **before** `base`, the executor's step 2
+ * (the pattern rules). It is the composition `startTheRun` built inline until WP-275a, named once and
+ * used for the prompt columns (transaction 1b), and by `settleRun` for the artifact, the start
+ * failure and the escalation — so the two cannot name different secrets.
+ *
+ * At settle the **names** come from `run_plans.secret_env_names` and the **values** from the
+ * settling process's own `agentRunEnvironment` (the same function the planner and the claimant
+ * use), so a repeated settle after the seal is cleared builds the same redactor and never opens it.
+ */
+export const runRedactorFor = (
+  environment: RunSecretEnvironment,
+  base: SecretRedactor,
+  logger: Logger,
+  context: { readonly runId?: string } = {},
+): SecretRedactor =>
+  composeSecretRedactors(injectedSecretRedactorForEnvironment(environment, logger, context), base);
 
 /**
  * The secrets a run was given **after** its redactors were built — TD-028's WP-76 amendment,

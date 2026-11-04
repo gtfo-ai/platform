@@ -16,6 +16,7 @@ import type { BudgetGuard } from '../cost/guard.js';
 import type { EventHandler } from '../events/handler.js';
 import type { InboundIdentityDirectory } from '../integrations/inbound.js';
 import type { RunLeaseOptions } from '../pipeline/lease.js';
+import type { RunSecretEnvironment } from '../pipeline/run-redaction.js';
 import type { ProjectSettingsPort } from '../pipeline/settings.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore } from '../pipeline/store.js';
@@ -23,6 +24,7 @@ import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
 import { JOB_QUEUES, type Jobs, type JobWorker } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
+import type { RunPlanSealer } from '../ports/run-plan-sealer.js';
 import type { ClaudeRunner } from '../ports/runner.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { askHandlers } from './commands.js';
@@ -56,6 +58,9 @@ export interface AskCompositionOptions extends AskRuntimeOptions {
    * wall-clock backstop, as every build before WP-48 did.
    */
   readonly lease?: RunLeaseOptions;
+  /** The stage executor's seal and environment (WP-275a), taken from `execution` like the lease. */
+  readonly runPlans: RunPlanSealer;
+  readonly runEnvironment?: RunSecretEnvironment;
   readonly unitOfWork: UnitOfWork;
   readonly store: PipelineStore;
   readonly settings: ProjectSettingsPort;
@@ -88,6 +93,8 @@ export const composeAsk = (options: AskCompositionOptions): AskComposition => {
     redactor: options.redactor,
     askedByLabel: options.askedByLabel,
     ...(options.lease === undefined ? {} : { lease: options.lease }),
+    runPlans: options.runPlans,
+    ...(options.runEnvironment === undefined ? {} : { runEnvironment: options.runEnvironment }),
     ...(options.budgets === undefined ? {} : { budgets: options.budgets }),
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });

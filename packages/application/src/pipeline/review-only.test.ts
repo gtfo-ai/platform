@@ -432,6 +432,14 @@ describe('a human merge request opening', () => {
     expect(
       (verdict?.data as { checklists_applied?: unknown } | undefined)?.checklists_applied,
     ).toEqual([{ name: 'payments', item_count: 1, required_by: ['payments'], truncated: false }]);
+    // WP-275a criterion 4: the settle read those checklists back from the stored plan — a fresh
+    // store read, not the job's memory — and they are the ones the verdict records.
+    const plan = await harness.memory.transaction(async (scope) =>
+      harness.store.runPlans.load(scope.tx, harness.specs[0]?.runId as Id),
+    );
+    expect(plan?.reviewChecklists).toEqual(
+      (verdict?.data as { checklists_applied?: unknown } | undefined)?.checklists_applied,
+    );
   });
 
   it('records "given none" on a verdict whose review matched no class, never the model’s claim', async () => {

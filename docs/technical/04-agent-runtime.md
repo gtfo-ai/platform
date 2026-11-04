@@ -943,3 +943,20 @@ A usage-limit rejection (`rate_limit_event` `rejected`, research/17 § 1) ends a
 terminal reason `rate_limited`, which is not the task's failure (TD-031 decision 11); a lost lease is
 re-offered once per stage entry (decision 12). Steer, cancel and take-over reach a remote holder on its
 heartbeat response (decision 14).
+
+> **The claimant's spec is the stored plan (WP-275a, TD-031's 2026-11-04 amendment §2).** Transaction
+> 1b writes the planned `RunSpec` to `run_plans` beside the run row — the secret `env` values removed
+> (their names kept), the prompts byte-identical and **never redacted**, envelope-sealed under
+> `APP_SECRET_KEY` through the `RunPlanSealer` port, bounded at `RUN_PLAN_MAX_BYTES` (1 MiB, refused,
+> never cut) — and the session runs from what `loadRunPackage` (`pipeline/run-package.ts`) reads back:
+> the seal opened and the secret values re-attached from the claiming process's own
+> `agentRunEnvironment` (an unresolvable name is `not_started`/`credential_unavailable`, a seal that
+> will not open `run_plan_unreadable`). The `stage.execute` job already runs its session that way, so
+> WP-276 moves a call rather than inventing a read; `RunRepository.finish` clears the seal in every
+> terminal transaction. `settleRun` takes only `{ runId, fence, outcome, stopReason }` and reads the
+> rest back under its lock (`settlementInputs`): the job fields from the run row, the aggregate through
+> the one `toRunAggregate`, the stage off the task's frozen template, the review checklists and the
+> question timeout from `run_plans`, the redactor from `runRedactorFor` (names from the plan, values
+> from the settling process). A start failure settles through the same command as `not_started`, its
+> retry counted from the stage entry's stored runs (`RunRepository.startFailures`, by `created_at`),
+> and the follow-on `stage.execute` (a retry, a hand-back) is enqueued by `settleRun` after its commit.

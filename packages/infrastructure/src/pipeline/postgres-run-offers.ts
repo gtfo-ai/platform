@@ -76,7 +76,9 @@ const toStoredOffer = (row: RunOfferRow): StoredRunOffer => ({
  * TD-031 §2's claim. `$1` the eligible run (WP-274's only eligibility, `RunOfferEligibility`), `$2`
  * the live statuses, `$3` the claimant kind, `$4` the claim instant, `$5` the owner, `$6` the
  * lease's expiry — both null in a composition with no lease, which leaves the run row as such a
- * composition wrote it before WP-274.
+ * composition wrote it before WP-274. Since WP-275b the outer update is also the run's
+ * `created → starting` (TD-031's 2026-11-04 amendment §4); a row a previous build inserted live in
+ * another status keeps it.
  */
 const CLAIM_SQL = `with candidate as (
     select o.id
@@ -97,7 +99,8 @@ const CLAIM_SQL = `with candidate as (
     returning o.id, o.run_id, o.task_id, o.lease_epoch
   )
   update runs r
-     set lease_owner = $5, lease_expires_at = $6::timestamptz, lease_epoch = c.lease_epoch
+     set lease_owner = $5, lease_expires_at = $6::timestamptz, lease_epoch = c.lease_epoch,
+         status = case r.status when 'created' then 'starting'::run_status else r.status end
     from claimed c
    where r.id = c.run_id
   returning c.id, c.run_id, c.task_id, c.lease_epoch`;

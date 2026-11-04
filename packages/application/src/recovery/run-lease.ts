@@ -66,8 +66,9 @@
  *    interval, the same one every row of `./stranded.ts` uses: *a row that has had a full pass
  *    interval past its deadline and nothing renewed it.* At the shipped numbers that is the
  *    five-minute TTL plus a minute.
- * 2. **The wall clock** (backstop). `lease_expires_at is null and started_at < now - (wallClockMs
- *    + grace)`. It is for rows written **before this column had a writer** — every `runs` row in
+ * 2. **The wall clock** (backstop). `lease_expires_at is null and coalesce(started_at, created_at)
+ *    < now - (wallClockMs + grace)` — `created_at` since WP-275b, because `started_at` is written
+ *    only at the CLI spawn marker and a run that never reached it must still reach the backstop. It is for rows written **before this column had a writer** — every `runs` row in
  *    every database that existed before WP-47 — and for runs started by a composition that passes
  *    no `lease`. **Both compositions that start a run pass one since WP-48** (PROGRESS backlog
  *    120): the stage executor and the ask executor, from the same `RunLeaseOptions` and therefore
@@ -97,11 +98,11 @@
  * asserted (standing rule 42).
  */
 import type { Id, IsoDateTime, RunStartFailure, Slug } from '@platform/contracts';
-import { agentRoleSchema, effortSchema, runModeSchema } from '@platform/contracts';
-import type { CommandContext, Run } from '@platform/domain';
+import type { CommandContext } from '@platform/domain';
 import { canTransitionTask, escalateTask, failRun, type Task } from '@platform/domain';
 import { MEASURED_ZERO_COST, NO_RUN_USAGE } from '../pipeline/cli-spawn.js';
-import type { PipelineStore, StoredRun } from '../pipeline/store.js';
+import { toRunAggregate } from '../pipeline/run-aggregate.js';
+import type { PipelineStore } from '../pipeline/store.js';
 import { retryOnTaskConflict } from '../pipeline/task-conflict.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
@@ -181,34 +182,6 @@ export interface RunLeaseSweepReport {
 /** Wall time for a run ended from outside the process that started it; `0` when it never started. */
 const wallMsSince = (startedAt: IsoDateTime | null, now: IsoDateTime): number =>
   startedAt === null ? 0 : Math.max(0, Date.parse(now) - Date.parse(startedAt));
-
-/**
- * A `StoredRun` as the Run aggregate, at the sequence the log says its stream is at.
- *
- * Every field the aggregate types more narrowly than the row does is **parsed**, not cast, for the
- * reason `commands.ts`'s twin gives: a value the enum does not have would otherwise reach an event
- * payload and be rejected by the catalogue's schema at append time. It differs from that twin in
- * one way — a `stage: null` run is accepted, because the aggregate has allowed it since WP-31 and
- * a run outside a pipeline stage can strand exactly like one inside it.
- */
-const toRunAggregate = (stored: StoredRun, sequence: number): Run => ({
-  id: stored.id,
-  taskId: stored.taskId,
-  projectId: stored.projectId,
-  stage: stored.stage,
-  role: agentRoleSchema.parse(stored.role),
-  mode: runModeSchema.parse(stored.mode),
-  attempt: stored.attempt,
-  model: stored.model,
-  effort: effortSchema.parse(stored.effort),
-  promptVersion: stored.promptVersion,
-  status: stored.status,
-  startedAt: stored.startedAt,
-  lastOutputAt: null,
-  endedAt: null,
-  terminalReason: stored.terminalReason,
-  sequence,
-});
 
 const endingReason = (run: ExpiredRunLease, unspawned: boolean): string =>
   (run.leaseExpiresAt === null

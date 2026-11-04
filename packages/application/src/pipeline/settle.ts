@@ -13,6 +13,20 @@
  * the job, and its claimant calls this command in process (a remote worker reaches it over HTTP,
  * WP-281).
  *
+ * ## Given only what a claimant has (WP-275a)
+ *
+ * The request is `{ runId, fence, outcome, stopReason }` (TD-031's 2026-11-04 amendment §1), so a
+ * run planned in one process is settled in another from stored state alone. Everything else is read
+ * under the settle's lock by one function, {@link settlementInputs}: the stage entry from the run
+ * row, the aggregate through the shared `toRunAggregate` (`./run-aggregate.ts`) at the run stream's
+ * sequence, the stage from the task's **frozen** template, the review checklists and the question
+ * timeout from `run_plans` (the live timeout and a `run_plan_missing` warning for a run planned
+ * before that row existed), and the redactor from `runRedactorFor` — the secret names from the plan,
+ * the values from this process's `agentRunEnvironment`. A start failure is a `NotStartedReport` and
+ * settles through the `not_started` branch (`recordNotStarted`), its retry counted from the stage
+ * entry's stored runs; a retry's and a hand-back's `stage.execute` are enqueued here, after the
+ * commit. The answer gains `task_gone` for a run whose task, and so whose row, was deleted.
+ *
  * ## Idempotent on `(run_id, epoch)`
  *
  * The command's first statement locks the run row (`RunRepository.lockSettlement`, `for update`),
@@ -60,10 +74,11 @@ import type {
   Slug,
   TokenUsage,
 } from '@platform/contracts';
-import { stageVerdictSchema } from '@platform/contracts';
+import { effortSchema, stageVerdictSchema } from '@platform/contracts';
 import type { CommandContext, PipelineStage, Run } from '@platform/domain';
 import {
   askQuestion,
+  compilePipeline,
   completeStage,
   escalateTask,
   failRun,
@@ -74,6 +89,7 @@ import {
   openQuestion,
   pauseTask,
   recordArtifact,
+  stageOf,
   toQuestionRecord,
 } from '@platform/domain';
 import {
@@ -85,21 +101,27 @@ import { noLateCostRecorder } from '../cost/late.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { RunOutcome } from '../ports/runner.js';
+import {
+  type NotStartedReport,
+  type RunOutcome,
+  type RunStoppedReason,
+  runStartFailureFromReport,
+} from '../ports/runner.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
-import { questionDeadlineRule } from './deadline-rules.js';
-import type { ProjectSettings } from './settings.js';
-import type {
-  AppliedChecklistRecord,
-  StageExecutionJob,
-  StageExecutionOutcome,
-  StageExecutorOptions,
-} from './stage-executor.js';
+import { DEFAULT_QUESTION_TIMEOUT } from '../scheduling/working-calendar.js';
+import { MEASURED_ZERO_COST, NO_RUN_USAGE } from './cli-spawn.js';
+import { questionDeadlineRuleFor, questionTimeoutOf } from './deadline-rules.js';
+import { toRunAggregate } from './run-aggregate.js';
+import { runRedactorFor } from './run-redaction.js';
+import { enqueueStage, RUN_START_RETRY_MS, SHUTDOWN_HAND_BACK_DELAY_MS } from './stage-enqueue.js';
+import type { StageExecutionOutcome, StageExecutorOptions } from './stage-executor.js';
 import { revalidate } from './stage-revalidation.js';
 import {
+  type AppliedChecklistRecord,
   LeaseLostError,
   type RunLeaseFence,
   type RunSettlement,
+  type StoredRun,
   type StoredTask,
 } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
@@ -112,8 +134,27 @@ import { artifactQuestions, rawVerdict, stageVerdict } from './verdicts.js';
  */
 export type SettleOptions = Pick<
   StageExecutorOptions,
-  'store' | 'context' | 'calendar' | 'lateCost'
+  | 'store'
+  | 'context'
+  | 'calendar'
+  | 'lateCost'
+  | 'redactor'
+  | 'settings'
+  | 'eventStore'
+  | 'jobs'
+  | 'runEnvironment'
 >;
+
+/**
+ * How many times a stage's run may fail to *start* for a transport reason before the task is
+ * escalated (Q59(a)).
+ *
+ * Three, with `RUN_START_RETRY_MS` between them: about a minute of flapping absorbed without
+ * telling anybody, and a launcher that is genuinely down parks the task about a minute later rather
+ * than never. Since WP-275a the count is the stage entry's stored runs (`RunRepository.startFailures`),
+ * read under the settle's lock — never a payload a restart could reset.
+ */
+export const MAX_RUN_START_ATTEMPTS = 3;
 
 /**
  * How many times one stage entry may be **handed back** by a `runner` stop before the next stop
@@ -171,15 +212,29 @@ const failedSpendOf = (
 ): { readonly usage?: TokenUsage; readonly cost?: RunCost } =>
   outcome.costUnmeasured === true ? {} : { usage: outcome.usage, cost: outcome.cost };
 
+/** The stage entry a run serves, read off its row — all of the job that settle reads (§1). */
+export interface SettledJob {
+  readonly taskId: Id;
+  readonly projectId: Id;
+  readonly stage: Slug;
+  readonly attempt: number;
+}
+
+/** What `record` and its branches are given — rebuilt by {@link settlementInputs}, never carried. */
 export interface RecordInput {
-  readonly job: StageExecutionJob;
-  readonly settings: ProjectSettings;
-  readonly stage: PipelineStage;
+  readonly job: SettledJob;
+  /** The question timeout the run was planned with (`run_plans.question_timeout`). */
+  readonly questionTimeout: string;
+  /**
+   * The stage from the task's **frozen** template, or `null` when the template no longer has it — a
+   * run that then settles as {@link recordOntoStoppedTask} does.
+   */
+  readonly stage: PipelineStage | null;
   readonly run: Run;
   readonly outcome: RunOutcome;
   readonly stopReason: string | null;
   readonly options: SettleOptions;
-  /** The run's own redactor — TD-012 at the artifact write (WP-52). */
+  /** The run's own redactor — TD-012 at the artifact write (WP-52), from `runRedactorFor`. */
   readonly redactor: SecretRedactor;
   /** What the planner gave a Reviewer run, or `null` when it recorded nothing (WP-45). */
   readonly reviewChecklists: readonly AppliedChecklistRecord[] | null;
@@ -327,7 +382,9 @@ const record = async (
    * never asked which attempt it was recording, so a retry pressed during a run was completed by
    * the run it meant to replace — and the new attempt's job found the stage done.
    */
-  if (!isCurrentStageAttempt(stored.task, job.stage, job.attempt)) {
+  if (!isCurrentStageAttempt(stored.task, job.stage, job.attempt) || stage === null) {
+    // A stage the task's frozen template no longer has cannot be completed either (WP-275a): the
+    // run is recorded and nothing else, as for a task that left the attempt.
     return recordOntoStoppedTask(scope, input, withCost, context);
   }
 
@@ -528,7 +585,7 @@ const record = async (
         ...(draft.options === null ? {} : { options: draft.options }),
         // WP-56: `deadline_at` is written in this transaction, from `questionTimeoutAt` over the
         // organisation's calendar at the project's `question_timeout` (BD-006).
-        deadlineFrom: questionDeadlineRule(input.options.calendar, input.settings),
+        deadlineFrom: questionDeadlineRuleFor(input.options.calendar, input.questionTimeout),
       },
       context,
     );
@@ -595,7 +652,7 @@ export const lostTheRun = async (input: {
   const skipped: StageExecutionOutcome = { kind: 'skipped', reason };
   LOST_THE_RUN.add(skipped);
   if (outcome === undefined) {
-    // `recordUnstarted`'s path: the run never started, so there is no spend to record and nothing
+    // `recordNotStarted`'s path: the run never started, so there is no spend to record and nothing
     // for the ledger to be late about.
     return skipped;
   }
@@ -983,12 +1040,20 @@ export interface SettleRunDeps extends SettleOptions {
 }
 
 /**
- * What a settle carries: the run, its claim's fence, the outcome, and what the plan knew about it.
- * The last group (settings, stage, redactor, review checklists) is the job's memory in WP-275; a
- * settle that arrives in another process (WP-276's claimant, WP-281's worker) reads it back from
- * the run row instead.
+ * What a settle carries — **only what a claimant has** (WP-275a, TD-031's 2026-11-04 amendment §1):
+ * the run, its claim's fence, what happened, and the claimant's own stop register. Everything else
+ * transaction 2 needs is read back under the settle's lock by {@link settlementInputs}, so a run
+ * settled in another process than the one that planned it (WP-276's claimant, WP-281's worker) is
+ * settled from stored state alone.
  */
-export type SettleRunRequest = Omit<RecordInput, 'options'>;
+export interface SettleRunRequest {
+  readonly runId: Id;
+  /** `{ epoch, owner }` — the claim's; on the worker route the owner is the authenticated worker. */
+  readonly fence: RunLeaseFence;
+  readonly outcome: RunOutcome | NotStartedReport;
+  /** The claimant's stop register, a closed word (`RunStoppedReason`), or `null`. */
+  readonly stopReason: RunStoppedReason | null;
+}
 
 /** **The stored result** of a settle — the run row's ending, read under its lock (module docblock). */
 export interface RunEnding {
@@ -1002,15 +1067,27 @@ export interface SettleRunResult {
   /**
    * `settled`: this call wrote the run's ending. `already_settled`: the row was ended at this epoch
    * before this call could — a repeat, or another writer — and this call appended nothing.
+   * `task_gone`: the run's task, and by cascade its row, was deleted mid-run — nothing is written,
+   * `ending` is `null`, and the claimant destroys its workspace (TD-031's 2026-11-04 amendment §1).
    */
-  readonly kind: 'settled' | 'already_settled';
-  /**
-   * The run's ending as the row stores it. `null` only where transaction 2 never reaches `finish`:
-   * a task deleted while its run was in flight (`record`'s first answer), which leaves the row live.
-   */
+  readonly kind: 'settled' | 'already_settled' | 'task_gone';
+  /** The run's ending as the row stores it; `null` only for `task_gone`. */
   readonly ending: RunEnding | null;
   /** What the job does next — transaction 2's own answer, unchanged. */
   readonly outcome: StageExecutionOutcome;
+}
+
+/** A settle of a run linked to no stage: an ask's ending is the ask's (TD-031 decision 13). */
+export class NotAStageRunError extends Error {
+  override readonly name = 'NotAStageRunError';
+  readonly runId: Id;
+
+  constructor(runId: Id) {
+    super(
+      `run ${runId} belongs to no pipeline stage (not_a_stage_run); its ending is not settleRun's`,
+    );
+    this.runId = runId;
+  }
 }
 
 /** `lostTheRun`'s answers, so a settle that lost the row is told apart without a second spelling. */
@@ -1029,39 +1106,155 @@ const endingOf = (row: RunSettlement | null): RunEnding | null =>
         terminalReason: row.terminalReason,
       };
 
+/** What {@link settlementInputs} reads: everything `record` needs but the outcome and the fence. */
+export type SettlementInputs = Omit<RecordInput, 'outcome' | 'stopReason' | 'fence' | 'options'>;
+
+/** The task has gone and its run with it — `task_gone`. */
+const TASK_GONE = Symbol('task_gone');
+
+/**
+ * **Everything transaction 2 needs that the request does not carry** — read under the settle's lock,
+ * by this one function (TD-031's 2026-11-04 amendment §1):
+ *
+ * - **the job** (`taskId`, `projectId`, `stage`, `attempt`) — the run row;
+ * - **the aggregate** — the shared `toRunAggregate` over the row at the stream's next sequence; a
+ *   stage-less row is refused ({@link NotAStageRunError});
+ * - **the stage** — `stageOf(compilePipeline(…the task's frozen columns…))`, `revalidate`'s lookup
+ *   *without* its "is the task still here" half: a stage the template no longer has is `null`, and
+ *   the run then settles as `recordOntoStoppedTask` does;
+ * - **the review checklists and the question timeout** — `run_plans`, as frozen at plan time; a run
+ *   with no plan row settles with checklists `null` and the **live** question timeout (the platform
+ *   default on a `configRefusal`) and a `warn` naming `run_plan_missing`;
+ * - **the redactor** — `runRedactorFor`: the secret **names** from `run_plans.secret_env_names`, the
+ *   **values** from this process's `agentRunEnvironment`, composed with the executor's base
+ *   redactor. Settle never opens the seal.
+ */
+export const settlementInputs = async (
+  scope: TransactionScope,
+  runId: Id,
+  deps: SettleRunDeps,
+): Promise<SettlementInputs | typeof TASK_GONE> => {
+  const logger = deps.logger ?? silentLogger;
+  const row = await deps.store.runs.load(scope.tx, runId);
+  if (row === null) return TASK_GONE;
+  if (row.stage === null) throw new NotAStageRunError(runId);
+  const stored = await deps.store.tasks.load(scope.tx, row.taskId);
+  if (stored === null) return TASK_GONE;
+  const aggregate = toRunAggregate(row, await deps.eventStore.nextStreamSequence('run', runId));
+  /**
+   * A row another writer already ended is read as the live run it was, `running`: every branch
+   * computes its terminal decision and then loses the conditional `finish`, so the decision is
+   * discarded and `lostTheRun` answers — the path transaction 2 always had, when it carried the
+   * job's live aggregate. A terminal status here would refuse the decision before `finish` could.
+   */
+  const run = isActiveRunStatus(aggregate.status)
+    ? aggregate
+    : { ...aggregate, status: 'running' as const, terminalReason: null };
+  const { task } = stored;
+  const stage = stageOf(
+    compilePipeline(task.template, stored.template, stored.pipelineDial, stored.qaStage),
+    row.stage,
+  );
+  const plan = await deps.store.runPlans.load(scope.tx, runId);
+  const environment = deps.runEnvironment ?? NO_RUN_ENVIRONMENT;
+  let questionTimeout: string;
+  if (plan === null) {
+    logger.warn(
+      { run_id: runId, task_id: row.taskId },
+      'run_plan_missing: this run has no stored plan, so it settles with no review checklists and the live question timeout',
+    );
+    const settings = await deps.settings(row.projectId, scope.tx);
+    questionTimeout =
+      settings.configRefusal === undefined ? questionTimeoutOf(settings) : DEFAULT_QUESTION_TIMEOUT;
+  } else {
+    questionTimeout = plan.questionTimeout;
+  }
+  return {
+    job: { taskId: row.taskId, projectId: row.projectId, stage: row.stage, attempt: row.attempt },
+    questionTimeout,
+    stage,
+    run,
+    redactor: runRedactorFor(
+      {
+        env: environment.env,
+        secretEnvNames: plan === null ? environment.secretEnvNames : plan.secretEnvNames,
+      },
+      deps.redactor,
+      logger,
+      { runId },
+    ),
+    reviewChecklists: plan?.reviewChecklists ?? null,
+  };
+};
+
+/** No model credential in this process — the default of a composition that names none. */
+const NO_RUN_ENVIRONMENT = { env: {}, secretEnvNames: [] } as const;
+
 /**
  * **Settles a run** — transaction 2, as a command (module docblock): `lease_lost` (thrown) for a
- * stale fence, `already_settled` with the stored result for a row that has ended, and otherwise the
- * run's result written once.
+ * stale fence, `already_settled` with the stored result for a row that has ended, `task_gone` for a
+ * row deleted with its task, and otherwise the run's result written once. A start failure
+ * (`NotStartedReport`) is the `not_started` branch.
  *
  * The transaction is the command's own, on the executor's bound: a refused task write re-runs the
  * whole unit in a new transaction (`retryOnTaskConflict`), and a spent bound escapes as
- * `TaskConflictExhaustedError` for the caller's ending, exactly as the job's `writing` did.
+ * `TaskConflictExhaustedError` for the caller's ending, exactly as the job's `writing` did. A
+ * `retry` or a `handed_back` answer is followed, **after the commit**, by the stage entry's
+ * `stage.execute` wake-up — the enqueue `jobs.ts` made off the job's outcome until WP-275a.
  *
  * @throws {LeaseLostError} when the row is held under another claim, before anything is written.
+ * @throws {NotAStageRunError} for a run linked to no stage.
  */
 export const settleRun = async (
   deps: SettleRunDeps,
   request: SettleRunRequest,
-): Promise<SettleRunResult> =>
-  retryOnTaskConflict(
+): Promise<SettleRunResult> => {
+  const located = await deps.unitOfWork.transaction(async (scope) =>
+    deps.store.runs.load(scope.tx, request.runId),
+  );
+  if (located === null) {
+    return taskGone();
+  }
+  const result = await retryOnTaskConflict(
     {
-      taskId: request.job.taskId,
+      taskId: located.taskId,
       what: "recording a run's result",
       logger: deps.logger ?? silentLogger,
     },
     async () =>
-      deps.unitOfWork.transaction(async (scope) => {
-        const runId = request.run.id;
+      deps.unitOfWork.transaction(async (scope): Promise<SettleRunResult> => {
+        const runId = request.runId;
         const before = await deps.store.runs.lockSettlement(scope.tx, runId);
-        if (before !== null && !fenceHolds(before, request.fence)) {
+        if (before === null) {
+          return taskGone();
+        }
+        if (!fenceHolds(before, request.fence)) {
           throw new LeaseLostError(runId, request.fence);
         }
-        // No short cut for a row that has ended: every branch of `record` writes the conditional
-        // `finish` first, which answers `false` for it, and then `lostTheRun` — the path transaction 2
+        const inputs = await settlementInputs(scope, runId, deps);
+        if (inputs === TASK_GONE) {
+          return taskGone();
+        }
+        // No short cut for a row that has ended: every branch writes the conditional `finish`
+        // first, which answers `false` for it, and then `lostTheRun` — the path transaction 2
         // always had, taken unchanged (the memory store's missing rollback, divergence 4, is why a
         // short cut here would answer a retried attempt from its own abandoned write).
-        const outcome = await record(scope, { ...request, options: deps });
+        const reported = request.outcome;
+        const outcome =
+          'kind' in reported
+            ? await recordNotStarted(scope, {
+                ...inputs,
+                report: reported,
+                options: deps,
+                fence: request.fence,
+              })
+            : await record(scope, {
+                ...inputs,
+                outcome: reported,
+                stopReason: request.stopReason,
+                options: deps,
+                fence: request.fence,
+              });
         const ending = endingOf(await deps.store.runs.lockSettlement(scope.tx, runId));
         return {
           kind: LOST_THE_RUN.has(outcome) ? 'already_settled' : 'settled',
@@ -1070,3 +1263,196 @@ export const settleRun = async (
         };
       }),
   );
+  await enqueueFollowOn(deps, located, result.outcome);
+  return result;
+};
+
+const taskGone = (): SettleRunResult => ({
+  kind: 'task_gone',
+  ending: null,
+  outcome: { kind: 'skipped', reason: 'the task was deleted while its run was in flight' },
+});
+
+/**
+ * The wake-up a settle owes its stage entry, **after its commit** (`Jobs.enqueue` joins no
+ * transaction): a start failure's retry after `RUN_START_RETRY_MS` (Q59(a)), a hand-back's re-run
+ * after `SHUTDOWN_HAND_BACK_DELAY_MS` (WP-144). The attempt's model and effort ride along as the run
+ * row recorded them, so a person's per-attempt override survives a flap as it did on the payload.
+ * A process that dies between the commit and this leaves the entry to the stranded-stage recovery.
+ */
+const enqueueFollowOn = async (
+  deps: SettleRunDeps,
+  run: StoredRun,
+  outcome: StageExecutionOutcome,
+): Promise<void> => {
+  if ((outcome.kind !== 'retry' && outcome.kind !== 'handed_back') || run.stage === null) {
+    return;
+  }
+  const logger = deps.logger ?? silentLogger;
+  const now = Date.parse(deps.context(run.taskId).clock.now());
+  const requeued = await enqueueStage(deps.jobs, {
+    taskId: run.taskId,
+    projectId: run.projectId,
+    stage: run.stage,
+    attempt: run.attempt,
+    overrides: { model: run.model, effort: effortSchema.parse(run.effort) },
+    startAfter: new Date(
+      now + (outcome.kind === 'retry' ? RUN_START_RETRY_MS : SHUTDOWN_HAND_BACK_DELAY_MS),
+    ),
+  });
+  if (requeued.status === 'coalesced' && outcome.kind === 'handed_back') {
+    /**
+     * **A dropped re-enqueue is stated, not silent** (WP-149, PROGRESS backlog 445): the queue is
+     * `stately` per task, so when another job for the task is already queued the enqueue is
+     * `coalesced`. Nothing the bound needs is lost — it is read off the runs — and if that job is for
+     * something else, the stranded-stage recovery finds the entry and escalates it.
+     */
+    logger.warn(
+      { task_id: run.taskId, stage: run.stage, attempt: run.attempt },
+      'a handed-back stage was not re-enqueued: another job for the task is already queued; the stranded-stage recovery escalates the entry if that job does not run it',
+    );
+  }
+};
+
+/** How much of the launcher's words the brief quotes; the run page has all of them (backlog 453). */
+export const NOT_STARTED_BRIEF_QUOTE_CHARS = 600;
+
+/**
+ * The blocker brief of a run that **never started** (PROGRESS backlog 453).
+ *
+ * The default brief sends the reader to *"the run's transcript"*, and a run that never started has
+ * none — so this one says the run did not start, gives the platform's diagnosis, and quotes the tail
+ * of the launcher's own words, bounded to {@link NOT_STARTED_BRIEF_QUOTE_CHARS}. The quote is marked
+ * as the launcher's: the brief also reaches the workpad and chat, and the text is untrusted
+ * (BD-022) — redacted twice already, bounded here, and rendered as text by every reader that shows
+ * it. With no words to quote the brief says so rather than inventing a reason.
+ */
+export const notStartedBrief = (
+  ticketKey: string,
+  stage: Slug,
+  reason: string,
+  notStarted: RunStartFailure,
+): string => {
+  const detail = notStarted.detail;
+  const cut =
+    detail !== null && (detail.length > NOT_STARTED_BRIEF_QUOTE_CHARS || notStarted.truncated);
+  const quote =
+    detail === null
+      ? "The launcher gave no reason of its own; the runner's log has the error under this run's id."
+      : `The launcher said${cut ? ' (the end of it)' : ''}: «${detail.slice(-NOT_STARTED_BRIEF_QUOTE_CHARS)}»`;
+  return (
+    `The "${stage}" stage of ${ticketKey} did not start: ${reason}. ${quote} ` +
+    'There is no transcript, because no agent ran; the run page shows the whole reason. ' +
+    'Nothing is retried automatically. Fix what stopped the workspace from starting, then hand the ' +
+    'task back at this stage.'
+  );
+};
+
+/**
+ * **The `not_started` branch** — a run that was created and never started (WP-275a, TD-031's
+ * 2026-11-04 amendment §3; `recordUnstarted` in `stage-executor.ts` until then, writing exactly what
+ * it wrote): fail the run, and escalate the task unless the failure is worth another attempt.
+ *
+ * Deliberately **not** routed through `record`: there is no `RunOutcome`, and fabricating one would
+ * make the pipeline transition on a verdict for a run that was never attempted — the fail-open
+ * direction standing rule 20 names. The run really exists and really failed to start, so
+ * `run.failed` is the honest record of it.
+ *
+ * **The retry counter is the stage entry's stored runs** (`RunRepository.startFailures`, read under
+ * the settle's lock): `attempt = startFailures + 1`, `retryable = transient && attempt <
+ * MAX_RUN_START_ATTEMPTS`. On the retryable path the run is failed and the task is left alone — a
+ * `runs` row left live for a run nobody will start is the defect WP-15c closed, and a task moved out
+ * of `active` could not be woken by the re-enqueue `settleRun` makes after the commit — so each flap
+ * costs exactly one failed `runs` row, which is what makes a flapping transport visible.
+ *
+ * The redacted `RunStartFailure` (backlog 453's words) is built **here**, with the settle's redactor,
+ * from the claimant's unredacted report — never by the claimant.
+ */
+const recordNotStarted = async (
+  scope: TransactionScope,
+  input: SettlementInputs & {
+    readonly report: NotStartedReport;
+    readonly options: SettleOptions;
+    readonly fence: RunLeaseFence;
+  },
+): Promise<StageExecutionOutcome> => {
+  const { job, run, options, report } = input;
+  const spend = report.spawnRequested ? {} : { usage: NO_RUN_USAGE, cost: MEASURED_ZERO_COST };
+  const stored = await options.store.tasks.load(scope.tx, job.taskId);
+  if (stored === null) {
+    return { kind: 'skipped', reason: 'the task was deleted before its run could start' };
+  }
+  const attempt =
+    (await options.store.runs.startFailures(scope.tx, {
+      taskId: job.taskId,
+      stage: job.stage,
+      attempt: job.attempt,
+      runId: run.id,
+    })) + 1;
+  const retryable = report.transient && attempt < MAX_RUN_START_ATTEMPTS;
+  const notStarted = runStartFailureFromReport(report, {
+    redactor: input.redactor,
+    attempt,
+    retryable,
+  });
+  const context = options.context(job.taskId);
+  const reason = retryable
+    ? `the run could not be started (${report.failure}); attempt ${attempt} of ${MAX_RUN_START_ATTEMPTS}`
+    : `the run could not be started (${report.failure})`;
+  const failed = failRun(
+    run,
+    {
+      status: 'failed',
+      terminalReason: 'error_during_execution',
+      error: reason,
+      ...spend,
+      startFailure: notStarted,
+    },
+    context,
+  );
+  const owned = await options.store.runs.finish(scope.tx, {
+    runId: run.id,
+    status: 'failed',
+    terminalReason: 'error_during_execution',
+    sessionId: null,
+    numTurns: 0,
+    usage: NO_RUN_USAGE,
+    cost: report.spawnRequested ? null : MEASURED_ZERO_COST,
+    wallMs: 0,
+    startFailure: notStarted,
+    lease: input.fence,
+  });
+  if (!owned) {
+    // A human cancelled the run between its insert and this failure (WP-15i), or the lease sweep
+    // ended it (WP-47). Neither ending applies: there is nothing to retry and nothing to escalate
+    // about a run somebody else stopped — and no spend, because it never started.
+    return lostTheRun({ run, options, scope });
+  }
+  if (retryable) {
+    // The task is untouched — still `active`, still at this stage, still on this attempt — so the
+    // re-enqueue `settleRun` makes finds exactly the state `revalidate` admits. Nothing is written
+    // about the task at all: `recordStageExited` would record an exit from a stage the task has not
+    // left, and the stage's convergence signature reads those rows.
+    await scope.events.append(failed.events);
+    return { kind: 'retry', runId: run.id, reason, startAttempts: attempt };
+  }
+  const escalated = escalate(
+    stored,
+    context,
+    job.stage,
+    reason,
+    notStartedBrief(stored.task.ticket.key, job.stage, reason, notStarted),
+  );
+  await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
+  await options.store.tasks.recordStageExited(scope.tx, {
+    taskId: job.taskId,
+    stage: job.stage,
+    attempt: job.attempt,
+    state: 'failed',
+    outcome: 'failed',
+    returnReason: reason,
+    returnedTo: null,
+  });
+  await scope.events.append([...failed.events, ...escalated.events]);
+  return { kind: 'failed', runId: run.id, reason };
+};

@@ -3412,6 +3412,238 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         ).toBe(false);
       });
 
+      describe('the run plan and the run lifecycle (WP-275a, WP-275b)', () => {
+        const PLAN_AT = '2026-06-01T09:00:02.000Z' as IsoDateTime;
+        const ENDING = {
+          status: 'failed' as const,
+          terminalReason: 'error_during_execution' as const,
+          sessionId: null,
+          numTurns: 0,
+          usage: MEASURED.usage,
+          cost: null,
+          wallMs: 0,
+        };
+        const START_FAILURE = {
+          kind: 'not_started' as const,
+          diagnosis: 'RunStartError: workspace_failed, launcher_unreachable',
+          detail: null,
+          truncated: false,
+          attempt: 1,
+          retryable: true,
+        };
+
+        /** A run as transaction 1b writes it since WP-275b: `created`, no `started_at`. */
+        const createdRun = async (entry: {
+          readonly taskId: Id;
+          readonly attempt?: number;
+        }): Promise<Id> => {
+          const runId = nextId();
+          await store.runs.insert(tx, {
+            id: runId,
+            taskId: entry.taskId,
+            projectId,
+            stage: 'refinement' as Slug,
+            role: 'product_manager',
+            mode: 'normal',
+            attempt: entry.attempt ?? 1,
+            model: 'claude-opus-5',
+            effort: 'medium',
+            promptVersion: 'basic@1+product_manager',
+            systemPrompt: null,
+            userPrompt: null,
+            redactionCount: 0,
+            contextPack: null,
+            settings: null,
+            reserveUsd: null,
+            promptsWithheld: null,
+            providerMode: 'api',
+            status: 'created',
+            terminalReason: null,
+            sessionId: null,
+            numTurns: 0,
+            usage: null,
+            cost: null,
+            wallMs: 0,
+            createdAt: '2026-06-01T09:00:00.000Z',
+            startedAt: null,
+          });
+          return runId;
+        };
+
+        const enteredTask = async (attempts: readonly number[] = [1]): Promise<Id> => {
+          const stored = task();
+          await store.tasks.insert(tx, stored);
+          for (const attempt of attempts) {
+            await store.tasks.recordStageEntered(tx, {
+              taskId: stored.task.id,
+              stage: 'refinement' as Slug,
+              attempt,
+              causedByEventId: null,
+            });
+          }
+          return stored.task.id;
+        };
+
+        const claim = async (runId: Id, taskId: Id): Promise<{ epoch: number; owner: string }> => {
+          await store.offers.insert(tx, {
+            id: nextId(),
+            runId,
+            taskId,
+            projectId,
+            stage: 'refinement' as Slug,
+            attempt: 1,
+            kind: 'ask',
+            offeredAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+          });
+          const claimed = await claimRunOffer(store.offers, tx, {
+            eligibility: { runId },
+            claimantKind: 'server',
+            owner: 'server:server-1',
+            expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
+            now: '2026-06-01T09:00:01.000Z' as IsoDateTime,
+          });
+          return { epoch: claimed?.epoch ?? 0, owner: 'server:server-1' };
+        };
+
+        it('writes a plan and reads it back byte-identical, and clears its seal when the run ends', async () => {
+          const taskId = await enteredTask();
+          const runId = await createdRun({ taskId });
+          expect(await store.runPlans.load(tx, runId)).toBeNull();
+          const sealed = Uint8Array.from([0, 1, 2, 250, 251, 255, 7]);
+          await store.runPlans.insert(tx, {
+            runId,
+            format: 1,
+            sealedSpec: sealed,
+            keyId: 'v1:0123456789abcdef',
+            secretEnvNames: ['ANTHROPIC_API_KEY'],
+            reviewChecklists: [
+              { name: 'security', item_count: 3, required_by: ['auth/**'], truncated: false },
+            ],
+            questionTimeout: '2 working days',
+          });
+          const plan = await store.runPlans.load(tx, runId);
+          expect(plan).toMatchObject({
+            runId,
+            format: 1,
+            keyId: 'v1:0123456789abcdef',
+            secretEnvNames: ['ANTHROPIC_API_KEY'],
+            reviewChecklists: [
+              { name: 'security', item_count: 3, required_by: ['auth/**'], truncated: false },
+            ],
+            questionTimeout: '2 working days',
+          });
+          expect([...(plan?.sealedSpec ?? [])]).toEqual([...sealed]);
+          // A second plan for one run is refused: written once, never re-derived.
+          await expect(
+            store.runPlans.insert(tx, {
+              runId,
+              format: 1,
+              sealedSpec: sealed,
+              keyId: 'v1:0123456789abcdef',
+              secretEnvNames: [],
+              reviewChecklists: null,
+              questionTimeout: '1 working day',
+            }),
+          ).rejects.toThrow();
+        });
+
+        it('clears the sealed plan in the terminal write, keeping the readable columns', async () => {
+          const taskId = await enteredTask();
+          const runId = await createdRun({ taskId });
+          await store.runPlans.insert(tx, {
+            runId,
+            format: 1,
+            sealedSpec: Uint8Array.from([1, 2, 3]),
+            keyId: 'v1:0123456789abcdef',
+            secretEnvNames: [],
+            reviewChecklists: null,
+            questionTimeout: '1 working day',
+          });
+          // A loser of `finish` clears nothing: only the winner's transaction does.
+          expect(await store.runs.finish(tx, { ...ENDING, runId })).toBe(true);
+          const plan = await store.runPlans.load(tx, runId);
+          expect(plan?.sealedSpec).toBeNull();
+          expect(plan?.questionTimeout).toBe('1 working day');
+          expect(plan?.reviewChecklists).toBeNull();
+        });
+
+        it('moves a created run to starting at the claim and to running at the marker, with started_at', async () => {
+          const taskId = await enteredTask();
+          const runId = await createdRun({ taskId });
+          expect((await store.runs.load(tx, runId))?.status).toBe('created');
+          const fence = await claim(runId, taskId);
+          expect((await store.runs.load(tx, runId))?.status).toBe('starting');
+          expect((await store.runs.load(tx, runId))?.startedAt).toBeNull();
+          // A stale fence on a live, unmarked run is lease_lost, and writes nothing.
+          await expect(
+            store.runs.markCliSpawnRequested(tx, {
+              runId,
+              at: PLAN_AT,
+              lease: { epoch: fence.epoch + 1, owner: fence.owner },
+            }),
+          ).rejects.toMatchObject({ name: 'LeaseLostError' });
+          expect((await store.runs.load(tx, runId))?.status).toBe('starting');
+          expect(
+            await store.runs.markCliSpawnRequested(tx, { runId, at: PLAN_AT, lease: fence }),
+          ).toBe(true);
+          const running = await store.runs.load(tx, runId);
+          expect(running?.status).toBe('running');
+          expect(Date.parse(running?.startedAt ?? '')).toBe(Date.parse(PLAN_AT));
+          expect(Date.parse(running?.cliSpawnRequestedAt ?? '')).toBe(Date.parse(PLAN_AT));
+        });
+
+        it('counts the immediately preceding start failures of the stage entry, by created_at', async () => {
+          const taskId = await enteredTask([1, 2]);
+          const failedToStart = async (attempt = 1): Promise<Id> => {
+            const runId = await createdRun({ taskId, attempt });
+            await store.runs.finish(tx, { ...ENDING, runId, startFailure: START_FAILURE });
+            return runId;
+          };
+          // Two start failures, then the run being settled: two precede it.
+          await failedToStart();
+          await failedToStart();
+          const third = await createdRun({ taskId });
+          expect(
+            await store.runs.startFailures(tx, {
+              taskId,
+              stage: 'refinement' as Slug,
+              attempt: 1,
+              runId: third,
+            }),
+          ).toBe(2);
+          // A hand-back ends the streak; so does a run that started.
+          await store.runs.finish(tx, {
+            ...ENDING,
+            runId: third,
+            terminalReason: 'shutdown',
+          });
+          const afterHandBack = await failedToStart();
+          const fifth = await createdRun({ taskId });
+          const count = (runId: Id, attempt = 1) =>
+            store.runs.startFailures(tx, {
+              taskId,
+              stage: 'refinement' as Slug,
+              attempt,
+              runId,
+            });
+          expect(await count(fifth)).toBe(1);
+          expect(await count(afterHandBack)).toBe(0);
+          await store.runs.finish(tx, {
+            ...ENDING,
+            runId: fifth,
+            status: 'completed' as never,
+            terminalReason: 'success',
+          });
+          const sixth = await createdRun({ taskId });
+          expect(await count(sixth)).toBe(0);
+          // Another attempt of the stage is another entry; a run after this one is never counted.
+          await failedToStart(2);
+          expect(await count(sixth)).toBe(0);
+          const ofAttemptTwo = await createdRun({ taskId, attempt: 2 });
+          expect(await count(ofAttemptTwo, 2)).toBe(1);
+        });
+      });
+
       describe('offers and the claim (WP-274, TD-031 decisions 1–2)', () => {
         it('writes an offer open at epoch 0, and the claim moves it to claimed at epoch 1', async () => {
           const runId = await liveRun();

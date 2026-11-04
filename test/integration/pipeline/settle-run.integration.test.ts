@@ -28,8 +28,7 @@ import {
   type Transaction,
 } from '@platform/application';
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
-import type { Run } from '@platform/domain';
-import { compilePipeline, FEATURE_TEMPLATE, SHIPPED_TEMPLATES, stageOf } from '@platform/domain';
+import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
 import { eventing, pipeline, redaction } from '@platform/infrastructure';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -76,13 +75,15 @@ afterAll(async () => {
  * A committed task at `implementation` attempt 1 with its stage row, and one `running` run with its
  * stage offer claimed by {@link OWNER} at epoch 1 — the state the job's transaction 1 leaves.
  */
-const seedClaimedRun = async (): Promise<{ readonly taskId: Id; readonly runId: Id }> => {
+const seedClaimedRun = async (
+  existing?: Id,
+): Promise<{ readonly taskId: Id; readonly runId: Id }> => {
   const client = createTestClient(database.connectionString);
   await client.connect();
   try {
     await client.query('begin');
     const tx = { adapter: 'postgres', client } as unknown as Transaction;
-    const taskId = nextId();
+    const taskId = existing ?? nextId();
     const stored = {
       task: {
         id: taskId,
@@ -139,11 +140,14 @@ const seedClaimedRun = async (): Promise<{ readonly taskId: Id; readonly runId: 
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
     } as unknown as StoredTask;
-    await store.tasks.insert(tx, stored);
-    await client.query(
-      `insert into task_stages (task_id, stage, attempt, state) values ($1, 'implementation', 1, 'running')`,
-      [taskId],
-    );
+    // WP-275a: a second run of the same stage entry reuses the task and its stage row.
+    if (existing === undefined) {
+      await store.tasks.insert(tx, stored);
+      await client.query(
+        `insert into task_stages (task_id, stage, attempt, state) values ($1, 'implementation', 1, 'running')`,
+        [taskId],
+      );
+    }
     const runId = nextId();
     await store.runs.insert(tx, {
       id: runId,
@@ -213,6 +217,13 @@ const deps = (overrides: Partial<SettleRunDeps> = {}): SettleRunDeps => ({
     causeEventId: null,
   }),
   calendar: createWorkingCalendar(),
+  // WP-275a: what settle reads back instead of being handed — the base redactor, the run stream,
+  // and (for a run seeded with no plan row, `run_plan_missing`) the project's settings, here a
+  // configuration the platform cannot read, so the platform's default question timeout applies.
+  redactor: redaction.patternRedactor(),
+  eventStore: eventStore(),
+  settings: async () => ({ configRefusal: 'seeded run, no settings' }) as never,
+  jobs: { enqueue: async () => ({ status: 'enqueued', jobId: 'job-275' }) } as never,
   ...overrides,
 });
 
@@ -238,46 +249,14 @@ const FAILED: RunOutcome = {
   redactionCount: 0,
 };
 
-/** The request the job's transaction 1 would have built for this run. */
+/** The request a claimant sends (WP-275a): the run, its fence, the outcome, the stop register. */
 const requestFor = async (
   taskId: Id,
   runId: Id,
   fence: SettleRunRequest['fence'] = { epoch: 1, owner: OWNER },
 ): Promise<SettleRunRequest> => {
-  const stage = stageOf(
-    compilePipeline('feature', FEATURE_TEMPLATE, null, false),
-    'implementation',
-  );
-  if (stage === null) throw new Error('feature has no implementation stage');
-  const run: Run = {
-    id: runId,
-    taskId,
-    projectId,
-    stage: 'implementation' as Slug,
-    role: 'developer',
-    mode: 'normal',
-    attempt: 1,
-    model: 'claude-opus-5',
-    effort: 'high',
-    promptVersion: 'test@1',
-    status: 'running',
-    startedAt: NOW,
-    lastOutputAt: null,
-    endedAt: null,
-    terminalReason: null,
-    sequence: await eventStore().nextStreamSequence('run', runId),
-  };
-  return {
-    job: { taskId, projectId, stage: 'implementation' as Slug, attempt: 1 },
-    settings: {} as SettleRunRequest['settings'],
-    stage,
-    run,
-    outcome: { ...FAILED, runId },
-    stopReason: null,
-    redactor: redaction.patternRedactor(),
-    reviewChecklists: null,
-    fence,
-  };
+  void taskId;
+  return { runId, fence, outcome: { ...FAILED, runId }, stopReason: null };
 };
 
 /** What a settle can change: the run row, the task's spend and version, and the run's terminal events. */
@@ -435,5 +414,110 @@ describe('a settle with a stale fence (WP-275, criterion 3)', () => {
       settleRun(deps(), await requestFor(taskId, runId, { epoch: 2, owner: OWNER })),
     ).rejects.toBeInstanceOf(LeaseLostError);
     expect(await stateOf(taskId, runId)).toEqual(before);
+  }, 60_000);
+});
+
+/**
+ * **The start-failure counter is the stored runs'** (WP-275a criterion 5, TD-031's 2026-11-04
+ * amendment §3), against PostgreSQL: three runs of one stage entry fail to start and are settled by
+ * **two different settling processes** — two deps, two unit-of-work instances, nothing shared but the
+ * database — and the third escalates; a shutdown hand-back between failures restarts the count; a
+ * non-transient failure escalates on the first.
+ */
+describe('a start failure settled as not_started (WP-275a)', () => {
+  const report = (transient: boolean) => ({
+    kind: 'not_started' as const,
+    failure: 'RunStartError: workspace_failed, launcher_unreachable',
+    detail: 'the launcher did not answer',
+    detailTruncated: false,
+    transient,
+    spawnRequested: false,
+  });
+  const notStarted = async (taskId: Id | undefined, transient: boolean, process: 'a' | 'b') => {
+    const seeded = await seedClaimedRun(taskId);
+    const enqueued: unknown[] = [];
+    const settled = await settleRun(
+      deps({
+        unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
+        jobs: {
+          enqueue: async (request: unknown) => {
+            enqueued.push(request);
+            return { status: 'enqueued', jobId: `job-${process}` };
+          },
+        } as never,
+      }),
+      {
+        runId: seeded.runId,
+        fence: { epoch: 1, owner: OWNER },
+        outcome: report(transient),
+        stopReason: null,
+      },
+    );
+    return { ...seeded, settled, enqueued };
+  };
+  const taskState = async (taskId: Id): Promise<string> =>
+    (await pool.query<{ state: string }>('select state from tasks where id = $1', [taskId])).rows[0]
+      ?.state ?? 'gone';
+  const startFailureOf = async (runId: Id) =>
+    (
+      await pool.query<{ exit_detail: { attempt: number; retryable: boolean } | null }>(
+        'select exit_detail from runs where id = $1',
+        [runId],
+      )
+    ).rows[0]?.exit_detail;
+
+  it('escalates on the third failure across two settling processes, and retries the two before', async () => {
+    const first = await notStarted(undefined, true, 'a');
+    expect(first.settled.outcome.kind).toBe('retry');
+    expect(first.enqueued).toHaveLength(1);
+    const second = await notStarted(first.taskId, true, 'b');
+    expect(second.settled.outcome.kind).toBe('retry');
+    expect(await taskState(first.taskId)).toBe('active');
+    const third = await notStarted(first.taskId, true, 'a');
+    expect(third.settled.outcome.kind).toBe('failed');
+    expect(third.enqueued).toEqual([]);
+    expect(await taskState(first.taskId)).toBe('needs_human');
+    expect(
+      await Promise.all([first, second, third].map((entry) => startFailureOf(entry.runId))),
+    ).toEqual([
+      expect.objectContaining({ attempt: 1, retryable: true }),
+      expect.objectContaining({ attempt: 2, retryable: true }),
+      expect.objectContaining({ attempt: 3, retryable: false }),
+    ]);
+    // The run's sealed plan would be cleared by these endings too (there is none on a seeded run).
+    const started = await pool.query<{ n: string }>(
+      "select count(*) as n from events where type = 'run.started' and stream_id = any($1::uuid[])",
+      [[first.runId, second.runId, third.runId]],
+    );
+    expect(Number(started.rows[0]?.n)).toBe(0);
+  }, 60_000);
+
+  it('restarts the count after a shutdown hand-back', async () => {
+    const first = await notStarted(undefined, true, 'a');
+    expect(first.settled.outcome.kind).toBe('retry');
+    const handBack = await seedClaimedRun(first.taskId);
+    const handed = await settleRun(deps(), {
+      runId: handBack.runId,
+      fence: { epoch: 1, owner: OWNER },
+      outcome: {
+        ...FAILED,
+        runId: handBack.runId,
+        terminalReason: 'shutdown',
+        error: 'the platform stopped the run: shutdown',
+      },
+      stopReason: 'shutdown',
+    });
+    expect(handed.outcome.kind).toBe('handed_back');
+    const again = await notStarted(first.taskId, true, 'b');
+    expect(again.settled.outcome.kind).toBe('retry');
+    expect(await startFailureOf(again.runId)).toMatchObject({ attempt: 1 });
+    expect(await taskState(first.taskId)).toBe('active');
+  }, 60_000);
+
+  it('escalates a non-transient failure on the first', async () => {
+    const only = await notStarted(undefined, false, 'a');
+    expect(only.settled.outcome.kind).toBe('failed');
+    expect(await taskState(only.taskId)).toBe('needs_human');
+    expect(await startFailureOf(only.runId)).toMatchObject({ attempt: 1, retryable: false });
   }, 60_000);
 });

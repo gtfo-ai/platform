@@ -23,7 +23,6 @@ import type {
   TokenUsage,
   UserRole,
 } from '@platform/contracts';
-import { agentRoleSchema, effortSchema, runModeSchema } from '@platform/contracts';
 import type {
   CommandContext,
   FeedbackScope,
@@ -77,6 +76,7 @@ import {
   type PipelineOutboundData,
   type ReadyHeadCheckData,
 } from './jobs.js';
+import { toRunAggregate } from './run-aggregate.js';
 import { type RunCommandWakeUp, runCommandsTopic } from './run-commands.js';
 import type { ProjectSettingsPort } from './settings.js';
 import { configuredStageAgent } from './settings.js';
@@ -479,6 +479,9 @@ export class RunNotLiveError extends Error {
     this.status = status;
   }
 }
+
+/** The statuses a steer is recorded for (WP-275b): a claimed run, starting or running. */
+const isSteerable = (status: RunStatus): boolean => status === 'running' || status === 'starting';
 
 /** technical/08 — *"`POST /api/runs/:id/steer` limited to 1 message per 5 s per user"*, verbatim. */
 export const STEER_MIN_INTERVAL_MS = 5_000;
@@ -1556,38 +1559,18 @@ const NO_USAGE: TokenUsage = {
 };
 
 /**
- * A `StoredRun` as the Run aggregate, at the sequence the log says its stream is at.
- *
- * Every field the aggregate types more narrowly than the row does is **parsed**, not cast: `role`,
- * `mode` and `effort` are text columns, and a value the enum does not have would otherwise reach an
- * event payload and be rejected by the catalogue's schema at append time, which is a 500 for a
- * caller who did nothing wrong.
+ * The shared `StoredRun` → `Run` (`./run-aggregate.ts`, WP-275a), refusing a run linked to no stage
+ * attempt — a cancel of it could not tell which attempt it belongs to — which the shared function
+ * admits for its other readers.
  */
-const toRunAggregate = (stored: StoredRun, sequence: number): Run => {
+const toStageRunAggregate = (stored: StoredRun, sequence: number): Run => {
   if (stored.stage === null) {
     throw new InvariantViolationError(
       'run.stage',
       `run ${stored.id} is linked to no stage attempt, so the platform cannot tell which attempt it belongs to`,
     );
   }
-  return {
-    id: stored.id,
-    taskId: stored.taskId,
-    projectId: stored.projectId,
-    stage: stored.stage,
-    role: agentRoleSchema.parse(stored.role),
-    mode: runModeSchema.parse(stored.mode),
-    attempt: stored.attempt,
-    model: stored.model,
-    effort: effortSchema.parse(stored.effort),
-    promptVersion: stored.promptVersion,
-    status: stored.status,
-    startedAt: stored.startedAt,
-    lastOutputAt: null,
-    endedAt: null,
-    terminalReason: stored.terminalReason,
-    sequence,
-  };
+  return toRunAggregate(stored, sequence);
 };
 
 /** What a run cancel did — which of TD-028 decision 11's two branches, and what it recorded. */
@@ -1812,7 +1795,10 @@ const endRunRecordInPlace = async (
   if (!won) {
     throw new RunNotLiveError(run.id, run.status, 'cancelled: it has already ended');
   }
-  const aggregate = toRunAggregate(run, await deps.eventStore.nextStreamSequence('run', run.id));
+  const aggregate = toStageRunAggregate(
+    run,
+    await deps.eventStore.nextStreamSequence('run', run.id),
+  );
   const decision = finishRun(
     aggregate,
     {
@@ -2057,6 +2043,15 @@ const recordRunCommand = async (
  *
  * The message is redacted once, here, and the same redacted bytes go to the row, the event and —
  * through the row — the session and the transcript (TD-012).
+ *
+ * ## A `starting` run is steered by queueing (WP-275b)
+ *
+ * Since WP-275b a run is `running` only from its CLI spawn marker; before it — claimed, its
+ * workspace provisioning, its shim handshaking — it is `starting`. The stated rule: **a steer of a
+ * `starting` run is accepted and queued** — recorded exactly as any steer, and delivered by the
+ * holder once the session's handle is registered (`./run-commands.ts`'s start window, WP-85) —
+ * which is what every steer in that window did before WP-275b, when such a run already read
+ * `running`. A `created` run (no claim, no holder) and an ended one are refused `run_not_live`.
  */
 export const steerRunCommand = async (
   deps: HumanCommandDependencies,
@@ -2080,7 +2075,7 @@ export const steerRunCommand = async (
   if (run === null) {
     throw new UnknownAggregateError(`run ${input.runId} does not exist`);
   }
-  if (run.status !== 'running') {
+  if (!isSteerable(run.status)) {
     throw new RunNotLiveError(run.id, run.status, 'steered');
   }
   const message = deps.redactor.redactText(input.message).value;
@@ -2095,7 +2090,7 @@ export const steerRunCommand = async (
     if (locked === null) {
       throw new UnknownAggregateError(`run ${input.runId} does not exist`);
     }
-    if (locked.status !== 'running') {
+    if (!isSteerable(locked.status)) {
       throw new RunNotLiveError(run.id, locked.status, 'steered');
     }
     const stored = await loadTaskOrThrow(deps, scope.tx, run.taskId);

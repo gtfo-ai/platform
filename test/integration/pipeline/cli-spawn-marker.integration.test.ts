@@ -18,6 +18,7 @@
  * — leave it out, while the marker stays on the row.
  */
 import {
+  cliSpawnDepsForTest,
   INITIAL_TASK_VERSION,
   MEASURED_ZERO_COST,
   type PipelineStore,
@@ -198,7 +199,7 @@ describe('the CLI spawn marker, against PostgreSQL (WP-150)', () => {
         unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
         runs: store.runs,
         now: () => NOW,
-        runId,
+        ...cliSpawnDepsForTest({ runId, now: () => NOW }),
       });
       const seen: { atSend?: string | null; framesAtSend?: readonly string[] } = {};
       let peerFrames: () => readonly string[] = () => [];
@@ -275,7 +276,12 @@ describe('the CLI spawn marker, against PostgreSQL (WP-150)', () => {
           wallMs: 0,
         }),
       );
-      const record = recordCliSpawn({ unitOfWork, runs: store.runs, now: () => NOW, runId });
+      const record = recordCliSpawn({
+        unitOfWork,
+        runs: store.runs,
+        now: () => NOW,
+        ...cliSpawnDepsForTest({ runId, now: () => NOW }),
+      });
       expect(await record.hooks.beforeCliSpawn()).toBe(false);
       expect(record.mayHaveReachedCli()).toBe(false);
       expect(await committedMarker(runId)).toBeNull();
@@ -296,7 +302,12 @@ describe('the CLI spawn marker, against PostgreSQL (WP-150)', () => {
       const pool = createTestPool(database.connectionString, { max: 2 });
       const unitOfWork = new eventing.PostgresUnitOfWork({ pool });
       try {
-        const record = recordCliSpawn({ unitOfWork, runs: store.runs, now: () => NOW, runId });
+        const record = recordCliSpawn({
+          unitOfWork,
+          runs: store.runs,
+          now: () => NOW,
+          ...cliSpawnDepsForTest({ runId, now: () => NOW }),
+        });
         expect(await record.hooks.beforeCliSpawn()).toBe(true);
         if (withhold) {
           record.hooks.cliSpawnWithheld();

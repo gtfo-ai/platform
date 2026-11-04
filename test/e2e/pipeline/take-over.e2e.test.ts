@@ -246,7 +246,8 @@ describe('steering a run that is really running', () => {
         'select status from runs where id = $1',
         [runId],
       );
-      return row !== undefined && row.status !== 'running';
+      // Terminal: since WP-275b a live run reads `created`/`starting` before `running`.
+      return row !== undefined && !['created', 'starting', 'running'].includes(row.status);
     });
     const [finished] = await pipeline.query<{
       status: string;
@@ -300,7 +301,7 @@ describe('taking a task over and handing it back', () => {
     // ── the run really ends, and its workspace is told what the human needs ──
     await pipeline.waitFor('the interrupted run to be recorded', async () => {
       const run = await client.json<RunRecord>(`/api/runs/${runId}`);
-      return run.status === 200 && run.body.status !== 'running';
+      return run.status === 200 && !['created', 'starting', 'running'].includes(run.body.status);
     });
     const run = await client.json<RunRecord>(`/api/runs/${runId}`);
     expect(run.body.status).toBe('cancelled');

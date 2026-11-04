@@ -15,9 +15,10 @@
  * still holds for the run's duration, and every existing tier is unchanged; what is new is the row,
  * its epoch and the two events. WP-276 moves the run out of the job and makes the claim a loop.
  *
- * The run row is still inserted `running` with its lease in the same transaction (WP-47's rule:
- * a `running` row with no lease is the row the sweep's backstop takes an hour to reach) — TD-031 §1's
- * *row at offer time in status `created`* is WP-276's, when there is a time between the two.
+ * The run row is inserted with its lease in the same transaction (WP-47's rule: a live row with no
+ * lease is the row the sweep's backstop takes an hour to reach). Since WP-275b it is inserted
+ * **`created`** — TD-031's 2026-11-04 amendment §4 — the claim moves it to `starting`, and the CLI
+ * spawn marker to `running` with `run.started`; WP-276 puts time between the offer and the claim.
  *
  * ## Who closes the offer
  *

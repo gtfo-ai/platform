@@ -70,6 +70,12 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     sites: 1,
     how: "the `stage.execute` job's revalidation (and `settleRun`'s hand-back re-check): the loaded row's `stored.pipelineDial`",
   },
+  // WP-275a: `settlementInputs` reads a settled run's stage off the task's frozen columns —
+  // `revalidate`'s lookup without its "is the task still here" half (TD-031's 2026-11-04 amendment §1).
+  'packages/application/src/pipeline/settle.ts': {
+    sites: 1,
+    how: "inside `settleRun`'s transaction, under the run's lock: the loaded row's `stored.pipelineDial` — the stage a run settled outside its job served",
+  },
   'packages/application/src/pipeline/ready-head.ts': {
     sites: 1,
     how: "inside the `ready_head_check` duty's own transaction (WP-79): the re-loaded row's `current.pipelineDial` — so the gate a human's new commits re-enter is one the dial left enabled",
@@ -232,9 +238,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2323 ms (median 1927 ms); 2× it, 15 s floor.
-  it('counts thirty-five — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184 — and states how each resolves the dial', () => {
+  it('counts thirty-six — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(35);
+    expect(total).toBe(36);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }

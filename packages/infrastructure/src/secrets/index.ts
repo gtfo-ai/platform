@@ -7,3 +7,4 @@
 export * from './envelope.js';
 export * from './postgres-binding-repository.js';
 export * from './postgres-secret-store.js';
+export * from './run-plan-sealer.js';

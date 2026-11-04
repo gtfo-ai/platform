@@ -22,6 +22,7 @@ import type { DomainEvent, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope } from '../ports/unit-of-work.js';
 import { PROCEEDING_REFINED_SPEC } from '../testing/artifact-fixtures.js';
 import {
@@ -31,6 +32,7 @@ import {
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
 import {
+  NotAStageRunError,
   type SettleRunDeps,
   type SettleRunRequest,
   type SettleRunResult,
@@ -208,10 +210,10 @@ describe('a second settle of a settled run (WP-275, criterion 2)', () => {
       hook.around = async (real, deps, request) => {
         hook.around = null; // the refinement run's settle only
         const first = await real(deps, request);
-        const before = await stateOf(harness, request.run.id);
+        const before = await stateOf(harness, request.runId);
         const recording = recordingAppends(deps);
         const second = await real(recording.deps, request);
-        const after = await stateOf(harness, request.run.id);
+        const after = await stateOf(harness, request.runId);
         seen.value = { first, second, appended: recording.appended, before, after };
         return first;
       };
@@ -253,7 +255,7 @@ describe('a settle with a stale fence (WP-275, criterion 3)', () => {
     let appended: readonly DomainEvent[] = ['not read' as unknown as DomainEvent];
     hook.around = async (real, deps, request) => {
       hook.around = null; // the refinement run's settle only
-      const before = await stateOf(harness, request.run.id);
+      const before = await stateOf(harness, request.runId);
       const recording = recordingAppends(deps);
       refused = await real(recording.deps, { ...request, fence: stale(request.fence) }).then(
         () => null,
@@ -261,7 +263,7 @@ describe('a settle with a stale fence (WP-275, criterion 3)', () => {
       );
       appended = recording.appended;
       unchanged =
-        JSON.stringify(await stateOf(harness, request.run.id)) === JSON.stringify(before) &&
+        JSON.stringify(await stateOf(harness, request.runId)) === JSON.stringify(before) &&
         before.row?.status === 'running';
       return real(deps, request);
     };
@@ -284,13 +286,13 @@ describe('a settle with a stale fence (WP-275, criterion 3)', () => {
       hook.around = async (real, deps, request) => {
         hook.around = null; // the refinement run's settle only
         const first = await real(deps, request);
-        const before = await stateOf(harness, request.run.id);
+        const before = await stateOf(harness, request.runId);
         refused = await real(deps, { ...request, fence: stale(request.fence) }).then(
           () => null,
           (error: unknown) => error,
         );
         unchanged =
-          JSON.stringify(await stateOf(harness, request.run.id)) === JSON.stringify(before);
+          JSON.stringify(await stateOf(harness, request.runId)) === JSON.stringify(before);
         return first;
       };
       await harness.publish([ticketMatched()]);
@@ -360,7 +362,7 @@ describe('two settles of one run, in any interleaving (WP-275, criterion 4)', ()
           let runId: Id | null = null;
           hook.around = async (real, deps, request) => {
             hook.around = null; // the refinement run's settle only
-            runId = request.run.id;
+            runId = request.runId;
             const both = Promise.all([
               real(scheduled(s, deps, 'a'), request),
               real(scheduled(s, deps, 'b'), request),
@@ -415,5 +417,99 @@ describe('the platform’s record on a review verdict', () => {
 
   it('leaves every other artifact type exactly as the model wrote it', () => {
     expect(withPlatformReviewRecord('AcceptanceVerdict', MODEL, [])).toBe(MODEL);
+  });
+});
+
+/**
+ * **A run with no plan row** (WP-275a criterion 4): planned before the row that writes it, and
+ * reachable only through a settle of a run in flight across that upgrade. It settles — with no
+ * review checklists, the **live** question timeout read from the project's settings in the settle's
+ * own transaction, and a `warn` naming `run_plan_missing`; a run with its plan reads no settings.
+ */
+describe('a settle of a run with no stored plan (WP-275a)', () => {
+  const settleObserved = async (missing: boolean) => {
+    const harness = harnessWith(ENDINGS.completed as HarnessScript);
+    const seen: {
+      result: SettleRunResult | null;
+      warnings: string[];
+      settingsReads: number;
+    } = { result: null, warnings: [], settingsReads: 0 };
+    hook.around = async (real, deps, request) => {
+      hook.around = null; // the refinement run's settle only
+      const observed: SettleRunDeps = {
+        ...deps,
+        settings: async (projectId, tx) => {
+          seen.settingsReads += 1;
+          return deps.settings(projectId, tx);
+        },
+        logger: {
+          ...silentLogger,
+          warn: (_fields: unknown, message: string) => {
+            seen.warnings.push(message);
+          },
+        } as SettleRunDeps['logger'],
+        store: missing
+          ? { ...deps.store, runPlans: { ...deps.store.runPlans, load: async () => null } }
+          : deps.store,
+      };
+      seen.result = await real(observed, request);
+      return seen.result;
+    };
+    await harness.publish([ticketMatched()]);
+    return seen;
+  };
+
+  it('settles with the live question timeout and warns run_plan_missing', async () => {
+    const seen = await settleObserved(true);
+    expect(seen.result?.kind).toBe('settled');
+    expect(seen.result?.outcome.kind).toBe('ran');
+    expect(seen.warnings.some((message) => message.startsWith('run_plan_missing'))).toBe(true);
+    expect(seen.settingsReads).toBe(1);
+  });
+
+  it('reads no settings and warns nothing when the plan is there', async () => {
+    const seen = await settleObserved(false);
+    expect(seen.result?.kind).toBe('settled');
+    expect(seen.warnings.filter((message) => message.startsWith('run_plan_missing'))).toEqual([]);
+    expect(seen.settingsReads).toBe(0);
+  });
+});
+
+/**
+ * **A stage-less run is not `settleRun`'s** (TD-031's 2026-11-04 amendment §1): the shared
+ * `toRunAggregate` admits one, and the command refuses it as `not_a_stage_run` — an ask's ending is
+ * the ask's (decision 13). And a run whose row is gone (its task deleted, the row with it by cascade)
+ * is `task_gone`: nothing written, `ending: null`.
+ */
+describe('the runs settleRun refuses or finds gone (WP-275a)', () => {
+  it('refuses a run linked to no stage, and answers task_gone for a run that does not exist', async () => {
+    const harness = harnessWith(ENDINGS.completed as HarnessScript);
+    let checked = false;
+    hook.around = async (real, deps, request) => {
+      hook.around = null;
+      const gone = await real(deps, {
+        ...request,
+        runId: '00000000-0000-4000-8000-00000000dead' as Id,
+      });
+      expect(gone).toMatchObject({ kind: 'task_gone', ending: null });
+      const stageless: SettleRunDeps = {
+        ...deps,
+        store: {
+          ...deps.store,
+          runs: {
+            ...deps.store.runs,
+            load: async (tx, runId) => {
+              const row = await deps.store.runs.load(tx, runId);
+              return row === null ? null : { ...row, stage: null };
+            },
+          },
+        },
+      };
+      await expect(real(stageless, request)).rejects.toThrow(NotAStageRunError);
+      checked = true;
+      return real(deps, request);
+    };
+    await harness.publish([ticketMatched()]);
+    expect(checked).toBe(true);
   });
 });

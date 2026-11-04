@@ -451,6 +451,13 @@ export const WORKSPACE_ERROR_REASONS = [
   'cli_spawn_not_requested',
   /** The run was ended by another writer (a cancel, the lease sweep) before its CLI was asked for. */
   'ended_before_cli_spawn',
+  // ── WP-275a: a run started from its stored plan (TD-031's 2026-11-04 amendment §2, `run-package.ts`).
+  /** A secret environment variable the stored plan names has no value in the claiming process. */
+  'credential_unavailable',
+  /** The stored plan's seal does not open (a rotated `APP_SECRET_KEY`, another run's blob) or parse. */
+  'run_plan_unreadable',
+  /** The run has no stored plan: it was planned by a build before WP-275a. */
+  'run_plan_missing',
 ] as const;
 export type WorkspaceErrorReason = (typeof WORKSPACE_ERROR_REASONS)[number];
 export const workspaceErrorReasonSchema = z.enum(WORKSPACE_ERROR_REASONS);

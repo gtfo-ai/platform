@@ -6,8 +6,10 @@
  * is therefore **transaction, no transaction, transaction**:
  *
  * ```
- * tx  1   load the task, re-validate, check the budget, create the Run  → run.created, run.started
- * ——      start the runner and await its outcome                        (minutes; no connection held)
+ * tx  1   load the task, re-validate, check the budget, create the Run,   → run.created, run.offered,
+ *         store its sealed plan, offer and claim it                        run.claimed
+ * ——      read the plan back, start the runner and await its outcome     (minutes; no connection held)
+ *         (the CLI spawn marker, its own transaction)                    → run.started
  * tx  2   store the artifact and the outcome                            → run.finished | run.failed,
  *         (`settleRun`, `./settle.ts`, since WP-275)                       artifact.created,
  *                                                                          task.stage.completed
@@ -15,8 +17,12 @@
  *
  * Transaction 2 is the `settleRun` command since WP-275 (TD-031 decision 3): the same writes, moved
  * out of this module so that a run settled outside the job (WP-276's claimant, a remote worker) is
- * settled by the same code, idempotent on the run and its claim's epoch. The start failure's ending
- * (`recordUnstarted`) is still this module's.
+ * settled by the same code, idempotent on the run and its claim's epoch. Since WP-275a it is given
+ * only `{ runId, fence, outcome, stopReason }` and reads the rest back, the start failure's ending
+ * is its `not_started` branch, and the session runs from the plan transaction 1 stored
+ * (`./run-package.ts`), never from this module's memory of it. Since WP-275b the run is `created`
+ * when its row is written, `starting` at the claim and `running` — with `run.started` — only at the
+ * CLI spawn marker (`./cli-spawn.ts`).
  *
  * Neither transaction is nested and neither is open while the run is. The job worker's own
  * concurrency is therefore **additive** to the dispatcher's `2 × concurrency + 1` pool floor rather
@@ -50,14 +56,7 @@
  * the stage completes, the run row and `run.finished` carry the reason and the cost, and the spend is
  * added to the task. Nothing pauses the task. The next run's admission still reads the task cap.
  */
-import type {
-  ContextPackRecord,
-  Effort,
-  Id,
-  IsoDateTime,
-  RunStartFailure,
-  Slug,
-} from '@platform/contracts';
+import type { ContextPackRecord, Effort, Id, IsoDateTime, Slug } from '@platform/contracts';
 import type {
   CommandContext,
   PausedBudgetScope,
@@ -68,13 +67,11 @@ import type {
 import {
   createRun,
   DEFAULT_STAGE_RUN_BUDGET_USD,
-  failRun,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
   maintenanceBudgetUsdOf,
-  markRunning,
   namesAMaintenanceChore,
   pauseTask,
-  startRun,
+  recordRunCreated,
 } from '@platform/domain';
 import { redactedPromptsWithheld } from '../config/repository-config.js';
 import { type BudgetGuard, blockingBudgetDetail, noBudgetGuard } from '../cost/guard.js';
@@ -86,19 +83,20 @@ import {
   type Hold,
   holdDetail,
 } from '../cost/pending.js';
-import { composeSecretRedactors } from '../integrations/redaction.js';
 import { redactTextSearchTerms } from '../knowledge/text-search-record.js';
 import type { MaintenanceSpendReader } from '../maintenance/ports.js';
+import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import type { RunPlanSealer } from '../ports/run-plan-sealer.js';
 import {
   type ClaudeRunner,
-  describeStartFailure,
-  isRetryableStartFailure,
+  notStartedReportOf,
   type RunOutcome,
   type RunSpec,
-  runStartFailureOf,
+  runStoppedReasonOf,
 } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
@@ -106,14 +104,13 @@ import type { WorkingCalendar } from '../scheduling/working-calendar.js';
 import {
   cliSpawnNotRequested,
   isStopEnding,
-  MEASURED_ZERO_COST,
-  NO_RUN_USAGE,
   recordCliSpawn,
   stopEndingOf,
   stoppedBeforeCliSpawn,
   unspawnedStepOf,
   unspawnedStop,
 } from './cli-spawn.js';
+import { questionTimeoutOf } from './deadline-rules.js';
 import {
   leaseExpiryAt,
   RUN_LEASE_TTL_MS,
@@ -122,13 +119,20 @@ import {
 } from './lease.js';
 import { offerAndClaimInJob } from './offers.js';
 import { REFREEZE_PENDING_SENTENCE, refrozen, refrozenColumns } from './refreeze.js';
-import { injectedSecretRedactorFor } from './run-redaction.js';
+import {
+  loadRunPackage,
+  RUN_PLAN_MAX_BYTES,
+  RunPlanTooLargeError,
+  sealRunPlan,
+} from './run-package.js';
+import { type RunSecretEnvironment, runRedactorFor } from './run-redaction.js';
 import { type ProjectSettings, settingsAdmission } from './settings.js';
 import { runSettingsSnapshot } from './settings-snapshot.js';
-import { escalate, lostTheRun, settleRun } from './settle.js';
+import { escalate, type SettleRunRequest, settleRun } from './settle.js';
 import { revalidate } from './stage-revalidation.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import {
+  type AppliedChecklistRecord,
   type AttachedReturnFeedback,
   type EndedRun,
   LeaseLostError,
@@ -240,13 +244,8 @@ export interface StageRunPlan {
   readonly reviewChecklists?: readonly AppliedChecklistRecord[];
 }
 
-/** One `ReviewVerdict.checklists_applied` entry, as the planner decides it. */
-export interface AppliedChecklistRecord {
-  readonly name: string;
-  readonly item_count: number;
-  readonly required_by: readonly string[];
-  readonly truncated: boolean;
-}
+/** One `ReviewVerdict.checklists_applied` entry — defined beside the run plan that stores it. */
+export type { AppliedChecklistRecord } from './store.js';
 
 /**
  * Builds the `RunSpec` for one stage.
@@ -325,7 +324,8 @@ export interface StageExecutorOptions {
   readonly stopReasons: RunStopReasons;
   /** A fresh `CommandContext` per command: ids, clock and the pipeline's system actor. */
   readonly context: (correlationId: Id) => CommandContext;
-  readonly settings: (projectId: Id) => Promise<ProjectSettings>;
+  /** The project's settings; `tx` when asked inside a transaction (settle's `run_plan_missing`). */
+  readonly settings: (projectId: Id, tx?: Transaction) => Promise<ProjectSettings>;
   /**
    * The organisation's working calendar (WP-56) — what a blocking question's `deadline_at` is
    * computed on. Required: a question stored without one is a question nothing ever expires, which
@@ -421,6 +421,23 @@ export interface StageExecutorOptions {
    * which is the argument {@link StageExecutorOptions.budgets} already makes one field up.
    */
   readonly lateCost?: LateCostRecorder;
+  /**
+   * The seal over a run's stored plan (WP-275a, TD-031's 2026-11-04 amendment §2): the envelope
+   * under `APP_SECRET_KEY` in production (`createEnvelopeRunPlanSealer`). Required: the session runs
+   * from the read-back plan, so a composition without it could run nothing.
+   */
+  readonly runPlans: RunPlanSealer;
+  /**
+   * This process's `agentRunEnvironment` — the secret **values** a run is given, re-attached to the
+   * read-back spec (`loadRunPackage`) and redacted by settle (`runRedactorFor`), the names coming
+   * from the plan. **Absent is an empty environment**: a run whose plan names a secret then settles
+   * `not_started`, `credential_unavailable`, rather than running without it.
+   */
+  readonly runEnvironment?: RunSecretEnvironment;
+  /** Where `settleRun` enqueues a start failure's retry and a hand-back's re-run, after its commit. */
+  readonly jobs: Jobs;
+  /** The run stream's next sequence — what `settleRun` rebuilds the run's aggregate at (WP-275a). */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
   /**
    * How many stages this process runs at once. Stated here because it is a **pool** number: each
@@ -437,11 +454,10 @@ export interface StageExecutionJob {
   readonly stage: Slug;
   readonly attempt: number;
   /**
-   * How many times a run of this stage has failed to **start** for a retryable reason (Q59(a)).
-   *
-   * On the job rather than in memory, for the same reason `gate_checks` is: the process that retries
-   * may not be the process that failed, and a counter a restart forgets is an unbounded retry.
-   * Absent is zero — the ordinary first attempt.
+   * **Read by nothing** since WP-275a (TD-031's 2026-11-04 amendment §3): the start-failure count is
+   * read off the stage entry's stored runs (`RunRepository.startFailures`) under the settle's lock.
+   * Kept on the type for one release beside the payload's `start_attempts`, which a job queued by the
+   * previous build still carries; then removed.
    */
   readonly startAttempts?: number;
   /**
@@ -469,17 +485,6 @@ export interface StageExecutionJob {
    */
   readonly observability?: readonly PromptObservabilityExcerpt[];
 }
-
-/**
- * How many times a stage's run may fail to *start* for a transport reason before the task is
- * escalated (Q59(a)).
- *
- * Three, with {@link RUN_START_RETRY_MS} between them: about a minute of flapping absorbed without
- * telling anybody, and a launcher that is genuinely down parks the task about a minute later rather
- * than never. The two numbers are the whole bound, and they are here rather than in the caller so
- * that "what stops an unbounded retry" has one answer.
- */
-export const MAX_RUN_START_ATTEMPTS = 3;
 
 export interface StageExecutor {
   execute(job: StageExecutionJob): Promise<StageExecutionOutcome>;
@@ -622,24 +627,12 @@ type Prepared =
   | { readonly kind: 'escalated'; readonly reason: string }
   | {
       readonly kind: 'ready';
-      /** The settings the run was planned with ({@link Admitted.settings}). */
-      readonly settings: ProjectSettings;
-      readonly spec: RunSpec;
       readonly stage: PipelineStage;
       readonly stored: StoredTask;
+      /** The run as the claim left it: `starting`, its `run.started` not yet appended (WP-275b). */
       readonly run: Run;
-      /**
-       * The run's own TD-012 step-1 redactor, built **once** from the spec this run was started
-       * with (WP-52).
-       *
-       * It is carried rather than rebuilt at each write for the reason the TD-012 amendment gives:
-       * the prompt columns (transaction 1b), the artifact (transaction 2) and the transcript (the
-       * runner, through `RunSpec.env`/`secretEnvNames`) must name the same secrets, and three
-       * constructions are three chances to disagree.
-       */
-      readonly redactor: SecretRedactor;
-      /** {@link StageRunPlan.reviewChecklists}, carried to the artifact write. */
-      readonly reviewChecklists: readonly AppliedChecklistRecord[] | null;
+      /** The redacted context-pack record `run.started` carries at the CLI spawn marker. */
+      readonly contextPack: ContextPackRecord;
       /** The claim's fence (WP-274): every later write of this run by this job carries it. */
       readonly fence: RunLeaseFence;
     };
@@ -699,10 +692,16 @@ export { REFREEZE_PENDING_SENTENCE, refrozen } from './refreeze.js';
 // importer has always found them.
 export {
   COST_UNREPORTED,
+  MAX_RUN_START_ATTEMPTS,
   MAX_SHUTDOWN_HAND_BACKS,
+  NOT_STARTED_BRIEF_QUOTE_CHARS,
+  notStartedBrief,
   withPlatformMergeRequestRecord,
   withPlatformReviewRecord,
 } from './settle.js';
+
+/** No model credential in this process — the default of a composition that names none. */
+const NO_RUN_ENVIRONMENT: RunSecretEnvironment = { env: {}, secretEnvNames: [] };
 
 export const createStageExecutor = (options: StageExecutorOptions): StageExecutor => {
   const { unitOfWork, store, runner, planner, stopReasons } = options;
@@ -1000,50 +999,62 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
        * the context pack is a point-in-time read, so re-assembling the prompt later would produce a
        * different document answering a different question — the argument `tasks.template_snapshot`
        * and `ticket_snapshot` have already won. What is stored is exactly the bytes the runner is
-       * handed on the next line but one, minus the secrets this run was given.
+       * handed, minus the secrets this run was given. The redactor is `runRedactorFor` (WP-275a):
+       * the one factory settle builds the artifact's redactor with too.
        */
-      const redactor = composeSecretRedactors(
-        injectedSecretRedactorFor(spec, logger),
+      const redactor = runRedactorFor(
+        { env: spec.env, secretEnvNames: spec.secretEnvNames },
         options.redactor,
+        logger,
+        { runId: spec.runId },
       );
       const systemPrompt = redactor.redactText(spec.systemPromptAppend);
       const userPrompt = redactor.redactText(spec.userPrompt);
       // The pack's recorded search terms are the prompt's own words in another shape, so the same
       // redactor decides them before they reach `run.started` or `run_context_pack` (WP-44).
       const contextPack = redactTextSearchTerms(plan.contextPack, redactor);
-
-      // `created → starting → running`: two transitions, two catalogue events, and no observable
-      // moment between them here — the platform has the spec and is handing it to the runner. The
-      // states exist for the runner's own lifecycle (technical/02), not for this seam.
-      const created = createRun({
-        id: runId,
-        taskId: task.id,
-        projectId: task.projectId,
-        stage: job.stage,
-        role: valid.role,
-        // The planner already decided it from the task and the template (WP-24's `runModeFor`);
-        // deriving it a second time here is how the two would come apart.
-        mode: spec.mode,
-        attempt: job.attempt,
-        model: spec.model,
-        effort: spec.effort,
-        promptVersion: spec.promptVersion,
+      // Sealed before the first write, so an oversized plan (`RunPlanTooLargeError`) leaves no row —
+      // in the memory store too, which keeps a failed transaction's writes (divergence 4).
+      const sealedPlan = sealRunPlan(options.runPlans, {
+        spec,
+        reviewChecklists: plan.reviewChecklists ?? null,
+        questionTimeout: questionTimeoutOf(settings),
       });
-      const starting = startRun(created, context);
+
+      // The run enters the log here, **in `created`** (WP-275b, TD-031's 2026-11-04 amendment §4):
+      // `run.created` with its row and its offer, `created → starting` at the claim below, and
+      // `starting → running` with `run.started` only at the CLI spawn marker (`./cli-spawn.ts`).
+      const created = recordRunCreated(
+        createRun({
+          id: runId,
+          taskId: task.id,
+          projectId: task.projectId,
+          stage: job.stage,
+          role: valid.role,
+          // The planner already decided it from the task and the template (WP-24's `runModeFor`);
+          // deriving it a second time here is how the two would come apart.
+          mode: spec.mode,
+          attempt: job.attempt,
+          model: spec.model,
+          effort: spec.effort,
+          promptVersion: spec.promptVersion,
+        }),
+        context,
+      );
       await store.runs.insert(scope.tx, {
         id: runId,
         taskId: task.id,
         projectId: task.projectId,
         stage: job.stage,
-        role: created.role,
-        mode: created.mode,
+        role: created.aggregate.role,
+        mode: created.aggregate.mode,
         attempt: job.attempt,
         model: spec.model,
         effort: spec.effort,
         promptVersion: spec.promptVersion,
-        // `running`, which `markRunning` below moves the aggregate to in this same transaction: the
-        // row is written before the offer that references it (WP-274), so before the claim.
-        status: 'running',
+        // `created`: the claim below moves it to `starting` in this transaction, and only the CLI
+        // spawn marker moves it to `running` (WP-275b) — so `started_at` is null until then.
+        status: 'created',
         terminalReason: null,
         sessionId: null,
         numTurns: 0,
@@ -1051,9 +1062,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         cost: null,
         wallMs: 0,
         createdAt: context.clock.now(),
-        // The domain's clock, not the database's: the same instant stamps `run.started`, and a
-        // run ended from another process computes its wall time from this column (WP-15i).
-        startedAt: context.clock.now(),
+        startedAt: null,
         systemPrompt: systemPrompt.value,
         userPrompt: userPrompt.value,
         // The sum over both columns, which is what `runs.redaction_count` means from migration
@@ -1083,21 +1092,29 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         providerMode: spec.providerMode,
       });
       /**
+       * **The run plan** (WP-275a, TD-031's 2026-11-04 amendment §2), in the run row's transaction:
+       * the spec without its secret values, **sealed, never redacted**, beside the checklists the
+       * planner applied and the question timeout it was planned with. The session below runs from
+       * what is read back (`loadRunPackage`), never from this process's memory of the plan.
+       */
+      await store.runPlans.insert(scope.tx, sealedPlan);
+      /**
        * The offer, and the lease claimed through it, in the **same transaction as the row** (WP-47,
        * WP-274).
        *
-       * Not on the line after, and not from the first heartbeat: a `runs` row that is `running`
-       * with no lease is exactly the row the sweep's wall-clock backstop takes an hour to reach, and
-       * a process that dies between an insert and a claim would leave one every time. The claim
-       * commits with the insert or neither does. Since WP-274 the claim is the offer's one claim
-       * (TD-031 §2, `./offers.ts`): it writes `lease_owner`, `lease_expires_at` and the epoch, and
-       * this job is its only claimant, so the run still executes here (criterion 1).
+       * Not on the line after, and not from the first heartbeat: a live `runs` row with no lease is
+       * exactly the row the sweep's wall-clock backstop takes an hour to reach, and a process that
+       * dies between an insert and a claim would leave one every time. The claim commits with the
+       * insert or neither does. Since WP-274 the claim is the offer's one claim (TD-031 §2,
+       * `./offers.ts`): it writes `lease_owner`, `lease_expires_at` and the epoch, and since WP-275b
+       * it moves the run `created → starting`; this job is its only claimant, so the run still
+       * executes here.
        */
       const claimed = await offerAndClaimInJob(
         store.offers,
         scope.tx,
         {
-          run: starting.aggregate,
+          run: created.aggregate,
           kind: 'stage',
           offerId: context.ids.next(),
           owner: options.lease?.owner ?? null,
@@ -1109,20 +1126,13 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         },
         context,
       );
-      // The real record, since WP-17. It was a zeroed literal from WP-15 until the pack had a
-      // producer *and* a delimiter (PROGRESS backlog 11 and 12). Appended after the claim, which is
-      // where TD-031 §1 puts `run.started`.
-      const running = markRunning(claimed.run, { contextPack }, context);
-      await scope.events.append([...starting.events, ...claimed.events, ...running.events]);
+      await scope.events.append([...created.events, ...claimed.events]);
       return {
         kind: 'ready',
-        settings,
-        spec,
         stage: valid.stage,
         stored,
-        run: running.aggregate,
-        redactor,
-        reviewChecklists: plan.reviewChecklists ?? null,
+        run: claimed.run,
+        contextPack,
         fence: claimed.fence,
       };
     });
@@ -1160,8 +1170,33 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       ...(job.mergeRequestPaths === undefined ? {} : { mergeRequestPaths: job.mergeRequestPaths }),
       ...(job.observability === undefined ? {} : { observability: job.observability }),
     });
-    return startTheRun(job, plan, runId, settings);
+    try {
+      return await startTheRun(job, plan, runId, settings);
+    } catch (error) {
+      if (!(error instanceof RunPlanTooLargeError)) throw error;
+      return refuseOversizedPlan(job, error);
+    }
   };
+
+  /**
+   * A plan past `RUN_PLAN_MAX_BYTES` is **refused, never cut** (WP-275a): transaction 1b rolled
+   * back, so no run exists, and the task is parked for a human with the size — the ending a
+   * configuration the platform cannot run already has.
+   */
+  const refuseOversizedPlan = async (
+    job: StageExecutionJob,
+    error: RunPlanTooLargeError,
+  ): Promise<Prepared> =>
+    writing(job.taskId, 'refusing an oversized run plan', async (scope): Promise<Prepared> => {
+      const valid = await revalidateOpen(store, scope.tx, job);
+      if (valid.kind === 'skipped') return valid;
+      const reason = `the run's plan is ${error.bytes} bytes, over the ${RUN_PLAN_MAX_BYTES}-byte bound a stored plan may have; it is refused rather than cut`;
+      const escalated = escalate(valid.stored, options.context(job.taskId), job.stage, reason);
+      await store.tasks.save(scope.tx, { ...valid.stored, task: escalated.aggregate });
+      await closeParkedStageRow(store, scope.tx, escalated, 'failed');
+      await scope.events.append(escalated.events);
+      return { kind: 'escalated', reason };
+    });
 
   /**
    * The ending for a write that lost every race (WP-15e, criterion 4).
@@ -1209,6 +1244,25 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       return { kind: 'skipped', reason: error.message };
     };
 
+  /**
+   * **The spec the session runs, read back from the stored plan** (WP-275a, `./run-package.ts`):
+   * the seal opened and the secret values re-attached from this process's own environment — never
+   * the planner's memory, so WP-276's claimant runs a run exactly as this job does. A plan that
+   * cannot be read back throws a terminal `RunStartError`, which the caller settles `not_started`.
+   */
+  const readBackSpec = async (runId: Id): Promise<RunSpec> =>
+    unitOfWork.transaction(
+      async (scope) =>
+        (
+          await loadRunPackage(
+            { runPlans: store.runPlans, sealer: options.runPlans },
+            scope.tx,
+            runId,
+            options.runEnvironment ?? NO_RUN_ENVIRONMENT,
+          )
+        ).spec,
+    );
+
   const runStage = async (job: StageExecutionJob): Promise<StageExecutionOutcome> => {
     // WP-106: a stored settings document this release cannot parse is answered by the port as
     // `configRefusal`, and admission refuses the run by that name (`settingsAdmission`).
@@ -1225,6 +1279,11 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       );
       return prepared;
     }
+    const runId = prepared.run.id;
+    const settle = (request: Omit<SettleRunRequest, 'runId' | 'fence'>) =>
+      settleRun({ ...options, logger }, { runId, fence: prepared.fence, ...request })
+        .then((settled) => settled.outcome)
+        .catch(leaseLost(job));
 
     let outcome: RunOutcome;
     /**
@@ -1249,23 +1308,29 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
               lease: options.lease,
               ...(options.logger === undefined ? {} : { logger: options.logger }),
             },
-            prepared.run.id,
+            runId,
             prepared.fence.epoch,
           );
     /**
      * The CLI spawn marker for this run (WP-150): the runner asks it between the shim's `hello.ok`
      * and the `spawn` frame, and this process learns back whether it was written — the one fact
-     * that tells a run that may have spent from one that cannot have (`./cli-spawn.ts`).
+     * that tells a run that may have spent from one that cannot have (`./cli-spawn.ts`). Since
+     * WP-275b it is also where the run becomes `running` and `run.started` is appended, fenced on
+     * the claim.
      */
     const spawn = recordCliSpawn({
       unitOfWork,
       runs: store.runs,
       now: () => options.context(job.taskId).clock.now(),
-      runId: prepared.run.id,
+      run: prepared.run,
+      contextPack: prepared.contextPack,
+      fence: prepared.fence,
+      context: options.context(job.taskId),
       logger,
     });
     try {
-      const handle = runner.start(prepared.spec, spawn.hooks);
+      const spec = await readBackSpec(runId);
+      const handle = runner.start(spec, spawn.hooks);
       outcome = await handle.outcome;
       if (!spawn.mayHaveReachedCli() && !isStopEnding(outcome)) {
         // Ruling (d): an ending that came back with no marker is a run whose CLI was never asked
@@ -1277,81 +1342,35 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     } catch (error) {
       // **A start that throws used to escape both endings** (WP-15c, Q52/Q59).
       //
-      // Transaction 1 has already created the `runs` row and emitted `run.created`/`run.started`,
-      // so an error thrown by `start` — or a rejection of `handle.outcome` — left a run `running`
-      // for ever, a task sitting at a stage nothing would move, and a `stage.execute` job that
-      // exhausted its retries into pg-boss where no screen showed it (an administrator's list does
-      // since WP-108, and the stranded-stage recovery finds the task). Nothing told a human.
+      // Transaction 1 has already created the `runs` row and emitted `run.created`, so an error
+      // thrown by `start` — or a rejection of `handle.outcome` — left a run live for ever, a task
+      // sitting at a stage nothing would move, and a `stage.execute` job that exhausted its retries
+      // into pg-boss where no screen showed it. Nothing told a human.
       //
-      // It was not hypothetical from the day a webhook could reach the pipeline, and WP-53 narrowed
-      // it twice: the transport exists now (TD-028), and a process that is *not* configured to run
-      // agents no longer subscribes this queue at all — so a ticket does not land here on an
-      // unconfigured instance, it waits for a process that can perform the job. What still reaches
-      // this branch is a start that fails on a configured one: the launcher unreachable, a spec it
-      // refuses, or a run image with no CLI at the path the platform named.
-      //
-      // The ending is the one the executor already has for "the run produced no usable result":
-      // the run is failed and the task is **escalated to `needs_human`**, an existing state whose
-      // whole meaning is *a human must act*. No new task state — a third spelling of "stuck" that
-      // no template, query or screen knows about would be worse than the one that exists. `unavailableClaudeRunner`
-      // is unchanged and still refuses rather than fabricating a `RunOutcome`: what changed is
-      // that its refusal now has somewhere to land.
-      //
-      // **WP-15g splits that cost in two** (Q59(a)). A *transport* failure — the runner could not
-      // reach the workspace's control socket — is retried a bounded number of times before it
-      // escalates, because escalation happens on the first failure and a transport that flaps
-      // would otherwise park one task and need one human per flap. Everything else still
-      // escalates immediately, which is the fail-closed default: a failure shape nobody has
-      // classified tells somebody rather than spinning. `retry-stage` remains the human's answer
-      // either way (product/04).
+      // The ending is `settleRun`'s `not_started` branch since WP-275a (TD-031's 2026-11-04
+      // amendment §3): the run is failed and the task is **escalated to `needs_human`** — or, for a
+      // *transport* failure (Q59(a), WP-15g), left where it is and re-enqueued a bounded number of
+      // times, the bound counted from the stage entry's stored runs. No new task state. What
+      // crosses is a `NotStartedReport` — the platform's closed-vocabulary sentence, the launcher's
+      // own words unredacted, the classification — and settle redacts, bounds and decides.
       await stopHeartbeat();
-      stopReasons.forget(prepared.spec.runId);
-      const startAttempts = (job.startAttempts ?? 0) + 1;
-      const retryable = isRetryableStartFailure(error) && startAttempts < MAX_RUN_START_ATTEMPTS;
+      stopReasons.forget(runId);
+      const report = notStartedReportOf(error, { spawnRequested: spawn.mayHaveReachedCli() });
       logger.error(
         {
           err: error,
           task_id: job.taskId,
           stage: job.stage,
-          run_id: prepared.run.id,
-          start_attempts: startAttempts,
-          retryable,
+          run_id: runId,
+          transient: report.transient,
         },
-        retryable
-          ? 'the runner could not start this stage; the run is failed and the stage will be retried'
-          : 'the runner could not start this stage; the run is failed and the task escalated',
+        'the runner could not start this stage; the run is settled as not started',
       );
-      return writing(job.taskId, 'recording a run that could not start', async (scope) =>
-        recordUnstarted(scope, {
-          job,
-          run: prepared.run,
-          options,
-          // The **class name and the platform's own diagnosis**, never the message: an error
-          // thrown out of a runner may quote a provider, a URL or a credential, and this string is
-          // written to `events.payload` (`run.failed`) and into the escalation's blocker brief,
-          // both of which TD-012 covers and neither of which passes a redactor here. So what is
-          // added is closed vocabulary only — the workspace's error kind and its reason code, and
-          // a commit through `shaSchema` (WP-127, backlog 351, `describeStartFailure`). The message
-          // is in the log line above.
-          startFailure: describeStartFailure(error),
-          // Backlog 453: the workspace's own words, beside that sentence and never in it — through
-          // this run's redactor, over the whole text before the cut, then bounded. They go to
-          // `runs.exit_detail`, `run.failed.start_failure`, the run page and the brief.
-          notStarted: runStartFailureOf(error, {
-            redactor: prepared.redactor,
-            attempt: startAttempts,
-            retryable,
-          }),
-          startAttempts,
-          retryable,
-          spawnRequested: spawn.mayHaveReachedCli(),
-          fence: prepared.fence,
-        }),
-      ).catch(leaseLost(job));
+      return settle({ outcome: report, stopReason: null });
     }
     await stopHeartbeat();
-    const stopReason = stopReasons.reasonFor(prepared.spec.runId);
-    stopReasons.forget(prepared.spec.runId);
+    const stopReason = runStoppedReasonOf(stopReasons.reasonFor(runId));
+    stopReasons.forget(runId);
     if (!spawn.mayHaveReachedCli()) {
       // A stop that landed before the CLI was asked for — or while its marker committed, so the
       // frame was withheld (WP-163) — keeps its status and spent nothing (WP-150),
@@ -1363,30 +1382,16 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         stoppedBeforeCliSpawn({
           ending: stopEndingOf(outcome),
           step: unspawnedStepOf(spawn),
-          attempt: (job.startAttempts ?? 0) + 1,
+          attempt: 1,
           retryable: false,
         }),
       );
     }
 
     // Transaction 2 is the `settleRun` command since WP-275 (`./settle.ts`): the same writes, in a
-    // transaction of its own on the same bound, idempotent on the run and its claim's epoch.
-    return settleRun(
-      { ...options, logger },
-      {
-        job,
-        settings: prepared.settings,
-        stage: prepared.stage,
-        run: prepared.run,
-        outcome,
-        stopReason,
-        redactor: prepared.redactor,
-        reviewChecklists: prepared.reviewChecklists,
-        fence: prepared.fence,
-      },
-    )
-      .then((settled) => settled.outcome)
-      .catch(leaseLost(job));
+    // transaction of its own on the same bound, idempotent on the run and its claim's epoch — and
+    // since WP-275a it is given only what a claimant has (the four fields) and reads the rest back.
+    return settle({ outcome, stopReason });
   };
 
   return {
@@ -1402,150 +1407,3 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     },
   };
 };
-
-/**
- * A run that was created and never started: fail the run, and escalate the task unless the failure
- * is worth another attempt.
- *
- * Deliberately **not** routed through `record`: that function reads a `RunOutcome`, and there is
- * none — fabricating one would make the pipeline transition on a verdict for a run that was never
- * attempted, which is the fail-open direction standing rule 20 names and which
- * `apps/server/src/pipeline.ts` refuses at the runner. The run really exists (transaction 1 wrote
- * it) and really failed to start, so `run.failed` is the honest record of it.
- *
- * **On the retryable path the run is still failed and the task is left alone** (Q59(a)). Both halves
- * matter: a `runs` row left `running` for a run nobody will start is the defect WP-15c closed, and a
- * task moved out of `active` could not be woken by the re-enqueue the caller is about to make. So
- * each flap costs exactly one failed `runs` row, which is what makes a flapping transport visible
- * without a human.
- */
-const recordUnstarted = async (
-  scope: TransactionScope,
-  input: {
-    readonly job: StageExecutionJob;
-    readonly run: Run;
-    readonly options: StageExecutorOptions;
-    readonly startFailure: string;
-    /** What `runs.exit_detail` and `run.failed.start_failure` record (backlog 453). */
-    readonly notStarted: RunStartFailure;
-    readonly startAttempts: number;
-    /** `true` leaves the task where it is; the caller re-enqueues the stage. */
-    readonly retryable: boolean;
-    /**
-     * Whether the run may have reached its CLI: its spawn marker was written (WP-150) and its
-     * `spawn` frame was not withheld (WP-163). Almost always `false` here. `true` is a runner that
-     * failed **after** asking for the CLI, whose spend nobody measured: the run is then recorded
-     * with no figure and held at its reservation (WP-131), never the measured zero.
-     */
-    readonly spawnRequested: boolean;
-    /** The claim's fence (WP-274): the run's `finish` is conditional on it. */
-    readonly fence: RunLeaseFence;
-  },
-): Promise<StageExecutionOutcome> => {
-  const { job, run, options, startFailure } = input;
-  const spend = input.spawnRequested ? {} : { usage: NO_USAGE, cost: NO_COST };
-  const stored = await options.store.tasks.load(scope.tx, job.taskId);
-  if (stored === null) {
-    return { kind: 'skipped', reason: 'the task was deleted before its run could start' };
-  }
-  const context = options.context(job.taskId);
-  const reason = input.retryable
-    ? `the run could not be started (${startFailure}); attempt ${input.startAttempts} of ${MAX_RUN_START_ATTEMPTS}`
-    : `the run could not be started (${startFailure})`;
-  const failed = failRun(
-    run,
-    {
-      status: 'failed',
-      terminalReason: 'error_during_execution',
-      error: reason,
-      ...spend,
-      startFailure: input.notStarted,
-    },
-    context,
-  );
-  const owned = await options.store.runs.finish(scope.tx, {
-    runId: run.id,
-    status: 'failed',
-    terminalReason: 'error_during_execution',
-    sessionId: null,
-    numTurns: 0,
-    usage: NO_USAGE,
-    cost: input.spawnRequested ? null : NO_COST,
-    wallMs: 0,
-    startFailure: input.notStarted,
-    lease: input.fence,
-  });
-  if (!owned) {
-    // A human cancelled the run between its insert and this failure (WP-15i), or the lease sweep
-    // ended it (WP-47). Neither ending applies: there is nothing to retry and nothing to escalate
-    // about a run somebody else stopped — and no spend, because it never started.
-    return lostTheRun({ run, options, scope });
-  }
-  if (input.retryable) {
-    // The task is untouched — still `active`, still at this stage, still on this attempt — so the
-    // re-enqueue the caller makes finds exactly the state `revalidate` admits. Nothing is written
-    // about the task at all: `recordStageExited` would record an exit from a stage the task has not
-    // left, and the stage's convergence signature reads those rows.
-    await scope.events.append(failed.events);
-    return { kind: 'retry', runId: run.id, reason, startAttempts: input.startAttempts };
-  }
-  const escalated = escalate(
-    stored,
-    context,
-    job.stage,
-    reason,
-    notStartedBrief(stored.task.ticket.key, job.stage, reason, input.notStarted),
-  );
-  await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
-  await options.store.tasks.recordStageExited(scope.tx, {
-    taskId: job.taskId,
-    stage: job.stage,
-    attempt: job.attempt,
-    state: 'failed',
-    outcome: 'failed',
-    returnReason: reason,
-    returnedTo: null,
-  });
-  await scope.events.append([...failed.events, ...escalated.events]);
-  return { kind: 'failed', runId: run.id, reason };
-};
-
-/** How much of the launcher's words the brief quotes; the run page has all of them (backlog 453). */
-export const NOT_STARTED_BRIEF_QUOTE_CHARS = 600;
-
-/**
- * The blocker brief of a run that **never started** (PROGRESS backlog 453).
- *
- * The default brief sends the reader to *"the run's transcript"*, and a run that never started has
- * none — so this one says the run did not start, gives the platform's diagnosis, and quotes the tail
- * of the launcher's own words, bounded to {@link NOT_STARTED_BRIEF_QUOTE_CHARS}. The quote is marked
- * as the launcher's: the brief also reaches the workpad and chat, and the text is untrusted
- * (BD-022) — redacted twice already, bounded here, and rendered as text by every reader that shows
- * it. With no words to quote the brief says so rather than inventing a reason.
- */
-export const notStartedBrief = (
-  ticketKey: string,
-  stage: Slug,
-  reason: string,
-  notStarted: RunStartFailure,
-): string => {
-  const detail = notStarted.detail;
-  const cut =
-    detail !== null && (detail.length > NOT_STARTED_BRIEF_QUOTE_CHARS || notStarted.truncated);
-  const quote =
-    detail === null
-      ? "The launcher gave no reason of its own; the runner's log has the error under this run's id."
-      : `The launcher said${cut ? ' (the end of it)' : ''}: «${detail.slice(-NOT_STARTED_BRIEF_QUOTE_CHARS)}»`;
-  return (
-    `The "${stage}" stage of ${ticketKey} did not start: ${reason}. ${quote} ` +
-    'There is no transcript, because no agent ran; the run page shows the whole reason. ' +
-    'Nothing is retried automatically. Fix what stopped the workspace from starting, then hand the ' +
-    'task back at this stage.'
-  );
-};
-
-/** Nothing was spent, because nothing ran — the one zero `./cli-spawn.ts` names (WP-150). */
-const NO_USAGE = NO_RUN_USAGE;
-
-/** `is_estimate: false` — "nothing" is a measurement, not a guess (BD-011). */
-const NO_COST = MEASURED_ZERO_COST;

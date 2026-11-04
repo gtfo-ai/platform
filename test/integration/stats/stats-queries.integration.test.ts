@@ -249,6 +249,15 @@ describe('the statistics reads (PostgreSQL)', () => {
        select id, $1, $2, 'code_review', 'claude', 2.5, true, $3 from runs where task_id = $1`,
       [taskId, projectId, at(-30)],
     );
+    // WP-275b: a run that ended before its CLI spawn marker has no `started_at`, and adds no agent
+    // time — it ran no agent. Without the `started_at is not null` guard it would add nothing either
+    // way, but a `coalesce(started_at, created_at)` would count its provisioning as agent time.
+    await pool.query(
+      `insert into runs (task_id, project_id, role, model, prompt_version, status,
+                         started_at, ended_at, created_at)
+       values ($1, $2, 'reviewer', 'claude', 'v1', 'failed', null, $3, $4)`,
+      [taskId, projectId, at(-20), at(-25)],
+    );
 
     await merge(projectId, taskId, at(0));
 

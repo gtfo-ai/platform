@@ -238,6 +238,9 @@ describe('the runs declared unable to start', () => {
     'packages/application/src/pipeline/delivery-measures.test.ts': 1,
     'packages/application/src/pipeline/dependency-gate.test.ts': 1,
     'packages/application/src/pipeline/epic-split.test.ts': 1,
+    // WP-275a: the refinement run is the case; a completed one walks on to architecture, declared
+    // unable to start — and the read-back refusals declare the refinement run itself unstarted.
+    'packages/application/src/pipeline/run-plan.test.ts': 2,
     // WP-275: the settle cases are the refinement run's; a completed one walks on to architecture,
     // declared unable to start so the walk ends without a second settle.
     'packages/application/src/pipeline/settle.test.ts': 1,

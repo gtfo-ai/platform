@@ -23,7 +23,8 @@
  *
  * ## Why a heartbeat rather than the wall clock alone
  *
- * The wall clock is the cheaper signal — `started_at + spec.limits.wallClockMs + grace`, no writes
+ * The wall clock is the cheaper signal — `coalesce(started_at, created_at) + spec.limits.wallClockMs
+ * + grace` (`created_at` since WP-275b, `started_at` being the CLI spawn marker's), no writes
  * at all — and it is kept, as the **backstop** for rows written before this column had a writer
  * (`../recovery/run-lease.ts`). It cannot be the primary one: the default wall clock is an hour, so
  * a process that dies a minute into a run would hold its stage's reservation against every future

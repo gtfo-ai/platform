@@ -1677,7 +1677,8 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                       tone={
                         run.status === 'completed'
                           ? 'success'
-                          : run.status === 'running'
+                          : // WP-275b: `starting` is live too — claimed, its CLI not yet asked for.
+                            run.status === 'running' || run.status === 'starting'
                             ? 'accent'
                             : run.status === 'failed'
                               ? 'danger'

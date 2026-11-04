@@ -67,12 +67,14 @@ import type {
   RunCommandRefusal,
   RunCommandRepository,
   RunOfferRepository,
+  RunPlanRepository,
   RunRepository,
   StoredApproval,
   StoredArtifact,
   StoredBreakdownItem,
   StoredRun,
   StoredRunOffer,
+  StoredRunPlan,
   StoredTask,
   SupersededMergeRequest,
   SupersededMergeRequestOutcome,
@@ -339,6 +341,8 @@ export const createMemoryPipelineStore = (
   const epochs = new Map<Id, number>();
   /** `run_offers` (WP-274), keyed by `run_id` (unique there), insertion-ordered. */
   const offers = new Map<Id, StoredRunOffer>();
+  /** `run_plans` (WP-275a, migration 0095), keyed by `run_id`. */
+  const plans = new Map<Id, StoredRunPlan>();
   /** `run_commands` (WP-85), insertion-ordered like the SQL's `created_at, id`. */
   const runCommandRows = new Map<Id, MemoryRunCommandRow>();
   let runCommandSequence = 0;
@@ -1304,6 +1308,11 @@ export const createMemoryPipelineStore = (
       }
       // The winner closes the run's offer (WP-274, TD-031 §12), as the SQL adapter does.
       closeOffer(outcome.runId, outcome.terminalReason);
+      // …and clears its sealed plan (WP-275a), in the same write.
+      const plan = plans.get(outcome.runId);
+      if (plan !== undefined) {
+        plans.set(outcome.runId, { ...plan, sealedSpec: null });
+      }
       // The winner closes the run's pending commands, as the SQL adapter does in the same
       // transaction (WP-85).
       for (const row of runCommandRows.values()) {
@@ -1381,8 +1390,32 @@ export const createMemoryPipelineStore = (
       if (!isActiveRunStatus(run.status) || spawnMarkers.has(marker.runId)) {
         return false;
       }
+      // WP-275b: fenced on the claim, as the SQL's predicate; a live row under another claim throws.
+      if (marker.lease !== undefined && !fenceHolds(marker.runId, marker.lease)) {
+        throw new LeaseLostError(marker.runId, marker.lease);
+      }
       spawnMarkers.set(marker.runId, marker.at);
+      // …and the run's `starting → running`, with `started_at`, in the same write (WP-275b).
+      runs.set(marker.runId, { ...run, status: 'running', startedAt: marker.at });
       return true;
+    },
+    /**
+     * WP-275a's counter, the SQL's walk: the entry's runs before `runId` in insertion (`created_at`)
+     * order, counted back while each ended `error_during_execution` with a start failure recorded.
+     */
+    startFailures: async (_tx, entry) => {
+      const entryRuns = [...runs.values()].filter(
+        (run) =>
+          run.taskId === entry.taskId && run.stage === entry.stage && run.attempt === entry.attempt,
+      );
+      const index = entryRuns.findIndex((run) => run.id === entry.runId);
+      const before = index < 0 ? entryRuns : entryRuns.slice(0, index);
+      let count = 0;
+      for (const run of before.reverse()) {
+        if (run.terminalReason !== 'error_during_execution' || !startFailures.has(run.id)) break;
+        count += 1;
+      }
+      return count;
     },
     load: async (_tx, runId) => {
       const run = runs.get(runId);
@@ -1556,6 +1589,11 @@ export const createMemoryPipelineStore = (
         claimedAt: claim.now,
       });
       epochs.set(offer.runId, epoch);
+      // WP-275b: the claim is the run's `created → starting`, as the SQL's outer update writes it.
+      const claimedRun = runs.get(offer.runId);
+      if (claimedRun !== undefined && claimedRun.status === 'created') {
+        runs.set(offer.runId, { ...claimedRun, status: 'starting' });
+      }
       if (claim.owner === null || claim.expiresAt === null) {
         leases.delete(offer.runId);
       } else {
@@ -1572,6 +1610,27 @@ export const createMemoryPipelineStore = (
     load: async (_tx, runId) => {
       const offer = offers.get(runId);
       return offer === undefined ? null : clone(offer);
+    },
+  };
+
+  /** `run_plans` (WP-275a): written once, read by the run id; `finish` clears the seal above. */
+  const runPlanRepository: RunPlanRepository = {
+    insert: async (_tx, plan) => {
+      if (!runs.has(plan.runId)) {
+        throw new PipelineStoreError(
+          `run ${plan.runId} does not exist (run_plans.run_id references runs)`,
+        );
+      }
+      if (plans.has(plan.runId)) {
+        throw new PipelineStoreError(
+          `run ${plan.runId} already has a plan (run_plans.run_id is the key)`,
+        );
+      }
+      plans.set(plan.runId, clone({ ...plan }));
+    },
+    load: async (_tx, runId) => {
+      const plan = plans.get(runId);
+      return plan === undefined ? null : clone(plan);
     },
   };
 
@@ -2104,6 +2163,7 @@ export const createMemoryPipelineStore = (
     artifacts: artifactRepository,
     runs: runRepository,
     offers: offerRepository,
+    runPlans: runPlanRepository,
     questions: questionRepository,
     approvals: approvalRepository,
     breakdown: breakdownRepository,

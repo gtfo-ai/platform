@@ -15,9 +15,11 @@
  * memory store; the contract suite holds both to the behaviour). So the census has three halves:
  *
  * 1. **No other statement writes `runs.status`.** Every production SQL text that updates `runs` and
- *    assigns `status` is listed — today exactly `finish`'s — so a new raw writer fails here until it
+ *    assigns `status` is listed — `finish`'s, and since WP-275b the claim's and the CLI spawn
+ *    marker's live-to-live moves — so a new raw writer fails here until it
  *    goes through `finish` or closes the offer itself and is added below with its reason.
- * 2. **Both `finish` implementations close the offer**, read off their bodies.
+ * 2. **Both `finish` implementations close the offer** — and, since WP-275a, clear the run's sealed
+ *    plan — read off their bodies.
  * 3. **Every caller of `finish` is named**, per file, with the terminal writer of criterion (6b) it
  *    is — so a new terminal writer is a decision somebody records rather than a line somebody adds.
  *
@@ -28,7 +30,8 @@
  * - cancel — `cancelRunCommand`'s in-place ending (`commands.ts`, no live lease), and the holder's
  *   applied cancel, which stops the session so the run ends `cancelled` through `settleRun`'s
  *   `recordUnsuccessful`;
- * - the start failures — the executor's `recordUnstarted`;
+ * - the start failures — `settleRun`'s `not_started` branch, `recordNotStarted` (WP-275a; the
+ *   executor's `recordUnstarted` until then, and `stage-executor.ts` now calls `finish` nowhere);
  * - today's lease sweep — `recovery/run-lease.ts`;
  * - WP-144's shutdown hand-back — `recordHandBack`;
  * - the take-over's stop — the holder stops the session and `settleRun`'s `recordOntoStoppedTask`
@@ -54,21 +57,26 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const EXPECTED_FINISH_CALLERS: ReadonlyMap<string, number> = new Map([
   // `cancelRunCommand`'s in-place ending (no live lease, WP-101).
   ['packages/application/src/pipeline/commands.ts', 1],
-  // `recordUnstarted`, the start failure — the one ending the job still writes itself.
-  ['packages/application/src/pipeline/stage-executor.ts', 1],
   // `settleRun` (WP-275, transaction 2 moved out of the job): `record`, `recordOntoStoppedTask` (the
-  // take-over's stop), `recordUnsuccessful` (failure and the holder's applied cancel) and
-  // `recordHandBack` (WP-144's shutdown).
-  ['packages/application/src/pipeline/settle.ts', 4],
+  // take-over's stop), `recordUnsuccessful` (failure and the holder's applied cancel),
+  // `recordHandBack` (WP-144's shutdown) and — since WP-275a — `recordNotStarted`, the start failure
+  // (TD-031's 2026-11-04 amendment §3). `stage-executor.ts` writes no ending of its own any more.
+  ['packages/application/src/pipeline/settle.ts', 5],
   // The ask's endings: the hand-back, the failure, the answer, and the start failure.
   ['packages/application/src/ask/executor.ts', 4],
   // The lease sweep (`lease_expired`).
   ['packages/application/src/recovery/run-lease.ts', 1],
 ]);
 
-/** The production SQL texts that assign `runs.status`, per file — `finish`'s alone. */
+/** The production SQL texts that assign `runs.status`, per file — `finish`'s and two live moves. */
 const EXPECTED_STATUS_WRITERS: ReadonlyMap<string, number> = new Map([
-  ['packages/infrastructure/src/pipeline/postgres-pipeline-store.ts', 1],
+  // `finish` — the one **terminal** writer — and, since WP-275b, `markCliSpawnRequested`'s
+  // `starting → running` (the CLI spawn marker, TD-031's 2026-11-04 amendment §4): a live-to-live
+  // move, conditional on a live row, which ends nothing and so owes the offer nothing.
+  ['packages/infrastructure/src/pipeline/postgres-pipeline-store.ts', 2],
+  // WP-275b: the one claim's `created → starting`, in its outer `update runs` — live to live, the
+  // offer it moves being the claim's own.
+  ['packages/infrastructure/src/pipeline/postgres-run-offers.ts', 1],
 ]);
 
 const sources = (): string[] => censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] });
@@ -117,7 +125,7 @@ const memberBody = (file: string, name: string): string => {
 };
 
 describe('the terminal run-status writers close the offer (WP-274, criterion 6b)', () => {
-  it('has exactly one SQL text assigning runs.status, RunRepository.finish', () => {
+  it('has exactly the SQL texts assigning runs.status: finish, and the two live moves of WP-275b', () => {
     expect(
       sorted(
         census(
@@ -143,6 +151,28 @@ describe('the terminal run-status writers close the offer (WP-274, criterion 6b)
     );
     expect(closing).toMatch(/when 'claimed' then 'settled' else 'withdrawn'/);
     expect(closing).toMatch(/where run_id = \$1 and state in \('open', 'claimed'\)/);
+  });
+
+  /**
+   * WP-275a criterion 2 (TD-031's 2026-11-04 amendment §2): every terminal writer goes through
+   * `finish` (the census below), and both implementations clear the run's sealed plan once they
+   * have won the row — so the column is null after each writer. The behaviour is the contract
+   * suite's (`clears the sealed plan in the terminal write`, both stores); this is its census half.
+   */
+  it('clears the sealed run plan in both finish implementations, after the row is won (WP-275a)', () => {
+    const postgres = memberBody(
+      'packages/infrastructure/src/pipeline/postgres-pipeline-store.ts',
+      'finish',
+    );
+    expect(postgres).toMatch(
+      /if \(result\.rowCount !== 0\) \{[\s\S]*?await clearRunPlanSeal\(sqlOf\(tx\), outcome\.runId\)/,
+    );
+    const memory = memberBody('packages/application/src/testing/memory-pipeline.ts', 'finish');
+    expect(memory).toMatch(/plans\.set\(outcome\.runId, \{ \.\.\.plan, sealedSpec: null \}\)/);
+    const clearing = withoutComments(
+      censusText(REPO_ROOT, 'packages/infrastructure/src/pipeline/postgres-run-plans.ts'),
+    );
+    expect(clearing).toMatch(/update run_plans set sealed_spec = null where run_id = \$1/);
   });
 
   it('names every caller of runs.finish — each one a terminal writer criterion (6b) lists', () => {

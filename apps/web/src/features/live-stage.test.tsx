@@ -224,6 +224,26 @@ describe('the live stage on the task page (backlogs 455 and 496)', () => {
     });
   });
 
+  /**
+   * WP-275b: a run is `starting` from its claim until it asks for its CLI, with no `started_at` —
+   * the task page's live stage shows it as live, names the status, and says it has not started
+   * rather than inventing an elapsed time.
+   */
+  it('shows a starting run as live, and as not started yet (WP-275b)', async () => {
+    const app = createApp({
+      fetchImpl: fetchFor(
+        detail([run({ status: 'starting', started_at: null, latest_progress: null })]),
+      ),
+      realtime: false,
+      now: () => NOW,
+    });
+    render(app.element);
+    const panel = await screen.findByTestId('live-stage');
+    expect(panel.textContent).toContain('starting');
+    expect(panel.textContent).toContain('not started yet');
+    expect(panel.textContent).not.toContain('for ');
+  });
+
   it('renders the model’s words as text, never as markup (BD-022)', async () => {
     const hostile = '<img src=x onerror=alert(1)> **bold** [link](javascript:alert(1))';
     const app = createApp({

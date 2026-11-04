@@ -457,6 +457,29 @@ export interface SteerMessage {
 export type RunStopReason = 'cancelled' | 'taken_over' | 'shutdown';
 
 /**
+ * **Why the platform stopped a run** — the closed vocabulary of the `run_stopped` transcript row's
+ * `data.reason` (`claude-runner.ts`'s `StopCause`): the runner's own stops beside a holder's
+ * {@link RunStopReason}. It is what `settleRun`'s request carries as `stopReason` (WP-275a, TD-031's
+ * 2026-11-04 amendment §1), so a claimant's stop register crosses as a closed word and a worker's
+ * (WP-281) is validated against {@link runStoppedReasonSchema} at the boundary.
+ */
+export const RUN_STOPPED_REASONS = [
+  'stalled',
+  'timed_out',
+  'budget_exceeded',
+  'cost_unreported',
+  'cancelled',
+  'taken_over',
+  'shutdown',
+] as const;
+export type RunStoppedReason = (typeof RUN_STOPPED_REASONS)[number];
+export const runStoppedReasonSchema = z.enum(RUN_STOPPED_REASONS);
+
+/** A stop register's word as the closed vocabulary, or `null` for none or for a word it lacks. */
+export const runStoppedReasonOf = (value: string | null): RunStoppedReason | null =>
+  value === null ? null : (runStoppedReasonSchema.safeParse(value).data ?? null);
+
+/**
  * What a take-over asks the run's **workspace** for on the way out (product/19 §19, WP-27).
  *
  * It travels with the stop rather than being asked for afterwards, because after the stop there is
@@ -750,6 +773,113 @@ export const runStartFailureOf = (
   }
   const message = input.redactor.redactText(workspace.message.trim()).value;
   const output = workspace.output === null ? '' : input.redactor.redactText(workspace.output).value;
+  return { ...base, ...boundedStartFailureDetail(message, output, workspace.outputTruncated) };
+};
+
+/**
+ * **A run that never started, as a claimant reports it** — `settleRun`'s `not_started` outcome
+ * (WP-275a, TD-031's 2026-11-04 amendment §§1, 3). A distinct type and never a fabricated
+ * `RunOutcome`: settle's `record` never sees one.
+ *
+ * The claimant classifies and quotes; it does **not** redact, bound to the record's caps, or decide
+ * whether the stage goes again. The redacted {@link RunStartFailure} is built in settle with the
+ * settle's redactor ({@link runStartFailureFromReport}), and `retryable` is
+ * `transient && attempt < MAX_RUN_START_ATTEMPTS` with the attempt counted from stored rows.
+ */
+export interface NotStartedReport {
+  readonly kind: 'not_started';
+  /** {@link describeStartFailure}'s closed-vocabulary sentence, unchanged. */
+  readonly failure: string;
+  /**
+   * The launcher's own words — its message, a newline, the failing helper's output tail —
+   * **unredacted**, bounded by the claimant at {@link NOT_STARTED_REPORT_DETAIL_MAX_CHARS}; `null`
+   * when no workspace said anything.
+   */
+  readonly detail: string | null;
+  /**
+   * Whether {@link detail} is already a cut — the launcher's tail of a longer output, or the
+   * claimant's own bound — so the record can announce it (backlog 453: a cut is announced in
+   * `truncated`, never inside the text). A field the amendment's sketch does not list: without it
+   * the record would claim a whole output it never had (stated in PROGRESS under WP-275a).
+   */
+  readonly detailTruncated: boolean;
+  /** {@link isRetryableStartFailure} — the classification only. */
+  readonly transient: boolean;
+  /** WP-150's marker: the run may have reached its CLI (written, and its frame not withheld). */
+  readonly spawnRequested: boolean;
+}
+
+/**
+ * The claimant's bound on {@link NotStartedReport.detail} — far above the record's own caps, so a
+ * cut here is never the one that decides what is stored (settle redacts **before** it cuts, and a
+ * bound applied first could split a secret). Only a runaway message reaches it.
+ */
+export const NOT_STARTED_REPORT_DETAIL_MAX_CHARS = 16_000;
+
+/** What a claimant reports about a start that threw (module docblock of {@link NotStartedReport}). */
+export const notStartedReportOf = (
+  error: unknown,
+  input: { readonly spawnRequested: boolean },
+): NotStartedReport => {
+  const workspace = workspaceErrorOf(error);
+  const words =
+    workspace === null
+      ? ''
+      : [workspace.message.trim(), workspace.output ?? ''].filter((part) => part !== '').join('\n');
+  const cut = words.length > NOT_STARTED_REPORT_DETAIL_MAX_CHARS;
+  return {
+    kind: 'not_started',
+    failure: describeStartFailure(error),
+    detail: words === '' ? null : words.slice(0, NOT_STARTED_REPORT_DETAIL_MAX_CHARS),
+    detailTruncated: cut || (workspace?.outputTruncated ?? false),
+    transient: isRetryableStartFailure(error),
+    spawnRequested: input.spawnRequested,
+  };
+};
+
+/**
+ * The record of a reported start failure — {@link runStartFailureOf}'s rule over a
+ * {@link NotStartedReport} rather than an error object: the report's words split back into the
+ * launcher's message (the first line) and its output (the rest), each redacted **whole** by the
+ * settle's redactor, then bounded and the cuts announced.
+ */
+export const runStartFailureFromReport = (
+  report: NotStartedReport,
+  input: {
+    readonly redactor: SecretRedactor;
+    readonly attempt: number;
+    readonly retryable: boolean;
+  },
+): RunStartFailure => {
+  const diagnosis = report.failure.slice(0, RUN_START_FAILURE_MESSAGE_MAX_CHARS);
+  const base = {
+    kind: 'not_started' as const,
+    diagnosis: diagnosis === '' ? 'unknown error' : diagnosis,
+    attempt: input.attempt,
+    retryable: input.retryable,
+  };
+  if (report.detail === null) {
+    return { ...base, detail: null, truncated: false };
+  }
+  const newline = report.detail.indexOf('\n');
+  const message = newline < 0 ? report.detail : report.detail.slice(0, newline);
+  const rest = newline < 0 ? '' : report.detail.slice(newline + 1);
+  return {
+    ...base,
+    ...boundedStartFailureDetail(
+      input.redactor.redactText(message.trim()).value,
+      rest === '' ? '' : input.redactor.redactText(rest).value,
+      report.detailTruncated,
+    ),
+  };
+};
+
+/** The head of the message and the tail of the output, after the redactor, cuts announced. */
+const boundedStartFailureDetail = (
+  message: string,
+  output: string,
+  alreadyCut: boolean,
+): { readonly detail: string | null; readonly truncated: boolean } => {
   const head = message.slice(0, RUN_START_FAILURE_MESSAGE_MAX_CHARS);
   // A placeholder can lengthen the text past the launcher's bound, so it is cut again here, after
   // the redactor, with the same rule: the tail, without a partial token at its front.
@@ -759,9 +889,8 @@ export const runStartFailureOf = (
     .join('\n')
     .slice(0, RUN_START_FAILURE_DETAIL_MAX_CHARS);
   return {
-    ...base,
     detail: detail === '' ? null : detail,
-    truncated: head.length < message.length || tail.cut || workspace.outputTruncated,
+    truncated: head.length < message.length || tail.cut || alreadyCut,
   };
 };
 

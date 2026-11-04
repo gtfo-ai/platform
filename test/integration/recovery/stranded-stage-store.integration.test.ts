@@ -384,6 +384,36 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
     expect(row?.endedRun).toBeNull();
   });
 
+  /**
+   * WP-275b: `started_at` is null for a run that ended before its CLI spawn marker, so "the newest
+   * run of the attempt" is ordered by `created_at` — `started_at desc nulls last` picked the older,
+   * started run instead. Here the attempt's newest run never started (a start failure); the pick is
+   * it, not the hand-back before it.
+   */
+  it('reads the newest ended run by creation, a never-started one included (WP-275b)', async () => {
+    const task = await seedTask({});
+    const stage = await client.query<{ id: string }>(
+      'select id from task_stages where task_id = $1',
+      [task],
+    );
+    for (const [created, started, status, reason] of [
+      ['30 minutes', '29 minutes', 'failed', 'shutdown'],
+      ['10 minutes', null, 'failed', 'error_during_execution'],
+    ] as const) {
+      await client.query(
+        `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
+                           attempt, status, started_at, terminal_reason, ended_at, created_at)
+         values ($1, $2, $3, 'developer', 'claude-opus-5', 'high', 'feature@1+developer', 1,
+                 $4::run_status,
+                 case when $5::text is null then null else now() - $5::interval end,
+                 $6::run_terminal_reason, now() - interval '9 minutes', now() - $7::interval)`,
+        [task, stage.rows[0]?.id, projectId, status, started, reason, created],
+      );
+    }
+    const [row] = (await store.strandedStages(tx, query())).filter((r) => r.taskId === task);
+    expect(row?.endedRun).toEqual({ status: 'failed', terminalReason: 'error_during_execution' });
+  });
+
   it('finds a retrospective whose run a person cancelled, with the ending, and never marks it (WP-108 review round 1)', async () => {
     // `retro` has no edge to `paused`, so a cancel with no live lease leaves the task at its stage.
     const task = await seedTask({ state: 'retro', stage: 'retrospective' });

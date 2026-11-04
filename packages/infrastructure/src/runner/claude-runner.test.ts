@@ -19,6 +19,7 @@ import path from 'node:path';
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import type { RunOutcome, RunSpec, ToolApprovalDecision } from '@platform/application';
 import {
+  cliSpawnDepsForTest,
   countingStartHooks,
   PROGRESS_MIN_INTERVAL_MS,
   recordCliSpawn,
@@ -1665,7 +1666,8 @@ describe('a stop requested while the CLI spawn marker commits (WP-163)', () => {
       });
       const record = recordCliSpawn({
         unitOfWork: {
-          transaction: async (work: (scope: never) => unknown) => work({} as never),
+          transaction: async (work: (scope: never) => unknown) =>
+            work({ events: { append: async () => {} } } as never),
         } as never,
         runs: {
           markCliSpawnRequested: async () => {
@@ -1674,7 +1676,10 @@ describe('a stop requested while the CLI spawn marker commits (WP-163)', () => {
           },
         },
         now: () => FIXTURE_CLOCK_START as never,
-        runId: runSpecFixture().runId,
+        ...cliSpawnDepsForTest({
+          runId: runSpecFixture().runId as never,
+          now: () => FIXTURE_CLOCK_START as never,
+        }),
       });
       let withholds = 0;
       const hooks = {

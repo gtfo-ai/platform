@@ -113,7 +113,15 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    */
   readonly execution: Omit<
     StageExecutorOptions,
-    'unitOfWork' | 'store' | 'settings' | 'logger' | 'context' | 'redactor' | 'calendar'
+    | 'unitOfWork'
+    | 'store'
+    | 'settings'
+    | 'logger'
+    | 'context'
+    | 'redactor'
+    | 'calendar'
+    | 'jobs'
+    | 'eventStore'
   > &
     Pick<StageExecutorOptions, 'context'>;
   /** How many stages this process runs at once. @default 1 */
@@ -257,7 +265,11 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     ...options.execution,
     unitOfWork,
     store: options.store,
-    settings: async (projectId) => options.settings.forProject(projectId),
+    settings: async (projectId, tx) => options.settings.forProject(projectId, tx),
+    // WP-275a: where `settleRun` enqueues a start failure's retry and a hand-back's re-run, and the
+    // run stream it rebuilds a run's aggregate from — the runtime's own, as every handler's.
+    jobs: options.jobs,
+    eventStore: options.eventStore,
     // WP-56: the calendar a blocking question's deadline is computed on — the saga's own, so the
     // stage executor and the approval gates cannot resolve `1 working day` on two calendars.
     calendar: options.calendar,
@@ -299,6 +311,12 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     // by the wall-clock backstop. Taken from `execution` rather than added to `AskRuntimeOptions`,
     // so a composition root cannot pass one and forget the other.
     ...(options.execution.lease === undefined ? {} : { lease: options.execution.lease }),
+    // WP-275a: the same seal and the same environment as the stage executor, so an ask's run is
+    // planned, stored and read back exactly as a stage's is.
+    runPlans: options.execution.runPlans,
+    ...(options.execution.runEnvironment === undefined
+      ? {}
+      : { runEnvironment: options.execution.runEnvironment }),
     ...(logger === undefined ? {} : { logger }),
   });
   // The outbound queue's duties include the notification band's, which needs the store and the

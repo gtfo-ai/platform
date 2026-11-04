@@ -1430,6 +1430,20 @@ export const composePipeline = async (
         logger: options.logger,
       }),
       stopReasons,
+      /**
+       * The run plan's seal (WP-275a, TD-031's 2026-11-04 amendment §2): the `secrets` table's
+       * envelope under this process's `APP_SECRET_KEY`, so the plan transaction 1b stores opens in
+       * any process holding the key — the claimant WP-276 composes here, too.
+       */
+      runPlans: secretAdapters.createEnvelopeRunPlanSealer(
+        secretAdapters.deriveSecretKey(options.secretKey),
+      ),
+      /**
+       * The values a read-back spec is given and a settle redacts — `agentRunEnvironment`, the one
+       * function the planner above is given its `env` from, so the plan's names and these values are
+       * one resolution of one process environment.
+       */
+      runEnvironment,
       // BD-010's org and project budgets, read from the projection the ledger writes. A deployment
       // with no `budgets` rows is unaffected: `applicable` matches nothing and nothing blocks.
       budgets: createBudgetGuard({ store: costStore }),

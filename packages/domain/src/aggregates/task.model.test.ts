@@ -593,7 +593,8 @@ class HandBack implements TaskCommand {
  *
  * Two things it pins that a single example cannot. The permission subject is the **run's** status
  * and not the task's, so a steer succeeds from a `paused`, `needs_human` or even `done` task and is
- * refused for every non-`running` run — a rule this file's sequences reach from states no unit test
+ * refused for every run that is not claimed and live — `starting` (queued for the holder since
+ * WP-275b) or `running` — a rule this file's sequences reach from states no unit test
  * enumerates. And the steer **moves nothing**: state and stage are unchanged, while the event still
  * chains the task's `stream_seq` (invariant 5 above), which is the whole reason the command lives
  * on this aggregate.
@@ -620,7 +621,7 @@ class Steer implements TaskCommand {
         },
         context(real),
       );
-    if (this.status !== 'running') {
+    if (this.status !== 'running' && this.status !== 'starting') {
       expect(command).toThrow(PermissionDeniedError);
       return;
     }
@@ -855,7 +856,7 @@ describe('Task state machine — model-based properties', () => {
    * claim about a seed. The enum is read off the contract, so a tenth status fails here on the day
    * it is added rather than whenever the sampler happens to draw it (standing rule 68).
    */
-  it('allows a steer for exactly one of the nine run statuses, and refuses the other eight', () => {
+  it('allows a steer for exactly two of the nine run statuses, and refuses the other seven', () => {
     const { real } = setup();
     const attempt = (status: RunStatus): TaskDecision =>
       steerRun(
@@ -877,7 +878,8 @@ describe('Task state machine — model-based properties', () => {
         return false;
       }
     });
-    expect(allowed).toEqual(['running']);
+    // WP-275b: `starting` (claimed, its CLI not yet asked for) is steered by queueing.
+    expect(allowed).toEqual(['starting', 'running']);
   });
 
   it(

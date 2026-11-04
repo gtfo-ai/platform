@@ -875,7 +875,9 @@ describe('a run whose start failed for a transport reason', () => {
 
     const queued = harness.jobs.enqueued.filter((request) => request.queue === 'stage.execute');
     expect(queued).toHaveLength(1);
-    expect(queued[0]?.data).toMatchObject({ stage: 'refinement', start_attempts: 1 });
+    // No count rides the payload since WP-275a: the next settle counts the entry's stored runs.
+    expect(queued[0]?.data).toMatchObject({ stage: 'refinement' });
+    expect(queued[0]?.data).not.toHaveProperty('start_attempts');
     // A delay, not a spin: `drain` ran every job whose timer had come and this one had not.
     expect(queued[0]?.startAfter?.getTime()).toBe(harness.clock.epochMs + RUN_START_RETRY_MS);
   });
@@ -906,6 +908,73 @@ describe('a run whose start failed for a transport reason', () => {
     expect(
       harness.jobs.history.filter((request) => request.queue === 'stage.execute'),
     ).toHaveLength(MAX_RUN_START_ATTEMPTS);
+  });
+
+  /**
+   * WP-275a criterion 5 (TD-031's 2026-11-04 amendment §3): the count is the stage entry's **stored
+   * runs** — the run's immediately preceding start failures by `created_at` — so a shutdown
+   * hand-back between failures ends the streak and the bound starts again. Discriminating: counted
+   * over every failure of the entry (or carried on a payload a hand-back did not reset… and did), the
+   * escalation would land on the second failure after the hand-back, not the third.
+   */
+  it('restarts the count after a shutdown hand-back, and escalates on the third failure after it', async () => {
+    const harness = harnessThatFlaps();
+    await harness.publish([ticketMatched()]);
+    const states: string[] = [taskOf(harness).task.state];
+
+    harness.script('refinement', {
+      status: 'failed',
+      terminalReason: 'shutdown',
+      costUsd: 0.1,
+      error: 'the platform stopped the run: shutdown',
+      stopReason: 'shutdown',
+    });
+    harness.clock.advance(RUN_START_RETRY_MS);
+    await harness.drain();
+    states.push(taskOf(harness).task.state);
+
+    harness.script('refinement', {
+      status: 'completed',
+      terminalReason: 'success',
+      throwsOnStart: transportFailure(),
+    });
+    for (let round = 0; round < MAX_RUN_START_ATTEMPTS; round += 1) {
+      harness.clock.advance(RUN_START_RETRY_MS);
+      await harness.drain();
+      states.push(taskOf(harness).task.state);
+    }
+
+    expect(states).toEqual(['active', 'active', 'active', 'active', 'needs_human']);
+    // The attempts the records name, in order: the first failure, then 1, 2, 3 after the hand-back.
+    expect(
+      harness
+        .events()
+        .filter((entry) => entry.type === 'run.failed')
+        .map((entry) => (entry.payload as { start_failure?: { attempt: number } }).start_failure)
+        .filter((failure) => failure !== undefined)
+        .map((failure) => failure.attempt),
+    ).toEqual([1, 1, 2, 3]);
+    expect(escalationOf(harness)?.payload.reason).toContain('could not be started');
+  });
+
+  /**
+   * A job queued by the previous build still carries `start_attempts`; it is accepted and **read by
+   * nothing** (WP-275a criterion 5). A payload that claims two attempts already spent is not what
+   * decides: the run's stored predecessors are, and there are none.
+   */
+  it('ignores a start_attempts a previous build left on the payload', async () => {
+    const harness = harnessThatFlaps();
+    await harness.publish([ticketMatched()]);
+    const [queued] = harness.jobs.enqueued.filter((request) => request.queue === 'stage.execute');
+    expect(queued).toBeDefined();
+    (queued as { data: Record<string, unknown> }).data = {
+      ...(queued?.data as Record<string, unknown>),
+      start_attempts: MAX_RUN_START_ATTEMPTS - 1,
+    };
+    harness.clock.advance(RUN_START_RETRY_MS);
+    await harness.drain();
+    // Read off the payload, this second failure would have been the bound's last and escalated.
+    expect(taskOf(harness).task.state).toBe('active');
   });
 
   it('treats a failure it cannot classify as terminal, and carries no message into the log', async () => {

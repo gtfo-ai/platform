@@ -68,8 +68,10 @@ describe('Drizzle schema', () => {
     // duties right now, which the executor's idempotency record cannot answer because it is written
     // after the call (migration 0091, WP-184), plus `run_offers` — one offer per agent run, claimed
     // by one SQL claim under an epoch, whose per-task index replaces the job singleton for a run's
-    // duration (migration 0094, WP-274, TD-031 decisions 1–2).
-    expect(tables.length).toBe(73);
+    // duration (migration 0094, WP-274, TD-031 decisions 1–2), plus `run_plans` — the run's planned
+    // spec, sealed, cleared at its terminal write (migration 0095, WP-275a, TD-031's 2026-11-04
+    // amendment §2).
+    expect(tables.length).toBe(74);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

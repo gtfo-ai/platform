@@ -220,7 +220,8 @@ export const createRunCommandInbox = (deps: RunCommandInboxDependencies): RunCom
       }
       const { refused, leakedSession } = await deps.unitOfWork.transaction(async (scope) => {
         // A stop refused here leaves a session nobody will stop, if one still runs (PROGRESS backlog
-        // 336). The run row says whether one may: still `running` and still leased to this process.
+        // 336). The run row says whether one may: still live (`starting` or `running`, WP-275b) and
+        // still leased to this process.
         // Read **first**, under the run's `for share` lock — the order `markApplied` takes and the
         // one `RunRepository.finish` meets (run row, then its commands), so the refusal and an
         // ending cannot wait on each other in opposite orders.
@@ -234,7 +235,12 @@ export const createRunCommandInbox = (deps: RunCommandInboxDependencies): RunCom
         });
         return {
           refused: marked,
-          leakedSession: marked && run?.status === 'running' && run.leaseOwner === deps.owner,
+          // `starting` too since WP-275b: a run is `running` only from its CLI spawn marker, and a
+          // handle registered before it (provisioning, the handshake) is a session to stop as well.
+          leakedSession:
+            marked &&
+            (run?.status === 'running' || run?.status === 'starting') &&
+            run.leaseOwner === deps.owner,
         };
       });
       if (leakedSession) {

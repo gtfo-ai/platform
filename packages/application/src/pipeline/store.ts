@@ -1437,15 +1437,16 @@ export interface StoredRun {
   readonly wallMs: number;
   readonly createdAt: IsoDateTime;
   /**
-   * When the run's session was started, or `null` for a row that never reached `starting`.
+   * When the run asked for its CLI — its CLI spawn marker's instant — or `null` for a run that
+   * never did.
    *
    * Read since WP-15i, because `POST /api/runs/:run_id/cancel` ends a run from **another process**
    * than the one executing it: the executor has the `Run` aggregate it created in memory and can
    * compute the wall time from it, and a cancelling request has only the row. Without this the
    * cancelled run's `wall_ms` would have to be written as `0`, which is a measurement nobody made.
    *
-   * The SQL adapter writes `started_at = now()` in the insert, so a caller does not supply it; it
-   * is on this type because `load` answers it.
+   * Since WP-275b it is written by the CLI spawn marker (`markCliSpawnRequested`), never by the
+   * insert, so it is `null` for every run that ended before it asked for its CLI.
    */
   readonly startedAt: IsoDateTime | null;
   /**
@@ -1661,6 +1662,46 @@ export interface RunOfferRepository {
   load(tx: Transaction, runId: Id): Promise<StoredRunOffer | null>;
 }
 
+/** One `ReviewVerdict.checklists_applied` entry, as the planner decides it (WP-45). */
+export interface AppliedChecklistRecord {
+  readonly name: string;
+  readonly item_count: number;
+  readonly required_by: readonly string[];
+  readonly truncated: boolean;
+}
+
+/**
+ * The run's planned spec as stored — `run_plans` (migration 0095, WP-275a, TD-031's 2026-11-04
+ * amendment §2). The spec is opaque bytes here: sealed by the `RunPlanSealer` port before the write
+ * and opened by `loadRunPackage` after the read, so this repository never sees a plaintext spec.
+ */
+export interface NewRunPlan {
+  readonly runId: Id;
+  /** The sealed document's shape (`RUN_PLAN_FORMAT`). */
+  readonly format: number;
+  readonly sealedSpec: Uint8Array;
+  /** The `APP_SECRET_KEY` generation that sealed it. */
+  readonly keyId: string;
+  /** The spec's `secretEnvNames` — names, never values. */
+  readonly secretEnvNames: readonly string[];
+  /** What the planner gave a Reviewer run, or `null` when it recorded nothing (WP-45). */
+  readonly reviewChecklists: readonly AppliedChecklistRecord[] | null;
+  /** `questionTimeoutOf(settings)` at plan time. */
+  readonly questionTimeout: string;
+}
+
+export interface StoredRunPlan extends Omit<NewRunPlan, 'sealedSpec'> {
+  /** `null` once the run is terminal: `RunRepository.finish` clears it in the run's transaction. */
+  readonly sealedSpec: Uint8Array | null;
+}
+
+export interface RunPlanRepository {
+  /** Written once, in the run's creation transaction, beside the run row. */
+  insert(tx: Transaction, plan: NewRunPlan): Promise<void>;
+  /** The plan, or `null` for a run planned before WP-275a (or one that does not exist). */
+  load(tx: Transaction, runId: Id): Promise<StoredRunPlan | null>;
+}
+
 /**
  * {@link RunRepository.lockSettlement}'s answer: what `settleRun` asks of the run row before it
  * writes anything (WP-275, TD-031 decision 3) — whether it is still live, under which claim, and,
@@ -1720,6 +1761,10 @@ export interface RunRepository {
    * `lease_epoch` and `lease_owner`, and a **live** row held under another claim throws
    * {@link LeaseLostError}. A writer that is not the claimant — a person's cancel ending the record
    * in place, the lease sweep — passes none and ends the row whoever holds it, as before.
+   *
+   * **The winner also clears the run's sealed plan** (WP-275a, TD-031's 2026-11-04 amendment §2):
+   * `run_plans.sealed_spec = null` in the same transaction, so a sealed spec exists only while its
+   * run is live — a leaf row reached only under the run's lock, so the lock order is unchanged.
    *
    * **The winner also closes the run's pending commands** (WP-85): every `run_commands` row still
    * pending is stamped `run_ended` in the same transaction, after the row moved, so a command
@@ -1821,14 +1866,48 @@ export interface RunRepository {
    * cancel ended in place, the lease sweep) and for a second call: the caller then starts no CLI.
    * The caller runs it in a transaction of its own and commits it **before** it asks for the CLI
    * (`RunStartHooks.beforeCliSpawn`), so the record is durable whenever a CLI can exist. Never a
-   * whole-row write (standing rule 79): the run's status, cost and lease are other writers'.
+   * whole-row write (standing rule 79): the run's cost and lease are other writers'.
+   *
+   * **Since WP-275b it is also the run's `starting → running`** (TD-031's 2026-11-04 amendment §4):
+   * the same statement writes `status = 'running'` and `started_at = at`, and the caller appends
+   * `run.started` in the same transaction — so `started_at` is null, and the run has no
+   * `run.started`, for every run that ended before it asked for its CLI.
    *
    * @throws when the run does not exist at all, exactly as {@link RunRepository.finish} does.
    */
   markCliSpawnRequested(
     tx: Transaction,
-    marker: { readonly runId: Id; readonly at: IsoDateTime },
+    marker: {
+      readonly runId: Id;
+      readonly at: IsoDateTime;
+      /**
+       * The claimant's fence (WP-275b): the write is then also conditional on `lease_epoch` and
+       * `lease_owner`, and a **live** row held under another claim throws {@link LeaseLostError}
+       * — the claimant withholds the `spawn` frame. Absent only for a row no claim took.
+       */
+      readonly lease?: RunLeaseFence;
+    },
   ): Promise<boolean>;
+  /**
+   * How many of this stage entry's runs **immediately preceding** `runId` ended with a recorded
+   * start failure — the retry counter of a start failure, counted from stored rows (WP-275a,
+   * TD-031's 2026-11-04 amendment §3), as {@link shutdownEndings} counts hand-backs.
+   *
+   * The entry is `(task, stage, attempt)`; its runs are ordered by **`created_at`** (then `id`),
+   * never `started_at`, which is null for a run that never started. Walking back from `runId`, a
+   * run counts while it ended `error_during_execution` with a start failure recorded
+   * (`runs.exit_detail`); the first run that did not — a run that started, or a shutdown hand-back —
+   * ends the streak. Read under the settle's lock, so `runId` itself is live and not counted.
+   */
+  startFailures(
+    tx: Transaction,
+    entry: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      readonly runId: Id;
+    },
+  ): Promise<number>;
   /**
    * Renews the run's lease — `runs.lease_expires_at` under `lease_owner` (TD-003, WP-47, WP-274).
    *
@@ -2408,6 +2487,8 @@ export interface PipelineStore {
   readonly runs: RunRepository;
   /** WP-274's offers (migration 0094, TD-031 decisions 1–2). */
   readonly offers: RunOfferRepository;
+  /** The run's planned spec, sealed (WP-275a, migration 0095). */
+  readonly runPlans: RunPlanRepository;
   readonly questions: QuestionRepository;
   readonly approvals: ApprovalRepository;
   /** WP-40's epic-split queue: one row per proposed child ticket. */

@@ -667,7 +667,11 @@ such, and so are the failing jobs past the fifth.
 
 ## 5. Run detail and the transcript
 
-Click a run. Header metrics, then four tabs:
+Click a run. Header metrics, then four tabs. A run reads **starting** from the moment the
+platform's runner takes it until it asks for the agent's CLI — while its workspace is prepared — and
+**running** from then on; a starting run shows no elapsed time yet and can be cancelled, and a steer
+sent to it is recorded and reaches the agent as soon as it starts. A run that ends while still
+starting never ran an agent and cost nothing.
 
 - **Transcript** — the live stream of the agent's turn: messages, tool calls and their results, as
   they happen. This is the "click and watch" part of the product. Everything in it is rendered as

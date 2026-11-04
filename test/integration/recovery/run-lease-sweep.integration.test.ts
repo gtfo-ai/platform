@@ -86,8 +86,11 @@ const withTx = async <T>(fn: (tx: Transaction) => Promise<T>): Promise<T> => {
 
 interface SeededRun {
   readonly leaseExpiresAt?: string | null;
-  readonly startedAt?: string;
+  /** `null` is a run that never reached its CLI spawn marker (WP-275b). */
+  readonly startedAt?: string | null;
   readonly status?: string;
+  /** The row's `created_at`; absent is the column's own default, `now()`. */
+  readonly createdAt?: string;
 }
 
 /** `(task_id, stage, attempt)` is unique, so a case that seeds two runs seeds two attempts. */
@@ -102,18 +105,20 @@ const seedRun = async (run: SeededRun = {}): Promise<string> => {
   );
   const inserted = await pool.query<{ id: string }>(
     `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
-                       attempt, status, started_at, lease_owner, lease_expires_at)
+                       attempt, status, started_at, lease_owner, lease_expires_at, created_at)
      values ($1, $2, $3, 'developer', 'claude-opus-5', 'high', 'feature@1+developer',
-             $8, $4::run_status, $5::timestamptz, $6, $7::timestamptz) returning id`,
+             $8, $4::run_status, $5::timestamptz, $6, $7::timestamptz,
+             coalesce($9::timestamptz, now())) returning id`,
     [
       taskId,
       stage.rows[0]?.id,
       projectId,
       run.status ?? 'running',
-      run.startedAt ?? at(-30),
+      run.startedAt === undefined ? at(-30) : run.startedAt,
       run.leaseExpiresAt === null ? null : 'server-1:0f0f0f0f',
       run.leaseExpiresAt === undefined ? at(-10) : run.leaseExpiresAt,
       attempt,
+      run.createdAt ?? null,
     ],
   );
   return inserted.rows[0]?.id as string;
@@ -214,6 +219,32 @@ describe('the expired-run query', () => {
     const found = await withTx(async (tx) => store.expiredRuns(tx, QUERY));
 
     expect(found.map((run) => run.runId)).toEqual([old]);
+  });
+
+  /**
+   * WP-275b: `started_at` is written only at the CLI spawn marker, so a `starting` run with no lease
+   * and no `started_at` would never meet a `started_at` backstop. The backstop reads
+   * `coalesce(started_at, created_at)`: a run created longer ago than a wall clock plus grace is
+   * found, one created inside it is not (rule 42). Canary: the pre-WP-275b predicate finds neither.
+   */
+  it('reaches a never-started run through its created_at, and not one created inside the bound', async () => {
+    const stuck = await seedRun({
+      status: 'starting',
+      leaseExpiresAt: null,
+      startedAt: null,
+      createdAt: addMs(STARTED_CUTOFF, -1000),
+    });
+    await seedRun({
+      status: 'starting',
+      leaseExpiresAt: null,
+      startedAt: null,
+      createdAt: addMs(STARTED_CUTOFF, 1000),
+    });
+
+    const found = await withTx(async (tx) => store.expiredRuns(tx, QUERY));
+
+    expect(found.map((run) => run.runId)).toEqual([stuck]);
+    expect(found[0]?.startedAt).toBeNull();
   });
 
   it('leaves a terminal run alone, whatever its lease says', async () => {

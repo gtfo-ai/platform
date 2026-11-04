@@ -241,6 +241,32 @@ describe('the cost ledger handler', () => {
     expect(harness.store.modelUsage).toMatchObject([{ usdEstimated: null, usdReported: null }]);
   });
 
+  /**
+   * WP-275b: `runs.started_at` is written only at the CLI spawn marker, so a run that never reached
+   * it carries none — and the ledger prices at the event's own instant instead of failing to price.
+   */
+  it('prices a run with no started_at at the instant its ending was recorded (WP-275b)', async () => {
+    const harness = ledgerHarness();
+    const NEVER_STARTED = '00000000-0000-4000-8000-0000000002b5' as Id;
+    harness.store.seedRun({
+      runId: NEVER_STARTED,
+      taskId: TASK,
+      projectId: PROJECT,
+      orgId: ORG,
+      template: 'feature',
+      stage: 'implementation',
+      model: 'claude-opus-5',
+      startedAt: null,
+    });
+    harness.store.seedPrice(OPUS_PRICE);
+    await harness.publish([
+      runFinished({ run_id: NEVER_STARTED, cost: { usd: 0, is_estimate: true } }),
+    ]);
+    expect(harness.store.entries).toMatchObject([
+      { runId: NEVER_STARTED, usd: 5, isEstimate: true },
+    ]);
+  });
+
   it('charges nothing for a run the platform has no row for', async () => {
     const harness = ledgerHarness();
     await harness.publish([runFinished({ run_id: '00000000-0000-4000-8000-00000000dead' as Id })]);

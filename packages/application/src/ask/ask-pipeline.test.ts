@@ -235,6 +235,36 @@ describe('an ask is a run with a task and no stage (criterion 1)', () => {
     expect(ask?.runId).not.toBeNull();
   });
 
+  /**
+   * WP-275a criterion 3 and WP-275b criterion 3, for the ask: its session runs the spec its planner
+   * returned, **read back** from the plan transaction 1b stored (deep-equal, prompts byte-identical),
+   * the plan's seal is cleared by the run's ending, and its run follows the offer's lifecycle —
+   * `run.created` with the row, `run.claimed` at the claim, `run.started` at the CLI spawn marker.
+   */
+  it('runs from the plan it stored, read back as planned, and follows the offer’s lifecycle (WP-275a/b)', async () => {
+    const harness = harnessWith();
+    await seedTask(harness);
+    await askThroughHttp(harness);
+    const [ask] = harness.asks.all();
+    const runId = ask?.runId as Id;
+    const ran = harness.specs.find((spec) => spec.runId === runId);
+    const planned = harness.plannedSpecs.find((spec) => spec.runId === runId);
+    expect(ran).toBeDefined();
+    expect(ran).toEqual(planned);
+    expect(ran?.userPrompt).toBe(planned?.userPrompt);
+    const plan = await harness.memory.transaction(async (scope) =>
+      harness.store.runPlans.load(scope.tx, runId),
+    );
+    expect(plan?.sealedSpec).toBeNull();
+    expect(plan?.reviewChecklists).toBeNull();
+    expect(
+      harness
+        .events()
+        .filter((entry) => (entry.payload as { run_id?: string }).run_id === runId)
+        .map((entry) => entry.type),
+    ).toEqual(['run.created', 'run.offered', 'run.claimed', 'run.started', 'run.finished']);
+  });
+
   it('records the provider mode the ask was planned with on its run row (backlog 454)', async () => {
     for (const providerMode of ['local', 'api'] as const) {
       const harness = harnessWith({ providerMode });

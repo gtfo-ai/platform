@@ -66,6 +66,7 @@ import {
   retryStageCommand,
   returnToStageCommand,
   reworkStageCommand,
+  STEER_MIN_INTERVAL_MS,
   StageNotCurrentError,
   StageNotInTemplateError,
   StageNotReachedError,
@@ -2203,7 +2204,10 @@ describe('the two commands that predate this row', () => {
 const seedLiveRun = async (
   harness: PipelineHarness,
   stage: Slug,
-  options: { readonly reachedCli?: boolean } = {},
+  options: {
+    readonly reachedCli?: boolean;
+    readonly status?: 'created' | 'starting' | 'running';
+  } = {},
 ): Promise<Id> => {
   const stored = taskOf(harness);
   const runId = harness.ids.next();
@@ -2228,7 +2232,7 @@ const seedLiveRun = async (
       reserveUsd: null,
       promptsWithheld: null,
       providerMode: 'api',
-      status: 'running',
+      status: options.status ?? 'running',
       terminalReason: null,
       sessionId: 'session-live',
       numTurns: 2,
@@ -2871,6 +2875,49 @@ describe('steer a run', () => {
     ).rejects.toThrow(RunNotLiveError);
     expect(harness.store.runCommandRows()).toEqual([]);
     expect(countOf(harness, 'run.steered')).toBe(0);
+  });
+
+  /**
+   * WP-275b's stated rule (`steerRunCommand`'s docblock): a run is `running` only from its CLI spawn
+   * marker, and a `starting` one — claimed, its CLI not yet asked for — is steered by **queueing**:
+   * the turn is recorded as any steer is, and the holder delivers it once the session takes turns.
+   * The other direction: a `created` run, which no claim holds, is refused and records nothing.
+   */
+  it('queues a steer of a starting run for its holder, and refuses one of a created run (WP-275b)', async () => {
+    const harness = await asking();
+    const runId = await seedLiveRun(harness, 'refinement' as Slug, {
+      reachedCli: false,
+      status: 'starting',
+    });
+    await leaseTo(harness, runId);
+
+    const queued = await steerRunCommand(harness.humanCommands, {
+      runId,
+      userId: USER,
+      role: 'maintainer',
+      message: 'hello',
+      authorName: 'Ada',
+    });
+    expect(harness.store.runCommandRows()).toMatchObject([
+      { id: queued.commandId, applied: false, refusedReason: null },
+    ]);
+    expect(countOf(harness, 'run.steered')).toBe(1);
+
+    const created = await seedLiveRun(harness, 'refinement' as Slug, {
+      reachedCli: false,
+      status: 'created',
+    });
+    harness.clock.advance(STEER_MIN_INTERVAL_MS);
+    await expect(
+      steerRunCommand(harness.humanCommands, {
+        runId: created,
+        userId: USER,
+        role: 'maintainer',
+        message: 'hello',
+        authorName: 'Ada',
+      }),
+    ).rejects.toMatchObject({ name: 'RunNotLiveError', status: 'created' });
+    expect(countOf(harness, 'run.steered')).toBe(1);
   });
 
   it('refuses a role that may not steer, and the aggregate is what refuses it', async () => {

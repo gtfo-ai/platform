@@ -102,11 +102,15 @@ describe('a stage run handed back by its runner’s stop (WP-144)', () => {
 
     const queued = stageJobs(harness);
     expect(queued).toHaveLength(1);
+    // Enqueued by `settleRun` after its commit since WP-275a, with the attempt's model and effort
+    // as the run row recorded them (what a person's per-attempt override rode on before).
     expect(queued[0]?.data).toEqual({
       task_id: task.task.id,
       project_id: PROJECT,
       stage: 'refinement',
       attempt: task.task.stageAttempts.refinement,
+      model: run?.model,
+      effort: run?.effort,
     });
     expect(queued[0]?.startAfter?.getTime()).toBe(
       harness.clock.epochMs + SHUTDOWN_HAND_BACK_DELAY_MS,

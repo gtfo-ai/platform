@@ -66,6 +66,7 @@ import type {
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { StageExecuteData } from '../pipeline/jobs.js';
 import { createStageRunPlanner, SKILLS_BY_ROLE } from '../pipeline/planner.js';
+import type { RunSecretEnvironment } from '../pipeline/run-redaction.js';
 import { createPipelineRuntime, type PipelineRuntime } from '../pipeline/runtime.js';
 import type { PipelineSagaOptions } from '../pipeline/saga.js';
 import type { ProjectSettings, ProjectSettingsPort } from '../pipeline/settings.js';
@@ -76,6 +77,7 @@ import {
   REFUSED_CONFIGURATION_WIP_LIMITS,
   staticProjectSettings,
 } from '../pipeline/settings.js';
+import type { StageRunPlanner } from '../pipeline/stage-executor.js';
 import { createRunStopReasons } from '../pipeline/stop-reasons.js';
 import { unfinishedWorkExportFor } from '../pipeline/unfinished-work.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
@@ -99,6 +101,7 @@ import {
   type OrganisationSettingsPort,
   staticOrganisationSettings,
 } from '../ports/organisation-settings.js';
+import type { RunPlanSealer } from '../ports/run-plan-sealer.js';
 import {
   type ClaudeRunner,
   type RunOutcome,
@@ -128,6 +131,7 @@ import {
 } from './memory-notifications.js';
 import { createMemoryPipelineStore, type MemoryPipelineStore } from './memory-pipeline.js';
 import { createMemoryShadowStore, type MemoryShadowStore } from './memory-shadow.js';
+import { createTestRunPlanSealer } from './run-plans.js';
 
 /** Enough for the longest template plus every bounded loop; a runaway pipeline passes it. */
 const MAX_DISPATCHES = 500;
@@ -875,6 +879,19 @@ export interface HarnessOptions {
    */
   readonly commandSecrets?: readonly InjectedSecret[];
   /**
+   * The seal over the run plans (WP-275a). Absent is {@link createTestRunPlanSealer}'s double; a
+   * test that wants a seal that will not open (a rotated key) passes one.
+   */
+  readonly runPlanSealer?: RunPlanSealer;
+  /**
+   * This process's `agentRunEnvironment` (WP-275a): the secret values the read-back spec is given
+   * and settle redacts. The planners are composed with it too — production's one function — unless
+   * {@link plannerEnvironment} says otherwise. Absent is none.
+   */
+  readonly runEnvironment?: RunSecretEnvironment;
+  /** The planners' environment when it must differ from {@link runEnvironment} (a rotated secret). */
+  readonly plannerEnvironment?: RunSecretEnvironment;
+  /**
    * The provider mode both planners are composed with (BD-004) — production's
    * `APP_PROVIDER_MODE`. Absent is the planners' own default, `api`. A test of a `local` instance
    * sets it, which is how backlog 454's "the row says `local`" is asserted end to end.
@@ -929,6 +946,11 @@ export interface PipelineHarness {
   readonly heartbeats: { readonly started: number; readonly stopped: number };
   /** Every spec the runner was started with, in order. */
   readonly specs: readonly RunSpec[];
+  /**
+   * Every spec a planner **returned** — the stage and the ask planner alike, in order (WP-275a). The
+   * runner is handed the spec read back from the stored plan (`specs`); a test compares the two.
+   */
+  readonly plannedSpecs: readonly RunSpec[];
   /**
    * Records a `human_actions` row the store's take-over activity rule reads (WP-44, PROGRESS
    * backlog 167). The harness has no HTTP surface, so the row a command route would write is
@@ -985,15 +1007,17 @@ export interface PipelineHarness {
 const askPlannerWith = (
   planner: AskRunPlanner,
   hook: (() => Promise<void>) | undefined,
-): AskRunPlanner =>
-  hook === undefined
-    ? planner
-    : {
-        plan: async (input) => {
-          await hook();
-          return planner.plan(input);
-        },
-      };
+  planned: RunSpec[],
+): AskRunPlanner => ({
+  plan: async (input) => {
+    if (hook !== undefined) {
+      await hook();
+    }
+    const plan = await planner.plan(input);
+    planned.push(structuredClone(plan.spec));
+    return plan;
+  },
+});
 
 /** A default branch with no file at all — the harness's "this project has no CI" (WP-138). */
 const noCiRepository: RepositoryFileSource = {
@@ -1455,6 +1479,19 @@ const harnessSkills = (): Readonly<Record<string, SkillDefinition>> =>
 /** A UUID from the harness's id source, as the 32 hex characters the data-block nonce must be. */
 const nonceFor = (id: Id): string => id.replaceAll('-', '').padEnd(32, '0').slice(0, 32);
 
+/** The stage planner, with every spec it returns recorded (WP-275a). */
+const recordingPlans = (planned: RunSpec[], planner: StageRunPlanner): StageRunPlanner => ({
+  plan: async (request) => {
+    const plan = await planner.plan(request);
+    planned.push(structuredClone(plan.spec));
+    return plan;
+  },
+});
+
+/** The planners' environment: {@link HarnessOptions.plannerEnvironment}, else the process's. */
+const plannerEnvironmentOf = (options: HarnessOptions): RunSecretEnvironment | undefined =>
+  options.plannerEnvironment ?? options.runEnvironment;
+
 export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHarness => {
   const projectId = options.projectId ?? '00000000-0000-4000-8000-0000000000p1'.replace('p', 'b');
   const clock = testClock();
@@ -1588,6 +1625,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         })
       : null;
   const specs: RunSpec[] = [];
+  const plannedSpecs: RunSpec[] = [];
   /** What {@link checkScripted} refused, thrown by `drain` (see {@link ScriptedRunRefusedError}). */
   const refusals: (ScriptedRunRefusedError | UnscriptedRunError)[] = [];
   const startedDeclarations = new Set<string>();
@@ -1882,8 +1920,15 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
           headPaths: (projectId: Id) => knowledge.readPathWitnesses(projectId),
           clock: { now: () => clock.now() },
           ...(options.providerMode === undefined ? {} : { providerMode: options.providerMode }),
+          ...(plannerEnvironmentOf(options) === undefined
+            ? {}
+            : {
+                env: plannerEnvironmentOf(options)?.env ?? {},
+                secretEnvNames: plannerEnvironmentOf(options)?.secretEnvNames ?? [],
+              }),
         }),
         options.whileAskPlans,
+        plannedSpecs,
       ),
       redactor: options.askRedactor ?? exactSecretRedactor([]),
       askedByLabel: async (userId: Id) => `user-${userId.slice(0, 8)}`,
@@ -1895,27 +1940,40 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     execution: {
       runner: wrapRunner(runner, scripts, () => clock, sink),
-      planner: createStageRunPlanner({
-        workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
-        prompts: harnessRolePrompts(),
-        skills: harnessSkills(),
-        // The harness's integrations are fakes whose registrations declare no agent tooling, so no
-        // binding names a provider skill — which is what production answers for them too (WP-54).
-        boundSkills: async () => [],
-        ciConfigLocation: async () => null,
-        readConversation:
-          options.readsConversation === true
-            ? createConversationReader({ integrations: staticPipelineIntegrations(integrations) })
-            : async () => null,
-        // Deterministic and distinct per run: a constant would make the delimiter predictable, and
-        // the executor's own ids are already the harness's one source of "unique".
-        nonce: { next: () => nonceFor(ids.next()) },
-        contextPacks: createContextPackAssembler({ store: knowledge, logger: silentLogger }),
-        // The production shape (WP-58): the listing the index write stored for its commit.
-        headPaths: (projectId: Id) => knowledge.readPathWitnesses(projectId),
-        clock: { now: () => clock.now() },
-        ...(options.providerMode === undefined ? {} : { providerMode: options.providerMode }),
-      }),
+      // WP-275a: the run plan's seal (a reversible double that binds the run id) and this process's
+      // environment — the values a read-back spec is given and a settle redacts.
+      runPlans: options.runPlanSealer ?? createTestRunPlanSealer(),
+      ...(options.runEnvironment === undefined ? {} : { runEnvironment: options.runEnvironment }),
+      planner: recordingPlans(
+        plannedSpecs,
+        createStageRunPlanner({
+          workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
+          prompts: harnessRolePrompts(),
+          skills: harnessSkills(),
+          // The harness's integrations are fakes whose registrations declare no agent tooling, so no
+          // binding names a provider skill — which is what production answers for them too (WP-54).
+          boundSkills: async () => [],
+          ciConfigLocation: async () => null,
+          readConversation:
+            options.readsConversation === true
+              ? createConversationReader({ integrations: staticPipelineIntegrations(integrations) })
+              : async () => null,
+          // Deterministic and distinct per run: a constant would make the delimiter predictable, and
+          // the executor's own ids are already the harness's one source of "unique".
+          nonce: { next: () => nonceFor(ids.next()) },
+          contextPacks: createContextPackAssembler({ store: knowledge, logger: silentLogger }),
+          // The production shape (WP-58): the listing the index write stored for its commit.
+          headPaths: (projectId: Id) => knowledge.readPathWitnesses(projectId),
+          clock: { now: () => clock.now() },
+          ...(options.providerMode === undefined ? {} : { providerMode: options.providerMode }),
+          ...(plannerEnvironmentOf(options) === undefined
+            ? {}
+            : {
+                env: plannerEnvironmentOf(options)?.env ?? {},
+                secretEnvNames: plannerEnvironmentOf(options)?.secretEnvNames ?? [],
+              }),
+        }),
+      ),
       stopReasons,
       ...(cost === null ? {} : { budgets: createBudgetGuard({ store: cost }) }),
       /**
@@ -2153,6 +2211,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     asks,
     heartbeats,
     specs,
+    plannedSpecs,
     recordHumanAction: (input) => {
       humanActions.push({ ...input });
     },

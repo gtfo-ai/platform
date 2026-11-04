@@ -51,14 +51,19 @@ export const questionTimeoutOf = (settings: ProjectSettings): string =>
  * never from a new dial cell". So there is no `approval_timeout` key, and a project that lengthens
  * its question timeout lengthens both.
  */
-export const questionDeadlineRule =
-  (calendar: WorkingCalendar, settings: ProjectSettings): DeadlineRule =>
+export const questionDeadlineRule = (
+  calendar: WorkingCalendar,
+  settings: ProjectSettings,
+): DeadlineRule => questionDeadlineRuleFor(calendar, questionTimeoutOf(settings));
+
+/**
+ * {@link questionDeadlineRule} at a timeout already resolved — the one `run_plans.question_timeout`
+ * froze at plan time (WP-275a), which is what a run settled outside its job reads.
+ */
+export const questionDeadlineRuleFor =
+  (calendar: WorkingCalendar, timeout: string): DeadlineRule =>
   (from) =>
-    questionTimeoutAt(
-      calendar,
-      new Date(from),
-      questionTimeoutOf(settings),
-    ).toISOString() as IsoDateTime;
+    questionTimeoutAt(calendar, new Date(from), timeout).toISOString() as IsoDateTime;
 
 /**
  * When a take-over whose holder was last active at `lastActivityAt` has been inactive for

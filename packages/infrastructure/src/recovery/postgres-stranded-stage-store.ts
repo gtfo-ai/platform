@@ -140,8 +140,10 @@ const strandedSql = (schema: string): string => `
       select r.status::text as status, r.terminal_reason::text as terminal_reason, r.ended_at
         from runs r
        where r.task_stage_id = s.id
-       -- Run ids are random (v4) UUIDs, so the newest is the latest start (WP-108 review round 2).
-       order by r.started_at desc nulls last, r.id desc
+       -- Run ids are random (v4) UUIDs, so the newest is the latest creation (WP-108 review round 2).
+       -- WP-275b: created_at, never started_at — null for a run that ended before its CLI
+       -- spawn marker, which nulls last put behind every older run that had started.
+       order by r.created_at desc, r.id desc
        limit 1
     ) er on true
     -- Backlog 490: the newest job of **this entry** that pg-boss failed (every retry spent), read

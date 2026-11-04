@@ -722,8 +722,11 @@ export const taskCompletedEvent = defineEvent('task.completed', {
 // ── Runs ─────────────────────────────────────────────────────────────────────
 
 /**
- * The run exists and the platform has committed to launching it (`created → starting`). Carries
- * everything needed to rebuild the run row from the log alone, so no state change is silent.
+ * The run exists: its row was written, in status `created`, with its offer (WP-275b, TD-031's
+ * 2026-11-04 amendment §4) — the run enters the log here. **Not** a transition: the claim is
+ * `created → starting` (`run.claimed`) and the CLI spawn marker `starting → running`
+ * (`run.started`). Carries everything needed to rebuild the run row from the log alone, so no state
+ * change is silent.
  */
 export const runCreatedEvent = defineEvent('run.created', {
   ...taskScoped,
@@ -743,6 +746,11 @@ export const runCreatedEvent = defineEvent('run.created', {
   prompt_version: nonEmptyStringSchema,
 });
 
+/**
+ * The platform asked for the run's CLI (WP-275b, TD-031's 2026-11-04 amendment §4): appended in the
+ * transaction that writes `runs.cli_spawn_requested_at` and `started_at`, `starting → running`. A run
+ * that ends before its CLI spawn marker has no `run.started`.
+ */
 export const runStartedEvent = defineEvent('run.started', {
   ...taskScoped,
   run_id: idSchema,

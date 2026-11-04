@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import { IntegrationError } from '../ports/integrations/common.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import { silentLogger } from '../ports/logger.js';
 import { startShadowBatch } from '../shadow/batch.js';
 import {
   createPipelineHarness,
@@ -43,9 +44,11 @@ import {
   takeOverTaskCommand,
 } from './commands.js';
 import { conflictWarningMarker } from './conflict-warning.js';
+import { questionTimeoutOf } from './deadline-rules.js';
 import { MAX_GATE_CHECKS } from './gates.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import { GATE_RECHECK_MS } from './jobs.js';
+import { runRedactorFor } from './run-redaction.js';
 import {
   DEFAULT_REVIEW_COMMENT_WINDOW_MS,
   priorityRankOf,
@@ -53,6 +56,7 @@ import {
   UNMATERIALISED_PLAN_APPROVAL,
 } from './saga.js';
 import { staticProjectSettings } from './settings.js';
+import { settlementInputs } from './settle.js';
 import type { NewRun } from './store.js';
 import { DefaultBranchChangedError } from './store.js';
 
@@ -479,6 +483,96 @@ describe('a feature ticket through the whole loop', () => {
         'run.started',
         'run.finished',
       ]);
+    }
+  });
+
+  /**
+   * WP-275a criteria 3 and 4, over **every agent stage of the default template**: each session ran
+   * the spec its planner returned, read back from the stored plan (deep-equal), and what `settleRun`
+   * rebuilds from stored state alone — `settlementInputs`, re-read here in a fresh transaction after
+   * the walk — is what the job carried before WP-275a: the stage entry off the run row, the stage off
+   * the task's frozen template, the run's identity, the plan's question timeout, and a redactor that
+   * replaces the run's secret exactly as `runRedactorFor` over the run's own spec does.
+   */
+  it('runs every agent stage from its stored plan, and settles each from stored state alone (WP-275a)', async () => {
+    const MODEL_KEY = 'sk-ant-FAKE-model-credential-0123456789abcdef';
+    const runEnvironment = {
+      env: { ANTHROPIC_API_KEY: MODEL_KEY },
+      secretEnvNames: ['ANTHROPIC_API_KEY'],
+    };
+    const harness = harnessWith({ runEnvironment });
+    await harness.publish([ticketMatched()]);
+    // The merge is a human's: past it, the retrospective and the librarian run too.
+    await harness.publish([
+      event('mr.merged', {
+        project_id: PROJECT,
+        task_id: null,
+        mr: mergeRequest(false).ref,
+        draft: false,
+        head_sha: 'b'.repeat(40),
+        diff_stats: null,
+        merge_commit_sha: 'c'.repeat(40),
+      }),
+    ]);
+    const stageSpecs = harness.specs.filter((spec) => spec.stage !== null);
+    expect(stageSpecs.map((spec) => spec.stage)).toEqual([
+      'refinement',
+      'architecture',
+      'implementation',
+      'code_review',
+      'business_review',
+      'retrospective',
+      'librarian',
+    ]);
+    const deps = {
+      unitOfWork: harness.memory,
+      store: harness.store,
+      eventStore: harness.memory.store,
+      settings: async () => harness.settings,
+      redactor: exactSecretRedactor([]),
+      runEnvironment,
+      context: () => ({
+        ids: harness.ids,
+        actor: { kind: 'system' as const, component: 'test' },
+        clock: { now: () => harness.clock.now() },
+      }),
+      calendar: harness.calendar,
+      jobs: harness.jobs,
+    };
+    for (const spec of stageSpecs) {
+      expect(spec, spec.stage ?? '').toEqual(
+        harness.plannedSpecs.find((planned) => planned.runId === spec.runId),
+      );
+      expect(spec.env.ANTHROPIC_API_KEY).toBe(MODEL_KEY);
+      const inputs = await harness.memory.transaction(async (scope) =>
+        settlementInputs(scope, spec.runId as never, deps),
+      );
+      if (typeof inputs === 'symbol') throw new Error(`run ${spec.runId} read back as gone`);
+      expect(inputs.job).toEqual({
+        taskId: spec.taskId,
+        projectId: spec.projectId,
+        stage: spec.stage,
+        attempt: spec.attempt,
+      });
+      expect(inputs.stage?.id).toBe(spec.stage);
+      expect(inputs.run).toMatchObject({
+        id: spec.runId,
+        role: spec.role,
+        mode: spec.mode,
+        model: spec.model,
+        effort: spec.effort,
+        promptVersion: spec.promptVersion,
+      });
+      expect(inputs.questionTimeout).toBe(questionTimeoutOf(harness.settings));
+      const text = `the key is ${MODEL_KEY}, keep it out`;
+      expect(inputs.redactor.redactText(text)).toEqual(
+        runRedactorFor(
+          { env: spec.env, secretEnvNames: spec.secretEnvNames },
+          exactSecretRedactor([]),
+          silentLogger,
+        ).redactText(text),
+      );
+      expect(inputs.redactor.redactText(text).value).not.toContain(MODEL_KEY);
     }
   });
 

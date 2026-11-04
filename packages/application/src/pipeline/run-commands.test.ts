@@ -319,6 +319,35 @@ describe('the run command inbox', () => {
       },
     );
 
+    /**
+     * WP-275b: a run is `running` only from its CLI spawn marker, so a stop refused while the run
+     * is still `starting` (its handle registered, its CLI not yet asked for) is the same leak and
+     * is logged at `error` — `leakedSession` reads both live statuses. Canary: `running` alone.
+     */
+    it('logs a refused stop at error for a run still starting under this lease (WP-275b)', async () => {
+      const w = await world();
+      const { lines, logger } = recordingLogger();
+      await record(w, { kind: 'cancel' });
+      const inbox = createRunCommandInbox({
+        unitOfWork: w.eventing,
+        store: {
+          runCommands: {
+            ...w.store.runCommands,
+            lockRun: async (tx, runId, options) => {
+              const locked = await w.store.runCommands.lockRun(tx, runId, options);
+              return locked === null ? null : { ...locked, status: 'starting' };
+            },
+          },
+        },
+        liveRuns: createLiveRuns(),
+        owner: OWNER,
+        logger,
+      });
+      await inbox.drain({ runId: RUN, onMiss: 'refuse' });
+      expect(rowsOf(w)).toMatchObject([{ refusedReason: 'register_miss' }]);
+      expect(lines.map((line) => line.level)).toEqual(['error']);
+    });
+
     it('keeps a refused steer at warn: no session is left running by refusing it', async () => {
       const w = await world();
       const { lines, logger } = recordingLogger();

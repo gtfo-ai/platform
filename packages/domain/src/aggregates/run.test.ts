@@ -26,7 +26,7 @@ import {
   RUN_TRANSITIONS,
   type Run,
   recordOutput,
-  startRun,
+  recordRunCreated,
 } from './run.js';
 
 const RUN_ID = '00000000-0000-4000-8000-0000000000f1';
@@ -74,8 +74,22 @@ const newRun = (): Run =>
     promptVersion: 'implementation@1.0',
   });
 
-/** A run in `starting`, with its `run.created` already emitted. */
-const startedRun = (shared = world()): Run => startRun(newRun(), context(shared)).aggregate;
+/** A run in `created` with its `run.created` emitted — the row written with its offer. */
+const recordedRun = (shared = world()): Run =>
+  recordRunCreated(newRun(), context(shared)).aggregate;
+
+/** A run in `starting`: recorded, then claimed (WP-275b, TD-031's 2026-11-04 amendment §4). */
+const startedRun = (shared = world()): Run =>
+  claimRun(
+    recordedRun(shared),
+    {
+      offerId: '00000000-0000-4000-8000-0000000000c0',
+      claimantKind: 'server',
+      workerId: null,
+      epoch: 1,
+    },
+    context(shared),
+  ).aggregate;
 
 /** A run in `running`, with its `run.created` and `run.started` already emitted. */
 const runningRun = (shared = world()): Run =>
@@ -91,8 +105,8 @@ describe('Run transition table', () => {
     // budget_exceeded | timed_out | stalled)", so a wrong row in the table under test disagrees
     // with the document rather than with itself.
     expect(RUN_TRANSITIONS).toEqual({
-      created: ['starting'],
-      starting: ['running', 'failed', 'cancelled', 'timed_out'],
+      created: ['starting', 'cancelled'],
+      starting: ['running', 'failed', 'cancelled', 'timed_out', 'created'],
       running: ['completed', 'failed', 'cancelled', 'budget_exceeded', 'timed_out', 'stalled'],
       completed: [],
       failed: [],
@@ -119,14 +133,14 @@ describe('Run transition table', () => {
 });
 
 describe('run lifecycle', () => {
-  it('enters the log at `run.created`, when the platform commits to launching it', () => {
+  it('enters the log at `run.created` when its row is written, and stays `created`', () => {
     const created = newRun();
     expect(created.status).toBe('created');
     expect(created.sequence).toBe(FIRST_STREAM_SEQ);
 
     const shared = world();
-    const { aggregate, events } = startRun(created, context(shared));
-    expect(aggregate.status).toBe('starting');
+    const { aggregate, events } = recordRunCreated(created, context(shared));
+    expect(aggregate.status).toBe('created');
     expect(events.map((event) => event.type)).toEqual(['run.created']);
     expect(events[0]?.stream_type).toBe('run');
     expect(events[0]?.stream_seq).toBe(FIRST_STREAM_SEQ);
@@ -144,10 +158,57 @@ describe('run lifecycle', () => {
     });
   });
 
-  it('refuses to start a run twice', () => {
+  it('refuses to record a run twice, or one that has left `created`', () => {
+    const shared = world();
+    expect(() => recordRunCreated(recordedRun(shared), context(shared))).toThrow(
+      InvariantViolationError,
+    );
+    expect(() => recordRunCreated(startedRun(shared), context(shared))).toThrow(
+      InvariantViolationError,
+    );
+  });
+
+  it('is `created → starting` at the claim, and the claim cannot be repeated', () => {
     const shared = world();
     const started = startedRun(shared);
-    expect(() => startRun(started, context(shared))).toThrow(IllegalTransitionError);
+    expect(started.status).toBe('starting');
+    expect(() =>
+      claimRun(
+        started,
+        {
+          offerId: '00000000-0000-4000-8000-0000000000c0',
+          claimantKind: 'server',
+          workerId: null,
+          epoch: 2,
+        },
+        context(shared),
+      ),
+    ).toThrow(IllegalTransitionError);
+  });
+
+  it('admits a withdrawal from `created` and a release from `starting` (WP-276, WP-281)', () => {
+    expect(canTransitionRun('created', 'cancelled')).toBe(true);
+    expect(canTransitionRun('starting', 'created')).toBe(true);
+    // A withdrawn run that no claimant took ends with its own `run.finished`, and no `run.started`.
+    const shared = world();
+    const withdrawn = finishRun(
+      recordedRun(shared),
+      {
+        status: 'cancelled',
+        terminalReason: 'cancelled',
+        usage,
+        modelUsage: [],
+        cost: null,
+        numTurns: 0,
+      },
+      context(shared),
+    );
+    expect(withdrawn.aggregate.status).toBe('cancelled');
+    expect(withdrawn.events.map((event) => event.type)).toEqual(['run.finished']);
+    expect(withdrawn.events[0]?.payload).toMatchObject({ wall_ms: 0 });
+    // Nothing but the withdrawal and the claim leave `created`.
+    expect(canTransitionRun('created', 'running')).toBe(false);
+    expect(canTransitionRun('created', 'failed')).toBe(false);
   });
 
   it('emits run.started when the session begins', () => {
@@ -392,16 +453,16 @@ describe('one active run per task (technical/02 invariant)', () => {
 describe('the offer and the claim (WP-274, TD-031 decisions 1–2)', () => {
   const OFFER_ID = '00000000-0000-4000-8000-0000000000c1';
 
-  it('records run.offered then run.claimed on the run stream and changes no status', () => {
+  it('records run.offered then run.claimed on the run stream, the claim moving it to `starting`', () => {
     const shared = world();
-    const starting = startedRun(shared);
-    const offered = offerRun(starting, { offerId: OFFER_ID, kind: 'stage' }, context(shared));
+    const recorded = recordedRun(shared);
+    const offered = offerRun(recorded, { offerId: OFFER_ID, kind: 'stage' }, context(shared));
     const claimed = claimRun(
       offered.aggregate,
       { offerId: OFFER_ID, claimantKind: 'server', workerId: null, epoch: 1 },
       context(shared),
     );
-    expect(offered.aggregate.status).toBe('starting');
+    expect(offered.aggregate.status).toBe('created');
     expect(claimed.aggregate.status).toBe('starting');
     expect([...offered.events, ...claimed.events].map((event) => event.type)).toEqual([
       'run.offered',
@@ -427,10 +488,10 @@ describe('the offer and the claim (WP-274, TD-031 decisions 1–2)', () => {
 
   it('refuses a claim at an epoch below 1, and an offer or claim of an ended run', () => {
     const shared = world();
-    const starting = startedRun(shared);
+    const recorded = recordedRun(shared);
     expect(() =>
       claimRun(
-        starting,
+        recorded,
         { offerId: OFFER_ID, claimantKind: 'server', workerId: null, epoch: 0 },
         context(shared),
       ),

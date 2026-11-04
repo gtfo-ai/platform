@@ -599,6 +599,39 @@ export const runSpecSchema = z.strictObject({
 });
 
 export type RunSpec = z.infer<typeof runSpecSchema>;
+
+/**
+ * **The run plan's spec** — what `run_plans.sealed_spec` holds, sealed (WP-275a, TD-031's
+ * 2026-11-04 amendment §2): {@link runSpecSchema} with every `env` entry whose name is in
+ * `secretEnvNames` **removed** — the names kept, so the claimant re-attaches the values from its
+ * own process environment — and everything else, the two prompts included, **byte-identical**.
+ *
+ * It is never redacted: the session is handed exactly the bytes the planner assembled, and the
+ * readable record of the prompt stays `runs.system_prompt`/`user_prompt` (TD-012). A spec that
+ * still carries a secret value is refused by name rather than stored.
+ */
+export const storedRunSpecSchema = runSpecSchema.superRefine((spec, context) => {
+  for (const name of spec.secretEnvNames) {
+    if (Object.hasOwn(spec.env, name)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['env', name],
+        message: `a stored run spec carries no secret value; "${name}" is named in secretEnvNames`,
+      });
+    }
+  }
+});
+
+export type StoredRunSpec = z.infer<typeof storedRunSpecSchema>;
+
+/** The spec with its secret values removed — what {@link storedRunSpecSchema} accepts. */
+export const storedRunSpecOf = (spec: RunSpec): StoredRunSpec => ({
+  ...spec,
+  env: Object.fromEntries(
+    Object.entries(spec.env).filter(([name]) => !spec.secretEnvNames.includes(name)),
+  ),
+  secretEnvNames: [...spec.secretEnvNames],
+});
 export type RunLimits = z.infer<typeof runLimitsSchema>;
 export type RunCommandPolicy = z.infer<typeof runCommandPolicySchema>;
 export type RunSubagent = z.infer<typeof runSubagentSchema>;

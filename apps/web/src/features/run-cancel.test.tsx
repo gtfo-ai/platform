@@ -74,7 +74,7 @@ const RUNNING: RunRecord = {
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-const fetchWith = (cancel: () => Response, posted: string[]) =>
+const fetchWith = (cancel: () => Response, posted: string[], record: RunRecord = RUNNING) =>
   (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url.includes('/api/auth/get-session')) return json(SESSION);
@@ -85,7 +85,7 @@ const fetchWith = (cancel: () => Response, posted: string[]) =>
     }
     if (url.includes(`/api/runs/${RUN}/messages`)) return json({ items: [], next_seq: null });
     if (url.endsWith(`/api/runs/${RUN}/commands`)) return json({ items: [] });
-    if (url.endsWith(`/api/runs/${RUN}`)) return json(asRead(RUNNING));
+    if (url.endsWith(`/api/runs/${RUN}`)) return json(asRead(record));
     if (url.endsWith('/api/projects')) return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
@@ -162,5 +162,31 @@ describe('the run screen’s cancel says which branch happened (WP-101)', () => 
     });
     expect(container.textContent).not.toContain('Cancel accepted');
     expect(container.textContent).not.toContain('the run was ended here');
+  });
+});
+
+/**
+ * WP-275b: a run is `starting` from its claim to its CLI spawn marker — live, with no `started_at`
+ * and no `run.started` yet. The run screen shows the status, an elapsed time of `—` rather than a
+ * time it does not have, and still offers **Cancel run**, which the server admits from `starting`.
+ */
+describe('the run screen of a starting run (WP-275b)', () => {
+  it('shows starting with no elapsed time, and lets a person cancel it', async () => {
+    const posted: string[] = [];
+    const user = userEvent.setup();
+    const starting: RunRecord = { ...RUNNING, status: 'starting', started_at: null, num_turns: 0 };
+    const { container } = render(
+      createApp({
+        fetchImpl: fetchWith(answer(null, 200), posted, starting),
+        realtime: false,
+      }).element,
+    );
+    const cancel = await screen.findByRole('button', { name: 'Cancel run' });
+    expect(container.textContent).toContain('starting');
+    expect(cancel).not.toHaveProperty('disabled', true);
+    await user.click(cancel);
+    await waitFor(() => {
+      expect(posted).toContain(`/api/runs/${RUN}/cancel`);
+    });
   });
 });

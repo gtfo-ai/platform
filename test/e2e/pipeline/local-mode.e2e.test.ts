@@ -91,7 +91,8 @@ describe('a runner in local mode (compose.local.yml’s arrangement)', () => {
     // and this wait fails by name.
     await pipeline.waitFor('the local-mode runner to finish its first stage', async () => {
       const [row] = await pipeline.query<{ status: string }>(
-        "select status::text as status from runs where status <> 'running' order by created_at limit 1",
+        // A terminal status: since WP-275b a run reads `created` or `starting` before `running`.
+        "select status::text as status from runs where status not in ('created', 'starting', 'running') order by created_at limit 1",
       );
       return row !== undefined;
     });
