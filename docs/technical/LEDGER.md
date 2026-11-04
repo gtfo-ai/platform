@@ -13,3 +13,4 @@ the first rows of M22 — is in the frozen `PROGRESS.md` (its tables and notes s
 | WP-274 | Run offers, the claim and the lease epoch | — | `4760587c` | 2026-11-04 | pre-lean; migration 0094 |
 | WP-275 | `settleRun` | — | `bfa86711` | 2026-11-04 | pre-lean; money path traced |
 | process | The lean loop: technical/14, 15, 16, LEDGER, BACKLOG; M22 re-cut into slices S-22.1…12 | — | — | 2026-11-04 | owner decision; PROGRESS.md frozen |
+| S-22.1 | The run plan is stored and the run's lifecycle follows the offer (WP-275a, WP-275b) | #3 | `22515c2e` | 2026-11-04 | migration 0095 `run_plans` (sealed); review: docs only; backlog 700 closed, 709–710 |
