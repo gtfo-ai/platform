@@ -1506,6 +1506,37 @@ real limit is recorded (V-WM1). **Migrations**: 0092 (WP-271), 0093 (WP-291's, t
 **First production use** (Autix, `workers_only`, external) needs WP-271–WP-286 and WP-289; WP-287
 (worker updates) before more than one developer joins; WP-288 is not needed there.
 
+## Milestone M23 — the redesign: GitHub's grammar in the brand, the activity vocabulary, and the live views (orchestrator, session 22)
+
+The product owner asked on 2026-11-04 and 2026-11-05 for the SPA to be redesigned in this way:
+- GitHub-like, in the sign-in page's brand;
+- leading the user as a wizard;
+- showing at a glance what agents and workers are doing, including as a fun pixel office and a
+  clickable flow canvas;
+- making a job's phase always readable, on the platform and on the worker's local page.
+
+The owner also asked for the result to be deployed to Autix. The decision is **TD-033**. The inventory,
+screen layouts and sources are in **research/19**. Slices reserve WP-300–WP-329; backlog findings take
+800+. A slice's PR updates the user guide's sections for the screens it changes.
+
+| Slice | Title | Depends | Risk | Acceptance (summary; TD-033 and research/19 hold the detail) |
+|---|---|---|---|---|
+| **S-23.1** | Design foundations: tokens (both themes, dark default), Inter, Octicons, Base UI, the primitive kit | — | low | `contrast.test.ts` holds the 4.5:1 and 3:1 pairs; `kit.tsx`'s API survives as aliases; the avatar menu and a tooltip open under the production CSP (`csp.spec.ts`); notices regenerated; bundle ≤ 300 kB gz |
+| **S-23.2** | Words and phase: `humanize.ts`, `activity.ts`, `PhaseTrack`, no spec references in UI text | S-23.1 | low | exhaustive records fail `typecheck` on a new state; activity derivation table-tested; spec-reference census over rendered strings; PhaseTrack has a unit test and reads in one line |
+| **S-23.3** | The mascot's poses and the office props as sprite grids, `Bot` component | S-23.1 | low | grids parse (allowed inks, sizes); one pose per activity; reduced motion freezes on frame 1; research/18 addendum (prompts, seeds, hand edits) |
+| **S-23.4** | The frame: top bar (switcher, running indicator with connection dot, `+`, inbox count, avatar menu), org nav, `/projects`, the project layout route with header and tabs | S-23.1, S-23.2 | low | `NAV` = the user guide (census); no URL changes; e2e navigation passes; `/projects` served by the SPA allow-list |
+| **S-23.5** | The flow canvas (`@xyflow/react`, lazy) with stage nodes and the run dialog (live activity and log tail); Pipeline tab = the template; task Flow tab = the live run | S-23.2, S-23.15 | low | lazy chunk outside the initial graph; nodes are buttons, with a list fallback; dialog log is untrusted text; CSP spec opens the canvas |
+| **S-23.6** | Agents: Fleet map (default), Office, List — workers, seats, queue, needs-you | S-23.3, S-23.5, S-23.14 | low | every seat shows its activity and PhaseTrack; a click opens the run dialog; reduced motion respected; empty state teaches |
+| **S-23.7** | Home: needs-you first, running now, projects, spend; the first-run setup checklist | S-23.4 | low | checklist done-ness derived from server state; one primary action |
+| **S-23.8** | The onboarding wizard (Stepper, addressable steps, resume, skippable optional steps, the finish that opens the board); project settings reuse the steps | S-23.4 | low | onboarding tests updated; no jumping past a required step |
+| **S-23.9** | Board and task: cards with PhaseTrack and needs-you, card menu, list view; the task page as a pull request (state-dependent primary, needs-you callout, tabs, merge-box checks, dialogs) | S-23.4, S-23.5 | low | `checks-panel.test.tsx` unchanged; `screens.spec.ts` updated deliberately |
+| **S-23.10** | Run page as an Actions job: job list, Cancel and Re-run menu, log steps, sticky steer, live activity | S-23.9 | low | transcript tests green; follow-tail in its own scroll pane |
+| **S-23.11** | Inbox, Integrations (detail route and add wizard), Workers, Settings sub-routes, Knowledge, Budgets, Shadow, Audit, Statistics | S-23.4 | low | human field labels; the allow-list covers new sub-paths |
+| **S-23.12** | The worker's local page in the same language: its room, seats, PhaseTrack, activity and log tail | S-22.13, S-23.3, S-23.2 | high (the local page's auth surface is S-22.13's; this is a re-skin) | worker entry ≤ 120 kB gz; no new endpoint |
+| **S-23.14** | Live domain events: `org`, `project:<id>` and `task:<id>` carry the domain events the screens already subscribe to, read back across instances like the transcript bridge | — | high (the stream's fan-out and who may see what) | a hint is a position and the read-back is a catch-up read; frames carry ids and the type only, never untrusted text; a process test shows an event appended by one instance reaching a stream held by another; the query bridge invalidates as designed |
+| **S-23.15** | Reads for the views: a run's seat (server claimant or worker, with its name) and its current activity (last entry kind, tool name, at) on the agents DTO; the compiled stage graph per task and per project template | — | low | projections refuse rather than invent; the client census lists the new routes; activity never carries tool input or text |
+| **S-23.13** | Polish and docs: command palette, shortcuts, responsive pass, axe, copy; technical/09 and the user guide swept | all | low | axe clean on the main screens; user guide census green |
+
 ## Suggested agent team for the orchestrator
 - **Architect (this role, read-only)** for questions about decisions; **Backend developer** (domain/application/infrastructure), **Integrations developer** (providers + contract tests), **Runner/security developer** (SDK runner, launcher, isolation), **Frontend developer** (SPA), **Prompt engineer** (roles, evals), **Reviewer** (fresh context, security checklist), **Docs writer**. Sequence M1 WPs by dependencies; WP-13 early because the whole runner path depends on it.
 

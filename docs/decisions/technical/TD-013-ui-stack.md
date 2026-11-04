@@ -36,6 +36,10 @@ Single-page app (no SSR) served by the app process; stack as in technical/09. Tr
 > `@pierre/diffs`, Recharts, Shiki) are untouched and still pending — WP-20 built none of them.
 >
 > Base UI is a separate deviation, recorded as **Q46** in `docs/OPEN-QUESTIONS.md`.
+>
+> **Amendment 2026-11-05 (TD-033).** Q46 is answered. Base UI is adopted for the five behaviours that need
+> real focus management (Menu, Dialog, Tooltip, Popover, Tabs). shadcn/ui is not adopted: the visual
+> language is TD-033's own. `@xyflow/react` joins the stack as a lazy chunk for the flow canvas.
 
 ## Alternatives considered
 Next.js (self-hosting overhead, no SSR need), SvelteKit/Solid (ecosystem pieces are React-first), Mantine (own theming), Monaco (95 MB), xterm for output (only for a future interactive terminal), assistant-ui (chat-composer framework).
