@@ -97,6 +97,22 @@ body {
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
+/*
+ * Tailwind v4's Preflight gives buttons the browser's `cursor: default` (its upgrade guide, "Buttons
+ * use the default cursor"); this is the guide's own restoration, widened to the other controls that
+ * act on a click. In the base layer, so a utility (`disabled:cursor-not-allowed`, `cursor-wait`)
+ * still wins, and never on a disabled control.
+ */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  input:is([type="submit"], [type="button"], [type="reset"]):not(:disabled),
+  select:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
+}
+
 /* product/10: "reduced-motion" is a UX rule, not a preference we get to ignore. */
 @media (prefers-reduced-motion: reduce) {
   *,
