@@ -9,3 +9,4 @@
 export * from './client.js';
 export * from './protocol.js';
 export * from './provisioner.js';
+export * from './remote-package.js';

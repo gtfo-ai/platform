@@ -21,6 +21,7 @@
  * | 10 | `bugTraces.latest` (WP-90) reads the **committed** project log through {@link MemoryPipelineStoreOptions.projectEvents}, in stream order; PostgreSQL orders by `occurred_at` then `position` and also sees the calling transaction's own staged appends. Unwired, it answers `null`. | **same, when wired** | Its one caller, the `ticket.updated` handler, asks in the dispatcher's transaction about traces an earlier job committed; a trace appended in the asking transaction does not exist, because no handler appends one. Stream order and `occurred_at` order agree for every trace the duty writes, which appends with the platform clock in sequence. The contract suite drives both. |
  * | 11 | `runs.markCliSpawnRequested` (WP-150) refuses a run that has ended and a run already marked, exactly as the SQL's `where cli_spawn_requested_at is null and status = any(active)`; `load` answers the marker and `insert` drops one a caller passed; the held set (`heldFor`, `totalsFor`'s `unmeasuredRuns`) excludes an unmarked run, as `unmeasuredEndedRunSql` does. What it cannot show is the marker **committed before** the `spawn` frame is sent — divergence 4's isolation. | **same** on predicates, **kinder** on commit order | The commit order is asserted against PostgreSQL from a second connection in `test/integration/pipeline/cli-spawn-marker.integration.test.ts`, and the predicates by the shared suite against both stores. |
  * | 12 | `tasks.ticketStatusChangesSinceEntry` (WP-178) reads the **committed** log through {@link MemoryPipelineStoreOptions.committedLog}, ordered by `position`; PostgreSQL's query also sees the calling transaction's own staged appends. Unwired, it answers `[]`. | **same, when wired** | Its one caller, the human-return window, asks in a job's own transaction about events earlier transactions committed (the task's entry into `qa`, a webhook's status change); the predicate — the newest entry, the project stream, the ticket by id or key — is the SQL's, and the contract suite drives it against both stores. |
+ * | 13 | A **remote worker's claim** (WP-281) asks {@link MemoryPipelineStoreOptions.remoteWorkers} and {@link MemoryPipelineStoreOptions.runCredentialSource} where the SQL claim joins `workers`, `users`, `project_members`, `bindings` and `integrations` in its one statement; the same callback fences `finish`, `renewLease` and the spawn marker of a run a worker holds (backlog 714's `runHolderUsableSql`). Unwired, no worker is eligible and a worker-held run's fence never holds. | **same** on the predicates, **stricter** unwired | That the predicates are asked **in the committing statement** — a revoke that commits between a request's authentication and its write is seen — is PostgreSQL's isolation, asserted by `test/integration/pipeline/remote-claim.integration.test.ts`; divergence 4 is why it cannot be shown here. |
  */
 import type {
   ArtifactType,
@@ -57,6 +58,7 @@ import {
   isTerminalTaskState,
 } from '@platform/domain';
 import { holdOf } from '../cost/pending.js';
+import { decideRelease } from '../pipeline/release.js';
 import type {
   ApprovalRepository,
   ArtifactRepository,
@@ -68,6 +70,7 @@ import type {
   RunCommandInstruction,
   RunCommandRefusal,
   RunCommandRepository,
+  RunOfferClaim,
   RunOfferRepository,
   RunPlanRepository,
   RunRepository,
@@ -302,6 +305,31 @@ export interface MemoryPipelineStoreOptions {
    * database's `now()` in PostgreSQL. Defaults to `Date.now`.
    */
   readonly now?: () => number;
+  /**
+   * The remote workers a worker claim may name (WP-281) — `workers`, `users` and `project_members`
+   * in PostgreSQL, which this store does not have. **Divergence 13**: the SQL claim asks the worker's
+   * revocation, its user's ban, its pause and its membership **in the statement**; this store asks
+   * this callback at the same point, so a test that revokes between two calls sees what PostgreSQL
+   * would — but the interleaving *inside* one statement is PostgreSQL's alone, asserted by
+   * `test/integration/pipeline/remote-claim.integration.test.ts`. Unwired, no worker is eligible and
+   * every run a worker holds reads as held by one that may not act (stricter, never kinder).
+   */
+  readonly remoteWorkers?: (workerId: Id) => MemoryRemoteWorker | undefined;
+  /**
+   * The project's git run credential source (`integrations.config.run_credential` of its git
+   * binding), or `null` for a project with no git binding. Unwired is `minted` for every project.
+   */
+  readonly runCredentialSource?: (projectId: Id) => 'minted' | 'static' | 'deploy_key' | null;
+}
+
+/** A remote worker as {@link MemoryPipelineStoreOptions.remoteWorkers} answers it (WP-281). */
+export interface MemoryRemoteWorker {
+  readonly userId: Id;
+  /** Not revoked, and its user may act. */
+  readonly usable: boolean;
+  readonly pausedUntil: IsoDateTime | null;
+  /** Whether the user is a member of the project at `member` or above. */
+  readonly memberOf: (projectId: Id) => boolean;
 }
 
 /** One `superseded_merge_requests` row, as the memory store keeps it. */
@@ -351,6 +379,42 @@ export const createMemoryPipelineStore = (
   const epochs = new Map<Id, number>();
   /** `run_offers` (WP-274), keyed by `run_id` (unique there), insertion-ordered. */
   const offers = new Map<Id, StoredRunOffer>();
+  /**
+   * WP-281: the offer's remote columns — `worker_id`, `run_token_hash`/`run_token_epoch`,
+   * `image_digests`, `excluded_worker_ids`, `released_at` — keyed by `run_id`.
+   */
+  const offerRemote = new Map<
+    Id,
+    {
+      workerId: Id | null;
+      tokenHash: string | null;
+      tokenEpoch: number | null;
+      images: { run: string; egress: string } | null;
+      excluded: Id[];
+      releasedAt: IsoDateTime | null;
+      releaseReason: string | null;
+    }
+  >();
+  /** `runs.worker_id` (WP-280's column, WP-281's writer). */
+  const runWorkers = new Map<Id, Id>();
+  /** `runs.ended_at`, as `finish` writes it — what a run token's validity is counted from. */
+  const endedAts = new Map<Id, IsoDateTime>();
+  /** The remote columns of an offer, defaulted for one no worker ever touched. */
+  const remoteOf = (runId: Id) =>
+    offerRemote.get(runId) ?? {
+      workerId: null,
+      tokenHash: null,
+      tokenEpoch: null,
+      images: null,
+      excluded: [],
+      releasedAt: null,
+      releaseReason: null,
+    };
+  /** The SQL's `runHolderUsableSql`: no remote holder, or one that may still act (backlog 714). */
+  const holderUsable = (runId: Id): boolean => {
+    const workerId = runWorkers.get(runId);
+    return workerId === undefined || options.remoteWorkers?.(workerId)?.usable === true;
+  };
   /** WP-278: `project_execution_settings`, the online assignees, and the claimant holders. */
   const executionSettings = new Map<Id, ExecutionSettings>();
   const onlineAssignees = new Set<string>();
@@ -1305,6 +1369,7 @@ export const createMemoryPipelineStore = (
       if (outcome.lease !== undefined && !fenceHolds(outcome.runId, outcome.lease)) {
         throw new LeaseLostError(outcome.runId, outcome.lease);
       }
+      endedAts.set(outcome.runId, new Date(stageClock()).toISOString() as IsoDateTime);
       runs.set(outcome.runId, {
         ...run,
         status: outcome.status,
@@ -1537,7 +1602,11 @@ export const createMemoryPipelineStore = (
   /** The SQL's `lease_epoch = $e and lease_owner is not distinct from $o` (WP-274). */
   function fenceHolds(runId: Id, fence: { readonly epoch: number; readonly owner: string | null }) {
     return (
-      (epochs.get(runId) ?? 0) === fence.epoch && (leases.get(runId)?.owner ?? null) === fence.owner
+      (epochs.get(runId) ?? 0) === fence.epoch &&
+      (leases.get(runId)?.owner ?? null) === fence.owner &&
+      // WP-281 (backlog 714): a run a remote worker holds is fenced on that worker still being able
+      // to act, as the SQL's `runHolderUsableSql` is.
+      holderUsable(runId)
     );
   }
 
@@ -1565,6 +1634,35 @@ export const createMemoryPipelineStore = (
    * per-task partial unique index over open or claimed **stage** offers — so a test that would
    * violate the index fails here as it would there (standing rule 1).
    */
+  /** The SQL's `WORKER_ELIGIBLE` over an open offer (WP-281; divergence 13). */
+  function workerEligible(candidate: StoredRunOffer, claim: RunOfferClaim): boolean {
+    const worker = claim.worker;
+    if (worker === undefined) return false;
+    const known = options.remoteWorkers?.(worker.workerId);
+    if (known === undefined || !known.usable || candidate.kind !== 'stage') return false;
+    if (known.pausedUntil !== null && Date.parse(known.pausedUntil) > Date.parse(claim.now)) {
+      return false;
+    }
+    if (!known.memberOf(candidate.projectId)) return false;
+    const remote = remoteOf(candidate.runId);
+    if (remote.excluded.includes(worker.workerId)) return false;
+    const images = remote.images ?? worker.images;
+    if (
+      !worker.heldImageDigests.includes(images.run) ||
+      !worker.heldImageDigests.includes(images.egress)
+    ) {
+      return false;
+    }
+    const source = options.runCredentialSource?.(candidate.projectId) ?? null;
+    if (source !== null && source !== 'minted') return false;
+    const { workersFrom, assigneeUserId, assigneeUntil } = candidate.routing;
+    const now = Date.parse(claim.now);
+    return (
+      (workersFrom !== null && Date.parse(workersFrom) <= now) ||
+      (assigneeUserId === known.userId && assigneeUntil !== null && now < Date.parse(assigneeUntil))
+    );
+  }
+
   const offerRepository: RunOfferRepository = {
     insert: async (_tx, offer) => {
       if (offers.has(offer.runId)) {
@@ -1608,11 +1706,18 @@ export const createMemoryPipelineStore = (
             (claim.claimantKind !== 'server' ||
               (candidate.routing.serverFrom !== null &&
                 Date.parse(candidate.routing.serverFrom) <= Date.parse(claim.now)) ||
-              (candidate.routing.serverFrom === null && candidate.routing.workersFrom === null)),
+              (candidate.routing.serverFrom === null && candidate.routing.workersFrom === null)) &&
+            // WP-281: a remote worker's, as the SQL's `WORKER_ELIGIBLE` spells it.
+            (claim.claimantKind !== 'worker' || workerEligible(candidate, claim)),
         )
         .sort((a, b) => Date.parse(a.offeredAt) - Date.parse(b.offeredAt))[0];
       if (offer === undefined) {
         return null;
+      }
+      if ((claim.claimantKind === 'worker') !== (claim.worker !== undefined)) {
+        throw new PipelineStoreError(
+          'a worker claim names its worker, and only a worker claim does (RunOfferClaim.worker, WP-281)',
+        );
       }
       const epoch = offer.leaseEpoch + 1;
       offers.set(offer.runId, {
@@ -1623,6 +1728,18 @@ export const createMemoryPipelineStore = (
         claimedAt: claim.now,
       });
       epochs.set(offer.runId, epoch);
+      const remote = remoteOf(offer.runId);
+      const worker = claim.worker;
+      const claimedImages = worker === undefined ? remote.images : (remote.images ?? worker.images);
+      offerRemote.set(offer.runId, {
+        ...remote,
+        workerId: worker?.workerId ?? null,
+        tokenHash: worker === undefined ? remote.tokenHash : worker.runTokenHash,
+        tokenEpoch: worker === undefined ? remote.tokenEpoch : epoch,
+        images: claimedImages === null ? null : { ...claimedImages },
+      });
+      if (worker === undefined) runWorkers.delete(offer.runId);
+      else runWorkers.set(offer.runId, worker.workerId);
       // WP-275b: the claim is the run's `created → starting`, as the SQL's outer update writes it.
       const claimedRun = runs.get(offer.runId);
       if (claimedRun !== undefined && claimedRun.status === 'created') {
@@ -1640,6 +1757,72 @@ export const createMemoryPipelineStore = (
         kind: offer.kind,
         epoch,
         owner: claim.owner,
+        images: claimedImages === null ? null : { ...claimedImages },
+      };
+    },
+    /** WP-281: the SQL adapter's release, its decision the shared `decideRelease`. */
+    release: async (_tx, input) => {
+      const offer = offers.get(input.runId);
+      const run = runs.get(input.runId);
+      if (offer === undefined || run === undefined) {
+        return { kind: 'lease_lost' };
+      }
+      const remote = remoteOf(input.runId);
+      const decision = decideRelease(
+        {
+          offerState: offer.state,
+          offerEpoch: offer.leaseEpoch,
+          tokenEpoch: remote.tokenEpoch,
+          released: remote.releasedAt !== null,
+          offerOwner: remote.workerId === null ? null : `worker:${remote.workerId}`,
+          runStatus: run.status,
+          runEpoch: epochs.get(input.runId) ?? 0,
+          leaseOwner: leases.get(input.runId)?.owner ?? null,
+          marked: spawnMarkers.has(input.runId),
+        },
+        input,
+      );
+      if (decision !== 'release') {
+        return { kind: decision };
+      }
+      offers.set(input.runId, { ...offer, state: 'open' });
+      offerRemote.set(input.runId, {
+        ...remote,
+        releasedAt: input.now,
+        releaseReason: input.reason,
+        excluded:
+          input.excludeWorkerId === null || remote.excluded.includes(input.excludeWorkerId)
+            ? remote.excluded
+            : [...remote.excluded, input.excludeWorkerId],
+      });
+      runs.set(input.runId, { ...run, status: 'created' });
+      leases.delete(input.runId);
+      runWorkers.delete(input.runId);
+      return {
+        kind: 'released',
+        offerId: offer.id,
+        taskId: offer.taskId,
+        projectId: offer.projectId,
+      };
+    },
+    runTokenHolder: async (_tx, runId) => {
+      const offer = offers.get(runId);
+      const run = runs.get(runId);
+      if (offer === undefined || run === undefined) {
+        return null;
+      }
+      const remote = remoteOf(runId);
+      return {
+        runId,
+        offerId: offer.id,
+        kind: offer.kind,
+        tokenHash: remote.tokenHash,
+        tokenEpoch: remote.tokenEpoch,
+        workerId: remote.workerId,
+        workerUsable:
+          remote.workerId !== null && options.remoteWorkers?.(remote.workerId)?.usable === true,
+        runStatus: run.status,
+        endedAt: endedAts.get(runId) ?? null,
       };
     },
     load: async (_tx, runId) => {

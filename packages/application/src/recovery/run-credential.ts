@@ -151,6 +151,15 @@ export interface UnrevokedRunCredentialStore {
     tx: Transaction,
     input: { readonly runId: Id; readonly revokeId: string; readonly now: IsoDateTime },
   ): Promise<RecoverableRunCredential | null>;
+  /**
+   * WP-281: the run's minted credentials nothing has revoked, **whatever its status** — the same
+   * predicate without the run window and without "terminal": a remote run's release puts the run
+   * back to `created`, and its credential is revoked then (TD-031 decision 6).
+   */
+  liveCredentialsOfRun(
+    tx: Transaction,
+    input: { readonly runId: Id; readonly now: IsoDateTime },
+  ): Promise<readonly RecoverableRunCredential[]>;
 }
 
 /**
@@ -365,4 +374,90 @@ export const runRunCredentialRevocation = async (
     fields,
     'the provider says it has no such credential, which from a process that did not mint it cannot be told from "already revoked": recorded as unconfirmed, never as revoked; check the project\'s access tokens (PROGRESS backlog 155)',
   );
+};
+
+/**
+ * **Revokes a run's minted git credentials now, from what is stored** (WP-281, TD-031 decisions 5
+ * and 6) — a remote run's release and its settle, answered by whichever API process the worker's
+ * request reached, which need not be the one that minted. Each address the mint's audit row recorded
+ * and nothing has revoked is revoked through the integration that minted it, outside any
+ * transaction, with an ordinary `revoke_credential` row (`runCredentialRevocations().revoke`, the
+ * provisioner's own path — not the recovery's).
+ *
+ * **It never throws**: a failure is logged as what it is, a live token. For a terminal run the WP-77
+ * pass reaches the address again (its failed attempt is not a success); for a released run — live
+ * again, `created` — the address is reached again when that run ends.
+ */
+export const revokeRunCredentialsNow = async (
+  options: {
+    readonly unitOfWork: UnitOfWork;
+    readonly integrations: PipelineIntegrationsPort;
+    readonly store: Pick<UnrevokedRunCredentialStore, 'liveCredentialsOfRun'>;
+    readonly clock: { now(): string };
+    readonly logger?: Logger;
+  },
+  runId: Id,
+): Promise<number> => {
+  const logger = options.logger ?? silentLogger;
+  let credentials: readonly RecoverableRunCredential[];
+  try {
+    credentials = await options.unitOfWork.transaction(async (scope) =>
+      options.store.liveCredentialsOfRun(scope.tx, {
+        runId,
+        now: options.clock.now() as IsoDateTime,
+      }),
+    );
+  } catch (error) {
+    logger.error(
+      { err: error, run_id: runId },
+      'a remote run’s minted credentials could not be read, so none was revoked now; the recovery pass reaches them once the run has ended (PROGRESS backlog 155)',
+    );
+    return 0;
+  }
+  let revoked = 0;
+  for (const credential of credentials) {
+    const fields = {
+      run_id: credential.runId,
+      task_id: credential.taskId,
+      integration_id: credential.integrationId,
+      scope: credential.scope,
+      expires_at: credential.expiresAt,
+    };
+    try {
+      const minting = await mintingIntegrationFor(
+        options.integrations,
+        credential.integrationId,
+        noRunScopedSecrets(),
+      );
+      if (minting === null) {
+        logger.error(
+          fields,
+          'the integration that minted this run credential no longer exists, so nothing was called; the token lives until it expires — revoke it by hand in the provider',
+        );
+        continue;
+      }
+      await runCredentialRevocations(minting).revoke(
+        {
+          integrationId: credential.integrationId,
+          revokeId: credential.revokeId,
+          scope: credential.scope,
+          expiresAt: credential.expiresAt,
+        },
+        {
+          runId: credential.runId,
+          taskId: credential.taskId,
+          projectId: credential.projectId,
+          mode: credential.mode,
+        },
+      );
+      revoked += 1;
+      logger.info(fields, 'a remote run’s credential is revoked');
+    } catch (error) {
+      logger.error(
+        { ...fields, err: error },
+        'a remote run’s credential could not be revoked now; it is live until the recovery pass revokes it once the run has ended, or until it expires (PROGRESS backlog 155)',
+      );
+    }
+  }
+  return revoked;
 };

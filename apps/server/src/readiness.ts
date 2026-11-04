@@ -44,8 +44,11 @@ export interface ReadinessOptions {
    * a process that holds no job client.
    *
    * `composedHere` is `server` when this process runs the server claimant (a launcher, or the
-   * in-process provisioner); `workersConnected` counts remote workers online (0 until WP-281). The
-   * line reads `server`, `workers: <n>` or `none` — and `none` is **not** degraded on its own: a
+   * in-process provisioner); `serverClaimantRunning` asks whether **any** process of the instance
+   * holds a fresh `server_claimants` row (WP-281, backlog 722: the `app` process beside a busy
+   * `runner` is not "no claimant"); `workersConnected` counts remote workers seen in the last 60 s.
+   * The line reads `server` (here or elsewhere), `workers: <n>` or `none` — and `none` is **not**
+   * degraded on its own: a
    * `workers_only` core with no worker online, or with no open offer, is a valid state. It is
    * `degraded` (still 200) only when an offer has waited past the bound
    * (`OFFER_UNCLAIMED_AFTER_SECONDS`) with no claimant, and the report names that offer. A failed
@@ -53,6 +56,7 @@ export interface ReadinessOptions {
    */
   readonly claimants?: {
     readonly composedHere: 'server' | null;
+    readonly serverClaimantRunning: () => Promise<boolean>;
     readonly workersConnected: () => Promise<number>;
     readonly oldestUnclaimedOffer: () => Promise<{
       readonly runId: string;
@@ -177,8 +181,12 @@ export const createReadinessCheck = (
     let unclaimed: ReadinessReport['oldest_unclaimed_offer'];
     if (claimants !== null) {
       const read = await withDeadline(
-        Promise.all([claimants.workersConnected(), claimants.oldestUnclaimedOffer()]).then(
-          ([workers, oldest]) => ({ ok: true as const, workers, oldest }),
+        Promise.all([
+          claimants.composedHere === null ? claimants.serverClaimantRunning() : true,
+          claimants.workersConnected(),
+          claimants.oldestUnclaimedOffer(),
+        ]).then(
+          ([server, workers, oldest]) => ({ ok: true as const, server, workers, oldest }),
           () => ({ ok: false as const }),
         ),
         timeoutMs,
@@ -188,8 +196,11 @@ export const createReadinessCheck = (
         checks.claimants = 'degraded';
         details.claimants = 'unknown';
       } else {
-        claimantsLine =
-          claimants.composedHere ?? (read.workers > 0 ? `workers: ${read.workers}` : 'none');
+        claimantsLine = read.server
+          ? 'server'
+          : read.workers > 0
+            ? `workers: ${read.workers}`
+            : 'none';
         if (claimantsLine === 'none' && read.oldest !== null) {
           checks.claimants = 'degraded';
           details.claimants = 'unclaimed';

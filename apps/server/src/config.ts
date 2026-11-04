@@ -21,7 +21,7 @@ import {
   defaultWorkingCalendarConfig,
   workingCalendarSchema,
 } from '@platform/application';
-import { providerModeSchema } from '@platform/contracts';
+import { coreImageDigestsSchema, providerModeSchema } from '@platform/contracts';
 import { db, eventing, jobs } from '@platform/infrastructure';
 import * as z from 'zod';
 import { isTrustProxyEntry } from './client-address.js';
@@ -76,6 +76,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   launcherToken: 'APP_LAUNCHER_TOKEN',
   workspaceControlRoot: 'APP_WORKSPACE_CONTROL_ROOT',
   modelEgressHosts: 'APP_MODEL_EGRESS_HOSTS',
+  workerImageDigests: 'APP_WORKER_IMAGE_DIGESTS',
 };
 
 /**
@@ -219,6 +220,14 @@ const serverConfigFields = z.strictObject({
    * so a claimant that self-terminates at `TTL − ½·renew` is gone before the row is.
    */
   leaseSkewGraceSeconds: z.int().min(0).max(3_600),
+  /**
+   * `APP_WORKER_IMAGE_DIGESTS` (WP-281): the core's four images by digest — what the worker
+   * protocol's handshake and `426` advertise and what a run package names its run and egress images
+   * by (TD-031 decision 4, TD-032 decision 3). `null` (unset) answers `503 digests_unresolved` on
+   * `handshake` and `claims`. WP-284 resolves the core's own `sha-<7>` digests and keeps this as the
+   * override.
+   */
+  workerImageDigests: coreImageDigestsSchema.nullable(),
 
   /**
    * How often the ticket poller's sweep lists the polling bindings and re-arms any whose chain was
@@ -584,6 +593,7 @@ export const SERVER_CONFIG_DEFAULTS = {
   intakeReconcileIntervalMs: 60_000,
   runnerConcurrency: 1,
   leaseSkewGraceSeconds: 120,
+  workerImageDigests: null,
   pollSweepIntervalMs: 60_000,
   argon2: { memoryCostKib: 19_456, timeCost: 2, parallelism: 1 },
 } as const;
@@ -962,6 +972,25 @@ const nullableString = (raw: string | undefined): string | null => {
 };
 
 /**
+ * `APP_WORKER_IMAGE_DIGESTS` (WP-281): `platform=sha256:…,platform_launcher=sha256:…,
+ * platform_runtime=sha256:…,platform_egress=sha256:…`, or empty for none. Returned as the pairs it
+ * names and validated by the schema, so a misspelled image or a tag where a digest belongs refuses
+ * the configuration by name rather than advertising a digest nobody holds.
+ */
+const imageDigestsFromEnv = (raw: string | undefined): Record<string, string> | null => {
+  const value = raw?.trim();
+  if (value === undefined || value === '') {
+    return null;
+  }
+  return Object.fromEntries(
+    value.split(',').map((entry) => {
+      const [name = '', ...rest] = entry.split('=');
+      return [name.trim(), rest.join('=').trim()];
+    }),
+  );
+};
+
+/**
  * A comma-separated list of environment-variable names, de-duplicated and in the order declared.
  *
  * Unparseable entries are **dropped rather than accepted**: this list is an allow-list, so the
@@ -1145,6 +1174,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
       env.APP_LEASE_SKEW_GRACE,
       SERVER_CONFIG_DEFAULTS.leaseSkewGraceSeconds,
     ),
+    workerImageDigests: imageDigestsFromEnv(env.APP_WORKER_IMAGE_DIGESTS),
     pollSweepIntervalMs: numberFromEnv(
       nonEmpty(env.APP_POLL_SWEEP_INTERVAL_MS) ?? env[DEPRECATED_POLL_SWEEP_INTERVAL_VARIABLE],
       SERVER_CONFIG_DEFAULTS.pollSweepIntervalMs,

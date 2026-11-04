@@ -470,6 +470,8 @@ export const WORKSPACE_ERROR_REASONS = [
   'skill_set_invalid',
   /** An image digest the create request named is not on this launcher's daemon; it never pulls (WP-279). */
   'image_not_local',
+  /** A remote run's package was refused by `runPackageSchema`'s refinements (WP-281, TD-031 decision 4). */
+  'run_package_refused',
 ] as const;
 export type WorkspaceErrorReason = (typeof WORKSPACE_ERROR_REASONS)[number];
 export const workspaceErrorReasonSchema = z.enum(WORKSPACE_ERROR_REASONS);

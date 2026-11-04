@@ -136,7 +136,9 @@ export const healthResponseSchema = z.strictObject({
   details: z.record(z.string(), z.enum(['unclaimed', 'unknown', 'ahead_additive'])).optional(),
   /**
    * **Who claims agent runs** (WP-277, TD-031 decision 13): `server` when this process composes the
-   * server claimant, `workers: <n>` when remote workers are connected (always 0 until WP-281), or
+   * server claimant **or another process of the instance runs one** (its `server_claimants` row is
+   * fresh — WP-281, backlog 722), `workers: <n>` when remote workers are connected (seen in the last
+   * 60 s), or
    * `none`. `none` is **not** degraded by itself — a `workers_only` core with no worker online is a
    * valid state — only when an offer has waited past the bound (`oldest_unclaimed_offer`).
    */

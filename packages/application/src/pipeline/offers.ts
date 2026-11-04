@@ -159,18 +159,25 @@ export interface RecordedClaim {
   readonly fence: RunLeaseFence;
 }
 
-/** `run.claimed` for a claim the repository granted — the run `created → starting` in the log. */
+/** The `lease_owner` a remote worker's claim writes: `worker:<id>` (TD-031 §2, WP-281). */
+export const workerLeaseOwner = (workerId: Id): string => `worker:${workerId}`;
+
+/**
+ * `run.claimed` for a claim the repository granted — the run `created → starting` in the log. The
+ * claimant is the server's runner unless `worker` names the remote worker that claimed (WP-281).
+ */
 export const recordClaim = (
   run: Run,
   claimed: ClaimedRunOffer,
   context: CommandContext,
+  worker: Id | null = null,
 ): RecordedClaim => {
   const recorded = claimRun(
     run,
     {
       offerId: claimed.offerId,
-      claimantKind: 'server',
-      workerId: null,
+      claimantKind: worker === null ? 'server' : 'worker',
+      workerId: worker,
       epoch: claimed.epoch,
     },
     context,

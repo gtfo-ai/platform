@@ -844,7 +844,7 @@ export const runClaimedEvent = defineEvent('run.claimed', {
   run_id: idSchema,
   offer_id: idSchema,
   claimant_kind: runClaimantKindSchema,
-  /** The remote worker that claimed; `null` for the server's runner (no remote claim until WP-281). */
+  /** The remote worker that claimed (WP-281); `null` for the server's runner. */
   worker_id: idSchema.nullable(),
   /** The epoch this claim holds — every claim of an offer increments it (TD-031 §2). */
   lease_epoch: z.int().positive(),
@@ -862,6 +862,37 @@ export const runOfferWithdrawnEvent = defineEvent('run.offer.withdrawn', {
   offer_id: idSchema,
   /** Why — platform text: the transition that left the stage entry. */
   reason: nonEmptyStringSchema,
+});
+
+/**
+ * Why a claim was handed back **unspent** (TD-031 decision 6): a remote worker's four reasons, and
+ * `credential_unavailable` — the core's own, when the run's git credential could not be minted
+ * after the claim committed (TD-031 §2).
+ */
+export const runReleaseReasonSchema = z.enum([
+  'usage_limited',
+  'image_missing',
+  'provision_failed',
+  'shutdown',
+  'credential_unavailable',
+]);
+export type RunReleaseReason = z.infer<typeof runReleaseReasonSchema>;
+
+/**
+ * A claim was **released** before the run's CLI spawn marker (WP-281, TD-031 decision 6 and its
+ * 2026-11-04 amendment §4): the offer went `claimed → open` (its epoch kept, so the releasing
+ * claimant's fence is stale), the run `starting → created`, the lease cleared and the minted
+ * credential revoked. Nothing ran, nothing is charged; `run.claimed` stands beside it.
+ */
+export const runOfferReleasedEvent = defineEvent('run.offer.released', {
+  ...taskScoped,
+  run_id: idSchema,
+  offer_id: idSchema,
+  /** The remote worker that released; `null` for a release the core made itself. */
+  worker_id: idSchema.nullable(),
+  /** The epoch of the claim that was released. */
+  lease_epoch: z.int().positive(),
+  reason: runReleaseReasonSchema,
 });
 
 export const runSteeredEvent = defineEvent('run.steered', {
@@ -1182,6 +1213,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   runOfferedEvent,
   runClaimedEvent,
   runOfferWithdrawnEvent,
+  runOfferReleasedEvent,
   runSteeredEvent,
   artifactCreatedEvent,
   workspaceProvisionedEvent,

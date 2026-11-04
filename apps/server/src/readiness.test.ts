@@ -193,6 +193,7 @@ describe('createReadinessCheck', () => {
     };
     const withClaimants = (input: {
       readonly composedHere: 'server' | null;
+      readonly elsewhere?: boolean;
       readonly workers?: number;
       readonly oldest?: typeof OLD_OFFER | null;
       readonly fails?: boolean;
@@ -203,6 +204,7 @@ describe('createReadinessCheck', () => {
         dispatchReady: null,
         claimants: {
           composedHere: input.composedHere,
+          serverClaimantRunning: async () => input.elsewhere ?? false,
           workersConnected: async () => {
             if (input.fails === true) throw new Error('relation "run_offers" does not exist');
             return input.workers ?? 0;
@@ -219,6 +221,28 @@ describe('createReadinessCheck', () => {
           claimants: 'server',
         },
       );
+    });
+
+    /**
+     * Backlog 722 (WP-281): the `app` process beside a busy `runner` composes no claimant, and the
+     * instance still has one — its `server_claimants` row is fresh — so it reads `server` and an old
+     * offer does not degrade it; without the row the same process reads `none` and degrades.
+     */
+    it('reads server, not degraded, where another process’s server claimant is alive (backlog 722)', async () => {
+      await expect(
+        withClaimants({ composedHere: null, elsewhere: true, oldest: OLD_OFFER })(),
+      ).resolves.toEqual({
+        status: 'ok',
+        checks: { database: 'ok', migrations: 'ok', queue: 'ok', claimants: 'ok' },
+        claimants: 'server',
+      });
+      const alone = await withClaimants({
+        composedHere: null,
+        elsewhere: false,
+        oldest: OLD_OFFER,
+      })();
+      expect(alone.claimants).toBe('none');
+      expect(alone.checks.claimants).toBe('degraded');
     });
 
     it('reads workers: <n> when workers are connected', async () => {

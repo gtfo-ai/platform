@@ -1662,10 +1662,33 @@ export interface StoredRunOffer extends Omit<NewRunOffer, 'routing'> {
  *
  * Since WP-276 the server's claimant loop (`./claimant.ts`) takes **any** open offer, stage or ask,
  * oldest first: `{}`. `runId` narrows the claim to one offer, which is what a test that drives one
- * run asks for. Routing (WP-278) and remote workers (WP-281) narrow it further.
+ * run asks for. Routing (WP-278) narrows the server's claim to `server_from`; a remote worker's claim
+ * is narrowed by {@link RunOfferClaim.worker} (WP-281).
  */
 export interface RunOfferEligibility {
   readonly runId?: Id;
+}
+
+/**
+ * **A remote worker's claim** (WP-281, TD-031 decisions 2, 7 and 8). The repository's one claim
+ * statement checks TD-031 §8's eligibility **in the statement** against these: the worker is not
+ * revoked and its user may act (backlog 714: re-checked where the claim commits, not only at the
+ * request's authentication), not paused, not excluded from the offer, its user a project member at
+ * `member` or above, the offer's images held, the project's run credential `minted`
+ * (`remote_run_credential` is WP-282's), the offer a **stage** offer (an ask's ending is not served
+ * to a worker before WP-283), and `now ≥ workers_from` or the assignee's head start.
+ */
+export interface RemoteClaimant {
+  readonly workerId: Id;
+  /** The image digests the worker reports holding (`claims`' `image_digests`). */
+  readonly heldImageDigests: readonly string[];
+  /**
+   * The core's run and egress images by digest — what an offer that names none is packaged with,
+   * written onto the offer by the claim (`run_offers.image_digests`, TD-031 decision 4).
+   */
+  readonly images: { readonly run: string; readonly egress: string };
+  /** SHA-256 hex of the run token minted for this claim (TD-031 decision 7); never the token. */
+  readonly runTokenHash: string;
 }
 
 /**
@@ -1692,6 +1715,8 @@ export interface ExpiredRunOffer {
 export interface RunOfferClaim {
   readonly eligibility: RunOfferEligibility;
   readonly claimantKind: RunClaimantKind;
+  /** Present exactly for `claimantKind: 'worker'` (WP-281). */
+  readonly worker?: RemoteClaimant;
   /** `server:<process>` for the server's runner (`serverLeaseOwner`); `null` with no lease configured. */
   readonly owner: string | null;
   /** The lease's expiry, or `null` for a composition that runs no heartbeat (no lease configured). */
@@ -1708,6 +1733,45 @@ export interface ClaimedRunOffer {
   readonly kind: RunOfferKind;
   readonly epoch: number;
   readonly owner: string | null;
+  /** The images the offer names after the claim — `null` for a server claim of an offer naming none. */
+  readonly images?: { readonly run: string; readonly egress: string } | null;
+}
+
+/** What {@link RunOfferRepository.release} answers (WP-281, TD-031 decision 6 as amended §4). */
+export type RunOfferRelease =
+  /** This call undid the claim: the offer `claimed → open`, the run `starting → created`. */
+  | {
+      readonly kind: 'released';
+      readonly offerId: Id;
+      readonly taskId: Id;
+      readonly projectId: Id;
+    }
+  /** A repeat: the offer is open at this epoch with a release recorded — nothing was written. */
+  | { readonly kind: 'already_released' }
+  /** The run's CLI spawn marker is written: a started run ends through `finish` (`409 run_started`). */
+  | { readonly kind: 'run_started' }
+  /** The run is not live under this claim — another epoch, another owner, or ended. */
+  | { readonly kind: 'lease_lost' };
+
+/**
+ * Who holds a run's token (WP-281, TD-031 decision 7): the offer's `run_token_hash`, the epoch it was
+ * minted for, the remote worker that claimed and whether it may still act — read in one statement, so
+ * a revoked worker or a user who may no longer act authenticates nothing.
+ */
+export interface RunTokenHolder {
+  readonly runId: Id;
+  readonly offerId: Id;
+  readonly kind: RunOfferKind;
+  /** SHA-256 hex, or `null` for an offer no remote worker ever claimed. */
+  readonly tokenHash: string | null;
+  readonly tokenEpoch: number | null;
+  /** `run_offers.worker_id` — the last remote claimant, kept by a release until the next claim. */
+  readonly workerId: Id | null;
+  /** The worker is not revoked and its user may act (`USER_MAY_ACT`). */
+  readonly workerUsable: boolean;
+  readonly runStatus: RunStatus;
+  /** `runs.ended_at`, or `null` while the run is live. */
+  readonly endedAt: IsoDateTime | null;
 }
 
 /** What {@link RunOfferRepository.withdraw} moved `open → withdrawn`. */
@@ -1766,6 +1830,28 @@ export interface RunOfferRepository {
    */
   liveStageOffer(tx: Transaction, taskId: Id): Promise<StoredRunOffer | null>;
   /**
+   * **A release** (WP-281, TD-031 decision 6 and its 2026-11-04 amendment §4): undoes the claim at
+   * `epoch` held by `owner`, only while the run is `starting` with no CLI spawn marker — the offer
+   * `claimed → open` with its epoch **kept** (so the releasing claimant's fence is stale), the release
+   * recorded, `excludeWorkerId` appended to `excluded_worker_ids` when given, and the run's
+   * `lease_owner`, `lease_expires_at` and `worker_id` cleared, `starting → created`. Locks the offer,
+   * then the run (the one lock order). The caller appends `run.offer.released` and revokes the
+   * minted credential after the commit.
+   */
+  release(
+    tx: Transaction,
+    input: {
+      readonly runId: Id;
+      readonly epoch: number;
+      readonly owner: string;
+      readonly reason: string;
+      readonly excludeWorkerId: Id | null;
+      readonly now: IsoDateTime;
+    },
+  ): Promise<RunOfferRelease>;
+  /** The run token's holder (WP-281), or `null` for a run with no offer. */
+  runTokenHolder(tx: Transaction, runId: Id): Promise<RunTokenHolder | null>;
+  /**
    * Open offers whose run has **no** stored plan (TD-031's 2026-11-04 amendment §2) — the claimant
    * withdraws each through its kind's executor before it claims. Reachable only for a run offered by a
    * build before WP-275a.
@@ -1797,8 +1883,8 @@ export interface ExecutionRoutingRepository {
   /**
    * Whether `userId` has a worker **online** for this project at `now` (TD-031 §8): a worker of
    * theirs that is not revoked, not paused, seen in the last 60 s, and they are a member of the
-   * project at `member` or above. Nothing writes `workers.last_seen_at` before WP-281, so until
-   * then this answers `false`.
+   * project at `member` or above. `workers.last_seen_at` is written by every authenticated worker
+   * protocol call (WP-281), the heartbeat's every 20 s among them.
    */
   assigneeOnline(
     tx: Transaction,

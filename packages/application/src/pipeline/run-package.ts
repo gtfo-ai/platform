@@ -133,30 +133,7 @@ export const loadRunPackage = async (
   runId: Id,
   environment: RunSecretEnvironment,
 ): Promise<RunPackage> => {
-  const plan = await deps.runPlans.load(tx, runId);
-  if (plan === null) {
-    throw refused(runId, 'run_plan_missing', 'it has no stored plan');
-  }
-  if (plan.sealedSpec === null) {
-    throw refused(runId, 'run_plan_unreadable', 'its plan was cleared when the run ended');
-  }
-  let stored: RunSpec;
-  try {
-    const document = deps.sealer.open(runId, plan.sealedSpec, plan.keyId);
-    stored = storedRunSpecSchema.parse(JSON.parse(document));
-  } catch (error) {
-    throw refused(
-      runId,
-      'run_plan_unreadable',
-      error instanceof RunPlanUnreadableError
-        ? 'its seal does not open under this process’s APP_SECRET_KEY'
-        : 'its stored plan does not parse',
-      error,
-    );
-  }
-  if (stored.runId !== runId) {
-    throw refused(runId, 'run_plan_unreadable', 'its stored plan names another run');
-  }
+  const { stored, plan } = await openRunPlan(deps, tx, runId);
   const secrets: Record<string, string> = {};
   for (const name of stored.secretEnvNames) {
     const value = environment.env[name];
@@ -192,4 +169,44 @@ export const loadRunPackage = async (
     }),
     plan,
   };
+};
+
+/**
+ * **The stored plan opened, with no secret value attached** (WP-281): the spec exactly as sealed —
+ * `storedRunSpecSchema`, every `env` entry named in `secretEnvNames` absent — which is what a run
+ * package is built from (TD-031 decision 4: the core never puts a secret value in a package).
+ * {@link loadRunPackage} is this plus the claimant's own values.
+ *
+ * @throws {RunStartError} terminal, `run_plan_missing` or `run_plan_unreadable`.
+ */
+export const openRunPlan = async (
+  deps: { readonly runPlans: RunPlanRepository; readonly sealer: RunPlanSealer },
+  tx: Transaction,
+  runId: Id,
+): Promise<{ readonly stored: RunSpec; readonly plan: StoredRunPlan }> => {
+  const plan = await deps.runPlans.load(tx, runId);
+  if (plan === null) {
+    throw refused(runId, 'run_plan_missing', 'it has no stored plan');
+  }
+  if (plan.sealedSpec === null) {
+    throw refused(runId, 'run_plan_unreadable', 'its plan was cleared when the run ended');
+  }
+  let stored: RunSpec;
+  try {
+    const document = deps.sealer.open(runId, plan.sealedSpec, plan.keyId);
+    stored = storedRunSpecSchema.parse(JSON.parse(document));
+  } catch (error) {
+    throw refused(
+      runId,
+      'run_plan_unreadable',
+      error instanceof RunPlanUnreadableError
+        ? 'its seal does not open under this process’s APP_SECRET_KEY'
+        : 'its stored plan does not parse',
+      error,
+    );
+  }
+  if (stored.runId !== runId) {
+    throw refused(runId, 'run_plan_unreadable', 'its stored plan names another run');
+  }
+  return { stored, plan };
 };

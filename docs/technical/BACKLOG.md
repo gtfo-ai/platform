@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 733, so the next is **734**), its grade
+line with the next free number (the highest is 745, so the next is **746**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -14,10 +14,15 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 |---|---|---|---|
 | 171 | major | WP-58 (architect ruling pending) | KB query floor drops the subject word on a single-subject vault; a wrong page can outrank the right one on PostgreSQL (small-to-major) |
 | 693 | major | WP-283 | Ruled (c): on a remote worker the launcher's mirror and export helpers need the core-held SSH deploy key; worker must sign through the core |
-| 714 | major | WP-281 | Claim, heartbeat and finish SQL must re-check `workers.revoked_at` and the user-may-act rule (`USER_MAY_ACT`) in their own statement, so a request authenticated just before a revoke or ban cannot commit after it |
+| 740 | major | — | A remote claim whose git credential cannot be minted (a provider error) is released `credential_unavailable` (TD-031 §2) with no bound and no spacing: Q59a's bound counts a stage entry's runs and a release keeps the run, so a provider that refuses every mint lets workers re-claim and re-mint at their request rate (WP-281 ends the hold at once; the loop is the worker's). Needs a ruling: a release counter, a `*_from` delay, or the transient start-failure path |
 | 232 | minor | — | Storage gauge (org-dashboard panel, 50 GB warning, partition purge) not built; only Prometheus metrics exist |
 | 446 | minor | — | WP-144 criterion (3), a real `docker compose stop runner` mid-run, not built; needs fake providers reachable from a compose stack |
 | 538 | minor | — | Two installations sharing one tracker service account both see themselves as assignee, so the claim does not stop double work |
+| 741 | minor | WP-283 | WP-281's worker claim takes **stage** offers only: an ask's ending (`AskExecutor.settle`) is not composed on the worker routes, so an ask offer waits for the server claimant or its `offer_timeout`; TD-031 §13's asker's-worker head start needs the ask settle on `finish` |
+| 742 | minor | WP-282 | The heartbeat answers `approvals: []` always: no worker can open a tool approval before WP-282's `approvals` verb, which must deliver its decision on the heartbeat (TD-031 §9) |
+| 743 | minor | WP-284 | `handshake`'s `compose_bundle_digest` is the SHA-256 of the four advertised image digests (`apps/server/src/workers/release.ts`) until WP-284 renders `compose.worker.yml` and advertises the file's own digest |
+| 744 | minor | — | TD-031 §2's admission re-check at the claim (`cost/guard.ts` and the task cap, an admission refused at the claim withdrawing the offer and pausing the task) is made by neither claimant — the server's (WP-276) nor a remote worker's (WP-281); both rely on the admission at offer time |
+| 745 | minor | WP-282 | A remote run's minted credential is added to the minting API process's run-scoped secret registry only; a `finish` answered by another replica settles (artifact redaction) without its exact value, relying on the pattern rules — WP-282's re-redaction should rebuild the run's exact-value redactor from stored state |
 | 730 | minor | — | A stage offer names no assignee (WP-278): the ticket's assignee is read at intake (`TicketRead.assignee`) and dropped, so BD-032 decision 5's head start reaches only an ask's asker until a mapped assignee user is stored on the task |
 | 733 | minor | — | Offer timestamps (`server_from`, `workers_from`, `expires_at`) are written from the offering process's clock and compared with the claimant's, while claimant liveness uses the database's clock; a process clock ahead of the claimant's delays a server claim by the skew (WP-278) |
 | 556 | minor | WP-270 (b) | Flake: runlet conformance case for a close after `result` fails with write EPIPE in CI (two occurrences); measure before fixing |
@@ -28,14 +33,11 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 694 | minor | WP-285 | Undecided whether a rate_limited run saves its unfinished work; WP-285's criteria must state it |
 | 695 | minor | WP-283 | A run package carries the core's workspacePath and claudeCodePath; WP-283 must say the worker answers them from its own provisioning |
 | 696 | minor | — | protocol:check reads "one release earlier" as the base's first parent, so a multi-commit push can slip a protocol version bump |
-| 701 | minor | WP-281 | Ruled: a start failure in the claimant settles as not_started; run.started moves to the CLI spawn request; release until then (the first two built by S-22.1; `release` is WP-281's) |
 | 704 | minor | WP-284 | WP-279's launcher resolves a create's image digest with a bare `sha256:` inspect, which finds an image id (what `/v1/health` answers) but a registry manifest digest only under the containerd store; TD-032's `sha-<7>` digests need `repo@digest` or an id map — measure on a worker bundle |
 | 705 | minor | WP-283 | The relayed helper agent socket's ownership: WP-279's Docker phase measured `1000:0`/`0660` in a `1000:0`/`0750` directory (export helper uid 1000, mirror helper root with no capabilities); the `remote-worker` must create it so |
 | 708 | minor | WP-283 | The worker must serve each run's relayed helper agent socket from a directory of its own: the mirror/export helpers mount the socket's whole directory, so a shared one would let one run's helper reach another run's socket (PR #2 review) |
 | 711 | minor | — | A user's deactivation (Better Auth ban/disable) expires their workers' run leases from the update's after-hook, after its commit, not in its transaction as TD-031 §7 says; a trigger on users is not additive (TD-032 D) |
-| 712 | minor | WP-281 | WP-280 serves no X-Worker-Protocol check on device/device-token (a credential-less machine asks before it speaks the protocol); WP-281 should state whether the 426 applies there |
 | 715 | minor | — | Device-flow limit keys an exact IPv6 address (rotate within a /64 to dodge the 20 per address), and ~10 addresses fill the 200 instance slots for 10 min; key IPv6 on its /64 and alert on the instance limit |
-| 722 | minor | WP-281 | `/readyz` on a process that is not a claimant (`app` beside a busy `runner`) reads `claimants: none` and degrades after an offer waits 5 min, though another process's server claimant is alive and only busy. The liveness row exists since WP-278 (`server_claimants`, migration 0097, renewed by every running server claimant); `/readyz` only needs to read it beside WP-281's connected-worker count |
 | 713 | nit | — | worker_device_codes rows are never deleted; bounded by the 200-pending limit per ten minutes, but grow with use; add a sweep of consumed/expired rows |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
 | 422 | nit | — | pipeline.outbound polls at 0.5 s in every process; idle cost on a large job table and drain above N = 50 never measured |
@@ -64,6 +66,10 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 
 | # | Closed by | Item |
 |---|---|---|
+| 714 | S-22.6 (WP-281) | The claim (`WORKER_ELIGIBLE` in `postgres-run-offers.ts`), the heartbeat's renewal, the spawn marker and `finish`'s fence re-ask `workers.revoked_at` and `USER_MAY_ACT` in their own statement (`pipeline/worker-holder.ts`, one definition the worker store reads too); `remote-runs.test.ts` and `remote-claim.integration.test.ts` hold it |
+| 701 | S-22.6 (WP-281) | `release` is admitted while the run is `starting` with no spawn marker and undoes the claim only (offer `claimed → open`, epoch kept, lease cleared, run `starting → created`, credential revoked, nothing charged); `409 run_started` after; `POST runs/:id/spawn` writes the marker and `run.started` |
+| 712 | S-22.6 (WP-281) | The `426` check applies to the device flow too (TD-031 §9: the header on every request), first, before authentication; `protocol.contract.test.ts` and `client-census.test.ts` assert it on every verb |
+| 722 | S-22.6 (WP-281) | `/readyz`'s `claimants` reads `server` when any process holds a fresh `server_claimants` row (S-22.3's table, no second mechanism) and `workers: <n>` from `workers.last_seen_at`; `readiness.test.ts` holds the `app`-beside-a-busy-`runner` case |
 | 690 | WP-274 `4760587c` (scanner matched to TD-032's 2026-11-04 amendment) | Ruled (TD-032 amendment D): create trigger/type/sequence in additive migrations; scanner to match the amendment |
 | 691 | WP-274 `4760587c` (scanner matched to TD-032's 2026-11-04 amendment) | Ruled (TD-032 amendments A–C): scanner admits same-file unique index, validated constraint, platform_table_policy insert |
 | 700 | S-22.1 (WP-275a) | Ruled: settleRun in the claimant lacks the job's memory (redactor, review checklists); the planned spec is sealed in a new run_plans table |

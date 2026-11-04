@@ -71,8 +71,9 @@ stores its sealed plan and **offers** the run, and it evaluates the platform gat
 `APP_LAUNCHER_TOKEN` does not do is **claim** an offer and run it; it says so in its start log
 (*this process is not a claimant*), and the run waits as an open offer. **Two places show it**:
 
-- `/readyz` reports `claimants`: `server` on a process that runs the server claimant, `workers: <n>`
-  when remote workers are connected (none until WP-281), or `none`. `none` is **not** degraded by
+- `/readyz` reports `claimants`: `server` when this process — or, since WP-281, any other process of
+  the instance — runs the server claimant (its liveness row is fresh), `workers: <n>` when remote
+  workers are connected (an authenticated protocol call in the last 60 s), or `none`. `none` is **not** degraded by
   itself — a core where every run is meant for workers is a valid state — and becomes `degraded`
   (still **200**), with `"details": {"claimants": "unclaimed"}` and the offer named in
   `oldest_unclaimed_offer`, only once an offer has waited five minutes with no claimant.
@@ -421,7 +422,7 @@ process cannot answer*, never zero:
 | `jobs_queued_oldest_age_seconds{queue="…"}` | how long the oldest of those has waited; no series for a queue with nothing waiting | a queue whose oldest job keeps ageing |
 | `run_offers_open{project="…"}` | open run offers — agent runs waiting for a claimant — per project; no series for a project with none (WP-277) | above 0 for longer than a run takes to be claimed: no claimant is running agent runs |
 | `run_offer_wait_seconds{project="…"}` | how long the project's oldest open offer has waited (WP-277) | above 300 — the same condition `/readyz` reports as `claimants: degraded` |
-| `workers_connected`, `workers_paused` | remote workers connected to this core and paused (WP-277; always 0 until worker mode ships, WP-281) | — |
+| `workers_connected`, `workers_paused` | remote workers connected to this core (an authenticated worker-protocol call in the last 60 s) and, of those, paused (WP-277, WP-281) | — |
 | `webhook_deliveries_rate_limited_total{provider="…"}` | webhook deliveries answered `429` by their integration's rate limit, before any signature check (API roles, WP-87) | a rate that does not stop: somebody is flooding the endpoint, or a vendor's burst is larger than the bucket — its deliveries are being retried, not lost, until the vendor gives up |
 | `command_idempotency_claims_unknown{action="…"}` | commands whose process died between claiming their `Idempotency-Key` and recording the outcome, past the in-flight window (`CLAIM_IN_FLIGHT_MS`, `apps/server/src/routes/idempotency.ts`); the key answers `409 idempotency_attempt_unknown` for good (API roles, WP-73) | anything above 0 asks a **human check** of the resource the action names — never a delete of the row, which would let a retry perform the command a second time |
 
@@ -439,7 +440,15 @@ the worker device flow's limits (at most 20 pending codes per client address, 20
 on it — so behind a CDN, list the CDN's ranges in `APP_TRUST_PROXY` and name its header here, or
 every developer behind the CDN shares one address's limit.
 
-Both of those are among the variables `compose.yml` does not pass through, so they need the override
+`APP_WORKER_IMAGE_DIGESTS` (WP-281) names the core's four images by digest —
+`platform=sha256:…,platform_launcher=sha256:…,platform_runtime=sha256:…,platform_egress=sha256:…` —
+which the remote-worker protocol advertises on its handshake and names a run package's run and egress
+images by. Unset, a worker's `handshake` and `claims` answer `503 digests_unresolved` (the device flow
+still works); WP-284 resolves the core's own digests and keeps this as the override. Every request to
+`/api/worker/v1/`, the device flow's included, must carry `X-Worker-Protocol`; a worker the core does
+not serve is answered `426 upgrade_required`.
+
+Both `APP_TRUST_PROXY` and `APP_TRUSTED_CLIENT_IP_HEADER` are among the variables `compose.yml` does not pass through, so they need the override
 from §2 to have any effect at all.
 
 ## 4. Integrations

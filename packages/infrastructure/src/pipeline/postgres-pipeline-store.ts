@@ -106,6 +106,7 @@ import {
 } from './postgres-run-offers.js';
 import { clearRunPlanSeal, createPostgresRunPlanRepository } from './postgres-run-plans.js';
 import { takeOverLastActivitySql } from './take-over-activity.js';
+import { runHolderUsableSql } from './worker-holder.js';
 
 /** Raised when a write that had to change a row changed none. */
 export class PipelineRowMissingError extends Error {
@@ -1692,7 +1693,8 @@ export const createPostgresPipelineStore = (
                 exit_detail = $16::jsonb, saved_work = $17::jsonb
           where id = $1 and status = any($14::run_status[])
             and ($18::boolean is not true
-                 or (lease_epoch = $19 and lease_owner is not distinct from $20))`,
+                 or (lease_epoch = $19 and lease_owner is not distinct from $20
+                     and ${runHolderUsableSql('runs')}))`,
         [
           outcome.runId,
           outcome.status,
@@ -1820,7 +1822,8 @@ export const createPostgresPipelineStore = (
           where id = $1
             and status = any($4::run_status[])
             and lease_epoch = $5
-            and lease_owner = $2`,
+            and lease_owner = $2
+            and ${runHolderUsableSql('runs')}`,
         [lease.runId, lease.owner, lease.expiresAt, [...ACTIVE_RUN_STATUSES], lease.epoch],
       );
       return result.rowCount !== 0;
@@ -1840,7 +1843,8 @@ export const createPostgresPipelineStore = (
             and cli_spawn_requested_at is null
             and status = any($3::run_status[])
             and ($4::boolean is not true
-                 or (lease_epoch = $5 and lease_owner is not distinct from $6))`,
+                 or (lease_epoch = $5 and lease_owner is not distinct from $6
+                     and ${runHolderUsableSql('runs')}))`,
         [
           marker.runId,
           marker.at,

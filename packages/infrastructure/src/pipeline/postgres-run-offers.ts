@@ -25,14 +25,24 @@
  */
 import type {
   ClaimedRunOffer,
+  RunOfferRelease,
   RunOfferRepository,
+  RunTokenHolder,
   StoredRunOffer,
   Transaction,
 } from '@platform/application';
-import type { Id, IsoDateTime, RunClaimantKind, RunOfferKind } from '@platform/contracts';
+import { decideRelease } from '@platform/application';
+import type {
+  Id,
+  IsoDateTime,
+  RunClaimantKind,
+  RunOfferKind,
+  RunStatus,
+} from '@platform/contracts';
 import { ACTIVE_RUN_STATUSES } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import { USER_MAY_ACT_SQL, workerUsableSql } from './worker-holder.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
@@ -93,14 +103,62 @@ const toStoredOffer = (row: RunOfferRow): StoredRunOffer => ({
   },
 });
 
+/** The project roles that may take a run (TD-031 §8: `member` or above). */
+const RUNNING_ROLES = ['member', 'maintainer', 'admin'] as const;
+
+/**
+ * **A remote worker's eligibility for offer `o`** (WP-281, TD-031 decision 8), checked inside the one
+ * claim statement:
+ *
+ * - a **stage** offer — an ask's ending (TD-031 §13) is not served to a remote worker before WP-283,
+ *   which composes the ask's settle on the worker routes;
+ * - the worker is not excluded from it (`excluded_worker_ids`, decisions 6 and 12);
+ * - it holds the offer's run and egress images — the digests the offer names, or the core's own for
+ *   an offer that names none (decision 4);
+ * - the worker is not revoked, its user may act (backlog 714: here, in the statement that commits the
+ *   claim) and is a project member at `member` or above, and it is not paused;
+ * - `now ≥ workers_from`, or the worker's user is the offer's assignee inside its head start — a
+ *   `null` `workers_from` is *never* (`server_only`, and an offer written before WP-278);
+ * - the project's run credential is `minted`: a git binding whose integration declares
+ *   `run_credential: static` or `deploy_key` is admitted only behind `remote_run_credential: allow`
+ *   (decision 5, Q124 (a)), which is WP-282's — until then such a project is excluded.
+ */
+const WORKER_ELIGIBLE = `(
+         o.kind = 'stage'
+     and not ($7::uuid = any(o.excluded_worker_ids))
+     and coalesce(o.image_digests ->> 'run', $9::text) = any($8::text[])
+     and coalesce(o.image_digests ->> 'egress', $10::text) = any($8::text[])
+     and exists (
+           select 1
+             from workers w
+             join users u on u.id = w.user_id
+             join project_members m on m.user_id = w.user_id and m.project_id = o.project_id
+            where w.id = $7::uuid
+              and w.revoked_at is null
+              and ${USER_MAY_ACT_SQL}
+              and (w.paused_until is null or w.paused_until <= $4::timestamptz)
+              and m.role::text = any(array[${RUNNING_ROLES.map((role) => `'${role}'`).join(', ')}])
+              and (o.workers_from <= $4::timestamptz
+                   or (o.assignee_user_id = w.user_id and $4::timestamptz < o.assignee_until)))
+     and not exists (
+           select 1
+             from bindings b
+             join integrations i on i.id = b.integration_id
+            where b.project_id = o.project_id
+              and i.type = 'git'
+              and i.retired_at is null
+              and coalesce(i.config ->> 'run_credential', 'minted') <> 'minted'))`;
+
 /**
  * TD-031 §2's claim. `$1` narrows it to one run's offer, or is null for the oldest eligible open
  * offer (the server claimant's loop, WP-276); `$2` the live statuses, `$3` the claimant kind, `$4`
  * the claim instant, `$5` the owner, `$6` the lease's expiry — both null in a composition with no
  * lease. **The server's eligibility** (WP-278, TD-031 decision 8): `server_from` reached — a
  * `null` `server_from` is *never* (`workers_only`) — or an offer written before WP-278, which has
- * neither `*_from` and is the server's at once. A remote worker's eligibility is WP-281's. The outer update is the run's `created → starting` (WP-275b); a row a previous build
- * inserted live in another status keeps it. `for update of o, r skip locked` takes the offer and
+ * neither `*_from` and is the server's at once. **A remote worker's** (WP-281, {@link WORKER_ELIGIBLE}):
+ * `$7` the worker, `$8` the digests it holds, `$9`/`$10` the core's run and egress digests, `$11` the
+ * run token's hash. The outer update is the run's `created → starting` (WP-275b); a row a previous
+ * build inserted live in another status keeps it. `for update of o, r skip locked` takes the offer and
  * then its run (the one lock order, WP-276) and skips a run a terminal writer holds.
  */
 const CLAIM_SQL = `with candidate as (
@@ -113,23 +171,32 @@ const CLAIM_SQL = `with candidate as (
        and ($3 <> 'server'
             or o.server_from <= $4::timestamptz
             or (o.server_from is null and o.workers_from is null))
+       and ($3 <> 'worker' or ${WORKER_ELIGIBLE})
      order by o.offered_at, o.id
      for update of o, r skip locked
      limit 1
   ), claimed as (
     update run_offers o
        set state = 'claimed', lease_epoch = o.lease_epoch + 1, claimant_kind = $3,
-           claimed_at = $4::timestamptz
+           claimed_at = $4::timestamptz, worker_id = $7::uuid,
+           run_token_hash = case when $7::uuid is null then o.run_token_hash else $11 end,
+           run_token_epoch = case when $7::uuid is null then o.run_token_epoch
+                                  else o.lease_epoch + 1 end,
+           image_digests = case when $7::uuid is null then o.image_digests
+                                else coalesce(o.image_digests,
+                                              jsonb_build_object('run', $9::text, 'egress', $10::text))
+                           end
       from candidate
      where o.id = candidate.id
-    returning o.id, o.run_id, o.task_id, o.kind, o.lease_epoch
+    returning o.id, o.run_id, o.task_id, o.kind, o.lease_epoch, o.image_digests
   )
   update runs r
      set lease_owner = $5, lease_expires_at = $6::timestamptz, lease_epoch = c.lease_epoch,
+         worker_id = $7::uuid,
          status = case r.status when 'created' then 'starting'::run_status else r.status end
     from claimed c
    where r.id = c.run_id
-  returning c.id, c.run_id, c.task_id, c.kind, c.lease_epoch`;
+  returning c.id, c.run_id, c.task_id, c.kind, c.lease_epoch, c.image_digests`;
 
 /**
  * Closes the run's offer — `RunRepository.finish`'s second statement, only for the writer that won
@@ -187,12 +254,19 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
     );
   },
   claim: async (tx, claim): Promise<ClaimedRunOffer | null> => {
+    const worker = claim.worker;
+    if ((claim.claimantKind === 'worker') !== (worker !== undefined)) {
+      throw new Error(
+        'a worker claim names its worker, and only a worker claim does (RunOfferClaim.worker, WP-281)',
+      );
+    }
     const { rows } = await sqlOf(tx).query<{
       id: string;
       run_id: string;
       task_id: string;
       kind: RunOfferKind;
       lease_epoch: number;
+      image_digests: { run?: unknown; egress?: unknown } | null;
     }>(CLAIM_SQL, [
       claim.eligibility.runId ?? null,
       [...ACTIVE_RUN_STATUSES],
@@ -200,17 +274,137 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       claim.now,
       claim.owner,
       claim.expiresAt,
+      worker?.workerId ?? null,
+      worker === undefined ? null : [...worker.heldImageDigests],
+      worker?.images.run ?? null,
+      worker?.images.egress ?? null,
+      worker?.runTokenHash ?? null,
     ]);
+    const row = rows[0];
+    if (row === undefined) {
+      return null;
+    }
+    const digests = row.image_digests;
+    return {
+      offerId: row.id,
+      runId: row.run_id,
+      taskId: row.task_id,
+      kind: row.kind,
+      epoch: row.lease_epoch,
+      owner: claim.owner,
+      images:
+        digests !== null && typeof digests.run === 'string' && typeof digests.egress === 'string'
+          ? { run: digests.run, egress: digests.egress }
+          : null,
+    };
+  },
+  /**
+   * WP-281's release — the port's docblock has the rule. The offer, then the run, locked (§5's
+   * order); the decision is read off the locked rows and the two writes follow, so a claim, a
+   * settle or a sweep of the same run waits for this transaction or has already ended the row.
+   */
+  release: async (tx, input): Promise<RunOfferRelease> => {
+    const sql = sqlOf(tx);
+    await lockOfferOf(sql, input.runId);
+    const { rows } = await sql.query<{
+      offer_id: string;
+      task_id: string;
+      project_id: string;
+      state: string;
+      offer_epoch: number;
+      token_epoch: number | null;
+      released_at: Date | null;
+      offer_worker: string | null;
+      status: string;
+      run_epoch: number;
+      lease_owner: string | null;
+      marked: boolean;
+    }>(
+      `select o.id as offer_id, o.task_id, o.project_id, o.state, o.lease_epoch as offer_epoch,
+              o.run_token_epoch as token_epoch, o.released_at, o.worker_id as offer_worker,
+              r.status, r.lease_epoch as run_epoch, r.lease_owner,
+              r.cli_spawn_requested_at is not null as marked
+         from run_offers o
+         join runs r on r.id = o.run_id
+        where o.run_id = $1
+          for update of r`,
+      [input.runId],
+    );
+    const row = rows[0];
+    if (row === undefined) {
+      return { kind: 'lease_lost' };
+    }
+    const decision = decideRelease(
+      {
+        offerState: row.state,
+        offerEpoch: row.offer_epoch,
+        tokenEpoch: row.token_epoch,
+        released: row.released_at !== null,
+        offerOwner: row.offer_worker === null ? null : `worker:${row.offer_worker}`,
+        runStatus: row.status,
+        runEpoch: row.run_epoch,
+        leaseOwner: row.lease_owner,
+        marked: row.marked,
+      },
+      input,
+    );
+    if (decision !== 'release') {
+      return { kind: decision };
+    }
+    await sql.query(
+      `update run_offers
+          set state = 'open', release_reason = $2, released_at = $3::timestamptz,
+              excluded_worker_ids = case
+                when $4::uuid is null or $4::uuid = any(excluded_worker_ids) then excluded_worker_ids
+                else array_append(excluded_worker_ids, $4::uuid) end
+        where run_id = $1`,
+      [input.runId, input.reason, input.now, input.excludeWorkerId],
+    );
+    await sql.query(
+      `update runs
+          set status = 'created', lease_owner = null, lease_expires_at = null, worker_id = null
+        where id = $1`,
+      [input.runId],
+    );
+    return {
+      kind: 'released',
+      offerId: row.offer_id,
+      taskId: row.task_id,
+      projectId: row.project_id,
+    };
+  },
+  runTokenHolder: async (tx, runId): Promise<RunTokenHolder | null> => {
+    const { rows } = await sqlOf(tx).query<{
+      offer_id: string;
+      kind: RunOfferKind;
+      run_token_hash: string | null;
+      run_token_epoch: number | null;
+      worker_id: string | null;
+      usable: boolean;
+      status: RunStatus;
+      ended_at: Date | null;
+    }>(
+      `select o.id as offer_id, o.kind, o.run_token_hash, o.run_token_epoch, o.worker_id,
+              (o.worker_id is not null and ${workerUsableSql('o.worker_id')}) as usable,
+              r.status, r.ended_at
+         from run_offers o
+         join runs r on r.id = o.run_id
+        where o.run_id = $1`,
+      [runId],
+    );
     const row = rows[0];
     return row === undefined
       ? null
       : {
-          offerId: row.id,
-          runId: row.run_id,
-          taskId: row.task_id,
+          runId,
+          offerId: row.offer_id,
           kind: row.kind,
-          epoch: row.lease_epoch,
-          owner: claim.owner,
+          tokenHash: row.run_token_hash,
+          tokenEpoch: row.run_token_epoch,
+          workerId: row.worker_id,
+          workerUsable: row.usable,
+          runStatus: row.status,
+          endedAt: iso(row.ended_at),
         };
   },
   /**

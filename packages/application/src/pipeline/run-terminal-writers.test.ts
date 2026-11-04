@@ -71,15 +71,16 @@ const EXPECTED_FINISH_CALLERS: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/offer-withdrawal.ts', 1],
 ]);
 
-/** The production SQL texts that assign `runs.status`, per file — `finish`'s and two live moves. */
+/** The production SQL texts that assign `runs.status`, per file — `finish`'s and three live moves. */
 const EXPECTED_STATUS_WRITERS: ReadonlyMap<string, number> = new Map([
   // `finish` — the one **terminal** writer — and, since WP-275b, `markCliSpawnRequested`'s
   // `starting → running` (the CLI spawn marker, TD-031's 2026-11-04 amendment §4): a live-to-live
   // move, conditional on a live row, which ends nothing and so owes the offer nothing.
   ['packages/infrastructure/src/pipeline/postgres-pipeline-store.ts', 2],
   // WP-275b: the one claim's `created → starting`, in its outer `update runs` — live to live, the
-  // offer it moves being the claim's own.
-  ['packages/infrastructure/src/pipeline/postgres-run-offers.ts', 1],
+  // offer it moves being the claim's own. WP-281: a release's `starting → created`, live to live,
+  // which reopens the offer (`claimed → open`) in the statement before it — it ends nothing.
+  ['packages/infrastructure/src/pipeline/postgres-run-offers.ts', 2],
 ]);
 
 const sources = (): string[] => censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] });
@@ -128,7 +129,7 @@ const memberBody = (file: string, name: string): string => {
 };
 
 describe('the terminal run-status writers close the offer (WP-274, criterion 6b)', () => {
-  it('has exactly the SQL texts assigning runs.status: finish, and the two live moves of WP-275b', () => {
+  it('has exactly the SQL texts assigning runs.status: finish, the two live moves of WP-275b and WP-281’s release', () => {
     expect(
       sorted(
         census(

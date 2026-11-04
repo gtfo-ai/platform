@@ -19,7 +19,7 @@
  *
  * It never re-plans: a run whose plan cannot be read back settles `not_started` (a terminal
  * `RunStartError` from `loadRunPackage`). A provision failure settles `not_started` too — the server
- * claimant never **releases** an offer (TD-031 §6 as amended is WP-281's). An open offer with **no**
+ * claimant never **releases** an offer (TD-031 §6 as amended is a remote worker's: `remote-runs.ts`, WP-281). An open offer with **no**
  * plan row is withdrawn before any claim by {@link RunClaimantOptions.unplanned} (once per poll, and
  * first in every drain), its task escalated naming `run_plan_missing`; one claimed between two such
  * passes settles `not_started` with the same name (`loadRunPackage`), which escalates its task too.

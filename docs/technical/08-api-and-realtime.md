@@ -37,8 +37,10 @@
 >
 > **`claimants` says who runs agent runs, and `degraded` is still ready (WP-277, TD-031 decision 13;
 > WP-86's `agent_runs` until then).** Every role that holds a job client reports `claimants`: `server`
-> when this process composes the server claimant, `workers: <n>` when remote workers are connected (0
-> until WP-281), else `none`. `none` alone is **not** degraded — a `workers_only` core is a valid
+> when this process composes the server claimant **or another process of the instance holds a fresh
+> `server_claimants` row** (WP-281, backlog 722 — the `app` process beside a busy `runner` is not
+> "no claimant"), `workers: <n>` when remote workers are connected (an authenticated protocol call in
+> the last 60 s, WP-281), else `none`. `none` alone is **not** degraded — a `workers_only` core is a valid
 > state; the check is `degraded` — with `details: {"claimants": "unclaimed"}` and
 > `oldest_unclaimed_offer: {run_id, offered_at, waited_seconds}` — only when no claimant is here or
 > connected and an open offer has waited five minutes, read from `run_offers` rather than from the
@@ -415,7 +417,62 @@ and somebody else's worker is `404` to anyone else. Each decision and each perfo
 one `human_actions` row (`worker.device.approve|deny`, `worker.revoke`). The DTOs are
 `packages/contracts/src/workers.ts`.
 
-**The contract is code since WP-273** (no route serves it yet; WP-280 to WP-284 do):
+**The protocol's first half is served since WP-281** (`apps/server/src/routes/worker/protocol.ts`, the
+commands `packages/application/src/pipeline/remote-runs.ts`, composed for every process that serves the
+API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker credential), and
+`runs/:id/{heartbeat, release, spawn, finish, late-cost}` (run token). What is decided there:
+
+- **`X-Worker-Protocol` is checked first, on every `/api/worker/v1/` verb — the device flow's two
+  included** (backlog 712: TD-031 §9 asks it on every request, and a worker whose protocol this core
+  does not serve learns it before it registers a credential it cannot use). An absent, malformed or
+  unaccepted header is `426 upgrade_required` with `accepted`, `compose_url` and `digests` — `digests`
+  is `null` while the core cannot name its images — before authentication and before the body is read.
+  Every answer is `Cache-Control: no-store`.
+- **Authentication is `Authorization: Bearer`**, in `preValidation`: the `wkr_` credential on
+  `handshake`/`claims`, the run token on a run verb — a token authenticates only its own run, while its
+  worker is not revoked and its user may act, until fifteen minutes after the run's terminal write.
+  Anything else is `401 unauthenticated`, which a worker treats as `lease_lost`. The fence's owner is
+  `worker:<id>` from the authenticated subject; a body names an epoch and nothing else of the claim.
+  Every authenticated call stamps `workers.last_seen_at` (the database's clock) and the protocol it
+  spoke — TD-031 §8's *online*, `/readyz`'s `workers: <n>` and the `workers_connected` gauge.
+- **`claims`** is held up to 25 s, woken by `pg_notify('run_offers')` and a 5 s poll (a
+  `workers_from` passing is announced by nothing); `204` with nothing claimable, at once for a
+  `paused` worker. The one claim checks TD-031 §8's eligibility **in its statement** — a **stage**
+  offer (an ask's ending is not served to a worker before WP-283), not excluded, the offer's images
+  held, the worker not revoked, its user may act (backlog 714), not paused, a project member at
+  `member`+, `workers_from` reached or the assignee's head start, and the project's run credential
+  `minted` (`static`/`deploy_key` wait for WP-282's `remote_run_credential: allow`). The claim writes
+  `run_offers.worker_id`, `runs.worker_id`, the run token's SHA-256 and its epoch, and the offer's
+  `image_digests`; the git credential is minted **after** it commits. A provider error while minting
+  **releases** the claim (`credential_unavailable`); a run that cannot be packaged at all settles
+  `not_started` under the worker's claim. `200` is the run package (`runPackageSchema`): the stored
+  spec with no secret value and `secretEnvNames` empty, the minted credential, the skills, the images
+  by digest, `limits.leaseTtlMs` 600 000. `503 digests_unresolved` while `APP_WORKER_IMAGE_DIGESTS` is
+  unset (WP-284 resolves the core's own).
+- **`heartbeat`** renews the 10-minute lease in one statement fenced on the epoch, the worker and the
+  worker still able to act (backlog 714), stamps the acks of delivered commands (`applied`, or one of
+  the four existing refusals — only for a command pending for this run), and answers the run's pending
+  `run_commands` (steer, cancel, take-over, delivered until acked). With nothing pending it is held up
+  to 20 s, woken by the worker's command topic. `approvals` is `[]` until a worker can open one
+  (WP-282).
+- **`release`** is admitted while the run is `starting` with no spawn marker and undoes the claim only
+  (TD-031's 2026-11-04 amendment §4): offer `claimed → open` at the same epoch, lease and
+  `runs.worker_id` cleared, run `starting → created`, `run.offer.released`, the worker added to
+  `excluded_worker_ids` for `usage_limited`/`provision_failed`, the minted credential revoked, nothing
+  charged; `run_offers.worker_id` keeps the last claimant until the next claim, so a repeat answers
+  `204` again. `409 run_started` after the marker, `409 lease_lost` for another claim or an ended run.
+- **`spawn`** (TD-031 decision 9's table gains it) writes the CLI spawn marker, `started_at`, `starting →
+  running` and `run.started` in one transaction fenced like the heartbeat; the worker sends no `spawn`
+  frame before its `200 {started_at}`; a repeat answers the first instant.
+- **`finish`** is `settleRun` with the four-field request — `{epoch, stop_reason, outcome}`, the outcome
+  `{kind: "ran", …RunOutcome}` or `{kind: "not_started", failure, detail, detail_truncated, transient,
+  spawn_requested}`, `stop_reason` the closed `RunStoppedReason` vocabulary; `200 {outcome: settled |
+  already_settled, ending}`, idempotent on `(run_id, epoch)`; `409 lease_lost`; `410 run_gone` for a
+  run whose task was deleted. The minted credential is revoked after it.
+- **`late-cost`** is `cost/late.ts` for a run another writer ended under this claim; `409 run_live`
+  while the run is live.
+
+**The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above; WP-282 to WP-284 the rest):
 `packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (1), `ACCEPTED_WORKER_PROTOCOLS`
 (`[N-1, N]`, today `[1]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
 paths, the bounds, and a strict zod schema for every request and response body of TD-031 §9. Two

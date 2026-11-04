@@ -59,6 +59,10 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/claimant.ts', 1],
   ['packages/application/src/ask/executor.ts', 1],
   ['packages/application/src/pipeline/offer-withdrawal.ts', 1],
+  // WP-281: the remote claim appends `run.claimed` under the claim's `for update of o, r`, as the
+  // server claimant does; a release appends `run.offer.released` under `release`'s `for update of r`;
+  // the spawn marker appends `run.started` after its compare-and-set `update runs` took the row.
+  ['packages/application/src/pipeline/remote-runs.ts', 3],
 ]);
 
 const SEQUENCE_READ = /\.\s*nextStreamSequence\s*\(/g;

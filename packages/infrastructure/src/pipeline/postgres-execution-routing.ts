@@ -9,8 +9,8 @@
  *   TD-031 §8's defaults.
  * - **An online assignee** (TD-031 §8): a worker of the user that is `active`, not paused (or paused
  *   until a past instant), seen in the last {@link ASSIGNEE_ONLINE_SECONDS} on the database's clock,
- *   and the user a member of the project at `member` or above. Nothing writes `last_seen_at` before
- *   WP-281, so this answers `false` until then.
+ *   and the user a member of the project at `member` or above. `last_seen_at` is written by every
+ *   authenticated worker protocol call (WP-281, `WorkerStore.recordContact`).
  * - **Server claimant liveness**, both halves on the database's clock (`held_connection_liveness`'s
  *   shape, migration 0054): the writer sets `expires_at = now() + ttl`, the reader compares with
  *   `now()`, so two processes whose wall clocks disagree cannot disagree about whether a claimant is

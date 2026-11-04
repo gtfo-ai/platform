@@ -151,7 +151,7 @@ describe('createMetrics', () => {
 
   /**
    * WP-277: the offer pool is the agent backlog since WP-276 — per project, the open offers and the
-   * oldest one's wait, rebuilt every scrape; and the worker counts, a measured zero until WP-281.
+   * oldest one's wait, rebuilt every scrape; and the worker counts (WP-281 reads them from `workers`).
    */
   it('publishes the open offers and their wait per project, and the worker counts (WP-277)', async () => {
     let offers = [{ projectId: 'p-1', open: 3, oldestWaitSeconds: 75.5 }];

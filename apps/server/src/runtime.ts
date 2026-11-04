@@ -106,6 +106,7 @@ import {
 } from './pipeline.js';
 import { createProjectConfigCommands } from './project-config.js';
 import { listedModelIds } from './queries/cost-queries.js';
+import { serverClaimantRunning } from './queries/execution-queries.js';
 import { countStaleCommandClaims } from './queries/idempotency-queries.js';
 import { listRunMessages } from './queries/pipeline-queries.js';
 import { anySignInRecorded, recordFirstSignIn } from './queries/setup-state-queries.js';
@@ -120,6 +121,8 @@ import { createStorageSamplers } from './storage.js';
 import { createTaskStartCommands } from './task-start.js';
 import { createTicketStatusReader } from './ticket-statuses.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
+import { composeRemoteRuns } from './worker-protocol.js';
+import { workerReleaseOf } from './workers/release.js';
 import {
   composeOrphanWorkspaceReaper,
   composeRunWorkspaces,
@@ -333,8 +336,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             jobQueues: async () => jobsAdapters.readQueueBacklog(database.pool, config.jobs.schema),
             // WP-277: the agent backlog since WP-276 is the offer pool's, not `stage.execute`'s.
             runOffers: async () => pipelineAdapters.readOfferBacklog(database.pool),
-            // WP-277: no worker can connect until WP-281, so both counts are a measured zero.
-            workers: async () => ({ connected: 0, paused: 0 }),
+            // WP-281: the remote workers seen in the last 60 s, and the paused among them.
+            workers: async () => createPostgresWorkerStore(database.db).countConnected(),
           }
         : {}),
       // WP-65 (Q63): the storage gauge. The database line in every process that has a database;
@@ -1162,12 +1165,45 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       stopCallbacks.unshift({ name: 'inbound-connections', stop: heldConnections.stop });
     }
 
+    /**
+     * WP-281: the worker protocol's commands, composed for every process that serves the API — a
+     * worker's request reaches any replica (TD-031 §9). It needs the integration stack (the minter,
+     * the revoke) and a job client (a settle's retry), both of which an API process holds.
+     */
+    const workerStore = createPostgresWorkerStore(database.db);
+    const remoteRuns =
+      capabilities.api && stack !== null && jobs !== null
+        ? composeRemoteRuns({
+            pool: database.pool,
+            eventing,
+            jobs,
+            stack,
+            secretKey: config.secretKey,
+            calendar: createWorkingCalendar(config.workingCalendar),
+            agent: {
+              providerMode: config.providerMode,
+              modelApiKey: config.modelApiKey,
+              modelOauthToken: config.modelOauthToken,
+            },
+            modelEgressHosts: config.modelEgressHosts,
+            runRegistryHosts: config.runRegistryHosts,
+            logger: loggerPort,
+          })
+        : null;
+    const workerRelease = workerReleaseOf(config.workerImageDigests);
+
     const app = await buildApp({
       config,
       logger,
       metrics,
       database: database.db,
       auth,
+      workers: workerStore,
+      workerProtocol: {
+        remoteRuns,
+        broadcast: eventing.broadcast,
+        release: () => workerRelease,
+      },
       setupState,
       hub,
       webhooks,
@@ -1234,13 +1270,17 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           ? () => sweepReadiness(eventing.bus.registry).ready
           : null,
         // WP-277 (TD-031 decision 13): who claims agent runs — this process's own claimant, the
-        // connected workers (0 until WP-281), and the oldest offer waiting past the bound. Every role
+        // connected workers (WP-281), and the oldest offer waiting past the bound. Every role
         // that holds a job client asks: the pool is in the database, and `app` claims nothing.
         claimants:
           capabilities.worker || capabilities.api
             ? {
                 composedHere: claimantComposed ? 'server' : null,
-                workersConnected: async () => 0,
+                // WP-281 (backlog 722): another process's server claimant is a claimant of this
+                // instance — its `server_claimants` row, on the database's clock.
+                serverClaimantRunning: async () => serverClaimantRunning(database.db),
+                // WP-281: the remote workers seen in the last 60 s (TD-031 §8's *online*).
+                workersConnected: async () => (await workerStore.countConnected()).connected,
                 oldestUnclaimedOffer: async () =>
                   pipelineAdapters.readOldestUnclaimedOffer(database.pool),
               }

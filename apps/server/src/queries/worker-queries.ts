@@ -36,6 +36,7 @@ import {
   isDeviceCodeStale,
   repeatedDeviceDecision,
 } from '@platform/domain';
+import { pipeline as pipelineAdapters } from '@platform/infrastructure';
 import { sql } from 'drizzle-orm';
 import type { Database } from './identity-queries.js';
 
@@ -152,7 +153,30 @@ export interface WorkerStore {
   /** The deactivation write: the live runs of every worker of the user get `lease_expires_at = now()`. */
   expireUserWorkerLeases(userId: string): Promise<number>;
   findCredentialSubject(workerId: string): Promise<CredentialSubject | null>;
+  /**
+   * What an authenticated worker call records (WP-281): `last_seen_at` on the **database's** clock —
+   * what `assigneeOnline` and the connected count compare with `now()` — the protocol it spoke, and,
+   * when the call reported them, the image digests it holds. Answers the row as listed, or `null`
+   * for no such worker.
+   */
+  recordContact(input: {
+    readonly workerId: string;
+    readonly protocolVersion: number;
+    readonly imageDigests: readonly string[] | null;
+  }): Promise<WorkerListRow | null>;
+  /**
+   * The workers **connected** now — not revoked, seen in the last {@link WORKER_CONNECTED_SECONDS}
+   * on the database's clock — and how many of them are paused (`/readyz`'s `claimants`, the
+   * `workers_connected`/`workers_paused` gauges).
+   */
+  countConnected(): Promise<{ readonly connected: number; readonly paused: number }>;
 }
+
+/**
+ * A worker is connected while its last authenticated call is younger than this — TD-031 §8's
+ * *online* (a heartbeat in the last 60 s), the same window `assigneeOnline` reads.
+ */
+export const WORKER_CONNECTED_SECONDS = 60;
 
 const at = (value: Date | string | null): Date | null =>
   value === null ? null : value instanceof Date ? value : new Date(value);
@@ -188,9 +212,11 @@ const stateOf = (row: DeviceCodeRowSql): DeviceCodeState => ({
 /**
  * The user may act: not disabled, and not under a ban that is still in force — `userMayAct`
  * (`identity-queries.ts`) in SQL, the session hook's rule; the store suite holds the two together
- * with a ban whose expiry has passed and one still ahead.
+ * with a ban whose expiry has passed and one still ahead. The text is defined once, in
+ * `packages/infrastructure/src/pipeline/worker-holder.ts`, because the claim, the renewal and the
+ * settle re-ask it in their own statements (WP-281, backlog 714).
  */
-const USER_MAY_ACT = sql`(u.status <> 'disabled' and not (coalesce(u.banned, false) and (u.ban_expires is null or u.ban_expires > now())))`;
+const USER_MAY_ACT = sql.raw(pipelineAdapters.USER_MAY_ACT_SQL);
 
 /** The revocation's one write to `runs` (TD-031 §7): the live runs' lease expires now, nothing else. */
 const expireLeasesSql = (workerFilter: ReturnType<typeof sql>) => sql`
@@ -198,6 +224,41 @@ const expireLeasesSql = (workerFilter: ReturnType<typeof sql>) => sql`
    where worker_id in (${workerFilter})
      and status in ('created', 'starting', 'running')
   returning id`;
+
+/** A `workers` row joined with its user, as {@link WorkerStore.listWorkers} reads it. */
+type WorkerRowSql = {
+  id: string;
+  name: string;
+  user_id: string;
+  email: string;
+  user_name: string | null;
+  created_at: Date;
+  last_seen_at: Date | null;
+  protocol_version: number | null;
+  image_digests: unknown;
+  state: string;
+  revoked_at: Date | null;
+  paused_until: Date | null;
+  paused_reason: string | null;
+  concurrency: number;
+};
+
+const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
+  id: row.id,
+  name: row.name,
+  userId: row.user_id,
+  userEmail: row.email,
+  userName: row.user_name,
+  createdAt: at(row.created_at) as Date,
+  lastSeenAt: at(row.last_seen_at),
+  protocolVersion: row.protocol_version,
+  imageDigests: row.image_digests,
+  state: row.state,
+  revokedAt: at(row.revoked_at),
+  pausedUntil: at(row.paused_until),
+  pausedReason: row.paused_reason,
+  concurrency: row.concurrency,
+});
 
 export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
   async createDeviceCode(input, now) {
@@ -338,42 +399,12 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
   },
 
   async listWorkers(userId) {
-    const { rows } = await database.execute<{
-      id: string;
-      name: string;
-      user_id: string;
-      email: string;
-      user_name: string | null;
-      created_at: Date;
-      last_seen_at: Date | null;
-      protocol_version: number | null;
-      image_digests: unknown;
-      state: string;
-      revoked_at: Date | null;
-      paused_until: Date | null;
-      paused_reason: string | null;
-      concurrency: number;
-    }>(sql`
+    const { rows } = await database.execute<WorkerRowSql>(sql`
       select w.*, u.email, u.name as user_name
         from workers w join users u on u.id = w.user_id
        where ${userId === null ? sql`true` : sql`w.user_id = ${userId}`}
        order by w.created_at desc, w.id desc`);
-    return rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      userId: row.user_id,
-      userEmail: row.email,
-      userName: row.user_name,
-      createdAt: at(row.created_at) as Date,
-      lastSeenAt: at(row.last_seen_at),
-      protocolVersion: row.protocol_version,
-      imageDigests: row.image_digests,
-      state: row.state,
-      revokedAt: at(row.revoked_at),
-      pausedUntil: at(row.paused_until),
-      pausedReason: row.paused_reason,
-      concurrency: row.concurrency,
-    }));
+    return rows.map(toWorkerListRow);
   },
 
   async revokeWorker({ workerId, ownerUserId, actorUserId, now }) {
@@ -418,6 +449,35 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
       expireLeasesSql(sql`select id from workers where user_id = ${userId}`),
     );
     return rows.length;
+  },
+
+  async recordContact({ workerId, protocolVersion, imageDigests }) {
+    const updated = await database.execute<{ id: string }>(sql`
+      update workers
+         set last_seen_at = now(), protocol_version = ${protocolVersion},
+             image_digests = coalesce(${imageDigests === null ? null : JSON.stringify(imageDigests)}::jsonb,
+                                      image_digests)
+       where id = ${workerId}
+      returning id`);
+    if (updated.rows.length === 0) {
+      return null;
+    }
+    const { rows } = await database.execute<WorkerRowSql>(sql`
+      select w.*, u.email, u.name as user_name
+        from workers w join users u on u.id = w.user_id
+       where w.id = ${workerId}`);
+    const row = rows[0];
+    return row === undefined ? null : toWorkerListRow(row);
+  },
+
+  async countConnected() {
+    const { rows } = await database.execute<{ connected: number; paused: number }>(sql`
+      select count(*)::int as connected,
+             count(*) filter (where paused_until > now())::int as paused
+        from workers
+       where state = 'active'
+         and last_seen_at > now() - make_interval(secs => ${WORKER_CONNECTED_SECONDS})`);
+    return { connected: Number(rows[0]?.connected ?? 0), paused: Number(rows[0]?.paused ?? 0) };
   },
 
   async findCredentialSubject(workerId) {

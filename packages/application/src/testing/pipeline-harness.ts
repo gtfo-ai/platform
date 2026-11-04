@@ -129,7 +129,11 @@ import {
   createMemoryNotificationStore,
   type MemoryNotificationStore,
 } from './memory-notifications.js';
-import { createMemoryPipelineStore, type MemoryPipelineStore } from './memory-pipeline.js';
+import {
+  createMemoryPipelineStore,
+  type MemoryPipelineStore,
+  type MemoryPipelineStoreOptions,
+} from './memory-pipeline.js';
 import { createMemoryShadowStore, type MemoryShadowStore } from './memory-shadow.js';
 import { createTestRunPlanSealer } from './run-plans.js';
 
@@ -658,6 +662,14 @@ const outcomeFor = (runId: Id, scripted: ScriptedRun, structuredOutput: unknown)
 
 export interface HarnessOptions {
   readonly projectId?: Id;
+  /**
+   * The remote workers and the run credential source the store's worker claim reads (WP-281,
+   * {@link MemoryPipelineStoreOptions}' divergence 13). Absent: no worker is eligible.
+   */
+  readonly remoteWorkers?: Pick<
+    MemoryPipelineStoreOptions,
+    'remoteWorkers' | 'runCredentialSource'
+  >;
   /** Platform users by id → display name, for `NotificationStore.userName` (WP-73, backlog 234). */
   readonly users?: Readonly<Record<string, string>>;
   /**
@@ -1526,6 +1538,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         .filter((event) => event.stream_type === 'project' && event.stream_id === projectId),
     // WP-178: `ticketStatusChangesSinceEntry` orders two streams by the log's position.
     committedLog: () => memory.log,
+    // WP-281: the worker claim's eligibility facts, when a case names any.
+    ...(options.remoteWorkers ?? {}),
   });
   const jobs = recordingJobs();
   const audit = createMemoryAuditLog();

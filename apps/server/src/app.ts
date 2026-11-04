@@ -54,8 +54,10 @@ import fastifySse from '@fastify/sse';
 import fastifySwagger from '@fastify/swagger';
 import underPressure from '@fastify/under-pressure';
 import type {
+  Broadcast,
   DeadLetterCommands,
   ProjectSettingsPort,
+  RemoteRuns,
   WebhookIngress,
 } from '@platform/application';
 import { createIntegrationEgressPolicy } from '@platform/application';
@@ -172,6 +174,10 @@ import { registerStatsRoutes } from './routes/stats.js';
 import { registerTaskStartRoutes } from './routes/task-start.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
+import {
+  registerWorkerProtocolCheck,
+  registerWorkerProtocolRoutes,
+} from './routes/worker/protocol.js';
 import { registerWorkerDeviceRoutes } from './routes/worker-device.js';
 import { registerWorkerRoutes } from './routes/workers.js';
 import type { ShadowCommands } from './shadow.js';
@@ -180,6 +186,7 @@ import { registerSseRoutes } from './sse/routes.js';
 import type { TaskStartCommands } from './task-start.js';
 import type { TicketStatusReader } from './ticket-statuses.js';
 import { type ClientFallback, createClientFallback } from './web/fallback.js';
+import type { WorkerRelease } from './workers/release.js';
 
 /**
  * What the read endpoint publishes when the process cannot compute an estimate.
@@ -285,6 +292,23 @@ export interface BuildAppOptions {
   readonly workers?: WorkerStore;
   /** The clock the worker routes read (device-code expiry, a code's age). Absent: the wall clock. */
   readonly workersNow?: () => Date;
+  /**
+   * The worker protocol's commands (WP-281), the broadcast its held requests wake on, and what the
+   * core advertises. Absent (or `remoteRuns: null`): the routes are still registered — the protocol
+   * check, then `401` to an anonymous caller — and an authenticated call is answered
+   * `503 worker_protocol_unavailable` by name, which is what the census builds.
+   */
+  readonly workerProtocol?: {
+    readonly remoteRuns: RemoteRuns | null;
+    readonly broadcast: Broadcast | null;
+    readonly release: () => WorkerRelease | null;
+    /** The held requests' bounds; absent, TD-031 §9's 25 s and 20 s (a test shortens them). */
+    readonly holds?: {
+      readonly claimMs?: number;
+      readonly heartbeatMs?: number;
+      readonly claimPollMs?: number;
+    };
+  };
   /**
    * Whether a project may start a shadow batch — the same predicate the command refuses with.
    *
@@ -605,6 +629,10 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     });
     // WP-280: the device flow (unauthenticated, rate-limited) and the people's worker surface.
     const workerStore = options.workers ?? createPostgresWorkerStore(options.database);
+    // WP-281: the protocol check (`426`, `no-store`) first, on every `/api/worker/v1/` verb — the
+    // device flow's included (backlog 712) — then the device flow and the protocol's verbs.
+    const workerRelease = options.workerProtocol?.release ?? (() => null);
+    registerWorkerProtocolCheck(app, { release: workerRelease, baseUrl: config.baseUrl });
     await registerWorkerDeviceRoutes(app, {
       store: workerStore,
       baseUrl: config.baseUrl,
@@ -616,6 +644,22 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       store: workerStore,
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
+      ...(options.workersNow === undefined ? {} : { now: options.workersNow }),
+    });
+    await registerWorkerProtocolRoutes(app, {
+      store: workerStore,
+      remoteRuns: options.workerProtocol?.remoteRuns ?? null,
+      broadcast: options.workerProtocol?.broadcast ?? null,
+      release: workerRelease,
+      ...(options.workerProtocol?.holds?.claimMs === undefined
+        ? {}
+        : { claimHoldMs: options.workerProtocol.holds.claimMs }),
+      ...(options.workerProtocol?.holds?.heartbeatMs === undefined
+        ? {}
+        : { heartbeatHoldMs: options.workerProtocol.holds.heartbeatMs }),
+      ...(options.workerProtocol?.holds?.claimPollMs === undefined
+        ? {}
+        : { claimPollMs: options.workerProtocol.holds.claimPollMs }),
       ...(options.workersNow === undefined ? {} : { now: options.workersNow }),
     });
     // WP-108, backlog 325: beside it, the jobs pg-boss gave up on — a read, never a re-queue.

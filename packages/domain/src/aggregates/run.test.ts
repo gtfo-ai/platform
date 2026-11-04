@@ -27,6 +27,7 @@ import {
   type Run,
   recordOutput,
   recordRunCreated,
+  releaseRunClaim,
 } from './run.js';
 
 const RUN_ID = '00000000-0000-4000-8000-0000000000f1';
@@ -510,6 +511,61 @@ describe('the offer and the claim (WP-274, TD-031 decisions 1–2)', () => {
         { offerId: OFFER_ID, claimantKind: 'server', workerId: null, epoch: 1 },
         context(shared),
       ),
+    ).toThrow(InvariantViolationError);
+  });
+});
+
+describe('releaseRunClaim (WP-281, TD-031 decision 6)', () => {
+  const release = {
+    offerId: '00000000-0000-4000-8000-0000000000c0',
+    workerId: '00000000-0000-4000-8000-0000000000d1',
+    epoch: 1,
+    reason: 'image_missing',
+  } as const;
+
+  it('moves a claimed run starting → created and records run.offer.released after run.claimed', () => {
+    const shared = world();
+    const started = startedRun(shared);
+    const released = releaseRunClaim(started, release, context(shared));
+    expect(released.aggregate.status).toBe('created');
+    expect(released.events.map((event) => event.type)).toEqual(['run.offer.released']);
+    expect(released.events[0]?.stream_seq).toBe(started.sequence);
+    expect(released.events[0]?.payload).toMatchObject({
+      run_id: RUN_ID,
+      worker_id: release.workerId,
+      lease_epoch: 1,
+      reason: 'image_missing',
+    });
+    // Claimed again afterwards: the released run is an ordinary `created` run.
+    expect(
+      claimRun(
+        released.aggregate,
+        { ...release, claimantKind: 'worker', epoch: 2 },
+        context(shared),
+      ).aggregate.status,
+    ).toBe('starting');
+  });
+
+  it('refuses a run that started, one never claimed and one that ended', () => {
+    const shared = world();
+    expect(() => releaseRunClaim(runningRun(shared), release, context(shared))).toThrow(
+      IllegalTransitionError,
+    );
+    expect(() => releaseRunClaim(recordedRun(shared), release, context(shared))).toThrow(
+      IllegalTransitionError,
+    );
+    const ended = failRun(
+      startedRun(shared),
+      { status: 'failed', terminalReason: 'error_during_execution', error: 'launcher refused' },
+      context(shared),
+    ).aggregate;
+    expect(() => releaseRunClaim(ended, release, context(shared))).toThrow(IllegalTransitionError);
+  });
+
+  it('refuses an epoch below 1', () => {
+    const shared = world();
+    expect(() =>
+      releaseRunClaim(startedRun(shared), { ...release, epoch: 0 }, context(shared)),
     ).toThrow(InvariantViolationError);
   });
 });

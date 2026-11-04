@@ -1,0 +1,748 @@
+/**
+ * The core's half of the worker protocol (WP-281), over the in-memory store — every command a
+ * remote worker's request performs: the claim with TD-031 §8's eligibility, the package after the
+ * commit, the run token, the heartbeat (backlog 714's re-check), the release (backlog 701), the spawn
+ * marker, `finish` through `settleRun`, and late cost.
+ *
+ * The offers come from a harness composed with **no** claimant (`runsAgents: false`): the stage job
+ * ends at the offer, and with no server claimant in the instance every offer is open to workers at
+ * once (TD-031 §8's third reading). What the memory store cannot show — the eligibility asked **in the
+ * committing statement**, a revoke that commits between authentication and the write — is asserted
+ * against PostgreSQL in `test/integration/pipeline/remote-claim.integration.test.ts` (divergence 13).
+ */
+import type {
+  DomainEvent,
+  Id,
+  IsoDateTime,
+  RunPackage as WorkerRunPackage,
+} from '@platform/contracts';
+import { domainEventSchemasByType } from '@platform/contracts';
+import { DEFAULT_WIP_LIMITS } from '@platform/domain';
+import { describe, expect, it } from 'vitest';
+import type { LateRunSpend } from '../cost/late.js';
+import { WorkspaceError } from '../ports/workspace.js';
+import type { MemoryRemoteWorker } from '../testing/memory-pipeline.js';
+import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
+import { createTestRunPlanSealer } from '../testing/run-plans.js';
+import {
+  createRemoteRuns,
+  type RemotePackageAnswer,
+  type RemoteRuns,
+  type RunTokens,
+  settleOutcomeOfFinish,
+} from './remote-runs.js';
+import type { SettleRunRequest, SettleRunResult } from './settle.js';
+
+const PROJECT = '00000000-0000-4000-8000-0000000281b1';
+const W1 = '00000000-0000-4000-8000-0000000281f1';
+const W2 = '00000000-0000-4000-8000-0000000281f2';
+const ALICE = '00000000-0000-4000-8000-0000000281a1';
+const BOB = '00000000-0000-4000-8000-0000000281a2';
+const RUN_DIGEST = `sha256:${'a'.repeat(64)}`;
+const EGRESS_DIGEST = `sha256:${'b'.repeat(64)}`;
+const IMAGES = { run: RUN_DIGEST, egress: EGRESS_DIGEST };
+const HELD = [RUN_DIGEST, EGRESS_DIGEST];
+
+const ticketMatched = (key: string, seq: number): DomainEvent =>
+  domainEventSchemasByType['ticket.matched'].parse({
+    id: `00000000-0000-4000-9000-0000002810${String(seq).padStart(2, '0')}`,
+    stream_type: 'project',
+    stream_id: PROJECT,
+    stream_seq: seq,
+    correlation_id: null,
+    cause_event_id: null,
+    actor: { kind: 'integration', integration_id: PROJECT, provider: 'fake-jira' },
+    occurred_at: '2026-06-01T09:00:00.000Z',
+    type: 'ticket.matched',
+    payload: {
+      project_id: PROJECT,
+      ticket: { provider: 'fake-jira', key, url: `https://jira.example.test/browse/${key}` },
+      rule: 'label:agentic',
+      priority: null,
+      issue_type: 'Story',
+      epic: null,
+      links: [],
+    },
+  }) as DomainEvent;
+
+/** Deterministic tokens: `token-N`, stored as `hash:token-N`. */
+const fakeTokens = (): RunTokens & { readonly minted: string[] } => {
+  const minted: string[] = [];
+  return {
+    minted,
+    mint: () => {
+      const token = `token-${minted.length + 1}`;
+      minted.push(token);
+      return { token, hash: `hash:${token}` };
+    },
+    hashOf: (token) => `hash:${token}`,
+    same: (a, b) => a === b,
+  };
+};
+
+interface World {
+  readonly harness: PipelineHarness;
+  readonly remote: RemoteRuns;
+  readonly workers: Map<
+    Id,
+    MemoryRemoteWorker & { usable: boolean; pausedUntil: IsoDateTime | null }
+  >;
+  readonly credentialSource: { value: 'minted' | 'static' | 'deploy_key' | null };
+  readonly tokens: ReturnType<typeof fakeTokens>;
+  readonly built: { epoch: number; runToken: string; images: typeof IMAGES }[];
+  readonly revoked: Id[];
+  readonly lateSpends: LateRunSpend[];
+  readonly runId: Id;
+}
+
+const world = async (
+  options: {
+    readonly packager?: () => Promise<RemotePackageAnswer>;
+    readonly settle?: (request: SettleRunRequest) => Promise<SettleRunResult>;
+    readonly before?: (harness: PipelineHarness) => void;
+  } = {},
+): Promise<World> => {
+  const workers: World['workers'] = new Map();
+  const members = new Set<string>([`${PROJECT}#${ALICE}`, `${PROJECT}#${BOB}`]);
+  for (const [id, userId] of [
+    [W1, ALICE],
+    [W2, BOB],
+  ] as const) {
+    workers.set(id, {
+      userId,
+      usable: true,
+      pausedUntil: null,
+      memberOf: (projectId) => members.has(`${projectId}#${userId}`),
+    });
+  }
+  const credentialSource: World['credentialSource'] = { value: 'minted' };
+  const harness = createPipelineHarness({
+    projectId: PROJECT,
+    runsAgents: false,
+    settings: { wip: { ...DEFAULT_WIP_LIMITS, maxParallelTasks: 10, maxParallelRuns: 10 } },
+    remoteWorkers: {
+      remoteWorkers: (id) => workers.get(id),
+      runCredentialSource: () => credentialSource.value,
+    },
+  });
+  options.before?.(harness);
+  await harness.publish([ticketMatched('ACME-1', 1)]);
+  const tokens = fakeTokens();
+  const built: World['built'] = [];
+  const revoked: Id[] = [];
+  const lateSpends: LateRunSpend[] = [];
+  const remote = createRemoteRuns({
+    unitOfWork: harness.memory,
+    store: harness.store,
+    eventStore: harness.memory.store,
+    context: harness.commands.context,
+    runPlans: createTestRunPlanSealer(),
+    packager: {
+      build: async (input) => {
+        built.push({ epoch: input.epoch, runToken: input.runToken, images: { ...input.images } });
+        return (
+          (await options.packager?.()) ?? {
+            kind: 'package',
+            package: { runId: input.spec.runId, epoch: input.epoch } as unknown as WorkerRunPackage,
+          }
+        );
+      },
+    },
+    credentials: {
+      revoke: async (runId) => {
+        revoked.push(runId);
+      },
+    },
+    tokens,
+    settle: options.settle ?? (async (request) => harness.runtime.executor.settle(request)),
+    lateCost: {
+      record: async (_scope, spend) => {
+        lateSpends.push(spend);
+        return { recorded: true, charge: null };
+      },
+    },
+  });
+  const runId = harness.store.offerRows()[0]?.runId as Id;
+  return {
+    harness,
+    remote,
+    workers,
+    credentialSource,
+    tokens,
+    built,
+    revoked,
+    lateSpends,
+    runId,
+  };
+};
+
+const claimAs = (w: World, workerId: Id, held: readonly string[] = HELD) =>
+  w.remote.claim({ workerId, heldImageDigests: held, images: IMAGES, now: w.harness.clock.now() });
+
+const ranOutcome = (runId: Id) =>
+  settleOutcomeOfFinish(runId, {
+    epoch: 1,
+    stop_reason: null,
+    outcome: {
+      kind: 'ran',
+      status: 'completed',
+      terminal_reason: 'success',
+      session_id: null,
+      num_turns: 2,
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_write_5m_tokens: 0,
+        cache_write_1h_tokens: 0,
+        cache_read_tokens: 0,
+      },
+      model_usage: [],
+      cost: { usd: 0.02, is_estimate: false, price_list_id: null },
+      wall_ms: 1_000,
+      structured_output: null,
+      error: null,
+      redaction_count: 0,
+    },
+  });
+
+describe('the remote claim (WP-281, TD-031 decisions 2, 7, 8)', () => {
+  it('claims the open offer for a worker: worker on the offer and the run, run.claimed names it, the token stored hashed, the package built after the claim', async () => {
+    const w = await world();
+    expect(w.harness.store.offerRows()[0]?.state).toBe('open');
+
+    const answer = await claimAs(w, W1);
+
+    expect(answer.kind).toBe('claimed');
+    const offer = w.harness.store.offerRows()[0];
+    expect(offer).toMatchObject({ state: 'claimed', claimantKind: 'worker', leaseEpoch: 1 });
+    expect(w.harness.store.leaseOf(w.runId)?.owner).toBe(`worker:${W1}`);
+    const claimed = w.harness.events().find((event) => event.type === 'run.claimed');
+    expect(claimed?.payload).toMatchObject({
+      claimant_kind: 'worker',
+      worker_id: W1,
+      lease_epoch: 1,
+    });
+    const holder = await w.harness.memory.transaction(async (scope) =>
+      w.harness.store.offers.runTokenHolder(scope.tx, w.runId),
+    );
+    // The token's stored form only, at the claim's epoch, under the claiming worker.
+    expect(holder).toMatchObject({ tokenHash: 'hash:token-1', tokenEpoch: 1, workerId: W1 });
+    expect(w.built).toEqual([{ epoch: 1, runToken: 'token-1', images: IMAGES }]);
+    // No session ran in the core, and no `run.started` before the worker's spawn call.
+    expect(w.harness.types()).not.toContain('run.started');
+  });
+
+  it.each([
+    [
+      'a revoked worker (or a user who may not act)',
+      (w: World) => {
+        (w.workers.get(W1) as { usable: boolean }).usable = false;
+      },
+    ],
+    [
+      'a paused worker',
+      (w: World) => {
+        (w.workers.get(W1) as { pausedUntil: IsoDateTime | null }).pausedUntil =
+          '2099-01-01T00:00:00.000Z' as IsoDateTime;
+      },
+    ],
+    [
+      'a worker whose user is not a project member',
+      (w: World) => {
+        const known = w.workers.get(W1) as MemoryRemoteWorker;
+        w.workers.set(W1, { ...known, usable: true, pausedUntil: null, memberOf: () => false });
+      },
+    ],
+    [
+      'a project whose run credential is static (WP-282’s opt-in)',
+      (w: World) => {
+        w.credentialSource.value = 'static';
+      },
+    ],
+    [
+      'a project whose run credential is a deploy key (WP-282’s opt-in)',
+      (w: World) => {
+        w.credentialSource.value = 'deploy_key';
+      },
+    ],
+  ] as const)(
+    'refuses %s, and the same offer is claimed once the fact is put back',
+    async (_name, refuse) => {
+      const w = await world();
+      refuse(w);
+      expect((await claimAs(w, W1)).kind).toBe('none');
+      expect(w.harness.store.offerRows()[0]?.state).toBe('open');
+      expect(w.built).toEqual([]);
+      // Positive control (standing rule 6): the other worker, or the fact restored, claims it.
+      const restored = await world();
+      expect((await claimAs(restored, W1)).kind).toBe('claimed');
+    },
+  );
+
+  it('refuses a worker that does not hold the images, and claims for one that does', async () => {
+    const w = await world();
+    expect((await claimAs(w, W1, [RUN_DIGEST])).kind).toBe('none');
+    expect((await claimAs(w, W1, [EGRESS_DIGEST, RUN_DIGEST])).kind).toBe('claimed');
+  });
+
+  it('refuses every worker on a server_only project: workers_from is never', async () => {
+    const w = await world({
+      before: (harness) =>
+        harness.store.setExecutionSettings(PROJECT, {
+          mode: 'server_only',
+          prefer: 'server',
+          fallbackAfterSeconds: null,
+          assigneeWindowSeconds: 120,
+          offerTimeoutSeconds: 86_400,
+        }),
+    });
+    expect(w.harness.store.offerRows()[0]?.routing.workersFrom).toBeNull();
+    expect((await claimAs(w, W1)).kind).toBe('none');
+  });
+
+  it('settles a run it cannot package as not started, under the worker’s claim, and ends the hold', async () => {
+    const w = await world({
+      packager: async () => {
+        throw new WorkspaceError('invalid_spec', 'the binding can mint nothing for a writing run', {
+          reason: 'run_credential_unavailable',
+        });
+      },
+    });
+    const answer = await claimAs(w, W1);
+    expect(answer).toEqual({ kind: 'not_packaged', runId: w.runId });
+    const failed = w.harness.events().find((event) => event.type === 'run.failed');
+    expect(failed?.payload).toMatchObject({
+      run_id: w.runId,
+      terminal_reason: 'error_during_execution',
+    });
+    expect(w.harness.store.offerRows()[0]?.state).toBe('settled');
+  });
+
+  it('releases the claim when the credential cannot be minted (credential_unavailable): the offer is open, nothing is charged', async () => {
+    const w = await world({
+      packager: async () => ({ kind: 'credential_unavailable', detail: 'provider answered 502' }),
+    });
+    expect((await claimAs(w, W1)).kind).toBe('not_packaged');
+    const offer = w.harness.store.offerRows()[0];
+    expect(offer).toMatchObject({ state: 'open', leaseEpoch: 1 });
+    const released = w.harness.events().find((event) => event.type === 'run.offer.released');
+    expect(released?.payload).toMatchObject({ reason: 'credential_unavailable', worker_id: W1 });
+    expect(w.harness.types()).not.toContain('run.failed');
+    expect(w.revoked).toEqual([w.runId]);
+    // Not excluded: the next claim takes it again, at the next epoch.
+    expect((await claimAs(w, W1)).kind).toBe('not_packaged');
+    expect(w.harness.store.offerRows()[0]?.leaseEpoch).toBe(2);
+  });
+});
+
+describe('the run token (TD-031 decision 7)', () => {
+  it('authenticates its own run while the worker may act, until fifteen minutes after the end', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    const now = w.harness.clock.now();
+    expect(await w.remote.authenticate({ runId: w.runId, token: 'token-1', now })).toEqual({
+      runId: w.runId,
+      workerId: W1,
+    });
+    expect(await w.remote.authenticate({ runId: w.runId, token: 'token-2', now })).toBeNull();
+
+    (w.workers.get(W1) as { usable: boolean }).usable = false;
+    expect(await w.remote.authenticate({ runId: w.runId, token: 'token-1', now })).toBeNull();
+    (w.workers.get(W1) as { usable: boolean }).usable = true;
+
+    // Ended by a cancel in place: the token keeps authenticating for late-cost, then stops.
+    await w.harness.memory.transaction(async (scope) =>
+      w.harness.store.runs.finish(scope.tx, {
+        runId: w.runId,
+        status: 'cancelled',
+        terminalReason: 'cancelled',
+        sessionId: null,
+        numTurns: 0,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_write_5m_tokens: 0,
+          cache_write_1h_tokens: 0,
+          cache_read_tokens: 0,
+        },
+        cost: null,
+        wallMs: 0,
+      }),
+    );
+    const ended = Date.parse(w.harness.clock.now());
+    const at = (ms: number) => new Date(ended + ms).toISOString() as IsoDateTime;
+    expect(
+      await w.remote.authenticate({ runId: w.runId, token: 'token-1', now: at(14 * 60_000) }),
+    ).not.toBeNull();
+    expect(
+      await w.remote.authenticate({ runId: w.runId, token: 'token-1', now: at(16 * 60_000) }),
+    ).toBeNull();
+  });
+});
+
+describe('the heartbeat (TD-031 §§2, 14; backlog 714)', () => {
+  it('renews the 10-minute lease under the claim, and answers lease_lost for another epoch or a revoked worker', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    w.harness.clock.advance(20_000);
+    const now = w.harness.clock.now();
+    const beat = await w.remote.heartbeat({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      acks: [],
+      now,
+    });
+    expect(beat).toEqual({
+      kind: 'renewed',
+      leaseExpiresAt: new Date(Date.parse(now) + 600_000).toISOString(),
+      commands: [],
+    });
+    expect(w.harness.store.leaseOf(w.runId)?.expiresAt).toBe(
+      new Date(Date.parse(now) + 600_000).toISOString(),
+    );
+    expect(
+      (await w.remote.heartbeat({ runId: w.runId, workerId: W1, epoch: 2, acks: [], now })).kind,
+    ).toBe('lease_lost');
+    expect(
+      (await w.remote.heartbeat({ runId: w.runId, workerId: W2, epoch: 1, acks: [], now })).kind,
+    ).toBe('lease_lost');
+    // Backlog 714: the renewal re-asks whether the holder may act, in its own write.
+    (w.workers.get(W1) as { usable: boolean }).usable = false;
+    expect(
+      (await w.remote.heartbeat({ runId: w.runId, workerId: W1, epoch: 1, acks: [], now })).kind,
+    ).toBe('lease_lost');
+  });
+
+  it('delivers a pending cancel, stamps the worker’s ack, and ignores an ack of a command that is not the run’s', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    const commandId = '00000000-0000-4000-8000-0000000281c1' as Id;
+    await w.harness.memory.transaction(async (scope) =>
+      w.harness.store.runCommands.insert(scope.tx, {
+        id: commandId,
+        runId: w.runId,
+        taskId: w.harness.store.offerRows()[0]?.taskId as Id,
+        actorUserId: null,
+        instruction: { kind: 'cancel' },
+      }),
+    );
+    const now = w.harness.clock.now();
+    const first = await w.remote.heartbeat({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      acks: [{ commandId: '00000000-0000-4000-8000-0000000281c9' as Id, outcome: 'applied' }],
+      now,
+    });
+    expect(first).toMatchObject({
+      kind: 'renewed',
+      commands: [{ id: commandId, kind: 'cancel', payload: {} }],
+    });
+    // Delivered until acked: the same command rides the next beat too.
+    expect(await w.remote.pending({ runId: w.runId, workerId: W1 })).toHaveLength(1);
+    const acked = await w.remote.heartbeat({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      acks: [{ commandId, outcome: 'applied' }],
+      now,
+    });
+    expect(acked).toMatchObject({ kind: 'renewed', commands: [] });
+    expect(w.harness.store.runCommandRows().find((row) => row.id === commandId)?.applied).toBe(
+      true,
+    );
+  });
+});
+
+describe('the release (TD-031 decision 6 as amended §4; backlog 701)', () => {
+  it('undoes the claim only, before the spawn marker: offer open at the same epoch, run created, lease cleared, credential revoked; a repeat writes nothing', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    const now = w.harness.clock.now();
+    expect(
+      await w.remote.release({
+        runId: w.runId,
+        workerId: W1,
+        epoch: 1,
+        reason: 'image_missing',
+        now,
+      }),
+    ).toBe('released');
+    expect(w.harness.store.offerRows()[0]).toMatchObject({ state: 'open', leaseEpoch: 1 });
+    expect(w.harness.store.leaseOf(w.runId)).toBeNull();
+    const run = await w.harness.memory.transaction(async (scope) =>
+      w.harness.store.runs.load(scope.tx, w.runId),
+    );
+    expect(run?.status).toBe('created');
+    expect(w.revoked).toEqual([w.runId]);
+    const types = w.harness.types();
+    expect(types).toContain('run.claimed');
+    expect(types).toContain('run.offer.released');
+    expect(types).not.toContain('run.failed');
+    const eventsBefore = types.length;
+
+    expect(
+      await w.remote.release({
+        runId: w.runId,
+        workerId: W1,
+        epoch: 1,
+        reason: 'image_missing',
+        now,
+      }),
+    ).toBe('already_released');
+    expect(w.harness.types()).toHaveLength(eventsBefore);
+    expect(w.revoked).toEqual([w.runId]);
+
+    // `image_missing` excludes nobody: the same worker claims it again, at the next epoch, and the
+    // released claim's epoch is stale from then on.
+    expect((await claimAs(w, W1)).kind).toBe('claimed');
+    expect(w.harness.store.offerRows()[0]?.leaseEpoch).toBe(2);
+    expect(
+      await w.remote.release({
+        runId: w.runId,
+        workerId: W1,
+        epoch: 1,
+        reason: 'image_missing',
+        now,
+      }),
+    ).toBe('lease_lost');
+  });
+
+  it('excludes the worker for provision_failed and usage_limited, and another worker still claims it', async () => {
+    for (const reason of ['provision_failed', 'usage_limited'] as const) {
+      const w = await world();
+      await claimAs(w, W1);
+      const now = w.harness.clock.now();
+      expect(await w.remote.release({ runId: w.runId, workerId: W1, epoch: 1, reason, now })).toBe(
+        'released',
+      );
+      expect((await claimAs(w, W1)).kind).toBe('none');
+      expect((await claimAs(w, W2)).kind).toBe('claimed');
+    }
+  });
+
+  it('is refused run_started once the spawn marker is written, and lease_lost for another worker', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    const now = w.harness.clock.now();
+    expect(
+      await w.remote.release({ runId: w.runId, workerId: W2, epoch: 1, reason: 'shutdown', now }),
+    ).toBe('lease_lost');
+    expect((await w.remote.spawn({ runId: w.runId, workerId: W1, epoch: 1, now })).kind).toBe(
+      'spawned',
+    );
+    expect(
+      await w.remote.release({ runId: w.runId, workerId: W1, epoch: 1, reason: 'shutdown', now }),
+    ).toBe('run_started');
+    expect(w.harness.store.offerRows()[0]?.state).toBe('claimed');
+  });
+});
+
+describe('the spawn marker (TD-031’s 2026-11-04 amendment §4)', () => {
+  it('writes the marker and run.started under the claim; a repeat answers the first instant; a stale epoch or a revoked worker is lease_lost', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    const first = w.harness.clock.now();
+    expect(await w.remote.spawn({ runId: w.runId, workerId: W1, epoch: 2, now: first })).toEqual({
+      kind: 'lease_lost',
+    });
+    // Backlog 714: the marker's fence re-asks the holder in its own write.
+    (w.workers.get(W1) as { usable: boolean }).usable = false;
+    expect(await w.remote.spawn({ runId: w.runId, workerId: W1, epoch: 1, now: first })).toEqual({
+      kind: 'lease_lost',
+    });
+    (w.workers.get(W1) as { usable: boolean }).usable = true;
+    expect(w.harness.types()).not.toContain('run.started');
+
+    expect(await w.remote.spawn({ runId: w.runId, workerId: W1, epoch: 1, now: first })).toEqual({
+      kind: 'spawned',
+      startedAt: first,
+    });
+    const started = w.harness.events().filter((event) => event.type === 'run.started');
+    expect(started).toHaveLength(1);
+    expect(started[0]?.payload).toMatchObject({ context_pack: { tier0: expect.any(Array) } });
+    w.harness.clock.advance(5_000);
+    expect(
+      await w.remote.spawn({ runId: w.runId, workerId: W1, epoch: 1, now: w.harness.clock.now() }),
+    ).toEqual({ kind: 'already_spawned', startedAt: first });
+    expect(w.harness.events().filter((event) => event.type === 'run.started')).toHaveLength(1);
+  });
+});
+
+describe('finish (TD-031 §3, the four-field request)', () => {
+  it('settles through settleRun under the worker’s fence, revokes the credential, and a repeat answers already_settled', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    const now = w.harness.clock.now();
+    await w.remote.spawn({ runId: w.runId, workerId: W1, epoch: 1, now });
+    const outcome = ranOutcome(w.runId);
+    const settled = await w.remote.finish({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      outcome,
+      stopReason: null,
+    });
+    expect(settled).toMatchObject({ kind: 'settled', ending: { epoch: 1 } });
+    expect(w.revoked).toEqual([w.runId]);
+    const again = await w.remote.finish({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      outcome,
+      stopReason: null,
+    });
+    expect(again.kind).toBe('already_settled');
+    expect(w.harness.store.offerRows()[0]?.state).toBe('settled');
+  });
+
+  it('answers lease_lost for a stale epoch, another worker and a revoked worker (backlog 714), writing nothing', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    await w.remote.spawn({ runId: w.runId, workerId: W1, epoch: 1, now: w.harness.clock.now() });
+    const outcome = ranOutcome(w.runId);
+    for (const [workerId, epoch] of [
+      [W1, 2],
+      [W2, 1],
+    ] as const) {
+      expect(
+        (await w.remote.finish({ runId: w.runId, workerId, epoch, outcome, stopReason: null }))
+          .kind,
+      ).toBe('lease_lost');
+    }
+    (w.workers.get(W1) as { usable: boolean }).usable = false;
+    expect(
+      (await w.remote.finish({ runId: w.runId, workerId: W1, epoch: 1, outcome, stopReason: null }))
+        .kind,
+    ).toBe('lease_lost');
+    expect(w.harness.store.offerRows()[0]?.state).toBe('claimed');
+    expect(w.revoked).toEqual([]);
+  });
+
+  it('answers run_gone for a run whose task was deleted (task_gone), and settles a not_started report', async () => {
+    const gone = await world({
+      settle: async () => ({
+        kind: 'task_gone',
+        ending: null,
+        outcome: { kind: 'skipped', reason: 'gone' },
+      }),
+    });
+    await claimAs(gone, W1);
+    expect(
+      (
+        await gone.remote.finish({
+          runId: gone.runId,
+          workerId: W1,
+          epoch: 1,
+          outcome: ranOutcome(gone.runId),
+          stopReason: null,
+        })
+      ).kind,
+    ).toBe('run_gone');
+
+    const w = await world();
+    await claimAs(w, W1);
+    const report = settleOutcomeOfFinish(w.runId, {
+      epoch: 1,
+      stop_reason: null,
+      outcome: {
+        kind: 'not_started',
+        failure: 'the workspace could not be created',
+        detail: 'docker: image not found',
+        detail_truncated: false,
+        transient: false,
+        spawn_requested: false,
+      },
+    });
+    const settled = await w.remote.finish({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      outcome: report,
+      stopReason: null,
+    });
+    expect(settled).toMatchObject({ kind: 'settled', ending: { status: 'failed' } });
+    expect(w.harness.store.startFailureOf(w.runId)).toMatchObject({ kind: 'not_started' });
+  });
+});
+
+describe('late cost (Q70 (b))', () => {
+  it('is run_live while the run is live, lease_lost for another claim, and recorded once another writer ended it', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    const spend = {
+      sessionId: null,
+      numTurns: 3,
+      wallMs: 2_000,
+      cost: { usd: 0.4, is_estimate: false, price_list_id: null },
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_write_5m_tokens: 0,
+        cache_write_1h_tokens: 0,
+        cache_read_tokens: 0,
+      },
+      modelUsage: [],
+    };
+    const now = w.harness.clock.now();
+    expect(await w.remote.lateCost({ runId: w.runId, workerId: W1, epoch: 1, spend, now })).toEqual(
+      { kind: 'run_live' },
+    );
+    await w.harness.memory.transaction(async (scope) =>
+      w.harness.store.runs.finish(scope.tx, {
+        runId: w.runId,
+        status: 'cancelled',
+        terminalReason: 'cancelled',
+        sessionId: null,
+        numTurns: 0,
+        usage: spend.usage,
+        cost: null,
+        wallMs: 0,
+      }),
+    );
+    expect(await w.remote.lateCost({ runId: w.runId, workerId: W2, epoch: 1, spend, now })).toEqual(
+      { kind: 'lease_lost' },
+    );
+    expect(w.lateSpends).toEqual([]);
+    expect(await w.remote.lateCost({ runId: w.runId, workerId: W1, epoch: 1, spend, now })).toEqual(
+      { kind: 'recorded', recorded: true },
+    );
+    expect(w.lateSpends).toMatchObject([{ runId: w.runId, numTurns: 3, cost: { usd: 0.4 } }]);
+  });
+});
+
+describe('settleOutcomeOfFinish', () => {
+  it('reads a null cost as unmeasured — never a zero that reads as free (rule 16)', () => {
+    const runId = '00000000-0000-4000-8000-0000000281d1' as Id;
+    const measured = ranOutcome(runId);
+    expect('kind' in measured).toBe(false);
+    expect(measured).toMatchObject({ cost: { usd: 0.02 } });
+    expect((measured as { costUnmeasured?: boolean }).costUnmeasured).toBeUndefined();
+    const unmeasured = settleOutcomeOfFinish(runId, {
+      epoch: 1,
+      stop_reason: 'cancelled',
+      outcome: {
+        kind: 'ran',
+        status: 'cancelled',
+        terminal_reason: 'cancelled',
+        session_id: null,
+        num_turns: 1,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_write_5m_tokens: 0,
+          cache_write_1h_tokens: 0,
+          cache_read_tokens: 0,
+        },
+        model_usage: [],
+        cost: null,
+        wall_ms: 10,
+        structured_output: null,
+        error: null,
+        redaction_count: 0,
+      },
+    });
+    expect(unmeasured).toMatchObject({ costUnmeasured: true, runId });
+  });
+});

@@ -322,6 +322,45 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       );
     });
 
+    it('records a worker’s contact and counts it connected until it is revoked (WP-281)', async () => {
+      const world = await harness.create();
+      const owner = await world.addUser('contact@example.test');
+      const worker = await registerWorker(world, owner);
+      // Registered but never seen: not connected — `last_seen_at` is the protocol's to write.
+      expect(await world.store.countConnected()).toEqual({ connected: 0, paused: 0 });
+      const digests = [`sha256:${'c'.repeat(64)}`, `sha256:${'d'.repeat(64)}`];
+      const row = await world.store.recordContact({
+        workerId: worker,
+        protocolVersion: 1,
+        imageDigests: digests,
+      });
+      expect(row).toMatchObject({ id: worker, protocolVersion: 1, imageDigests: digests });
+      expect(row?.lastSeenAt).not.toBeNull();
+      // A call that reports no digests keeps the ones recorded.
+      expect(
+        await world.store.recordContact({
+          workerId: worker,
+          protocolVersion: 1,
+          imageDigests: null,
+        }),
+      ).toMatchObject({ imageDigests: digests });
+      expect(await world.store.countConnected()).toEqual({ connected: 1, paused: 0 });
+      expect(
+        await world.store.recordContact({
+          workerId: '00000000-0000-4000-8000-00000028ffff',
+          protocolVersion: 1,
+          imageDigests: null,
+        }),
+      ).toBeNull();
+      await world.store.revokeWorker({
+        workerId: worker,
+        ownerUserId: null,
+        actorUserId: owner,
+        now: at(0),
+      });
+      expect(await world.store.countConnected()).toEqual({ connected: 0, paused: 0 });
+    });
+
     it('answers a repeated decision with the recorded one, writes nothing, and refuses a different one', async () => {
       const world = await harness.create();
       const user = await world.addUser('repeat@example.test');

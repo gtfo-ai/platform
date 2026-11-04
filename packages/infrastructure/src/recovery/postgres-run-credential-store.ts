@@ -59,7 +59,10 @@ interface Row extends Record<string, unknown> {
  *
  * `$1` the live statuses, `$2` `now`, `$3` `endedAfter`.
  */
-const fromAndPredicate = (integration: 'present' | 'gone'): string => `
+const fromAndPredicate = (
+  integration: 'present' | 'gone',
+  runs: 'terminal' | 'any' = 'terminal',
+): string => `
    from runs r
    join tasks t on t.id = r.task_id
    join integration_actions m
@@ -78,8 +81,7 @@ const fromAndPredicate = (integration: 'present' | 'gone'): string => `
           else true
         end
    ${INTEGRATION_CLAUSE[integration]}
-  where r.status <> all($1::run_status[])
-    and r.ended_at is not null
+  where ${runs === 'terminal' ? 'r.status <> all($1::run_status[]) and r.ended_at is not null' : '$1::run_status[] is not null'}
     and not exists (
       select 1
         from integration_actions v
@@ -183,6 +185,27 @@ export const createPostgresRunCredentialStore = (): UnrevokedRunCredentialStore 
     return rows.map(toCredential);
   },
 
+  /**
+   * WP-281: a run's minted credentials nothing has revoked, **whatever the run's status** — what a
+   * remote run's release (a `created` run again) and its settle revoke from, in any process. The
+   * same predicate as the pass's otherwise: a recorded `revoke_id`, unexpired, no successful or
+   * recovery revoke of the address.
+   */
+  liveCredentialsOfRun: async (tx, input) => {
+    const { rows } = await sqlOf(tx).query<Row>(
+      `${SELECT}
+       ${fromAndPredicate('present', 'any')}
+          and r.id = $4
+        order by m.created_at`,
+      [
+        LIVE_RUN_STATUSES,
+        input.now,
+        new Date(Date.parse(input.now) - REVALIDATION_LOOKBACK_MS).toISOString(),
+        input.runId,
+      ],
+    );
+    return rows.map(toCredential);
+  },
   unrevokedRunCredential: async (tx, input) => {
     const { rows } = await sqlOf(tx).query<Row>(
       `${SELECT}

@@ -164,6 +164,7 @@
         "run.offered",
         "run.claimed",
         "run.offer.withdrawn",
+        "run.offer.released",
         "run.steered",
         "artifact.created",
         "workspace.provisioned",

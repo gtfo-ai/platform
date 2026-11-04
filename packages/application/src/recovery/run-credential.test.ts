@@ -27,6 +27,7 @@ import type { Logger } from '../ports/logger.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
 import {
+  revokeRunCredentialsNow,
   runCredentialRecoveryHorizonMs,
   runRunCredentialRevocation,
   type UnrevokedRunCredentialStore,
@@ -129,6 +130,7 @@ const harness = (
       revalidations.push(input);
       return options.revalidated === undefined ? STRANDED : options.revalidated;
     },
+    liveCredentialsOfRun: async () => [],
   };
   const logger: Logger = {
     debug: () => {},
@@ -301,5 +303,79 @@ describe('the run-credential site’s bounds', () => {
       now: NOW,
       limit: 10,
     });
+  });
+});
+
+/**
+ * WP-281: a remote run's release and settle revoke its minted credentials **now**, from what is
+ * stored — through the integration that minted each, with an ordinary `revoke_credential` row (the
+ * provisioner's path, not the recovery's), never throwing.
+ */
+describe('revokeRunCredentialsNow (WP-281)', () => {
+  it('revokes each live address of the run through the minting integration, and reads nothing else', async () => {
+    const { asked, auditLog, lines, base, mintingAsked } = harness();
+    const reads: unknown[] = [];
+    const revoked = await revokeRunCredentialsNow(
+      {
+        ...base,
+        store: {
+          liveCredentialsOfRun: async (_tx, input) => {
+            reads.push(input);
+            return [STRANDED];
+          },
+        },
+      },
+      RUN,
+    );
+    expect(revoked).toBe(1);
+    expect(reads).toEqual([{ runId: RUN, now: NOW }]);
+    expect(mintingAsked).toEqual([GIT]);
+    expect(asked).toEqual([{ revokeId: 'acme/api#58' }]);
+    const rows = auditLog.entriesFor('revoke_credential');
+    expect(rows.map((row) => row.status)).toEqual(['ok']);
+    // Not the recovery's row: a release or a settle is the run's own revoke.
+    expect(JSON.stringify(rows[0])).not.toContain('recovery');
+    expect(lines).toEqual([]);
+  });
+
+  it('logs a failed revoke and a gone integration as live tokens, and never throws', async () => {
+    const failing = harness({
+      revokeError: new IntegrationError('forbidden', 'fake-git', 'the token may not revoke'),
+    });
+    expect(
+      await revokeRunCredentialsNow(
+        { ...failing.base, store: { liveCredentialsOfRun: async () => [STRANDED] } },
+        RUN,
+      ),
+    ).toBe(0);
+    expect(failing.lines.map((line) => line.level)).toEqual(['error']);
+
+    const gone = harness({ mintingGone: true });
+    expect(
+      await revokeRunCredentialsNow(
+        { ...gone.base, store: { liveCredentialsOfRun: async () => [STRANDED] } },
+        RUN,
+      ),
+    ).toBe(0);
+    expect(gone.asked).toEqual([]);
+    expect(gone.lines).toEqual([
+      { level: 'error', message: expect.stringMatching(/no longer exists/) },
+    ]);
+
+    const unreadable = harness();
+    expect(
+      await revokeRunCredentialsNow(
+        {
+          ...unreadable.base,
+          store: {
+            liveCredentialsOfRun: async () => {
+              throw new Error('connection reset');
+            },
+          },
+        },
+        RUN,
+      ),
+    ).toBe(0);
+    expect(unreadable.lines.map((line) => line.level)).toEqual(['error']);
   });
 });

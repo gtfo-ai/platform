@@ -19,11 +19,12 @@ import {
   repeatedDeviceDecision,
 } from '@platform/domain';
 import { userMayAct } from './identity-queries.js';
-import type {
-  CredentialSubject,
-  NewDeviceCode,
-  WorkerListRow,
-  WorkerStore,
+import {
+  type CredentialSubject,
+  type NewDeviceCode,
+  WORKER_CONNECTED_SECONDS,
+  type WorkerListRow,
+  type WorkerStore,
 } from './worker-queries.js';
 
 interface CodeRow extends Omit<NewDeviceCode, 'intervalSeconds'> {
@@ -45,6 +46,10 @@ interface WorkerRowMemory {
   readonly credentialHash: string;
   readonly createdAt: Date;
   revokedAt: Date | null;
+  lastSeenAt: Date | null;
+  protocolVersion: number | null;
+  imageDigests: readonly string[];
+  pausedUntil: Date | null;
 }
 
 export interface MemoryUser {
@@ -77,6 +82,12 @@ export interface MemoryWorkerStore extends WorkerStore {
   readonly audit: readonly MemoryAudit[];
   /** The number of device-code rows, whatever their state. */
   codeCount(): number;
+  /** TD-031 §11's pause, as WP-285's `pause` will write it (`null` resumes). */
+  setPausedUntil(workerId: string, until: Date | null): void;
+  /** Whether a user may act now — the rule the store applies, for a composition that mirrors it. */
+  userMayAct(userId: string): boolean;
+  /** The worker's row as the store holds it, for a harness that mirrors it elsewhere. */
+  worker(workerId: string): WorkerListRow | null;
 }
 
 const stateOf = (row: CodeRow): DeviceCodeState => ({
@@ -91,7 +102,11 @@ const stateOf = (row: CodeRow): DeviceCodeState => ({
 
 const LIVE = new Set(['created', 'starting', 'running']);
 
-export const createMemoryWorkerStore = (): MemoryWorkerStore => {
+export const createMemoryWorkerStore = (
+  options: { readonly now?: () => Date } = {},
+): MemoryWorkerStore => {
+  /** The database's `now()` here: what `last_seen_at` is stamped by and the connected window reads. */
+  const now = options.now ?? (() => new Date());
   const codes: CodeRow[] = [];
   const workers = new Map<string, WorkerRowMemory>();
   const users = new Map<string, MemoryUser>();
@@ -121,10 +136,39 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
     return count;
   };
 
+  const listRowOf = (worker: WorkerRowMemory): WorkerListRow => {
+    const user = users.get(worker.userId);
+    return {
+      id: worker.id,
+      name: worker.name,
+      userId: worker.userId,
+      userEmail: user?.email ?? 'unknown@example.invalid',
+      userName: user?.name ?? null,
+      createdAt: worker.createdAt,
+      lastSeenAt: worker.lastSeenAt,
+      protocolVersion: worker.protocolVersion,
+      imageDigests: [...worker.imageDigests],
+      state: worker.revokedAt === null ? 'active' : 'revoked',
+      revokedAt: worker.revokedAt,
+      pausedUntil: worker.pausedUntil,
+      pausedReason: worker.pausedUntil === null ? null : 'usage_limited',
+      concurrency: 1,
+    };
+  };
+
   return {
     runs,
     audit,
     codeCount: () => codes.length,
+    setPausedUntil: (workerId, until) => {
+      const worker = workers.get(workerId);
+      if (worker !== undefined) worker.pausedUntil = until;
+    },
+    userMayAct: (userId) => mayAct(userId),
+    worker: (workerId) => {
+      const worker = workers.get(workerId);
+      return worker === undefined ? null : listRowOf(worker);
+    },
     addUser: (user) => users.set(user.id, user),
     setUserMayAct: (userId, mayAct) => {
       if (mayAct) disabled.delete(userId);
@@ -195,6 +239,10 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
         credentialHash: mint.credentialHash,
         createdAt: now,
         revokedAt: null,
+        lastSeenAt: null,
+        protocolVersion: null,
+        imageDigests: [],
+        pausedUntil: null,
       });
       row.consumedAt = now;
       row.workerId = mint.workerId;
@@ -273,25 +321,7 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
       return [...workers.values()]
         .filter((worker) => userId === null || worker.userId === userId)
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .map((worker): WorkerListRow => {
-          const user = users.get(worker.userId);
-          return {
-            id: worker.id,
-            name: worker.name,
-            userId: worker.userId,
-            userEmail: user?.email ?? 'unknown@example.invalid',
-            userName: user?.name ?? null,
-            createdAt: worker.createdAt,
-            lastSeenAt: null,
-            protocolVersion: null,
-            imageDigests: [],
-            state: worker.revokedAt === null ? 'active' : 'revoked',
-            revokedAt: worker.revokedAt,
-            pausedUntil: null,
-            pausedReason: null,
-            concurrency: 1,
-          };
-        });
+        .map(listRowOf);
     },
 
     async revokeWorker({ workerId, ownerUserId, actorUserId, now }) {
@@ -316,6 +346,35 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
       return expire(
         new Set([...workers.values()].filter((w) => w.userId === userId).map((w) => w.id)),
       );
+    },
+
+    async recordContact({ workerId, protocolVersion, imageDigests }) {
+      const worker = workers.get(workerId);
+      if (worker === undefined) {
+        return null;
+      }
+      worker.lastSeenAt = now();
+      worker.protocolVersion = protocolVersion;
+      if (imageDigests !== null) {
+        worker.imageDigests = [...imageDigests];
+      }
+      return listRowOf(worker);
+    },
+
+    async countConnected() {
+      const at = now().getTime();
+      const connected = [...workers.values()].filter(
+        (worker) =>
+          worker.revokedAt === null &&
+          worker.lastSeenAt !== null &&
+          at - worker.lastSeenAt.getTime() < WORKER_CONNECTED_SECONDS * 1000,
+      );
+      return {
+        connected: connected.length,
+        paused: connected.filter(
+          (worker) => worker.pausedUntil !== null && worker.pausedUntil.getTime() > at,
+        ).length,
+      };
     },
 
     async findCredentialSubject(workerId): Promise<CredentialSubject | null> {

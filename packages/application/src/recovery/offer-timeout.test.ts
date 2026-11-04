@@ -45,8 +45,26 @@ const ticketMatched = (key: string, seq: number): DomainEvent =>
   }) as DomainEvent;
 
 /** A `workers_only` project on a core with no worker: the job offers, and nobody ever claims. */
+const RACING_WORKER = '00000000-0000-4000-8000-0000000278f1' as Id;
+const RACE_DIGEST = `sha256:${'e'.repeat(64)}`;
+
 const unclaimed = async (): Promise<PipelineHarness> => {
-  const harness = createPipelineHarness({ projectId: PROJECT, runsAgents: false });
+  const harness = createPipelineHarness({
+    projectId: PROJECT,
+    runsAgents: false,
+    // WP-281: one remote worker that may claim, for the race below.
+    remoteWorkers: {
+      remoteWorkers: (workerId) =>
+        workerId === RACING_WORKER
+          ? {
+              userId: '00000000-0000-4000-8000-0000000278a1' as Id,
+              usable: true,
+              pausedUntil: null,
+              memberOf: () => true,
+            }
+          : undefined,
+    },
+  });
   harness.store.setExecutionSettings(PROJECT, {
     mode: 'workers_only',
     prefer: 'server',
@@ -120,13 +138,20 @@ describe('the offer-timeout recovery row (WP-278)', () => {
     });
     expect(expired.map((row) => row.runId)).toEqual([offer?.runId]);
     // A worker claim (WP-281's) between the read and the withdrawal, as a remote claim would race it.
-    await claimRunOffer(harness.store.offers, {} as never, {
+    const claimed = await claimRunOffer(harness.store.offers, {} as never, {
       eligibility: { runId: offer?.runId as Id },
       claimantKind: 'worker',
-      owner: 'worker:race',
+      owner: `worker:${RACING_WORKER}`,
       expiresAt: harness.clock.now(),
       now: harness.clock.now(),
+      worker: {
+        workerId: RACING_WORKER,
+        heldImageDigests: [RACE_DIGEST],
+        images: { run: RACE_DIGEST, egress: RACE_DIGEST },
+        runTokenHash: 'e'.repeat(64),
+      },
     });
+    expect(claimed?.runId).toBe(offer?.runId);
     const withdrawn = await site(harness).withdraw(expired[0] as (typeof expired)[number], {
       withdrawnReason: OFFER_TIMEOUT_REASON,
       brief: 'no claimant took this run',

@@ -61,9 +61,9 @@ export interface Metrics {
   readonly runOffersOpen: Gauge<'project'>;
   /** WP-277: seconds the oldest open offer of a project has waited; no series for none waiting. */
   readonly runOfferWaitSeconds: Gauge<'project'>;
-  /** WP-277: remote workers connected (0 until WP-281). */
+  /** WP-277: remote workers connected — seen in the last 60 s (WP-281). */
   readonly workersConnected: Gauge;
-  /** WP-277: remote workers paused, by their user or a usage limit (0 until WP-281). */
+  /** WP-277: remote workers paused, by their user or a usage limit (WP-281 counts them). */
   readonly workersPaused: Gauge;
   /** Sets the gauges that have to be sampled rather than incremented. Called on scrape. */
   readonly collect: () => Promise<void>;
@@ -130,7 +130,7 @@ export interface MetricsOptions {
       readonly oldestWaitSeconds: number;
     }[]
   >;
-  /** WP-277: remote workers connected and paused — 0 and 0 until WP-281 has workers to count. */
+  /** WP-277: remote workers connected and paused — counted by `WorkerStore.countConnected` (WP-281). */
   readonly workers?: () => Promise<{ readonly connected: number; readonly paused: number }>;
   /**
    * Told when an isolated sampler throws (WP-65 review round 2): its series is then absent from the
@@ -338,12 +338,12 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
   });
   const workersConnected = new Gauge({
     name: 'workers_connected',
-    help: 'Remote workers connected to this core (WP-277; always 0 until WP-281).',
+    help: 'Remote workers connected to this core: seen in the last 60 s (WP-277, WP-281).',
     registers: options.workers === undefined ? [] : [registry],
   });
   const workersPaused = new Gauge({
     name: 'workers_paused',
-    help: 'Remote workers paused by their user or a usage limit (WP-277; always 0 until WP-281).',
+    help: 'Remote workers connected and paused by their user or a usage limit (WP-277, WP-281).',
     registers: options.workers === undefined ? [] : [registry],
   });
 

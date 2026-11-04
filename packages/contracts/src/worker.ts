@@ -123,6 +123,8 @@ export const WORKER_PATHS = {
   session: 'runs/:id/session',
   sshSign: 'runs/:id/ssh-sign',
   runRelease: 'runs/:id/release',
+  /** The CLI spawn marker (TD-031's 2026-11-04 amendment §4): answered before the `spawn` frame. */
+  spawn: 'runs/:id/spawn',
   finish: 'runs/:id/finish',
   lateCost: 'runs/:id/late-cost',
   pause: 'pause',
@@ -141,6 +143,17 @@ export const WORKER_CLAIM_HOLD_MS = 25_000;
 export const WORKER_HEARTBEAT_HOLD_MS = 20_000;
 /** A remote run's lease (TD-031 §9; the server's runner keeps `RUN_LEASE_TTL_MS`, 5 min). */
 export const WORKER_REMOTE_LEASE_TTL_MS = 10 * 60_000;
+/**
+ * A remote run's renewal bound (TD-031 §2): the heartbeat is held ≤ {@link WORKER_HEARTBEAT_HOLD_MS}
+ * and re-issued at once, so a renewal lands about every 20 s on a healthy link and 30 s is the
+ * declared bound the self-termination rule is computed from (`TTL − ½·renew` = 585 s).
+ */
+export const WORKER_REMOTE_LEASE_RENEW_MS = 30_000;
+/**
+ * How long a run token keeps authenticating after its run is terminal (TD-031 §7): fifteen minutes,
+ * for `late-cost` — a worker that comes back after the sweep reports what its run burned (Q70 (b)).
+ */
+export const WORKER_RUN_TOKEN_AFTER_END_MS = 15 * 60_000;
 
 // ── Shared pieces ────────────────────────────────────────────────────────────
 
@@ -433,7 +446,11 @@ export const workerUpgradeRequiredBodySchema = z.strictObject({
   error: apiErrorSchema.shape.error.extend({ code: z.literal('upgrade_required') }),
   accepted: z.array(z.int().positive()).min(1).max(2),
   compose_url: httpUrlSchema,
-  digests: coreImageDigestsSchema,
+  /**
+   * The core's four digests, or `null` while the core cannot name them (`digests_unresolved`,
+   * WP-281): the refusal still reaches the worker, which stops claiming either way (TD-032 §5).
+   */
+  digests: coreImageDigestsSchema.nullable(),
 });
 export type WorkerUpgradeRequiredBody = z.infer<typeof workerUpgradeRequiredBodySchema>;
 
@@ -717,18 +734,45 @@ export const terminalRunStatusSchema = z.enum([
 ]);
 
 /**
- * `POST runs/:id/finish`: the run's `RunOutcome`, snake_case, idempotent on `(run_id, epoch)` (TD-031
- * §3). `cost` is `null` exactly when nothing measured the run (`costUnmeasured`, rule 16) — never a
- * zero standing in for an unknown.
+ * **Why the platform stopped a run** — the closed vocabulary of the `run_stopped` transcript row's
+ * `data.reason`: the runner's own stops beside a holder's (`cancelled`, `taken_over`, `shutdown`).
+ * `settleRun`'s request carries it as `stopReason` (TD-031's 2026-11-04 amendment §1), so a
+ * worker's stop register crosses as a closed word, validated here (WP-281); `@platform/application`
+ * re-exports it from `ports/runner.ts`, its one definition.
  */
-export const workerFinishRequestSchema = z.strictObject({
-  epoch: leaseEpochSchema,
+export const RUN_STOPPED_REASONS = [
+  'stalled',
+  'timed_out',
+  'budget_exceeded',
+  'cost_unreported',
+  'cancelled',
+  'taken_over',
+  'shutdown',
+] as const;
+export const runStoppedReasonSchema = z.enum(RUN_STOPPED_REASONS);
+
+/** `POST runs/:id/spawn`: the CLI spawn marker, under the claim's epoch (WP-281). */
+export const workerSpawnRequestSchema = z.strictObject({ epoch: leaseEpochSchema });
+
+/**
+ * `POST runs/:id/spawn` → the marker's instant. The worker sends **no** `spawn` frame before this
+ * `200` (TD-031's 2026-11-04 amendment §4); a replay under the same claim answers the same instant.
+ */
+export const workerSpawnResponseSchema = z.strictObject({ started_at: isoDateTimeSchema });
+
+/** The run's `RunOutcome`, snake_case — a run that started (or a stop before its marker). */
+export const workerRanOutcomeSchema = z.strictObject({
+  kind: z.literal('ran'),
   status: terminalRunStatusSchema,
   terminal_reason: runTerminalReasonSchema,
   session_id: nonEmptyStringSchema.max(256).nullable(),
   num_turns: z.int().nonnegative(),
   usage: tokenUsageSchema,
   model_usage: z.array(modelUsageSchema).max(64),
+  /**
+   * `null` exactly when nothing measured the run (`costUnmeasured`, rule 16) — never a zero standing
+   * in for an unknown.
+   */
   cost: runCostSchema.nullable(),
   wall_ms: z.int().nonnegative(),
   structured_output: jsonValueSchema.nullable(),
@@ -738,13 +782,67 @@ export const workerFinishRequestSchema = z.strictObject({
   start_failure: runStartFailureSchema.optional(),
 });
 
-/** `POST runs/:id/late-cost`: what a run burned after its row ended (Q70 (b), `cost/late.ts`). */
+/**
+ * A run that **never started** (`NotStartedReport`, TD-031's 2026-11-04 amendment §3): the
+ * claimant classifies and quotes; the core redacts, bounds and decides whether the stage goes again.
+ */
+export const workerNotStartedSchema = z.strictObject({
+  kind: z.literal('not_started'),
+  /** The closed-vocabulary diagnosis (`describeStartFailure`). */
+  failure: nonEmptyStringSchema.max(2_000),
+  /** The launcher's own words, unredacted — the core redacts them with the run's redactor. */
+  detail: z.string().max(16_000).nullable(),
+  detail_truncated: z.boolean(),
+  transient: z.boolean(),
+  /** WP-150's marker: the run may have reached its CLI. */
+  spawn_requested: z.boolean(),
+});
+
+/**
+ * `POST runs/:id/finish`: `settleRun`'s four-field request (TD-031's 2026-11-04 amendment §1) —
+ * the epoch (the fence's owner is the authenticated worker, never the body), what happened, and the
+ * worker's stop register. Idempotent on `(run_id, epoch)` (TD-031 §3).
+ */
+export const workerFinishRequestSchema = z.strictObject({
+  epoch: leaseEpochSchema,
+  stop_reason: runStoppedReasonSchema.nullable(),
+  outcome: z.discriminatedUnion('kind', [workerRanOutcomeSchema, workerNotStartedSchema]),
+});
+
+/**
+ * `POST runs/:id/finish` → whether this call wrote the run's ending (`settled`) or found it already
+ * written at this epoch (`already_settled`), and the ending as the row stores it. A run whose task was
+ * deleted answers `410 run_gone`, which a worker treats as terminal.
+ */
+export const workerFinishResponseSchema = z.strictObject({
+  outcome: z.enum(['settled', 'already_settled']),
+  ending: z.strictObject({
+    status: terminalRunStatusSchema,
+    terminal_reason: runTerminalReasonSchema.nullable(),
+    epoch: leaseEpochSchema,
+  }),
+});
+
+/**
+ * `POST runs/:id/late-cost`: what a run burned after its row was ended by another writer (Q70 (b),
+ * `cost/late.ts`) — accepted while the run token authenticates, terminal plus
+ * {@link WORKER_RUN_TOKEN_AFTER_END_MS}.
+ */
 export const workerLateCostRequestSchema = z.strictObject({
   epoch: leaseEpochSchema,
+  session_id: nonEmptyStringSchema.max(256).nullable(),
+  num_turns: z.int().nonnegative(),
+  wall_ms: z.int().nonnegative(),
   cost: runCostSchema,
   usage: tokenUsageSchema,
   model_usage: z.array(modelUsageSchema).max(64),
 });
+
+/**
+ * `POST runs/:id/late-cost` → whether the figure was written. `false` is not a refusal: the row
+ * already carries a figure or the ledger already charged the run, so a repeat writes nothing.
+ */
+export const workerLateCostResponseSchema = z.strictObject({ recorded: z.boolean() });
 
 // ── Release and updates (TD-032 decisions 3, 4) ──────────────────────────────
 

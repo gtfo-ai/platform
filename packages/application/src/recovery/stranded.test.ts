@@ -613,6 +613,7 @@ describe('the run-credential site', () => {
           },
           unreachableRunCredentials: async () => [],
           unrevokedRunCredential: async () => null,
+          liveCredentialsOfRun: async () => [],
         },
         unreachable: createUnreachableRunCredentialReports(),
       },
@@ -683,6 +684,7 @@ describe('the run-credential site', () => {
               return [credential];
             },
             unrevokedRunCredential: async () => null,
+            liveCredentialsOfRun: async () => [],
           },
           unreachable,
         },

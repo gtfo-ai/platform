@@ -26,8 +26,11 @@
  * move is the same (start again), and a distinct answer would only tell a guesser it guessed wrong.
  * Every answer is `Cache-Control: no-store` (RFC 6749 §5.1), the credential's above all.
  *
- * Not checked here: `X-Worker-Protocol`. The device flow is how a worker *gets* a credential, before
- * it speaks the protocol; WP-281 checks the header on the authenticated verbs.
+ * `X-Worker-Protocol` is checked **before** these routes, by `routes/worker/protocol.ts`'s
+ * `registerWorkerProtocolCheck` on every `/api/worker/v1/` verb (WP-281, backlog 712): TD-031 §9 asks
+ * the header on every request, and a worker whose protocol this core does not serve should learn it
+ * before it registers a credential it cannot use. These handlers are therefore reached only by an
+ * accepted protocol.
  */
 import {
   apiErrorSchema,

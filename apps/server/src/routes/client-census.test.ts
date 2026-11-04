@@ -35,6 +35,7 @@
  * that path). It also says nothing about the *shape* either side expects; that is
  * `packages/contracts`, which both import.
  */
+import { WORKER_API_PREFIX, WORKER_PATHS, WORKER_PROTOCOL_VERSION } from '@platform/contracts';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
@@ -253,6 +254,90 @@ const probe = async (path: string): Promise<Probe> => {
   }
   return { path, served: false, status: 404, code: 'not_found' };
 };
+
+/**
+ * **The worker as the census's second client** (WP-281, the plan row's criterion 7).
+ *
+ * The worker's half is `WORKER_PATHS` in `@platform/contracts` — the one module the core's routes and
+ * the worker's client both read (the worker process itself is WP-283's). Each verb is asked through
+ * the real `buildApp`, with an accepted `X-Worker-Protocol` and **no** credential: a served verb
+ * answers `401 unauthenticated`, the device flow's two answer without one (public by design,
+ * rate-limited, TD-031 §10c), and every verb answers `426` to a request with no protocol header.
+ * The verbs a later row serves are admitted **with the row**, and both directions are asserted, so
+ * a verb that gains a route while still listed fails as surely as one that loses its route.
+ *
+ * **First in the file, deliberately**: `@fastify/under-pressure` answers `503` once the event loop's
+ * utilisation passes its bound, and the web-source sweeps below are synchronous reads of every
+ * client file — measured: run after them, these probes met `Service Unavailable` on a busy host.
+ */
+const WORKER_VERBS_SERVED_LATER: Readonly<Partial<Record<keyof typeof WORKER_PATHS, string>>> = {
+  transcript: 'WP-282',
+  tool: 'WP-282',
+  approvals: 'WP-282',
+  session: 'WP-282',
+  sshSign: 'WP-282',
+  pause: 'WP-285',
+  release: 'WP-284',
+  composeFile: 'WP-284',
+  updateReport: 'WP-287',
+};
+const PUBLIC_WORKER_VERBS: readonly (keyof typeof WORKER_PATHS)[] = ['device', 'deviceToken'];
+
+describe('the worker as a second client (WP-281)', () => {
+  const workerUrl = (verb: string): string =>
+    `${WORKER_API_PREFIX}/${verb.replaceAll(':id', PROBE_ID).replaceAll(':name', 'kb_search')}`;
+  const askWorker = async (verb: string, headers: Record<string, string>) => {
+    for (const method of ['POST', 'GET'] as const) {
+      const response = await app.inject({
+        method,
+        url: workerUrl(verb),
+        headers,
+        payload: method === 'POST' ? {} : undefined,
+      });
+      const code = (response.json() as ApiErrorBody).error?.code ?? null;
+      if (!(response.statusCode === 404 && code === 'not_found')) {
+        return { served: true, status: response.statusCode, code };
+      }
+    }
+    return { served: false, status: 404, code: 'not_found' };
+  };
+
+  it('serves every verb of the protocol but the ones a later row owns, and each authenticated one refuses a caller with no credential', async () => {
+    const protocol = { 'x-worker-protocol': String(WORKER_PROTOCOL_VERSION) };
+    const served: string[] = [];
+    for (const [name, verb] of Object.entries(WORKER_PATHS) as [
+      keyof typeof WORKER_PATHS,
+      string,
+    ][]) {
+      const probed = await askWorker(verb, protocol);
+      if (!probed.served) continue;
+      served.push(name);
+      if (PUBLIC_WORKER_VERBS.includes(name)) {
+        expect(`${name} ${probed.status}`).not.toBe(`${name} 401`);
+      } else {
+        expect(`${name} ${probed.status} ${probed.code}`).toBe(`${name} 401 unauthenticated`);
+      }
+    }
+    // Both directions: exactly the verbs no later row owns are served.
+    expect(served.sort()).toEqual(
+      (Object.keys(WORKER_PATHS) as (keyof typeof WORKER_PATHS)[])
+        .filter((name) => WORKER_VERBS_SERVED_LATER[name] === undefined)
+        .sort(),
+    );
+    expect(served).toContain('finish');
+  }, 15_000);
+
+  it('answers 426 to every served verb that carries no protocol header — the device flow’s too (backlog 712)', async () => {
+    for (const [name, verb] of Object.entries(WORKER_PATHS) as [
+      keyof typeof WORKER_PATHS,
+      string,
+    ][]) {
+      if (WORKER_VERBS_SERVED_LATER[name] !== undefined) continue;
+      const probed = await askWorker(verb, {});
+      expect(`${name} ${probed.status} ${probed.code}`).toBe(`${name} 426 upgrade_required`);
+    }
+  }, 15_000);
+});
 
 describe('the client’s endpoint list against the server’s router', () => {
   // WP-249: slowest of 10 green CI runs 319 ms (median under 300 ms); 2× it, 15 s floor.
@@ -872,8 +957,8 @@ describe('the client’s endpoint list against the server’s router', () => {
 
   it('serves the worker surface WP-280 added, the client calls all four, and each refuses an anonymous caller', async () => {
     // Named positively (standing rule 10). The device flow's machine half (`/api/worker/v1/device…`)
-    // is not the SPA's to call and is not here: it is public by design, and WP-281 teaches this
-    // census the worker as a second client.
+    // is not the SPA's to call and is not here: it is public by design, and the worker is this
+    // census's second client since WP-281 (`the worker as a second client`, below).
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
         path,

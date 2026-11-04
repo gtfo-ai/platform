@@ -21,16 +21,20 @@ import {
   workerDeviceTokenRequestSchema,
   workerDeviceTokenResponseSchema,
   workerFinishRequestSchema,
+  workerFinishResponseSchema,
   workerHandshakeRequestSchema,
   workerHandshakeResponseSchema,
   workerHeartbeatRequestSchema,
   workerHeartbeatResponseSchema,
   workerLateCostRequestSchema,
+  workerLateCostResponseSchema,
   workerLeaseLostBodySchema,
   workerPauseRequestSchema,
   workerReleaseResponseSchema,
   workerRunReleaseRequestSchema,
   workerSessionRequestSchema,
+  workerSpawnRequestSchema,
+  workerSpawnResponseSchema,
   workerSshSignRequestSchema,
   workerSshSignResponseSchema,
   workerToolCallRequestSchema,
@@ -206,7 +210,9 @@ describe('protocol versions (TD-032 decision 7)', () => {
   it('names every verb of TD-031 decision 9 once', () => {
     const paths = Object.values(WORKER_PATHS);
     expect(new Set(paths).size).toBe(paths.length);
-    expect(paths).toHaveLength(17);
+    // WP-281: the spawn marker joined TD-031 §9's seventeen (its 2026-11-04 amendment §4).
+    expect(paths).toHaveLength(18);
+    expect(paths).toContain('runs/:id/spawn');
   });
 });
 
@@ -613,30 +619,64 @@ const DTO_SAMPLES: ReadonlyArray<readonly [string, z.ZodType, Record<string, unk
     workerFinishRequestSchema,
     {
       epoch: 1,
-      status: 'failed',
-      terminal_reason: 'rate_limited',
-      session_id: null,
-      num_turns: 3,
-      usage: {
-        input_tokens: 1,
-        output_tokens: 1,
-        cache_write_5m_tokens: 0,
-        cache_write_1h_tokens: 0,
-        cache_read_tokens: 0,
+      stop_reason: null,
+      outcome: {
+        kind: 'ran',
+        status: 'failed',
+        terminal_reason: 'rate_limited',
+        session_id: null,
+        num_turns: 3,
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_write_5m_tokens: 0,
+          cache_write_1h_tokens: 0,
+          cache_read_tokens: 0,
+        },
+        model_usage: [],
+        cost: null,
+        wall_ms: 1_000,
+        structured_output: null,
+        error: 'usage limit',
+        redaction_count: 0,
       },
-      model_usage: [],
-      cost: null,
-      wall_ms: 1_000,
-      structured_output: null,
-      error: 'usage limit',
-      redaction_count: 0,
     },
   ],
+  [
+    'finish request (not started)',
+    workerFinishRequestSchema,
+    {
+      epoch: 1,
+      stop_reason: 'shutdown',
+      outcome: {
+        kind: 'not_started',
+        failure: 'the workspace could not be created',
+        detail: null,
+        detail_truncated: false,
+        transient: true,
+        spawn_requested: false,
+      },
+    },
+  ],
+  [
+    'finish response',
+    workerFinishResponseSchema,
+    {
+      outcome: 'already_settled',
+      ending: { status: 'completed', terminal_reason: 'success', epoch: 2 },
+    },
+  ],
+  ['spawn request', workerSpawnRequestSchema, { epoch: 2 }],
+  ['spawn response', workerSpawnResponseSchema, { started_at: '2026-11-04T09:00:00.000Z' }],
+  ['late cost response', workerLateCostResponseSchema, { recorded: false }],
   [
     'late cost request',
     workerLateCostRequestSchema,
     {
       epoch: 1,
+      session_id: null,
+      num_turns: 4,
+      wall_ms: 2_000,
       cost: { usd: 0.12, is_estimate: false },
       usage: {
         input_tokens: 1,
@@ -674,6 +714,16 @@ const DTO_SAMPLES: ReadonlyArray<readonly [string, z.ZodType, Record<string, unk
     },
   ],
   [
+    '426 upgrade_required, digests unresolved (WP-281)',
+    workerUpgradeRequiredBodySchema,
+    {
+      error: { code: 'upgrade_required', message: 'this core serves protocol 1' },
+      accepted: [1],
+      compose_url: 'https://core.example.com/api/worker/v1/compose.yml',
+      digests: null,
+    },
+  ],
+  [
     '409 lease_lost',
     workerLeaseLostBodySchema,
     { error: { code: 'lease_lost', message: 'the run’s epoch moved on' } },
@@ -698,6 +748,41 @@ describe('the worker DTOs (TD-031 decision 9)', () => {
         accepted: [1],
         compose_url: 'https://core.example.com/c.yml',
         digests: DIGESTS,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('refuses a finish whose stop reason is outside the closed vocabulary, and a not_started report with a run’s fields (WP-281)', () => {
+    const notStarted = {
+      kind: 'not_started',
+      failure: 'the workspace could not be created',
+      detail: null,
+      detail_truncated: false,
+      transient: false,
+      spawn_requested: false,
+    };
+    expect(
+      workerFinishRequestSchema.safeParse({ epoch: 1, stop_reason: null, outcome: notStarted })
+        .success,
+    ).toBe(true);
+    expect(
+      workerFinishRequestSchema.safeParse({ epoch: 1, stop_reason: 'bored', outcome: notStarted })
+        .success,
+    ).toBe(false);
+    expect(
+      workerFinishRequestSchema.safeParse({
+        epoch: 1,
+        stop_reason: null,
+        outcome: { ...notStarted, num_turns: 3 },
+      }).success,
+    ).toBe(false);
+    // The epoch is the only fence field a body names: the owner is the authenticated worker.
+    expect(
+      workerFinishRequestSchema.safeParse({
+        epoch: 1,
+        owner: 'worker:someone-else',
+        stop_reason: null,
+        outcome: notStarted,
       }).success,
     ).toBe(false);
   });

@@ -295,6 +295,52 @@ export const claimRun = (
 };
 
 /**
+ * **A claim is handed back unspent** (WP-281, TD-031 decision 6 and its 2026-11-04 amendment §4):
+ * the run is **`starting → created`** — only before its CLI spawn marker, which the caller's
+ * conditional write checks; a `running` run is refused here too, because a started run ends through
+ * `finish`. Records `run.offer.released`; `run.claimed` stands beside it, and nothing is charged.
+ */
+export const releaseRunClaim = (
+  run: Run,
+  release: {
+    readonly offerId: Id;
+    readonly workerId: Id | null;
+    readonly epoch: number;
+    readonly reason:
+      | 'usage_limited'
+      | 'image_missing'
+      | 'provision_failed'
+      | 'shutdown'
+      | 'credential_unavailable';
+  },
+  context: CommandContext,
+): RunDecision => {
+  if (run.status !== 'starting') {
+    throw new IllegalTransitionError('Run', run.status, 'created');
+  }
+  if (!Number.isInteger(release.epoch) || release.epoch < 1) {
+    throw new InvariantViolationError(
+      'run.offer.released',
+      `a released claim's epoch is at least 1, not ${release.epoch}`,
+    );
+  }
+  const recorder = recorderFor(run, context);
+  recorder.emit('run.offer.released', {
+    project_id: run.projectId,
+    task_id: run.taskId,
+    run_id: run.id,
+    offer_id: release.offerId,
+    worker_id: release.workerId,
+    lease_epoch: release.epoch,
+    reason: release.reason,
+  });
+  return {
+    aggregate: { ...run, status: 'created', sequence: recorder.sequence },
+    events: recorder.events,
+  };
+};
+
+/**
  * **The offer no claimant took is withdrawn** (WP-276, TD-031 decision 3): a task transition left the
  * run's stage entry while its offer was still `open`. Only a `created` run — never claimed — can be
  * withdrawn: a claimed one is stopped through its holder (a `cancel` run command) instead. Records

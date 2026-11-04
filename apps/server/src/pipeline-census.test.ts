@@ -334,6 +334,8 @@ const WRAPPED_JOBS_CALL_SITES: Readonly<Record<string, string>> = {
   createKnowledgeCommands: 'the proposal decision, which asks for a commit (WP-18b).',
   createProjectConfigCommands:
     'a change of the default branch asks for a knowledge index of the new branch (WP-142) and a readiness re-check pinned to the commit its configuration read answered (WP-147).',
+  composeRemoteRuns:
+    'the worker protocol (WP-281): a remote run’s settle enqueues its stage entry’s start-failure retry and hand-back re-run after its commit, as `settleRun` does for the server claimant.',
 };
 
 /** The segments of the object literal at `open`, or `null` when the call takes no literal. */

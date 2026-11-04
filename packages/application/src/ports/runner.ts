@@ -48,11 +48,13 @@ import {
   RUN_START_FAILURE_DETAIL_MAX_CHARS,
   RUN_START_FAILURE_MESSAGE_MAX_CHARS,
   RUN_START_FAILURE_OUTPUT_MAX_CHARS,
+  RUN_STOPPED_REASONS,
   runCommandPolicySchema,
   runContextDocumentSchema,
   runLimitsDefaults,
   runLimitsSchema,
   runSpecSchema,
+  runStoppedReasonSchema,
   runSubagentSchema,
   shaSchema,
 } from '@platform/contracts';
@@ -463,17 +465,9 @@ export type RunStopReason = 'cancelled' | 'taken_over' | 'shutdown';
  * 2026-11-04 amendment §1), so a claimant's stop register crosses as a closed word and a worker's
  * (WP-281) is validated against {@link runStoppedReasonSchema} at the boundary.
  */
-export const RUN_STOPPED_REASONS = [
-  'stalled',
-  'timed_out',
-  'budget_exceeded',
-  'cost_unreported',
-  'cancelled',
-  'taken_over',
-  'shutdown',
-] as const;
+// The one definition is `@platform/contracts`' (WP-281): the worker protocol's `finish` validates it.
+export { RUN_STOPPED_REASONS, runStoppedReasonSchema };
 export type RunStoppedReason = (typeof RUN_STOPPED_REASONS)[number];
-export const runStoppedReasonSchema = z.enum(RUN_STOPPED_REASONS);
 
 /** A stop register's word as the closed vocabulary, or `null` for none or for a word it lacks. */
 export const runStoppedReasonOf = (value: string | null): RunStoppedReason | null =>

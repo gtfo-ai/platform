@@ -3683,6 +3683,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             kind: 'stage',
             epoch: 1,
             owner: 'server:server-1',
+            // WP-281: a server claim of an offer naming no images answers none.
+            images: null,
           });
           expect(await store.offers.load(tx, runId)).toMatchObject({
             state: 'claimed',

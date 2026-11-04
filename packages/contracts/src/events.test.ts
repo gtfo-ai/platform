@@ -350,6 +350,14 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     offer_id: uuid(40),
     reason: 'the task was paused by a human',
   },
+  'run.offer.released': {
+    ...taskScoped,
+    run_id: RUN,
+    offer_id: uuid(40),
+    worker_id: uuid(41),
+    lease_epoch: 1,
+    reason: 'image_missing',
+  },
   'run.steered': {
     ...taskScoped,
     run_id: RUN,

@@ -13,6 +13,7 @@
  * over; `workers/secrets.test.ts` holds the shapes.
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import type { RunTokens } from '@platform/application';
 import {
   formatWorkerCredential,
   normaliseUserCode,
@@ -80,4 +81,21 @@ export const authenticateWorkerCredential = async (
     return null;
   }
   return subject.usable ? subject : null;
+};
+
+/**
+ * The run token (TD-031 decision 7, WP-281): 32 random bytes in unpadded base64url, minted at each
+ * remote claim, stored only as {@link hashSecret}'s SHA-256 on the offer, compared in constant time.
+ */
+export const runTokens: RunTokens = {
+  mint: () => {
+    const token = random32();
+    return { token, hash: hashSecret(token) };
+  },
+  hashOf: hashSecret,
+  same: (a, b) => {
+    const left = Buffer.from(a, 'hex');
+    const right = Buffer.from(b, 'hex');
+    return left.length === right.length && left.length > 0 && timingSafeEqual(left, right);
+  },
 };

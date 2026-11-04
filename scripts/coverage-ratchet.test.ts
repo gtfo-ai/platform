@@ -232,7 +232,10 @@ describe('the whole check, against this repository’s configuration', () => {
     );
     expect(result).toMatchObject({ code: 1, out: 'FAIL: coverage:ratchet' });
     expect(result.err).toContainEqual(
-      expect.stringMatching(/^server branches: measured .* is below its floor 57/),
+      // The configured floor, not a literal: WP-281 re-pinned it (57 → 58) by the ratchet's own rule.
+      expect.stringMatching(
+        new RegExp(`^server branches: measured .* is below its floor ${serverFloor}\\b`),
+      ),
     );
   }, 15_000);
 

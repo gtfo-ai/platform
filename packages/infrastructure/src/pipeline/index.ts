@@ -5,3 +5,4 @@ export * from './postgres-intake-reconciliation.js';
 export * from './postgres-pipeline-store.js';
 export * from './postgres-run-commands.js';
 export * from './postgres-ticket-poll.js';
+export * from './worker-holder.js';
