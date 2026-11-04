@@ -112,3 +112,18 @@ first relies on them (docs/TODO.md § Verification). Nothing here was run agains
   CIDR ranges, an array of them, a hop count, or a function. — https://fastify.dev/docs/latest/Reference/Server/#trustproxy
   (architect's reading, session 21, not fetched in this pass: `[unverified]`, re-read by WP-280 before it
   widens the variable; TODO V-WM7).
+
+## 10. Publishing a container port to loopback only (TD-031's worker-UI amendment)
+
+- A port published without a host address is published **on all host addresses**, IPv4 and IPv6;
+  `-p 127.0.0.1:8080:80` (or `[::1]`) means *"only the Docker host can access the published container
+  port"*. Caveat on the same page: **before Docker Engine 28.0.0**, hosts on the same L2 segment could
+  reach ports published to localhost. — https://docs.docker.com/engine/network/port-publishing/
+  (fetched 2026-11-04, architect, session 22).
+- Consequence used by the amendment: the process inside the container must listen on the container's
+  own interface (a listener on the container's `127.0.0.1` is unreachable through any publish), so the
+  loopback restriction lives in the compose publish line, and the token is what holds on an engine
+  older than 28.0.0.
+- DNS rebinding: a page on an attacker's name that re-resolves to `127.0.0.1` reaches a loopback port
+  with **its own name in the `Host` header**, so an exact `Host` allow-list refuses it.
+  `[unverified]` here (general web-security knowledge, no page fetched in this pass; TODO V-WM9).

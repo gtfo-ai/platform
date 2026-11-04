@@ -759,3 +759,86 @@ not part of.
   is stored sealed under `APP_SECRET_KEY` until its terminal write, so a holder of the database **and**
   the key reads it, the reach `secrets` already has; a worker's Claude token is redacted only by the
   worker; a settle of a run planned before WP-275a reads the live question timeout.
+
+## Amendment (2026-11-04, architect, session 22) — the worker's local UI: what a developer sees and controls on their own machine, and where each control is decided (owner request 2026-11-04; slice S-22.13, WP-292)
+
+**Context.** The owner asked for a page, served by the worker on a local port, showing what the worker is
+doing (state, the task, the stage, logs) and letting the developer pause, stop and cancel. Read at
+`75d132d2`. What exists: `POST pause {until, reason}` with `reason ∈ {usage_limited}` only
+(`packages/contracts/src/worker.ts:512-513, 547-550`), backed by `workers.paused_reason` under a CHECK of
+that one value (`0096_workers.sql:58`); WP-283 (3) gives the worker `POST /internal/drain` and `GET
+/internal/state` on its compose network only; a run cancel is a core command on the `Run` aggregate,
+`run.cancel` at `member` (`packages/domain/src/permissions.ts:181`, route `apps/server/src/routes/commands.ts:1051-1057`),
+whose lease-held branch records a `run_commands` row the heartbeat delivers (§14); `release` is refused
+after `run.started` (§6); the package names `taskId`/`projectId`/`stage` but no key or title
+(`run-spec.ts:469-476`); the protocol is `1`, accepted `[1]` (`worker.ts:70, 76`).
+
+**Decision.**
+
+1. **Serving.** The `remote-worker` process opens a **second listener**, separate from `/internal/*`, on
+   container port 7357; `compose.worker.yml` publishes it as `127.0.0.1:${APP_WORKER_UI_PORT:-7357}:7357`
+   — never a bare port, which Docker publishes on every host address (research/17 § 10). The listener
+   binds the container's interface, because a container-loopback listener is unreachable through a
+   publish. `APP_WORKER_UI=enabled|disabled` (default `enabled`); `disabled` opens nothing. No run
+   container can reach it: run containers join only their per-run networks (TD-025), asserted by the
+   Docker check.
+2. **Auth.** A 32-byte token, generated on first start, kept in `worker-state` (`ui-token`, mode 0600),
+   rotated by deleting the file. Each start logs once `http://127.0.0.1:<port>/#token=…` — in the
+   **fragment**, so it reaches no request line; the page moves it to `sessionStorage` and strips it. Every
+   `/api/local/*` call carries `Authorization: Bearer` (compared in constant time): **no cookie**, so a
+   cross-site request carries no credential and CSRF has nothing to ride; no CORS header is ever sent.
+   The `Host` header must be exactly `localhost`, `127.0.0.1` or `[::1]` with the published port
+   (DNS rebinding, `[unverified]` V-WM9), and a mutating call must also carry a matching `Origin`.
+   Responses: `Cache-Control: no-store`, a `default-src 'self'; frame-ancestors 'none'` CSP, `nosniff`.
+   The token is added to the worker's local redactor and never enters a request to the core.
+3. **What it shows**, read from the worker's own memory (no new core read): connection (handshake time,
+   protocol, core range, `426`/revoked/`lease_lost`), pause state and reason, update pending, slots; per
+   run: project and ticket key, task title, stage, role, attempt, run state, elapsed, tokens so far and
+   the cost **only when reported** (BD-011: the worker has no price list, so no estimate is invented); a
+   transcript tail and the worker's log tail (bounded ring buffers). **What it displays is exactly what
+   the worker uploads**: the transcript entries after the local sink's redaction (§10a — the run
+   credential, the Claude token, the shipped patterns) and log lines after pino's redaction plus the same
+   exact-value redactor; never the raw SDK stream. **The page is a second Vite entry of `apps/web`**
+   (`worker.html`), served by the worker from the bundle the platform image already carries
+   (`docker/app.Dockerfile:22-26`), reusing `ui/untrusted.tsx` and the transcript renderers, so BD-022's
+   text-node rule and `no-html.test.ts` cover it unchanged; its own initial-graph budget (≤ 120 kB gz) is
+   a `bundle:check` entry beside TD-013's 300 kB. The display fields (project key, ticket key, title)
+   come in a new package block built from the core's redacted ticket snapshot.
+4. **Controls — the core decides each one that changes shared state.**
+   - **Pause / resume claiming**: a new protocol verb `POST manual-pause {paused: boolean}` (a state
+     assertion, idempotent), stored in a **new nullable column `workers.manually_paused_at`** (additive)
+     — not a new `paused_reason`, which would need the CHECK dropped (a `contract` migration, TD-032 §1)
+     and would conflate a person's hold with a limit's timer. The claim's eligibility and the *online
+     assignee* rule (§8) exclude it; the Workers screen shows *paused by its owner*. One `human_actions`
+     row (`worker.pause` / `worker.resume`, `params: {worker_id, via: 'worker_ui'}`, the worker's user).
+     Runs in flight continue.
+   - **Drain and stop**: manual-pause, finish what is running, exit; the worker remembers in
+     `worker-state` that the pause was a drain's and clears it at its next start. WP-283's
+     `/internal/drain` is the same function.
+   - **Cancel a run**: a new run-token verb `POST runs/:id/cancel {reason?}` with an `Idempotency-Key`.
+     The core performs **the same application command** as `POST /api/runs/:run_id/cancel`, as the
+     worker's user, under the same `run.cancel` permission (a `403` is shown, not worked around), with the
+     same `human_actions` row plus `via: 'worker_ui'`. The worker holds the lease, so it is the `202`
+     branch: a `run_commands` row the worker's own heartbeat delivers and acks (§14). As from the task
+     page, the **task is paused**; the page says so. The UI never stops a container: a killed worker is a
+     lost lease (§12), not a cancel.
+   - **Not offered:** releasing a run (the claim-to-spawn window is seconds, and §6 refuses it after);
+     handing a *started* run back to the pool (no such semantics exist — Q126); steer and take-over
+     (the core's run page, linked).
+5. **Protocol.** `WORKER_PROTOCOL_VERSION` → **2**, accepted `[1, 2]` (`protocol:check`: `N = B+1`, `B`
+   kept, no bump in the push before). A version-1 worker never calls the two verbs, and the core answers
+   it the version-1 shapes: the handshake's `worker.manually_paused_at` and the package's display block
+   are sent **only** when `X-Worker-Protocol ≥ 2`, because every schema is strict and a v1 worker would
+   refuse an unknown key. A v2 worker against a core accepting only `[1]` gets `426` (§9) and the page
+   says the core must update first.
+
+**Alternatives rejected.** A self-contained page outside `apps/web` (a second set of untrusted-text rules
+outside the census); a cookie session (CSRF to defend); controls acting locally only (no audit, the core
+would offer work to a worker that will not take it, and a local kill reads as a lost worker); reading the
+core's re-redacted transcript back (a new read verb and bandwidth for a view of the same machine).
+
+**Residuals.** The local view may show a value the core's re-redaction would mask if it reached the run
+from outside the package (the repository, the web) — it is on the developer's machine already. The UI is
+not a confidentiality boundary against the machine's owner, who controls the Docker daemon and can read
+the run credential from the container (§5's tampered-worker residual). Before Docker Engine 28.0.0 a
+host on the same L2 segment can reach a loopback publish; the token holds there.
