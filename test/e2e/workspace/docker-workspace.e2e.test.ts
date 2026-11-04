@@ -2736,8 +2736,9 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
     return {
       provider: {
         updateMirror: (input) => fixture.provider.updateMirror(input),
-        create: async (input) => {
-          const handle = await fixture.provider.create(...shipped(input));
+        // The suite's own provision, passed through: it is what the WP-279 refusals are about.
+        create: async (input, provision) => {
+          const handle = await fixture.provider.create(input, provision);
           created = handle.runId;
           // Q51, admitted: this process is not uid 1000, and `attach` reads a 0600 file owned by
           // it. The real mode is measured in its own case above, before anything relaxes it.

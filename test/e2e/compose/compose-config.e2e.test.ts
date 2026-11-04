@@ -453,8 +453,13 @@ const RESIDUAL: readonly { group: string; reason: string; matches: (name: string
     // `APP_LAUNCHER_PORT` joined this group at WP-53: it is the port the *launcher* listens on and
     // the `runner` service interpolates it into its own `APP_LAUNCHER_URL`; no server source reads
     // it. `APP_LAUNCHER_URL`/`APP_LAUNCHER_TOKEN` are **not** here — the server does read those.
+    // `APP_LAUNCHER_DEPLOY_KEY_CARRIAGE` joined at WP-279: the launcher's carriage, set `relayed`
+    // only by a worker's compose file; the server never reads it.
     matches: (name) =>
-      name === 'DOCKER_HOST' || name === 'APP_LAUNCHER_PORT' || name.startsWith('APP_WORKSPACE_'),
+      name === 'DOCKER_HOST' ||
+      name === 'APP_LAUNCHER_PORT' ||
+      name === 'APP_LAUNCHER_DEPLOY_KEY_CARRIAGE' ||
+      name.startsWith('APP_WORKSPACE_'),
   },
   {
     group: 'the run shim’s',
