@@ -233,3 +233,124 @@ unreliable, and no maintained compose-aware updater with rollback exists to adop
   the updater row pins the same version as the launcher's proxy and files the bump as backlog.
 - To verify (TODO V-WM2, V-WM5): Compose through the proxy with the six flags; Swarm `replicated-job` for
   the reference stack's `migrate`.
+
+## Amendment (2026-11-04, architect, session 21) — decision 1's list ruled: what "a table this file creates" admits, a `not valid` constraint narrowed, triggers on a new table (PROGRESS backlog 690, 691)
+
+Read at `369b38f0` with WP-273 uncommitted in the tree; nothing was run. The scanner read is
+`packages/infrastructure/src/db/migration-scanner.ts` as WP-271 landed it after three review rounds.
+
+### A. The same-file rule is decision 1's, and its precondition is the scanner's forgery refusals (691)
+
+WP-271's scanner admits three things decision 1 did not list, each only on a table the **same file**
+creates: `create unique index`, a validated `add constraint` (check, `primary key`, `unique`,
+`exclude`, foreign key), and `insert into platform_table_policy` registering that table. **All three
+are admitted, and are now part of decision 1**, because their reach is the new table's own rows and the
+previous build writes none (it was compiled without the table) — with one exception, ruled in B.
+
+**The precondition is that "this file creates it" cannot be forged.** The rule holds only together with
+the refusals WP-271's review rounds added, which are hereby part of the decision rather than of a
+docblock: a table counts as this file's only from a plain `create [unlogged] table <name>` — never
+`if not exists` (it may create nothing), never `temp`/`temporary` (it shadows a permanent table for the
+session), never a `partition of` or `inherits` child (the previous build's inserts into the parent route
+into it), never `create table … as` (it runs a query); a call to any routine this file or an earlier
+migration declares is refused wherever a call is evaluated at migration time, and a routine named like a
+member of `PURE_CALLS` is refused (overload resolution is PostgreSQL's). Weakening any of these
+re-opens decision 1 and needs an amendment here.
+
+**The registry insert, measured off the tree** (backlog 691 asked what an older build does with a
+`platform_table_policy` row naming a table it was not compiled with). The rows are read by **three SQL
+functions of migration 0001**, whose bodies are the database's, not the image's, so the older and the
+newer build run the *same* code over the row:
+
+| reader | what it does with a row for a table the running build does not know |
+|---|---|
+| `platform_ensure_partitions` (0001; called by `partitions.ts` from the daily `db.partitions.maintain` job and by `migrator.ts` after migrating) | creates that table's monthly partitions when `partition_column` is set — the table exists because the same file created it, so the older build's cron keeps the newer table insertable, exactly as the newer build would |
+| `platform_drop_expired_partitions` (0001; `partitions.ts`) | drops expired partitions of rows whose `retention_scope` equals the one scope the code passes (`transcripts`); a new table registered under it is purged by either build alike; a **new** scope is read by no older code, so its retention is not applied (data kept — the fail-safe direction) |
+| `platform_apply_grants` (0001; `migrator.ts`, at migrate only) | applies the row's `app_access`; an older build's `migrate` (an `external` re-pin) re-applies the same grants. **Without** the row the table reads as `read_write`, so the registry row is what keeps a new `append_only` table append-only under any build — a reason to admit the insert, not to refuse it |
+
+The TypeScript side: `migrator.ts` also runs `update platform_table_policy set retention_days … where
+retention_scope = 'transcripts'` (applies to a new row of that scope as the newer build would);
+`maintenance.ts` only schedules `partitions.ts`; `task-audit.ts` and `onboarding-queries.ts` **name the
+table in docblocks and query nothing** (grep, no query site); the Drizzle `platformTablePolicy` has no
+query site outside its schema file. **No reader enumerates registry rows against a compiled table
+list**, so an unknown row is tolerated by every reader. The insert stays admitted only as WP-271 built
+it: an explicit column list including `table_name`, `values` rows of literals only (no `on conflict`, no
+`select`, no expression), every `table_name` a table this file creates.
+
+### B. A foreign key's reach is the parent too: a reference to an existing table names its `on delete`
+
+A foreign key on a new table constrains the **referenced** table: with the default `no action` (or
+`restrict`), a row the newer build wrote in the new table makes the previous build's `delete` of the
+parent row fail — after a code rollback, indefinitely. Production code deletes from `bindings`,
+`budgets`, `command_idempotency`, `secrets`, the `kb_*` index tables, `event_dispatch`,
+`task_duty_leases` and `held_connection_liveness` (grep of `apps/` and `packages/`, test files excluded),
+and that set grows without anyone re-reading old migrations. So, in an `additive` file, **every reference
+to a table the file did not create** — inline in `create table`, inline in `add column`, or an `add
+constraint … foreign key` — must state `on delete cascade` or `on delete set null` (or `set default`);
+`no action`/`restrict`/absent is refused with the reason, and `match full` is refused. A reference to a
+table the same file creates needs nothing (the previous build never deletes from it). `on update` is not
+checked: no platform code updates a primary key (stated, not enforced). This amends decision 1's
+"`create table` always": it is now *always, subject to B*.
+
+### C. `add constraint … not valid` on an existing table is additive only over columns the same file adds (the reviewer's minor)
+
+Decision 1's parenthetical — *"old code writes no row the constraint refuses, or the validation fails
+the migration"* — is wrong in its first half: PostgreSQL exempts only the **existing** rows from a `not
+valid` constraint and enforces it on every later insert and update. Migration 0038 is the house's own
+proof: its `not valid` check exists precisely so that *"a writer that omits the column from here is
+refused by the database"* (`0038_artifact_redaction.sql:32-34`) — under decision 1 as written it would
+have read `additive`, and the previous build's artifact inserts would have failed from the migration
+until the recreate and, after a rollback, for good. Ruling:
+
+- **Admitted** (`additive`): `add constraint … check|foreign key … not valid` on an existing table **only
+  when every column it names was added earlier in the same file** as nullable with **no default** — so
+  every row the previous build writes carries null there — and, for a check, when its expression is
+  **null-propagating by construction**: each atom compares exactly one such column with literals (`=`,
+  `<>`, `<`, `<=`, `>`, `>=`, `in`, `not in`, `between`, `like`), atoms joined by `and`, `or` and
+  parentheses; `is`, a prefix `not`, `coalesce`, `nullif`, `case`, `distinct`, `any`/`all`, a literal on
+  both sides of an atom, and every call are refused. Then a null column makes every atom null and the
+  check passes, whatever the newer build writes. This is 0092's own shape (`check (class in
+  ('additive', 'contract')) not valid` over the column it adds), which stays admitted. Its
+  `validate constraint` stays admitted.
+- **Refused** (`contract`): any other `not valid` constraint on an existing table — one naming a column
+  that existed before the file, or a check the reader cannot show to be null-propagating. Shipped as
+  expand → contract with **check-migrations rule 4 unchanged**: the push whose code stops writing the rows
+  the constraint will refuse carries a one-statement `additive` marker migration (`comment on column … is
+  '<the rule the code now holds>'`), and the later `contract` file adding the constraint names it in
+  `expands:`. The marker costs one file and gives the rule a release to name.
+
+**Consequence for M22's plan.** WP-280's planned `runs.worker_id` foreign key `not valid` + `validate`
+is over a column WP-274's 0094 would have added — refused under C. So `runs.worker_id` and
+`run_offers.worker_id` move from WP-274's migration to WP-280's, added there as nullable columns with an
+inline `references workers` (a table that file creates, so B asks nothing): admitted, and every row a
+WP-274–WP-279 build writes is null there, which it is anyway (only a remote claim sets it, WP-281).
+
+### D. `create type`, `create sequence`, `create trigger` (690)
+
+- **`create trigger` (and `create constraint trigger`, `create or replace trigger`) — admitted on a table
+  the same file creates**, under A's precondition. A trigger fires only on writes to its table; the
+  previous build never writes the new table, and the only insert an `additive` file may make is A's
+  registry row, which is never into the new table. The trigger's function may be new or earlier; its
+  `execute function f()` is not a migration-time evaluation, so the call refusal does not apply to it.
+  This admits the useful cases (an append-only guard, a `pg_notify` such as TD-031 §8's `run_offers`
+  wake-up) without a `contract`. A trigger on an **existing** table is refused (it changes what the
+  previous build's own writes do), and `create event trigger` is refused (it fires on DDL anywhere).
+- **`create type` (enum, composite, range) and `create domain` — stay refused.** The house style since
+  0002 is a `text` column with a `check` inside `create table` (0081:13, 0092:23), which A admits and
+  which is as strong at the write. A new enum *type* would make every later value an `alter type … add
+  value` with its contracts-one-release-earlier dance, and a removed value a `contract` that recreates the
+  type; text + check evolves by `add constraint … not valid` (C) instead. The trade, stated: a migration
+  that genuinely needs a type pays `contract` once; no planned M22 migration does (backlog 690's census).
+- **`create sequence` — stays refused.** A sequence's only use is `nextval()` in a default; on an
+  existing table that is a non-pure call the scanner already refuses, and on a new table `generated …
+  as identity` (or `serial`) inside `create table` is the idiom and is admitted. No migration in the
+  history creates one. Admitting it would add a scanner row with no caller.
+
+### E. Who builds it, and how it is checked
+
+The scanner is matched to A–D by **WP-274's criterion (0)**, before its own migration (the first
+table-creating migration of M22, and the first with references to existing tables): one test row per
+ruling — admitted and refused — each with a canary that is killed (B's `no action` reference admitted;
+C's existing-column `not valid` admitted; C's `is not null` check admitted; D's trigger on an existing
+table admitted). The scanner's docblock table is replaced by a pointer to this amendment plus the table
+as amended. Applied files are not re-scanned (they are never edited, TD-011).

@@ -431,3 +431,92 @@ of a socket follow from the owner's deployment (a CDN, no access gateway, any AP
   that ignores self-termination with a static token keeps pushing until the token expires (decision 2); the Claude token's redaction
   depends on the worker's own redactor; a take-over of a remote run exports no tarball; an offer on a
   `workers_only` project with no worker waits up to `offer_timeout`.
+
+## Amendment (2026-11-04, architect, session 21) — decision 5: on a worker the launcher's git helpers sign through the core too, and the deploy key still never leaves it (PROGRESS backlog 693)
+
+Read at `369b38f0` with WP-273 uncommitted in the tree; nothing was run.
+
+**The contradiction.** Decision 5 keeps the deploy key on the core and covers the run container's git
+(the runlet's `ssh.sign` frames). It never covered the launcher's two git helpers, which TD-028 decision
+13b item 5 hands the key itself: `updateMirror` and the export build the helper's environment from
+`credential.password` as `GIT_SSH_KEY` (`packages/infrastructure/src/workspace/provider.ts`,
+`#gitCredentialEnv` and `SSH_HELPER_SETUP`), and the run's checkout is cloned from that mirror. A
+worker's launcher has no key, and `runCredentialIssues(…, 'carried')` refuses an SSH spec without one
+(`packages/contracts/src/run-spec.ts`). So as designed no deploy-key run could be created on a worker,
+and none could save work or export a take-over.
+
+### Ruling: option (c), with a third carriage
+
+Of backlog 693's options: (a) HTTPS-minted-only is (e) for gitlab.com Free; (b) a core git proxy is a new
+transport for one credential variant; (d) contradicts this decision and BD-032's residual; (e) was
+rejected by this record's alternatives. **(c) is chosen: on a worker, the helpers sign through the core
+exactly as the run container does.** Its reach is the one the Q124 opt-in already states — a signing
+oracle for the run's lifetime, never the key — so nothing widens.
+
+1. **`DeployKeyCarriage` gains `relayed`** (`'carried' | 'signed_by_core' | 'relayed'`). `carried` stays
+   the server's launcher (key in the create request, helpers as TD-028 13b item 5, unchanged).
+   `signed_by_core` stays the **run package** rule (no key, the SSH route and public key only).
+   `relayed` is the **worker's launcher** rule: an SSH spec carries **no** private key and **must** carry
+   the route plus a `helperAgentSocket` path; a request carrying a deploy key is refused. The worker's
+   launcher protocol applies `relayed`, never `carried`.
+2. **Who holds the socket.** The `remote-worker` process (the only holder of the run token, decision 7)
+   serves, per run with an SSH route, an ssh-agent socket on the worker's `ctl` volume beside the run's
+   control directory, speaking the same two requests as `/ctl/ssh-agent.sock` (list identities → the
+   public key from the package; sign → `POST runs/:id/ssh-sign` under the run token and epoch). It is the
+   runlet's relay code path, not a second agent implementation. The launcher mounts that socket's
+   directory into the mirror and export helpers and sets the helper's `GIT_SSH_COMMAND` with
+   `IdentityAgent=<socket>` instead of a key file; `SSH_HELPER_SETUP` writes only `known_hosts`. Whether
+   a helper container connects to a Unix socket on a mounted named-volume directory through the
+   socket-proxied daemon is `[unverified]` (TODO V-WM8); WP-279 measures it in `deploy-key-check.mjs`'s
+   new `relayed` phase and WP-284 again on a worker bundle.
+3. **The three questions backlog 693 posed, answered.**
+   - *Is the run token valid before `run.started`?* Yes: it is minted at the claim (decision 7) and the
+     claim appends `run.started` (decision 1), both before the package is returned; the mirror runs
+     during `create`, after both. `ssh-sign` admits a run that is non-terminal at the presented epoch.
+   - *Does the cap cover the helpers?* Yes, one cap per run: `MAX_DEPLOY_KEY_SIGNATURES` (128) counts
+     every signature the core makes for the run — runlet and helpers alike. A mirror fetch is one SSH
+     connection, an export push one. On the core the count is **a database counter, `run_offers.ssh_signatures` (created with the
+     table by WP-274), incremented in the same statement as the epoch check** (any `ROLE=api` replica may answer, so a per-process counter would
+     be a cap per replica).
+   - *The helper's direct route?* Accepted. A helper is platform content only (no agent code reaches it,
+     WP-75) and connects to `altssh.gitlab.com:443` from the worker's helper network, as on the server; on
+     a developer's machine that is the developer's network, which the worker already uses to reach the core
+     and `api.anthropic.com`. The run container's own SSH still goes through its egress sidecar.
+4. **Ordering at the end of a run.** `ssh-sign` refuses a terminal run, so the worker performs every
+   export — saved unfinished work (BD-025), a take-over's branch push (decision 14) — **before** its
+   `finish`, and WP-283 asserts that order (a sign after the terminal write is refused, contract-tested in
+   WP-282); a `lease_lost` or a self-termination exports nothing
+   (decision 2). Backlog 694's "saved" answer, if WP-285 chooses it, needs nothing more for a deploy-key
+   project.
+5. **TD-028 decision 13b item 5 is amended for the worker case only**: on a worker the helpers hold no
+   key and sign through the run's relayed agent socket; on the server item 5 is unchanged. The platform's
+   vault mirror (TD-026) is unchanged.
+
+### Q124 and the first deployment, end to end
+
+Both of the first deployment's credential shapes now have a path, and both sit behind the same
+`remote_run_credential: allow` (Q124 (a), default `deny`):
+
+- **Static HTTPS token** — the Autix shape: gitlab.com Free, `run_credential: static`, `run_token_owner:
+  operator` (TD-028 decision 13a). With the opt-in, the claim's eligibility admits the project (decision
+  8), the package carries the static credential (`signed_by_core` admits a non-SSH, non-deploy-key
+  credential), the worker's launcher applies `relayed` — which for an HTTPS spec is the `carried` rule —
+  so the mirror and export helpers authenticate with `GIT_USER`/`GIT_PASS` as on the server, and the run
+  container's git uses `/ctl/cred.sock` (WP-118). No new mechanism; the residual is Q124's (one project,
+  up to 90 days, the operator's own token on the developer's machine for the run's life, no per-run
+  revocation). With `deny` the project is excluded from every remote claim and, on a `workers_only` core,
+  its offers wait and the execution settings screen says why.
+- **Deploy key** — the ruling above.
+
+### Consequences
+
+- WP-274's migration creates `run_offers.ssh_signatures`; decision 1's `worker_id` columns (on `run_offers`
+  and `runs`) land with WP-280's migration instead of WP-274's (TD-032's 2026-11-04 amendment C), and
+  WP-274's claim writes no `worker_id` until WP-281's remote claim does.
+- WP-279 builds the `relayed` carriage in the launcher protocol and the helpers' agent-socket
+  environment; WP-282's `ssh-sign` gains the database counter, the non-terminal rule and its second
+  caller; WP-283 serves the helper socket, exports before `finish` and proves both credential shapes in
+  the fake-worker e2e; WP-284's Docker check runs both against a real launcher. Backlog 693 is owned by
+  **WP-283** and resolves when its e2e creates a deploy-key run on a worker. No M22 row moves.
+- Residual, stated: a tampered worker can call `ssh-sign` for its run up to the cap whether or not a
+  helper asked — the same reach the runlet relay already has, now counted in one place.
