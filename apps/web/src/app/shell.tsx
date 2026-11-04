@@ -13,6 +13,7 @@ import { type ReactElement, useSyncExternalStore } from 'react';
 import { displayName } from '../auth/session.js';
 import { useRealtime } from '../realtime/provider.js';
 import { Badge, type BadgeTone, Button, cx } from '../ui/kit.js';
+import { Logo } from '../ui/logo.js';
 import { type ThemePreference, useTheme } from '../ui/theme.js';
 import { useSession } from './queries.js';
 import { useServices } from './services.js';
@@ -120,8 +121,8 @@ export const AppShell = (): ReactElement => {
   return (
     <div className="flex min-h-full flex-col">
       <header className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-2">
-        <Link to="/" className="text-sm font-semibold">
-          Agentic
+        <Link to="/" className="rounded-sm py-1">
+          <Logo label="Agentic" className="w-20" />
         </Link>
         <nav aria-label="Primary" className="flex flex-wrap gap-1">
           {NAV.map((item) => (

@@ -35,6 +35,7 @@ import { queryKeys } from '../api/keys.js';
 import { useServices } from '../app/services.js';
 import { safeRedirectPath } from '../routes/redirect.js';
 import { ErrorNotice } from '../ui/kit.js';
+import { Logo } from '../ui/logo.js';
 import { DitherCanvas } from './dither-canvas.js';
 import { PeekBot } from './peek-bot.js';
 
@@ -135,7 +136,7 @@ export const SignInScreen = (): ReactElement => {
     >
       <DitherCanvas />
       <div className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col px-5 py-6 sm:px-10 lg:px-16">
-        <p className="text-sm font-semibold tracking-tight text-signin-text">Agentic platform</p>
+        <Logo label="Agentic platform" className="w-28 text-signin-text" />
         <div className="grid flex-1 content-center gap-10 py-12 lg:grid-cols-12 lg:items-center lg:gap-12 lg:py-16">
           <div className="lg:col-span-7" data-dither-quiet="">
             <h1 className="max-w-[12ch] text-[clamp(2.5rem,7.2vw,5rem)] leading-[1.0] font-black tracking-[-0.03em] text-balance text-signin-text">

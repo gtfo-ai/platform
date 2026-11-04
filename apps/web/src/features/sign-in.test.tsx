@@ -125,7 +125,7 @@ describe('the form', () => {
     const password = screen.getByLabelText('Password') as HTMLInputElement;
     expect(email.autocomplete).toBe('username');
     expect(password.autocomplete).toBe('current-password');
-    expect(screen.getByText('Agentic platform')).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Agentic platform' })).toBeTruthy();
     expect(
       screen.getByText('Sign in to see what your agents are working on — and what needs you.'),
     ).toBeTruthy();
