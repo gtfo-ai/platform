@@ -767,9 +767,22 @@ describe("TD-019's hygiene list", () => {
  */
 describe('the required checks named in CONTRIBUTING.md', () => {
   it('are exactly the jobs ci.yml runs', () => {
-    const jobs = [...read(CI_WORKFLOW).matchAll(/^ {4}name: (.+)$/gm)].map((match) =>
+    const names = [...read(CI_WORKFLOW).matchAll(/^ {4}name: (.+)$/gm)].map((match) =>
       (match[1] ?? '').trim(),
     );
+    // A **part** of a tier CI splits over several runners (`unit + contract (part ${{ matrix.part
+    // }}/3)`) is not a check of its own: GitHub reports one per matrix leg, under a name that
+    // changes with the part count, and the tier's check is the merge job, which needs every part
+    // and fails unless each succeeded (`verify.test.ts` holds that shape). So a part's name must
+    // be built from a required check's name, and must be nothing else.
+    const parts = names.filter((name) => name.includes('${{'));
+    const jobs = names.filter((name) => !name.includes('${{'));
+    expect(parts.length, 'the split tiers were not found').toBeGreaterThan(0);
+    for (const part of parts) {
+      expect(jobs, `${part} is not a part of a required check`).toContain(
+        part.replace(/ \(part \$\{\{ matrix\.part \}\}\/\d+\)$/, ''),
+      );
+    }
     expect(jobs.length).toBeGreaterThan(5);
 
     // Only that section: the rest of the file has bullet lists of its own, and one of them is a
@@ -1164,10 +1177,10 @@ describe('every workflow job is bounded (WP-126)', () => {
     expect(workflows).toEqual(
       expect.arrayContaining([CI_WORKFLOW, IMAGE_WORKFLOW, '.github/workflows/base-image.yml']),
     );
-    // Not vacuous: jobs are read out of every workflow — ci.yml's eleven, the count CONTRIBUTING.md's
-    // required checks are held to above.
+    // Not vacuous: jobs are read out of every workflow — ci.yml's thirteen: the eleven
+    // CONTRIBUTING.md's required checks are held to above, and the parts of the two split tiers.
     for (const path of workflows) expect(workflowJobs(read(path)).length, path).toBeGreaterThan(0);
-    expect(workflowJobs(read(CI_WORKFLOW))).toHaveLength(11);
+    expect(workflowJobs(read(CI_WORKFLOW))).toHaveLength(13);
     const findings = workflows.flatMap((path) =>
       unboundedJobs(read(path)).map((finding) => `${path} ${finding}`),
     );

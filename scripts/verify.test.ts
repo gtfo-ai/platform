@@ -346,3 +346,74 @@ describe('the process project’s membership', () => {
     ).toBe(false);
   });
 });
+
+/**
+ * **A tier CI splits over several runners is still the whole tier, and still fails as one**
+ * (`scripts/verify.mjs`'s `--shard` and `--merge-reports`).
+ *
+ * The CI-equality cases above see the target's name in a `pnpm run -s` line and nothing else, so a
+ * split could lose a part, a part's report, or the merge, and stay equal to them. What is held here,
+ * for every job that runs a target with `--shard`: the matrix is exactly the parts `1…n` and agrees
+ * with `PARTS` and the job's name; every part uploads its report even when it fails; and exactly
+ * one job needs the parts, runs **even when one fails** (a skipped required check reads as a pass),
+ * runs the same target with `--merge-reports` over the directory the reports land in, and ends by
+ * failing unless every part succeeded.
+ */
+const ciJobs = (workflow: string): { key: string; body: string }[] => {
+  const jobs = workflow.slice(workflow.indexOf('\njobs:\n') + 1);
+  const keys = [...jobs.matchAll(/\n {2}([a-z][\w-]*):\n/g)];
+  return keys.map((key, index) => ({
+    key: key[1] ?? '',
+    body: jobs.slice(key.index, keys[index + 1]?.index ?? jobs.length),
+  }));
+};
+
+describe('the tiers CI splits over several runners', () => {
+  const workflow = read('.github/workflows/ci.yml');
+  const jobs = ciJobs(workflow);
+  const parts = jobs.filter(({ body }) => /pnpm run -s [\w:-]+ --shard /.test(body));
+
+  it('are the two longest tiers, and nothing else is split', () => {
+    // Not vacuous (standing rule 4), and a third split is a decision rather than a drift.
+    expect(
+      parts.map(({ body }) => /pnpm run -s ([\w:-]+) --shard /.exec(body)?.[1]).sort(),
+    ).toEqual(['verify:e2e', 'verify:tests']);
+  });
+
+  it.each(parts.map((part) => [part.key, part] as const))(
+    '%s runs parts 1…n and merges all of them',
+    (_, part) => {
+      const target = /pnpm run -s ([\w:-]+) --shard "\$PART\/\$PARTS"/.exec(part.body)?.[1];
+      expect(target, 'the part runs its target as `--shard "$PART/$PARTS"`').toBeDefined();
+      const count = Number(/^ {6}PARTS: (\d+)$/m.exec(part.body)?.[1]);
+      expect(count).toBeGreaterThan(1);
+      const matrix = /^ {8}part: \[([\d, ]+)\]$/m.exec(part.body)?.[1]?.split(',').map(Number);
+      expect(matrix, 'the matrix is exactly the parts 1…PARTS').toEqual(
+        Array.from({ length: count }, (_, at) => at + 1),
+      );
+      expect(part.body).toMatch(/^ {6}PART: \$\{\{ matrix\.part \}\}$/m);
+      expect(part.body).toContain(`(part \${{ matrix.part }}/${count})`);
+      expect(part.body, 'a failed part stops the others').toMatch(/^ {6}fail-fast: false$/m);
+      // Its report is uploaded whatever happened, under a name only its own merge downloads.
+      const upload =
+        /- name: upload this part's report\n {8}if: always\(\)\n[\s\S]*?name: ([\w-]+)-\$\{\{ matrix\.part \}\}\n {10}path: \.vitest-reports\/\n/.exec(
+          part.body,
+        );
+      expect(upload, 'the part uploads .vitest-reports/ under if: always()').not.toBeNull();
+
+      const merges = jobs.filter(({ body }) =>
+        new RegExp(`^ {4}needs: ${part.key}$`, 'm').test(body),
+      );
+      expect(merges.map(({ key }) => key)).toHaveLength(1);
+      const merge = merges[0]?.body ?? '';
+      expect(merge).toMatch(/^ {4}if: \$\{\{ !cancelled\(\) \}\}$/m);
+      expect(merge).toContain(`pattern: ${upload?.[1]}-*\n          path: .vitest-reports\n`);
+      expect(merge).toContain(`pnpm run -s ${target} --merge-reports .vitest-reports`);
+      expect(merge).toContain(`PARTS_RESULT: \${{ needs.${part.key}.result }}`);
+      expect(merge).toMatch(/- name: every part succeeded\n {8}if: always\(\)\n/);
+      // The merge job is the tier's check: it carries the name the part's is built from.
+      const name = /^ {4}name: (.+)$/m.exec(merge)?.[1] ?? '(none)';
+      expect(part.body).toContain(`name: ${name} (part `);
+    },
+  );
+});

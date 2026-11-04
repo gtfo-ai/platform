@@ -87,6 +87,11 @@ job missing from the list gates nothing:
 - `commitlint`
 - `dco`
 
+`unit + contract` and `e2e-fake-claude` each run on several runners: a job per part, named
+`… (part <i>/<n>)`, and the job above, which merges the parts' reports, judges the whole tier and
+fails unless every part succeeded. The parts are **not** required checks — their names change with
+the part count, and the merge already fails when one of them does.
+
 [`image.yml`](.github/workflows/image.yml) builds and size-checks every image on a pull request and
 is deliberately **not** required: it builds five images on two architectures, its failure is
 visible on the PR, and requiring it would put that on the critical path of every documentation

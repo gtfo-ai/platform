@@ -354,6 +354,21 @@ export const COVERAGE_RINGS: Readonly<
  * The tiers map onto the verification contract in
  * docs/technical/14-orchestration-protocol.md via `scripts/verify.mjs`.
  */
+/**
+ * Whether this vitest is **one part** of a split run (`--shard`, `scripts/verify.mjs`).
+ *
+ * A part measures the coverage of the test files it was given, so every ring would read low against
+ * a bar set for the whole tier and every part would fail. Its thresholds are therefore not checked
+ * — and they are **not lost**: the part's coverage rides in its blob, and the merge
+ * (`--merge-reports`, which no `--shard` accompanies) merges every part's coverage and checks these
+ * same thresholds on the whole, before `coverage:ratchet` reads the summary it writes. A
+ * `--shard` with no merge after it has checked no threshold, which is why CI's `unit + contract`
+ * job is the merge and not a part. Read from `argv` because the config is evaluated in the process
+ * vitest was started as, and the option is not otherwise visible to it.
+ */
+export const isShardRun = (argv: readonly string[]): boolean =>
+  argv.some((arg) => arg === '--shard' || arg.startsWith('--shard='));
+
 export default defineConfig({
   test: {
     projects: [
@@ -469,10 +484,15 @@ export default defineConfig({
         '**/*.d.ts',
         ...COVERAGE_EXCLUDED_FILES.map((exclusion) => exclusion.path),
       ],
-      // Per ring, and **no global threshold** ({@link COVERAGE_RINGS} says why).
-      thresholds: Object.fromEntries(
-        Object.values(COVERAGE_RINGS).map((ring) => [ring.glob, ring.thresholds]),
-      ),
+      // Per ring, and **no global threshold** ({@link COVERAGE_RINGS} says why) — and none on one
+      // part of a split run ({@link isShardRun}), which the merge of every part then checks.
+      ...(isShardRun(process.argv)
+        ? {}
+        : {
+            thresholds: Object.fromEntries(
+              Object.values(COVERAGE_RINGS).map((ring) => [ring.glob, ring.thresholds]),
+            ),
+          }),
     },
   },
 });

@@ -9,8 +9,14 @@ on:
 permissions:
   contents: read
 
+# **A push is never queued behind another push.** A pull request's newer run cancels its older one,
+# which nobody is waiting for. A push to `main` used to share one group per branch without
+# cancelling, so each push **waited** for the one before it to finish — 2 to 11 minutes of the
+# 12–24 a run took on `main` were that queue (6 of 16 runs measured on 2026-11-04) — and GitHub keeps
+# only the newest pending run of a group, so the middle push of three in a row was cancelled
+# unverified. A push's group is its commit now: every push runs, at once, and to the end.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'newest' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -127,10 +133,30 @@ jobs:
       # so it cannot be added there and forgotten here.
       - run: pnpm run -s verify:bundle
 
-  unit:
-    name: unit + contract
+  # **The two longest tiers run on several runners, and each still reports one check under its own
+  # name.** A runner has four vCPUs and vitest runs three workers, so `unit + contract` (CPU-bound:
+  # 616 s of tests in a 456 s run) and `e2e-fake-claude` (1988 s of tests in a 747 s run) were each
+  # bounded by one machine. Each is now split into parts by `scripts/verify.mjs --shard <i>/<n>`
+  # — vitest gives every test file to exactly one part — and the job that keeps the tier's name is
+  # the **merge**: `--merge-reports` refuses unless every part's blob is there, replays every part's
+  # results (one failed test fails it), and, for `unit + contract`, merges the coverage, checks the
+  # thresholds on the whole and runs the ratchet. The part count is the matrix's length and the
+  # `PARTS` beside it, which `scripts/verify.test.ts` holds equal; changing it is changing both.
+  #
+  # The merge runs when a part fails (`!cancelled()`), because a required check that is *skipped*
+  # reads as passed; and its last step fails unless every part succeeded, so a part that failed
+  # before writing a blob cannot leave the merge to judge an empty directory.
+  unit-part:
+    name: unit + contract (part ${{ matrix.part }}/3)
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # WP-126: 3.6 min median, 4.0 max
+    timeout-minutes: 15 # WP-126's unit bound, kept until the parts have a median of their own
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3]
+    env:
+      PARTS: 3
+      PART: ${{ matrix.part }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -145,10 +171,44 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The coverage run, then the coverage ratchet over the figures it just wrote (WP-97): the
-      # ratchet runs here because this is where coverage is measured, and it refuses a summary
-      # written before this step started.
-      - run: pnpm run -s verify:tests
+      # This part's test files, with coverage, into `.vitest-reports/blob-<part>-<parts>.json`. Its
+      # thresholds and the ratchet are the merge's: they judge the whole tier, which no part has.
+      - run: pnpm run -s verify:tests --shard "$PART/$PARTS"
+      - name: upload this part's report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unit-blob-${{ matrix.part }}
+          path: .vitest-reports/
+          if-no-files-found: ignore
+          retention-days: 1
+
+  unit:
+    name: unit + contract
+    needs: unit-part
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # the merge of the parts above; it runs no test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: download every part's report
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: unit-blob-*
+          path: .vitest-reports
+          merge-multiple: true
+      # Every part's results and coverage merged, the coverage thresholds checked on the whole, then
+      # the coverage ratchet over the summary the merge just wrote (WP-97): it refuses a summary
+      # written before this step started, and one that does not cover every file the checkout counts.
+      - run: pnpm run -s verify:tests --merge-reports .vitest-reports
       - name: upload coverage
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -157,6 +217,11 @@ jobs:
           path: coverage/
           if-no-files-found: ignore
           retention-days: 7
+      - name: every part succeeded
+        if: always()
+        env:
+          PARTS_RESULT: ${{ needs.unit-part.result }}
+        run: test "$PARTS_RESULT" = success || { echo "a part of unit + contract ended $PARTS_RESULT"; exit 1; }
 
   ui:
     name: ui
@@ -222,10 +287,17 @@ jobs:
       # TEST_DATABASE_URL would point the suite at an external server instead.
       - run: pnpm run -s verify:integration
 
-  e2e:
-    name: e2e-fake-claude
+  e2e-part:
+    name: e2e-fake-claude (part ${{ matrix.part }}/3)
     runs-on: ubuntu-latest
-    timeout-minutes: 35 # WP-126: 10.4 min median, 15.1 max
+    timeout-minutes: 35 # WP-126's e2e bound, kept until the parts have a median of their own
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3]
+    env:
+      PARTS: 3
+      PART: ${{ matrix.part }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -241,15 +313,17 @@ jobs:
       # as the run container, `platform-egress` as the sidecar. They are built
       # here rather than pulled, so the tier tests **this commit's** images —
       # and a missing image fails the suite rather than skipping a case, which
-      # is WP-22's criterion (PROGRESS backlog 27).
+      # is WP-22's criterion (PROGRESS backlog 27). Built in every part, because
+      # which part holds the workspace files is vitest's hash of their paths.
       # No `--size-check` here: the budgets are `image.yml`'s job, and measuring an unpacked image
       # size costs this tier nothing it needs.
       - name: build the run images this tier needs
         run: node scripts/build-images.mjs runtime egress
       # TD-025's Docker verification, against the image that ships the shim
       # rather than against a bind-mounted checkout. Not a `verify` target: it
-      # needs a daemon, which only this job has.
+      # needs a daemon, which only this tier's runners have. Once per run, in part 1.
       - name: the run shim works in the image it ships in
+        if: matrix.part == 1
         env:
           # Without this the check falls back to WP-13's arrangement — `node:24-alpine` with the
           # repository bind-mounted at `/repo` — which is the thing the image exists to replace.
@@ -257,8 +331,45 @@ jobs:
         run: node scripts/runlet-container-check.mjs
       # Starts whole `apps/server` instances against the same Testcontainers
       # PostgreSQL 18 the integration tier uses, and runs the workspace tier
-      # against the real daemon.
-      - run: pnpm run -s verify:e2e
+      # against the real daemon — this part's files of it.
+      - run: pnpm run -s verify:e2e --shard "$PART/$PARTS"
+      - name: upload this part's report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-blob-${{ matrix.part }}
+          path: .vitest-reports/
+          if-no-files-found: ignore
+          retention-days: 1
+
+  e2e:
+    name: e2e-fake-claude
+    needs: e2e-part
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # the merge of the parts above; it runs no test and starts no database
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: download every part's report
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: e2e-blob-*
+          path: .vitest-reports
+          merge-multiple: true
+      - run: pnpm run -s verify:e2e --merge-reports .vitest-reports
+      - name: every part succeeded
+        if: always()
+        env:
+          PARTS_RESULT: ${{ needs.e2e-part.result }}
+        run: test "$PARTS_RESULT" = success || { echo "a part of e2e-fake-claude ended $PARTS_RESULT"; exit 1; }
 
   secret-scan:
     name: secret scan

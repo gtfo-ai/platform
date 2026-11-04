@@ -24,6 +24,8 @@ coverage/
 .vitest/
 /test-results/
 /playwright-report/
+# One part's blob per machine of a split run, read by the merge (`scripts/verify.mjs`).
+/.vitest-reports/
 *.lcov
 
 # Local data and logs.

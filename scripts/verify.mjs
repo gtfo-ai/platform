@@ -20,12 +20,35 @@
  * where it is still visible in a terminal and in CI logs. A step whose vitest run stopped because a
  * file never finished collecting (`vitest-bounded.mjs`, WP-213) makes that line
  * `FAIL: <target> — collection stalled in <file>`.
+ *
+ * ## One target over several machines: `--shard` and `--merge-reports`
+ *
+ * CI runs the two longest tiers on several runners at once, and the target is still the one list in
+ * `verify-targets.ts` — the modes below change *where* its vitest step runs, never which steps run:
+ *
+ *   node scripts/verify.mjs <target> --shard <i>/<n>          one machine's part
+ *   node scripts/verify.mjs <target> --merge-reports <dir>    the whole, after every part
+ *
+ * A target may be split only if exactly one of its steps runs vitest (`shardableStep`); anything
+ * else is refused rather than guessed at, because two vitest steps would write one blob name.
+ *
+ *  - **`--shard i/n`** runs that step with `--shard=i/n` and a blob report (vitest splits the test
+ *    *files* between the `n` parts, by a hash of their path, so every file is in exactly one), and
+ *    **stops after it**: the steps after it — `coverage:ratchet` after `test` — judge the whole
+ *    tier, which no part has. A part's own coverage thresholds are not checked either
+ *    (`vitest.config.ts`), for the same reason. Its line is `PASS: <target> (shard i/n)`.
+ *  - **`--merge-reports <dir>`** first refuses a directory that does not hold exactly the blobs
+ *    `blob-1-n.json` … `blob-n-n.json` of one `n` — a part that never reported is a FAIL, not a
+ *    smaller pass — then runs the step as vitest's merge, which replays every part's results (a
+ *    failed test fails it) and merges their coverage and checks its thresholds, and then runs
+ *    **every remaining step** as the unsplit target would. Its line is the target's own.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
+import { blobSetProblem, parseVerifyMode, shardArgs, shardableStep } from './verify-shards.mjs';
 // The on-disk `.ts` specifier, not this repository's usual `.js` one: Node runs this file directly
 // and strips the types itself (verified on node:24-alpine, the version in .nvmrc), and its type
 // stripping resolves the path it is given rather than rewriting the extension (CLAUDE.md).
@@ -33,14 +56,52 @@ import { TARGETS } from './verify-targets.ts';
 import { stallLine } from './vitest-bounded.mjs';
 
 const target = process.argv[2];
-const steps = TARGETS[target];
+const allSteps = TARGETS[target];
 
-if (!steps) {
+if (!allSteps) {
   process.stderr.write(
     `unknown verify target ${JSON.stringify(target)}; expected one of ${Object.keys(TARGETS).join(', ')}\n`,
   );
   process.stdout.write('FAIL: verify\n');
   process.exit(2);
+}
+
+const refuse = (message) => {
+  process.stderr.write(`${message}\n`);
+  process.stdout.write(`FAIL: ${target}\n`);
+  process.exit(2);
+};
+
+let mode;
+try {
+  mode = parseVerifyMode(process.argv.slice(3));
+} catch (error) {
+  refuse(error.message);
+}
+
+// The plan: which steps run, and what each vitest step is given on top of its script.
+let steps = allSteps;
+/** @type {Record<string, readonly string[]>} */
+let extraArgs = {};
+let verdict = `PASS: ${target}`;
+if (mode.kind !== 'whole') {
+  const { scripts } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  let step;
+  try {
+    step = shardableStep(target, allSteps, scripts);
+  } catch (error) {
+    refuse(error.message);
+  }
+  const at = allSteps.indexOf(step);
+  if (mode.kind === 'shard') {
+    steps = allSteps.slice(0, at + 1);
+    extraArgs = { [step]: shardArgs(mode.index, mode.count) };
+    verdict = `PASS: ${target} (shard ${mode.index}/${mode.count})`;
+  } else {
+    const problem = blobSetProblem(existsSync(mode.dir) ? readdirSync(mode.dir) : null, mode.dir);
+    if (problem !== null) refuse(problem);
+    extraArgs = { [step]: [`--merge-reports=${mode.dir}`] };
+  }
 }
 
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
@@ -63,7 +124,7 @@ for (const step of steps) {
   process.stderr.write(`\n── ${target} › ${step} ──\n`);
   // stdin inherited, child stdout redirected onto our fd 2, stderr inherited. Passing the fd
   // (rather than piping) keeps the output streaming and keeps the child's TTY detection working.
-  const result = spawnSync(pnpm, ['-s', 'run', step], {
+  const result = spawnSync(pnpm, ['-s', 'run', step, ...(extraArgs[step] ?? [])], {
     stdio: ['inherit', 2, 'inherit'],
     env,
   });
@@ -87,4 +148,4 @@ if (failed) {
   process.exit(1);
 }
 
-process.stdout.write(`PASS: ${target}\n`);
+process.stdout.write(`${verdict}\n`);

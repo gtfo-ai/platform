@@ -38,7 +38,9 @@
  * **Where coverage is measured, never in the census** (plan row WP-97): the census reads the tree,
  * and a measured figure exists only after a coverage run. So this is the step after `test` in
  * `verify:tests`, which is CI's `unit + contract` job's one command — the job that produced the
- * figures, in its own checkout.
+ * figures, in its own checkout. Since that tier runs on several runners, the figures are the
+ * **merge's** (`verify:tests --merge-reports`, `scripts/verify.mjs`): every part's coverage merged
+ * and its thresholds checked on the whole in that job, and then this step; no part runs it.
  *
  * It reads `coverage/coverage-summary.json`, which that run wrote, and two runs in **one checkout**
  * share that directory: vitest cleans it at the start of a run and writes it at the end, so a
