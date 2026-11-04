@@ -514,6 +514,60 @@ describe('self-termination and an answered lease_lost (WP-276)', () => {
     expect(losses).toEqual(['self_terminated']);
   });
 
+  it('counts the self-stop from the send of the last successful renewal, not from its answer', async () => {
+    let now = 0;
+    let tick: (() => void) | undefined;
+    const timers: { at: number; fire: () => void; cancelled: boolean }[] = [];
+    const losses: string[] = [];
+    let answer: (renewed: boolean) => void = () => {};
+    const store = {
+      runs: {
+        renewLease: async () =>
+          new Promise<boolean>((resolve) => {
+            answer = resolve;
+          }),
+      },
+    } as unknown as PipelineStore;
+    startRunHeartbeat(
+      {
+        unitOfWork: { transaction: async (fn) => fn({ tx: { adapter: 'memory' } } as never) },
+        store,
+        clock: { now: () => NOW },
+        lease: {
+          owner: OWNER,
+          schedule: (_everyMs, beat) => {
+            tick = beat;
+            return () => {};
+          },
+          monotonicNow: () => now,
+          timer: (afterMs, fire) => {
+            const entry = { at: now + afterMs, fire, cancelled: false };
+            timers.push(entry);
+            return () => {
+              entry.cancelled = true;
+            };
+          },
+        },
+        claimedAt: 0,
+        onLost: (loss) => {
+          losses.push(loss);
+        },
+      },
+      RUN,
+      EPOCH,
+    );
+    // Sent at 100 s; answered `renewed` only at 200 s.
+    now = 100_000;
+    tick?.();
+    now = 200_000;
+    answer(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    const armed = timers.filter((timer) => !timer.cancelled).at(-1);
+    // Due 250 s after the **send** (350 s), never 250 s after the answer (450 s).
+    expect(armed?.at).toBe(100_000 + selfStopAfterMs(RUN_LEASE_TTL_MS, RUN_LEASE_RENEW_MS));
+    expect(losses).toEqual([]);
+  });
+
   it('reports nothing once the caller has stopped the heartbeat', async () => {
     const { losses, stop, advance } = lossHarness(['throws']);
     await stop();

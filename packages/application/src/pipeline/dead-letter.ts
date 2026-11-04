@@ -47,18 +47,23 @@
  * `needs_human`, `done` or `cancelled` — is skipped by asking {@link canTransitionTask} first, which
  * is also what makes a *second* poisoned event of the same task write nothing.
  */
+
 import type { Id } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { canTransitionTask, escalateTask } from '@platform/domain';
 import type { DeadLetterRecord, DeadLetterSink } from '../events/dead-letter.js';
+import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope } from '../ports/unit-of-work.js';
+import { closeStageOffer } from './offer-withdrawal.js';
 import type { PipelineStore } from './store.js';
 import { closeParkedStageRow } from './transitions.js';
 
 export interface DeadLetterEscalationOptions {
   readonly store: PipelineStore;
+  /** The run stream's next sequence — a withdrawn offer's run ending (WP-276, `./offer-withdrawal.ts`). */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   /** The system actor every escalation this sink writes carries. */
   readonly context: (taskId: Id, causeEventId: Id) => CommandContext;
   readonly logger?: Logger;
@@ -147,9 +152,15 @@ export const createDeadLetterEscalation = (
       { reason: reasonFor(record), blockerBrief: blockerBriefFor(record, stored.task.ticket.key) },
       options.context(stored.task.id, record.event.event.id),
     );
+    // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
+    const closing = await closeStageOffer(options, scope, {
+      taskId: stored.task.id,
+      reason: 'the task was escalated: an event was dead-lettered',
+      context: options.context(stored.task.id, record.event.event.id),
+    });
     await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
     await closeParkedStageRow(options.store, scope.tx, escalated, 'dead_lettered');
-    await scope.events.append(escalated.events);
+    await scope.events.append([...closing.events, ...escalated.events]);
     logger.error(
       {
         position: record.event.position,

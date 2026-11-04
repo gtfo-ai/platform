@@ -28,13 +28,16 @@
  * {@link MAX_CONCURRENCY_CONFLICT_ATTEMPTS} states it once, for both retry sites, with the reasoning
  * that chose the number.
  */
+
 import type { Id } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { escalateTask, IllegalTransitionError } from '@platform/domain';
 import { isConcurrencyConflict, MAX_CONCURRENCY_CONFLICT_ATTEMPTS } from '../events/concurrency.js';
+import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { closeStageOffer } from './offer-withdrawal.js';
 import type { PipelineStore } from './store.js';
 import { closeParkedStageRow } from './transitions.js';
 
@@ -114,6 +117,8 @@ export interface ConflictEscalationOptions {
   readonly unitOfWork: UnitOfWork;
   readonly store: PipelineStore;
   readonly context: (taskId: Id) => CommandContext;
+  /** The run stream's next sequence — a withdrawn offer's run ending (WP-276, `./offer-withdrawal.ts`). */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
 }
 
@@ -154,9 +159,15 @@ export const escalateTaskAfterConflict = async (
             },
             options.context(stored.task.id),
           );
+          // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
+          const closing = await closeStageOffer(options, scope, {
+            taskId: stored.task.id,
+            reason: 'the task was escalated: a write lost every race',
+            context: options.context(stored.task.id),
+          });
           await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
           await closeParkedStageRow(options.store, scope.tx, escalated, 'write_conflict');
-          await scope.events.append(escalated.events);
+          await scope.events.append([...closing.events, ...escalated.events]);
         } catch (error) {
           if (!(error instanceof IllegalTransitionError)) {
             throw error;

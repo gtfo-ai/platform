@@ -80,6 +80,7 @@ const failingFirst = (inner: UnitOfWork): UnitOfWork => {
 const escalationOptions = (harness: PipelineHarness, unitOfWork: UnitOfWork = harness.memory) => ({
   unitOfWork,
   store: harness.store,
+  eventStore: harness.memory.store,
   jobs: harness.jobs,
   ids: harness.ids,
   clock: harness.clock,

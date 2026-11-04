@@ -42,12 +42,14 @@
  * {@link settleDeadline}, the job's own path, and gives a row written before WP-56 its first
  * deadline.
  */
+
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { idSchema } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { escalateTask, isBefore } from '@platform/domain';
 import * as z from 'zod';
 import type { EventHandler } from '../events/handler.js';
+import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { JobHandler, Jobs } from '../ports/jobs.js';
@@ -257,6 +259,8 @@ export interface DeadlineSweepOptions {
   readonly clock: { now(): string };
   /** `TaskCommandDependencies.redactor`: the expiry commands store no free text, but share the type. */
   readonly redactor: SecretRedactor;
+  /** The run stream's next sequence — a withdrawn offer's run ending (WP-276). */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
 }
 
@@ -338,6 +342,7 @@ const expireTakeOver = async (
       {
         unitOfWork: options.unitOfWork,
         store: options.store,
+        eventStore: options.eventStore,
         context: (id) => contextFor(options, id),
         ...(options.logger === undefined ? {} : { logger: options.logger }),
       },

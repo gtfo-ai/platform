@@ -865,7 +865,8 @@ const stageCompletedHandler = (options: PipelineSagaOptions): EventHandler => ({
       await escalateForConfigRefusalInHandler(
         {
           store: options.store,
-          tx: context.scope.tx,
+          scope: context.scope,
+          eventStore: options.eventStore,
           emit: async (events) => {
             await context.emit(events);
           },

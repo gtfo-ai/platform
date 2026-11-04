@@ -110,6 +110,7 @@ const world = async (options: { readonly state?: StoredTask['task']['state'] } =
   bus.onDeadLetter(
     createDeadLetterEscalation({
       store,
+      eventStore: eventing.store,
       context: (correlationId, causeEventId) => ({
         ids: { next: () => '00000000-0000-4000-8000-0000000000f1' as Id },
         actor: { kind: 'system', component: 'dispatcher' },
@@ -230,6 +231,7 @@ describe('the dead-letter escalation', () => {
     const { eventing, store } = await world();
     const sink = createDeadLetterEscalation({
       store,
+      eventStore: eventing.store,
       context: (correlationId, causeEventId) => ({
         ids: { next: () => '00000000-0000-4000-8000-0000000000f1' as Id },
         actor: { kind: 'system', component: 'dispatcher' },
@@ -271,6 +273,7 @@ describe('the dead-letter escalation', () => {
     const { eventing, store } = await world();
     const sink = createDeadLetterEscalation({
       store,
+      eventStore: eventing.store,
       context: (correlationId, causeEventId) => ({
         ids: { next: () => '00000000-0000-4000-8000-0000000000f2' as Id },
         actor: { kind: 'system', component: 'dispatcher' },

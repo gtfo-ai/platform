@@ -199,7 +199,12 @@ describe('the discovery_record row (backlog 366)', () => {
       graceMs: 60_000,
       discoveryRecords: {
         store,
-        escalation: { store: harness.store, ids: harness.ids, clock: harness.clock },
+        escalation: {
+          store: harness.store,
+          eventStore: harness.memory.store,
+          ids: harness.ids,
+          clock: harness.clock,
+        },
       },
     });
 

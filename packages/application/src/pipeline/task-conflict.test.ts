@@ -254,6 +254,7 @@ describe('escalateTaskAfterConflict', () => {
   const options = (store: ReturnType<typeof createMemoryPipelineStore>, uow: MemoryEventing) => ({
     unitOfWork: uow,
     store,
+    eventStore: uow.store,
     context: (taskId: Id) => ({
       ids: { next: () => '00000000-0000-4000-8000-00000000e00f' as Id },
       actor: { kind: 'system' as const, component: 'pipeline' },

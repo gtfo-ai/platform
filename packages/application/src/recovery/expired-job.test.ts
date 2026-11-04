@@ -122,7 +122,12 @@ const pass = async (harness: PipelineHarness, store: ExpiredJobRecoveryStore) =>
     graceMs: 60_000,
     expiredJobs: {
       store,
-      escalation: { store: harness.store, ids: harness.ids, clock: harness.clock },
+      escalation: {
+        store: harness.store,
+        eventStore: harness.memory.store,
+        ids: harness.ids,
+        clock: harness.clock,
+      },
     },
   });
 

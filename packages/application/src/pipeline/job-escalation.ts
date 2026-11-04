@@ -42,15 +42,18 @@
  * accepts. A job with no task (`intake_check`, the organisation's notification) cannot take this
  * shape at all, which is why none of them is declared with it.
  */
+
 import type { Id } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { amendEscalation, escalateTask, IllegalTransitionError } from '@platform/domain';
+import type { EventStore } from '../ports/event-store.js';
 import type { JobContext, Jobs } from '../ports/jobs.js';
 import { isLastTry, JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { PipelineOutboundData } from './jobs.js';
+import { closeStageOffer } from './offer-withdrawal.js';
 import { PIPELINE_ACTOR, type PipelineStore } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
 import { closeParkedStageRow } from './transitions.js';
@@ -58,6 +61,8 @@ import { closeParkedStageRow } from './transitions.js';
 export interface ExhaustedJobEscalationOptions {
   readonly unitOfWork: UnitOfWork;
   readonly store: PipelineStore;
+  /** The run stream's next sequence — a withdrawn offer's run ending (WP-276, `./offer-withdrawal.ts`). */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly jobs: Jobs;
   readonly ids: CommandContext['ids'];
   readonly clock: { now(): string };
@@ -161,17 +166,24 @@ export const escalateTaskWithBrief = async (
           }
           const brief = input.brief(stored.task.ticket.key);
           const escalation = { reason: input.reason, blockerBrief: brief };
+          // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks` — whether the
+          // escalation is new or amended (a parked task's offer must not be run either).
+          const closing = await closeStageOffer(options, scope, {
+            taskId: stored.task.id,
+            reason: `the task was escalated: ${input.reason}`,
+            context: context(),
+          });
           if (stored.task.state === 'needs_human') {
             const amended = amendEscalation(stored.task, escalation, context());
             await options.store.tasks.save(scope.tx, { ...stored, task: amended.aggregate });
-            await scope.events.append(amended.events);
+            await scope.events.append([...closing.events, ...amended.events]);
             return { ending: 'amended', brief };
           }
           try {
             const escalated = escalateTask(stored.task, escalation, context());
             await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
             await closeParkedStageRow(options.store, scope.tx, escalated, 'escalated');
-            await scope.events.append(escalated.events);
+            await scope.events.append([...closing.events, ...escalated.events]);
             return { ending: 'escalated', brief };
           } catch (error) {
             if (error instanceof IllegalTransitionError) {

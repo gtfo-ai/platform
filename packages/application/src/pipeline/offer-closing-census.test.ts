@@ -104,29 +104,10 @@ const SAVE_SITES: ReadonlyMap<string, Closing> = new Map<string, Closing>([
     'packages/application/src/shadow/report.ts',
     { closes: false, because: 'a shadow task at its human stage, where no agent offer exists' },
   ],
-  [
-    'packages/application/src/pipeline/task-conflict.ts',
-    {
-      closes: false,
-      because:
-        'the ending of a write that lost every race; a live offer left open is backlog 720 (run, then recordOntoStoppedTask)',
-    },
-  ],
-  [
-    'packages/application/src/pipeline/dead-letter.ts',
-    {
-      closes: false,
-      because: 'runs inside the dispatcher’s transaction with no event store; backlog 720',
-    },
-  ],
-  [
-    'packages/application/src/pipeline/job-escalation.ts',
-    { closes: false, because: 'an exhausted job’s escalation has no event store; backlog 720' },
-  ],
-  [
-    'packages/application/src/pipeline/config-refusal.ts',
-    { closes: false, because: 'a handler-side refusal with no event store; backlog 720' },
-  ],
+  ['packages/application/src/pipeline/task-conflict.ts', CLOSES],
+  ['packages/application/src/pipeline/dead-letter.ts', CLOSES],
+  ['packages/application/src/pipeline/job-escalation.ts', CLOSES],
+  ['packages/application/src/pipeline/config-refusal.ts', CLOSES],
 ]);
 
 const SAVE = /\btasks\.save\s*\(/;

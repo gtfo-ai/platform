@@ -1219,7 +1219,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       'a stage write lost every race against another writer; the task is escalated',
     );
     await escalateTaskAfterConflict(
-      { unitOfWork, store, context: options.context, logger },
+      { unitOfWork, store, eventStore: options.eventStore, context: options.context, logger },
       failure,
     );
     return { kind: 'escalated', reason: failure.message };

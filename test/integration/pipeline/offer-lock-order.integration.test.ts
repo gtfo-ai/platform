@@ -369,6 +369,171 @@ const cancelInPlace = async (
 const sqlStateOf = (error: unknown): string | undefined =>
   (error as { code?: string } | undefined)?.code;
 
+/**
+ * **Every terminal writer, in the one order** (criterion 9): each takes its first lock in a
+ * transaction held open while a stage transition's withdrawal of the same task's offer starts on a
+ * second connection, then ends the run and commits. No `40P01`; the writer ends the run, and the
+ * withdrawal — waiting on the offer row — then finds it closed and touches nothing. The settle-shaped
+ * writers (a settle, the holder's applied cancel, the take-over's stop, the shutdown hand-back, the
+ * ask's ending) lock through `lockSettlement` and finish under the claim's fence; the sweep through
+ * `claimExpiredRun`; a person's cancel and a take-over through `lockRun`/`lockLiveRunOf`.
+ */
+type Writer = {
+  readonly name: string;
+  readonly claim: boolean;
+  readonly kind?: 'stage' | 'ask';
+  readonly status: 'completed' | 'cancelled' | 'failed';
+  readonly reason:
+    | 'success'
+    | 'cancelled'
+    | 'shutdown'
+    | 'lease_expired'
+    | 'error_during_execution';
+  readonly firstLock: (
+    connection: Awaited<ReturnType<typeof begin>>,
+    runId: Id,
+    taskId: Id,
+  ) => Promise<void>;
+  readonly fenced: boolean;
+};
+
+const settleLock: Writer['firstLock'] = async (connection, runId) => {
+  await store.runs.lockSettlement(connection.tx, runId);
+};
+
+const WRITERS: readonly Writer[] = [
+  {
+    name: 'settleRun (a stage run ending)',
+    claim: true,
+    status: 'completed',
+    reason: 'success',
+    firstLock: settleLock,
+    fenced: true,
+  },
+  {
+    name: "the holder's applied cancel (its settle)",
+    claim: true,
+    status: 'cancelled',
+    reason: 'cancelled',
+    firstLock: settleLock,
+    fenced: true,
+  },
+  {
+    name: "the take-over's stop (its settle)",
+    claim: true,
+    status: 'cancelled',
+    reason: 'cancelled',
+    firstLock: settleLock,
+    fenced: true,
+  },
+  {
+    name: 'the shutdown hand-back (its settle)',
+    claim: true,
+    status: 'failed',
+    reason: 'shutdown',
+    firstLock: settleLock,
+    fenced: true,
+  },
+  {
+    name: "the ask's ending",
+    claim: true,
+    kind: 'ask',
+    status: 'completed',
+    reason: 'success',
+    firstLock: settleLock,
+    fenced: true,
+  },
+  {
+    name: 'the lease sweep',
+    claim: true,
+    status: 'failed',
+    reason: 'lease_expired',
+    fenced: false,
+    firstLock: async (connection, runId) => {
+      await connection.client.query(
+        "update runs set lease_expires_at = now() - interval '1 hour' where id = $1",
+        [runId],
+      );
+      const claimed = await recovery
+        .createPostgresExpiredRunStore()
+        .claimExpiredRun(connection.tx, {
+          runId,
+          query: {
+            leaseExpiredBefore: '2999-01-01T00:00:00.000Z' as IsoDateTime,
+            startedBefore: '1999-01-01T00:00:00.000Z' as IsoDateTime,
+            limit: 1,
+          },
+        });
+      expect(claimed).toBe(true);
+    },
+  },
+  {
+    name: "a person's cancel (lockRun)",
+    claim: false,
+    status: 'cancelled',
+    reason: 'cancelled',
+    fenced: false,
+    firstLock: async (connection, runId) => {
+      await store.runCommands.lockRun(connection.tx, runId, { forUpdate: true });
+    },
+  },
+  {
+    name: 'a take-over (lockLiveRunOf)',
+    claim: true,
+    status: 'cancelled',
+    reason: 'cancelled',
+    fenced: false,
+    firstLock: async (connection, _runId, taskId) => {
+      await store.runCommands.lockLiveRunOf(connection.tx, taskId, { forUpdate: true });
+    },
+  },
+];
+
+describe('every terminal writer against a withdrawal, in the one order (WP-276 criterion 9)', () => {
+  it.each(WRITERS.map((writer) => [writer.name, writer] as const))(
+    '%s: no 40P01, and exactly one of them ends the run',
+    async (_name, writer) => {
+      const { taskId, runId } = await seed({ status: 'created', claim: writer.claim });
+      if (writer.kind === 'ask') {
+        await pool.query("update run_offers set kind = 'ask', stage = null where run_id = $1", [
+          runId,
+        ]);
+      }
+      const connection = await begin();
+      await writer.firstLock(connection, runId, taskId);
+      const pending = withdrawal(taskId).then(
+        (closing) => ({ ok: true as const, closing }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const ended = await store.runs.finish(connection.tx, {
+        runId,
+        status: writer.status,
+        terminalReason: writer.reason,
+        sessionId: null,
+        numTurns: 0,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_write_5m_tokens: 0,
+          cache_write_1h_tokens: 0,
+          cache_read_tokens: 0,
+        },
+        cost: null,
+        wallMs: 0,
+        ...(writer.fenced ? { lease: { epoch: 1, owner: OWNER } } : {}),
+      });
+      await connection.commit();
+      const withdrawn = await pending;
+      expect(withdrawn.ok, sqlStateOf(withdrawn.ok ? undefined : withdrawn.error)).toBe(true);
+      expect(ended).toBe(true);
+      expect(withdrawn.ok && withdrawn.closing.kind).toBe('none');
+      expect((await rowsOf(runId)).run).toBe(writer.status);
+    },
+    60_000,
+  );
+});
+
 describe('one lock order, run_offers → runs → tasks (WP-276 criterion 9, backlog 697)', () => {
   it('a terminal writer holding its first lock and a withdrawal of the same run: no 40P01, exactly one ends it', async () => {
     const { taskId, runId } = await seed({ status: 'created', claim: false });

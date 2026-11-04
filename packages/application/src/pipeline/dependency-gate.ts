@@ -702,6 +702,7 @@ const inTaskTransaction = async <T>(
       {
         unitOfWork: options.unitOfWork,
         store: options.store,
+        eventStore: options.eventStore,
         context: (id) => commandContextFor(options, id),
         ...(options.logger === undefined ? {} : { logger: options.logger }),
       },

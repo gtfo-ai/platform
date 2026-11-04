@@ -1567,6 +1567,7 @@ export const composePipeline = async (
   options.eventing.bus.onDeadLetter(
     createDeadLetterEscalation({
       store,
+      eventStore: options.eventing.store,
       context: (correlationId, causeEventId) => ({
         ids,
         actor: { kind: 'system', component: 'dispatcher' },
@@ -1724,7 +1725,7 @@ export const composePipeline = async (
         store: recoveryAdapters.createPostgresDiscoveryRecordRecoveryStore({
           jobsSchema: options.jobsSchema,
         }),
-        escalation: { store, ids, clock: { now: nowIso } },
+        escalation: { store, eventStore: options.eventing.store, ids, clock: { now: nowIso } },
       },
       /**
        * WP-156, backlog **421**: a bound-and-escalate job whose last try ran past its expiry, which
@@ -1734,7 +1735,7 @@ export const composePipeline = async (
        */
       expiredJobs: {
         store: recoveryAdapters.createPostgresExpiredJobStore({ jobsSchema: options.jobsSchema }),
-        escalation: { store, ids, clock: { now: nowIso } },
+        escalation: { store, eventStore: options.eventing.store, ids, clock: { now: nowIso } },
       },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
@@ -1742,6 +1743,7 @@ export const composePipeline = async (
         sweep: {
           unitOfWork: options.eventing.unitOfWork,
           store,
+          eventStore: options.eventing.store,
           jobs,
           calendar: options.calendar,
           ids,

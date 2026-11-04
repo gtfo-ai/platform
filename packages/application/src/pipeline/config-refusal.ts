@@ -18,13 +18,15 @@
  * {@link escalateForConfigRefusal} for a job, which owns its own on the conflict bound, as
  * `escalateTaskAfterConflict` does.
  */
+
 import type { DomainEvent, Id } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { escalateTask, IllegalTransitionError } from '@platform/domain';
+import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { Transaction } from '../ports/transaction.js';
-import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import { closeStageOffer } from './offer-withdrawal.js';
 import { REFREEZE_PENDING_SENTENCE } from './refreeze.js';
 import { PIPELINE_ACTOR, type PipelineStore, type StoredTask } from './store.js';
 import { type ConflictEscalationOptions, retryOnTaskConflict } from './task-conflict.js';
@@ -55,9 +57,12 @@ const escalation = (stored: StoredTask, refusal: string, what: string, context: 
 export const escalateForConfigRefusalInHandler = async (
   input: {
     readonly store: PipelineStore;
-    readonly tx: Transaction;
+    /** The transaction and its broadcast — the stage offer's close records a holder's `cancel`. */
+    readonly scope: Pick<TransactionScope, 'tx' | 'broadcast'>;
     readonly emit: (events: readonly DomainEvent[]) => Promise<void>;
     readonly context: CommandContext;
+    /** The run stream's next sequence — a withdrawn offer's run ending (WP-276). */
+    readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   },
   stored: StoredTask,
   refusal: string,
@@ -65,9 +70,15 @@ export const escalateForConfigRefusalInHandler = async (
 ): Promise<boolean> => {
   try {
     const escalated = escalation(stored, refusal, what, input.context);
-    await input.store.tasks.save(input.tx, { ...stored, task: escalated.aggregate });
-    await closeParkedStageRow(input.store, input.tx, escalated, 'settings_config_invalid');
-    await input.emit(escalated.events);
+    // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
+    const closing = await closeStageOffer(input, input.scope, {
+      taskId: stored.task.id,
+      reason: 'the task was escalated: its configuration could not be read',
+      context: input.context,
+    });
+    await input.store.tasks.save(input.scope.tx, { ...stored, task: escalated.aggregate });
+    await closeParkedStageRow(input.store, input.scope.tx, escalated, 'settings_config_invalid');
+    await input.emit([...closing.events, ...escalated.events]);
     return true;
   } catch (error) {
     if (error instanceof IllegalTransitionError) {
@@ -101,7 +112,8 @@ export const escalateForConfigRefusal = async (
         const parked = await escalateForConfigRefusalInHandler(
           {
             store: options.store,
-            tx: scope.tx,
+            scope,
+            eventStore: options.eventStore,
             emit: async (events) => {
               await scope.events.append(events);
             },
@@ -127,6 +139,8 @@ export interface ConfigRefusalJobOptions {
   readonly store: PipelineStore;
   readonly ids: CommandContext['ids'];
   readonly clock: { now(): string };
+  /** The run stream's next sequence — a withdrawn offer's run ending (WP-276). */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
 }
 
@@ -142,6 +156,7 @@ export const parkForConfigRefusal = async (
     {
       unitOfWork: options.unitOfWork,
       store: options.store,
+      eventStore: options.eventStore,
       context: (taskId) => ({
         ids: options.ids,
         actor: PIPELINE_ACTOR,

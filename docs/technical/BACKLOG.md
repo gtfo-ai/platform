@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 721, so the next is **722**), its grade
+line with the next free number (the highest is 722, so the next is **723**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -33,7 +33,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 711 | minor | — | A user's deactivation (Better Auth ban/disable) expires their workers' run leases from the update's after-hook, after its commit, not in its transaction as TD-031 §7 says; a trigger on users is not additive (TD-032 D) |
 | 712 | minor | WP-281 | WP-280 serves no X-Worker-Protocol check on device/device-token (a credential-less machine asks before it speaks the protocol); WP-281 should state whether the 426 applies there |
 | 715 | minor | — | Device-flow limit keys an exact IPv6 address (rotate within a /64 to dodge the 20 per address), and ~10 addresses fill the 200 instance slots for 10 min; key IPv6 on its /64 and alert on the instance limit |
-| 720 | minor | — | Four task-escalation sites save the task without closing its stage offer first (dead-letter, exhausted-job escalation, task-conflict ending, handler config refusal: none holds an event store); an offer left open there is claimed and run, then recorded onto the stopped task — wasted spend, no corruption (`offer-closing-census.test.ts` names them) |
+| 722 | minor | WP-281 | `/readyz` on a process that is not a claimant (`app` beside a busy `runner`) reads `claimants: none` and degrades after an offer waits 5 min, though another process's server claimant is alive and only busy — TD-031 §13 wants claimant liveness visible across processes (a heartbeat row like `held_connection_liveness`, beside WP-281's connected-worker count) |
 | 713 | nit | — | worker_device_codes rows are never deleted; bounded by the 200-pending limit per ten minutes, but grow with use; add a sweep of consumed/expired rows |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
 | 422 | nit | — | pipeline.outbound polls at 0.5 s in every process; idle cost on a large job table and drain above N = 50 never measured |

@@ -84,7 +84,12 @@ const pass = async () =>
     graceMs: 0,
     expiredJobs: {
       store: expiredStore,
-      escalation: { store: pipeline, ids, clock: { now: nowIso } },
+      escalation: {
+        store: pipeline,
+        eventStore: new eventing.PostgresEventStore(handle.pool),
+        ids,
+        clock: { now: nowIso },
+      },
     },
   });
 
@@ -138,6 +143,7 @@ describe('an expired last try (WP-156 (c), backlog 421)', () => {
         {
           unitOfWork: new eventing.PostgresUnitOfWork({ pool: handle.pool }),
           store: pipeline,
+          eventStore: new eventing.PostgresEventStore(handle.pool),
           jobs: runtime.jobs,
           ids,
           clock: { now: nowIso },

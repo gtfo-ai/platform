@@ -1295,6 +1295,7 @@ describe('deadline.sweep re-validation, directly', () => {
     deadlineSweepHandler({
       unitOfWork: harness.memory,
       store: harness.store,
+      eventStore: harness.memory.store,
       jobs: harness.jobs,
       calendar: harness.calendar,
       ids: harness.ids,
@@ -1527,6 +1528,7 @@ describe('the recovery row: a lost arm, and a row older than deadlines (backlog 
     sweep: {
       unitOfWork: harness.memory,
       store: harness.store,
+      eventStore: harness.memory.store,
       jobs: harness.jobs,
       calendar: harness.calendar,
       ids: harness.ids,
@@ -1758,6 +1760,7 @@ describe('the fourth deadline row: a reminder whose arm was lost (WP-108, PROGRE
     sweep: {
       unitOfWork: harness.memory,
       store: harness.store,
+      eventStore: harness.memory.store,
       jobs: harness.jobs,
       calendar: harness.calendar,
       ids: harness.ids,

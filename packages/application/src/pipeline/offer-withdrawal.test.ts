@@ -131,6 +131,14 @@ describe('what replaces the job singleton for a run’s duration (WP-276 criteri
     const offer = harness.store.offerRows()[0];
     await claim(harness, runId);
     const before = harness.store.offerRows().length;
+    // The executor's own answer: `skipped` (a duplicate), never `waiting` (another entry's run).
+    const outcome = await harness.runtime.executor.execute({
+      taskId,
+      projectId: PROJECT as Id,
+      stage: offer?.stage as string,
+      attempt: offer?.attempt as number,
+    });
+    expect(outcome.kind).toBe('skipped');
     await fire(harness, taskId, offer?.stage as string, offer?.attempt as number);
     expect(harness.store.offerRows()).toHaveLength(before);
     expect(harness.types().filter((type) => type === 'run.created')).toHaveLength(1);
