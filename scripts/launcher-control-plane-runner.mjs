@@ -127,10 +127,20 @@ const client = {
  * the spec names, carried with their digest (the launcher holds no copy any more), and the launcher's
  * configured images by digest, asked of its `/v1/health` per create, as `apps/server` composes it.
  */
-const PROVISION = {
+const provisionFor = (launcherClient) => ({
   skills: PLATFORM_SKILLS,
-  images: launcherAdapters.launcherConfiguredImages(real),
-};
+  // The digests of **the launcher this provisioner talks to** — a second launcher's run image is
+  // not the first one's.
+  images: launcherAdapters.launcherConfiguredImages(launcherClient),
+});
+/**
+ * Asked through a client with the **default** timeout: `CHECK_CLIENT_TIMEOUT_MS` shortens the create
+ * so it outlives its client (backlog 286 (b)); the health read that names the digests is not what that
+ * phase measures, and under the shortened bound it would time out first and no create would be sent.
+ */
+const PROVISION = provisionFor(
+  launcherAdapters.createLauncherControlClient({ baseUrl, token, logger }),
+);
 
 const projectSource = {
   forRun: async () => ({
@@ -1551,9 +1561,14 @@ try {
    */
   const badUrl = process.env['CHECK_BAD_LAUNCHER_URL'];
   if (badUrl !== undefined && badUrl.length > 0) {
+    const badClient = launcherAdapters.createLauncherControlClient({
+      baseUrl: badUrl,
+      token,
+      logger,
+    });
     const badProvisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
-      ...PROVISION,
-      client: launcherAdapters.createLauncherControlClient({ baseUrl: badUrl, token, logger }),
+      ...provisionFor(badClient),
+      client: badClient,
       credentials,
       projects: projectSource,
       controlRoot: CONTROL_ROOT,
@@ -1578,13 +1593,14 @@ try {
    */
   const relabelledUrl = process.env['CHECK_RELABELLED_LAUNCHER_URL'];
   if (relabelledUrl !== undefined && relabelledUrl.length > 0) {
+    const relabelledClient = launcherAdapters.createLauncherControlClient({
+      baseUrl: relabelledUrl,
+      token,
+      logger,
+    });
     const relabelledProvisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
-      ...PROVISION,
-      client: launcherAdapters.createLauncherControlClient({
-        baseUrl: relabelledUrl,
-        token,
-        logger,
-      }),
+      ...provisionFor(relabelledClient),
+      client: relabelledClient,
       credentials,
       projects: projectSource,
       controlRoot: CONTROL_ROOT,

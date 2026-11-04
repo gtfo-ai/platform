@@ -736,6 +736,16 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * image's declared `PATH`; a run this process did not create falls back to the configured tag.
    */
   readonly #runImages = new Map<string, string>();
+  /**
+   * What an operator calls an image a create named by digest: its configured tag when the digest is
+   * what that tag resolves to now, so a refusal names `platform-runtime:dev` rather than 64 hex
+   * characters (WP-279). A digest no configured tag resolves to is named by itself.
+   */
+  readonly #imageNames = new Map<string, string>();
+
+  #nameOf(image: string): string {
+    return this.#imageNames.get(image) ?? image;
+  }
 
   constructor(options: DockerWorkspaceProviderOptions) {
     assertRunnerUid(options.runnerUid);
@@ -818,7 +828,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       if (error instanceof WorkspaceError && error.code === 'workspace_failed') {
         throw new WorkspaceError(
           'invalid_spec',
-          `the run image ${image} has no executable at ${cliPath}, so every run would exec a path that is not in the container (APP_WORKSPACE_RUNTIME_CLI_PATH)`,
+          `the run image ${this.#nameOf(image)} has no executable at ${cliPath}, so every run would exec a path that is not in the container (APP_WORKSPACE_RUNTIME_CLI_PATH)`,
           {
             ...(error.detail === null ? {} : { detail: error.detail }),
             cause: error,
@@ -857,14 +867,14 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     if (declared === undefined) {
       throw new WorkspaceError(
         'invalid_spec',
-        `the run image ${image} declares no PATH in its configuration, so the CLI would start with no command search path (WP-118)`,
+        `the run image ${this.#nameOf(image)} declares no PATH in its configuration, so the CLI would start with no command search path (WP-118)`,
         { reason: 'runtime_image_path_missing' },
       );
     }
     if (!IMAGE_PATH_PATTERN.test(declared) || declared.length > 4_096) {
       throw new WorkspaceError(
         'invalid_spec',
-        `the run image ${image} declares a PATH that is not a list of absolute directories (WP-118)`,
+        `the run image ${this.#nameOf(image)} declares a PATH that is not a list of absolute directories (WP-118)`,
         { detail: declared.slice(0, 200), reason: 'runtime_image_path_invalid' },
       );
     }
@@ -904,7 +914,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     if (declared === null) {
       throw new WorkspaceError(
         'invalid_spec',
-        `the run image ${image} declares no shim protocol (no ${RUNLET_PROTOCOL_IMAGE_LABEL} label, or not a number), and the runner speaks protocol ${spec.runletProtocol}; rebuild the run image from the runner's commit (WP-151)`,
+        `the run image ${this.#nameOf(image)} declares no shim protocol (no ${RUNLET_PROTOCOL_IMAGE_LABEL} label, or not a number), and the runner speaks protocol ${spec.runletProtocol}; rebuild the run image from the runner's commit (WP-151)`,
         {
           runId: spec.runId,
           reason: 'runtime_image_protocol_missing',
@@ -915,7 +925,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     }
     throw new WorkspaceError(
       'invalid_spec',
-      `the run image ${image} declares shim protocol ${declared}, and the runner speaks protocol ${spec.runletProtocol}; rebuild and recreate the runner and the run image from one commit (WP-151)`,
+      `the run image ${this.#nameOf(image)} declares shim protocol ${declared}, and the runner speaks protocol ${spec.runletProtocol}; rebuild and recreate the runner and the run image from one commit (WP-151)`,
       { runId: spec.runId, reason: 'runtime_image_protocol_mismatch', protocols },
     );
   }
@@ -1715,10 +1725,21 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         throw error;
       }
     };
-    return {
+    const resolved = {
       runtime: await local('run', images.run),
       egress: await local('egress', images.egress),
     };
+    await this.#nameByConfiguredTag(resolved.runtime, this.#images.runtime);
+    await this.#nameByConfiguredTag(resolved.egress, this.#images.egress);
+    return resolved;
+  }
+
+  /** Records `tag` as `id`'s name when the tag resolves to it now; a tag that does not is no name. */
+  async #nameByConfiguredTag(id: string, tag: string): Promise<void> {
+    const current = await this.#engine.inspectImage(tag).catch(() => null);
+    if (current?.Id === id) {
+      this.#imageNames.set(id, tag);
+    }
   }
 
   /**

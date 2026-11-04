@@ -204,6 +204,20 @@ describe('images by digest (WP-279)', () => {
     );
   });
 
+  it('names a told digest by its configured tag in a refusal, when that tag resolves to it', async () => {
+    const images = await provider.configuredImageDigests();
+    await expect(
+      provider.create(
+        ...provisioned(workspaceSpecFixture({ runletProtocol: 999 }), undefined, images),
+      ),
+    ).rejects.toMatchObject({
+      reason: 'runtime_image_protocol_mismatch',
+      message: expect.stringContaining(
+        'the run image platform-runtime:test declares shim protocol',
+      ),
+    });
+  });
+
   it('refuses a digest that is not on the daemon, naming it, and pulls nothing', async () => {
     const absent = `sha256:${'f'.repeat(64)}`;
     for (const images of [
