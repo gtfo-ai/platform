@@ -15,3 +15,4 @@ the first rows of M22 — is in the frozen `PROGRESS.md` (its tables and notes s
 | process | The lean loop: technical/14, 15, 16, LEDGER, BACKLOG; M22 re-cut into slices S-22.1…12 | — | — | 2026-11-04 | owner decision; PROGRESS.md frozen |
 | S-22.1 | The run plan is stored and the run's lifecycle follows the offer (WP-275a, WP-275b) | #3 | `22515c2e` | 2026-11-04 | migration 0095 `run_plans` (sealed); review: docs only; backlog 700 closed, 709–710 |
 | S-22.4 | The launcher writes the skills it is given and runs only the digests it is told (WP-279) | #2 | `02889b87` | 2026-11-04 | relayed deploy-key carriage; fixed: no SSH export had ever pushed (707); backlog 702–708; V-WM8 half measured (socket proxy → WP-284) |
+| S-22.5 | Workers and the device flow (WP-280) | #4 | `d58c8960` | 2026-11-04 | migration 0096 `workers`, `worker_device_codes`; `wkr_` credential hashed; backlog 711 (deactivation after commit, minor), 714 (major, WP-281: re-check revoke/ban at write) |
