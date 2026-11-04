@@ -520,3 +520,242 @@ Both of the first deployment's credential shapes now have a path, and both sit b
   **WP-283** and resolves when its e2e creates a deploy-key run on a worker. No M22 row moves.
 - Residual, stated: a tampered worker can call `ssh-sign` for its run up to the cap whether or not a
   helper asked — the same reach the runlet relay already has, now counted in one place.
+
+## Amendment (2026-11-04, architect, session 21) — decisions 1, 2, 3 and 6: what `settleRun` is given and what it reads back, the stored run plan, a start failure as a settle, when `run.started` is appended, and one lock order (PROGRESS backlogs 700, 701, 697)
+
+Read at `769360d0` (WP-275 merged); nothing was run. The code read: `pipeline/settle.ts`
+(`SettleRunRequest`, `RecordInput`, `settleRun`), `pipeline/stage-executor.ts` (`startTheRun`,
+`runStage`, `recordUnstarted`), `pipeline/offers.ts`, `pipeline/store.ts` (`lockSettlement`, `finish`,
+`shutdownEndings`), `pipeline/planner.ts` (`reviewChecklists`), `pipeline/settings-snapshot.ts`,
+`pipeline/deadline-rules.ts`, `pipeline/run-redaction.ts`, `apps/server/src/agent.ts`, `jobs.ts`'s
+`retry`/hand-back re-enqueue, `domain/aggregates/run.ts`, and migrations 0004 and 0094.
+
+**The finding, confirmed.** Once WP-276 ends the job at the offer, nothing that WP-275's request carries
+from the job's memory survives to the claimant except what is stored, and two inputs are stored
+nowhere. Read off the tree: (i) the **`RunSpec` is not reconstructible**: `runs` holds the two prompts
+**redacted**, the model, effort, mode and prompt version, and `run_context_pack` the pack's rows; the
+limits, tools, command policy, protected paths, MCP servers, skill names and environment names are the
+planner's output over a point-in-time read, the job's per-attempt `overrides` and the
+`mergeRequestPaths`/`observability` read fresh on each fire, and re-planning yields another document —
+`startTheRun`'s own rule is *"written here and never re-derived"*. (ii) The **applied review
+checklists** are computed by the planner from the prompt it assembled and carried only by the job;
+`run_context_pack`'s columns (`0004_pipeline.sql`: tier, source path, reason, score, tokens, validated,
+KB commit) carry none, so the read 700 asked for spares no migration. (iii) `runs.settings_snapshot`
+cannot stand in for `ProjectSettings`: it is redacted and stored as a marker past 256 KiB. Settle reads
+the settings **once**, for `questionTimeoutOf` (`deadline-rules.ts:40-61`); the job used the plan-time
+value.
+
+### 1. `settleRun`'s request: TD-031 §3's shape, with the fence and the stop reason spelled out
+
+```ts
+interface SettleRunRequest {
+  readonly runId: Id;
+  readonly fence: RunLeaseFence;        // { epoch, owner } — the claim's; on the worker route the
+                                        // owner is derived from the authenticated worker, never the body
+  readonly outcome: RunOutcome | NotStartedReport;
+  readonly stopReason: RunStopReason | null; // the claimant's own stop register (`ports/runner.ts`,
+                                             // closed vocabulary), validated at the worker boundary (WP-281)
+}
+interface NotStartedReport {
+  readonly kind: 'not_started';
+  readonly failure: string;          // describeStartFailure's closed vocabulary, unchanged
+  readonly detail: string | null;    // the launcher's own words, unredacted, bounded by the claimant
+  readonly transient: boolean;       // isRetryableStartFailure(error), the classification only
+  readonly spawnRequested: boolean;  // WP-150's marker, as recordUnstarted takes it today
+}
+```
+
+Nothing else crosses. Everything `RecordInput` held besides those four is read **under the settle's
+lock** by **one** function in `settle.ts`, `settlementInputs(tx, runId)`:
+
+| input | source |
+|---|---|
+| `job` (`taskId`, `projectId`, `stage`, `attempt`) | the run row (`StoredRun`); nothing else of the job is read by settle |
+| `run` (the aggregate) | **one** shared `toRunAggregate` over the row and the stream's next sequence, replacing the twins in `commands.ts` and `recovery/run-lease.ts`; it admits a stage-less row (`run-lease.ts`'s reading) and `settleRun` refuses one as `not_a_stage_run`, because an ask's ending is the ask's (decision 13) |
+| `stage` (`PipelineStage`) | `stageOf(compilePipeline(…task's frozen columns…), run.stage)`, i.e. `revalidate`'s lookup **without** its *is the task still here* half; a stage the frozen template no longer has settles as `recordOntoStoppedTask` does |
+| `settings` | **retired from the request.** Settle reads one value, the question timeout, and it is **frozen at plan time** in the run plan (§2), which is exactly what the job used (`prepared.settings`); a live read, which could be a `configRefusal` and refuse the settle of a run that happened, is rejected |
+| `reviewChecklists` | the run plan (§2) |
+| `redactor` | **one factory**, `runRedactorFor(secretEnvironment, base)` = `composeSecretRedactors(injectedSecretRedactorForEnvironment(…), base)` — the composition `startTheRun` builds today, named once and used for the prompt columns (transaction 1b), the session (through the spec) and settle. At settle the secret **names** come from `run_plans.secret_env_names` (readable, so a repeated settle after the seal is cleared still builds the same redactor; settle never opens the seal) and the **values** from the settling process's `agentRunEnvironment` — the same function the planner and the claimant use |
+
+**The rotation residual is closed for the server claimant and stated for a worker.** From WP-276 the
+claimant re-attaches the secret values at the claim (§2) and settles in the same process, so the values
+the session held and the values the settle redacts are one resolution of one process environment; a
+credential rotated between plan and claim changes the prompt columns' redactor only, and the old value
+is then handed to no session. On a remote worker (WP-281/282) the core's settle redactor has the core's
+values and never the worker's Claude token — TD-031's stated residual, unchanged, closed only by the
+worker's local exact-value redaction (WP-283 (2)).
+
+**The answer gains a third kind**: `settled | already_settled | task_gone`. `task_gone` is the run whose
+task was deleted mid-run (`runs.task_id … on delete cascade`, so the row went with it): nothing is
+written, `ending` is `null`, the claimant destroys its workspace. WP-275's `settled` with `ending: null`
+for that case is retired. WP-281 maps it to `410 run_gone`, which a worker treats as terminal.
+
+**Follow-on enqueues move into the command.** `jobs.ts` re-enqueues `stage.execute` for a `retry`
+(`RUN_START_RETRY_MS`) and a `handed_back` (`SHUTDOWN_HAND_BACK_DELAY_MS`) off the job's outcome. Once
+the caller is a claimant or a worker route there is no job handler to do it, so `settleRun` takes the
+job client and enqueues both **after its commit** — one path for every caller.
+
+### 2. The run plan is stored: `run_plans`, written in the run's creation transaction, the spec **sealed** (additive)
+
+A claimant needs the whole `RunSpec` to provision and run (`runner.start(spec, hooks)`); §4's package is
+the same spec minus secret values. So the plan is persisted **once, in transaction 1b, beside the run
+row** — the moment the prompt columns and the pack are written, and for the same reason: written there
+and never re-derived.
+
+```sql
+-- migration-class: additive
+create table run_plans (
+  run_id uuid primary key references runs (id) on delete cascade,
+  format smallint not null,               -- the sealed spec's shape, bumped when it changes
+  sealed_spec bytea,                      -- envelope-sealed storedRunSpecSchema; null once the run is terminal
+  key_id text not null,                   -- the APP_SECRET_KEY generation that sealed it (as `secrets.key_id`)
+  secret_env_names text[] not null,       -- the spec's secretEnvNames, readable: names, never values
+  review_checklists jsonb,                -- AppliedChecklistRecord[]; null = recorded nothing (WP-45)
+  question_timeout text not null,         -- questionTimeoutOf(settings) at plan time
+  created_at timestamptz not null default now()
+);
+insert into platform_table_policy (table_name, app_access) values ('run_plans', 'read_write');
+```
+
+Additive under TD-032 §1 and its 2026-11-04 amendment: a new table, its only reference to an existing
+table states `on delete cascade` (B), the policy row registers a table this file creates (A); no
+`not valid` constraint (C). It does **not** raise the rollback floor: an older build never reads the
+table and runs no offer it did not claim in its own job. Number: the next free one at implementation
+(0095 planned).
+
+**Why a table and not columns on `run_offers`.** The offer is the claim's mutable lifecycle (claimed,
+released, withdrawn); the plan is written once and read by the claimant, settle, WP-281's package
+builder and WP-282's tool context. A new table also keeps the `not null` columns, which on 0094's
+existing table would be refused as additive or need a default nobody means.
+
+**The spec is sealed, not redacted — ruled after weighing both.** The first draft of this amendment
+stored the spec and ran the session on the **redacted** prompt columns. The design review (session 21)
+showed that understated: the prompt redactor is TD-012 step 1 (the injected model credential) **and
+step 2, the gitleaks-derived pattern rules** (`StageExecutorOptions.redactor`, composed in
+`startTheRun`), so the session would read `[REDACTED sha256:…]` wherever a pattern matched in a KB
+page, a prior artifact or ticket text — false positives included — and the same rules run over the
+spec could refuse every run of a project for good. **Chosen instead: `storedRunSpecSchema` —
+`runSpecSchema` with every `env` entry named in `secretEnvNames` removed (the names stay), prompts
+included and byte-identical — is envelope-sealed under `APP_SECRET_KEY`** with the mechanism `secrets`
+uses (`packages/infrastructure/src/secrets/envelope.ts`, `sealSecret`, the run id as the bound
+identity), behind an application port (`RunPlanSealer`). Why sealed wins:
+
+- **No behaviour change**: the session is handed exactly the bytes the planner assembled, as today; no
+  false-positive damage to a prompt and no permanent refusal of a project by a pattern.
+- **TD-012 holds**: TD-012 governs what is stored *readable*; the sealed column is the `secrets` table's
+  shape (technical/03: never joined into an API response), it is served by no route and no export, and
+  the readable record of the prompt stays `runs.system_prompt`/`user_prompt`, redacted, unchanged.
+- **Its exposure is bounded in time**: `RunRepository.finish` — every terminal writer's one statement —
+  sets `run_plans.sealed_spec = null` in the run's terminal transaction (a leaf row reached only under
+  the run's lock, so §5's order is unchanged). A sealed spec exists only while its run is live; a
+  backup taken mid-run holds it encrypted, as it holds every `secrets` row.
+- The **rejected alternatives**, named: the unredacted spec in plaintext (TD-012 forbids it); the
+  redacted prompt columns as the prompt run (this amendment's first draft: a silent behaviour change and
+  false-positive damage); re-planning at the claim (another document, refused by `startTheRun`'s rule).
+
+Bounded at `RUN_PLAN_MAX_BYTES` (1 MiB of canonical JSON before sealing), refused past it, never cut.
+`secret_env_names`, `review_checklists` and `question_timeout` are platform text and stay readable (settle needs them after
+the seal is cleared; the artifact write redacts the checklist record as today).
+
+**What a claimant runs: `loadRunPackage(tx, runId, environment)`** (`pipeline/run-package.ts`) — the
+spec opened, and the secret values re-attached from the claimant's own `agentRunEnvironment` (a name it
+cannot resolve is a non-transient `not_started`, `credential_unavailable`; a seal it cannot open — an
+`APP_SECRET_KEY` rotated without its previous generation — is `run_plan_unreadable`, likewise). The
+process that claims needs `APP_SECRET_KEY`, which every process with a worker half already has; a remote
+worker never does — the core opens the seal and the package carries the spec (decision 4).
+
+A run with **no** plan row (planned before the row that writes it; reachable only through a settle of a
+run in flight across that upgrade) settles with `review_checklists` null and the live question
+timeout — the platform default on a `configRefusal` — and a `warn` naming `run_plan_missing`; a
+claimant that finds such an offer withdraws it and escalates with that name. Neither is reachable
+after one release.
+
+### 3. A start failure settles through `settleRun` as `not_started` (backlog 701 (a)–(b))
+
+`recordUnstarted` moves into `settle.ts` as the `not_started` branch, writing exactly what it writes
+today (failed run, `start_failure`, the escalation or the untouched task, the measured zero or the
+unmeasured hold by `spawnRequested`). The fence pre-check, the lock, `(run_id, epoch)` idempotency and
+the offer's close are then one path, and a worker reports the same thing through `finish`. A
+`NotStartedReport` is a distinct type and never a fabricated `RunOutcome`; `record` still never sees
+one. The redacted `RunStartFailure` (backlog 453's words) is built **in settle** with the settle's
+redactor, not by the claimant.
+
+**The retry counter is counted from stored rows**, as `MAX_SHUTDOWN_HAND_BACKS` is:
+`RunRepository.startFailures(tx, entry)` answers how many of the stage entry's `(task, stage, attempt)`
+runs **immediately preceding** this one (ordered by `created_at`, since `started_at` is null for an unstarted run) ended with a recorded start failure — a run that started, or a
+shutdown hand-back, ends the streak, which is what today's payload counter does (a hand-back re-enqueues
+with no `startAttempts`). Read under the settle's lock, the current run is still live and so not
+counted: `attempt = startFailures + 1`, `retryable = transient && attempt < MAX_RUN_START_ATTEMPTS`.
+`StageExecutionJob.startAttempts` is read by nothing; it stays an accepted, ignored payload field for one
+release (a job queued by the previous build) and is then removed.
+
+### 4. When `run.started` is appended, and what `release` may undo (backlog 701 (c))
+
+Decision 1 appends `run.started` "at the claim", decision 6 admits `release` only "before
+`run.started`" — so as written no unspent offer could ever be released. **Ruled: `run.started` is
+appended when the claimant asks for its CLI**, in the transaction that writes
+`runs.cli_spawn_requested_at` (WP-150's marker, committed before the shim's `spawn` frame). The marker is
+already the platform's one boundary between a run that may have spent and one that cannot; `run.started`
+now states the same fact instead of a weaker one. The run's lifecycle is re-cut onto the offer:
+
+| moment | status | events |
+|---|---|---|
+| offer written (transaction 1b) | `created` (persisted; the run enters the log here) | `run.created`, `run.offered` |
+| claim | `created → starting` | `run.claimed` |
+| CLI spawn marker (fenced on `(epoch, owner)`; a stale fence withholds the `spawn` frame) | `starting → running`, `runs.started_at` written | `run.started` |
+| release (decision 6) | `starting → created` | `run.offer.released` |
+| withdrawal (decision 3) | `created → cancelled` | `run.finished` (`cancelled`), `run.offer.withdrawn` |
+
+`RUN_TRANSITIONS` gains `created → cancelled` and `starting → created`, and its docblock's *"`created` is
+in memory only"* — false since WP-274 — is corrected; technical/02's run state machine is amended by the
+row that changes the table. A run that ends before the marker has **no** `run.started`, and every
+consumer of that event (the cost ledger and pricing, `run-lease.ts`, `events/consumption.ts`, the runs
+route, the context-pack readers, the ask executor) must read such a run correctly; the lease sweep's
+wall-clock backstop reads `coalesce(started_at, created_at)`.
+
+**Decision 6 is amended:** `release` is admissible while the run is `starting` with
+`cli_spawn_requested_at` null, and refused `409 run_started` once the marker is written. It undoes the
+**claim only**: the offer `claimed → open` (its `lease_epoch` kept, so the next claim increments it and
+the releasing claimant's fence is stale), `runs.lease_owner`/`lease_expires_at` cleared, the run
+`starting → created`, the minted credential revoked, `excluded_worker_ids` per reason; nothing is
+charged and no run is ended. Events stay appended (`run.claimed` and `run.offer.released` both stand).
+A remote worker therefore needs a fenced, idempotent **`POST /api/worker/v1/runs/:id/spawn`** answered
+before it sends the `spawn` frame (decision 9's table gains it; WP-281). **The server claimant does not
+release in WP-276**: its provision failures settle as `not_started` and re-plan as today, one failed
+row per flap (Q59(a)'s visibility).
+
+### 5. One lock order (backlog 697)
+
+**`run_offers`, then `runs`, then `tasks`**, for every transaction that locks more than one of them:
+the claim (its CTE already takes the offer first and the outer `update runs` second; it additionally
+takes `for update of o, r skip locked`, so a claim never waits on a run a terminal writer holds),
+`settleRun` (`lockSettlement` **will** lock the run's offer row, then the run, before anything else — today it locks `runs` only), every
+other `finish` caller (a person's cancel, whose documented `runs` then `tasks` becomes `run_offers`,
+`runs`, `tasks`; the lease sweep; the holder's applied cancel; the take-over's stop; the shutdown
+hand-back; the ask's ending), and WP-276's withdrawal (its conditional offer update, then the run, then
+the task's save). `tasks.save` is an optimistic write at the end of each, so it is last everywhere.
+Shape (b) alone was not chosen because the withdrawal and the task row make a second cycle a claim is
+not part of.
+
+### Consequences
+
+- **A row before WP-276 carries the migration**: WP-275a (the run plan, the four-field request, the
+  `not_started` settle, the counter from rows) and WP-275b (the lifecycle re-cut of §4, **no migration
+  and no rollback-floor raise**: `starting` is in the run-status enum since 0002, the sweep works off the
+  lease, and the web already renders `starting` and a null `started_at`), each shippable with the job
+  still running the session; WP-276 keeps "Migration: no". The job in WP-275a already runs
+  its session from `loadRunPackage`, so WP-276 moves a call rather than inventing a read.
+- technical/02 (run state machine), technical/03 (`run_plans`, its seal and its clearing at the
+  terminal write), technical/04 (the claimant's spec is the sealed plan) are amended by WP-275a/275b.
+- **TD-031 decision 11 is amended** (the review's finding on this amendment): a usage-limit rejection
+  is observable only after the CLI spawned — after `run.started` under §4 — so *"a rejection between
+  claim and `run.started` is a `release` with `usage_limited`"* cannot happen and would be `409
+  run_started`. **A rejection is always the mid-run branch** (`rate_limited`, one re-offer). `release
+  usage_limited` remains only for a worker that learns of its pause (a sibling run's rejection, a
+  `resetsAt` still in the future) after claiming and before its spawn call. WP-285 (2) is amended.
+- Backlogs 700 and 701 are ruled here; 697's order is ruled here and built in WP-276; 698 is folded into
+  WP-276's tests.
+- **Residuals, stated:** a live run's whole spec — prompts unredacted, secret env values excluded —
+  is stored sealed under `APP_SECRET_KEY` until its terminal write, so a holder of the database **and**
+  the key reads it, the reach `secrets` already has; a worker's Claude token is redacted only by the
+  worker; a settle of a run planned before WP-275a reads the live question timeout.
