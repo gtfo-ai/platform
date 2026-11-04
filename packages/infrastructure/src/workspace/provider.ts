@@ -2290,6 +2290,8 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * which holds the run token, so leaving it is leaving a credential on a shared volume.
    */
   async #teardown(runId: string, made: CreatedObjects, graceSeconds: number): Promise<void> {
+    // Every destroy path ends here, so the per-run image entry does not outlive its run.
+    this.#runImages.delete(runId);
     const failures: unknown[] = [];
     const step = async (what: string, action: () => Promise<unknown>): Promise<void> => {
       try {

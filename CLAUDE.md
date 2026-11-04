@@ -83,8 +83,10 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
   WP-14a amendment and in `packages/prompts/src/skills.ts`). They reach a run as a **plugin**:
   `WorkspaceProvider.create` writes the stage role's skills into
   `<checkout>/.agentic-run/plugins/agentic/skills/` (for a run with no checkout — a spec with no file tool
-  and no shell, WP-74 — that is an empty `/work/repo` the prepare helper makes), from the **launcher's** own copy of
-  `@platform/prompts` rather than from the run image, and `options.ts` passes that directory as
+  and no shell, WP-74 — that is an empty `/work/repo` the prepare helper makes), from the skill files the **create
+  request** carries (WP-279: the core sends the role's `SKILL.md` texts, versions and set digest, and the
+  launcher recomputes the digest and refuses a mismatch `invalid_spec`) rather than from the launcher's or
+  the run image's own copy — so a remote worker's launcher runs the core's skills, not its own version's, and `options.ts` passes that directory as
   `Options.plugins` so the names are namespaced (`agentic:kb`) and nothing of the project's
   `.claude/skills` is touched. The per-role table is `SKILLS_BY_ROLE` beside the other two
   least-privilege tables in the planner, and **it is the restriction** — the SDK's `skills` option is

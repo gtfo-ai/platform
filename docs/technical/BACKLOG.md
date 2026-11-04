@@ -30,6 +30,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 709 | minor | WP-276 | `recordCliSpawn` takes `run.started`'s context-pack record from transaction 1b's memory; a claimant outside the job must read it back (`run_context_pack` or the plan) |
 | 704 | minor | WP-284 | WP-279's launcher resolves a create's image digest with a bare `sha256:` inspect, which finds an image id (what `/v1/health` answers) but a registry manifest digest only under the containerd store; TD-032's `sha-<7>` digests need `repo@digest` or an id map — measure on a worker bundle |
 | 705 | minor | WP-283 | The relayed helper agent socket's ownership: WP-279's Docker phase measured `1000:0`/`0660` in a `1000:0`/`0750` directory (export helper uid 1000, mirror helper root with no capabilities); the `remote-worker` must create it so |
+| 708 | minor | WP-283 | The worker must serve each run's relayed helper agent socket from a directory of its own: the mirror/export helpers mount the socket's whole directory, so a shared one would let one run's helper reach another run's socket (PR #2 review) |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
 | 422 | nit | — | pipeline.outbound polls at 0.5 s in every process; idle cost on a large job table and drain above N = 50 never measured |
 | 439 | nit | — | WP-136 put the pipeline harness's `now` on the test clock, which also moves run_commands.created_at and the steer window |
@@ -45,7 +46,6 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 685 | nit | — | Over-ask: a quoted `[` as a command name reads as an expanded name and blocks, where bash finds nothing and runs nothing |
 | 698 | nit | WP-276 criterion (10) | Memory PipelineStore keeps writes made before finish threw LeaseLostError; PostgreSQL rolls them back |
 | 702 | nit | — | `apps/launcher` still declares `@platform/prompts` as a runtime dependency (and the launcher image copies it) though nothing at runtime reads it since WP-279; tests only — move to devDependencies |
-| 703 | nit | orchestrator | CLAUDE.md says `WorkspaceProvider.create` writes skills "from the launcher's own copy of `@platform/prompts`"; since WP-279 they come from the create request (technical/04 amended) |
 | 706 | nit | — | `DockerWorkspaceProvider.cliEnvironment` after a launcher restart answers the configured tag's `PATH`, not the digest the run was created from (the run→image map is memory); harmless while one tag serves every run |
 | 132 | ? | — | Unexplained once: authenticated GET /api/artifacts/:id answered 200 with an empty body in verify:e2e; instrumented, not seen since |
 | 7 | ? | — | "Carried, not yet scheduled": a bullet list of carried nits (route-sealed credential never opened by the loader, volume retention, …) |
