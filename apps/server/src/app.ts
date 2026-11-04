@@ -159,6 +159,7 @@ import { registerProjectRoutes } from './routes/projects.js';
 import { type RediscoveryGateReader, registerRediscoveryRoutes } from './routes/rediscovery.js';
 import { databaseRunQueries, registerRunRoutes } from './routes/runs.js';
 import { registerSettingsRoutes } from './routes/settings.js';
+import { registerSetupStateRoutes, type SetupStateReader } from './routes/setup-state.js';
 import { registerShadowRoutes } from './routes/shadow.js';
 import { registerStatsRoutes } from './routes/stats.js';
 import { registerTaskStartRoutes } from './routes/task-start.js';
@@ -341,6 +342,13 @@ export interface BuildAppOptions {
    */
   readonly breakdown: BreakdownComposition | null;
   /**
+   * Whether anybody has signed in to this instance yet — `GET /api/setup-state` (WP-291).
+   *
+   * Required and a reader rather than the database, so `app.test.ts` and the census, which build
+   * an app with no database, say what it answers instead of reaching a `{}` that throws.
+   */
+  readonly setupState: SetupStateReader;
+  /**
    * The directory holding the built SPA, or absent for a process that serves no browser
    * application (WP-15j).
    *
@@ -420,6 +428,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       servers: [{ url: config.baseUrl }],
       tags: [
         { name: 'ops', description: 'Health, metrics and build metadata' },
+        { name: 'auth', description: 'What the sign-in page reads before a session exists' },
         { name: 'org', description: 'Organisation-scoped reads' },
         { name: 'projects', description: 'Project-scoped reads' },
         { name: 'tasks', description: 'Task-scoped reads' },
@@ -547,6 +556,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       baseUrl: config.baseUrl,
       trustProxy: config.trustProxy,
     });
+    // WP-291: public by design — the sign-in page reads it before a session exists.
+    await registerSetupStateRoutes(app, { setupState: options.setupState });
     await registerOrgRoutes(app, {
       database: options.database,
       // The identity pair's four functions, bound to this process's database here so the route

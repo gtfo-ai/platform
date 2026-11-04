@@ -8,6 +8,8 @@
  */
 export const queryKeys = {
   session: ['session'] as const,
+  /** WP-291: whether anybody has signed in yet — read by the sign-in page only. */
+  setupState: ['setup-state'] as const,
   version: ['version'] as const,
   orgUsers: ['org', 'users'] as const,
   /** Refused accounts nobody has mapped (WP-44); under the identities prefix, so a mapping refreshes it. */

@@ -33,3 +33,53 @@ describe('authOptions', () => {
     expect(new URL(config.baseUrl).origin).toBe(options.baseURL);
   });
 });
+
+describe('the first-sign-in hook (WP-291)', () => {
+  const build = async (onSessionCreated?: (userId: string) => Promise<void>) => {
+    const { authOptions } = await import('./better-auth.js');
+    const { loadServerConfig } = await import('../config.js');
+    const config = loadServerConfig({
+      DATABASE_URL: 'postgres://app:app@db:5432/app',
+      APP_SECRET_KEY: 'x'.repeat(40),
+      APP_BASE_URL: 'http://localhost:8080',
+    });
+    return authOptions({
+      pool: {} as never,
+      config,
+      ...(onSessionCreated === undefined ? {} : { onSessionCreated }),
+    });
+  };
+  type After = (session: unknown, context: unknown) => Promise<void>;
+
+  it('tells onSessionCreated about every session it creates, by user id', async () => {
+    const seen: string[] = [];
+    const options = await build(async (userId) => {
+      seen.push(userId);
+    });
+    const after = options.databaseHooks?.session?.create?.after as After | undefined;
+    expect(after).toBeDefined();
+    await after?.({ userId: '00000000-0000-4000-8000-000000000291' }, null);
+    expect(seen).toEqual(['00000000-0000-4000-8000-000000000291']);
+  });
+
+  it('declares no database hook at all without it (the bootstrap instance)', async () => {
+    const options = await build();
+    expect('databaseHooks' in options).toBe(false);
+  });
+
+  it('never rejects when onSessionCreated throws, and reports it', async () => {
+    const options = await build(async () => {
+      throw new Error('connection terminated');
+    });
+    const after = options.databaseHooks?.session?.create?.after as After | undefined;
+    const reported: unknown[][] = [];
+    await expect(
+      after?.(
+        { userId: '00000000-0000-4000-8000-000000000291' },
+        { context: { logger: { error: (...args: unknown[]) => reported.push(args) } } },
+      ),
+    ).resolves.toBeUndefined();
+    expect(reported).toEqual([['onSessionCreated failed', 'Error: connection terminated']]);
+    await expect(after?.({ userId: 'x' }, null)).resolves.toBeUndefined();
+  });
+});

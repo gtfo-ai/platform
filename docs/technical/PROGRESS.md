@@ -62808,3 +62808,77 @@ Built in the main checkout on `9f37337e`, session 21. Not committed.
     the literal-length check off (2), `pg_sleep` added to `PURE_CALLS` (1).
   - Tests: `migration-scanner.test.ts` › "refuses a call to any routine the file or an earlier
     migration defines, whatever its name".
+
+#### WP-291
+The sign-in page redesign and the bootstrap hint that disappears after the first sign-in (owner
+request, 2026-11-04).
+
+- **(Superseded by round 3 below: migration 0093, no audit row.)** **"Ever signed in" is a row of `human_actions`, not of `sessions`** — no migration. Better Auth
+  deletes a session at sign-out and when it finds one expired, and users can be deleted, so neither
+  table remembers a sign-in. The served Better Auth instance gets a `databaseHooks.session.create.after`
+  (`CreateAuthOptions.onSessionCreated`, absent on the bootstrap's instance because the server creating
+  the account is not the operator signing in) that inserts one `auth.first_sign_in` row (task null,
+  params `{}`) **only while the table is empty**; `GET /api/setup-state` answers
+  `not exists (select 1 from human_actions)`. `human_actions` is `append_only` and `user_id` is
+  `on delete set null`, so the marker survives sign-out, pruning and account deletion. Assumption: an
+  instance upgraded with command rows reads `false` at once; one whose people only ever signed in
+  reads `true` until the next sign-in writes the marker. A failed marker write is logged at warn and
+  never fails the sign-in. A `false` is cached per process (the fact is monotone), so a used instance
+  answers the public read without the database.
+- **Path `/api/setup-state`, not `/api/auth/setup-state`**: `/api/auth/*` is Better Auth's wildcard
+  mount and the census's public prefix for it; a platform route inside it would read as Better Auth's.
+  Listed in `PUBLIC_PREFIXES` of `apps/server/src/routes/client-census.test.ts` with its reason, and
+  named positively there. **No rate limiter**: the server has none for public reads (the brief's "if
+  such a limiter exists" — it does not); the cache is the mitigation. The one-bit disclosure is
+  recorded in technical/08 § "Auth and RBAC".
+- **The canvas's `aria-hidden` is on its wrapping box**, not on the `<canvas>`: biome's
+  `noAriaHiddenOnFocusable` refuses it on the canvas. The subtree is hidden either way.
+- **The `<h1>` is now the headline**, "Agentic platform" a paragraph; the three Playwright sites that
+  waited for the old heading wait for the new one. The page is `data-theme="dark"` so the kit's
+  `ErrorNotice` draws in its dark tokens.
+- The frame loop paints when `now - last >= 1000/30 - 2` ms: without the slack a 60 Hz display's
+  jitter makes every other frame miss and the field runs at 20 fps (measured in the driver's test).
+- Tests: `packages/contracts/src/api.test.ts` (strict one-bit schema), `apps/server/src/auth/setup-state.test.ts`
+  (cache, marker once, failure absorbed, the route), the census entry, `test/e2e/server/setup-state.e2e.test.ts`
+  (pending on a fresh instance with the bootstrap admin present, false after sign-in with one marker,
+  still false with every session deleted, read by a second instance), `apps/web/src/features/dither-field.test.ts`
+  (pure frame, layout, loop: reduced motion paints one frame and schedules nothing, hidden tab, stop),
+  `apps/web/src/features/sign-in.test.tsx` (hint on true, absent on false/500/malformed, form refusal
+  and redirect), `test/web-e2e/auth.spec.ts` (hint, failure, amber focus ring).
+- Verify: **`PASS: verify`** (16 736 passed, 31 skipped; the first run read `FAIL` on
+  `scripts/census-timeouts.test.ts`, which the new census case answered with a 15 s timeout, and on
+  a 30 s timeout of `packages/domain/src/policies/unattended-commands.test.ts` at load ~25, which
+  passed on the re-run untouched), **`PASS: verify:ui`**, **`PASS: verify:web-e2e`** (58 passed), and
+  the e2e file alone 3/3 against Testcontainers. Screenshots at 1440×900, 390×844 and 320×640, both
+  motion modes, were looked at and not committed.
+- **Pre-review round (orchestrator's four fixes).** (1) A quiet zone: `DitherState.quiet` carries the
+  rectangles of every `data-dither-quiet` element in cells, and `quietAt` (pure, unit-tested) fades the
+  field — and the travellers — to 8 % inside them, easing back over 14 cells; text now sits on the
+  plain ground (worst case, muted text on a stray lit cell, is still 4.52:1). (2) Calmer: narrower
+  lanes whose brightness drifts so a few are lit at a time, sprinkle between lanes cut to a quarter;
+  about 6 % of cells lit at 288×180 (measured at t = 2, 10, 40). (3) The sub copy is `max-w-[34ch]`
+  with `text-wrap: pretty` — no orphan. (4) The hint is a muted line inside the ink block below the
+  button, its variable wrapping only where it must (`overflow-wrap: anywhere`); the trade, stated: the
+  centred block moves up by half the hint's height when it arrives, which supersedes "no layout shift".
+- **Review nits.** The hook's three cases are unit tests now (`apps/server/src/auth/better-auth.test.ts`):
+  it passes the session's user id, it is absent without `onSessionCreated`, and a throwing callback
+  never rejects it — the hook catches and reports through Better Auth's own logger, so a failure can
+  never turn a correct password into a 500. Text-field edges use `--signin-edge` `#7671B0`: 4.1:1 on
+  the field's fill, 3.7:1 on the ink block (WCAG 1.4.11 needs 3:1; `--signin-lit` was about 1.5:1).
+- **Rework after the orchestrator's `verify:e2e` (round 3).** The first version's `auth.first_sign_in`
+  row in `human_actions` broke seven e2e tests that assert a task's exact action list — rightly: a
+  synthetic row there leaks into the audit, the export and the statistics. It is gone. Migration
+  **0093** (`-- migration-class: additive`) adds nullable `users.first_signed_in_at`; the session hook
+  stamps it on every sign-in with `… and first_signed_in_at is null`, so it keeps the first instant.
+  **Backfill decision:** none in 0093 — an `update` is not an additive statement under TD-032 §1, and
+  declaring the file `contract` for a hint is the wrong trade. The read covers older instances instead:
+  `pending` is also false when any `human_actions` row exists (only a signed-in person writes one). For
+  the Autix instance that is enough if its admin ever performed a command; otherwise the hint shows
+  until the admin's next sign-in. `test/e2e/server/setup-state.e2e.test.ts` now asserts the stamp, that
+  a second sign-in keeps it, that `human_actions` stays empty, and durability across deleting every
+  session (a second instance answers).
+  Round 3 verification: `PASS: verify` (16 846 passed), `PASS: verify:ui`, `PASS: verify:integration`
+  (910 passed, after `test/integration/auth/better-auth-schema.integration.test.ts` learned the new
+  column), `FAIL: verify:e2e` with 222 passed and only the two files that need the locally built
+  `platform-runtime:dev` image failing (`docker-workspace.e2e.test.ts`, and one case of
+  `harness-volumes.e2e.test.ts`, same error) — environmental; the seven action-list tests pass.

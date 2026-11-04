@@ -107,6 +107,10 @@ const PUBLIC_PREFIXES: readonly { readonly prefix: string; readonly why: string 
     why: 'Better Auth owns sign-in, sign-out and the session read; a login endpoint that needed a session could never be used',
   },
   { prefix: '/api/version', why: 'build metadata, and the SPA reads it before anybody signs in' },
+  {
+    prefix: '/api/setup-state',
+    why: 'WP-291: the sign-in page reads it before a session exists; it discloses one bit, whether anybody has ever signed in (technical/08)',
+  },
 ];
 
 /** A quoted literal beginning `/api/`, in any of the three quote styles. */
@@ -196,6 +200,7 @@ beforeAll(async () => {
     },
     // WP-40: no pipeline store here, so the decision refuses by name and the queue reads empty.
     breakdown: null,
+    setupState: { firstSignInPending: async () => true },
     version: { version: '0.0.0-test', commit: null, builtAt: null },
     readiness: async () => ({ status: 'ok', checks: {} }),
     isShuttingDown: () => false,
@@ -866,6 +871,22 @@ describe('the client’s endpoint list against the server’s router', () => {
   }, 15_000);
 
   // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
+  // WP-291: walks the web sources like its neighbours, so it carries their 15 s floor (WP-249).
+  it('serves the setup state to an anonymous caller, and the sign-in page names it (WP-291)', async () => {
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    // Named positively: "public" is a list entry, and the entry is only honest while the client
+    // calls the path and the server answers it without a session.
+    expect(paths).toContain('/api/setup-state');
+    const response = await app.inject({ method: 'GET', url: '/api/setup-state' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ first_sign_in_pending: true });
+  }, 15_000);
+
   it('refuses an anonymous caller on every served path that is not deliberately public', async () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({

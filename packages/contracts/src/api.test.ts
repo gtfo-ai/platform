@@ -28,6 +28,7 @@ import {
   readinessResponseSchema,
   runMessagesQuerySchema,
   setDefaultBranchRequestSchema,
+  setupStateResponseSchema,
   sseFrameSchema,
   sseTopicSchema,
   startDiscoveryResponseSchema,
@@ -141,6 +142,20 @@ describe('request DTOs', () => {
 });
 
 describe('response DTOs', () => {
+  it('publishes the setup state as one strict bit (WP-291)', () => {
+    expect(setupStateResponseSchema.parse({ first_sign_in_pending: true })).toEqual({
+      first_sign_in_pending: true,
+    });
+    expect(setupStateResponseSchema.safeParse({ first_sign_in_pending: 'yes' }).success).toBe(
+      false,
+    );
+    // Strict: the public read must not grow a second fact by accident.
+    expect(
+      setupStateResponseSchema.safeParse({ first_sign_in_pending: false, users: 1 }).success,
+    ).toBe(false);
+    expect(setupStateResponseSchema.safeParse({}).success).toBe(false);
+  });
+
   it('describes an error with a machine-readable code', () => {
     expect(apiErrorSchema.parse({ error: { code: 'not_found', message: 'no such task' } })).toEqual(
       {

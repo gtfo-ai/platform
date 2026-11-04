@@ -64,6 +64,8 @@ describe('Better Auth schema parity', () => {
       'created_at',
       'email',
       'email_verified',
+      // WP-291 (migration 0093): the platform's own column, which Better Auth never reads or writes.
+      'first_signed_in_at',
       'id',
       'image',
       'name',

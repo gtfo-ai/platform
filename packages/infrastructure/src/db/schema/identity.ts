@@ -51,6 +51,8 @@ export const users = pgTable('users', {
   banned: boolean('banned'),
   banReason: text('ban_reason'),
   banExpires: timestamp('ban_expires', { withTimezone: true }),
+  /** WP-291 (migration 0093): set once, by the served Better Auth instance's session hook. */
+  firstSignedInAt: timestamp('first_signed_in_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

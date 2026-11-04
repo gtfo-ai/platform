@@ -60,7 +60,25 @@ export interface CreateAuthOptions {
   /** The platform's own pool, so Better Auth runs as the least-privilege role like everything else. */
   readonly pool: pg.Pool;
   readonly config: ServerConfig;
+  /**
+   * Told about every session this instance creates (WP-291) — the served instance passes
+   * `SetupState.signedIn`, so the sign-in page's bootstrap hint goes away after the first sign-in.
+   *
+   * **Absent on the bootstrap instance** (`auth/bootstrap.ts`), and that is load-bearing: its
+   * `signUpEmail` may create a session for the account it makes, and the operator has not signed
+   * in because the server created their account.
+   */
+  readonly onSessionCreated?: (userId: string) => Promise<void>;
 }
+
+/** Reports a failed `onSessionCreated` through Better Auth's own logger, when the hook has one. */
+const reportHookFailure = (context: unknown, error: unknown): void => {
+  const logger = (context as { context?: { logger?: { error?: unknown } } } | null)?.context
+    ?.logger;
+  if (typeof logger?.error === 'function') {
+    (logger.error as (...args: unknown[]) => void)('onSessionCreated failed', String(error));
+  }
+};
 
 /**
  * The configuration object, separated from the instance it builds.
@@ -174,6 +192,27 @@ export const authOptions = (options: CreateAuthOptions): BetterAuthOptions => {
       modelName: 'verifications',
       fields: { expiresAt: 'expires_at', createdAt: 'created_at', updatedAt: 'updated_at' },
     },
+
+    ...(options.onSessionCreated === undefined
+      ? {}
+      : {
+          databaseHooks: {
+            session: {
+              create: {
+                // A failure here never fails the sign-in it follows: the hint is not worth a 500
+                // on a correct password. `SetupState.signedIn` already absorbs and logs its own
+                // errors; anything else that escapes is reported through Better Auth's logger.
+                after: async (session: { userId: string }, context: unknown) => {
+                  try {
+                    await options.onSessionCreated?.(session.userId);
+                  } catch (error) {
+                    reportHookFailure(context, error);
+                  }
+                },
+              },
+            },
+          },
+        }),
 
     plugins: [
       admin({

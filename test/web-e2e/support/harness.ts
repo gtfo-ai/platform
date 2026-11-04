@@ -17,7 +17,9 @@ export const resetBackend = async (request: APIRequestContext): Promise<void> =>
 
 export const signIn = async (page: Page, path = '/'): Promise<void> => {
   await page.goto(path);
-  await expect(page.getByRole('heading', { name: 'Agentic platform' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Tickets in, merge requests out.' }),
+  ).toBeVisible();
   await page.getByLabel('Email').fill(CREDENTIALS.email);
   await page.getByLabel('Password').fill(CREDENTIALS.password);
   await page.getByRole('button', { name: 'Sign in' }).click();

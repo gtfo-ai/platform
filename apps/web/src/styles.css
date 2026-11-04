@@ -28,6 +28,25 @@
   --app-success: oklch(0.6 0.13 155);
 }
 
+/*
+ * The sign-in page's palette (WP-291). One page, always dark, whatever the selected theme: it is
+ * the instance's front door rather than a screen of the app, and it is drawn before a theme can be
+ * read from a user. The dither field (`features/dither-field.ts`) draws `night`, `lit` and `beacon`
+ * itself. Measured contrast: text on night 15.2:1, on ink 13.7:1; muted on night 7.5:1, on ink
+ * 6.7:1, on a lit cell 4.52:1; night on beacon (the button) 10.2:1;
+ * a text field's edge 4.1:1 on its fill and 3.7:1 on the ink block.
+ */
+:root {
+  --signin-night: #15132b;
+  --signin-ink: #1f1c3d;
+  --signin-lit: #3a3570;
+  /* A text field's edge (WCAG 1.4.11): 4.1:1 on the field's night fill, 3.7:1 on the ink block. */
+  --signin-edge: #7671b0;
+  --signin-text: #ece9ff;
+  --signin-muted: #a7a2cc;
+  --signin-beacon: #f4b860;
+}
+
 [data-theme="dark"] {
   color-scheme: dark;
   --app-canvas: oklch(0.19 0.008 260);
@@ -55,6 +74,13 @@
   --color-danger: var(--app-danger);
   --color-warning: var(--app-warning);
   --color-success: var(--app-success);
+  --color-signin-night: var(--signin-night);
+  --color-signin-ink: var(--signin-ink);
+  --color-signin-lit: var(--signin-lit);
+  --color-signin-edge: var(--signin-edge);
+  --color-signin-text: var(--signin-text);
+  --color-signin-muted: var(--signin-muted);
+  --color-signin-beacon: var(--signin-beacon);
 }
 
 html,

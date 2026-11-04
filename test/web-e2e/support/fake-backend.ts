@@ -239,6 +239,11 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
    * "the server received this body".
    */
   const commands: { path: string; body: unknown }[] = [];
+  /**
+   * What `GET /api/setup-state` answers (WP-291): `false` by default, so every spec that is not
+   * about the bootstrap hint sees the page an instance in use shows; `'fails'` answers 500.
+   */
+  let setupState: boolean | 'fails' = false;
 
   const writeFrame = (stream: Stream, frame: SseFrame, event: string): void => {
     const lines: string[] = [];
@@ -375,7 +380,14 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       extraTasks.length = 0;
       connects.length = 0;
       commands.length = 0;
+      setupState = false;
       json(response, 200, { reset: true });
+      return;
+    }
+    if (path === '/__test__/setup-state' && method === 'POST') {
+      const body = (await readBody(request)) as { pending?: boolean | 'fails' };
+      setupState = body.pending ?? false;
+      json(response, 200, { pending: setupState });
       return;
     }
     if (path === '/__test__/streams' && method === 'GET') {
@@ -428,6 +440,16 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
     if (path === '/api/auth/sign-out' && method === 'POST') {
       response.setHeader('set-cookie', `${SESSION_COOKIE}=; Path=/; Max-Age=0`);
       json(response, 200, { success: true });
+      return;
+    }
+
+    // WP-291: the platform's one public read, which the sign-in page makes before a session exists.
+    if (path === '/api/setup-state' && method === 'GET') {
+      if (setupState === 'fails') {
+        problem(response, 500, 'internal', 'the fake backend was told to fail this read');
+        return;
+      }
+      json(response, 200, { first_sign_in_pending: setupState });
       return;
     }
 

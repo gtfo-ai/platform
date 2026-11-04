@@ -106,6 +106,17 @@ export const versionResponseSchema = z.strictObject({
   built_at: isoDateTimeSchema.nullable(),
 });
 
+/**
+ * `GET /api/setup-state` — the one fact the sign-in page needs before anybody signs in (WP-291).
+ *
+ * `first_sign_in_pending` is `true` only while **no account has ever signed in** on this instance,
+ * which is the condition under which the sign-in page names `APP_BOOTSTRAP_ADMIN_EMAIL`. It is
+ * public, so it is deliberately one bit and nothing more: technical/08 records the disclosure.
+ */
+export const setupStateResponseSchema = z.strictObject({
+  first_sign_in_pending: z.boolean(),
+});
+
 export const healthResponseSchema = z.strictObject({
   status: z.enum(['ok', 'degraded', 'down']),
   checks: z.record(z.string(), z.enum(['ok', 'degraded', 'down'])),
@@ -2918,6 +2929,7 @@ export const setupGuideResponseSchema = z.strictObject({
 export type ApiError = z.infer<typeof apiErrorSchema>;
 export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 export type VersionResponse = z.infer<typeof versionResponseSchema>;
+export type SetupStateResponse = z.infer<typeof setupStateResponseSchema>;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type UserSummary = z.infer<typeof userSummarySchema>;
 export type OrgUsersResponse = z.infer<typeof orgUsersResponseSchema>;

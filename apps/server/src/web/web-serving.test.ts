@@ -159,6 +159,7 @@ const build = async (
     },
     // WP-40: no pipeline store here, so the decision refuses by name and the queue reads empty.
     breakdown: null,
+    setupState: { firstSignInPending: async () => true },
     webRoot: options.webRoot === undefined ? root : options.webRoot,
     version: { version: '0.0.0-test', commit: null, builtAt: null },
     readiness: async () => ({ status: 'ok', checks: {} }),

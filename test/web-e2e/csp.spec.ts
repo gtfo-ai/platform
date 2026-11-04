@@ -105,7 +105,9 @@ test('the policy is enforced: an inline script and a <style> element are both re
   page,
 }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Agentic platform' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Tickets in, merge requests out.' }),
+  ).toBeVisible();
 
   const probe = await page.evaluate(() => {
     const script = document.createElement('script');

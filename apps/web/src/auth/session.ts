@@ -1,5 +1,6 @@
 /**
- * The three Better Auth calls the SPA makes (TD-022, technical/08 § Auth).
+ * The three Better Auth calls the SPA makes, and the platform's one pre-session read (TD-022,
+ * technical/08 § Auth).
  *
  * Better Auth owns `/api/auth/*` and its payloads are camelCase — the one documented exception to
  * the platform's snake_case wire format, because they are a third party's shape rather than one
@@ -13,7 +14,11 @@
  * request (`auth/plugin.ts`): a demotion bites the next request, so the client's copy is only ever
  * used to decide what to *offer*, never to decide what is allowed. The server is the authority.
  */
-import { userRoleSchema } from '@platform/contracts';
+import {
+  type SetupStateResponse,
+  setupStateResponseSchema,
+  userRoleSchema,
+} from '@platform/contracts';
 import * as z from 'zod';
 import type { ApiClient } from '../api/http.js';
 
@@ -45,6 +50,11 @@ export interface AuthApi {
   readonly getSession: () => Promise<SessionResponse>;
   readonly signIn: (credentials: SignInCredentials) => Promise<void>;
   readonly signOut: () => Promise<void>;
+  /**
+   * `GET /api/setup-state` (WP-291) — whether anybody has signed in to this instance yet. The
+   * platform's own route rather than Better Auth's, so its payload is snake_case and strict.
+   */
+  readonly setupState: () => Promise<SetupStateResponse>;
 }
 
 export const createAuthApi = (client: ApiClient): AuthApi => ({
@@ -58,6 +68,7 @@ export const createAuthApi = (client: ApiClient): AuthApi => ({
   signOut: async () => {
     await client.command('/api/auth/sign-out', { schema: signInResponseSchema, body: {} });
   },
+  setupState: () => client.get('/api/setup-state', { schema: setupStateResponseSchema }),
 });
 
 /** What the UI shows for a user: the name when there is one, the email otherwise. */

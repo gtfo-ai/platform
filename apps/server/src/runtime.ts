@@ -71,6 +71,7 @@ import { buildApp } from './app.js';
 import { composeAsks } from './asks.js';
 import { createAuth } from './auth/better-auth.js';
 import { bootstrapAdministrator } from './auth/bootstrap.js';
+import { createSetupState } from './auth/setup-state.js';
 import {
   composeHistoryBootstrap,
   createHistoryBootstrapCommands,
@@ -106,6 +107,7 @@ import { createProjectConfigCommands } from './project-config.js';
 import { listedModelIds } from './queries/cost-queries.js';
 import { countStaleCommandClaims } from './queries/idempotency-queries.js';
 import { listRunMessages } from './queries/pipeline-queries.js';
+import { anySignInRecorded, recordFirstSignIn } from './queries/setup-state-queries.js';
 import { createReadinessCheck } from './readiness.js';
 import { roleCapabilities, roleIsIdle } from './role.js';
 import { CLAIM_IN_FLIGHT_MS } from './routes/idempotency.js';
@@ -1004,7 +1006,20 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         })
       : null;
 
-    const auth = createAuth({ pool: database.pool, config });
+    // WP-291: the sign-in page's bootstrap hint, told about every session the served instance
+    // creates — and only the served one: `auth/bootstrap.ts` builds its own instance without it.
+    const setupState = createSetupState({
+      store: {
+        anySignInRecorded: async () => anySignInRecorded(database.db),
+        recordFirstSignIn: async (userId) => recordFirstSignIn(database.db, userId),
+      },
+      logger: loggerPort,
+    });
+    const auth = createAuth({
+      pool: database.pool,
+      config,
+      onSessionCreated: setupState.signedIn,
+    });
     const hub = new SseHub({
       bufferSize: config.sseBufferSize,
       maxQueuedFrames: config.sseMaxQueuedFrames,
@@ -1135,6 +1150,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       metrics,
       database: database.db,
       auth,
+      setupState,
       hub,
       webhooks,
       knowledge: knowledgeCommands,
