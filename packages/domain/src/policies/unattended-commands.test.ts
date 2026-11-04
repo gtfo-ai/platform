@@ -1316,33 +1316,30 @@ describe('properties over arbitrary lines', () => {
   );
   const lines = fc.array(words, { minLength: 1, maxLength: 9 }).map((parts) => parts.join(' '));
 
-  it(
-    'never allows what the policy blocks or cannot follow, and `deny` never allows an ask',
-    () => {
-      fc.assert(
-        fc.property(lines, (command) => {
-          const evaluation = evaluateCommand({ command }, policy);
-          const autoDecision = auto(command);
-          const denied = denyMode(command);
-          if (evaluation.verdict === 'block' || evaluation.uncertainty.length > 0) {
-            expect(autoDecision.decision).toBe('deny');
-            expect(denied.decision).toBe('deny');
-          }
-          if (evaluation.verdict !== 'allow') {
-            expect(denied.decision).toBe('deny');
-          }
-          if (denied.decision === 'allow') {
-            expect(autoDecision.decision).toBe('allow');
-          }
-          if (autoDecision.decision === 'deny') {
-            expect(autoDecision.reason).toContain(UNATTENDED_ALTERNATIVES);
-          }
-        }),
-        { numRuns: 3_000 },
-      );
-    },
-    PROPERTY_TEST_TIMEOUT_MS,
-  );
+  // 3 000 runs of the whole policy: timed out at the shared 30 s bound under the pre-push hook's own load.
+  it('never allows what the policy blocks or cannot follow, and `deny` never allows an ask', () => {
+    fc.assert(
+      fc.property(lines, (command) => {
+        const evaluation = evaluateCommand({ command }, policy);
+        const autoDecision = auto(command);
+        const denied = denyMode(command);
+        if (evaluation.verdict === 'block' || evaluation.uncertainty.length > 0) {
+          expect(autoDecision.decision).toBe('deny');
+          expect(denied.decision).toBe('deny');
+        }
+        if (evaluation.verdict !== 'allow') {
+          expect(denied.decision).toBe('deny');
+        }
+        if (denied.decision === 'allow') {
+          expect(autoDecision.decision).toBe('allow');
+        }
+        if (autoDecision.decision === 'deny') {
+          expect(autoDecision.reason).toContain(UNATTENDED_ALTERNATIVES);
+        }
+      }),
+      { numRuns: 3_000 },
+    );
+  }, 120_000);
 });
 
 describe('the setting only tightens across layers', () => {

@@ -424,5 +424,6 @@ describe('runMigrationsCheck — the command line', () => {
     expect(out).toMatch(
       /^PASS: migrations:check \(\d+ new migration\(s\) classified and checked, \d+ applied at the base unchanged; explicit range HEAD\.\.HEAD\)\n$/,
     );
-  });
+    // A real `node` process over the whole checkout: timed out at the default 5 s under load.
+  }, 60_000);
 });

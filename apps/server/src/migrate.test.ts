@@ -59,7 +59,10 @@ const closedPort = async (): Promise<number> => {
   return address.port;
 };
 
-describe('the migrate entrypoint', () => {
+// Every case spawns `node` on the TypeScript sources (import and transform alone take seconds on a loaded
+// machine): the default 5 s limit timed out under the pre-push hook's own load, so each case gets the
+// child's own 60 s bound.
+describe('the migrate entrypoint', { timeout: 60_000 }, () => {
   it('exits 2 and names the variable when there is no database configuration', () => {
     const run = runMigrate({});
     expect(run.status, run.stderr).toBe(2);
