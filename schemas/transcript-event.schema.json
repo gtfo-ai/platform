@@ -743,7 +743,8 @@
         "timed_out",
         "crash",
         "lease_expired",
-        "shutdown"
+        "shutdown",
+        "rate_limited"
       ]
     },
     "Sequence": {

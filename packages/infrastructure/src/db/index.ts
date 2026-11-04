@@ -6,6 +6,7 @@
  */
 export * from './client.js';
 export * from './config.js';
+export * from './contracts-ahead.js';
 export * from './image-labels.js';
 export * from './migration-class.js';
 export * from './migrations.js';

@@ -176,6 +176,14 @@ describe('the verification targets and .github/workflows/ci.yml', () => {
     expect(job, 'the lint job checks out a shallow clone').toMatch(/^\s+fetch-depth: 0$/m);
   });
 
+  it('keeps the worker-protocol check in the static group (WP-273)', () => {
+    // The same blind spot: dropping `protocol:check` from the table keeps it equal to CI. It reads
+    // git history like `migrations:check`, whose case above pins the full-history checkout.
+    expect(VERIFY_GROUPS['verify:static'], 'verify:static lost protocol:check').toContain(
+      'protocol:check',
+    );
+  });
+
   it('runs every step of `verify` in some CI job', () => {
     const inCi = new Set(workflowCommands().flatMap(expand));
 

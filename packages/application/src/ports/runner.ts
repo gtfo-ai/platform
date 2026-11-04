@@ -13,46 +13,53 @@
  *
  * Field names here are camelCase and match technical/04's table verbatim. The snake_case rule in
  * `CLAUDE.md` governs the wire — config YAML, event payloads, artifact data, API DTOs and
- * transcript rows — and a `RunSpec` is none of those: it never leaves the process.
+ * transcript rows — and a `RunSpec` was none of those while it never left the process. Since WP-273
+ * it does: a remote worker's run package carries it (TD-031 decision 4), camelCase, which is the
+ * deviation `@platform/contracts`'s `run-spec.ts` (where the schemas live now) and `worker.ts` state.
  */
 import type {
   Id,
   JsonObject,
   JsonValue,
   ModelUsage,
+  PlatformToolName,
+  PromptHolds,
+  RunCommandPolicy,
+  RunContextDocument,
   RunCost,
+  RunLimits,
   RunMode,
   RunSavedWork,
+  RunSpec,
   RunStartFailure,
   RunStatus,
+  RunSubagent,
   RunTerminalReason,
   TokenUsage,
   TranscriptEvent,
 } from '@platform/contracts';
 import {
-  agentRoleSchema,
   artifactTypeSchema,
-  effortSchema,
-  idSchema,
-  jsonObjectSchema,
+  MUTATING_PLATFORM_TOOLS,
   nonEmptyStringSchema,
-  pathPatternSchema,
-  providerModeSchema,
+  PLATFORM_TOOL_NAMES,
+  platformToolNameSchema,
+  promptHoldsSchema,
   RUN_START_FAILURE_DETAIL_MAX_CHARS,
   RUN_START_FAILURE_MESSAGE_MAX_CHARS,
   RUN_START_FAILURE_OUTPUT_MAX_CHARS,
-  runModeSchema,
-  runSavedWorkSchema,
+  runCommandPolicySchema,
+  runContextDocumentSchema,
+  runLimitsDefaults,
+  runLimitsSchema,
+  runSpecSchema,
+  runSubagentSchema,
   shaSchema,
-  stageIdSchema,
-  unattendedCommandModeSchema,
-  usdSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
 import type { SecretRedactor } from './integrations/audit.js';
 import {
   boundOutputTail,
-  existingProtectedPathsSchema,
   WorkspaceError,
   type WorkspaceErrorCode,
   type WorkspaceErrorReason,
@@ -88,242 +95,29 @@ export interface RunnerClock {
 
 // ── RunSpec ──────────────────────────────────────────────────────────────────
 
-/** technical/04: `maxTurns`, `maxBudgetUsd`, `stallTimeoutMs`, `wallClockMs` from effective config. */
-export const runLimitsSchema = z.strictObject({
-  maxTurns: z.int().positive().max(1000),
-  maxBudgetUsd: usdSchema,
-  /** No transcript output for this long ⇒ the run is `stalled` (technical/02: default 5 min). */
-  stallTimeoutMs: z.int().positive(),
-  /** Hard ceiling on the whole run; the process tree is killed (technical/05). */
-  wallClockMs: z.int().positive(),
-  /** `PostToolUse` truncates tool output to this many characters, head and tail (technical/04). */
-  toolOutputMaxChars: z.int().positive(),
-  /** How long `canUseTool` waits for a human before it denies (BD-025: unattended default deny). */
-  questionTimeoutMs: z.int().positive(),
-});
-
-export const runLimitsDefaults = {
-  maxTurns: 60,
-  maxBudgetUsd: 10,
-  stallTimeoutMs: 5 * 60_000,
-  wallClockMs: 60 * 60_000,
-  toolOutputMaxChars: 10_000,
-  questionTimeoutMs: 24 * 60 * 60_000,
-} as const satisfies z.infer<typeof runLimitsSchema>;
-
-/** The three-list command policy as it reaches the runner (BD-025); resolved by WP-15. */
-export const runCommandPolicySchema = z.strictObject({
-  allow: z.array(nonEmptyStringSchema),
-  ask: z.array(nonEmptyStringSchema),
-  block: z.array(nonEmptyStringSchema),
-  /**
-   * What the `PreToolUse(Bash)` hook does with an `ask` (BD-025's 2026-10-06 amendment): `auto`
-   * runs it in the sandbox, `deny` refuses it — `unattendedCommandModeOf` over the organisation,
-   * the settings and the repository file. Required, so no planner can leave a run to a default.
-   */
-  unattended: unattendedCommandModeSchema,
-});
-
-/** One subagent definition (technical/04 `agents`). */
-export const runSubagentSchema = z.strictObject({
-  description: nonEmptyStringSchema,
-  prompt: nonEmptyStringSchema,
-  tools: z.array(nonEmptyStringSchema),
-});
-
-/** A context-pack document written into the workspace (product/05, technical/04). */
-export const runContextDocumentSchema = z.strictObject({
-  tier: z.union([z.literal(0), z.literal(1)]),
-  path: pathPatternSchema,
-  reason: z.string(),
-});
-
-/**
- * The ten in-process MCP tools of technical/04 (`get_conversation` joined at WP-180, TD-029 decision
- * 11). A run is given the subset its role needs: a
- * read-only stage never sees `open_mr`, so a mutating action is impossible rather than merely
- * refused (BD-021).
- */
-export const PLATFORM_TOOL_NAMES = [
-  'ask_human',
-  'notify_human',
-  'report_progress',
-  'get_task_context',
-  'get_conversation',
-  'kb_search',
-  'add_ticket_comment',
-  'open_mr',
-  'update_mr_description',
-  'create_followup_ticket',
-] as const;
-
-export type PlatformToolName = (typeof PLATFORM_TOOL_NAMES)[number];
-
-export const platformToolNameSchema = z.enum(PLATFORM_TOOL_NAMES);
-
-/** Platform tools that change something outside the workspace. */
-export const MUTATING_PLATFORM_TOOLS = [
-  'add_ticket_comment',
-  'open_mr',
-  'update_mr_description',
-  'create_followup_ticket',
-] as const satisfies readonly PlatformToolName[];
-
-/**
- * What a run's prompt already carries **whole**, so `get_task_context` need not send it again
- * (PROGRESS backlog 474): on Autix the tool re-sent the ticket and the RefinedSpec the user prompt
- * held — about 22 KB of a run's context, twice.
- *
- * Written by the planner from the same cut the assembler applies (`artifactShownWhole`), never
- * re-derived by the tool. Absent for a run whose prompt the tool knows nothing about (the ask, a
- * test's hand-built spec), and then every value is served as before — the safe direction.
- */
-export const promptHoldsSchema = z.strictObject({
-  ticket: z.boolean(),
-  artifacts: z.array(
-    z.strictObject({ artifact_type: artifactTypeSchema, version: z.int().positive() }),
-  ),
-});
-
-export type PromptHolds = z.infer<typeof promptHoldsSchema>;
-
-export const runSpecSchema = z.strictObject({
-  runId: idSchema,
-  taskId: idSchema,
-  projectId: idSchema,
-  /** Null for runs that belong to no pipeline stage — discovery, librarian, ask-the-task. */
-  stage: stageIdSchema.nullable(),
-  role: agentRoleSchema,
-  mode: runModeSchema,
-  attempt: z.int().positive(),
-  model: nonEmptyStringSchema,
-  effort: effortSchema,
-  providerMode: providerModeSchema,
-  /** Hash of prompt layers 1–3 (technical/04 § "Prompt assembly"). */
-  promptVersion: nonEmptyStringSchema,
-  /** Layers 1–3, already assembled by `assemblePrompt`; appended to the `claude_code` preset. */
-  systemPromptAppend: nonEmptyStringSchema,
-  /** Layers 4–6: the task block, the context pack and the output contract. */
-  userPrompt: nonEmptyStringSchema,
-  /** Absolute path of the task's workspace; the only writable tree (BD-021, TD-021). */
-  workspacePath: nonEmptyStringSchema,
-  /**
-   * The **branch** the workspace checks out — technical/05 §2's *"checkout of the task branch for
-   * re-entries"*, which had no carrier at all until WP-34 (PROGRESS backlog **71**).
-   *
-   * A branch name, never a commit (WP-105: a commit is {@link checkoutCommit}). `null` means the
-   * repository's default branch, which is what the *first* run of a task gets: the task's branch
-   * does not exist on the remote yet, and a provisioner that failed on it would fail every task's
-   * first stage.
-   *
-   * One producer, `pipeline/planner.ts`: an ordinary task checks out its **own branch**
-   * (`tasks.branch`), so a returned `implementation` run sees what the previous attempt pushed and
-   * a `code_review` stage reviews the tree the merge request is about.
-   *
-   * **It is honoured since WP-53**, which is the mapping backlog 71 was filed for:
-   * `runWorkspaceSpecFor` (`packages/infrastructure/src/launcher/provisioner.ts`) writes it to
-   * `WorkspaceSpec.repo.checkoutBranch`, and the Docker provider's clone runs
-   * `git checkout "$B" || git checkout -b "$B"` — so a task's first run, whose branch is not on the
-   * remote, clones the default branch and creates it rather than failing. Measured end to end
-   * against a real daemon by `scripts/launcher-control-plane-check.mjs`.
-   */
-  checkoutRef: nonEmptyStringSchema.nullable(),
-  /**
-   * The **commit** the workspace checks out, detached — a **shadow** task's base: the merge base of
-   * the human merge request it is compared with (Q82 (a)), because a diff written against today's
-   * tree and a human diff written against the tree six months ago measure drift, not similarity.
-   *
-   * Its own field since WP-105 (WP-98's discovered work). Until then the sha travelled in
-   * {@link checkoutRef}, and the clone's `checkout "$B" || checkout -b "$B"` — right for a branch a
-   * task's first run creates — turned a commit the mirror does not hold into a new branch *named*
-   * after the sha at the default branch's head: the run started on today's tree, which Q82 (a) says
-   * must be refused. A field per kind is how the workspace tells *a branch that does not exist yet*
-   * (create it) from *a commit that does not exist* (refuse the start by name, `invalid_spec`,
-   * terminal — `#clone` in `packages/infrastructure/src/workspace/provider.ts`). At most one of the
-   * two is set; the planner is the one producer.
-   */
-  checkoutCommit: shaSchema.nullable(),
-  /**
-   * Where this run's **unfinished work** goes if it ends without a result — the product owner's
-   * 2026-10-05 decision (BD-025's amendment of that date, PROGRESS backlog 467) — or `null` for a
-   * run whose work is not saved.
-   *
-   * One producer, the planner (`unfinishedWorkBranchFor` in `pipeline/unfinished-work.ts`): a
-   * Developer run of an ordinary task at any stage but `conflict_resolution`, whose checkout is an
-   * `agentic/*` branch — the same value as {@link checkoutRef}, so the work goes back to the branch
-   * the run was given. One reader, the workspace runner, which asks the workspace for the export when
-   * the outcome is one `savesUnfinishedWork` names. A field rather than a rule the runner re-derives
-   * because the runner must not grow a second opinion about roles, stages and task modes.
-   */
-  unfinishedWorkBranch: runSavedWorkSchema.shape.branch.nullable(),
-  contextPack: z.array(runContextDocumentSchema),
-  limits: runLimitsSchema,
-  /**
-   * The role's tool policy: the **base set** the run may use, mapped onto the SDK's `tools`.
-   *
-   * Named `tools` and not `allowedTools` because the SDK means something else by that name — an
-   * auto-approve list that shadows `canUseTool` — which technical/04's table got wrong and WP-12
-   * corrected there (see the note under the RunSpec table). The field kept the wrong name for one
-   * work package; it is renamed here so the next reader inherits the correction rather than the
-   * confusion. The `runs.allowed_tools` **column** keeps its name: that is technical/03's wire.
-   */
-  tools: z.array(nonEmptyStringSchema),
-  disallowedTools: z.array(nonEmptyStringSchema),
-  platformTools: z.array(platformToolNameSchema),
-  commandPolicy: runCommandPolicySchema,
-  /**
-   * BD-024's protected paths (technical/04's WP-99 amendment). A write that **creates** one is
-   * allowed; a write to one that **exists** at the merge base with the default branch (`existingProtectedPaths`) is
-   * allowed only when a pattern of `plannedProtectedPaths` matches it.
-   */
-  protectedPaths: z.array(pathPatternSchema),
-  /**
-   * The latest ImplementationPlan's `protected_path_changes[].path` — the planner reads them through
-   * the CI gate's own `exceptionsOf`, and an absent or unparsable plan gives `[]`.
-   */
-  plannedProtectedPaths: z.array(pathPatternSchema),
-  /**
-   * Which protected paths exist at the merge base of the checkout and the default branch. The planner writes `unlisted` (nothing is
-   * listed before there is a workspace, and `unlisted` fails closed); the workspace runner
-   * substitutes the launcher's listing beside `workspacePath`.
-   */
-  existingProtectedPaths: existingProtectedPathsSchema,
-  agents: z.record(nonEmptyStringSchema, runSubagentSchema),
-  /** Opaque per-provider MCP configuration (technical/06); passed to the SDK unread. */
-  mcpServers: z.record(nonEmptyStringSchema, jsonObjectSchema),
-  skills: z.array(nonEmptyStringSchema),
-  /**
-   * The artifact this run must produce, or null for a run that produces none (intake
-   * classification, ask-the-task). The runner derives **both** the JSON Schema it hands the SDK
-   * (`outputFormat: { type: 'json_schema' }`) and the validator it re-checks the answer with from
-   * `artifactDataSchemas` in `@platform/contracts`, so "what the model was asked for" and "what the
-   * platform accepts" cannot drift apart — technical/04 calls the second check defence in depth,
-   * and defence in depth against a *different* schema is not depth.
-   */
-  artifactType: artifactTypeSchema.nullable(),
-  /**
-   * The subprocess environment, explicit and never inherited (technical/04; the SDK's `env`
-   * REPLACES `process.env` rather than merging with it — verified in `Options.env`).
-   */
-  env: z.record(nonEmptyStringSchema, z.string()),
-  /**
-   * Names of `env` entries whose values are secret. The composition root builds the run's
-   * injected-secret redactor from these (TD-012 step 1); the runner never copies the values.
-   */
-  secretEnvNames: z.array(nonEmptyStringSchema),
-  /** `pathToClaudeCodeExecutable` in `local` provider mode (BD-004); null uses the bundled binary. */
-  claudeCodePath: nonEmptyStringSchema.nullable(),
-  /** Session to resume after a platform restart (technical/04 § "Resume and take-over"). */
-  resumeSessionId: nonEmptyStringSchema.nullable(),
-  /** {@link promptHoldsSchema}: what `get_task_context` need not send again. Optional. */
-  promptHolds: promptHoldsSchema.optional(),
-});
-
-export type RunSpec = z.infer<typeof runSpecSchema>;
-export type RunLimits = z.infer<typeof runLimitsSchema>;
-export type RunCommandPolicy = z.infer<typeof runCommandPolicySchema>;
-export type RunSubagent = z.infer<typeof runSubagentSchema>;
-export type RunContextDocument = z.infer<typeof runContextDocumentSchema>;
+// The RunSpec schemas moved to `@platform/contracts` (`run-spec.ts`) at WP-273 — TD-031 decision 4
+// puts the RunSpec in the run package a remote worker receives — and are re-exported unchanged.
+export type {
+  PlatformToolName,
+  PromptHolds,
+  RunCommandPolicy,
+  RunContextDocument,
+  RunLimits,
+  RunSpec,
+  RunSubagent,
+};
+export {
+  MUTATING_PLATFORM_TOOLS,
+  PLATFORM_TOOL_NAMES,
+  platformToolNameSchema,
+  promptHoldsSchema,
+  runCommandPolicySchema,
+  runContextDocumentSchema,
+  runLimitsDefaults,
+  runLimitsSchema,
+  runSpecSchema,
+  runSubagentSchema,
+};
 
 // ── Outcome ──────────────────────────────────────────────────────────────────
 

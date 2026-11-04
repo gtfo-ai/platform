@@ -81,6 +81,7 @@ import {
   workspaceRecordSchema,
 } from './records.js';
 import { contentBlockSchema, hookNameSchema, transcriptEventSchema } from './transcript.js';
+import { runPackageSchema } from './worker.js';
 
 /**
  * Stable `$defs` names for the schemas that appear more than once in a published document.
@@ -210,6 +211,13 @@ export const publishedSchemas: readonly PublishedSchema[] = [
     description:
       'The organisation settings document (organizations.settings), read and written by GET/PATCH /api/org; unknown keys are errors (technical/12, WP-93).',
     schema: organisationSettingsSchema,
+  },
+  {
+    file: 'worker-run-package.schema.json',
+    title: 'Worker run package',
+    description:
+      'One run as the core decided it and a remote worker executes it: the RunSpec without secret values, the WorkspaceSpec, the run credential, the skills, the image digests, the epoch and the run token (TD-031 decision 4). camelCase, a stated deviation; refinements (one run, no secret in an environment, the byte bound) are enforced by the zod schema only.',
+    schema: runPackageSchema,
   },
   {
     file: 'transcript-event.schema.json',

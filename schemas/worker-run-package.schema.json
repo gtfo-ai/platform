@@ -1,0 +1,1034 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Worker run package",
+  "description": "One run as the core decided it and a remote worker executes it: the RunSpec without secret values, the WorkspaceSpec, the run credential, the skills, the image digests, the epoch and the run token (TD-031 decision 4). camelCase, a stated deviation; refinements (one run, no secret in an environment, the byte bound) are enforced by the zod schema only.",
+  "type": "object",
+  "properties": {
+    "runId": {
+      "$ref": "#/$defs/Id"
+    },
+    "epoch": {
+      "$ref": "#/$defs/anon_03c948b9"
+    },
+    "runToken": {
+      "$ref": "#/$defs/anon_ab1f2555"
+    },
+    "run": {
+      "$ref": "#/$defs/anon_e7d1fded"
+    },
+    "workspace": {
+      "$ref": "#/$defs/anon_2346d027"
+    },
+    "credential": {
+      "$ref": "#/$defs/anon_e8af54fa"
+    },
+    "skills": {
+      "$ref": "#/$defs/anon_e9ddba2d"
+    },
+    "images": {
+      "$ref": "#/$defs/anon_16e0fe1d"
+    },
+    "limits": {
+      "$ref": "#/$defs/anon_8b4b1efa"
+    }
+  },
+  "required": [
+    "runId",
+    "epoch",
+    "runToken",
+    "run",
+    "workspace",
+    "credential",
+    "skills",
+    "images",
+    "limits"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "AgentRole": {
+      "type": "string",
+      "enum": [
+        "triager",
+        "product_manager",
+        "investigator",
+        "architect",
+        "developer",
+        "reviewer",
+        "acceptance_tester",
+        "facilitator",
+        "librarian",
+        "discovery",
+        "ask",
+        "historian"
+      ]
+    },
+    "ArtifactType": {
+      "type": "string",
+      "enum": [
+        "RefinedSpec",
+        "RootCauseAnalysis",
+        "ImplementationPlan",
+        "ImplementationNotes",
+        "ReviewVerdict",
+        "AcceptanceVerdict",
+        "RetroReport",
+        "LibrarianProposals",
+        "ShadowReport",
+        "ReadinessReport",
+        "DiscoveryDraft",
+        "AskAnswer",
+        "HistoryFindings",
+        "ResearchReport",
+        "TicketBreakdown"
+      ]
+    },
+    "Effort": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "Id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "IsoDateTime": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "JsonObject": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        }
+      ]
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "Sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,64}$"
+    },
+    "Slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "Usd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "anon_03c948b9": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "anon_16e0fe1d": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/anon_5e81710d"
+        },
+        "egress": {
+          "$ref": "#/$defs/anon_5e81710d"
+        }
+      },
+      "required": [
+        "run",
+        "egress"
+      ],
+      "additionalProperties": false
+    },
+    "anon_1c77b77c": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+    },
+    "anon_2346d027": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/Id"
+        },
+        "projectId": {
+          "$ref": "#/$defs/Id"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "$ref": "#/$defs/anon_66c51516"
+                },
+                "defaultBranch": {
+                  "$ref": "#/$defs/anon_fff8dfda"
+                },
+                "checkoutBranch": {
+                  "$ref": "#/$defs/anon_68965646"
+                },
+                "checkoutCommit": {
+                  "$ref": "#/$defs/anon_f89f3e3b"
+                },
+                "cacheKey": {
+                  "$ref": "#/$defs/anon_1c77b77c"
+                },
+                "ssh": {
+                  "$ref": "#/$defs/anon_e731877e"
+                }
+              },
+              "required": [
+                "url",
+                "defaultBranch",
+                "checkoutBranch",
+                "checkoutCommit",
+                "cacheKey"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "cpus": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 64
+            },
+            "memoryMb": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 1048576
+            },
+            "pidsLimit": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 65536
+            },
+            "tmpfsMb": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 65536
+            },
+            "stopGraceSeconds": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 3600
+            }
+          },
+          "required": [
+            "cpus",
+            "memoryMb",
+            "pidsLimit",
+            "tmpfsMb",
+            "stopGraceSeconds"
+          ],
+          "additionalProperties": false
+        },
+        "egress": {
+          "type": "object",
+          "properties": {
+            "hosts": {
+              "maxItems": 256,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_9374ac22"
+              }
+            },
+            "connectPorts": {
+              "minItems": 1,
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_f2e5cf00"
+              }
+            }
+          },
+          "required": [
+            "hosts",
+            "connectPorts"
+          ],
+          "additionalProperties": false
+        },
+        "runtime": {
+          "type": "string",
+          "enum": [
+            "runc",
+            "runsc"
+          ]
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "skills": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_6d600f46"
+          }
+        },
+        "protectedPaths": {
+          "maxItems": 256,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PathPattern"
+          }
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "keepUntil": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "runletProtocol": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "runId",
+        "projectId",
+        "repo",
+        "limits",
+        "egress",
+        "runtime",
+        "readOnly",
+        "skills",
+        "protectedPaths",
+        "env",
+        "keepUntil",
+        "runletProtocol"
+      ],
+      "additionalProperties": false
+    },
+    "anon_5e81710d": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "anon_66c51516": {
+      "maxLength": 2048,
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_68965646": {
+      "anyOf": [
+        {
+          "maxLength": 255,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "anon_6d600f46": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "anon_8b4b1efa": {
+      "type": "object",
+      "properties": {
+        "leaseTtlMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 3600000
+        }
+      },
+      "required": [
+        "leaseTtlMs"
+      ],
+      "additionalProperties": false
+    },
+    "anon_9374ac22": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+    },
+    "anon_ab1f2555": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "anon_b4ffa68c": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "anon_e731877e": {
+      "type": "object",
+      "properties": {
+        "publicKey": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$"
+        },
+        "httpsPrefix": {
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^https:\\/\\/[a-z0-9.-]+\\/$"
+        },
+        "sshPrefix": {
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^ssh:\\/\\/git@[a-z0-9.-]+:\\d{1,5}\\/$"
+        },
+        "connectHost": {
+          "$ref": "#/$defs/anon_9374ac22"
+        },
+        "connectPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "hostKeyAlias": {
+          "$ref": "#/$defs/anon_9374ac22"
+        },
+        "knownHosts": {
+          "minItems": 1,
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_fee36e83"
+          }
+        }
+      },
+      "required": [
+        "publicKey",
+        "httpsPrefix",
+        "sshPrefix",
+        "connectHost",
+        "connectPort",
+        "hostKeyAlias",
+        "knownHosts"
+      ],
+      "additionalProperties": false
+    },
+    "anon_e7d1fded": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/Id"
+        },
+        "taskId": {
+          "$ref": "#/$defs/Id"
+        },
+        "projectId": {
+          "$ref": "#/$defs/Id"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Slug"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "shadow",
+            "review_only",
+            "linter",
+            "discovery",
+            "retro",
+            "librarian",
+            "ask",
+            "bootstrap"
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "model": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "effort": {
+          "$ref": "#/$defs/Effort"
+        },
+        "providerMode": {
+          "type": "string",
+          "enum": [
+            "api",
+            "local"
+          ]
+        },
+        "promptVersion": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "systemPromptAppend": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "userPrompt": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "workspacePath": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "checkoutRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checkoutCommit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unfinishedWorkBranch": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^agentic\\/[A-Za-z0-9._\\-/]{1,200}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contextPack": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "tier": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 0
+                  },
+                  {
+                    "type": "number",
+                    "const": 1
+                  }
+                ]
+              },
+              "path": {
+                "$ref": "#/$defs/PathPattern"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tier",
+              "path",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "maxTurns": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 1000
+            },
+            "maxBudgetUsd": {
+              "$ref": "#/$defs/Usd"
+            },
+            "stallTimeoutMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "wallClockMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "toolOutputMaxChars": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "questionTimeoutMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "maxTurns",
+            "maxBudgetUsd",
+            "stallTimeoutMs",
+            "wallClockMs",
+            "toolOutputMaxChars",
+            "questionTimeoutMs"
+          ],
+          "additionalProperties": false
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "disallowedTools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "platformTools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "ask_human",
+              "notify_human",
+              "report_progress",
+              "get_task_context",
+              "get_conversation",
+              "kb_search",
+              "add_ticket_comment",
+              "open_mr",
+              "update_mr_description",
+              "create_followup_ticket"
+            ]
+          }
+        },
+        "commandPolicy": {
+          "type": "object",
+          "properties": {
+            "allow": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "ask": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "block": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "unattended": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "deny"
+              ]
+            }
+          },
+          "required": [
+            "allow",
+            "ask",
+            "block",
+            "unattended"
+          ],
+          "additionalProperties": false
+        },
+        "protectedPaths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PathPattern"
+          }
+        },
+        "plannedProtectedPaths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PathPattern"
+          }
+        },
+        "existingProtectedPaths": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "listed"
+                },
+                "paths": {
+                  "maxItems": 10000,
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/anon_b4ffa68c"
+                  }
+                },
+                "opaque": {
+                  "maxItems": 1000,
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/anon_b4ffa68c"
+                  }
+                }
+              },
+              "required": [
+                "state",
+                "paths",
+                "opaque"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "unlisted"
+                },
+                "reason": {
+                  "maxLength": 500,
+                  "$ref": "#/$defs/NonEmptyString"
+                }
+              },
+              "required": [
+                "state",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "agents": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "$ref": "#/$defs/NonEmptyString"
+              },
+              "prompt": {
+                "$ref": "#/$defs/NonEmptyString"
+              },
+              "tools": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/NonEmptyString"
+                }
+              }
+            },
+            "required": [
+              "description",
+              "prompt",
+              "tools"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "mcpServers": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonObject"
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "artifactType": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "secretEnvNames": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "claudeCodePath": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resumeSessionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "promptHolds": {
+          "type": "object",
+          "properties": {
+            "ticket": {
+              "type": "boolean"
+            },
+            "artifacts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "artifact_type": {
+                    "$ref": "#/$defs/ArtifactType"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "artifact_type",
+                  "version"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "ticket",
+            "artifacts"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "runId",
+        "taskId",
+        "projectId",
+        "stage",
+        "role",
+        "mode",
+        "attempt",
+        "model",
+        "effort",
+        "providerMode",
+        "promptVersion",
+        "systemPromptAppend",
+        "userPrompt",
+        "workspacePath",
+        "checkoutRef",
+        "checkoutCommit",
+        "unfinishedWorkBranch",
+        "contextPack",
+        "limits",
+        "tools",
+        "disallowedTools",
+        "platformTools",
+        "commandPolicy",
+        "protectedPaths",
+        "plannedProtectedPaths",
+        "existingProtectedPaths",
+        "agents",
+        "mcpServers",
+        "skills",
+        "artifactType",
+        "env",
+        "secretEnvNames",
+        "claudeCodePath",
+        "resumeSessionId"
+      ],
+      "additionalProperties": false
+    },
+    "anon_e8af54fa": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "host": {
+              "maxLength": 253,
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "username": {
+              "maxLength": 255,
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "password": {
+              "maxLength": 4096,
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "read",
+                "push"
+              ]
+            },
+            "expiresAt": {
+              "$ref": "#/$defs/IsoDateTime"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "minted",
+                "static",
+                "deploy_key"
+              ]
+            }
+          },
+          "required": [
+            "host",
+            "username",
+            "password",
+            "scope",
+            "expiresAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "anon_e9ddba2d": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "type": "string",
+          "pattern": "^skills@(?:none|[0-9a-f]{16})$"
+        },
+        "files": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/anon_6d600f46"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 262144
+            }
+          }
+        }
+      },
+      "required": [
+        "digest",
+        "files"
+      ],
+      "additionalProperties": false
+    },
+    "anon_f2e5cf00": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "anon_f89f3e3b": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Sha"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "anon_fee36e83": {
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^[a-z0-9.-]+ (?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256) [A-Za-z0-9+/]+={0,2}$"
+    },
+    "anon_fff8dfda": {
+      "maxLength": 255,
+      "$ref": "#/$defs/NonEmptyString"
+    }
+  }
+}

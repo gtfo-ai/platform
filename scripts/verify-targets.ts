@@ -46,6 +46,9 @@ export const VERIFY_GROUPS: Readonly<Record<string, readonly string[]>> = {
     // Every new migration declares its class and the class is true (WP-271, TD-032 decision 1).
     // It reads the push's base commit, so CI's lint job checks out the full history.
     'migrations:check',
+    // A worker-protocol bump is base + 1, keeps N-1 accepted, and never follows a bump in the push
+    // before it (WP-273, TD-032 decision 7). It reads git history the same way as the step above.
+    'protocol:check',
   ],
   'verify:types': ['typecheck'],
   // TD-013's bundle budget is an **acceptance criterion** of WP-20, not a nicety, so it is a step

@@ -56,7 +56,15 @@ import {
   workspaceProtocolsSchema,
   workspaceSpecSchema,
 } from '@platform/application';
-import { isoDateTimeSchema, nonEmptyStringSchema, shaSchema } from '@platform/contracts';
+import {
+  isoDateTimeSchema,
+  nonEmptyStringSchema,
+  type RunCredentialPayload,
+  runCredentialIssues,
+  runCredentialSchema,
+  secretInEnvironment,
+  shaSchema,
+} from '@platform/contracts';
 import * as z from 'zod';
 
 /** Every path this surface answers, so a router and a client cannot disagree about one. */
@@ -263,46 +271,11 @@ export const workspaceCliEnvironmentSchema: z.ZodType<WorkspaceCliEnvironment> =
 // ── Requests ─────────────────────────────────────────────────────────────────
 
 /**
- * The run's git credential, **minted by the runner and carried to the launcher** — TD-028's WP-76
- * amendment (2026-09-25), decision 3.
- *
- * This read *"The launcher **mints** through its own `RunCredentialSource`; the caller says what to
- * mint for"* until WP-76, and the launcher could not: it holds no binding, no `APP_SECRET_KEY` and
- * no database (TD-021), so its source refused and every writing run failed terminally at
- * `startRun` (PROGRESS backlog 133). The second clause survives — **the scope is still decided
- * platform-side**, by the spec's `readOnly` — and the first is reversed: the runner mints through
- * `IntegrationActionExecutor` (one audit row per mint and per revoke, keyed by the git binding) and
- * sends the material here.
- *
- * What that costs, stated rather than implied: **the runner holds the token for the life of the
- * run**, not of one request — it answers the workspace's `cred.get` from its own copy and revokes
- * after `endRun` returns — and the token crosses this hop, the same `internal: true`, authenticated
- * network the run token already crosses the other way (`workspaceAttachmentSchema`). No `revokeId`
- * travels: the launcher cannot use one. Neither end logs a body.
+ * The run's git credential — {@link runCredentialSchema} — moved to `@platform/contracts`
+ * (`run-spec.ts`) at WP-273 with its docblock, because a remote worker's run package carries the same
+ * credential (TD-031 decision 4). Re-exported so this module stays the launcher's one wire format.
  */
-export const runCredentialSchema = z.strictObject({
-  /** The git host the credential is for. Lowercase, no port — {@link egressHostSchema}'s form. */
-  host: nonEmptyStringSchema.max(253),
-  username: nonEmptyStringSchema.max(255),
-  /** The secret. Standing rule 18: `nonEmptyStringSchema` refuses empty and blank. */
-  password: nonEmptyStringSchema.max(4_096),
-  scope: z.enum(['read', 'push']),
-  expiresAt: isoDateTimeSchema,
-  /**
-   * `minted` for a run-scoped token, `static` for an integration's declared run token (TD-028
-   * decision 13, WP-137) — the one credential a **read-only** spec may carry with `push` scope,
-   * because it cannot be narrowed. Absent is `minted`, so an absent field falls under the strict
-   * rule rather than the exception.
-   *
-   * `deploy_key` (TD-028 decision 13b, WP-146) is a project SSH deploy key: `password` is then the
-   * **OpenSSH private key text**, `username` is `git`, the spec's `repo.ssh` must be present (and is
-   * present only then), and the launcher uses the key for exactly one thing — its mirror and export
-   * helpers, from a `0600` file on the helper's tmpfs. It is never answered to the workspace's
-   * `cred.get`; the run's signatures come from the runner through `/ctl/ssh-agent.sock`.
-   */
-  source: z.enum(['minted', 'static', 'deploy_key']).optional(),
-});
-export type RunCredentialPayload = z.infer<typeof runCredentialSchema>;
+export { type RunCredentialPayload, runCredentialSchema };
 
 /**
  * `POST /v1/runs`.
@@ -341,55 +314,10 @@ export const createRunRequestSchema = z
     const refuse = (message: string): void => {
       context.addIssue({ code: 'custom', message, path: ['credential'] });
     };
-    if (spec.repo === null) {
-      if (credential !== null) {
-        refuse('a spec with no repository carries no credential: nothing will fetch or push');
-      }
-      return;
-    }
-    if (credential === null) {
-      if (spec.repo.ssh !== undefined) {
-        refuse('a spec whose git goes over SSH carries its deploy key (TD-028 decision 13b)');
-      }
-      if (!spec.readOnly) {
-        refuse(
-          'a spec that writes must carry a run credential; a binding that cannot mint refuses the run before it is created',
-        );
-      }
-      return;
-    }
-    // WP-146: a deploy key and the spec's SSH route travel together or not at all, and the route's
-    // CONNECT host and port are ones the run may reach — 443, never 22 (decision 13b item 4).
-    const ssh = spec.repo.ssh;
-    if ((credential.source === 'deploy_key') !== (ssh !== undefined)) {
-      refuse(
-        'a deploy-key credential and the spec’s repo.ssh route travel together: one without the other is an SSH run with no key or a key with no route (TD-028 decision 13b)',
-      );
-    }
-    if (ssh !== undefined) {
-      if (!spec.egress.hosts.includes(ssh.connectHost)) {
-        refuse('the SSH route’s CONNECT host is not one of the spec’s egress hosts');
-      }
-      if (!spec.egress.connectPorts.includes(ssh.connectPort) || ssh.connectPort === 22) {
-        refuse(
-          'the SSH route’s port must be one the sidecar admits for CONNECT, and never 22 (TD-028 decision 13b item 4)',
-        );
-      }
-    }
-    if (
-      spec.readOnly &&
-      credential.scope === 'push' &&
-      credential.source !== 'static' &&
-      credential.source !== 'deploy_key'
-    ) {
-      refuse(
-        'a read-only spec may carry a read credential or none, never a minted push one (BD-021); only a static run credential, which cannot be narrowed, is push-scoped there (TD-028 decision 13)',
-      );
-    }
-    if (!spec.egress.hosts.includes(credential.host)) {
-      refuse('the credential names a host that is not one of the spec’s egress hosts');
-    }
-    if (Object.values(spec.env).some((value) => value.includes(credential.password))) {
+    // The rules live in `@platform/contracts` since WP-273, so a remote worker's run package applies
+    // the same ones (TD-031 decision 4); `carried` is this hop's: the deploy key reaches the launcher.
+    for (const message of runCredentialIssues(spec, credential, 'carried')) refuse(message);
+    if (credential !== null && secretInEnvironment(credential.password, [spec.env])) {
       refuse(
         'the credential appears in the spec’s container environment, which the agent can read',
       );

@@ -4,6 +4,12 @@
  * new task state or terminal reason cannot be added to the wire format and forgotten in storage.
  *
  * The four enums with no contracts counterpart are pinned against technical/03's own wording.
+ *
+ * **Since WP-273 one difference is declared rather than absent**: a value the contract publishes one
+ * release ahead of its label (TD-032 decision 1's enum rule) is listed in `db.CONTRACTS_AHEAD_OF_STORAGE`
+ * with the row that stores it, and storage is compared with the contract *minus* that list. The test
+ * fails on an undeclared difference and on a declared value the database already holds — so the row
+ * that appends the label (WP-285 for `rate_limited`) must empty its entry.
  */
 import {
   agentRoleSchema,
@@ -132,7 +138,23 @@ describe('enum types', () => {
 
   it('gives every enum the value set its source of truth defines, in the same order', () => {
     for (const [name, expected] of Object.entries(EXPECTED_LABELS)) {
-      expect(actual.get(name), `labels of ${name}`).toEqual([...expected]);
+      expect(actual.get(name), `labels of ${name}`).toEqual(db.storedLabelsOf(name, expected));
+    }
+  });
+
+  it('holds no value declared ahead of storage, and declares only enums it knows (WP-273)', () => {
+    for (const [name, entries] of Object.entries(db.CONTRACTS_AHEAD_OF_STORAGE)) {
+      expect(
+        Object.keys(EXPECTED_LABELS),
+        `${name} is declared ahead but is no enum here`,
+      ).toContain(name);
+      for (const { value, emptiedBy } of entries) {
+        expect(
+          actual.get(name) ?? [],
+          `${name} already stores '${value}': ${emptiedBy} must delete its CONTRACTS_AHEAD_OF_STORAGE entry`,
+        ).not.toContain(value);
+        expect(EXPECTED_LABELS[name], `${name} does not publish '${value}'`).toContain(value);
+      }
     }
   });
 

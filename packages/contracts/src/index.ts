@@ -7,6 +7,9 @@
  * Conventions in force here:
  *  - The wire format is snake_case (config YAML, event payloads, artifact data, API DTOs,
  *    transcript rows), matching technical/02, /03, /08 and /12; exported identifiers are camelCase.
+ *    One stated exception since WP-273: `run-spec.ts` (`RunSpec`, `WorkspaceSpec`, the run
+ *    credential) and the run package in `worker.ts` are camelCase, the deviation TD-031 decision 4
+ *    and the launcher protocol state; the worker protocol's HTTP DTOs stay snake_case.
  *  - Object schemas are **strict**: an unknown key is an error, never silently dropped
  *    (technical/12). The only exceptions are records whose keys are user-chosen — stage ids,
  *    template names, risk-class names, status mappings, and opaque provider payloads — where an
@@ -25,8 +28,10 @@ export * from './events.js';
 export * from './knowledge.js';
 export * from './pipeline.js';
 export * from './records.js';
+export * from './run-spec.js';
 export * from './runlet.js';
 export * from './schemas.js';
 export * from './transcript.js';
+export * from './worker.js';
 
 export const packageId = '@platform/contracts' as const;

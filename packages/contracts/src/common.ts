@@ -345,6 +345,18 @@ export const runTerminalReasonSchema = z.enum([
    * `lease_expired`.
    */
   'shutdown',
+  /**
+   * **Appended at WP-273, ahead of storage** (TD-031 decision 11, TD-032 decision 1's enum rule): a
+   * run a usage limit ended mid-run — not the task's failure, so the stage entry is re-offered once.
+   * It is in the contract **before** anything writes it and before the `run_terminal_reason` enum
+   * has the label: `alter type … add value` is `additive` only when the value is already in
+   * `packages/contracts` at the migration's base commit (`migrations:check`), so the build that runs
+   * beside the migration can parse every value the database may hold. **No writer and no database
+   * value yet** — WP-285 adds both (its migration and its detection), and empties
+   * `CONTRACTS_AHEAD_OF_STORAGE` (`packages/infrastructure/src/db/contracts-ahead.ts`), which is what
+   * the parity tests hold this difference to. Last, because the migration will append.
+   */
+  'rate_limited',
 ]);
 
 export const questionStatusSchema = z.enum(['open', 'answered', 'expired', 'escalated']);

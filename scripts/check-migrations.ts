@@ -101,7 +101,12 @@ export interface MigrationsBase {
   readonly label: string;
 }
 
-/** The push's base commit, resolved as `verify:commits` resolves its range (see the docblock). */
+/**
+ * The push's base commit, resolved as `verify:commits` resolves its range (see the docblock).
+ *
+ * `subject` names what is compared in the refusals; `protocol:check` (`check-protocol.ts`, WP-273)
+ * resolves its base through this function rather than a second resolver.
+ */
 export const resolveMigrationsBase = (
   git: GitRunner,
   options: {
@@ -109,10 +114,11 @@ export const resolveMigrationsBase = (
     readonly to?: string | null;
     readonly env?: Environment;
   },
+  subject = 'the migrations',
 ): MigrationsBase => {
   if (isShallowCheckout(git)) {
     throw new MigrationsBaseError(
-      'this checkout is shallow, so the migrations at the push’s base are unknowable — use `fetch-depth: 0`.',
+      `this checkout is shallow, so ${subject} at the push’s base are unknowable — use \`fetch-depth: 0\`.`,
     );
   }
   let range: ReturnType<typeof resolveCommitRange>;
@@ -133,7 +139,7 @@ export const resolveMigrationsBase = (
   if (range.contiguous !== null) return { base: range.contiguous.from, label: range.label };
   if (range.revList.length === 0) return { base: null, label: range.label };
   throw new MigrationsBaseError(
-    `${range.label}: there is no base commit to compare the migrations with; pass --from <rev>`,
+    `${range.label}: there is no base commit to compare ${subject} with; pass --from <rev>`,
   );
 };
 

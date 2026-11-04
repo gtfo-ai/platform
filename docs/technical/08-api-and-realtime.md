@@ -389,3 +389,19 @@ the surface works through a CDN proxy (research/17 § 8). For people: `GET/DELET
 (own; all for `org.admin`), `POST /api/workers/device/approve` (session, CSRF), `GET/PUT
 /api/projects/:id/execution` (`project.settings.write`), `GET /api/org/updates` (admin). Full contract:
 TD-031 decision 9.
+
+**The contract is code since WP-273** (no route serves it yet; WP-280 to WP-284 do):
+`packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (1), `ACCEPTED_WORKER_PROTOCOLS`
+(`[N-1, N]`, today `[1]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
+paths, the bounds, and a strict zod schema for every request and response body of TD-031 §9. Two
+spellings, each stated there: the **HTTP DTOs are snake_case**, the house rule; the **run package**
+(`runPackageSchema`, the `200` of `claims`, published as `schemas/worker-run-package.schema.json`) is
+**camelCase**, the deviation TD-031 §4 states — its vocabulary is the `RunSpec` and the launcher's
+`WorkspaceSpec`, which moved to `packages/contracts/src/run-spec.ts` for it, and a snake_case copy would
+be a second schema for one structure. The `426` and `409 lease_lost` bodies are this page's error
+envelope (`{ error: { code, message } }`), the `426` with TD-031's `accepted`, `compose_url` and
+`digests` beside it; the device-token poll alone answers RFC 8628's `{ error: "<code>" }`, as TD-031
+§10c asks. The package refuses a secret it must not carry: a named secret variable, a model credential's
+name, the run credential or the run token in either environment, an `sk-ant-`/`wkr_` value, and a deploy
+key (the core signs, TD-031 §5) — with the launcher's own credential rules, which moved beside it as
+`runCredentialIssues` so both apply one copy.

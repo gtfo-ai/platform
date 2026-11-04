@@ -35,342 +35,80 @@
  *
  * The `WorkspaceSpec` is built from effective config, which a project can edit (BD-025 lets a
  * project narrow the org's maximum, never widen it), so every field that becomes a container
- * argument, a path component or a proxy rule is validated by the schemas below and again by the
+ * argument, a path component or a proxy rule is validated by the schemas (in `@platform/contracts`'s
+ * `run-spec.ts` since WP-273) and again by the
  * adapter. The run id in particular becomes a *path component* of the control volume
  * (`<ctl>/<run-id>/`) and the name of a Docker object; `runIdSchema` is a uuid for exactly that
  * reason, and the adapter refuses anything else before it reaches the daemon.
  */
+import type {
+  ExistingProtectedPaths,
+  WorkspaceEgress,
+  WorkspaceGitSsh,
+  WorkspaceLimits,
+  WorkspaceRepo,
+  WorkspaceRuntime,
+  WorkspaceSpec,
+} from '@platform/contracts';
 import {
-  idSchema,
-  isoDateTimeSchema,
+  egressHostSchema,
+  existingProtectedPathsSchema,
+  MAX_EXISTING_PROTECTED_PATHS,
+  MAX_OPAQUE_TRACKED_PATHS,
+  MAX_TRACKED_ENTRIES,
+  MAX_WORKSPACE_PROTECTED_PATTERNS,
   nonEmptyStringSchema,
-  pathPatternSchema,
+  PLATFORM_SKILLS_PLUGIN_DIRECTORY,
+  PLATFORM_SKILLS_PLUGIN_NAME,
+  platformSkillNameSchema,
+  platformSkillOfQualified,
+  qualifiedPlatformSkill,
+  runIdSchema,
   shaSchema,
+  unlistedProtectedPaths,
+  workspaceEgressSchema,
+  workspaceGitSshSchema,
+  workspaceLimitsSchema,
+  workspaceRepoSchema,
+  workspaceRuntimeSchema,
+  workspaceSpecSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
 
-// ── Identity ─────────────────────────────────────────────────────────────────
-
-/**
- * A run id. A uuid, because it names a directory on a volume several containers share and a
- * Docker object others can be asked about by name: `../other-run` and `..%2f` are not run ids.
- */
-export const runIdSchema = idSchema;
-
-/** A DNS host name, lowercase, no scheme, no port, no path. What the egress list is written in. */
-export const egressHostSchema = z
-  .string()
-  .min(1)
-  .max(253)
-  .regex(
-    /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/,
-    'expected a lowercase DNS host name with no scheme, port or path',
-  );
-
-// ── The spec ─────────────────────────────────────────────────────────────────
-
-/** How many protected patterns a spec may carry; the shipped default list has fourteen. */
-export const MAX_WORKSPACE_PROTECTED_PATTERNS = 256;
-
-/**
- * Resource limits per run container (TD-021: project defaults 2 CPU / 4 GiB / 512 pids).
- *
- * `stopGraceSeconds` is technical/05's `stop_grace_period`: how long the daemon waits between
- * SIGTERM and SIGKILL when the workspace is stopped.
- */
-export const workspaceLimitsSchema = z.strictObject({
-  cpus: z.number().positive().max(64),
-  memoryMb: z.number().int().positive().max(1_048_576),
-  pidsLimit: z.number().int().positive().max(65_536),
-  tmpfsMb: z.number().int().positive().max(65_536),
-  stopGraceSeconds: z.number().int().positive().max(3_600),
-});
-export type WorkspaceLimits = z.infer<typeof workspaceLimitsSchema>;
-
-/** TD-021: `runc` by default, `runsc` (gVisor) opt-in per project on Linux hosts. */
-export const workspaceRuntimeSchema = z.enum(['runc', 'runsc']);
-export type WorkspaceRuntime = z.infer<typeof workspaceRuntimeSchema>;
-
-/**
- * What the workspace may reach, rendered into the egress sidecar's allow-list.
- *
- * `hosts` is the union technical/05 § "Network policy" describes: the model provider host, the git
- * host, the package registries discovery found, and read-only observability hosts for stages that
- * may use them. Everything else is denied.
- */
-export const workspaceEgressSchema = z.strictObject({
-  hosts: z.array(egressHostSchema).max(256),
-  /** Ports `CONNECT` may name. 443 only, unless a project needs more. */
-  connectPorts: z.array(z.number().int().min(1).max(65_535)).min(1).max(32),
-});
-export type WorkspaceEgress = z.infer<typeof workspaceEgressSchema>;
-
-/**
- * A run whose git goes over **SSH** with a project deploy key — TD-028 decision 13b (WP-146). Every
- * field is non-secret and platform-written (the provider's route, the key's public half): the private
- * key never travels in a spec, only in the create request's credential, and never enters the run
- * container. The launcher writes {@link knownHosts} to the run's control directory, serves
- * `/ctl/ssh-agent.sock` through the shim listing {@link publicKey}, and answers the CLI's
- * `GIT_SSH_COMMAND` and one `url.<sshPrefix>.insteadOf = <httpsPrefix>` pair (`cliEnvironment`).
- */
-export const workspaceGitSshSchema = z.strictObject({
-  /** The deploy key's `ssh-ed25519 AAAA…` line, without a comment. */
-  publicKey: z
-    .string()
-    .max(200)
-    .regex(/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/, 'expected an ssh-ed25519 public key line'),
-  /** The repository URL prefix git rewrites (`https://gitlab.com/`). */
-  httpsPrefix: z
-    .string()
-    .max(300)
-    .regex(/^https:\/\/[a-z0-9.-]+\/$/, 'expected https://<host>/'),
-  /** What it becomes (`ssh://git@altssh.gitlab.com:443/`). */
-  sshPrefix: z
-    .string()
-    .max(300)
-    .regex(/^ssh:\/\/git@[a-z0-9.-]+:\d{1,5}\/$/, 'expected ssh://git@<host>:<port>/'),
-  /** The host the egress sidecar is asked to `CONNECT` to — one of the spec's egress hosts. */
-  connectHost: egressHostSchema,
-  /** Its port, one of the spec's `connectPorts` (443: no port 22 is ever admitted). */
-  connectPort: z.int().min(1).max(65_535),
-  /** The name the host keys are pinned under (`HostKeyAlias`). */
-  hostKeyAlias: egressHostSchema,
-  /** The documented `known_hosts` lines, each `<hostKeyAlias> <type> <base64>`. */
-  knownHosts: z
-    .array(
-      z
-        .string()
-        .max(1_024)
-        .regex(
-          /^[a-z0-9.-]+ (?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256) [A-Za-z0-9+/]+={0,2}$/,
-          'expected one known_hosts line',
-        ),
-    )
-    .min(1)
-    .max(8),
-});
-export type WorkspaceGitSsh = z.infer<typeof workspaceGitSshSchema>;
-
-/**
- * The repository half of the spec.
- *
- * `url` is what the mirror fetches from and what the export pushes to; `cacheKey` names the bare
- * mirror on the shared `repo-cache` volume (one per project, technical/05 §1). `checkoutBranch` is
- * the task branch for a re-entry — `null` means "the default branch", which is also the only
- * branch agent configuration is ever read from (BD-025). `checkoutCommit` is a commit to check out
- * detached — a shadow task's base (Q82 (a), WP-105) — which the clone **refuses by name** when the
- * mirror does not hold it, where a branch that does not exist yet is created. At most one is set.
- */
-export const workspaceRepoSchema = z
-  .strictObject({
-    url: nonEmptyStringSchema.max(2_048),
-    defaultBranch: nonEmptyStringSchema.max(255),
-    checkoutBranch: nonEmptyStringSchema.max(255).nullable(),
-    checkoutCommit: shaSchema.nullable(),
-    cacheKey: z
-      .string()
-      .regex(/^[a-z0-9][a-z0-9._-]{0,62}$/, 'expected a lowercase mirror cache key'),
-    /** SSH with a deploy key (WP-146, TD-028 decision 13b); absent is HTTPS with the credential helper. */
-    ssh: workspaceGitSshSchema.optional(),
-  })
-  .refine((repo) => repo.checkoutBranch === null || repo.checkoutCommit === null, {
-    message: 'a workspace checks out a branch or a commit, never both',
-    path: ['checkoutCommit'],
-  });
-export type WorkspaceRepo = z.infer<typeof workspaceRepoSchema>;
-
-/**
- * Where the platform's own skills are provisioned inside the workspace, and what they are called.
- *
- * ## Measured, because the obvious layout does not work
- *
- * technical/04 says *"copy platform skills into the workspace `.claude/skills/_platform/` at
- * provisioning so `settingSources: ['project']` discovers them"*. Against the pinned CLI
- * (`@anthropic-ai/claude-agent-sdk@0.3.267` and the `claude` binary it resolves), a skill at
- * `.claude/skills/_platform/<name>/SKILL.md` is **not discovered**: the CLI's own `system`/`init`
- * message lists a sibling at `.claude/skills/<name>/SKILL.md` and never the nested one. Discovery
- * under `.claude/skills` is one level deep, and a `.claude/skills` in a *parent* of the checkout is
- * not read either. The measurement and its second fixture are in
- * `packages/prompts/src/skills.ts`; the amendment is on technical/04.
- *
- * ## So the skills are a plugin, and that is better than the alternative anyway
- *
- * A directory containing `skills/<name>/SKILL.md`, handed to the CLI as a plugin
- * (`Options.plugins`, one `--plugin-dir` per entry), **is** discovered, and its skills are
- * namespaced: `agentic:kb`. Measured the same way. Three things follow, each of which the flat
- * copy into `.claude/skills/` would have got wrong:
- *
- *  - **the project's own skills are untouched** — nothing is written inside `.claude/` at all, so
- *    there is no name to collide with and no file of the project's to overwrite;
- *  - **the names say where they came from**: `agentic:kb` in the model's listing and in the audit
- *    is the platform's `kb`, not a repository's;
- *  - **nothing is added to the checkout's tracked tree** under a name a `git add -A` would sweep
- *    up. It still lands *inside* the checkout — the CLI reads a relative plugin path against its
- *    `cwd`, and `cwd` is the checkout — so provisioning also writes `.git/info/exclude`, which is
- *    local to the clone and can never be committed.
- *
- * `.agentic-run/` is already the platform's directory inside a workspace (`CONTEXT_DIRECTORY`),
- * which is why the plugin lives under it rather than at a new top-level name.
- */
-export const PLATFORM_SKILLS_PLUGIN_NAME = 'agentic';
-
-/** Relative to the checkout: the plugin root, whose `skills/<name>/SKILL.md` the CLI discovers. */
-export const PLATFORM_SKILLS_PLUGIN_DIRECTORY = `.agentic-run/plugins/${PLATFORM_SKILLS_PLUGIN_NAME}`;
-
-/**
- * A platform skill's name — which is its **directory** name.
- *
- * Measured: a `SKILL.md` whose frontmatter `name` differs from its directory is listed under the
- * directory's name, and the CLI's own error text says so ("Skill names match the skill's directory
- * name"). The alphabet is therefore the alphabet of a directory this platform creates on a shared
- * volume, and it is narrow on purpose: the name reaches a shell as part of a path in the
- * provisioning helper's script.
- */
-export const platformSkillNameSchema = z
-  .string()
-  .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'expected a lowercase platform skill directory name');
-
-/** `kb` → `agentic:kb`: what `RunSpec.skills` and the SDK's `skills` filter name. */
-export const qualifiedPlatformSkill = (name: string): string =>
-  `${PLATFORM_SKILLS_PLUGIN_NAME}:${name}`;
-
-/**
- * `agentic:kb` → `kb`, and **null for anything else**.
- *
- * Null rather than the input, because the only caller turns a `RunSpec` into a `WorkspaceSpec`: a
- * name that is not the platform's is a name this platform has no file for, and provisioning it as
- * if it were would create an empty skill directory named after somebody else's skill.
- */
-export const platformSkillOfQualified = (qualified: string): string | null => {
-  const prefix = `${PLATFORM_SKILLS_PLUGIN_NAME}:`;
-  if (!qualified.startsWith(prefix)) {
-    return null;
-  }
-  const name = qualified.slice(prefix.length);
-  return platformSkillNameSchema.safeParse(name).success ? name : null;
+// The spec half of this port — `WorkspaceSpec`, its parts and the protected-path listing — moved to
+// `@platform/contracts` (`run-spec.ts`) at WP-273, verbatim, because a remote worker's run package
+// carries it (TD-031 decision 4) and `contracts` is the ring both the core and a worker read.
+// Re-exported here so every importer of this port is unchanged.
+export type {
+  ExistingProtectedPaths,
+  WorkspaceEgress,
+  WorkspaceGitSsh,
+  WorkspaceLimits,
+  WorkspaceRepo,
+  WorkspaceRuntime,
+  WorkspaceSpec,
 };
-
-/**
- * A workspace to create.
- *
- * `readOnly` is BD-021's least privilege at the workspace level: a read-only stage gets **no git
- * write credential at all** — the runner mints it a `read` credential or none, and the control
- * plane refuses a `push` one for it (TD-028's WP-76 amendment, decision 3).
- */
-export const workspaceSpecSchema = z.strictObject({
-  runId: runIdSchema,
-  projectId: idSchema,
-  /**
-   * The repository to check out, or **`null` for a run that holds no tool to open one** (WP-74,
-   * PROGRESS backlog 82).
-   *
-   * `null` means *no checkout*, and never *no container*: a repo-less spec skips the mirror update
-   * and the clone and **keeps** the network, the volume, the egress sidecar, the control socket and
-   * the platform skills, because the CLI is what the run shim execs inside that container and a run
-   * has no other transport. Executing a tool-less run's CLI in the platform process instead is ruled
-   * out by TD-021's **decision body** — *"the Agent SDK runs in the platform `runner` role and spawns
-   * `claude` inside the container"* (`docs/decisions/technical/TD-021-workspace-isolation.md:10`) —
-   * and **not** by the WP-15g amendment's Docker-client clause, which that path would not breach. A
-   * reader who checks only the amendment concludes the option is open; it is not.
-   *
-   * The predicate that decides it is on the run's **tools**, never its role or stage:
-   * `runNeedsCheckout` in `packages/infrastructure/src/workspace/spec.ts`. The SDK's tool filter runs
-   * inside the container, so it is a context filter and not a sandbox — the honest restriction for a
-   * run that may not read the tree is not to put the tree there.
-   */
-  repo: workspaceRepoSchema.nullable(),
-  limits: workspaceLimitsSchema,
-  egress: workspaceEgressSchema,
-  runtime: workspaceRuntimeSchema,
-  readOnly: z.boolean(),
-  /**
-   * The platform skills to provision into this workspace — the stage's role's list, by directory
-   * name, unqualified.
-   *
-   * It is on the **spec** rather than fixed for every workspace because the copy is the real
-   * restriction. The SDK's `skills` option is "a context filter, not a sandbox: unlisted skills are
-   * hidden from the model's listing and rejected by the Skill tool, but their files remain on disk
-   * and are reachable via Read/Bash" (`sdk.d.ts:2089-2098`), so a skill a role may not use must not
-   * be *in* the workspace — which is a decision provisioning can enforce and a run option cannot.
-   */
-  skills: z.array(platformSkillNameSchema).max(32),
-  /**
-   * The run's effective BD-024 protected patterns (`RunSpec.protectedPaths`), so the launcher can
-   * list which of them **exist** at the merge base with the default branch (WP-99, {@link existingProtectedPathsSchema}).
-   * The launcher reads them and nothing else: it decides nothing about a write.
-   */
-  protectedPaths: z.array(pathPatternSchema).max(MAX_WORKSPACE_PROTECTED_PATTERNS),
-  /**
-   * Non-secret project variables placed in the container's environment. Integration credentials
-   * never appear here (BD-025 §3); the git token arrives through the shim's credential socket.
-   */
-  env: z.record(
-    z.string().regex(/^[A-Z][A-Z0-9_]*$/, 'expected an UPPER_SNAKE_CASE variable name'),
-    z.string().max(4_096),
-  ),
-  /** When the workspace's volume may be purged (technical/05 §5: 3 days, 14 when paused). */
-  keepUntil: isoDateTimeSchema,
-  /**
-   * The run-shim protocol the **requesting runner** speaks (`RUNLET_PROTOCOL_VERSION`, WP-151,
-   * TD-025's M9 amendment) — the runner, not the launcher, is the other end of the run's control
-   * socket, and the two can be from different builds. The launcher compares it with the run image's
-   * `com.agentic.runlet-protocol` label before it creates anything and refuses another number, or
-   * none, as `invalid_spec` naming the image and both numbers. Required: a runner from before WP-151
-   * sends no number, and its create is refused by this schema rather than admitted unchecked.
-   */
-  runletProtocol: z.int().positive(),
-});
-export type WorkspaceSpec = z.infer<typeof workspaceSpecSchema>;
-
-// ── What exists at the merge base with the default branch (WP-99) ────────────
-
-/** How many tracked entries the launcher reads out of a checkout before it gives up (fail closed). */
-export const MAX_TRACKED_ENTRIES = 100_000;
-/** How many tracked files matching a protected pattern a listing may carry. */
-export const MAX_EXISTING_PROTECTED_PATHS = 10_000;
-/** How many tracked symlinks and submodules a listing may carry. */
-export const MAX_OPAQUE_TRACKED_PATHS = 1_000;
-
-/** A repository-relative path as git lists it: `/`-separated, no NUL, bounded. */
-const trackedPathSchema = z
-  .string()
-  .min(1)
-  .max(4_096)
-  .refine((value) => !value.includes('\0'), 'a tracked path carries no NUL byte');
-
-/**
- * Which protected paths **exist** at the merge base of the run's checkout and the default branch (WP-99 review round 1: the base the merge request diff is computed against) — what the path guard needs to tell a
- * write that creates a protected path (allowed) from one that changes an existing one (allowed only
- * when the plan declares it). BD-024 §2 as amended at WP-81; technical/04's WP-99 amendment.
- *
- * `listed` is the launcher's answer from the fresh checkout: `paths` are the regular files at the
- * merge base matching one of the spec's protected patterns, and `opaque` is **every** tracked symlink and
- * submodule, because a write at or under one of those lands somewhere the path does not name.
- *
- * `unlisted` is every other case, and it **fails closed**: the guard then treats every protected
- * path as existing, which is its behaviour before WP-99. The planner writes it (nothing is listed
- * before there is a workspace), and the launcher answers it for a run with no checkout, no known
- * default branch or no computable merge base, a listing that failed, one past a bound, and one with
- * a line it could not read. `reason` is platform text.
- */
-export const existingProtectedPathsSchema = z.discriminatedUnion('state', [
-  z.strictObject({
-    state: z.literal('listed'),
-    paths: z.array(trackedPathSchema).max(MAX_EXISTING_PROTECTED_PATHS),
-    opaque: z.array(trackedPathSchema).max(MAX_OPAQUE_TRACKED_PATHS),
-  }),
-  z.strictObject({
-    state: z.literal('unlisted'),
-    reason: nonEmptyStringSchema.max(500),
-  }),
-]);
-export type ExistingProtectedPaths = z.infer<typeof existingProtectedPathsSchema>;
-
-/** The fail-closed answer, with the platform's reason. */
-export const unlistedProtectedPaths = (reason: string): ExistingProtectedPaths => ({
-  state: 'unlisted',
-  reason,
-});
+export {
+  egressHostSchema,
+  existingProtectedPathsSchema,
+  MAX_EXISTING_PROTECTED_PATHS,
+  MAX_OPAQUE_TRACKED_PATHS,
+  MAX_TRACKED_ENTRIES,
+  MAX_WORKSPACE_PROTECTED_PATTERNS,
+  PLATFORM_SKILLS_PLUGIN_DIRECTORY,
+  PLATFORM_SKILLS_PLUGIN_NAME,
+  platformSkillNameSchema,
+  platformSkillOfQualified,
+  qualifiedPlatformSkill,
+  runIdSchema,
+  unlistedProtectedPaths,
+  workspaceEgressSchema,
+  workspaceGitSshSchema,
+  workspaceLimitsSchema,
+  workspaceRepoSchema,
+  workspaceRuntimeSchema,
+  workspaceSpecSchema,
+};
 
 // ── Handles ──────────────────────────────────────────────────────────────────
 

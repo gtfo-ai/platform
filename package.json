@@ -46,6 +46,7 @@
     "data-model:check": "node scripts/check-data-model.mjs",
     "hooks:check": "node scripts/check-hooks.mjs",
     "migrations:check": "node scripts/check-migrations.mjs",
+    "protocol:check": "node scripts/check-protocol.mjs",
     "secrets:scan": "node scripts/gitleaks.mjs dir .",
     "secrets:scan:ci": "node scripts/gitleaks.mjs git --log-opts=--all --require",
     "secrets:scan:history": "node scripts/gitleaks.mjs git --log-opts=--all",
