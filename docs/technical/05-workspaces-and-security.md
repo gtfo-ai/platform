@@ -177,3 +177,28 @@ the platform's `node_modules` path. No tier has run a real agent through the rea
 scoped that out and no criterion here needs it), so this is recorded rather than fixed: the fix is a
 `RunSpec.claudeCodePath` the workspace spec sets to the run image's path. PROGRESS carries it as
 discovered work.
+
+## Amendment (2026-11-04, BD-032, TD-031) — the developer's machine is a trust boundary
+
+A remote worker executes runs in the **same** isolated run container (BD-021, TD-021, TD-025) on the
+developer's Docker. What crosses to that machine: the run package (prompt, skills, workspace spec, image
+digests), a **minted** short-lived credential for the run's project (host-only: its branch limit on a
+worker is the provider's protected branches, since the `agentic/*` guard is the worker's own code), and a
+run token that never enters the container. By an audited per-integration opt-in (`remote_run_credential`,
+Q124) a static run token crosses, or a deploy key's **signatures** are made on the core for the worker —
+the key never crosses, but the oracle cannot see refs, so a tampered worker may push wherever the key
+may for the run's duration. What never crosses: the database, `APP_SECRET_KEY`, integration secrets.
+What never leaves the machine: the developer's Claude token, redacted there by exact value. **The
+developer can tamper with their worker** — read their run's workspace and credential, alter what it
+reports. What holds regardless: the credential's scope and lifetime, the epoch fence (TD-031 decision 2),
+the core's re-redaction and schema validation of every transcript entry and artifact, gates read from the
+provider, and a human merge (BD-007). It can under-report usage and so evade the estimated budget caps
+(BD-032 Consequences). A worker cut off from the core stops its run 585 s after its last successful renewal (`TTL − ½·renew` of a 600 s / 30 s lease), a revoked one at its first `401`, and the core
+revokes the minted credential before re-offering (TD-031 decision 2); a static token cannot be revoked per
+run (residual). The updater (TD-032) holds Docker through its own socket proxy and is root-equivalent on
+its host, as the launcher is; its scoping to its compose project is code, not proxy. **The core is
+therefore a root-capable principal on every worker machine unless the updater refuses its bytes**: the
+worker verifies each digest's build attestation against a repository and workflow configured on the
+worker, applies digests only, and takes its compose template from the verified image (TD-032 decision 3).
+Residual: a compromised core can still steer workers to any attested build of that workflow, including an
+older one.

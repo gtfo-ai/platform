@@ -64,3 +64,15 @@ Dependency rule: `domain ← application ← infrastructure/integrations ← app
 
 ## Scaling path
 Single `app` process → split roles across containers (same image, `ROLE` env) → multiple `api`/`worker` replicas (LISTEN/NOTIFY + polling; NATS/Valkey behind the `Broadcast` port if needed) → Kubernetes provider for workspaces → per-customer instances for hosting (BD-009).
+
+## Amendment (2026-11-04, BD-032, TD-031, TD-032) — worker mode
+
+The `runner` row's *"a deployment without them leaves `stage.execute` and `task.ask` queued, which stops
+the platform gates too"* is **superseded**: `stage.execute` plans and writes a **run offer** and is
+subscribed by every worker process; agent runs (stage and ask) are claimed from `run_offers` by the
+server's claimant (composed only where a launcher is configured) or by **remote workers** on developers'
+machines (`compose.worker.yml`: `remote-worker`, `launcher`, `docker-socket-proxy`, `updater`), which speak
+TD-031's HTTPS protocol to the core and hold the developer's own Claude token. A core with no `runner`,
+`launcher` or `docker-socket-proxy` is a supported topology (`workers_only`). The core gains an optional
+`updater` (+ its own socket proxy) when `APP_UPDATE_MODE=self` (TD-032). The scaling path gains a branch:
+*… → remote workers (BD-032) beside or instead of the `runner`*.

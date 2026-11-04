@@ -314,3 +314,14 @@ planned: `renovate.json` is what keeps the pins current.
   v5.5.1) and read back after every `up`. `compose-stock-check.mjs` had none of the deadlines; it
   stays override-free, so `APP_PORT=0` is in its `.env` and its `APP_BASE_URL` is a fixed origin
   the client sends while connecting to the published port — an instance behind a reverse proxy.
+
+## Amendment (2026-11-04, TD-032) — migration classes, automatic updates, worker compose
+
+The *Release* bullet's *"the app refuses to start when the DB schema is newer than the code"* is narrowed
+to *newer by a migration that is not `additive`* (TD-032 decision 2). `verify:static` gains
+`migrations:check` (class header, additive allow-list, a contract's expand released by an earlier push)
+and `protocol:check` (no two worker-protocol bumps in consecutive pushes). The `platform` image gains the
+Docker CLI and Compose plugin for `ROLE=updater`/`update-apply`. Compose files name product images through
+`${PLATFORM_*_IMAGE}` variables whose managed `.env` block the updater rewrites; `compose.worker.yml` is
+served by the core pinned to its own digests; a Swarm reference stack (`deploy/swarm/`) documents the
+`external` mode.

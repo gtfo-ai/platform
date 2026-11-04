@@ -23,3 +23,14 @@ Meets the brief while staying inside published policy. Keeping the SDK as the si
 - Docker image contains the SDK's bundled binary; a `local` compose profile mounts binary + credentials and must be tested for token expiry (Round 2).
 - Budget enforcement in `local` mode relies on estimated cost.
 - Verified 2026-08-28: `pathToClaudeCodeExecutable` is documented for a separately installed binary; `CLAUDE_CODE_OAUTH_TOKEN` is a one-year token documented for CI/scripts; **bare mode does not read the OAuth token**, so `local` mode must isolate host config via `settingSources` rather than `--bare` (research/04). Still to verify in Round 2: behaviour inside containers and refresh at expiry.
+
+## Amendment (2026-11-04, the product owner's worker-mode decision, BD-032)
+
+`local` mode gains a second home: a **worker** on a developer's machine (BD-032), which runs the
+developer's **own** `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`) and **keeps it on that machine** —
+the core never receives, stores or logs it (TD-031 decision 4). Decision 3 is untouched and reinforced:
+the worker signs in to the **platform** with a device code (TD-031 decision 10c), never through a
+claude.ai login, and the platform still ships and stores no subscription token. Runs on a worker are
+`local` runs, cost estimated (decision 2). Whether Anthropic's terms admit this use of personal or seat
+subscriptions is **unverified** (research/17 § 3, **Q123**); documentation states it remains the
+operator's responsibility and recommends verifying before production use.

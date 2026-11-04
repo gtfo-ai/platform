@@ -66,6 +66,7 @@ Positive, negative, follow-ups (TODO links), what must be verified.
 | [BD-029](business/BD-029-business-model.md) | Everything is Apache-2.0; revenue from hosting, support and a registry service | accepted |
 | [BD-030](business/BD-030-additional-pipeline-gates.md) | Rebase gate, dependency/epic awareness, reviewer routing with risk classes, dependency policy, coverage delta | accepted |
 | [BD-031](business/BD-031-ticket-lifecycle-claim-qa-and-mr-conversation.md) | The tracker lifecycle is the project's mapping: optional status slots, a claimed ticket, a human QA stage, every form of a human return, the review conversation on the MR | accepted |
+| [BD-032](business/BD-032-worker-mode.md) | Worker mode: agent runs may execute on developers' machines with their own Claude subscription, beside or instead of the server's runner | accepted |
 
 ## Index — technical
 

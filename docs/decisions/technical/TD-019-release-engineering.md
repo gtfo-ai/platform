@@ -47,3 +47,13 @@ pushed build**, computed from conventional commits. The bump is `scripts/version
 breaking change is minor** (the retired `bump-minor-pre-major`, kept so 1.0 is a decision rather than an exclamation mark —
 a departure from Q96's *"`!` → major"* the founder may reverse in one line); the first version is `0.1.0`; a shallow clone
 is refused.
+
+## Amendment (2026-11-04, architect session 21) — automatic updates, the guard, and who follows what
+
+Three clauses of the decision line change, by **TD-032**: (1) *"app refuses to start if the DB schema is
+newer"* now reads *newer by any migration that is not `additive`* (decision 2), which is what makes a
+code-only rollback possible; (2) a self-managed core (`APP_UPDATE_MODE=self`, the shipped compose file)
+follows `APP_UPDATE_CHANNEL` (default `latest`) automatically with a mandatory pre-update backup
+(decision 5), while an externally managed core (`external`, e.g. a Swarm stack pinned by an infra
+repository) never updates itself; (3) **workers follow the core's own digests, never `latest`**
+(decision 3), and the worker protocol has its own version with an N-1 window (decision 7).

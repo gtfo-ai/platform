@@ -367,3 +367,16 @@ Per-user rate limits on mutating endpoints; webhook endpoints limited per integr
 > opened that socket, and limiting what it acknowledged would drop a notification. This note is
 > about the webhook clause only; the steer limit is the WP-101 note above, and — unlike this bucket —
 > it is shared by every process.
+
+## Amendment (2026-11-04, TD-031) — the worker surface
+
+A second authenticated surface, `/api/worker/v1/*`, for remote workers: device flow (`device`,
+`device/token`, unauthenticated and rate-limited), `handshake`, `claims` (held ≤ 25 s), `runs/:id/
+{heartbeat (held ≤ 20 s), transcript, tools/:name, approvals, session, ssh-sign, release, finish,
+late-cost}`, `pause`, `release` (digests + protocol range; the updater verifies attestations itself), `compose.yml` (first install only), `update-report`. Device-flow rate limits key on `APP_TRUSTED_CLIENT_IP_HEADER` only from a peer the widened `APP_TRUST_PROXY` (an address/CIDR list) trusts. Auth: a per-machine worker credential (`wkr_…`,
+stored SHA-256) or a per-run token; header `X-Worker-Protocol`; `426 upgrade_required` outside `[N-1,
+N]`; `409 lease_lost` on a stale epoch; `Cache-Control: no-store`. No request is held longer than 25 s, so
+the surface works through a CDN proxy (research/17 § 8). For people: `GET/DELETE /api/workers[/:id]`
+(own; all for `org.admin`), `POST /api/workers/device/approve` (session, CSRF), `GET/PUT
+/api/projects/:id/execution` (`project.settings.write`), `GET /api/org/updates` (admin). Full contract:
+TD-031 decision 9.

@@ -605,3 +605,37 @@ user, method or key, trailing bytes and raw data (WP-146 review round 1). (iii) 
 the run's user; the pin protects a well-behaved agent from the network, not the platform from the agent, whose
 egress already admits only `altssh.gitlab.com:443` and whose signatures are bound to their SSH session.
 
+
+## Amendment (2026-11-04, architect session 21, BD-032 / TD-031) — the server's runner becomes one claimant of an offer pool, and decision 5 moves from the queue to the claimant
+
+Recorded before M22's rows (plan § "Milestone M22"). Read at `da2e2ed6`; nothing was run.
+
+- **Decision 5 is superseded in its mechanism, kept in its intent.** "`stage.execute` is subscribed by
+  configuration, never by role" existed so that a process without a launcher never took an agent run. In
+  TD-031 the run no longer happens inside the job: `stage.execute` plans, writes a `run_offers` row and
+  ends, so **every process with a worker half subscribes it** (gates included), and what is composed *by
+  configuration* is the **claimant loop** (TD-031 decision 13). A process with `APP_LAUNCHER_URL` +
+  `APP_LAUNCHER_TOKEN` (or the in-process provisioner) runs the server claimant; a process without them
+  runs none and says so at start. `task.ask` follows: its runs are offers too.
+- **The WP-53 amendment's consequence is retired**: a runner-less instance no longer stalls the platform
+  gates (they never needed a runner) and agent runs wait as **offers** that a remote worker may claim.
+  `/readyz`'s `agent_runs: degraded / unserved` becomes TD-031 decision 13's `claimants` reading, which is
+  not degraded on a `workers_only` core.
+- **Decision 6's topology gains two shapes**: a core with no `runner`, `launcher` or `docker-socket-proxy`
+  at all (`workers_only`, the Autix Swarm deployment), and a developer's machine running
+  `compose.worker.yml` (`remote-worker`, `launcher`, `docker-socket-proxy`, `updater`). The launcher and its
+  control plane are unchanged on both; on a worker the launcher's caller is the `remote-worker` process.
+- **The create request changes** (TD-031 decision 4): it carries the skills' content and the image digests,
+  and the launcher's own `@platform/prompts` copy is deleted.
+- **Decision 9's channel reaches a remote holder through its heartbeat response** (TD-031 decision 14);
+  `pg_notify` stays the server claimant's latency path.
+- **The WP-76 mint moves from `provision` to just after the claim** (still outside any transaction), and
+  13b's signing oracle is reached by a remote worker through `POST /api/worker/v1/runs/:id/ssh-sign`
+  (TD-031 decision 5).
+- **The lease gains an epoch** (TD-031 decision 2); an answered `lease_lost` interrupts the session at
+  once (a `401` on a run-scoped call likewise), a single failed beat does not, and a claimant that has gone
+  `TTL − ½·renew` without a successful renewal (250 s for the server's 300 s / 100 s lease, 585 s for a
+  remote worker's 600 s / 30 s one) **stops its run itself**. The sweep acts only after `lease_expires_at +
+  APP_LEASE_SKEW_GRACE`, revokes the minted credential, and closes the run's offer in the run's terminal
+  transaction before the stage is re-planned once (TD-031 decisions 2 and 12). This supersedes WP-47's
+  *"a lost lease never interrupts the run"* for every claimant, the server's included.

@@ -931,3 +931,15 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 ## Model routing
 
 Per stage from effective config (BD-013). Runner does not switch models mid-run except the SDK's own fallback (`PostModelSwitch` hook records it, cost ledger uses `modelUsage`).
+
+## Amendment (2026-11-04, TD-031) — where a run executes
+
+A run is no longer awaited inside `stage.execute`: the job plans it and writes an **offer**; a claimant
+(the server's, or a remote worker) executes it with the same `ClaudeRunner`, hooks, command policy and
+platform-tool port — on a remote worker the tool port is an HTTP adapter to `POST
+/api/worker/v1/runs/:id/tools/:name` — and the outcome is settled on the core by `settleRun`. The skills'
+**content** now comes from the core in the launcher's create request, not from the launcher's own copy.
+A usage-limit rejection (`rate_limit_event` `rejected`, research/17 § 1) ends a started run with the new
+terminal reason `rate_limited`, which is not the task's failure (TD-031 decision 11); a lost lease is
+re-offered once per stage entry (decision 12). Steer, cancel and take-over reach a remote holder on its
+heartbeat response (decision 14).

@@ -1,0 +1,235 @@
+# TD-032 — Automatic updates: every migration is `additive` or `contract`, an older build accepts an all-additive schema, a mandatory pre-update backup, and one updater with three modes (self-managed core, externally managed core, worker)
+
+- **Status:** accepted
+- **Date:** 2026-11-04
+- **Deciders:** architect (session 21), within BD-032 decisions 9–11 (the product owner's, 2026-11-04, including the Autix deployment input)
+- **Relates to:** BD-002, BD-003, BD-020, BD-032, TD-006, TD-011 (amended), TD-017, TD-018, TD-019 (amended), TD-021, TD-028, TD-031, technical/11, research/17, Q125, plan § "Milestone M22"
+
+## Context
+
+Read at `da2e2ed6`; nothing here was run.
+
+- Migrations are forward-only SQL files applied by the `migrate` one-shot under an advisory lock
+  (TD-011, TD-019); `assertSchemaIsKnown` (`packages/infrastructure/src/db/migrator.ts:329-338`) refuses
+  to start a build on a database carrying any migration it does not know. So today **no** automatic
+  update can be rolled back by code: the previous build refuses the new schema by construction.
+- Every push to `main` is a release and `latest` is the newest push (TD-019's 2026-09-16 amendment); the
+  registry's `latest` can therefore be ahead of a given core.
+- `db-backup` exists under the `backup` profile (`compose.yml:482-508`); the operator guide's upgrade
+  section already asks for a pre-upgrade `pg_dump` by hand (`docs/operator-guide.md:759-765`).
+- The first production core is a Docker Swarm stack deployed by an infra repository's CI with the tag
+  pinned there, and no Docker socket on the server (BD-032 Context, decision 10).
+- research/17 §§ 4–6: the socket proxy filters by API path only (no label or project scoping); Compose
+  recreates a container as *create temp → stop old → remove → rename*, so a container cannot recreate
+  itself; a tag resolves to a digest by an anonymous `HEAD` on GHCR.
+
+## Decision
+
+### 1. Two migration classes, declared in the file
+
+Every new file under `packages/infrastructure/src/db/migrations/` opens with one header line:
+`-- migration-class: additive` or `-- migration-class: contract; expands: <NNNN_name>`.
+
+- **`additive`** — *the previous release's code works on the schema after it and on every row the new
+  release writes.* Admitted statements (checked mechanically): `create table`, `create index` (never
+  `concurrently`: the migrator applies each file inside one transaction, `migrator.ts:247-257`, where
+  `create index concurrently` cannot run — a non-transactional migration mechanism is not built in M22),
+  `alter table … add column` that is nullable or has a default, `add constraint … not valid` and the
+  `validate constraint` that completes it (old code writes no row the constraint refuses, or the
+  validation fails the migration and the running build carries on — step 4 below), `create or replace function`/`view` that keeps the old signature, `grant`, `comment`, and
+  `alter type … add value` **only when** the value already exists in `packages/contracts` at the
+  migration's base commit (an enum value the previous build cannot parse is a contract change — e.g.
+  TD-031's `rate_limited` lands in contracts one release before the migration that adds it).
+- **`contract`** — anything else (drop, rename, type change, `not null` on an existing column, data
+  rewrite). It names the `additive` migration it completes (`expands:`).
+- The migrator records the class in a new `platform_migrations.class` column at apply time (the column is
+  added by migration **0092**, itself additive). Rows applied before it carry `null`, read as `contract`.
+- **CI check** `pnpm migrations:check` (a step of `verify:static`): every new file has a valid header;
+  an `additive` file contains only admitted statements (a conservative statement scanner; anything it
+  cannot classify fails, with the escape being `contract`); a `contract` file's `expands:` migration
+  **exists at the push's base commit on `main`** — so the expand was released by an earlier push (every
+  push is a release, TD-019) and the contract can never land in the same release as its expand; applied
+  files are never edited (already TD-011's rule, now checked by digest against the base).
+
+### 2. The schema guard accepts an all-additive future
+
+`assertSchemaIsKnown` becomes: unknown migrations **all** with class `additive` → start, log
+`schema_ahead_additive` naming them, and `/readyz` reports `schema: ahead_additive` (200); any unknown
+migration with class `contract` or `null` → `DatabaseSchemaAheadError` as today. This is what makes a
+code-only rollback possible. **It protects only builds that contain it**: the first build with the
+amended guard is the oldest build an automatic rollback may target; the updater refuses to roll back
+past it (it reads the target's guard version from the image label `org.platform.schema-guard=2`).
+
+**Additive is a statement-level property; a rollback also needs a behavioural one.** A schema can be
+additive while the *rows* the newer build wrote mean nothing to the older one (after TD-031's WP-276,
+`created` runs carry offers that a WP-272–275 build never claims), and `runMigrations` also upgrades the
+pg-boss schema, which no migration class sees. So every image carries two more labels, and the updater
+**refuses a code rollback past either**:
+
+- `org.platform.rollback-floor=<n>` — an integer **raised by every row that changes what existing rows
+  mean to the runtime** (M22: WP-274, WP-276, WP-285, WP-286; a later row raises it when its review says
+  so, and `migrations:check` fails a migration whose header says `raises-rollback-floor` without the
+  label moving). A rollback from build B to build A is admitted only when `A.floor = B.floor`.
+- `org.platform.pgboss-schema=<version>` — the pg-boss schema version the build's `runMigrations`
+  installs; a rollback is admitted only when it is equal.
+
+A refused code rollback is `failed_needs_operator` with the backup (decision 5 step 7), exactly as for a
+contract migration. In `external` mode the same three labels are printed by `migrate --plan` so an
+operator re-pinning a tag can read whether the guard and the floor admit it.
+
+### 3. The core's own digests, and what it serves to workers
+
+The core learns its own image digests by resolving `sha-<own 7-char commit>` for `platform`,
+`platform-launcher`, `platform-runtime` and `platform-egress` in `APP_IMAGE_REPOSITORY` (default
+`ghcr.io/<owner>`) with the anonymous OCI `HEAD` (research/17 § 6), cached for the process' life;
+`APP_WORKER_IMAGE_DIGESTS` overrides it for a mirror or an air-gapped registry. `GET
+/api/worker/v1/release` answers **digests and the protocol range only** (no compose file); it answers a
+typed `503 digests_unresolved` naming the image when resolution fails. **Workers follow the core, never
+`latest`.** This works identically in every core mode, including externally managed.
+
+**The core chooses which build; it cannot choose what a build is.** A worker's updater is root-equivalent
+on the developer's machine (decision 4), so whatever it applies must not be the core's choice of bytes:
+
+- the worker verifies every advertised digest's **build attestation** (image.yml attests each build,
+  TD-017) against an identity configured **on the worker**, not served by the core:
+  `APP_TRUSTED_IMAGE_REPOSITORY` (e.g. `ghcr.io/<owner>/platform`) and `APP_TRUSTED_BUILDER` (the
+  repository and workflow, `<owner>/<repo>/.github/workflows/image.yml`, ref `refs/heads/main`); a digest
+  whose attestation does not verify is refused and reported, and nothing is pulled into service;
+- the worker applies **digests only**; the compose template is read **from the verified new `platform`
+  image** (`/opt/platform/compose.worker.yml`), never from the core. `GET /api/worker/v1/compose.yml`
+  still renders that template pinned by digest **for the first install** (BD-032 decision 9: a person
+  downloads it, reads it and runs it), but no updater ever applies a file the core served;
+- the verification tool and its offline trust root are the row's to measure (`[unverified]`, TODO V-WM6);
+  a worker without a verifier refuses to self-update and says so.
+
+**Residual, stated:** a compromised core can steer workers to **any** attested build of the trusted
+workflow — including an older one with a known defect (a downgrade) — but not to an arbitrary image. The
+worker refuses a downgrade below the build it runs unless the core's protocol range excludes it, and logs
+every change. The core in `self` mode verifies its own pulls the same way.
+
+### 4. One updater component, three modes
+
+`ROLE=updater` in the `platform` image; the Docker CLI and the Compose plugin are added to that image,
+pinned by checksum and declared in `THIRD_PARTY_NOTICES.md`'s table (≈ 78 MB, research/17 § 5 — the
+row measures the image-size delta against TD-018's budget and states it). `APP_UPDATE_MODE`:
+
+- **`external`** — the core is deployed by something else (Swarm, Kubernetes, an infra repository
+  pinning tags). **No updater runs and nothing touches Docker.** The core only advertises its digests
+  and protocol range (decision 3). The migration classes and the guard still hold: the deployment runs
+  the `migrate` one-shot before the app (the Swarm reference does it as a `replicated-job` or a CI step,
+  M22 WP-289), and a rollback is the operator re-pinning the previous tag, which the guard admits when
+  everything since is additive. This is the Autix deployment.
+- **`self`** — the shipped `compose.yml`'s default (BD-032 decision 10: always automatic). Decision 5.
+- **`off`** — development and CI (`pnpm dev`, the test tiers); nothing polls.
+- **`worker`** — set by `compose.worker.yml`. Decision 6.
+
+**Docker access.** The updater talks to Docker only through its **own** socket-proxy instance on an
+`internal: true` network only it and the apply container join, with `CONTAINERS NETWORKS VOLUMES IMAGES
+INFO POST` (research/17 § 5; whether Compose works through the proxy is measured by the row's Docker
+check, TODO V-WM2). **Scoping to its compose project is a code property, not a proxy property** — the
+proxy cannot filter by label (research/17 § 4) — so the updater is root-equivalent on its host exactly as
+the launcher already is (TD-021's residual), and the record says so. Every Compose call passes
+`--project-name` explicitly.
+
+**The apply container.** Because Compose cannot recreate the container that runs it (research/17 § 5),
+the long-running updater never applies anything itself: it starts a labelled one-shot container from the
+**new** `platform` image (`ROLE=update-apply`, `--rm`, outside the compose project) that performs the
+sequence below, recreates the updater last, and exits. A crashed apply leaves `updates/state.json`
+naming its step; the next updater start resumes or rolls back from it.
+
+**Where digests are pinned.** The shipped `compose.yml` and `compose.worker.yml` name the four product
+images as `${PLATFORM_IMAGE}`, `${PLATFORM_LAUNCHER_IMAGE}`, … The updater owns a marked block of those
+lines in `.env` (atomic write; the previous block kept as `.env.previous`), so an operator's own `docker
+compose up` keeps working and keeps the pinned digests.
+
+### 5. Core mode `self`: the sequence
+
+Polls the registry for `APP_UPDATE_CHANNEL` (default `latest`; `X` once TD-019's versioning switch is on)
+every 15 minutes; a new digest starts an apply (one at a time, never while a previous one is unresolved):
+
+1. **Pull** the four new digests and verify their attestations (decision 3). Failure → abort, nothing changed.
+2. **Plan**: run the new image's `migrate --plan` (read-only) → pending migrations with classes. A pending
+   `contract` migration whose `expands:` the **running** build does not contain (an instance that skipped
+   releases) means the running build may use what it drops: the platform services are **stopped before
+   migrate** (downtime, stated in the update record) instead of serving through it.
+3. **Mandatory backup**: `pg_dump -Z1` from a one-shot `postgres:18@<db's digest>` container on the db
+   network (the operator guide's own command, as a container) into the `backups` volume as
+   `pre-update-<from7>-<to7>-<ts>.sql.gz`; it must exit 0 and be non-empty. Failure → abort. Kept for the
+   last 5 updates.
+4. **Migrate** with the new image's `migrate`. Failure → the transaction of the failing file rolled back;
+   if everything applied before it is additive the running build carries on (it was never stopped unless
+   step 2 said so) → `failed_migration` recorded, the instance stays on the old digests.
+5. **Recreate** `app`, `runner`, `launcher` with the new digests (`docker compose up -d --wait
+   --wait-timeout 120`). The server runner's in-flight runs are handed back (WP-144); remote runs survive
+   on their 10-minute lease (TD-031 decision 9).
+6. **Check** within 120 s: `/readyz` 200 on `app` (and `runner` when composed) and `/api/version` reports
+   the new commit.
+7. **Unhealthy** → if every migration applied in step 4 is `additive`, the old build carries the
+   amended guard, and its `rollback-floor` and `pgboss-schema` labels equal the new build's (decision 2): recreate with the previous digests (`.env.previous`), check again, record
+   `rolled_back`. Otherwise record `failed_needs_operator` with the backup's file name and § 6's restore
+   block, and **do not restore automatically** (**Q125**; the residual below).
+
+The apply writes each step to `updates/history.jsonl`; the core, on start, ingests unrecorded lines into
+`instance_updates` and appends `instance.update.started/succeeded/rolled_back/failed` events (BD-003) and, for `failed_needs_operator`,
+posts to the organisation's communication account through `IntegrationActionExecutor` (the WP-65 shape) —
+so the updater needs no database credential. Settings → *Updates* (admin) renders them; metric
+`instance_update_last_result`.
+
+### 6. Worker mode: the sequence
+
+The worker's updater polls the core's `release` every 5 minutes and on every `426` the worker
+reports. A different set of digests, each verified (decision 3) → it asks the worker process (local `POST /internal/drain` on the
+worker's own compose network, never published) to stop claiming, waits until it reports **idle** (no run
+held), then the apply container (from the verified new image, carrying its own template): pull the verified images (including the run and egress images, so the
+launcher never pulls at create), rewrite the managed `.env` block, `up -d --wait --wait-timeout 120`,
+and check: the worker's `/readyz` reports `core_handshake: ok` within ~120 s. Failure → previous block,
+`up -d`, report `rolled_back` via `POST update-report`. A worker holds no durable state (BD-032 decision
+9); its mirror cache and workspace volumes are disposable, so a worker never migrates anything.
+
+### 7. Protocol N-1
+
+`WORKER_PROTOCOL_VERSION` (integer, `packages/contracts`) is independent of the build. The core accepts
+`[N-1, N]`; a change ships *expand → contract*: the release that adds a field or verb accepts both
+shapes, and the release that removes the old one bumps `N`. **CI check** (`pnpm protocol:check`, part of
+`verify:static`): a bump of `WORKER_PROTOCOL_VERSION` is refused when the base commit's value differs from
+the value one release earlier — no two bumps in consecutive pushes. A run claimed under `N-1` keeps being
+served under `N-1` until it ends; a worker at `N-2` gets `426` on everything, including a run in flight,
+which therefore ends `lease_expired` and is re-offered once (TD-031 decision 12) — the stated cost of two
+bumps inside one run's life.
+
+## Rationale
+
+The classes turn the owner's "always automatic" into something with a bounded failure: most releases add
+tables and columns, and for those an unhealthy update is undone by the previous image alone. A contract
+release is still applied automatically, which the owner chose knowingly; its residual is written down
+rather than designed around. One updater with modes keeps one mechanism to test; the external mode exists
+because an orchestrator that owns the deployment must not be fought by the thing it deploys. The apply
+container sidesteps the one Compose behaviour (self-recreation) that makes every in-container updater
+unreliable, and no maintained compose-aware updater with rollback exists to adopt (research/17 § 5).
+
+## Alternatives considered
+
+- **Approval before a contract migration** — the owner rejected it (BD-032 decision 10).
+- **Watchtower or a fork** — archived upstream; no rollback, no migration step (research/17 § 5).
+- **Edit the operator's `compose.yml` in place** — rejected: the operator's own file; the `.env` block is
+  smaller and reversible.
+- **Down-migrations** — rejected: TD-011 is forward-only for a reason (data loss in a reversal is silent);
+  the additive class gives the same rollback for the common case without writing reversals.
+- **The updater with a database credential** — rejected: the history file plus ingest-on-start keeps the
+  Docker-holding container away from the data.
+
+## Consequences
+
+- **The residual of BD-032 decision 10, stated:** a `contract` release applies automatically; if it is
+  unhealthy, the only rollback is restoring the pre-update backup, which loses every write since the
+  backup (normally the minutes of the failed update, but an operator who finds it hours later loses
+  hours). Forward-only migrations and the guard mean no code-only path exists. The updater does not
+  restore by itself (Q125).
+- Two CI checks (`migrations:check`, `protocol:check`) join `verify:static`; `docs/technical/14`'s target
+  list and `scripts/verify-targets.ts` gain them.
+- `compose.yml` gains `updater` and `updater-docker-proxy`; image references become variables; the
+  operator guide's § 5 *Upgrade* is rewritten for `self` and `external`.
+- The docker-socket-proxy pin (0.3.0, 2024-09-09) is two minor releases behind v0.5.0 (research/17 § 4);
+  the updater row pins the same version as the launcher's proxy and files the bump as backlog.
+- To verify (TODO V-WM2, V-WM5): Compose through the proxy with the six flags; Swarm `replicated-job` for
+  the reference stack's `migrate`.
