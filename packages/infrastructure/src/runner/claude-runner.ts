@@ -101,7 +101,7 @@ import type {
   RunSpec,
   RunStartHooks,
   RunStop,
-  RunStopReason,
+  RunStoppedReason,
   RunTranscriptSink,
   SecretRedactor,
   SessionMirrorPort,
@@ -215,7 +215,7 @@ const ZERO_USAGE: TokenUsage = {
 };
 
 /** Why the platform stopped the run, when it was the platform that stopped it. */
-type StopCause = 'stalled' | 'timed_out' | 'budget_exceeded' | 'cost_unreported' | RunStopReason;
+type StopCause = RunStoppedReason;
 
 /**
  * The stops whose interrupted turn's `result` is read for its cost — a human's two (WP-101) and,

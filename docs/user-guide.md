@@ -667,11 +667,7 @@ such, and so are the failing jobs past the fifth.
 
 ## 5. Run detail and the transcript
 
-Click a run. Header metrics, then four tabs. A run reads **starting** from the moment the
-platform's runner takes it until it asks for the agent's CLI — while its workspace is prepared — and
-**running** from then on; a starting run shows no elapsed time yet and can be cancelled, and a steer
-sent to it is recorded and reaches the agent as soon as it starts. A run that ends while still
-starting never ran an agent and cost nothing.
+Click a run. Header metrics, then four tabs:
 
 - **Transcript** — the live stream of the agent's turn: messages, tool calls and their results, as
   they happen. This is the "click and watch" part of the product. Everything in it is rendered as
@@ -688,6 +684,11 @@ CLI refuses any other.
 - **Settings** — the project settings this run was planned with, frozen when the run was created
   and redacted then. The line under the header says whether they were the same as the task's
   previous run's.
+
+A run reads **starting** from the moment the platform's runner takes it until it asks for the
+agent's CLI — while its workspace is prepared — and **running** from then on; a starting run shows
+no elapsed time yet and can be cancelled, and a steer sent to it is recorded and reaches the agent
+as soon as it starts. A run that ends while still starting never ran an agent and cost nothing.
 
 You can **cancel** the run (member), **retry** it with a different model or effort (member — this
 creates a *new* run rather than changing this one), and leave **feedback** scoped to the stage. The

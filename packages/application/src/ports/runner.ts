@@ -800,7 +800,8 @@ export interface NotStartedReport {
    * Whether {@link detail} is already a cut — the launcher's tail of a longer output, or the
    * claimant's own bound — so the record can announce it (backlog 453: a cut is announced in
    * `truncated`, never inside the text). A field the amendment's sketch does not list: without it
-   * the record would claim a whole output it never had (stated in PROGRESS under WP-275a).
+   * the record would claim a whole output it never had (the deviation is stated in technical/04's
+   * TD-031 amendment note on the stored plan).
    */
   readonly detailTruncated: boolean;
   /** {@link isRetryableStartFailure} — the classification only. */

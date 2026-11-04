@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 703, so the next is **704**), its grade
+line with the next free number (the highest is 710, so the next is **711**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -27,7 +27,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 696 | minor | — | protocol:check reads "one release earlier" as the base's first parent, so a multi-commit push can slip a protocol version bump |
 | 697 | minor | WP-276 criterion (9) | Ruled: one lock order run_offers → runs → tasks, so a claim and a cancel/sweep/settle of the same run cannot deadlock |
 | 701 | minor | WP-281 | Ruled: a start failure in the claimant settles as not_started; run.started moves to the CLI spawn request; release until then (the first two built by S-22.1; `release` is WP-281's) |
-| 702 | minor | WP-276 | `recordCliSpawn` takes `run.started`'s context-pack record from transaction 1b's memory; a claimant outside the job must read it back (`run_context_pack` or the plan) |
+| 709 | minor | WP-276 | `recordCliSpawn` takes `run.started`'s context-pack record from transaction 1b's memory; a claimant outside the job must read it back (`run_context_pack` or the plan) |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
 | 422 | nit | — | pipeline.outbound polls at 0.5 s in every process; idle cost on a large job table and drain above N = 50 never measured |
 | 439 | nit | — | WP-136 put the pipeline harness's `now` on the test clock, which also moves run_commands.created_at and the steer window |
@@ -38,7 +38,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 672 | nit | — | Over-ask: a newline inside a backtick in a substitution body is over-read; blocked on 681 |
 | 681 | nit | — | Over-ask: `$` after an escaped backslash in a command name is read as an expansion where bash runs a literal name |
 | 682 | nit | — | Over-ask: a single-quoted backtick in a `$(…)` body reads uncertain where bash runs a literal name |
-| 703 | nit | — | WP-275a (3)'s planted pattern value is asserted through the ticket snapshot only; the KB-page and prior-artifact paths into the same prompt have no case of their own |
+| 710 | nit | — | WP-275a (3)'s planted pattern value is asserted through the ticket snapshot only; the KB-page and prior-artifact paths into the same prompt have no case of their own |
 | 683 | nit | — | bash 5.3 keeps a backtick body's trailing backslash and 3.2 drops it; the policy records no reading for that byte |
 | 685 | nit | — | Over-ask: a quoted `[` as a command name reads as an expanded name and blocks, where bash finds nothing and runs nothing |
 | 698 | nit | WP-276 criterion (10) | Memory PipelineStore keeps writes made before finish threw LeaseLostError; PostgreSQL rolls them back |

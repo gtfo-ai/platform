@@ -960,3 +960,7 @@ heartbeat response (decision 14).
 > from the settling process). A start failure settles through the same command as `not_started`, its
 > retry counted from the stage entry's stored runs (`RunRepository.startFailures`, by `created_at`),
 > and the follow-on `stage.execute` (a retry, a hand-back) is enqueued by `settleRun` after its commit.
+> **One stated deviation from the amendment's sketch:** `NotStartedReport` carries a sixth field,
+> `detailTruncated`, so the record still announces a cut the launcher (or the claimant's own bound)
+> made in `detail` (backlog 453: a cut is announced in `truncated`, never inside the text) — without
+> it a cut output would be recorded as whole.
