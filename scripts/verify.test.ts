@@ -400,6 +400,10 @@ describe('the tiers CI splits over several runners', () => {
           part.body,
         );
       expect(upload, 'the part uploads .vitest-reports/ under if: always()').not.toBeNull();
+      // `.vitest-reports` is hidden, and upload-artifact skips hidden files by default: the first CI
+      // run of the split uploaded nothing from every part (measured on PR #5).
+      expect(part.body).toMatch(/^ {10}include-hidden-files: true$/m);
+      expect(part.body).toMatch(/^ {10}if-no-files-found: error$/m);
 
       const merges = jobs.filter(({ body }) =>
         new RegExp(`^ {4}needs: ${part.key}$`, 'm').test(body),

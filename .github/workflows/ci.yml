@@ -180,7 +180,11 @@ jobs:
         with:
           name: unit-blob-${{ matrix.part }}
           path: .vitest-reports/
-          if-no-files-found: ignore
+          # The directory is hidden, and upload-artifact skips hidden files unless told: without
+          # this the first run uploaded nothing and the merge refused an empty set (as it should).
+          include-hidden-files: true
+          # A part that wrote no report fails here, by name, as well as at the merge.
+          if-no-files-found: error
           retention-days: 1
 
   unit:
@@ -339,7 +343,11 @@ jobs:
         with:
           name: e2e-blob-${{ matrix.part }}
           path: .vitest-reports/
-          if-no-files-found: ignore
+          # The directory is hidden, and upload-artifact skips hidden files unless told: without
+          # this the first run uploaded nothing and the merge refused an empty set (as it should).
+          include-hidden-files: true
+          # A part that wrote no report fails here, by name, as well as at the merge.
+          if-no-files-found: error
           retention-days: 1
 
   e2e:
