@@ -1097,9 +1097,16 @@ describe('a core with no launcher (WP-277)', () => {
     let text = await (await fetch(`${base}/metrics`)).text();
     expect(offersOpen(text)).toBe(1);
 
-    // Past the bound with no claimant: degraded (still 200), naming the offer.
+    // Past the bound with no claimant: degraded (still 200), naming the offer. The bound is measured
+    // from the instant workers may claim it (TD-031 §13's `workers_from + 5 min`, WP-278 writes
+    // `workers_from`), so the offer's routing is moved back with its `offered_at`.
     await pipeline.query(
-      "update run_offers set offered_at = now() - interval '10 minutes' where state = 'open'",
+      `update run_offers
+          set offered_at = offered_at - interval '10 minutes',
+              server_from = server_from - interval '10 minutes',
+              workers_from = workers_from - interval '10 minutes',
+              expires_at = expires_at - interval '10 minutes'
+        where state = 'open'`,
     );
     const [run] = await pipeline.query<{ id: string }>('select id from runs');
     ready = await fetch(`${base}/readyz`);
