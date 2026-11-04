@@ -55,10 +55,29 @@
  *
  * **Since WP-274 the beat and the finish are fenced on the claim's epoch** (TD-031 §2, migration
  * 0094): the lease is claimed by the offer's one claim (`./offers.ts`), not by the first beat, and a
- * renewal under another epoch or owner answers `lease_lost`. TD-031 §2 amends the sentence above —
- * an answered `lease_lost` interrupts, and a claimant self-terminates at `TTL − ½·renew` — and that
- * amendment is a later row's: with the server's runner the only claimant, no second claim exists to
- * take a live run from it, so WP-274 changes what is written and not what the session does.
+ * renewal under another epoch or owner answers `lease_lost`.
+ *
+ * ## Since WP-276: a lost lease **does** interrupt (TD-031 §2, TD-028's 2026-11-04 amendment)
+ *
+ * The sentence above — *"a lost lease never interrupts the run"* — is superseded for every claimant,
+ * the server's included, in three ways, each reported through {@link RunHeartbeatDependencies.onLost}
+ * so the claimant stops the session and destroys its workspace (`./claimant.ts`):
+ *
+ * - an **answered** `lease_lost` (the row refused the renewal: another claim, or a terminal row)
+ *   interrupts at once;
+ * - a **`401`** on a run-scoped call is the same fact for a remote worker (`unauthorized`, WP-281's
+ *   transport; the server's claimant makes no HTTP call, and handles the word identically);
+ * - **self-termination**: a claimant that has gone {@link selfStopAfterMs} — `TTL − ½·renew` — on
+ *   its **monotonic** clock without one successful renewal stops by itself. A **single failed beat
+ *   does not interrupt**: the invariant `TTL − ½·renew ≥ 2 × renew` ({@link leaseConstantsHold})
+ *   tolerates two consecutive missed beats, and `lease.test.ts` holds both constant sets to it.
+ *
+ * The clock is counted from the instant the last **successful** renewal was **sent** — never
+ * received — which is no later than TD-031's *"from the moment it received the last successful
+ * answer"* and so strictly earlier to give up: the core writes `lease_expires_at` while answering,
+ * after the send, so whatever the request's latency, the claimant has stopped at least `½·renew +
+ * APP_LEASE_SKEW_GRACE` before the sweep (`../recovery/run-lease.ts`) may end the row. The claim
+ * itself counts as the first renewal, sent when the claim's transaction began.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type { Logger } from '../ports/logger.js';
@@ -71,6 +90,51 @@ export const RUN_LEASE_TTL_MS = 5 * 60_000;
 
 /** A third of the TTL: two consecutive beats may be lost before the lease lapses. */
 export const RUN_LEASE_RENEW_MS = RUN_LEASE_TTL_MS / 3;
+
+/** A remote worker's lease (TD-031 §2): ten minutes, renewed by a heartbeat held ≤ 20 s. */
+export const REMOTE_RUN_LEASE_TTL_MS = 10 * 60_000;
+
+/** A remote worker's declared renewal bound: 30 s (a healthy link renews about every 20 s). */
+export const REMOTE_RUN_LEASE_RENEW_MS = 30_000;
+
+/**
+ * `APP_LEASE_SKEW_GRACE`'s default (TD-031 §2): the sweep ends a run only after `lease_expires_at +`
+ * this — response latency, clock-rate drift between machines and the sweep's own pass interval.
+ */
+export const DEFAULT_LEASE_SKEW_GRACE_MS = 120_000;
+
+/**
+ * **Self-termination** (TD-031 §2): a claimant that has gone this long without one successful
+ * renewal stops its run by itself — `TTL − ½·renew`: 250 s for the server's 300 s / 100 s lease,
+ * 585 s for a remote worker's 600 s / 30 s one.
+ */
+export const selfStopAfterMs = (ttlMs: number, renewMs: number): number => ttlMs - renewMs / 2;
+
+/**
+ * TD-031 §2's stated invariant, `TTL − ½·renew ≥ 2 × renew`: at least two consecutive missed beats
+ * are tolerated before a claimant gives up, so one or two failed beats interrupt nothing.
+ */
+export const leaseConstantsHold = (ttlMs: number, renewMs: number): boolean =>
+  renewMs > 0 && selfStopAfterMs(ttlMs, renewMs) >= 2 * renewMs;
+
+/**
+ * Why a claimant lost its run (TD-031 §2): the row refused a renewal (`lease_lost`), a run-scoped call
+ * answered `401` (`unauthorized`, a remote worker's), or no renewal succeeded for
+ * {@link selfStopAfterMs} (`self_terminated`). The claimant handles all three identically: it stops
+ * the session, pushes nothing more and destroys the workspace.
+ */
+export type RunLeaseLoss = 'lease_lost' | 'unauthorized' | 'self_terminated';
+
+/** A one-shot timer and how to cancel it — the self-stop's. Injectable for the same reason as the beat. */
+export type LeaseTimer = (afterMs: number, fire: () => void) => () => void;
+
+export const realLeaseTimer: LeaseTimer = (afterMs, fire) => {
+  const timer = setTimeout(fire, Math.max(0, afterMs));
+  (timer as { unref?: () => void }).unref?.();
+  return () => {
+    clearTimeout(timer);
+  };
+};
 
 /**
  * Starts a repeating callback and answers how to stop it.
@@ -121,6 +185,13 @@ export interface RunLeaseOptions {
    * reaches the run.
    */
   readonly onRenewed?: (runId: Id) => Promise<void>;
+  /** @default realLeaseTimer — the self-stop's one-shot timer (WP-276). */
+  readonly timer?: LeaseTimer;
+  /**
+   * The **monotonic** clock the self-stop is measured on (WP-276, TD-031 §2), in milliseconds — never
+   * the wall clock, which another process's skew or an NTP step could move. @default performance.now
+   */
+  readonly monotonicNow?: () => number;
 }
 
 /**
@@ -142,6 +213,18 @@ export interface RunHeartbeatDependencies {
   readonly clock: { now(): IsoDateTime };
   readonly lease: RunLeaseOptions;
   readonly logger?: Logger;
+  /**
+   * Told **once** when this process has lost the run (WP-276, {@link RunLeaseLoss}): an answered
+   * `lease_lost`, or the self-stop. The heartbeat has already stopped; the caller stops the session
+   * and destroys its workspace. Absent is the pre-WP-276 behaviour — the session runs on and its own
+   * settle arbitrates — which only a composition that runs no claimant still has.
+   */
+  readonly onLost?: (loss: RunLeaseLoss) => void;
+  /**
+   * The monotonic instant the claim's transaction **began** — the first renewal's send (WP-276). The
+   * self-stop is counted from it until a beat succeeds. @default the instant the heartbeat starts
+   */
+  readonly claimedAt?: number;
 }
 
 /** The instant a lease claimed now would expire. */
@@ -162,7 +245,7 @@ export type RunLeaseRenewal = 'renewed' | 'lease_lost';
  * **Fenced on the claim** (WP-274, TD-031 §2): the write is conditional on `lease_epoch = epoch` and
  * `lease_owner` this process's, and answers `lease_lost` when the row refused it — the run has
  * ended, or another claim holds it (TD-031: *"another claim or a terminal row exists"*). The caller
- * stops beating; in WP-274 it never stops the run (self-termination is a later row's).
+ * stops beating and, since WP-276, is told (`onLost`): the claimant stops the session.
  */
 export const renewRunLease = async (
   deps: RunHeartbeatDependencies,
@@ -196,8 +279,15 @@ export const startRunHeartbeat = (
 ): StopHeartbeat => {
   const logger = deps.logger ?? silentLogger;
   const everyMs = deps.lease.renewEveryMs ?? RUN_LEASE_RENEW_MS;
+  const ttlMs = deps.lease.ttlMs ?? RUN_LEASE_TTL_MS;
   const schedule = deps.lease.schedule ?? intervalHeartbeatSchedule;
+  const timer = deps.lease.timer ?? realLeaseTimer;
+  const monotonic = deps.lease.monotonicNow ?? (() => performance.now());
+  const giveUpAfter = selfStopAfterMs(ttlMs, everyMs);
   let stopped = false;
+  let lost = false;
+  /** The self-stop's timer, re-armed from the send of every successful renewal (WP-276). */
+  let cancelSelfStop: (() => void) | undefined;
   /** The beat currently borrowing a connection, or `null`; what {@link StopHeartbeat} awaits. */
   let inFlight: Promise<void> | null = null;
   /**
@@ -214,7 +304,36 @@ export const startRunHeartbeat = (
   const halt = (): void => {
     stopped = true;
     cancel?.();
+    cancelSelfStop?.();
   };
+
+  /** Tells the caller once, after the heartbeat has stopped (WP-276). */
+  const lose = (loss: RunLeaseLoss): void => {
+    if (lost) return;
+    lost = true;
+    halt();
+    deps.onLost?.(loss);
+  };
+
+  /** Arms the self-stop to fire `giveUpAfter` after `sentAt` — the last successful renewal's send. */
+  const armSelfStop = (sentAt: number): void => {
+    cancelSelfStop?.();
+    if (deps.onLost === undefined) return;
+    cancelSelfStop = timer(giveUpAfter - (monotonic() - sentAt), () => {
+      if (stopped) return;
+      logger.error(
+        {
+          run_id: runId,
+          lease_owner: deps.lease.owner,
+          lease_epoch: epoch,
+          self_stop_after_ms: giveUpAfter,
+        },
+        'no lease renewal succeeded for TTL − ½·renew, so this process stops the run itself (self-termination) before the sweep may end it',
+      );
+      lose('self_terminated');
+    });
+  };
+  armSelfStop(deps.claimedAt ?? monotonic());
 
   cancel = schedule(everyMs, () => {
     // One beat at a time: a beat that is slower than the interval must not queue a second
@@ -222,26 +341,28 @@ export const startRunHeartbeat = (
     if (stopped || inFlight !== null) {
       return;
     }
+    const sentAt = monotonic();
     inFlight = renewRunLease(deps, runId, epoch)
       .then(async (renewal) => {
         const renewed = renewal === 'renewed';
         if (renewed && !stopped) {
+          armSelfStop(sentAt);
           await deps.lease.onRenewed?.(runId);
           return;
         }
         if (renewed || stopped) {
           return;
         }
-        halt();
         logger.info(
           { run_id: runId, lease_owner: deps.lease.owner, lease_epoch: epoch },
           'the run lease was not renewed (lease_lost): the run has ended or another claim holds it, so the heartbeat stopped',
         );
+        lose('lease_lost');
       })
       .catch((error: unknown) => {
         logger.warn(
           { err: error, run_id: runId, lease_owner: deps.lease.owner },
-          'a run lease heartbeat failed; the run continues and the next beat will try again',
+          'a run lease heartbeat failed; the run continues and the next beat will try again (one or two failed beats interrupt nothing; the self-stop is TTL − ½·renew after the last success)',
         );
       })
       .finally(() => {

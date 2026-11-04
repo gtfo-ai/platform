@@ -598,6 +598,8 @@ describe('stage.execute refuses an attempt whose stage row is closed (WP-108 rev
       data: { task_id: taskId, project_id: harness.projectId, stage: 'discovery', attempt: 1 },
       signal: AbortSignal.abort(),
     });
+    // WP-276: the job ends at the offer; the claimant is what starts the run it offered.
+    await harness.runtime.claimant?.drain();
   };
 
   it('starts the run while the row is open (the control)', async () => {

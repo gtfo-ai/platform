@@ -1875,6 +1875,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     settings: settingsPort,
     jobs,
     ...(options.runsAgents === undefined ? {} : { runsAgents: options.runsAgents }),
+    // WP-276: `drain` plays the claimant too, so no poll claims behind a case's back.
+    claimantDrivenBy: 'caller',
     notifications,
     timezone: options.timezone ?? 'UTC',
     organisation,
@@ -1990,6 +1992,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
             heartbeats.stopped += 1;
           };
         },
+        // WP-276: the self-stop never fires here — nothing in this harness waits minutes, and what
+        // the self-stop decides is `pipeline/lease.test.ts`'s and `claimant.test.ts`'s subject.
+        timer: () => () => {},
       },
       /**
        * A cancelled run's spend, charged from the process that measured it (WP-47, Q70 (b)).
@@ -2131,6 +2136,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         // WP-31: an ask is a run on a queue of its own, and it enqueues the ticket mirror back onto
         // `pipeline.outbound` — so it is drained in the same loop rather than by a second helper.
         (await runJobs(JOB_QUEUES.taskAsk)) +
+        // WP-276: the jobs end at the offer; the server's claimant runs and settles what they
+        // offered — every run to its settle before the loop goes round again.
+        ((await runtime.claimant?.drain()) ?? 0) +
         (await runJobs(JOB_QUEUES.mrCommentDebounce)) +
         // WP-56: a deadline fires when the test has moved the clock past it, and not before.
         (await runJobs(JOB_QUEUES.deadlineSweep));

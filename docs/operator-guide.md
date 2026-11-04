@@ -63,36 +63,32 @@ request in addition to the network isolation, because a control plane that is sa
 compose file is safe until somebody writes a different compose file — and this one creates
 containers.
 
-**A compose instance without a configured runner runs everything except agent stages *and the
-platform gates*.** That is the honest consequence of the rule above
-([TD-028](decisions/technical/TD-028-launcher-control-plane.md), amended 2026-09-23) and it is worth
-knowing before you meet it. The `stage.execute` jobs are still enqueued and simply **queue** rather
-than failing, so nothing is lost. **Two places show it** (WP-86):
+**A compose instance without a configured runner runs everything except the agent runs themselves.**
+Since WP-276/WP-277 ([TD-031](decisions/technical/TD-031-run-offers-and-remote-workers.md) decision
+13, TD-028's 2026-11-04 amendment) every worker takes `stage.execute`: the job plans an agent stage,
+stores its sealed plan and **offers** the run, and it evaluates the platform gates — `ci_gate`,
+`rebase_gate`, `merged_gate` — with no runner at all. What a process without `APP_LAUNCHER_URL` and
+`APP_LAUNCHER_TOKEN` does not do is **claim** an offer and run it; it says so in its start log
+(*this process is not a claimant*), and the run waits as an open offer. **Two places show it**:
 
-- `/readyz` on `app` reports `agent_runs: degraded`, with `"details": {"agent_runs": "unserved"}`,
-  once a `stage.execute` job has waited five minutes and no process has claimed one in that time.
-  `degraded` still answers **200**, so it never takes the instance out of rotation.
-- `/metrics` exports `jobs_queued{queue="stage.execute"}` (jobs ready to run and not yet claimed)
-  and `jobs_queued_oldest_age_seconds{queue="stage.execute"}` (how long the oldest has waited), and
-  the same pair for every other queue.
+- `/readyz` reports `claimants`: `server` on a process that runs the server claimant, `workers: <n>`
+  when remote workers are connected (none until WP-281), or `none`. `none` is **not** degraded by
+  itself — a core where every run is meant for workers is a valid state — and becomes `degraded`
+  (still **200**), with `"details": {"claimants": "unclaimed"}` and the offer named in
+  `oldest_unclaimed_offer`, only once an offer has waited five minutes with no claimant.
+- `/metrics` exports `run_offers_open{project}` (open offers — runs waiting for a claimant) and
+  `run_offer_wait_seconds{project}` (how long the oldest has waited). `jobs_queued{queue="stage.execute"}`
+  is **no longer** an agent backlog: the job ends at the offer, so it counts plans and gates waiting
+  for any worker.
 
 ```bash
 curl -fsS localhost:8080/readyz
-curl -fsS localhost:8080/metrics | grep '^jobs_queued'
+curl -fsS localhost:8080/metrics | grep '^run_offer'
 ```
 
 Both are asserted through `app` with the runner absent and then present in
 `test/e2e/topology/two-processes.e2e.test.ts`; these two `curl` lines against a compose instance
 were not run.
-
-Gate evaluation — `ci_gate`, `rebase_gate`, `merged_gate` — is a *branch of the same handler on the
-same queue*, so it stops with them. It is not given a queue of its own because `stage.execute` is
-`stately` with one job per task, which is what stops a task running two stages at once; a second
-queue would let a gate and a stage for one task run concurrently. Every shipped template puts the
-gates *behind* agent stages, so no task reaches one by the pipeline's own motion on such an
-instance; the reachable paths are **human** — a hand-back to a gate stage, a `merged_gate` after you
-merge by hand, and a gate already waiting when the runner stopped. The jobs are durable and are
-taken when a runner starts, bounded by pg-boss's 14-day default retention.
 
 Everything else — intake, the board, the knowledge index, every outbound provider call, the cost
 ledger, the audit — runs in `app`.
@@ -124,9 +120,9 @@ through the processes rather than reasoned about.
 
 | `ROLE` | Serves the API, SSE and `/webhooks/*` | Runs the dispatcher and the job workers | Smallest `APP_DB_POOL_MAX` (concurrency 1) |
 |---|---|---|---|
-| `all` | yes | yes | 24 |
+| `all` | yes | yes | 25 |
 | `api` | yes | no — it only **enqueues** | 4 |
-| `worker`, `runner`, `indexer` | no | yes | 22 |
+| `worker`, `runner`, `indexer` | no | yes | 23 |
 
 Each process refuses to start below its own number and names it, listing what the number is made of. The table is held to the code by a test (`apps/server/src/config.test.ts`), so it moves when a workload is added. `runner` and `indexer` are workers
 named for what you deploy them for; whether a worker runs agents is its launcher configuration,
@@ -341,11 +337,12 @@ That is a real answer, not a glitch, and the body says which check failed:
 | `queue` | pg-boss did not start | the logs name the failure |
 | `dispatch` | this process cannot handle every event the build declares consumed, so it refuses to sweep the outbox | see below |
 
-One check is never `down`: **`agent_runs`** is `degraded` (and `/readyz` still answers 200) when
-agent stages are not being taken — `details.agent_runs` says `unserved` (a `stage.execute` job has
-waited five minutes with nothing claiming it: no runner, or a runner with no launcher URL and token)
-or `unknown` (the read failed; the `database` check says why). It is about the instance, not the
-process you asked, so `app` reports it too. See *The runner, and why it is a container of its own*, above.
+One check is never `down`: **`claimants`** is `degraded` (and `/readyz` still answers 200) only when
+no claimant is composed in the process you asked or connected, and an agent run's offer has waited
+five minutes — `details.claimants` says `unclaimed` and `oldest_unclaimed_offer` names the run — or
+`unknown` (the read failed; the `database` check says why). The `claimants` line itself — `server`,
+`workers: <n>` or `none` — is the answer to *who runs agent runs here*. See *The runner, and why it is
+a container of its own*, above.
 
 **`dispatch` is the one to know about.** `/readyz` is 503 on every worker role — `all`, `worker`,
 `runner` and `indexer` — for as long as the process cannot compose a pipeline — it is honest rather
@@ -420,8 +417,11 @@ process cannot answer*, never zero:
 | `platform_storage_bytes{component="knowledge_mirrors"}` | the bare git mirrors under `APP_KNOWLEDGE_MIRROR_ROOT` (processes that have it) | the 50 GB mark, as for the database |
 | `platform_storage_total_bytes{components="database+knowledge_mirrors"}` | the two lines above summed — exported only when both were measured | the disk you gave the instance |
 | `knowledge_mirror_bytes{project_id="…"}` | one project's mirror — the axis you can act on | a project that outweighs the rest |
-| `jobs_queued{queue="…"}` | pg-boss jobs ready to run and not yet claimed, per declared queue, `0` included; a timer not yet due is not counted (every role that holds a job client, WP-86) | `queue="stage.execute"` above 0 for longer than a stage takes: no runner is taking agent stages |
-| `jobs_queued_oldest_age_seconds{queue="…"}` | how long the oldest of those has waited; no series for a queue with nothing waiting | `queue="stage.execute"` above 300 — the same condition `/readyz` reports as `agent_runs: degraded` |
+| `jobs_queued{queue="…"}` | pg-boss jobs ready to run and not yet claimed, per declared queue, `0` included; a timer not yet due is not counted (every role that holds a job client, WP-86). Since WP-276 `stage.execute` ends at the offer, so this is **not** an agent backlog | a queue above 0 for longer than its jobs take: no worker is taking it |
+| `jobs_queued_oldest_age_seconds{queue="…"}` | how long the oldest of those has waited; no series for a queue with nothing waiting | a queue whose oldest job keeps ageing |
+| `run_offers_open{project="…"}` | open run offers — agent runs waiting for a claimant — per project; no series for a project with none (WP-277) | above 0 for longer than a run takes to be claimed: no claimant is running agent runs |
+| `run_offer_wait_seconds{project="…"}` | how long the project's oldest open offer has waited (WP-277) | above 300 — the same condition `/readyz` reports as `claimants: degraded` |
+| `workers_connected`, `workers_paused` | remote workers connected to this core and paused (WP-277; always 0 until worker mode ships, WP-281) | — |
 | `webhook_deliveries_rate_limited_total{provider="…"}` | webhook deliveries answered `429` by their integration's rate limit, before any signature check (API roles, WP-87) | a rate that does not stop: somebody is flooding the endpoint, or a vendor's burst is larger than the bucket — its deliveries are being retried, not lost, until the vendor gives up |
 | `command_idempotency_claims_unknown{action="…"}` | commands whose process died between claiming their `Idempotency-Key` and recording the outcome, past the in-flight window (`CLAIM_IN_FLIGHT_MS`, `apps/server/src/routes/idempotency.ts`); the key answers `409 idempotency_attempt_unknown` for good (API roles, WP-73) | anything above 0 asks a **human check** of the resource the action names — never a delete of the row, which would let a retry perform the command a second time |
 
@@ -797,6 +797,16 @@ the value **before** you upgrade: a stock `.env` (`25` since this build, `24` be
 an installation that set `APP_DB_POOL_MAX` to exactly the old minimum must raise it by one. The same
 holds for every later build that adds a job worker: the floor table above moves with the code, so read
 it against your `.env` on each upgrade (PROGRESS backlog 371).
+
+**Upgrading past the build whose stage job ends at the offer (WP-276).** The smallest `APP_DB_POOL_MAX`
+rose by one again — **25** for `ROLE=all` and **23** for `worker`, `runner` and `indexer` — for the
+server claimant's run (`APP_RUNNER_CONCURRENCY`, default 1, one connection each); a stock `.env` ships
+`26`. An agent run now waits as an **offer** between the stage job and the claimant, so
+`jobs_queued{queue="stage.execute"}` no longer means *agent stages are waiting*: read
+`run_offers_open{project}` and `run_offer_wait_seconds{project}` for that, and `/readyz`'s `claimants`
+line (`server`, `workers: <n>` or `none`; degraded only when an offer waited five minutes with no
+claimant). A run still in flight when the old build stopped is ended by the lease sweep, which since
+this build waits `APP_LEASE_SKEW_GRACE` (120 s) past the lease before it acts.
 
 **Upgrading past the build that re-reads stored repository readings (WP-121).** Before it, the copy of
 a project's `.agentic/prompts/` files the platform stores was redacted by the pattern rules only, so a

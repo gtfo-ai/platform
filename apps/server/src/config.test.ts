@@ -241,7 +241,7 @@ describe('the agent run’s provider configuration', () => {
 
 describe('pool sizing', () => {
   it('adds the composition root’s own floor to the dispatcher’s', () => {
-    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '26' });
+    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '27' });
     // 2 × 2 + 1 for dispatch — the dispatcher's own transaction and the handler's — plus pg-boss,
     // the pipeline's job workers, HTTP and maintenance. Every term is symbolic on purpose: the
     // count of pipeline workers belongs to `POOL_RESERVATIONS`, and this comment saying "three"
@@ -254,8 +254,20 @@ describe('pool sizing', () => {
         POOL_RESERVATIONS.onboarding +
         POOL_RESERVATIONS.bootstrap +
         POOL_RESERVATIONS.http +
-        POOL_RESERVATIONS.maintenance,
+        POOL_RESERVATIONS.maintenance +
+        // WP-276: the server claimant's runs, `APP_RUNNER_CONCURRENCY` (default 1).
+        config.runnerConcurrency,
     );
+  });
+
+  it('counts APP_RUNNER_CONCURRENCY once per claimant slot, on worker roles only (WP-276)', () => {
+    const one = load({ APP_DB_POOL_MAX: '100' });
+    const four = load({ APP_DB_POOL_MAX: '100', APP_RUNNER_CONCURRENCY: '4' });
+    expect(requiredPoolConnections(four) - requiredPoolConnections(one)).toBe(3);
+    expect(requiredPoolConnections(load({ ROLE: 'api', APP_RUNNER_CONCURRENCY: '4' }))).toBe(4);
+    expect(() => load({ APP_RUNNER_CONCURRENCY: '0' })).toThrow(/APP_RUNNER_CONCURRENCY/);
+    expect(load({}).leaseSkewGraceSeconds).toBe(120);
+    expect(load({ APP_LEASE_SKEW_GRACE: '300' }).leaseSkewGraceSeconds).toBe(300);
   });
 
   it('costs two connections per added dispatch, not three, because no handler calls a provider', () => {
@@ -297,7 +309,9 @@ describe('pool sizing', () => {
       POOL_RESERVATIONS.knowledge +
       POOL_RESERVATIONS.onboarding +
       POOL_RESERVATIONS.bootstrap +
-      POOL_RESERVATIONS.maintenance;
+      POOL_RESERVATIONS.maintenance +
+      // WP-276: the server claimant's one run at the default `APP_RUNNER_CONCURRENCY`.
+      1;
     for (const role of ['worker', 'runner', 'indexer']) {
       expect(requiredPoolConnections(load({ ROLE: role })), role).toBe(workerTerms);
     }
@@ -326,8 +340,9 @@ describe('pool sizing', () => {
     // `maintenance.schedule`) plus `deadline.sweep` (WP-56) — **one** worker for the question,
     // approval and take-over deadlines — plus `ticket.poll` (WP-87), **one** worker for every
     // binding that polls, each binding being a key on the queue rather than a worker of its own —
-    // and, twenty-four since WP-110, `mr.poll`, the merge-request poller's one worker.
-    expect((thrown as UndersizedPoolError).required).toBe(24);
+    // and, twenty-four since WP-110, `mr.poll`, the merge-request poller's one worker — and
+    // twenty-five since WP-276, the server claimant's run.
+    expect((thrown as UndersizedPoolError).required).toBe(25);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
     // PROGRESS backlog 22's **site 3**. The message used to say "the pipeline's five job workers"
     // beside a `POOL_RESERVATIONS.pipeline` of 6, and once the counts were interpolated it still
@@ -348,8 +363,11 @@ describe('pool sizing', () => {
       POOL_RESERVATIONS.knowledge,
       POOL_RESERVATIONS.onboarding,
       POOL_RESERVATIONS.bootstrap,
+      // WP-276: the server claimant's runs at the default `APP_RUNNER_CONCURRENCY`.
+      1,
     ]);
     expect(refused.message).toContain('the history-bootstrap worker');
+    expect(refused.message).toContain("the server claimant's runs at APP_RUNNER_CONCURRENCY=1");
   });
 
   it('names only the terms a role counts, and the enqueue-only sender instead of pg-boss (WP-72)', () => {
@@ -424,7 +442,11 @@ describe('pool sizing', () => {
   it('prints the floor .env.example states, and its shape at two concurrencies', () => {
     const text = envExampleText();
     const sum = Number(
-      matched(text, /\n#\s+\+ \d+ bootstrap \+ \d+ HTTP \+ \d+ maintenance = (\d+),/, 'the sum')[1],
+      matched(
+        text,
+        /\n#\s+\+ \d+ claimant \+ \d+ bootstrap \+ \d+ HTTP \+ \d+ maintenance = (\d+),/,
+        'the sum',
+      )[1],
     );
     const shape = matched(
       text,

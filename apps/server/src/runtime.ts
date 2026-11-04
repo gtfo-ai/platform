@@ -62,6 +62,7 @@ import {
   eventing as eventingAdapters,
   jobs as jobsAdapters,
   notify as notifyAdapters,
+  pipeline as pipelineAdapters,
   redaction as redactionAdapters,
 } from '@platform/infrastructure';
 import type { FastifyInstance } from 'fastify';
@@ -330,6 +331,10 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       ...(capabilities.worker || capabilities.api
         ? {
             jobQueues: async () => jobsAdapters.readQueueBacklog(database.pool, config.jobs.schema),
+            // WP-277: the agent backlog since WP-276 is the offer pool's, not `stage.execute`'s.
+            runOffers: async () => pipelineAdapters.readOfferBacklog(database.pool),
+            // WP-277: no worker can connect until WP-281, so both counts are a measured zero.
+            workers: async () => ({ connected: 0, paused: 0 }),
           }
         : {}),
       // WP-65 (Q63): the storage gauge. The database line in every process that has a database;
@@ -385,6 +390,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
     const liveRuns = createLiveRuns();
 
     let jobsStarted = false;
+    /** WP-277: whether this process composed the server claimant — `/readyz`'s `claimants: server`. */
+    let claimantComposed = false;
     let jobs: Jobs | null = null;
     /**
      * **Every role that serves the API or runs workers holds a job client** (WP-72).
@@ -588,6 +595,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           secretKey: config.secretKey,
           liveRuns,
           stageConcurrency: 1,
+          runnerConcurrency: config.runnerConcurrency,
+          leaseSkewGraceSeconds: config.leaseSkewGraceSeconds,
           intakeReconcileIntervalMs: config.intakeReconcileIntervalMs,
           jobsSchema: config.jobs.schema,
           pollSweepIntervalMs: config.pollSweepIntervalMs,
@@ -620,20 +629,17 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
          *
          * `composePipeline` answers with a list rather than a boolean, so this warning names the
          * thing an operator has to supply instead of restating that something is absent. A process
-         * with no launcher configuration is a legitimate deployment — it runs the status mapping,
-         * the workpad and every outbound provider call — so it warns rather than refusing to start.
-         *
-         * **Since WP-53 an agent stage does not reach it at all**: such a process does not subscribe
-         * `stage.execute` or `task.ask` (TD-028 decision 5), so those jobs wait for a process that
-         * can perform them. The sentence this replaced said the stage "fails in its own job and
-         * escalates the task", which is what the old, always-subscribed shape did. The cost, written
-         * down in TD-028's WP-53 amendment rather than left here, is that the **platform gates** are
-         * a branch of the same handler on the same queue and stop with it.
+         * with no launcher configuration is a legitimate deployment — and since WP-277 (TD-031
+         * decision 13) it still subscribes `stage.execute` and `task.ask`: it plans, offers and
+         * evaluates the platform gates, and its agent runs wait as **offers** for a claimant — the
+         * server claimant of another process, or (WP-281) a remote worker. `/readyz`'s `claimants`
+         * says who, and is degraded only when an offer has waited five minutes with none.
          */
+        claimantComposed = pipeline.runtime.claimant !== null;
         if (pipeline.agentMissing.length > 0) {
           logger.warn(
             { missing: pipeline.agentMissing },
-            'the pipeline is composed without an agent runner: this process subscribes neither stage.execute nor task.ask, so agent runs **and the platform gates, which are a branch of the same handler on the same queue** wait for a process that can perform them (TD-028, amended) rather than failing here. Everything else runs and is audited',
+            'the pipeline is composed without an agent runner: this process is not a claimant — it plans and offers agent runs and evaluates the platform gates, and its offers wait for a claimant (TD-031 decision 13; /readyz reports claimants)',
           );
         }
 
@@ -1227,12 +1233,17 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         dispatchReady: capabilities.worker
           ? () => sweepReadiness(eventing.bus.registry).ready
           : null,
-        // WP-86 (backlog 135, TD-028's Consequences): whether anything in the **instance** takes
-        // agent stages. Every role that holds a job client asks, because the answer is in the
-        // database and the process an operator reads — `app` — runs no agent by design.
-        agentRuns:
+        // WP-277 (TD-031 decision 13): who claims agent runs — this process's own claimant, the
+        // connected workers (0 until WP-281), and the oldest offer waiting past the bound. Every role
+        // that holds a job client asks: the pool is in the database, and `app` claims nothing.
+        claimants:
           capabilities.worker || capabilities.api
-            ? async () => jobsAdapters.readAgentRunService(database.pool, config.jobs.schema)
+            ? {
+                composedHere: claimantComposed ? 'server' : null,
+                workersConnected: async () => 0,
+                oldestUnclaimedOffer: async () =>
+                  pipelineAdapters.readOldestUnclaimedOffer(database.pool),
+              }
             : null,
       }),
       isShuttingDown: () => shuttingDown,

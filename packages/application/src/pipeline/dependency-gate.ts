@@ -872,6 +872,7 @@ const returnNow = async (
     current.qaStage,
   );
   const applied = await applyDecision({
+    offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
     store: options.store,
     pipeline,
     tx: scope.tx,

@@ -35,21 +35,22 @@
 > `test/e2e/topology/two-processes.e2e.test.ts` asserts exactly that through two processes on one
 > database.
 >
-> **`agent_runs` is about the instance, and `degraded` is still ready (WP-86, PROGRESS backlog
-> 135).** Every role that holds a job client also reports `agent_runs`, read from pg-boss's tables
-> rather than from the process: it is `degraded` — with `details: {"agent_runs": "unserved"}` — when
-> `stage.execute` holds a job that has been eligible for more than five minutes and no process has
-> claimed a `stage.execute` job in that time (none active, none started), which is what a deployment
-> with no runner looks like; `unknown` when the read failed. A `degraded` report answers **200**, a
-> `down` one 503: a missing runner stops agent stages and the platform gates and nothing else, so it
-> must not take the API out of a load balancer. The launcher itself is still not reported. The
-> matching metrics are `jobs_queued{queue}` (ready, unclaimed jobs per declared queue, `0`
-> included) and `jobs_queued_oldest_age_seconds{queue}` (only for a queue with something waiting).
+> **`claimants` says who runs agent runs, and `degraded` is still ready (WP-277, TD-031 decision 13;
+> WP-86's `agent_runs` until then).** Every role that holds a job client reports `claimants`: `server`
+> when this process composes the server claimant, `workers: <n>` when remote workers are connected (0
+> until WP-281), else `none`. `none` alone is **not** degraded — a `workers_only` core is a valid
+> state; the check is `degraded` — with `details: {"claimants": "unclaimed"}` and
+> `oldest_unclaimed_offer: {run_id, offered_at, waited_seconds}` — only when no claimant is here or
+> connected and an open offer has waited five minutes, read from `run_offers` rather than from the
+> process; `unknown` when the read failed. A `degraded` report answers **200**, a `down` one 503. The
+> matching metrics are `run_offers_open{project}` and `run_offer_wait_seconds{project}`;
+> `jobs_queued{queue}` (ready, unclaimed jobs per declared queue, `0` included) is no longer an agent
+> backlog since the job ends at the offer (WP-276).
 >
 > **`schema` appears only on an all-additive future (WP-272, TD-032 decision 2).** When the database
 > carries migrations this build does not ship and every one was recorded `additive`, the process
 > starts (the guard logs `schema_ahead_additive`) and every role reports `schema: degraded` with
-> `details: {"schema": "ahead_additive"}` beside `migrations: ok` — 200, like `agent_runs`. One
+> `details: {"schema": "ahead_additive"}` beside `migrations: ok` — 200, like `claimants`. One
 > unknown `contract` or unclassified migration is `migrations: down` instead, and a process starting
 > on it refuses to start. Both readers take the verdict from `judgeSchema` in
 > `packages/infrastructure/src/db/migrator.ts`.

@@ -181,49 +181,78 @@ describe('createReadinessCheck', () => {
   });
 
   /**
-   * WP-86 (backlog 135, TD-028's Consequences): `agent_runs` is about the instance — is anything
-   * taking `stage.execute` jobs — and an `unserved` answer is **degraded, never down**.
+   * WP-277 (TD-031 decision 13): `claimants` says who claims agent runs — `server` composed here,
+   * `workers: <n>`, or `none` — and `none` is **not** degraded by itself: only an offer that waited
+   * past the bound with no claimant degrades it, naming the offer. Degraded, never down.
    */
-  describe('agent_runs (WP-86)', () => {
-    const withAgentRuns = (agentRuns: () => Promise<'served' | 'unserved'>) =>
+  describe('claimants (WP-277)', () => {
+    const OLD_OFFER = {
+      runId: '00000000-0000-4000-8000-000000000277',
+      offeredAt: '2026-11-04T09:00:00.000Z',
+      waitedSeconds: 400,
+    };
+    const withClaimants = (input: {
+      readonly composedHere: 'server' | null;
+      readonly workers?: number;
+      readonly oldest?: typeof OLD_OFFER | null;
+      readonly fails?: boolean;
+    }) =>
       createReadinessCheck({
         database: fakeDatabase({ names: shipped() }),
         jobsStarted: () => true,
         dispatchReady: null,
-        agentRuns,
+        claimants: {
+          composedHere: input.composedHere,
+          workersConnected: async () => {
+            if (input.fails === true) throw new Error('relation "run_offers" does not exist');
+            return input.workers ?? 0;
+          },
+          oldestUnclaimedOffer: async () => input.oldest ?? null,
+        },
       });
 
-    it('is ok, with no details, when something takes the agent stages', async () => {
-      await expect(withAgentRuns(async () => 'served')()).resolves.toEqual({
+    it('reads server where this process composes the claimant, ok even with an old offer', async () => {
+      await expect(withClaimants({ composedHere: 'server', oldest: OLD_OFFER })()).resolves.toEqual(
+        {
+          status: 'ok',
+          checks: { database: 'ok', migrations: 'ok', queue: 'ok', claimants: 'ok' },
+          claimants: 'server',
+        },
+      );
+    });
+
+    it('reads workers: <n> when workers are connected', async () => {
+      const report = await withClaimants({ composedHere: null, workers: 2 })();
+      expect(report.claimants).toBe('workers: 2');
+      expect(report.checks.claimants).toBe('ok');
+    });
+
+    it('is none and NOT degraded on a workers_only core with nothing waiting past the bound', async () => {
+      await expect(withClaimants({ composedHere: null })()).resolves.toEqual({
         status: 'ok',
-        checks: { database: 'ok', migrations: 'ok', queue: 'ok', agent_runs: 'ok' },
+        checks: { database: 'ok', migrations: 'ok', queue: 'ok', claimants: 'ok' },
+        claimants: 'none',
       });
     });
 
-    it('is degraded — never down — and says unserved when nothing has claimed one', async () => {
-      await expect(withAgentRuns(async () => 'unserved')()).resolves.toEqual({
+    it('is degraded — never down — naming the oldest offer once one waited past the bound', async () => {
+      await expect(withClaimants({ composedHere: null, oldest: OLD_OFFER })()).resolves.toEqual({
         status: 'degraded',
-        checks: { database: 'ok', migrations: 'ok', queue: 'ok', agent_runs: 'degraded' },
-        details: { agent_runs: 'unserved' },
+        checks: { database: 'ok', migrations: 'ok', queue: 'ok', claimants: 'degraded' },
+        details: { claimants: 'unclaimed' },
+        claimants: 'none',
+        oldest_unclaimed_offer: {
+          run_id: OLD_OFFER.runId,
+          offered_at: OLD_OFFER.offeredAt,
+          waited_seconds: 400,
+        },
       });
     });
 
     it('is degraded and unknown, never ok, when the read fails', async () => {
-      const report = await withAgentRuns(async () => {
-        throw new Error('relation "pgboss.job" does not exist');
-      })();
-      expect(report.checks.agent_runs).toBe('degraded');
-      expect(report.details).toEqual({ agent_runs: 'unknown' });
-    });
-
-    it('does not hide a down check behind its degraded one', async () => {
-      const check = createReadinessCheck({
-        database: fakeDatabase({ names: shipped() }),
-        jobsStarted: () => false,
-        dispatchReady: null,
-        agentRuns: async () => 'unserved',
-      });
-      expect((await check()).status).toBe('down');
+      const report = await withClaimants({ composedHere: null, fails: true })();
+      expect(report.checks.claimants).toBe('degraded');
+      expect(report.details).toEqual({ claimants: 'unknown' });
     });
 
     it('is omitted where no job client is held', async () => {
@@ -231,7 +260,7 @@ describe('createReadinessCheck', () => {
         database: fakeDatabase({ names: shipped() }),
         jobsStarted: null,
         dispatchReady: null,
-        agentRuns: null,
+        claimants: null,
       });
       expect(Object.keys((await check()).checks)).toEqual(['database', 'migrations']);
     });

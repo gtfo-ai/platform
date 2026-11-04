@@ -183,6 +183,27 @@ describe('the session runs from the stored plan (WP-275a criterion 3)', () => {
   });
 });
 
+/**
+ * WP-276: the process that plans is not the one that runs. A core with no runner has no model
+ * credential, so its plan names none; the claimant brings its own and must **name** it, or TD-012
+ * step 1 would not know the value it hands the session (measured in the topology e2e: the key reached
+ * the transcript under a pattern placeholder instead of the run's own).
+ */
+describe('a claimant’s own credential joins a plan made without one (WP-276)', () => {
+  it('hands the session the claimant’s key, named as a secret, though the planner had none', async () => {
+    const harness = harnessWith({
+      plannerEnvironment: { env: {}, secretEnvNames: [] },
+      runEnvironment: ENVIRONMENT,
+    });
+    await harness.publish([ticketMatched()]);
+    const planned = harness.plannedSpecs[0];
+    expect(planned?.secretEnvNames).toEqual([]);
+    const ran = harness.specs[0];
+    expect(ran?.env.ANTHROPIC_API_KEY).toBe(MODEL_KEY);
+    expect(ran?.secretEnvNames).toEqual(['ANTHROPIC_API_KEY']);
+  });
+});
+
 describe('a plan that cannot be read back is a terminal not_started (WP-275a criterion 3)', () => {
   const refusedWith = async (options: HarnessOptions, reason: string) => {
     const harness = harnessWith({

@@ -40,21 +40,29 @@ export interface ReadinessOptions {
    */
   readonly dispatchReady: (() => boolean) | null;
   /**
-   * **Is anything taking agent stages?** (WP-86, PROGRESS backlog 135 — TD-028's Consequences:
-   * *"`/readyz` reports the runner as absent"*.) `null` in a process that holds no job client.
+   * **Who claims agent runs** (WP-277, TD-031 decision 13; replaces WP-86's `agent_runs`). `null` in
+   * a process that holds no job client.
    *
-   * It is a question about the **instance**, read from pg-boss's tables
-   * (`jobs.readAgentRunService`), because the process an operator reads `/readyz` on — `app` — is
-   * designed to run no agent: a process-local answer would be permanently "absent" there. An
-   * `unserved` answer is reported **`degraded`, never `down`**, and `degraded` answers 200: a
-   * missing runner stops agent stages and the platform gates and nothing else, so it must not take
-   * the API and the SPA out of a load balancer. A failed read is `degraded` with the detail
-   * `unknown` — the database check beside it says why — and never `ok` (standing rule 16).
+   * `composedHere` is `server` when this process runs the server claimant (a launcher, or the
+   * in-process provisioner); `workersConnected` counts remote workers online (0 until WP-281). The
+   * line reads `server`, `workers: <n>` or `none` — and `none` is **not** degraded on its own: a
+   * `workers_only` core with no worker online, or with no open offer, is a valid state. It is
+   * `degraded` (still 200) only when an offer has waited past the bound
+   * (`OFFER_UNCLAIMED_AFTER_SECONDS`) with no claimant, and the report names that offer. A failed
+   * read is `degraded` with the detail `unknown`, never `ok` (standing rule 16).
    */
-  readonly agentRuns?: (() => Promise<'served' | 'unserved'>) | null;
+  readonly claimants?: {
+    readonly composedHere: 'server' | null;
+    readonly workersConnected: () => Promise<number>;
+    readonly oldestUnclaimedOffer: () => Promise<{
+      readonly runId: string;
+      readonly offeredAt: string;
+      readonly waitedSeconds: number;
+    } | null>;
+  } | null;
   /**
    * Longest **each** awaited check may take (the migrations read and, where composed, the
-   * `agent_runs` read each get their own deadline), so the whole report is bounded by twice this.
+   * `claimants` read each get their own deadline), so the whole report is bounded by twice this.
    */
   readonly timeoutMs?: number;
 }
@@ -164,19 +172,35 @@ export const createReadinessCheck = (
       checks.dispatch = options.dispatchReady() ? 'ok' : 'down';
     }
 
-    const agentRuns = options.agentRuns ?? null;
-    if (agentRuns !== null) {
-      const service = await withDeadline(
-        agentRuns().then(
-          (answer) => answer,
-          () => 'unknown' as const,
+    const claimants = options.claimants ?? null;
+    let claimantsLine: ReadinessReport['claimants'];
+    let unclaimed: ReadinessReport['oldest_unclaimed_offer'];
+    if (claimants !== null) {
+      const read = await withDeadline(
+        Promise.all([claimants.workersConnected(), claimants.oldestUnclaimedOffer()]).then(
+          ([workers, oldest]) => ({ ok: true as const, workers, oldest }),
+          () => ({ ok: false as const }),
         ),
         timeoutMs,
-        'unknown' as const,
+        { ok: false as const },
       );
-      checks.agent_runs = service === 'served' ? 'ok' : 'degraded';
-      if (service !== 'served') {
-        details.agent_runs = service;
+      if (!read.ok) {
+        checks.claimants = 'degraded';
+        details.claimants = 'unknown';
+      } else {
+        claimantsLine =
+          claimants.composedHere ?? (read.workers > 0 ? `workers: ${read.workers}` : 'none');
+        if (claimantsLine === 'none' && read.oldest !== null) {
+          checks.claimants = 'degraded';
+          details.claimants = 'unclaimed';
+          unclaimed = {
+            run_id: read.oldest.runId,
+            offered_at: read.oldest.offeredAt,
+            waited_seconds: read.oldest.waitedSeconds,
+          };
+        } else {
+          checks.claimants = 'ok';
+        }
       }
     }
 
@@ -185,8 +209,12 @@ export const createReadinessCheck = (
       : Object.values(checks).includes('degraded')
         ? 'degraded'
         : 'ok';
-    return Object.keys(details).length === 0
-      ? { status: worst, checks }
-      : { status: worst, checks, details };
+    return {
+      status: worst,
+      checks,
+      ...(Object.keys(details).length === 0 ? {} : { details }),
+      ...(claimantsLine === undefined ? {} : { claimants: claimantsLine }),
+      ...(unclaimed === undefined ? {} : { oldest_unclaimed_offer: unclaimed }),
+    };
   };
 };

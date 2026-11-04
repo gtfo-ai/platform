@@ -38,19 +38,15 @@
  * `roleIsIdle('runner')` was `true`, so the role started a process that served ops endpoints and
  * waited.
  *
- * What makes the role honest is not a flag but a fact: **a run executes inside the `stage.execute`
- * job**, which is a pg-boss queue the *worker* subscribes to (`pipeline/jobs.ts`). So the process that
- * runs agents is a worker, and `ROLE=runner` is a worker that says what it is there for. It is
- * deliberately **not** a narrower workload:
- *
- *  - gating the agent runner on the **role** would be a lottery. pg-boss hands a `stage.execute` job
- *    to any subscribed worker, so a deployment with `ROLE=worker` beside `ROLE=runner` would give half
- *    its agent stages to the process that composes no runner, and each of those would fail its run and
- *    escalate its task. Whether a process runs agents is therefore decided by **configuration** — the
- *    workspace provisioner and the model credential (`agent.ts`) — and never by `ROLE`;
- *  - a container that runs *only* agent stages needs per-queue subscription, which nothing in this
- *    build has and no work package owns. It is recorded as discovered work rather than implied by a
- *    role name.
+ * What makes the role honest is not a flag but a fact. Since WP-276 (TD-031 decisions 3 and 13) the
+ * `stage.execute` job **ends at the offer** and every worker subscribes it, and a run executes in the
+ * **server claimant** (`@platform/application`'s `pipeline/claimant.ts`), which a worker composes only
+ * when it is configured to run agents — the workspace provisioner and the model credential
+ * (`agent.ts`). So `ROLE=runner` is a worker that says what it is there for, and it is deliberately
+ * **not** a narrower workload: whether a process claims runs is its **configuration**, never its
+ * `ROLE` (TD-028's 2026-11-04 amendment), which `test/e2e/topology/two-processes.e2e.test.ts` holds
+ * as a table — a `runner` and a `worker` with a runner both read `claimants: server`, either without
+ * one `none`.
  */
 
 /*
@@ -74,11 +70,10 @@ export interface RoleCapabilities {
   readonly api: boolean;
   /**
    * Run the outbox sweep, the event dispatcher, pg-boss workers and the maintenance cron — which
-   * includes the `stage.execute` queue, and therefore every agent run.
+   * includes the `stage.execute` queue (plans, offers and gates since WP-276).
    *
-   * There is no separate `runner` flag: it gated nothing, and gating the agent runner on a role would
-   * hand agent stages to whichever worker pg-boss picked (see this file's header). What decides
-   * whether a process can run an agent is its *configuration*, read in `agent.ts`.
+   * There is no separate `runner` flag: what decides whether a process **claims and runs** an agent
+   * run is its *configuration*, read in `agent.ts` (see this file's header).
    */
   readonly worker: boolean;
   /**
@@ -101,8 +96,8 @@ const CAPABILITIES: Record<Role, Omit<RoleCapabilities, 'unimplemented'>> = {
   all: { api: true, worker: true, indexer: true },
   api: { api: true, worker: false, indexer: false },
   worker: { api: false, worker: true, indexer: false },
-  // A worker, named for the workload an operator deploys it for: a run happens in the
-  // `stage.execute` job, which is the worker's queue (WP-15g).
+  // A worker, named for the workload an operator deploys it for: a worker configured with a
+  // launcher composes the server claimant, which runs the runs (WP-276).
   runner: { api: false, worker: true, indexer: false },
   // The same, for the `knowledge.index` job (WP-18a). It was `worker: false` while nothing
   // registered that queue, which made the role a process that served ops endpoints and waited.

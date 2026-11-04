@@ -176,9 +176,9 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
   `/webhooks/*`, and `apps/launcher/src/docker-access.test.ts` holds that as a census over every source git knows about, tracked or untracked (`scripts/census-files.mjs`).
   A process with no launcher configuration composes
   `unavailableClaudeRunner`, which **throws** and names the missing piece; that throw has an ending
-  (`stage-executor.ts` fails the run it created and escalates to `needs_human` — **no new task state**, Q59),
-  and a start failure is **retryable or terminal** rather than a state of its own (Q59a). Since WP-53 it is
-  also a throw that process should not reach: it no longer **subscribes** `stage.execute` (below).
+  (the run settles `not_started` and escalates to `needs_human` — **no new task state**, Q59),
+  and a start failure is **retryable or terminal** rather than a state of its own (Q59a). Since WP-277 it is
+  also a throw that process should not reach: it composes no **claimant** (below).
 - **The transport, and the first production run** (WP-53, TD-028, closing Q52). The launcher exposes an
   **authenticated HTTP control plane** — `apps/launcher/src/control-plane.ts`, `node:http`, seven verbs on a
   run id — on a compose network with `internal: true` and no published port that only it and a second
@@ -190,10 +190,19 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
   `launcher/client.ts` (a `fetch` with `redirect: 'error'`, because the request carries the launcher token)
   and the provisioner `launcher/provisioner.ts`; `apps/server/src/workspaces.ts` composes them from
   `APP_LAUNCHER_URL` + `APP_LAUNCHER_TOKEN`, and **exactly one of the two is a startup refusal naming the
-  other**. **`stage.execute` and `task.ask` are subscribed by configuration, never by `ROLE`** (TD-028
-  decision 5, because pg-boss hands a job to any subscribed worker), so a process that runs no agent leaves
-  those jobs **queued** — which also queues the platform **gates**, a consequence TD-028's wording does not
-  state and WP-53 measured. Every create is **idempotent on the run id** in the launcher's own memory; a
+  other**. **The job ends at the offer** (WP-276, TD-031 decisions 2–3 and 13, TD-028's 2026-11-04
+  amendment): `stage.execute` and `task.ask` plan, store the sealed plan and write a `run_offers` row, and
+  are subscribed by **every** worker (so a runner-less core still evaluates the platform **gates**); what is
+  composed **by configuration, never by `ROLE`**, is the **server claimant**
+  (`packages/application/src/pipeline/claimant.ts`), which claims offers (woken by `pg_notify('run_offers')`
+  and a 5 s poll, `APP_RUNNER_CONCURRENCY` slots), runs each from `loadRunPackage`, heartbeats with the
+  claim's epoch — an answered `lease_lost` stops the session, and it **self-terminates** `TTL − ½·renew`
+  after its last renewal, before the sweep acts at `lease_expires_at + APP_LEASE_SKEW_GRACE` — and settles
+  through `settleRun` (an ask through the ask's own ending). A process with no launcher says it is not a
+  claimant; `/readyz`'s `claimants` reads `server`, `workers: <n>` or `none`, degraded only when an offer
+  waited five minutes. Every transition that leaves a stage closes its offer first
+  (`pipeline/offer-withdrawal.ts`: one conditional update, else a `cancel` for the holder), and every
+  transaction that locks more than one of them locks **`run_offers` → `runs` → `tasks`**. Every create is **idempotent on the run id** in the launcher's own memory; a
   create replayed across a launcher restart is refused at the run's network (409) and starts no second
   container, and the first run's container is left running with nothing holding a handle for it (backlog
   136, measured at WP-82) until the runner's orphan pass (WP-103, TD-028 decision 12,

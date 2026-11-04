@@ -337,6 +337,7 @@ const actions = (harness: PipelineHarness, action: string) =>
  */
 const optionsOf = (harness: PipelineHarness): RiskRoutingOptions => ({
   store: harness.store,
+  eventStore: harness.memory.store,
   settings: staticProjectSettings(() => harness.settings),
   jobs: harness.jobs,
   calendar: harness.calendar,

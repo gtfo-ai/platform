@@ -574,6 +574,7 @@ export const breakdownDecidedHandler = (options: EpicSplitOptions): EventHandler
       stored.qaStage,
     );
     const applied = await applyDecision({
+      offerClosing: { eventStore: options.eventStore, broadcast: context.scope.broadcast },
       store: options.store,
       pipeline,
       tx: context.scope.tx,

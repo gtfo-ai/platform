@@ -1462,6 +1462,12 @@ export interface StoredRun {
    * `load` always answers it.
    */
   readonly cliSpawnRequestedAt?: IsoDateTime | null;
+  /**
+   * The ask this run answers (`runs.ask_id`, migration 0082) — read back since WP-276, because the
+   * ask's ending is settled by a claimant that holds nothing but the run id. `null` (or absent from
+   * a writer's own shape) for a stage run.
+   */
+  readonly askId?: Id | null;
 }
 
 /**
@@ -1610,11 +1616,12 @@ export interface StoredRunOffer extends NewRunOffer {
 /**
  * Which open offers a claim may take — TD-031 §2's `<eligibility for this claimant>`.
  *
- * WP-274 has one claimant, the server's runner inside the job that wrote the offer, so its
- * eligibility is *this run's offer*. Routing (WP-278) and remote workers (WP-281) widen it.
+ * Since WP-276 the server's claimant loop (`./claimant.ts`) takes **any** open offer, stage or ask,
+ * oldest first: `{}`. `runId` narrows the claim to one offer, which is what a test that drives one
+ * run asks for. Routing (WP-278) and remote workers (WP-281) narrow it further.
  */
 export interface RunOfferEligibility {
-  readonly runId: Id;
+  readonly runId?: Id;
 }
 
 /** One claim (TD-031 §2): who claims, under which owner, until when. */
@@ -1633,8 +1640,16 @@ export interface ClaimedRunOffer {
   readonly offerId: Id;
   readonly runId: Id;
   readonly taskId: Id;
+  /** `stage` or `ask` — which ending the claimant settles the run through (TD-031 decision 13). */
+  readonly kind: RunOfferKind;
   readonly epoch: number;
   readonly owner: string | null;
+}
+
+/** What {@link RunOfferRepository.withdraw} moved `open → withdrawn`. */
+export interface WithdrawnRunOffer {
+  readonly offerId: Id;
+  readonly runId: Id;
 }
 
 /**
@@ -1660,6 +1675,40 @@ export interface RunOfferRepository {
    */
   claim(tx: Transaction, claim: RunOfferClaim): Promise<ClaimedRunOffer | null>;
   load(tx: Transaction, runId: Id): Promise<StoredRunOffer | null>;
+  /**
+   * **The withdrawal** (WP-276, TD-031 decision 3): **one conditional statement**, `update run_offers
+   * set state = 'withdrawn' … where … and state = 'open'`, answering the row it moved or `null`. A
+   * claim that won the row lock first leaves it `claimed`, and this touches nothing — the caller then
+   * records a `cancel` run command instead. `taskId` selects the task's open **stage** offer (an
+   * ask's offer is outside the per-task index and is never withdrawn by a stage transition); `runId`
+   * selects one offer whatever its kind (a claimant that found the offer has no plan).
+   *
+   * The offer is the **first** of the three rows a withdrawal locks — `run_offers`, then `runs`, then
+   * `tasks` (TD-031's 2026-11-04 amendment §5) — so the caller ends the run and saves the task after.
+   */
+  withdraw(
+    tx: Transaction,
+    input: {
+      readonly by: { readonly taskId: Id } | { readonly runId: Id };
+      readonly reason: string;
+      readonly now: IsoDateTime;
+    },
+  ): Promise<WithdrawnRunOffer | null>;
+  /**
+   * The task's open or claimed **stage** offer — the one the per-task index admits — or `null`. Read
+   * without a lock: a withdrawal that finds it `claimed` uses it to name the run its `cancel` is for,
+   * under the lock {@link RunCommandRepository.lockRun} then takes in the one order.
+   */
+  liveStageOffer(tx: Transaction, taskId: Id): Promise<StoredRunOffer | null>;
+  /**
+   * Open offers whose run has **no** stored plan (TD-031's 2026-11-04 amendment §2) — the claimant
+   * withdraws each through its kind's executor before it claims. Reachable only for a run offered by a
+   * build before WP-275a.
+   */
+  openWithoutPlan(
+    tx: Transaction,
+    limit: number,
+  ): Promise<readonly { readonly runId: Id; readonly kind: RunOfferKind }[]>;
 }
 
 /** One `ReviewVerdict.checklists_applied` entry, as the planner decides it (WP-45). */
@@ -1728,12 +1777,22 @@ export interface RunRepository {
    *
    * Exclusive, and taken **first** in the settle's transaction, so that what the settle decides from
    * it stays true until it commits: no cancel, sweep or second settle can end the row in between,
-   * and a second settle of the same run waits here and then reads it terminal. The order is the one
-   * every writer of both rows already takes — the run, then the task (a cancel's `lockRun`, the
-   * sweep's claim), then the offer through `finish` — so the lock adds no new order (backlog 697 is
-   * the claim's, not this).
+   * and a second settle of the same run waits here and then reads it terminal.
+   *
+   * **One lock order** (WP-276, backlog 697, TD-031's 2026-11-04 amendment §5): it locks the run's
+   * **offer** row first, then the run — `run_offers` → `runs` → `tasks`, the order every transaction
+   * that locks more than one of them takes: the claim, every `finish` caller (a person's cancel, the
+   * lease sweep, the holder's applied cancel, the take-over's stop, the shutdown hand-back, the ask's
+   * ending), and the withdrawal. `tasks.save` is optimistic and written last everywhere.
    */
   lockSettlement(tx: Transaction, runId: Id): Promise<RunSettlement | null>;
+  /**
+   * The context-pack record the run was planned with, **read back** from what transaction 1b stored
+   * (`run_context_pack` and the header columns on `runs`, migration 0041) — PROGRESS backlog 709: a
+   * claimant outside the job that planned the run appends `run.started` with this, never with a
+   * planner's memory. `null` when the run recorded none (a row written before 0041, or none at all).
+   */
+  contextPack(tx: Transaction, runId: Id): Promise<ContextPackRecord | null>;
   /**
    * Moves a **live** run to a terminal status, and answers whether this caller is the one that did.
    *
@@ -1751,11 +1810,11 @@ export interface RunRepository {
    *
    * **The winner also closes the run's offer** (WP-274, TD-031 §12): `claimed → settled`, `open →
    * withdrawn` (with the terminal reason), in the same transaction — so every terminal writer frees
-   * the per-task index for the task's next stage. **Lock order:** `finish` locks the run row (its
-   * `update runs`) and then the offer, while the claim locks the offer and then the run. The two
-   * cannot deadlock in WP-274, whose only claim runs in the transaction that inserted the run (no other
-   * transaction can see that row); WP-276, which claims a run committed earlier, owns the question
-   * (backlog 697, and `postgres-run-offers.ts`'s docblock).
+   * the per-task index for the task's next stage. **Lock order** (WP-276, backlog 697): `finish`
+   * locks the run's offer row **before** its `update runs`, and every caller that locked the run
+   * earlier in its transaction (`lockSettlement`, a cancel's `lockRun`/`lockLiveRunOf` with
+   * `forUpdate`, the sweep's `claimExpiredRun`) locked the offer before it — `run_offers` → `runs` →
+   * `tasks`, the claim's own order, so a claim and a terminal writer of one run cannot deadlock.
    *
    * **A claimant passes its fence** ({@link RunLeaseFence}): the write is then also conditional on
    * `lease_epoch` and `lease_owner`, and a **live** row held under another claim throws

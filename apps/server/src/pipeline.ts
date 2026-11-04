@@ -356,6 +356,10 @@ export interface ComposePipelineOptions {
   /** `APP_SECRET_KEY`, already validated by `config.ts`. */
   readonly secretKey: string;
   readonly stageConcurrency: number;
+  /** `APP_RUNNER_CONCURRENCY` (WP-276): the server claimant's runs at once, when one is composed. */
+  readonly runnerConcurrency?: number;
+  /** `APP_LEASE_SKEW_GRACE` in seconds (WP-276): the lease sweep's wait past `lease_expires_at`. */
+  readonly leaseSkewGraceSeconds?: number;
   /**
    * How often the intake reconciliation runs, and the age a match must reach before it is
    * re-emitted (`APP_INTAKE_RECONCILE_INTERVAL_MS`). `0` starts no pass at all.
@@ -1152,7 +1156,10 @@ export const composePipeline = async (
   );
 
   /**
-   * TD-028 decision 5: this process takes `stage.execute` jobs **only if it can perform one**.
+   * WP-277 (TD-031 decision 13, TD-028's 2026-11-04 amendment): this process composes the **server
+   * claimant** only if it can run what it claims. Every worker subscribes `stage.execute` and
+   * `task.ask` regardless — a job plans, offers and evaluates gates — and a process without a runner
+   * logs at start that it is not a claimant, its offers waiting for one (`/readyz`'s `claimants`).
    *
    * The condition is exactly the one `composeAgentRunner` already answers — a workspace
    * provisioner, and in `api` mode a model credential — so there is one definition of "runs
@@ -1287,7 +1294,12 @@ export const composePipeline = async (
     eventStore: options.eventing.store,
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,
-    /** TD-028 decision 5 — see {@link runsAgents} above. */
+    // WP-276: the claimant's slots, and the transport it wakes on (`pg_notify('run_offers')`).
+    ...(options.runnerConcurrency === undefined
+      ? {}
+      : { runnerConcurrency: options.runnerConcurrency }),
+    broadcast: options.eventing.broadcast,
+    /** WP-277: whether this process is a claimant — see {@link runsAgents} above. */
     runsAgents,
     baseUrl: options.baseUrl,
     /**
@@ -1617,6 +1629,10 @@ export const composePipeline = async (
         unitOfWork: options.eventing.unitOfWork,
         eventStore: options.eventing.store,
         wallClockMs: runLimitsDefaults.wallClockMs,
+        // WP-276: the sweep acts only after `lease_expires_at + APP_LEASE_SKEW_GRACE`.
+        ...(options.leaseSkewGraceSeconds === undefined
+          ? {}
+          : { skewGraceMs: options.leaseSkewGraceSeconds * 1000 }),
         context: (correlationId) => ({
           ids,
           actor: { kind: 'system', component: RUN_LEASE_SWEEP_COMPONENT },

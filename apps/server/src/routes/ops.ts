@@ -16,8 +16,9 @@
  *   connections are closed (TD-002's shutdown order).
  *
  *   Since WP-86 a `degraded` report answers **200**. It has two producers, and each names its
- *   reason in `details`: `agent_runs`, which is about the instance (no process is taking agent
- *   stages), not about whether this process can serve; and, since WP-272, `schema`, when the
+ *   reason in `details`: `claimants` (WP-277; `agent_runs` until then), which is about the instance
+ *   (an agent run has waited past the bound with no claimant), not about whether this process can
+ *   serve; and, since WP-272, `schema`, when the
  *   database carries migrations this build does not ship and every one of them is `additive` — the
  *   rolled-back state TD-032 decision 2 makes servable.
  *
@@ -41,16 +42,24 @@ export interface ReadinessReport {
   readonly status: CheckStatus;
   readonly checks: Record<string, CheckStatus>;
   /**
-   * Why a check that is not `ok` is not — present only when one says (WP-86): `agent_runs:
-   * 'unserved'` when `stage.execute` holds a job nothing has claimed past the bound, `'unknown'`
-   * when that could not be read; `schema: 'ahead_additive'` (WP-272, TD-032 decision 2) when the
+   * Why a check that is not `ok` is not — present only when one says: `claimants: 'unclaimed'`
+   * (WP-277) when no claimant is composed here or connected and an offer has waited past the bound,
+   * `'unknown'` when that could not be read; `schema: 'ahead_additive'` (WP-272, TD-032 decision 2) when the
    * database carries migrations this build does not ship and every one of them is additive.
    */
   readonly details?: Record<string, ReadinessDetail>;
+  /** WP-277: `server`, `workers: <n>` or `none` — who claims agent runs (`readiness.ts`). */
+  readonly claimants?: 'server' | 'none' | `workers: ${number}`;
+  /** WP-277: the oldest offer that waited past the bound with no claimant, when `claimants` is degraded. */
+  readonly oldest_unclaimed_offer?: {
+    readonly run_id: string;
+    readonly offered_at: string;
+    readonly waited_seconds: number;
+  };
 }
 
 /** The reasons `details` can give (`healthResponseSchema` in `@platform/contracts`). */
-export type ReadinessDetail = 'unserved' | 'unknown' | 'ahead_additive';
+export type ReadinessDetail = 'unclaimed' | 'unknown' | 'ahead_additive';
 
 export interface OpsRoutesOptions {
   readonly config: ServerConfig;
@@ -133,7 +142,7 @@ export const registerOpsRoutes = async (
       schema: {
         summary: 'Readiness probe',
         description:
-          'Whether this process can serve traffic: database reachable, schema known to this build, job runtime started, and an event handler registered to dispatch to — 503 when any is down, and as soon as shutdown begins. `agent_runs` is about the instance: degraded (still 200, `details.agent_runs: unserved`) when stage.execute holds a job nothing has claimed for five minutes — no runner is taking agent stages. `schema` is degraded (still 200, `details.schema: ahead_additive`) when the database carries migrations this build does not ship and every one is additive (TD-032).',
+          'Whether this process can serve traffic: database reachable, schema known to this build, job runtime started, and an event handler registered to dispatch to — 503 when any is down, and as soon as shutdown begins. `claimants` says who claims agent runs — `server` (this process), `workers: <n>` or `none` — and is degraded (still 200, `details.claimants: unclaimed`, the offer named in `oldest_unclaimed_offer`) only when no claimant is here or connected and an offer has waited five minutes; `none` alone is not degraded (a workers_only core). `schema` is degraded (still 200, `details.schema: ahead_additive`) when the database carries migrations this build does not ship and every one is additive (TD-032).',
         tags: ['ops'],
         response: { 200: healthResponseSchema, 503: healthResponseSchema },
       },
@@ -145,7 +154,7 @@ export const registerOpsRoutes = async (
           .send({ status: 'down' as const, checks: { shutdown: 'down' as const } });
       }
       const report = await options.readiness();
-      // `degraded` is still ready (WP-86): `agent_runs` means agent stages are not being taken,
+      // `degraded` is still ready (WP-86): `claimants` means an agent run waits for a claimant,
       // and taking the API out of a load balancer for that would stop the product serving
       // everything else too; `schema: ahead_additive` (WP-272) is a schema this build serves.
       return reply.status(report.status === 'down' ? 503 : 200).send(report);

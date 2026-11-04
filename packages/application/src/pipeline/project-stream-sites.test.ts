@@ -53,6 +53,12 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // WP-275a: `settlementInputs` rebuilds the run's aggregate at its stream's sequence, read under
   // the settle's `for update` on the `runs` row, before the conditional `finish`.
   ['packages/application/src/pipeline/settle.ts', 1],
+  // WP-276: the claimant appends `run.claimed` at the sequence it reads in the claim's transaction,
+  // whose `for update of o, r` holds the run row; the ask's settle rebuilds its aggregate under
+  // `lockSettlement`; a withdrawal reads it after its conditional update, before `finish`.
+  ['packages/application/src/pipeline/claimant.ts', 1],
+  ['packages/application/src/ask/executor.ts', 1],
+  ['packages/application/src/pipeline/offer-withdrawal.ts', 1],
 ]);
 
 const SEQUENCE_READ = /\.\s*nextStreamSequence\s*\(/g;

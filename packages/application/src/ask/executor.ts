@@ -7,10 +7,19 @@
  * ```
  * tx 1a  load the ask and the task, ask the five admission questions   → nothing, or a refusal row
  *        plan the prompt (retrieval; no transaction open)
- * tx 1b  ask the same five again, then create the Run (stage null)     → run.created, run.started
- * ——     run                                                           (a minute; no connection held)
- * tx 2   store the AskAnswer artifact and the answer on the ask row    → run.finished | run.failed
+ * tx 1b  ask the same five again, then create the Run (stage null),    → run.created, run.offered
+ *        store its sealed plan and offer it — the job ends here (WP-276)
+ * ——     a claimant runs it (`pipeline/claimant.ts`)                   (a minute; no connection held)
+ * tx 2   {@link AskExecutor.settle}: the AskAnswer artifact and the     → run.finished | run.failed
+ *        answer on the ask row, from stored state alone
  * ```
+ *
+ * **Since WP-276 an ask's run is an offer like a stage's** (TD-031 decision 13, `kind = 'ask'`,
+ * outside the per-task index): a core with no server runner would otherwise never answer one. The
+ * job ends at the offer; the claimant settles the run through {@link AskExecutor.settle}, which reads
+ * everything the job's memory used to carry back from the rows — the ask (by the run's `ask_id`), the
+ * run's aggregate, the redactor (`runRedactorFor` over the plan's secret names), and the run and audit
+ * lines a citation may name (this task's, read again at the settle).
  *
  * ## Three things it deliberately does *not* do, and each is the point
  *
@@ -32,7 +41,6 @@
 import type {
   AskAnswerCitation,
   AskAnswerData,
-  ContextPackRecord,
   DomainEvent,
   Id,
   JsonValue,
@@ -50,6 +58,7 @@ import {
   createRun,
   failRun,
   finishRun,
+  isActiveRunStatus,
   MAX_ASK_ANSWER_CHARS,
   recordRunCreated,
 } from '@platform/domain';
@@ -60,29 +69,17 @@ import {
 import { type BudgetGuard, blockingBudgetDetail, noBudgetGuard } from '../cost/guard.js';
 import { type Hold, holdDetail } from '../cost/pending.js';
 import { redactTextSearchTerms } from '../knowledge/text-search-record.js';
-import {
-  cliSpawnNotRequested,
-  isStopEnding,
-  MEASURED_ZERO_COST,
-  NO_RUN_USAGE,
-  recordCliSpawn,
-  stopEndingOf,
-  stoppedBeforeCliSpawn,
-  unspawnedStepOf,
-  unspawnedStop,
-} from '../pipeline/cli-spawn.js';
+import { MEASURED_ZERO_COST, NO_RUN_USAGE } from '../pipeline/cli-spawn.js';
 import { questionTimeoutOf } from '../pipeline/deadline-rules.js';
-import {
-  leaseExpiryAt,
-  RUN_LEASE_TTL_MS,
-  type RunLeaseOptions,
-  startRunHeartbeat,
-} from '../pipeline/lease.js';
-import { offerAndClaimInJob } from '../pipeline/offers.js';
-import { loadRunPackage, RunPlanTooLargeError, sealRunPlan } from '../pipeline/run-package.js';
+import type { RunLeaseOptions } from '../pipeline/lease.js';
+import { endWithdrawnRun } from '../pipeline/offer-withdrawal.js';
+import { offerRun } from '../pipeline/offers.js';
+import { toRunAggregate } from '../pipeline/run-aggregate.js';
+import { RunPlanTooLargeError, sealRunPlan } from '../pipeline/run-package.js';
 import { type RunSecretEnvironment, runRedactorFor } from '../pipeline/run-redaction.js';
 import { type ProjectSettings, settingsAdmission } from '../pipeline/settings.js';
 import { runSettingsSnapshot } from '../pipeline/settings-snapshot.js';
+import type { SettleRunRequest } from '../pipeline/settle.js';
 import { COST_UNREPORTED, withTaskCap } from '../pipeline/stage-executor.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import {
@@ -91,6 +88,7 @@ import {
   type RunLeaseFence,
   type StoredTask,
 } from '../pipeline/store.js';
+import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -99,9 +97,9 @@ import { silentLogger } from '../ports/logger.js';
 import type { RunPlanSealer } from '../ports/run-plan-sealer.js';
 import {
   type ClaudeRunner,
-  describeStartFailure,
+  type NotStartedReport,
   type RunOutcome,
-  runStartFailureOf,
+  runStartFailureFromReport,
 } from '../ports/runner.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import {
@@ -122,6 +120,8 @@ export interface AskExecuteData {
 }
 
 export type AskExecutionOutcome =
+  /** The ask's run is offered (WP-276); a claimant runs it and {@link AskExecutor.settle} ends it. */
+  | { readonly kind: 'offered'; readonly askId: Id; readonly runId: Id }
   /** The run happened and its answer is stored. */
   | { readonly kind: 'answered'; readonly askId: Id; readonly runId: Id }
   /** Nothing to do: the ask is gone or has already been answered (a duplicate wake-up). */
@@ -211,11 +211,29 @@ export interface AskExecutorOptions {
   readonly runPlans: RunPlanSealer;
   /** The secret values the read-back spec is given (WP-275a); absent is none. */
   readonly runEnvironment?: RunSecretEnvironment;
+  /** The run stream's next sequence — what the settle rebuilds the run's aggregate at (WP-276). */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
 }
 
 export interface AskExecutor {
+  /** Transaction 1 — admit, plan, offer (WP-276: the job ends at the offer). */
   execute(job: AskExecuteData): Promise<AskExecutionOutcome>;
+  /**
+   * **The ask run's ending** — its transaction 2, from stored state alone (WP-276), called by the
+   * claimant with the four-field request. A stale fence throws `LeaseLostError` before anything is
+   * written; a row another writer ended answers `already_settled`; a run whose task (and so whose
+   * row) was deleted answers `task_gone`.
+   */
+  settle(request: SettleRunRequest): Promise<AskSettled>;
+  /** Withdraws an ask's open offer that has no stored plan and refuses the ask (WP-276). */
+  withdrawUnplanned(runId: Id): Promise<boolean>;
+}
+
+/** {@link AskExecutor.settle}'s answer: the claimant's three kinds and the ask's own outcome. */
+export interface AskSettled {
+  readonly kind: 'settled' | 'already_settled' | 'task_gone';
+  readonly outcome: AskExecutionOutcome;
 }
 
 /**
@@ -528,15 +546,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
     runId: Id,
     settings: ProjectSettings,
   ): Promise<
-    | {
-        readonly kind: 'started';
-        /** As the claim left it: `starting`, `run.started` appended at the CLI spawn marker. */
-        readonly run: Run;
-        readonly contextPack: ContextPackRecord;
-        readonly redactor: SecretRedactor;
-        /** The claim's fence (WP-274): every later write of this run by this job carries it. */
-        readonly fence: RunLeaseFence;
-      }
+    | { readonly kind: 'offered' }
     | { readonly kind: 'skipped'; readonly reason: string }
     | { readonly kind: 'refused'; readonly reason: string }
   > =>
@@ -639,59 +649,29 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         // Backlog 454: the second insert writes the planned mode too (standing rule 49).
         providerMode: plan.spec.providerMode,
       });
-      /**
-       * The offer, and the lease claimed through it, in the **same transaction as the row** — the
-       * stage executor's rule and its reason, one composition across (WP-48, WP-274): a `runs` row
-       * that is `running` with no lease is exactly the row the sweep's wall-clock backstop takes an
-       * hour to reach. An ask's offer is `kind: 'ask'` (TD-031 §13), outside the per-task index, so
-       * it runs beside the task's stage offer as the ask ran beside the stage before.
-       */
       // WP-275a: the ask's plan, sealed, in the run row's transaction — the stage executor's rule at
       // the second insert (standing rule 49); the ask's session runs from the read-back spec too.
       await options.store.runPlans.insert(scope.tx, sealedPlan);
-      const claimed = await offerAndClaimInJob(
+      /**
+       * **The offer, and the job ends here** (WP-276, TD-031 decision 13). An ask's offer is `kind:
+       * 'ask'`, outside the per-task index, so it runs beside the task's stage offer as the ask ran
+       * beside the stage before; a claimant takes it through the same one claim.
+       */
+      const offered = await offerRun(
         options.store.offers,
-        scope.tx,
+        scope,
         {
           run: created.aggregate,
           kind: 'ask',
           offerId: context.ids.next(),
-          owner: options.lease?.owner ?? null,
-          expiresAt:
-            options.lease === undefined
-              ? null
-              : leaseExpiryAt(context.clock.now(), options.lease.ttlMs ?? RUN_LEASE_TTL_MS),
           now: context.clock.now(),
         },
         context,
       );
       await options.asks.attachRun(scope.tx, ask.id, runId);
-      await scope.events.append([...created.events, ...claimed.events]);
-      return {
-        kind: 'started' as const,
-        run: claimed.run,
-        contextPack,
-        redactor: runRedactor,
-        fence: claimed.fence,
-      };
+      await scope.events.append([...created.events, ...offered.events]);
+      return { kind: 'offered' as const };
     });
-
-  /**
-   * A fenced `finish` found the run live under another claim (WP-274, TD-031 §2): its transaction
-   * rolled back, so this job wrote nothing about the run or the ask, and it ends there — the stage
-   * executor's answer (`leaseLost` in `stage-executor.ts`). Unreachable while the server's runner is
-   * the only claimant; stated rather than left to pg-boss's retry, which would plan the ask again.
-   */
-  const leaseLost =
-    (askId: Id) =>
-    (error: unknown): AskExecutionOutcome => {
-      if (!(error instanceof LeaseLostError)) throw error;
-      logger.warn(
-        { ask_id: askId, run_id: error.runId, lease_epoch: error.fence.epoch },
-        "the ask's run is held under another claim (lease_lost); this job wrote nothing about it",
-      );
-      return { kind: 'skipped', reason: error.message };
-    };
 
   /** tx 2: the answer, the artifact, the spend and the run's ending, in one write. */
   const record = async (input: {
@@ -952,6 +932,218 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       return { kind: 'answered' as const, askId: ask.id, runId: run.id };
     });
 
+  /**
+   * The run's **start failure**, recorded from stored state (WP-276): the run failed — the measured
+   * zero when the CLI was never asked for (WP-150), no figure otherwise — and the ask refused with
+   * the platform's closed-vocabulary sentence. The workspace's own words reach `exit_detail` through
+   * this run's redactor and bounded (backlog 453). An ask is not retried on a start failure.
+   */
+  const recordAskNotStarted = async (input: {
+    readonly ask: StoredAsk;
+    readonly run: Run;
+    readonly report: NotStartedReport;
+    readonly redactor: SecretRedactor;
+    readonly fence: RunLeaseFence;
+  }): Promise<AskExecutionOutcome> =>
+    options.unitOfWork.transaction(async (scope) => {
+      const { ask, run, report } = input;
+      const reason = `the runner could not start this ask: ${report.failure}`;
+      const notStarted = runStartFailureFromReport(report, {
+        redactor: input.redactor,
+        attempt: 1,
+        retryable: false,
+      });
+      const requested = report.spawnRequested;
+      const failed = failRun(
+        run,
+        {
+          status: 'failed',
+          terminalReason: 'error_during_execution',
+          error: reason,
+          ...(requested ? {} : { usage: NO_RUN_USAGE, cost: MEASURED_ZERO_COST }),
+          startFailure: notStarted,
+        },
+        options.context(ask.taskId),
+      );
+      const owned = await options.store.runs.finish(scope.tx, {
+        runId: run.id,
+        status: 'failed',
+        terminalReason: 'error_during_execution',
+        sessionId: null,
+        numTurns: 0,
+        usage: NO_RUN_USAGE,
+        cost: requested ? null : MEASURED_ZERO_COST,
+        wallMs: 0,
+        startFailure: notStarted,
+        lease: input.fence,
+      });
+      if (!owned) {
+        return { kind: 'skipped' as const, reason: 'another writer ended this run first' };
+      }
+      await options.asks.recordRefusal(scope.tx, { askId: ask.id, status: 'failed', reason });
+      await scope.events.append([...failed.events] as DomainEvent[]);
+      return { kind: 'failed' as const, askId: ask.id, reason };
+    });
+
+  /**
+   * **The ask run's ending, from stored state alone** (WP-276, {@link AskExecutor.settle}). Everything
+   * the job's memory carried until WP-276 is read back: the run row and its aggregate at the stream's
+   * sequence, the ask by the run's `ask_id`, the redactor from the plan's secret names and this
+   * process's values (`runRedactorFor`, the factory transaction 1b used), and the run and audit lines
+   * a citation may name — this task's, read again here (a citation of a line written after the plan
+   * is in scope; one of another task's never is).
+   */
+  const settleAskRun = async (request: SettleRunRequest): Promise<AskSettled> => {
+    const located = await options.unitOfWork.transaction(async (scope) => {
+      const settlement = await options.store.runs.lockSettlement(scope.tx, request.runId);
+      if (settlement === null) return null;
+      if (
+        settlement.leaseEpoch !== request.fence.epoch ||
+        settlement.leaseOwner !== request.fence.owner
+      ) {
+        throw new LeaseLostError(request.runId, request.fence);
+      }
+      const row = await options.store.runs.load(scope.tx, request.runId);
+      if (row === null || row.askId === undefined || row.askId === null) return null;
+      const ask = await options.asks.load(scope.tx, row.askId);
+      if (ask === null) return null;
+      const aggregate = toRunAggregate(
+        row,
+        await options.eventStore.nextStreamSequence('run', request.runId),
+      );
+      const plan = await options.store.runPlans.load(scope.tx, request.runId);
+      const environment = options.runEnvironment ?? NO_RUN_ENVIRONMENT;
+      return {
+        ask,
+        ended: !isActiveRunStatus(aggregate.status),
+        // A row another writer ended is read as the live run it was, so the decision below is made
+        // and then loses the conditional `finish` (`settle.ts`'s reading).
+        run: isActiveRunStatus(aggregate.status)
+          ? aggregate
+          : { ...aggregate, status: 'running' as const, terminalReason: null },
+        redactor: runRedactorFor(
+          {
+            env: environment.env,
+            // The plan's names and this process's own (WP-276, `loadRunPackage`).
+            secretEnvNames: [
+              ...new Set([...(plan?.secretEnvNames ?? []), ...environment.secretEnvNames]),
+            ],
+          },
+          options.redactor,
+          logger,
+          { runId: request.runId },
+        ),
+        runs: await options.asks.runsForTask(scope.tx, ask.taskId, ASK_RECORD_RUN_LIMIT),
+        audit: await options.asks.auditForTask(scope.tx, ask.taskId, ASK_RECORD_AUDIT_LIMIT),
+      };
+    });
+    if (located === null) {
+      return {
+        kind: 'task_gone',
+        outcome: {
+          kind: 'skipped',
+          reason: 'the ask or its task was deleted while its run was in flight',
+        },
+      };
+    }
+    const { ask } = located;
+    const reported = request.outcome;
+    const recorded =
+      'kind' in reported
+        ? await recordAskNotStarted({
+            ask,
+            run: located.run,
+            report: reported,
+            redactor: located.redactor,
+            fence: request.fence,
+          })
+        : await record({
+            ask,
+            run: located.run,
+            outcome: reported,
+            stopReason: request.stopReason,
+            redactor: located.redactor,
+            knownRunIds: new Set(located.runs.map((line) => line.runId)),
+            knownAuditIds: new Set(located.audit.map((line) => line.id)),
+            fence: request.fence,
+          });
+    await askFollowOn(ask, recorded);
+    return {
+      kind: located.ended || recorded.kind === 'skipped' ? 'already_settled' : 'settled',
+      outcome: recorded,
+    };
+  };
+
+  /** What an ask's ending owes after its commit: the hand-back's re-run, the answer's mirror. */
+  const askFollowOn = async (ask: StoredAsk, recorded: AskExecutionOutcome): Promise<void> => {
+    if (recorded.kind === 'handed_back') {
+      // WP-144: the same ask again, after the stopped process has had time to come back. The bound
+      // is read off the ask's runs (WP-149), so nothing rides the payload; a `coalesced` answer means
+      // a job for this ask is already queued, and that job runs it.
+      const requeued = await options.jobs.enqueue<AskExecuteData>({
+        queue: JOB_QUEUES.taskAsk,
+        singletonKey: `ask:${ask.id}`,
+        startAfter: new Date(
+          Date.parse(options.context(ask.taskId).clock.now()) + ASK_HAND_BACK_DELAY_MS,
+        ),
+        data: { ask_id: ask.id, task_id: ask.taskId, project_id: ask.projectId },
+      });
+      logger.info(
+        {
+          ask_id: ask.id,
+          run_id: recorded.runId,
+          hand_backs: recorded.handBacks,
+          requeued: requeued.status,
+        },
+        'an ask run was handed back by this process’s stop; it is started again',
+      );
+    }
+    if (recorded.kind === 'answered') {
+      await options.jobs.enqueue({
+        queue: JOB_QUEUES.pipelineOutbound,
+        data: {
+          duty: 'ask_answer',
+          project_id: ask.projectId,
+          task_id: ask.taskId,
+          ask_id: recorded.askId,
+          // The run that produced the answer is the cause: an ask has no event of its own, and the
+          // duty's replay identity is the ask's id rather than this.
+          cause_event_id: recorded.runId,
+        },
+      });
+    }
+  };
+
+  /**
+   * An ask's open offer with **no** stored plan (TD-031's 2026-11-04 amendment §2): withdrawn by one
+   * conditional update, its run ended `cancelled`, and the ask refused naming `run_plan_missing`.
+   */
+  const withdrawUnplannedAsk = async (runId: Id): Promise<boolean> =>
+    options.unitOfWork.transaction(async (scope) => {
+      const row = await options.store.runs.load(scope.tx, runId);
+      if (row === null) return false;
+      const context = options.context(row.taskId);
+      const reason =
+        'run_plan_missing: the ask’s run was offered without a stored plan, so no claimant can run it';
+      const withdrawn = await options.store.offers.withdraw(scope.tx, {
+        by: { runId },
+        reason,
+        now: context.clock.now(),
+      });
+      if (withdrawn === null) return false;
+      const events = await endWithdrawnRun(
+        { store: options.store, eventStore: options.eventStore },
+        scope,
+        withdrawn,
+        { reason, context },
+      );
+      if (row.askId !== undefined && row.askId !== null) {
+        await options.asks.recordRefusal(scope.tx, { askId: row.askId, status: 'failed', reason });
+      }
+      await scope.events.append(events);
+      return true;
+    });
+
   return {
     execute: async (job: AskExecuteData): Promise<AskExecutionOutcome> => {
       const admitted = await admit(job);
@@ -991,7 +1183,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           );
         },
       );
-      if (started.kind !== 'started') {
+      if (started.kind !== 'offered') {
         logger.info(
           {
             ask_id: admitted.ask.id,
@@ -1005,188 +1197,13 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           ? { kind: 'skipped', reason: started.reason }
           : { kind: 'refused', askId: admitted.ask.id, reason: started.reason };
       }
-
-      let outcome: RunOutcome;
-      /**
-       * The heartbeat runs for exactly as long as the session does (WP-48).
-       *
-       * Started **after** the run's own transaction has committed and **awaited to a stop** before
-       * either ending opens one of its own — the stage executor's shape and its reason: a beat is
-       * fired and forgotten so it can never block the run, so clearing the timer alone would leave
-       * at most one narrow `update` borrowing a connection beside the ending's transaction.
-       */
-      const stopHeartbeat =
-        options.lease === undefined
-          ? async (): Promise<void> => {}
-          : startRunHeartbeat(
-              {
-                unitOfWork: options.unitOfWork,
-                store: options.store,
-                clock: { now: () => options.context(admitted.ask.taskId).clock.now() },
-                lease: options.lease,
-                ...(options.logger === undefined ? {} : { logger: options.logger }),
-              },
-              runId,
-              started.fence.epoch,
-            );
-      // WP-150: the ask's runs get the stage runs' marker, and the same rule about a missing one.
-      const spawn = recordCliSpawn({
-        unitOfWork: options.unitOfWork,
-        runs: options.store.runs,
-        now: () => options.context(admitted.ask.taskId).clock.now(),
-        run: started.run,
-        contextPack: started.contextPack,
-        fence: started.fence,
-        context: options.context(admitted.ask.taskId),
-        logger,
-      });
-      try {
-        // WP-275a: the session runs from the stored plan, read back — never the planner's memory.
-        const spec = await options.unitOfWork.transaction(
-          async (scope) =>
-            (
-              await loadRunPackage(
-                { runPlans: options.store.runPlans, sealer: options.runPlans },
-                scope.tx,
-                runId,
-                options.runEnvironment ?? NO_RUN_ENVIRONMENT,
-              )
-            ).spec,
-        );
-        const handle = options.runner.start(spec, spawn.hooks);
-        outcome = await handle.outcome;
-        if (!spawn.mayHaveReachedCli() && !isStopEnding(outcome)) {
-          throw cliSpawnNotRequested(outcome, spawn);
-        }
-      } catch (error) {
-        await stopHeartbeat();
-        options.stopReasons.forget(runId);
-        // The **class name and the platform's own diagnosis**, never the message: it is written to
-        // `events.payload` and to the ask row, and neither passes a redactor at the point it is
-        // read. So what is added to the class name is closed vocabulary only — the workspace's
-        // error kind, its reason code and a commit through `shaSchema` — the stage executor's rule
-        // and its function (`describeStartFailure`, WP-127; applied here by WP-132, backlog 424).
-        // The message is in the log line below.
-        const reason = `the runner could not start this ask: ${describeStartFailure(error)}`;
-        logger.error({ err: error, ask_id: admitted.ask.id, run_id: runId }, reason);
-        // Backlog 453: the workspace's own words, through this run's redactor and bounded — the
-        // stage executor's record, at the second place a run can fail to start (standing rule 49).
-        // An ask is not retried on a start failure, so it is attempt 1 and not retryable.
-        const notStarted = runStartFailureOf(error, {
-          redactor: started.redactor,
-          attempt: 1,
-          retryable: false,
-        });
-        return await options.unitOfWork
-          .transaction(async (scope) => {
-            // The measured zero only when the CLI was never asked for (WP-150) or its frame was
-            // withheld after the marker (WP-163); a runner that failed after the frame may have been
-            // sent leaves no figure, and the run is held at its reservation (WP-131).
-            const requested = spawn.mayHaveReachedCli();
-            const failed = failRun(
-              spawn.run(),
-              {
-                status: 'failed',
-                terminalReason: 'error_during_execution',
-                error: reason,
-                ...(requested ? {} : { usage: NO_RUN_USAGE, cost: MEASURED_ZERO_COST }),
-                startFailure: notStarted,
-              },
-              options.context(admitted.ask.taskId),
-            );
-            await options.store.runs.finish(scope.tx, {
-              runId,
-              status: 'failed',
-              terminalReason: 'error_during_execution',
-              sessionId: null,
-              numTurns: 0,
-              usage: NO_RUN_USAGE,
-              cost: requested ? null : MEASURED_ZERO_COST,
-              wallMs: 0,
-              startFailure: notStarted,
-              lease: started.fence,
-            });
-            await options.asks.recordRefusal(scope.tx, {
-              askId: admitted.ask.id,
-              status: 'failed',
-              reason,
-            });
-            await scope.events.append([...failed.events] as DomainEvent[]);
-            return { kind: 'failed' as const, askId: admitted.ask.id, reason };
-          })
-          .catch(leaseLost(admitted.ask.id));
-      }
-      await stopHeartbeat();
-      const stopReason = options.stopReasons.reasonFor(runId);
-      options.stopReasons.forget(runId);
-      if (!spawn.mayHaveReachedCli()) {
-        // A stop before the CLI was asked for, or whose frame was withheld after the marker
-        // (WP-163), keeps its status and spent nothing (WP-150), and
-        // records how far it got (WP-154 (b′)). An ask has no start attempts: attempt 1.
-        outcome = unspawnedStop(
-          outcome,
-          stoppedBeforeCliSpawn({
-            ending: stopEndingOf(outcome),
-            step: unspawnedStepOf(spawn),
-            attempt: 1,
-            retryable: false,
-          }),
-        );
-      }
-
-      const recorded = await record({
-        ask: admitted.ask,
-        run: spawn.run(),
-        outcome,
-        stopReason,
-        redactor: started.redactor,
-        knownRunIds: new Set(admitted.runs.map((line) => line.runId)),
-        knownAuditIds: new Set(admitted.audit.map((line) => line.id)),
-        fence: started.fence,
-      }).catch(leaseLost(admitted.ask.id));
-      if (recorded.kind === 'handed_back') {
-        // WP-144: the same ask again, after the stopped process has had time to come back. This
-        // handler is inside the worker's drain and pg-boss stops after the pipeline's workers, so
-        // the enqueue lands. `stately` per ask admits it beside this still-active job. The bound is
-        // read off the ask's runs (WP-149), so nothing rides the payload; a `coalesced` answer means
-        // a job for this ask is already queued, and that job runs it.
-        const requeued = await options.jobs.enqueue<AskExecuteData>({
-          queue: JOB_QUEUES.taskAsk,
-          singletonKey: `ask:${job.ask_id}`,
-          startAfter: new Date(
-            Date.parse(options.context(admitted.ask.taskId).clock.now()) + ASK_HAND_BACK_DELAY_MS,
-          ),
-          data: {
-            ask_id: job.ask_id,
-            task_id: job.task_id,
-            project_id: job.project_id,
-          },
-        });
-        logger.info(
-          {
-            ask_id: job.ask_id,
-            run_id: recorded.runId,
-            hand_backs: recorded.handBacks,
-            requeued: requeued.status,
-          },
-          'an ask run was handed back by this process’s stop; it is started again',
-        );
-      }
-      if (recorded.kind === 'answered') {
-        await options.jobs.enqueue({
-          queue: JOB_QUEUES.pipelineOutbound,
-          data: {
-            duty: 'ask_answer',
-            project_id: admitted.ask.projectId,
-            task_id: admitted.ask.taskId,
-            ask_id: recorded.askId,
-            // The run that produced the answer is the cause: an ask has no event of its own, and
-            // the duty's replay identity is the ask's id rather than this.
-            cause_event_id: recorded.runId,
-          },
-        });
-      }
-      return recorded;
+      logger.info(
+        { ask_id: admitted.ask.id, task_id: admitted.ask.taskId, run_id: runId },
+        'the ask’s run is offered; a claimant runs it',
+      );
+      return { kind: 'offered', askId: admitted.ask.id, runId };
     },
+    settle: async (request) => settleAskRun(request),
+    withdrawUnplanned: async (runId) => withdrawUnplannedAsk(runId),
   };
 };

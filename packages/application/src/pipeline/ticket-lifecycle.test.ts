@@ -768,6 +768,7 @@ describe('the WP-177 review amendment to TD-029 decision 5', () => {
 /** What `ensureTicketClaim` needs, from the harness's own parts. */
 const claimOptions = (harness: PipelineHarness) => ({
   store: harness.store,
+  eventStore: harness.memory.store,
   settings: staticProjectSettings(() => harness.settings),
   jobs: harness.jobs,
   integrations: staticPipelineIntegrations(harness.integrations),

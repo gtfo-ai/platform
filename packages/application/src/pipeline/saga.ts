@@ -101,6 +101,7 @@ import {
   enqueueStage,
   type PipelineOutboundData,
 } from './jobs.js';
+import { closeStageOffer } from './offer-withdrawal.js';
 import { appendOnProjectWithRetry } from './project-stream.js';
 import { refrozen, refrozenColumns } from './refreeze.js';
 import { isPlatformNote } from './review-threads.js';
@@ -158,6 +159,12 @@ export interface PipelineSagaOptions {
    * every default; a unit case shortens the wait or disarms the lease for its canary.
    */
   readonly dutyLease?: TaskDutyLeaseOptions['dutyLease'];
+  /**
+   * The run stream's next sequence (WP-276): what a transition that leaves a stage entry appends the
+   * withdrawn offer's run ending at (`./offer-withdrawal.ts`). Required, because every such
+   * transition closes the entry's offer in its own transaction.
+   */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
 }
 
 /** BD-007, technical/02 § ReviewCommentBatcher: "debounces `mr.review.comment` for 2 minutes". */
@@ -212,6 +219,7 @@ const step = async (
     interpret(pipeline, signal),
   );
   const applied = await applyDecision({
+    offerClosing: { eventStore: options.eventStore, broadcast: context.scope.broadcast },
     store: options.store,
     pipeline,
     tx: context.scope.tx,
@@ -651,6 +659,8 @@ export const runIntakeCheck = async (
       stored.qaStage,
     );
     const applied = await applyDecision({
+      // Intake created the task in this transaction: no offer can exist for it yet.
+      offerClosing: 'task_has_no_offer',
       store: options.store,
       pipeline,
       tx: scope.tx,
@@ -1680,14 +1690,17 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
       reason: string,
       brief: string,
     ) => {
-      const escalated = escalateTask(
-        stored.task,
-        { reason, blockerBrief: brief },
-        contextFor(options, stored.task.id, event.id),
-      );
+      const commandContext = contextFor(options, stored.task.id, event.id);
+      const escalated = escalateTask(stored.task, { reason, blockerBrief: brief }, commandContext);
+      // WP-276: the stage's offer is closed before the task is saved (`run_offers` → `runs` → `tasks`).
+      const closing = await closeStageOffer(options, context.scope, {
+        taskId: stored.task.id,
+        reason: `the task was escalated: ${outcome}`,
+        context: commandContext,
+      });
       await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
       await closeParkedStageRow(options.store, context.scope.tx, escalated, outcome);
-      await context.emit(escalated.events);
+      await context.emit([...closing.events, ...escalated.events]);
     };
     if (event.type === 'mr.closed') {
       if (stored.task.state === 'done' || stored.task.state === 'cancelled') {

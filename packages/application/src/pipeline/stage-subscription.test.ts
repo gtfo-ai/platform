@@ -1,70 +1,76 @@
 /**
- * **TD-028 decision 5**: `stage.execute` is subscribed by *configuration*, never by role.
+ * **WP-277 (TD-031 decision 13, TD-028's 2026-11-04 amendment)**: every process with a worker half
+ * subscribes `stage.execute` and `task.ask`; what is composed *by configuration* is the **claimant**.
  *
- * ## The lottery this closes
+ * ## What changed, and why the old lottery cannot come back
  *
- * `apps/server/src/role.ts` has measured the alternative since WP-15g: *"pg-boss hands a
- * `stage.execute` job to **any** subscribed worker, so a deployment with `ROLE=worker` beside
- * `ROLE=runner` would give half its agent stages to the process that composes no runner, and each
- * of those would fail its run and escalate its task."* The file also records that per-queue
- * subscription is *"still missing"* and owned by nobody. This is it.
+ * Until WP-276 the run happened inside the `stage.execute` job, so TD-028 decision 5 kept the queue
+ * off a process with no runner — pg-boss hands a job to **any** subscribed worker, and a runner-less
+ * process that took one would fail its run. The price was that such a deployment left the platform
+ * **gates** queued too (TD-028's WP-53 amendment). Since WP-276 a job plans, offers and evaluates
+ * gates and needs no runner, so subscribing it everywhere is safe: an agent stage taken by a
+ * runner-less process becomes an **offer** that waits for a claimant, never a failed run.
  *
  * ## Both directions, because "no worker" and "no jobs" look the same from outside
  *
- * A composition that subscribes nothing and a composition whose queue is empty are indistinguishable
- * unless the subscription itself is asserted (standing rule 42), so both cases read the same seam —
- * `RecordingJobs.handlers`, which is what `Jobs.work` writes to.
- *
- * ## The consequence this tier makes visible, and it is wider than "agent stages"
- *
- * `stage.execute` also evaluates the **platform gates** (`jobs.ts`: *"an agent stage runs, a
- * platform gate is evaluated, anything else is skipped"*), so a deployment with no configured runner
- * leaves those queued too. TD-028's **WP-53 amendment** is where that trade is written down, and it
- * refuses to split the queue for a named reason: `stage.execute` is `stately` with
- * `singletonKey: task:<id>`, which is what enforces *a task never runs two stages at once*, and a
- * second queue would let a gate and a stage for one task run concurrently. The queue is still
- * **declared** either way, so its depth is a metric rather than an error.
+ * A composition that subscribes nothing and one whose queue is empty are indistinguishable unless
+ * the subscription itself is asserted (standing rule 42), so every case reads the same seams —
+ * `RecordingJobs.handlers` (what `Jobs.work` writes to) and `PipelineRuntime.claimant`.
  */
 
 import { describe, expect, it } from 'vitest';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import type { Logger } from '../ports/logger.js';
 import { createPipelineHarness } from '../testing/pipeline-harness.js';
 
-describe('TD-028 decision 5 — who takes a `stage.execute` job', () => {
-  it('subscribes the queue when this process runs agents', async () => {
+const recordingLogger = (): { readonly logger: Logger; readonly lines: string[] } => {
+  const lines: string[] = [];
+  const record = (_fields: unknown, message?: string) => {
+    if (message !== undefined) lines.push(message);
+  };
+  const logger: Logger = {
+    debug: record,
+    info: record,
+    warn: record,
+    error: record,
+    child: () => logger,
+  } as unknown as Logger;
+  return { logger, lines };
+};
+
+describe('WP-277 — who takes a `stage.execute` job, and who claims', () => {
+  it('subscribes both run queues and composes the claimant when this process runs agents', async () => {
     const harness = createPipelineHarness({ runsAgents: true });
     await harness.drain();
     expect(harness.jobs.handlers.has(JOB_QUEUES.stageExecute)).toBe(true);
+    expect(harness.jobs.handlers.has(JOB_QUEUES.taskAsk)).toBe(true);
+    expect(harness.runtime.claimant).not.toBeNull();
   });
 
-  it('does not subscribe it when this process runs none, so no run fails for being in the wrong container', async () => {
-    const harness = createPipelineHarness({ runsAgents: false });
+  it('subscribes both run queues on a process that runs none, and composes no claimant', async () => {
+    const { logger, lines } = recordingLogger();
+    const harness = createPipelineHarness({ runsAgents: false, logger });
     await harness.drain();
-    expect(harness.jobs.handlers.has(JOB_QUEUES.stageExecute)).toBe(false);
-  });
-
-  it('leaves the ask queue unsubscribed too, because an ask is a run', async () => {
-    // TD-028's wording says "the agent-run queue"; this build has **two**. An ask goes through the
-    // same `ClaudeRunner`, so a worker with no provisioner that took one would fail it exactly as
-    // it would fail a stage — which is the lottery the decision exists to close.
-    const harness = createPipelineHarness({ runsAgents: false });
-    await harness.drain();
-    expect(harness.jobs.handlers.has(JOB_QUEUES.taskAsk)).toBe(false);
+    expect(harness.jobs.handlers.has(JOB_QUEUES.stageExecute)).toBe(true);
+    expect(harness.jobs.handlers.has(JOB_QUEUES.taskAsk)).toBe(true);
+    expect(harness.runtime.claimant).toBeNull();
+    // The start log names it, so an operator reading one process's log knows what it will not do.
+    expect(lines.filter((line) => line.startsWith('this process is not a claimant'))).toHaveLength(
+      1,
+    );
   });
 
   it('keeps the queues that need no workspace subscribed either way', async () => {
-    // The narrow claim: this is per-queue subscription, not "the worker half is off". A process
-    // with no launcher still debounces merge-request comments and still makes every outbound
-    // provider call.
     const harness = createPipelineHarness({ runsAgents: false });
     await harness.drain();
     expect(harness.jobs.handlers.has(JOB_QUEUES.pipelineOutbound)).toBe(true);
     expect(harness.jobs.handlers.has(JOB_QUEUES.mrCommentDebounce)).toBe(true);
   });
 
-  it('subscribes by default, which is what every composition that predates the option does', async () => {
+  it('composes the claimant by default, which is what every composition that predates the option does', async () => {
     const harness = createPipelineHarness();
     await harness.drain();
     expect(harness.jobs.handlers.has(JOB_QUEUES.stageExecute)).toBe(true);
+    expect(harness.runtime.claimant).not.toBeNull();
   });
 });

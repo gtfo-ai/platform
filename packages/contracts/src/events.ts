@@ -850,6 +850,20 @@ export const runClaimedEvent = defineEvent('run.claimed', {
   lease_epoch: z.int().positive(),
 });
 
+/**
+ * An offer no claimant took was **withdrawn** (WP-276, TD-031 decision 3): a task transition left the
+ * offer's stage entry while the offer was still `open`, so one conditional update moved it to
+ * `withdrawn` and the run ended `created → cancelled` (`run.finished`) in the same transaction. A
+ * claim that won the row first is not withdrawn: a `cancel` run command is recorded instead.
+ */
+export const runOfferWithdrawnEvent = defineEvent('run.offer.withdrawn', {
+  ...taskScoped,
+  run_id: idSchema,
+  offer_id: idSchema,
+  /** Why — platform text: the transition that left the stage entry. */
+  reason: nonEmptyStringSchema,
+});
+
 export const runSteeredEvent = defineEvent('run.steered', {
   ...taskScoped,
   run_id: idSchema,
@@ -1167,6 +1181,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   runFailedEvent,
   runOfferedEvent,
   runClaimedEvent,
+  runOfferWithdrawnEvent,
   runSteeredEvent,
   artifactCreatedEvent,
   workspaceProvisionedEvent,

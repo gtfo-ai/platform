@@ -29,6 +29,13 @@ export const RUN_START_RETRY_MS = 30_000;
  */
 export const SHUTDOWN_HAND_BACK_DELAY_MS = 30_000;
 
+/**
+ * How long a stage wake-up that found the task's **previous** entry's run still live waits before it
+ * fires again (WP-276, `stage-executor.ts`'s `waiting`): that run's stop was recorded by the
+ * transition that left it, and its ending frees the per-task offer index.
+ */
+export const STAGE_WAIT_FOR_PREVIOUS_RUN_MS = 10_000;
+
 export const enqueueStage = async (
   jobs: Jobs,
   job: StageExecutionJob & {

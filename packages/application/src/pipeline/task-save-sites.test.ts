@@ -131,7 +131,7 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // Still 3 at WP-275a: `recordUnstarted` moved to `settle.ts` (`recordNotStarted`) and the refusal
   // of an oversized run plan (`refuseOversizedPlan`, a transaction of its own under
   // `retryOnTaskConflict`) took its place.
-  ['packages/application/src/pipeline/stage-executor.ts', 3],
+  ['packages/application/src/pipeline/stage-executor.ts', 4],
   // WP-275: transaction 2 as the `settleRun` command — `record`'s completed stage,
   // `recordUnsuccessful`'s overspend pause and `escalateOnRun`. The same three sites, moved, with
   // the same ending: the command owns its transaction and retries through `retryOnTaskConflict`,
@@ -195,7 +195,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2775 ms (median 1861 ms); 2× it, 15 s floor.
-  it('counts thirty-nine, which is the number the change states', () => {
+  it('counts forty, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -237,7 +237,8 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Unchanged at WP-275**: three of the executor's six moved to `settle.ts` with transaction 2.
     // **Plus one at WP-275a**: the refusal of an oversized run plan (`refuseOversizedPlan`).
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(39);
+    // **Plus one at WP-276**: an open offer with no stored plan escalates its task (`run_plan_missing`).
+    expect(total).toBe(40);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   }, 15_000);
 

@@ -59,7 +59,10 @@ import {
   startLibrarianCuration,
   startRetrospective,
 } from '@platform/domain';
+import type { TransactionalBroadcast } from '../ports/broadcast.js';
+import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
+import { closeStageOffer } from './offer-withdrawal.js';
 import type { StageExecutionJob } from './stage-executor.js';
 import type { PipelineStore, StoredTask } from './store.js';
 
@@ -111,8 +114,27 @@ const enterCommand = (
   }
 };
 
+/**
+ * What a decision needs to close the task's stage offer before it moves the task (WP-276,
+ * `./offer-withdrawal.ts`) — or `'task_has_no_offer'`, stated by a caller that applies a decision
+ * to a task no offer can exist for yet (a task it created in this very transaction).
+ */
+export type ApplyOfferClosing =
+  | {
+      readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
+      readonly broadcast: TransactionalBroadcast;
+    }
+  | 'task_has_no_offer';
+
 export interface ApplyOptions {
   readonly store: PipelineStore;
+  /**
+   * **Every decision but `wait` closes the task's stage offer first** (WP-276, TD-031 decision 3):
+   * one conditional `run_offers` update before the task is saved — `run_offers` → `runs` → `tasks`.
+   * A decision about the run's own ending finds its offer already closed by `finish` and touches
+   * nothing.
+   */
+  readonly offerClosing: ApplyOfferClosing;
   /** The task's own template, compiled: what decides whether an entered stage needs a job. */
   readonly pipeline: CompiledPipeline;
   readonly tx: import('../ports/transaction.js').Transaction;
@@ -206,6 +228,27 @@ export interface ApplyOptions {
  * job. Everything it writes goes through the transaction it was handed.
  */
 export const applyDecision = async (options: ApplyOptions): Promise<AppliedDecision> => {
+  const closed = await closeOfferFor(options);
+  const applied = await applyOrEscalate(options);
+  return closed.length === 0 ? applied : { ...applied, events: [...closed, ...applied.events] };
+};
+
+/** WP-276: the stage offer closed before the decision moves the task (see {@link ApplyOptions}). */
+const closeOfferFor = async (options: ApplyOptions): Promise<readonly DomainEvent[]> => {
+  if (options.decision.kind === 'wait' || options.offerClosing === 'task_has_no_offer') return [];
+  const closing = await closeStageOffer(
+    { store: options.store, eventStore: options.offerClosing.eventStore },
+    { tx: options.tx, broadcast: options.offerClosing.broadcast },
+    {
+      taskId: options.stored.task.id,
+      reason: `the task left its stage entry (${options.decision.kind})`,
+      context: options.context,
+    },
+  );
+  return closing.events;
+};
+
+const applyOrEscalate = async (options: ApplyOptions): Promise<AppliedDecision> => {
   try {
     return await apply(options);
   } catch (error) {

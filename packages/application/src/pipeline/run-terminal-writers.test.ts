@@ -66,6 +66,9 @@ const EXPECTED_FINISH_CALLERS: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/ask/executor.ts', 4],
   // The lease sweep (`lease_expired`).
   ['packages/application/src/recovery/run-lease.ts', 1],
+  // WP-276: the withdrawal of an offer no claimant took (`created → cancelled`, TD-031 §3), after
+  // its conditional `run_offers` update — the offer is already `withdrawn` when `finish` runs.
+  ['packages/application/src/pipeline/offer-withdrawal.ts', 1],
 ]);
 
 /** The production SQL texts that assign `runs.status`, per file — `finish`'s and two live moves. */

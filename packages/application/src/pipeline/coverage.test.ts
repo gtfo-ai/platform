@@ -304,6 +304,7 @@ const statusReads = (harness: PipelineHarness, headSha: string): number =>
 /** The duty's dependencies, with the transaction guard armed — the shape `notify.test.ts` uses. */
 const optionsOf = (harness: PipelineHarness): CoverageOptions => ({
   store: harness.store,
+  eventStore: harness.memory.store,
   settings: staticProjectSettings(() => harness.settings),
   jobs: harness.jobs,
   calendar: harness.calendar,

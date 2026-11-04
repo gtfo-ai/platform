@@ -242,6 +242,9 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // never from this event, so nothing handles either — `—` in technical/02.
   'run.offered': 'unconsumed',
   'run.claimed': 'unconsumed',
+  // WP-276: the withdrawal's audit record; the run's own `run.finished` (`cancelled`) is what the
+  // ledger and the screens read.
+  'run.offer.withdrawn': 'unconsumed',
   'workspace.provisioned': 'unconsumed',
   'workspace.destroyed': 'unconsumed',
   'workspace.exported': 'unconsumed',
@@ -399,6 +402,7 @@ export const UNCONSUMED_OWNERS: Readonly<Partial<Record<DomainEventType, `WP-${s
     'run.started': null,
     'run.offered': null,
     'run.claimed': null,
+    'run.offer.withdrawn': null,
     'workspace.provisioned': null,
     'workspace.destroyed': null,
     'workspace.exported': null,

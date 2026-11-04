@@ -169,5 +169,27 @@ export const loadRunPackage = async (
     }
     secrets[name] = value;
   }
-  return { spec: runSpecSchema.parse({ ...stored, env: { ...stored.env, ...secrets } }), plan };
+  /**
+   * **The claimant's own credentials join the plan's** (WP-276). Since the job ends at the offer, the
+   * process that planned the run is not the one that runs it — on a core with no runner it has no
+   * model credential at all, so its plan names none. The claimant injects its own (the model key of
+   * its `agentRunEnvironment`), and it must name them, or TD-012 step 1 would not know them: the
+   * transcript would carry the key under a pattern placeholder at best. Measured: the topology e2e
+   * (`app` plans, `runner` runs) showed `[REDACTED sha256:…]` where the run's own placeholder was due.
+   */
+  const names = [...stored.secretEnvNames];
+  for (const name of environment.secretEnvNames) {
+    const value = environment.env[name];
+    if (names.includes(name) || value === undefined || value === '') continue;
+    names.push(name);
+    secrets[name] = value;
+  }
+  return {
+    spec: runSpecSchema.parse({
+      ...stored,
+      env: { ...stored.env, ...secrets },
+      secretEnvNames: names,
+    }),
+    plan,
+  };
 };

@@ -102,9 +102,9 @@ export const DATABASE_CONFIG_DEFAULTS = {
    * slack after the floor had moved (backlog 22's site 6). Both relationships are asserted rather
    * than restated — `apps/server/src/config.test.ts` holds this value **equal** to
    * `requiredPoolConnections` at the defaults and `.env.example`'s to one above it — so a worker
-   * added to the pool fails a test until both move.
+   * added to the pool fails a test until both move. 25 since WP-276: the server claimant's run.
    */
-  poolMax: 24,
+  poolMax: 25,
   connectionTimeoutMs: 10_000,
   partitionMonthsAhead: 3,
 } as const;

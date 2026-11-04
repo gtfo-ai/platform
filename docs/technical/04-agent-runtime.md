@@ -6,7 +6,11 @@
 
 ```
 Stage executor (application ring)
-   │  builds RunSpec {role, prompt layers, context pack, tools, policy, limits, schema}
+   │  builds RunSpec {role, prompt layers, context pack, tools, policy, limits, schema},
+   │  seals it in run_plans and offers it (run_offers) — the job ends here (WP-276)
+   ▼
+Claimant (application ring: the server's, or a remote worker from WP-281)
+   │  claims the offer, reads the plan back, settles through settleRun
    ▼
 Runner service (infrastructure)  ── platform-side SDK host; the CLI itself runs inside the task's workspace container via the run shim (TD-025)
    │  Claude Agent SDK query() in streaming-input mode
@@ -19,6 +23,30 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
    ├─ sessionStore → transcript store (03); includePartialMessages → live stream to UI (08)
    └─ result: structured_output (artifact data) + usage/cost → run.finished
 ```
+
+> **Amended at WP-276/WP-277 (TD-031 decisions 2, 3 and 13; TD-028's 2026-11-04 amendment): the stage
+> executor ends at the offer, and a claimant runs the run.** The `stage.execute` job (and `task.ask`)
+> keeps everything up to the plan — re-validation, the ticket claim, owed duties, budget admission, the
+> run row (`created`), the stored prompt and pack, the **sealed plan** (`run_plans`, WP-275a) — then
+> writes the `run_offers` row in that transaction, announces it on `pg_notify('run_offers')` and
+> **ends**. Every worker subscribes both queues, so a core with no runner still evaluates the platform
+> gates. The **server claimant** (`packages/application/src/pipeline/claimant.ts`) is composed only
+> where a launcher URL and token (or the in-process provisioner) are configured; it claims an open
+> offer through the one claim (`for update of o, r skip locked`, the epoch incremented, the run
+> `created → starting`), reads back the run's context pack (backlog 709) and its plan
+> (`loadRunPackage` — never a re-plan), provisions and runs the session on its own runner, heartbeats
+> with the claim's epoch, and settles through `settleRun` with the four-field request (an ask's offer
+> through the ask executor's own ending). A provision failure settles `not_started`; the server
+> claimant never releases. **A lost lease interrupts:** an answered `lease_lost` stops the session and
+> destroys the workspace at once, a single failed beat does not, and a claimant that has gone
+> `TTL − ½·renew` (250 s of 300 s / 100 s) without a successful renewal stops by itself and pushes
+> nothing more — the lease sweep acts only after `lease_expires_at + APP_LEASE_SKEW_GRACE` (120 s).
+> What replaces the job singleton for the run's duration: the per-task partial index over open or
+> claimed stage offers; `revalidate`'s *does this entry already have a live run* (a duplicate wake-up
+> does nothing; a new entry whose previous run is still being stopped waits); and every transition
+> that leaves a stage closing the offer in its own transaction (`pipeline/offer-withdrawal.ts`: one
+> conditional `update … where state = 'open'`, else a `cancel` run command for the holder). One lock
+> order holds everywhere: `run_offers` → `runs` → `tasks`.
 
 > **As built at WP-177 (BD-031 ruling 5, TD-029 decision 5): the ticket claim comes before the stage
 > executor.** For an **agent** stage, the `stage.execute` job asks `ensureTicketClaim`

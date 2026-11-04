@@ -76,6 +76,7 @@ import {
   type PipelineOutboundData,
   type ReadyHeadCheckData,
 } from './jobs.js';
+import { closeStageOffer, endWithdrawnRun } from './offer-withdrawal.js';
 import { toRunAggregate } from './run-aggregate.js';
 import { type RunCommandWakeUp, runCommandsTopic } from './run-commands.js';
 import type { ProjectSettingsPort } from './settings.js';
@@ -682,6 +683,7 @@ const applyHumanDecisionRecorded = async (
     );
   }
   const applied = await applyDecision({
+    offerClosing: { eventStore: deps.eventStore, broadcast: scope.broadcast },
     store: deps.store,
     pipeline: compilePipeline(
       stored.task.template,
@@ -771,8 +773,15 @@ export const pauseTaskCommand = async (
     { taskId: input.taskId, userId: input.userId, what: 'pausing the task' },
     async (scope, stored, context) => {
       const decision = pauseTask(stored.task, { reason: 'manual' }, context);
+      // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
+      const closing = await closeStageOffer(deps, scope, {
+        taskId: stored.task.id,
+        reason: 'the task was paused by a human',
+        context,
+        actorUserId: input.userId,
+      });
       await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
-      await scope.events.append(decision.events);
+      await scope.events.append([...closing.events, ...decision.events]);
       return { result: undefined, work: null };
     },
   );
@@ -983,6 +992,13 @@ export const cancelTaskCommand = async (
       },
       context,
     );
+    // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
+    const closing = await closeStageOffer(deps, scope, {
+      taskId: stored.task.id,
+      reason: 'the task was cancelled by a human',
+      context,
+      actorUserId: input.userId,
+    });
     await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
     // The attempt the task was at can never resume now, paused or not (WP-46, backlog 212).
     await closeCurrentStageRow(
@@ -992,7 +1008,7 @@ export const cancelTaskCommand = async (
       CANCELLED_OUTCOME,
       'the task was cancelled by a human',
     );
-    await scope.events.append(decision.events);
+    await scope.events.append([...closing.events, ...decision.events]);
     return { result: undefined, work: null };
   });
 
@@ -2211,7 +2227,22 @@ export const takeOverTaskCommand = async (
     { taskId: input.taskId, userId: input.userId, what: 'taking the task over' },
     async (scope, stored, context) => {
       const stage = currentStageOrThrow(stored, 'take over');
-      // Before the task row is written: `runs` then `tasks`, the order the run's ending takes.
+      // WP-276: an offer no claimant took is withdrawn first (its run ends `cancelled`), so the
+      // live run below is one a holder drives — `run_offers` → `runs` → `tasks`. A claimed offer is
+      // left to the take-over's own stop below.
+      const withdrawn = await deps.store.offers.withdraw(scope.tx, {
+        by: { taskId: stored.task.id },
+        reason: 'the task was taken over by a human',
+        now: context.clock.now(),
+      });
+      const closing =
+        withdrawn === null
+          ? []
+          : await endWithdrawnRun(deps, scope, withdrawn, {
+              reason: 'the task was taken over by a human',
+              context,
+            });
+      // Before the task row is written: `run_offers`, `runs` then `tasks`, the run ending's order.
       const live = await deps.store.runCommands.lockLiveRunOf(scope.tx, stored.task.id);
       // The branch the work is on: what the merge request said, or the name BD-025 reserves for
       // this task. Never invented from the run — a task may have been taken over before any push.
@@ -2229,7 +2260,7 @@ export const takeOverTaskCommand = async (
         context,
       );
       await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
-      await scope.events.append(decision.events);
+      await scope.events.append([...closing, ...decision.events]);
       if (live !== null) {
         // The stop's {@link RunTakeOverExport}, recorded for the holder to hand to `RunHandle.stop`.
         await recordRunCommand(deps, scope, live, {

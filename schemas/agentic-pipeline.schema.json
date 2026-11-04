@@ -163,6 +163,7 @@
         "run.failed",
         "run.offered",
         "run.claimed",
+        "run.offer.withdrawn",
         "run.steered",
         "artifact.created",
         "workspace.provisioned",

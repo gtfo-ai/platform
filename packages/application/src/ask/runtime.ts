@@ -20,6 +20,7 @@ import type { RunSecretEnvironment } from '../pipeline/run-redaction.js';
 import type { ProjectSettingsPort } from '../pipeline/settings.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore } from '../pipeline/store.js';
+import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
 import { JOB_QUEUES, type Jobs, type JobWorker } from '../ports/jobs.js';
@@ -69,6 +70,8 @@ export interface AskCompositionOptions extends AskRuntimeOptions {
   readonly ids: { next(): Id };
   readonly clock: { now(): string };
   readonly context: Parameters<typeof createAskExecutor>[0]['context'];
+  /** The run stream's next sequence — the ask settle's aggregate (WP-276). */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
 }
 
@@ -94,6 +97,7 @@ export const composeAsk = (options: AskCompositionOptions): AskComposition => {
     askedByLabel: options.askedByLabel,
     ...(options.lease === undefined ? {} : { lease: options.lease }),
     runPlans: options.runPlans,
+    eventStore: options.eventStore,
     ...(options.runEnvironment === undefined ? {} : { runEnvironment: options.runEnvironment }),
     ...(options.budgets === undefined ? {} : { budgets: options.budgets }),
     ...(options.logger === undefined ? {} : { logger: options.logger }),

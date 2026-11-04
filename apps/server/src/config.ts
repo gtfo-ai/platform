@@ -71,6 +71,8 @@ const SOURCE_VARIABLE: Record<string, string> = {
   modelOauthToken: 'CLAUDE_CODE_OAUTH_TOKEN',
   claudeBinary: 'APP_CLAUDE_BINARY',
   launcherUrl: 'APP_LAUNCHER_URL',
+  runnerConcurrency: 'APP_RUNNER_CONCURRENCY',
+  leaseSkewGraceSeconds: 'APP_LEASE_SKEW_GRACE',
   launcherToken: 'APP_LAUNCHER_TOKEN',
   workspaceControlRoot: 'APP_WORKSPACE_CONTROL_ROOT',
   modelEgressHosts: 'APP_MODEL_EGRESS_HOSTS',
@@ -205,6 +207,18 @@ const serverConfigFields = z.strictObject({
    * be spelled the same way (standing rule 18).
    */
   intakeReconcileIntervalMs: z.union([z.literal(0), z.int().min(1_000).max(3_600_000)]),
+  /**
+   * `APP_RUNNER_CONCURRENCY` (WP-276, TD-031 decision 13): how many runs the **server's claimant**
+   * runs at once — each from its claim to its settle. Read only by a process that composes a
+   * claimant (a launcher URL and token); one more pool connection each (`poolTerms`).
+   */
+  runnerConcurrency: z.int().min(1).max(64),
+  /**
+   * `APP_LEASE_SKEW_GRACE`, in **seconds** (WP-276, TD-031 §2): the lease sweep ends a run only once
+   * `lease_expires_at` plus this is past — response latency, clock-rate drift and the pass interval —
+   * so a claimant that self-terminates at `TTL − ½·renew` is gone before the row is.
+   */
+  leaseSkewGraceSeconds: z.int().min(0).max(3_600),
 
   /**
    * How often the ticket poller's sweep lists the polling bindings and re-arms any whose chain was
@@ -568,6 +582,8 @@ export const SERVER_CONFIG_DEFAULTS = {
   // The Anthropic API, which is what both provider modes authenticate against (measured, WP-53).
   modelEgressHosts: ['api.anthropic.com'],
   intakeReconcileIntervalMs: 60_000,
+  runnerConcurrency: 1,
+  leaseSkewGraceSeconds: 120,
   pollSweepIntervalMs: 60_000,
   argon2: { memoryCostKib: 19_456, timeCost: 2, parallelism: 1 },
 } as const;
@@ -796,7 +812,21 @@ export const poolTerms = (config: ServerConfig): readonly PoolTerm[] => {
   const flat = (Object.keys(FLAT_POOL_TERMS) as FlatReservation[])
     .filter((key) => FLAT_POOL_TERMS[key].counted(capabilities))
     .map((key) => ({ connections: POOL_RESERVATIONS[key], what: FLAT_POOL_TERMS[key].what }));
-  return [...dispatcher, ...flat];
+  /**
+   * WP-276: the server claimant's runs, one connection each — its claim, its heartbeat and its
+   * settle are each a transaction of their own, never nested. Counted for every `worker`, whether or
+   * not a launcher is configured: a reservation that shrank with a setting is a floor an operator
+   * could lower by accident (the other worker terms' rule).
+   */
+  const claimant: PoolTerm[] = capabilities.worker
+    ? [
+        {
+          connections: config.runnerConcurrency,
+          what: `the server claimant's runs at APP_RUNNER_CONCURRENCY=${config.runnerConcurrency}, one each`,
+        },
+      ]
+    : [];
+  return [...dispatcher, ...flat, ...claimant];
 };
 
 /** The smallest `APP_DB_POOL_MAX` that can serve this configuration's workloads. */
@@ -1106,6 +1136,14 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     intakeReconcileIntervalMs: numberFromEnv(
       env.APP_INTAKE_RECONCILE_INTERVAL_MS,
       SERVER_CONFIG_DEFAULTS.intakeReconcileIntervalMs,
+    ),
+    runnerConcurrency: numberFromEnv(
+      env.APP_RUNNER_CONCURRENCY,
+      SERVER_CONFIG_DEFAULTS.runnerConcurrency,
+    ),
+    leaseSkewGraceSeconds: numberFromEnv(
+      env.APP_LEASE_SKEW_GRACE,
+      SERVER_CONFIG_DEFAULTS.leaseSkewGraceSeconds,
     ),
     pollSweepIntervalMs: numberFromEnv(
       nonEmpty(env.APP_POLL_SWEEP_INTERVAL_MS) ?? env[DEPRECATED_POLL_SWEEP_INTERVAL_VARIABLE],

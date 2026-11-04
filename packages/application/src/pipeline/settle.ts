@@ -1177,7 +1177,11 @@ export const settlementInputs = async (
     redactor: runRedactorFor(
       {
         env: environment.env,
-        secretEnvNames: plan === null ? environment.secretEnvNames : plan.secretEnvNames,
+        // The plan's names and this process's own (WP-276): the claimant injected its own model
+        // credential even where the planning process had none to name (`loadRunPackage`).
+        secretEnvNames: [
+          ...new Set([...(plan?.secretEnvNames ?? []), ...environment.secretEnvNames]),
+        ],
       },
       deps.redactor,
       logger,

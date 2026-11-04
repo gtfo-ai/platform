@@ -137,24 +137,27 @@ describe('ops endpoints', () => {
   });
 
   /**
-   * WP-86 (backlog 135): `degraded` is still ready. Its one producer is `agent_runs: unserved` — no
-   * runner takes agent stages — and a 503 for that would take the API and the SPA out of a load
-   * balancer for a runner's absence.
+   * WP-86 (backlog 135), WP-277: `degraded` is still ready. One of its producers is `claimants:
+   * unclaimed` — no claimant here or connected, and an offer has waited past the bound — and a 503
+   * for that would take the API and the SPA out of a load balancer for a runner's absence.
    */
   it('answers 200 for a degraded report and publishes why', async () => {
     const harness = await build();
-    harness.readiness = {
+    const report = {
       status: 'degraded',
-      checks: { database: 'ok', agent_runs: 'degraded' },
-      details: { agent_runs: 'unserved' },
-    };
+      checks: { database: 'ok', claimants: 'degraded' },
+      details: { claimants: 'unclaimed' },
+      claimants: 'none',
+      oldest_unclaimed_offer: {
+        run_id: '00000000-0000-4000-8000-000000000277',
+        offered_at: '2026-11-04T09:00:00.000Z',
+        waited_seconds: 400,
+      },
+    } as const;
+    harness.readiness = report;
     const degraded = await harness.app.inject({ url: '/readyz' });
     expect(degraded.statusCode).toBe(200);
-    expect(degraded.json()).toEqual({
-      status: 'degraded',
-      checks: { database: 'ok', agent_runs: 'degraded' },
-      details: { agent_runs: 'unserved' },
-    });
+    expect(degraded.json()).toEqual(report);
   });
 
   it('fails readiness the moment shutdown starts, before anything is closed', async () => {

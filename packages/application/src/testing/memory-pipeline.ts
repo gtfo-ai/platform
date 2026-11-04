@@ -14,7 +14,7 @@
  * | 3 | Everything is returned by structural clone, so a caller mutating what it read cannot change the store. Postgres cannot be mutated that way either. | **stricter** | A shared object graph makes a test pass for the wrong reason: the aggregate is immutable by design, and a fake that hands out live references would hide a mutation. |
  * | 5 | ~~The whole-row `save` writes `ticketSnapshot`/`ticketSnapshotAt`; the SQL `save` does not name those two columns at all (WP-15f).~~ **Closed at WP-15e**: `save` now writes exactly the column set the SQL statement names, in both stores, and the divergence is gone rather than justified. | **same** | It was filed as *stricter* and it was, but a fake that can clobber a column the database cannot is a fake that answers a question production never asks — and the same shape one work package later (`save` clobbering `workpad_ref`, which PostgreSQL **could** do) was a live defect. The partition is now enforced off disk by `tasks-column-ownership.test.ts`. |
  * | 6 | `save` refuses a write over a row whose `version` has moved, exactly as the SQL `where … and version = $n` does (WP-15e). | **same** | The fake compares a number where PostgreSQL compares a predicate, and both throw `TaskConcurrentModificationError`. Asserted for both by `pipeline-store-concurrency-suite.ts`, which drives two transactions over one committed row. The fake's `version` is still only as good as divergence 4: with no isolation, the interleaving it reproduces is the *ordering*, not the locking. |
- * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
+ * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes — **including the writes made before a fenced write threw `LeaseLostError`** (WP-276, backlog 698): PostgreSQL rolls them back with the transaction, this store keeps them, so a test of a `lease_lost` reached through the claimant, the heartbeat or `settleRun` asserts through PostgreSQL (`test/integration/pipeline/settle-run.integration.test.ts`, `offer-lock-order.integration.test.ts`) or only on what the fenced call returned. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
  * | 8 | `takenOver` reads the **committed** log through {@link MemoryPipelineStoreOptions.taskEvents}; PostgreSQL's query also sees the calling transaction's own staged appends (WP-56). Unwired, it answers `null`; its `lastActivityAt` reads {@link MemoryPipelineStoreOptions.humanActions} (WP-44), and unwired that is the take-over's own instant. | **same, when wired; kinder by one window** | Both readers of it — the workpad render and the take-over timer — run in a job's **own** transaction after the events they react to have committed, so the window this cannot see is one neither reader stands in. A caller that asked inside the transaction that appended the take-over would get `null` here and the record from PostgreSQL; nothing does, and the contract suite drives the committed case against both. |
  * | 9 | `runCommands` (WP-85): `lockRun`/`lockLiveRunOf`/`markApplied` take no lock (nor does `runs.lockSettlement`, WP-275, whose `for update` orders two settles of one run in PostgreSQL — `test/integration/pipeline/settle-run.integration.test.ts`), `admitSteer` (WP-101) takes no advisory lock and reads `created_at` off {@link MemoryPipelineStoreOptions.now} rather than the database's clock, and `LockedRun.sessionId` is the run row's `sessionId` where PostgreSQL reads the run's `system`/`init` transcript entry (this store keeps no transcript). | **kinder** on ordering, **same** on predicates | The `for share` ordering between a command and the run's ending is a property of two concurrent transactions, which a single-threaded store cannot interleave; it is asserted against PostgreSQL in `test/integration/pipeline/run-commands.integration.test.ts`, both orders — and the steer window's lock there by a second transaction that must wait (WP-101). Every predicate — live run, this owner's lease, still pending, closed `run_ended` by the winning `finish` — is the SQL's, and the contract suite drives each against both stores. |
@@ -24,6 +24,7 @@
  */
 import type {
   ArtifactType,
+  ContextPackRecord,
   DomainEvent,
   EstimateBasis,
   Id,
@@ -316,6 +317,8 @@ export const createMemoryPipelineStore = (
   const runs = new Map<Id, StoredRun>();
   /** `runs.ask_id` (migration 0082, WP-149): the ask a run answered, for the ask's bound. */
   const askOfRun = new Map<Id, Id>();
+  /** Backlog 709: each run's stored context pack, as `run_context_pack` and its header hold it. */
+  const contextPacks = new Map<Id, ContextPackRecord>();
   /** `tasks.budget_cap_usd` (WP-131 review round 1): not on `StoredTask`, as `save` never names it. */
   const budgetCaps = new Map<Id, number>();
   /** `tasks.ticket_claim` (migration 0088, WP-177): not on `StoredTask`, as `save` never names it. */
@@ -1244,14 +1247,15 @@ export const createMemoryPipelineStore = (
       // `user_prompt` or `redaction_count`, so keeping them here would let a test read back a
       // prompt no production caller of `load` can see. The reader that wants them is the API
       // projection, and it has its own integration coverage.
-      // `contextPack` (WP-57) is dropped for the same reason: `load` answers no pack, and the
-      // reader that wants one is the API projection over `run_context_pack`. `settings` (WP-91)
-      // likewise: `load` does not select `settings_snapshot`/`settings_hash`.
+      // `contextPack` (WP-57) is kept beside the row, not on it: `load` answers no pack, and the
+      // readers that want one are the API projection and, since WP-276 (backlog 709), the
+      // claimant's `contextPack`, which reads it back as the SQL adapter does. `settings` (WP-91)
+      // is dropped: `load` does not select `settings_snapshot`/`settings_hash`.
       const {
         systemPrompt: _s,
         userPrompt: _u,
         redactionCount: _r,
-        contextPack: _c,
+        contextPack,
         settings: _g,
         // WP-121: write-only too — the API projection reads `runs.prompts_withheld`, `load` does not.
         promptsWithheld: _w,
@@ -1265,6 +1269,9 @@ export const createMemoryPipelineStore = (
         ...stored
       } = run;
       providerModes.set(run.id, providerMode);
+      if (contextPack !== null) {
+        contextPacks.set(run.id, clone(contextPack));
+      }
       runs.set(run.id, clone({ ...stored, stage: linked ? run.stage : null }));
       if (askId !== undefined) {
         askOfRun.set(run.id, askId);
@@ -1421,7 +1428,17 @@ export const createMemoryPipelineStore = (
       const run = runs.get(runId);
       return run === undefined
         ? null
-        : { ...clone(run), cliSpawnRequestedAt: spawnMarkers.get(runId) ?? null };
+        : {
+            ...clone(run),
+            cliSpawnRequestedAt: spawnMarkers.get(runId) ?? null,
+            // WP-276: the SQL adapter's `load` names `ask_id`.
+            askId: askOfRun.get(runId) ?? null,
+          };
+    },
+    /** Backlog 709: the pack transaction 1b stored, read back — the SQL adapter's rows and header. */
+    contextPack: async (_tx, runId) => {
+      const pack = contextPacks.get(runId);
+      return pack === undefined ? null : clone(pack);
     },
     /** WP-149's ask bound, over this store's rows with the SQL adapter's predicate. */
     askShutdownEndings: async (_tx, askId) =>
@@ -1573,7 +1590,8 @@ export const createMemoryPipelineStore = (
         .filter(
           (candidate) =>
             candidate.state === 'open' &&
-            candidate.runId === claim.eligibility.runId &&
+            (claim.eligibility.runId === undefined ||
+              candidate.runId === claim.eligibility.runId) &&
             isActiveRunStatus(runs.get(candidate.runId)?.status ?? 'completed'),
         )
         .sort((a, b) => Date.parse(a.offeredAt) - Date.parse(b.offeredAt))[0];
@@ -1603,12 +1621,47 @@ export const createMemoryPipelineStore = (
         offerId: offer.id,
         runId: offer.runId,
         taskId: offer.taskId,
+        kind: offer.kind,
         epoch,
         owner: claim.owner,
       };
     },
     load: async (_tx, runId) => {
       const offer = offers.get(runId);
+      return offer === undefined ? null : clone(offer);
+    },
+    /** WP-276: the SQL adapter's one conditional update — only an `open` offer moves. */
+    withdraw: async (_tx, input) => {
+      const offer = [...offers.values()].find((candidate) =>
+        'taskId' in input.by
+          ? candidate.taskId === input.by.taskId &&
+            candidate.kind === 'stage' &&
+            candidate.state === 'open'
+          : candidate.runId === input.by.runId && candidate.state === 'open',
+      );
+      if (offer === undefined) {
+        return null;
+      }
+      offers.set(offer.runId, {
+        ...offer,
+        state: 'withdrawn',
+        withdrawnAt: input.now,
+        withdrawnReason: input.reason,
+      });
+      return { offerId: offer.id, runId: offer.runId };
+    },
+    openWithoutPlan: async (_tx, limit) =>
+      [...offers.values()]
+        .filter((offer) => offer.state === 'open' && !plans.has(offer.runId))
+        .slice(0, limit)
+        .map((offer) => ({ runId: offer.runId, kind: offer.kind })),
+    liveStageOffer: async (_tx, taskId) => {
+      const offer = [...offers.values()].find(
+        (candidate) =>
+          candidate.taskId === taskId &&
+          candidate.kind === 'stage' &&
+          (candidate.state === 'open' || candidate.state === 'claimed'),
+      );
       return offer === undefined ? null : clone(offer);
     },
   };

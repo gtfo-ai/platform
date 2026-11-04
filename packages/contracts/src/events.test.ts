@@ -344,6 +344,12 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     worker_id: null,
     lease_epoch: 1,
   },
+  'run.offer.withdrawn': {
+    ...taskScoped,
+    run_id: RUN,
+    offer_id: uuid(40),
+    reason: 'the task was paused by a human',
+  },
   'run.steered': {
     ...taskScoped,
     run_id: RUN,

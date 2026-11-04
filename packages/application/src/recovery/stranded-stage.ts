@@ -249,7 +249,7 @@ export const endedRunBrief = (
 
 /** What the person who picks the task up is told to do. */
 export const strandedStageBrief = (row: StrandedStage, ticketKey: string): string =>
-  `${ticketKey} was entered at "${row.stage}" and nothing ever ran it: the job that runs a stage was lost (a process stopped between the task's commit and the enqueue, or the job spent every retry), and one re-enqueue by the platform did not start it either. Nothing ran, so nothing was spent on this attempt. Check that a runner is serving agent stages (/readyz's agent_runs line), then hand the task back at the stage it should resume from — or cancel it if it is no longer wanted.`;
+  `${ticketKey} was entered at "${row.stage}" and nothing ever ran it: the job that runs a stage was lost (a process stopped between the task's commit and the enqueue, or the job spent every retry), and one re-enqueue by the platform did not start it either. Nothing ran, so nothing was spent on this attempt. Check that a claimant is running agent runs (/readyz's claimants line), then hand the task back at the stage it should resume from — or cancel it if it is no longer wanted.`;
 
 /**
  * A serialised error's `name` or `code` as the brief may quote it — an identifier and nothing else

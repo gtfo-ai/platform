@@ -295,6 +295,52 @@ export const claimRun = (
 };
 
 /**
+ * **The offer no claimant took is withdrawn** (WP-276, TD-031 decision 3): a task transition left the
+ * run's stage entry while its offer was still `open`. Only a `created` run — never claimed — can be
+ * withdrawn: a claimed one is stopped through its holder (a `cancel` run command) instead. Records
+ * `run.offer.withdrawn` and then the run's ending, `created → cancelled` (`run.finished`), with the
+ * measured zero the caller hands in — nothing ran, so nothing was spent (WP-150's rule) — and the
+ * start-failure record that says how far it got.
+ */
+export const withdrawRunOffer = (
+  run: Run,
+  input: {
+    readonly offerId: Id;
+    readonly reason: string;
+    readonly usage: TokenUsage;
+    readonly cost: RunCost;
+    readonly startFailure: RunStartFailure;
+  },
+  context: CommandContext,
+): RunDecision => {
+  if (run.status !== 'created') {
+    throw new IllegalTransitionError('Run', run.status, 'cancelled');
+  }
+  const recorder = recorderFor(run, context);
+  recorder.emit('run.offer.withdrawn', {
+    project_id: run.projectId,
+    task_id: run.taskId,
+    run_id: run.id,
+    offer_id: input.offerId,
+    reason: input.reason,
+  });
+  const finished = finishRun(
+    { ...run, sequence: recorder.sequence },
+    {
+      status: 'cancelled',
+      terminalReason: 'cancelled',
+      usage: input.usage,
+      modelUsage: [],
+      cost: input.cost,
+      numTurns: 0,
+      startFailure: input.startFailure,
+    },
+    context,
+  );
+  return { aggregate: finished.aggregate, events: [...recorder.events, ...finished.events] };
+};
+
+/**
  * The platform asked for the run's CLI: `starting → running`, and the catalogue's `run.started` is
  * emitted — in the transaction that writes `runs.cli_spawn_requested_at` and `runs.started_at`
  * (`recordCliSpawn`, WP-275b), never before.

@@ -128,6 +128,7 @@ export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
 export * from './pipeline/binding-lifecycle.js';
 export * from './pipeline/ci-config-location.js';
+export * from './pipeline/claimant.js';
 export * from './pipeline/cli-spawn.js';
 export * from './pipeline/commands.js';
 export * from './pipeline/conversation-read.js';
@@ -148,6 +149,7 @@ export * from './pipeline/manual-start.js';
 export * from './pipeline/merge-request-tool.js';
 export * from './pipeline/mr-poll.js';
 export * from './pipeline/observability-prefetch.js';
+export * from './pipeline/offer-withdrawal.js';
 export * from './pipeline/offers.js';
 export * from './pipeline/outbound.js';
 export * from './pipeline/planner.js';

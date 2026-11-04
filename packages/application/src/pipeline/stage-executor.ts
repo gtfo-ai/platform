@@ -6,14 +6,24 @@
  * is therefore **transaction, no transaction, transaction**:
  *
  * ```
- * tx  1   load the task, re-validate, check the budget, create the Run,   → run.created, run.offered,
- *         store its sealed plan, offer and claim it                        run.claimed
- * ——      read the plan back, start the runner and await its outcome     (minutes; no connection held)
- *         (the CLI spawn marker, its own transaction)                    → run.started
+ * tx  1   load the task, re-validate, check the budget, create the Run,   → run.created, run.offered
+ *         store its sealed plan, offer it — and the job ends here (WP-276)
+ * ——      a claimant claims the offer (`./claimant.ts`), reads the plan   → run.claimed
+ *         back, starts the runner (the CLI spawn marker)                   → run.started
  * tx  2   store the artifact and the outcome                            → run.finished | run.failed,
  *         (`settleRun`, `./settle.ts`, since WP-275)                       artifact.created,
  *                                                                          task.stage.completed
  * ```
+ *
+ * **Since WP-276 the job ends at the offer** (TD-031 decision 3): this module is transaction 1 only.
+ * The run waits `created` for a claimant — the server's claimant loop, composed by configuration, or
+ * (WP-281) a remote worker — which runs it from the stored plan and settles it through `settleRun`.
+ * What replaced the job's singleton for the run's duration is three things: the per-task partial
+ * unique index over open or claimed stage offers; {@link revalidateOpen}'s question *does this stage
+ * entry already have a live run?* (a duplicate wake-up succeeds doing nothing, and a wake-up for a
+ * **new** entry whose previous run is still being stopped answers `waiting` and is fired again); and
+ * every task transition that leaves the stage closing the offer in its own transaction
+ * (`./offer-withdrawal.ts`).
  *
  * Transaction 2 is the `settleRun` command since WP-275 (TD-031 decision 3): the same writes, moved
  * out of this module so that a run settled outside the job (WP-276's claimant, a remote worker) is
@@ -62,9 +72,9 @@ import type {
   PausedBudgetScope,
   PipelineStage,
   PromptObservabilityExcerpt,
-  Run,
 } from '@platform/domain';
 import {
+  canTransitionTask,
   createRun,
   DEFAULT_STAGE_RUN_BUDGET_USD,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
@@ -91,57 +101,31 @@ import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { RunPlanSealer } from '../ports/run-plan-sealer.js';
-import {
-  type ClaudeRunner,
-  notStartedReportOf,
-  type RunOutcome,
-  type RunSpec,
-  runStoppedReasonOf,
-} from '../ports/runner.js';
+import type { ClaudeRunner, RunSpec } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import type { WorkingCalendar } from '../scheduling/working-calendar.js';
-import {
-  cliSpawnNotRequested,
-  isStopEnding,
-  recordCliSpawn,
-  stopEndingOf,
-  stoppedBeforeCliSpawn,
-  unspawnedStepOf,
-  unspawnedStop,
-} from './cli-spawn.js';
 import { questionTimeoutOf } from './deadline-rules.js';
-import {
-  leaseExpiryAt,
-  RUN_LEASE_TTL_MS,
-  type RunLeaseOptions,
-  startRunHeartbeat,
-} from './lease.js';
-import { offerAndClaimInJob } from './offers.js';
+import type { RunLeaseOptions } from './lease.js';
+import { endWithdrawnRun } from './offer-withdrawal.js';
+import { offerRun } from './offers.js';
 import { REFREEZE_PENDING_SENTENCE, refrozen, refrozenColumns } from './refreeze.js';
-import {
-  loadRunPackage,
-  RUN_PLAN_MAX_BYTES,
-  RunPlanTooLargeError,
-  sealRunPlan,
-} from './run-package.js';
+import { RUN_PLAN_MAX_BYTES, RunPlanTooLargeError, sealRunPlan } from './run-package.js';
 import { type RunSecretEnvironment, runRedactorFor } from './run-redaction.js';
 import { type ProjectSettings, settingsAdmission } from './settings.js';
 import { runSettingsSnapshot } from './settings-snapshot.js';
-import { escalate, type SettleRunRequest, settleRun } from './settle.js';
+import { escalate, type SettleRunRequest, type SettleRunResult, settleRun } from './settle.js';
 import { revalidate } from './stage-revalidation.js';
 import type { RunStopReasons } from './stop-reasons.js';
-import {
-  type AppliedChecklistRecord,
-  type AttachedReturnFeedback,
-  type EndedRun,
-  LeaseLostError,
-  type PipelineStore,
-  type ReturnCause,
-  type RunLeaseFence,
-  type SavedAttempt,
-  type StoredArtifact,
-  type StoredTask,
+import type {
+  AppliedChecklistRecord,
+  AttachedReturnFeedback,
+  EndedRun,
+  PipelineStore,
+  ReturnCause,
+  SavedAttempt,
+  StoredArtifact,
+  StoredTask,
 } from './store.js';
 import {
   escalateTaskAfterConflict,
@@ -260,6 +244,17 @@ export interface StageRunPlanner {
 }
 
 export type StageExecutionOutcome =
+  /**
+   * The run is **offered** (WP-276): its row, its sealed plan and its offer are committed, and the job
+   * has ended — a claimant runs it and settles it.
+   */
+  | { readonly kind: 'offered'; readonly runId: Id }
+  /**
+   * The task's **previous** stage entry still has a live run — claimed, its stop recorded by the
+   * transition that left it — so this entry's offer would break the per-task index (WP-276). The
+   * caller fires the job again after {@link STAGE_WAIT_FOR_PREVIOUS_RUN_MS}.
+   */
+  | { readonly kind: 'waiting'; readonly reason: string; readonly runId: Id }
   /** The run happened and its result has been recorded. */
   | { readonly kind: 'ran'; readonly runId: Id; readonly verdict: string | null }
   /**
@@ -487,8 +482,18 @@ export interface StageExecutionJob {
 }
 
 export interface StageExecutor {
+  /** Transaction 1 — admit, plan, offer (WP-276: the job ends at the offer). */
   execute(job: StageExecutionJob): Promise<StageExecutionOutcome>;
+  /**
+   * **Transaction 2**, for the claimant that ran the run (WP-276): `settleRun` over this executor's
+   * own collaborators — the four-field request, everything else read back under the settle's lock.
+   */
+  settle(request: SettleRunRequest): Promise<SettleRunResult>;
+  /** Withdraws an open stage offer with no stored plan, escalating `run_plan_missing` (WP-276). */
+  withdrawUnplanned(runId: Id): Promise<boolean>;
 }
+
+export { STAGE_WAIT_FOR_PREVIOUS_RUN_MS } from './stage-enqueue.js';
 
 /**
  * The start of the current calendar month, in **UTC**, as an ISO instant.
@@ -625,17 +630,10 @@ type Prepared =
   | { readonly kind: 'paused'; readonly reason: string }
   /** Refused before any run exists, the task parked for a human (WP-63, WP-106: bad config). */
   | { readonly kind: 'escalated'; readonly reason: string }
-  | {
-      readonly kind: 'ready';
-      readonly stage: PipelineStage;
-      readonly stored: StoredTask;
-      /** The run as the claim left it: `starting`, its `run.started` not yet appended (WP-275b). */
-      readonly run: Run;
-      /** The redacted context-pack record `run.started` carries at the CLI spawn marker. */
-      readonly contextPack: ContextPackRecord;
-      /** The claim's fence (WP-274): every later write of this run by this job carries it. */
-      readonly fence: RunLeaseFence;
-    };
+  /** WP-276: the task's previous stage entry still has a live run; fired again later. */
+  | { readonly kind: 'waiting'; readonly reason: string; readonly runId: Id }
+  /** WP-276: the run is written and offered; the job ends here. */
+  | { readonly kind: 'offered'; readonly runId: Id };
 
 type Admitted = {
   readonly kind: 'admitted';
@@ -657,7 +655,7 @@ type Admitted = {
   readonly previousRun: EndedRun | null;
 };
 
-type Admission = Exclude<Prepared, { kind: 'ready' }> | Admitted;
+type Admission = Exclude<Prepared, { kind: 'offered' }> | Admitted;
 
 /**
  * {@link revalidate}, plus the one question it cannot ask of the aggregate (WP-108 review round 1,
@@ -674,7 +672,10 @@ const revalidateOpen = async (
   store: PipelineStore,
   tx: Transaction,
   job: StageExecutionJob,
-): Promise<ReturnType<typeof revalidate>> => {
+): Promise<
+  | ReturnType<typeof revalidate>
+  | { readonly kind: 'waiting'; readonly reason: string; readonly runId: Id }
+> => {
   const valid = revalidate(await store.tasks.load(tx, job.taskId), job);
   if (valid.kind === 'skipped') return valid;
   const row = await store.tasks.stageAttemptState(tx, job.taskId, job.stage, job.attempt);
@@ -682,6 +683,28 @@ const revalidateOpen = async (
     return {
       kind: 'skipped',
       reason: `attempt ${job.attempt} of "${job.stage}" has already ended (its stage row is closed); a late wake-up starts no second run`,
+    };
+  }
+  /**
+   * **Does this stage entry already have a live run?** (WP-276, TD-031 decision 3, item 2.) The job
+   * no longer holds its singleton for the run's duration, so a duplicate wake-up — a redelivery, a
+   * recovery re-enqueue, a person's second press — finds the entry's offer open or claimed and
+   * succeeds doing nothing. A live offer of **another** entry is a run whose stop the transition
+   * that left it recorded (`./offer-withdrawal.ts`): this entry waits for its ending rather than
+   * break the per-task index.
+   */
+  const live = await store.offers.liveStageOffer(tx, job.taskId);
+  if (live !== null) {
+    if (live.stage === job.stage && live.attempt === job.attempt) {
+      return {
+        kind: 'skipped',
+        reason: `attempt ${job.attempt} of "${job.stage}" already has a live run (${live.runId}, its offer ${live.state}); a duplicate wake-up starts nothing`,
+      };
+    }
+    return {
+      kind: 'waiting',
+      runId: live.runId,
+      reason: `the task's previous run ${live.runId} (attempt ${live.attempt} of "${live.stage ?? 'no stage'}") is still ${live.state}; attempt ${job.attempt} of "${job.stage}" is offered once it has ended`,
     };
   }
   return valid;
@@ -700,11 +723,8 @@ export {
   withPlatformReviewRecord,
 } from './settle.js';
 
-/** No model credential in this process — the default of a composition that names none. */
-const NO_RUN_ENVIRONMENT: RunSecretEnvironment = { env: {}, secretEnvNames: [] };
-
 export const createStageExecutor = (options: StageExecutorOptions): StageExecutor => {
-  const { unitOfWork, store, runner, planner, stopReasons } = options;
+  const { unitOfWork, store, planner } = options;
   const logger = options.logger ?? silentLogger;
   const budgets = options.budgets ?? noBudgetGuard;
 
@@ -745,7 +765,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
   const admit = async (job: StageExecutionJob, read: ProjectSettings): Promise<Admission> =>
     writing(job.taskId, 'admitting a stage run', async (scope): Promise<Admission> => {
       const valid = await revalidateOpen(store, scope.tx, job);
-      if (valid.kind === 'skipped') return valid;
+      if (valid.kind === 'skipped' || valid.kind === 'waiting') return valid;
       const loaded = valid.stored;
       const { task } = loaded;
 
@@ -987,7 +1007,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
   ): Promise<Prepared> =>
     unitOfWork.transaction(async (scope): Promise<Prepared> => {
       const valid = await revalidateOpen(store, scope.tx, job);
-      if (valid.kind === 'skipped') return valid;
+      if (valid.kind === 'skipped' || valid.kind === 'waiting') return valid;
       const { spec } = plan;
       const { stored } = valid;
       const { task } = stored;
@@ -1099,42 +1119,26 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
        */
       await store.runPlans.insert(scope.tx, sealedPlan);
       /**
-       * The offer, and the lease claimed through it, in the **same transaction as the row** (WP-47,
-       * WP-274).
-       *
-       * Not on the line after, and not from the first heartbeat: a live `runs` row with no lease is
-       * exactly the row the sweep's wall-clock backstop takes an hour to reach, and a process that
-       * dies between an insert and a claim would leave one every time. The claim commits with the
-       * insert or neither does. Since WP-274 the claim is the offer's one claim (TD-031 §2,
-       * `./offers.ts`): it writes `lease_owner`, `lease_expires_at` and the epoch, and since WP-275b
-       * it moves the run `created → starting`; this job is its only claimant, so the run still
-       * executes here.
+       * **The offer, in the same transaction as the row — and the job ends here** (WP-274, WP-276,
+       * TD-031 decision 3). The run is `created` and holds no lease: nothing is driving it until a
+       * claimant takes it through the one claim (`./offers.ts`), which writes the lease, the epoch
+       * and `created → starting` in one statement. The offer is announced on `run_offers` at commit.
+       * A `created` row is not the sweep's (it has no lease to lose); an offer nobody claims waits
+       * for one — WP-278's `offer_timeout` is what bounds that wait.
        */
-      const claimed = await offerAndClaimInJob(
+      const offered = await offerRun(
         store.offers,
-        scope.tx,
+        scope,
         {
           run: created.aggregate,
           kind: 'stage',
           offerId: context.ids.next(),
-          owner: options.lease?.owner ?? null,
-          expiresAt:
-            options.lease === undefined
-              ? null
-              : leaseExpiryAt(context.clock.now(), options.lease.ttlMs ?? RUN_LEASE_TTL_MS),
           now: context.clock.now(),
         },
         context,
       );
-      await scope.events.append([...created.events, ...claimed.events]);
-      return {
-        kind: 'ready',
-        stage: valid.stage,
-        stored,
-        run: claimed.run,
-        contextPack,
-        fence: claimed.fence,
-      };
+      await scope.events.append([...created.events, ...offered.events]);
+      return { kind: 'offered', runId };
     });
 
   /**
@@ -1189,7 +1193,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
   ): Promise<Prepared> =>
     writing(job.taskId, 'refusing an oversized run plan', async (scope): Promise<Prepared> => {
       const valid = await revalidateOpen(store, scope.tx, job);
-      if (valid.kind === 'skipped') return valid;
+      if (valid.kind === 'skipped' || valid.kind === 'waiting') return valid;
       const reason = `the run's plan is ${error.bytes} bytes, over the ${RUN_PLAN_MAX_BYTES}-byte bound a stored plan may have; it is refused rather than cut`;
       const escalated = escalate(valid.stored, options.context(job.taskId), job.stage, reason);
       await store.tasks.save(scope.tx, { ...valid.stored, task: escalated.aggregate });
@@ -1221,177 +1225,64 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     return { kind: 'escalated', reason: failure.message };
   };
 
-  /**
-   * A fenced write found the run live under another claim (WP-274, TD-031 §2): the transaction has
-   * rolled back, so this job wrote nothing about the run, and it ends doing nothing more — the run is
-   * the other claim's. Not reachable while the server's runner is the only claimant (nothing else
-   * can claim an offer this job claimed), and stated rather than left to pg-boss's retry, which would
-   * plan the stage again.
-   */
-  const leaseLost =
-    (job: StageExecutionJob) =>
-    (error: unknown): StageExecutionOutcome => {
-      if (!(error instanceof LeaseLostError)) throw error;
-      logger.warn(
-        {
-          task_id: job.taskId,
-          stage: job.stage,
-          run_id: error.runId,
-          lease_epoch: error.fence.epoch,
-        },
-        'the run is held under another claim (lease_lost); this job wrote nothing about it',
-      );
-      return { kind: 'skipped', reason: error.message };
-    };
-
-  /**
-   * **The spec the session runs, read back from the stored plan** (WP-275a, `./run-package.ts`):
-   * the seal opened and the secret values re-attached from this process's own environment — never
-   * the planner's memory, so WP-276's claimant runs a run exactly as this job does. A plan that
-   * cannot be read back throws a terminal `RunStartError`, which the caller settles `not_started`.
-   */
-  const readBackSpec = async (runId: Id): Promise<RunSpec> =>
-    unitOfWork.transaction(
-      async (scope) =>
-        (
-          await loadRunPackage(
-            { runPlans: store.runPlans, sealer: options.runPlans },
-            scope.tx,
-            runId,
-            options.runEnvironment ?? NO_RUN_ENVIRONMENT,
-          )
-        ).spec,
-    );
-
   const runStage = async (job: StageExecutionJob): Promise<StageExecutionOutcome> => {
     // WP-106: a stored settings document this release cannot parse is answered by the port as
     // `configRefusal`, and admission refuses the run by that name (`settingsAdmission`).
     const prepared = await prepare(job, await options.settings(job.projectId));
-    if (prepared.kind !== 'ready') {
-      logger.info(
-        {
-          task_id: job.taskId,
-          stage: job.stage,
-          outcome: prepared.kind,
-          reason: prepared.reason,
-        },
-        'stage execution did not start',
-      );
-      return prepared;
-    }
-    const runId = prepared.run.id;
-    const settle = (request: Omit<SettleRunRequest, 'runId' | 'fence'>) =>
-      settleRun({ ...options, logger }, { runId, fence: prepared.fence, ...request })
-        .then((settled) => settled.outcome)
-        .catch(leaseLost(job));
+    logger.info(
+      {
+        task_id: job.taskId,
+        stage: job.stage,
+        outcome: prepared.kind,
+        ...(prepared.kind === 'offered' ? { run_id: prepared.runId } : { reason: prepared.reason }),
+      },
+      prepared.kind === 'offered'
+        ? 'the stage run is offered; a claimant runs it'
+        : 'stage execution did not start',
+    );
+    return prepared;
+  };
 
-    let outcome: RunOutcome;
-    /**
-     * The heartbeat runs for exactly as long as the session does (WP-47).
-     *
-     * It is started **after** the run's own transaction has committed, and it is **awaited to a
-     * stop** on both endings — the outcome path and the start-failure path — before either opens a
-     * transaction of its own. Awaited rather than merely cancelled: a beat is fired and forgotten
-     * so that it can never block the run, so clearing the timer alone would leave at most one
-     * narrow `update` in flight beside transaction 2. That overlap is harmless in itself
-     * (`renewLease` refuses a terminal row) but it is one pooled connection nobody counted, and
-     * `POOL_RESERVATIONS` is arithmetic somebody has to be able to do.
-     */
-    const stopHeartbeat =
-      options.lease === undefined
-        ? async (): Promise<void> => {}
-        : startRunHeartbeat(
-            {
-              unitOfWork,
-              store,
-              clock: { now: () => options.context(job.taskId).clock.now() },
-              lease: options.lease,
-              ...(options.logger === undefined ? {} : { logger: options.logger }),
-            },
-            runId,
-            prepared.fence.epoch,
-          );
-    /**
-     * The CLI spawn marker for this run (WP-150): the runner asks it between the shim's `hello.ok`
-     * and the `spawn` frame, and this process learns back whether it was written — the one fact
-     * that tells a run that may have spent from one that cannot have (`./cli-spawn.ts`). Since
-     * WP-275b it is also where the run becomes `running` and `run.started` is appended, fenced on
-     * the claim.
-     */
-    const spawn = recordCliSpawn({
-      unitOfWork,
-      runs: store.runs,
-      now: () => options.context(job.taskId).clock.now(),
-      run: prepared.run,
-      contextPack: prepared.contextPack,
-      fence: prepared.fence,
-      context: options.context(job.taskId),
-      logger,
-    });
-    try {
-      const spec = await readBackSpec(runId);
-      const handle = runner.start(spec, spawn.hooks);
-      outcome = await handle.outcome;
-      if (!spawn.mayHaveReachedCli() && !isStopEnding(outcome)) {
-        // Ruling (d): an ending that came back with no marker is a run whose CLI was never asked
-        // for — a refused handshake, a connect timeout, a session that ended first. It ends as a
-        // start failure, never as the `crash` the runner may have reported.
-        // WP-163: so does one whose marker was written and whose `spawn` frame was then withheld.
-        throw cliSpawnNotRequested(outcome, spawn);
+  /**
+   * **An open offer with no stored plan** (TD-031's 2026-11-04 amendment §2): never claimable (the
+   * claim requires a plan), so it is withdrawn — one conditional update on the run — its run ended
+   * `cancelled` and its task escalated naming `run_plan_missing`. Reachable only for a run offered by
+   * a build before WP-275a and claimed by none; the claimant asks once per poll.
+   */
+  const withdrawUnplanned = async (runId: Id): Promise<boolean> => {
+    const row = await unitOfWork.transaction(async (scope) => store.runs.load(scope.tx, runId));
+    if (row === null) return false;
+    const reason =
+      'run_plan_missing: the run was offered without a stored plan, so no claimant can run it';
+    return writing(row.taskId, 'withdrawing an offer with no plan', async (scope) => {
+      const context = options.context(row.taskId);
+      const withdrawn = await store.offers.withdraw(scope.tx, {
+        by: { runId },
+        reason,
+        now: context.clock.now(),
+      });
+      if (withdrawn === null) return false;
+      const ended = await endWithdrawnRun(
+        { store, eventStore: options.eventStore },
+        scope,
+        withdrawn,
+        { reason, context },
+      );
+      const events = [...ended];
+      const stored = await store.tasks.load(scope.tx, row.taskId);
+      if (
+        stored !== null &&
+        row.stage !== null &&
+        canTransitionTask(stored.task.state, 'needs_human')
+      ) {
+        const escalated = escalate(stored, context, row.stage, reason);
+        await store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
+        await closeParkedStageRow(store, scope.tx, escalated, 'failed');
+        events.push(...escalated.events);
       }
-    } catch (error) {
-      // **A start that throws used to escape both endings** (WP-15c, Q52/Q59).
-      //
-      // Transaction 1 has already created the `runs` row and emitted `run.created`, so an error
-      // thrown by `start` — or a rejection of `handle.outcome` — left a run live for ever, a task
-      // sitting at a stage nothing would move, and a `stage.execute` job that exhausted its retries
-      // into pg-boss where no screen showed it. Nothing told a human.
-      //
-      // The ending is `settleRun`'s `not_started` branch since WP-275a (TD-031's 2026-11-04
-      // amendment §3): the run is failed and the task is **escalated to `needs_human`** — or, for a
-      // *transport* failure (Q59(a), WP-15g), left where it is and re-enqueued a bounded number of
-      // times, the bound counted from the stage entry's stored runs. No new task state. What
-      // crosses is a `NotStartedReport` — the platform's closed-vocabulary sentence, the launcher's
-      // own words unredacted, the classification — and settle redacts, bounds and decides.
-      await stopHeartbeat();
-      stopReasons.forget(runId);
-      const report = notStartedReportOf(error, { spawnRequested: spawn.mayHaveReachedCli() });
-      logger.error(
-        {
-          err: error,
-          task_id: job.taskId,
-          stage: job.stage,
-          run_id: runId,
-          transient: report.transient,
-        },
-        'the runner could not start this stage; the run is settled as not started',
-      );
-      return settle({ outcome: report, stopReason: null });
-    }
-    await stopHeartbeat();
-    const stopReason = runStoppedReasonOf(stopReasons.reasonFor(runId));
-    stopReasons.forget(runId);
-    if (!spawn.mayHaveReachedCli()) {
-      // A stop that landed before the CLI was asked for — or while its marker committed, so the
-      // frame was withheld (WP-163) — keeps its status and spent nothing (WP-150),
-      // and records how far it got (WP-154 (b′), backlog 502): the run page then says *did not
-      // start* rather than showing an empty transcript, and the event log can tell it from a run
-      // that started and was stopped.
-      outcome = unspawnedStop(
-        outcome,
-        stoppedBeforeCliSpawn({
-          ending: stopEndingOf(outcome),
-          step: unspawnedStepOf(spawn),
-          attempt: 1,
-          retryable: false,
-        }),
-      );
-    }
-
-    // Transaction 2 is the `settleRun` command since WP-275 (`./settle.ts`): the same writes, in a
-    // transaction of its own on the same bound, idempotent on the run and its claim's epoch — and
-    // since WP-275a it is given only what a claimant has (the four fields) and reads the rest back.
-    return settle({ outcome, stopReason });
+      await scope.events.append(events);
+      return true;
+    });
   };
 
   return {
@@ -1405,5 +1296,16 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         return escalateOnConflict(error);
       }
     },
+    settle: async (request) => {
+      try {
+        return await settleRun({ ...options, logger }, request);
+      } catch (error) {
+        if (!(error instanceof TaskConflictExhaustedError)) throw error;
+        // A settle whose task write lost every race parks the task (WP-15e) — the ending the job
+        // gave it when transaction 2 ran inside the job.
+        return { kind: 'settled', ending: null, outcome: await escalateOnConflict(error) };
+      }
+    },
+    withdrawUnplanned,
   };
 };

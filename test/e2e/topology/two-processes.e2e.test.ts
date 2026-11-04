@@ -36,9 +36,9 @@
  *     one of its duties* (backlog 181) — counted here, and the figure is stated at the coalescer.
  *  8. **A split install accepts commands before its worker starts** (WP-86, backlog 262): `migrate`
  *     declares every job queue, so `ROLE=api` alone enqueues and the job waits for a worker.
- *  9. **A deployment with no runner is visible** (WP-86, backlog 135): `app`'s `/readyz` reports
- *     `agent_runs` degraded (still 200) with `details.agent_runs: unserved`, and `/metrics` the
- *     `stage.execute` backlog and its age — then `ok` once a runner takes the job.
+ *  9. **A core with no launcher** (WP-277, TD-031 decision 13): `app` plans and offers an agent
+ *     stage — one open offer, `run_offers_open` 1 — evaluates a gate with no runner, and reports
+ *     `claimants: none`, degraded only once an offer waited past the bound; a runner claims it.
  * 10. **A cancel answered by `app` stops the session in `runner`, and the steer window is one
  *     window** (WP-101, TD-028 decision 11, backlog 294 and 295): the run ends `cancelled` in the
  *     runner with its measured cost, charged once and not late; and two steers by one person
@@ -175,8 +175,8 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
     let firstRunId: string | null = null;
 
     // `app`: the primary, `ROLE=all` (what `.env.example` gives the `app` service) with **no**
-    // runner — `compose.yml` pins its launcher variables empty, so it subscribes neither
-    // `stage.execute` nor `task.ask` (TD-028 decision 5).
+    // runner — `compose.yml` pins its launcher variables empty, so it plans and offers but is not a
+    // claimant (WP-277, TD-031 decision 13): the run is claimed by `runner`.
     const pipeline = await startPipeline({
       scenarios: featureScenarios,
       label: 'topology-shipped',
@@ -950,14 +950,15 @@ describe('the scaling split: ROLE=api beside ROLE=worker', () => {
     const apiBody = (await apiReady.json()) as { status: string; checks: Record<string, string> };
     expect(apiReady.status, JSON.stringify(apiBody)).toBe(200);
     // The API runs no dispatcher, so it reports none — omitted, not `ok` — and since WP-72 it
-    // reports the queue client it enqueues through; since WP-86, whether the instance's agent
-    // stages are being taken (nothing is queued here, so they are).
+    // reports the queue client it enqueues through; since WP-277, who claims agent runs: nobody
+    // here, and nothing waits, so `none` and not degraded.
     expect(apiBody.checks).toEqual({
       database: 'ok',
       migrations: 'ok',
       queue: 'ok',
-      agent_runs: 'ok',
+      claimants: 'ok',
     });
+    expect((apiBody as { claimants?: string }).claimants).toBe('none');
 
     const workerReady = await fetch(`${worker.baseUrl}/readyz`);
     const workerBody = (await workerReady.json()) as {
@@ -970,7 +971,7 @@ describe('the scaling split: ROLE=api beside ROLE=worker', () => {
       migrations: 'ok',
       queue: 'ok',
       dispatch: 'down',
-      agent_runs: 'ok',
+      claimants: 'ok',
     });
   }, 180_000);
 });
@@ -1043,20 +1044,19 @@ describe('a split install before its worker has started (backlog 262)', () => {
 });
 
 /**
- * WP-86 (PROGRESS backlog 135, criterion 3): TD-028's *"the queue depth is a metric, `/readyz`
- * reports the runner as absent"*, asserted through `app` with the runner absent and then present.
- *
- * `app` is the stock one — `ROLE=all`, no launcher — so the first stage's job is enqueued and
- * nothing claims it. Its eligibility is moved back past the five-minute bound with one `update`
- * rather than by waiting; the rest is the processes' own answers over HTTP.
+ * **A core with no launcher** (WP-277 criterion 4, TD-031 decision 13; WP-86's backlog 135 before
+ * it): `app` — `ROLE=all`, no launcher — subscribes `stage.execute` and plans and **offers** an agent
+ * stage, which waits as one open offer rather than as a queued job; it evaluates a **gate** with no
+ * runner at all; and `/readyz` says `claimants: none`, degraded only once an offer has waited past
+ * the bound, naming it. A runner that starts claims the offer and runs it.
  */
-describe('a deployment with no runner is visible (backlog 135)', () => {
-  const metric = (text: string, name: string, queue: string): number | null => {
-    const line = text.split('\n').find((entry) => entry.startsWith(`${name}{queue="${queue}"} `));
+describe('a core with no launcher (WP-277)', () => {
+  const offersOpen = (text: string): number | null => {
+    const line = text.split('\n').find((entry) => entry.startsWith('run_offers_open{'));
     return line === undefined ? null : Number(line.split(' ').at(-1));
   };
 
-  it('reports agent_runs unserved (degraded, 200) and the stage.execute backlog on app, and ok once a runner takes it', async () => {
+  it('offers the agent stage and leaves one open offer, reports claimants none, then a runner claims it', async () => {
     const pipeline = await startPipeline({
       scenarios: featureScenarios,
       label: 'topology-no-runner',
@@ -1068,62 +1068,170 @@ describe('a deployment with no runner is visible (backlog 135)', () => {
     const base = pipeline.instance.baseUrl;
 
     await pipeline.publish([ticketMatched(pipeline)]);
-    await pipeline.waitFor('the first stage to be enqueued and left unclaimed', async () => {
-      const [row] = await pipeline.query<{ queued: number }>(
-        "select count(*)::int as queued from pgboss.job where name = 'stage.execute' and state = 'created'",
+    await pipeline.waitFor('the first agent stage to be offered', async () => {
+      const [row] = await pipeline.query<{ open: number }>(
+        "select count(*)::int as open from run_offers where state = 'open' and kind = 'stage'",
       );
-      return (row?.queued ?? 0) > 0;
+      return (row?.open ?? 0) > 0;
     });
+    // The job ran and ended at the offer: nothing of `stage.execute` is waiting for a runner.
+    const [offers] = await pipeline.query<{ open: number; runs: number; created: number }>(
+      `select (select count(*)::int from run_offers where state = 'open') as open,
+              (select count(*)::int from runs) as runs,
+              (select count(*)::int from runs where status = 'created') as created`,
+    );
+    expect(offers).toEqual({ open: 1, runs: 1, created: 1 });
 
-    // Inside the bound: queued, but not yet a finding.
+    // Inside the bound: `none`, and not degraded — a workers_only core is a valid state.
     let ready = await fetch(`${base}/readyz`);
     let body = (await ready.json()) as {
       status: string;
       checks: Record<string, string>;
       details?: Record<string, string>;
+      claimants?: string;
+      oldest_unclaimed_offer?: { run_id: string };
     };
     expect(ready.status, JSON.stringify(body)).toBe(200);
-    expect(body.checks.agent_runs).toBe('ok');
+    expect(body.checks.claimants).toBe('ok');
+    expect(body.claimants).toBe('none');
+    let text = await (await fetch(`${base}/metrics`)).text();
+    expect(offersOpen(text)).toBe(1);
 
-    // Runner absent: the job has been eligible for ten minutes and nothing has claimed it.
+    // Past the bound with no claimant: degraded (still 200), naming the offer.
     await pipeline.query(
-      "update pgboss.job set start_after = now() - interval '10 minutes' where name = 'stage.execute' and state = 'created'",
+      "update run_offers set offered_at = now() - interval '10 minutes' where state = 'open'",
     );
+    const [run] = await pipeline.query<{ id: string }>('select id from runs');
     ready = await fetch(`${base}/readyz`);
     body = (await ready.json()) as typeof body;
     expect(ready.status, JSON.stringify(body)).toBe(200);
     expect(body).toMatchObject({
       status: 'degraded',
-      checks: { database: 'ok', migrations: 'ok', queue: 'ok', agent_runs: 'degraded' },
-      details: { agent_runs: 'unserved' },
+      checks: { claimants: 'degraded' },
+      details: { claimants: 'unclaimed' },
+      claimants: 'none',
+      oldest_unclaimed_offer: { run_id: run?.id },
     });
-    let text = await (await fetch(`${base}/metrics`)).text();
-    expect(metric(text, 'jobs_queued', 'stage.execute')).toBe(1);
-    expect(metric(text, 'jobs_queued_oldest_age_seconds', 'stage.execute')).toBeGreaterThan(300);
-    // Every declared queue has a count — zero is a measurement, not an absence.
-    expect(metric(text, 'jobs_queued', 'knowledge.apply')).toBe(0);
 
-    // Runner present: it subscribes `stage.execute` and takes the job.
+    // A runner starts: it claims the offer and runs it, and `app` is no longer degraded.
     await pipeline.addProcess({
       name: 'runner',
       role: 'runner',
       agent: 'fake-runner',
       env: { APP_DB_POOL_MAX: String(floorOf('runner')) },
     });
-    await pipeline.waitFor('the runner to claim the waiting stage', async () => {
+    await pipeline.waitFor('the runner to claim the open offer', async () => {
       const [row] = await pipeline.query<{ claimed: number }>(
-        "select count(*)::int as claimed from pgboss.job where name = 'stage.execute' and started_on is not null",
+        "select count(*)::int as claimed from run_offers where state in ('claimed', 'settled')",
       );
       return (row?.claimed ?? 0) > 0;
     });
     ready = await fetch(`${base}/readyz`);
     body = (await ready.json()) as typeof body;
     expect(ready.status, JSON.stringify(body)).toBe(200);
-    expect(body.checks.agent_runs).toBe('ok');
+    expect(body.checks.claimants).toBe('ok');
     expect(body.details).toBeUndefined();
     text = await (await fetch(`${base}/metrics`)).text();
-    const age = metric(text, 'jobs_queued_oldest_age_seconds', 'stage.execute');
-    expect(age === null || age < 300, `oldest age ${age}`).toBe(true);
+    expect(offersOpen(text)).toBeNull();
+  }, 240_000);
+
+  /**
+   * **The role table** (WP-277 criterion 5, TD-028's 2026-11-04 amendment): whether a process is a
+   * claimant is its **configuration** — a runner (here the fake) composed or not — never its `ROLE`.
+   * Every role with a worker half takes `stage.execute` either way; `/readyz`'s `claimants` is the
+   * per-process answer an operator reads.
+   */
+  it('makes a claimant of configuration, never of ROLE: runner and worker alike, with and without a runner', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'topology-role-table',
+      tickets: TICKETS,
+      agent: 'none',
+      processName: 'app',
+    });
+    harness = pipeline;
+    const claimantsOf = async (baseUrl: string) =>
+      ((await (await fetch(`${baseUrl}/readyz`)).json()) as { claimants?: string }).claimants;
+    const table: Record<string, string | undefined> = {
+      'all, no runner': await claimantsOf(pipeline.instance.baseUrl),
+    };
+    for (const [role, agent] of [
+      ['runner', 'fake-runner'],
+      ['worker', 'fake-runner'],
+      ['runner', 'none'],
+      ['indexer', 'none'],
+    ] as const) {
+      const process = await pipeline.addProcess({
+        name: `${role}-${agent}`,
+        role,
+        agent,
+        env: { APP_DB_POOL_MAX: String(floorOf(role)) },
+      });
+      table[`${role}, ${agent === 'none' ? 'no runner' : 'a runner'}`] = await claimantsOf(
+        process.baseUrl,
+      );
+    }
+    expect(table).toEqual({
+      'all, no runner': 'none',
+      'runner, a runner': 'server',
+      'worker, a runner': 'server',
+      'runner, no runner': 'none',
+      'indexer, no runner': 'none',
+    });
+  }, 300_000);
+
+  it('evaluates a gate with no runner: a task handed back to a gate stage settles it', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'topology-no-runner-gate',
+      tickets: TICKETS,
+      agent: 'none',
+      processName: 'app',
+    });
+    harness = pipeline;
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await pipeline.waitFor('the first agent stage to be offered', async () => {
+      const [row] = await pipeline.query<{ open: number }>(
+        "select count(*)::int as open from run_offers where state = 'open'",
+      );
+      return (row?.open ?? 0) > 0;
+    });
+    const [task] = await pipeline.query<{ id: string }>('select id from tasks');
+    const client = await signIn(pipeline.instance.baseUrl);
+    const send = (path: string, body: unknown, key: string) =>
+      client.json<Record<string, unknown>>(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': key },
+        body: JSON.stringify(body),
+      });
+    const taken = await send(
+      `/api/tasks/${task?.id}/take-over`,
+      { tarball: false },
+      'take-over-277',
+    );
+    expect(taken.status, JSON.stringify(taken.body)).toBe(200);
+    // The take-over withdrew the offer nobody had claimed, and its run ended `cancelled`.
+    const [withdrawn] = await pipeline.query<{ state: string; status: string }>(
+      'select o.state, r.status::text as status from run_offers o join runs r on r.id = o.run_id',
+    );
+    expect(withdrawn).toEqual({ state: 'withdrawn', status: 'cancelled' });
+
+    const handed = await send(
+      `/api/tasks/${task?.id}/hand-back`,
+      { stage: 'rebase_gate', summary: 'the gate decides this, not an agent' },
+      'hand-back-277',
+    );
+    expect(handed.status, JSON.stringify(handed.body)).toBe(200);
+    // The gate's `stage.execute` ran in `app`, which has no launcher: the gate decided and closed
+    // its stage row — it did not wait for a runner.
+    await pipeline.waitFor('the rebase gate to settle in a process with no runner', async () => {
+      const [row] = await pipeline.query<{ state: string }>(
+        `select state::text as state from task_stages
+          where task_id = $1 and stage = 'rebase_gate' order by attempt desc limit 1`,
+        [task?.id],
+      );
+      return row !== undefined && row.state !== 'running';
+    });
   }, 240_000);
 });
 

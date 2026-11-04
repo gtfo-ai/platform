@@ -106,6 +106,7 @@ const optionsOf = (
   const clock = overrides.now === undefined ? harness.clock : testClock(overrides.now);
   return {
     store: harness.store,
+    eventStore: harness.memory.store,
     settings: staticProjectSettings(() => harness.settings),
     jobs: harness.jobs,
     calendar: harness.calendar,

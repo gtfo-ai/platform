@@ -38,6 +38,7 @@ import { ACTIVE_RUN_STATUSES } from '@platform/domain';
 import * as z from 'zod';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import { lockOfferOf } from './postgres-run-offers.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
@@ -183,6 +184,9 @@ export const createPostgresRunCommandRepository = (): RunCommandRepository => ({
     // `for update` for a cancel, which may go on to `finish` the row (WP-101): two share locks
     // upgraded at once deadlock where one exclusive lock makes the second cancel wait and refuse.
     const strength = options?.forUpdate === true ? 'update' : 'share';
+    // WP-276 (backlog 697): a cancel that may `finish` the row takes its offer first — `run_offers`
+    // → `runs` → `tasks`, the one order. A steer's share lock writes no ending and needs none.
+    if (options?.forUpdate === true) await lockOfferOf(sqlOf(tx), runId);
     const { rows } = await sqlOf(tx).query<LockedRow>(
       `select r.id, r.task_id, r.status, r.lease_owner, r.lease_expires_at, ${SESSION_OF_RUN}
          from runs r where r.id = $1 for ${strength} of r`,
@@ -197,6 +201,20 @@ export const createPostgresRunCommandRepository = (): RunCommandRepository => ({
     // `stage` (backlog 494) joins the run's stage attempt, so an ask run — no stage — never matches.
     const strength = options?.forUpdate === true ? 'update' : 'share';
     const byStage = options?.stage === undefined ? '' : 'and s.stage = $3';
+    // WP-276 (backlog 697): for a cancel, the live run's offer is locked before the run. The run is
+    // found unlocked first, then its offer and the run are locked in the one order, and the run is
+    // re-read live under the lock below.
+    if (options?.forUpdate === true) {
+      const { rows: candidates } = await sqlOf(tx).query<{ id: string }>(
+        `select r.id from runs r
+           left join task_stages s on s.id = r.task_stage_id
+          where r.task_id = $1 and r.status = any($2::run_status[]) ${byStage}
+          order by r.created_at desc, r.id desc limit 1`,
+        options.stage === undefined ? [taskId, ACTIVE] : [taskId, ACTIVE, options.stage],
+      );
+      const candidate = candidates[0];
+      if (candidate !== undefined) await lockOfferOf(sqlOf(tx), candidate.id);
+    }
     const { rows } = await sqlOf(tx).query<LockedRow>(
       `select r.id, r.task_id, r.status, r.lease_owner, r.lease_expires_at, ${SESSION_OF_RUN}
          from runs r

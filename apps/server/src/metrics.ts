@@ -57,6 +57,14 @@ export interface Metrics {
   readonly jobsQueued: Gauge<'queue'>;
   /** How long the oldest of them has been eligible, per queue that has one (WP-86). */
   readonly jobsQueuedOldestAge: Gauge<'queue'>;
+  /** WP-277: open offers per project — agent runs waiting for a claimant (TD-031 decision 13). */
+  readonly runOffersOpen: Gauge<'project'>;
+  /** WP-277: seconds the oldest open offer of a project has waited; no series for none waiting. */
+  readonly runOfferWaitSeconds: Gauge<'project'>;
+  /** WP-277: remote workers connected (0 until WP-281). */
+  readonly workersConnected: Gauge;
+  /** WP-277: remote workers paused, by their user or a usage limit (0 until WP-281). */
+  readonly workersPaused: Gauge;
   /** Sets the gauges that have to be sampled rather than incremented. Called on scrape. */
   readonly collect: () => Promise<void>;
 }
@@ -111,12 +119,32 @@ export interface MetricsOptions {
     }[]
   >;
   /**
+   * The offer pool (WP-277): per project, the open offers and the oldest one's wait — where an agent
+   * backlog is visible since WP-276 (a `stage.execute` job ends at the offer, so `jobs_queued` is no
+   * agent backlog any more). Absent in a process that holds no job client.
+   */
+  readonly runOffers?: () => Promise<
+    readonly {
+      readonly projectId: string;
+      readonly open: number;
+      readonly oldestWaitSeconds: number;
+    }[]
+  >;
+  /** WP-277: remote workers connected and paused — 0 and 0 until WP-281 has workers to count. */
+  readonly workers?: () => Promise<{ readonly connected: number; readonly paused: number }>;
+  /**
    * Told when an isolated sampler throws (WP-65 review round 2): its series is then absent from the
    * scrape, and without a log line an operator could not tell a failing measurement from a gauge
    * this process never registers.
    */
   readonly onSamplerError?: (
-    sampler: 'undelivered_notifications' | 'storage' | 'stale_command_claims' | 'job_queues',
+    sampler:
+      | 'undelivered_notifications'
+      | 'storage'
+      | 'stale_command_claims'
+      | 'job_queues'
+      | 'run_offers'
+      | 'workers',
     error: unknown,
   ) => void;
   /** Node process metrics (heap, event loop lag, handles). @default true */
@@ -291,6 +319,34 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     registers: options.jobQueues === undefined ? [] : [registry],
   });
 
+  /**
+   * **The offer pool** (WP-277, TD-031 decision 13). Since WP-276 an agent run waits as an offer for
+   * a claimant, so this — not `jobs_queued{queue="stage.execute"}`, which counts plans and gates
+   * waiting for any worker — is the agent backlog. A project with no open offer has no series.
+   */
+  const runOffersOpen = new Gauge({
+    name: 'run_offers_open',
+    help: 'Open run offers — agent runs waiting for a claimant — per project (WP-277).',
+    labelNames: ['project'] as const,
+    registers: options.runOffers === undefined ? [] : [registry],
+  });
+  const runOfferWaitSeconds = new Gauge({
+    name: 'run_offer_wait_seconds',
+    help: 'Seconds the oldest open run offer of the project has waited for a claimant (WP-277).',
+    labelNames: ['project'] as const,
+    registers: options.runOffers === undefined ? [] : [registry],
+  });
+  const workersConnected = new Gauge({
+    name: 'workers_connected',
+    help: 'Remote workers connected to this core (WP-277; always 0 until WP-281).',
+    registers: options.workers === undefined ? [] : [registry],
+  });
+  const workersPaused = new Gauge({
+    name: 'workers_paused',
+    help: 'Remote workers paused by their user or a usage limit (WP-277; always 0 until WP-281).',
+    registers: options.workers === undefined ? [] : [registry],
+  });
+
   /** The storage gauge's reading: every series rebuilt from this scrape (WP-65). */
   const sampleStorage = async (storage: NonNullable<MetricsOptions['storage']>): Promise<void> => {
     const database = await storage.database();
@@ -331,6 +387,10 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     commandClaimsUnknown,
     jobsQueued,
     jobsQueuedOldestAge,
+    runOffersOpen,
+    runOfferWaitSeconds,
+    workersConnected,
+    workersPaused,
     collect: async () => {
       if (options.pendingDispatch !== undefined) {
         eventDispatchPending.set(await options.pendingDispatch());
@@ -383,6 +443,32 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
           jobsQueued.reset();
           jobsQueuedOldestAge.reset();
           options.onSamplerError?.('job_queues', error);
+        }
+      }
+      if (options.runOffers !== undefined) {
+        // Rebuilt from this scrape, so a project whose offers were claimed loses its series.
+        runOffersOpen.reset();
+        runOfferWaitSeconds.reset();
+        try {
+          for (const entry of await options.runOffers()) {
+            runOffersOpen.set({ project: entry.projectId }, entry.open);
+            runOfferWaitSeconds.set({ project: entry.projectId }, entry.oldestWaitSeconds);
+          }
+        } catch (error) {
+          runOffersOpen.reset();
+          runOfferWaitSeconds.reset();
+          options.onSamplerError?.('run_offers', error);
+        }
+      }
+      if (options.workers !== undefined) {
+        try {
+          const workers = await options.workers();
+          workersConnected.set(workers.connected);
+          workersPaused.set(workers.paused);
+        } catch (error) {
+          workersConnected.reset();
+          workersPaused.reset();
+          options.onSamplerError?.('workers', error);
         }
       }
       if (options.storage !== undefined) {

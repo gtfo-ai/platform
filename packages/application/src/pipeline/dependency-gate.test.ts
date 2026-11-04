@@ -877,6 +877,7 @@ describe('a decision that meets a stop a human owns is deferred to the resume (W
     await runDependencyGate(
       {
         store: harness.store,
+        eventStore: harness.memory.store,
         settings: staticProjectSettings(() => ({
           ...harness.settings,
           config: { ...harness.settings.config, policies: { dependency_policy: policy } },
@@ -935,6 +936,7 @@ describe('a decision that meets a stop a human owns is deferred to the resume (W
     await runDependencyGate(
       {
         store: harness.store,
+        eventStore: harness.memory.store,
         settings: staticProjectSettings(() => ({
           ...harness.settings,
           config: { ...harness.settings.config, policies: { dependency_policy: 'ask' } },

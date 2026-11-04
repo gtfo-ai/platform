@@ -1,6 +1,8 @@
 /**
- * The two reads behind the job-queue gauge and `/readyz`'s `agent_runs` line, against real pg-boss
- * on PostgreSQL 18 (WP-86, PROGRESS backlog 135) — with the runner **absent** and then **present**.
+ * The read behind the job-queue gauge, against real pg-boss on PostgreSQL 18 (WP-86, PROGRESS
+ * backlog 135) — with the worker **absent** and then **present**. Since WP-277 `/readyz`'s line is
+ * `claimants`, read off the offer pool (`offer-backlog.integration.test.ts`), not off this queue: a
+ * `stage.execute` job plans and offers, so its backlog is not an agent backlog.
  *
  * "Absent" is what a stock `app` sees when no process subscribes `stage.execute`: the job is
  * enqueued by a sender (as `ROLE=api` enqueues) and nothing claims it. "Present" is a worker that
@@ -44,7 +46,7 @@ afterAll(async () => {
 const backlogOf = async (queue: string) =>
   (await jobs.readQueueBacklog(handle.pool, 'pgboss')).find((row) => row.queue === queue);
 
-describe('the job backlog and agent_runs, runner absent then present (WP-86)', () => {
+describe('the job backlog, worker absent then present (WP-86)', () => {
   it('reads every declared queue at zero, and a deferred timer as no backlog', async () => {
     const sender = jobs.createPgBossJobs({
       database: jobs.asJobsDatabase(handle.pool),
@@ -66,13 +68,12 @@ describe('the job backlog and agent_runs, runner absent then present (WP-86)', (
         queued: 0,
         oldestAgeSeconds: null,
       });
-      await expect(jobs.readAgentRunService(handle.pool, 'pgboss')).resolves.toBe('served');
     } finally {
       await sender.stop();
     }
   });
 
-  it('is unserved while nothing claims an old stage.execute job, and served once a worker takes it', async () => {
+  it('counts an old stage.execute job while nothing claims it, and none once a worker takes it', async () => {
     const sender = jobs.createPgBossJobs({
       database: jobs.asJobsDatabase(handle.pool),
       supervise: false,
@@ -91,9 +92,8 @@ describe('the job backlog and agent_runs, runner absent then present (WP-86)', (
       });
       expect(enqueued.status).toBe('enqueued');
 
-      // Freshly enqueued: backlog of one, but inside the bound — not yet unserved.
+      // Freshly enqueued: a backlog of one.
       expect((await backlogOf(JOB_QUEUES.stageExecute))?.queued).toBe(1);
-      await expect(jobs.readAgentRunService(handle.pool, 'pgboss')).resolves.toBe('served');
 
       // Runner absent: eligible for ten minutes and nothing has claimed it.
       await handle.pool.query(
@@ -102,8 +102,7 @@ describe('the job backlog and agent_runs, runner absent then present (WP-86)', (
       );
       const waiting = await backlogOf(JOB_QUEUES.stageExecute);
       expect(waiting?.queued).toBe(1);
-      expect(waiting?.oldestAgeSeconds).toBeGreaterThan(jobs.AGENT_RUNS_UNSERVED_AFTER_SECONDS);
-      await expect(jobs.readAgentRunService(handle.pool, 'pgboss')).resolves.toBe('unserved');
+      expect(waiting?.oldestAgeSeconds).toBeGreaterThan(300);
 
       // Runner present: a worker subscribes the queue and takes the job.
       let release = (): void => undefined;
@@ -124,7 +123,6 @@ describe('the job backlog and agent_runs, runner absent then present (WP-86)', (
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       expect(claimed).toBe(true);
-      await expect(jobs.readAgentRunService(handle.pool, 'pgboss')).resolves.toBe('served');
       expect(await backlogOf(JOB_QUEUES.stageExecute)).toEqual({
         queue: JOB_QUEUES.stageExecute,
         queued: 0,

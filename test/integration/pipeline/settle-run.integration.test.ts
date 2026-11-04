@@ -346,8 +346,9 @@ describe('a second settle waits on the first one’s lock (WP-275, criteria 2 an
     const first = settleRun(deps({ store: holding }), request);
     await atFinish;
     const second = settleRun(deps(), request);
-    // The second settle is waiting on the run row's lock, not running beside the first: its
-    // backend waits on a lock while running `lockSettlement`'s statement.
+    // The second settle is waiting on the first one's lock, not running beside it: its backend
+    // waits on a lock while running `lockSettlement`'s first statement — since WP-276 the run's
+    // **offer** row (the one lock order, `run_offers` → `runs` → `tasks`, backlog 697).
     try {
       await expect
         .poll(
@@ -357,7 +358,7 @@ describe('a second settle waits on the first one’s lock (WP-275, criteria 2 an
                 await pool.query<{ count: string }>(
                   `select count(*) from pg_stat_activity
                     where wait_event_type = 'Lock'
-                      and query like '%from runs where id = $1 for update%'`,
+                      and query like '%from run_offers where run_id = $1 for update%'`,
                 )
               ).rows[0]?.count,
             ),

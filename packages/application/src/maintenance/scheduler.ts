@@ -586,6 +586,8 @@ const scheduleProject = async (
         stored.qaStage,
       );
       const applied = await applyDecision({
+        // The chore was created in this transaction: no offer can exist for it yet.
+        offerClosing: 'task_has_no_offer',
         store: options.store,
         pipeline,
         tx: scope.tx,

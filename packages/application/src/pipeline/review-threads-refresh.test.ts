@@ -321,6 +321,7 @@ describe('the review-thread count after a resolution (backlog 210)', () => {
     const task = taskOf(world.harness).task;
     const options = {
       store: world.harness.store,
+      eventStore: world.harness.memory.store,
       settings: staticProjectSettings(() => world.harness.settings),
       jobs: world.harness.jobs,
       calendar: world.harness.calendar,

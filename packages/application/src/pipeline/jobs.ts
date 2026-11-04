@@ -97,7 +97,7 @@ import {
   type WindowWord,
 } from './review-threads.js';
 import type { PipelineSagaOptions } from './saga.js';
-import { enqueueStage } from './stage-enqueue.js';
+import { enqueueStage, STAGE_WAIT_FOR_PREVIOUS_RUN_MS } from './stage-enqueue.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
 import type { StoredTask, TicketStatusChange } from './store.js';
 import { confirmExcusedPaths, unconfirmedTamperReturn } from './tamper-confirmation.js';
@@ -799,6 +799,18 @@ export const stageExecuteHandler = (
        * already waiting it coalesces, which is that job. Bounded: the forwarded job is for the
        * task's current attempt, so it never forwards again unless a person moves the task again.
        */
+      /**
+       * **The previous entry's run is still being stopped** (WP-276): the transition that left it
+       * recorded a `cancel` for its holder, and this entry's offer must wait for its ending rather than
+       * break the per-task index. The job fires again after `STAGE_WAIT_FOR_PREVIOUS_RUN_MS`; the
+       * attempt it carries is unchanged, so a later transition makes it skip as usual.
+       */
+      if (outcome.kind === 'waiting') {
+        await enqueueStage(options.jobs, {
+          ...request,
+          startAfter: new Date(Date.parse(options.clock.now()) + STAGE_WAIT_FOR_PREVIOUS_RUN_MS),
+        });
+      }
       if (outcome.kind === 'skipped' && outcome.supersededBy !== undefined) {
         const forwarded = await enqueueStage(options.jobs, {
           taskId: request.taskId,
@@ -1314,6 +1326,7 @@ const settle = async (
           ? undefined
           : settledWord;
       const applied = await applyDecision({
+        offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
         store: options.store,
         pipeline,
         tx: scope.tx,
@@ -1823,6 +1836,7 @@ const returnForHumanWords = async (
         },
       }) as DomainEvent;
       const applied = await applyDecision({
+        offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
         store: options.store,
         pipeline,
         tx: scope.tx,
@@ -1888,6 +1902,7 @@ const passQa = async (
       detail: 'the ticket left the qa status',
     });
     const applied = await applyDecision({
+      offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
       store: options.store,
       pipeline,
       tx: scope.tx,

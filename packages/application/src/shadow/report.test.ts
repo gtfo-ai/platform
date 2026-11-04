@@ -629,6 +629,7 @@ describe('the shadow report, through the whole walk', () => {
       {
         unitOfWork: harness.memory,
         store: harness.store,
+        eventStore: harness.memory.store,
         shadow: { ...harness.shadow, reports: async () => [] },
         settings: staticProjectSettings(() => harness.settings),
         integrations: staticPipelineIntegrations(harness.integrations),
@@ -666,6 +667,7 @@ describe('the shadow report, through the whole walk', () => {
       {
         unitOfWork: harness.memory,
         store: harness.store,
+        eventStore: harness.memory.store,
         shadow: harness.shadow,
         settings: staticProjectSettings(() => harness.settings),
         integrations: staticPipelineIntegrations(harness.integrations),

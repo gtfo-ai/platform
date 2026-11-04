@@ -150,6 +150,47 @@ describe('createMetrics', () => {
   });
 
   /**
+   * WP-277: the offer pool is the agent backlog since WP-276 — per project, the open offers and the
+   * oldest one's wait, rebuilt every scrape; and the worker counts, a measured zero until WP-281.
+   */
+  it('publishes the open offers and their wait per project, and the worker counts (WP-277)', async () => {
+    let offers = [{ projectId: 'p-1', open: 3, oldestWaitSeconds: 75.5 }];
+    const metrics = createMetrics({
+      defaultMetrics: false,
+      runOffers: async () => offers,
+      workers: async () => ({ connected: 0, paused: 0 }),
+    });
+    await metrics.collect();
+    let text = await metrics.registry.metrics();
+    expect(text).toContain('run_offers_open{project="p-1"} 3');
+    expect(text).toContain('run_offer_wait_seconds{project="p-1"} 75.5');
+    expect(text).toContain('workers_connected 0');
+    expect(text).toContain('workers_paused 0');
+
+    offers = [];
+    await metrics.collect();
+    text = await metrics.registry.metrics();
+    expect(text).not.toContain('run_offers_open{');
+    expect(text).not.toContain('run_offer_wait_seconds{');
+
+    const failures: string[] = [];
+    const failing = createMetrics({
+      defaultMetrics: false,
+      runOffers: async () => {
+        throw new Error('run_offers unreachable');
+      },
+      onSamplerError: (sampler) => failures.push(sampler),
+    });
+    await failing.collect();
+    expect(await failing.registry.metrics()).not.toContain('run_offers_open{');
+    expect(failures).toEqual(['run_offers']);
+
+    const silent = createMetrics({ defaultMetrics: false });
+    await silent.collect();
+    expect(await silent.registry.metrics()).not.toContain('run_offers_open');
+  });
+
+  /**
    * WP-65 (Q63): the storage gauge — database and mirrors as two lines under one total, the
    * mirrors per project, and **no** total where the mirrors cannot be measured.
    */

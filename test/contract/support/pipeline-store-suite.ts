@@ -3677,6 +3677,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             offerId,
             runId,
             taskId: run?.taskId,
+            kind: 'stage',
             epoch: 1,
             owner: 'server:server-1',
           });
@@ -3839,6 +3840,189 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           const next = await liveRun({ taskId });
           const { claim } = await claimed(next);
           expect(claim).toMatchObject({ runId: next, epoch: 1 });
+        });
+
+        const offerOpen = async (
+          runId: Id,
+          input: { readonly kind?: 'stage' | 'ask'; readonly offeredAt?: string } = {},
+        ) => {
+          const run = await store.runs.load(tx, runId);
+          const offerId = nextId();
+          await store.offers.insert(tx, {
+            id: offerId,
+            runId,
+            taskId: run?.taskId as Id,
+            projectId,
+            stage: (input.kind ?? 'stage') === 'stage' ? ('refinement' as Slug) : null,
+            attempt: 1,
+            kind: input.kind ?? 'stage',
+            offeredAt: (input.offeredAt ?? '2026-06-01T09:00:01.000Z') as IsoDateTime,
+          });
+          return { offerId, taskId: run?.taskId as Id };
+        };
+
+        it('claims the oldest open offer of any kind when the claim names no run, and answers its kind (WP-276)', async () => {
+          const later = await liveRun();
+          await offerOpen(later, { offeredAt: '2000-01-01T00:00:02.000Z' });
+          const older = await liveRun();
+          const { offerId } = await offerOpen(older, {
+            kind: 'ask',
+            offeredAt: '2000-01-01T00:00:01.000Z',
+          });
+          const claim = await claimRunOffer(store.offers, tx, {
+            eligibility: {},
+            claimantKind: 'server',
+            owner: 'server:server-1',
+            expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
+            now: '2026-06-01T09:00:02.000Z' as IsoDateTime,
+          });
+          expect(claim).toMatchObject({ offerId, runId: older, kind: 'ask', epoch: 1 });
+        });
+
+        it('withdraws only an open stage offer, by one conditional update, and leaves a claimed one (WP-276)', async () => {
+          const open = await liveRun();
+          const { offerId, taskId } = await offerOpen(open);
+          expect(await store.offers.liveStageOffer(tx, taskId)).toMatchObject({
+            id: offerId,
+            state: 'open',
+          });
+          expect(
+            await store.offers.withdraw(tx, {
+              by: { taskId },
+              reason: 'the task was paused by a human',
+              now: '2026-06-01T09:00:05.000Z' as IsoDateTime,
+            }),
+          ).toEqual({ offerId, runId: open });
+          expect(await store.offers.load(tx, open)).toMatchObject({
+            state: 'withdrawn',
+            withdrawnReason: 'the task was paused by a human',
+          });
+          expect(await store.offers.liveStageOffer(tx, taskId)).toBeNull();
+          // A second withdrawal touches nothing: the update is conditional on `open`.
+          expect(
+            await store.offers.withdraw(tx, {
+              by: { taskId },
+              reason: 'again',
+              now: '2026-06-01T09:00:06.000Z' as IsoDateTime,
+            }),
+          ).toBeNull();
+
+          const held = await liveRun();
+          const { taskId: heldTask } = await claimed(held);
+          expect(
+            await store.offers.withdraw(tx, {
+              by: { taskId: heldTask },
+              reason: 'the task was paused by a human',
+              now: '2026-06-01T09:00:05.000Z' as IsoDateTime,
+            }),
+          ).toBeNull();
+          expect(await store.offers.liveStageOffer(tx, heldTask)).toMatchObject({
+            state: 'claimed',
+          });
+        });
+
+        it('withdraws an ask offer only by its run, never by its task’s stage transition (WP-276)', async () => {
+          const ask = await liveRun();
+          const { offerId, taskId } = await offerOpen(ask, { kind: 'ask' });
+          expect(
+            await store.offers.withdraw(tx, {
+              by: { taskId },
+              reason: 'stage left',
+              now: '2026-06-01T09:00:05.000Z' as IsoDateTime,
+            }),
+          ).toBeNull();
+          expect(
+            await store.offers.withdraw(tx, {
+              by: { runId: ask },
+              reason: 'run_plan_missing',
+              now: '2026-06-01T09:00:05.000Z' as IsoDateTime,
+            }),
+          ).toEqual({ offerId, runId: ask });
+        });
+
+        it('lists open offers that have no stored plan, and not one that has (WP-276)', async () => {
+          const planless = await liveRun();
+          await offerOpen(planless);
+          const planned = await liveRun();
+          await offerOpen(planned);
+          await store.runPlans.insert(tx, {
+            runId: planned,
+            format: 1,
+            sealedSpec: Uint8Array.from([1, 2, 3]),
+            keyId: 'v1:0123456789abcdef',
+            secretEnvNames: [],
+            reviewChecklists: null,
+            questionTimeout: '1 working day',
+          });
+          const found = (await store.offers.openWithoutPlan(tx, 1000)).map((row) => row.runId);
+          expect(found).toContain(planless);
+          expect(found).not.toContain(planned);
+        });
+
+        it('reads a run’s stored context pack back as it was written, and null for a run with none (backlog 709)', async () => {
+          const bare = await liveRun();
+          expect(await store.runs.contextPack(tx, bare)).toBeNull();
+          const stored = task();
+          await store.tasks.insert(tx, stored);
+          await store.tasks.recordStageEntered(tx, {
+            taskId: stored.task.id,
+            stage: 'refinement' as Slug,
+            attempt: 1,
+            causedByEventId: null,
+          });
+          const pack = {
+            tier0: [{ path: 'knowledge/index.md', tokens: 120 }],
+            tier1: [
+              {
+                path: 'knowledge/a.md',
+                reason: 'paths' as const,
+                score: 0.75,
+                tokens: 40,
+                validated: true,
+              },
+              {
+                path: 'knowledge/b.md',
+                reason: 'trigger' as const,
+                score: 0.5,
+                tokens: 30,
+                validated: false,
+              },
+            ],
+            budget_tokens: 8000,
+            total_tokens: 190,
+            kb_commit: null,
+          };
+          const runId = nextId();
+          await store.runs.insert(tx, {
+            id: runId,
+            taskId: stored.task.id,
+            projectId,
+            stage: 'refinement' as Slug,
+            role: 'product_manager',
+            mode: 'normal',
+            attempt: 1,
+            model: 'claude-opus-5',
+            effort: 'medium',
+            promptVersion: 'basic@1+product_manager',
+            systemPrompt: null,
+            userPrompt: null,
+            redactionCount: 0,
+            contextPack: pack,
+            settings: null,
+            reserveUsd: null,
+            promptsWithheld: null,
+            providerMode: 'api',
+            status: 'created',
+            terminalReason: null,
+            sessionId: null,
+            numTurns: 0,
+            usage: null,
+            cost: null,
+            wallMs: 0,
+            createdAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+            startedAt: null,
+          });
+          expect(await store.runs.contextPack(tx, runId)).toEqual(pack);
         });
 
         // Last in its case: on PostgreSQL the refused insert aborts the case's transaction.

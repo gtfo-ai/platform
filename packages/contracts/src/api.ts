@@ -121,12 +121,30 @@ export const healthResponseSchema = z.strictObject({
   status: z.enum(['ok', 'degraded', 'down']),
   checks: z.record(z.string(), z.enum(['ok', 'degraded', 'down'])),
   /**
-   * Why a check is not `ok`, where the check says (WP-86): `agent_runs: "unserved"` — `stage.execute`
-   * holds a job nothing has claimed past the bound — or `"unknown"`; `schema: "ahead_additive"`
-   * (WP-272, TD-032 decision 2) — the database carries migrations this build does not ship, every
-   * one of them additive, and the build serves it. Absent when nothing is said.
+   * Why a check is not `ok`, where the check says: `claimants: "unclaimed"` (WP-277) — no claimant is
+   * composed here or connected, and an offer has waited past the bound — or `"unknown"`;
+   * `schema: "ahead_additive"` (WP-272, TD-032 decision 2) — the database carries migrations this
+   * build does not ship, every one of them additive, and the build serves it. Absent when nothing is
+   * said.
    */
-  details: z.record(z.string(), z.enum(['unserved', 'unknown', 'ahead_additive'])).optional(),
+  details: z.record(z.string(), z.enum(['unclaimed', 'unknown', 'ahead_additive'])).optional(),
+  /**
+   * **Who claims agent runs** (WP-277, TD-031 decision 13): `server` when this process composes the
+   * server claimant, `workers: <n>` when remote workers are connected (always 0 until WP-281), or
+   * `none`. `none` is **not** degraded by itself — a `workers_only` core with no worker online is a
+   * valid state — only when an offer has waited past the bound (`oldest_unclaimed_offer`).
+   */
+  claimants: z
+    .union([z.literal('server'), z.literal('none'), z.string().regex(/^workers: \d+$/)])
+    .optional(),
+  /** The oldest open offer that has waited past the bound with no claimant (WP-277). */
+  oldest_unclaimed_offer: z
+    .strictObject({
+      run_id: idSchema,
+      offered_at: isoDateTimeSchema,
+      waited_seconds: z.number().nonnegative(),
+    })
+    .optional(),
 });
 
 export const userSummarySchema = z.strictObject({

@@ -175,7 +175,7 @@ CMD ["apps/server/src/main.ts"]
 # `image-labels.test.ts` holds this block to that module.
 ARG PGBOSS_SCHEMA
 LABEL org.platform.schema-guard="2" \
-      org.platform.rollback-floor="2" \
+      org.platform.rollback-floor="3" \
       org.platform.pgboss-schema="${PGBOSS_SCHEMA}"
 
 LABEL org.opencontainers.image.title="platform" \

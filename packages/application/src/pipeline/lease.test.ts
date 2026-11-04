@@ -7,16 +7,22 @@
  * ended, or another process owns the lease), and **never** let a failed beat reach the run.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
+import * as fc from 'fast-check';
 import { describe, expect, it, vi } from 'vitest';
 import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
 import { offerAndClaimForTest } from '../testing/run-offers.js';
 import {
+  DEFAULT_LEASE_SKEW_GRACE_MS,
   intervalHeartbeatSchedule,
+  leaseConstantsHold,
   leaseExpiryAt,
+  REMOTE_RUN_LEASE_RENEW_MS,
+  REMOTE_RUN_LEASE_TTL_MS,
   RUN_LEASE_RENEW_MS,
   RUN_LEASE_TTL_MS,
   type RunHeartbeatDependencies,
   renewRunLease,
+  selfStopAfterMs,
   startRunHeartbeat,
 } from './lease.js';
 import { LeaseLostError, type PipelineStore } from './store.js';
@@ -408,5 +414,148 @@ describe('the lease’s two numbers', () => {
     expect(clearIntervalSpy).toHaveBeenCalledWith(timer);
     setIntervalSpy.mockRestore();
     clearIntervalSpy.mockRestore();
+  });
+});
+
+/**
+ * **WP-276 (TD-031 §2): a lost lease interrupts.** An answered `lease_lost` is reported at once; one
+ * or two failed beats are not; and a claimant that has gone `TTL − ½·renew` on its monotonic clock
+ * without a successful renewal stops itself. A fake monotonic clock and a fake one-shot timer stand
+ * in for `performance.now` and `setTimeout`, so every case is about the decision, not the timer.
+ */
+describe('self-termination and an answered lease_lost (WP-276)', () => {
+  const lossHarness = (answers: readonly ('renewed' | 'lost' | 'throws')[]) => {
+    let now = 0;
+    let tick: (() => void) | undefined;
+    const timers: { at: number; fire: () => void; cancelled: boolean }[] = [];
+    const losses: string[] = [];
+    let call = 0;
+    const store = {
+      runs: {
+        renewLease: async () => {
+          const answer = answers[call] ?? 'renewed';
+          call += 1;
+          if (answer === 'throws') throw new Error('the database is unreachable');
+          return answer === 'renewed';
+        },
+      },
+    } as unknown as PipelineStore;
+    const stop = startRunHeartbeat(
+      {
+        unitOfWork: { transaction: async (fn) => fn({ tx: { adapter: 'memory' } } as never) },
+        store,
+        clock: { now: () => NOW },
+        lease: {
+          owner: OWNER,
+          schedule: (_everyMs, beat) => {
+            tick = beat;
+            return () => {};
+          },
+          monotonicNow: () => now,
+          timer: (afterMs, fire) => {
+            const entry = { at: now + afterMs, fire, cancelled: false };
+            timers.push(entry);
+            return () => {
+              entry.cancelled = true;
+            };
+          },
+        },
+        claimedAt: 0,
+        onLost: (loss) => {
+          losses.push(loss);
+        },
+      },
+      RUN,
+      EPOCH,
+    );
+    /** Moves the monotonic clock, fires every due timer, and beats once if `beat`. */
+    const advance = async (toMs: number, beat: boolean) => {
+      now = toMs;
+      for (const timer of timers) {
+        if (!timer.cancelled && timer.at <= now) {
+          timer.cancelled = true;
+          timer.fire();
+        }
+      }
+      if (beat) tick?.();
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    return { losses, stop, advance };
+  };
+
+  it('interrupts at once on an answered lease_lost', async () => {
+    const { losses, advance } = lossHarness(['lost']);
+    await advance(RUN_LEASE_RENEW_MS, true);
+    expect(losses).toEqual(['lease_lost']);
+  });
+
+  it('lets one and two failed beats interrupt nothing, and a later success re-arms the self-stop', async () => {
+    const { losses, advance } = lossHarness(['throws', 'throws', 'renewed']);
+    await advance(RUN_LEASE_RENEW_MS, true);
+    await advance(2 * RUN_LEASE_RENEW_MS, true);
+    expect(losses).toEqual([]);
+    await advance(2.4 * RUN_LEASE_RENEW_MS, true); // the third beat succeeds, sent at 240 s
+    await advance(
+      2.4 * RUN_LEASE_RENEW_MS + selfStopAfterMs(RUN_LEASE_TTL_MS, RUN_LEASE_RENEW_MS) - 1,
+      false,
+    );
+    expect(losses).toEqual([]);
+  });
+
+  it('stops itself TTL − ½·renew after the last successful send, and not a millisecond before', async () => {
+    const { losses, advance } = lossHarness(['throws', 'throws', 'throws']);
+    const giveUp = selfStopAfterMs(RUN_LEASE_TTL_MS, RUN_LEASE_RENEW_MS);
+    expect(giveUp).toBe(250_000);
+    await advance(RUN_LEASE_RENEW_MS, true);
+    await advance(2 * RUN_LEASE_RENEW_MS, true);
+    await advance(giveUp - 1, false);
+    expect(losses).toEqual([]);
+    await advance(giveUp, false);
+    expect(losses).toEqual(['self_terminated']);
+  });
+
+  it('reports nothing once the caller has stopped the heartbeat', async () => {
+    const { losses, stop, advance } = lossHarness(['throws']);
+    await stop();
+    await advance(10 * RUN_LEASE_TTL_MS, true);
+    expect(losses).toEqual([]);
+  });
+});
+
+describe('the self-stop constants (TD-031 §2)', () => {
+  it('holds both constant sets to TTL − ½·renew ≥ 2 × renew, and names their give-up instants', () => {
+    expect(leaseConstantsHold(RUN_LEASE_TTL_MS, RUN_LEASE_RENEW_MS)).toBe(true);
+    expect(leaseConstantsHold(REMOTE_RUN_LEASE_TTL_MS, REMOTE_RUN_LEASE_RENEW_MS)).toBe(true);
+    expect(selfStopAfterMs(RUN_LEASE_TTL_MS, RUN_LEASE_RENEW_MS)).toBe(250_000);
+    expect(selfStopAfterMs(REMOTE_RUN_LEASE_TTL_MS, REMOTE_RUN_LEASE_RENEW_MS)).toBe(585_000);
+    // The check refuses a set that would interrupt on the second missed beat.
+    expect(leaseConstantsHold(300_000, 140_000)).toBe(false);
+  });
+
+  /**
+   * The property: the claimant's give-up instant precedes the sweep's earliest act by at least
+   * `½·renew + grace`, whatever the request's latency up to the grace. The claimant counts from the
+   * **send** of its last successful renewal; the core writes `lease_expires_at = write + TTL` at some
+   * instant between the send and the answer; the sweep acts no earlier than `expires + grace`.
+   */
+  it('gives up at least ½·renew + grace before the sweep may act, for any latency ≤ the grace', () => {
+    for (const [ttl, renew] of [
+      [RUN_LEASE_TTL_MS, RUN_LEASE_RENEW_MS],
+      [REMOTE_RUN_LEASE_TTL_MS, REMOTE_RUN_LEASE_RENEW_MS],
+    ] as const) {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 0, max: 10 ** 9 }),
+          fc.integer({ min: 0, max: DEFAULT_LEASE_SKEW_GRACE_MS }),
+          fc.double({ min: 0, max: 1, noNaN: true }),
+          (sentAt, latency, writeFraction) => {
+            const coreWrite = sentAt + latency * writeFraction;
+            const sweepEarliest = coreWrite + ttl + DEFAULT_LEASE_SKEW_GRACE_MS;
+            const giveUp = sentAt + selfStopAfterMs(ttl, renew);
+            return sweepEarliest - giveUp >= renew / 2 + DEFAULT_LEASE_SKEW_GRACE_MS;
+          },
+        ),
+      );
+    }
   });
 });

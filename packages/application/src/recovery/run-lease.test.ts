@@ -105,6 +105,8 @@ const sweep = async (options: {
   readonly taskAttempt?: number;
   /** `false` sweeps a run whose CLI was never asked for (WP-150). @default true */
   readonly reachedCli?: boolean;
+  /** `APP_LEASE_SKEW_GRACE` (WP-276); absent is the default. */
+  readonly skewGraceMs?: number;
 }) => {
   const store = createMemoryPipelineStore();
   const eventing = new MemoryEventing();
@@ -172,6 +174,7 @@ const sweep = async (options: {
     }),
     clock: { now: () => NOW },
     graceMs: GRACE_MS,
+    ...(options.skewGraceMs === undefined ? {} : { skewGraceMs: options.skewGraceMs }),
     wallClockMs: WALL_CLOCK_MS,
     limit: 50,
   });
@@ -188,11 +191,18 @@ describe('the run-lease sweep', () => {
     const { asked } = await sweep({ claim: true });
 
     expect(asked).toHaveLength(1);
-    // `now - grace` and `now - (wallClock + grace)`: the lease is the primary signal and the wall
-    // clock is only for rows that never held one, which is why the two instants are an hour apart
-    // at the shipped defaults rather than equal.
-    expect(asked[0]?.leaseExpiredBefore).toBe('2026-09-15T09:59:00.000Z');
+    // `now - skew grace` (WP-276: `APP_LEASE_SKEW_GRACE`, 120 s by default, never below the pass
+    // interval) and `now - (wallClock + grace)`: the lease is the primary signal and the wall clock
+    // is only for rows that never held one.
+    expect(asked[0]?.leaseExpiredBefore).toBe('2026-09-15T09:58:00.000Z');
     expect(asked[0]?.startedBefore).toBe('2026-09-15T08:59:00.000Z');
+  });
+
+  it('waits APP_LEASE_SKEW_GRACE past the lease, never less than the pass interval (WP-276)', async () => {
+    const shorter = await sweep({ claim: true, skewGraceMs: 30_000 });
+    expect(shorter.asked[0]?.leaseExpiredBefore).toBe('2026-09-15T09:59:00.000Z');
+    const longer = await sweep({ claim: true, skewGraceMs: 600_000 });
+    expect(longer.asked[0]?.leaseExpiredBefore).toBe('2026-09-15T09:50:00.000Z');
   });
 
   it('ends the run as failed with the named reason, and escalates its task', async () => {

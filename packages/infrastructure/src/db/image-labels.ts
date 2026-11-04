@@ -38,8 +38,13 @@ export const SCHEMA_GUARD_VERSION = 2;
  *
  * **2 since WP-274** (migration 0094, `raises-rollback-floor`): this build writes a `run_offers` row
  * for every run and relies on the per-task index over them; a build before it writes none.
+ *
+ * **3 since WP-276** (no migration): the `stage.execute` job ends at the offer, so a live database
+ * holds `created` runs with **open** offers that only a claimant runs. A build before it claims an
+ * offer only in the job that wrote it, so it would leave every such offer open for ever — and its
+ * per-task index would refuse the task's next stage.
  */
-export const ROLLBACK_FLOOR = 2;
+export const ROLLBACK_FLOOR = 3;
 
 const pgBossManifestSchema = z.object({
   pgboss: z.object({ schema: z.number().int().positive() }),

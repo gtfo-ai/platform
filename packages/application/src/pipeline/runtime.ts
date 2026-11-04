@@ -38,6 +38,7 @@
  * what it borrows as well.
  */
 
+import type { IsoDateTime } from '@platform/contracts';
 import { type AskRuntimeOptions, composeAsk } from '../ask/runtime.js';
 import type { EventHandler } from '../events/handler.js';
 import { markTransactions } from '../events/open-transaction.js';
@@ -45,6 +46,7 @@ import type { MaintenanceSpendReader } from '../maintenance/ports.js';
 import { startDigestRuntime } from '../notify/digest.js';
 import { notifyHandlers } from '../notify/handlers.js';
 import type { NotifyOptions } from '../notify/options.js';
+import type { Broadcast } from '../ports/broadcast.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -56,6 +58,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { UnrevokedRunCredentialStore } from '../recovery/run-credential.js';
 import type { ShadowStore } from '../shadow/ports.js';
 import { type ShadowReportOptions, shadowHandlers } from '../shadow/report.js';
+import { createRunClaimant, type RunClaimant } from './claimant.js';
 import { conflictWarningHandlers } from './conflict-warning.js';
 import { coverageHandlers } from './coverage.js';
 import { deadlineArmingHandler, deadlineSweepHandler, declareDeadlineQueue } from './deadlines.js';
@@ -124,31 +127,42 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
     | 'eventStore'
   > &
     Pick<StageExecutorOptions, 'context'>;
-  /** How many stages this process runs at once. @default 1 */
+  /**
+   * How many `stage.execute` jobs this process handles at once — plans and offers, and gates. Since
+   * WP-276 a job ends at the offer, so this is no longer a number of runs. @default 1
+   */
   readonly stageConcurrency?: number;
   /**
-   * Whether this process subscribes the `stage.execute` queue — **TD-028 decision 5**, and the
-   * close of the per-queue-subscription gap `apps/server/src/role.ts` has named since WP-15g.
+   * How many runs the server's claimant runs at once — `APP_RUNNER_CONCURRENCY` (WP-276, TD-031
+   * decision 13). @default DEFAULT_RUNNER_CONCURRENCY
+   */
+  readonly runnerConcurrency?: number;
+  /**
+   * The transport the claimant listens on for `run_offers` (WP-276). Absent, it polls only — which a
+   * test harness that drives {@link PipelineRuntime.claimant} by hand never needs anyway.
+   */
+  readonly broadcast?: Broadcast;
+  /**
+   * Who drives the claimant (WP-276): `loop` — {@link PipelineRuntime.start} starts its wake-ups and
+   * poll, as production does — or `caller`, a test harness that plays the worker and calls
+   * `claimant.drain()` itself, so no timer claims behind its back. @default 'loop'
+   */
+  readonly claimantDrivenBy?: 'loop' | 'caller';
+  /**
+   * Whether this process composes the **server's claimant loop** (WP-277, TD-031 decision 13,
+   * TD-028's 2026-11-04 amendment) — what decision 5's *"by configuration, never by `ROLE`"* governs
+   * since WP-276.
    *
-   * *"A worker composition subscribes the agent-run queue **only when it is configured to run
-   * agents**."* The alternative was measured in that file and rejected as a lottery: pg-boss hands
-   * a `stage.execute` job to **any** subscribed worker, so a deployment with `ROLE=worker` beside
-   * `ROLE=runner` would give half its agent stages to the process that composes no runner, and each
-   * of those would fail its run and escalate its task. What decides it is configuration — a launcher
-   * URL and token, or an in-process provisioner — never `ROLE`.
-   *
-   * **The consequence is wider than "agent stages", and TD-028's WP-53 amendment is where it is
-   * written down.** `stage.execute` also evaluates the **platform gates** — `ci_gate`,
-   * `rebase_gate`, `merged_gate`, a branch of `stageExecuteHandler` itself — so a deployment with no
-   * configured runner leaves those queued too. The queue is deliberately **not** split: it is
-   * `stately` with `singletonKey: task:<id>`, which is what enforces *a task never runs two stages
-   * at once*, and a second queue would let a gate and a stage for one task run concurrently and both
-   * write the task through `settle`. A correctness regression bought for the convenience of a
-   * degraded deployment is refused in that direction. Nothing is lost, only delayed — the jobs are
-   * durable and are taken when a runner starts.
+   * Until WP-276 this decided whether the process subscribed `stage.execute` and `task.ask` at all,
+   * because the run happened inside the job and a process with no runner would fail every agent stage
+   * it took — at the price that a runner-less instance left the **platform gates** queued too. Now a
+   * job plans, offers and evaluates gates and needs no runner, so **every** process with a worker half
+   * subscribes both queues, and this flag decides only whether the process also **claims** offers:
+   * `true` with a launcher URL and token (or the in-process provisioner), `false` otherwise — and then
+   * the start log says it is not a claimant, and its offers wait for one (`/readyz`'s `claimants`).
    *
    * Defaults to **`true`**, which keeps every existing composition (the e2e tiers, `pipeline.test.ts`
-   * and the census) exactly as it was: those processes do compose a runner.
+   * and the census) running its runs: those processes compose a runner.
    */
   readonly runsAgents?: boolean;
   /**
@@ -236,6 +250,11 @@ export interface PipelineRuntime {
   /** Registered on the `EventBus` by the composition root, in TD-005's core band. */
   readonly handlers: readonly EventHandler[];
   readonly executor: StageExecutor;
+  /**
+   * The server's claimant loop (WP-276), or `null` in a process composed without one
+   * ({@link PipelineRuntimeOptions.runsAgents}). Started by {@link start}; a test harness drains it.
+   */
+  readonly claimant: RunClaimant | null;
   /** Declares the queues and starts the workers. Idempotent. */
   start(): Promise<void>;
   /**
@@ -306,6 +325,7 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     ids: options.ids,
     clock: options.clock,
     context: options.execution.context,
+    eventStore: options.eventStore,
     // WP-48 (backlog 120): the **same** lease the stage executor was given, so an ask's run is held
     // by this process's one owner string and is swept at the lease bound rather than an hour later
     // by the wall-clock backstop. Taken from `execution` rather than added to `AskRuntimeOptions`,
@@ -341,6 +361,49 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
   // they are the deciding and the calling halves of the same feature (WP-15d's shape).
   const shadowOptions: ShadowReportOptions = { ...options, unitOfWork, shadow: options.shadow };
   const workers: JobWorker[] = [];
+
+  /**
+   * **The server's claimant** (WP-276, TD-031 decisions 2–3 and 13): composed only where runs can be
+   * run. It claims offers — a stage's and an ask's — runs each from its stored plan on the same
+   * runner, heartbeat and stop register the executors were given, and settles each through its
+   * kind's ending: `settleRun` for a stage, the ask's own for an ask.
+   */
+  const claimant: RunClaimant | null =
+    (options.runsAgents ?? true)
+      ? createRunClaimant({
+          unitOfWork,
+          store: options.store,
+          runner: options.execution.runner,
+          stopReasons: options.execution.stopReasons,
+          context: options.execution.context,
+          clock: options.clock as { now(): IsoDateTime },
+          runPlans: options.execution.runPlans,
+          ...(options.execution.runEnvironment === undefined
+            ? {}
+            : { runEnvironment: options.execution.runEnvironment }),
+          eventStore: options.eventStore,
+          ...(options.execution.lease === undefined ? {} : { lease: options.execution.lease }),
+          settle: {
+            stage: async (request) => executor.settle(request),
+            ask: async (request) => ask.executor.settle(request),
+          },
+          unplanned: async () => {
+            const found = await unitOfWork.transaction(async (scope) =>
+              options.store.offers.openWithoutPlan(scope.tx, 10),
+            );
+            for (const offer of found) {
+              await (offer.kind === 'stage'
+                ? executor.withdrawUnplanned(offer.runId)
+                : ask.executor.withdrawUnplanned(offer.runId));
+            }
+            return found.length;
+          },
+          ...(options.runnerConcurrency === undefined
+            ? {}
+            : { concurrency: options.runnerConcurrency }),
+          ...(logger === undefined ? {} : { logger }),
+        })
+      : null;
 
   return {
     /**
@@ -396,6 +459,7 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ...ticketLifecycleHandlers(options),
     ],
     executor,
+    claimant,
     start: async () => {
       // Declared whatever this process subscribes: a queue that exists is a queue whose depth is a
       // metric, and TD-028's honest consequence — "a deployment with no runner leaves
@@ -403,18 +467,22 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       await declarePipelineQueues(options.jobs);
       await declareDeadlineQueue(options.jobs);
       await ask.declareQueue();
-      if (options.runsAgents ?? true) {
-        workers.push(
-          await options.jobs.work<StageExecuteData>({
-            queue: JOB_QUEUES.stageExecute,
-            // WP-184: the owed duties run before the plan, with the job's own options.
-            handler: stageExecuteHandler(jobOptions, (stored, entry) =>
-              performOwedDuties(jobOptions, stored, entry),
-            ),
-            concurrency: options.stageConcurrency ?? 1,
-          }),
-        );
-      }
+      /**
+       * `stage.execute` on **every** process with a worker half (WP-277, TD-031 decision 13): a job
+       * plans, offers and evaluates the platform gates, and needs no runner — so a core with no
+       * launcher still moves tasks through `ci_gate`, `rebase_gate` and `merged_gate`, and its agent
+       * stages wait as offers.
+       */
+      workers.push(
+        await options.jobs.work<StageExecuteData>({
+          queue: JOB_QUEUES.stageExecute,
+          // WP-184: the owed duties run before the plan, with the job's own options.
+          handler: stageExecuteHandler(jobOptions, (stored, entry) =>
+            performOwedDuties(jobOptions, stored, entry),
+          ),
+          concurrency: options.stageConcurrency ?? 1,
+        }),
+      );
       workers.push(
         await options.jobs.work<ReviewWindowData>({
           queue: JOB_QUEUES.mrCommentDebounce,
@@ -430,16 +498,11 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       /**
        * WP-31: one ask at a time, one more pooled connection (`POOL_RESERVATIONS.pipeline`).
        *
-       * Gated on the same condition as `stage.execute`, and for the same reason TD-028 decision 5
-       * gives: **an ask is a run**. It goes through the same `ClaudeRunner` this process either
-       * composed or did not, so a worker with no provisioner that took a `task.ask` job would fail
-       * it exactly as it would fail a stage. The decision's wording says "the agent-run queue"; this
-       * build has two of them, and leaving the second subscribed would have shipped the lottery the
-       * decision exists to close.
+       * On every process with a worker half since WP-277, like `stage.execute`: the job plans the
+       * ask's run and **offers** it (`kind = 'ask'`, TD-031 decision 13), so it needs no runner, and a
+       * core with no server runner still has its asks offered to whoever claims them.
        */
-      if (options.runsAgents ?? true) {
-        workers.push(await ask.startWorker());
-      }
+      workers.push(await ask.startWorker());
       /**
        * WP-56: the deadline timers — one worker for every kind, one more pooled connection
        * (`POOL_RESERVATIONS.pipeline`). Subscribed **unconditionally**, unlike `stage.execute`: an
@@ -482,12 +545,24 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
           concurrency: 1,
         }),
       );
+      // WP-276: the claimant loop, last — the queues it settles into are declared and subscribed.
+      if (claimant === null) {
+        logger?.info(
+          {},
+          'this process is not a claimant: no launcher (APP_LAUNCHER_URL and APP_LAUNCHER_TOKEN) or in-process provisioner is configured, so it plans, offers and evaluates gates but runs no agent run',
+        );
+      } else if ((options.claimantDrivenBy ?? 'loop') === 'loop') {
+        await claimant.start(options.broadcast);
+      }
     },
     stop: async () => {
       const stopping = workers.splice(0, workers.length);
       // Every worker stops *taking* jobs before any run is stopped (pg-boss sets the flag
-      // synchronously), so a hand-back's re-enqueue is not taken by this process on its way out.
+      // synchronously), so a hand-back's re-enqueue is not taken by this process on its way out —
+      // and the claimant stops *claiming* offers the same way (WP-276: `stop` sets its flag before
+      // its first await), so no offer is claimed only to be handed back at once.
       const drains = stopping.map(async (worker) => worker.stop());
+      const claimantStopped = claimant?.stop();
       const handedBack = options.liveRuns?.stopAll({ reason: 'shutdown' }) ?? 0;
       if (handedBack > 0) {
         logger?.info(
@@ -496,6 +571,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
         );
       }
       await Promise.all(drains);
+      // The claimant's sessions were stopped above; each settles its hand-back before this resolves.
+      await claimantStopped;
     },
   };
 };

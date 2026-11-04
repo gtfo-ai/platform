@@ -62,10 +62,14 @@
  *
  * ## The bound is both, and which is primary
  *
- * 1. **The lease** (primary). `lease_expires_at < now - grace`, where the grace is the pass's own
- *    interval, the same one every row of `./stranded.ts` uses: *a row that has had a full pass
- *    interval past its deadline and nothing renewed it.* At the shipped numbers that is the
- *    five-minute TTL plus a minute.
+ * 1. **The lease** (primary). `lease_expires_at < now - APP_LEASE_SKEW_GRACE` (WP-276, TD-031 §2;
+ *    default 120 s, never less than the pass interval): *a row past its deadline by more than any
+ *    claimant's give-up margin.* A claimant self-terminates `TTL − ½·renew` after its last successful
+ *    renewal (`../pipeline/lease.ts`), so it has stopped at least `½·renew + grace` before this ends
+ *    the row. **The sweep still re-plans nothing** — it escalates, as before; when WP-286 makes the
+ *    first `lease_expired` of an entry re-plan, the run's minted credential is revoked first
+ *    (`./run-credential.ts` revokes it once the row is terminal) and only then is the stage offered
+ *    again.
  * 2. **The wall clock** (backstop). `lease_expires_at is null and coalesce(started_at, created_at)
  *    < now - (wallClockMs + grace)` — `created_at` since WP-275b, because `started_at` is written
  *    only at the CLI spawn marker and a run that never reached it must still reach the backstop. It is for rows written **before this column had a writer** — every `runs` row in
@@ -101,6 +105,7 @@ import type { Id, IsoDateTime, RunStartFailure, Slug } from '@platform/contracts
 import type { CommandContext } from '@platform/domain';
 import { canTransitionTask, escalateTask, failRun, type Task } from '@platform/domain';
 import { MEASURED_ZERO_COST, NO_RUN_USAGE } from '../pipeline/cli-spawn.js';
+import { DEFAULT_LEASE_SKEW_GRACE_MS } from '../pipeline/lease.js';
 import { toRunAggregate } from '../pipeline/run-aggregate.js';
 import type { PipelineStore } from '../pipeline/store.js';
 import { retryOnTaskConflict } from '../pipeline/task-conflict.js';
@@ -163,8 +168,15 @@ export interface RunLeaseSweepOptions {
   /** The system actor every ending this sweep writes carries. */
   readonly context: (correlationId: Id) => CommandContext;
   readonly clock: { now(): IsoDateTime };
-  /** A lease that expired less than this ago may still be renewed; equal to the pass interval. */
+  /** The wall-clock backstop's grace: the pass interval. */
   readonly graceMs: number;
+  /**
+   * `APP_LEASE_SKEW_GRACE` (WP-276, TD-031 §2): a run is ended only once `lease_expires_at` plus this
+   * is past — response latency, clock-rate drift between machines and the pass interval — so a
+   * claimant that self-terminates at `TTL − ½·renew` is gone at least `½·renew + grace` before.
+   * @default DEFAULT_LEASE_SKEW_GRACE_MS (120 s); never less than {@link graceMs}.
+   */
+  readonly skewGraceMs?: number;
   /** The backstop's ceiling — a run's hard wall clock. @default runLimitsDefaults.wallClockMs */
   readonly wallClockMs: number;
   readonly limit: number;
@@ -241,8 +253,9 @@ export const sweepExpiredRunLeases = async (
   const now = options.clock.now();
   const at = Date.parse(now);
   const grace = Math.max(0, options.graceMs);
+  const skewGrace = Math.max(grace, options.skewGraceMs ?? DEFAULT_LEASE_SKEW_GRACE_MS);
   const query: ExpiredRunQuery = {
-    leaseExpiredBefore: new Date(at - grace).toISOString() as IsoDateTime,
+    leaseExpiredBefore: new Date(at - skewGrace).toISOString() as IsoDateTime,
     startedBefore: new Date(at - options.wallClockMs - grace).toISOString() as IsoDateTime,
     limit: options.limit,
   };

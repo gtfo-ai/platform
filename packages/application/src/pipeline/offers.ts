@@ -1,37 +1,49 @@
 /**
- * Offers and the claim — WP-274, TD-031 decisions 1–2 (migration 0094).
+ * Offers and the claim — WP-274, TD-031 decisions 1–3 (migration 0094); the asynchronous hand-off
+ * since WP-276.
  *
  * Every agent run is an **offer** (`run_offers`, one row per run) written in the run's creation
- * transaction, and becomes a claimant's only through **one claim**: {@link claimRunOffer}, the single
- * function every claimant calls, over the repository's one SQL statement (`for update skip locked`,
- * the epoch incremented, the run's `lease_owner`/`lease_expires_at`/`lease_epoch` written with it).
+ * transaction ({@link offerRun}), and becomes a claimant's only through **one claim**:
+ * {@link claimRunOffer}, the single function every claimant calls, over the repository's one SQL
+ * statement (`for update of o, r skip locked`, the epoch incremented, the run's
+ * `lease_owner`/`lease_expires_at`/`lease_epoch` written with it, the run `created → starting`).
  * Every later write the claimant makes carries the claim's {@link RunLeaseFence}.
  *
- * ## What WP-274 changes, and what it deliberately does not
+ * ## The job ends at the offer (WP-276)
  *
- * The server's runner is the **only** claimant, and it claims inside the job that wrote the offer —
- * `stage.execute` ({@link offerAndClaimInJob} from `stage-executor.ts`'s run-creation transaction)
- * and `task.ask` (the ask executor's). So a run still executes inside its job, the job's singleton
- * still holds for the run's duration, and every existing tier is unchanged; what is new is the row,
- * its epoch and the two events. WP-276 moves the run out of the job and makes the claim a loop.
- *
- * The run row is inserted with its lease in the same transaction (WP-47's rule: a live row with no
- * lease is the row the sweep's backstop takes an hour to reach). Since WP-275b it is inserted
- * **`created`** — TD-031's 2026-11-04 amendment §4 — the claim moves it to `starting`, and the CLI
- * spawn marker to `running` with `run.started`; WP-276 puts time between the offer and the claim.
+ * Until WP-276 the job that wrote the offer claimed it in the same transaction and ran the session
+ * itself. Now `stage.execute` (and `task.ask`) **end after the offer**: the run waits, `created`, for
+ * a claimant — the server's claimant loop (`./claimant.ts`, composed by configuration, TD-031
+ * decision 13) or, from WP-281, a remote worker. The offer is announced on {@link RUN_OFFERS_TOPIC}
+ * when its transaction commits, so a claimant that is listening wakes at once; a claimant's own poll
+ * is the guarantee for a notification sent while nothing listened.
  *
  * ## Who closes the offer
  *
- * Not this module: `RunRepository.finish` closes it, in the terminal writer's transaction, because
- * every terminal writer goes through `finish` (`run-terminal-writers.test.ts` holds that).
+ * `RunRepository.finish` closes it, in the terminal writer's transaction, because every terminal
+ * writer goes through `finish` (`run-terminal-writers.test.ts` holds that) — and a task transition
+ * that leaves the stage entry while the offer is still open **withdraws** it (`./offer-withdrawal.ts`).
  */
 import type { Id, IsoDateTime, RunOfferKind } from '@platform/contracts';
-import { type CommandContext, claimRun, offerRun, type Run } from '@platform/domain';
+import {
+  type CommandContext,
+  claimRun,
+  type Run,
+  offerRun as recordRunOffered,
+} from '@platform/domain';
 import type { Transaction } from '../ports/transaction.js';
+import type { TransactionScope } from '../ports/unit-of-work.js';
 import type { ClaimedRunOffer, RunLeaseFence, RunOfferClaim, RunOfferRepository } from './store.js';
 
 /** The `lease_owner` the server's runner writes: `server:<process>` (TD-031 §2). */
 export const serverLeaseOwner = (process: string): string => `server:${process}`;
+
+/**
+ * The broadcast topic an offer is announced on when its transaction commits — TD-031's
+ * `pg_notify('run_offers')`. The payload names the offer's kind and run, and a claimant needs
+ * neither: it wakes and claims through the one claim, which picks the oldest eligible offer.
+ */
+export const RUN_OFFERS_TOPIC = 'run_offers';
 
 /**
  * **The one claim** (TD-031 §2). Every claimant calls this and nothing else touches an offer's
@@ -43,55 +55,26 @@ export const claimRunOffer = async (
   claim: RunOfferClaim,
 ): Promise<ClaimedRunOffer | null> => offers.claim(tx, claim);
 
-/** The claim took nothing in the very transaction that wrote the offer — an invariant broke. */
-export class OfferNotClaimedError extends Error {
-  override readonly name = 'OfferNotClaimedError';
-  readonly runId: Id;
-
-  constructor(runId: Id) {
-    super(
-      `the offer of run ${runId} was written in this transaction and the claim took nothing: the run is not this job's to run`,
-    );
-    this.runId = runId;
-  }
-}
-
-export interface OfferAndClaimInput {
-  /** The run as it stands after `startRun` — its row already inserted in this transaction. */
+export interface OfferRunInput {
+  /** The run as `recordRunCreated` left it — its row already inserted in this transaction. */
   readonly run: Run;
   readonly kind: RunOfferKind;
   readonly offerId: Id;
-  /**
-   * `server:<process>` ({@link serverLeaseOwner}), or `null` in a composition that configures **no**
-   * run lease (a test harness with no heartbeat): the claim still happens and still increments the
-   * epoch, and the run row keeps the null `lease_owner`/`lease_expires_at` such a composition wrote
-   * before WP-274 — so the cancel and steer branches that read "nobody holds this run" are unchanged.
-   */
-  readonly owner: string | null;
-  readonly expiresAt: IsoDateTime | null;
   readonly now: IsoDateTime;
 }
 
-export interface OfferedAndClaimed {
-  /** The run with `run.offered` and `run.claimed` recorded on its stream. */
-  readonly run: Run;
-  readonly events: ReturnType<typeof offerRun>['events'];
-  /** What every later write of this run by this claimant carries. */
-  readonly fence: RunLeaseFence;
-}
-
 /**
- * Writes the run's offer and claims it at once — the in-job claimant of WP-274 (criterion 1), inside
- * the run's creation transaction. Throws {@link OfferNotClaimedError} if the claim takes nothing,
- * which within one transaction means a broken invariant rather than a race.
+ * Writes the run's offer `open` in its creation transaction, records `run.offered` on the run's
+ * stream, and announces it on {@link RUN_OFFERS_TOPIC} at commit (WP-276). The caller appends the
+ * returned events with the run's own. **No claim**: the run waits, `created`, for a claimant.
  */
-export const offerAndClaimInJob = async (
+export const offerRun = async (
   offers: RunOfferRepository,
-  tx: Transaction,
-  input: OfferAndClaimInput,
+  scope: Pick<TransactionScope, 'tx' | 'broadcast'>,
+  input: OfferRunInput,
   context: CommandContext,
-): Promise<OfferedAndClaimed> => {
-  await offers.insert(tx, {
+): Promise<ReturnType<typeof recordRunOffered>> => {
+  await offers.insert(scope.tx, {
     id: input.offerId,
     runId: input.run.id,
     taskId: input.run.taskId,
@@ -101,19 +84,28 @@ export const offerAndClaimInJob = async (
     kind: input.kind,
     offeredAt: input.now,
   });
-  const offered = offerRun(input.run, { offerId: input.offerId, kind: input.kind }, context);
-  const claimed = await claimRunOffer(offers, tx, {
-    eligibility: { runId: input.run.id },
-    claimantKind: 'server',
-    owner: input.owner,
-    expiresAt: input.expiresAt,
-    now: input.now,
+  await scope.broadcast.publish({
+    topic: RUN_OFFERS_TOPIC,
+    payload: { run_id: input.run.id, kind: input.kind },
   });
-  if (claimed === null) {
-    throw new OfferNotClaimedError(input.run.id);
-  }
+  return recordRunOffered(input.run, { offerId: input.offerId, kind: input.kind }, context);
+};
+
+/** What {@link recordClaim} answers: the run `starting` and the fence every later write carries. */
+export interface RecordedClaim {
+  readonly run: Run;
+  readonly events: ReturnType<typeof claimRun>['events'];
+  readonly fence: RunLeaseFence;
+}
+
+/** `run.claimed` for a claim the repository granted — the run `created → starting` in the log. */
+export const recordClaim = (
+  run: Run,
+  claimed: ClaimedRunOffer,
+  context: CommandContext,
+): RecordedClaim => {
   const recorded = claimRun(
-    offered.aggregate,
+    run,
     {
       offerId: claimed.offerId,
       claimantKind: 'server',
@@ -124,7 +116,7 @@ export const offerAndClaimInJob = async (
   );
   return {
     run: recorded.aggregate,
-    events: [...offered.events, ...recorded.events],
+    events: recorded.events,
     fence: { epoch: claimed.epoch, owner: claimed.owner },
   };
 };

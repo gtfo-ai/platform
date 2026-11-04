@@ -71,6 +71,7 @@ import type {
 import {
   acceptanceCriterionSchema,
   artifactTypeSchema,
+  contextPackRecordSchema,
   mergeRequestRefSchema,
   pausedBudgetScopeSchema,
   runSavedWorkSchema,
@@ -97,7 +98,11 @@ import {
   closePendingRunCommands,
   createPostgresRunCommandRepository,
 } from './postgres-run-commands.js';
-import { closeRunOffer, createPostgresRunOfferRepository } from './postgres-run-offers.js';
+import {
+  closeRunOffer,
+  createPostgresRunOfferRepository,
+  lockOfferOf,
+} from './postgres-run-offers.js';
 import { clearRunPlanSeal, createPostgresRunPlanRepository } from './postgres-run-plans.js';
 import { takeOverLastActivitySql } from './take-over-activity.js';
 
@@ -1673,6 +1678,10 @@ export const createPostgresPipelineStore = (
      * the SQL and the domain's table cannot drift apart.
      */
     finish: async (tx, outcome) => {
+      // WP-276 (backlog 697): the run's offer first, then the run — the one lock order, so a
+      // terminal writer that did not lock the offer earlier in its transaction still takes it before
+      // `update runs`. A caller that already holds it re-takes a lock it has.
+      await lockOfferOf(sqlOf(tx), outcome.runId);
       const result = await sqlOf(tx).query(
         `update runs
             set status = $2, terminal_reason = $3, session_id = $4, num_turns = $5,
@@ -1894,6 +1903,8 @@ export const createPostgresPipelineStore = (
      * its commit — the port's docblock has the lock order.
      */
     lockSettlement: async (tx, runId) => {
+      // WP-276 (backlog 697): the offer row first, then the run — `run_offers` → `runs` → `tasks`.
+      await lockOfferOf(sqlOf(tx), runId);
       const { rows } = await sqlOf(tx).query<{
         id: string;
         status: RunStatus;
@@ -1916,12 +1927,18 @@ export const createPostgresPipelineStore = (
             leaseOwner: row.lease_owner,
           };
     },
+    /**
+     * Backlog 709: the context-pack record transaction 1b stored, read back for `run.started` —
+     * the header columns on `runs` and the ordered `run_context_pack` rows, parsed through the
+     * published schema. `null` for a run that recorded none (no header), never an invented pack.
+     */
+    contextPack: async (tx, runId) => readContextPack(sqlOf(tx), runId),
     load: async (tx, runId) => {
       const { rows } = await sqlOf(tx).query<RunRow>(
         `select r.id, r.task_id, r.project_id, s.stage, r.role, r.mode, r.attempt, r.model,
                 r.effort, r.prompt_version, r.status, r.terminal_reason, r.session_id, r.num_turns,
                 r.usd_reported, r.usd_estimated, r.wall_ms, r.created_at, r.started_at,
-                r.cli_spawn_requested_at
+                r.cli_spawn_requested_at, r.ask_id
            from runs r
            left join task_stages s on s.id = r.task_stage_id
           where r.id = $1`,
@@ -2583,6 +2600,8 @@ interface RunRow extends Record<string, unknown> {
   started_at: Date | null;
   /** Migration 0085 (WP-150); absent from a select that does not name it. */
   cli_spawn_requested_at?: Date | null;
+  /** WP-276: `load` names it — the ask a claimant settles the run's ending through. */
+  ask_id?: string | null;
 }
 
 /** `is_estimate: false` fills `usd_reported`; `true` fills `usd_estimated`; `null` fills neither. */
@@ -2599,6 +2618,56 @@ interface RunRow extends Record<string, unknown> {
  * tier-0 document is removed from the tier-1 candidates, and candidates are keyed by path — so a
  * duplicate here is a defect in the assembler and is refused by the database rather than merged.
  */
+/** {@link RunRepository.contextPack}'s read (backlog 709). */
+const readContextPack = async (
+  sql: SqlExecutor,
+  runId: string,
+): Promise<ContextPackRecord | null> => {
+  const header = await sql.query<{
+    budget: number | null;
+    total: number | null;
+    kb_commit: string | null;
+    text_search: unknown;
+  }>(
+    `select context_budget_tokens as budget, context_total_tokens as total,
+            context_kb_commit as kb_commit, context_text_search as text_search
+       from runs where id = $1`,
+    [runId],
+  );
+  const run = header.rows[0];
+  if (run === undefined || run.budget === null || run.total === null) return null;
+  const { rows } = await sql.query<{
+    tier: number;
+    path: string;
+    reason: string | null;
+    score: number | null;
+    tokens: number;
+    validated: boolean;
+  }>(
+    `select tier, source_path as path, reason::text as reason, score, tokens, validated
+       from run_context_pack where run_id = $1 order by tier, ordinal`,
+    [runId],
+  );
+  return contextPackRecordSchema.parse({
+    tier0: rows
+      .filter((row) => row.tier === 0)
+      .map((row) => ({ path: row.path, tokens: row.tokens })),
+    tier1: rows
+      .filter((row) => row.tier === 1)
+      .map((row) => ({
+        path: row.path,
+        reason: row.reason,
+        score: row.score,
+        tokens: row.tokens,
+        validated: row.validated,
+      })),
+    budget_tokens: run.budget,
+    total_tokens: run.total,
+    kb_commit: run.kb_commit,
+    ...(run.text_search === null ? {} : { text_search: run.text_search }),
+  });
+};
+
 const insertContextPackRows = async (
   sql: SqlExecutor,
   runId: Id,
@@ -2692,6 +2761,7 @@ const toStoredRun = (row: RunRow): StoredRun => ({
   startedAt:
     row.started_at === null ? null : (new Date(row.started_at).toISOString() as IsoDateTime),
   // WP-150: `undefined` only for a select that does not name the column; `load` always names it.
+  ...(row.ask_id === undefined ? {} : { askId: row.ask_id as Id | null }),
   ...(row.cli_spawn_requested_at === undefined
     ? {}
     : {

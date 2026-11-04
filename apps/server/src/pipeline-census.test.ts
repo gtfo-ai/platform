@@ -77,6 +77,8 @@ const OPTION_SOURCES: Readonly<Record<string, string>> = {
  * too (standing rule 7's corollary — a list that only suppressed failures goes stale silently).
  */
 const ADMITTED_OMISSIONS: Readonly<Record<string, string>> = {
+  claimantDrivenBy:
+    'who drives the server claimant (WP-276): production takes the default, `loop` — `start()` subscribes `run_offers` and polls — and only a test harness that plays the worker by hand passes `caller`.',
   dutyLease:
     'the task duty lease’s test seams (WP-184, `duty-lease.ts`): the poll interval, the lease length, the renewal schedule and the canary’s `disarmed`. Production takes every default — a two-minute lease renewed every thirty seconds — so there is nothing for this root to decide, and `disarmed` must never be reachable from it.',
   reviewCommentWindowMs:

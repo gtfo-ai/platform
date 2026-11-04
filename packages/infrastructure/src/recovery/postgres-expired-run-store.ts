@@ -34,6 +34,7 @@ import type {
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import { lockOfferOf } from '../pipeline/postgres-run-offers.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
@@ -106,6 +107,8 @@ export const createPostgresExpiredRunStore = (): ExpiredRunStore => ({
   },
 
   claimExpiredRun: async (tx, input) => {
+    // WP-276 (backlog 697): the run's offer first, then the run — the one lock order.
+    await lockOfferOf(sqlOf(tx), input.runId);
     const { rows } = await sqlOf(tx).query<{ id: string }>(
       `select r.id
          from runs r
