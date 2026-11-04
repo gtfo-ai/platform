@@ -19,6 +19,7 @@
  * because a hint is not worth an error on the one page everybody sees. It is a quiet line inside the
  * ink block below the button, so it never sits on the field; the trade, stated: the block is
  * vertically centred, so the hint's arrival (one fast read) nudges the block up by half its height.
+ * A small robot (`peek-bot.tsx`) hides behind the ink block and pops over its top edge to wave.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
@@ -35,6 +36,7 @@ import { useServices } from '../app/services.js';
 import { safeRedirectPath } from '../routes/redirect.js';
 import { ErrorNotice } from '../ui/kit.js';
 import { DitherCanvas } from './dither-canvas.js';
+import { PeekBot } from './peek-bot.js';
 
 /** What a user is told. Server messages are shown; anything else gets a message we wrote. */
 export const signInMessage = (error: unknown): string => {
@@ -144,6 +146,7 @@ export const SignInScreen = (): ReactElement => {
             </p>
           </div>
           <div className="w-full max-w-md lg:col-span-5 lg:justify-self-end">
+            <PeekBot />
             <section
               aria-label="Sign in"
               data-dither-quiet=""

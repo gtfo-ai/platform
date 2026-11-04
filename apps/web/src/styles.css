@@ -108,3 +108,164 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/*
+ * The robot behind the sign-in form (`features/peek-bot.tsx`). One 10 s loop shared by the rig
+ * (the slide, in whole 5 px sprite pixels: `steps(n)` over n × 5 px) and the frames (`step-end`
+ * opacity, so exactly one frame shows at a time). 0–6 % hidden, rise, 15–39 % wave in 0.3 s halves,
+ * blink at 44 %, duck at 50 %, a half-peek with only the eyes over the edge at 66 %, blink, duck.
+ * The base styles — the rig standing, the waving frame shown — are what reduced motion gets.
+ */
+@keyframes peek-bot-rig {
+  0%,
+  6% {
+    transform: translateY(175px);
+    animation-timing-function: steps(35, end);
+  }
+  12%,
+  50% {
+    transform: translateY(0);
+    animation-timing-function: steps(35, end);
+  }
+  56%,
+  66% {
+    transform: translateY(175px);
+    animation-timing-function: steps(21, end);
+  }
+  70%,
+  76% {
+    transform: translateY(70px);
+    animation-timing-function: steps(21, end);
+  }
+  80%,
+  100% {
+    transform: translateY(175px);
+  }
+}
+
+@keyframes peek-bot-peek {
+  0% {
+    opacity: 1;
+  }
+  15% {
+    opacity: 0;
+  }
+  39%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes peek-bot-wave-a {
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  18% {
+    opacity: 0;
+  }
+  21% {
+    opacity: 1;
+  }
+  24% {
+    opacity: 0;
+  }
+  27% {
+    opacity: 1;
+  }
+  30% {
+    opacity: 0;
+  }
+  33% {
+    opacity: 1;
+  }
+  36%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes peek-bot-wave-b {
+  0% {
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  21% {
+    opacity: 0;
+  }
+  24% {
+    opacity: 1;
+  }
+  27% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  33% {
+    opacity: 0;
+  }
+  36% {
+    opacity: 1;
+  }
+  39%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes peek-bot-blink {
+  0% {
+    opacity: 0;
+  }
+  44% {
+    opacity: 1;
+  }
+  45.5% {
+    opacity: 0;
+  }
+  72% {
+    opacity: 1;
+  }
+  73.5%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.peek-bot-rig {
+  animation: peek-bot-rig 10s linear infinite;
+}
+
+.peek-bot-peek,
+.peek-bot-wave-b,
+.peek-bot-blink {
+  opacity: 0;
+}
+
+.peek-bot-peek {
+  animation: peek-bot-peek 10s step-end infinite;
+}
+.peek-bot-wave-a {
+  animation: peek-bot-wave-a 10s step-end infinite;
+}
+.peek-bot-wave-b {
+  animation: peek-bot-wave-b 10s step-end infinite;
+}
+.peek-bot-blink {
+  animation: peek-bot-blink 10s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .peek-bot-rig,
+  .peek-bot-peek,
+  .peek-bot-wave-a,
+  .peek-bot-wave-b,
+  .peek-bot-blink {
+    animation: none;
+  }
+}
