@@ -9,9 +9,14 @@
  * tx  1   load the task, re-validate, check the budget, create the Run  → run.created, run.started
  * ——      start the runner and await its outcome                        (minutes; no connection held)
  * tx  2   store the artifact and the outcome                            → run.finished | run.failed,
- *                                                                          artifact.created,
+ *         (`settleRun`, `./settle.ts`, since WP-275)                       artifact.created,
  *                                                                          task.stage.completed
  * ```
+ *
+ * Transaction 2 is the `settleRun` command since WP-275 (TD-031 decision 3): the same writes, moved
+ * out of this module so that a run settled outside the job (WP-276's claimant, a remote worker) is
+ * settled by the same code, idempotent on the run and its claim's epoch. The start failure's ending
+ * (`recordUnstarted`) is still this module's.
  *
  * Neither transaction is nested and neither is open while the run is. The job worker's own
  * concurrency is therefore **additive** to the dispatcher's `2 × concurrency + 1` pool floor rather
@@ -33,10 +38,11 @@
  * no name for the fault — and it carries the distinct name in the `run_stopped` transcript row's
  * `data.reason`. A blind stop is **not** an overspend, and the two need different endings: an
  * overspend pauses the task so a human can raise the cap (product/09), while a CLI that stopped
- * reporting what it spent is a fault that escalates. This module therefore branches on
+ * reporting what it spent is a fault that escalates. Transaction 2 (`./settle.ts`) therefore branches on
  * `data.reason` from the transcript — the structured field — rather than on the status, or on a
  * substring of the human-readable `error`. The runner takes one sink for every run it drives, so
- * the reason arrives through {@link RunStopReasons} rather than through a sink this module wraps.
+ * the reason arrives through {@link RunStopReasons} rather than through a sink this module wraps,
+ * and this module hands it to `settleRun` as the request's `stopReason`.
  *
  * A third reading of `error_max_budget_usd` is not a budget ending here at all. Its status is
  * `completed`: the run delivered a valid artifact in the turn that crossed its cap (product owner,
@@ -45,22 +51,13 @@
  * added to the task. Nothing pauses the task. The next run's admission still reads the task cap.
  */
 import type {
-  AgentRole,
-  ArtifactRef,
   ContextPackRecord,
-  DomainEvent,
   Effort,
   Id,
   IsoDateTime,
-  JsonValue,
-  MergeRequestRef,
-  RunCost,
-  RunSavedWork,
   RunStartFailure,
   Slug,
-  TokenUsage,
 } from '@platform/contracts';
-import { stageVerdictSchema } from '@platform/contracts';
 import type {
   CommandContext,
   PausedBudgetScope,
@@ -69,35 +66,19 @@ import type {
   Run,
 } from '@platform/domain';
 import {
-  askQuestion,
-  compilePipeline,
-  completeStage,
   createRun,
   DEFAULT_STAGE_RUN_BUDGET_USD,
-  escalateTask,
   failRun,
-  finishRun,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
-  isCurrentStageAttempt,
-  isRunnableTaskState,
   maintenanceBudgetUsdOf,
   markRunning,
   namesAMaintenanceChore,
-  openQuestion,
   pauseTask,
-  recordArtifact,
-  stageOf,
   startRun,
-  toQuestionRecord,
 } from '@platform/domain';
-import {
-  ArtifactIdentifierSecretError,
-  type RedactedArtifact,
-  redactArtifactData,
-} from '../artifacts/redaction.js';
 import { redactedPromptsWithheld } from '../config/repository-config.js';
 import { type BudgetGuard, blockingBudgetDetail, noBudgetGuard } from '../cost/guard.js';
-import { type LateCostRecorder, noLateCostRecorder } from '../cost/late.js';
+import type { LateCostRecorder } from '../cost/late.js';
 import {
   type CapSpend,
   capIsSpent,
@@ -133,7 +114,6 @@ import {
   unspawnedStepOf,
   unspawnedStop,
 } from './cli-spawn.js';
-import { questionDeadlineRule } from './deadline-rules.js';
 import {
   leaseExpiryAt,
   RUN_LEASE_TTL_MS,
@@ -145,6 +125,8 @@ import { REFREEZE_PENDING_SENTENCE, refrozen, refrozenColumns } from './refreeze
 import { injectedSecretRedactorFor } from './run-redaction.js';
 import { type ProjectSettings, settingsAdmission } from './settings.js';
 import { runSettingsSnapshot } from './settings-snapshot.js';
+import { escalate, lostTheRun, settleRun } from './settle.js';
+import { revalidate } from './stage-revalidation.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import {
   type AttachedReturnFeedback,
@@ -163,8 +145,6 @@ import {
   TaskConflictExhaustedError,
 } from './task-conflict.js';
 import { closeParkedStageRow } from './transitions.js';
-import { savedWorkSentence } from './unfinished-work.js';
-import { artifactQuestions, rawVerdict, stageVerdict } from './verdicts.js';
 
 export interface StageRunRequest {
   readonly runId: Id;
@@ -501,15 +481,6 @@ export interface StageExecutionJob {
  */
 export const MAX_RUN_START_ATTEMPTS = 3;
 
-/**
- * How many times one stage entry may be **handed back** by a `runner` stop before the next stop
- * escalates it (WP-144 ruling (b)): two. An upgrade or a restart in the middle of a run is the
- * ordinary case and costs nothing but the interrupted work; a third stop of the same entry is a
- * process that keeps being stopped under one stage, and a person is told, with a brief naming the
- * stops. Counted from the entry's runs' end reasons (`RunRepository.shutdownEndings`), not a column.
- */
-export const MAX_SHUTDOWN_HAND_BACKS = 2;
-
 export interface StageExecutor {
   execute(job: StageExecutionJob): Promise<StageExecutionOutcome>;
 }
@@ -526,9 +497,6 @@ export const monthStartUtc = (at: string): IsoDateTime => {
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0),
   ).toISOString() as IsoDateTime;
 };
-
-/** The name WP-12 puts on `run_stopped.data.reason` when the CLI reported no usable cost. */
-export const COST_UNREPORTED = 'cost_unreported';
 
 /**
  * What the stage executor asks about a **shadow** task, and about nothing else.
@@ -699,57 +667,6 @@ type Admitted = {
 type Admission = Exclude<Prepared, { kind: 'ready' }> | Admitted;
 
 /**
- * The four questions TD-004 makes the executor re-ask every time a job fires: does the task exist,
- * has it stopped, is this attempt current, and is this stage an agent stage?
- *
- * Factored out because **it is asked twice** since WP-17 — once to admit the job and once after the
- * context pack has been assembled, which happens outside any transaction. Two copies of a
- * re-validation is one copy that drifts (standing rule 41's shape).
- */
-const revalidate = (
-  stored: StoredTask | null,
-  job: StageExecutionJob,
-):
-  | { readonly kind: 'skipped'; readonly reason: string; readonly supersededBy?: number }
-  | {
-      readonly kind: 'ok';
-      readonly stored: StoredTask;
-      readonly stage: PipelineStage;
-      readonly role: AgentRole;
-    } => {
-  if (stored === null) return { kind: 'skipped', reason: 'the task no longer exists' };
-  const { task } = stored;
-  // Not `state === 'active'`: the retrospective runs in the `retro` state. What disqualifies a
-  // run is the task having stopped — paused, parked for a human, waiting, or finished.
-  if (!isRunnableTaskState(task.state) || task.currentStage !== job.stage) {
-    return {
-      kind: 'skipped',
-      reason: `the task is "${task.state}" at "${task.currentStage ?? 'no stage'}", not running at "${job.stage}"`,
-    };
-  }
-  if ((task.stageAttempts[job.stage] ?? 0) !== job.attempt) {
-    const current = task.stageAttempts[job.stage] ?? 0;
-    return {
-      kind: 'skipped',
-      reason: `attempt ${job.attempt} of "${job.stage}" has been superseded by attempt ${current}`,
-      // Only forward: a job for a *later* attempt than the task's is not a wake-up anybody owes.
-      ...(current > job.attempt ? { supersededBy: current } : {}),
-    };
-  }
-  const stage = stageOf(
-    compilePipeline(task.template, stored.template, stored.pipelineDial, stored.qaStage),
-    job.stage,
-  );
-  if (stage === null || stage.kind !== 'agent' || stage.role === null) {
-    return {
-      kind: 'skipped',
-      reason: `"${job.stage}" is not an agent stage of template "${task.template}"`,
-    };
-  }
-  return { kind: 'ok', stored, stage, role: stage.role };
-};
-
-/**
  * {@link revalidate}, plus the one question it cannot ask of the aggregate (WP-108 review round 1,
  * PROGRESS backlog 365): **is this attempt's `task_stages` row still open?**
  *
@@ -778,6 +695,14 @@ const revalidateOpen = async (
 };
 
 export { REFREEZE_PENDING_SENTENCE, refrozen } from './refreeze.js';
+// Moved to `./settle.ts` with transaction 2 (WP-275); still exported from here, where every
+// importer has always found them.
+export {
+  COST_UNREPORTED,
+  MAX_SHUTDOWN_HAND_BACKS,
+  withPlatformMergeRequestRecord,
+  withPlatformReviewRecord,
+} from './settle.js';
 
 export const createStageExecutor = (options: StageExecutorOptions): StageExecutor => {
   const { unitOfWork, store, runner, planner, stopReasons } = options;
@@ -1444,20 +1369,24 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       );
     }
 
-    return writing(job.taskId, "recording a run's result", async (scope) =>
-      record(scope, {
+    // Transaction 2 is the `settleRun` command since WP-275 (`./settle.ts`): the same writes, in a
+    // transaction of its own on the same bound, idempotent on the run and its claim's epoch.
+    return settleRun(
+      { ...options, logger },
+      {
         job,
         settings: prepared.settings,
         stage: prepared.stage,
         run: prepared.run,
         outcome,
         stopReason,
-        options,
         redactor: prepared.redactor,
         reviewChecklists: prepared.reviewChecklists,
         fence: prepared.fence,
-      }),
-    ).catch(leaseLost(job));
+      },
+    )
+      .then((settled) => settled.outcome)
+      .catch(leaseLost(job));
   };
 
   return {
@@ -1472,829 +1401,6 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       }
     },
   };
-};
-
-/**
- * What a run adds to the task's `cost_actual`: finite, non-negative, and 0 for a run that reported
- * nothing (`cost_unreported`, which is a fault rather than a free run — BD-011, standing rule 16) or
- * that nothing measured (`costUnmeasured`) — adding nothing, which is not the same as recording a
- * zero: the run row and the event carry `null` for the second (`rowCostOf`).
- */
-const spendOf = (outcome: RunOutcome): number =>
-  outcome.costUnmeasured === true
-    ? 0
-    : Number.isFinite(outcome.cost.usd)
-      ? Math.max(0, outcome.cost.usd)
-      : 0;
-
-/**
- * The cost `runs.finish` writes **and the terminal event carries**: the outcome's, or **`null`**
- * when nothing measured it (WP-101 review round 1, standing rule 16) — a stop whose interrupted
- * turn sent no `result` inside the grace: a human's cancel or take-over, and since WP-119 a stall or
- * a wall-clock stop (PROGRESS backlog 334). Both cost columns then stay empty, as for a run the
- * lease sweep ended, `run.finished.cost` is `null` (nullish since WP-119; until then the event said
- * `{ usd: 0 }` while the row said `null`), and the ledger writes no row, rather than a `0` that every
- * later reader would take for a measurement.
- */
-const rowCostOf = (outcome: RunOutcome): RunCost | null =>
-  outcome.costUnmeasured === true ? null : outcome.cost;
-
-/**
- * Is the outcome's cost the runner's **floor** — a `cost_unreported` stop (WP-131 pre-review round,
- * PROGRESS backlog 407)? WP-119 kept the floor in the cost column and this does not change it; it
- * tells `runs.finish` so, and the caps then hold the run at its reservation and the totals count it
- * as unmeasured, rather than reading a measured `0`.
- */
-const costIsFloorOf = (input: { readonly stopReason: string | null }): boolean =>
-  input.stopReason === COST_UNREPORTED;
-
-/**
- * What a `run.failed` carries about the spend — both nullish in the event. A `stalled` run whose
- * stop read nothing (WP-119) carries **neither**, which is the lease sweep's shape and what the
- * ledger reads as `no_usage_and_no_cost`; the zeros the outcome holds are the runner's floor.
- */
-const failedSpendOf = (
-  outcome: RunOutcome,
-): { readonly usage?: TokenUsage; readonly cost?: RunCost } =>
-  outcome.costUnmeasured === true ? {} : { usage: outcome.usage, cost: outcome.cost };
-
-interface RecordInput {
-  readonly job: StageExecutionJob;
-  readonly settings: ProjectSettings;
-  readonly stage: PipelineStage;
-  readonly run: Run;
-  readonly outcome: RunOutcome;
-  readonly stopReason: string | null;
-  readonly options: StageExecutorOptions;
-  /** The run's own redactor — TD-012 at the artifact write (WP-52). */
-  readonly redactor: SecretRedactor;
-  /** What the planner gave a Reviewer run, or `null` when it recorded nothing (WP-45). */
-  readonly reviewChecklists: readonly AppliedChecklistRecord[] | null;
-  /** The claim's fence (WP-274): the run's `finish` is conditional on it. */
-  readonly fence: RunLeaseFence;
-}
-
-/**
- * The platform's record on a `ReviewVerdict`, over whatever the model wrote there (WP-45).
- *
- * `checklists_applied` is a fact about the prompt the platform assembled, so a model's value for it
- * is **discarded** rather than trusted or merged — a Reviewer that claimed a checklist it was never
- * given would otherwise put *"stricter"* on the record for free. Every other artifact type is
- * returned untouched.
- */
-export const withPlatformReviewRecord = (
-  artifactType: string,
-  data: JsonValue,
-  applied: readonly AppliedChecklistRecord[] | null,
-): JsonValue => {
-  if (artifactType !== 'ReviewVerdict' || typeof data !== 'object' || data === null) {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return data;
-  }
-  return {
-    ...data,
-    checklists_applied:
-      applied === null
-        ? null
-        : applied.map((entry) => ({
-            name: entry.name,
-            item_count: entry.item_count,
-            required_by: [...entry.required_by],
-            truncated: entry.truncated,
-          })),
-  };
-};
-
-/**
- * **The platform's merge request, not the model's** (WP-138 ruling (e)).
- *
- * `ImplementationNotes.mr` is the developer's report of the merge request it opened, and until
- * WP-138 the saga recorded it as the task's. The record is now the platform's — written when the
- * `open_mr` tool opened or adopted the merge request — so when the task holds one, the stored
- * artifact carries **the record's** reference, and a report that named another merge request is
- * noted in `known_gaps` with a platform-written line (both iids, nothing else of the model's).
- * A task with no record keeps the report as written: nothing is recorded from it either way.
- * Every other artifact type is returned untouched.
- */
-export const withPlatformMergeRequestRecord = (
-  artifactType: string,
-  data: JsonValue,
-  recorded: MergeRequestRef | null,
-): JsonValue => {
-  if (
-    artifactType !== 'ImplementationNotes' ||
-    recorded === null ||
-    typeof data !== 'object' ||
-    data === null ||
-    Array.isArray(data)
-  ) {
-    return data;
-  }
-  const object = data as { readonly [key: string]: JsonValue | undefined };
-  const reported = object.mr;
-  const reportedIid =
-    typeof reported === 'object' && reported !== null && !Array.isArray(reported)
-      ? (reported as { readonly [key: string]: JsonValue | undefined }).iid
-      : undefined;
-  const gaps: JsonValue[] = Array.isArray(object.known_gaps) ? [...object.known_gaps] : [];
-  if (reportedIid !== recorded.iid) {
-    gaps.push(
-      `The platform recorded merge request !${recorded.iid} for this task; the run reported ${
-        typeof reportedIid === 'number' ? `!${reportedIid}` : 'another one'
-      }, which was not recorded (WP-138: the platform's record wins).`,
-    );
-  }
-  return { ...object, mr: { ...recorded } as JsonValue, known_gaps: gaps } as JsonValue;
-};
-
-/**
- * Transaction 2: everything the run produced, written once.
- *
- * The artifact, the run's terminal event, the task's spend and `task.stage.completed` all commit
- * together — a partial write here would leave a task whose stage completed but whose artifact is
- * missing, and the interpreter would then transition on an artifact nobody can read.
- */
-const record = async (
-  scope: TransactionScope,
-  input: RecordInput,
-): Promise<StageExecutionOutcome> => {
-  const { options, outcome, run, stage, job } = input;
-  const { store } = options;
-  const stored = await store.tasks.load(scope.tx, job.taskId);
-  if (stored === null) {
-    return { kind: 'skipped', reason: 'the task was deleted while its stage was running' };
-  }
-  const context = options.context(job.taskId);
-
-  const spent = spendOf(outcome);
-  /**
-   * The spend, carried in memory here and **written by `addSpend`** in each branch below, after
-   * that branch has won the run (WP-31).
-   *
-   * Two things, deliberately. The row's `cost_actual` is moved by an increment the database
-   * performs, because the ask executor adds to the same column from a process that runs beside this
-   * one and a read-modify-write from either would lose the other's — `save` no longer names the
-   * column at all, so there is one writing statement and no arbitration to get wrong. And the
-   * *in-memory* snapshot still carries the new total, because the workpad render and the task's own
-   * events read it from there.
-   *
-   * It is **not** written here, before the branches: `runs.finish` is conditional on this caller
-   * still owning the run (a human may have cancelled it), and a caller that lost must write nothing
-   * — which is the assertion `writes nothing at all when the run was ended by somebody else first`
-   * makes.
-   */
-  const withCost: StoredTask = { ...stored, costActualUsd: stored.costActualUsd + spent };
-
-  /**
-   * **The task stopped while this run was in flight** (WP-15i).
-   *
-   * A human can pause, cancel or send a task back over HTTP at any moment, and the only thing that
-   * had ever moved a task out from under a running stage before was the executor itself. Every
-   * write below assumes the task is still running at this stage: `completeStage` throws for a
-   * paused one and `pauseTask` throws for a task that is already paused, and either exception fails
-   * the job into pg-boss's retry — which would re-run the *stage*, not the write, and eventually
-   * dead-letter a run that had already produced its answer.
-   *
-   * So the run is recorded and the stage is not completed. The spend is not lost (it is the
-   * platform's own record of money) and the human's decision stands: `revalidate` is what admits
-   * the next attempt when they resume.
-   */
-  if (!isRunnableTaskState(stored.task.state)) {
-    return recordOntoStoppedTask(scope, input, withCost, context);
-  }
-
-  /**
-   * **The task left this run's attempt while it was in flight** (PROGRESS backlog 494).
-   *
-   * A retry of the stage, a return, a hand-back — every way back into a stage is a new attempt, and
-   * a run started for the old one can no longer speak for the stage: it is recorded, and its spend
-   * charged, exactly like a run that ended into a stopped task. Until backlog 494 this transaction
-   * never asked which attempt it was recording, so a retry pressed during a run was completed by
-   * the run it meant to replace — and the new attempt's job found the stage done.
-   */
-  if (!isCurrentStageAttempt(stored.task, job.stage, job.attempt)) {
-    return recordOntoStoppedTask(scope, input, withCost, context);
-  }
-
-  if (outcome.status !== 'completed') {
-    return recordUnsuccessful(scope, input, withCost, context);
-  }
-
-  const finished = finishRun(
-    run,
-    {
-      status: 'completed',
-      terminalReason: outcome.terminalReason,
-      usage: outcome.usage,
-      modelUsage: outcome.modelUsage,
-      cost: rowCostOf(outcome),
-      numTurns: outcome.numTurns,
-    },
-    context,
-  );
-  const owned = await store.runs.finish(scope.tx, {
-    runId: run.id,
-    status: 'completed',
-    terminalReason: outcome.terminalReason,
-    sessionId: outcome.sessionId,
-    numTurns: outcome.numTurns,
-    usage: outcome.usage,
-    cost: rowCostOf(outcome),
-    wallMs: outcome.wallMs,
-    costIsFloor: costIsFloorOf(input),
-    lease: input.fence,
-  });
-  if (!owned) {
-    return lostTheRun({ ...input, scope });
-  }
-  await store.tasks.addSpend(scope.tx, job.taskId, spent);
-
-  const events: DomainEvent[] = [...finished.events];
-  let artifactRef: ArtifactRef | null = null;
-  let data: JsonValue | null = null;
-  let task = withCost.task;
-
-  if (stage.produces !== null) {
-    if (outcome.structuredOutput === null) {
-      // The runner re-validates structured output against the artifact schema and reports
-      // `error_max_structured_output_retries` when it never arrived; there is nothing to store and
-      // nothing to transition on.
-      return escalateOnRun(scope, input, withCost, context, 'the run produced no artifact', [
-        ...finished.events,
-      ]);
-    }
-    /**
-     * **A developer stage is not done without a merge request the platform recorded** (first local
-     * test, 2026-10-06, backlog 472).
-     *
-     * `ImplementationNotes.mr` is required by the schema, so a run whose `open_mr` failed still has
-     * to put *something* there — AUT-6820's second developer attempt could not commit (backlog 468),
-     * `open_mr` answered GitLab's 400, and the run reported the ticket number as the iid and a
-     * "create merge request" link as the URL. `withPlatformMergeRequestRecord` keeps a report as
-     * written when the task holds no record, so the stage completed and the task walked into
-     * `ci_gate` with no merge request at all. The record is the platform's (`open_mr` writes it,
-     * WP-138), so its absence here means the stage did not do the one thing the rest of the
-     * pipeline reads: the task escalates instead, with the run recorded as finished. A shadow task
-     * opens nothing by design and is left alone.
-     */
-    if (
-      stage.produces === 'ImplementationNotes' &&
-      stored.mr === null &&
-      stored.task.mode !== 'shadow'
-    ) {
-      return escalateOnRun(
-        scope,
-        input,
-        withCost,
-        context,
-        'the developer stage reported its work done, but no merge request was opened through ' +
-          'open_mr, so there is nothing for the CI gate or a review to read; the work is in the ' +
-          "run's workspace only if it was committed and pushed to the task's branch",
-        [...finished.events],
-      );
-    }
-    /**
-     * TD-012 **at the write**, which this line did not do until WP-52 (PROGRESS backlog 35).
-     *
-     * `data = outcome.structuredOutput` stored the model's answer verbatim, so a credential the
-     * platform injected into the run reached `artifacts.data` — and from there `questions.text`
-     * below and, through `recordMergeRequest`, the `tasks` row. `artifacts` is append-only, so the
-     * redaction has to happen before the insert or not at all.
-     *
-     * The refusal is the identifier half of the amendment: a field the platform *reads as a name*
-     * is never rewritten, because a `[REDACTED:integration:…]` in `mr.head_sha` is a value the
-     * platform then queries a provider with (standing rule 70). Nothing is stored, the run is
-     * already recorded as finished above, and the task escalates — the ending this branch already
-     * has for "the run produced no artifact", reused rather than invented.
-     */
-    let redacted: RedactedArtifact;
-    try {
-      redacted = redactArtifactData(
-        stage.produces,
-        withPlatformMergeRequestRecord(
-          stage.produces,
-          withPlatformReviewRecord(
-            stage.produces,
-            outcome.structuredOutput as JsonValue,
-            input.reviewChecklists,
-          ),
-          stored.mr,
-        ),
-        input.redactor,
-      );
-    } catch (error) {
-      if (!(error instanceof ArtifactIdentifierSecretError)) {
-        throw error;
-      }
-      return escalateOnRun(
-        scope,
-        input,
-        withCost,
-        context,
-        // The **path**, never the value: this reason is written to `events.payload` and into the
-        // blocker brief a human reads.
-        `the run wrote a secret this run was given into "${error.path}", which the platform reads ` +
-          'as an identifier and therefore refuses to rewrite',
-        [...finished.events],
-      );
-    }
-    data = redacted.data;
-    const version = await store.artifacts.nextVersion(scope.tx, job.taskId, stage.produces);
-    const artifactId = context.ids.next();
-    await store.artifacts.insert(scope.tx, {
-      id: artifactId,
-      taskId: job.taskId,
-      type: stage.produces,
-      version,
-      markdown: null,
-      data,
-      schemaVersion: '1',
-      producedByRunId: run.id,
-      redactionCount: redacted.count,
-      createdAt: context.clock.now(),
-    });
-    artifactRef = { id: artifactId, artifact_type: stage.produces, version, url: null };
-    const recorded = recordArtifact(
-      task,
-      { artifact: artifactRef, producedByRunId: run.id },
-      context,
-    );
-    task = recorded.aggregate;
-    events.push(...recorded.events);
-  }
-
-  const verdictInput = {
-    artifactType: stage.produces,
-    data,
-    attemptOnLowConfidence: false,
-  };
-  /**
-   * An **advisory** stage always advances (`agentStageSchema.advisory`, WP-25).
-   *
-   * The artifact is still produced, validated and stored; what it does not do is decide the
-   * transition. Without this, the ticket readiness linter's own success case — a `RefinedSpec`
-   * whose `decision` is `ask`, which is what an unready ticket deserves — would park the lint task
-   * in `waiting_answers` on questions nobody can answer, and a `reject` would escalate it to
-   * `needs_human`. Measured on the first run of `ticket-lint.test.ts`: *"expected
-   * 'waiting_answers' to be 'done'"*.
-   *
-   * A verdict the platform cannot map is still passed through, capped: the interpreter escalates
-   * on it either way, and "the stage said `ship it`" is a far better blocker brief than "the stage
-   * said nothing".
-   */
-  const verdict = stage.advisory
-    ? 'approve'
-    : (stageVerdict(verdictInput) ?? rawVerdict(verdictInput));
-
-  const completed = completeStage(
-    task,
-    {
-      stage: job.stage,
-      artifacts: artifactRef === null ? [] : [artifactRef],
-      ...(verdict === null ? {} : { verdict }),
-    },
-    context,
-  );
-  events.push(...completed.events);
-  task = completed.aggregate;
-
-  const questions =
-    verdict === 'questions' ? artifactQuestions(data).filter((draft) => draft.blocking) : [];
-  for (const draft of questions) {
-    const question = openQuestion(
-      {
-        id: context.ids.next(),
-        taskId: job.taskId,
-        projectId: stored.task.projectId,
-        stage: job.stage,
-        runId: run.id,
-        text: draft.text,
-        blocking: true,
-        ...(draft.options === null ? {} : { options: draft.options }),
-        // WP-56: `deadline_at` is written in this transaction, from `questionTimeoutAt` over the
-        // organisation's calendar at the project's `question_timeout` (BD-006).
-        deadlineFrom: questionDeadlineRule(input.options.calendar, input.settings),
-      },
-      context,
-    );
-    await store.questions.insert(scope.tx, question);
-    const asked = askQuestion(task, { question: toQuestionRecord(question) }, context);
-    task = asked.aggregate;
-    events.push(...asked.events);
-  }
-
-  await store.tasks.save(scope.tx, { ...withCost, task });
-  await store.tasks.recordStageExited(scope.tx, {
-    taskId: job.taskId,
-    stage: job.stage,
-    attempt: job.attempt,
-    state: 'completed',
-    // The column's vocabulary, not the model's (WP-73, backlog 213): a verdict the interpreter
-    // does not know is recorded as `unrecognised` — the model's own word is on the artifact.
-    outcome:
-      verdict === null ? 'unknown' : (stageVerdictSchema.safeParse(verdict).data ?? 'unrecognised'),
-    returnReason: null,
-    returnedTo: null,
-  });
-  await scope.events.append(events);
-  return { kind: 'ran', runId: run.id, verdict };
-};
-
-/**
- * Somebody else ended this run while it was in flight, so this process writes **only its cost**.
- *
- * `RunRepository.finish` is conditional on the run still being live, and there are two other
- * writers: `POST /api/runs/:run_id/cancel` (WP-15i) and the lease sweep (WP-47). Since WP-101 the
- * cancel is a foreign writer only when no process held the run's lease (TD-028 decision 11); with a
- * live lease it is a `run_commands` row this process applies as the session's stop, and the ending
- * is then this process's own, with its measured cost — this path is not taken. Losing that race is
- * not a failure — the other writer's decision is the one that stands, and this transaction rewrites
- * no status, completes no stage and appends no second terminal event.
- *
- * **What changed at WP-47 is the money** (Q70 (b), PROGRESS backlog 50). Until then the tokens this
- * run had already spent were not recorded at all: the cancel wrote the row's terminal status with
- * the spend *it* knew about — none — the ledger took its `no_spend` branch, and `cost_entries`, the
- * rollup and every budget window stayed where they were. So cancelling was the one human action
- * that spent a project's budget without charging it. This process is the only one that knows the
- * number, so it writes it through the narrow `runs.recordCost` (never a status, never a whole row)
- * and charges the ledger from the same transaction, labelled `late`.
- *
- * The residual is one line down from where it used to be, and it is real: a run whose process
- * **died** has nobody left to make this call, so its spend is genuinely unknown and the platform
- * writes no figure and no ledger row rather than a zero (standing rule 16) — and, since WP-131,
- * every cap holds it at the reservation it was admitted at, so the unknown is not admitted past
- * (`../cost/pending.ts`). This call is what releases that hold, and it moves `cost_actual` with it.
- */
-const lostTheRun = async (input: {
-  readonly run: Run;
-  readonly outcome?: RunOutcome;
-  readonly options: StageExecutorOptions;
-  readonly scope: TransactionScope;
-  /** The transcript's stop reason — a `cost_unreported` outcome's cost is a floor (407). */
-  readonly stopReason?: string | null;
-}): Promise<StageExecutionOutcome> => {
-  const { run, outcome, options } = input;
-  const reason = `run ${run.id} was ended by another writer while it was in flight, so its outcome was discarded`;
-  if (outcome === undefined) {
-    // `recordUnstarted`'s path: the run never started, so there is no spend to record and nothing
-    // for the ledger to be late about.
-    return { kind: 'skipped', reason };
-  }
-  if (outcome.costUnmeasured === true) {
-    // Stopped with no result inside the grace (WP-101 review round 1): there is no figure to be
-    // late with, and a zero would be a claim (rule 16).
-    return { kind: 'skipped', reason };
-  }
-  const recorder = options.lateCost ?? noLateCostRecorder;
-  await recorder.record(
-    input.scope,
-    {
-      runId: run.id,
-      taskId: run.taskId,
-      sessionId: outcome.sessionId,
-      numTurns: outcome.numTurns,
-      usage: outcome.usage,
-      modelUsage: outcome.modelUsage,
-      cost: outcome.cost,
-      wallMs: outcome.wallMs,
-      // WP-131 review round 1: a `cost_unreported` outcome's `usd: 0` is the runner's floor, and the
-      // late write must say so, or the row would read as a measured free run and release the hold.
-      costIsFloor: costIsFloorOf({ stopReason: input.stopReason ?? null }),
-    },
-    options.context(run.taskId).clock.now(),
-  );
-  return { kind: 'skipped', reason };
-};
-
-/**
- * The run ended and the task is no longer running at this stage — or no longer on this run's
- * attempt of it (backlog 494): record the run, stop there.
- *
- * The caller's docblock has the reasoning. What this function is careful about is the *order*: the
- * run's row is written first and everything else depends on having won it, so a lost race leaves
- * this transaction with nothing in it.
- */
-const recordOntoStoppedTask = async (
-  scope: TransactionScope,
-  input: RecordInput,
-  withCost: StoredTask,
-  context: CommandContext,
-): Promise<StageExecutionOutcome> => {
-  const { options, outcome, run } = input;
-  const { store } = options;
-  const decision =
-    outcome.status === 'failed' || outcome.status === 'stalled'
-      ? failRun(
-          run,
-          {
-            status: outcome.status,
-            terminalReason: outcome.terminalReason,
-            error: outcome.error ?? outcome.terminalReason,
-            ...failedSpendOf(outcome),
-            ...endingDetailOf(outcome),
-          },
-          context,
-        )
-      : finishRun(
-          run,
-          {
-            status: outcome.status,
-            terminalReason: outcome.terminalReason,
-            usage: outcome.usage,
-            modelUsage: outcome.modelUsage,
-            cost: rowCostOf(outcome),
-            numTurns: outcome.numTurns,
-            ...endingDetailOf(outcome),
-          },
-          context,
-        );
-  const owned = await store.runs.finish(scope.tx, {
-    runId: run.id,
-    status: outcome.status,
-    terminalReason: outcome.terminalReason,
-    sessionId: outcome.sessionId,
-    numTurns: outcome.numTurns,
-    usage: outcome.usage,
-    cost: rowCostOf(outcome),
-    wallMs: outcome.wallMs,
-    costIsFloor: costIsFloorOf(input),
-    ...endingDetailOf(outcome),
-    lease: input.fence,
-  });
-  if (!owned) {
-    return lostTheRun({ ...input, scope });
-  }
-  // The spend, and **nothing else**: `withCost.task` is the state the human left the task in, so a
-  // `save` here would put back a row nobody changed and bump its version against the human's next
-  // command. Since WP-31 the spend is its own narrow write, which is what made that possible.
-  await store.tasks.addSpend(scope.tx, input.job.taskId, spendOf(outcome));
-  await scope.events.append(decision.events);
-  const { task } = withCost;
-  return {
-    kind: 'skipped',
-    reason: `the task is "${task.state}" at "${task.currentStage ?? 'no stage'}" (attempt ${String(
-      task.currentStage === null ? 0 : (task.stageAttempts[task.currentStage] ?? 0),
-    )}), so the run of attempt ${String(input.job.attempt)} of "${input.job.stage}" was recorded and the stage was not completed`,
-  };
-};
-
-/** A run that did not complete: budget, fault, timeout, stall or cancellation. */
-const recordUnsuccessful = async (
-  scope: TransactionScope,
-  input: RecordInput,
-  stored: StoredTask,
-  context: CommandContext,
-): Promise<StageExecutionOutcome> => {
-  const { options, outcome, run } = input;
-  const { store } = options;
-
-  if (outcome.terminalReason === 'shutdown') {
-    return recordHandBack(scope, input, stored, context);
-  }
-
-  const costUnreported = input.stopReason === COST_UNREPORTED;
-  const overspent = outcome.status === 'budget_exceeded' && !costUnreported;
-
-  const decision =
-    outcome.status === 'failed' || outcome.status === 'stalled'
-      ? failRun(
-          run,
-          {
-            status: outcome.status,
-            terminalReason: outcome.terminalReason,
-            error: outcome.error ?? outcome.terminalReason,
-            ...failedSpendOf(outcome),
-            ...endingDetailOf(outcome),
-          },
-          context,
-        )
-      : finishRun(
-          run,
-          {
-            status: outcome.status,
-            terminalReason: outcome.terminalReason,
-            usage: outcome.usage,
-            modelUsage: outcome.modelUsage,
-            cost: rowCostOf(outcome),
-            numTurns: outcome.numTurns,
-            ...endingDetailOf(outcome),
-          },
-          context,
-        );
-
-  const owned = await store.runs.finish(scope.tx, {
-    runId: run.id,
-    status: outcome.status,
-    terminalReason: outcome.terminalReason,
-    sessionId: outcome.sessionId,
-    numTurns: outcome.numTurns,
-    usage: outcome.usage,
-    cost: rowCostOf(outcome),
-    wallMs: outcome.wallMs,
-    costIsFloor: costIsFloorOf(input),
-    ...endingDetailOf(outcome),
-    lease: input.fence,
-  });
-  if (!owned) {
-    return lostTheRun({ ...input, scope });
-  }
-  await store.tasks.addSpend(scope.tx, input.job.taskId, spendOf(outcome));
-  // Backlog 467: the branch the run's unfinished work was pushed to is the task's from now on.
-  const withBranch = withSavedBranch(stored, outcome);
-
-  if (overspent) {
-    // BD-010: a task budget pauses the task; a human may raise the cap and resume it.
-    const paused = pauseTask(withBranch.task, { reason: 'budget', budgetScope: 'run' }, context);
-    await store.tasks.save(scope.tx, { ...withBranch, task: paused.aggregate });
-    await scope.events.append([...decision.events, ...paused.events]);
-    return {
-      kind: 'paused',
-      reason: `the run stopped at its ${outcome.terminalReason} cap`,
-    };
-  }
-
-  const reason = costUnreported
-    ? 'the platform could not tell what the run cost, so it stopped it without verifying the budget'
-    : `the run ended as ${outcome.status} (${outcome.terminalReason})`;
-  return escalateOnRun(
-    scope,
-    input,
-    withBranch,
-    context,
-    reason,
-    decision.events,
-    outcome.savedWork === undefined
-      ? undefined
-      : `${defaultBlockerBrief(input.job.stage, withBranch.task.ticket.key, reason)} ${savedWorkSentence(outcome.savedWork)}`,
-  );
-};
-
-/**
- * `outcome.savedWork` as the optional input `failRun`, `finishRun` and `runs.finish` take — absent
- * when the workspace attempted no export (PROGRESS backlog 467).
- */
-const savedWorkOf = (outcome: RunOutcome): { readonly savedWork?: RunSavedWork } =>
-  outcome.savedWork === undefined ? {} : { savedWork: outcome.savedWork };
-
-/**
- * {@link savedWorkOf} plus the cause of a stop that landed before the CLI spawn marker (WP-154
- * (b′)): `outcome.startFailure`, onto `runs.exit_detail` and the terminal event's `start_failure` —
- * absent for every other ending, which leaves both unset.
- */
-const endingDetailOf = (
-  outcome: RunOutcome,
-): { readonly savedWork?: RunSavedWork; readonly startFailure?: RunStartFailure } => ({
-  ...savedWorkOf(outcome),
-  ...(outcome.startFailure === undefined ? {} : { startFailure: outcome.startFailure }),
-});
-
-/**
- * The task with the branch its run's unfinished work was **pushed** to (PROGRESS backlog 467).
- *
- * `tasks.branch` is `save`'s column (the aggregate's, `tasks-column-ownership.test.ts`), and both
- * callers save the task in this same transaction, so the branch rides that write rather than a
- * narrow one of its own. Filled only while it is `null` — a recorded branch is the merge request's
- * or a rework's, and the export pushed to the spec's checkout, which is that same branch — and only
- * for a push that succeeded: a branch the remote does not hold is not the task's.
- */
-const withSavedBranch = (stored: StoredTask, outcome: RunOutcome): StoredTask =>
-  outcome.savedWork?.pushed === true && stored.branch === null
-    ? { ...stored, branch: outcome.savedWork.branch }
-    : stored;
-
-/**
- * **A run its own process stopped** (WP-144, PROGRESS backlog 432): end it `failed`/`shutdown` with
- * whatever the session measured, and hand the stage entry back — or, past the bound, escalate.
- *
- * The run's ending and the decision are one transaction: the count is read **before** this run's
- * row moves (so it is the entry's earlier hand-backs), `finish` is the arbiter with every other
- * writer (a person's cancel that ended the row first wins, and this writes nothing but the late
- * cost — `lostTheRun`), and the spend is added once, by the winner. The reservation is released by
- * the row becoming terminal, as for every ending; a run that measured nothing **after asking for its
- * CLI** keeps both cost columns null and is held at its reservation by the task cap (rule 16,
- * WP-131) — never a `0`. A hand-back that landed before the marker, or whose `spawn` frame was
- * withheld after it (WP-163), spent nothing and carries the measured zero (`unspawnedStop`, WP-150).
- *
- * **The task is not touched** on the hand-back: still `active` at this stage on this attempt with
- * its stage row open, which is exactly what `revalidateOpen` admits when the re-enqueued job fires
- * — the caller's enqueue, after this commits (`Jobs.enqueue` does not join a transaction; a process
- * that dies between the two leaves the entry to the stranded-stage recovery, which escalates an
- * attempt whose run ended, naming `shutdown`). A task a person moved meanwhile (paused, cancelled,
- * sent elsewhere) is recorded onto and never re-run: the job re-validates on fire (TD-004).
- */
-const recordHandBack = async (
-  scope: TransactionScope,
-  input: RecordInput,
-  stored: StoredTask,
-  context: CommandContext,
-): Promise<StageExecutionOutcome> => {
-  const { options, outcome, run, job } = input;
-  const { store } = options;
-  if (revalidate(stored, job).kind === 'skipped') {
-    return recordOntoStoppedTask(scope, input, stored, context);
-  }
-  const earlier = await store.runs.shutdownEndings(scope.tx, {
-    taskId: job.taskId,
-    stage: job.stage,
-    attempt: job.attempt,
-  });
-  const handBacks = earlier + 1;
-  // A hand-back before the CLI spawn marker records why it did not start (WP-154 (b′)); whether
-  // the stage goes again is decided only here, so the cause's `retryable` is set here too.
-  const notStarted =
-    outcome.startFailure === undefined
-      ? {}
-      : {
-          startFailure: {
-            ...outcome.startFailure,
-            retryable: handBacks <= MAX_SHUTDOWN_HAND_BACKS,
-          },
-        };
-  const failed = failRun(
-    run,
-    {
-      status: 'failed',
-      terminalReason: 'shutdown',
-      error: outcome.error ?? 'shutdown',
-      ...failedSpendOf(outcome),
-      ...notStarted,
-    },
-    context,
-  );
-  const owned = await store.runs.finish(scope.tx, {
-    runId: run.id,
-    status: 'failed',
-    terminalReason: 'shutdown',
-    sessionId: outcome.sessionId,
-    numTurns: outcome.numTurns,
-    usage: outcome.usage,
-    cost: rowCostOf(outcome),
-    wallMs: outcome.wallMs,
-    costIsFloor: costIsFloorOf(input),
-    ...notStarted,
-    lease: input.fence,
-  });
-  if (!owned) {
-    return lostTheRun({ ...input, scope });
-  }
-  await store.tasks.addSpend(scope.tx, job.taskId, spendOf(outcome));
-  if (handBacks > MAX_SHUTDOWN_HAND_BACKS) {
-    const reason = `the platform's runner was stopped during this stage ${String(handBacks)} times`;
-    return escalateOnRun(
-      scope,
-      input,
-      stored,
-      context,
-      reason,
-      failed.events,
-      `The "${job.stage}" stage of ${stored.task.ticket.key} was interrupted ${String(handBacks)} times ` +
-        `because the platform's runner process was stopped while it ran (attempt ${String(job.attempt)}; ` +
-        `the last run is ${run.id}). The first ${String(MAX_SHUTDOWN_HAND_BACKS)} were started again ` +
-        'automatically; this one is not. Work the interrupted runs had not pushed is lost. Find out ' +
-        'why the runner keeps stopping (an upgrade loop, a memory limit, a restart policy), then hand ' +
-        'the task back at this stage.',
-    );
-  }
-  await scope.events.append(failed.events);
-  return {
-    kind: 'handed_back',
-    runId: run.id,
-    handBacks,
-    reason: `the runner was stopped while the run was in flight; hand-back ${String(handBacks)} of ${String(MAX_SHUTDOWN_HAND_BACKS)}`,
-  };
-};
-
-/**
- * Ends the stage without a verdict. The pipeline's `run.failed` handler is *not* what escalates —
- * the task is parked here, in the same transaction that recorded the run, so there is no window in
- * which a task looks `active` at a stage that has already stopped.
- */
-const escalateOnRun = async (
-  scope: TransactionScope,
-  input: RecordInput,
-  stored: StoredTask,
-  context: CommandContext,
-  reason: string,
-  runEvents: readonly DomainEvent[] = [],
-  blockerBrief?: string,
-): Promise<StageExecutionOutcome> => {
-  const { options, run } = input;
-  const { job } = input;
-  const escalated = escalate(stored, context, job.stage, reason, blockerBrief);
-  await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
-  await options.store.tasks.recordStageExited(scope.tx, {
-    taskId: job.taskId,
-    stage: job.stage,
-    attempt: job.attempt,
-    state: 'failed',
-    outcome: 'failed',
-    returnReason: reason,
-    returnedTo: null,
-  });
-  await scope.events.append([...runEvents, ...escalated.events]);
-  return { kind: 'failed', runId: run.id, reason };
 };
 
 /**
@@ -2443,25 +1549,3 @@ const NO_USAGE = NO_RUN_USAGE;
 
 /** `is_estimate: false` — "nothing" is a measurement, not a guess (BD-011). */
 const NO_COST = MEASURED_ZERO_COST;
-
-/** The blocker brief a stage that stopped without a result gets when its caller wrote none. */
-const defaultBlockerBrief = (stage: Slug, ticketKey: string, reason: string): string =>
-  `The "${stage}" stage of ${ticketKey} stopped without a result: ${reason}. ` +
-  "Nothing is retried automatically. Open the run's transcript, decide what should change, " +
-  'and hand the task back at the stage you want it to resume from.';
-
-const escalate = (
-  stored: StoredTask,
-  context: CommandContext,
-  stage: Slug,
-  reason: string,
-  blockerBrief?: string,
-) =>
-  escalateTask(
-    stored.task,
-    {
-      reason: `stage "${stage}": ${reason}`,
-      blockerBrief: blockerBrief ?? defaultBlockerBrief(stage, stored.task.ticket.key, reason),
-    },
-    context,
-  );

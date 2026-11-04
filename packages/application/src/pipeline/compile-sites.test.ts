@@ -64,9 +64,11 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     sites: 2,
     how: "inside the two merge-request handlers' transactions (WP-138, backlog 486): the loaded row's `stored.pipelineDial` — only to ask whether the completed stage produces ImplementationNotes, and whether an entered stage is an agent stage",
   },
-  'packages/application/src/pipeline/stage-executor.ts': {
+  // WP-275: `revalidate` left `stage-executor.ts` for a module of its own, so the job and
+  // `settleRun`'s hand-back ask the same questions without importing each other's values.
+  'packages/application/src/pipeline/stage-revalidation.ts': {
     sites: 1,
-    how: "the `stage.execute` job's revalidation: the loaded row's `stored.pipelineDial`",
+    how: "the `stage.execute` job's revalidation (and `settleRun`'s hand-back re-check): the loaded row's `stored.pipelineDial`",
   },
   'packages/application/src/pipeline/ready-head.ts': {
     sites: 1,

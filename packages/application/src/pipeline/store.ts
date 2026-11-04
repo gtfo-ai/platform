@@ -1661,8 +1661,38 @@ export interface RunOfferRepository {
   load(tx: Transaction, runId: Id): Promise<StoredRunOffer | null>;
 }
 
+/**
+ * {@link RunRepository.lockSettlement}'s answer: what `settleRun` asks of the run row before it
+ * writes anything (WP-275, TD-031 decision 3) — whether it is still live, under which claim, and,
+ * once terminal, how it ended. The last two are **the stored result** a repeated settle answers:
+ * `status`, `terminal_reason` and `lease_epoch` are columns the first settle's `finish` left on the
+ * row, so the idempotency of `(run_id, epoch)` needs no column of its own.
+ */
+export interface RunSettlement {
+  readonly runId: Id;
+  readonly status: RunStatus;
+  /** `null` while the run is live. */
+  readonly terminalReason: RunTerminalReason | null;
+  /** `runs.lease_epoch` (WP-274): `0` for a run no claim took. */
+  readonly leaseEpoch: number;
+  /** `runs.lease_owner`, or `null` in a composition that configures no run lease. */
+  readonly leaseOwner: string | null;
+}
+
 export interface RunRepository {
   insert(tx: Transaction, run: NewRun): Promise<void>;
+  /**
+   * The run row as `settleRun` needs it, locked **`for update`** — or `null` when there is no such run
+   * (WP-275, TD-031 decision 3).
+   *
+   * Exclusive, and taken **first** in the settle's transaction, so that what the settle decides from
+   * it stays true until it commits: no cancel, sweep or second settle can end the row in between,
+   * and a second settle of the same run waits here and then reads it terminal. The order is the one
+   * every writer of both rows already takes — the run, then the task (a cancel's `lockRun`, the
+   * sweep's claim), then the offer through `finish` — so the lock adds no new order (backlog 697 is
+   * the claim's, not this).
+   */
+  lockSettlement(tx: Transaction, runId: Id): Promise<RunSettlement | null>;
   /**
    * Moves a **live** run to a terminal status, and answers whether this caller is the one that did.
    *

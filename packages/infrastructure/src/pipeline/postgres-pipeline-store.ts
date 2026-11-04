@@ -56,6 +56,8 @@ import type {
   MergeRequestSnapshot,
   PipelineTemplate,
   RunCost,
+  RunStatus,
+  RunTerminalReason,
   Slug,
   TaskCoverage,
   TaskDependencies,
@@ -1832,6 +1834,33 @@ export const createPostgresPipelineStore = (
         throw new PipelineRowMissingError(`run ${marker.runId} does not exist`);
       }
       return false;
+    },
+    /**
+     * `settleRun`'s first statement (WP-275): the row `for update`, so the settle's decision holds to
+     * its commit — the port's docblock has the lock order.
+     */
+    lockSettlement: async (tx, runId) => {
+      const { rows } = await sqlOf(tx).query<{
+        id: string;
+        status: RunStatus;
+        terminal_reason: RunTerminalReason | null;
+        lease_epoch: number;
+        lease_owner: string | null;
+      }>(
+        `select id, status, terminal_reason, lease_epoch, lease_owner
+           from runs where id = $1 for update`,
+        [runId],
+      );
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : {
+            runId: row.id as Id,
+            status: row.status,
+            terminalReason: row.terminal_reason,
+            leaseEpoch: row.lease_epoch,
+            leaseOwner: row.lease_owner,
+          };
     },
     load: async (tx, runId) => {
       const { rows } = await sqlOf(tx).query<RunRow>(

@@ -23,15 +23,15 @@
  *
  * ## Criterion (6b)'s writers, and where each one's `finish` is
  *
- * - the normal finish and failure — `stage-executor.ts`'s transaction 2: `record` and
- *   `recordUnsuccessful`;
+ * - the normal finish and failure — transaction 2, which is `settleRun` since WP-275
+ *   (`settle.ts`): `record` and `recordUnsuccessful`;
  * - cancel — `cancelRunCommand`'s in-place ending (`commands.ts`, no live lease), and the holder's
- *   applied cancel, which stops the session so the run ends `cancelled` through the executor's own
+ *   applied cancel, which stops the session so the run ends `cancelled` through `settleRun`'s
  *   `recordUnsuccessful`;
- * - the start failures — `recordUnstarted`;
+ * - the start failures — the executor's `recordUnstarted`;
  * - today's lease sweep — `recovery/run-lease.ts`;
  * - WP-144's shutdown hand-back — `recordHandBack`;
- * - the take-over's stop — the holder stops the session and the executor's `recordOntoStoppedTask`
+ * - the take-over's stop — the holder stops the session and `settleRun`'s `recordOntoStoppedTask`
  *   ends the run (the task was stopped under it);
  * - the ask's ending — `ask/executor.ts`'s four: the hand-back, the failure, the answer and the
  *   start failure.
@@ -54,9 +54,12 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const EXPECTED_FINISH_CALLERS: ReadonlyMap<string, number> = new Map([
   // `cancelRunCommand`'s in-place ending (no live lease, WP-101).
   ['packages/application/src/pipeline/commands.ts', 1],
-  // `record`, `recordOntoStoppedTask` (the take-over's stop), `recordUnsuccessful` (failure and the
-  // holder's applied cancel), `recordHandBack` (WP-144's shutdown) and `recordUnstarted`.
-  ['packages/application/src/pipeline/stage-executor.ts', 5],
+  // `recordUnstarted`, the start failure — the one ending the job still writes itself.
+  ['packages/application/src/pipeline/stage-executor.ts', 1],
+  // `settleRun` (WP-275, transaction 2 moved out of the job): `record`, `recordOntoStoppedTask` (the
+  // take-over's stop), `recordUnsuccessful` (failure and the holder's applied cancel) and
+  // `recordHandBack` (WP-144's shutdown).
+  ['packages/application/src/pipeline/settle.ts', 4],
   // The ask's endings: the hand-back, the failure, the answer, and the start failure.
   ['packages/application/src/ask/executor.ts', 4],
   // The lease sweep (`lease_expired`).

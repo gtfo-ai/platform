@@ -1639,8 +1639,8 @@ const leaseIsLive = (run: LockedRun, now: IsoDateTime): boolean =>
  * holder would wait for nobody. The command wins the row through the conditional `runs.finish` with
  * status `cancelled` and appends `run.finished` itself — the synchronous answer, kept for this branch
  * only. If a process *was* still running the session (a holder partitioned from the database), it
- * finds the row terminal when the session ends, discards its **verdict** (`stage-executor.ts`'s
- * `lostTheRun`) and records its spend through the narrow `runs.recordCost` (WP-47, Q70 (b)) — which
+ * finds the row terminal when the session ends, discards its **verdict** (`settle.ts`'s
+ * `lostTheRun`, the stage executor's transaction 2 since WP-275) and records its spend through the narrow `runs.recordCost` (WP-47, Q70 (b)) — which
  * is why the cost stored here is `null` rather than a zero (see the call below).
  *
  * ## The arbiter is the row, and it is taken exclusively

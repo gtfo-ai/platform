@@ -3557,6 +3557,36 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           ).toBe(false);
         });
 
+        it('lockSettlement answers the row settleRun decides from — live, then its ending under the same epoch (WP-275)', async () => {
+          const runId = await liveRun();
+          expect(await store.runs.lockSettlement(tx, nextId())).toBeNull();
+          // Before the claim: epoch 0, nobody holds it.
+          expect(await store.runs.lockSettlement(tx, runId)).toEqual({
+            runId,
+            status: 'running',
+            terminalReason: null,
+            leaseEpoch: 0,
+            leaseOwner: null,
+          });
+          const { claim } = await claimed(runId);
+          expect(await store.runs.lockSettlement(tx, runId)).toEqual({
+            runId,
+            status: 'running',
+            terminalReason: null,
+            leaseEpoch: claim?.epoch,
+            leaseOwner: claim?.owner,
+          });
+          await store.runs.finish(tx, { ...ENDED, runId });
+          // The stored result a repeated settle answers: the row's ending, the claim's epoch kept.
+          expect(await store.runs.lockSettlement(tx, runId)).toEqual({
+            runId,
+            status: 'completed',
+            terminalReason: 'success',
+            leaseEpoch: 1,
+            leaseOwner: claim?.owner,
+          });
+        });
+
         it('a claim with no lease configured takes the epoch and leaves the run unleased', async () => {
           const runId = await liveRun();
           const { claim } = await claimed(runId, null);

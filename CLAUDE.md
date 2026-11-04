@@ -121,7 +121,8 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
 - **The command surface** (WP-15i): every write the SPA makes to a task or a run goes through `apps/server/src/routes/commands.ts`, and each command is an operation on the aggregate — `Task`, `Run`, `Question` or `Approval` in `packages/domain` — whose refusing state answers a typed 409 naming the transition; no route writes a column the aggregate did not decide. Every accepted command leaves one `human_actions` row and none is left for a refused one. `Idempotency-Key` is one mechanism for the whole server, `apps/server/src/routes/idempotency.ts` (WP-21's, moved): a digest of the canonical request stored beside the key in `command_idempotency` (migration 0053, WP-67), **claimed before the command performs**, so a replay performs nothing twice, a concurrent repeat is `409 idempotency_key_in_flight` rather than a second effect, a claim whose process died answers `idempotency_attempt_unknown` and is never re-claimed, and a different body under a used key is refused — scoped **`(user_id, action, key)`**, because a key is generated per attempt by a client and an installation-wide lookup refuses a stranger's legitimate command and says their key exists. Every refusal a command raises is translated **at these routes** (`commandRefusal`), so the same `IllegalTransitionError` from a route that reads stays a 500 rather than reading as the caller's fault. A command that lands beside a running stage meets WP-15e's `save` refusal and retries through `retryOnTaskConflict` or answers a typed 409; **no HTTP request can move a task to `needs_human`**. `apps/server/src/routes/commands.test.ts` drives all eleven through the real router (401 per route, a wrong-role 403, replay, refusal → status), and `apps/server/src/routes/client-census.test.ts` names them positively; steer, take-over and hand-back are WP-27's.
 - Pipeline behaviour: `docs/product/04-pipeline.md`, `docs/technical/02-domain-model-and-events.md`. The
   interpreter is `packages/domain/src/pipeline/` — the shipped templates as data, and a pure
-  `interpret(pipeline, signal) → decision` that reads them; the sagas, the stage executor and the
+  `interpret(pipeline, signal) → decision` that reads them; the sagas, the stage executor, its
+  settling transaction (`settle.ts`'s `settleRun`, idempotent on `(run_id, lease_epoch)` since WP-275) and the
   `PipelineStore` port are `packages/application/src/pipeline/`, and `createPipelineRuntime` is what a
   composition root registers. A stage runs in a `stage.execute` job, never in an event handler: the shape is
   transaction / no transaction / transaction, so no database connection is held while a run is, and the job
@@ -274,6 +275,7 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
   holds nothing. The bound is **both**: the lease is primary and
   `started_at + wallClockMs + grace` is the backstop for rows written before the column had a writer.
   The money a *cancelled* or swept run burned reaches the ledger from the process that ran it, which
+  (through `settleRun`, WP-275 — a cancel or a sweep leaves the claim's epoch alone, so the fence never refuses it)
   is refused `finish` and takes the narrow `runs.recordCost` plus `cost/late.ts` instead (Q70 (b)) —
   one transaction, rows labelled `cost_entries.late`, and refused outright for a live run, a row that
   already carries a figure or a run the ledger has charged. `runs.usd_estimated` also got its first

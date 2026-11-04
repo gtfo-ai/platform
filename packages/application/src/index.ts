@@ -162,6 +162,14 @@ export * from './pipeline/runtime.js';
 export * from './pipeline/saga.js';
 export * from './pipeline/settings.js';
 export * from './pipeline/settings-snapshot.js';
+export {
+  type RunEnding,
+  type SettleOptions,
+  type SettleRunDeps,
+  type SettleRunRequest,
+  type SettleRunResult,
+  settleRun,
+} from './pipeline/settle.js';
 export * from './pipeline/stage-executor.js';
 export * from './pipeline/stop-reasons.js';
 export * from './pipeline/store.js';

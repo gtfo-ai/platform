@@ -126,7 +126,14 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/saga.ts', 13],
   // 6 since WP-63: the admission refusal of a run whose repository `.agentic/config.yml` does not
   // parse, inside the executor's own admission transaction and under its `retryOnTaskConflict`.
-  ['packages/application/src/pipeline/stage-executor.ts', 6],
+  // 3 since WP-275, when transaction 2 moved to `settle.ts` with three of them: the budget pause
+  // and the configuration refusal at admission, and `recordUnstarted`'s escalation stay here.
+  ['packages/application/src/pipeline/stage-executor.ts', 3],
+  // WP-275: transaction 2 as the `settleRun` command — `record`'s completed stage,
+  // `recordUnsuccessful`'s overspend pause and `escalateOnRun`. The same three sites, moved, with
+  // the same ending: the command owns its transaction and retries through `retryOnTaskConflict`,
+  // and a spent bound escapes as `TaskConflictExhaustedError` to the job's `escalateOnConflict`.
+  ['packages/application/src/pipeline/settle.ts', 3],
   ['packages/application/src/pipeline/transitions.ts', 5],
   ['packages/application/src/pipeline/task-conflict.ts', 1],
   // WP-80 (PROGRESS backlog 131): the shadow report's identifier refusal escalates its task from
@@ -223,6 +230,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // waits for a human writes the amended brief (`amendEscalation`), with the handler's ending.
     // **Plus two at WP-124**: `job-escalation.ts`'s escalation and amended brief, the
     // bound-and-escalate ending of a job a person waits on (backlog 366).
+    // **Unchanged at WP-275**: three of the executor's six moved to `settle.ts` with transaction 2.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
     expect(total).toBe(38);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
@@ -258,7 +266,8 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
  * fails here, naming its file.
  *
  * **Two modules close the row themselves and are exempt by name, with the reason**, rather than
- * made to call a helper that would do nothing: `stage-executor.ts` writes `recordStageExited`
+ * made to call a helper that would do nothing: `settle.ts` (the stage executor's `escalate`, since
+ * WP-275) writes `recordStageExited`
  * `failed` beside each of its escalations (it knows the run's reason and has always recorded it),
  * and `recovery/run-lease.ts` does the same for a run nothing is driving (WP-47). A third exemption
  * is a decision somebody writes here.
@@ -270,13 +279,23 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
  * **`resumeStage(` counts as an escalation** (PROGRESS backlog 495): the domain command escalates by
  * itself when its loop is spent, so its one call site (`resumeAtStage`) closes the parked row on
  * that branch like any other escalation does.
+ *
+ * **So does `escalate(`** (WP-275): the stage executor's helper over `escalateTask`, which moved to
+ * `settle.ts` with transaction 2 and is imported back by the job. Counting its calls keeps the job's
+ * own escalations visible in the file that makes them, rather than only the one `escalateTask(`
+ * inside the helper.
  */
-const ESCALATE_CALL = /\bescalateTask\s*\(|\bresumeStage\s*\(/g;
+const ESCALATE_CALL = /\bescalateTask\s*\(|\bresumeStage\s*\(|\bescalate\s*\(/g;
 const CLOSE_PARKED_CALL = /\bcloseParkedStageRow\s*\(/g;
 
 const ROW_CLOSED_BY_ITS_OWN_WRITE: ReadonlyMap<string, string> = new Map([
   [
     'packages/application/src/pipeline/stage-executor.ts',
+    'the start failure’s escalation writes recordStageExited failed with the run’s reason; the configuration refusal at admission calls closeParkedStageRow (WP-275: both through `escalate`, imported from settle.ts)',
+  ],
+  // WP-275: transaction 2 and the `escalate` helper moved here from `stage-executor.ts`.
+  [
+    'packages/application/src/pipeline/settle.ts',
     'every escalation writes recordStageExited failed with the run’s reason',
   ],
   [

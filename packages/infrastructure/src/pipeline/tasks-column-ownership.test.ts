@@ -46,6 +46,7 @@ import {
   readCensus,
 } from '../../../../scripts/census-files.mjs';
 import { checkoutGitEnv } from '../../../../scripts/git-scratch-env.mjs';
+import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 
@@ -198,7 +199,8 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // `addSpend` — the one column two *processes* write, and therefore the one whose statement is
     // an increment rather than an assignment (WP-31). It left `save`'s list with this row: the ask
     // executor adds a run's spend from a process that runs beside the stage executor, and the
-    // version token cannot arbitrate an increment.
+    // version token cannot arbitrate an increment. Its callers are pinned below
+    // ({@link ADD_SPEND_CALLERS}); since WP-275 the stage side's are `settleRun`'s (`settle.ts`).
     'cost_actual',
     // `raiseBudgetCap` — the task's own cap, only ever raised, by a maintainer's command (WP-131
     // review round 1, migration 0072). Not the aggregate's, and never `save`'s.
@@ -413,6 +415,52 @@ describe('`tasks` column ownership (WP-15e)', () => {
       Object.fromEntries(
         Object.entries(EXPECTED_OWNERSHIP).map(([file, columns]) => [file, [...columns].sort()]),
       ),
+    );
+  }, 15_000);
+});
+
+/**
+ * **Who calls `cost_actual`'s one statement** (WP-275, criterion (5)). The census above holds the
+ * column to one writing statement, `addSpend`; it cannot see who runs it, and an increment run twice
+ * charges a task twice. So the callers are pinned per file: the stage side's four are transaction 2's
+ * — `record`, `recordOntoStoppedTask`, `recordUnsuccessful` and `recordHandBack` — and moved with it
+ * from `stage-executor.ts` to `settleRun` (`settle.ts`), which is idempotent on `(run_id, epoch)`
+ * because each of the four runs only after its conditional `finish` won the row. A new caller fails
+ * here until somebody states what stops it charging twice. Production sources only, as
+ * `task-save-sites.test.ts` reads them; a call through an alias is invisible, as there.
+ */
+const ADD_SPEND_CALLERS: ReadonlyMap<string, number> = new Map([
+  ['packages/application/src/pipeline/settle.ts', 4],
+  // The ask executor's three endings that add a run's spend (WP-31), each after its own `finish` won.
+  ['packages/application/src/ask/executor.ts', 3],
+  // Q70 (b): the late cost of a run another writer ended, refused once the row carries a figure.
+  ['packages/application/src/cost/late.ts', 1],
+]);
+
+const ADD_SPEND_CALL = /\btasks\s*\.\s*addSpend\s*\(/g;
+
+const isTestTier = (file: string): boolean =>
+  file.startsWith('test/') ||
+  /\.(?:test|spec)\.[cm]?tsx?$/.test(file) ||
+  /(?:^|\/)(?:testing|fixtures)\.ts$/.test(file) ||
+  file.includes('/src/testing/');
+
+describe('`cost_actual` callers (WP-275)', () => {
+  it('has exactly the addSpend callers this change states, per file', () => {
+    const files = censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] }).filter(
+      (file) => !isTestTier(file),
+    );
+    const read = readCensus(REPO_ROOT, files);
+    if (read.unreadable.length > 0) {
+      throw new CensusUnreadableError(read.unreadable);
+    }
+    const found = new Map<string, number>();
+    for (const { path: file, contents: body } of read.files) {
+      const hits = withoutComments(body).match(ADD_SPEND_CALL)?.length ?? 0;
+      if (hits > 0) found.set(file, hits);
+    }
+    expect(Object.fromEntries([...found].sort())).toEqual(
+      Object.fromEntries([...ADD_SPEND_CALLERS].sort()),
     );
   }, 15_000);
 });

@@ -117,7 +117,7 @@ export interface LateCostRecorder {
 /**
  * The recorder a composition with no cost ledger uses: it writes **nothing** — no row is
  * corrected and nothing is charged — and answers `{recorded: false, charge: null}`, which is what
- * the stage executor's `lostTheRun` branch and `late.test.ts` pin. A composition without a
+ * `settleRun`'s `lostTheRun` branch (`pipeline/settle.ts`, the stage executor's transaction 2) and `late.test.ts` pin. A composition without a
  * `CostStore` therefore keeps the pre-WP-47 behaviour for a run that ends outside its own process:
  * the terminated row keeps whatever figure it had, and `GET /api/runs/:id` publishes that. The
  * production composition (`apps/server/src/pipeline.ts`) never uses this one.
