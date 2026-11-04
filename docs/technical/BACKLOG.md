@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 745, so the next is **746**), its grade
+line with the next free number (the highest is 746, so the next is **747**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -14,7 +14,6 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 |---|---|---|---|
 | 171 | major | WP-58 (architect ruling pending) | KB query floor drops the subject word on a single-subject vault; a wrong page can outrank the right one on PostgreSQL (small-to-major) |
 | 693 | major | WP-283 | Ruled (c): on a remote worker the launcher's mirror and export helpers need the core-held SSH deploy key; worker must sign through the core |
-| 740 | major | — | A remote claim whose git credential cannot be minted (a provider error) is released `credential_unavailable` (TD-031 §2) with no bound and no spacing: Q59a's bound counts a stage entry's runs and a release keeps the run, so a provider that refuses every mint lets workers re-claim and re-mint at their request rate (WP-281 ends the hold at once; the loop is the worker's). Needs a ruling: a release counter, a `*_from` delay, or the transient start-failure path |
 | 232 | minor | — | Storage gauge (org-dashboard panel, 50 GB warning, partition purge) not built; only Prometheus metrics exist |
 | 446 | minor | — | WP-144 criterion (3), a real `docker compose stop runner` mid-run, not built; needs fake providers reachable from a compose stack |
 | 538 | minor | — | Two installations sharing one tracker service account both see themselves as assignee, so the claim does not stop double work |
@@ -66,6 +65,8 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 
 | # | Closed by | Item |
 |---|---|---|
+| 740 | S-22.6 (WP-281, TD-031's 2026-11-05 amendment) | A mint failure after a remote claim settles the run `not_started` (retryable from `IntegrationError.retryable`; the binding-changed race retryable) — never a release — so Q59(a) spaces it 30 s and escalates after 3; the server claimant's `classifyProvisionFailure` honours the same flag; `credential_unavailable` left the release reasons; `remote-runs.test.ts`, `protocol.contract.test.ts`, `workspace-runner.test.ts` |
+| 746 | S-22.6 (WP-281), found in review | A release revoked every unrevoked mint of the run (`liveCredentialsOfRun`), including one a later claimant of the reopened offer had already minted; it is now scoped to mints recorded at or before the release (`mintedBefore`). Residual: the bound is the releasing API process's clock against `integration_actions.created_at` (the database's) |
 | 714 | S-22.6 (WP-281) | The claim (`WORKER_ELIGIBLE` in `postgres-run-offers.ts`), the heartbeat's renewal, the spawn marker and `finish`'s fence re-ask `workers.revoked_at` and `USER_MAY_ACT` in their own statement (`pipeline/worker-holder.ts`, one definition the worker store reads too); `remote-runs.test.ts` and `remote-claim.integration.test.ts` hold it |
 | 701 | S-22.6 (WP-281) | `release` is admitted while the run is `starting` with no spawn marker and undoes the claim only (offer `claimed → open`, epoch kept, lease cleared, run `starting → created`, credential revoked, nothing charged); `409 run_started` after; `POST runs/:id/spawn` writes the marker and `run.started` |
 | 712 | S-22.6 (WP-281) | The `426` check applies to the device flow too (TD-031 §9: the header on every request), first, before authentication; `protocol.contract.test.ts` and `client-census.test.ts` assert it on every verb |

@@ -3616,8 +3616,7 @@
                 "usage_limited",
                 "image_missing",
                 "provision_failed",
-                "shutdown",
-                "credential_unavailable"
+                "shutdown"
               ]
             }
           },

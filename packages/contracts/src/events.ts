@@ -865,16 +865,15 @@ export const runOfferWithdrawnEvent = defineEvent('run.offer.withdrawn', {
 });
 
 /**
- * Why a claim was handed back **unspent** (TD-031 decision 6): a remote worker's four reasons, and
- * `credential_unavailable` — the core's own, when the run's git credential could not be minted
- * after the claim committed (TD-031 §2).
+ * Why a claim was handed back **unspent** (TD-031 decision 6): a remote worker's four reasons. A
+ * release is the claimant's own act — a credential the core could not mint after a claim settles the
+ * run `not_started` instead (TD-031's 2026-11-05 amendment).
  */
 export const runReleaseReasonSchema = z.enum([
   'usage_limited',
   'image_missing',
   'provision_failed',
   'shutdown',
-  'credential_unavailable',
 ]);
 export type RunReleaseReason = z.infer<typeof runReleaseReasonSchema>;
 
@@ -888,7 +887,7 @@ export const runOfferReleasedEvent = defineEvent('run.offer.released', {
   ...taskScoped,
   run_id: idSchema,
   offer_id: idSchema,
-  /** The remote worker that released; `null` for a release the core made itself. */
+  /** The remote worker that released (nullable for a claimant that is no remote worker). */
   worker_id: idSchema.nullable(),
   /** The epoch of the claim that was released. */
   lease_epoch: z.int().positive(),

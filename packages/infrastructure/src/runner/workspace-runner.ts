@@ -73,6 +73,9 @@ import type {
   WorkspaceCliEnvironment,
 } from '@platform/application';
 import {
+  IntegrationError,
+  isRetryableMintFailure,
+  RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS,
   RunStartError,
   silentLogger,
   type UnfinishedWorkExport,
@@ -217,13 +220,20 @@ export interface WorkspaceClaudeRunnerOptions {
  * same reason `engine_unavailable` is: the run's control directory not being there yet is what a
  * launcher that has just restarted looks like.
  *
- * Anything that is not a `WorkspaceError` is **terminal**, which is the fail-closed answer: a new
+ * An `IntegrationError` is the **mint's** (the only provider call a provision makes) and says itself
+ * whether a retry could help (`rate_limited`, `unavailable`) — TD-031's 2026-11-05 amendment, item 3:
+ * a provider `503` is three spaced attempts and an escalation on either claimant, a `403` one.
+ *
+ * Anything else that is not a `WorkspaceError` is **terminal**, which is the fail-closed answer: a new
  * failure shape parks one task and tells a human, rather than retrying something nobody has looked
  * at. A provisioner may also throw a {@link RunStartError} itself, which is taken as given.
  */
 export const classifyProvisionFailure = (error: unknown): { readonly retryable: boolean } => {
   if (error instanceof RunStartError) {
     return { retryable: error.retryable };
+  }
+  if (error instanceof IntegrationError) {
+    return { retryable: isRetryableMintFailure(error) };
   }
   if (error instanceof WorkspaceError) {
     return {
@@ -288,6 +298,10 @@ export const createWorkspaceClaudeRunner = (
             {
               retryable,
               cause: error,
+              // A mint's failure is named as one, the same diagnosis a remote claim's records.
+              ...(error instanceof IntegrationError
+                ? { diagnosis: RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS }
+                : {}),
             },
           );
         }

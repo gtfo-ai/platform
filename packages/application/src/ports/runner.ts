@@ -60,6 +60,7 @@ import {
 } from '@platform/contracts';
 import * as z from 'zod';
 import type { SecretRedactor } from './integrations/audit.js';
+import { IntegrationError } from './integrations/common.js';
 import {
   boundOutputTail,
   WorkspaceError,
@@ -896,5 +897,22 @@ const boundedStartFailureDetail = (
  * answer **false** — the fail-closed direction — and a call site that wrote the check itself would
  * eventually write it the other way round.
  */
+/**
+ * The diagnosis of a run whose git credential could not be minted after its claim (TD-031's
+ * 2026-11-05 amendment): platform text, the same on either claimant.
+ */
+export const RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS: RunStartDiagnosis = {
+  kind: 'workspace_failed',
+  reason: 'run_credential_unavailable',
+  commit: null,
+};
+
+/**
+ * Whether a mint failure is worth another attempt (TD-031's 2026-11-05 amendment): an
+ * `IntegrationError` says so itself (`rate_limited`, `unavailable`); anything else is terminal.
+ */
+export const isRetryableMintFailure = (error: unknown): boolean =>
+  error instanceof IntegrationError && error.retryable;
+
 export const isRetryableStartFailure = (error: unknown): boolean =>
   error instanceof RunStartError && error.retryable;

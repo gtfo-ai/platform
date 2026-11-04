@@ -1248,7 +1248,7 @@ export const settleRun = async (
           'kind' in reported
             ? await recordNotStarted(scope, {
                 ...inputs,
-                report: reported,
+                report: await withStoredSpawnMarker(deps, scope, request, reported),
                 options: deps,
                 fence: request.fence,
               })
@@ -1269,6 +1269,32 @@ export const settleRun = async (
   );
   await enqueueFollowOn(deps, located, result.outcome);
   return result;
+};
+
+/**
+ * **A remote worker's word does not beat the core's own marker** (TD-031's 2026-11-04 amendment §4,
+ * rule 16; PR #9 review): a worker's `not_started` report with `spawn_requested: false` for a run
+ * whose `runs.cli_spawn_requested_at` it wrote through `spawn` would record a **measured zero** for a
+ * run that may have spent, on an untrusted producer's say-so. So for a fence held by a remote worker
+ * (`worker:<id>`) the stored marker decides, read under the settle's lock.
+ *
+ * **Not for the server claimant**, deliberately: its `false` after a written marker is in-process
+ * evidence that the runner withheld the `spawn` frame (`CliSpawnRecord.withheld`, WP-163 ruling (c)),
+ * which no stored column records, and that run is a measured zero by ruling. A report's `true` is
+ * kept as given on either claimant.
+ */
+const withStoredSpawnMarker = async (
+  deps: SettleRunDeps,
+  scope: TransactionScope,
+  request: SettleRunRequest,
+  report: NotStartedReport,
+): Promise<NotStartedReport> => {
+  if (report.spawnRequested || request.fence.owner?.startsWith('worker:') !== true) {
+    return report;
+  }
+  const stored = await deps.store.runs.load(scope.tx, request.runId);
+  const marked = stored?.cliSpawnRequestedAt !== null && stored?.cliSpawnRequestedAt !== undefined;
+  return marked ? { ...report, spawnRequested: true } : report;
 };
 
 const taskGone = (): SettleRunResult => ({

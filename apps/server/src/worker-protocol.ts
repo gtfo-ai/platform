@@ -136,7 +136,7 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
       logger: options.logger,
     }),
     credentials: {
-      revoke: async (runId) => {
+      revoke: async (runId, scope) => {
         await revokeRunCredentialsNow(
           {
             unitOfWork,
@@ -146,6 +146,7 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
             logger: options.logger,
           },
           runId,
+          scope,
         );
       },
     },

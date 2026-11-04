@@ -20,10 +20,12 @@ import { domainEventSchemasByType } from '@platform/contracts';
 import { DEFAULT_WIP_LIMITS } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import type { LateRunSpend } from '../cost/late.js';
+import { RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS, RunStartError } from '../ports/runner.js';
 import { WorkspaceError } from '../ports/workspace.js';
 import type { MemoryRemoteWorker } from '../testing/memory-pipeline.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import { createTestRunPlanSealer } from '../testing/run-plans.js';
+import { RUN_START_RETRY_MS } from './jobs.js';
 import {
   createRemoteRuns,
   type RemotePackageAnswer,
@@ -31,7 +33,7 @@ import {
   type RunTokens,
   settleOutcomeOfFinish,
 } from './remote-runs.js';
-import type { SettleRunRequest, SettleRunResult } from './settle.js';
+import { MAX_RUN_START_ATTEMPTS, type SettleRunRequest, type SettleRunResult } from './settle.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000281b1';
 const W1 = '00000000-0000-4000-8000-0000000281f1';
@@ -100,6 +102,7 @@ const world = async (
     readonly packager?: () => Promise<RemotePackageAnswer>;
     readonly settle?: (request: SettleRunRequest) => Promise<SettleRunResult>;
     readonly before?: (harness: PipelineHarness) => void;
+    readonly tickets?: number;
   } = {},
 ): Promise<World> => {
   const workers: World['workers'] = new Map();
@@ -126,7 +129,9 @@ const world = async (
     },
   });
   options.before?.(harness);
-  await harness.publish([ticketMatched('ACME-1', 1)]);
+  for (let index = 1; index <= (options.tickets ?? 1); index += 1) {
+    await harness.publish([ticketMatched(`ACME-${index}`, index)]);
+  }
   const tokens = fakeTokens();
   const built: World['built'] = [];
   const revoked: Id[] = [];
@@ -318,20 +323,84 @@ describe('the remote claim (WP-281, TD-031 decisions 2, 7, 8)', () => {
     expect(w.harness.store.offerRows()[0]?.state).toBe('settled');
   });
 
-  it('releases the claim when the credential cannot be minted (credential_unavailable): the offer is open, nothing is charged', async () => {
+  /**
+   * TD-031's 2026-11-05 amendment (backlog 740): a mint that fails after the claim is a **start
+   * failure**, never a release — so Q59(a)'s bound spaces the retries `RUN_START_RETRY_MS` apart and
+   * ends them in `needs_human` after `MAX_RUN_START_ATTEMPTS`, each attempt one failed run, with no
+   * worker excluded. Before the amendment the offer reopened at once and the claim re-minted forever.
+   */
+  it('settles an always-failing retryable mint as not started, three times 30 s apart, then needs_human — never a release', async () => {
+    const mints: number[] = [];
+    let harnessRef: PipelineHarness | null = null;
     const w = await world({
-      packager: async () => ({ kind: 'credential_unavailable', detail: 'provider answered 502' }),
+      packager: async () => {
+        mints.push(harnessRef?.clock.epochMs ?? 0);
+        throw new RunStartError('the provider answered 503', {
+          retryable: true,
+          diagnosis: RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS,
+        });
+      },
+    });
+    harnessRef = w.harness;
+    for (let attempt = 1; attempt <= MAX_RUN_START_ATTEMPTS + 1; attempt += 1) {
+      const answer = await claimAs(w, W1);
+      expect(answer.kind).toBe(attempt <= MAX_RUN_START_ATTEMPTS ? 'not_packaged' : 'none');
+      w.harness.clock.advance(RUN_START_RETRY_MS);
+      await w.harness.drain();
+    }
+    expect(mints).toHaveLength(MAX_RUN_START_ATTEMPTS);
+    for (let index = 1; index < mints.length; index += 1) {
+      expect((mints[index] ?? 0) - (mints[index - 1] ?? 0)).toBeGreaterThanOrEqual(
+        RUN_START_RETRY_MS,
+      );
+    }
+    const failed = w.harness.events().filter((event) => event.type === 'run.failed');
+    expect(failed).toHaveLength(MAX_RUN_START_ATTEMPTS);
+    expect(
+      failed.map(
+        (event) => (event.payload as { start_failure?: { diagnosis: string } }).start_failure,
+      ),
+    ).toEqual(
+      Array(MAX_RUN_START_ATTEMPTS).fill(
+        expect.objectContaining({
+          diagnosis: expect.stringContaining('run_credential_unavailable'),
+        }),
+      ),
+    );
+    expect(w.harness.types()).not.toContain('run.offer.released');
+    expect(w.harness.store.offerRows().every((row) => row.state === 'settled')).toBe(true);
+    // No worker excluded: the provider's fault is not the worker's.
+    expect(w.harness.store.offerRows().map((row) => row.state)).toHaveLength(
+      MAX_RUN_START_ATTEMPTS,
+    );
+    const task = await w.harness.store.tasks.load(
+      {} as never,
+      w.harness.store.offerRows()[0]?.taskId as Id,
+    );
+    expect(task?.task.state).toBe('needs_human');
+  });
+
+  it('escalates a non-retryable mint failure (forbidden) on its first attempt', async () => {
+    let mints = 0;
+    const w = await world({
+      packager: async () => {
+        mints += 1;
+        throw new RunStartError('the token may not mint', {
+          retryable: false,
+          diagnosis: RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS,
+        });
+      },
     });
     expect((await claimAs(w, W1)).kind).toBe('not_packaged');
-    const offer = w.harness.store.offerRows()[0];
-    expect(offer).toMatchObject({ state: 'open', leaseEpoch: 1 });
-    const released = w.harness.events().find((event) => event.type === 'run.offer.released');
-    expect(released?.payload).toMatchObject({ reason: 'credential_unavailable', worker_id: W1 });
-    expect(w.harness.types()).not.toContain('run.failed');
-    expect(w.revoked).toEqual([w.runId]);
-    // Not excluded: the next claim takes it again, at the next epoch.
-    expect((await claimAs(w, W1)).kind).toBe('not_packaged');
-    expect(w.harness.store.offerRows()[0]?.leaseEpoch).toBe(2);
+    w.harness.clock.advance(RUN_START_RETRY_MS);
+    await w.harness.drain();
+    expect((await claimAs(w, W1)).kind).toBe('none');
+    expect(mints).toBe(1);
+    const task = await w.harness.store.tasks.load(
+      {} as never,
+      w.harness.store.offerRows()[0]?.taskId as Id,
+    );
+    expect(task?.task.state).toBe('needs_human');
   });
 });
 
@@ -452,6 +521,38 @@ describe('the heartbeat (TD-031 §§2, 14; backlog 714)', () => {
     expect(w.harness.store.runCommandRows().find((row) => row.id === commandId)?.applied).toBe(
       true,
     );
+  });
+});
+
+describe('acks are scoped to the run and its holder', () => {
+  it('leaves pending a command of another run, held by another worker, that this worker acks refused', async () => {
+    const w = await world({ tickets: 2 });
+    await claimAs(w, W1);
+    await claimAs(w, W2);
+    const [first, second] = w.harness.store.offerRows();
+    const theirs = '00000000-0000-4000-8000-0000000281c7' as Id;
+    await w.harness.memory.transaction(async (scope) =>
+      w.harness.store.runCommands.insert(scope.tx, {
+        id: theirs,
+        runId: second?.runId as Id,
+        taskId: second?.taskId as Id,
+        actorUserId: null,
+        instruction: { kind: 'cancel' },
+      }),
+    );
+    expect(w.harness.store.leaseOf(second?.runId as Id)?.owner).toBe(`worker:${W2}`);
+    const beat = await w.remote.heartbeat({
+      runId: first?.runId as Id,
+      workerId: W1,
+      epoch: 1,
+      acks: [{ commandId: theirs, outcome: 'refused', reason: 'register_miss' }],
+      now: w.harness.clock.now(),
+    });
+    expect(beat.kind).toBe('renewed');
+    const row = w.harness.store.runCommandRows().find((entry) => entry.id === theirs);
+    expect(row).toMatchObject({ applied: false, refusedReason: null });
+    // Its own holder still receives it.
+    expect(await w.remote.pending({ runId: second?.runId as Id, workerId: W2 })).toHaveLength(1);
   });
 });
 
@@ -664,6 +765,60 @@ describe('finish (TD-031 §3, the four-field request)', () => {
     });
     expect(settled).toMatchObject({ kind: 'settled', ending: { status: 'failed' } });
     expect(w.harness.store.startFailureOf(w.runId)).toMatchObject({ kind: 'not_started' });
+  });
+});
+
+describe('the core’s spawn marker beats the claimant’s word (rule 16)', () => {
+  /**
+   * PR #9 review: a run whose CLI spawn marker is written and whose claimant then reports it
+   * `not_started` with `spawn_requested: false` must not record a measured zero — it may have spent.
+   * `settleRun` reads the marker under its lock (both claimants), so the run is held unmeasured.
+   */
+  it('settles a spawned run reported not_started with spawn_requested false as unmeasured, not zero', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    await w.remote.spawn({ runId: w.runId, workerId: W1, epoch: 1, now: w.harness.clock.now() });
+    const settled = await w.remote.finish({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      outcome: {
+        kind: 'not_started',
+        failure: 'the workspace could not be created',
+        detail: null,
+        detailTruncated: false,
+        transient: false,
+        spawnRequested: false,
+      },
+      stopReason: null,
+    });
+    expect(settled.kind).toBe('settled');
+    const run = await w.harness.store.runs.load({} as never, w.runId);
+    expect(run?.cost).toBeNull();
+    const failed = w.harness.events().find((event) => event.type === 'run.failed');
+    expect(failed).toBeDefined();
+    expect((failed?.payload as { cost?: unknown } | undefined)?.cost ?? null).toBeNull();
+  });
+
+  it('keeps the measured zero for a run that never reached its marker', async () => {
+    const w = await world();
+    await claimAs(w, W1);
+    await w.remote.finish({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      outcome: {
+        kind: 'not_started',
+        failure: 'the workspace could not be created',
+        detail: null,
+        detailTruncated: false,
+        transient: false,
+        spawnRequested: false,
+      },
+      stopReason: null,
+    });
+    const run = await w.harness.store.runs.load({} as never, w.runId);
+    expect(run?.cost).toMatchObject({ usd: 0 });
   });
 });
 

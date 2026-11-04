@@ -443,9 +443,12 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
   `member`+, `workers_from` reached or the assignee's head start, and the project's run credential
   `minted` (`static`/`deploy_key` wait for WP-282's `remote_run_credential: allow`). The claim writes
   `run_offers.worker_id`, `runs.worker_id`, the run token's SHA-256 and its epoch, and the offer's
-  `image_digests`; the git credential is minted **after** it commits. A provider error while minting
-  **releases** the claim (`credential_unavailable`); a run that cannot be packaged at all settles
-  `not_started` under the worker's claim. `200` is the run package (`runPackageSchema`): the stored
+  `image_digests`; the git credential is minted **after** it commits. A run that cannot be packaged
+  settles `not_started` under the worker's claim — **a mint failure included, never a release**
+  (TD-031's 2026-11-05 amendment, backlog 740): retryable exactly when the mint error is
+  (`rate_limited`, `unavailable`, or the binding changing between claim and mint), so Q59(a)'s bound
+  spaces the attempts 30 s apart and escalates the task after three; no worker is excluded. The server
+  claimant judges a mint error the same way (`classifyProvisionFailure`). `200` is the run package (`runPackageSchema`): the stored
   spec with no secret value and `secretEnvNames` empty, the minted credential, the skills, the images
   by digest, `limits.leaseTtlMs` 600 000. `503 digests_unresolved` while `APP_WORKER_IMAGE_DIGESTS` is
   unset (WP-284 resolves the core's own).
@@ -458,8 +461,8 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
 - **`release`** is admitted while the run is `starting` with no spawn marker and undoes the claim only
   (TD-031's 2026-11-04 amendment §4): offer `claimed → open` at the same epoch, lease and
   `runs.worker_id` cleared, run `starting → created`, `run.offer.released`, the worker added to
-  `excluded_worker_ids` for `usage_limited`/`provision_failed`, the minted credential revoked, nothing
-  charged; `run_offers.worker_id` keeps the last claimant until the next claim, so a repeat answers
+  `excluded_worker_ids` for `usage_limited`/`provision_failed`, the credential minted for the released
+  claim revoked (mints recorded by the release only, never a later claimant's), nothing charged; `run_offers.worker_id` keeps the last claimant until the next claim, so a repeat answers
   `204` again. `409 run_started` after the marker, `409 lease_lost` for another claim or an ended run.
 - **`spawn`** (TD-031 decision 9's table gains it) writes the CLI spawn marker, `started_at`, `starting →
   running` and `run.started` in one transaction fenced like the heartbeat; the worker sends no `spawn`

@@ -738,4 +738,44 @@ describe('a run’s live minted credentials, whatever its status (WP-281)', () =
     );
     expect(await live()).toEqual([]);
   });
+
+  it('scopes a release’s revoke to the mints recorded by then — never a later claimant’s', async () => {
+    const w = await world();
+    const runId = await offered(w);
+    const [taskRow] = await sql<{ task_id: string }>('select task_id from runs where id = $1', [
+      runId,
+    ]);
+    const [integration] = await sql<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name) values ($1, 'git', 'gitlab', $2)
+       returning id`,
+      [orgId, `git-${nextId()}`],
+    );
+    const mint = async (revokeId: string, createdAt: string) =>
+      sql(
+        `insert into integration_actions
+           (integration_id, task_id, direction, action, payload, result, status, attempts,
+            redaction_count, created_at)
+         values ($1, $2, 'out', 'mint_credential', jsonb_build_object('run_id', $3::text),
+                 jsonb_build_object('revoke_id', $4::text, 'scope', 'push',
+                                    'expires_at', '2099-01-01T00:00:00.000Z'), 'ok', 1, 0,
+                 $5::timestamptz)`,
+        [integration?.id, taskRow?.task_id, runId, revokeId, createdAt],
+      );
+    const now = Date.now();
+    await mint('acme/remote#91', new Date(now - 60_000).toISOString());
+    await mint('acme/remote#92', new Date(now - 1_000).toISOString());
+    const credentialStore = recovery.createPostgresRunCredentialStore();
+    const live = (mintedBefore?: string) =>
+      inTx(async (tx) =>
+        credentialStore.liveCredentialsOfRun(tx, {
+          runId,
+          now: new Date(now).toISOString() as IsoDateTime,
+          ...(mintedBefore === undefined ? {} : { mintedBefore: mintedBefore as IsoDateTime }),
+        }),
+      );
+    expect((await live()).map((row) => row.revokeId)).toEqual(['acme/remote#91', 'acme/remote#92']);
+    expect((await live(new Date(now - 30_000).toISOString())).map((row) => row.revokeId)).toEqual([
+      'acme/remote#91',
+    ]);
+  });
 });

@@ -158,7 +158,15 @@ export interface UnrevokedRunCredentialStore {
    */
   liveCredentialsOfRun(
     tx: Transaction,
-    input: { readonly runId: Id; readonly now: IsoDateTime },
+    input: {
+      readonly runId: Id;
+      readonly now: IsoDateTime;
+      /**
+       * Only mints recorded at or before this instant: a release revokes the **released** claim's
+       * credential, never the one a later claimant of the reopened offer has already minted.
+       */
+      readonly mintedBefore?: IsoDateTime;
+    },
   ): Promise<readonly RecoverableRunCredential[]>;
 }
 
@@ -397,14 +405,16 @@ export const revokeRunCredentialsNow = async (
     readonly logger?: Logger;
   },
   runId: Id,
+  scope: { readonly mintedBefore?: IsoDateTime } = {},
 ): Promise<number> => {
   const logger = options.logger ?? silentLogger;
   let credentials: readonly RecoverableRunCredential[];
   try {
-    credentials = await options.unitOfWork.transaction(async (scope) =>
-      options.store.liveCredentialsOfRun(scope.tx, {
+    credentials = await options.unitOfWork.transaction(async (transaction) =>
+      options.store.liveCredentialsOfRun(transaction.tx, {
         runId,
         now: options.clock.now() as IsoDateTime,
+        ...(scope.mintedBefore === undefined ? {} : { mintedBefore: scope.mintedBefore }),
       }),
     );
   } catch (error) {

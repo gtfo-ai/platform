@@ -22,7 +22,13 @@
  * 714's re-check under concurrency) are PostgreSQL's and are asserted in
  * `test/integration/pipeline/remote-claim.integration.test.ts`.
  */
-import { createRemoteRuns, type RemoteRuns } from '@platform/application';
+import {
+  createRemoteRuns,
+  IntegrationError,
+  MAX_RUN_START_ATTEMPTS,
+  type RemoteRuns,
+  RUN_START_RETRY_MS,
+} from '@platform/application';
 import {
   type DomainEvent,
   domainEventSchemasByType,
@@ -163,7 +169,15 @@ afterEach(async () => {
   opened = undefined;
 });
 
-const world = async (options: { readonly release?: boolean } = {}): Promise<World> => {
+const world = async (
+  options: {
+    readonly release?: boolean;
+    readonly tickets?: number;
+    /** What the git credential minter does instead of minting (TD-031's 2026-11-05 amendment). */
+    readonly mintFails?: () => Error;
+    readonly onMint?: (at: number) => void;
+  } = {},
+): Promise<World> => {
   const store = createMemoryWorkerStore();
   store.addUser({ id: ALICE, email: 'alice@example.test', name: null });
   store.addUser({ id: BOB, email: 'bob@example.test', name: null });
@@ -186,7 +200,9 @@ const world = async (options: { readonly release?: boolean } = {}): Promise<Worl
       },
     },
   });
-  await harness.publish([ticketMatched('ACME-1', 1)]);
+  for (let index = 1; index <= (options.tickets ?? 1); index += 1) {
+    await harness.publish([ticketMatched(`ACME-${index}`, index)]);
+  }
   const remote = createRemoteRuns({
     unitOfWork: harness.memory,
     store: harness.store,
@@ -205,17 +221,22 @@ const world = async (options: { readonly release?: boolean } = {}): Promise<Worl
         }),
       },
       credentials: {
-        mint: async ({ scope }) => ({
-          kind: 'minted',
-          credential: {
-            username: 'oauth2',
-            password: RUN_CREDENTIAL,
-            scope,
-            expiresAt: '2026-06-02T09:00:00.000Z',
-            source: 'minted',
-            revoke: async () => {},
-          },
-        }),
+        mint: async ({ scope }) => {
+          options.onMint?.(harness.clock.epochMs);
+          const failure = options.mintFails?.();
+          if (failure !== undefined) throw failure;
+          return {
+            kind: 'minted',
+            credential: {
+              username: 'oauth2',
+              password: RUN_CREDENTIAL,
+              scope,
+              expiresAt: '2026-06-02T09:00:00.000Z',
+              source: 'minted',
+              revoke: async () => {},
+            },
+          };
+        },
       },
       skills: PLATFORM_SKILLS,
       modelEgressHosts: ['api.anthropic.com'],
@@ -441,8 +462,15 @@ describe('the worker protocol (WP-281): 426 before anything else, on every verb 
 
 describe('the worker protocol (WP-281): 401 on every authenticated verb (census)', () => {
   it('refuses no credential, a wrong one, a credential of the wrong kind and another run’s token', async () => {
-    const w = await world();
+    const w = await world({ tickets: 2 });
     const pkg = await claimAsAlice(w);
+    // A second **claimed** run, so a token is checked against that run's own stored hash.
+    const bobs = runPackageSchema.parse(
+      (
+        await post(w, WORKER_PATHS.claims, '', w.bob.credential, bodies(1)[WORKER_PATHS.claims])
+      ).json(),
+    );
+    expect(bobs.runId).not.toBe(pkg.runId);
     const wrongWorker = `wkr_${'a'.repeat(26)}_${'b'.repeat(43)}`;
     for (const verb of WORKER_VERBS) {
       for (const headers of [PROTOCOL, bearer(wrongWorker), bearer(pkg.runToken)]) {
@@ -458,13 +486,13 @@ describe('the worker protocol (WP-281): 401 on every authenticated verb (census)
         expect(response.headers['cache-control']).toBe('no-store');
       }
     }
-    const otherRun = '00000000-0000-4000-8000-0000000282ff';
     for (const verb of RUN_VERBS) {
       for (const [runId, headers] of [
         [w.runId, PROTOCOL],
         [w.runId, bearer(w.alice.credential)],
         [w.runId, bearer('x'.repeat(43))],
-        [otherRun, bearer(pkg.runToken)],
+        [bobs.runId, bearer(pkg.runToken)],
+        [pkg.runId, bearer(bobs.runToken)],
       ] as const) {
         const response = await w.app.inject({
           method: 'POST',
@@ -499,6 +527,58 @@ describe('the worker protocol (WP-281): 401 on every authenticated verb (census)
       acks: [],
     });
     expect(`${beat.statusCode} ${beat.json().error?.code}`).toBe('401 unauthenticated');
+  });
+});
+
+describe('a mint failure after a remote claim (TD-031’s 2026-11-05 amendment, backlog 740)', () => {
+  it('is a start failure: an always-unavailable minter is asked 3 times, 30 s apart, then the task needs a human — no release', async () => {
+    const mints: number[] = [];
+    const w = await world({
+      mintFails: () => new IntegrationError('unavailable', 'fake-git', 'the provider answered 503'),
+      onMint: (at) => mints.push(at),
+    });
+    for (let attempt = 1; attempt <= MAX_RUN_START_ATTEMPTS + 1; attempt += 1) {
+      const response = await post(
+        w,
+        WORKER_PATHS.claims,
+        '',
+        w.alice.credential,
+        bodies(1)[WORKER_PATHS.claims],
+      );
+      expect(response.statusCode).toBe(204);
+      w.harness.clock.advance(RUN_START_RETRY_MS);
+      await w.harness.drain();
+    }
+    expect(mints).toHaveLength(MAX_RUN_START_ATTEMPTS);
+    for (let index = 1; index < mints.length; index += 1) {
+      expect((mints[index] ?? 0) - (mints[index - 1] ?? 0)).toBeGreaterThanOrEqual(
+        RUN_START_RETRY_MS,
+      );
+    }
+    expect(w.harness.types().filter((type) => type === 'run.failed')).toHaveLength(
+      MAX_RUN_START_ATTEMPTS,
+    );
+    expect(w.harness.types()).not.toContain('run.offer.released');
+    const [first] = w.harness.store.offerRows();
+    const task = await w.harness.store.tasks.load({} as never, first?.taskId as Id);
+    expect(task?.task.state).toBe('needs_human');
+  });
+
+  it('escalates a forbidden mint on its first attempt', async () => {
+    const mints: number[] = [];
+    const w = await world({
+      mintFails: () => new IntegrationError('forbidden', 'fake-git', 'the token may not mint'),
+      onMint: (at) => mints.push(at),
+    });
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await post(w, WORKER_PATHS.claims, '', w.alice.credential, bodies(1)[WORKER_PATHS.claims]);
+      w.harness.clock.advance(RUN_START_RETRY_MS);
+      await w.harness.drain();
+    }
+    expect(mints).toHaveLength(1);
+    const [first] = w.harness.store.offerRows();
+    const task = await w.harness.store.tasks.load({} as never, first?.taskId as Id);
+    expect(task?.task.state).toBe('needs_human');
   });
 });
 

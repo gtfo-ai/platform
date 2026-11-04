@@ -18,7 +18,12 @@ import type {
   RunSpec,
   TerminalRunStatus,
 } from '@platform/application';
-import { countingStartHooks, RunStartError, WorkspaceError } from '@platform/application';
+import {
+  countingStartHooks,
+  IntegrationError,
+  RunStartError,
+  WorkspaceError,
+} from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { runSpecFixture } from './fixtures.js';
 import {
@@ -212,6 +217,34 @@ describe('every ending frees the workspace', () => {
     // would be calling a method on nothing.
     expect(world.released).toEqual([]);
   });
+
+  /**
+   * TD-031's 2026-11-05 amendment, item 3: the server claimant judges a mint failure as a remote claim
+   * does — a provider 503 is retryable (Q59(a)'s three spaced attempts), a 403 terminal — and names
+   * it `run_credential_unavailable`. Before it, every non-`WorkspaceError` was terminal: a 503 mint
+   * escalated on its first try.
+   */
+  it.each([
+    ['a provider 503', new IntegrationError('unavailable', 'fake-git', '503'), true],
+    ['a provider 403', new IntegrationError('forbidden', 'fake-git', '403'), false],
+  ] as const)(
+    'ends %s while minting as a mint start failure, retryable as the error says',
+    async (_name, error, retryable) => {
+      const world = harness({
+        provision: async () => {
+          throw error;
+        },
+      });
+      const failure = await world.runner
+        .start(runSpecFixture(), countingStartHooks())
+        .outcome.catch((thrown: unknown) => thrown);
+      expect(failure).toBeInstanceOf(RunStartError);
+      expect((failure as RunStartError).retryable).toBe(retryable);
+      expect((failure as RunStartError).diagnosis).toMatchObject({
+        reason: 'run_credential_unavailable',
+      });
+    },
+  );
 
   it('carries the workspace’s kind, reason code and commit to the stage executor (WP-127)', async () => {
     const sha = '0123456789abcdef0123456789abcdef01234567';

@@ -306,12 +306,7 @@ export const releaseRunClaim = (
     readonly offerId: Id;
     readonly workerId: Id | null;
     readonly epoch: number;
-    readonly reason:
-      | 'usage_limited'
-      | 'image_missing'
-      | 'provision_failed'
-      | 'shutdown'
-      | 'credential_unavailable';
+    readonly reason: 'usage_limited' | 'image_missing' | 'provision_failed' | 'shutdown';
   },
   context: CommandContext,
 ): RunDecision => {

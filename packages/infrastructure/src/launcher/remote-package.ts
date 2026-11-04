@@ -15,15 +15,19 @@
  *   scope the spec asks — `push` for a writing run, `read` otherwise — and only a `minted` one
  *   travels: a static run token or a deploy key is WP-282's opt-in, and the claim's eligibility
  *   already keeps such a project off a worker, so one met here (a binding changed between the claim
- *   and the mint) is answered `credential_unavailable` and the claim is released;
+ *   and the mint) is a **retryable** start failure: the re-planned offer's eligibility then answers
+ *   who may claim it (TD-031's 2026-11-05 amendment, item 2);
  * - the package is validated by `runPackageSchema` — its refinements (one run, no credential in an
  *   environment, the 4 MiB bound) are the last word — and refused, never cut.
  *
- * **Endings.** A provider error while minting is `credential_unavailable` (the caller releases the
- * claim). A writing run whose binding can mint nothing, a skill this deployment does not ship, a
- * scope wider than asked and a package the schema refuses are terminal `invalid_spec`
- * `WorkspaceError`s (the caller settles the run `not_started`). Whatever was minted is revoked before
- * a refusal is thrown, so a refused package leaves no live token behind.
+ * **Endings — every one a start failure the caller settles `not_started`, never a release** (TD-031's
+ * 2026-11-05 amendment, backlog 740). A mint that throws is a `RunStartError` diagnosed
+ * `run_credential_unavailable` whose `retryable` is the mint error's own (`isRetryableMintFailure`:
+ * an `IntegrationError` that is `rate_limited` or `unavailable`), so Q59(a)'s bound spaces and ends
+ * it. A writing run whose binding can mint nothing, a skill this deployment does not ship, a scope
+ * wider than asked and a package the schema refuses are terminal `invalid_spec` `WorkspaceError`s.
+ * Whatever was minted is revoked before a refusal is thrown, so a refused package leaves no live
+ * token behind.
  */
 import type {
   RemotePackageAnswer,
@@ -31,7 +35,14 @@ import type {
   RunnerClock,
   WorkspaceErrorReason,
 } from '@platform/application';
-import { type Logger, silentLogger, WorkspaceError } from '@platform/application';
+import {
+  isRetryableMintFailure,
+  type Logger,
+  RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS,
+  RunStartError,
+  silentLogger,
+  WorkspaceError,
+} from '@platform/application';
 import { type RunCredentialPayload, runPackageSchema } from '@platform/contracts';
 import { type PlatformSkillCatalogue, runSkillsFor } from '../workspace/skills.js';
 import {
@@ -104,10 +115,14 @@ export const createRemoteRunPackager = (options: RemoteRunPackagerOptions): Remo
           if (error instanceof WorkspaceError) {
             throw error;
           }
-          return {
-            kind: 'credential_unavailable',
-            detail: error instanceof Error ? error.message : String(error),
-          };
+          throw new RunStartError(
+            `run ${spec.runId}'s git credential could not be minted after its claim`,
+            {
+              retryable: isRetryableMintFailure(error),
+              cause: error,
+              diagnosis: RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS,
+            },
+          );
         }
         if (answer.kind === 'unavailable') {
           if (!workspace.readOnly) {
@@ -125,10 +140,12 @@ export const createRemoteRunPackager = (options: RemoteRunPackagerOptions): Remo
           minted = answer.credential;
           if ((minted.source ?? 'minted') !== 'minted') {
             await revokeQuietly(spec.runId, minted);
-            return {
-              kind: 'credential_unavailable',
-              detail: `the project's run credential is ${minted.source}, which reaches a remote worker only behind remote_run_credential: allow (TD-031 decision 5, WP-282)`,
-            };
+            // The binding changed between the claim and the mint: retryable, so the re-planned
+            // offer's eligibility answers who may claim it (TD-031's 2026-11-05 amendment, item 2).
+            throw new RunStartError(
+              `run ${spec.runId}'s project now gives a ${minted.source} run credential, which reaches a remote worker only behind remote_run_credential: allow (TD-031 decision 5, WP-282)`,
+              { retryable: true, diagnosis: RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS },
+            );
           }
           if (scope === 'read' && minted.scope === 'push') {
             await revokeQuietly(spec.runId, minted);

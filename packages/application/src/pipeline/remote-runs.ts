@@ -19,15 +19,16 @@
  * ## After the claim commits
  *
  * The git credential is minted **after** the claim's transaction commits (`assertOutsideTransaction`,
- * TD-028's WP-76 amendment) and before the package is answered (TD-031 §2). Three endings:
+ * TD-028's WP-76 amendment) and before the package is answered (TD-031 §2). Two endings:
  *
  * - the package — answered;
- * - **the credential could not be minted** (a provider error) — the claim is **released** by the core
- *   with `credential_unavailable`, and the offer is open again;
- * - **the run cannot be packaged at all** (no stored plan, a seal that does not open, a writing run
- *   whose binding can mint nothing, a package the schema refuses) — the run **settles as
- *   `not_started`** under the worker's claim, exactly as the server's claimant settles a start that
- *   threw, so the stage entry's start-failure bound and escalation are the ones every run gets.
+ * - **the run cannot be packaged** — the credential could not be minted, the plan cannot be read
+ *   back, a writing run's binding can mint nothing, the package the schema refuses — and the run
+ *   **settles as `not_started`** under the worker's claim, exactly as the server's claimant settles a
+ *   start that threw. A mint failure is **never a release** (TD-031's 2026-11-05 amendment, backlog
+ *   740): it is retryable as the mint error says (`IntegrationError.retryable`), so Q59(a)'s bound —
+ *   `RUN_START_RETRY_MS` apart, `MAX_RUN_START_ATTEMPTS` per stage entry, then `needs_human` — ends a
+ *   provider that refuses every mint, and no worker is excluded for the provider's fault.
  *
  * ## The run token
  *
@@ -105,11 +106,12 @@ export interface RemoteRunImages {
   readonly egress: string;
 }
 
-/** What {@link RemoteRunPackager.build} answers. */
-export type RemotePackageAnswer =
-  | { readonly kind: 'package'; readonly package: WorkerRunPackage }
-  /** The git credential could not be minted (a provider error): the claim is released. */
-  | { readonly kind: 'credential_unavailable'; readonly detail: string };
+/**
+ * What {@link RemoteRunPackager.build} answers: the package. Every failure is **thrown** — a mint
+ * failure as a `RunStartError` whose `retryable` is the mint error's own (TD-031's 2026-11-05
+ * amendment), a refusal as a terminal `WorkspaceError` — and settles the run `not_started`.
+ */
+export type RemotePackageAnswer = { readonly kind: 'package'; readonly package: WorkerRunPackage };
 
 /**
  * Builds a claimed run's package after the claim committed (TD-031 decision 4): the stored spec with
@@ -134,7 +136,11 @@ export interface RemoteRunPackager {
  * a failure is logged, and the WP-77 recovery pass reaches a terminal run's credential again.
  */
 export interface RemoteRunCredentials {
-  revoke(runId: Id): Promise<void>;
+  /**
+   * `mintedBefore` scopes a release's revoke to the mints recorded by then — the released claim's —
+   * so a credential a later claimant of the reopened offer minted is never revoked with it.
+   */
+  revoke(runId: Id, scope?: { readonly mintedBefore?: IsoDateTime }): Promise<void>;
 }
 
 export interface RemoteRunsOptions {
@@ -181,8 +187,8 @@ export type RemoteClaimAnswer =
   /** No eligible offer was open. */
   | { readonly kind: 'none' }
   /**
-   * An offer was claimed and could not be packaged — released (`credential_unavailable`) or
-   * settled `not_started`. The caller ends its hold rather than claiming again at once.
+   * An offer was claimed and could not be packaged — settled `not_started`, its retry (if any)
+   * Q59(a)'s. The caller ends its hold rather than claiming again at once.
    */
   | { readonly kind: 'not_packaged'; readonly runId: Id };
 
@@ -427,7 +433,7 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
       );
       // TD-031 decision 6: the minted credential is revoked — after the commit, outside any
       // transaction, and from what is stored, because this process may not be the one that minted.
-      await options.credentials.revoke(input.runId);
+      await options.credentials.revoke(input.runId, { mintedBefore: input.now });
     }
     return result;
   };
@@ -492,20 +498,6 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
         });
       } catch (error) {
         await settleUnpackaged(claimed, error);
-        return { kind: 'not_packaged', runId: claimed.runId };
-      }
-      if (answer.kind === 'credential_unavailable') {
-        logger.warn(
-          { run_id: claimed.runId, worker_id: input.workerId, detail: answer.detail },
-          'a remote claim’s git credential could not be minted; the claim is released (credential_unavailable)',
-        );
-        await release({
-          runId: claimed.runId,
-          workerId: input.workerId,
-          epoch: claimed.epoch,
-          reason: 'credential_unavailable',
-          now: input.now,
-        });
         return { kind: 'not_packaged', runId: claimed.runId };
       }
       logger.info(

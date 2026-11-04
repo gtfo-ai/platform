@@ -2,10 +2,12 @@
  * A remote run's package (WP-281, TD-031 decision 4): built from the provisioner's own mapping, with
  * a credential minted for exactly the spec's scope, and refused — never cut — where it may not travel.
  * The success path through the routes is `test/contract/worker/protocol.contract.test.ts`; these are
- * the branches: what is answered `credential_unavailable` (the claim is released), what is a terminal
- * `invalid_spec` (the run settles `not_started`), and that every refusal revokes what it minted.
+ * the branches — every one a start failure the caller settles `not_started`, never a release (TD-031's
+ * 2026-11-05 amendment): a mint failure is retryable exactly when the mint error says so, the
+ * binding-changed race is retryable, a refusal is a terminal `invalid_spec` — and that every refusal
+ * revokes what it minted.
  */
-import { WorkspaceError } from '@platform/application';
+import { IntegrationError, RunStartError, WorkspaceError } from '@platform/application';
 import { type RunSpec, runPackageSchema, storedRunSpecOf } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { manualClock } from '../runner/clock.js';
@@ -83,21 +85,38 @@ describe('the remote run package (WP-281)', () => {
     expect(minted.revoked()).toBe(0);
   });
 
-  it('answers credential_unavailable for a provider error while minting — the caller releases', async () => {
-    const answer = await build(
-      packager(async () => {
-        throw new Error('the provider answered 502');
-      }),
-    );
-    expect(answer).toEqual({ kind: 'credential_unavailable', detail: 'the provider answered 502' });
-  });
+  it.each([
+    ['a provider 503 (unavailable)', new IntegrationError('unavailable', 'fake-git', '503'), true],
+    ['a rate limit', new IntegrationError('rate_limited', 'fake-git', '429'), true],
+    ['a refusal (forbidden)', new IntegrationError('forbidden', 'fake-git', '403'), false],
+    ['an error of no known shape', new Error('socket hang up'), false],
+  ] as const)(
+    'throws a start failure for %s while minting, retryable as the error says',
+    async (_name, error, retryable) => {
+      const refused = build(
+        packager(async () => {
+          throw error;
+        }),
+      );
+      await expect(refused).rejects.toBeInstanceOf(RunStartError);
+      await expect(refused).rejects.toMatchObject({
+        retryable,
+        diagnosis: { reason: 'run_credential_unavailable' },
+      });
+    },
+  );
 
-  it('answers credential_unavailable for a static or deploy-key credential, revoking what was handed', async () => {
+  it('throws a retryable start failure for a static or deploy-key credential (the binding changed), revoking it', async () => {
     for (const source of ['static', 'deploy_key'] as const) {
       const minted = credential({ source });
-      const answer = await build(packager(async () => ({ kind: 'minted', credential: minted })));
-      expect(answer.kind).toBe('credential_unavailable');
-      expect(JSON.stringify(answer)).not.toContain(PASSWORD);
+      const refused = build(packager(async () => ({ kind: 'minted', credential: minted })));
+      await expect(refused).rejects.toMatchObject({
+        retryable: true,
+        diagnosis: { reason: 'run_credential_unavailable' },
+      });
+      await refused.catch((error: unknown) => {
+        expect((error as Error).message).not.toContain(PASSWORD);
+      });
       expect(minted.revoked()).toBe(1);
     }
   });

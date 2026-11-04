@@ -196,12 +196,14 @@ export const createPostgresRunCredentialStore = (): UnrevokedRunCredentialStore 
       `${SELECT}
        ${fromAndPredicate('present', 'any')}
           and r.id = $4
+          and ($5::timestamptz is null or m.created_at <= $5::timestamptz)
         order by m.created_at`,
       [
         LIVE_RUN_STATUSES,
         input.now,
         new Date(Date.parse(input.now) - REVALIDATION_LOOKBACK_MS).toISOString(),
         input.runId,
+        input.mintedBefore ?? null,
       ],
     );
     return rows.map(toCredential);
