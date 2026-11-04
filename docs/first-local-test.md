@@ -507,7 +507,8 @@ is *Done*.
 - **Autix's CI rules are required** (§ 1): `agentic/` admitted where `feature|bugfix` is matched,
   and the test jobs run on merge-request pipelines — otherwise the merge request gets no pipeline
   and the CI gate waits for one until its timeout (the platform's branch namespace is fixed, Q114).
-- **The runner's log** has a *"stage executed"* line per stage.
+- **The runner's log** has a *"run settled by this claimant"* line per agent run (since WP-276 the
+  `stage.execute` job only plans and offers, and any worker may log its *"stage executed"* line).
 
 ## 8. When something fails — where it is named
 

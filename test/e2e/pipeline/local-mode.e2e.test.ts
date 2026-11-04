@@ -39,6 +39,13 @@ describe('a runner in local mode (compose.local.yml’s arrangement)', () => {
       tickets: TICKETS,
       agent: 'none',
       processName: 'app',
+      // `compose.local.yml` overrides **both** product services. Since WP-277 `app` takes
+      // `stage.execute` too and plans runs, so the instance's mode is the planner's as well.
+      env: {
+        APP_PROVIDER_MODE: 'local',
+        CLAUDE_CODE_OAUTH_TOKEN: FAKE_OAUTH_TOKEN,
+        ANTHROPIC_API_KEY: '',
+      },
     });
     harness = pipeline;
     const lines: string[] = [];
@@ -98,10 +105,12 @@ describe('a runner in local mode (compose.local.yml’s arrangement)', () => {
     });
 
     const logged = lines.join('');
-    // The positive half first, so the two negatives below cannot pass on an empty log: the stage
-    // executor's own line, written by this process. (Not the launcher-provisioner line
-    // `composeRunWorkspaces` logs — the harness hands its scripted provisioner in directly.)
-    expect(logged).toContain('"msg":"stage executed"');
+    // The positive half first, so the two negatives below cannot pass on an empty log: the server
+    // claimant's own line, written by this process — since WP-276 the job ends at the offer (and
+    // any worker may take it), and the run is claimed, run and settled here. (Not the
+    // launcher-provisioner line `composeRunWorkspaces` logs — the harness hands its scripted
+    // provisioner in directly.)
+    expect(logged).toContain('"msg":"run settled by this claimant"');
     expect(logged).not.toContain('composed without an agent runner');
 
     const [first] = pipeline.agentRuns;

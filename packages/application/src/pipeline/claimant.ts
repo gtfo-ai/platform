@@ -222,6 +222,15 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
         fence: claimed.fence,
         ...request,
       });
+      logger.info(
+        {
+          run_id: claimed.runId,
+          task_id: claimed.taskId,
+          kind: claimed.kind,
+          settled: settled.kind,
+        },
+        'run settled by this claimant',
+      );
       if (settled.kind === 'task_gone') {
         logger.info(
           { run_id: claimed.runId, task_id: claimed.taskId },
