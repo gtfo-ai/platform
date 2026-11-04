@@ -826,6 +826,26 @@ describe('a spec with no checkout (WP-74)', () => {
   });
 
   /**
+   * With no identity git asks the resolver for the hostname's canonical name before every reflog
+   * write, and in a container with no network that waits out the resolver's 5 s timeout per git
+   * command (measured on the git image under `--network none`). The daemon double runs no git, so
+   * the environment is what is asserted; the time is the Docker e2e tier's.
+   */
+  it('clones under a committer identity, so no git command waits on a resolver it cannot reach', async () => {
+    await provider.create(...provisioned(workspaceSpecFixture()));
+    const env = daemon.byName(`clone-${FIXTURE_RUN_ID}`)?.body.Env ?? [];
+    expect(env).toEqual(
+      expect.arrayContaining([
+        'GIT_COMMITTER_NAME=agentic',
+        'GIT_COMMITTER_EMAIL=agentic@localhost',
+      ]),
+    );
+    expect(daemon.byName(`clone-${FIXTURE_RUN_ID}`)?.body.HostConfig).toMatchObject({
+      NetworkMode: 'none',
+    });
+  });
+
+  /**
    * A control volume compose initialised from the launcher image is uid 1000's, and this helper
    * has no `DAC_OVERRIDE`: it must take the root back before it creates the run's directory.
    */

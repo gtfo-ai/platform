@@ -1522,6 +1522,17 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         // downloading DB/autix_clean.sql.gz"* (exit 128, the first local test). An agent works on
         // code; the binaries stay pointer files, which is also what keeps them out of its context.
         GIT_LFS_SKIP_SMUDGE: '1',
+        // **An identity, so git never asks a resolver for one.** Every git process here that writes
+        // a reflog — the clone, and each checkout after it — needs a committer identity, and with
+        // none configured git builds `<user>@<hostname>` and first asks the resolver for the
+        // container hostname's canonical name. This container has no network, so that question
+        // waits out the resolver's whole timeout: **5 s per reflog-writing command**, measured on
+        // `alpine/git:v2.49.1` under `--network none` (`git clone --shared` of a one-commit mirror:
+        // 5 s without, 0 s with), and it was most of every Docker e2e case and of every run's
+        // create. The identity is the export helper's (`exportScript`); it names the reflog entry
+        // of a tree no commit is made in, and reaches no commit the agent makes.
+        GIT_COMMITTER_NAME: 'agentic',
+        GIT_COMMITTER_EMAIL: 'agentic@localhost',
         REPO_URL: repo.url,
         DEFAULT_BRANCH: repo.defaultBranch,
         ...(repo.checkoutBranch === null ? {} : { CHECKOUT_BRANCH: repo.checkoutBranch }),
