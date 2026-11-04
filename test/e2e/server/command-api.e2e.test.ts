@@ -985,6 +985,29 @@ describe('the run command surface', () => {
 
     // A run that is still going cannot be retried, and the message says which status refused.
     await pipeline.settle('ready_for_merge', (snapshot) => snapshot.state === 'ready_for_merge');
+    // WP-274 (criterion 6b): the cancelled stage resumed as a new attempt and the task walked on
+    // through four more stages — each run's offer settled by its own ending, the cancelled one's
+    // included (its holder's `finish`), so the per-task index never refused the next stage's offer.
+    const offers = await pipeline.query<{ stage: string; attempt: number; state: string }>(
+      `select o.stage, o.attempt, o.state
+         from run_offers o join runs r on r.id = o.run_id
+        where o.task_id = $1 order by r.created_at, r.id`,
+      [task.id],
+    );
+    expect(offers).toEqual([
+      { stage: 'refinement', attempt: 1, state: 'settled' },
+      { stage: 'refinement', attempt: 2, state: 'settled' },
+      { stage: 'architecture', attempt: 1, state: 'settled' },
+      { stage: 'implementation', attempt: 1, state: 'settled' },
+      { stage: 'code_review', attempt: 1, state: 'settled' },
+      { stage: 'business_review', attempt: 1, state: 'settled' },
+    ]);
+    expect(
+      await pipeline.query<{ id: string }>(
+        `select id from run_offers where task_id = $1 and kind = 'stage' and state in ('open', 'claimed')`,
+        [task.id],
+      ),
+    ).toEqual([]);
     const audit = await humanActions(pipeline);
     expect(audit.map((row) => row.action)).toEqual(['run.cancel', 'run.retry']);
     expect(audit.find((row) => row.action === 'run.retry')?.params.model).toBe('claude-haiku-4-5');

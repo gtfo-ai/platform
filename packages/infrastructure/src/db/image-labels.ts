@@ -35,8 +35,11 @@ export const SCHEMA_GUARD_VERSION = 2;
 /**
  * The rollback floor (TD-032 decision 2). **Raise it with the Dockerfile label** in a row that
  * changes what existing rows mean to the runtime (M22: WP-274, WP-276, WP-285, WP-286).
+ *
+ * **2 since WP-274** (migration 0094, `raises-rollback-floor`): this build writes a `run_offers` row
+ * for every run and relies on the per-task index over them; a build before it writes none.
  */
-export const ROLLBACK_FLOOR = 1;
+export const ROLLBACK_FLOOR = 2;
 
 const pgBossManifestSchema = z.object({
   pgboss: z.object({ schema: z.number().int().positive() }),

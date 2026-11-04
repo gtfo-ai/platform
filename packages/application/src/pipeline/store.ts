@@ -37,7 +37,9 @@ import type {
   PausedBudgetScope,
   PipelineTemplate,
   ProviderMode,
+  RunClaimantKind,
   RunCost,
+  RunOfferKind,
   RunSavedWork,
   RunStartFailure,
   RunStatus,
@@ -1544,6 +1546,121 @@ export type NewRun = StoredRun & {
   readonly providerMode: ProviderMode;
 };
 
+/**
+ * The fence a claimant's write carries (WP-274, TD-031 decision 2): the epoch its claim was granted
+ * and the `lease_owner` it wrote. A write that carries one is conditional on both.
+ */
+export interface RunLeaseFence {
+  readonly epoch: number;
+  /** `null` only in a composition that configures no run lease (`offers.ts`, `OfferAndClaimInput`). */
+  readonly owner: string | null;
+}
+
+/**
+ * A fenced write found the run **live** under another claim — a different `lease_epoch` or
+ * `lease_owner` (WP-274, TD-031 decision 2's in-process `LeaseLostError`). A run that is already
+ * terminal is not this error: `finish` answers `false` for it, as it always has.
+ *
+ * Thrown rather than answered so that a caller's transaction rolls back whatever it wrote before
+ * the fenced statement — a claimant that lost the run writes nothing (TD-031 §2).
+ */
+export class LeaseLostError extends Error {
+  override readonly name = 'LeaseLostError';
+  readonly code = 'lease_lost' as const;
+  readonly runId: Id;
+  readonly fence: RunLeaseFence;
+
+  constructor(runId: Id, fence: RunLeaseFence) {
+    super(
+      `run ${runId} is live under another claim than epoch ${fence.epoch} held by ${fence.owner}: lease_lost`,
+    );
+    this.runId = runId;
+    this.fence = fence;
+  }
+}
+
+/** A `run_offers` row's lifecycle (TD-031 decision 1, migration 0094). */
+export type RunOfferState = 'open' | 'claimed' | 'settled' | 'withdrawn';
+
+/** An offer as written in its run's creation transaction (WP-274). */
+export interface NewRunOffer {
+  readonly id: Id;
+  readonly runId: Id;
+  readonly taskId: Id;
+  readonly projectId: Id;
+  /** The stage entry the run serves; `null` for an ask's offer. */
+  readonly stage: Slug | null;
+  readonly attempt: number;
+  readonly kind: RunOfferKind;
+  readonly offeredAt: IsoDateTime;
+}
+
+/** An offer read back. */
+export interface StoredRunOffer extends NewRunOffer {
+  readonly state: RunOfferState;
+  readonly leaseEpoch: number;
+  readonly claimantKind: RunClaimantKind | null;
+  readonly claimedAt: IsoDateTime | null;
+  readonly settledAt: IsoDateTime | null;
+  readonly withdrawnAt: IsoDateTime | null;
+  readonly withdrawnReason: string | null;
+}
+
+/**
+ * Which open offers a claim may take — TD-031 §2's `<eligibility for this claimant>`.
+ *
+ * WP-274 has one claimant, the server's runner inside the job that wrote the offer, so its
+ * eligibility is *this run's offer*. Routing (WP-278) and remote workers (WP-281) widen it.
+ */
+export interface RunOfferEligibility {
+  readonly runId: Id;
+}
+
+/** One claim (TD-031 §2): who claims, under which owner, until when. */
+export interface RunOfferClaim {
+  readonly eligibility: RunOfferEligibility;
+  readonly claimantKind: RunClaimantKind;
+  /** `server:<process>` for the server's runner (`serverLeaseOwner`); `null` with no lease configured. */
+  readonly owner: string | null;
+  /** The lease's expiry, or `null` for a composition that runs no heartbeat (no lease configured). */
+  readonly expiresAt: IsoDateTime | null;
+  readonly now: IsoDateTime;
+}
+
+/** What a claim that won answers: the offer, its run and the epoch the claim now holds. */
+export interface ClaimedRunOffer {
+  readonly offerId: Id;
+  readonly runId: Id;
+  readonly taskId: Id;
+  readonly epoch: number;
+  readonly owner: string | null;
+}
+
+/**
+ * `run_offers` (migration 0094, WP-274, TD-031 decisions 1–2).
+ *
+ * **Closing is not here.** Every terminal writer of a run closes its offer in the run's terminal
+ * transaction, and every terminal writer goes through {@link RunRepository.finish} — so `finish`
+ * closes it, after it won the row: `claimed → settled`, `open → withdrawn`. The census that holds
+ * every writer to that is `run-terminal-writers.test.ts`.
+ */
+export interface RunOfferRepository {
+  /**
+   * Writes the offer `open`, at epoch 0. Refused by the database (a unique violation) when the task
+   * already has an open or claimed **stage** offer — the per-task index that replaces the job
+   * singleton for a run's duration (TD-031 §1).
+   */
+  insert(tx: Transaction, offer: NewRunOffer): Promise<void>;
+  /**
+   * **The one claim** (TD-031 §2): the oldest eligible `open` offer, `for update skip locked`,
+   * moved to `claimed` with its epoch incremented — and, in the same statement, the run's
+   * `lease_owner`, `lease_expires_at` and `lease_epoch`. Answers `null` when no eligible offer is
+   * open (another claim took it, or it was closed), and never claims an offer whose run has ended.
+   */
+  claim(tx: Transaction, claim: RunOfferClaim): Promise<ClaimedRunOffer | null>;
+  load(tx: Transaction, runId: Id): Promise<StoredRunOffer | null>;
+}
+
 export interface RunRepository {
   insert(tx: Transaction, run: NewRun): Promise<void>;
   /**
@@ -1560,6 +1677,19 @@ export interface RunRepository {
    * A caller that loses **must not** write the rest of what it was going to write — the executor
    * returns `skipped` rather than completing a stage on a run a human cancelled, and the cancel
    * command answers 409 rather than reporting a cancellation that did not happen.
+   *
+   * **The winner also closes the run's offer** (WP-274, TD-031 §12): `claimed → settled`, `open →
+   * withdrawn` (with the terminal reason), in the same transaction — so every terminal writer frees
+   * the per-task index for the task's next stage. **Lock order:** `finish` locks the run row (its
+   * `update runs`) and then the offer, while the claim locks the offer and then the run. The two
+   * cannot deadlock in WP-274, whose only claim runs in the transaction that inserted the run (no other
+   * transaction can see that row); WP-276, which claims a run committed earlier, owns the question
+   * (backlog 697, and `postgres-run-offers.ts`'s docblock).
+   *
+   * **A claimant passes its fence** ({@link RunLeaseFence}): the write is then also conditional on
+   * `lease_epoch` and `lease_owner`, and a **live** row held under another claim throws
+   * {@link LeaseLostError}. A writer that is not the claimant — a person's cancel ending the record
+   * in place, the lease sweep — passes none and ends the row whoever holds it, as before.
    *
    * **The winner also closes the run's pending commands** (WP-85): every `run_commands` row still
    * pending is stamped `run_ended` in the same transaction, after the row moved, so a command
@@ -1613,6 +1743,8 @@ export interface RunRepository {
        * PROGRESS backlog 467). Absent when no export was attempted, which leaves the column null.
        */
       readonly savedWork?: RunSavedWork;
+      /** The claimant's fence (WP-274); absent for a writer that is not the run's claimant. */
+      readonly lease?: RunLeaseFence;
     },
   ): Promise<boolean>;
   /**
@@ -1668,24 +1800,27 @@ export interface RunRepository {
     marker: { readonly runId: Id; readonly at: IsoDateTime },
   ): Promise<boolean>;
   /**
-   * Claims or renews the run's lease — `runs.lease_owner` / `lease_expires_at` (TD-003, WP-47).
+   * Renews the run's lease — `runs.lease_expires_at` under `lease_owner` (TD-003, WP-47, WP-274).
    *
    * Both columns have existed since migration 0004 and had **no reader and no writer** until WP-47.
-   * The owner is the process executing the run: it claims the lease in the transaction that creates
-   * the row and renews it on a heartbeat while the session is live, so *"nothing is renewing this
+   * The owner is the process executing the run: it takes the lease in the transaction that creates
+   * the row (through the offer's claim since WP-274) and renews it on a heartbeat while the session is live, so *"nothing is renewing this
    * lease"* becomes a question a query can ask. It is the only thing a missing heartbeat licenses
    * anybody to conclude — never that the model stopped, never that the work was wasted.
    *
-   * Conditional on the run still being live **and** on the lease being this process's (or unheld),
-   * and answers whether it wrote. A `false` is not an error: the run has ended, or another process
-   * took the lease over, and a heartbeat that kept writing either would be renewing a claim it does
-   * not hold. The caller stops beating and lets its own `finish` arbitrate.
+   * Conditional on the run still being live **and** on the claim's fence — `lease_epoch` and
+   * `lease_owner` both this caller's (WP-274, TD-031 §2) — and answers whether it wrote. Since WP-274
+   * it only **renews**: the lease is claimed by {@link RunOfferRepository.claim}, which writes the
+   * owner and the epoch with the offer. A `false` is not an error: the run has ended, or another
+   * claim holds it, and a heartbeat that kept writing either would be renewing a claim it does not
+   * hold. The caller (`renewRunLease`) answers `lease_lost` and stops beating.
    */
   renewLease(
     tx: Transaction,
     lease: {
       readonly runId: Id;
       readonly owner: string;
+      readonly epoch: number;
       readonly expiresAt: IsoDateTime;
     },
   ): Promise<boolean>;
@@ -2241,6 +2376,8 @@ export interface PipelineStore {
   readonly tasks: TaskRepository;
   readonly artifacts: ArtifactRepository;
   readonly runs: RunRepository;
+  /** WP-274's offers (migration 0094, TD-031 decisions 1–2). */
+  readonly offers: RunOfferRepository;
   readonly questions: QuestionRepository;
   readonly approvals: ApprovalRepository;
   /** WP-40's epic-split queue: one row per proposed child ticket. */

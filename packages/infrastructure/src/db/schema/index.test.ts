@@ -66,8 +66,10 @@ describe('Drizzle schema', () => {
     // pg-boss's own table cannot carry because the platform does not write it (migration 0087,
     // WP-156, backlog 421), plus `task_duty_leases` — who performs a group of one task's outbound
     // duties right now, which the executor's idempotency record cannot answer because it is written
-    // after the call (migration 0091, WP-184).
-    expect(tables.length).toBe(72);
+    // after the call (migration 0091, WP-184), plus `run_offers` — one offer per agent run, claimed
+    // by one SQL claim under an epoch, whose per-task index replaces the job singleton for a run's
+    // duration (migration 0094, WP-274, TD-031 decisions 1–2).
+    expect(tables.length).toBe(73);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

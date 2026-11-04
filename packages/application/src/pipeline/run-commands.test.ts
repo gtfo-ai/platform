@@ -15,6 +15,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { ClaudeRunner, RunHandle, RunStop, SteerMessage } from '../ports/runner.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { createMemoryPipelineStore, type MemoryPipelineStore } from '../testing/memory-pipeline.js';
+import { offerAndClaimForTest } from '../testing/run-offers.js';
 import { countingStartHooks } from '../testing/run-start-hooks.js';
 import { type HeartbeatSchedule, startRunHeartbeat } from './lease.js';
 import { createLiveRuns, type LiveRuns } from './live-runs.js';
@@ -79,9 +80,16 @@ const world = async (owner: string | null = OWNER): Promise<World> => {
       createdAt: NOW,
       startedAt: NOW,
     });
-    if (owner !== null) {
-      await store.runs.renewLease(scope.tx, { runId: RUN, owner, expiresAt: NOW });
-    }
+    // WP-274: the lease is the offer's one claim's to write, never a first beat's.
+    await offerAndClaimForTest(store, scope.tx, {
+      offerId: '00000000-0000-4000-8000-0000000000a5' as Id,
+      runId: RUN,
+      taskId: TASK,
+      projectId: '00000000-0000-4000-8000-0000000000a4' as Id,
+      owner,
+      expiresAt: owner === null ? null : NOW,
+      now: NOW,
+    });
   });
   return { eventing, store };
 };
@@ -226,6 +234,7 @@ describe('the run command inbox', () => {
         },
       },
       RUN,
+      1,
     );
     await record(w, steer('heard on the beat'));
     expect(steers).toEqual([]);

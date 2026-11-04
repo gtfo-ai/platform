@@ -17,7 +17,7 @@ import type {
   StoredTask,
   Transaction,
 } from '@platform/application';
-import { INITIAL_TASK_VERSION } from '@platform/application';
+import { claimRunOffer, INITIAL_TASK_VERSION } from '@platform/application';
 import type { Id, IsoDateTime, Slug, TaskDependencies, TaskReviewers } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -2644,19 +2644,26 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
        * and the states are the whole subject: live, terminal-with-no-figure, terminal-with-a-figure.
        */
       /** A live run; its CLI spawn marker is written unless `marked` is `false` (WP-150). */
-      const liveRun = async (options: { readonly marked?: boolean } = {}): Promise<Id> => {
-        const stored = task();
-        await store.tasks.insert(tx, stored);
-        await store.tasks.recordStageEntered(tx, {
-          taskId: stored.task.id,
-          stage: 'refinement' as Slug,
-          attempt: 1,
-          causedByEventId: null,
-        });
+      const liveRun = async (
+        options: { readonly marked?: boolean; readonly taskId?: Id } = {},
+      ): Promise<Id> => {
+        // WP-274: a second run on an existing task (the per-task offer index's cases).
+        let taskId = options.taskId;
+        if (taskId === undefined) {
+          const stored = task();
+          await store.tasks.insert(tx, stored);
+          await store.tasks.recordStageEntered(tx, {
+            taskId: stored.task.id,
+            stage: 'refinement' as Slug,
+            attempt: 1,
+            causedByEventId: null,
+          });
+          taskId = stored.task.id;
+        }
         const runId = nextId();
         await store.runs.insert(tx, {
           id: runId,
-          taskId: stored.task.id,
+          taskId,
           projectId,
           stage: 'refinement' as Slug,
           role: 'product_manager',
@@ -3335,51 +3342,261 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(totals).toMatchObject({ runs: 1, costUsd: 0, isEstimate: false, unmeasuredRuns: 1 });
       });
 
-      it('claims a lease, lets its owner renew it, and refuses a stranger and a finished run', async () => {
-        const runId = await liveRun();
-
-        expect(
-          await store.runs.renewLease(tx, {
-            runId,
-            owner: 'server-1',
-            expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
-          }),
-        ).toBe(true);
-        expect(
-          await store.runs.renewLease(tx, {
-            runId,
-            owner: 'server-1',
-            expiresAt: '2026-06-01T09:10:00.000Z' as IsoDateTime,
-          }),
-        ).toBe(true);
-        // A second process must not take a lease whose holder may still be alive.
-        expect(
-          await store.runs.renewLease(tx, {
-            runId,
-            owner: 'server-2',
-            expiresAt: '2026-06-01T09:10:00.000Z' as IsoDateTime,
-          }),
-        ).toBe(false);
-
-        await store.runs.finish(tx, {
+      /** WP-274: the run's offer, claimed through the one claim, as `offerAndClaimInJob` does. */
+      const claimed = async (
+        runId: Id,
+        owner: string | null = 'server:server-1',
+        kind: 'stage' | 'ask' = 'stage',
+      ) => {
+        const run = await store.runs.load(tx, runId);
+        const offerId = nextId();
+        await store.offers.insert(tx, {
+          id: offerId,
           runId,
-          status: 'completed',
-          terminalReason: 'success',
-          sessionId: null,
-          numTurns: 1,
-          usage: MEASURED.usage,
-          cost: { usd: 1, is_estimate: false, price_list_id: null },
-          wallMs: 10,
+          taskId: run?.taskId as Id,
+          projectId,
+          stage: kind === 'stage' ? ('refinement' as Slug) : null,
+          attempt: 1,
+          kind,
+          offeredAt: '2026-06-01T09:00:01.000Z' as IsoDateTime,
         });
+        const claim = await claimRunOffer(store.offers, tx, {
+          eligibility: { runId },
+          claimantKind: 'server',
+          owner,
+          expiresAt: owner === null ? null : ('2026-06-01T09:05:00.000Z' as IsoDateTime),
+          now: '2026-06-01T09:00:02.000Z' as IsoDateTime,
+        });
+        return { offerId, claim, taskId: run?.taskId as Id };
+      };
+      const ENDED = {
+        status: 'completed' as const,
+        terminalReason: 'success' as const,
+        sessionId: null,
+        numTurns: 1,
+        usage: MEASURED.usage,
+        cost: { usd: 1, is_estimate: false, price_list_id: null },
+        wallMs: 10,
+      };
+
+      it('lets the claim’s owner renew its lease under its epoch, and refuses a stranger, another epoch and a finished run (WP-274)', async () => {
+        const runId = await liveRun();
+        const { claim } = await claimed(runId);
+        expect(claim).toMatchObject({ runId, epoch: 1, owner: 'server:server-1' });
+        const renew = (owner: string, epoch: number, expiresAt: string) =>
+          store.runs.renewLease(tx, { runId, owner, epoch, expiresAt: expiresAt as IsoDateTime });
+
+        expect(await renew('server:server-1', 1, '2026-06-01T09:10:00.000Z')).toBe(true);
+        expect(await renew('server:server-1', 1, '2026-06-01T09:15:00.000Z')).toBe(true);
+        // A second process must not take a lease whose holder may still be alive — and since
+        // WP-274 a renewal never claims: it is fenced on the epoch the claim granted.
+        expect(await renew('server:server-2', 1, '2026-06-01T09:20:00.000Z')).toBe(false);
+        expect(await renew('server:server-1', 2, '2026-06-01T09:20:00.000Z')).toBe(false);
+        expect(await renew('server:server-1', 0, '2026-06-01T09:20:00.000Z')).toBe(false);
+
+        await store.runs.finish(tx, { ...ENDED, runId });
         // A heartbeat that arrived late finds the run terminal and writes nothing, which is what
         // lets the sweep and the run's own process race safely.
+        expect(await renew('server:server-1', 1, '2026-06-01T09:25:00.000Z')).toBe(false);
+      });
+
+      it('never renews a run no claim took: the first beat is no longer a claim (WP-274)', async () => {
+        const runId = await liveRun();
         expect(
           await store.runs.renewLease(tx, {
             runId,
-            owner: 'server-1',
-            expiresAt: '2026-06-01T09:15:00.000Z' as IsoDateTime,
+            owner: 'server:server-1',
+            epoch: 0,
+            expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
           }),
         ).toBe(false);
+      });
+
+      describe('offers and the claim (WP-274, TD-031 decisions 1–2)', () => {
+        it('writes an offer open at epoch 0, and the claim moves it to claimed at epoch 1', async () => {
+          const runId = await liveRun();
+          const run = await store.runs.load(tx, runId);
+          const offerId = nextId();
+          await store.offers.insert(tx, {
+            id: offerId,
+            runId,
+            taskId: run?.taskId as Id,
+            projectId,
+            stage: 'refinement' as Slug,
+            attempt: 1,
+            kind: 'stage',
+            offeredAt: '2026-06-01T09:00:01.000Z' as IsoDateTime,
+          });
+          expect(await store.offers.load(tx, runId)).toMatchObject({
+            id: offerId,
+            state: 'open',
+            leaseEpoch: 0,
+            claimantKind: null,
+            claimedAt: null,
+          });
+          const claim = await claimRunOffer(store.offers, tx, {
+            eligibility: { runId },
+            claimantKind: 'server',
+            owner: 'server:server-1',
+            expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
+            now: '2026-06-01T09:00:02.000Z' as IsoDateTime,
+          });
+          expect(claim).toEqual({
+            offerId,
+            runId,
+            taskId: run?.taskId,
+            epoch: 1,
+            owner: 'server:server-1',
+          });
+          expect(await store.offers.load(tx, runId)).toMatchObject({
+            state: 'claimed',
+            leaseEpoch: 1,
+            claimantKind: 'server',
+            claimedAt: '2026-06-01T09:00:02.000Z',
+          });
+          // A second claim of the same offer takes nothing: it is no longer open.
+          expect(
+            await claimRunOffer(store.offers, tx, {
+              eligibility: { runId },
+              claimantKind: 'server',
+              owner: 'server:server-2',
+              expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
+              now: '2026-06-01T09:00:03.000Z' as IsoDateTime,
+            }),
+          ).toBeNull();
+        });
+
+        it('claims nothing for a run with no offer, and nothing for an offer whose run has ended', async () => {
+          const bare = await liveRun();
+          expect(
+            await claimRunOffer(store.offers, tx, {
+              eligibility: { runId: bare },
+              claimantKind: 'server',
+              owner: 'server:server-1',
+              expiresAt: null,
+              now: '2026-06-01T09:00:02.000Z' as IsoDateTime,
+            }),
+          ).toBeNull();
+          const ended = await liveRun();
+          const run = await store.runs.load(tx, ended);
+          await store.offers.insert(tx, {
+            id: nextId(),
+            runId: ended,
+            taskId: run?.taskId as Id,
+            projectId,
+            stage: 'refinement' as Slug,
+            attempt: 1,
+            kind: 'stage',
+            offeredAt: '2026-06-01T09:00:01.000Z' as IsoDateTime,
+          });
+          await store.runs.finish(tx, {
+            ...ENDED,
+            runId: ended,
+            terminalReason: 'error_during_execution',
+            status: 'failed',
+          });
+          expect(
+            await claimRunOffer(store.offers, tx, {
+              eligibility: { runId: ended },
+              claimantKind: 'server',
+              owner: 'server:server-1',
+              expiresAt: null,
+              now: '2026-06-01T09:00:02.000Z' as IsoDateTime,
+            }),
+          ).toBeNull();
+          // The ending withdrew the open offer, naming the terminal reason.
+          expect(await store.offers.load(tx, ended)).toMatchObject({
+            state: 'withdrawn',
+            withdrawnReason: 'error_during_execution',
+          });
+        });
+
+        it('every finish closes the offer — claimed to settled — whether or not the writer carries the fence', async () => {
+          for (const fenced of [true, false]) {
+            const runId = await liveRun();
+            const { claim } = await claimed(runId);
+            const fence = { epoch: claim?.epoch as number, owner: claim?.owner ?? null };
+            expect(
+              await store.runs.finish(tx, { ...ENDED, runId, ...(fenced ? { lease: fence } : {}) }),
+            ).toBe(true);
+            expect(await store.offers.load(tx, runId)).toMatchObject({
+              state: 'settled',
+              leaseEpoch: 1,
+            });
+            expect((await store.offers.load(tx, runId))?.settledAt).not.toBeNull();
+          }
+        });
+
+        it('a fenced finish under another epoch or owner is lease_lost, and the run and offer stay live', async () => {
+          const runId = await liveRun();
+          await claimed(runId);
+          for (const lease of [
+            { epoch: 2, owner: 'server:server-1' },
+            { epoch: 1, owner: 'server:server-2' },
+            { epoch: 1, owner: null },
+          ]) {
+            await expect(store.runs.finish(tx, { ...ENDED, runId, lease })).rejects.toMatchObject({
+              name: 'LeaseLostError',
+              code: 'lease_lost',
+            });
+          }
+          expect((await store.runs.load(tx, runId))?.status).toBe('running');
+          expect((await store.offers.load(tx, runId))?.state).toBe('claimed');
+        });
+
+        it('a fenced finish of a run already ended is false, not lease_lost', async () => {
+          const runId = await liveRun();
+          const { claim } = await claimed(runId);
+          await store.runs.finish(tx, { ...ENDED, runId });
+          expect(
+            await store.runs.finish(tx, {
+              ...ENDED,
+              runId,
+              lease: { epoch: claim?.epoch as number, owner: claim?.owner ?? null },
+            }),
+          ).toBe(false);
+        });
+
+        it('a claim with no lease configured takes the epoch and leaves the run unleased', async () => {
+          const runId = await liveRun();
+          const { claim } = await claimed(runId, null);
+          expect(claim).toMatchObject({ epoch: 1, owner: null });
+          expect(
+            await store.runs.finish(tx, { ...ENDED, runId, lease: { epoch: 1, owner: null } }),
+          ).toBe(true);
+        });
+
+        it('admits a stage offer for a task once its previous stage offer is closed, and an ask offer beside a live one', async () => {
+          const first = await liveRun();
+          const { taskId } = await claimed(first);
+          // An ask runs beside the stage (TD-031 §13): its offer is outside the per-task index.
+          const ask = await liveRun({ taskId });
+          await claimed(ask, 'server:server-1', 'ask');
+          // The stage's run ends; its `finish` settles the offer, and the task's next stage offers.
+          await store.runs.finish(tx, { ...ENDED, runId: first });
+          const next = await liveRun({ taskId });
+          const { claim } = await claimed(next);
+          expect(claim).toMatchObject({ runId: next, epoch: 1 });
+        });
+
+        // Last in its case: on PostgreSQL the refused insert aborts the case's transaction.
+        it('refuses a second open or claimed stage offer for one task (the job singleton’s successor)', async () => {
+          const first = await liveRun();
+          const { taskId } = await claimed(first);
+          const second = await liveRun({ taskId });
+          await expect(
+            store.offers.insert(tx, {
+              id: nextId(),
+              runId: second,
+              taskId,
+              projectId,
+              stage: 'refinement' as Slug,
+              attempt: 1,
+              kind: 'stage',
+              offeredAt: '2026-06-01T09:00:03.000Z' as IsoDateTime,
+            }),
+          ).rejects.toThrow();
+        });
       });
 
       it('answers false rather than throwing when a lease is asked for a run that does not exist', async () => {
@@ -3387,6 +3604,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           await store.runs.renewLease(tx, {
             runId: nextId(),
             owner: 'server-1',
+            epoch: 1,
             expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
           }),
         ).toBe(false);
@@ -3422,11 +3640,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         });
         const leased = async (owner = OWNER): Promise<{ runId: Id; taskId: Id }> => {
           const runId = await liveRun();
-          await store.runs.renewLease(tx, {
-            runId,
-            owner,
-            expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
-          });
+          // WP-274: the lease is written by the offer's one claim.
+          await claimed(runId, owner);
           const run = await store.runs.load(tx, runId);
           return { runId, taskId: run?.taskId as Id };
         };

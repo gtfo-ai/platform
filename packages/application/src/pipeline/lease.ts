@@ -8,8 +8,10 @@
  *
  * ## Who owns a lease, and what a missing heartbeat means
  *
- * The **process executing the run** owns it. It claims the lease in the transaction that creates
- * the `runs` row and renews it on a timer for as long as the session is in flight, so that
+ * The **process executing the run** owns it. It takes the lease in the transaction that creates
+ * the `runs` row — since WP-274 through the run offer's one claim (`./offers.ts`), which writes the
+ * owner, the expiry and the epoch — and renews it here on a timer for as long as the session is in
+ * flight, so that
  * *"nothing is renewing this lease"* becomes a question a query can ask.
  *
  * The answer to that question is deliberately narrow, and it is the whole of what this mechanism
@@ -49,6 +51,13 @@
  * renewing either would be asserting a claim this process does not hold. **A lost lease never
  * interrupts the run** — the session keeps going and its own `finish` arbitrates when it ends, which
  * is exactly the race `RunRepository.finish` was made conditional for.
+ *
+ * **Since WP-274 the beat and the finish are fenced on the claim's epoch** (TD-031 §2, migration
+ * 0094): the lease is claimed by the offer's one claim (`./offers.ts`), not by the first beat, and a
+ * renewal under another epoch or owner answers `lease_lost`. TD-031 §2 amends the sentence above —
+ * an answered `lease_lost` interrupts, and a claimant self-terminates at `TTL − ½·renew` — and that
+ * amendment is a later row's: with the server's runner the only claimant, no second claim exists to
+ * take a live run from it, so WP-274 changes what is written and not what the session does.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type { Logger } from '../ports/logger.js';
@@ -89,7 +98,8 @@ export interface RunLeaseOptions {
    * operator reads off the row when they ask which instance was driving a run that died. A
    * composition root builds it once (hostname plus a random suffix is enough: it has to be unique
    * among live processes, not stable across restarts — a restarted process must **not** inherit
-   * the lease its predecessor held).
+   * the lease its predecessor held). Since WP-274 it is `server:<process>` (`serverLeaseOwner`), the
+   * value the claim writes (TD-031 §2).
    */
   readonly owner: string;
   /** @default RUN_LEASE_TTL_MS */
@@ -137,6 +147,9 @@ export interface RunHeartbeatDependencies {
 export const leaseExpiryAt = (now: IsoDateTime, ttlMs: number): IsoDateTime =>
   new Date(Date.parse(now) + ttlMs).toISOString() as IsoDateTime;
 
+/** What a renewal answered (WP-274, TD-031 §2): the lease moved, or the claim is not ours any more. */
+export type RunLeaseRenewal = 'renewed' | 'lease_lost';
+
 /**
  * Renews one run's lease, in a transaction of its own.
  *
@@ -145,21 +158,26 @@ export const leaseExpiryAt = (now: IsoDateTime, ttlMs: number): IsoDateTime =>
  * gives it back. Holding a connection for the length of a run is the defect the executor's whole
  * shape exists to avoid.
  *
- * Answers `false` when the row refused the write — the run has ended, or another process owns the
- * lease. The caller stops beating; it never stops the run.
+ * **Fenced on the claim** (WP-274, TD-031 §2): the write is conditional on `lease_epoch = epoch` and
+ * `lease_owner` this process's, and answers `lease_lost` when the row refused it — the run has
+ * ended, or another claim holds it (TD-031: *"another claim or a terminal row exists"*). The caller
+ * stops beating; in WP-274 it never stops the run (self-termination is a later row's).
  */
 export const renewRunLease = async (
   deps: RunHeartbeatDependencies,
   runId: Id,
-): Promise<boolean> => {
+  epoch: number,
+): Promise<RunLeaseRenewal> => {
   const ttlMs = deps.lease.ttlMs ?? RUN_LEASE_TTL_MS;
-  return deps.unitOfWork.transaction(async (scope) =>
+  const renewed = await deps.unitOfWork.transaction(async (scope) =>
     deps.store.runs.renewLease(scope.tx, {
       runId,
       owner: deps.lease.owner,
+      epoch,
       expiresAt: leaseExpiryAt(deps.clock.now(), ttlMs),
     }),
   );
+  return renewed ? 'renewed' : 'lease_lost';
 };
 
 /**
@@ -169,7 +187,12 @@ export const renewRunLease = async (
  * executing beside it, and the next beat will either succeed or the lease will lapse and the sweep
  * will do the honest thing. A beat that returns `false` stops the heartbeat and says so once.
  */
-export const startRunHeartbeat = (deps: RunHeartbeatDependencies, runId: Id): StopHeartbeat => {
+export const startRunHeartbeat = (
+  deps: RunHeartbeatDependencies,
+  runId: Id,
+  /** The epoch of this process's claim (WP-274): every beat is fenced on it. */
+  epoch: number,
+): StopHeartbeat => {
   const logger = deps.logger ?? silentLogger;
   const everyMs = deps.lease.renewEveryMs ?? RUN_LEASE_RENEW_MS;
   const schedule = deps.lease.schedule ?? intervalHeartbeatSchedule;
@@ -198,8 +221,9 @@ export const startRunHeartbeat = (deps: RunHeartbeatDependencies, runId: Id): St
     if (stopped || inFlight !== null) {
       return;
     }
-    inFlight = renewRunLease(deps, runId)
-      .then(async (renewed) => {
+    inFlight = renewRunLease(deps, runId, epoch)
+      .then(async (renewal) => {
+        const renewed = renewal === 'renewed';
         if (renewed && !stopped) {
           await deps.lease.onRenewed?.(runId);
           return;
@@ -209,8 +233,8 @@ export const startRunHeartbeat = (deps: RunHeartbeatDependencies, runId: Id): St
         }
         halt();
         logger.info(
-          { run_id: runId, lease_owner: deps.lease.owner },
-          'the run lease was not renewed: the run has ended or another process owns it, so the heartbeat stopped',
+          { run_id: runId, lease_owner: deps.lease.owner, lease_epoch: epoch },
+          'the run lease was not renewed (lease_lost): the run has ended or another claim holds it, so the heartbeat stopped',
         );
       })
       .catch((error: unknown) => {

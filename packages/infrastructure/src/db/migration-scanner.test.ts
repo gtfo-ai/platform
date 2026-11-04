@@ -152,12 +152,18 @@ describe('scanAdditive — what TD-032 §1 admits', () => {
     }
   });
 
-  it('admits a check or foreign key added not valid, and the validate that completes it', () => {
+  // TD-032's 2026-11-04 amendment C narrowed this row: a `not valid` constraint on an existing table
+  // is admitted only over columns the same file adds nullable with no default, and `is not null` is
+  // no longer a null-propagating check — so each constraint now follows its column's `add`.
+  it('admits a check or foreign key added not valid over this file’s columns, and the validate that completes it', () => {
     expect(
       isAdditive(`
+        alter table platform_migrations add column class text;
         alter table platform_migrations add constraint known check (class in ('additive', 'contract')) not valid;
+        alter table runs add column worker_id uuid;
         alter table runs add constraint runs_worker_fk foreign key (worker_id) references workers (id) on delete set null not valid;
-        alter table runs add check (x is not null) not valid;
+        alter table runs add column x int;
+        alter table runs add check (x > 0) not valid;
         alter table platform_migrations validate constraint known;
       `),
     ).toBe(true);
@@ -716,9 +722,11 @@ describe('scanAdditive — nothing evaluated at migration time calls a function 
         alter table runs add column a timestamptz not null default now();
         alter table runs add column b uuid default gen_random_uuid();
         alter table runs add column c numeric(12, 6) generated always as (coalesce(x, 0)) stored;
-        alter table runs add column d uuid references public.workers (id);
-        alter table runs add constraint e check (lower(f) in ('a', 'b')) not valid;
-        alter table runs add constraint g foreign key (h) references workers (id) not valid;
+        alter table runs add column d uuid references public.workers (id) on delete set null;
+        alter table runs add column f text;
+        alter table runs add constraint e check (f in ('a', 'b')) not valid;
+        alter table runs add column h uuid;
+        alter table runs add constraint g foreign key (h) references workers (id) on delete cascade not valid;
         create index on only public.runs using gin ((lower(name)));
         create table n (id int default zz());
         insert into platform_table_policy (table_name, app_access, retention_days) values ('n', 'read_write', null);
@@ -852,5 +860,221 @@ describe('scanAdditive — review round 2: overloads, child tables, computed val
     expect(
       refusals(`alter table tasks add constraint c check (${call} is null) not valid;`),
     ).toHaveLength(1);
+  });
+});
+
+/**
+ * TD-032's 2026-11-04 amendment, A to D (WP-274 criterion (0), backlog 690 and 691): one admitted
+ * and one refused row per ruling. The four canaries the amendment's section E names are each killed
+ * by a named row here: B's `no action` reference admitted (the "B refuses" rows), C's existing-column
+ * `not valid` admitted ("C refuses a not-valid constraint naming a column that predates the file"),
+ * C's `is not null` check admitted ("C refuses a check that is not null-propagating") and D's trigger
+ * on an existing table admitted ("D refuses a trigger on an existing table").
+ */
+describe('scanAdditive — TD-032 amendment of 2026-11-04 (A–D)', () => {
+  it('A admits the same-file rule: a unique index, a validated constraint and the registry row on a new table', () => {
+    expect(
+      isAdditive(`
+        create table offers (id uuid primary key, task_id uuid not null, state text not null);
+        create unique index offers_one_open on offers (task_id) where state = 'open';
+        alter table offers add constraint offers_state check (state in ('open', 'claimed'));
+        insert into platform_table_policy (table_name, app_access) values ('offers', 'read_write');
+      `),
+    ).toBe(true);
+  });
+
+  it('A refuses the same three on a table the file only names (its forgery precondition)', () => {
+    for (const create of [
+      'create table if not exists tasks (id uuid);',
+      'create temp table tasks (id uuid);',
+      'create table tasks_child partition of tasks for values in (1);',
+    ]) {
+      for (const follow of [
+        'create unique index on tasks (id);',
+        'alter table tasks add constraint c check (id is not null);',
+        "insert into platform_table_policy (table_name) values ('tasks');",
+      ]) {
+        expect(isAdditive(`${create}\n${follow}`), `${create} ${follow}`).toBe(false);
+      }
+    }
+  });
+
+  it('B admits a reference to an existing table that states on delete cascade, set null or set default, and one to a same-file table that states nothing', () => {
+    expect(
+      isAdditive(`
+        create table offers (
+          id uuid primary key,
+          run_id uuid not null references runs (id) on delete cascade,
+          task_id uuid references public.tasks on update cascade on delete set null,
+          project_id uuid,
+          parent uuid references offers (id),
+          foreign key (project_id) references projects (id) match simple on delete set default
+        );
+        create table claims (offer_id uuid references offers (id));
+        alter table runs add column offer_id uuid references offers (id);
+        alter table runs add column task_ref uuid references tasks (id) on delete set null (task_ref);
+      `),
+    ).toBe(true);
+  });
+
+  it.each([
+    ['inline in create table', 'create table offers (run_id uuid references runs (id));'],
+    [
+      'inline, on delete no action',
+      'create table offers (run_id uuid references runs (id) on delete no action);',
+    ],
+    [
+      'inline, on delete restrict',
+      'create table offers (run_id uuid references runs on delete restrict);',
+    ],
+    ['only on update', 'create table offers (run_id uuid references runs (id) on update cascade);'],
+    [
+      'a table constraint',
+      'create table offers (run_id uuid, constraint f foreign key (run_id) references runs (id));',
+    ],
+    ['inline in add column', 'alter table tasks add column run_id uuid references runs (id);'],
+    [
+      'an add constraint foreign key on a same-file table',
+      'create table offers (run_id uuid);\nalter table offers add constraint f foreign key (run_id) references runs (id);',
+    ],
+    [
+      'a self-reference of an if-not-exists table',
+      'create table if not exists offers (parent uuid references offers (id));',
+    ],
+  ])(
+    'B refuses a reference to an existing table %s without an on delete that settles',
+    (_, sql) => {
+      const found = refusals(sql);
+      expect(found, sql).toHaveLength(1);
+      expect(found[0]?.reason).toMatch(
+        /states no `on delete cascade`, `set null` or `set default`.*amendment B/,
+      );
+    },
+  );
+
+  it('B refuses match full even with an on delete that settles', () => {
+    expect(
+      refusals(
+        'create table offers (a uuid, b uuid, foreign key (a, b) references runs (id, task_id) match full on delete cascade);',
+      )[0]?.reason,
+    ).toMatch(/is `match full`, which TD-032's 2026-11-04 amendment B refuses/);
+  });
+
+  it('C admits a not-valid check and foreign key over columns the same file adds nullable with no default', () => {
+    expect(
+      isAdditive(`
+        alter table runs add column lane text, add column weight int;
+        alter table runs add constraint runs_lane check (lane in ('a', 'b') or (weight between -1 and 10 and lane like 'x%') or 3 <= weight) not valid;
+        alter table runs add constraint runs_weight check (weight <> 0 and weight not in (7, 8)) not valid;
+        alter table runs add column worker uuid;
+        alter table runs add constraint runs_worker foreign key (worker) references workers (id) on delete set null not valid;
+        alter table runs validate constraint runs_lane;
+      `),
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      'a column that predates the file',
+      "alter table runs add constraint c check (status in ('a')) not valid;",
+    ],
+    [
+      'a column added with a default',
+      "alter table runs add column lane text default 'a';\nalter table runs add constraint c check (lane in ('a')) not valid;",
+    ],
+    [
+      'a column added not null with a default',
+      "alter table runs add column lane text not null default 'a';\nalter table runs add constraint c check (lane = 'a') not valid;",
+    ],
+    [
+      'a column added if not exists',
+      "alter table runs add column if not exists lane text;\nalter table runs add constraint c check (lane = 'a') not valid;",
+    ],
+    [
+      'a column added to another table',
+      "alter table tasks add column lane text;\nalter table runs add constraint c check (lane = 'a') not valid;",
+    ],
+    [
+      'a foreign key over a column that predates the file',
+      'alter table runs add constraint f foreign key (task_id) references tasks (id) on delete cascade not valid;',
+    ],
+    [
+      'a foreign key over one new and one old column',
+      'alter table runs add column w uuid;\nalter table runs add constraint f foreign key (w, task_id) references tasks (id, x) on delete cascade not valid;',
+    ],
+  ])('C refuses a not-valid constraint naming a column that predates the file: %s', (_, sql) => {
+    const found = refusals(sql);
+    expect(found, sql).toHaveLength(1);
+    expect(found[0]?.reason).toMatch(/amendment C/);
+  });
+
+  it.each([
+    ['is not null', 'lane is not null'],
+    ['is null', 'lane is null'],
+    ['is distinct from', "lane is distinct from 'a'"],
+    ['a prefix not', "not (lane = 'a')"],
+    ['coalesce', "coalesce(lane, 'a') = 'a'"],
+    ['nullif', "nullif(lane, 'b') = 'a'"],
+    ['case', "case when lane = 'a' then true else false end"],
+    ['any', "lane = any (array['a'])"],
+    ['a literal on both sides', "'a' = 'a'"],
+    ['two columns in one atom', 'lane = other'],
+    ['a call', "lower(lane) = 'a'"],
+    ['a cast', "lane = 'a'::text"],
+    ['not like', "lane not like 'a%'"],
+    ['an atom with no column', "lane = 'a' or true"],
+  ])('C refuses a check that is not null-propagating: %s', (_, expression) => {
+    const sql = `alter table runs add column lane text, add column other text;\nalter table runs add constraint c check (${expression}) not valid;`;
+    const found = refusals(sql);
+    expect(found, sql).toHaveLength(1);
+    expect(found[0]?.reason).toMatch(/not null-propagating by construction.*amendment C/);
+  });
+
+  it('D admits a trigger, in each spelling, on a table the same file creates', () => {
+    expect(
+      isAdditive(`
+        create table offers (id uuid);
+        create trigger offers_wake after insert on offers for each row execute function platform_notify();
+        create or replace trigger offers_wake2 after update of id on public.offers for each row execute function platform_notify();
+        create constraint trigger offers_guard after insert or update on offers deferrable initially deferred for each row execute function platform_guard();
+      `),
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      'a trigger on an existing table',
+      'create trigger t after insert on runs for each row execute function f();',
+      /trigger on the existing table runs.*amendment D/,
+    ],
+    [
+      'a constraint trigger on an existing table',
+      'create constraint trigger t after insert on only public.runs for each row execute function f();',
+      /trigger on the existing table runs/,
+    ],
+    [
+      'or replace on an existing table',
+      'create or replace trigger t before update on tasks for each row execute function f();',
+      /trigger on the existing table tasks/,
+    ],
+    [
+      'a trigger on an if-not-exists table',
+      'create table if not exists tasks (id int);\ncreate trigger t after insert on tasks for each row execute function f();',
+      /trigger on the existing table tasks/,
+    ],
+    [
+      'an event trigger',
+      'create event trigger e on ddl_command_start execute function f();',
+      /create event trigger fires on DDL anywhere.*amendment D/,
+    ],
+    ['an enum type', "create type lane as enum ('a');", /create type stays refused.*amendment D/],
+    ['a composite type', 'create type pair as (a int, b int);', /create type stays refused/],
+    ['a domain', "create domain lane as text check (value <> '');", /create domain stays refused/],
+    ['a sequence', 'create sequence s;', /create sequence stays refused/],
+    ['a temporary sequence', 'create temp sequence s;', /create sequence stays refused/],
+  ])('D refuses %s', (_, sql, reason) => {
+    const found = refusals(sql);
+    expect(found, sql).toHaveLength(1);
+    expect(found[0]?.reason).toMatch(reason);
   });
 });

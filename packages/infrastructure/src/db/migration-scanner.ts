@@ -7,21 +7,46 @@
  * an unknown statement **fails**, and the escape is to declare the file `contract`, never to teach
  * the scanner a guess.
  *
- * ## What is admitted (TD-032 §1)
+ * ## What is admitted (TD-032 §1, as amended on 2026-11-04 — A to D)
+ *
+ * The rulings are TD-032's 2026-11-04 amendment
+ * (`docs/decisions/technical/TD-032-automatic-updates-and-migration-classes.md`, sections A–D);
+ * this table is that amendment's list, and the amendment wins where they differ.
  *
  * | statement | admitted when |
  * |---|---|
- * | `create [unlogged] table` | always (the old build never names the table) |
+ * | `create [unlogged] table` | always, subject to B (the old build never names the table) |
  * | `create index` | never `concurrently`: the migrator applies each file in one transaction, where it cannot run |
- * | `create unique index` | only on a table the same file creates — on an existing table it can refuse a row the old build writes |
- * | `alter table … add [column]` | the column is nullable or has a default, with no inline `check`, `unique` or `primary key` (write a check as `add constraint … not valid`) |
- * | `alter table … add constraint`/`check`/`foreign key` | it ends `not valid` — or the table is created in the same file |
+ * | `create unique index` | only on a table the same file creates (A) — on an existing table it can refuse a row the old build writes |
+ * | `alter table … add [column]` | the column is nullable or has a default, with no inline `check`, `unique` or `primary key` (write a check as `add constraint … not valid`); subject to B |
+ * | `alter table … add constraint` on a table the same file creates | always (A), subject to B |
+ * | `alter table … add constraint … check`/`foreign key … not valid` on an existing table | only over columns the same file added earlier, nullable with no default, and a check only when null-propagating by construction (C) |
  * | `alter table … validate constraint` | always (it completes a `not valid`; a row it refuses fails the migration, and the running build carries on) |
  * | `create [or replace] function` | the name is new, or an earlier migration declared it with the same arguments and return type |
  * | `create [or replace] view` | always — PostgreSQL itself refuses a replacement that drops, renames or retypes a column |
+ * | `create [or replace] [constraint] trigger` | only on a table the same file creates (D); `create event trigger` never |
  * | `grant`, `comment on` | always |
  * | `alter type … add value 'v'` | `'v'` is already in `packages/contracts` at the base commit (the caller answers) |
- * | `insert into platform_table_policy` | every `table_name` it registers is a table the same file creates (technical/03: every migration that creates a table registers it) |
+ * | `insert into platform_table_policy` | every `table_name` it registers is a table the same file creates, every value a literal (A; technical/03: every migration that creates a table registers it) |
+ *
+ * **A's precondition, held here and not only stated**: "a table this file creates" is only a plain
+ * `create [unlogged] table <name>` — never `if not exists`, `temp`/`temporary`, a `partition of` or
+ * `inherits` child, or `create table … as`; and a call to a routine this file or an earlier
+ * migration declares is refused wherever a call is evaluated. Weakening either re-opens decision 1.
+ *
+ * **B — references.** Every `references <table>` (inline in `create table` or `add column`, or in an
+ * `add [constraint …] foreign key`) naming a table the file did not create must state `on delete
+ * cascade`, `on delete set null` or `on delete set default`, and never `match full`: with the default
+ * `no action` a row the newer build writes refuses the previous build's delete of the parent.
+ * `on update` is not read (no platform code updates a primary key).
+ *
+ * **C — a `not valid` check is null-propagating by construction** when every atom compares exactly
+ * one same-file nullable column with literals (`=`, `<>`, `<`, `<=`, `>`, `>=`, `[not] in (…)`,
+ * `between … and …`, `like`), atoms joined by `and`, `or` and parentheses. A null column then makes
+ * every atom null and the check passes for every row the previous build writes.
+ *
+ * **D — refused by name**: `create type`, `create domain`, `create sequence`, `create event
+ * trigger`, and a trigger on an existing table.
  *
  * Every other statement is refused, by name. In particular nothing that **drops**, **renames** or
  * **changes a column's type** is ever admitted, whatever table it names — `migration-scanner.test.ts`
@@ -65,7 +90,13 @@
  *   reader cannot parse.
  * - A function reached without a call's spelling: an operator a migration defined (`create
  *   operator` is refused, so only one an earlier migration made), or a cast.
- * - The enum-value lookup is the caller's: `migrations:check` asks `git grep` for the quoted value
+ * - **B's action against the column**: an `on delete set null` over a `not null` column (or a
+ *   `set default` whose default names no parent row) still makes the parent's delete fail; the
+ *   scanner reads the action, not the column it acts on.
+ * - **C's "no default" against the column's type**: a column whose type is a domain carrying a
+ *   default or `not null` reads as nullable with no default here. No migration creates a domain
+ *   (D keeps `create domain` refused), so only one made outside the migrations could.
+ * - The enum-value lookup is the caller's:`migrations:check` asks `git grep` for the quoted value
  *   anywhere under `packages/contracts` at the base commit, so a value that appears there only in
  *   another enum is admitted.
  */
@@ -452,6 +483,8 @@ const PURE_CALL_LIST = 'PostgreSQL builtins that write nothing (`PURE_CALLS`)';
 
 /** Words followed by `(` that are syntax or a type modifier, never a call. */
 const NOT_A_CALL = new Set([
+  // `on delete set null (column)` (PostgreSQL 15) — `null` is never a function.
+  'null',
   'in',
   'any',
   'all',
@@ -565,6 +598,11 @@ interface FileState {
   /** Tables created earlier in the same file. */
   readonly tables: Set<string>;
   /**
+   * Columns added earlier in the same file to an **existing** table, nullable and with no default,
+   * by table — the only columns a `not valid` constraint there may name (TD-032 amendment C).
+   */
+  readonly nullableAdded: Map<string, Set<string>>;
+  /**
    * Every function or procedure name this file or an earlier migration defines, unqualified and
    * in any signature: a call to one is never taken for a builtin.
    */
@@ -579,6 +617,194 @@ const declaredRoutine = (tokens: readonly SqlToken[]): string | null => {
   const named = readName(tokens, at + 1);
   return named === null ? null : (named.name.split('.').at(-1) as string);
 };
+
+const AMENDMENT = "TD-032's 2026-11-04 amendment";
+
+/**
+ * B: the first `references <table>` in `tokens` naming a table this file did not create (nor
+ * `own`, the table the statement itself creates) that does not state `on delete cascade`, `set
+ * null` or `set default`, or that states `match full` — as a refusal reason, or `null`.
+ */
+const referenceRefusal = (
+  tokens: readonly SqlToken[],
+  file: FileState,
+  own: string | null,
+): string | null => {
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (!isWord(tokens[index], 'references')) continue;
+    const named = readName(tokens, index + 1);
+    if (named === null) return `a reference the scanner cannot read; ${NOT_ON_LIST}`;
+    if (file.tables.has(named.name) || named.name === own) continue;
+    // The clause runs to the next comma or close at the depth `references` sits at.
+    let depth = 0;
+    let end = named.next;
+    for (; end < tokens.length; end += 1) {
+      if (isPunct(tokens[end], '(')) depth += 1;
+      else if (isPunct(tokens[end], ')')) {
+        if (depth === 0) break;
+        depth -= 1;
+      } else if (depth === 0 && isPunct(tokens[end], ',')) break;
+    }
+    const words = topLevelWords(tokens.slice(named.next, end));
+    const at = (word: string, offset: number) =>
+      words.findIndex((w, i) => i >= offset && w === word);
+    const match = at('match', 0);
+    if (match !== -1 && words[match + 1] === 'full') {
+      return `the reference to the existing table ${named.name} is \`match full\`, which ${AMENDMENT} B refuses`;
+    }
+    let onDelete = -1;
+    for (let i = 0; i < words.length - 1; i += 1) {
+      if (words[i] === 'on' && words[i + 1] === 'delete') onDelete = i + 2;
+    }
+    const action = onDelete === -1 ? [] : words.slice(onDelete, onDelete + 2);
+    const settles =
+      action[0] === 'cascade' ||
+      (action[0] === 'set' && (action[1] === 'null' || action[1] === 'default'));
+    if (!settles) {
+      return `the reference to the existing table ${named.name} states no \`on delete cascade\`, \`set null\` or \`set default\`: with \`no action\` or \`restrict\` a row the newer build writes refuses the previous build's delete of the parent (${AMENDMENT} B)`;
+    }
+  }
+  return null;
+};
+
+const COMPARISONS = new Set(['=', '<>', '<', '<=', '>', '>=']);
+
+/**
+ * C: whether `tokens` (a check's expression) is null-propagating by construction over `columns` —
+ * atoms comparing exactly one such column with literals, joined by `and`, `or` and parentheses.
+ * A tiny recursive reader; anything it does not recognise is a refusal.
+ */
+const nullPropagating = (tokens: readonly SqlToken[], columns: ReadonlySet<string>): boolean => {
+  let at = 0;
+  const literal = (): boolean => {
+    const token = tokens[at];
+    if (token?.kind === 'string' || token?.kind === 'number' || isWord(token, 'true', 'false')) {
+      at += 1;
+      return true;
+    }
+    if (isPunct(token, '-') && tokens[at + 1]?.kind === 'number') {
+      at += 2;
+      return true;
+    }
+    return false;
+  };
+  const column = (): boolean => {
+    const name = nameText(tokens[at]);
+    if (name === null || !columns.has(name) || isPunct(tokens[at + 1], '(')) return false;
+    if (isPunct(tokens[at + 1], '.')) return false;
+    at += 1;
+    return true;
+  };
+  const operator = (): boolean => {
+    const first = tokens[at];
+    if (first?.kind !== 'punct') return false;
+    const second = tokens[at + 1];
+    const pair = second?.kind === 'punct' ? first.text + second.text : null;
+    if (pair !== null && COMPARISONS.has(pair)) {
+      at += 2;
+      return true;
+    }
+    if (COMPARISONS.has(first.text)) {
+      at += 1;
+      return true;
+    }
+    return false;
+  };
+  const literalList = (): boolean => {
+    if (!isPunct(tokens[at], '(')) return false;
+    at += 1;
+    for (;;) {
+      if (!literal()) return false;
+      if (!isPunct(tokens[at], ',')) break;
+      at += 1;
+    }
+    if (!isPunct(tokens[at], ')')) return false;
+    at += 1;
+    return true;
+  };
+  const atom = (): boolean => {
+    if (column()) {
+      if (isWord(tokens[at], 'not') && isWord(tokens[at + 1], 'in')) {
+        at += 2;
+        return literalList();
+      }
+      if (isWord(tokens[at], 'in')) {
+        at += 1;
+        return literalList();
+      }
+      if (isWord(tokens[at], 'between')) {
+        at += 1;
+        if (!literal() || !isWord(tokens[at], 'and')) return false;
+        at += 1;
+        return literal();
+      }
+      if (isWord(tokens[at], 'like')) {
+        at += 1;
+        return literal();
+      }
+      return operator() && literal();
+    }
+    return literal() && operator() && column();
+  };
+  const primary = (): boolean => {
+    if (isPunct(tokens[at], '(')) {
+      at += 1;
+      if (!disjunction() || !isPunct(tokens[at], ')')) return false;
+      at += 1;
+      return true;
+    }
+    return atom();
+  };
+  const conjunction = (): boolean => {
+    if (!primary()) return false;
+    while (isWord(tokens[at], 'and')) {
+      at += 1;
+      if (!primary()) return false;
+    }
+    return true;
+  };
+  function disjunction(): boolean {
+    if (!conjunction()) return false;
+    while (isWord(tokens[at], 'or')) {
+      at += 1;
+      if (!conjunction()) return false;
+    }
+    return true;
+  }
+  return disjunction() && at === tokens.length;
+};
+
+/** D: `create [or replace] [constraint] trigger <name> … on <table>` — admitted on a same-file table. */
+const classifyTrigger = (
+  tokens: readonly SqlToken[],
+  at: number,
+  file: FileState,
+): StatementVerdict => {
+  const named = readName(tokens, at + 1);
+  const on = named === null ? -1 : tokens.findIndex((t, i) => i >= named.next && isWord(t, 'on'));
+  const table = on === -1 ? null : readName(tokens, skipWords(tokens, on + 1, 'only'));
+  if (table === null) return refuse(`a create trigger the scanner cannot read; ${NOT_ON_LIST}`);
+  return file.tables.has(table.name)
+    ? admit('create trigger (on a table this file creates)')
+    : refuse(
+        `a trigger on the existing table ${table.name} changes what the previous build's own writes do; only a trigger on a table the same file creates is additive (${AMENDMENT} D)`,
+      );
+};
+
+const REFUSED_OBJECTS: ReadonlyMap<string, string> = new Map([
+  [
+    'type',
+    `create type stays refused (${AMENDMENT} D): use a text column with a \`check\` inside \`create table\`, or declare the file \`contract\``,
+  ],
+  [
+    'domain',
+    `create domain stays refused (${AMENDMENT} D): use a text column with a \`check\` inside \`create table\`, or declare the file \`contract\``,
+  ],
+  [
+    'sequence',
+    `create sequence stays refused (${AMENDMENT} D): use \`generated … as identity\` inside \`create table\`, or declare the file \`contract\``,
+  ],
+]);
 
 const classifyCreate = (
   tokens: readonly SqlToken[],
@@ -612,6 +838,15 @@ const classifyCreate = (
     at += 1;
   }
   if (isWord(tokens[at], 'view')) return admit('create view');
+  if (isWord(tokens[at], 'trigger')) return classifyTrigger(tokens, at, file);
+  if (isWord(tokens[at], 'constraint') && isWord(tokens[at + 1], 'trigger')) {
+    return classifyTrigger(tokens, at + 1, file);
+  }
+  if (isWord(tokens[at], 'event') && isWord(tokens[at + 1], 'trigger')) {
+    return refuse(
+      `create event trigger fires on DDL anywhere in the database, so it is never additive (${AMENDMENT} D)`,
+    );
+  }
   if (orReplace) return refuse(`create or replace ${nameText(tokens[at]) ?? '…'}: ${NOT_ON_LIST}`);
   while (isWord(tokens[at], 'unlogged', 'global', 'local', 'temp', 'temporary')) {
     temporary ||= isWord(tokens[at], 'temp', 'temporary');
@@ -638,11 +873,15 @@ const classifyCreate = (
     // route into it, so a constraint or a unique index on it can refuse them (review round 2).
     const after = topLevelWords(tokens.slice(named.next));
     const child = isWord(tokens[named.next], 'partition') || after.includes('inherits');
-    if (afterTable === at + 1 && !child) file.tables.add(named.name);
-    return admit('create table');
+    const own = afterTable === at + 1 && !child ? named.name : null;
+    const reference = referenceRefusal(tokens.slice(named.next), file, own);
+    if (own !== null) file.tables.add(own);
+    return reference === null ? admit('create table') : refuse(reference);
   }
   const unique = isWord(tokens[at], 'unique');
   if (unique) at += 1;
+  const refusedObject = REFUSED_OBJECTS.get(nameText(tokens[at]) ?? '');
+  if (refusedObject !== undefined && !unique) return refuse(refusedObject);
   if (!isWord(tokens[at], 'index'))
     return refuse(`create ${nameText(tokens[at]) ?? '…'}: ${NOT_ON_LIST}`);
   if (isWord(tokens[at + 1], 'concurrently')) {
@@ -669,11 +908,48 @@ const classifyCreate = (
       );
 };
 
+/** The column names of the parenthesised list that opens at `at`, or `null` when it is not one. */
+const columnList = (tokens: readonly SqlToken[], at: number): string[] | null => {
+  const end = closeParen(tokens, at);
+  if (end === null) return null;
+  const names = splitTopLevel(tokens.slice(at + 1, end - 1)).map((part) =>
+    part.length === 1 ? nameText(part[0]) : null,
+  );
+  return names.every((name): name is string => name !== null) ? names : null;
+};
+
+/**
+ * C: a `check`/`foreign key … not valid` on an existing table names only columns this file added
+ * there, nullable with no default, and a check is null-propagating by construction — as a refusal
+ * reason, or `null`.
+ */
+const notValidRefusal = (
+  action: readonly SqlToken[],
+  kind: 'check' | 'foreign',
+  table: string,
+  added: ReadonlySet<string>,
+): string | null => {
+  const keyword = action.findIndex((token) => isWord(token, kind));
+  if (kind === 'foreign') {
+    const columns = isWord(action[keyword + 1], 'key') ? columnList(action, keyword + 2) : null;
+    if (columns === null) return `a foreign key the scanner cannot read; ${NOT_ON_LIST}`;
+    const old = columns.find((column) => !added.has(column));
+    return old === undefined
+      ? null
+      : `the \`not valid\` foreign key on the existing table ${table} names ${old}, which this file did not add there as a nullable column with no default; PostgreSQL enforces a \`not valid\` constraint on every later write, so the previous build's rows would be refused (${AMENDMENT} C)`;
+  }
+  const end = closeParen(action, keyword + 1);
+  if (end === null) return `a check the scanner cannot read; ${NOT_ON_LIST}`;
+  return nullPropagating(action.slice(keyword + 2, end - 1), added)
+    ? null
+    : `the \`not valid\` check on the existing table ${table} is not null-propagating by construction over columns this file added there nullable with no default (atoms comparing one such column with literals, joined by \`and\`/\`or\`); PostgreSQL enforces it on every later write, so a row the previous build writes could be refused (${AMENDMENT} C)`;
+};
+
 const classifyAddConstraint = (
   action: readonly SqlToken[],
   sameFile: boolean,
   table: string,
-  shadowed: ReadonlySet<string>,
+  file: FileState,
 ): StatementVerdict => {
   if (sameFile) return admit('add constraint (on a table this file creates)');
   const words = topLevelWords(action);
@@ -683,13 +959,21 @@ const classifyAddConstraint = (
     words.at(-2) === 'not' &&
     words.at(-1) === 'valid'
   ) {
-    const call = impureCall(action, shadowed);
+    const call = impureCall(action, file.shadowed);
     if (call !== null) {
       return refuse(
         `the constraint on ${table} calls ${call}(), which its \`validate constraint\` runs over every existing row; only ${PURE_CALL_LIST} may be called there`,
       );
     }
-    return admit('add constraint … not valid');
+    const narrowed = notValidRefusal(
+      action,
+      kind,
+      table,
+      file.nullableAdded.get(table) ?? new Set(),
+    );
+    return narrowed === null
+      ? admit('add constraint … not valid (over this file’s columns)')
+      : refuse(narrowed);
   }
   return refuse(
     `a constraint on the existing table ${table} is additive only as \`add constraint … not valid\` (a check or a foreign key), validated by a later \`validate constraint\``,
@@ -700,7 +984,7 @@ const classifyAddColumn = (
   action: readonly SqlToken[],
   sameFile: boolean,
   table: string,
-  shadowed: ReadonlySet<string>,
+  file: FileState,
 ): StatementVerdict => {
   let at = skipWords(action, 1, 'column');
   at = skipWords(action, at, 'if', 'not', 'exists');
@@ -721,11 +1005,22 @@ const classifyAddColumn = (
       );
     }
   }
-  const call = impureCall(action.slice(at + 1), shadowed);
+  const call = impureCall(action.slice(at + 1), file.shadowed);
   if (call !== null) {
     return refuse(
       `column ${table}.${column} calls ${call}(), which PostgreSQL evaluates for the existing rows at migration time; only ${PURE_CALL_LIST} may be called in a default or generated expression`,
     );
+  }
+  // `if not exists` may add nothing (the column can predate the file), so it is never recorded.
+  const bare =
+    !notNull &&
+    !words.includes('default') &&
+    !words.includes('generated') &&
+    at === skipWords(action, 1, 'column');
+  if (bare) {
+    const added = file.nullableAdded.get(table) ?? new Set<string>();
+    added.add(column);
+    file.nullableAdded.set(table, added);
   }
   return admit('add column (nullable or defaulted)');
 };
@@ -741,8 +1036,10 @@ const classifyAlterTable = (tokens: readonly SqlToken[], file: FileState): State
   const actions = splitTopLevel(tokens.slice(at));
   const verdicts = actions.map((action): StatementVerdict => {
     if (isWord(action[0], 'add')) {
+      const reference = referenceRefusal(action, file, null);
+      if (reference !== null) return refuse(reference);
       if (isWord(action[1], 'constraint', 'check', 'foreign')) {
-        return classifyAddConstraint(action, sameFile, named.name, file.shadowed);
+        return classifyAddConstraint(action, sameFile, named.name, file);
       }
       if (isWord(action[1], 'primary', 'unique', 'exclude')) {
         return sameFile
@@ -751,7 +1048,7 @@ const classifyAlterTable = (tokens: readonly SqlToken[], file: FileState): State
               `${isWord(action[1], 'primary') ? 'a primary key' : `an ${nameText(action[1])}`} constraint on the existing table ${named.name} can refuse a row the previous build writes`,
             );
       }
-      return classifyAddColumn(action, sameFile, named.name, file.shadowed);
+      return classifyAddColumn(action, sameFile, named.name, file);
     }
     if (isWord(action[0], 'validate') && isWord(action[1], 'constraint')) {
       return admit('validate constraint');
@@ -872,7 +1169,7 @@ export const scanAdditive = (sql: string, context: AdditiveScanContext): Additiv
   for (const name of context.functionSignatures.keys()) {
     shadowed.add(name.split('.').at(-1) as string);
   }
-  const file: FileState = { tables: new Set(), shadowed };
+  const file: FileState = { tables: new Set(), nullableAdded: new Map(), shadowed };
   const refusals: AdditiveRefusal[] = [];
   for (const statement of statements) {
     const verdict = classify(statement, context, file);

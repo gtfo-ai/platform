@@ -95,6 +95,9 @@ const EXPECTED_TABLES = [
   'run_context_pack',
   'run_messages',
   'run_model_usage',
+  // WP-274, migration 0094: one offer per agent run, claimed by one SQL claim under an epoch
+  // (TD-031 decisions 1–2); its per-task index replaces the job singleton for a run's duration.
+  'run_offers',
   'runs',
   'secrets',
   'sessions',
@@ -281,6 +284,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // ending or the holder's heartbeat stamps it refused — once, after it was written pending.
       row('run_commands', 'read_write', null),
       row('run_messages', 'append_only', 'created_at', 'transcripts'),
+      // WP-274 (migration 0094): `read_write` — written open, moved by the claim, closed by the
+      // run's terminal writer.
+      row('run_offers', 'read_write', null),
       row('sessions', 'read_write', null),
       // WP-41 (migration 0034): the statistics projections. `read_write` for both — a counter is
       // an upsert that adds, and a projection that could never be corrected could not be rebuilt

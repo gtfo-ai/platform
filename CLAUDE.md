@@ -260,9 +260,10 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
   dispatcher does, which is what lets a handler registered today be served events swept last month, and
   makes a second pass a no-op.
 - **A run whose process died, and the money it still owes** (WP-47): the lease is written by the
-  process executing the run — `packages/application/src/pipeline/lease.ts` claims
-  `runs.lease_owner`/`lease_expires_at` in the same transaction as the `runs` row and renews them on a
-  heartbeat inside `stage.execute` — and read by
+  process executing the run — since WP-274 the run is **offered** and **claimed** through one function
+  (`packages/application/src/pipeline/offers.ts`, TD-031 decisions 1–2: `for update skip locked`, `lease_epoch` + 1,
+  `lease_owner`) in the same transaction as the `runs` row, `lease.ts` renews it on a heartbeat inside `stage.execute`,
+  and renewal and `finish` are fenced on `(lease_epoch, lease_owner)` (a mismatch is `lease_lost`) — and read by
   `packages/application/src/recovery/run-lease.ts`, a **third row of `recovery/stranded.ts`'s
   table**. A missing heartbeat licenses exactly one conclusion, *no process is renewing this lease*,
   never that the model stopped, so the sweep ends the **row**: `run.failed` with the new terminal

@@ -22,6 +22,7 @@ import {
   createLiveRuns,
   createRunCommandInbox,
   INITIAL_TASK_VERSION,
+  offerAndClaimForTest,
   type PipelineStore,
   type RunCommandInstruction,
   type RunHandle,
@@ -217,7 +218,16 @@ const liveRun = async (): Promise<{ runId: Id; taskId: Id }> => {
     createdAt: NOW,
     startedAt: NOW,
   });
-  await store.runs.renewLease(setup.tx, { runId, owner: OWNER, expiresAt: NOW });
+  // WP-274: the lease is the offer's one claim's to write (TD-031 §2), never a first beat's.
+  await offerAndClaimForTest(store, setup.tx, {
+    offerId: nextId(),
+    runId,
+    taskId,
+    projectId,
+    owner: OWNER,
+    expiresAt: NOW,
+    now: NOW,
+  });
   await setup.commit();
   return { runId, taskId };
 };
@@ -577,6 +587,7 @@ describe('the holder applies a command recorded in another process', () => {
           },
         },
         run.runId,
+        1,
       );
       beat();
       // Bounded, and named when it fails: a beat that never reaches the inbox is the defect.

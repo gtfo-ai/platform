@@ -3320,6 +3320,192 @@
         },
         "type": {
           "type": "string",
+          "const": "run.offered"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "task_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "run_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "offer_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "stage",
+                "ask"
+              ]
+            },
+            "stage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Slug"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "attempt": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "project_id",
+            "task_id",
+            "run_id",
+            "offer_id",
+            "kind",
+            "stage",
+            "attempt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
+          "const": "run.claimed"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "task_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "run_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "offer_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "claimant_kind": {
+              "type": "string",
+              "enum": [
+                "server",
+                "worker"
+              ]
+            },
+            "worker_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lease_epoch": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "project_id",
+            "task_id",
+            "run_id",
+            "offer_id",
+            "claimant_kind",
+            "worker_id",
+            "lease_epoch"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
           "const": "run.steered"
         },
         "payload": {

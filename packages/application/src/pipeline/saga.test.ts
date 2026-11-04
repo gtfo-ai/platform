@@ -444,6 +444,44 @@ describe('a feature ticket through the whole loop', () => {
     ]);
   });
 
+  /**
+   * WP-274 (TD-031 decisions 1–2): five consecutive stages of one task, each run an offer the job
+   * wrote and claimed in the run's creation transaction, and settled by its own `finish` — or the
+   * per-task index (one open or claimed stage offer) would have refused the second stage's offer.
+   */
+  it('offers every run, claims it at epoch 1 in the job and settles it at its ending (WP-274)', async () => {
+    const harness = harnessWith();
+    await harness.publish([ticketMatched()]);
+    const offers = harness.store.offerRows();
+    expect(offers.map((offer) => [offer.stage, offer.kind, offer.state, offer.leaseEpoch])).toEqual(
+      [
+        ['refinement', 'stage', 'settled', 1],
+        ['architecture', 'stage', 'settled', 1],
+        ['implementation', 'stage', 'settled', 1],
+        ['code_review', 'stage', 'settled', 1],
+        ['business_review', 'stage', 'settled', 1],
+      ],
+    );
+    expect(offers.map((offer) => offer.runId)).toEqual(harness.specs.map((spec) => spec.runId));
+    for (const offer of offers) {
+      expect(offer.claimantKind).toBe('server');
+      expect(harness.store.leaseEpochOf(offer.runId)).toBe(1);
+      // The run stream reads created → offered → claimed → started (TD-031 §1: `run.started` at
+      // the claim that starts it), then its ending.
+      const types = harness
+        .events()
+        .filter((entry) => entry.stream_type === 'run' && entry.stream_id === offer.runId)
+        .map((entry) => entry.type);
+      expect(types).toEqual([
+        'run.created',
+        'run.offered',
+        'run.claimed',
+        'run.started',
+        'run.finished',
+      ]);
+    }
+  });
+
   it('records the merge request the implementation notes reported', async () => {
     const harness = harnessWith();
     await harness.publish([ticketMatched()]);

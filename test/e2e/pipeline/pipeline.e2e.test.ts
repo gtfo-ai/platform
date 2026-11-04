@@ -247,6 +247,47 @@ describe('a feature ticket, end to end', () => {
       'retrospective',
       'librarian',
     ]);
+
+    // WP-274 (TD-031 decisions 1–2, criterion 6b): seven consecutive agent stages of one task, each
+    // run an offer written and claimed in its creation transaction and settled by its ending. Had
+    // any ending left its offer open or claimed, the per-task index would have refused the next
+    // stage's offer and the walk above would not have reached `done`.
+    const offers = await pipeline.query<{
+      stage: string;
+      kind: string;
+      state: string;
+      offer_epoch: number;
+      run_epoch: number;
+      lease_owner: string | null;
+      claimant_kind: string | null;
+    }>(
+      `select o.stage, o.kind, o.state, o.lease_epoch as offer_epoch, r.lease_epoch as run_epoch,
+              r.lease_owner, o.claimant_kind
+         from runs r left join run_offers o on o.run_id = r.id
+        where r.task_id = $1
+        order by r.created_at, r.id`,
+      [(await pipeline.task()).id],
+    );
+    expect(offers.map((offer) => offer.stage)).toEqual([
+      'refinement',
+      'architecture',
+      'implementation',
+      'code_review',
+      'business_review',
+      'retrospective',
+      'librarian',
+    ]);
+    for (const offer of offers) {
+      expect(offer).toMatchObject({
+        kind: 'stage',
+        state: 'settled',
+        offer_epoch: 1,
+        run_epoch: 1,
+        claimant_kind: 'server',
+      });
+      // TD-031 §2: the server's claim writes `server:<process>`.
+      expect(offer.lease_owner).toMatch(/^server:/);
+    }
   });
 });
 

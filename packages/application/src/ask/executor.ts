@@ -79,12 +79,18 @@ import {
   type RunLeaseOptions,
   startRunHeartbeat,
 } from '../pipeline/lease.js';
+import { offerAndClaimInJob } from '../pipeline/offers.js';
 import { injectedSecretRedactorFor } from '../pipeline/run-redaction.js';
 import { type ProjectSettings, settingsAdmission } from '../pipeline/settings.js';
 import { runSettingsSnapshot } from '../pipeline/settings-snapshot.js';
 import { COST_UNREPORTED, withTaskCap } from '../pipeline/stage-executor.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
-import type { PipelineStore, StoredTask } from '../pipeline/store.js';
+import {
+  LeaseLostError,
+  type PipelineStore,
+  type RunLeaseFence,
+  type StoredTask,
+} from '../pipeline/store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -514,7 +520,13 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
     runId: Id,
     settings: ProjectSettings,
   ): Promise<
-    | { readonly kind: 'started'; readonly run: Run; readonly redactor: SecretRedactor }
+    | {
+        readonly kind: 'started';
+        readonly run: Run;
+        readonly redactor: SecretRedactor;
+        /** The claim's fence (WP-274): every later write of this run by this job carries it. */
+        readonly fence: RunLeaseFence;
+      }
     | { readonly kind: 'skipped'; readonly reason: string }
     | { readonly kind: 'refused'; readonly reason: string }
   > =>
@@ -562,11 +574,6 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         promptVersion: plan.spec.promptVersion,
       });
       const starting = startRun(created, context);
-      const running = markRunning(
-        starting.aggregate,
-        { contextPack: contextPack satisfies ContextPackRecord },
-        context,
-      );
       await options.store.runs.insert(scope.tx, {
         id: runId,
         taskId: ask.taskId,
@@ -580,7 +587,9 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         model: plan.spec.model,
         effort: plan.spec.effort,
         promptVersion: plan.spec.promptVersion,
-        status: running.aggregate.status,
+        // `running`, which `markRunning` below moves the aggregate to in this same transaction: the
+        // row is written before the offer that references it (WP-274), so before the claim.
+        status: 'running',
         terminalReason: null,
         sessionId: null,
         numTurns: 0,
@@ -609,21 +618,59 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         providerMode: plan.spec.providerMode,
       });
       /**
-       * The lease, claimed in the **same transaction as the row** — the stage executor's rule and
-       * its reason, one composition across (WP-48): a `runs` row that is `running` with no lease is
-       * exactly the row the sweep's wall-clock backstop takes an hour to reach.
+       * The offer, and the lease claimed through it, in the **same transaction as the row** — the
+       * stage executor's rule and its reason, one composition across (WP-48, WP-274): a `runs` row
+       * that is `running` with no lease is exactly the row the sweep's wall-clock backstop takes an
+       * hour to reach. An ask's offer is `kind: 'ask'` (TD-031 §13), outside the per-task index, so
+       * it runs beside the task's stage offer as the ask ran beside the stage before.
        */
-      if (options.lease !== undefined) {
-        await options.store.runs.renewLease(scope.tx, {
-          runId,
-          owner: options.lease.owner,
-          expiresAt: leaseExpiryAt(context.clock.now(), options.lease.ttlMs ?? RUN_LEASE_TTL_MS),
-        });
-      }
+      const claimed = await offerAndClaimInJob(
+        options.store.offers,
+        scope.tx,
+        {
+          run: starting.aggregate,
+          kind: 'ask',
+          offerId: context.ids.next(),
+          owner: options.lease?.owner ?? null,
+          expiresAt:
+            options.lease === undefined
+              ? null
+              : leaseExpiryAt(context.clock.now(), options.lease.ttlMs ?? RUN_LEASE_TTL_MS),
+          now: context.clock.now(),
+        },
+        context,
+      );
+      const running = markRunning(
+        claimed.run,
+        { contextPack: contextPack satisfies ContextPackRecord },
+        context,
+      );
       await options.asks.attachRun(scope.tx, ask.id, runId);
-      await scope.events.append([...starting.events, ...running.events]);
-      return { kind: 'started' as const, run: running.aggregate, redactor: runRedactor };
+      await scope.events.append([...starting.events, ...claimed.events, ...running.events]);
+      return {
+        kind: 'started' as const,
+        run: running.aggregate,
+        redactor: runRedactor,
+        fence: claimed.fence,
+      };
     });
+
+  /**
+   * A fenced `finish` found the run live under another claim (WP-274, TD-031 §2): its transaction
+   * rolled back, so this job wrote nothing about the run or the ask, and it ends there — the stage
+   * executor's answer (`leaseLost` in `stage-executor.ts`). Unreachable while the server's runner is
+   * the only claimant; stated rather than left to pg-boss's retry, which would plan the ask again.
+   */
+  const leaseLost =
+    (askId: Id) =>
+    (error: unknown): AskExecutionOutcome => {
+      if (!(error instanceof LeaseLostError)) throw error;
+      logger.warn(
+        { ask_id: askId, run_id: error.runId, lease_epoch: error.fence.epoch },
+        "the ask's run is held under another claim (lease_lost); this job wrote nothing about it",
+      );
+      return { kind: 'skipped', reason: error.message };
+    };
 
   /** tx 2: the answer, the artifact, the spend and the run's ending, in one write. */
   const record = async (input: {
@@ -640,6 +687,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
     readonly redactor: SecretRedactor;
     readonly knownRunIds: ReadonlySet<string>;
     readonly knownAuditIds: ReadonlySet<string>;
+    /** The claim's fence (WP-274): the run's `finish` is conditional on it. */
+    readonly fence: RunLeaseFence;
   }): Promise<AskExecutionOutcome> =>
     options.unitOfWork.transaction(async (scope) => {
       const { ask, run, outcome } = input;
@@ -687,6 +736,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           wallMs: outcome.wallMs,
           costIsFloor: input.stopReason === COST_UNREPORTED,
           ...notStartedOf(outcome, true),
+          lease: input.fence,
         });
         if (!owned) {
           return { kind: 'skipped' as const, reason: 'another writer ended this run first' };
@@ -791,6 +841,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           // WP-131 pre-review round (backlog 407): a `cost_unreported` stop's cost is a floor.
           costIsFloor: input.stopReason === COST_UNREPORTED,
           ...notStartedOf(outcome, false),
+          lease: input.fence,
         });
         if (!owned) {
           return { kind: 'skipped' as const, reason: 'another writer ended this run first' };
@@ -831,6 +882,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         cost: outcome.cost,
         wallMs: outcome.wallMs,
         costIsFloor: input.stopReason === COST_UNREPORTED,
+        lease: input.fence,
       });
       if (!owned) {
         return { kind: 'skipped' as const, reason: 'another writer ended this run first' };
@@ -946,6 +998,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
                 ...(options.logger === undefined ? {} : { logger: options.logger }),
               },
               runId,
+              started.fence.epoch,
             );
       // WP-150: the ask's runs get the stage runs' marker, and the same rule about a missing one.
       const spawn = recordCliSpawn({
@@ -980,41 +1033,44 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           attempt: 1,
           retryable: false,
         });
-        return await options.unitOfWork.transaction(async (scope) => {
-          // The measured zero only when the CLI was never asked for (WP-150) or its frame was
-          // withheld after the marker (WP-163); a runner that failed after the frame may have been
-          // sent leaves no figure, and the run is held at its reservation (WP-131).
-          const requested = spawn.mayHaveReachedCli();
-          const failed = failRun(
-            started.run,
-            {
+        return await options.unitOfWork
+          .transaction(async (scope) => {
+            // The measured zero only when the CLI was never asked for (WP-150) or its frame was
+            // withheld after the marker (WP-163); a runner that failed after the frame may have been
+            // sent leaves no figure, and the run is held at its reservation (WP-131).
+            const requested = spawn.mayHaveReachedCli();
+            const failed = failRun(
+              started.run,
+              {
+                status: 'failed',
+                terminalReason: 'error_during_execution',
+                error: reason,
+                ...(requested ? {} : { usage: NO_RUN_USAGE, cost: MEASURED_ZERO_COST }),
+                startFailure: notStarted,
+              },
+              options.context(admitted.ask.taskId),
+            );
+            await options.store.runs.finish(scope.tx, {
+              runId,
               status: 'failed',
               terminalReason: 'error_during_execution',
-              error: reason,
-              ...(requested ? {} : { usage: NO_RUN_USAGE, cost: MEASURED_ZERO_COST }),
+              sessionId: null,
+              numTurns: 0,
+              usage: NO_RUN_USAGE,
+              cost: requested ? null : MEASURED_ZERO_COST,
+              wallMs: 0,
               startFailure: notStarted,
-            },
-            options.context(admitted.ask.taskId),
-          );
-          await options.store.runs.finish(scope.tx, {
-            runId,
-            status: 'failed',
-            terminalReason: 'error_during_execution',
-            sessionId: null,
-            numTurns: 0,
-            usage: NO_RUN_USAGE,
-            cost: requested ? null : MEASURED_ZERO_COST,
-            wallMs: 0,
-            startFailure: notStarted,
-          });
-          await options.asks.recordRefusal(scope.tx, {
-            askId: admitted.ask.id,
-            status: 'failed',
-            reason,
-          });
-          await scope.events.append([...failed.events] as DomainEvent[]);
-          return { kind: 'failed' as const, askId: admitted.ask.id, reason };
-        });
+              lease: started.fence,
+            });
+            await options.asks.recordRefusal(scope.tx, {
+              askId: admitted.ask.id,
+              status: 'failed',
+              reason,
+            });
+            await scope.events.append([...failed.events] as DomainEvent[]);
+            return { kind: 'failed' as const, askId: admitted.ask.id, reason };
+          })
+          .catch(leaseLost(admitted.ask.id));
       }
       await stopHeartbeat();
       const stopReason = options.stopReasons.reasonFor(runId);
@@ -1042,7 +1098,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         redactor: started.redactor,
         knownRunIds: new Set(admitted.runs.map((line) => line.runId)),
         knownAuditIds: new Set(admitted.audit.map((line) => line.id)),
-      });
+        fence: started.fence,
+      }).catch(leaseLost(admitted.ask.id));
       if (recorded.kind === 'handed_back') {
         // WP-144: the same ask again, after the stopped process has had time to come back. This
         // handler is inside the worker's drain and pg-boss stops after the pipeline's workers, so

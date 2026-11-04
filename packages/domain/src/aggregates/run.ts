@@ -198,6 +198,74 @@ export const startRun = (run: Run, context: CommandContext): RunDecision => {
   };
 };
 
+const assertOfferable = (run: Run, event: string): void => {
+  if (!isActiveRunStatus(run.status)) {
+    throw new InvariantViolationError(
+      event,
+      `only a live run is offered or claimed, this one is "${run.status}"`,
+    );
+  }
+};
+
+/**
+ * The run is **offered** (WP-274, TD-031 decision 1): its `run_offers` row is written in the run's
+ * creation transaction. **No status change** — the run state machine of technical/02 is unchanged
+ * (TD-031 §1); the event is the run stream's record that the offer exists.
+ */
+export const offerRun = (
+  run: Run,
+  offer: { readonly offerId: Id; readonly kind: 'stage' | 'ask' },
+  context: CommandContext,
+): RunDecision => {
+  assertOfferable(run, 'run.offered');
+  const recorder = recorderFor(run, context);
+  recorder.emit('run.offered', {
+    project_id: run.projectId,
+    task_id: run.taskId,
+    run_id: run.id,
+    offer_id: offer.offerId,
+    kind: offer.kind,
+    stage: run.stage,
+    attempt: run.attempt,
+  });
+  return { aggregate: { ...run, sequence: recorder.sequence }, events: recorder.events };
+};
+
+/**
+ * One claim took the run's offer (WP-274, TD-031 decision 2) — at `epoch`, which every claim of an
+ * offer increments. No status change, for {@link offerRun}'s reason. The claim itself is the
+ * repository's one SQL statement; this records what it answered.
+ */
+export const claimRun = (
+  run: Run,
+  claim: {
+    readonly offerId: Id;
+    readonly claimantKind: 'server' | 'worker';
+    readonly workerId: Id | null;
+    readonly epoch: number;
+  },
+  context: CommandContext,
+): RunDecision => {
+  assertOfferable(run, 'run.claimed');
+  if (!Number.isInteger(claim.epoch) || claim.epoch < 1) {
+    throw new InvariantViolationError(
+      'run.claimed',
+      `a claim's epoch is at least 1, not ${claim.epoch}`,
+    );
+  }
+  const recorder = recorderFor(run, context);
+  recorder.emit('run.claimed', {
+    project_id: run.projectId,
+    task_id: run.taskId,
+    run_id: run.id,
+    offer_id: claim.offerId,
+    claimant_kind: claim.claimantKind,
+    worker_id: claim.workerId,
+    lease_epoch: claim.epoch,
+  });
+  return { aggregate: { ...run, sequence: recorder.sequence }, events: recorder.events };
+};
+
 /** The session is live: `starting → running`, and the catalogue's `run.started` is emitted. */
 export const markRunning = (
   run: Run,

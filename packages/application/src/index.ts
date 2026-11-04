@@ -148,6 +148,7 @@ export * from './pipeline/manual-start.js';
 export * from './pipeline/merge-request-tool.js';
 export * from './pipeline/mr-poll.js';
 export * from './pipeline/observability-prefetch.js';
+export * from './pipeline/offers.js';
 export * from './pipeline/outbound.js';
 export * from './pipeline/planner.js';
 export * from './pipeline/progress-tool.js';
@@ -245,6 +246,7 @@ export * from './testing/memory-readiness.js';
 export * from './testing/memory-shadow.js';
 export * from './testing/memory-stats.js';
 export * from './testing/project-stream-race.js';
+export * from './testing/run-offers.js';
 export * from './testing/run-start-hooks.js';
 export * from './testing/ssh-deploy-key-fixtures.js';
 

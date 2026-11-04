@@ -237,6 +237,11 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // without them — the run screen reads rows, not these events — so they have no owner (backlog 1).
   'run.created': 'unconsumed',
   'run.started': 'unconsumed',
+  // WP-274 (TD-031 decision 1): the offer and its claim are audit records of the run's stream. The
+  // claimants learn of an open offer from the `run_offers` row (and, from WP-276, a `pg_notify`),
+  // never from this event, so nothing handles either — `—` in technical/02.
+  'run.offered': 'unconsumed',
+  'run.claimed': 'unconsumed',
   'workspace.provisioned': 'unconsumed',
   'workspace.destroyed': 'unconsumed',
   'workspace.exported': 'unconsumed',
@@ -392,6 +397,8 @@ export const UNCONSUMED_OWNERS: Readonly<Partial<Record<DomainEventType, `WP-${s
     'task.human_return': null,
     'run.created': null,
     'run.started': null,
+    'run.offered': null,
+    'run.claimed': null,
     'workspace.provisioned': null,
     'workspace.destroyed': null,
     'workspace.exported': null,

@@ -316,6 +316,11 @@ describe('an ask is a run with a task and no stage (criterion 1)', () => {
     const [ask] = harness.asks.all();
     expect(ask?.runId).not.toBeNull();
     expect(harness.store.leaseOf(ask?.runId as Id)?.owner).toBe('harness');
+    // WP-274 (TD-031 §1, §13): through an `ask` offer the job claimed at epoch 1 — outside the
+    // per-task index, so it runs beside the task's stage offer — and settled by the ask's ending.
+    expect(harness.store.offerRows().filter((offer) => offer.runId === ask?.runId)).toMatchObject([
+      { kind: 'ask', stage: null, state: 'settled', leaseEpoch: 1 },
+    ]);
     // …and it **renews** it for the length of the run and stops when the run ends: a lease claimed
     // once and never beaten lapses five minutes in, which would have the sweep ending live runs.
     expect(harness.heartbeats.started).toBeGreaterThan(before.started);

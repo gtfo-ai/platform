@@ -106,6 +106,7 @@ import {
   runCredentialRecoveryHorizonMs,
   runLimitsDefaults,
   STRANDED_STAGE_COMPONENT,
+  serverLeaseOwner,
   silentLogger,
   startIntakeReconciliation,
   startMergeRequestPoller,
@@ -184,8 +185,10 @@ import {
  * and the opposite of what a stable id would give: a restarted process must not inherit the lease
  * its predecessor held, or the run that predecessor was driving would never be swept. Hostname for
  * the operator reading the column, a random suffix so two containers on one host cannot collide.
+ * Since WP-274 it is the claim's `server:<process>` (TD-031 §2, `serverLeaseOwner`), so a row's
+ * `lease_owner` says which kind of claimant holds it once remote workers (`worker:<id>`) exist.
  */
-export const RUN_LEASE_OWNER = `${hostname()}:${randomUUID().slice(0, 8)}`;
+export const RUN_LEASE_OWNER = serverLeaseOwner(`${hostname()}:${randomUUID().slice(0, 8)}`);
 
 /** `Actor.component` on everything the run-lease sweep writes; it appears in the run's own log. */
 export const RUN_LEASE_SWEEP_COMPONENT = 'pipeline.run-lease.sweep';
@@ -1433,8 +1436,9 @@ export const composePipeline = async (
       /**
        * The run lease this process holds while a stage is in flight (WP-47, backlog **109**).
        *
-       * {@link RUN_LEASE_OWNER} is built once per process; the executor claims the lease in the
-       * transaction that creates the `runs` row and renews it on a heartbeat, so the sweep below can
+       * {@link RUN_LEASE_OWNER} is built once per process; the executor takes the lease through the
+       * run offer's one claim (WP-274) in the transaction that creates the `runs` row and renews it
+       * on a heartbeat, so the sweep below can
        * tell a run nothing is driving from one that is working. Without it a process that dies
        * mid-run leaves a row `running` for ever, holding its stage's per-run budget against every
        * future window of its project and its organisation.

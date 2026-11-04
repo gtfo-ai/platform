@@ -92,7 +92,7 @@ const fnv1a = (text: string, seed: number): string => {
  * The broadcast topic a lease holder listens on — TD-028 decision 9's *"a channel keyed by
  * `runs.lease_owner`"*.
  *
- * A lease owner is `hostname:suffix` and a topic's key admits `[A-Za-z0-9_-]{1,64}` only
+ * A lease owner is `server:hostname:suffix` (WP-274) and a topic's key admits `[A-Za-z0-9_-]{1,64}` only
  * (`TOPIC_PATTERN`), so the key is a digest of the owner rather than the owner itself. The Postgres
  * adapter carries every topic on one `LISTEN` and filters in the process, so keying costs nothing.
  */

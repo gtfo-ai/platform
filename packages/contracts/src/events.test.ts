@@ -328,6 +328,22 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     usage,
     cost,
   },
+  'run.offered': {
+    ...taskScoped,
+    run_id: RUN,
+    offer_id: uuid(40),
+    kind: 'stage',
+    stage: 'implementation',
+    attempt: 1,
+  },
+  'run.claimed': {
+    ...taskScoped,
+    run_id: RUN,
+    offer_id: uuid(40),
+    claimant_kind: 'server',
+    worker_id: null,
+    lease_epoch: 1,
+  },
   'run.steered': {
     ...taskScoped,
     run_id: RUN,

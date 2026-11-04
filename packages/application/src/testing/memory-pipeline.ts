@@ -66,11 +66,13 @@ import type {
   RunCommandInstruction,
   RunCommandRefusal,
   RunCommandRepository,
+  RunOfferRepository,
   RunRepository,
   StoredApproval,
   StoredArtifact,
   StoredBreakdownItem,
   StoredRun,
+  StoredRunOffer,
   StoredTask,
   SupersededMergeRequest,
   SupersededMergeRequestOutcome,
@@ -79,6 +81,7 @@ import type {
 } from '../pipeline/store.js';
 import {
   DefaultBranchChangedError,
+  LeaseLostError,
   STOPPING_RUN_COMMAND_KINDS,
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
@@ -217,6 +220,10 @@ export interface MemoryPipelineStore extends PipelineStore {
   leaseOf(runId: Id): { readonly owner: string; readonly expiresAt: IsoDateTime } | null;
   /** Every `run_commands` row, for a test that asserts what the holder stamped (WP-85). */
   runCommandRows(): readonly MemoryRunCommandRow[];
+  /** Every `run_offers` row (WP-274), for a test that asserts the offer's lifecycle. */
+  offerRows(): readonly StoredRunOffer[];
+  /** `runs.lease_epoch` (WP-274), `0` for a run no claim took. */
+  leaseEpochOf(runId: Id): number;
 }
 
 /** One `run_commands` row as this store keeps it (migration 0060). */
@@ -328,6 +335,10 @@ export const createMemoryPipelineStore = (
   const breakdown = new Map<Id, StoredBreakdownItem>();
   /** `runs.lease_owner` / `lease_expires_at`, which this store keeps beside the row (WP-47). */
   const leases = new Map<Id, { owner: string; expiresAt: IsoDateTime }>();
+  /** `runs.lease_epoch` (WP-274, migration 0094), copied from the offer by the claim. */
+  const epochs = new Map<Id, number>();
+  /** `run_offers` (WP-274), keyed by `run_id` (unique there), insertion-ordered. */
+  const offers = new Map<Id, StoredRunOffer>();
   /** `run_commands` (WP-85), insertion-ordered like the SQL's `created_at, id`. */
   const runCommandRows = new Map<Id, MemoryRunCommandRow>();
   let runCommandSequence = 0;
@@ -1267,6 +1278,11 @@ export const createMemoryPipelineStore = (
       if (!isActiveRunStatus(run.status)) {
         return false;
       }
+      // WP-274: a claimant's fence, the SQL adapter's `lease_epoch`/`lease_owner` predicate. A live
+      // row under another claim is `lease_lost`, thrown so the caller's transaction rolls back.
+      if (outcome.lease !== undefined && !fenceHolds(outcome.runId, outcome.lease)) {
+        throw new LeaseLostError(outcome.runId, outcome.lease);
+      }
       runs.set(outcome.runId, {
         ...run,
         status: outcome.status,
@@ -1286,6 +1302,8 @@ export const createMemoryPipelineStore = (
       if (outcome.savedWork !== undefined) {
         savedWorks.set(outcome.runId, clone(outcome.savedWork));
       }
+      // The winner closes the run's offer (WP-274, TD-031 §12), as the SQL adapter does.
+      closeOffer(outcome.runId, outcome.terminalReason);
       // The winner closes the run's pending commands, as the SQL adapter does in the same
       // transaction (WP-85).
       for (const row of runCommandRows.values()) {
@@ -1325,14 +1343,17 @@ export const createMemoryPipelineStore = (
       }
       return true;
     },
-    /** Conditional on the run being live and on the lease being unheld or this owner's. */
+    /**
+     * Conditional on the run being live and on the claim's fence — `lease_epoch` and `lease_owner`
+     * both the caller's (WP-274), the SQL adapter's predicate. It only renews: the claim writes the
+     * owner.
+     */
     renewLease: async (_tx, lease) => {
       const run = runs.get(lease.runId);
       if (run === undefined || !isActiveRunStatus(run.status)) {
         return false;
       }
-      const held = leases.get(lease.runId);
-      if (held !== undefined && held.owner !== lease.owner) {
+      if (!fenceHolds(lease.runId, { epoch: lease.epoch, owner: lease.owner })) {
         return false;
       }
       leases.set(lease.runId, { owner: lease.owner, expiresAt: lease.expiresAt });
@@ -1437,6 +1458,108 @@ export const createMemoryPipelineStore = (
           .map((run) => reserves.get(run.id) ?? null),
         admittingReserveUsd,
       ),
+  };
+
+  /** The SQL's `lease_epoch = $e and lease_owner is not distinct from $o` (WP-274). */
+  function fenceHolds(runId: Id, fence: { readonly epoch: number; readonly owner: string | null }) {
+    return (
+      (epochs.get(runId) ?? 0) === fence.epoch && (leases.get(runId)?.owner ?? null) === fence.owner
+    );
+  }
+
+  /** `RunRepository.finish`'s closing of the offer: `claimed → settled`, `open → withdrawn`. */
+  function closeOffer(runId: Id, terminalReason: string) {
+    const offer = offers.get(runId);
+    if (offer === undefined) {
+      return;
+    }
+    const at = new Date(stageClock()).toISOString() as IsoDateTime;
+    if (offer.state === 'claimed') {
+      offers.set(runId, { ...offer, state: 'settled', settledAt: at });
+    } else if (offer.state === 'open') {
+      offers.set(runId, {
+        ...offer,
+        state: 'withdrawn',
+        withdrawnAt: at,
+        withdrawnReason: terminalReason,
+      });
+    }
+  }
+
+  /**
+   * `run_offers` (WP-274) with the database's two refusals spelled out — `run_id` unique, and the
+   * per-task partial unique index over open or claimed **stage** offers — so a test that would
+   * violate the index fails here as it would there (standing rule 1).
+   */
+  const offerRepository: RunOfferRepository = {
+    insert: async (_tx, offer) => {
+      if (offers.has(offer.runId)) {
+        throw new PipelineStoreError(
+          `run ${offer.runId} already has an offer (run_offers.run_id is unique)`,
+        );
+      }
+      if (
+        offer.kind === 'stage' &&
+        [...offers.values()].some(
+          (other) =>
+            other.taskId === offer.taskId &&
+            other.kind === 'stage' &&
+            (other.state === 'open' || other.state === 'claimed'),
+        )
+      ) {
+        throw new PipelineStoreError(
+          `task ${offer.taskId} already has an open or claimed stage offer (run_offers_one_live_stage_per_task)`,
+        );
+      }
+      offers.set(offer.runId, {
+        ...clone(offer),
+        state: 'open',
+        leaseEpoch: 0,
+        claimantKind: null,
+        claimedAt: null,
+        settledAt: null,
+        withdrawnAt: null,
+        withdrawnReason: null,
+      });
+    },
+    claim: async (_tx, claim) => {
+      const offer = [...offers.values()]
+        .filter(
+          (candidate) =>
+            candidate.state === 'open' &&
+            candidate.runId === claim.eligibility.runId &&
+            isActiveRunStatus(runs.get(candidate.runId)?.status ?? 'completed'),
+        )
+        .sort((a, b) => Date.parse(a.offeredAt) - Date.parse(b.offeredAt))[0];
+      if (offer === undefined) {
+        return null;
+      }
+      const epoch = offer.leaseEpoch + 1;
+      offers.set(offer.runId, {
+        ...offer,
+        state: 'claimed',
+        leaseEpoch: epoch,
+        claimantKind: claim.claimantKind,
+        claimedAt: claim.now,
+      });
+      epochs.set(offer.runId, epoch);
+      if (claim.owner === null || claim.expiresAt === null) {
+        leases.delete(offer.runId);
+      } else {
+        leases.set(offer.runId, { owner: claim.owner, expiresAt: claim.expiresAt });
+      }
+      return {
+        offerId: offer.id,
+        runId: offer.runId,
+        taskId: offer.taskId,
+        epoch,
+        owner: claim.owner,
+      };
+    },
+    load: async (_tx, runId) => {
+      const offer = offers.get(runId);
+      return offer === undefined ? null : clone(offer);
+    },
   };
 
   const lockedRunOf = (run: StoredRun) => ({
@@ -1967,12 +2090,15 @@ export const createMemoryPipelineStore = (
     tasks: taskRepository,
     artifacts: artifactRepository,
     runs: runRepository,
+    offers: offerRepository,
     questions: questionRepository,
     approvals: approvalRepository,
     breakdown: breakdownRepository,
     runCommands: runCommandRepository,
     bugTraces: bugTraceRepository,
     runCommandRows: () => [...runCommandRows.values()].map((row) => clone(row)),
+    offerRows: () => [...offers.values()].map((row) => clone(row)),
+    leaseEpochOf: (runId) => epochs.get(runId) ?? 0,
     writeEstimate: (taskId, estimate) => {
       const current = tasks.get(taskId);
       if (current === undefined) {

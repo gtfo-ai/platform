@@ -330,6 +330,12 @@ export const runs = pgTable('runs', {
   cliSpawnRequestedAt: timestamp('cli_spawn_requested_at', { withTimezone: true }).defaultNow(),
   leaseOwner: text('lease_owner'),
   leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+  /**
+   * The epoch of the claim that holds the run (migration 0094, WP-274, TD-031 decision 2), copied
+   * from {@link runOffers}' `lease_epoch` by the one claim; renew and a claimant's `finish` are
+   * conditional on it and on `lease_owner`. `0` for a run no claim took.
+   */
+  leaseEpoch: integer('lease_epoch').notNull().default(0),
   numTurns: integer('num_turns').notNull().default(0),
   inputTokens: bigint('input_tokens', { mode: 'number' }).notNull().default(0),
   outputTokens: bigint('output_tokens', { mode: 'number' }).notNull().default(0),
@@ -545,6 +551,48 @@ export const commandIdempotency = pgTable(
   },
   (table) => [primaryKey({ columns: [table.userId, table.action, table.idempotencyKey] })],
 );
+
+/**
+ * One offer per agent run (migration 0094, WP-274, TD-031 decisions 1–2): written `open` in the
+ * run's creation transaction, moved `open → claimed` by the one claim (`for update skip locked`,
+ * `lease_epoch + 1`), and closed — `settled` or `withdrawn` — by the run's terminal writer, in
+ * `RunRepository.finish`. The partial unique index `run_offers_one_live_stage_per_task` holds one
+ * open or claimed **stage** offer per task (the job singleton's successor); an `ask` offer is
+ * outside it. The columns for routing, the run package, the run token, releases and the signature
+ * counter are written by later M22 rows; `worker_id` is WP-280's (TD-032's 2026-11-04 amendment C).
+ */
+export const runOffers = pgTable('run_offers', {
+  id: uuid('id').primaryKey(),
+  runId: uuid('run_id').notNull(),
+  taskId: uuid('task_id').notNull(),
+  projectId: uuid('project_id').notNull(),
+  stage: text('stage'),
+  attempt: integer('attempt').notNull(),
+  kind: text('kind').$type<'stage' | 'ask'>().notNull(),
+  state: text('state')
+    .$type<'open' | 'claimed' | 'settled' | 'withdrawn'>()
+    .notNull()
+    .default('open'),
+  leaseEpoch: integer('lease_epoch').notNull().default(0),
+  claimantKind: text('claimant_kind').$type<'server' | 'worker'>(),
+  assigneeUserId: uuid('assignee_user_id'),
+  assigneeUntil: timestamp('assignee_until', { withTimezone: true }),
+  serverFrom: timestamp('server_from', { withTimezone: true }),
+  workersFrom: timestamp('workers_from', { withTimezone: true }),
+  excludedWorkerIds: uuid('excluded_worker_ids').array().notNull().default(sql`'{}'`),
+  imageDigests: jsonb('image_digests').$type<JsonObject>(),
+  runTokenHash: text('run_token_hash'),
+  runTokenEpoch: integer('run_token_epoch'),
+  releaseReason: text('release_reason'),
+  releasedAt: timestamp('released_at', { withTimezone: true }),
+  sshSignatures: integer('ssh_signatures').notNull().default(0),
+  offeredAt: timestamp('offered_at', { withTimezone: true }).notNull(),
+  claimedAt: timestamp('claimed_at', { withTimezone: true }),
+  settledAt: timestamp('settled_at', { withTimezone: true }),
+  withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
+  withdrawnReason: text('withdrawn_reason'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+});
 
 /**
  * A human command for a live run, on its way to the process holding it (migration 0060, WP-85,

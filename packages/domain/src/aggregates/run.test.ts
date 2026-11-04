@@ -14,6 +14,7 @@ import {
   assertRunTransition,
   assertSingleActiveRun,
   canTransitionRun,
+  claimRun,
   createRun,
   DEFAULT_STALL_TIMEOUT_MS,
   failRun,
@@ -21,6 +22,7 @@ import {
   isActiveRunStatus,
   isStalled,
   markRunning,
+  offerRun,
   RUN_TRANSITIONS,
   type Run,
   recordOutput,
@@ -384,5 +386,69 @@ describe('one active run per task (technical/02 invariant)', () => {
   it('ignores runs of other tasks', () => {
     const other = { ...runningRun(), taskId: '00000000-0000-4000-8000-0000000000ab' };
     expect(() => assertSingleActiveRun([other], TASK_ID)).not.toThrow();
+  });
+});
+
+describe('the offer and the claim (WP-274, TD-031 decisions 1–2)', () => {
+  const OFFER_ID = '00000000-0000-4000-8000-0000000000c1';
+
+  it('records run.offered then run.claimed on the run stream and changes no status', () => {
+    const shared = world();
+    const starting = startedRun(shared);
+    const offered = offerRun(starting, { offerId: OFFER_ID, kind: 'stage' }, context(shared));
+    const claimed = claimRun(
+      offered.aggregate,
+      { offerId: OFFER_ID, claimantKind: 'server', workerId: null, epoch: 1 },
+      context(shared),
+    );
+    expect(offered.aggregate.status).toBe('starting');
+    expect(claimed.aggregate.status).toBe('starting');
+    expect([...offered.events, ...claimed.events].map((event) => event.type)).toEqual([
+      'run.offered',
+      'run.claimed',
+    ]);
+    expect(offered.events[0]?.payload).toMatchObject({
+      run_id: RUN_ID,
+      offer_id: OFFER_ID,
+      kind: 'stage',
+      stage: 'implementation',
+      attempt: 1,
+    });
+    expect(claimed.events[0]?.payload).toMatchObject({
+      offer_id: OFFER_ID,
+      claimant_kind: 'server',
+      worker_id: null,
+      lease_epoch: 1,
+    });
+    // The stream continues: `run.started` follows the claim (TD-031 §1).
+    const running = markRunning(claimed.aggregate, { contextPack }, context(shared));
+    expect(running.events[0]?.stream_seq).toBe((claimed.events[0]?.stream_seq ?? 0) + 1);
+  });
+
+  it('refuses a claim at an epoch below 1, and an offer or claim of an ended run', () => {
+    const shared = world();
+    const starting = startedRun(shared);
+    expect(() =>
+      claimRun(
+        starting,
+        { offerId: OFFER_ID, claimantKind: 'server', workerId: null, epoch: 0 },
+        context(shared),
+      ),
+    ).toThrow(InvariantViolationError);
+    const ended = failRun(
+      runningRun(shared),
+      { status: 'failed', terminalReason: 'error_during_execution', error: 'boom' },
+      context(shared),
+    ).aggregate;
+    expect(() => offerRun(ended, { offerId: OFFER_ID, kind: 'stage' }, context(shared))).toThrow(
+      InvariantViolationError,
+    );
+    expect(() =>
+      claimRun(
+        ended,
+        { offerId: OFFER_ID, claimantKind: 'server', workerId: null, epoch: 1 },
+        context(shared),
+      ),
+    ).toThrow(InvariantViolationError);
   });
 });

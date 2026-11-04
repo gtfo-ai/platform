@@ -8,22 +8,29 @@
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { describe, expect, it, vi } from 'vitest';
+import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
+import { offerAndClaimForTest } from '../testing/run-offers.js';
 import {
   intervalHeartbeatSchedule,
   leaseExpiryAt,
   RUN_LEASE_RENEW_MS,
   RUN_LEASE_TTL_MS,
+  type RunHeartbeatDependencies,
+  renewRunLease,
   startRunHeartbeat,
 } from './lease.js';
-import type { PipelineStore } from './store.js';
+import { LeaseLostError, type PipelineStore } from './store.js';
 
 const RUN = '00000000-0000-4000-8000-0000000000e1' as Id;
 const NOW = '2026-09-15T10:00:00.000Z' as IsoDateTime;
-const OWNER = 'server-1:0f0f0f0f';
+const OWNER = 'server:server-1:0f0f0f0f';
+/** The epoch of this process's claim (WP-274): every beat carries it. */
+const EPOCH = 3;
 
 interface Beat {
   readonly runId: Id;
   readonly owner: string;
+  readonly epoch: number;
   readonly expiresAt: IsoDateTime;
 }
 
@@ -59,6 +66,7 @@ const harness = (
       },
     },
     RUN,
+    EPOCH,
   );
   return {
     beats,
@@ -86,8 +94,8 @@ describe('the run lease heartbeat', () => {
     await heartbeat.beat();
 
     expect(heartbeat.beats).toEqual([
-      { runId: RUN, owner: OWNER, expiresAt: '2026-09-15T10:05:00.000Z' },
-      { runId: RUN, owner: OWNER, expiresAt: '2026-09-15T10:05:00.000Z' },
+      { runId: RUN, owner: OWNER, epoch: EPOCH, expiresAt: '2026-09-15T10:05:00.000Z' },
+      { runId: RUN, owner: OWNER, epoch: EPOCH, expiresAt: '2026-09-15T10:05:00.000Z' },
     ]);
   });
 
@@ -243,9 +251,138 @@ describe('the run lease heartbeat', () => {
           },
         },
         RUN,
+        EPOCH,
       ),
     ).not.toThrow();
   });
+});
+
+/**
+ * WP-274 (TD-031 §2): the renewal is fenced on the claim. These cases run over the **memory store**
+ * through the real claim (`offerAndClaimInJob`), so the epoch a beat carries is one a claim granted.
+ */
+describe('renewRunLease is conditional on (lease_epoch, lease_owner)', () => {
+  const TASK = '00000000-0000-4000-8000-0000000000e2' as Id;
+  const OFFER = '00000000-0000-4000-8000-0000000000e3' as Id;
+  const tx = { adapter: 'memory' } as never;
+
+  /** One `running` run in the memory store, taken by the offer's one claim (`../testing/run-offers.ts`). */
+  const claimedRun = async () => {
+    const store = createMemoryPipelineStore();
+    await store.runs.insert(tx, {
+      id: RUN,
+      taskId: TASK,
+      projectId: '00000000-0000-4000-8000-0000000000e4' as Id,
+      stage: null,
+      role: 'developer',
+      mode: 'normal',
+      attempt: 1,
+      model: 'claude-opus-5',
+      effort: 'high',
+      promptVersion: 'test@1',
+      systemPrompt: null,
+      userPrompt: null,
+      redactionCount: 0,
+      contextPack: null,
+      settings: null,
+      reserveUsd: null,
+      promptsWithheld: null,
+      providerMode: 'api',
+      status: 'running',
+      terminalReason: null,
+      sessionId: null,
+      numTurns: 0,
+      usage: null,
+      cost: null,
+      wallMs: 0,
+      createdAt: NOW,
+      startedAt: NOW,
+    });
+    const fence = await offerAndClaimForTest(store, tx, {
+      offerId: OFFER,
+      runId: RUN,
+      taskId: TASK,
+      projectId: '00000000-0000-4000-8000-0000000000e4' as Id,
+      owner: OWNER,
+      expiresAt: NOW,
+      now: NOW,
+    });
+    const depsFor = (owner: string): RunHeartbeatDependencies => ({
+      unitOfWork: { transaction: async (fn) => fn({ tx } as never) },
+      store,
+      clock: { now: () => NOW },
+      lease: { owner },
+    });
+    return { store, fence, depsFor };
+  };
+
+  it('renews under the epoch and owner the claim granted', async () => {
+    const { store, fence, depsFor } = await claimedRun();
+    expect(fence).toEqual({ epoch: 1, owner: OWNER });
+    expect(await renewRunLease(depsFor(OWNER), RUN, fence.epoch)).toBe('renewed');
+    expect(store.leaseOf(RUN)).toEqual({ owner: OWNER, expiresAt: '2026-09-15T10:05:00.000Z' });
+  });
+
+  it('answers lease_lost under another epoch, and writes nothing', async () => {
+    const { store, depsFor } = await claimedRun();
+    expect(await renewRunLease(depsFor(OWNER), RUN, 2)).toBe('lease_lost');
+    expect(await renewRunLease(depsFor(OWNER), RUN, 0)).toBe('lease_lost');
+    expect(store.leaseOf(RUN)).toEqual({ owner: OWNER, expiresAt: NOW });
+  });
+
+  it('answers lease_lost under another owner, and writes nothing', async () => {
+    const { store, depsFor } = await claimedRun();
+    expect(await renewRunLease(depsFor('server:other:00000000'), RUN, 1)).toBe('lease_lost');
+    expect(store.leaseOf(RUN)).toEqual({ owner: OWNER, expiresAt: NOW });
+  });
+
+  it('answers lease_lost once the run has ended, even under its own fence', async () => {
+    const { store, fence, depsFor } = await claimedRun();
+    expect(await store.runs.finish(tx, { ...ENDED, lease: fence })).toBe(true);
+    expect(await renewRunLease(depsFor(OWNER), RUN, fence.epoch)).toBe('lease_lost');
+  });
+
+  it('a fenced finish under another epoch throws LeaseLostError and leaves the run live', async () => {
+    const { store, fence } = await claimedRun();
+    const stale = { epoch: fence.epoch + 1, owner: OWNER };
+    await expect(store.runs.finish(tx, { ...ENDED, lease: stale })).rejects.toBeInstanceOf(
+      LeaseLostError,
+    );
+    await expect(
+      store.runs.finish(tx, { ...ENDED, lease: { epoch: fence.epoch, owner: 'server:x' } }),
+    ).rejects.toMatchObject({ code: 'lease_lost' });
+    expect((await store.runs.load(tx, RUN))?.status).toBe('running');
+    expect(store.offerRows()[0]?.state).toBe('claimed');
+  });
+
+  it('a fenced finish under its own claim wins the row and settles the offer', async () => {
+    const { store, fence } = await claimedRun();
+    expect(await store.runs.finish(tx, { ...ENDED, lease: fence })).toBe(true);
+    expect(store.offerRows()[0]).toMatchObject({ state: 'settled', leaseEpoch: 1 });
+  });
+
+  it('a finish by a writer that is not the claimant (no fence) ends the row whoever holds it', async () => {
+    const { store } = await claimedRun();
+    expect(await store.runs.finish(tx, ENDED)).toBe(true);
+    expect(store.offerRows()[0]?.state).toBe('settled');
+  });
+
+  const ENDED = {
+    runId: RUN,
+    status: 'completed' as const,
+    terminalReason: 'success' as const,
+    sessionId: null,
+    numTurns: 1,
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_write_5m_tokens: 0,
+      cache_write_1h_tokens: 0,
+      cache_read_tokens: 0,
+    },
+    cost: { usd: 0, is_estimate: false, price_list_id: null },
+    wallMs: 1,
+  };
 });
 
 describe('the lease’s two numbers', () => {

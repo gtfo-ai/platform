@@ -40,6 +40,7 @@ import type {
 } from '@platform/application';
 import {
   DefaultBranchChangedError,
+  LeaseLostError,
   silentLogger,
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
@@ -94,6 +95,7 @@ import {
   closePendingRunCommands,
   createPostgresRunCommandRepository,
 } from './postgres-run-commands.js';
+import { closeRunOffer, createPostgresRunOfferRepository } from './postgres-run-offers.js';
 import { takeOverLastActivitySql } from './take-over-activity.js';
 
 /** Raised when a write that had to change a row changed none. */
@@ -1675,7 +1677,9 @@ export const createPostgresPipelineStore = (
                 cache_write_1h_tokens = $9, cache_read_tokens = $10, usd_reported = $11,
                 usd_estimated = $12, wall_ms = $13, ended_at = now(), figure_is_floor = $15,
                 exit_detail = $16::jsonb, saved_work = $17::jsonb
-          where id = $1 and status = any($14::run_status[])`,
+          where id = $1 and status = any($14::run_status[])
+            and ($18::boolean is not true
+                 or (lease_epoch = $19 and lease_owner is not distinct from $20))`,
         [
           outcome.runId,
           outcome.status,
@@ -1697,22 +1701,38 @@ export const createPostgresPipelineStore = (
           outcome.startFailure === undefined ? null : JSON.stringify(outcome.startFailure),
           // Backlog 467: what the workspace did with the run's unfinished work; null otherwise.
           outcome.savedWork === undefined ? null : JSON.stringify(outcome.savedWork),
+          // WP-274 (TD-031 §2): a claimant's fence. Absent for a writer that is not the claimant.
+          outcome.lease !== undefined,
+          outcome.lease?.epoch ?? null,
+          outcome.lease?.owner ?? null,
         ],
       );
       if (result.rowCount !== 0) {
+        // The winner closes the run's offer (WP-274, TD-031 §12), so the per-task index admits the
+        // task's next stage offer once this transaction commits.
+        await closeRunOffer(sqlOf(tx), outcome.runId, outcome.terminalReason);
         // The winner closes the run's pending commands, after the row moved (WP-85): a command
         // that held the run `for share` has committed by now and this later statement sees it.
         await closePendingRunCommands(sqlOf(tx), outcome.runId);
         return true;
       }
-      // Nothing was written: either the run is already terminal (somebody else ended it) or it
-      // does not exist. They are different facts and the caller branches on them differently, so
-      // the losing path pays for one extra read rather than the winning path paying for a join.
-      const { rows } = await sqlOf(tx).query<{ id: string }>('select id from runs where id = $1', [
-        outcome.runId,
-      ]);
-      if (rows.length === 0) {
+      // Nothing was written: the run is already terminal (somebody else ended it), it is live
+      // under another claim (a fenced write, WP-274), or it does not exist. They are different
+      // facts and the caller branches on them differently, so the losing path pays for one extra
+      // read rather than the winning path paying for a join.
+      const { rows } = await sqlOf(tx).query<{ status: string }>(
+        'select status from runs where id = $1',
+        [outcome.runId],
+      );
+      const row = rows[0];
+      if (row === undefined) {
         throw new PipelineRowMissingError(`run ${outcome.runId} does not exist`);
+      }
+      if (
+        outcome.lease !== undefined &&
+        (ACTIVE_RUN_STATUSES as readonly string[]).includes(row.status)
+      ) {
+        throw new LeaseLostError(outcome.runId, outcome.lease);
       }
       return false;
     },
@@ -1770,21 +1790,22 @@ export const createPostgresPipelineStore = (
       return false;
     },
     /**
-     * Claims the lease, or renews one this process already holds — the port's docblock has the rest.
+     * Renews the lease this caller's claim holds — the port's docblock has the rest.
      *
-     * `lease_owner is null or lease_owner = $2` is what makes the claim and the renewal one
-     * statement: the row is inserted with no owner, so the first beat claims it and every later
-     * beat matches its own name. A process that finds another owner writes nothing and is told so,
-     * rather than stealing a lease whose holder may be alive.
+     * Since WP-274 it never claims: the offer's one claim (`postgres-run-offers.ts`) writes the
+     * owner and the epoch, and this write is conditional on both (TD-031 §2). Before it, `lease_owner
+     * is null or lease_owner = $2` made the first beat the claim; a row with no owner is now one no
+     * claim took, and renewing it would be asserting a claim nobody granted.
      */
     renewLease: async (tx, lease) => {
       const result = await sqlOf(tx).query(
         `update runs
-            set lease_owner = $2, lease_expires_at = $3::timestamptz
+            set lease_expires_at = $3::timestamptz
           where id = $1
             and status = any($4::run_status[])
-            and (lease_owner is null or lease_owner = $2)`,
-        [lease.runId, lease.owner, lease.expiresAt, [...ACTIVE_RUN_STATUSES]],
+            and lease_epoch = $5
+            and lease_owner = $2`,
+        [lease.runId, lease.owner, lease.expiresAt, [...ACTIVE_RUN_STATUSES], lease.epoch],
       );
       return result.rowCount !== 0;
     },
@@ -2237,6 +2258,7 @@ export const createPostgresPipelineStore = (
     tasks,
     artifacts,
     runs,
+    offers: createPostgresRunOfferRepository(),
     questions,
     approvals,
     breakdown,

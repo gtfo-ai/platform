@@ -140,19 +140,22 @@ import {
   type RunLeaseOptions,
   startRunHeartbeat,
 } from './lease.js';
+import { offerAndClaimInJob } from './offers.js';
 import { REFREEZE_PENDING_SENTENCE, refrozen, refrozenColumns } from './refreeze.js';
 import { injectedSecretRedactorFor } from './run-redaction.js';
 import { type ProjectSettings, settingsAdmission } from './settings.js';
 import { runSettingsSnapshot } from './settings-snapshot.js';
 import type { RunStopReasons } from './stop-reasons.js';
-import type {
-  AttachedReturnFeedback,
-  EndedRun,
-  PipelineStore,
-  ReturnCause,
-  SavedAttempt,
-  StoredArtifact,
-  StoredTask,
+import {
+  type AttachedReturnFeedback,
+  type EndedRun,
+  LeaseLostError,
+  type PipelineStore,
+  type ReturnCause,
+  type RunLeaseFence,
+  type SavedAttempt,
+  type StoredArtifact,
+  type StoredTask,
 } from './store.js';
 import {
   escalateTaskAfterConflict,
@@ -669,6 +672,8 @@ type Prepared =
       readonly redactor: SecretRedactor;
       /** {@link StageRunPlan.reviewChecklists}, carried to the artifact write. */
       readonly reviewChecklists: readonly AppliedChecklistRecord[] | null;
+      /** The claim's fence (WP-274): every later write of this run by this job carries it. */
+      readonly fence: RunLeaseFence;
     };
 
 type Admitted = {
@@ -1100,9 +1105,6 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         promptVersion: spec.promptVersion,
       });
       const starting = startRun(created, context);
-      // The real record, since WP-17. It was a zeroed literal from WP-15 until the pack had a
-      // producer *and* a delimiter (PROGRESS backlog 11 and 12).
-      const running = markRunning(starting.aggregate, { contextPack }, context);
       await store.runs.insert(scope.tx, {
         id: runId,
         taskId: task.id,
@@ -1114,7 +1116,9 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         model: spec.model,
         effort: spec.effort,
         promptVersion: spec.promptVersion,
-        status: running.aggregate.status,
+        // `running`, which `markRunning` below moves the aggregate to in this same transaction: the
+        // row is written before the offer that references it (WP-274), so before the claim.
+        status: 'running',
         terminalReason: null,
         sessionId: null,
         numTurns: 0,
@@ -1154,21 +1158,37 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         providerMode: spec.providerMode,
       });
       /**
-       * The lease, claimed in the **same transaction as the row** (WP-47).
+       * The offer, and the lease claimed through it, in the **same transaction as the row** (WP-47,
+       * WP-274).
        *
        * Not on the line after, and not from the first heartbeat: a `runs` row that is `running`
        * with no lease is exactly the row the sweep's wall-clock backstop takes an hour to reach, and
        * a process that dies between an insert and a claim would leave one every time. The claim
-       * commits with the insert or neither does.
+       * commits with the insert or neither does. Since WP-274 the claim is the offer's one claim
+       * (TD-031 §2, `./offers.ts`): it writes `lease_owner`, `lease_expires_at` and the epoch, and
+       * this job is its only claimant, so the run still executes here (criterion 1).
        */
-      if (options.lease !== undefined) {
-        await store.runs.renewLease(scope.tx, {
-          runId,
-          owner: options.lease.owner,
-          expiresAt: leaseExpiryAt(context.clock.now(), options.lease.ttlMs ?? RUN_LEASE_TTL_MS),
-        });
-      }
-      await scope.events.append([...starting.events, ...running.events]);
+      const claimed = await offerAndClaimInJob(
+        store.offers,
+        scope.tx,
+        {
+          run: starting.aggregate,
+          kind: 'stage',
+          offerId: context.ids.next(),
+          owner: options.lease?.owner ?? null,
+          expiresAt:
+            options.lease === undefined
+              ? null
+              : leaseExpiryAt(context.clock.now(), options.lease.ttlMs ?? RUN_LEASE_TTL_MS),
+          now: context.clock.now(),
+        },
+        context,
+      );
+      // The real record, since WP-17. It was a zeroed literal from WP-15 until the pack had a
+      // producer *and* a delimiter (PROGRESS backlog 11 and 12). Appended after the claim, which is
+      // where TD-031 §1 puts `run.started`.
+      const running = markRunning(claimed.run, { contextPack }, context);
+      await scope.events.append([...starting.events, ...claimed.events, ...running.events]);
       return {
         kind: 'ready',
         settings,
@@ -1178,6 +1198,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         run: running.aggregate,
         redactor,
         reviewChecklists: plan.reviewChecklists ?? null,
+        fence: claimed.fence,
       };
     });
 
@@ -1240,6 +1261,29 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     return { kind: 'escalated', reason: failure.message };
   };
 
+  /**
+   * A fenced write found the run live under another claim (WP-274, TD-031 §2): the transaction has
+   * rolled back, so this job wrote nothing about the run, and it ends doing nothing more — the run is
+   * the other claim's. Not reachable while the server's runner is the only claimant (nothing else
+   * can claim an offer this job claimed), and stated rather than left to pg-boss's retry, which would
+   * plan the stage again.
+   */
+  const leaseLost =
+    (job: StageExecutionJob) =>
+    (error: unknown): StageExecutionOutcome => {
+      if (!(error instanceof LeaseLostError)) throw error;
+      logger.warn(
+        {
+          task_id: job.taskId,
+          stage: job.stage,
+          run_id: error.runId,
+          lease_epoch: error.fence.epoch,
+        },
+        'the run is held under another claim (lease_lost); this job wrote nothing about it',
+      );
+      return { kind: 'skipped', reason: error.message };
+    };
+
   const runStage = async (job: StageExecutionJob): Promise<StageExecutionOutcome> => {
     // WP-106: a stored settings document this release cannot parse is answered by the port as
     // `configRefusal`, and admission refuses the run by that name (`settingsAdmission`).
@@ -1281,6 +1325,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
               ...(options.logger === undefined ? {} : { logger: options.logger }),
             },
             prepared.run.id,
+            prepared.fence.epoch,
           );
     /**
      * The CLI spawn marker for this run (WP-150): the runner asks it between the shim's `hello.ok`
@@ -1375,8 +1420,9 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           startAttempts,
           retryable,
           spawnRequested: spawn.mayHaveReachedCli(),
+          fence: prepared.fence,
         }),
-      );
+      ).catch(leaseLost(job));
     }
     await stopHeartbeat();
     const stopReason = stopReasons.reasonFor(prepared.spec.runId);
@@ -1409,8 +1455,9 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         options,
         redactor: prepared.redactor,
         reviewChecklists: prepared.reviewChecklists,
+        fence: prepared.fence,
       }),
-    );
+    ).catch(leaseLost(job));
   };
 
   return {
@@ -1483,6 +1530,8 @@ interface RecordInput {
   readonly redactor: SecretRedactor;
   /** What the planner gave a Reviewer run, or `null` when it recorded nothing (WP-45). */
   readonly reviewChecklists: readonly AppliedChecklistRecord[] | null;
+  /** The claim's fence (WP-274): the run's `finish` is conditional on it. */
+  readonly fence: RunLeaseFence;
 }
 
 /**
@@ -1655,6 +1704,7 @@ const record = async (
     cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
     costIsFloor: costIsFloorOf(input),
+    lease: input.fence,
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
@@ -1971,6 +2021,7 @@ const recordOntoStoppedTask = async (
     wallMs: outcome.wallMs,
     costIsFloor: costIsFloorOf(input),
     ...endingDetailOf(outcome),
+    lease: input.fence,
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
@@ -2044,6 +2095,7 @@ const recordUnsuccessful = async (
     wallMs: outcome.wallMs,
     costIsFloor: costIsFloorOf(input),
     ...endingDetailOf(outcome),
+    lease: input.fence,
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
@@ -2182,6 +2234,7 @@ const recordHandBack = async (
     wallMs: outcome.wallMs,
     costIsFloor: costIsFloorOf(input),
     ...notStarted,
+    lease: input.fence,
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
@@ -2279,6 +2332,8 @@ const recordUnstarted = async (
      * with no figure and held at its reservation (WP-131), never the measured zero.
      */
     readonly spawnRequested: boolean;
+    /** The claim's fence (WP-274): the run's `finish` is conditional on it. */
+    readonly fence: RunLeaseFence;
   },
 ): Promise<StageExecutionOutcome> => {
   const { job, run, options, startFailure } = input;
@@ -2312,6 +2367,7 @@ const recordUnstarted = async (
     cost: input.spawnRequested ? null : NO_COST,
     wallMs: 0,
     startFailure: input.notStarted,
+    lease: input.fence,
   });
   if (!owned) {
     // A human cancelled the run between its insert and this failure (WP-15i), or the lease sweep

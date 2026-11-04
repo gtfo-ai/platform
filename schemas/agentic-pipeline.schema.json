@@ -161,6 +161,8 @@
         "run.started",
         "run.finished",
         "run.failed",
+        "run.offered",
+        "run.claimed",
         "run.steered",
         "artifact.created",
         "workspace.provisioned",

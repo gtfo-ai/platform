@@ -803,6 +803,45 @@ export const runFailedEvent = defineEvent('run.failed', {
   saved_work: runSavedWorkSchema.nullish(),
 });
 
+/** What an offer serves (TD-031 decisions 1 and 13): a pipeline stage's run, or an ask's. */
+export const runOfferKindSchema = z.enum(['stage', 'ask']);
+export type RunOfferKind = z.infer<typeof runOfferKindSchema>;
+
+/** Who claimed an offer (TD-031 decision 2): the server's runner, or a remote worker (WP-281). */
+export const runClaimantKindSchema = z.enum(['server', 'worker']);
+export type RunClaimantKind = z.infer<typeof runClaimantKindSchema>;
+
+/**
+ * The run was **offered** (WP-274, TD-031 decision 1): its `run_offers` row was written in the run's
+ * creation transaction, open for one claim. Since WP-274 the server's runner claims it at once, in
+ * the same transaction, so `run.claimed` follows it directly.
+ */
+export const runOfferedEvent = defineEvent('run.offered', {
+  ...taskScoped,
+  run_id: idSchema,
+  offer_id: idSchema,
+  kind: runOfferKindSchema,
+  /** The stage entry the run serves; `null` for an ask's run, which belongs to no stage. */
+  stage: stageIdSchema.nullable(),
+  attempt: z.int().positive(),
+});
+
+/**
+ * One claim took the offer (WP-274, TD-031 decision 2): the offer moved `open → claimed` and its
+ * epoch was incremented, and the run's `lease_owner`, `lease_expires_at` and `lease_epoch` were
+ * written by the same statement. Every later write by the claimant is fenced on that epoch.
+ */
+export const runClaimedEvent = defineEvent('run.claimed', {
+  ...taskScoped,
+  run_id: idSchema,
+  offer_id: idSchema,
+  claimant_kind: runClaimantKindSchema,
+  /** The remote worker that claimed; `null` for the server's runner (no remote claim until WP-281). */
+  worker_id: idSchema.nullable(),
+  /** The epoch this claim holds — every claim of an offer increments it (TD-031 §2). */
+  lease_epoch: z.int().positive(),
+});
+
 export const runSteeredEvent = defineEvent('run.steered', {
   ...taskScoped,
   run_id: idSchema,
@@ -1118,6 +1157,8 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   runStartedEvent,
   runFinishedEvent,
   runFailedEvent,
+  runOfferedEvent,
+  runClaimedEvent,
   runSteeredEvent,
   artifactCreatedEvent,
   workspaceProvisionedEvent,

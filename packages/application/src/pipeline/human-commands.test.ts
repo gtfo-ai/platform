@@ -47,6 +47,7 @@ import {
   type PipelineHarness,
   type ScriptedRun,
 } from '../testing/pipeline-harness.js';
+import { offerAndClaimForTest } from '../testing/run-offers.js';
 import {
   actorLabel,
   answerTaskQuestion,
@@ -2738,11 +2739,18 @@ const leaseTo = async (
   owner = HOLDER,
   expiresAt = '2099-01-01T00:00:00.000Z',
 ): Promise<void> => {
+  // WP-274: through the offer's one claim, as the executor's first transaction does — a seeded run
+  // has no offer, so the fixture writes one (`kind: 'ask'`, outside the per-task index).
+  const stored = taskOf(harness);
   await harness.memory.transaction(async (scope) => {
-    await harness.store.runs.renewLease(scope.tx, {
+    await offerAndClaimForTest(harness.store, scope.tx, {
+      offerId: harness.ids.next(),
       runId,
+      taskId: stored.task.id,
+      projectId: stored.task.projectId,
       owner,
       expiresAt: expiresAt as never,
+      now: harness.clock.now(),
     });
   });
 };
