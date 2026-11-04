@@ -320,7 +320,7 @@ const unadmitted = (cases: readonly WalkCase[]): string[] =>
     .map((walk) => `${walk.path}:${walk.line} ${walk.name} (timeout ${walk.timeout ?? 'none'})`);
 
 describe('every whole-tree census case carries its own timeout (WP-249)', () => {
-  // WP-256: slowest of 7 green CI runs 7770 ms (median 5520 ms); 2× it, 15 s floor.
+  // WP-256: slowest of 7 green CI runs 7770 ms (median 5520 ms); 2× it, 15 s floor; 60 s for a loaded host.
   it('finds no walk case in this repository without an explicit timeout of at least 15 s', () => {
     const sources = censusFiles(REPOSITORY_ROOT, {
       include: (path) => SOURCE.test(path) && !path.startsWith('node_modules/'),
@@ -341,7 +341,8 @@ describe('every whole-tree census case carries its own timeout (WP-249)', () => 
       'packages/application/src/pipeline/default-branch-readers.test.ts',
     );
     expect(unadmitted(cases)).toEqual([]);
-  }, 16_000);
+    // 16 s timed out on the pre-push hook under a second agent's test run (2026-11-04).
+  }, 60_000);
 
   it('names the case whose timeout was removed (the canary)', () => {
     const path = 'packages/application/src/pipeline/default-branch-readers.test.ts';

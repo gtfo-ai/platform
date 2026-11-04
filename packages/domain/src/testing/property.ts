@@ -18,9 +18,11 @@
 
 /**
  * Timeout for any `it` that runs `fc.assert`. Roughly 25× the slowest property test measured
- * locally, which leaves headroom for a runner several times slower under v8 coverage.
+ * locally, which leaves headroom for a runner several times slower under v8 coverage. Raised from
+ * 30 s to 90 s on 2026-11-04: the pre-push hook timed property cases out at 30 s on a developer
+ * machine running two test suites at once; a limit is a bound on a hang, not a performance gate.
  */
-export const PROPERTY_TEST_TIMEOUT_MS = 30_000;
+export const PROPERTY_TEST_TIMEOUT_MS = 90_000;
 
 /**
  * Runs for a model-based (`fc.commands`) suite. Each run is a whole command sequence against both
