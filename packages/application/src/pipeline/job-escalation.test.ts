@@ -17,7 +17,11 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { askingRefinedSpec } from '../testing/artifact-fixtures.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
-import { escalateExhaustedJob, escalatingOnLastTry } from './job-escalation.js';
+import {
+  escalateExhaustedJob,
+  escalateTaskWithBrief,
+  escalatingOnLastTry,
+} from './job-escalation.js';
 import { type PipelineJobOptions, reviewWindowHandler } from './jobs.js';
 import { OUTBOUND_ESCALATION_TEXT, pipelineOutboundHandler } from './outbound.js';
 
@@ -309,5 +313,58 @@ describe('the endings, by the task’s state', () => {
         retries: lastTry,
       } as JobContext),
     ).rejects.toThrow('the provider said 502');
+  });
+});
+
+describe('an escalation that closes an open offer (WP-278 review, BACKLOG 731)', () => {
+  it('withdraws the offer under a code, whatever the length of the escalation’s reason', async () => {
+    // A harness that offers and never claims: the refinement stage's offer stays open.
+    const harness = createPipelineHarness({ projectId: PROJECT, runsAgents: false });
+    await harness.publish([
+      {
+        id: '00000000-0000-4000-9000-0000000000a2',
+        stream_type: 'project',
+        stream_id: PROJECT,
+        stream_seq: 1,
+        correlation_id: null,
+        cause_event_id: null,
+        actor: { kind: 'integration', integration_id: PROJECT, provider: 'fake-jira' },
+        occurred_at: '2026-06-01T09:00:00.000Z',
+        type: 'ticket.matched',
+        payload: {
+          project_id: PROJECT,
+          ticket: { provider: 'fake-jira', key: 'ACME-2', url: 'https://jira.example.test/ACME-2' },
+          rule: 'label:agentic',
+          priority: 'High',
+          issue_type: 'Story',
+          epic: null,
+          links: [],
+        },
+      } as never,
+    ]);
+    const [offer] = harness.store.offerRows();
+    expect(offer?.state).toBe('open');
+    const reason = `the job ${'that ran past every retry and every limit '.repeat(4)}`;
+    expect(reason.length).toBeGreaterThan(64);
+
+    expect(
+      await escalateTaskWithBrief(escalationOptions(harness), {
+        taskId: offer?.taskId as Id,
+        projectId: PROJECT,
+        causeEventId: CAUSE,
+        reason,
+        brief: () => 'a person has to look',
+      }),
+    ).toBe('escalated');
+
+    expect(harness.store.offerRows()[0]).toMatchObject({
+      state: 'withdrawn',
+      withdrawnReason: 'job_escalated',
+    });
+    const withdrawal = harness.events().find((event) => event.type === 'run.offer.withdrawn');
+    expect((withdrawal?.payload as { reason?: string } | undefined)?.reason).toBe(
+      `the task was escalated: ${reason}`,
+    );
+    expect(await stateOf(harness, offer?.taskId as Id)).toBe('needs_human');
   });
 });

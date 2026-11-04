@@ -1648,6 +1648,13 @@ export const createMemoryPipelineStore = (
     },
     /** WP-276: the SQL adapter's one conditional update — only an `open` offer moves. */
     withdraw: async (_tx, input) => {
+      // `run_offers_withdrawn_reason_shape` (migration 0094), spelled out so a sentence that would
+      // fail the database's check fails here too (WP-278 review, BACKLOG 731).
+      if (input.reason.length < 1 || input.reason.length > 64) {
+        throw new PipelineStoreError(
+          `withdrawn_reason must be 1–64 characters (run_offers_withdrawn_reason_shape), got ${input.reason.length}`,
+        );
+      }
       const offer = [...offers.values()].find((candidate) =>
         'taskId' in input.by
           ? candidate.taskId === input.by.taskId &&

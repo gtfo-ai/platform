@@ -155,6 +155,7 @@ export const createDeadLetterEscalation = (
     // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
     const closing = await closeStageOffer(options, scope, {
       taskId: stored.task.id,
+      code: 'dead_lettered',
       reason: 'the task was escalated: an event was dead-lettered',
       context: options.context(stored.task.id, record.event.event.id),
     });

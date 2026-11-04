@@ -170,6 +170,9 @@ export const escalateTaskWithBrief = async (
           // escalation is new or amended (a parked task's offer must not be run either).
           const closing = await closeStageOffer(options, scope, {
             taskId: stored.task.id,
+            // A code, never `input.reason`: a free reason overran the column's 64 characters and
+            // rolled this escalation back (WP-278 review, BACKLOG 731).
+            code: 'job_escalated',
             reason: `the task was escalated: ${input.reason}`,
             context: context(),
           });

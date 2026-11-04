@@ -1594,6 +1594,30 @@ export class LeaseLostError extends Error {
   }
 }
 
+/**
+ * `run_offers.withdrawn_reason` — a **code**, never a sentence (WP-278 review, BACKLOG 731): the
+ * column is checked at 1–64 characters (migration 0094), and a sentence built from a free reason
+ * (`the task was escalated: ${reason}`) failed that check and rolled back the escalation that
+ * closed the offer. The sentence stays where it is read — `run.offer.withdrawn`'s `reason`, the
+ * escalation's brief. A run's own terminal writer closes an offer with its terminal reason
+ * (`closeRunOffer`), which is an enum value and as short.
+ */
+export const OFFER_WITHDRAWAL_CODES = [
+  'paused_by_human',
+  'cancelled_by_human',
+  'taken_over',
+  'dead_lettered',
+  'config_unreadable',
+  'write_conflict',
+  'job_escalated',
+  'mr_closed',
+  'mr_merged',
+  'stage_left',
+  'run_plan_missing',
+  'offer_timeout',
+] as const;
+export type OfferWithdrawalCode = (typeof OFFER_WITHDRAWAL_CODES)[number];
+
 /** A `run_offers` row's lifecycle (TD-031 decision 1, migration 0094). */
 export type RunOfferState = 'open' | 'claimed' | 'settled' | 'withdrawn';
 
@@ -1650,7 +1674,7 @@ export interface RunOfferEligibility {
  * `brief` is the platform's sentence the task's escalation (or the ask's refusal) carries.
  */
 export interface OfferWithdrawalReason {
-  readonly withdrawnReason: string;
+  readonly withdrawnReason: OfferWithdrawalCode;
   readonly brief: string;
 }
 
@@ -1730,7 +1754,8 @@ export interface RunOfferRepository {
     tx: Transaction,
     input: {
       readonly by: { readonly taskId: Id } | { readonly runId: Id };
-      readonly reason: string;
+      /** The code `withdrawn_reason` stores (never a sentence: the column holds 64 characters). */
+      readonly reason: OfferWithdrawalCode;
       readonly now: IsoDateTime;
     },
   ): Promise<WithdrawnRunOffer | null>;

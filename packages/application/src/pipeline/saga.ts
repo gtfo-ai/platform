@@ -1696,6 +1696,7 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
       // WP-276: the stage's offer is closed before the task is saved (`run_offers` → `runs` → `tasks`).
       const closing = await closeStageOffer(options, context.scope, {
         taskId: stored.task.id,
+        code: outcome === 'mr.closed' ? 'mr_closed' : 'mr_merged',
         reason: `the task was escalated: ${outcome}`,
         context: commandContext,
       });

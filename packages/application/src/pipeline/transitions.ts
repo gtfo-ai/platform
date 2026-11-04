@@ -241,6 +241,7 @@ const closeOfferFor = async (options: ApplyOptions): Promise<readonly DomainEven
     { tx: options.tx, broadcast: options.offerClosing.broadcast },
     {
       taskId: options.stored.task.id,
+      code: 'stage_left',
       reason: `the task left its stage entry (${options.decision.kind})`,
       context: options.context,
     },

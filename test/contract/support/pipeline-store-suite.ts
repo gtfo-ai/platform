@@ -3896,20 +3896,20 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           expect(
             await store.offers.withdraw(tx, {
               by: { taskId },
-              reason: 'the task was paused by a human',
+              reason: 'paused_by_human',
               now: '2026-06-01T09:00:05.000Z' as IsoDateTime,
             }),
           ).toEqual({ offerId, runId: open });
           expect(await store.offers.load(tx, open)).toMatchObject({
             state: 'withdrawn',
-            withdrawnReason: 'the task was paused by a human',
+            withdrawnReason: 'paused_by_human',
           });
           expect(await store.offers.liveStageOffer(tx, taskId)).toBeNull();
           // A second withdrawal touches nothing: the update is conditional on `open`.
           expect(
             await store.offers.withdraw(tx, {
               by: { taskId },
-              reason: 'again',
+              reason: 'cancelled_by_human',
               now: '2026-06-01T09:00:06.000Z' as IsoDateTime,
             }),
           ).toBeNull();
@@ -3919,7 +3919,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           expect(
             await store.offers.withdraw(tx, {
               by: { taskId: heldTask },
-              reason: 'the task was paused by a human',
+              reason: 'paused_by_human',
               now: '2026-06-01T09:00:05.000Z' as IsoDateTime,
             }),
           ).toBeNull();
@@ -3934,7 +3934,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           expect(
             await store.offers.withdraw(tx, {
               by: { taskId },
-              reason: 'stage left',
+              reason: 'stage_left',
               now: '2026-06-01T09:00:05.000Z' as IsoDateTime,
             }),
           ).toBeNull();

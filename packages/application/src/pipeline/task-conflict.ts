@@ -162,6 +162,7 @@ export const escalateTaskAfterConflict = async (
           // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
           const closing = await closeStageOffer(options, scope, {
             taskId: stored.task.id,
+            code: 'write_conflict',
             reason: 'the task was escalated: a write lost every race',
             context: options.context(stored.task.id),
           });

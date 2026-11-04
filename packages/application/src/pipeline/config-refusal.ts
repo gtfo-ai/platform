@@ -73,6 +73,7 @@ export const escalateForConfigRefusalInHandler = async (
     // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
     const closing = await closeStageOffer(input, input.scope, {
       taskId: stored.task.id,
+      code: 'config_unreadable',
       reason: 'the task was escalated: its configuration could not be read',
       context: input.context,
     });

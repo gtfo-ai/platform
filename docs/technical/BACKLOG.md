@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 732, so the next is **733**), its grade
+line with the next free number (the highest is 733, so the next is **734**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -19,7 +19,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 446 | minor | — | WP-144 criterion (3), a real `docker compose stop runner` mid-run, not built; needs fake providers reachable from a compose stack |
 | 538 | minor | — | Two installations sharing one tracker service account both see themselves as assignee, so the claim does not stop double work |
 | 730 | minor | — | A stage offer names no assignee (WP-278): the ticket's assignee is read at intake (`TicketRead.assignee`) and dropped, so BD-032 decision 5's head start reaches only an ask's asker until a mapped assignee user is stored on the task |
-| 731 | minor | — | `run_offers.withdrawn_reason` is checked at 1–64 characters, but `closeStageOffer`'s callers pass sentences built from free reasons (`the task was escalated: ${input.reason}` in job-escalation, `${outcome}` in the saga); a long one would fail the check and roll back the escalation — unmeasured. WP-278's withdrawals pass short codes |
+| 733 | minor | — | Offer timestamps (`server_from`, `workers_from`, `expires_at`) are written from the offering process's clock and compared with the claimant's, while claimant liveness uses the database's clock; a process clock ahead of the claimant's delays a server claim by the skew (WP-278) |
 | 556 | minor | WP-270 (b) | Flake: runlet conformance case for a close after `result` fails with write EPIPE in CI (two occurrences); measure before fixing |
 | 570 | minor | — | Flake: web-e2e xss.spec, integrations page never showed its Setup guide button within 30 s (once in three runs) |
 | 587 | minor | — | `git -C <dir>` honours a run-written .git/config (fsmonitor, pager, hooks); tier 3 per TD-030; path-guard measurement in docs/TODO.md |
@@ -35,7 +35,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 711 | minor | — | A user's deactivation (Better Auth ban/disable) expires their workers' run leases from the update's after-hook, after its commit, not in its transaction as TD-031 §7 says; a trigger on users is not additive (TD-032 D) |
 | 712 | minor | WP-281 | WP-280 serves no X-Worker-Protocol check on device/device-token (a credential-less machine asks before it speaks the protocol); WP-281 should state whether the 426 applies there |
 | 715 | minor | — | Device-flow limit keys an exact IPv6 address (rotate within a /64 to dodge the 20 per address), and ~10 addresses fill the 200 instance slots for 10 min; key IPv6 on its /64 and alert on the instance limit |
-| 722 | minor | WP-281 | `/readyz` on a process that is not a claimant (`app` beside a busy `runner`) reads `claimants: none` and degrades after an offer waits 5 min, though another process's server claimant is alive and only busy — TD-031 §13 wants claimant liveness visible across processes (a heartbeat row like `held_connection_liveness`, beside WP-281's connected-worker count) |
+| 722 | minor | WP-281 | `/readyz` on a process that is not a claimant (`app` beside a busy `runner`) reads `claimants: none` and degrades after an offer waits 5 min, though another process's server claimant is alive and only busy. The liveness row exists since WP-278 (`server_claimants`, migration 0097, renewed by every running server claimant); `/readyz` only needs to read it beside WP-281's connected-worker count |
 | 713 | nit | — | worker_device_codes rows are never deleted; bounded by the 200-pending limit per ten minutes, but grow with use; add a sweep of consumed/expired rows |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
 | 422 | nit | — | pipeline.outbound polls at 0.5 s in every process; idle cost on a large job table and drain above N = 50 never measured |

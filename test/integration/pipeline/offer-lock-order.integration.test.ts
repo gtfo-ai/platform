@@ -257,7 +257,12 @@ const withdrawal = async (taskId: Id, holder = begin()) => {
     const closed = await closeStageOffer(
       { store, eventStore: eventStore() },
       { tx: connection.tx, broadcast: noBroadcast },
-      { taskId, reason: 'the task was paused by a human', context: context(taskId) },
+      {
+        taskId,
+        code: 'paused_by_human',
+        reason: 'the task was paused by a human',
+        context: context(taskId),
+      },
     );
     await connection.commit();
     return closed.closing;
@@ -303,7 +308,7 @@ describe('the withdrawal against a concurrent claim, in both orders (WP-276 crit
     expect(
       await store.offers.withdraw(holder.tx, {
         by: { taskId },
-        reason: 'held',
+        reason: 'paused_by_human',
         now: NOW,
       }),
     ).not.toBeNull();

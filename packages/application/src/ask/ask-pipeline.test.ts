@@ -357,6 +357,24 @@ describe('an ask is a run with a task and no stage (criterion 1)', () => {
     expect(harness.heartbeats.stopped).toBe(harness.heartbeats.started);
   });
 
+  it('gives the asker’s online worker the head start: the asker plays the assignee (WP-278, TD-031 §13)', async () => {
+    const harness = harnessWith();
+    await seedTask(harness);
+    harness.store.setAssigneeOnline(PROJECT as Id, ASKER, true);
+    const offeredAt = harness.clock.now();
+    await askThroughHttp(harness);
+
+    const [ask] = harness.asks.all();
+    const [offer] = harness.store.offerRows().filter((row) => row.runId === ask?.runId);
+    const headStartEnds = new Date(Date.parse(offeredAt) + 120_000).toISOString();
+    expect(offer).toMatchObject({
+      kind: 'ask',
+      // The server is preferred, so it waits out the asker’s window before it may claim.
+      state: 'open',
+      routing: { assigneeUserId: ASKER, assigneeUntil: headStartEnds, serverFrom: headStartEnds },
+    });
+  });
+
   it('is given read-only platform tools and no repository tools at all (Q72 (b))', async () => {
     const harness = harnessWith();
     await seedTask(harness);

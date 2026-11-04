@@ -842,3 +842,14 @@ from outside the package (the repository, the web) — it is on the developer's 
 not a confidentiality boundary against the machine's owner, who controls the Docker daemon and can read
 the run credential from the container (§5's tampered-worker residual). Before Docker Engine 28.0.0 a
 host on the same L2 segment can reach a loopback publish; the token holds there.
+
+## Amendment (2026-11-04, orchestrator-authorised, WP-278) — decision 8: what "no server claimant" does to each mode
+
+§8's *"a core with no claimant composed for the server treats every project as `workers_only`"* is read
+per mode, and "no claimant" is an instance fact (`server_claimants` liveness rows, migration 0097), not
+the offering process's configuration. **`server_only` stays closed to workers**: an administrator may
+have chosen it so the project's credential never reaches a developer's machine (Q124's reason), so its
+offers wait — bounded by `offer_timeout` — and the settings screen says so. **`hybrid` opens to workers
+at once but keeps its `server_from`** (never null), so a server runner that was down when the offer was
+written still takes it when it returns; a stale liveness read can only let workers claim as early as
+the server, never keep the server from a run. `server_only` never sets `workers_from`, unconditionally.

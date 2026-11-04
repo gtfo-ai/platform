@@ -776,6 +776,7 @@ export const pauseTaskCommand = async (
       // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
       const closing = await closeStageOffer(deps, scope, {
         taskId: stored.task.id,
+        code: 'paused_by_human',
         reason: 'the task was paused by a human',
         context,
         actorUserId: input.userId,
@@ -995,6 +996,7 @@ export const cancelTaskCommand = async (
     // WP-276: the stage's offer is closed first — `run_offers` → `runs` → `tasks`.
     const closing = await closeStageOffer(deps, scope, {
       taskId: stored.task.id,
+      code: 'cancelled_by_human',
       reason: 'the task was cancelled by a human',
       context,
       actorUserId: input.userId,
@@ -2232,7 +2234,7 @@ export const takeOverTaskCommand = async (
       // left to the take-over's own stop below.
       const withdrawn = await deps.store.offers.withdraw(scope.tx, {
         by: { taskId: stored.task.id },
-        reason: 'the task was taken over by a human',
+        reason: 'taken_over',
         now: context.clock.now(),
       });
       const closing =

@@ -7,6 +7,8 @@
 import type { DomainEvent, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { askTaskCommand } from '../ask/commands.js';
+import { exactSecretRedactor } from '../integrations/redaction.js';
 import { claimRunOffer } from '../pipeline/offers.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import {
@@ -18,6 +20,7 @@ import { runStrandedRecovery } from './stranded.js';
 
 const PROJECT = '00000000-0000-4000-8000-000000002781' as Id;
 const TIMEOUT_SECONDS = 3_600;
+const ASKER = '00000000-0000-4000-8000-000000002782' as Id;
 
 const ticketMatched = (key: string, seq: number): DomainEvent =>
   domainEventSchemasByType['ticket.matched'].parse({
@@ -130,6 +133,55 @@ describe('the offer-timeout recovery row (WP-278)', () => {
     });
     expect(withdrawn).toBe(false);
     expect(harness.store.offerRows()[0]?.state).toBe('claimed');
+    // And the pass counts it as found, not ended: its read came before the claim.
+    const raced = await recoverExpiredOffers(
+      { unitOfWork: harness.memory },
+      { ...site(harness), store: { expiredOpen: async () => expired } },
+      { now: harness.clock.now(), limit: 50 },
+    );
+    expect(raced).toEqual({ found: 1, ended: 0 });
+    expect(harness.events().filter((event) => event.type === 'task.escalated')).toEqual([]);
+  });
+
+  it('refuses an ask whose offer expired, failed, with the brief — the ask’s own ending (§13)', async () => {
+    const harness = await unclaimed();
+    const [stage] = harness.store.offerRows();
+    const asked = await askTaskCommand(
+      {
+        unitOfWork: harness.memory,
+        jobs: harness.jobs,
+        asks: harness.asks,
+        redactor: exactSecretRedactor([]),
+      },
+      {
+        id: harness.ids.next(),
+        taskId: stage?.taskId as Id,
+        projectId: PROJECT,
+        source: 'ui',
+        askedByUserId: ASKER,
+        askedByIdentity: null,
+        ticketCommentId: null,
+        question: 'What does the refinement say about rate limits?',
+        createdAt: harness.clock.now(),
+      },
+    );
+    expect(asked.status).toBe('recorded');
+    await harness.drain();
+    const askOffer = harness.store.offerRows().find((row) => row.kind === 'ask');
+    expect(askOffer?.state).toBe('open');
+
+    harness.clock.advance(TIMEOUT_SECONDS * 1000);
+    expect(await pass(harness)).toEqual({ found: 2, ended: 2 });
+
+    const [ask] = harness.asks.all();
+    expect(ask?.status).toBe('failed');
+    expect(ask?.refusalReason).toMatch(/^no claimant took this run: it was offered at/);
+    expect(harness.store.offerRows().find((row) => row.kind === 'ask')).toMatchObject({
+      state: 'withdrawn',
+      withdrawnReason: OFFER_TIMEOUT_REASON,
+    });
+    const run = await harness.store.runs.load({} as never, askOffer?.runId as Id);
+    expect(run?.status).toBe('cancelled');
   });
 
   it('is a row of the stranded pass, reported as run_offer_timeout', async () => {

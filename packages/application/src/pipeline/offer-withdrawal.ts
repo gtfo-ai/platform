@@ -32,7 +32,11 @@ import type { TransactionScope } from '../ports/unit-of-work.js';
 import { MEASURED_ZERO_COST, NO_RUN_USAGE, stoppedBeforeCliSpawn } from './cli-spawn.js';
 import { toRunAggregate } from './run-aggregate.js';
 import { type RunCommandWakeUp, runCommandsTopic } from './run-commands.js';
-import { type PipelineStore, STOPPING_RUN_COMMAND_KINDS } from './store.js';
+import {
+  type OfferWithdrawalCode,
+  type PipelineStore,
+  STOPPING_RUN_COMMAND_KINDS,
+} from './store.js';
 
 /** What a stage transition's closing did with the task's stage offer. */
 export type StageOfferClosing =
@@ -59,7 +63,9 @@ export const closeStageOffer = async (
   scope: Pick<TransactionScope, 'tx' | 'broadcast'>,
   input: {
     readonly taskId: Id;
-    /** Platform text: the transition that leaves the stage entry. */
+    /** The code `run_offers.withdrawn_reason` stores (WP-278 review, BACKLOG 731). */
+    readonly code: OfferWithdrawalCode;
+    /** Platform text: the transition that leaves the stage entry — `run.offer.withdrawn`'s reason. */
     readonly reason: string;
     readonly context: CommandContext;
     /** The person whose command this is, recorded on a `cancel`; `null` for the platform. */
@@ -70,7 +76,7 @@ export const closeStageOffer = async (
   const now = input.context.clock.now();
   const withdrawn = await store.offers.withdraw(scope.tx, {
     by: { taskId: input.taskId },
-    reason: input.reason,
+    reason: input.code,
     now,
   });
   if (withdrawn !== null) {
