@@ -39,6 +39,18 @@
  * `pg_notify('run_offers')` (`RUN_OFFERS_TOPIC`, published at the offer's commit) and a poll every
  * {@link DEFAULT_CLAIM_POLL_MS}. It claims while it has a free slot (`APP_RUNNER_CONCURRENCY`), and
  * each slot is one run from claim to settle. {@link RunClaimant.drain} is the test harness's worker.
+ * Since WP-278 the claim takes an offer only from its `server_from` (TD-031 decision 8), so an offer
+ * whose project prefers workers waits here for its fallback; the poll is what finds it then.
+ *
+ * ## Saying that it is running (WP-278)
+ *
+ * A started claimant with a lease writes its `server_claimants` row (`server:<process>`) at start,
+ * renews it every {@link SERVER_CLAIMANT_RENEW_MS} from its poll with a {@link SERVER_CLAIMANT_TTL_MS}
+ * expiry on the database's clock, and deletes it at stop. That row is how **any** process writing an
+ * offer knows whether the instance has a server claimant (TD-031 §8) — in the compose topology the
+ * process that offers is often not the one that claims. A renewal that fails is logged and retried
+ * on the next poll; the worst a stale answer does is let workers claim as early as the server
+ * (`routeOffer`'s third reading), never keep the server from a run.
  */
 import type { ContextPackRecord, Id, IsoDateTime, RunOfferKind } from '@platform/contracts';
 import type { CommandContext, Run } from '@platform/domain';
@@ -85,6 +97,11 @@ export const DEFAULT_CLAIM_POLL_MS = 5_000;
 
 /** `APP_RUNNER_CONCURRENCY`'s default: one run at a time per server claimant. */
 export const DEFAULT_RUNNER_CONCURRENCY = 1;
+
+/** How long a `server_claimants` row is fresh after a renewal: three renewals (WP-278). */
+export const SERVER_CLAIMANT_TTL_MS = 60_000;
+/** How often a started claimant renews its row, at the latest; checked on every poll. */
+export const SERVER_CLAIMANT_RENEW_MS = 20_000;
 
 /** How a run's ending answered — the slice of `SettleRunResult` (or the ask's) the claimant reads. */
 export interface ClaimantSettled {
@@ -174,6 +191,26 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
   let filling: Promise<number> | null = null;
   let subscription: BroadcastSubscription | null = null;
   let poll: ReturnType<typeof setInterval> | null = null;
+  /** WP-278: the `server_claimants` holder — the lease owner — or `null` with no lease. */
+  const holder = options.lease?.owner ?? null;
+  let renewedAt: number | null = null;
+
+  /** Writes or renews this claimant's liveness row when it is due; a failure waits for the next poll. */
+  const renewLiveness = async (): Promise<void> => {
+    if (holder === null || stopping) return;
+    if (renewedAt !== null && monotonic() - renewedAt < SERVER_CLAIMANT_RENEW_MS) return;
+    try {
+      await unitOfWork.transaction(async (scope) =>
+        store.execution.renewServerClaimant(scope.tx, { holder, ttlMs: SERVER_CLAIMANT_TTL_MS }),
+      );
+      renewedAt = monotonic();
+    } catch (error) {
+      logger.warn(
+        { err: error, holder },
+        'the server claimant could not renew its liveness row; offers written meanwhile may open to workers at once (TD-031 decision 8)',
+      );
+    }
+  };
 
   /** One claim, in a transaction of its own: the offer, `run.claimed`, and what the session reads. */
   const claimOne = async (): Promise<Claimed | null> => {
@@ -427,8 +464,9 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
       if (broadcast !== undefined) {
         subscription = await broadcast.subscribe([RUN_OFFERS_TOPIC], () => wake());
       }
+      await renewLiveness();
       const timer = setInterval(() => {
-        void sweepUnplanned().then(wake);
+        void renewLiveness().then(sweepUnplanned).then(wake);
       }, pollMs);
       (timer as { unref?: () => void }).unref?.();
       poll = timer;
@@ -443,6 +481,18 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
       await held?.close();
       await filling;
       await Promise.all([...inFlight]);
+      if (holder !== null && renewedAt !== null) {
+        try {
+          await unitOfWork.transaction(async (scope) =>
+            store.execution.releaseServerClaimant(scope.tx, holder),
+          );
+        } catch (error) {
+          logger.warn(
+            { err: error, holder },
+            'the server claimant could not delete its liveness row; it expires on its own',
+          );
+        }
+      }
     },
   };
 };

@@ -1012,6 +1012,28 @@ pipeline comes back to the Developer with the failing job's log, and Discovery a
 by reading the CI configuration rather than running anything (the evidence says so). The same key is
 `verification.mode: ci` in `.agentic/config.yml`, which may switch a project to CI but never back.
 
+**Execution** (since WP-278) is where a project's agent runs execute, on its settings page, and
+only an administrator may change it. Every agent run is first *offered*, and whoever may take it
+does:
+
+- **Mode** — *The server only* (the instance's own runner), *Workers only* (developers' registered
+  machines, the **Workers** page), or *Server and workers* (the default, one pool for both).
+- **Preferred** — in the hybrid mode, which side may take a run first (the server, by default);
+  the other side may take it after **Fallback after** seconds — 15 when the server is preferred,
+  300 when workers are, unless you set a number.
+- **Assignee head start** — a worker of the person a question was asked by gets this long (120 s by
+  default) to take the run before anybody else, while that worker is online. A ticket's assignee
+  does not get it yet: the platform does not keep who a ticket is assigned to.
+- **Offer timeout** — a run nobody takes within this long (a day by default) is withdrawn and its
+  task goes to **Needs human** with the brief *no claimant took this run*; a question is answered
+  as failed. Check the mode, and whether a worker or the server runner is actually running.
+
+The card shows whether the instance has a server runner right now. With none, a hybrid project's
+runs are offered to workers at once rather than after the fallback, and a *server only* project's
+runs wait — the card says which. A change applies to runs offered after you save it. This is never
+a key of `.agentic/config.yml`: the file refuses an `execution` key, because where code runs and
+whose subscription pays is not something a pushed commit may change.
+
 ## 12. Statistics
 
 The organisation's delivery numbers over a range you choose (7, 30, 90 or 365 days) and a bucket

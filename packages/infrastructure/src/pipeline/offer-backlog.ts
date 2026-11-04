@@ -12,8 +12,9 @@ import type { SqlExecutor } from '../events/sql.js';
 
 /**
  * How long an open offer may wait, with no claimant, before `/readyz` says so: **five minutes** past
- * the instant workers may claim it (TD-031 decision 13's `workers_from + 5 min`). Until WP-278 writes
- * `workers_from`, every offer is claimable from its `offered_at`, which is what this reads.
+ * the instant workers may claim it (TD-031 decision 13's `workers_from + 5 min`). Since WP-278 the
+ * offer carries `workers_from`; a `server_only` offer has none and is measured from its
+ * `server_from`, and an offer written before WP-278 from its `offered_at`.
  */
 export const OFFER_UNCLAIMED_AFTER_SECONDS = 300;
 
@@ -55,11 +56,14 @@ export const readOldestUnclaimedOffer = async (
   unclaimedAfterSeconds: number = OFFER_UNCLAIMED_AFTER_SECONDS,
 ): Promise<UnclaimedOffer | null> => {
   const { rows } = await sql.query<{ run_id: string; offered_at: Date; waited: number }>(
-    `select run_id, offered_at, extract(epoch from now() - offered_at)::float8 as waited
+    `select run_id, offered_at,
+            extract(epoch from now() - coalesce(workers_from, server_from, offered_at))::float8
+              as waited
        from run_offers
       where state = 'open'
-        and offered_at <= now() - make_interval(secs => $1::float8)
-      order by offered_at, id
+        and coalesce(workers_from, server_from, offered_at)
+              <= now() - make_interval(secs => $1::float8)
+      order by coalesce(workers_from, server_from, offered_at), id
       limit 1`,
     [unclaimedAfterSeconds],
   );

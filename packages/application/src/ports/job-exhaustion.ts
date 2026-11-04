@@ -94,10 +94,10 @@ export const JOB_EXHAUSTION: Readonly<Record<string, JobExhaustion>> = {
   [JOB_QUEUES.stageExecute]: {
     kind: 'bounds_itself',
     shape: 'bound_and_escalate',
-    loss: 'a stage run: a transport failure to start is re-enqueued on its own bound (MAX_RUN_START_ATTEMPTS), a gate whose provider does not answer re-asks on its own time bound (backlog 490), and a write that loses every race escalates the task',
-    recoveredBy: 'stranded_stage',
+    loss: 'a stage run: a transport failure to start is re-enqueued on its own bound (MAX_RUN_START_ATTEMPTS), a gate whose provider does not answer re-asks on its own time bound (backlog 490), and a write that loses every race escalates the task; since WP-276 the job ends at the run’s offer, and an offer no claimant takes before its expires_at is withdrawn and the task escalated (WP-278)',
+    recoveredBy: 'stranded_stage, run_offer_timeout',
     residual:
-      'an unanticipated throw is retried by pg-boss; a job that spends its retries leaves the task at its stage with no job, which the stranded_stage row re-enqueues once and then escalates, naming the failed job’s error class and code (WP-108, backlog 490), or that its last try ran past the queue’s limit when it expired (WP-166, backlog 529)',
+      'an unanticipated throw is retried by pg-boss; a job that spends its retries leaves the task at its stage with no job, which the stranded_stage row re-enqueues once and then escalates, naming the failed job’s error class and code (WP-108, backlog 490), or that its last try ran past the queue’s limit when it expired (WP-166, backlog 529); an offer the job wrote and no claimant took is the run_offer_timeout row’s (WP-278, TD-031 decision 1)',
   },
   [JOB_QUEUES.mrCommentDebounce]: {
     kind: 'relies_on_retries',
@@ -147,8 +147,8 @@ export const JOB_EXHAUSTION: Readonly<Record<string, JobExhaustion>> = {
   [JOB_QUEUES.taskAsk]: {
     kind: 'relies_on_retries',
     shape: 'recovery_row',
-    loss: 'one ask-the-task question’s run',
-    recoveredBy: 'task_ask, task_ask_run',
+    loss: 'one ask-the-task question’s run — or, since WP-276, its offer, which no claimant may take',
+    recoveredBy: 'task_ask, task_ask_run, run_offer_timeout',
   },
   [JOB_QUEUES.knowledgeIndex]: {
     kind: 'relies_on_retries',

@@ -121,6 +121,7 @@ import type {
   AppliedChecklistRecord,
   AttachedReturnFeedback,
   EndedRun,
+  OfferWithdrawalReason,
   PipelineStore,
   ReturnCause,
   SavedAttempt,
@@ -491,6 +492,12 @@ export interface StageExecutor {
   settle(request: SettleRunRequest): Promise<SettleRunResult>;
   /** Withdraws an open stage offer with no stored plan, escalating `run_plan_missing` (WP-276). */
   withdrawUnplanned(runId: Id): Promise<boolean>;
+  /**
+   * Withdraws an open stage offer — one conditional update, so a claim that won the row first
+   * leaves it alone and this answers `false` — ends its run `cancelled` and escalates the task with
+   * the brief (WP-278: an offer nobody claimed by its `expires_at`).
+   */
+  withdrawOffer(runId: Id, reason: OfferWithdrawalReason): Promise<boolean>;
 }
 
 export { STAGE_WAIT_FOR_PREVIOUS_RUN_MS } from './stage-enqueue.js';
@@ -1124,16 +1131,19 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
        * claimant takes it through the one claim (`./offers.ts`), which writes the lease, the epoch
        * and `created → starting` in one statement. The offer is announced on `run_offers` at commit.
        * A `created` row is not the sweep's (it has no lease to lose); an offer nobody claims waits
-       * for one — WP-278's `offer_timeout` is what bounds that wait.
+       * for one until its `expires_at` (WP-278's `offer_timeout`), when the offer-timeout recovery
+       * row withdraws it and escalates the task (`../recovery/offer-timeout.ts`).
        */
       const offered = await offerRun(
-        store.offers,
+        store,
         scope,
         {
           run: created.aggregate,
           kind: 'stage',
           offerId: context.ids.next(),
           now: context.clock.now(),
+          // WP-278: the ticket's assignee is not stored, so a stage offer has none yet (BACKLOG 730).
+          assigneeUserId: null,
         },
         context,
       );
@@ -1244,21 +1254,21 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
   };
 
   /**
-   * **An open offer with no stored plan** (TD-031's 2026-11-04 amendment §2): never claimable (the
-   * claim requires a plan), so it is withdrawn — one conditional update on the run — its run ended
-   * `cancelled` and its task escalated naming `run_plan_missing`. Reachable only for a run offered by
-   * a build before WP-275a and claimed by none; the claimant asks once per poll.
+   * **An offer withdrawn by the platform, not by a transition** — WP-278's generalisation of
+   * WP-276's withdrawal of an unplanned offer: one conditional update on the offer (a claim that won
+   * the row first leaves it `claimed` and this answers `false`), its run ended `cancelled` at the
+   * measured zero, and its task escalated with the brief. The offer's `withdrawn_reason` is the
+   * short code (the column's bound is 64 characters); the brief is the escalation's sentence.
    */
-  const withdrawUnplanned = async (runId: Id): Promise<boolean> => {
+  const withdrawOffer = async (runId: Id, why: OfferWithdrawalReason): Promise<boolean> => {
     const row = await unitOfWork.transaction(async (scope) => store.runs.load(scope.tx, runId));
     if (row === null) return false;
-    const reason =
-      'run_plan_missing: the run was offered without a stored plan, so no claimant can run it';
-    return writing(row.taskId, 'withdrawing an offer with no plan', async (scope) => {
+    const reason = why.brief;
+    return writing(row.taskId, `withdrawing an offer (${why.withdrawnReason})`, async (scope) => {
       const context = options.context(row.taskId);
       const withdrawn = await store.offers.withdraw(scope.tx, {
         by: { runId },
-        reason,
+        reason: why.withdrawnReason,
         now: context.clock.now(),
       });
       if (withdrawn === null) return false;
@@ -1266,7 +1276,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         { store, eventStore: options.eventStore },
         scope,
         withdrawn,
-        { reason, context },
+        { reason: why.withdrawnReason, context },
       );
       const events = [...ended];
       const stored = await store.tasks.load(scope.tx, row.taskId);
@@ -1284,6 +1294,19 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       return true;
     });
   };
+
+  /**
+   * **An open offer with no stored plan** (TD-031's 2026-11-04 amendment §2): never claimable (the
+   * claim requires a plan), so it is withdrawn, its run ended `cancelled` and its task escalated
+   * naming `run_plan_missing`. Reachable only for a run offered by a build before WP-275a and claimed
+   * by none; the claimant asks once per poll.
+   */
+  const withdrawUnplanned = async (runId: Id): Promise<boolean> =>
+    withdrawOffer(runId, {
+      withdrawnReason: 'run_plan_missing',
+      brief:
+        'run_plan_missing: the run was offered without a stored plan, so no claimant can run it',
+    });
 
   return {
     execute: async (job) => {
@@ -1307,5 +1330,6 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       }
     },
     withdrawUnplanned,
+    withdrawOffer,
   };
 };

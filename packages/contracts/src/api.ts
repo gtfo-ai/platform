@@ -21,7 +21,13 @@ import {
   agentRoleSchema,
   artifactTypeSchema,
   autonomyLevelSchema,
+  EXECUTION_ASSIGNEE_WINDOW_MAX_SECONDS,
+  EXECUTION_FALLBACK_AFTER_MAX_SECONDS,
+  EXECUTION_OFFER_TIMEOUT_MAX_SECONDS,
+  EXECUTION_OFFER_TIMEOUT_MIN_SECONDS,
   effortSchema,
+  executionModeSchema,
+  executionPreferenceSchema,
   gitBranchNameSchema,
   idSchema,
   integrationTypeSchema,
@@ -780,6 +786,44 @@ export const projectRepositoryResponseSchema = z.strictObject({
     .nullable(),
   provider_unavailable: z.string().max(1024).nullable(),
   live_tasks: z.int().nonnegative(),
+});
+
+/**
+ * `PUT /api/projects/:id/execution` — where this project's agent runs execute (WP-278, TD-031
+ * decision 8, BD-032 decisions 3 and 5). The **whole** setting, in whole seconds;
+ * `fallback_after_seconds: null` is the default for the preference (15 s when the server is
+ * preferred, 300 s when workers are). Written by an administrator (`project.settings.write`) and
+ * never by `.agentic/config.yml`, whose schema refuses an `execution` key by name.
+ */
+export const putProjectExecutionRequestSchema = z.strictObject({
+  mode: executionModeSchema,
+  prefer: executionPreferenceSchema,
+  fallback_after_seconds: z.int().min(0).max(EXECUTION_FALLBACK_AFTER_MAX_SECONDS).nullable(),
+  assignee_window_seconds: z.int().min(0).max(EXECUTION_ASSIGNEE_WINDOW_MAX_SECONDS),
+  offer_timeout_seconds: z
+    .int()
+    .min(EXECUTION_OFFER_TIMEOUT_MIN_SECONDS)
+    .max(EXECUTION_OFFER_TIMEOUT_MAX_SECONDS),
+});
+
+/**
+ * `GET /api/projects/:id/execution` — the setting as stored (`stored: false` is TD-031 §8's
+ * defaults, no row written), the fallback it resolves to, and whether **this instance** has a
+ * server claimant now (`server_claimant`). With none, a `hybrid` project's offers go to workers
+ * first and a `server_only` project's wait — `notice` says which, in a sentence the settings screen
+ * shows (TD-031 §8: *"says so on the settings screen"*).
+ */
+export const projectExecutionResponseSchema = putProjectExecutionRequestSchema.extend({
+  effective_fallback_after_seconds: z.int().nonnegative(),
+  stored: z.boolean(),
+  server_claimant: z.enum(['running', 'none']),
+  notice: z.string().max(1024).nullable(),
+});
+
+/** Its answer to a write: the setting as written, and `performed: false` for a replay. */
+export const putProjectExecutionResponseSchema = z.strictObject({
+  execution: projectExecutionResponseSchema,
+  performed: z.boolean(),
 });
 
 /**
@@ -2990,6 +3034,8 @@ export type ProjectBindingSummary = z.infer<typeof projectBindingSummarySchema>;
 export type ProjectBindingsResponse = z.infer<typeof projectBindingsResponseSchema>;
 export type SetDefaultBranchRequest = z.infer<typeof setDefaultBranchRequestSchema>;
 export type ProjectRepositoryResponse = z.infer<typeof projectRepositoryResponseSchema>;
+export type PutProjectExecutionRequest = z.infer<typeof putProjectExecutionRequestSchema>;
+export type ProjectExecutionResponse = z.infer<typeof projectExecutionResponseSchema>;
 export type CiConfigLocationDto = z.infer<typeof ciConfigLocationSchema>;
 export type PutProjectBindingsRequest = z.infer<typeof putProjectBindingsRequestSchema>;
 export type TicketStatusesResponse = z.infer<typeof ticketStatusesResponseSchema>;

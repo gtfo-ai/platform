@@ -10,6 +10,7 @@ export * from './columns.js';
 export * from './cost.js';
 export * from './enums.js';
 export * from './events.js';
+export * from './execution.js';
 export * from './identity.js';
 export * from './knowledge.js';
 export * from './pipeline.js';

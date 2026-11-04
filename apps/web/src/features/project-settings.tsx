@@ -25,6 +25,11 @@
  * beside it (`project-prompts.tsx`): what that same reading holds under `.agentic/prompts/`, what
  * each stage would be given, and *Re-read now*.
  *
+ * **Execution** (WP-278, TD-031 decision 8) has a card of its own (`execution-settings.tsx`): where
+ * the project's agent runs execute — the server, workers, or both — the assignee's head start and
+ * the offer timeout. It is not a wizard step: the defaults (`hybrid`, the server preferred) are what
+ * a new project needs, and it is an administrator's, never a key of `.agentic/config.yml`.
+ *
  * **Verification** (`verification.mode`, BD-025's 2026-10-05 amendment) is one key with a control of
  * its own (`verification-mode.tsx`): whether agents run the project's checks or CI does. It writes the
  * whole document with the hash it read, like the feature toggles.
@@ -62,6 +67,7 @@ import {
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { BusinessInterview } from './business-interview.js';
 import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
+import { ExecutionSettings } from './execution-settings.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 import { ProjectPromptFiles } from './project-prompts.js';
@@ -215,6 +221,12 @@ export const ProjectSettingsScreen = ({
       <Card className="flex flex-col gap-2">
         <SectionHeading>Default branch</SectionHeading>
         <DefaultBranch projectId={project.id} />
+      </Card>
+
+      {/* WP-278 (TD-031 decision 8): where the agent runs execute — a settings-only control. */}
+      <Card className="flex flex-col gap-2">
+        <SectionHeading>Execution</SectionHeading>
+        <ExecutionSettings projectId={project.id} />
       </Card>
 
       <Card className="flex flex-col gap-2">

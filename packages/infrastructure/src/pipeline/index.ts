@@ -1,5 +1,6 @@
 /** The pipeline's PostgreSQL adapters (WP-15, WP-15c). */
 export * from './offer-backlog.js';
+export * from './postgres-execution-routing.js';
 export * from './postgres-intake-reconciliation.js';
 export * from './postgres-pipeline-store.js';
 export * from './postgres-run-commands.js';

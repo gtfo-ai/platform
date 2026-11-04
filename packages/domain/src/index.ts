@@ -103,5 +103,7 @@ export * from './testing/hostile-text.js';
 // Remote workers: the device flow's rules and the credential's spelling (WP-280, TD-031 §7, §10c)
 export * from './workers/credential.js';
 export * from './workers/device-flow.js';
+// Where an offer may be claimed, and from when (WP-278, TD-031 decision 8)
+export * from './workers/execution-routing.js';
 
 export const packageId = '@platform/domain' as const;

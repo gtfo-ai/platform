@@ -49,7 +49,7 @@ import {
   taskStageStateSchema,
   workpadRefSchema,
 } from '@platform/contracts';
-import type { Approval, Question, QueuedTask } from '@platform/domain';
+import type { Approval, ExecutionSettings, Question, QueuedTask } from '@platform/domain';
 import {
   countsAsActive,
   countsInPipeline,
@@ -62,6 +62,7 @@ import type {
   ArtifactRepository,
   BreakdownRepository,
   BugTraceRepository,
+  ExecutionRoutingRepository,
   PipelineStore,
   QuestionRepository,
   RunCommandInstruction,
@@ -227,6 +228,12 @@ export interface MemoryPipelineStore extends PipelineStore {
   offerRows(): readonly StoredRunOffer[];
   /** `runs.lease_epoch` (WP-274), `0` for a run no claim took. */
   leaseEpochOf(runId: Id): number;
+  /** Stores a project's execution settings, as `PUT …/execution` would (WP-278). */
+  setExecutionSettings(projectId: Id, settings: ExecutionSettings | null): void;
+  /** Marks a user as having a worker online for a project (WP-278); nothing else writes it here. */
+  setAssigneeOnline(projectId: Id, userId: Id, online: boolean): void;
+  /** The holders of a fresh `server_claimants` row, as the claimant renewed them (WP-278). */
+  serverClaimantHolders(): readonly string[];
 }
 
 /** One `run_commands` row as this store keeps it (migration 0060). */
@@ -344,6 +351,10 @@ export const createMemoryPipelineStore = (
   const epochs = new Map<Id, number>();
   /** `run_offers` (WP-274), keyed by `run_id` (unique there), insertion-ordered. */
   const offers = new Map<Id, StoredRunOffer>();
+  /** WP-278: `project_execution_settings`, the online assignees, and the claimant holders. */
+  const executionSettings = new Map<Id, ExecutionSettings>();
+  const onlineAssignees = new Set<string>();
+  const serverClaimants = new Set<string>();
   /** `run_plans` (WP-275a, migration 0095), keyed by `run_id`. */
   const plans = new Map<Id, StoredRunPlan>();
   /** `run_commands` (WP-85), insertion-ordered like the SQL's `created_at, id`. */
@@ -1592,7 +1603,12 @@ export const createMemoryPipelineStore = (
             candidate.state === 'open' &&
             (claim.eligibility.runId === undefined ||
               candidate.runId === claim.eligibility.runId) &&
-            isActiveRunStatus(runs.get(candidate.runId)?.status ?? 'completed'),
+            isActiveRunStatus(runs.get(candidate.runId)?.status ?? 'completed') &&
+            // WP-278: the server's eligibility, as the SQL claim spells it.
+            (claim.claimantKind !== 'server' ||
+              (candidate.routing.serverFrom !== null &&
+                Date.parse(candidate.routing.serverFrom) <= Date.parse(claim.now)) ||
+              (candidate.routing.serverFrom === null && candidate.routing.workersFrom === null)),
         )
         .sort((a, b) => Date.parse(a.offeredAt) - Date.parse(b.offeredAt))[0];
       if (offer === undefined) {
@@ -1650,6 +1666,26 @@ export const createMemoryPipelineStore = (
       });
       return { offerId: offer.id, runId: offer.runId };
     },
+    expiredOpen: async (_tx, input) =>
+      [...offers.values()]
+        .filter(
+          (offer) =>
+            offer.state === 'open' &&
+            offer.routing.expiresAt !== null &&
+            Date.parse(offer.routing.expiresAt) <= Date.parse(input.now),
+        )
+        .sort(
+          (a, b) => Date.parse(a.routing.expiresAt ?? '') - Date.parse(b.routing.expiresAt ?? ''),
+        )
+        .slice(0, input.limit)
+        .map((offer) => ({
+          runId: offer.runId,
+          taskId: offer.taskId,
+          projectId: offer.projectId,
+          kind: offer.kind,
+          offeredAt: offer.offeredAt,
+          expiresAt: offer.routing.expiresAt as IsoDateTime,
+        })),
     openWithoutPlan: async (_tx, limit) =>
       [...offers.values()]
         .filter((offer) => offer.state === 'open' && !plans.has(offer.runId))
@@ -1663,6 +1699,26 @@ export const createMemoryPipelineStore = (
           (candidate.state === 'open' || candidate.state === 'claimed'),
       );
       return offer === undefined ? null : clone(offer);
+    },
+  };
+
+  /**
+   * WP-278's routing reads and the claimant's liveness. **Divergence:** liveness has no clock here —
+   * a holder is running from its renewal until its release, where the database also lets an
+   * unrenewed row expire — and an online assignee is whatever a test set.
+   */
+  const executionRepository: ExecutionRoutingRepository = {
+    settings: async (_tx, projectId) => {
+      const stored = executionSettings.get(projectId);
+      return stored === undefined ? null : clone(stored);
+    },
+    assigneeOnline: async (_tx, input) => onlineAssignees.has(`${input.projectId}#${input.userId}`),
+    serverClaimantRunning: async () => serverClaimants.size > 0,
+    renewServerClaimant: async (_tx, input) => {
+      serverClaimants.add(input.holder);
+    },
+    releaseServerClaimant: async (_tx, holder) => {
+      serverClaimants.delete(holder);
     },
   };
 
@@ -2217,6 +2273,7 @@ export const createMemoryPipelineStore = (
     runs: runRepository,
     offers: offerRepository,
     runPlans: runPlanRepository,
+    execution: executionRepository,
     questions: questionRepository,
     approvals: approvalRepository,
     breakdown: breakdownRepository,
@@ -2225,6 +2282,16 @@ export const createMemoryPipelineStore = (
     runCommandRows: () => [...runCommandRows.values()].map((row) => clone(row)),
     offerRows: () => [...offers.values()].map((row) => clone(row)),
     leaseEpochOf: (runId) => epochs.get(runId) ?? 0,
+    setExecutionSettings: (projectId, settings) => {
+      if (settings === null) executionSettings.delete(projectId);
+      else executionSettings.set(projectId, clone(settings));
+    },
+    setAssigneeOnline: (projectId, userId, online) => {
+      const key = `${projectId}#${userId}`;
+      if (online) onlineAssignees.add(key);
+      else onlineAssignees.delete(key);
+    },
+    serverClaimantHolders: () => [...serverClaimants],
     writeEstimate: (taskId, estimate) => {
       const current = tasks.get(taskId);
       if (current === undefined) {

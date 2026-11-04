@@ -98,6 +98,8 @@ const world = async (options: {
   readonly settle?: (request: SettleRunRequest) => Promise<{ kind: 'settled' }>;
   readonly concurrency?: number;
   readonly tickets?: number;
+  /** WP-278: what to set on the store before the first ticket is offered. */
+  readonly before?: (harness: PipelineHarness) => void;
 }) => {
   const harness: PipelineHarness = createPipelineHarness({
     projectId: PROJECT,
@@ -105,6 +107,7 @@ const world = async (options: {
     // Room for every ticket a case files, so each gets its own offer.
     settings: { wip: { ...DEFAULT_WIP_LIMITS, maxParallelTasks: 10, maxParallelRuns: 10 } },
   });
+  options.before?.(harness);
   for (let index = 1; index <= (options.tickets ?? 1); index += 1) {
     await harness.publish([ticketMatched(`ACME-${index}`, index)]);
   }
@@ -349,5 +352,60 @@ describe('a claimant that loses its lease (TD-031 §2)', () => {
     expect(settled, 'a self-terminated claimant must not settle; the row is the sweep’s').toEqual(
       [],
     );
+  });
+});
+
+describe('the server claimant and execution routing (WP-278, TD-031 decision 8)', () => {
+  it('takes an offer only from its server_from: a workers-preferred project waits its fallback', async () => {
+    const { harness, claimant, sessions } = await world({
+      before: (built) =>
+        built.store.setExecutionSettings(PROJECT as Id, {
+          mode: 'hybrid',
+          prefer: 'workers',
+          fallbackAfterSeconds: 30,
+          assigneeWindowSeconds: 120,
+          offerTimeoutSeconds: 86_400,
+        }),
+    });
+    const [offer] = harness.store.offerRows();
+    expect(offer?.routing.workersFrom).toBe(offer?.offeredAt);
+    expect(Date.parse(offer?.routing.serverFrom ?? '') - Date.parse(offer?.offeredAt ?? '')).toBe(
+      30_000,
+    );
+    expect(await claimant.drain()).toBe(0);
+    expect(harness.store.offerRows()[0]?.state).toBe('open');
+
+    harness.clock.advance(30_000);
+    const drained = claimant.drain();
+    await tick();
+    await tick();
+    const runId = offer?.runId as Id;
+    sessions.get(runId)?.finish(outcomeOf(runId, 'completed'));
+    expect(await drained).toBe(1);
+  });
+
+  it('never takes a workers_only project’s offer', async () => {
+    const { harness, claimant } = await world({
+      before: (built) =>
+        built.store.setExecutionSettings(PROJECT as Id, {
+          mode: 'workers_only',
+          prefer: 'server',
+          fallbackAfterSeconds: null,
+          assigneeWindowSeconds: 120,
+          offerTimeoutSeconds: 86_400,
+        }),
+    });
+    expect(harness.store.offerRows()[0]?.routing.serverFrom).toBeNull();
+    harness.clock.advance(86_000_000);
+    expect(await claimant.drain()).toBe(0);
+  });
+
+  it('writes its liveness row when it starts and deletes it when it stops', async () => {
+    const { harness, claimant } = await world({ tickets: 0 });
+    expect(harness.store.serverClaimantHolders()).toEqual([]);
+    await claimant.start();
+    expect(harness.store.serverClaimantHolders()).toEqual(['server:claimant-test']);
+    await claimant.stop();
+    expect(harness.store.serverClaimantHolders()).toEqual([]);
   });
 });

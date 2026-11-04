@@ -17,7 +17,7 @@ import type {
   StoredTask,
   Transaction,
 } from '@platform/application';
-import { claimRunOffer, INITIAL_TASK_VERSION } from '@platform/application';
+import { claimRunOffer, INITIAL_TASK_VERSION, unroutedOfferForTest } from '@platform/application';
 import type { Id, IsoDateTime, Slug, TaskDependencies, TaskReviewers } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -3359,6 +3359,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           attempt: 1,
           kind,
           offeredAt: '2026-06-01T09:00:01.000Z' as IsoDateTime,
+          routing: unroutedOfferForTest('2026-06-01T09:00:01.000Z' as IsoDateTime),
         });
         const claim = await claimRunOffer(store.offers, tx, {
           eligibility: { runId },
@@ -3494,6 +3495,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             attempt: 1,
             kind: 'ask',
             offeredAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+            routing: unroutedOfferForTest('2026-06-01T09:00:00.000Z' as IsoDateTime),
           });
           const claimed = await claimRunOffer(store.offers, tx, {
             eligibility: { runId },
@@ -3658,6 +3660,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             attempt: 1,
             kind: 'stage',
             offeredAt: '2026-06-01T09:00:01.000Z' as IsoDateTime,
+            routing: unroutedOfferForTest('2026-06-01T09:00:01.000Z' as IsoDateTime),
           });
           expect(await store.offers.load(tx, runId)).toMatchObject({
             id: offerId,
@@ -3721,6 +3724,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             attempt: 1,
             kind: 'stage',
             offeredAt: '2026-06-01T09:00:01.000Z' as IsoDateTime,
+            routing: unroutedOfferForTest('2026-06-01T09:00:01.000Z' as IsoDateTime),
           });
           await store.runs.finish(tx, {
             ...ENDED,
@@ -3857,6 +3861,9 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             attempt: 1,
             kind: input.kind ?? 'stage',
             offeredAt: (input.offeredAt ?? '2026-06-01T09:00:01.000Z') as IsoDateTime,
+            routing: unroutedOfferForTest(
+              (input.offeredAt ?? '2026-06-01T09:00:01.000Z') as IsoDateTime,
+            ),
           });
           return { offerId, taskId: run?.taskId as Id };
         };
@@ -4040,6 +4047,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
               attempt: 1,
               kind: 'stage',
               offeredAt: '2026-06-01T09:00:03.000Z' as IsoDateTime,
+              routing: unroutedOfferForTest('2026-06-01T09:00:03.000Z' as IsoDateTime),
             }),
           ).rejects.toThrow();
         });

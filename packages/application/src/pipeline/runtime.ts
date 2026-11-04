@@ -38,7 +38,7 @@
  * what it borrows as well.
  */
 
-import type { IsoDateTime } from '@platform/contracts';
+import type { Id, IsoDateTime, RunOfferKind } from '@platform/contracts';
 import { type AskRuntimeOptions, composeAsk } from '../ask/runtime.js';
 import type { EventHandler } from '../events/handler.js';
 import { markTransactions } from '../events/open-transaction.js';
@@ -91,6 +91,7 @@ import {
   type StageExecutorBootstrapPort,
   type StageExecutorOptions,
 } from './stage-executor.js';
+import type { OfferWithdrawalReason } from './store.js';
 import { ticketLifecycleHandlers } from './ticket-lifecycle.js';
 import { ticketLintHandlers } from './ticket-lint.js';
 
@@ -255,6 +256,15 @@ export interface PipelineRuntime {
    * ({@link PipelineRuntimeOptions.runsAgents}). Started by {@link start}; a test harness drains it.
    */
   readonly claimant: RunClaimant | null;
+  /**
+   * Withdraws an open offer through its kind's executor — a stage's escalates its task, an ask's
+   * refuses the ask — answering `false` when a claim took it first (WP-278: the offer-timeout
+   * recovery row's ending, `../recovery/offer-timeout.ts`).
+   */
+  withdrawOffer(
+    offer: { readonly runId: Id; readonly kind: RunOfferKind },
+    reason: OfferWithdrawalReason,
+  ): Promise<boolean>;
   /** Declares the queues and starts the workers. Idempotent. */
   start(): Promise<void>;
   /**
@@ -460,6 +470,10 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     ],
     executor,
     claimant,
+    withdrawOffer: async (offer, reason) =>
+      offer.kind === 'stage'
+        ? executor.withdrawOffer(offer.runId, reason)
+        : ask.executor.withdrawOffer(offer.runId, reason),
     start: async () => {
       // Declared whatever this process subscribes: a queue that exists is a queue whose depth is a
       // metric, and TD-028's honest consequence — "a deployment with no runner leaves

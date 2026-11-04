@@ -55,7 +55,17 @@ interface RunOfferRow extends Record<string, unknown> {
   readonly settled_at: Date | string | null;
   readonly withdrawn_at: Date | string | null;
   readonly withdrawn_reason: string | null;
+  readonly assignee_user_id: string | null;
+  readonly assignee_until: Date | string | null;
+  readonly server_from: Date | string | null;
+  readonly workers_from: Date | string | null;
+  readonly expires_at: Date | string | null;
 }
+
+/** Every column {@link toStoredOffer} reads, for the two reads that answer a whole offer. */
+const OFFER_COLUMNS = `id, run_id, task_id, project_id, stage, attempt, kind, state, lease_epoch,
+              claimant_kind, offered_at, claimed_at, settled_at, withdrawn_at, withdrawn_reason,
+              assignee_user_id, assignee_until, server_from, workers_from, expires_at`;
 
 const toStoredOffer = (row: RunOfferRow): StoredRunOffer => ({
   id: row.id,
@@ -73,13 +83,23 @@ const toStoredOffer = (row: RunOfferRow): StoredRunOffer => ({
   settledAt: iso(row.settled_at),
   withdrawnAt: iso(row.withdrawn_at),
   withdrawnReason: row.withdrawn_reason,
+  routing: {
+    assigneeUserId: row.assignee_user_id,
+    assigneeUntil: iso(row.assignee_until),
+    serverFrom: iso(row.server_from),
+    workersFrom: iso(row.workers_from),
+    // `null` for an offer written before WP-278: it never expires (`expiredOpen` never finds it).
+    expiresAt: iso(row.expires_at),
+  },
 });
 
 /**
  * TD-031 §2's claim. `$1` narrows it to one run's offer, or is null for the oldest eligible open
  * offer (the server claimant's loop, WP-276); `$2` the live statuses, `$3` the claimant kind, `$4`
  * the claim instant, `$5` the owner, `$6` the lease's expiry — both null in a composition with no
- * lease. The outer update is the run's `created → starting` (WP-275b); a row a previous build
+ * lease. **The server's eligibility** (WP-278, TD-031 decision 8): `server_from` reached — a
+ * `null` `server_from` is *never* (`workers_only`) — or an offer written before WP-278, which has
+ * neither `*_from` and is the server's at once. A remote worker's eligibility is WP-281's. The outer update is the run's `created → starting` (WP-275b); a row a previous build
  * inserted live in another status keeps it. `for update of o, r skip locked` takes the offer and
  * then its run (the one lock order, WP-276) and skips a run a terminal writer holds.
  */
@@ -90,6 +110,9 @@ const CLAIM_SQL = `with candidate as (
      where o.state = 'open'
        and ($1::uuid is null or o.run_id = $1::uuid)
        and r.status = any($2::run_status[])
+       and ($3 <> 'server'
+            or o.server_from <= $4::timestamptz
+            or (o.server_from is null and o.workers_from is null))
      order by o.offered_at, o.id
      for update of o, r skip locked
      limit 1
@@ -141,8 +164,11 @@ export const lockOfferOf = async (sql: SqlExecutor, runId: string): Promise<void
 export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
   insert: async (tx, offer) => {
     await sqlOf(tx).query(
-      `insert into run_offers (id, run_id, task_id, project_id, stage, attempt, kind, offered_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)`,
+      `insert into run_offers (id, run_id, task_id, project_id, stage, attempt, kind, offered_at,
+                               assignee_user_id, assignee_until, server_from, workers_from,
+                               expires_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9, $10::timestamptz,
+               $11::timestamptz, $12::timestamptz, $13::timestamptz)`,
       [
         offer.id,
         offer.runId,
@@ -152,6 +178,11 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
         offer.attempt,
         offer.kind,
         offer.offeredAt,
+        offer.routing.assigneeUserId,
+        offer.routing.assigneeUntil,
+        offer.routing.serverFrom,
+        offer.routing.workersFrom,
+        offer.routing.expiresAt,
       ],
     );
   },
@@ -206,8 +237,7 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
   },
   liveStageOffer: async (tx, taskId) => {
     const { rows } = await sqlOf(tx).query<RunOfferRow>(
-      `select id, run_id, task_id, project_id, stage, attempt, kind, state, lease_epoch,
-              claimant_kind, offered_at, claimed_at, settled_at, withdrawn_at, withdrawn_reason
+      `select ${OFFER_COLUMNS}
          from run_offers
         where task_id = $1 and kind = 'stage' and state in ('open', 'claimed')`,
       [taskId],
@@ -227,10 +257,34 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
     );
     return rows.map((row) => ({ runId: row.run_id, kind: row.kind }));
   },
+  expiredOpen: async (tx, input) => {
+    const { rows } = await sqlOf(tx).query<{
+      run_id: string;
+      task_id: string;
+      project_id: string;
+      kind: RunOfferKind;
+      offered_at: Date;
+      expires_at: Date;
+    }>(
+      `select run_id, task_id, project_id, kind, offered_at, expires_at
+         from run_offers
+        where state = 'open' and expires_at <= $1::timestamptz
+        order by expires_at, id
+        limit $2`,
+      [input.now, input.limit],
+    );
+    return rows.map((row) => ({
+      runId: row.run_id,
+      taskId: row.task_id,
+      projectId: row.project_id,
+      kind: row.kind,
+      offeredAt: iso(row.offered_at) as IsoDateTime,
+      expiresAt: iso(row.expires_at) as IsoDateTime,
+    }));
+  },
   load: async (tx, runId) => {
     const { rows } = await sqlOf(tx).query<RunOfferRow>(
-      `select id, run_id, task_id, project_id, stage, attempt, kind, state, lease_epoch,
-              claimant_kind, offered_at, claimed_at, settled_at, withdrawn_at, withdrawn_reason
+      `select ${OFFER_COLUMNS}
          from run_offers where run_id = $1`,
       [runId],
     );

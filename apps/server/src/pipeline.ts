@@ -1737,6 +1737,16 @@ export const composePipeline = async (
         store: recoveryAdapters.createPostgresExpiredJobStore({ jobsSchema: options.jobsSchema }),
         escalation: { store, eventStore: options.eventing.store, ids, clock: { now: nowIso } },
       },
+      /**
+       * WP-278 (TD-031 decisions 1 and 8): an agent run's offer no claimant took before its
+       * `expires_at` (the project's `offer_timeout`) — withdrawn through its kind's executor, its
+       * run cancelled and its task escalated with *no claimant took this run* (an ask is refused);
+       * `packages/application/src/recovery/offer-timeout.ts`.
+       */
+      offers: {
+        store: store.offers,
+        withdraw: async (offer, reason) => runtime.withdrawOffer(offer, reason),
+      },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
         settings,

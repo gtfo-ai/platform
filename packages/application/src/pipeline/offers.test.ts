@@ -10,7 +10,7 @@ import { createRun, recordRunCreated, sequentialIds } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import type { BroadcastMessage } from '../ports/broadcast.js';
 import { offerRun, RUN_OFFERS_TOPIC, recordClaim, serverLeaseOwner } from './offers.js';
-import type { RunOfferRepository } from './store.js';
+import type { ExecutionRoutingRepository, RunOfferRepository } from './store.js';
 
 const NOW = '2026-11-04T09:00:00.000Z' as IsoDateTime;
 const tx = { adapter: 'memory' } as never;
@@ -39,7 +39,34 @@ const created = () =>
     context(),
   ).aggregate;
 
-const recording = () => {
+const ASKER = '00000000-0000-4000-8000-0000000027a1' as Id;
+const at = (seconds: number): IsoDateTime =>
+  new Date(Date.parse(NOW) + seconds * 1000).toISOString() as IsoDateTime;
+
+/** WP-278's reads, answered as a test sets them. */
+const routingReads = (
+  answers: {
+    readonly settings?: Awaited<ReturnType<ExecutionRoutingRepository['settings']>>;
+    readonly online?: boolean;
+    readonly serverClaimant?: boolean;
+  } = {},
+) => {
+  const asked: unknown[] = [];
+  const execution: ExecutionRoutingRepository = {
+    settings: async () => answers.settings ?? null,
+    assigneeOnline: async (_tx, input) => {
+      asked.push(input);
+      return answers.online ?? false;
+    },
+    serverClaimantRunning: async () => answers.serverClaimant ?? true,
+    renewServerClaimant: async () => {},
+    releaseServerClaimant: async () => {},
+  };
+  return { execution, asked };
+};
+
+const recording = (answers: Parameters<typeof routingReads>[0] = {}) => {
+  const { execution, asked } = routingReads(answers);
   const inserted: unknown[] = [];
   const claims: unknown[] = [];
   const published: BroadcastMessage[] = [];
@@ -60,17 +87,23 @@ const recording = () => {
       },
     },
   };
-  return { offers, inserted, claims, published, scope };
+  return { offers, execution, asked, inserted, claims, published, scope };
 };
 
 describe('offerRun', () => {
   it('writes the offer open, announces it on run_offers, records run.offered — and claims nothing', async () => {
-    const { offers, inserted, claims, published, scope } = recording();
+    const { offers, execution, inserted, claims, published, scope } = recording();
     const run = created();
     const decision = await offerRun(
-      offers,
+      { offers, execution },
       scope,
-      { run, kind: 'stage', offerId: '00000000-0000-4000-8000-000000002744' as Id, now: NOW },
+      {
+        run,
+        kind: 'stage',
+        offerId: '00000000-0000-4000-8000-000000002744' as Id,
+        now: NOW,
+        assigneeUserId: null,
+      },
       context(),
     );
     expect(inserted).toEqual([
@@ -83,6 +116,14 @@ describe('offerRun', () => {
         attempt: 2,
         kind: 'stage',
         offeredAt: NOW,
+        // WP-278: no stored settings is TD-031 §8's defaults — hybrid, the server preferred.
+        routing: {
+          assigneeUserId: null,
+          assigneeUntil: null,
+          serverFrom: NOW,
+          workersFrom: at(15),
+          expiresAt: at(86_400),
+        },
       },
     ]);
     expect(claims).toEqual([]);
@@ -91,6 +132,82 @@ describe('offerRun', () => {
     ]);
     expect(decision.events.map((event) => event.type)).toEqual(['run.offered']);
     expect(decision.aggregate.status).toBe('created');
+  });
+});
+
+describe('offerRun — routing (WP-278, TD-031 decision 8)', () => {
+  const offer = async (
+    answers: Parameters<typeof recording>[0],
+    input: { readonly kind: 'stage' | 'ask'; readonly assigneeUserId: Id | null },
+  ) => {
+    const recorded = recording(answers);
+    await offerRun(
+      { offers: recorded.offers, execution: recorded.execution },
+      recorded.scope,
+      {
+        run: created(),
+        kind: input.kind,
+        offerId: '00000000-0000-4000-8000-000000002745' as Id,
+        now: NOW,
+        assigneeUserId: input.assigneeUserId,
+      },
+      context(),
+    );
+    return { ...recorded, routing: (recorded.inserted[0] as { routing: unknown }).routing };
+  };
+
+  it('an ask whose asker has a worker online gives the asker the head start (§13)', async () => {
+    const { routing, asked } = await offer(
+      { online: true },
+      { kind: 'ask', assigneeUserId: ASKER },
+    );
+    expect(asked).toEqual([
+      { projectId: '00000000-0000-4000-8000-000000002743', userId: ASKER, now: NOW },
+    ]);
+    expect(routing).toEqual({
+      assigneeUserId: ASKER,
+      assigneeUntil: at(120),
+      serverFrom: at(120),
+      workersFrom: at(135),
+      expiresAt: at(86_400),
+    });
+  });
+
+  it('an asker with no worker online gives nobody a head start', async () => {
+    const { routing } = await offer({ online: false }, { kind: 'ask', assigneeUserId: ASKER });
+    expect(routing).toMatchObject({ assigneeUserId: null, assigneeUntil: null, serverFrom: NOW });
+  });
+
+  it('a project’s stored settings decide, and server_only never asks whether the assignee is online', async () => {
+    const { routing, asked } = await offer(
+      {
+        online: true,
+        settings: {
+          mode: 'server_only',
+          prefer: 'workers',
+          fallbackAfterSeconds: null,
+          assigneeWindowSeconds: 120,
+          offerTimeoutSeconds: 600,
+        },
+      },
+      { kind: 'ask', assigneeUserId: ASKER },
+    );
+    expect(asked).toEqual([]);
+    expect(routing).toEqual({
+      assigneeUserId: null,
+      assigneeUntil: null,
+      serverFrom: NOW,
+      workersFrom: null,
+      expiresAt: at(600),
+    });
+  });
+
+  it('with no server claimant on the instance, a hybrid project opens to workers at once', async () => {
+    const { routing } = await offer(
+      { serverClaimant: false },
+      { kind: 'stage', assigneeUserId: null },
+    );
+    expect(routing).toMatchObject({ serverFrom: NOW, workersFrom: NOW });
   });
 });
 

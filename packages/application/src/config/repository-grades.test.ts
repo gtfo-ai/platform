@@ -25,6 +25,15 @@ const shapeOf = (schema: unknown): Record<string, unknown> => {
   return current.shape ?? {};
 };
 
+/** A key whose schema is `never` (optional or not): refused by name, never stated. */
+const refusedWhatever = (schema: unknown): boolean => {
+  let current = schema as Shaped & { _zod?: { def?: { type?: string } } };
+  while (current.unwrap !== undefined && current._zod?.def?.type !== 'never') {
+    current = current.unwrap() as typeof current;
+  }
+  return current._zod?.def?.type === 'never';
+};
+
 /** Every key the schema lets a file state, spelled as `REPOSITORY_KEY_GRADES` spells it. */
 const schemaKeys = (): string[] => {
   const root = shapeOf(agenticConfigSchema);
@@ -33,6 +42,9 @@ const schemaKeys = (): string[] => {
   // ungraded and fails the comparison below (review round 2). The four expanded below are graded
   // key by key; every other top-level key is graded whole.
   for (const key of Object.keys(root)) {
+    // A key the schema refuses whatever its value (`execution`, WP-278: `z.never()`) is not one a
+    // file can state, so it has no grade.
+    if (refusedWhatever(root[key])) continue;
     if (!['version', 'project', 'policies', 'pipeline', 'stages'].includes(key)) keys.push(key);
   }
   for (const key of Object.keys(shapeOf(root.project))) keys.push(`project.${key}`);

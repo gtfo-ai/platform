@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 722, so the next is **723**), its grade
+line with the next free number (the highest is 732, so the next is **733**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -18,6 +18,8 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 232 | minor | — | Storage gauge (org-dashboard panel, 50 GB warning, partition purge) not built; only Prometheus metrics exist |
 | 446 | minor | — | WP-144 criterion (3), a real `docker compose stop runner` mid-run, not built; needs fake providers reachable from a compose stack |
 | 538 | minor | — | Two installations sharing one tracker service account both see themselves as assignee, so the claim does not stop double work |
+| 730 | minor | — | A stage offer names no assignee (WP-278): the ticket's assignee is read at intake (`TicketRead.assignee`) and dropped, so BD-032 decision 5's head start reaches only an ask's asker until a mapped assignee user is stored on the task |
+| 731 | minor | — | `run_offers.withdrawn_reason` is checked at 1–64 characters, but `closeStageOffer`'s callers pass sentences built from free reasons (`the task was escalated: ${input.reason}` in job-escalation, `${outcome}` in the saga); a long one would fail the check and roll back the escalation — unmeasured. WP-278's withdrawals pass short codes |
 | 556 | minor | WP-270 (b) | Flake: runlet conformance case for a close after `result` fails with write EPIPE in CI (two occurrences); measure before fixing |
 | 570 | minor | — | Flake: web-e2e xss.spec, integrations page never showed its Setup guide button within 30 s (once in three runs) |
 | 587 | minor | — | `git -C <dir>` honours a run-written .git/config (fsmonitor, pager, hooks); tier 3 per TD-030; path-guard measurement in docs/TODO.md |
@@ -50,6 +52,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 685 | nit | — | Over-ask: a quoted `[` as a command name reads as an expanded name and blocks, where bash finds nothing and runs nothing |
 | 702 | nit | — | `apps/launcher` still declares `@platform/prompts` as a runtime dependency (and the launcher image copies it) though nothing at runtime reads it since WP-279; tests only — move to devDependencies |
 | 706 | nit | — | `DockerWorkspaceProvider.cliEnvironment` after a launcher restart answers the configured tag's `PATH`, not the digest the run was created from (the run→image map is memory); harmless while one tag serves every run |
+| 732 | nit | — | An offer withdrawn before any claim (`run_plan_missing`, WP-278's `offer_timeout`) escalates with `escalate`'s wording — *stopped without a result … open the run's transcript* — for a run that never started and has no transcript |
 | 721 | nit | — | An ask's settle (WP-276) re-reads the task's run and audit lines a citation may name at settle time, not at plan time, so a citation of a line written after the plan is kept; storing the plan's lines would need a column |
 | 132 | ? | — | Unexplained once: authenticated GET /api/artifacts/:id answered 200 with an empty body in verify:e2e; instrumented, not seen since |
 | 7 | ? | — | "Carried, not yet scheduled": a bullet list of carried nits (route-sealed credential never opened by the loader, volume retention, …) |

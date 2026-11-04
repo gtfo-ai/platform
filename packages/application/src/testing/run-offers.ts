@@ -13,6 +13,7 @@
  * the index passes `kind: 'stage'` (and a stage).
  */
 import type { Id, IsoDateTime, RunOfferKind, Slug } from '@platform/contracts';
+import type { OfferRouting } from '@platform/domain';
 import { claimRunOffer } from '../pipeline/offers.js';
 import type { PipelineStore, RunLeaseFence } from '../pipeline/store.js';
 import type { Transaction } from '../ports/transaction.js';
@@ -31,6 +32,19 @@ export interface TestRunClaim {
   readonly attempt?: number;
 }
 
+/**
+ * An offer's routing for a test that is not about routing (WP-278): neither `*_from` written — the
+ * shape of an offer from before WP-278, which the server's claim takes at once whatever the claim's
+ * instant — no assignee, and it expires a day after `at`.
+ */
+export const unroutedOfferForTest = (at: IsoDateTime | string): OfferRouting => ({
+  assigneeUserId: null,
+  assigneeUntil: null,
+  serverFrom: null,
+  workersFrom: null,
+  expiresAt: new Date(Date.parse(at) + 86_400_000).toISOString() as IsoDateTime,
+});
+
 /** Writes the run's offer and claims it; throws when the claim takes nothing. */
 export const offerAndClaimForTest = async (
   store: Pick<PipelineStore, 'offers'>,
@@ -46,6 +60,7 @@ export const offerAndClaimForTest = async (
     attempt: input.attempt ?? 1,
     kind: input.kind ?? 'ask',
     offeredAt: input.now,
+    routing: unroutedOfferForTest(input.now),
   });
   const claimed = await claimRunOffer(store.offers, tx, {
     eligibility: { runId: input.runId },

@@ -39,6 +39,7 @@ import {
   settleRun,
   sweepExpiredRunLeases,
   type Transaction,
+  unroutedOfferForTest,
 } from '@platform/application';
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
@@ -218,6 +219,7 @@ const seed = async (input: {
       attempt: 1,
       kind: 'stage',
       offeredAt: NOW,
+      routing: unroutedOfferForTest(NOW),
     });
     if (input.claim) {
       const claimed = await claimRunOffer(store.offers, setup.tx, {

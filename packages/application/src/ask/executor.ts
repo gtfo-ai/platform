@@ -84,6 +84,7 @@ import { COST_UNREPORTED, withTaskCap } from '../pipeline/stage-executor.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import {
   LeaseLostError,
+  type OfferWithdrawalReason,
   type PipelineStore,
   type RunLeaseFence,
   type StoredTask,
@@ -228,6 +229,11 @@ export interface AskExecutor {
   settle(request: SettleRunRequest): Promise<AskSettled>;
   /** Withdraws an ask's open offer that has no stored plan and refuses the ask (WP-276). */
   withdrawUnplanned(runId: Id): Promise<boolean>;
+  /**
+   * Withdraws an ask's open offer, ends its run `cancelled` and refuses the ask with the brief —
+   * the ask's own ending (TD-031 §13; WP-278: an offer nobody claimed by its `expires_at`).
+   */
+  withdrawOffer(runId: Id, reason: OfferWithdrawalReason): Promise<boolean>;
 }
 
 /** {@link AskExecutor.settle}'s answer: the claimant's three kinds and the ask's own outcome. */
@@ -658,13 +664,15 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
        * beside the stage before; a claimant takes it through the same one claim.
        */
       const offered = await offerRun(
-        options.store.offers,
+        options.store,
         scope,
         {
           run: created.aggregate,
           kind: 'ask',
           offerId: context.ids.next(),
           now: context.clock.now(),
+          // TD-031 §13: the asking user plays the assignee — their online worker gets the head start.
+          assigneeUserId: ask.askedByUserId,
         },
         context,
       );
@@ -1115,19 +1123,19 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
   };
 
   /**
-   * An ask's open offer with **no** stored plan (TD-031's 2026-11-04 amendment §2): withdrawn by one
-   * conditional update, its run ended `cancelled`, and the ask refused naming `run_plan_missing`.
+   * An ask's open offer withdrawn by the platform (WP-278's generalisation of WP-276's): one
+   * conditional update, its run ended `cancelled`, and the ask refused with the brief. The offer's
+   * `withdrawn_reason` is the short code; the brief is what the ask's thread says.
    */
-  const withdrawUnplannedAsk = async (runId: Id): Promise<boolean> =>
+  const withdrawAskOffer = async (runId: Id, why: OfferWithdrawalReason): Promise<boolean> =>
     options.unitOfWork.transaction(async (scope) => {
       const row = await options.store.runs.load(scope.tx, runId);
       if (row === null) return false;
       const context = options.context(row.taskId);
-      const reason =
-        'run_plan_missing: the ask’s run was offered without a stored plan, so no claimant can run it';
+      const reason = why.brief;
       const withdrawn = await options.store.offers.withdraw(scope.tx, {
         by: { runId },
-        reason,
+        reason: why.withdrawnReason,
         now: context.clock.now(),
       });
       if (withdrawn === null) return false;
@@ -1135,7 +1143,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         { store: options.store, eventStore: options.eventStore },
         scope,
         withdrawn,
-        { reason, context },
+        { reason: why.withdrawnReason, context },
       );
       if (row.askId !== undefined && row.askId !== null) {
         await options.asks.recordRefusal(scope.tx, { askId: row.askId, status: 'failed', reason });
@@ -1204,6 +1212,13 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       return { kind: 'offered', askId: admitted.ask.id, runId };
     },
     settle: async (request) => settleAskRun(request),
-    withdrawUnplanned: async (runId) => withdrawUnplannedAsk(runId),
+    // An ask's open offer with **no** stored plan (TD-031's 2026-11-04 amendment §2).
+    withdrawUnplanned: async (runId) =>
+      withdrawAskOffer(runId, {
+        withdrawnReason: 'run_plan_missing',
+        brief:
+          'run_plan_missing: the ask’s run was offered without a stored plan, so no claimant can run it',
+      }),
+    withdrawOffer: withdrawAskOffer,
   };
 };

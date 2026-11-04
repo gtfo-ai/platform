@@ -94,6 +94,7 @@ import * as z from 'zod';
 import { unmeasuredEndedRunSql } from '../cost/pending-run-spend.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import { createPostgresExecutionRoutingRepository } from './postgres-execution-routing.js';
 import {
   closePendingRunCommands,
   createPostgresRunCommandRepository,
@@ -2360,6 +2361,7 @@ export const createPostgresPipelineStore = (
     runs,
     offers: createPostgresRunOfferRepository(),
     runPlans: createPostgresRunPlanRepository(),
+    execution: createPostgresExecutionRoutingRepository(),
     questions,
     approvals,
     breakdown,

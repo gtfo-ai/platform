@@ -57,6 +57,7 @@ export const queryKeys = {
       : (['project', id, 'ticket-statuses', integrationId] as const),
   /** WP-139: the stored default branch beside the git provider's answer. */
   projectRepository: (id: string) => ['project', id, 'repository'] as const,
+  projectExecution: (id: string) => ['project', id, 'execution'] as const,
   projectBudgets: (id: string) => ['project', id, 'budgets'] as const,
   projectAutonomy: (id: string) => ['project', id, 'autonomy'] as const,
   projectAudit: (id: string) => ['project', id, 'audit'] as const,

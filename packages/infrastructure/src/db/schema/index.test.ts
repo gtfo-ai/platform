@@ -71,8 +71,10 @@ describe('Drizzle schema', () => {
     // duration (migration 0094, WP-274, TD-031 decisions 1–2), plus `run_plans` — the run's planned
     // spec, sealed, cleared at its terminal write (migration 0095, WP-275a, TD-031's 2026-11-04
     // amendment §2), plus `workers` and `worker_device_codes` — the registered machines and the
-    // device flow's hashed codes (migration 0096, WP-280, TD-031 decisions 7 and 10c).
-    expect(tables.length).toBe(76);
+    // device flow's hashed codes (migration 0096, WP-280, TD-031 decisions 7 and 10c), plus
+    // `project_execution_settings` and `server_claimants` — where a project's runs execute and
+    // whether the instance has a server claimant (migration 0097, WP-278, TD-031 decision 8).
+    expect(tables.length).toBe(78);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

@@ -85,6 +85,11 @@ import type { OnboardingCommands } from './onboarding.js';
 import type { ProjectConfigCommands } from './project-config.js';
 import { listHistoryBootstraps } from './queries/bootstrap-queries.js';
 import { listedModelIds, listOrgBudgets, writeBudget } from './queries/cost-queries.js';
+import {
+  findProjectExecution,
+  serverClaimantRunning,
+  writeProjectExecution,
+} from './queries/execution-queries.js';
 import { claimCommandAttempt, releaseCommandAttempt } from './queries/idempotency-queries.js';
 import type { Database } from './queries/identity-queries.js';
 import {
@@ -154,6 +159,7 @@ import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
 import { registerProjectBindingRoutes } from './routes/project-bindings.js';
 import { registerProjectConfigRoutes } from './routes/project-config.js';
+import { registerProjectExecutionRoutes } from './routes/project-execution.js';
 import { registerProjectReadinessRoutes } from './routes/project-readiness.js';
 import { registerProjectRepositoryRoutes } from './routes/project-repository.js';
 import { registerProjectRoutes } from './routes/projects.js';
@@ -662,6 +668,23 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       },
       commands: options.projectConfig ?? null,
       redactText: (value) => redactionAdapters.patternRedactor().redactText(value).value,
+    });
+    // WP-278 (TD-031 decision 8): where the project's agent runs execute — an administrator's
+    // setting, never a key of `.agentic/config.yml` — and whether the instance has a server claimant.
+    await registerProjectExecutionRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        projectExists: async (projectId) =>
+          (await findProjectById(options.database, projectId)) !== null,
+        execution: async (projectId) => findProjectExecution(options.database, projectId),
+        writeExecution: async (projectId, settings) =>
+          writeProjectExecution(options.database, projectId, settings),
+        serverClaimantRunning: async () => serverClaimantRunning(options.database),
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+      },
     });
     // WP-139: the project's default branch — the provider's answer beside the stored one, and the
     // maintainer's change command. The provider read rides the configuration commands' executor.

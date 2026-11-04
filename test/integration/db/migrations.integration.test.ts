@@ -81,6 +81,8 @@ const EXPECTED_TABLES = [
   'platform_migrations',
   'platform_table_policy',
   'price_list',
+  // WP-278, migration 0097: where a project's agent runs execute (TD-031 decision 8).
+  'project_execution_settings',
   'project_members',
   // WP-63 (migration 0050): the last reading of a project's own `.agentic/config.yml` on its
   // default branch — the `repo` layer technical/12's merge names and nothing produced (backlog 44).
@@ -102,6 +104,8 @@ const EXPECTED_TABLES = [
   'run_plans',
   'runs',
   'secrets',
+  // WP-278, migration 0097: the processes running the server claimant, renewed on its poll.
+  'server_claimants',
   'sessions',
   // WP-34, migration 0029: the set of tickets somebody selected on one day, and what each was
   // compared against. `shadow_reports` is a row per **task** and cannot express a batch, which is
@@ -282,6 +286,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // twice at most — claimed by a digest, then delivered — and registered rather than defaulted
       // so the "registry lists every table" invariant above stays true.
       row('notifications', 'read_write', null),
+      // WP-278 (migration 0097): an administrator's row replaced in place.
+      row('project_execution_settings', 'read_write', null),
       // WP-63 (migration 0050): `read_write` because a project's row is replaced on every reading
       // of the repository's file — derived state, rebuilt by the next reading (BD-012).
       row('project_repository_config', 'read_write', null),
@@ -296,6 +302,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // WP-275a (migration 0095): `read_write` — written once at the run's creation, its seal
       // cleared by the run's terminal writer.
       row('run_plans', 'read_write', null),
+      // WP-278 (migration 0097): a claimant's row renewed in place and deleted by its holder.
+      row('server_claimants', 'read_write', null),
       row('sessions', 'read_write', null),
       // WP-41 (migration 0034): the statistics projections. `read_write` for both — a counter is
       // an upsert that adds, and a projection that could never be corrected could not be rebuilt

@@ -516,6 +516,9 @@
         }
       },
       "additionalProperties": false
+    },
+    "execution": {
+      "not": {}
     }
   },
   "required": [

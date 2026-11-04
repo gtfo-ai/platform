@@ -29,6 +29,7 @@
  * | a knowledge apply that failed or never ran (WP-124) | **366** | a change a human accepted, never committed; the proposal reads approved for ever | **here** — `knowledge_apply`, in `./knowledge-apply.ts`: one apply per project under a mark, then `apply_failed` with a reason on the proposal queue |
  * | a discovery run's recording that failed or never ran (WP-124) | **366** | a paid run's readiness evaluation and drafted pages | **here** — `discovery_record`, in `./discovery-record.ts`: the recording job once more under a mark, then the discovery task escalates with a brief |
  * | a bound-and-escalate job whose last try **expired** rather than threw (WP-156) | **421** | a person waits on an escalation the wrapper never made: pg-boss fails an expired job without its handler throwing | **here** — `expired_job`, in `./expired-job.ts`: the task escalated once per job id under a mark, never re-enqueued |
+ * | an agent run's offer nobody claimed (WP-278) | — | the task's stage entry, held by an open offer for ever (a `workers_only` project with no worker, a `server_only` one with no runner) | **here** — `run_offer_timeout`, in `./offer-timeout.ts`: past its `expires_at` the offer is withdrawn, its run cancelled and the task escalated with *no claimant took this run* (an ask is refused), never re-offered |
  * | a create answer the runner never received (WP-103) | **286** | a run container, sidecar, network and control directory nobody holds a handle for | `./orphan-workspaces.ts`, on **the runner's own timer** at this pass's interval — it needs the launcher client, which only a process configured to run agents holds, while this pass rides a job any worker takes |
  *
  * …plus three rows that are **not** lost wake-ups at all and ride the same pass because each is the
@@ -173,6 +174,7 @@ import {
   type StrandedApply,
 } from './knowledge-apply.js';
 import type { NotificationRepostSite, UndeliveredNotification } from './notification-repost.js';
+import { type OfferTimeoutRecoverySite, recoverExpiredOffers } from './offer-timeout.js';
 import {
   enqueueRunCredentialRevocation,
   type RunCredentialRecoverySite,
@@ -447,6 +449,14 @@ export interface StrandedRecoveryOptions {
    * the reason `runs` is: its ending escalates through the pipeline store.
    */
   readonly expiredJobs?: ExpiredJobRecoverySite;
+  /**
+   * The offer-timeout site (WP-278, TD-031 decisions 1 and 8, `./offer-timeout.ts`): an open offer
+   * past its `expires_at`, withdrawn and its task escalated.
+   *
+   * **Absent is "an unclaimed offer waits for ever"** — every build before WP-278. Optional for the
+   * reason `runs` is: its ending escalates through the pipeline's executors.
+   */
+  readonly offers?: OfferTimeoutRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -1068,6 +1078,25 @@ export const runStrandedRecovery = async (
       found: deadlines.reminderFound,
       reEnqueued: deadlines.reminded,
       ended: 0,
+    });
+  }
+
+  if (options.offers !== undefined) {
+    // An ending, like the run site: no mark, because a withdrawn offer is not `open` and the read
+    // cannot find it twice. Its own transactions, after the query-shaped sites.
+    const offers = await recoverExpiredOffers(
+      {
+        unitOfWork: options.unitOfWork,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      },
+      options.offers,
+      { now, limit },
+    );
+    sites.push({
+      site: 'run_offer_timeout',
+      found: offers.found,
+      reEnqueued: 0,
+      ended: offers.ended,
     });
   }
 

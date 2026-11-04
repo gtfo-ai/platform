@@ -12,6 +12,10 @@
  *     answers the offer at epoch 1 and the other answers nothing — never both, never epoch 2.
  *  2. **A second open stage offer for one task violates the index** (`run_offers_one_live_stage_per_task`),
  *     whether the first is `open` or `claimed`, and is admitted once the first is closed.
+ *  3. **Routing** (WP-278, TD-031 decision 8): the server's claim honours `server_from` (never for a
+ *     `workers_only` offer, at once for an offer from before WP-278), the expiry read finds only open
+ *     offers past `expires_at`, and the execution repository's settings, online-assignee and
+ *     claimant-liveness reads answer from the database.
  */
 import {
   claimRunOffer,
@@ -19,9 +23,10 @@ import {
   type PipelineStore,
   type StoredTask,
   type Transaction,
+  unroutedOfferForTest,
 } from '@platform/application';
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
-import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
+import { FEATURE_TEMPLATE, type OfferRouting, SHIPPED_TEMPLATES } from '@platform/domain';
 import { pipeline } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -153,7 +158,11 @@ const committedTask = async (): Promise<Id> => {
 };
 
 /** A committed `running` run of `taskId`, with an `open` stage offer when `offered`. */
-const committedRun = async (taskId: Id, offered = true): Promise<{ runId: Id; offerId: Id }> => {
+const committedRun = async (
+  taskId: Id,
+  offered = true,
+  routing: OfferRouting = unroutedOfferForTest(NOW),
+): Promise<{ runId: Id; offerId: Id }> => {
   const setup = await begin();
   const runId = nextId();
   const offerId = nextId();
@@ -196,6 +205,7 @@ const committedRun = async (taskId: Id, offered = true): Promise<{ runId: Id; of
       attempt: 1,
       kind: 'stage',
       offeredAt: NOW,
+      routing,
     });
   }
   await setup.commit();
@@ -331,6 +341,7 @@ describe('the per-task index (WP-274 criterion 5, TD-031 §1)', () => {
         attempt: 1,
         kind: 'stage',
         offeredAt: NOW,
+        routing: unroutedOfferForTest(NOW),
       });
       await attempt.commit();
       return null;
@@ -395,7 +406,173 @@ describe('the per-task index (WP-274 criterion 5, TD-031 §1)', () => {
       attempt: 1,
       kind: 'ask',
       offeredAt: NOW,
+      routing: unroutedOfferForTest(NOW),
     });
     await ask.commit();
+  });
+});
+
+const at = (seconds: number): IsoDateTime =>
+  new Date(Date.parse(NOW) + seconds * 1000).toISOString() as IsoDateTime;
+
+const routed = (serverFrom: number | null, workersFrom: number | null): OfferRouting => ({
+  assigneeUserId: null,
+  assigneeUntil: null,
+  serverFrom: serverFrom === null ? null : at(serverFrom),
+  workersFrom: workersFrom === null ? null : at(workersFrom),
+  expiresAt: at(3_600),
+});
+
+/** The server's claim of one run at `now`, committed. */
+const serverClaimAt = async (runId: Id, now: IsoDateTime) => {
+  const claimant = await begin();
+  try {
+    const claimed = await claimRunOffer(store.offers, claimant.tx, {
+      eligibility: { runId },
+      claimantKind: 'server',
+      owner: 'server:routing',
+      expiresAt: at(3_900),
+      now,
+    });
+    await claimant.commit();
+    return claimed;
+  } catch (error) {
+    await claimant.rollback();
+    throw error;
+  }
+};
+
+describe('the server claim honours the offer’s routing (WP-278, TD-031 decision 8)', () => {
+  it('takes an offer only from its server_from', async () => {
+    const { runId } = await committedRun(await committedTask(), true, routed(300, 0));
+    expect(await serverClaimAt(runId, at(299))).toBeNull();
+    expect((await serverClaimAt(runId, at(300)))?.epoch).toBe(1);
+  });
+
+  it('never takes a workers_only offer, and takes one from before WP-278 at once', async () => {
+    const workersOnly = await committedRun(await committedTask(), true, routed(null, 0));
+    expect(await serverClaimAt(workersOnly.runId, at(86_400))).toBeNull();
+    const unrouted = await committedRun(await committedTask());
+    expect((await serverClaimAt(unrouted.runId, NOW))?.epoch).toBe(1);
+  });
+});
+
+describe('the offer-timeout read (WP-278, TD-031 decision 1)', () => {
+  it('finds an open offer at its expires_at, not before, and never a claimed one', async () => {
+    const open = await committedRun(await committedTask(), true, routed(null, 0));
+    const claimed = await committedRun(await committedTask(), true, routed(0, 0));
+    await serverClaimAt(claimed.runId, NOW);
+    const expiredAt = async (now: IsoDateTime) => {
+      const reader = await begin();
+      try {
+        return (await store.offers.expiredOpen(reader.tx, { now, limit: 1_000 })).map(
+          (offer) => offer.runId,
+        );
+      } finally {
+        await reader.rollback();
+      }
+    };
+    expect(await expiredAt(at(3_599))).not.toContain(open.runId);
+    const found = await expiredAt(at(3_600));
+    expect(found).toContain(open.runId);
+    expect(found).not.toContain(claimed.runId);
+    const [row] = await read<{ expires_at: Date }>(
+      'select expires_at from run_offers where run_id = $1',
+      [open.runId],
+    );
+    expect(row?.expires_at.toISOString()).toBe(at(3_600));
+  });
+});
+
+describe('the execution routing repository (WP-278, migration 0097)', () => {
+  const routingStore = pipeline.createPostgresExecutionRoutingRepository();
+
+  const within = async <T>(work: (tx: Transaction) => Promise<T>): Promise<T> => {
+    const scope = await begin();
+    try {
+      const answer = await work(scope.tx);
+      await scope.commit();
+      return answer;
+    } catch (error) {
+      await scope.rollback();
+      throw error;
+    }
+  };
+
+  it('answers null for no stored settings, and the stored row once written', async () => {
+    expect(await within((tx) => routingStore.settings(tx, projectId))).toBeNull();
+    await read(
+      `insert into project_execution_settings (project_id, mode, prefer, offer_timeout_seconds)
+       values ($1, 'workers_only', 'workers', 600)`,
+      [projectId],
+    );
+    expect(await within((tx) => routingStore.settings(tx, projectId))).toEqual({
+      mode: 'workers_only',
+      prefer: 'workers',
+      fallbackAfterSeconds: null,
+      assigneeWindowSeconds: 120,
+      offerTimeoutSeconds: 600,
+    });
+    await read('delete from project_execution_settings where project_id = $1', [projectId]);
+  });
+
+  it('answers an assignee online only for a member’s active, unpaused worker seen in the last minute', async () => {
+    const [user] = await read<{ id: string }>(
+      "insert into users (email, name) values ('dev@example.test', 'Dev') returning id",
+      [],
+    );
+    const userId = user?.id as Id;
+    const online = () =>
+      within((tx) =>
+        routingStore.assigneeOnline(tx, {
+          projectId,
+          userId,
+          now: new Date().toISOString() as IsoDateTime,
+        }),
+      );
+    await read(
+      `insert into workers (id, user_id, name, credential_hash, last_seen_at)
+       values ($1, $2, 'laptop', repeat('a', 64), now())`,
+      [nextId(), userId],
+    );
+    expect(await online()).toBe(false); // not a member yet
+    await read(
+      "insert into project_members (project_id, user_id, role) values ($1, $2, 'viewer')",
+      [projectId, userId],
+    );
+    expect(await online()).toBe(false); // a viewer may not take runs
+    await read("update project_members set role = 'member' where user_id = $1", [userId]);
+    expect(await online()).toBe(true);
+    await read(
+      "update workers set last_seen_at = now() - interval '61 seconds' where user_id = $1",
+      [userId],
+    );
+    expect(await online()).toBe(false);
+    await read(
+      `update workers set last_seen_at = now(), paused_until = now() + interval '1 hour',
+              paused_reason = 'usage_limited' where user_id = $1`,
+      [userId],
+    );
+    expect(await online()).toBe(false);
+  });
+
+  it('says a server claimant is running from its renewal until its release', async () => {
+    const running = () => within((tx) => routingStore.serverClaimantRunning(tx));
+    expect(await running()).toBe(false);
+    await within((tx) =>
+      routingStore.renewServerClaimant(tx, { holder: 'server:a', ttlMs: 60_000 }),
+    );
+    expect(await running()).toBe(true);
+    await within((tx) =>
+      routingStore.renewServerClaimant(tx, { holder: 'server:a', ttlMs: 60_000 }),
+    );
+    await within((tx) => routingStore.releaseServerClaimant(tx, 'server:a'));
+    expect(await running()).toBe(false);
+    await read(
+      `insert into server_claimants (holder, renewed_at, expires_at)
+       values ('server:dead', now() - interval '2 minutes', now() - interval '1 minute')`,
+      [],
+    );
+    expect(await running()).toBe(false);
   });
 });

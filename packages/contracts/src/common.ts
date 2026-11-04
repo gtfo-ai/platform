@@ -171,6 +171,25 @@ export const durationSchema = z
     'expected a duration such as "30 minutes", "2 hours" or "1 working day"',
   );
 
+/**
+ * Where a project's agent runs execute (WP-278, TD-031 decision 8, BD-032 decision 3): the server's
+ * runner only, remote workers only, or both through one pool.
+ */
+export const executionModeSchema = z.enum(['server_only', 'workers_only', 'hybrid']);
+
+/** In `hybrid`, which side may claim an offer first; the other waits `fallback_after`. */
+export const executionPreferenceSchema = z.enum(['server', 'workers']);
+
+/**
+ * The bounds of a project's execution settings, in whole seconds — the table's checks
+ * (`project_execution_settings`, migration 0097) written once. `offer_timeout` is at least a
+ * minute (an offer must outlive one recovery pass) and at most 30 days.
+ */
+export const EXECUTION_FALLBACK_AFTER_MAX_SECONDS = 86_400;
+export const EXECUTION_ASSIGNEE_WINDOW_MAX_SECONDS = 3_600;
+export const EXECUTION_OFFER_TIMEOUT_MIN_SECONDS = 60;
+export const EXECUTION_OFFER_TIMEOUT_MAX_SECONDS = 2_592_000;
+
 /** Wall-clock time of day, used by `features.digest.at` and quiet hours. */
 export const timeOfDaySchema = z
   .string()
@@ -1127,6 +1146,8 @@ export type AutonomyLevel = z.infer<typeof autonomyLevelSchema>;
 export type Effort = z.infer<typeof effortSchema>;
 export type ArtifactType = z.infer<typeof artifactTypeSchema>;
 export type ExternalIdentity = z.infer<typeof externalIdentitySchema>;
+export type ExecutionMode = z.infer<typeof executionModeSchema>;
+export type ExecutionPreference = z.infer<typeof executionPreferenceSchema>;
 export type Actor = z.infer<typeof actorSchema>;
 export type TicketRef = z.infer<typeof ticketRefSchema>;
 export type TicketStatusCategory = z.infer<typeof ticketStatusCategorySchema>;

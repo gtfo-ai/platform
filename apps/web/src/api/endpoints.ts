@@ -78,11 +78,14 @@ import {
   pauseTaskRequestSchema,
   projectAuditResponseSchema,
   projectBindingsResponseSchema,
+  projectExecutionResponseSchema,
   projectRecordSchema,
   projectRepositoryResponseSchema,
   projectsResponseSchema,
   putBudgetsRequestSchema,
   putProjectBindingsRequestSchema,
+  putProjectExecutionRequestSchema,
+  putProjectExecutionResponseSchema,
   raiseTaskBudgetRequestSchema,
   readinessResponseSchema,
   rediscoveryGateResponseSchema,
@@ -444,6 +447,15 @@ export interface Endpoints {
    * `PUT /api/projects/:id/default-branch` — a maintainer changes the branch runs check out and
    * merge requests target (WP-139); `409 project_has_live_tasks` while a task is not finished.
    */
+  /** WP-278: where the project's agent runs execute (TD-031 decision 8). */
+  readonly projectExecution: (
+    projectId: string,
+  ) => Promise<z.output<typeof projectExecutionResponseSchema>>;
+  readonly setProjectExecution: (
+    projectId: string,
+    body: z.input<typeof putProjectExecutionRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof putProjectExecutionResponseSchema>>;
   readonly setDefaultBranch: (
     projectId: string,
     body: z.input<typeof setDefaultBranchRequestSchema>,
@@ -885,6 +897,17 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     projectRepository: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/repository`, {
         schema: projectRepositoryResponseSchema,
+      }),
+    projectExecution: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/execution`, {
+        schema: projectExecutionResponseSchema,
+      }),
+    setProjectExecution: (projectId, body, idempotencyKey) =>
+      client.command(`/api/projects/${seg(projectId)}/execution`, {
+        method: 'PUT',
+        schema: putProjectExecutionResponseSchema,
+        body: putProjectExecutionRequestSchema.parse(body),
+        idempotencyKey,
       }),
     setDefaultBranch: (projectId, body, idempotencyKey) =>
       client.command(`/api/projects/${seg(projectId)}/default-branch`, {

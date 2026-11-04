@@ -60,7 +60,15 @@ import type {
   TokenUsage,
   WorkpadRef,
 } from '@platform/contracts';
-import type { Approval, IterationLimits, Question, QueuedTask, Task } from '@platform/domain';
+import type {
+  Approval,
+  ExecutionSettings,
+  IterationLimits,
+  OfferRouting,
+  Question,
+  QueuedTask,
+  Task,
+} from '@platform/domain';
 import type { PromptsWithheld } from '../config/repository-config.js';
 import type { ConcurrencyConflict } from '../events/concurrency.js';
 import type { Transaction } from '../ports/transaction.js';
@@ -1600,10 +1608,22 @@ export interface NewRunOffer {
   readonly attempt: number;
   readonly kind: RunOfferKind;
   readonly offeredAt: IsoDateTime;
+  /**
+   * Who may claim it, and from when (WP-278, TD-031 decision 8): `routeOffer`'s answer over the
+   * project's execution settings. `serverFrom` and `workersFrom` both `null` is an offer written
+   * before WP-278, which the server's claim takes at once.
+   */
+  readonly routing: OfferRouting;
+}
+
+/** An offer's routing read back: `expiresAt` is `null` for an offer written before WP-278. */
+export interface StoredOfferRouting extends Omit<OfferRouting, 'expiresAt'> {
+  readonly expiresAt: IsoDateTime | null;
 }
 
 /** An offer read back. */
-export interface StoredRunOffer extends NewRunOffer {
+export interface StoredRunOffer extends Omit<NewRunOffer, 'routing'> {
+  readonly routing: StoredOfferRouting;
   readonly state: RunOfferState;
   readonly leaseEpoch: number;
   readonly claimantKind: RunClaimantKind | null;
@@ -1622,6 +1642,26 @@ export interface StoredRunOffer extends NewRunOffer {
  */
 export interface RunOfferEligibility {
   readonly runId?: Id;
+}
+
+/**
+ * Why an offer is withdrawn by somebody other than a task transition: `withdrawnReason` is the
+ * offer's `withdrawn_reason` — a short platform code, the column is at most 64 characters — and
+ * `brief` is the platform's sentence the task's escalation (or the ask's refusal) carries.
+ */
+export interface OfferWithdrawalReason {
+  readonly withdrawnReason: string;
+  readonly brief: string;
+}
+
+/** An open offer past its `expires_at` (WP-278): what the offer-timeout recovery withdraws. */
+export interface ExpiredRunOffer {
+  readonly runId: Id;
+  readonly taskId: Id;
+  readonly projectId: Id;
+  readonly kind: RunOfferKind;
+  readonly offeredAt: IsoDateTime;
+  readonly expiresAt: IsoDateTime;
 }
 
 /** One claim (TD-031 §2): who claims, under which owner, until when. */
@@ -1709,6 +1749,45 @@ export interface RunOfferRepository {
     tx: Transaction,
     limit: number,
   ): Promise<readonly { readonly runId: Id; readonly kind: RunOfferKind }[]>;
+  /**
+   * Open offers whose `expires_at` is at or before `now` (WP-278, TD-031 decision 1: *an offer that
+   * nobody claims by `expires_at` is withdrawn*), oldest first — the offer-timeout recovery row's
+   * read (`recovery/offer-timeout.ts`). An offer written before WP-278 has no `expires_at` and is
+   * never found.
+   */
+  expiredOpen(
+    tx: Transaction,
+    input: { readonly now: IsoDateTime; readonly limit: number },
+  ): Promise<readonly ExpiredRunOffer[]>;
+}
+
+/**
+ * Where a project's agent runs execute, and who can claim them now (WP-278, TD-031 decision 8):
+ * `project_execution_settings`, `workers` and `server_claimants` (migration 0097). What the offer's
+ * writer reads to route it, and what the server claimant writes to say it is running.
+ */
+export interface ExecutionRoutingRepository {
+  /** The project's stored settings, or `null` when none is stored (the defaults apply). */
+  settings(tx: Transaction, projectId: Id): Promise<ExecutionSettings | null>;
+  /**
+   * Whether `userId` has a worker **online** for this project at `now` (TD-031 §8): a worker of
+   * theirs that is not revoked, not paused, seen in the last 60 s, and they are a member of the
+   * project at `member` or above. Nothing writes `workers.last_seen_at` before WP-281, so until
+   * then this answers `false`.
+   */
+  assigneeOnline(
+    tx: Transaction,
+    input: { readonly projectId: Id; readonly userId: Id; readonly now: IsoDateTime },
+  ): Promise<boolean>;
+  /** Whether any process holds a fresh `server_claimants` row — on the database's clock. */
+  serverClaimantRunning(tx: Transaction): Promise<boolean>;
+  /** Writes or renews this process's row, `expires_at = now() + ttl`, and prunes long-dead rows. */
+  renewServerClaimant(
+    tx: Transaction,
+    input: { readonly holder: string; readonly ttlMs: number },
+  ): Promise<void>;
+  /** Deletes this process's row when its claimant stops. */
+  releaseServerClaimant(tx: Transaction, holder: string): Promise<void>;
 }
 
 /** One `ReviewVerdict.checklists_applied` entry, as the planner decides it (WP-45). */
@@ -2548,6 +2627,8 @@ export interface PipelineStore {
   readonly offers: RunOfferRepository;
   /** The run's planned spec, sealed (WP-275a, migration 0095). */
   readonly runPlans: RunPlanRepository;
+  /** WP-278's execution settings and claimant liveness (migration 0097, TD-031 decision 8). */
+  readonly execution: ExecutionRoutingRepository;
   readonly questions: QuestionRepository;
   readonly approvals: ApprovalRepository;
   /** WP-40's epic-split queue: one row per proposed child ticket. */

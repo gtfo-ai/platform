@@ -1096,6 +1096,18 @@ export const agenticConfigSchema = z.strictObject({
   features: featuresConfigSchema.optional(),
   status_mapping: statusMappingSchema.optional(),
   human_returns: humanReturnsConfigSchema.optional(),
+  /**
+   * **Refused by name** (WP-278, TD-031 decision 8): where a project's runs execute and whose
+   * subscription pays is an administrator's choice that a pushed commit must not change (BD-025's
+   * config-trust reasoning), so it lives in `project_execution_settings` and is written through
+   * `PUT /api/projects/:id/execution`. A strict schema would refuse the key anyway; this says why.
+   */
+  execution: z
+    .never({
+      error:
+        'execution is not a repository setting: where runs execute is set by an administrator on the project settings page (PUT /api/projects/:id/execution), never in .agentic/config.yml',
+    })
+    .optional(),
 });
 
 export type AgenticConfig = z.infer<typeof agenticConfigSchema>;

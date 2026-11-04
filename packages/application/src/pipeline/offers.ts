@@ -23,17 +23,38 @@
  * `RunRepository.finish` closes it, in the terminal writer's transaction, because every terminal
  * writer goes through `finish` (`run-terminal-writers.test.ts` holds that) — and a task transition
  * that leaves the stage entry while the offer is still open **withdraws** it (`./offer-withdrawal.ts`).
+ * An offer nobody claims by its `expires_at` is withdrawn by the offer-timeout recovery row
+ * (`../recovery/offer-timeout.ts`, WP-278), and its task escalated.
+ *
+ * ## Who may claim it, and from when (WP-278)
+ *
+ * {@link offerRun} routes the offer as it writes it (TD-031 decision 8): it reads the project's
+ * execution settings (`project_execution_settings`; none stored is TD-031 §8's defaults), whether the
+ * candidate assignee has a worker online, and whether the instance has a server claimant running
+ * (`server_claimants`), and writes `routeOffer`'s four timestamps and `expires_at`
+ * (`@platform/domain`'s `workers/execution-routing.ts` carries the rules). The server's claim takes
+ * an offer only from its `server_from` — or at once for an offer written before WP-278, which has
+ * neither `*_from` (`postgres-run-offers.ts`).
  */
 import type { Id, IsoDateTime, RunOfferKind } from '@platform/contracts';
 import {
   type CommandContext,
   claimRun,
+  DEFAULT_EXECUTION_SETTINGS,
+  type OfferRouting,
   type Run,
   offerRun as recordRunOffered,
+  routeOffer,
 } from '@platform/domain';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope } from '../ports/unit-of-work.js';
-import type { ClaimedRunOffer, RunLeaseFence, RunOfferClaim, RunOfferRepository } from './store.js';
+import type {
+  ClaimedRunOffer,
+  ExecutionRoutingRepository,
+  RunLeaseFence,
+  RunOfferClaim,
+  RunOfferRepository,
+} from './store.js';
 
 /** The `lease_owner` the server's runner writes: `server:<process>` (TD-031 §2). */
 export const serverLeaseOwner = (process: string): string => `server:${process}`;
@@ -61,20 +82,59 @@ export interface OfferRunInput {
   readonly kind: RunOfferKind;
   readonly offerId: Id;
   readonly now: IsoDateTime;
+  /**
+   * Who plays the assignee (TD-031 §8, §13): for an ask, the **asking** user; for a stage, the
+   * ticket's assignee's platform user. `null` when there is none — and always for a stage until
+   * the ticket's assignee is stored (the ticket read keeps it for intake's one question and drops
+   * it, `ticket-snapshot.ts`; BACKLOG 730). The head start goes to this user only while a worker of
+   * theirs is online.
+   */
+  readonly assigneeUserId: Id | null;
 }
 
 /**
- * Writes the run's offer `open` in its creation transaction, records `run.offered` on the run's
- * stream, and announces it on {@link RUN_OFFERS_TOPIC} at commit (WP-276). The caller appends the
+ * TD-031 decision 8 at offer time: the project's settings (the defaults when none is stored), the
+ * assignee's worker, and the instance's server claimant, through `routeOffer`.
+ */
+export const routeNewOffer = async (
+  execution: ExecutionRoutingRepository,
+  tx: Transaction,
+  input: { readonly projectId: Id; readonly assigneeUserId: Id | null; readonly now: IsoDateTime },
+): Promise<OfferRouting> => {
+  const settings = (await execution.settings(tx, input.projectId)) ?? DEFAULT_EXECUTION_SETTINGS;
+  const online =
+    input.assigneeUserId !== null &&
+    settings.mode !== 'server_only' &&
+    (await execution.assigneeOnline(tx, {
+      projectId: input.projectId,
+      userId: input.assigneeUserId,
+      now: input.now,
+    }));
+  return routeOffer({
+    settings,
+    now: input.now,
+    onlineAssigneeUserId: online ? input.assigneeUserId : null,
+    serverClaimant: await execution.serverClaimantRunning(tx),
+  });
+};
+
+/**
+ * Writes the run's offer `open` in its creation transaction, routed (WP-278, {@link routeNewOffer}),
+ * records `run.offered` on the run's stream, and announces it on {@link RUN_OFFERS_TOPIC} at commit (WP-276). The caller appends the
  * returned events with the run's own. **No claim**: the run waits, `created`, for a claimant.
  */
 export const offerRun = async (
-  offers: RunOfferRepository,
+  store: { readonly offers: RunOfferRepository; readonly execution: ExecutionRoutingRepository },
   scope: Pick<TransactionScope, 'tx' | 'broadcast'>,
   input: OfferRunInput,
   context: CommandContext,
 ): Promise<ReturnType<typeof recordRunOffered>> => {
-  await offers.insert(scope.tx, {
+  const routing = await routeNewOffer(store.execution, scope.tx, {
+    projectId: input.run.projectId,
+    assigneeUserId: input.assigneeUserId,
+    now: input.now,
+  });
+  await store.offers.insert(scope.tx, {
     id: input.offerId,
     runId: input.run.id,
     taskId: input.run.taskId,
@@ -83,6 +143,7 @@ export const offerRun = async (
     attempt: input.run.attempt,
     kind: input.kind,
     offeredAt: input.now,
+    routing,
   });
   await scope.broadcast.publish({
     topic: RUN_OFFERS_TOPIC,

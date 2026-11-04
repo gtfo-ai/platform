@@ -902,6 +902,25 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   }, 15_000);
 
+  it('serves the execution setting WP-278 added, the client calls it, and both methods refuse an anonymous caller', async () => {
+    // Named positively (standing rule 10): TD-031 decision 8's read and its administrator's write.
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    expect(paths).toContain('/api/projects/{}/execution');
+    for (const method of ['GET', 'PUT'] as const) {
+      const url = `/api/projects/${PROBE_ID}/execution`;
+      const response = await app.inject({ method, url });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} 401 unauthenticated`,
+      );
+    }
+  }, 15_000);
+
   // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   // WP-291: walks the web sources like its neighbours, so it carries their 15 s floor (WP-249).
   it('serves the setup state to an anonymous caller, and the sign-in page names it (WP-291)', async () => {

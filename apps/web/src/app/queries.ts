@@ -165,6 +165,17 @@ export const useProjectRepository = (projectId: string | null) => {
   });
 };
 
+/** `GET /api/projects/:id/execution` — where the project's agent runs execute (WP-278). */
+export const useProjectExecution = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.projectExecution(projectId ?? ''),
+    queryFn: () => endpoints.projectExecution(projectId ?? ''),
+    enabled: projectId !== null,
+    ...FOREVER,
+  });
+};
+
 export const useProjectBudgets = (projectId: string | null) => {
   const { endpoints } = useServices();
   return useQuery({
@@ -1317,6 +1328,27 @@ export const useSettingsCommands = (mint?: MintKey) => {
         intents.release(['default_branch.write', input]);
         await queryClient.invalidateQueries({ queryKey: queryKeys.project(input.projectId) });
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] });
+      },
+    }),
+    /**
+     * WP-278: where the project's agent runs execute — an administrator's (`project.settings.write`);
+     * the whole setting, applied to offers written after it.
+     */
+    setExecution: useMutation({
+      mutationFn: (input: {
+        projectId: string;
+        body: Parameters<typeof endpoints.setProjectExecution>[1];
+      }) =>
+        endpoints.setProjectExecution(
+          input.projectId,
+          input.body,
+          intents.keyFor(['execution.write', input]),
+        ),
+      onSuccess: async (_result, input) => {
+        intents.release(['execution.write', input]);
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.projectExecution(input.projectId),
+        });
       },
     }),
     setProjectBudget: useMutation({
