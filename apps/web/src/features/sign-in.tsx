@@ -137,17 +137,17 @@ export const SignInScreen = (): ReactElement => {
       <DitherCanvas />
       <div className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col px-5 py-6 sm:px-10 lg:px-16">
         <Logo label="Agentic platform" className="w-28 text-signin-text" />
-        <div className="grid flex-1 content-center gap-10 py-12 lg:grid-cols-12 lg:items-center lg:gap-12 lg:py-16">
-          <div className="lg:col-span-7" data-dither-quiet="">
+        <div className="grid flex-1 content-start gap-6 pt-6 pb-8 lg:content-center lg:grid-cols-12 lg:items-center lg:gap-12 lg:py-16">
+          <div className="relative z-10 lg:col-span-7" data-dither-quiet="">
             <h1 className="max-w-[12ch] text-[clamp(2.5rem,7.2vw,5rem)] leading-[1.0] font-black tracking-[-0.03em] text-balance text-signin-text">
               {SIGN_IN_HEADLINE}
             </h1>
-            <p className="mt-6 max-w-[34ch] text-base leading-relaxed text-pretty text-signin-muted sm:text-lg">
+            <p className="mt-6 hidden max-w-[34ch] sm:block text-base leading-relaxed text-pretty text-signin-muted sm:text-lg">
               Sign in to see what your agents are working on — and what needs you.
             </p>
           </div>
           <div className="w-full max-w-md lg:col-span-5 lg:justify-self-end">
-            <PeekBot />
+            <PeekBot className="-mt-10 lg:mt-0" />
             <section
               aria-label="Sign in"
               data-dither-quiet=""

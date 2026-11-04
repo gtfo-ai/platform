@@ -38,11 +38,11 @@ const LAYERS: readonly { readonly className: string; readonly runs: readonly Pee
 const WIDTH = PEEK_BOT_COLS * PEEK_BOT_PIXEL_CSS_PX;
 const HEIGHT = PEEK_BOT_ROWS * PEEK_BOT_PIXEL_CSS_PX;
 
-export const PeekBot = (): ReactElement => (
+export const PeekBot = ({ className = '' }: { readonly className?: string }): ReactElement => (
   <div
     aria-hidden="true"
     data-testid="peek-bot"
-    className="pointer-events-none flex justify-end pr-6 sm:pr-10"
+    className={`pointer-events-none flex justify-end pr-6 sm:pr-10 ${className}`}
   >
     <div className="overflow-hidden" style={{ width: WIDTH, height: HEIGHT }}>
       <svg
