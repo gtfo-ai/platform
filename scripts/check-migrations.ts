@@ -33,6 +33,11 @@
  * 5. **`raises-rollback-floor` moves the label**: a header carrying it fails unless
  *    `docker/app.Dockerfile`'s `org.platform.rollback-floor` is a larger integer in the tree than at
  *    the base (an absent label reads as 0).
+ * 6. **A new file sorts after every file at the base** (WP-272, PROGRESS backlog 689). The migrator
+ *    applies whatever is unapplied in name order, so a file numbered below one already released
+ *    would be applied *before* it on a fresh database and *after* it on an upgraded one — and every
+ *    test tier migrates from empty, so only the fresh order is ever exercised. The refusal names
+ *    the file, the base file it sorts before, and the next free number to renumber it to.
  *
  * ## What it cannot see, stated
  *
@@ -42,8 +47,6 @@
  *   the one that holds rule 4.
  * - The scanner's own blind spots (its docblock): a function body, a view's meaning, a volatile
  *   default.
- * - A new file numbered below an applied one is not refused here (the migrator applies it on a
- *   fresh database in a different order than on an upgraded one).
  *
  * Prints exactly one `PASS: migrations:check` / `FAIL: migrations:check` line on stdout
  * (docs/technical/14); everything else goes to stderr.
@@ -51,6 +54,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ROLLBACK_FLOOR_LABEL } from '../packages/infrastructure/src/db/image-labels.js';
 import {
   MigrationHeaderError,
   parseMigrationHeader,
@@ -73,7 +77,7 @@ import type { Environment } from './git-scratch-env.mjs';
 export const MIGRATIONS_PATH = 'packages/infrastructure/src/db/migrations';
 /** The image whose label a `raises-rollback-floor` migration must move (TD-032 decision 2). */
 export const APP_DOCKERFILE = 'docker/app.Dockerfile';
-export const ROLLBACK_FLOOR_LABEL = 'org.platform.rollback-floor';
+export { ROLLBACK_FLOOR_LABEL };
 /** Where an enum value must already exist before `alter type … add value` is additive. */
 export const CONTRACTS_PATH = 'packages/contracts';
 /** The ref a branch with no upstream is compared with. */
@@ -230,11 +234,20 @@ export const checkMigrations = (
 
   const added = [...tree.keys()].filter((file) => !atBase.has(file));
   const sorted = [...tree.keys()];
+  const renumber = renumbering(added, [...atBase.keys()], sorted);
   for (const file of added) {
     const sql = tree.get(file) as string;
     if (!MIGRATION_FILE.test(file)) {
       findings.push({ file, message: 'does not match <nnnn>_<snake_case>.sql' });
       continue;
+    }
+    // Rule 6: a new file sorts after every file the base already released.
+    const misplaced = renumber.get(file);
+    if (misplaced !== undefined) {
+      findings.push({
+        file,
+        message: `is new here and sorts before ${misplaced.before}, which exists at the base: a fresh database would apply it before ${misplaced.before} and an upgraded one after — renumber it to ${misplaced.next} (the next free number)`,
+      });
     }
     // Rule 2: a header, and a valid one.
     let header: ReturnType<typeof parseMigrationHeader>;
@@ -312,6 +325,33 @@ export const checkMigrations = (
     }
   }
   return { findings, added, applied: atBase.size };
+};
+
+/**
+ * Rule 6's refusals: every new, well-named file that sorts before a well-named file at the base,
+ * with the first such base file (the one a fresh database would apply it before) and the number to
+ * renumber it to. The numbers handed out start after the highest number in the tree or at the base
+ * and count up in the misplaced files' order, so two misplaced files are never told to take the
+ * same number.
+ */
+export const renumbering = (
+  added: readonly string[],
+  atBase: readonly string[],
+  tree: readonly string[],
+): Map<string, { readonly before: string; readonly next: string }> => {
+  const numbered = (files: readonly string[]) =>
+    files.filter((file) => MIGRATION_FILE.test(file)).sort();
+  const base = numbered(atBase);
+  const refusals = new Map<string, { before: string; next: string }>();
+  let next =
+    Math.max(0, ...numbered([...tree, ...atBase]).map((file) => Number(file.slice(0, 4)))) + 1;
+  for (const file of numbered(added)) {
+    const before = base.find((applied) => applied > file);
+    if (before === undefined) continue;
+    refusals.set(file, { before, next: String(next).padStart(4, '0') });
+    next += 1;
+  }
+  return refusals;
 };
 
 const readOptional = (path: string): string | null => {

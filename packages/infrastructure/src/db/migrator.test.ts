@@ -16,11 +16,13 @@ import {
   DatabaseSchemaAheadError,
   DEFAULT_APP_ROLE,
   findUnknownMigrations,
+  judgeSchema,
   MIGRATION_LOCK_KEY,
   type MigrateDependencies,
   type MigrateEvent,
   type MigrationClient,
   MigrationConnectionLostError,
+  planMigrations,
   runMigrations,
 } from './migrator.js';
 
@@ -450,13 +452,24 @@ describe('runMigrations', () => {
 });
 
 describe('findUnknownMigrations', () => {
-  /** Answers the two catalogue questions `findUnknownMigrations` asks, and nothing else. */
-  const catalogue = (present: boolean, names: string[]): MigrationClient => ({
+  /**
+   * Answers the two catalogue questions `findUnknownMigrations` asks, and nothing else. A row given
+   * as a bare name has no class at all — the shape of a row the query reads from a database before
+   * 0092 — and one given as `[name, class]` carries the class it was recorded with.
+   */
+  const catalogue = (
+    present: boolean,
+    names: readonly (string | readonly [string, string | null])[],
+  ): MigrationClient => ({
     query: async <R extends Record<string, unknown>>(text: string) => {
       if (text.includes('to_regclass')) {
         return { rows: [{ present }] as unknown as R[] };
       }
-      return { rows: names.map((name) => ({ name })) as unknown as R[] };
+      return {
+        rows: names.map((row) =>
+          typeof row === 'string' ? { name: row } : { name: row[0], class: row[1] },
+        ) as unknown as R[],
+      };
     },
     on: () => undefined,
     end: () => Promise.resolve(),
@@ -487,10 +500,13 @@ describe('findUnknownMigrations', () => {
    */
   describe('assertSchemaIsKnown', () => {
     it('lets a database at or behind this build through, and an empty one', async () => {
-      await expect(
-        assertSchemaIsKnown(catalogue(true, ['0001_first']), known),
-      ).resolves.toBeUndefined();
-      await expect(assertSchemaIsKnown(catalogue(false, []), known)).resolves.toBeUndefined();
+      await expect(assertSchemaIsKnown(catalogue(true, ['0001_first']), known)).resolves.toEqual({
+        kind: 'known',
+        unknown: [],
+      });
+      await expect(assertSchemaIsKnown(catalogue(false, []), known)).resolves.toMatchObject({
+        kind: 'known',
+      });
     });
 
     it('refuses a database ahead of this build and names every migration it does not know', async () => {
@@ -534,10 +550,181 @@ describe('findUnknownMigrations', () => {
       expect(onDisk.length).toBeGreaterThan(10);
       for (const name of onDisk) expect(name).toMatch(shape);
 
-      const quotedName = /applied: (\S+)\. The database/.exec(line)?.[1] ?? '';
+      const quotedName = /applied: (\S+) \(contract\)\. The database/.exec(line)?.[1] ?? '';
       expect(quotedName).toMatch(shape);
-      expect(line).toBe(new DatabaseSchemaAheadError([quotedName]).message);
+      expect(line).toBe(
+        new DatabaseSchemaAheadError([{ name: quotedName, class: 'contract' }]).message,
+      );
     });
+  });
+
+  /**
+   * TD-032 decision 2's decision table (WP-272): the guard starts only when **every** unknown row
+   * was recorded `additive`. Each row of the table is a case, and the refusing rows are asserted
+   * as refusals so a guard that admitted everything fails here, not only in the integration tier.
+   */
+  describe('the all-additive future (TD-032 decision 2)', () => {
+    const captured = () => {
+      const lines: { level: string; fields: Record<string, unknown>; message: string }[] = [];
+      const at =
+        (level: string) =>
+        (fields: Readonly<Record<string, unknown>>, message: string): void => {
+          lines.push({ level, fields: { ...fields }, message });
+        };
+      return {
+        lines,
+        logger: { debug: at('debug'), info: at('info'), warn: at('warn'), error: at('error') },
+      };
+    };
+
+    it('starts when every unknown row is additive, and logs schema_ahead_additive naming them', async () => {
+      const log = captured();
+      const ahead = catalogue(true, [
+        '0001_first',
+        ['0098_alpha', 'additive'],
+        ['0099_omega', 'additive'],
+      ]);
+      await expect(assertSchemaIsKnown(ahead, known, log.logger)).resolves.toEqual({
+        kind: 'ahead_additive',
+        unknown: [
+          { name: '0098_alpha', class: 'additive' },
+          { name: '0099_omega', class: 'additive' },
+        ],
+      });
+      expect(log.lines).toEqual([
+        {
+          level: 'warn',
+          fields: { event: 'schema_ahead_additive', migrations: ['0098_alpha', '0099_omega'] },
+          message: expect.stringContaining('schema_ahead_additive'),
+        },
+      ]);
+    });
+
+    it.each([
+      ['any contract', [['0099_omega', 'contract']]],
+      ['any null (applied before 0092 recorded a class)', [['0099_omega', null]]],
+      ['a row with no class column at all', ['0099_omega']],
+      [
+        'mixed: additive beside contract',
+        [
+          ['0097_a', 'additive'],
+          ['0098_b', 'contract'],
+          ['0099_c', 'additive'],
+        ],
+      ],
+      [
+        'mixed: additive beside null',
+        [
+          ['0098_b', null],
+          ['0099_c', 'additive'],
+        ],
+      ],
+      ['a class that is not a known word', [['0099_omega', 'Additive']]],
+    ] as const)('refuses %s, naming every unknown row and logging nothing', async (_case, rows) => {
+      const log = captured();
+      const ahead = catalogue(true, ['0001_first', ...rows]);
+      const error = await assertSchemaIsKnown(ahead, known, log.logger).catch(
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(DatabaseSchemaAheadError);
+      const names = rows.map((row) => (typeof row === 'string' ? row : row[0]));
+      expect((error as DatabaseSchemaAheadError).unknownMigrations).toEqual(names);
+      for (const name of names) expect((error as Error).message).toContain(name);
+      expect(log.lines).toEqual([]);
+    });
+
+    it('names each unknown row with its class in the refusal, null as read as contract', () => {
+      expect(
+        new DatabaseSchemaAheadError([
+          { name: '0098_a', class: 'additive' },
+          { name: '0099_b', class: null },
+        ]).message,
+      ).toContain(
+        'applied: 0098_a (additive), 0099_b (unclassified, read as contract). The database is newer than the code and not every one of them is additive',
+      );
+    });
+
+    it('judges known, ahead_additive and ahead from names and classes alone', () => {
+      expect(judgeSchema(['a', 'b'], [{ name: 'a', class: null }])).toEqual({
+        kind: 'known',
+        unknown: [],
+      });
+      expect(judgeSchema(['a'], [{ name: 'z', class: 'additive' }]).kind).toBe('ahead_additive');
+      expect(
+        judgeSchema(
+          ['a'],
+          [
+            { name: 'y', class: 'additive' },
+            { name: 'z', class: 'contract' },
+          ],
+        ).kind,
+      ).toBe('ahead');
+      // A known row's class is irrelevant: only what the build does not ship is judged.
+      expect(judgeSchema(['a'], [{ name: 'a', class: 'contract' }]).kind).toBe('known');
+    });
+  });
+});
+
+/** `migrate --plan`'s read-only half (TD-032 decision 5 step 2, WP-272). */
+describe('planMigrations', () => {
+  const reader = (present: boolean, rows: { name: string; class?: string | null }[]) => {
+    const texts: string[] = [];
+    return {
+      texts,
+      client: {
+        query: async <R extends Record<string, unknown>>(text: string) => {
+          texts.push(text);
+          if (text.includes('to_regclass')) return { rows: [{ present }] as unknown as R[] };
+          return { rows: rows as unknown as R[] };
+        },
+      },
+    };
+  };
+  const shipped = [
+    { name: '0091_old', sql: '', checksum: '', header: null },
+    {
+      name: '0092_new',
+      sql: '',
+      checksum: '',
+      header: { class: 'additive' as const, expands: null, raisesRollbackFloor: false },
+    },
+    {
+      name: '0093_drop',
+      sql: '',
+      checksum: '',
+      header: { class: 'contract' as const, expands: '0092_new', raisesRollbackFloor: true },
+    },
+  ];
+
+  it('lists every pending migration with its declared class, on an empty database too', async () => {
+    const empty = reader(false, []);
+    await expect(planMigrations(empty.client, shipped)).resolves.toEqual({
+      pending: [
+        { name: '0091_old', class: null, expands: null, raisesRollbackFloor: false },
+        { name: '0092_new', class: 'additive', expands: null, raisesRollbackFloor: false },
+        { name: '0093_drop', class: 'contract', expands: '0092_new', raisesRollbackFloor: true },
+      ],
+      schema: 'known',
+      unknown: [],
+    });
+  });
+
+  it('reports the guard’s verdict and the unknown rows, and only ever reads', async () => {
+    const ahead = reader(true, [
+      { name: '0091_old', class: null },
+      { name: '0092_new', class: 'additive' },
+      { name: '0094_future', class: 'additive' },
+    ]);
+    const plan = await planMigrations(ahead.client, shipped);
+    expect(plan).toEqual({
+      pending: [
+        { name: '0093_drop', class: 'contract', expands: '0092_new', raisesRollbackFloor: true },
+      ],
+      schema: 'ahead_additive',
+      unknown: [{ name: '0094_future', class: 'additive' }],
+    });
+    expect(ahead.texts).toHaveLength(2);
+    for (const text of ahead.texts) expect(text.trim()).toMatch(/^select /);
   });
 });
 

@@ -252,7 +252,9 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
 
   try {
     /**
-     * TD-019: refuse to start against a database newer than this build (WP-42).
+     * TD-019: refuse to start against a database newer than this build (WP-42) — unless every
+     * migration it is ahead by is `additive`, which starts with a `schema_ahead_additive` warning
+     * (TD-032 decision 2, WP-272).
      *
      * First thing inside the `try`, so the `catch` below closes the pool, and before anything
      * else touches the schema — a query written against a column a later migration changed is
@@ -260,7 +262,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * is raised. `/readyz`'s `migrations: down` is the *other* half and is not a substitute: it
      * reports after the process is up and serving.
      */
-    await dbAdapters.assertSchemaIsKnown(database.pool);
+    await dbAdapters.assertSchemaIsKnown(database.pool, dbAdapters.loadMigrations(), loggerPort);
 
     const eventing = eventingAdapters.createEventing({
       pool: database.pool,

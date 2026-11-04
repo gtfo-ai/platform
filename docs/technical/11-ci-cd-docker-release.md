@@ -73,7 +73,7 @@ what it reads is a short fixed set rather than an unknowable one.
 
 ## Release
 - **Continuous deployment since TD-019's amendment of 2026-09-16**: every push to `main` is the release, published as `sha-<7>`, `edge` and `latest`. **Semantic versions since WP-71**, behind the repository variable `RELEASE_VERSIONING` = `enabled` (unset, so none is cut yet): `image.yml` computes the version from the conventional commits since the last `vX.Y.Z` tag, retags the sha manifests it just built, and creates the tag and the GitHub Release with `pnpm changelog --release-notes` as its body — no release pull request, no bot commit, no second build. release-please is deleted. commitlint is enforced by lefthook and CI (the history is what the version is computed from); agents sign off commits (DCO).
-- Migrations forward-only, run by the `migrate` service with an advisory lock; the app refuses to start when the DB schema is newer than the code; release notes state whether a migration is required; `pg_dump` before upgrade documented.
+- Migrations forward-only, run by the `migrate` service with an advisory lock; the app refuses to start when the DB schema is newer than the code by a migration that is not `additive` (TD-032 decision 2, WP-272: an all-`additive` future starts and `/readyz` reports `schema: ahead_additive`); release notes state whether a migration is required; `pg_dump` before upgrade documented.
 - `.agentic` schema `version` with JSON Schemas under `schemas/` served by the app for editor validation; N-1 upcast in memory + migration proposal.
 - Hygiene: CONTRIBUTING, CODE_OF_CONDUCT, SECURITY (private reporting), CODEOWNERS, issue forms, PR template with a "no secrets" checkbox, lefthook (lint, typecheck, gitleaks, commitlint, unit on push), DCO.
 
@@ -265,9 +265,14 @@ and the release PR is where the preview is deleted.
 **TD-019's "the app refuses to start when the DB schema is newer than the code" now has a caller.**
 `findUnknownMigrations` existed from WP-03 and nothing called it; `startRuntime` now asks
 `assertSchemaIsKnown` before it composes anything, and a database carrying a migration this build
-does not know is a named refusal rather than a `/readyz` line on a process that is already serving.
-Both directions are asserted against a real PostgreSQL in
-`test/integration/db/schema-guard.integration.test.ts`.
+does not know is a named refusal rather than a `/readyz` line on a process that is already serving —
+since WP-272 (TD-032 decision 2) unless every such migration was recorded `additive`, in which case
+the build starts, logs `schema_ahead_additive` and `/readyz` reports `schema: ahead_additive` (200).
+Both directions — and both refusing classes, `contract` and `null` — are asserted against a real
+PostgreSQL in `test/integration/db/schema-guard.integration.test.ts`. The `platform` image carries
+`org.platform.schema-guard`, `org.platform.rollback-floor` and `org.platform.pgboss-schema`
+(`docker/app.Dockerfile`, held to `packages/infrastructure/src/db/image-labels.ts` by its test), and
+`migrate --plan` prints them before its read-only plan.
 
 **None of `release.yml` has ever run**, and it cannot be run from a checkout. Every claim in its
 header was read out of a pinned source — the action at `45996ed`, release-please 17.6.0, GitHub's

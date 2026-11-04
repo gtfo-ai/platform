@@ -3,8 +3,16 @@ import { describe, expect, it } from 'vitest';
 import type { Database } from './queries/identity-queries.js';
 import { createReadinessCheck, migrationStatus } from './readiness.js';
 
-/** A Drizzle handle that answers only the one query readiness makes. */
-const fakeDatabase = (behaviour: { names?: string[]; fail?: boolean; hang?: boolean }): Database =>
+/**
+ * A Drizzle handle that answers only the one query readiness makes. `names` are rows recorded with
+ * no class (every row before 0092); `rows` carry one.
+ */
+const fakeDatabase = (behaviour: {
+  names?: string[];
+  rows?: { name: string; class: string | null }[];
+  fail?: boolean;
+  hang?: boolean;
+}): Database =>
   ({
     execute: async () => {
       if (behaviour.hang === true) {
@@ -13,24 +21,33 @@ const fakeDatabase = (behaviour: { names?: string[]; fail?: boolean; hang?: bool
       if (behaviour.fail === true) {
         throw new Error('connection refused');
       }
-      return { rows: (behaviour.names ?? []).map((name) => ({ name })) };
+      return {
+        rows: [
+          ...(behaviour.names ?? []).map((name) => ({ name, class: null })),
+          ...(behaviour.rows ?? []),
+        ],
+      };
     },
   }) as unknown as Database;
+
+/** Rows recorded with no class, as `appliedMigrations` returns them for a pre-0092 database. */
+const unclassified = (names: readonly string[]) => names.map((name) => ({ name, class: null }));
 
 /** Every migration this build ships, which is what readiness compares the database against. */
 const shipped = (): string[] => dbAdapters.loadMigrations().map((migration) => migration.name);
 
 describe('migrationStatus', () => {
   it('is ok when the database has exactly what this build ships', () => {
-    expect(migrationStatus(['0001_a', '0002_b'], ['0001_a', '0002_b'])).toEqual({
+    expect(migrationStatus(['0001_a', '0002_b'], unclassified(['0001_a', '0002_b']))).toEqual({
       status: 'ok',
       pending: [],
       unknown: [],
+      schema: 'known',
     });
   });
 
   it('is down when a migration has not been applied — migrate has not run', () => {
-    expect(migrationStatus(['0001_a', '0002_b'], ['0001_a'])).toMatchObject({
+    expect(migrationStatus(['0001_a', '0002_b'], unclassified(['0001_a']))).toMatchObject({
       status: 'down',
       pending: ['0002_b'],
       unknown: [],
@@ -40,11 +57,35 @@ describe('migrationStatus', () => {
   it('is down when the database carries a migration this build does not know', () => {
     // TD-019: serving traffic against a schema the code has never seen is how a rollback corrupts
     // data. The two cases are reported separately because they need different actions.
-    expect(migrationStatus(['0001_a'], ['0001_a', '0002_from_the_future'])).toMatchObject({
+    expect(
+      migrationStatus(['0001_a'], unclassified(['0001_a', '0002_from_the_future'])),
+    ).toMatchObject({
       status: 'down',
       pending: [],
       unknown: ['0002_from_the_future'],
+      schema: 'ahead',
     });
+  });
+
+  /** TD-032 decision 2 (WP-272): the guard's own decision, so the two readers cannot disagree. */
+  it('is ok and ahead_additive when every unknown row is additive, down when one is contract', () => {
+    const additive = { name: '0099_future', class: 'additive' };
+    expect(migrationStatus(['0001_a'], [...unclassified(['0001_a']), additive])).toEqual({
+      status: 'ok',
+      pending: [],
+      unknown: ['0099_future'],
+      schema: 'ahead_additive',
+    });
+    expect(
+      migrationStatus(
+        ['0001_a'],
+        [...unclassified(['0001_a']), additive, { name: '0100_drop', class: 'contract' }],
+      ),
+    ).toMatchObject({ status: 'down', schema: 'ahead' });
+    // Ahead by additive rows and behind by a pending one is still `down`: migrate has not run.
+    expect(
+      migrationStatus(['0001_a', '0002_b'], [...unclassified(['0001_a']), additive]),
+    ).toMatchObject({ status: 'down', pending: ['0002_b'], schema: 'ahead_additive' });
   });
 });
 
@@ -193,6 +234,35 @@ describe('createReadinessCheck', () => {
         agentRuns: null,
       });
       expect(Object.keys((await check()).checks)).toEqual(['database', 'migrations']);
+    });
+  });
+
+  /**
+   * `/readyz` on an all-additive future (TD-032 decision 2, WP-272): `schema: degraded` with
+   * `details.schema: ahead_additive` — a degraded report, which `routes/ops.ts` answers with 200 —
+   * and `down` again as soon as one unknown row is not additive.
+   */
+  it('reports schema ahead_additive, degraded and not down, when every unknown row is additive', async () => {
+    const future = { name: '9999_future', class: 'additive' };
+    const check = createReadinessCheck({
+      database: fakeDatabase({ names: shipped(), rows: [future] }),
+      jobsStarted: () => true,
+      dispatchReady: () => true,
+    });
+    await expect(check()).resolves.toEqual({
+      status: 'degraded',
+      checks: { database: 'ok', migrations: 'ok', schema: 'degraded', queue: 'ok', dispatch: 'ok' },
+      details: { schema: 'ahead_additive' },
+    });
+
+    const refused = createReadinessCheck({
+      database: fakeDatabase({ names: shipped(), rows: [{ ...future, class: 'contract' }] }),
+      jobsStarted: () => true,
+      dispatchReady: () => true,
+    });
+    await expect(refused()).resolves.toEqual({
+      status: 'down',
+      checks: { database: 'ok', migrations: 'down', queue: 'ok', dispatch: 'ok' },
     });
   });
 

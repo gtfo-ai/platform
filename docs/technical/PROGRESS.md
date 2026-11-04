@@ -62883,3 +62883,110 @@ request, 2026-11-04).
   column), `FAIL: verify:e2e` with 222 passed and only the two files that need the locally built
   `platform-runtime:dev` image failing (`docker-workspace.e2e.test.ts`, and one case of
   `harness-volumes.e2e.test.ts`, same error) — environmental; the seven action-list tests pass.
+
+#### WP-272 — the schema guard admits an all-additive future
+
+Built in the main checkout on `548e69c1`, session 21. Not committed. Folds backlog **689** (rule 6 of
+`migrations:check`) and **692**'s documentation half.
+
+- **(1) The guard.** `packages/infrastructure/src/db/migrator.ts`: `readAppliedMigrations` reads every
+  row with `to_jsonb(m) ->> 'class'` (so a pre-0092 database, with no column, reads `null` instead of
+  failing); `judgeSchema(known, applied)` is the pure decision (`known` / `ahead_additive` / `ahead`),
+  and **both** readers of `platform_migrations` take it — `assertSchemaIsKnown` and `/readyz`'s
+  `migrationStatus` (backlog 119's two readers can no longer disagree on "ahead").
+  `assertSchemaIsKnown(client, known, logger)` now returns the verdict, logs `warn`
+  `{event: 'schema_ahead_additive', migrations: [...]}` when every unknown row is `additive`, and
+  throws `DatabaseSchemaAheadError` otherwise. **Assumption**: a class that is not exactly
+  `'additive'` (a `null`, `'contract'`, or any other text) refuses. The error now takes the rows and
+  names each with its class (`0099_x (contract)`, `null` as *unclassified, read as contract*);
+  `unknownMigrations` is still **every** unknown name, additive ones included, because the way out
+  (roll forward) is about all of them. `runtime.ts` passes its logger. Tests:
+  `migrator.test.ts` › "the all-additive future (TD-032 decision 2)" — "starts when every unknown row
+  is additive, and logs schema_ahead_additive naming them", and an `it.each` refusal table over
+  any contract / any null / no class column / mixed additive+contract / mixed additive+null / an
+  unknown word. Canary (`every(… !== 'contract')`,
+  admitting `null`): 6 unit and 1 integration case failed; restored by md5.
+- **(2) `/readyz`.** **Assumption (shape)**: `healthResponseSchema.checks` is an enum of
+  `ok|degraded|down`, so "`schema: ahead_additive`" is spelled `checks.schema: 'degraded'` plus
+  `details.schema: 'ahead_additive'` (the `details` enum gains the value), with `migrations: 'ok'`;
+  `degraded` already answers 200 (WP-86). The `schema` check is present only in that state, so every
+  existing readiness assertion is unchanged. Ahead-additive **and** pending is still
+  `migrations: down`. `appliedMigrations` (`identity-queries.ts`) returns the class too. Tests:
+  `readiness.test.ts` › "reports schema ahead_additive, degraded and not down, when every unknown row
+  is additive" and `migrationStatus` › "is ok and ahead_additive when every unknown row is additive,
+  down when one is contract"; the 200 through the real route is the integration case below.
+- **(3) Labels.** `docker/app.Dockerfile` carries `org.platform.schema-guard="2"`,
+  `org.platform.rollback-floor="1"` and `org.platform.pgboss-schema="${PGBOSS_SCHEMA}"`;
+  `packages/infrastructure/src/db/image-labels.ts` is the code's answer (`SCHEMA_GUARD_VERSION`,
+  `ROLLBACK_FLOOR`, `readPgBossSchemaVersion()` — read off the installed pg-boss's own
+  `package.json` `pgboss.schema`, which is what its `Contractor` installs). **Deviation, stated: a
+  `LABEL` cannot take a value a `RUN` computed**, so "derived, not typed" is met as *typed once,
+  never trusted*: the number is written once, as the global `ARG PGBOSS_SCHEMA=40`; the `deps` stage
+  reads the installed pg-boss's `pgboss.schema` and **fails the image build** on a mismatch; and the
+  unit test compares it with the version pg-boss writes into its own construction plan
+  (`getConstructionPlans()`'s `INSERT INTO pgboss.version … VALUES ('40')`). A build argument passed
+  by `build-images.mjs` (the WP-151 `RUNLET_PROTOCOL` shape) was rejected: `compose.yml` builds `app`
+  itself and the operator guide documents `docker compose up -d --build`, which would then build an
+  image with an empty label or fail. `ROLLBACK_FLOOR` is the constant **and** the label, held equal
+  by the test (`scripts/check-migrations.ts` now imports `ROLLBACK_FLOOR_LABEL` from the module).
+  Tests: `image-labels.test.ts` (five cases, incl. "derives the pg-boss version from what pg-boss
+  installs, and the image build checks it"), and in `check-migrations.test.ts` the case reading
+  this repository's own Dockerfile with `rollbackFloorOf`. The Docker build itself was **not run**
+  (row: Docker none; no `platform-base:dev` on this machine) — the `RUN` check's `node -p` was run
+  from `packages/infrastructure` on the host (`40`).
+- **`migrate --plan`** (`apps/server/src/migrate.ts`): first line `image labels` (before the
+  configuration is read, so it needs no database), second `migration plan` —
+  `db.planMigrations`: pending migrations with declared class/expands/raises-rollback-floor, the
+  unknown rows with recorded classes, and the guard's verdict; two `select`s, no lock, no
+  `create table`, no pg-boss. Unknown argument → exit 2. Through compose it is
+  `docker compose run --rm migrate apps/server/src/migrate.ts --plan` (arguments replace the service
+  command). Tests: `migrate.test.ts` (three process cases) and the `planMigrations` block of
+  `migrator.test.ts`.
+- **(4) Integration**, `schema-guard.integration.test.ts`: "refuses to start on an unknown row with no
+  class (null, read as contract)" and "… recorded contract" (an `it.each` over the old case), "starts
+  on an unknown row recorded additive, and /readyz reports schema ahead_additive" (200, `migrations:
+  ok`), the at-head case unchanged, `migrate --plan` run as a process against the database (both
+  lines, row count unchanged), and "labels the pg-boss schema version runMigrations installed"
+  (`select version from pgboss.version` = `readPgBossSchemaVersion()`). 6/6 passed.
+- **(5) Docs (rule 83).** operator guide § 5's rollback paragraph rewritten (additive starts,
+  contract/null refuse, guard version 2 only, `--plan`), the quoted refusal re-quoted from the new
+  message (held by `migrator.test.ts` › "is quoted in the operator guide as the line the process actually writes"), and the `migrations`
+  row of the *If `/readyz` is 503* table. Also corrected: technical/11's *Release* bullet and its
+  WP-42 paragraph, technical/08 (a `schema` paragraph), `routes/ops.ts`'s "one producer of
+  degraded" docblock and route description, `readiness.ts`'s module note,
+  `postgres-maintenance-blocker-store.ts`'s "cannot happen" reason, and `scripts/changelog.mjs`'s
+  release-note sentence "rolling the image back … is not supported".
+- **Backlog 689 (rule 6).** `scripts/check-migrations.ts`: a new file that sorts before a file at the
+  base is refused, naming it, the first base file it sorts before, and the next free number
+  (numbers handed out upward from the highest in the tree or base, so two misplaced files never get
+  the same one); the docblock's "cannot see" bullet removed; technical/14's rule list and
+  13-implementation-plan.md's M22 note ("at the row's rebase before merge") updated. Test:
+  `check-migrations.test.ts` › "refuses a new file that sorts before a file at the base, naming both
+  and the next free number (rule 6)" — base holds 0095, new 0094 and 0093 refused (told 0096/0097),
+  then 0096 alone passes.
+- **Backlog 692 (docs half).** `CONTRIBUTING.md` beside the `verify` command: full history,
+  `origin/main` for a branch with no upstream, `git fetch --unshallow`, `COMMIT_RANGE_FROM`. The
+  measurement half (shallow clone, fork, tarball) was not run.
+- **Coverage re-pin**: the first `verify` read `FAIL: coverage:ratchet` only (16 869 passed) —
+  infrastructure functions measured 69.32 % and earned a floor of 67 (was 66); re-pinned in
+  `vitest.config.ts` and technical/10's pinned-floor table together. Then **`PASS: verify`** (16 869
+  passed, 31 skipped, `PASS: coverage:ratchet`). The baseline `verify` before any edit read `FAIL`
+  only on the 30 s timeout of the untouched `packages/domain/src/policies/unattended-commands.test.ts`
+  property at load ~24.
+- **Sentences for the orchestrator (not edited, `CLAUDE.md`)**: line 290's *"`startRuntime` refuses a
+  database whose schema it does not know — `assertSchemaIsKnown` … throws `DatabaseSchemaAheadError`
+  naming every unknown migration"* now needs *"unless every unknown migration is `additive` (TD-032,
+  WP-272: it starts, logs `schema_ahead_additive`, `/readyz` `schema: ahead_additive`)"*.
+  `docs/research/09-testing-ci-docker-release.md:45` says the same and is a research report (not
+  edited).
+- **Review round 1 (REQUEST_CHANGES).** (Major) the `deps` stage's `$(cd packages/infrastructure && node -p …)`
+  was hadolint DL3003 (exit 1 under `failure-threshold: style`); it now resolves without a `cd`
+  (`require.resolve('pg-boss/package.json', {paths: ['./packages/infrastructure']})`, measured to
+  answer `40` from the repository root and to fail from elsewhere). CI's pinned hadolint v2.15.1
+  (digest from `ci.yml`, with `.hadolint.yaml`) over all five `docker/*.Dockerfile`: exit 0 each;
+  the old spelling piped through it: `-:113 DL3003`, exit 1. (Minor) `ops.test.ts` › "answers 200
+  for a schema ahead by additive migrations only, and says so" and "answers 503 for a down report"
+  drive the real route; a canary answering 503 on `details.schema === 'ahead_additive'` failed the
+  first, restored by md5. (Nit) `judgeSchema`'s docblock states that a known name with a different
+  checksum is known here and refused by `runMigrations`' checksum check. The three
+  `noTemplateCurlyInString` warnings in `image-labels.test.ts` are gone.

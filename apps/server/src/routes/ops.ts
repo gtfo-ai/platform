@@ -15,9 +15,11 @@
  *   moment shutdown begins, which is what takes the instance out of a load balancer *before*
  *   connections are closed (TD-002's shutdown order).
  *
- *   Since WP-86 a `degraded` report answers **200**: its one producer is `agent_runs`, which is
- *   about the instance (no process is taking agent stages), not about whether this process can
- *   serve, and it names the reason in `details`.
+ *   Since WP-86 a `degraded` report answers **200**. It has two producers, and each names its
+ *   reason in `details`: `agent_runs`, which is about the instance (no process is taking agent
+ *   stages), not about whether this process can serve; and, since WP-272, `schema`, when the
+ *   database carries migrations this build does not ship and every one of them is `additive` — the
+ *   rolled-back state TD-032 decision 2 makes servable.
  *
  *   The fourth check is TD-023's amendment at WP-15a, and it has a consequence worth knowing here:
  *   `ROLE=all` and `ROLE=worker` are **503 for ever** until something composes a pipeline, which is
@@ -41,10 +43,14 @@ export interface ReadinessReport {
   /**
    * Why a check that is not `ok` is not — present only when one says (WP-86): `agent_runs:
    * 'unserved'` when `stage.execute` holds a job nothing has claimed past the bound, `'unknown'`
-   * when that could not be read.
+   * when that could not be read; `schema: 'ahead_additive'` (WP-272, TD-032 decision 2) when the
+   * database carries migrations this build does not ship and every one of them is additive.
    */
-  readonly details?: Record<string, 'unserved' | 'unknown'>;
+  readonly details?: Record<string, ReadinessDetail>;
 }
+
+/** The reasons `details` can give (`healthResponseSchema` in `@platform/contracts`). */
+export type ReadinessDetail = 'unserved' | 'unknown' | 'ahead_additive';
 
 export interface OpsRoutesOptions {
   readonly config: ServerConfig;
@@ -127,7 +133,7 @@ export const registerOpsRoutes = async (
       schema: {
         summary: 'Readiness probe',
         description:
-          'Whether this process can serve traffic: database reachable, schema known to this build, job runtime started, and an event handler registered to dispatch to — 503 when any is down, and as soon as shutdown begins. `agent_runs` is about the instance: degraded (still 200, `details.agent_runs: unserved`) when stage.execute holds a job nothing has claimed for five minutes — no runner is taking agent stages.',
+          'Whether this process can serve traffic: database reachable, schema known to this build, job runtime started, and an event handler registered to dispatch to — 503 when any is down, and as soon as shutdown begins. `agent_runs` is about the instance: degraded (still 200, `details.agent_runs: unserved`) when stage.execute holds a job nothing has claimed for five minutes — no runner is taking agent stages. `schema` is degraded (still 200, `details.schema: ahead_additive`) when the database carries migrations this build does not ship and every one is additive (TD-032).',
         tags: ['ops'],
         response: { 200: healthResponseSchema, 503: healthResponseSchema },
       },
@@ -139,9 +145,9 @@ export const registerOpsRoutes = async (
           .send({ status: 'down' as const, checks: { shutdown: 'down' as const } });
       }
       const report = await options.readiness();
-      // `degraded` is still ready (WP-86): the one degraded check, `agent_runs`, means agent stages
-      // are not being taken, and taking the API out of a load balancer for that would stop the
-      // product serving everything else too.
+      // `degraded` is still ready (WP-86): `agent_runs` means agent stages are not being taken,
+      // and taking the API out of a load balancer for that would stop the product serving
+      // everything else too; `schema: ahead_additive` (WP-272) is a schema this build serves.
       return reply.status(report.status === 'down' ? 503 : 200).send(report);
     },
   );

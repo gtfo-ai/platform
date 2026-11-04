@@ -1473,7 +1473,7 @@ WP-285 → WP-286 serial; WP-287 beside them; WP-288 after WP-287. WP-289's docu
 after WP-277; its composition half after WP-284. WP-290 last. **Docker rows**: WP-279 (extended
 control-plane check), WP-284, WP-287, WP-288, WP-289 (render) — the rest run in the test tiers. **Model
 credential**: none; every row uses fake Claude; WP-285's golden fixture is `documented-adapted` until a
-real limit is recorded (V-WM1). **Migrations**: 0092, 0093, 0094, 0095, 0096, 0097 in the planned order (WP-278's and WP-280's may swap — the next free number at a row's start wins), every one `additive`. **Rollback floor** raised by WP-274, WP-276, WP-285 and WP-286.
+real limit is recorded (V-WM1). **Migrations**: 0092, 0093, 0094, 0095, 0096, 0097 in the planned order (WP-278's and WP-280's may swap — the next free number at the row's rebase before merge wins; `migrations:check` refuses a new file numbered below one already on `main`, WP-272), every one `additive`. **Rollback floor** raised by WP-274, WP-276, WP-285 and WP-286.
 **First production use** (Autix, `workers_only`, external) needs WP-271–WP-286 and WP-289; WP-287
 (worker updates) before more than one developer joins; WP-288 is not needed there.
 

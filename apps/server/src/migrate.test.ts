@@ -21,10 +21,10 @@ import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
-const runMigrate = (env: Record<string, string>) => {
+const runMigrate = (env: Record<string, string>, args: readonly string[] = []) => {
   const result = spawnSync(
     process.execPath,
-    ['--import', './scripts/ts-source-resolver.mjs', 'apps/server/src/migrate.ts'],
+    ['--import', './scripts/ts-source-resolver.mjs', 'apps/server/src/migrate.ts', ...args],
     {
       cwd: repositoryRoot,
       env: { PATH: process.env.PATH ?? '', ...env },
@@ -35,7 +35,15 @@ const runMigrate = (env: Record<string, string>) => {
   const lines = result.stdout
     .split('\n')
     .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as { level: string; msg: string; error?: string });
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          level: string;
+          msg: string;
+          error?: string;
+          labels?: Record<string, string>;
+        },
+    );
   return { status: result.status, lines, stderr: result.stderr };
 };
 
@@ -93,5 +101,52 @@ describe('the migrate entrypoint', () => {
     expect(run.lines.at(-1)).toEqual(
       expect.objectContaining({ level: 'error', msg: 'migration failed' }),
     );
+  });
+
+  /**
+   * `--plan` (TD-032 decisions 2 and 5, WP-272): the image's three labels come first and need no
+   * database — an operator re-pinning a tag reads them before anything is reachable — and a plan
+   * that cannot reach the database fails with migrate's own exit code and its own message. The
+   * success path, against PostgreSQL, is `test/integration/db/schema-guard.integration.test.ts`.
+   */
+  it('--plan prints the three labels first, then fails with exit 1 when the database is unreachable', async () => {
+    const port = await closedPort();
+    const run = runMigrate({ DATABASE_URL: `postgres://fake:fake@127.0.0.1:${port}/none` }, [
+      '--plan',
+    ]);
+    expect(run.status, run.stderr).toBe(1);
+    expect(run.lines).toEqual([
+      {
+        level: 'info',
+        msg: 'image labels',
+        labels: {
+          'org.platform.schema-guard': '2',
+          'org.platform.rollback-floor': expect.stringMatching(/^\d+$/),
+          'org.platform.pgboss-schema': expect.stringMatching(/^\d+$/),
+        },
+      },
+      expect.objectContaining({ level: 'error', msg: 'migration plan failed' }),
+    ]);
+  });
+
+  it('--plan prints the labels with no database configuration at all, then exits 2', () => {
+    const run = runMigrate({}, ['--plan']);
+    expect(run.status, run.stderr).toBe(2);
+    expect(run.lines.map((line) => line.msg)).toEqual([
+      'image labels',
+      'invalid database configuration',
+    ]);
+  });
+
+  it('exits 2 on an argument it does not know, before anything else', () => {
+    const run = runMigrate({}, ['--apply-everything']);
+    expect(run.status, run.stderr).toBe(2);
+    expect(run.lines).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        msg: 'invalid arguments',
+        error: expect.stringContaining('usage: migrate [--plan]'),
+      }),
+    ]);
   });
 });

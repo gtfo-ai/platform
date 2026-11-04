@@ -12,7 +12,9 @@
  * not know (a later release's blocker, read by an older process) is answered as `null` — *nothing
  * recorded* — so it never hides a transition; because the stored value is not `null`, the
  * compare-and-set would then never match and the pass would announce *began* every night. It cannot
- * happen in practice: `assertSchemaIsKnown` refuses an older process before it runs.
+ * happen in practice: a new value means replacing the check constraint, which drops the old one — a
+ * `contract` migration — and `assertSchemaIsKnown` refuses an older process on any unknown migration
+ * that is not `additive` (TD-032 decision 2, WP-272) before it runs.
  */
 
 import type {

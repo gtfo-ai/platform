@@ -1,6 +1,15 @@
 import * as nodeCrypto from 'node:crypto';
+import fastify from 'fastify';
+import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { describe, expect, it, vi } from 'vitest';
-import { credentialsMatch, parseBasicAuth } from './ops.js';
+import type { ServerConfig } from '../config.js';
+import type { Metrics } from '../metrics.js';
+import {
+  credentialsMatch,
+  parseBasicAuth,
+  type ReadinessReport,
+  registerOpsRoutes,
+} from './ops.js';
 
 vi.mock('node:crypto', async (importOriginal) => {
   const actual = await importOriginal<typeof nodeCrypto>();
@@ -66,5 +75,51 @@ describe('credentialsMatch', () => {
     spy.mockClear();
     await credentialsMatch({ user: 'wrong', pass: 'also-wrong' }, expected);
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * `/readyz`'s status code is decided by the route, not the report (WP-272): a `degraded` report —
+ * `schema: ahead_additive`, the all-additive future TD-032 decision 2 makes servable — answers
+ * 200 with the body as reported, and a `down` one 503.
+ */
+describe('GET /readyz', () => {
+  const serve = async (report: ReadinessReport) => {
+    const app = fastify();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    await registerOpsRoutes(app, {
+      // Read only by `/metrics`, which these cases never call.
+      config: {} as ServerConfig,
+      metrics: {} as Metrics,
+      version: { version: '0.0.0-test', commit: null, builtAt: null },
+      readiness: async () => report,
+      isShuttingDown: () => false,
+      isUnderPressure: () => false,
+    });
+    try {
+      return await app.inject({ method: 'GET', url: '/readyz' });
+    } finally {
+      await app.close();
+    }
+  };
+
+  it('answers 200 for a schema ahead by additive migrations only, and says so', async () => {
+    const report: ReadinessReport = {
+      status: 'degraded',
+      checks: { database: 'ok', migrations: 'ok', schema: 'degraded' },
+      details: { schema: 'ahead_additive' },
+    };
+    const response = await serve(report);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(report);
+  });
+
+  it('answers 503 for a down report', async () => {
+    const response = await serve({
+      status: 'down',
+      checks: { database: 'ok', migrations: 'down' },
+    });
+    expect(response.statusCode).toBe(503);
   });
 });

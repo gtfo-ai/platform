@@ -24,10 +24,13 @@ import {
   declareJobQueues,
   JOB_QUEUE_DEFINITIONS,
   type JobQueueDefinition,
+  type Logger,
+  silentLogger,
 } from '@platform/application';
 import { PgBoss } from 'pg-boss';
 import { pgBossQueueOptions } from '../jobs/pg-boss-jobs.js';
 import { createDatabaseClient } from './client.js';
+import type { MigrationClass } from './migration-class.js';
 import { loadMigrations, type Migration, migrationsDirectory } from './migrations.js';
 import { TRANSCRIPT_RETENTION_SCOPE } from './partitions.js';
 
@@ -276,76 +279,219 @@ const applyMigration = async (client: MigrationClient, migration: Migration): Pr
   }
 };
 
+/** One row of `platform_migrations`, with the class it was recorded with (`null` before 0092). */
+export interface AppliedMigration {
+  readonly name: string;
+  /**
+   * `'additive'`, `'contract'`, or `null` — a row applied before 0092 added the column, read as
+   * `contract` (TD-032 decision 1). Kept as the stored text rather than narrowed: anything that is
+   * not exactly `'additive'` is treated as `contract` by {@link judgeSchema}.
+   */
+  readonly class: string | null;
+}
+
 /**
- * Fails when the database carries a migration this build does not know about — the "app refuses to
- * start when the DB schema is newer than the code" rule of TD-019. Safe to call from any process.
+ * Every row of `platform_migrations` with its class, or `[]` when the table does not exist yet.
  *
- * **One of two readers of `platform_migrations`** (PROGRESS backlog 119): `/readyz`'s
- * `migrationStatus` (`apps/server/src/readiness.ts`) is the other, and its verdict differs on
- * purpose — it reports `down` for a pending migration too, which is a deployment still migrating
- * rather than a rollback, while this refuses a process only for an unknown one. Its docblock names
- * the query each uses; a change to what "applied" means belongs in both.
+ * The class is read through `to_jsonb(row) ->> 'class'` rather than by naming the column, so the
+ * same query answers on a database from before 0092 (no column: every class reads `null`) — which
+ * is what a database migrated by an older build looks like to the guard of a newer one.
  */
-export const findUnknownMigrations = async (
+export const readAppliedMigrations = async (
   client: MigrationReader,
-  known: readonly Migration[] = loadMigrations(),
-): Promise<string[]> => {
+): Promise<AppliedMigration[]> => {
   const exists = await client.query<{ present: boolean }>(
     "select to_regclass('public.platform_migrations') is not null as present",
   );
   if (exists.rows[0]?.present !== true) {
     return [];
   }
-  const { rows } = await client.query<{ name: string }>('select name from platform_migrations');
-  const knownNames = new Set(known.map((migration) => migration.name));
-  return rows.map((row) => row.name).filter((name) => !knownNames.has(name));
+  const { rows } = await client.query<{ name: string; class?: string | null }>(
+    "select m.name, to_jsonb(m) ->> 'class' as class from platform_migrations m order by m.name",
+  );
+  return rows.map((row) => ({ name: row.name, class: row.class ?? null }));
 };
 
 /**
- * Raised by {@link assertSchemaIsKnown} when the database is ahead of the build.
+ * What a build may do on a database, decided from the names it ships and the rows it finds
+ * (TD-032 decision 2). Pure, so the decision table is tested without a database, and the one
+ * decision both readers of `platform_migrations` take — the start-up guard below and `/readyz`'s
+ * `migrationStatus` (`apps/server/src/readiness.ts`, PROGRESS backlog 119).
+ *
+ * - `known` — every applied row is a migration this build ships (it may still be behind: pending
+ *   migrations are `/readyz`'s concern, not the guard's).
+ * - `ahead_additive` — rows this build does not ship, **every one** recorded `additive`: the
+ *   previous release's code works on the schema after them, so the build starts.
+ * - `ahead` — at least one unknown row is `contract` or unclassified (`null`): refused.
+ *
+ * Only names are compared: a known name whose recorded checksum differs from this build's file
+ * counts as known here, and is refused by `runMigrations`' forward-only checksum check instead, so
+ * an edited migration never reaches the additive path.
+ */
+export type SchemaVerdict =
+  | { readonly kind: 'known'; readonly unknown: readonly [] }
+  | { readonly kind: 'ahead_additive'; readonly unknown: readonly AppliedMigration[] }
+  | { readonly kind: 'ahead'; readonly unknown: readonly AppliedMigration[] };
+
+export const judgeSchema = (
+  known: readonly string[],
+  applied: readonly AppliedMigration[],
+): SchemaVerdict => {
+  const knownNames = new Set(known);
+  const unknown = applied.filter((row) => !knownNames.has(row.name));
+  if (unknown.length === 0) {
+    return { kind: 'known', unknown: [] };
+  }
+  return unknown.every((row) => row.class === 'additive')
+    ? { kind: 'ahead_additive', unknown }
+    : { kind: 'ahead', unknown };
+};
+
+/**
+ * The names of the migrations the database has applied and this build does not ship, whatever
+ * their class. `[]` when `platform_migrations` does not exist.
+ *
+ * **One of two readers of `platform_migrations`** (PROGRESS backlog 119): `/readyz`'s
+ * `migrationStatus` (`apps/server/src/readiness.ts`) is the other, and its verdict differs on
+ * purpose — it reports `down` for a pending migration too, which is a deployment still migrating
+ * rather than a rollback, while the guard refuses a process only for an unknown non-additive one.
+ * Both decide "ahead" through {@link judgeSchema}; a change to what "applied" means belongs in both.
+ */
+export const findUnknownMigrations = async (
+  client: MigrationReader,
+  known: readonly Migration[] = loadMigrations(),
+): Promise<string[]> =>
+  judgeSchema(
+    known.map((migration) => migration.name),
+    await readAppliedMigrations(client),
+  ).unknown.map((row) => row.name);
+
+/** How an unknown row's class reads in a message: `null` is named for what TD-032 makes it. */
+const describeClass = (row: AppliedMigration): string =>
+  row.class === null ? 'unclassified, read as contract' : row.class;
+
+/**
+ * Raised by {@link assertSchemaIsKnown} when the database is ahead of the build and at least one
+ * of the migrations it is ahead by is not `additive` (TD-032 decision 2).
  *
  * It carries the names as data as well as in the message, because the process that catches it
  * writes a line an operator reads (`apps/server/src/main.ts`) and a log field is not a sentence.
+ * `unknownMigrations` is **every** unknown name, additive ones included: the operator's way out —
+ * roll forward to the build that applied them — is about all of them.
  */
 export class DatabaseSchemaAheadError extends Error {
   override readonly name = 'DatabaseSchemaAheadError';
   readonly unknownMigrations: readonly string[];
+  /** The unknown rows with the class each was recorded with. */
+  readonly unknownRows: readonly AppliedMigration[];
 
-  constructor(unknownMigrations: readonly string[]) {
+  constructor(unknown: readonly AppliedMigration[]) {
     super(
       'this build does not know ' +
-        `${unknownMigrations.length} migration(s) the database has applied: ` +
-        `${unknownMigrations.join(', ')}. The database is newer than the code (TD-019): roll ` +
+        `${unknown.length} migration(s) the database has applied: ` +
+        `${unknown.map((row) => `${row.name} (${describeClass(row)})`).join(', ')}. ` +
+        'The database is newer than the code and not every one of them is additive (TD-032): roll ' +
         'forward to the build that applied them, or restore the pre-upgrade dump — migrations are ' +
         'forward-only and serving traffic against a schema this build has never seen is how a ' +
         'rollback corrupts data (docs/operator-guide.md § 5).',
     );
-    this.unknownMigrations = [...unknownMigrations];
+    this.unknownRows = unknown.map((row) => ({ name: row.name, class: row.class }));
+    this.unknownMigrations = unknown.map((row) => row.name);
   }
 }
 
 /**
- * TD-019's *"the app refuses to start when the DB schema is newer than the code"*, as a call.
+ * TD-019's *"the app refuses to start when the DB schema is newer than the code"*, as amended by
+ * TD-032 decision 2 (WP-272): **an all-`additive` future starts**.
  *
  * `findUnknownMigrations` had no caller from WP-03 until WP-42 — the rule existed as a function and
- * as a `/readyz` check (`apps/server/src/readiness.ts` reports `migrations: down`), and a readiness
- * probe is not a refusal: the process still served `/api`, still answered `/webhooks/*` and still
- * ran its workers against a schema it did not know. This is the refusal, and the first release is
- * what makes it reachable, because nothing had ever been upgraded before there was a version to
- * roll back from.
+ * as a `/readyz` check, and a readiness probe is not a refusal: the process still served `/api`,
+ * still answered `/webhooks/*` and still ran its workers against a schema it did not know. This is
+ * the refusal.
+ *
+ * Since WP-272 it refuses only what a rollback cannot survive. When **every** unknown row was
+ * recorded `additive`, the previous release's code works on the schema after them (that is what
+ * the class means, and `migrations:check` holds the statements to it), so the build starts, logs
+ * `schema_ahead_additive` naming them at `warn`, and `/readyz` reports `schema: ahead_additive`.
+ * One `contract` row, or one row from before 0092 (`null`, read as `contract`), refuses with
+ * {@link DatabaseSchemaAheadError} exactly as before. This is what makes a code-only rollback
+ * possible — and it protects only builds that contain it, which is why the image carries
+ * `org.platform.schema-guard=2` (`image-labels.ts`).
  *
  * A database with **no** `platform_migrations` table at all is not ahead of anything: it is empty,
  * or `migrate` has not run yet, and that case belongs to `/readyz` (`migrations: down`, pending)
- * rather than here. `findUnknownMigrations` answers `[]` for it deliberately.
+ * rather than here.
  */
 export const assertSchemaIsKnown = async (
   client: MigrationReader,
   known: readonly Migration[] = loadMigrations(),
-): Promise<void> => {
-  const unknown = await findUnknownMigrations(client, known);
-  if (unknown.length > 0) {
-    throw new DatabaseSchemaAheadError(unknown);
+  logger: Logger = silentLogger,
+): Promise<SchemaVerdict> => {
+  const verdict = judgeSchema(
+    known.map((migration) => migration.name),
+    await readAppliedMigrations(client),
+  );
+  if (verdict.kind === 'ahead') {
+    throw new DatabaseSchemaAheadError(verdict.unknown);
   }
+  if (verdict.kind === 'ahead_additive') {
+    logger.warn(
+      {
+        event: 'schema_ahead_additive',
+        migrations: verdict.unknown.map((row) => row.name),
+      },
+      'schema_ahead_additive: the database carries additive migrations this build does not ship; starting (TD-032 decision 2)',
+    );
+  }
+  return verdict;
+};
+
+/** One migration `migrate` would apply, with the class its file declares (TD-032 decision 5). */
+export interface PlannedMigration {
+  readonly name: string;
+  /** The declared class; `null` for a file before 0092, which declares none. */
+  readonly class: MigrationClass | null;
+  /** A `contract`'s expand; `null` otherwise. */
+  readonly expands: string | null;
+  readonly raisesRollbackFloor: boolean;
+}
+
+/** What `migrate --plan` reports: read-only, nothing applied, no lock taken. */
+export interface MigrationPlan {
+  readonly pending: readonly PlannedMigration[];
+  /** The database's verdict for **this** build before anything is applied. */
+  readonly schema: SchemaVerdict['kind'];
+  readonly unknown: readonly AppliedMigration[];
+}
+
+/**
+ * The read-only half of `migrate` (TD-032 decision 5 step 2): which of this build's migrations the
+ * database has not applied, each with its declared class, and how the database reads to this
+ * build's guard. Two `select`s and nothing else — no advisory lock, no `create table`, no pg-boss —
+ * so it can be run against a live instance before deciding to migrate it.
+ */
+export const planMigrations = async (
+  client: MigrationReader,
+  known: readonly Migration[] = loadMigrations(),
+): Promise<MigrationPlan> => {
+  const applied = await readAppliedMigrations(client);
+  const appliedNames = new Set(applied.map((row) => row.name));
+  const verdict = judgeSchema(
+    known.map((migration) => migration.name),
+    applied,
+  );
+  return {
+    pending: known
+      .filter((migration) => !appliedNames.has(migration.name))
+      .map((migration) => ({
+        name: migration.name,
+        class: migration.header?.class ?? null,
+        expands: migration.header?.expands ?? null,
+        raisesRollbackFloor: migration.header?.raisesRollbackFloor ?? false,
+      })),
+    schema: verdict.kind,
+    unknown: verdict.unknown,
+  };
 };
 
 /**

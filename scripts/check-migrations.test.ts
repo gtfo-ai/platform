@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { ROLLBACK_FLOOR } from '../packages/infrastructure/src/db/image-labels.js';
 import {
   APP_DOCKERFILE,
   checkMigrations,
@@ -201,6 +202,45 @@ describe('checkMigrations — the rules', () => {
     ]);
     labelled.write(APP_DOCKERFILE, 'FROM scratch\nLABEL org.platform.rollback-floor=3\n');
     expect(findings(labelled)).toEqual([]);
+  });
+
+  /**
+   * Rule 6 (WP-272, PROGRESS backlog 689), both directions on one base: a branch that adds 0094
+   * after `main` released 0095 is refused with both names and the next free number; the same file
+   * numbered after the base passes.
+   */
+  it('refuses a new file that sorts before a file at the base, naming both and the next free number (rule 6)', () => {
+    const repo = scratch();
+    addMigration(
+      repo,
+      '0095_released.sql',
+      '-- migration-class: additive\ncreate table released (x int);\n',
+    );
+    repo.git('add', '-A');
+    repo.git('commit', '-q', '-m', 'main released 0095');
+    const base = repo.git('rev-parse', 'HEAD');
+    const against = () =>
+      checkMigrations(repo.root, base, gitRunner(repo.root, repo.env)).findings.map(
+        (finding) => `${finding.file} ${finding.message}`,
+      );
+    const late = '-- migration-class: additive\ncreate table late (x int);\n';
+
+    addMigration(repo, '0094_late.sql', late);
+    addMigration(repo, '0093_later_still.sql', late.replaceAll('late', 'later_still'));
+    expect(against()).toEqual([
+      '0093_later_still.sql is new here and sorts before 0095_released.sql, which exists at the base: a fresh database would apply it before 0095_released.sql and an upgraded one after — renumber it to 0096 (the next free number)',
+      '0094_late.sql is new here and sorts before 0095_released.sql, which exists at the base: a fresh database would apply it before 0095_released.sql and an upgraded one after — renumber it to 0097 (the next free number)',
+    ]);
+
+    rmSync(join(repo.root, MIGRATIONS_PATH, '0093_later_still.sql'));
+    rmSync(join(repo.root, MIGRATIONS_PATH, '0094_late.sql'));
+    addMigration(repo, '0096_late.sql', late);
+    expect(against()).toEqual([]);
+  });
+
+  it('reads the floor this repository’s app image declares as the code answers it', () => {
+    const dockerfile = readFileSync(join(import.meta.dirname, '..', APP_DOCKERFILE), 'utf8');
+    expect(rollbackFloorOf(dockerfile)).toBe(ROLLBACK_FLOOR);
   });
 
   it('reads the floor label in both of its spellings', () => {

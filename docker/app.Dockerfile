@@ -27,6 +27,13 @@
 # below to hold the two equal: moving either fails a test instead of 404ing only inside the image.
 # `APP_WEB_ROOT` overrides it for an operator serving a patched bundle from a mounted volume.
 ARG BASE_IMAGE=platform-base:dev
+# The pg-boss schema version `runMigrations` installs (TD-032 decision 2, WP-272), for the
+# `org.platform.pgboss-schema` label below. A `LABEL` cannot take a value a `RUN` computed, so this
+# is the one place the number is written — and it is never trusted: the `deps` stage checks it
+# against the installed pg-boss's own `pgboss.schema` and fails the build on a mismatch, and
+# `packages/infrastructure/src/db/image-labels.test.ts` compares it with the version pg-boss writes
+# into its own construction plan. Bump it with pg-boss; nothing else should ever set it.
+ARG PGBOSS_SCHEMA=40
 
 # ── The SPA bundle ───────────────────────────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE} AS web
@@ -99,6 +106,16 @@ COPY apps/runlet/package.json apps/runlet/
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter @platform/server... \
  && pnpm store prune \
  && rm -rf node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-linux-*
+# The label's pg-boss schema version, derived: read off the pg-boss this image installed — the one
+# `packages/infrastructure` resolves, so the one `runMigrations` runs — and compared with the
+# global `PGBOSS_SCHEMA` the label is written from (WP-272).
+ARG PGBOSS_SCHEMA
+RUN set -eu; \
+    installed="$(node -p "require(require.resolve('pg-boss/package.json',{paths:['./packages/infrastructure']})).pgboss.schema")"; \
+    if [ "$installed" != "${PGBOSS_SCHEMA}" ]; then \
+      echo "PGBOSS_SCHEMA=${PGBOSS_SCHEMA}, but the installed pg-boss installs schema ${installed}: set the global ARG at the top of docker/app.Dockerfile to it" >&2; \
+      exit 1; \
+    fi
 
 # ── The image ────────────────────────────────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE} AS app
@@ -149,6 +166,17 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
 
 ENTRYPOINT ["node", "--import", "./scripts/ts-source-resolver.mjs"]
 CMD ["apps/server/src/main.ts"]
+
+# What the updater reads before it rolls this build back to (TD-032 decision 2, WP-272): the
+# schema guard's version (2 starts on an all-additive unknown future), the rollback floor (raised by
+# every row that changes what existing rows mean to the runtime; `migrations:check` holds a
+# `raises-rollback-floor` migration to it) and the pg-boss schema version `runMigrations` installs.
+# `migrate --plan` prints the same three from `packages/infrastructure/src/db/image-labels.ts`, and
+# `image-labels.test.ts` holds this block to that module.
+ARG PGBOSS_SCHEMA
+LABEL org.platform.schema-guard="2" \
+      org.platform.rollback-floor="1" \
+      org.platform.pgboss-schema="${PGBOSS_SCHEMA}"
 
 LABEL org.opencontainers.image.title="platform" \
       org.opencontainers.image.description="The agentic platform: API, workers, SSE and migrations." \

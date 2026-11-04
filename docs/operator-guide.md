@@ -337,7 +337,7 @@ That is a real answer, not a glitch, and the body says which check failed:
 | Check | `down` means | What to do |
 |---|---|---|
 | `database` | the connection or the `platform_migrations` query failed | look at `docker compose logs db` |
-| `migrations` | the schema is **behind** this build (migrate has not run) **or ahead of it** (you rolled the image back) | run `docker compose run --rm migrate`; for "ahead", roll the image forward again — migrations are forward-only and an older build must not serve a newer schema |
+| `migrations` | the schema is **behind** this build (migrate has not run) **or ahead of it by a migration that is not additive** (you rolled the image back across a `contract` migration) | run `docker compose run --rm migrate`; for "ahead", roll the image forward again — migrations are forward-only and an older build must not serve a schema it cannot read. A schema ahead only by additive migrations is not `down`: it is `schema: degraded` (200), § 5 |
 | `queue` | pg-boss did not start | the logs name the failure |
 | `dispatch` | this process cannot handle every event the build declares consumed, so it refuses to sweep the outbox | see below |
 
@@ -920,17 +920,40 @@ which a healthy re-run says out loud:
 {"level":"info","msg":"migrations complete","applied":[],"already_applied":19,"pgboss_schema_version":40,"duration_ms":60}
 ```
 
-**Rolling back the image without rolling back the database is the one thing that is not supported.**
-The older build **refuses to start**: it sees migrations it does not know, writes one line to stderr
-naming them, and exits — so there is no `/readyz` to read here, because the container is not up.
-`docker compose ps` shows `app` as `Exited (1)` and `docker compose logs app` ends with the line
-below — one line, wrapped here, naming whichever migrations the newer build had added:
+**Rolling the image back without rolling back the database works only across additive
+migrations** ([TD-032](decisions/technical/TD-032-automatic-updates-and-migration-classes.md)
+decision 2). Every migration from 0092 on declares a class in its first line, and `migrate` records
+it in `platform_migrations.class`: `additive` means the previous build's code still works on the
+schema after it; `contract` means it may not. An older build that finds migrations it does not know
+reads their recorded classes:
+
+- **Every one `additive`** — it **starts**, logs a `schema_ahead_additive` warning naming them, and
+  `/readyz` answers 200 with `"schema":"degraded"` in `checks` and `"schema":"ahead_additive"` in
+  `details`. That is a code-only rollback, and it is safe to leave running until you roll forward.
+- **Any one `contract`, or any one from before 0092** (its class is `null`, read as `contract`) — it
+  **refuses to start**.
+
+This holds only for builds that carry the amended guard: an image labelled
+`org.platform.schema-guard=2` (`docker image inspect --format '{{json .Config.Labels}}' <image>`, or
+the first line of `docker compose run --rm migrate apps/server/src/migrate.ts --plan`, which prints
+the image's three labels — the arguments after the service name replace its command, so the script
+is named again).
+A build from before it refuses **every** unknown migration, additive or not. `migrate --plan` is
+read-only — it applies nothing and takes no lock — and its second line lists the migrations it would
+apply with their classes and says how the database reads to that build's guard (`known`,
+`ahead_additive` or `ahead`), so you can read whether an upgrade is additive before you run it.
+
+A refused build writes one line to stderr naming the migrations, with the class each was recorded
+with, and exits — so there is no `/readyz` to read here, because the container is not up. `docker
+compose ps` shows `app` as `Exited (1)` and `docker compose logs app` ends with the line below — one
+line, wrapped here, naming whichever migrations the newer build had added:
 
 ```
-this build does not know 1 migration(s) the database has applied: 0035_the_newer_build_added_this.
-The database is newer than the code (TD-019): roll forward to the build that applied them, or
-restore the pre-upgrade dump — migrations are forward-only and serving traffic against a schema this
-build has never seen is how a rollback corrupts data (docs/operator-guide.md § 5).
+this build does not know 1 migration(s) the database has applied: 0094_the_newer_build_added_this
+(contract). The database is newer than the code and not every one of them is additive (TD-032):
+roll forward to the build that applied them, or restore the pre-upgrade dump — migrations are
+forward-only and serving traffic against a schema this build has never seen is how a rollback
+corrupts data (docs/operator-guide.md § 5).
 ```
 
 That refusal is deliberate, and it is the whole recovery procedure. Two ways out, and only two:

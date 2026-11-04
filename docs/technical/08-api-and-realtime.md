@@ -45,6 +45,14 @@
 > must not take the API out of a load balancer. The launcher itself is still not reported. The
 > matching metrics are `jobs_queued{queue}` (ready, unclaimed jobs per declared queue, `0`
 > included) and `jobs_queued_oldest_age_seconds{queue}` (only for a queue with something waiting).
+>
+> **`schema` appears only on an all-additive future (WP-272, TD-032 decision 2).** When the database
+> carries migrations this build does not ship and every one was recorded `additive`, the process
+> starts (the guard logs `schema_ahead_additive`) and every role reports `schema: degraded` with
+> `details: {"schema": "ahead_additive"}` beside `migrations: ok` — 200, like `agent_runs`. One
+> unknown `contract` or unclassified migration is `migrations: down` instead, and a process starting
+> on it refuses to start. Both readers take the verdict from `judgeSchema` in
+> `packages/infrastructure/src/db/migrator.ts`.
 
 > **Five of the Knowledge row's eight endpoints are served** — four since WP-18b and `kb/health`
 > since WP-15h part 2 — and the other three are not, which is worth stating because the row reads as

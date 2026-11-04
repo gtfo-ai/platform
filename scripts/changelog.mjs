@@ -265,9 +265,11 @@ export const upgradeNote = ({ verdict, measurement }) => {
       CODE_FENCE,
       '',
       '**Take the dump first.** A migration is forward-only, so there is no down-step if one goes ' +
-        'wrong, and rolling the image back without rolling the database back is not supported: a ' +
-        'build refuses to start against a database carrying a migration it does not know, and ' +
-        'names it. See `docs/operator-guide.md` § 5 (upgrade) and § 6 (backup).',
+        'wrong, and rolling the image back without rolling the database back works only across ' +
+        '`additive` migrations: a build refuses to start against a database carrying a migration ' +
+        'it does not know, and names it, unless every such migration is `additive` and the build ' +
+        'is labelled `org.platform.schema-guard=2` (TD-032). See `docs/operator-guide.md` § 5 ' +
+        '(upgrade) and § 6 (backup).',
     );
   } else {
     lines.push(

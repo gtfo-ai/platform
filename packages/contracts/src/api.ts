@@ -122,9 +122,11 @@ export const healthResponseSchema = z.strictObject({
   checks: z.record(z.string(), z.enum(['ok', 'degraded', 'down'])),
   /**
    * Why a check is not `ok`, where the check says (WP-86): `agent_runs: "unserved"` — `stage.execute`
-   * holds a job nothing has claimed past the bound — or `"unknown"`. Absent when nothing is said.
+   * holds a job nothing has claimed past the bound — or `"unknown"`; `schema: "ahead_additive"`
+   * (WP-272, TD-032 decision 2) — the database carries migrations this build does not ship, every
+   * one of them additive, and the build serves it. Absent when nothing is said.
    */
-  details: z.record(z.string(), z.enum(['unserved', 'unknown'])).optional(),
+  details: z.record(z.string(), z.enum(['unserved', 'unknown', 'ahead_additive'])).optional(),
 });
 
 export const userSummarySchema = z.strictObject({

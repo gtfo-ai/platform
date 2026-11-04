@@ -14,7 +14,14 @@
  * **Both directions, in the same file and against the same database** (standing rule 42): a guard
  * that refused everything would pass the first case, and one that refused nothing the second. The
  * same database is used for both so the only difference between them is the planted row.
+ *
+ * **Since WP-272 (TD-032 decision 2) the planted row's class decides**: an unknown row recorded
+ * `additive` starts the instance and `/readyz` says `schema: ahead_additive`; one recorded
+ * `contract`, and one with no class (`null`, every row from before 0092), refuse it. And the
+ * read-only `migrate --plan` is run as the process an operator runs, against the same database.
  */
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { db } from '@platform/infrastructure';
 import { loadServerConfig, requiredPoolConnections, startRuntime } from '@platform/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -60,11 +67,17 @@ const environmentFor = (connectionString: string): Record<string, string> => {
   return { ...environment, APP_DB_POOL_MAX: String(floor) };
 };
 
-const plantFutureMigration = async (): Promise<void> => {
+/**
+ * Plants the future row: with no class (as every row before 0092 is recorded, read as `contract`),
+ * or with the class a newer build's `migrate` would have recorded.
+ */
+const plantFutureMigration = async (
+  recordedClass: 'additive' | 'contract' | null = null,
+): Promise<void> => {
   await withClient(database.connectionString, async (client) => {
     await client.query(
-      'insert into platform_migrations (name, checksum, duration_ms) values ($1, $2, 0)',
-      [FROM_THE_FUTURE, 'not-a-real-checksum'],
+      'insert into platform_migrations (name, checksum, duration_ms, class) values ($1, $2, 0, $3)',
+      [FROM_THE_FUTURE, 'not-a-real-checksum', recordedClass],
     );
   });
 };
@@ -76,24 +89,62 @@ const removeFutureMigration = async (): Promise<void> => {
 };
 
 describe('startRuntime against a database it does not know (TD-019)', () => {
-  it('refuses to start and names the migration', async () => {
-    await plantFutureMigration();
-    try {
-      const start = startRuntime({ env: environmentFor(database.connectionString) });
-      await expect(start).rejects.toThrow(db.DatabaseSchemaAheadError);
-      const error = await start.then(
-        () => null,
-        (caught: unknown) => caught,
-      );
-      expect((error as db.DatabaseSchemaAheadError).unknownMigrations).toEqual([FROM_THE_FUTURE]);
-      // The operator's next action is in the message, not only the fact of the failure.
-      expect((error as Error).message).toContain(FROM_THE_FUTURE);
-      expect((error as Error).message).toContain('forward-only');
+  it.each([
+    ['with no class (null, read as contract)', null],
+    ['recorded contract', 'contract'],
+  ] as const)(
+    'refuses to start on an unknown row %s, and names the migration',
+    async (_case, recordedClass) => {
+      await plantFutureMigration(recordedClass);
+      try {
+        const start = startRuntime({ env: environmentFor(database.connectionString) });
+        await expect(start).rejects.toThrow(db.DatabaseSchemaAheadError);
+        const error = await start.then(
+          () => null,
+          (caught: unknown) => caught,
+        );
+        expect((error as db.DatabaseSchemaAheadError).unknownMigrations).toEqual([FROM_THE_FUTURE]);
+        // The operator's next action is in the message, not only the fact of the failure.
+        expect((error as Error).message).toContain(FROM_THE_FUTURE);
+        expect((error as Error).message).toContain('forward-only');
 
-      // The pool the refused start opened is closed by `startRuntime`'s own `catch`. That is
-      // deliberately *not* asserted here by counting backends: `pool.end()` resolves before the
-      // sockets it removed are closed (standing rule 85), so the count is a claim about pg-pool's
-      // bookkeeping and a race, not about this guard.
+        // The pool the refused start opened is closed by `startRuntime`'s own `catch`. That is
+        // deliberately *not* asserted here by counting backends: `pool.end()` resolves before the
+        // sockets it removed are closed (standing rule 85), so the count is a claim about pg-pool's
+        // bookkeeping and a race, not about this guard.
+      } finally {
+        await removeFutureMigration();
+      }
+    },
+    120_000,
+  );
+
+  /**
+   * TD-032 decision 2 (WP-272): the other direction of the same planted row. An unknown row
+   * recorded `additive` is a schema the previous build's code works on, so the instance starts,
+   * and `/readyz` says so — `schema: degraded`, `details.schema: ahead_additive` — without the
+   * `migrations` check going down.
+   */
+  it('starts on an unknown row recorded additive, and /readyz reports schema ahead_additive', async () => {
+    await plantFutureMigration('additive');
+    try {
+      const runtime = await startRuntime({ env: environmentFor(database.connectionString) });
+      try {
+        const response = await runtime.app.inject({ method: 'GET', url: '/readyz' });
+        const report = response.json<{
+          status: string;
+          checks: Record<string, string>;
+          details?: Record<string, string>;
+        }>();
+        expect(report.checks.migrations).toBe('ok');
+        expect(report.checks.schema).toBe('degraded');
+        expect(report.details?.schema).toBe('ahead_additive');
+        // `degraded` is ready: 200 unless some *other* check is down, which is not this row's.
+        expect(response.statusCode).toBe(report.status === 'down' ? 503 : 200);
+        expect(report.status).not.toBe('down');
+      } finally {
+        await runtime.stop();
+      }
     } finally {
       await removeFutureMigration();
     }
@@ -112,4 +163,75 @@ describe('startRuntime against a database it does not know (TD-019)', () => {
       await runtime.stop();
     }
   }, 120_000);
+});
+
+/**
+ * `migrate --plan` (TD-032 decisions 2 and 5, WP-272), run as the entrypoint an operator runs —
+ * `node` with the repository's source resolver — against the same database: the image's three
+ * labels first, then the plan, and nothing written.
+ */
+describe('migrate --plan against a real database', () => {
+  const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
+
+  const rowCount = async (): Promise<number> =>
+    withClient(database.connectionString, async (client) => {
+      const { rows } = await client.query<{ n: string }>(
+        'select count(*)::text as n from platform_migrations',
+      );
+      return Number(rows[0]?.n);
+    });
+
+  it('prints the three labels and the plan, applies nothing, and reads the guard’s verdict', async () => {
+    await plantFutureMigration('additive');
+    try {
+      const before = await rowCount();
+      const run = spawnSync(
+        process.execPath,
+        ['--import', './scripts/ts-source-resolver.mjs', 'apps/server/src/migrate.ts', '--plan'],
+        {
+          cwd: repositoryRoot,
+          env: { PATH: process.env.PATH ?? '', DATABASE_URL: database.connectionString },
+          encoding: 'utf8',
+          timeout: 60_000,
+        },
+      );
+      expect(run.status, run.stderr).toBe(0);
+      const lines = run.stdout
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(lines).toEqual([
+        {
+          level: 'info',
+          msg: 'image labels',
+          labels: {
+            'org.platform.schema-guard': '2',
+            'org.platform.rollback-floor': String(db.ROLLBACK_FLOOR),
+            'org.platform.pgboss-schema': String(db.readPgBossSchemaVersion()),
+          },
+        },
+        {
+          level: 'info',
+          msg: 'migration plan',
+          pending: [],
+          schema: 'ahead_additive',
+          unknown: [{ name: FROM_THE_FUTURE, class: 'additive' }],
+        },
+      ]);
+      expect(await rowCount()).toBe(before);
+    } finally {
+      await removeFutureMigration();
+    }
+  }, 120_000);
+
+  /** The label's value is what `runMigrations` actually installed, read back from pg-boss's table. */
+  it('labels the pg-boss schema version runMigrations installed', async () => {
+    const installed = await withClient(database.connectionString, async (client) => {
+      const { rows } = await client.query<{ version: number }>(
+        'select version from pgboss.version',
+      );
+      return rows.map((row) => Number(row.version));
+    });
+    expect(installed).toEqual([db.readPgBossSchemaVersion()]);
+  });
 });

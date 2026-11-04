@@ -13,6 +13,13 @@ pnpm install         # also installs the git hooks
 pnpm run -s verify   # lint + typecheck + unit + contract
 ```
 
+**`verify` needs the repository's full git history.** Its `migrations:check` step compares the
+migrations directory with the push's base commit, so it refuses a shallow clone by name and, on a
+branch with no upstream, needs an `origin/main` ref to take the merge base with
+([`docs/technical/14-orchestration-protocol.md`](docs/technical/14-orchestration-protocol.md),
+WP-271). On a shallow clone run `git fetch --unshallow`; on a fork, fetch `main` as `origin/main`
+(or give the step a base with `COMMIT_RANGE_FROM=<rev>`).
+
 `pnpm install` runs `lefthook install`, which wires up:
 
 | Hook | What runs |

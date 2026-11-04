@@ -435,12 +435,19 @@ export const listAuditEntries = async (
   };
 };
 
-/** Migration names this database has applied, for the readiness check. */
-export const appliedMigrations = async (database: Database): Promise<string[]> => {
-  const result = await database.execute<{ name: string }>(
-    sql`select name from platform_migrations order by name`,
+/**
+ * The migrations this database has applied, each with the class it was recorded with, for the
+ * readiness check. The class is read as `to_jsonb(row) ->> 'class'` — the same spelling as
+ * `readAppliedMigrations` in the migrator — so a database from before 0092 (no column) answers
+ * `null` rather than failing the query and reading as `database: down`.
+ */
+export const appliedMigrations = async (
+  database: Database,
+): Promise<dbAdapters.AppliedMigration[]> => {
+  const result = await database.execute<{ name: string; class?: string | null }>(
+    sql`select m.name, to_jsonb(m) ->> 'class' as class from platform_migrations m order by m.name`,
   );
-  return [...result.rows].map((row) => row.name);
+  return [...result.rows].map((row) => ({ name: row.name, class: row.class ?? null }));
 };
 
 /**
