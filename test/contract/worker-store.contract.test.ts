@@ -21,6 +21,7 @@ describeWorkerStoreContract({
         return id;
       },
       setUserMayAct: async (userId, mayAct) => store.setUserMayAct(userId, mayAct),
+      banUser: async (userId, expiresAt) => store.banUser(userId, expiresAt),
       seedRun: async (workerId, status) => {
         runs += 1;
         const id = `run-${runs}`;

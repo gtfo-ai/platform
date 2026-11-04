@@ -33,6 +33,7 @@ import { type BetterAuthOptions, betterAuth } from 'better-auth';
 import { admin } from 'better-auth/plugins/admin';
 import type pg from 'pg';
 import type { ServerConfig } from '../config.js';
+import { userMayAct } from '../queries/identity-queries.js';
 
 /**
  * `Algorithm.Argon2id`, spelled as its value.
@@ -86,12 +87,12 @@ export interface CreateAuthOptions {
 interface UpdatedUser {
   readonly id: string;
   readonly banned?: boolean | null;
+  readonly banExpires?: Date | string | null;
   readonly status?: string | null;
 }
 
-/** Whether an updated user may no longer act: banned, or disabled. */
-export const isDeactivated = (user: UpdatedUser): boolean =>
-  user.banned === true || user.status === 'disabled';
+export const isDeactivated = (user: UpdatedUser, now: Date = new Date()): boolean =>
+  !userMayAct(user, now);
 
 /** Reports a failed `onSessionCreated` through Better Auth's own logger, when the hook has one. */
 const reportHookFailure = (context: unknown, error: unknown, hook = 'onSessionCreated'): void => {

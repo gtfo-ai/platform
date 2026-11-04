@@ -110,6 +110,14 @@ const startDevice = async (
     headers: { 'user-agent': 'agentic-worker/1 (FAKE)', ...extra.headers },
   });
 
+/** The approval page's read: the code travels in the body, never the URL (WP-280 review). */
+const lookupCode = async (instance: FastifyInstance, userCode: string) =>
+  instance.inject({
+    method: 'POST',
+    url: '/api/workers/device/lookup',
+    payload: { user_code: userCode },
+  });
+
 const poll = async (instance: FastifyInstance, deviceCode: string) =>
   instance.inject({
     method: 'POST',
@@ -195,10 +203,10 @@ describe('POST device (RFC 8628 §3.2)', () => {
       remoteAddress: '203.0.113.10',
       headers: { 'cf-connecting-ip': '192.0.2.250' },
     });
-    const lookup = await instance.inject({
-      method: 'GET',
-      url: `/api/workers/device/${workerDeviceResponseSchema.parse(last.json()).user_code}`,
-    });
+    const lookup = await lookupCode(
+      instance,
+      workerDeviceResponseSchema.parse(last.json()).user_code,
+    );
     expect(lookup.json().requested_ip).toBe('192.0.2.250');
   });
 });
@@ -217,10 +225,7 @@ describe('the whole device flow', () => {
     world.clock += 1_000;
     expect((await poll(instance, device.device_code)).json()).toEqual({ error: 'slow_down' });
 
-    const lookup = await instance.inject({
-      method: 'GET',
-      url: `/api/workers/device/${device.user_code.toLowerCase().replace('-', ' ')}`,
-    });
+    const lookup = await lookupCode(instance, device.user_code.toLowerCase().replace('-', ' '));
     expect(lookup.statusCode).toBe(200);
     expect(lookup.json()).toMatchObject({
       user_code: device.user_code,
@@ -270,10 +275,7 @@ describe('the whole device flow', () => {
     const device = workerDeviceResponseSchema.parse((await startDevice(instance)).json());
     world.clock += 600_000;
     expect((await poll(instance, device.device_code)).json()).toEqual({ error: 'expired_token' });
-    const lookup = await instance.inject({
-      method: 'GET',
-      url: `/api/workers/device/${device.user_code}`,
-    });
+    const lookup = await lookupCode(instance, device.user_code);
     expect(lookup.statusCode).toBe(404);
     const late = await approve(instance, device.user_code, true);
     expect(late.statusCode).toBe(409);
@@ -284,10 +286,7 @@ describe('the whole device flow', () => {
     const { app: instance, store, world } = await build();
     const device = workerDeviceResponseSchema.parse((await startDevice(instance)).json());
     world.clock += DEVICE_CODE_STALE_AFTER_MS + 1_000;
-    const lookup = await instance.inject({
-      method: 'GET',
-      url: `/api/workers/device/${device.user_code}`,
-    });
+    const lookup = await lookupCode(instance, device.user_code);
     expect(lookup.json().needs_confirmation).toBe(true);
     const first = await approve(instance, device.user_code, false);
     expect(first.statusCode).toBe(409);
@@ -296,24 +295,33 @@ describe('the whole device flow', () => {
     const second = await approve(instance, device.user_code, true);
     expect(second.statusCode).toBe(200);
     expect(store.audit[0]?.params.stale_confirmed).toBe(true);
+    expect(second.json().performed).toBe(true);
+    // A retry of the same approval is answered with it, and writes no second audit row…
     const again = await approve(instance, device.user_code, true);
-    expect(again.json().error.code).toBe('device_code_already_decided');
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ performed: false, decided_at: second.json().decided_at });
+    expect(store.audit).toHaveLength(1);
+    // …while a different decision on the decided code is refused.
+    const renamed = await instance.inject({
+      method: 'POST',
+      url: '/api/workers/device/approve',
+      payload: { decision: 'deny', user_code: device.user_code },
+    });
+    expect(renamed.json().error.code).toBe('device_code_already_decided');
   });
 
   it('refuses a malformed code as not found, and a decision with no session as 401', async () => {
     const { app: instance, world } = await build();
     expect((await approve(instance, 'AAAA-AAAA')).json().error.code).toBe('device_code_not_found');
-    expect(
-      (await instance.inject({ method: 'GET', url: '/api/workers/device/AAAA-AAAA' })).statusCode,
-    ).toBe(404);
+    expect((await lookupCode(instance, 'AAAA-AAAA')).statusCode).toBe(404);
     world.actor = null;
     for (const request of [
       { method: 'GET' as const, url: '/api/workers' },
-      { method: 'GET' as const, url: '/api/workers/device/BCDF-GHJK' },
       { method: 'DELETE' as const, url: `/api/workers/${ALICE}` },
     ]) {
       expect((await instance.inject(request)).statusCode).toBe(401);
     }
+    expect((await lookupCode(instance, 'BCDF-GHJK')).statusCode).toBe(401);
     expect((await approve(instance, 'BCDF-GHJK')).statusCode).toBe(401);
   });
 

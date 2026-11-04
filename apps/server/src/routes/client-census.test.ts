@@ -882,7 +882,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     );
     for (const path of [
       '/api/workers',
-      '/api/workers/device/{}',
+      '/api/workers/device/lookup',
       '/api/workers/device/approve',
       '/api/workers/{}',
     ]) {
@@ -890,7 +890,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
     for (const [method, url] of [
       ['GET', '/api/workers'],
-      ['GET', '/api/workers/device/BCDF-GHJK'],
+      ['POST', '/api/workers/device/lookup'],
       ['POST', '/api/workers/device/approve'],
       ['DELETE', `/api/workers/${PROBE_ID}`],
     ] as const) {

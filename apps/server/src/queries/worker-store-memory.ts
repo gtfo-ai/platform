@@ -6,7 +6,8 @@
  * stated:** no transaction and no row lock — a JavaScript turn is atomic, so two polls cannot
  * interleave inside one call here, which is what the lock buys in PostgreSQL; `runs` is a map the
  * test seeds (`seedRun`) rather than a table, and the users' ability to act is a set the test
- * flips (`setUserMayAct`) rather than `users.status`/`banned`.
+ * flips (`setUserMayAct`, `banUser`) rather than `users.status`/`banned`, judged by the same
+ * `userMayAct` the session hook uses.
  */
 import type { JsonObject, RunStatus } from '@platform/contracts';
 import {
@@ -15,7 +16,9 @@ import {
   decideDevicePoll,
   deviceCodeLimitExceeded,
   isDeviceCodeStale,
+  repeatedDeviceDecision,
 } from '@platform/domain';
+import { userMayAct } from './identity-queries.js';
 import type {
   CredentialSubject,
   NewDeviceCode,
@@ -30,6 +33,7 @@ interface CodeRow extends Omit<NewDeviceCode, 'intervalSeconds'> {
   approvedBy: string | null;
   workerName: string | null;
   deniedAt: Date | null;
+  deniedBy: string | null;
   consumedAt: Date | null;
   workerId: string | null;
 }
@@ -66,6 +70,8 @@ export interface MemoryAudit {
 export interface MemoryWorkerStore extends WorkerStore {
   addUser(user: MemoryUser): void;
   setUserMayAct(userId: string, mayAct: boolean): void;
+  /** Better Auth's ban: `null` never expires. */
+  banUser(userId: string, expiresAt: Date | null): void;
   seedRun(run: MemoryRun): void;
   readonly runs: ReadonlyMap<string, MemoryRun>;
   readonly audit: readonly MemoryAudit[];
@@ -90,6 +96,17 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
   const workers = new Map<string, WorkerRowMemory>();
   const users = new Map<string, MemoryUser>();
   const disabled = new Set<string>();
+  const bans = new Map<string, Date | null>();
+  /** The session's rule (`userMayAct`), so the double and PostgreSQL agree on an expired ban. */
+  const mayAct = (userId: string): boolean =>
+    userMayAct(
+      {
+        status: disabled.has(userId) ? 'disabled' : 'active',
+        banned: bans.has(userId),
+        banExpires: bans.get(userId) ?? null,
+      },
+      new Date(),
+    );
   const runs = new Map<string, MemoryRun>();
   const audit: MemoryAudit[] = [];
 
@@ -114,6 +131,7 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
       else disabled.add(userId);
     },
     seedRun: (run) => runs.set(run.id, run),
+    banUser: (userId, expiresAt) => bans.set(userId, expiresAt),
 
     async createDeviceCode(input, now) {
       const pending = codes.filter(
@@ -143,6 +161,7 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
         approvedBy: null,
         workerName: null,
         deniedAt: null,
+        deniedBy: null,
         consumedAt: null,
         workerId: null,
       });
@@ -166,7 +185,7 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
         return decision;
       }
       const approver = row.approvedBy;
-      if (approver === null || !users.has(approver) || disabled.has(approver)) {
+      if (approver === null || !users.has(approver) || !mayAct(approver)) {
         return { outcome: 'access_denied' };
       }
       workers.set(mint.workerId, {
@@ -205,6 +224,19 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
       if (row === undefined) {
         return { status: 'not_found' };
       }
+      const repeated = repeatedDeviceDecision(
+        {
+          approvedAt: row.approvedAt?.getTime() ?? null,
+          approvedBy: row.approvedBy,
+          workerName: row.workerName,
+          deniedAt: row.deniedAt?.getTime() ?? null,
+          deniedBy: row.deniedBy,
+        },
+        { decision: input.decision, actorUserId: input.actorUserId, name: input.name },
+      );
+      if (repeated !== null) {
+        return { status: 'decided', decidedAt: new Date(repeated), performed: false };
+      }
       const state = stateOf(row);
       const check = checkDeviceDecision(
         state,
@@ -221,6 +253,7 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
         row.workerName = input.name;
       } else {
         row.deniedAt = input.now;
+        row.deniedBy = input.actorUserId;
       }
       audit.push({
         userId: input.actorUserId,
@@ -233,7 +266,7 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
             input.decision === 'approve' && isDeviceCodeStale(state, input.now.getTime()),
         },
       });
-      return { status: 'decided', decidedAt: input.now };
+      return { status: 'decided', decidedAt: input.now, performed: true };
     },
 
     async listWorkers(userId) {
@@ -293,7 +326,7 @@ export const createMemoryWorkerStore = (): MemoryWorkerStore => {
             workerId: worker.id,
             userId: worker.userId,
             credentialHash: worker.credentialHash,
-            usable: worker.revokedAt === null && !disabled.has(worker.userId),
+            usable: worker.revokedAt === null && mayAct(worker.userId),
           };
     },
   };

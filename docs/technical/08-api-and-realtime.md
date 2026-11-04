@@ -398,12 +398,16 @@ and an unknown `device_code` is `expired_token`. `device` answers `429 device_co
 address is `apps/server/src/client-address.ts`'s — `APP_TRUSTED_CLIENT_IP_HEADER` only from a socket
 peer `APP_TRUST_PROXY` trusts (`false | true | <addresses/CIDRs>`, a bare integer refused), else
 `request.ip`. The people's half is `apps/server/src/routes/workers.ts`, with **one route the amendment
-above did not list**: `GET /api/workers/device/:user_code`, the approval page's read of what the
-requesting machine sent (address, user agent, age, `needs_confirmation` past five minutes) before
-anybody decides — `404 device_code_not_found` for anything not pending, so it is no oracle.
+above did not list**: `POST /api/workers/device/lookup` (`{user_code}`), the approval page's read of
+what the requesting machine sent (address, user agent, age, `needs_confirmation` past five minutes)
+before anybody decides — a read sent as a POST so the code never sits in a URL an access log records,
+and `404 device_code_not_found` for anything not pending, so it is no oracle.
 `POST /api/workers/device/approve` takes `{decision: "approve", user_code, name, confirm_stale}` or
 `{decision: "deny", user_code}` and refuses `409 device_code_needs_confirmation` /
-`device_code_expired` / `device_code_already_decided`; `DELETE /api/workers/:id` answers
+`device_code_expired` / `device_code_already_decided` (another person's decision, the other decision
+or another name); **a retry of the caller's own recorded decision** (same decision, same name) answers
+`200 {decision, decided_at, performed: false}` with the original instant and writes nothing, even
+after the code expired; `DELETE /api/workers/:id` answers
 `{worker_id, performed, revoked_at, expired_runs}`. RBAC: `worker.register` (viewer — any active user)
 for the device pair, the own list and the own revoke; `org.workers.manage` (admin) for every worker,
 and somebody else's worker is `404` to anyone else. Each decision and each performed revocation writes

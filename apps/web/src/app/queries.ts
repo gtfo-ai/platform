@@ -631,7 +631,7 @@ export const useWorkers = () => {
 };
 
 /**
- * `GET /api/workers/device/:user_code` (WP-280): what a pending code's machine sent, read only once
+ * `POST /api/workers/device/lookup` (WP-280): what a pending code's machine sent, read only once
  * somebody has typed a whole code. A `404` is an answer (no such pending code), so it is not retried.
  */
 export const useWorkerDevice = (userCode: string | null) => {

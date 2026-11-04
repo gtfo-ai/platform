@@ -89,6 +89,12 @@ describeWorkerStoreContract({
           mayAct ? 'active' : 'disabled',
         ]);
       },
+      banUser: async (userId, expiresAt) => {
+        await pool.query('update users set banned = true, ban_expires = $2 where id = $1', [
+          userId,
+          expiresAt,
+        ]);
+      },
       seedRun,
       leaseExpired: async (runId) => {
         const row = await pool.query<{ expired: boolean }>(

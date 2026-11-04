@@ -133,6 +133,7 @@ import {
   versionResponseSchema,
   workerDeviceDecisionRequestSchema,
   workerDeviceDecisionResponseSchema,
+  workerDeviceLookupRequestSchema,
   workerDeviceLookupResponseSchema,
   workersResponseSchema,
 } from '@platform/contracts';
@@ -193,8 +194,9 @@ export interface Endpoints {
    */
   readonly workers: () => Promise<z.output<typeof workersResponseSchema>>;
   /**
-   * `GET /api/workers/device/:user_code` — what a pending device code's machine sent (address,
-   * user agent, age) before anybody decides it (WP-280, TD-031 §10c). Rendered as text.
+   * `POST /api/workers/device/lookup` — what a pending device code's machine sent (address, user
+   * agent, age) before anybody decides it (WP-280, TD-031 §10c). A read sent as a POST, so the code
+   * is never in a URL; rendered as text.
    */
   readonly workerDevice: (
     userCode: string,
@@ -659,8 +661,9 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       }),
     workers: () => client.get('/api/workers', { schema: workersResponseSchema }),
     workerDevice: (userCode) =>
-      client.get(`/api/workers/device/${seg(userCode)}`, {
+      client.command('/api/workers/device/lookup', {
         schema: workerDeviceLookupResponseSchema,
+        body: workerDeviceLookupRequestSchema.parse({ user_code: userCode }),
       }),
     decideWorkerDevice: (body) =>
       client.command('/api/workers/device/approve', {

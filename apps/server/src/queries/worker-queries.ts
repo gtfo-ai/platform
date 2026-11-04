@@ -34,6 +34,7 @@ import {
   decideDevicePoll,
   deviceCodeLimitExceeded,
   isDeviceCodeStale,
+  repeatedDeviceDecision,
 } from '@platform/domain';
 import { sql } from 'drizzle-orm';
 import type { Database } from './identity-queries.js';
@@ -89,7 +90,8 @@ export interface DeviceDecisionInput {
 }
 
 export type DeviceDecisionResult =
-  | { readonly status: 'decided'; readonly decidedAt: Date }
+  /** `performed: false` is a repeat of the recorded decision: nothing written, no audit row. */
+  | { readonly status: 'decided'; readonly decidedAt: Date; readonly performed: boolean }
   | { readonly status: 'not_found' | 'expired' | 'already_decided' | 'needs_confirmation' };
 
 export interface WorkerListRow {
@@ -167,6 +169,7 @@ type DeviceCodeRowSql = {
   readonly approved_by: string | null;
   readonly worker_name: string | null;
   readonly denied_at: Date | null;
+  readonly denied_by: string | null;
   readonly consumed_at: Date | null;
   readonly client_address: string;
   readonly user_agent: string | null;
@@ -182,7 +185,11 @@ const stateOf = (row: DeviceCodeRowSql): DeviceCodeState => ({
   consumedAt: ms(row.consumed_at),
 });
 
-/** The user may act: not disabled, and not under a ban that is still in force. */
+/**
+ * The user may act: not disabled, and not under a ban that is still in force — `userMayAct`
+ * (`identity-queries.ts`) in SQL, the session hook's rule; the store suite holds the two together
+ * with a ban whose expiry has passed and one still ahead.
+ */
 const USER_MAY_ACT = sql`(u.status <> 'disabled' and not (coalesce(u.banned, false) and (u.ban_expires is null or u.ban_expires > now())))`;
 
 /** The revocation's one write to `runs` (TD-031 §7): the live runs' lease expires now, nothing else. */
@@ -280,6 +287,19 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
       if (row === undefined) {
         return { status: 'not_found' };
       }
+      const repeated = repeatedDeviceDecision(
+        {
+          approvedAt: ms(row.approved_at),
+          approvedBy: row.approved_by,
+          workerName: row.worker_name,
+          deniedAt: ms(row.denied_at),
+          deniedBy: row.denied_by,
+        },
+        { decision: input.decision, actorUserId: input.actorUserId, name: input.name },
+      );
+      if (repeated !== null) {
+        return { status: 'decided', decidedAt: new Date(repeated), performed: false };
+      }
       const state = stateOf(row);
       const check = checkDeviceDecision(
         state,
@@ -313,7 +333,7 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
       await tx.execute(sql`
         insert into human_actions (user_id, action, params)
         values (${input.actorUserId}, ${`worker.device.${input.decision}`}, ${JSON.stringify(params)}::jsonb)`);
-      return { status: 'decided', decidedAt: input.now };
+      return { status: 'decided', decidedAt: input.now, performed: true };
     });
   },
 

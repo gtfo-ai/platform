@@ -109,9 +109,14 @@ describe('the user-deactivation hook (WP-280, TD-031 §7)', () => {
     await after?.({ id: USER, banned: false, status: 'active' }, null);
     await after?.({ id: USER, name: 'renamed' }, null);
     expect(seen).toEqual([]);
+    // A ban whose expiry has passed is no ban — the session hook's rule (`userMayAct`), not a
+    // second one (WP-280 review).
+    await after?.({ id: USER, banned: true, banExpires: new Date(Date.now() - 60_000) }, null);
+    expect(seen).toEqual([]);
     await after?.({ id: USER, banned: true, status: 'active' }, null);
     await after?.({ id: USER, banned: false, status: 'disabled' }, null);
-    expect(seen).toEqual([USER, USER]);
+    await after?.({ id: USER, banned: true, banExpires: new Date(Date.now() + 60_000) }, null);
+    expect(seen).toEqual([USER, USER, USER]);
   });
 
   it('never fails the update when the hook throws, and reports it', async () => {

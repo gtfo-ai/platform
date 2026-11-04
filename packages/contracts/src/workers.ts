@@ -6,7 +6,7 @@
  * The **machine's** half — `POST /api/worker/v1/device` and `device/token` — is the worker protocol
  * and lives in `./worker.ts` beside the rest of it.
  *
- *   GET    /api/workers/device/:user_code   what the approval page shows before a decision
+ *   POST   /api/workers/device/lookup       what the approval page shows before a decision
  *   POST   /api/workers/device/approve      approve (naming the machine) or deny a code
  *   GET    /api/workers                     the caller's workers; every worker for an administrator
  *   DELETE /api/workers/:id                 revoke (own; any for an administrator)
@@ -18,8 +18,12 @@ import { imageDigestSchema, workerPauseReasonSchema, workerUserCodeSchema } from
 /** What a person typed: normalised by the server (case, spaces, hyphen), so only bounded here. */
 export const typedUserCodeSchema = z.string().min(1).max(32);
 
-/** `GET /api/workers/device/:user_code`'s path. */
-export const workerDeviceLookupParamsSchema = z.strictObject({ user_code: typedUserCodeSchema });
+/**
+ * `POST /api/workers/device/lookup`'s body. A **read sent as a POST** on purpose (WP-280 review): a
+ * user code in a URL path reaches every access log between the browser and the core, and a code is
+ * ~34 bits of a pending approval.
+ */
+export const workerDeviceLookupRequestSchema = z.strictObject({ user_code: typedUserCodeSchema });
 
 /**
  * What the approval page shows against code phishing (TD-031 §10c): where the request came from,
@@ -58,10 +62,15 @@ export const workerDeviceDecisionRequestSchema = z.discriminatedUnion('decision'
 ]);
 export type WorkerDeviceDecisionRequest = z.infer<typeof workerDeviceDecisionRequestSchema>;
 
-/** The decision as recorded. The worker row is created when the machine collects the credential. */
+/**
+ * The decision as recorded. The worker row is created when the machine collects the credential.
+ * `performed: false` is a retry of the caller's own recorded decision (same decision, same name),
+ * answered with its original instant; nothing was written.
+ */
 export const workerDeviceDecisionResponseSchema = z.strictObject({
   decision: z.enum(['approve', 'deny']),
   decided_at: isoDateTimeSchema,
+  performed: z.boolean(),
 });
 
 /** `active` until revoked; a revoked worker's credential answers `401` to every call (TD-031 §7). */

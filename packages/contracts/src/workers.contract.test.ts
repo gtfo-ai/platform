@@ -19,7 +19,7 @@ import {
   revokeWorkerResponseSchema,
   workerDeviceDecisionRequestSchema,
   workerDeviceDecisionResponseSchema,
-  workerDeviceLookupParamsSchema,
+  workerDeviceLookupRequestSchema,
   workerDeviceLookupResponseSchema,
   workerParamsSchema,
   workerSummarySchema,
@@ -100,8 +100,10 @@ describe('the device flow’s machine half (TD-031 §10c)', () => {
 
 describe('the people’s half', () => {
   it('reads a pending code by what was typed, and answers what the machine sent', () => {
-    expect(workerDeviceLookupParamsSchema.safeParse({ user_code: 'bcdf ghjk' }).success).toBe(true);
-    expect(workerDeviceLookupParamsSchema.safeParse({ user_code: 'x'.repeat(33) }).success).toBe(
+    expect(workerDeviceLookupRequestSchema.safeParse({ user_code: 'bcdf ghjk' }).success).toBe(
+      true,
+    );
+    expect(workerDeviceLookupRequestSchema.safeParse({ user_code: 'x'.repeat(33) }).success).toBe(
       false,
     );
     const body = {
@@ -146,7 +148,11 @@ describe('the people’s half', () => {
       }).success,
     ).toBe(false);
     expect(
-      workerDeviceDecisionResponseSchema.safeParse({ decision: 'deny', decided_at: AT }).success,
+      workerDeviceDecisionResponseSchema.safeParse({
+        decision: 'deny',
+        decided_at: AT,
+        performed: true,
+      }).success,
     ).toBe(true);
   });
 

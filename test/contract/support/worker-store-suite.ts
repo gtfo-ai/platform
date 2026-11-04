@@ -34,6 +34,8 @@ export interface WorkerStoreWorld {
   /** A user that exists and may act. */
   addUser(email: string): Promise<string>;
   setUserMayAct(userId: string, mayAct: boolean): Promise<void>;
+  /** Better Auth's ban, with its expiry (`null`: never expires). */
+  banUser(userId: string, expiresAt: Date | null): Promise<void>;
   /** A run held by `workerId`, in `status`; its lease is in the future. */
   seedRun(workerId: string, status: 'running' | 'starting' | 'completed'): Promise<string>;
   /** Whether the run's lease has expired (`lease_expires_at <= now()`). */
@@ -318,6 +320,50 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       expect(new Set((await world.store.listWorkers(null)).map((row) => row.id))).toEqual(
         new Set([worker, otherWorker]),
       );
+    });
+
+    it('answers a repeated decision with the recorded one, writes nothing, and refuses a different one', async () => {
+      const world = await harness.create();
+      const user = await world.addUser('repeat@example.test');
+      const other = await world.addUser('repeat-other@example.test');
+      const pair = code('198.51.100.70');
+      await world.store.createDeviceCode(pair, at(0));
+      const decide = (actorUserId: string, name: string, now: number) =>
+        world.store.decideDeviceCode({
+          userCodeHash: pair.userHash,
+          decision: 'approve',
+          name,
+          confirmedStale: false,
+          actorUserId,
+          now: at(now),
+          auditParams: {},
+        });
+      expect(await decide(user, 'repeat-machine', 1_000)).toEqual({
+        status: 'decided',
+        decidedAt: at(1_000),
+        performed: true,
+      });
+      // A retry — even after the code expired — answers the first decision and writes no audit row.
+      expect(await decide(user, 'repeat-machine', 700_000)).toEqual({
+        status: 'decided',
+        decidedAt: at(1_000),
+        performed: false,
+      });
+      expect(await decide(user, 'renamed', 2_000)).toEqual({ status: 'already_decided' });
+      expect(await decide(other, 'repeat-machine', 2_000)).toEqual({ status: 'already_decided' });
+      expect((await world.audit()).map((row) => row.action)).toEqual(['worker.device.approve']);
+    });
+
+    it('applies the session’s ban rule: a ban in force stops a worker, an expired one does not', async () => {
+      const world = await harness.create();
+      const owner = await world.addUser('banned@example.test');
+      const worker = await registerWorker(world, owner);
+      await world.banUser(owner, new Date(Date.now() - 60_000));
+      expect((await world.store.findCredentialSubject(worker))?.usable).toBe(true);
+      await world.banUser(owner, new Date(Date.now() + 3_600_000));
+      expect((await world.store.findCredentialSubject(worker))?.usable).toBe(false);
+      await world.banUser(owner, null);
+      expect((await world.store.findCredentialSubject(worker))?.usable).toBe(false);
     });
 
     it('expires the leases of every worker of a deactivated user, and stops authenticating them', async () => {

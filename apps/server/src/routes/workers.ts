@@ -2,7 +2,7 @@
  * The people's half of the worker surface — WP-280, TD-031 decisions 7 and 10c, technical/08's
  * TD-031 amendment:
  *
- *   GET    /api/workers/device/:user_code   what `/workers/approve` shows before a decision
+ *   POST   /api/workers/device/lookup       what `/workers/approve` shows before a decision
  *   POST   /api/workers/device/approve      approve (naming the machine) or deny a code
  *   GET    /api/workers                     own workers; every worker for an administrator
  *   DELETE /api/workers/:id                 revoke (own; any for an administrator)
@@ -26,7 +26,9 @@
  *
  * A decision writes one `human_actions` row (`worker.device.approve`/`worker.device.deny`) and a
  * performed revocation one (`worker.revoke`), each in the transaction of its write; a refused
- * command writes none. The row never carries a code.
+ * command writes none, and neither does a **retry**: the same person repeating their own recorded
+ * decision (same decision, same machine name) is answered `200` with the original instant and
+ * `performed: false` — `repeatedDeviceDecision` in `@platform/domain`. The row never carries a code.
  *
  * ## Revocation
  *
@@ -42,7 +44,7 @@ import {
   type WorkerSummary,
   workerDeviceDecisionRequestSchema,
   workerDeviceDecisionResponseSchema,
-  workerDeviceLookupParamsSchema,
+  workerDeviceLookupRequestSchema,
   workerDeviceLookupResponseSchema,
   workerParamsSchema,
   workerPauseReasonSchema,
@@ -109,22 +111,24 @@ export const registerWorkerRoutes = async (
     return actor;
   };
 
-  typed.get(
-    '/api/workers/device/:user_code',
+  // A read sent as a POST (WP-280 review): a user code in a URL path reaches every access log
+  // between the browser and the core. The body never does.
+  typed.post(
+    '/api/workers/device/lookup',
     {
       preValidation: requirePermission(guard, 'worker.register'),
       schema: {
         summary: 'What a pending device code’s machine sent, before a decision',
         description:
-          'The requesting address, user agent and age of a **pending** device code, and `needs_confirmation` once it is older than five minutes (TD-031 §10c). The code is normalised (case, spaces and the hyphen are ignored). An unknown, malformed, expired or decided code is `404 device_code_not_found`. Any signed-in user (`worker.register`, WP-280).',
+          'A read sent as a POST, so the code never sits in a URL an access log records. The requesting address, user agent and age of a **pending** device code, and `needs_confirmation` once it is older than five minutes (TD-031 §10c). The code is normalised (case, spaces and the hyphen are ignored). An unknown, malformed, expired or decided code is `404 device_code_not_found`. Any signed-in user (`worker.register`, WP-280).',
         tags: ['workers'],
-        params: workerDeviceLookupParamsSchema,
+        body: workerDeviceLookupRequestSchema,
         response: { 200: workerDeviceLookupResponseSchema, 404: apiErrorSchema },
       },
     },
     async (request): Promise<z.output<typeof workerDeviceLookupResponseSchema>> => {
-      const normalised = normaliseUserCode(request.params.user_code);
-      const hash = hashTypedUserCode(request.params.user_code);
+      const normalised = normaliseUserCode(request.body.user_code);
+      const hash = hashTypedUserCode(request.body.user_code);
       if (normalised === null || hash === null) {
         throw deviceCodeNotFound();
       }
@@ -155,7 +159,7 @@ export const registerWorkerRoutes = async (
       schema: {
         summary: 'Approve a device code for your machine, or deny it',
         description:
-          'Approving names the machine; the worker is created — yours — when the machine collects its credential with `device/token`. A code older than five minutes needs `confirm_stale: true` (`409 device_code_needs_confirmation` otherwise, TD-031 §10c); denying needs nothing and makes the poll answer `access_denied`. `404 device_code_not_found` for an unknown or malformed code, `409 device_code_expired`, `409 device_code_already_decided`. One `human_actions` row per decision. Any signed-in user (`worker.register`, WP-280).',
+          'Approving names the machine; the worker is created — yours — when the machine collects its credential with `device/token`. A code older than five minutes needs `confirm_stale: true` (`409 device_code_needs_confirmation` otherwise, TD-031 §10c); denying needs nothing and makes the poll answer `access_denied`. `404 device_code_not_found` for an unknown or malformed code, `409 device_code_expired`, `409 device_code_already_decided` (somebody else’s decision, the other decision, or another name). **A retry of your own recorded decision** — same decision, same name — answers `200` with its original `decided_at` and `performed: false`, even after the code expired. One `human_actions` row per performed decision, none for a retry. Any signed-in user (`worker.register`, WP-280).',
         tags: ['workers'],
         body: workerDeviceDecisionRequestSchema,
         response: {
@@ -183,7 +187,11 @@ export const registerWorkerRoutes = async (
       });
       switch (result.status) {
         case 'decided':
-          return { decision: body.decision, decided_at: iso(result.decidedAt) };
+          return {
+            decision: body.decision,
+            decided_at: iso(result.decidedAt),
+            performed: result.performed,
+          };
         case 'not_found':
           throw deviceCodeNotFound();
         case 'expired':

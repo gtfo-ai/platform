@@ -17,8 +17,11 @@
 -- writer, as it is of `run_offers.worker_id`.
 --
 -- **Device codes.** Both codes are stored hashed: the `device_code` is 32 random bytes (the poll's
--- bearer secret), and the `user_code` — eight letters of a 20-letter alphabet — is looked up by its
--- hash, so a read of this table cannot be turned into an approval. `client_address` and
+-- bearer secret, not recoverable from its hash), and the `user_code` — eight letters of a 20-letter
+-- alphabet — is looked up by its hash. That hash does **not** keep a user code secret from a reader
+-- of this table: 20⁸ ≈ 2.6 × 10¹⁰ codes are enumerable offline. What stops a read from becoming an
+-- approval is the approval itself: it needs a signed-in, active user's session (with CSRF) and a
+-- code still pending — younger than ten minutes — and it grants that user's own access only. `client_address` and
 -- `user_agent` are what the approval page shows against code phishing (TD-031 §10c); the address
 -- is also the key of the outstanding-code limit. `interval_seconds` grows by 5 on every `slow_down`
 -- (RFC 8628 §3.5). A row is **pending** until it is approved, denied or expires; an approved row is

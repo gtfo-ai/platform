@@ -179,3 +179,40 @@ export const deviceCodeLimitExceeded = (
   }
   return null;
 };
+
+/** Who decided a code, and how, as recorded. */
+export interface RecordedDeviceDecision {
+  readonly approvedAt: number | null;
+  readonly approvedBy: string | null;
+  readonly workerName: string | null;
+  readonly deniedAt: number | null;
+  readonly deniedBy: string | null;
+}
+
+/**
+ * The instant of the recorded decision a request **repeats**, or `null` (WP-280 review): the same
+ * person deciding the same way — approving under the same machine name — is a retry of a decision
+ * already performed, and is answered with that decision rather than `already_decided`. It is asked
+ * **before** {@link checkDeviceDecision}, so a retry that arrives after the code expired, or after
+ * the machine collected its credential, still answers what was done. A different person, a
+ * different decision or a different name is a second decision, and is refused.
+ */
+export const repeatedDeviceDecision = (
+  recorded: RecordedDeviceDecision,
+  request: {
+    readonly decision: 'approve' | 'deny';
+    readonly actorUserId: string;
+    readonly name: string | null;
+  },
+): number | null => {
+  if (request.decision === 'approve') {
+    return recorded.approvedAt !== null &&
+      recorded.approvedBy === request.actorUserId &&
+      recorded.workerName === request.name
+      ? recorded.approvedAt
+      : null;
+  }
+  return recorded.deniedAt !== null && recorded.deniedBy === request.actorUserId
+    ? recorded.deniedAt
+    : null;
+};

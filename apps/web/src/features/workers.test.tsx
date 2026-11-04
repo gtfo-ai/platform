@@ -1,7 +1,7 @@
 /**
  * The Workers screen and the device-approval page (WP-280, TD-031 §10c), driven through `createApp`
  * with a fake server, so the real router, query client and endpoint parsers are asserted: the page
- * **calls** `GET /api/workers/device/:code` before any decision and shows the requesting address,
+ * **calls** `POST /api/workers/device/lookup` (the code in the body, never the URL) before any decision and shows the requesting address,
  * user agent and the code's age as text with the phishing warning; a code older than five minutes
  * cannot be approved without the second confirmation, and the approval it then sends carries
  * `confirm_stale: true`; the Workers screen lists and revokes through `DELETE /api/workers/:id`.
@@ -71,10 +71,14 @@ const fetchFor = (device: WorkerDeviceLookup | 'missing', workers: WorkerSummary
     if (url.includes('/api/workers/device/approve')) {
       sent.push({ method, url, body: JSON.parse(String(init?.body)) });
       const body = JSON.parse(String(init?.body)) as { decision: string };
-      return json({ decision: body.decision, decided_at: '2026-11-04T12:02:00.000Z' });
+      return json({
+        decision: body.decision,
+        decided_at: '2026-11-04T12:02:00.000Z',
+        performed: true,
+      });
     }
-    if (url.includes('/api/workers/device/')) {
-      sent.push({ method, url, body: null });
+    if (url.includes('/api/workers/device/lookup')) {
+      sent.push({ method, url, body: JSON.parse(String(init?.body)) });
       return device === 'missing'
         ? json({ error: { code: 'device_code_not_found', message: 'no pending code' } }, 404)
         : json(device);
@@ -121,7 +125,9 @@ describe('the approval page', () => {
     await waitFor(() => {
       expect(container.querySelector('[data-device-ip]')?.textContent).toBe('198.51.100.7');
     });
-    expect(sent[0]?.url).toContain('/api/workers/device/BCDF-GHJK');
+    expect(sent[0]?.method).toBe('POST');
+    expect(sent[0]?.url).not.toContain('BCDF');
+    expect(sent[0]?.body).toEqual({ user_code: 'BCDF-GHJK' });
     expect(container.querySelector('[data-device-agent]')?.textContent).toBe(HOSTILE_AGENT);
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('[data-device-age]')?.textContent).toBe('1 min 15 s');

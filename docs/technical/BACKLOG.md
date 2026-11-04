@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 713, so the next is **714**), its grade
+line with the next free number (the highest is 715, so the next is **716**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -14,6 +14,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 |---|---|---|---|
 | 171 | major | WP-58 (architect ruling pending) | KB query floor drops the subject word on a single-subject vault; a wrong page can outrank the right one on PostgreSQL (small-to-major) |
 | 693 | major | WP-283 | Ruled (c): on a remote worker the launcher's mirror and export helpers need the core-held SSH deploy key; worker must sign through the core |
+| 714 | major | WP-281 | Claim, heartbeat and finish SQL must re-check `workers.revoked_at` and the user-may-act rule (`USER_MAY_ACT`) in their own statement, so a request authenticated just before a revoke or ban cannot commit after it |
 | 232 | minor | — | Storage gauge (org-dashboard panel, 50 GB warning, partition purge) not built; only Prometheus metrics exist |
 | 446 | minor | — | WP-144 criterion (3), a real `docker compose stop runner` mid-run, not built; needs fake providers reachable from a compose stack |
 | 538 | minor | — | Two installations sharing one tracker service account both see themselves as assignee, so the claim does not stop double work |
@@ -33,6 +34,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 708 | minor | WP-283 | The worker must serve each run's relayed helper agent socket from a directory of its own: the mirror/export helpers mount the socket's whole directory, so a shared one would let one run's helper reach another run's socket (PR #2 review) |
 | 711 | minor | — | A user's deactivation (Better Auth ban/disable) expires their workers' run leases from the update's after-hook, after its commit, not in its transaction as TD-031 §7 says; a trigger on users is not additive (TD-032 D) |
 | 712 | minor | WP-281 | WP-280 serves no X-Worker-Protocol check on device/device-token (a credential-less machine asks before it speaks the protocol); WP-281 should state whether the 426 applies there |
+| 715 | minor | — | Device-flow limit keys an exact IPv6 address (rotate within a /64 to dodge the 20 per address), and ~10 addresses fill the 200 instance slots for 10 min; key IPv6 on its /64 and alert on the instance limit |
 | 713 | nit | — | worker_device_codes rows are never deleted; bounded by the 200-pending limit per ten minutes, but grow with use; add a sweep of consumed/expired rows |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
 | 422 | nit | — | pipeline.outbound polls at 0.5 s in every process; idle cost on a large job table and drain above N = 50 never measured |

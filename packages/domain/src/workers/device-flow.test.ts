@@ -14,6 +14,7 @@ import {
   MAX_OUTSTANDING_DEVICE_CODES_PER_ADDRESS,
   MAX_OUTSTANDING_DEVICE_CODES_PER_INSTANCE,
   normaliseUserCode,
+  repeatedDeviceDecision,
   userCodeFromBytes,
 } from './device-flow.js';
 
@@ -180,5 +181,62 @@ describe('deviceCodeLimitExceeded', () => {
     expect(deviceCodeLimitExceeded(0, MAX_OUTSTANDING_DEVICE_CODES_PER_INSTANCE)).toBe('instance');
     expect(MAX_OUTSTANDING_DEVICE_CODES_PER_ADDRESS).toBe(20);
     expect(MAX_OUTSTANDING_DEVICE_CODES_PER_INSTANCE).toBe(200);
+  });
+});
+
+describe('repeatedDeviceDecision — a retried decision (WP-280 review)', () => {
+  const approved = {
+    approvedAt: T0 + 1_000,
+    approvedBy: 'alice',
+    workerName: 'alice-laptop',
+    deniedAt: null,
+    deniedBy: null,
+  };
+
+  it('answers the recorded instant for the same person, decision and name', () => {
+    expect(
+      repeatedDeviceDecision(approved, {
+        decision: 'approve',
+        actorUserId: 'alice',
+        name: 'alice-laptop',
+      }),
+    ).toBe(T0 + 1_000);
+    const denied = {
+      ...approved,
+      approvedAt: null,
+      approvedBy: null,
+      workerName: null,
+      deniedAt: T0,
+      deniedBy: 'alice',
+    };
+    expect(
+      repeatedDeviceDecision(denied, { decision: 'deny', actorUserId: 'alice', name: null }),
+    ).toBe(T0);
+  });
+
+  it('is no repeat for another person, another name, the other decision or an undecided code', () => {
+    expect(
+      repeatedDeviceDecision(approved, {
+        decision: 'approve',
+        actorUserId: 'bob',
+        name: 'alice-laptop',
+      }),
+    ).toBeNull();
+    expect(
+      repeatedDeviceDecision(approved, {
+        decision: 'approve',
+        actorUserId: 'alice',
+        name: 'other',
+      }),
+    ).toBeNull();
+    expect(
+      repeatedDeviceDecision(approved, { decision: 'deny', actorUserId: 'alice', name: null }),
+    ).toBeNull();
+    expect(
+      repeatedDeviceDecision(
+        { approvedAt: null, approvedBy: null, workerName: null, deniedAt: null, deniedBy: null },
+        { decision: 'approve', actorUserId: 'alice', name: 'alice-laptop' },
+      ),
+    ).toBeNull();
   });
 });

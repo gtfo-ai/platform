@@ -52,6 +52,33 @@ export interface IdentityRow {
 }
 
 /** The row behind an authenticated session. `null` when the user was deleted mid-session. */
+/**
+ * **The one rule for "is this ban in force"** (WP-280 review): `banned` set and no expiry, or an
+ * expiry still ahead. The session hook (through {@link findUserById}), the user-deactivation hook
+ * (`auth/better-auth.ts`) and the worker store's SQL predicate (`USER_MAY_ACT` in
+ * `worker-queries.ts`, held to this by `test/contract/support/worker-store-suite.ts`) all apply it,
+ * so a session and a worker credential of one user can never disagree about whether they may act.
+ */
+export const isBanInForce = (
+  banned: boolean | null | undefined,
+  banExpires: Date | string | null | undefined,
+  now: Date,
+): boolean =>
+  banned === true &&
+  (banExpires === null ||
+    banExpires === undefined ||
+    new Date(banExpires).getTime() > now.getTime());
+
+/** A user may act unless disabled or under a ban in force — the session's and the worker's rule. */
+export const userMayAct = (
+  user: {
+    readonly status?: string | null;
+    readonly banned?: boolean | null;
+    readonly banExpires?: Date | string | null;
+  },
+  now: Date,
+): boolean => user.status !== 'disabled' && !isBanInForce(user.banned, user.banExpires, now);
+
 export const findUserById = async (database: Database, id: string): Promise<IdentityRow | null> => {
   const rows = await database
     .select({
@@ -73,7 +100,7 @@ export const findUserById = async (database: Database, id: string): Promise<Iden
   }
   // A ban with an expiry in the past is over. Better Auth applies the same rule at sign-in; it is
   // repeated here because a session issued before the ban is still in the table.
-  const banned = row.banned === true && (row.banExpires === null || row.banExpires > new Date());
+  const banned = isBanInForce(row.banned, row.banExpires, new Date());
   return {
     id: row.id,
     email: row.email,
