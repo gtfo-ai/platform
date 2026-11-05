@@ -76,7 +76,7 @@ describe('Drizzle schema', () => {
     // whether the instance has a server claimant (migration 0097, WP-278, TD-031 decision 8), plus
     // `run_tool_calls`, `run_tool_approvals` and `run_session_lines` — what a remote run's calls to
     // the core leave behind: a mutating tool's answer keyed by its `tool_use_id`, an approval one
-    // replica opens and another's heartbeat delivers, and the session mirror (migration 0099,
+    // replica opens and another's heartbeat delivers, and the session mirror (migration 0098,
     // WP-282, TD-031 §§9–10).
     expect(tables.length).toBe(81);
   });

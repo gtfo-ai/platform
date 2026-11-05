@@ -263,6 +263,7 @@ export * from './testing/memory-notifications.js';
 export * from './testing/memory-pipeline.js';
 export * from './testing/memory-proposals.js';
 export * from './testing/memory-readiness.js';
+export * from './testing/memory-remote-run-calls.js';
 export * from './testing/memory-shadow.js';
 export * from './testing/memory-stats.js';
 export * from './testing/project-stream-race.js';

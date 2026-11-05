@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 753, so the next is **754**), its grade
+line with the next free number (the highest is 754, so the next is **755**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -24,6 +24,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 750 | minor | — | A remote run's SDK session mirror is stored redacted (`run_session_lines`, WP-282) and nothing reads it: no `SessionMirrorPort` over it exists, so a resume of a remote run on another host starts a fresh session; the in-process mirror has no production store either (`session-mirror.ts`) |
 | 751 | minor | — | A decided remote tool approval is delivered on one heartbeat (`delivered_at`, WP-282); a heartbeat response the worker never receives loses it and the worker's own timeout denies — fail closed today (the port only denies), a lost `allow` once a port can ask a human |
 | 752 | minor | WP-283 | `tools/report_progress` on the core has no progress door (the runner holds it), so it answers the refusal sentence: the remote worker must answer `report_progress` from its own runner and upload the row through `transcript` |
+| 754 | minor | — | A remote run's `run_messages` have no total cap per run: `transcript` bounds a batch (256 KiB) and a `seq` (2³¹−1), so a tampered worker can store up to 2³¹ entries; a per-run byte or row bound, refused past it as the session mirror is, would close it (review of PR #22) |
 | 730 | minor | — | A stage offer names no assignee (WP-278): the ticket's assignee is read at intake (`TicketRead.assignee`) and dropped, so BD-032 decision 5's head start reaches only an ask's asker until a mapped assignee user is stored on the task |
 | 733 | minor | — | Offer timestamps (`server_from`, `workers_from`, `expires_at`) are written from the offering process's clock and compared with the claimant's, while claimant liveness uses the database's clock; a process clock ahead of the claimant's delays a server claim by the skew (WP-278) |
 | 809 | minor | — | S-23.2 humanized the board, task, run, Agents and Inbox words only; raw enum values still print in `settings.tsx` (user role/status), `integrations.tsx`/`onboarding-connect.tsx`/`project-settings.tsx` (integration type, health), `project-panels.tsx`/`business-interview.tsx` (proposal type/kind/status), `run-command-log.tsx`, `breakdown-panel.tsx`, `workers.tsx`, `identities.tsx`, `ask-thread.tsx` and the board/task template badge — each needs its record in `ui/humanize.ts` as its screen is redone |

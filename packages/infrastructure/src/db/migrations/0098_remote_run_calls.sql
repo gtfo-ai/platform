@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0099 — what a remote run's calls to the core leave behind (WP-282, TD-031 decisions 5, 10a and
+-- 0098 — what a remote run's calls to the core leave behind (WP-282, TD-031 decisions 5, 10a and
 -- 10b, §9's `tools/:name`, `approvals` and `session` verbs).
 --
 -- **Why a migration, when the plan row says none.** The row's three stores were assumed to exist and
@@ -10,7 +10,7 @@
 -- `approvals` is a task's plan or merge decision with its own enum, and `run_commands`' `kind` check
 -- admits no new value without a `contract` migration (TD-031 §14); and the SDK session mirror (TD-007)
 -- has never had a production store at all (`session-mirror.ts` composes over a port nothing
--- implemented). 0098 is left to the TD-031 mint-retry ruling the orchestrator reserved it for.
+-- implemented). It takes 0098, the next free number; WP-285 takes the next free one after it.
 --
 -- **`run_tool_calls`** — one row per mutating platform tool call of a remote run, keyed by the run
 -- and the SHA-256 of the SDK's `tool_use_id` (a digest, so the stored key is secret-free whatever a

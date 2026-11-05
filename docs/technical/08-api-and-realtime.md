@@ -483,7 +483,7 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
 **The run-scoped calls besides the claim are served since WP-282** (`apps/server/src/routes/worker/
 run-calls.ts`, registered by `protocol.ts` with its run-token authentication; the commands
 `packages/application/src/pipeline/remote-run-calls.ts`, composed by `apps/server/src/worker-run-calls.ts`;
-their stores migration 0099). Every body names an epoch; the run must be held under it by the
+their stores migration 0098). Every body names an epoch; the run must be held under it by the
 authenticated worker, else `409 lease_lost` (`410 run_gone` for a run that no longer exists):
 
 - **`transcript`** — a batch of at most 256 KiB (`413` past it) for a run held under the epoch, live or

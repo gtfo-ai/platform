@@ -189,6 +189,11 @@ export interface RemoteRunCallStore {
       readonly at: IsoDateTime;
     },
   ): Promise<void>;
+  /** Deletes an **unanswered** claim, so a retry under the same key performs the call again. */
+  releaseToolCall(
+    tx: Transaction,
+    input: { readonly runId: Id; readonly toolUseDigest: string },
+  ): Promise<void>;
   /** Opens an approval, or answers the one already open under `(runId, toolUseDigest)`. */
   openApproval(
     tx: Transaction,
@@ -217,7 +222,9 @@ export interface RemoteRunCallStore {
     tx: Transaction,
     input: { readonly runId: Id; readonly at: IsoDateTime; readonly limit: number },
   ): Promise<readonly DecidedApproval[]>;
-  /** How many session lines the run has stored. */
+  /** Serialises the ingests of one run's session mirror until the transaction ends. */
+  lockSessionMirror(tx: Transaction, runId: Id): Promise<void>;
+  /** How many session lines the run has stored, across every session id. */
   sessionLineCount(tx: Transaction, runId: Id): Promise<number>;
   /** Stores the lines at `fromLine…`, each position at most once; answers how many were written. */
   appendSessionLines(
@@ -290,6 +297,8 @@ export interface RemoteRunCallsOptions {
   readonly deployKeys: RemoteRunDeployKeys;
   /** `MAX_DEPLOY_KEY_SIGNATURES`: one cap per run, counted in the database. */
   readonly maxSignatures: number;
+  /** @default MAX_SESSION_LINES_PER_RUN — the session mirror's lines per run, every session id. */
+  readonly maxSessionLines?: number;
   readonly now?: () => Date;
   readonly newId?: () => Id;
   readonly logger?: Logger;
@@ -469,6 +478,7 @@ export const createRemoteRunCalls = (options: RemoteRunCallsOptions): RemoteRunC
   const logger = options.logger ?? silentLogger;
   const now = options.now ?? (() => new Date());
   const newId = options.newId ?? ((): Id => randomUUID() as Id);
+  const maxSessionLines = options.maxSessionLines ?? MAX_SESSION_LINES_PER_RUN;
   const iso = (): IsoDateTime => now().toISOString() as IsoDateTime;
 
   const fenceIn = async (
@@ -703,7 +713,14 @@ export const createRemoteRunCalls = (options: RemoteRunCallsOptions): RemoteRunC
         const redacted = redactor.redactText(`${input.name} failed: ${message}`);
         answer = { result: redacted.value, isError: true, count: redacted.count };
       }
-      if (mutating) {
+      if (mutating && input.signal.aborted) {
+        // The worker went away mid-call (review of PR #22): nobody received this answer, so the
+        // claim is given back rather than completed with it — the worker's retry performs the call
+        // again, and the provider effect under it is the executor's own idempotency key.
+        await unitOfWork.transaction(async (scope) =>
+          store.releaseToolCall(scope.tx, { runId: input.runId, toolUseDigest }),
+        );
+      } else if (mutating) {
         await unitOfWork.transaction(async (scope) =>
           store.completeToolCall(scope.tx, {
             runId: input.runId,
@@ -800,8 +817,14 @@ export const createRemoteRunCalls = (options: RemoteRunCallsOptions): RemoteRunC
         if (held.fence === 'lost' || held.fence === 'gone') {
           return refusalOf(held.fence);
         }
-        if (input.fromLine + lines.length > MAX_SESSION_LINES_PER_RUN) {
-          return { kind: 'full', limit: MAX_SESSION_LINES_PER_RUN };
+        // The bound is per **run**, across every session id it names (review of PR #22): one
+        // ingest of a run's mirror at a time, then what the run holds plus this batch.
+        await store.lockSessionMirror(scope.tx, input.runId);
+        if (
+          input.fromLine + lines.length > maxSessionLines ||
+          (await store.sessionLineCount(scope.tx, input.runId)) + lines.length > maxSessionLines
+        ) {
+          return { kind: 'full', limit: maxSessionLines };
         }
         const stored = await store.appendSessionLines(scope.tx, {
           runId: input.runId,

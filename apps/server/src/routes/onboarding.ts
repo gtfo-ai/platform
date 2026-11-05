@@ -194,6 +194,30 @@ export const PROBE_TIMEOUT_MS = 10_000;
  * it. Only `allow` and `deny` are recorded; any other text is the schema's to refuse, never the
  * audit's to copy.
  */
+/**
+ * `integration.create`'s audit params: the provider, the name, the credential **field names** (never
+ * a value), the idempotency key and digest — and, since WP-282 (Q124 (a)), the remote-worker opt-in
+ * when the create sets it.
+ */
+export const integrationCreateAuditParams = (
+  body: {
+    readonly provider: string;
+    readonly name: string;
+    readonly config?: Readonly<Record<string, unknown>> | undefined;
+    readonly secret_refs?: Readonly<Record<string, string>> | undefined;
+  },
+  idempotencyKey: string,
+  bodyDigest: string,
+) => ({
+  provider: body.provider,
+  name: body.name,
+  // Field names, not values: what was configured, never what it was configured with.
+  secret_fields: Object.keys(body.secret_refs ?? {}),
+  idempotency_key: idempotencyKey,
+  body_digest: bodyDigest,
+  ...remoteRunCredentialAudit(body.config, undefined),
+});
+
 export const remoteRunCredentialAudit = (
   config: Readonly<Record<string, unknown>> | undefined,
   remove: readonly string[] | undefined,
@@ -435,14 +459,7 @@ export const registerOnboardingRoutes = async (
           audit: {
             userId: actor.userId,
             action: 'integration.create',
-            params: {
-              provider: request.body.provider,
-              name: request.body.name,
-              // Field names, not values: what was configured, never what it was configured with.
-              secret_fields: Object.keys(request.body.secret_refs ?? {}),
-              idempotency_key: key,
-              body_digest: digest,
-            },
+            params: integrationCreateAuditParams(request.body, key, digest),
           },
         });
       } catch (error) {

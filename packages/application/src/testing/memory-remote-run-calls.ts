@@ -102,6 +102,12 @@ export const createMemoryRemoteRunCallStore = (
       if (row === undefined || row.answer !== null) return;
       row.answer = { result: structuredClone(input.result) as JsonValue, isError: input.isError };
     },
+    releaseToolCall: async (_tx, input) => {
+      const row = toolCalls.get(key(input.runId, input.toolUseDigest));
+      if (row !== undefined && row.answer === null) {
+        toolCalls.delete(key(input.runId, input.toolUseDigest));
+      }
+    },
     openApproval: async (_tx, input) => {
       for (const row of approvals.values()) {
         if (row.runId === input.runId && row.toolUseDigest === input.toolUseDigest) {
@@ -143,6 +149,8 @@ export const createMemoryRemoteRunCallStore = (
       }
       return taken;
     },
+    // One thread: there is nothing to serialise (PostgreSQL takes an advisory lock).
+    lockSessionMirror: async () => {},
     sessionLineCount: async (_tx, runId) =>
       [...sessions.values()].filter((row) => row.runId === runId).length,
     appendSessionLines: async (_tx, input) => {

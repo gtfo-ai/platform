@@ -155,6 +155,8 @@ interface WorldOptions {
   readonly maxSignatures?: number;
   readonly approvals?: RemoteRunCallsOptions['approvals'];
   readonly deployKey?: boolean;
+  readonly maxSessionLines?: number;
+  readonly tools?: Partial<PlatformToolPort>;
 }
 
 const world = (options: WorldOptions = {}) => {
@@ -262,6 +264,7 @@ const world = (options: WorldOptions = {}) => {
     updateMrDescription: refuse,
     createFollowupTicket: refuse,
   };
+  Object.assign(tools, options.tools ?? {});
   const asked: ToolApprovalRequest[] = [];
   const signed: SshSignRequest[] = [];
   const calls = createRemoteRunCalls({
@@ -293,6 +296,7 @@ const world = (options: WorldOptions = {}) => {
             },
     },
     maxSignatures: options.maxSignatures ?? 128,
+    ...(options.maxSessionLines === undefined ? {} : { maxSessionLines: options.maxSessionLines }),
     now: () => NOW,
   });
   return { calls, memory, run, store, git, auditLog, kbQueries, asked, signed };
@@ -453,6 +457,30 @@ describe('platform tools through the core (TD-031 §10b)', () => {
     expect(w.git.drafts).toHaveLength(1);
   });
 
+  it('gives the claim back when the worker went away mid-call, so its retry performs the call again', async () => {
+    const aborted = new AbortController();
+    let calls = 0;
+    const w = world({
+      tools: {
+        openMergeRequest: async () => {
+          calls += 1;
+          if (calls === 1) aborted.abort();
+          return { iid: 7, attempt: calls };
+        },
+      },
+    });
+    const first = await w.calls.tool({ ...openMr('toolu_12'), signal: aborted.signal });
+    expect(first.kind).toBe('answered');
+    // Nothing stored for an answer nobody received.
+    expect(w.store.toolCallRows(RUN)).toHaveLength(0);
+    const retry = await w.calls.tool(openMr('toolu_12'));
+    expect(retry).toMatchObject({ kind: 'answered', result: { attempt: 2 } });
+    expect(calls).toBe(2);
+    // The retry's answer is the stored one from now on.
+    expect(await w.calls.tool(openMr('toolu_12'))).toEqual(retry);
+    expect(calls).toBe(2);
+  });
+
   it('keeps a planted credential in a tool input out of the provider request and the audit (integration_actions)', async () => {
     const w = world();
     const answer = await w.calls.tool(openMr('toolu_04', `uses ${PROJECT_SECRET} to log in`));
@@ -605,6 +633,23 @@ describe('the session mirror (TD-007, TD-031 §9)', () => {
     ).toEqual({
       kind: 'lease_lost',
     });
+  });
+});
+
+describe('the session mirror’s bound is per run (review of PR #22)', () => {
+  it('counts every session id the run names: a second session cannot store past the run’s bound', async () => {
+    const w = world({ maxSessionLines: 3 });
+    expect(
+      await w.calls.session({ ...fence, sessionId: 'sess-a', fromLine: 0, lines: ['1', '2'] }),
+    ).toEqual({ kind: 'stored', stored: 2 });
+    // A rotated session id starts at line 0 again; the run's total is what is bounded.
+    expect(
+      await w.calls.session({ ...fence, sessionId: 'sess-b', fromLine: 0, lines: ['3', '4'] }),
+    ).toEqual({ kind: 'full', limit: 3 });
+    expect(
+      await w.calls.session({ ...fence, sessionId: 'sess-b', fromLine: 0, lines: ['3'] }),
+    ).toEqual({ kind: 'stored', stored: 1 });
+    expect(w.store.sessionRows(RUN)).toHaveLength(3);
   });
 });
 

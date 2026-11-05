@@ -90,6 +90,49 @@ export interface ComposeRemoteRunsOptions {
 
 const nowIso = (): IsoDateTime => new Date().toISOString() as IsoDateTime;
 
+/**
+ * The settle's base redactor for a remote run (backlog 745): the run's project bindings over the
+ * platform's rules (`runRedactors.baseFor`), read outside any transaction before the settle opens its
+ * own. A binding that fails to load must not keep a finished run from settling, so it falls back to
+ * the platform's rules — the WP-281 behaviour — and says so; with no `runRedactors`, the platform's
+ * rules alone.
+ */
+export const remoteSettleRedactorFor =
+  (options: {
+    readonly pool: Pick<pg.Pool, 'query'>;
+    readonly platformRedactor: SecretRedactor;
+    readonly runRedactors:
+      | {
+          readonly baseFor: (run: {
+            readonly runId: Id;
+            readonly projectId: Id;
+          }) => Promise<SecretRedactor>;
+        }
+      | undefined;
+    readonly logger: Logger;
+  }) =>
+  async (runId: Id): Promise<SecretRedactor> => {
+    if (options.runRedactors === undefined) {
+      return options.platformRedactor;
+    }
+    try {
+      const { rows } = await options.pool.query<{ project_id: Id }>(
+        'select project_id from runs where id = $1',
+        [runId],
+      );
+      const projectId = rows[0]?.project_id;
+      return projectId === undefined
+        ? options.platformRedactor
+        : await options.runRedactors.baseFor({ runId, projectId });
+    } catch (error) {
+      options.logger.error(
+        { err: error, run_id: runId },
+        'a remote run’s binding redactors could not be rebuilt for its settle; it settles with the platform’s pattern rules',
+      );
+      return options.platformRedactor;
+    }
+  };
+
 export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns => {
   const unitOfWork = markTransactions(options.eventing.unitOfWork);
   const ids = { next: (): Id => randomUUID() as Id };
@@ -127,33 +170,12 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
     stack: options.stack,
   });
   const credentialStore = recoveryAdapters.createPostgresRunCredentialStore();
-  /**
-   * The settle's base redactor (backlog 745): the run's project bindings over the platform's rules,
-   * read outside any transaction before the settle opens its own. A binding that fails to load must
-   * not keep a finished run from settling, so it falls back to the platform's rules — the WP-281
-   * behaviour — and says so.
-   */
-  const settleRedactorFor = async (runId: Id): Promise<SecretRedactor> => {
-    if (options.runRedactors === undefined) {
-      return options.stack.platformRedactor;
-    }
-    try {
-      const { rows } = await options.pool.query<{ project_id: Id }>(
-        'select project_id from runs where id = $1',
-        [runId],
-      );
-      const projectId = rows[0]?.project_id;
-      return projectId === undefined
-        ? options.stack.platformRedactor
-        : await options.runRedactors.baseFor({ runId, projectId });
-    } catch (error) {
-      options.logger.error(
-        { err: error, run_id: runId },
-        'a remote run’s binding redactors could not be rebuilt for its settle; it settles with the platform’s pattern rules',
-      );
-      return options.stack.platformRedactor;
-    }
-  };
+  const settleRedactorFor = remoteSettleRedactorFor({
+    pool: options.pool,
+    platformRedactor: options.stack.platformRedactor,
+    runRedactors: options.runRedactors,
+    logger: options.logger,
+  });
   return createRemoteRuns({
     unitOfWork,
     store,

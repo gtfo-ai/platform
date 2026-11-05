@@ -40,6 +40,7 @@ import type { Id, IsoDateTime, Slug, TranscriptEvent } from '@platform/contracts
 import { FEATURE_TEMPLATE, type OfferRouting, SHIPPED_TEMPLATES } from '@platform/domain';
 import { pipeline, recovery } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { remoteRunCredentialOf } from '../../../apps/server/src/worker-run-calls.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
 
@@ -509,6 +510,40 @@ describe('the worker claim’s eligibility is its own statement (TD-031 §8)', (
       );
       expect((await claim(w.w1, runId))?.runId).toBe(runId);
       expect(binding?.id).toBeDefined();
+    }
+  });
+
+  it('the packager reads the opt-in as the claim does: every non-minted git binding must allow (review of PR #22)', async () => {
+    const w = await world();
+    const runId = await offered(w);
+    const bind = async (config: Record<string, string>) => {
+      const [integration] = await sql<{ id: string }>(
+        `insert into integrations (org_id, type, provider, name, config)
+         values ($1, 'git', 'gitlab', $2, $3::jsonb) returning id`,
+        [orgId, `git-${nextId()}`, JSON.stringify(config)],
+      );
+      await sql('insert into bindings (project_id, integration_id) values ($1, $2)', [
+        w.projectId,
+        integration?.id,
+      ]);
+      return integration?.id as string;
+    };
+    await bind({ run_credential: 'static', remote_run_credential: 'allow' });
+    const denying = await bind({ run_credential: 'deploy_key' });
+    const pool = createTestPool(database.connectionString, { max: 1 });
+    try {
+      const read = remoteRunCredentialOf(pool);
+      // One allows, one does not: both the claim and the packager refuse.
+      expect(await read(w.projectId)).toBe('deny');
+      expect(await claim(w.w1, runId)).toBeNull();
+      await sql(
+        "update integrations set config = config || jsonb_build_object('remote_run_credential', 'allow') where id = $1",
+        [denying],
+      );
+      expect(await read(w.projectId)).toBe('allow');
+      expect((await claim(w.w1, runId))?.runId).toBe(runId);
+    } finally {
+      await pool.end();
     }
   });
 

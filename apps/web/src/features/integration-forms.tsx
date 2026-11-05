@@ -154,11 +154,6 @@ const SELECT = cx(
 );
 
 /**
- * One configuration field's control, by its declared kind (WP-114, backlog 332): a select for a
- * boolean and a choice — whose first option, for an optional field, is the provider's default — a
- * number input for a number, and text otherwise. Labelled in words, with the key in the hint.
- */
-/**
  * What switching a field costs, said beside its control (WP-282): a field whose value is a trust
  * decision carries the residual the decision accepts, in platform text, so the administrator reads
  * it where the choice is made. Keyed by field name; a field without one shows only its hint.
@@ -169,6 +164,11 @@ export const CONFIG_FIELD_RESIDUALS: Readonly<Record<string, string>> = {
     'With allow, a remote worker runs this project with its static run token or its deploy key: a static token sits on a developer’s machine for the run’s life and is valid for up to 90 days on the project; a deploy key makes this core sign for the run, and its reach is every project the key is enabled on. Neither can be revoked per run. Minted run credentials need no opt-in. Default: deny.',
 };
 
+/**
+ * One configuration field's control, by its declared kind (WP-114, backlog 332): a select for a
+ * boolean and a choice — whose first option, for an optional field, is the provider's default — a
+ * number input for a number, and text otherwise. Labelled in words, with the key in the hint.
+ */
 export const ConfigFieldControl = ({
   field,
   provider,

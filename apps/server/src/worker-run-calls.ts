@@ -195,13 +195,17 @@ export const createRemoteRunDeployKeys = (options: {
 };
 
 /**
- * The git integration's `remote_run_credential` for a project (WP-282, Q124 (a)): `allow` only when
- * the project's live git binding says so in its stored configuration — absent is `deny`.
+ * The git integration's `remote_run_credential` for a project (WP-282, Q124 (a)), read **exactly as
+ * the claim reads it** (`WORKER_ELIGIBLE` in `postgres-run-offers.ts`): `allow` when no live git
+ * binding of the project declares a non-minted run credential without `remote_run_credential:
+ * allow` — every such binding must allow, and absent is `deny`. A project whose bindings all mint
+ * answers `allow`, which the packager never asks about (it asks only for a static or deploy-key
+ * credential).
  */
 export const remoteRunCredentialOf =
   (pool: Pick<pg.Pool, 'query'>) =>
   async (projectId: string): Promise<'allow' | 'deny'> => {
-    const { rows } = await pool.query<{ allowed: boolean }>(
+    const { rows } = await pool.query<{ refused: boolean }>(
       `select exists (
          select 1
            from bindings b
@@ -209,11 +213,12 @@ export const remoteRunCredentialOf =
           where b.project_id = $1
             and i.type = 'git'
             and i.retired_at is null
-            and coalesce(i.config ->> 'remote_run_credential', 'deny') = 'allow'
-       ) as allowed`,
+            and coalesce(i.config ->> 'run_credential', 'minted') <> 'minted'
+            and coalesce(i.config ->> 'remote_run_credential', 'deny') <> 'allow'
+       ) as refused`,
       [projectId],
     );
-    return rows[0]?.allowed === true ? 'allow' : 'deny';
+    return rows[0]?.refused === false ? 'allow' : 'deny';
   };
 
 export interface ComposeRemoteRunCallsOptions {

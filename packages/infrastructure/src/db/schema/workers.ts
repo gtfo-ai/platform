@@ -53,7 +53,7 @@ export const workerDeviceCodes = pgTable('worker_device_codes', {
 });
 
 /**
- * A remote run's mutating platform tool calls (migration 0099, WP-282, TD-031 §10b): a claim before
+ * A remote run's mutating platform tool calls (migration 0098, WP-282, TD-031 §10b): a claim before
  * the call, the redacted answer after it, keyed by the run and the SHA-256 of the `tool_use_id`.
  */
 export const runToolCalls = pgTable(
@@ -73,7 +73,7 @@ export const runToolCalls = pgTable(
   (table) => [primaryKey({ columns: [table.runId, table.toolUseDigest] })],
 );
 
-/** Tool approvals a remote run asked for, decided once and delivered once (migration 0099). */
+/** Tool approvals a remote run asked for, decided once and delivered once (migration 0098). */
 export const runToolApprovals = pgTable('run_tool_approvals', {
   id: uuid('id').primaryKey(),
   runId: uuid('run_id').notNull(),
@@ -88,7 +88,7 @@ export const runToolApprovals = pgTable('run_tool_approvals', {
   deliveredAt: timestamp('delivered_at', { withTimezone: true }),
 });
 
-/** The SDK session mirror of a remote run, one redacted JSONL line per row (migration 0099). */
+/** The SDK session mirror of a remote run, one redacted JSONL line per row (migration 0098). */
 export const runSessionLines = pgTable(
   'run_session_lines',
   {

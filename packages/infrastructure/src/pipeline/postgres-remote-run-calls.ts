@@ -1,7 +1,7 @@
 /**
  * `RemoteRunCallStore` on PostgreSQL (WP-282) — what a remote run's calls to the core write:
  * `run_messages` (TD-031 §10a), `run_tool_calls`, `run_tool_approvals`, `run_session_lines`
- * (migration 0099) and `run_offers.ssh_signatures` (migration 0094, TD-031's 2026-11-04 amendment).
+ * (migration 0098) and `run_offers.ssh_signatures` (migration 0094, TD-031's 2026-11-04 amendment).
  *
  * ## `(run_id, seq)` on a table whose key is `(run_id, seq, created_at)`
  *
@@ -142,6 +142,14 @@ export const createPostgresRemoteRunCallStore = (): RemoteRunCallStore => ({
     );
   },
 
+  releaseToolCall: async (tx, input) => {
+    await sqlOf(tx).query(
+      `delete from run_tool_calls
+        where run_id = $1 and tool_use_digest = $2 and completed_at is null`,
+      [input.runId, input.toolUseDigest],
+    );
+  },
+
   openApproval: async (tx, input) => {
     const sql = sqlOf(tx);
     const { rows } = await sql.query<{ id: string }>(
@@ -204,6 +212,13 @@ export const createPostgresRemoteRunCallStore = (): RemoteRunCallStore => ({
         reason: row.reason,
         questionId: row.question_id as Id | null,
       }),
+    );
+  },
+
+  lockSessionMirror: async (tx, runId) => {
+    await sqlOf(tx).query(
+      `select pg_advisory_xact_lock(hashtextextended('run_session_lines:' || $1, 0))`,
+      [runId],
     );
   },
 
