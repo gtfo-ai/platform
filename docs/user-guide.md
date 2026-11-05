@@ -949,7 +949,8 @@ is laid out like a GitHub Actions job:
   are reading marked — click another to read it. Under it, **Details** opens the settings line
   (described under *Settings* below), where an unsuccessful run's unfinished work was saved, and the
   version of the role prompt the run was given.
-- **The summary strip** gives the status, the model, the effort, the cost (marked *est.* when the
+- **The summary strip** gives the status, who executed the run (*Executed by* the platform server,
+  or a developer's remote worker by the name its owner gave it), the model, the effort, the cost (marked *est.* when the
   platform estimated it), the elapsed time, the turns and the tokens (in, out, and read from the prompt cache). Hover or focus a label for
   what its number means.
 - **While the run is live**, a *Now:* line says what the agent is doing, in the words the board and

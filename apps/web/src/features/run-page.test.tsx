@@ -333,6 +333,41 @@ describe('the summary strip and what the agent is doing now', () => {
     expect(text).toContain('1,200 in · 340 out · 9,000 cached');
   });
 
+  it.each([
+    [
+      {
+        kind: 'worker',
+        worker_id: '00000000-0000-4000-8000-0000000283e1',
+        worker_name: 'alice-laptop',
+      },
+      'Executed byalice-laptop (worker)',
+    ],
+    [{ kind: 'server', worker_id: null, worker_name: null }, 'Executed bythe platform server'],
+    [null, 'Executed bynot claimed yet'],
+  ] as const)(
+    'says who executed the run from its seat (WP-283 (5)): %j',
+    async (seat, expected) => {
+      window.history.pushState({}, '', `/runs/${LIVE.id}`);
+      const base = fetchFor(detail(), LIVE, MESSAGES);
+      const view = render(
+        createApp({
+          fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) =>
+            new URL(String(input), 'http://localhost').pathname === `/api/runs/${LIVE.id}`
+              ? json({ ...asRead(LIVE), seat })
+              : base(input, init)) as typeof fetch,
+          realtime: false,
+          now: () => NOW,
+        }).element,
+      );
+      await screen.findByRole('tab', { name: 'Transcript' });
+      await waitFor(() => {
+        expect(view.container.querySelector('[data-run-summary]')?.textContent ?? '').toContain(
+          expected,
+        );
+      });
+    },
+  );
+
   it('says Now: in the activity vocabulary and lists the newest live activity', async () => {
     const view = open();
     await waitFor(() => {

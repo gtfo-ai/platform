@@ -29,7 +29,7 @@
  * not paid for it.
  */
 
-import type { ContextPackRecord, RunReadResponse, RunRecord } from '@platform/contracts';
+import type { ContextPackRecord, RunReadResponse, RunRecord, RunSeat } from '@platform/contracts';
 import { ArrowLeftIcon } from '@primer/octicons-react/ArrowLeftIcon';
 import { TriangleDownIcon } from '@primer/octicons-react/TriangleDownIcon';
 import { Link } from '@tanstack/react-router';
@@ -176,12 +176,45 @@ const elapsedOf = (record: RunRecord, nowMs: number): string => {
   return formatElapsed(record.started_at, Number.isNaN(ended) ? nowMs : ended);
 };
 
+/**
+ * Who executed the run (WP-283 (5)) — the run read's `seat`, the agents list's own shape: a named
+ * remote worker, the platform's own server claimant, or `null` while no claimant took it (and for a
+ * server that answers no seat at all). A worker's name is its owner's choice: untrusted text.
+ */
+export const executedByOf = (
+  seat: RunSeat | null | undefined,
+):
+  | { readonly kind: 'worker'; readonly name: string | null }
+  | { readonly kind: 'server' }
+  | null =>
+  seat === null || seat === undefined
+    ? null
+    : seat.kind === 'server'
+      ? { kind: 'server' }
+      : { kind: 'worker', name: seat.worker_name };
+
+const ExecutedBy = ({ seat }: { readonly seat: RunSeat | null | undefined }): ReactElement => {
+  const executed = executedByOf(seat);
+  if (executed === null) {
+    return <span className="text-base text-fg-muted">not claimed yet</span>;
+  }
+  if (executed.kind === 'server') {
+    return <span className="text-base">the platform server</span>;
+  }
+  return (
+    <span className="text-base break-all">
+      {executed.name === null ? 'a remote worker' : <UntrustedText value={executed.name} />}{' '}
+      (worker)
+    </span>
+  );
+};
+
 /** The summary strip: what an Actions run's summary row says, with a definition for every number. */
 const RunSummary = ({
   record,
   nowMs,
 }: {
-  readonly record: RunRecord;
+  readonly record: RunRecord & { readonly seat?: RunSeat | null };
   readonly nowMs: number;
 }): ReactElement => (
   <Card>
@@ -195,6 +228,11 @@ const RunSummary = ({
           </span>
         }
         definition="Where the run is: starting while its workspace is prepared, running once its agent was asked for, then how it ended."
+      />
+      <Metric
+        label="Executed by"
+        value={<ExecutedBy seat={record.seat} />}
+        definition="Which claimant ran this run: the platform's own server, or a developer's remote worker named by its owner."
       />
       <Metric
         label="Model"
