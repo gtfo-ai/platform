@@ -432,7 +432,7 @@ export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, Cla
   },
   platform_images_unresolved: {
     word: 'The platform can’t name its run images',
-    fix: 'An administrator makes the platform’s images public in their registry, or sets APP_WORKER_IMAGE_DIGESTS on the platform; until then no worker can take work.',
+    fix: 'An administrator makes the platform’s images public in their registry, or pins the worker image versions in the platform’s configuration (the operator guide names the setting); until then no worker can take work.',
   },
   claude_rejected: {
     word: 'Claude refused its sign-in',
