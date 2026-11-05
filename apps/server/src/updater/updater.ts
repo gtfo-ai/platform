@@ -113,9 +113,16 @@ export const discoverSelf = async (
   const labels = self.Config?.Labels ?? {};
   const name = labels['com.docker.compose.project'];
   const workingDir = labels['com.docker.compose.project.working_dir'];
-  if (name === undefined || workingDir === undefined || !workingDir.startsWith('/')) {
+  if (name === undefined || workingDir === undefined) {
     throw new UpdaterSetupError(
       'this updater is not a service of a compose project (no com.docker.compose.project labels); it updates nothing',
+    );
+  }
+  if (!workingDir.startsWith('/')) {
+    // Docker Desktop for Windows records the folder `docker compose` ran in as a Windows path, which
+    // the apply container cannot mount at the same path (backlog 990, V-DA1).
+    throw new UpdaterSetupError(
+      `the project was brought up from ${workingDir}, which is not a Linux path; the apply container mounts the project's folder at its own path, so this updater cannot apply updates from it (backlog 990)`,
     );
   }
   const envFiles = (labels['com.docker.compose.project.environment_file'] ?? '')
@@ -432,6 +439,22 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       await refuse(running, advertised, decision.why);
       return;
     }
+    // 2b. Where this updater runs, before anything is pulled or drained (S-22.20): a project it
+    // cannot apply to — a Windows folder on Docker Desktop (backlog 990), an env file outside its
+    // directory — is refused and reported once, and the worker keeps taking work. Before this, the
+    // refusal came after the drain, so such a worker stayed drained at every poll.
+    let me: SelfContainer;
+    try {
+      me = await selfContainer();
+    } catch (error) {
+      if (!(error instanceof UpdaterSetupError)) throw error;
+      await refuse(
+        running,
+        advertised,
+        `this updater cannot apply an update here: ${error.message}`,
+      );
+      return;
+    }
     const repositories = repositoriesOf(config.verifier?.repository ?? '');
     const to = Object.fromEntries(
       IMAGE_KEYS.map((key) => [key, `${repositories[key]}@${advertised[key]}`]),
@@ -466,7 +489,6 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     if (stopped) return;
     // 5. The rollback's template, the state, and the apply from the new image.
     await copyFile(deps.templatePath, path.join(config.stateDir, PREVIOUS_TEMPLATE_FILE));
-    const me = await selfContainer();
     const plan: UpdatePlan = {
       id: randomUUID(),
       mode: 'update',

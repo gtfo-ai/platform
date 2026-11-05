@@ -1,0 +1,68 @@
+name: worker install
+
+# **The worker's Windows installer, on Windows** (S-22.20). `install.ps1` is the one file no tier of
+# `verify` can execute: nothing here has PowerShell. So a pull request or push that touches it, its
+# renderer or this check runs PSScriptAnalyzer over it, parses it with Windows PowerShell 5.1's
+# parser, and runs it against a stub `docker` under both PowerShell 7 and Windows PowerShell 5.1
+# (`scripts/worker-install-ps1-check.ps1`). Path-scoped, so it costs nothing on other changes, and
+# not a required check: `install.sh` is held by the unit tier and shellcheck in `ci.yml`.
+
+on:
+  pull_request:
+    paths:
+      - apps/server/src/workers/install/**
+      - apps/server/src/workers/install.ts
+      - scripts/worker-install-ps1-check.ps1
+      - scripts/fixtures/docker-stub.ps1
+      - .github/workflows/worker-install.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/server/src/workers/install/**
+      - apps/server/src/workers/install.ts
+      - scripts/worker-install-ps1-check.ps1
+      - scripts/fixtures/docker-stub.ps1
+      - .github/workflows/worker-install.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-install-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'newest' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  powershell:
+    name: install.ps1 (windows)
+    runs-on: windows-latest
+    timeout-minutes: 15 # S-22.20: new; a module install and four short runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+          Import-Module PSScriptAnalyzer -RequiredVersion 1.24.0
+          $findings = @(Invoke-ScriptAnalyzer -Path apps/server/src/workers/install/install.ps1 -Severity Warning, Error)
+          $findings | Format-Table -AutoSize -Wrap RuleName, Severity, Line, Message | Out-String -Width 250 | Write-Host
+          if ($findings.Count -gt 0) { exit 1 }
+      - name: parse under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSVersionTable.PSVersion | Out-String | Write-Host
+          $tokens = $null
+          $errors = $null
+          $path = (Resolve-Path apps/server/src/workers/install/install.ps1).Path
+          [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | Out-String | Write-Host; exit 1 }
+      - name: run against a stub docker (PowerShell 7)
+        shell: pwsh
+        run: ./scripts/worker-install-ps1-check.ps1
+      - name: run against a stub docker (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./scripts/worker-install-ps1-check.ps1

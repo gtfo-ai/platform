@@ -231,7 +231,10 @@ describe('protocol versions (TD-032 decision 7)', () => {
     // WP-281: the spawn marker joined TD-031 §9's seventeen (its 2026-11-04 amendment §4).
     // WP-292: the local UI's two verbs (TD-031's worker-UI amendment §4).
     // WP-293: the claim scope, the offers and a pick (TD-031's claim-scope amendment §6).
-    expect(paths).toHaveLength(23);
+    // S-22.20: the two install scripts, public downloads like `compose.yml`.
+    expect(paths).toHaveLength(25);
+    expect(paths).toContain('install.sh');
+    expect(paths).toContain('install.ps1');
     expect(paths).toContain('claim-scope');
     expect(paths).toContain('offers');
     expect(paths).toContain('offers/:id/claim');

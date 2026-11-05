@@ -97,6 +97,14 @@ jobs:
         with:
           entrypoint: /bin/hadolint
           args: docker/app.Dockerfile docker/base.Dockerfile docker/egress.Dockerfile docker/launcher.Dockerfile docker/runtime.Dockerfile
+      # shellcheck over every shell script git tracks (S-22.20): the worker's `install.sh`, which a
+      # person pipes into `sh`, and the test stubs. Like hadolint's, the list is explicit — the image
+      # has no shell to expand a glob — and `scripts/release.test.ts` holds it to `git ls-files '*.sh'`
+      # in both directions. Each file's shebang picks the dialect (`install.sh` is POSIX `sh`).
+      - name: shellcheck
+        uses: docker://koalaman/shellcheck@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d # v0.11.0
+        with:
+          args: apps/server/src/workers/install/install.sh scripts/fixtures/docker-stub.sh scripts/fixtures/gh-stub.sh
 
   typecheck:
     name: typecheck

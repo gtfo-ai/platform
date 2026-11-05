@@ -292,6 +292,15 @@ const PUBLIC_WORKER_VERBS: readonly (keyof typeof WORKER_PATHS)[] = [
   // TD-031's first-run amendment §6 (WP-294): a worker's wizard checks an address with it before it
   // has a credential; the protocol check stays.
   'release',
+  // TD-031's 2026-11-05 install-scripts amendment (S-22.20): the one-command install, likewise.
+  'installSh',
+  'installPs1',
+];
+/** The public verbs that are downloads, the only ones outside the protocol check. */
+const PUBLIC_DOWNLOAD_VERBS: readonly (keyof typeof WORKER_PATHS)[] = [
+  'composeFile',
+  'installSh',
+  'installPs1',
 ];
 
 describe('the worker as a second client (WP-281)', () => {
@@ -305,7 +314,9 @@ describe('the worker as a second client (WP-281)', () => {
         headers,
         payload: method === 'POST' ? {} : undefined,
       });
-      const code = (response.json() as ApiErrorBody).error?.code ?? null;
+      // A download (S-22.20's scripts) answers a body that is not JSON, and no error code.
+      const json = String(response.headers['content-type'] ?? '').startsWith('application/json');
+      const code = json ? ((response.json() as ApiErrorBody).error?.code ?? null) : null;
       if (!(response.statusCode === 404 && code === 'not_found')) {
         return { served: true, status: response.statusCode, code };
       }
@@ -344,13 +355,20 @@ describe('the worker as a second client (WP-281)', () => {
       keyof typeof WORKER_PATHS,
       string,
     ][]) {
-      if (WORKER_VERBS_SERVED_LATER[name] !== undefined || name === 'composeFile') continue;
+      if (WORKER_VERBS_SERVED_LATER[name] !== undefined || PUBLIC_DOWNLOAD_VERBS.includes(name)) {
+        continue;
+      }
       const probed = await askWorker(verb, {});
       expect(`${name} ${probed.status} ${probed.code}`).toBe(`${name} 426 upgrade_required`);
     }
-    // The one exception (TD-031's 2026-11-05 amendment): `GET compose.yml` with no header is not 426.
-    const download = await app.inject({ method: 'GET', url: workerUrl(WORKER_PATHS.composeFile) });
-    expect(download.statusCode).not.toBe(426);
+    // The exceptions (TD-031's 2026-11-05 amendments): a `GET` of a public download with no header
+    // is not 426 — and each is a download, so a `POST` to it still is.
+    for (const name of PUBLIC_DOWNLOAD_VERBS) {
+      const download = await app.inject({ method: 'GET', url: workerUrl(WORKER_PATHS[name]) });
+      expect(`${name} ${download.statusCode}`).not.toBe(`${name} 426`);
+      const posted = await app.inject({ method: 'POST', url: workerUrl(WORKER_PATHS[name]) });
+      expect(`${name} ${posted.statusCode}`).toBe(`${name} 426`);
+    }
   }, 15_000);
 });
 

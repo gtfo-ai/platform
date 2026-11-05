@@ -1252,3 +1252,18 @@ membership at `member` or above, so `worker.register: viewer` still grants nothi
    stage entry — checks out that branch and is told the previous attempt's work is there. BD-025's
    2026-10-05 amendment, item 2, is amended to match.
 
+
+## Amendment (2026-11-05, orchestrator-authorised, S-22.20) — decision 9: the install scripts are public downloads too
+
+1. **`GET /api/worker/v1/install.sh` and `GET /api/worker/v1/install.ps1` take no authentication** and,
+   with `compose.yml`, are the paths the `X-Worker-Protocol` check skips (`GET`/`HEAD` of exactly those
+   paths, query ignored; `Cache-Control: no-store` kept). They are person-run downloads, not protocol
+   messages. Each is a file in the image (`apps/server/src/workers/install/`) with one substitution, the
+   core's `APP_BASE_URL`, which is refused (`503 install_script_unavailable`) unless it is a plain
+   `http(s)` URL with no credential, query or quote. **No secret** is in either; the residual is the
+   2026-11-05 amendment's (the canonical base URL).
+2. **A re-run never moves a worker's images** (owner: "autoupdate always"). It installs the core's file
+   only when it pins the same four images the worker runs (the updater's managed block, else the
+   file already there). Otherwise it restarts what exists and leaves the move to the updater, which
+   verifies first. It never writes the env file or a volume. TD-032 §3 holds: a person runs the
+   script, and no updater applies anything the core served.
