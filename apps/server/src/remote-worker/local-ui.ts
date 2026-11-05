@@ -37,6 +37,8 @@ import {
   workerLocalClaudeTokenRequestSchema,
   workerLocalCoreCheckRequestSchema,
   workerLocalCoreRequestSchema,
+  workerLocalErrorReportingRequestSchema,
+  workerLocalErrorReportingTestRequestSchema,
   workerLocalPauseRequestSchema,
   workerLocalSignInRequestSchema,
   workerLocalTakeRequestSchema,
@@ -96,6 +98,13 @@ export interface LocalUiApi {
   signOut(): Promise<unknown>;
   connectAgain(): Promise<unknown>;
   retry(): Promise<unknown>;
+  /**
+   * The *Error reporting* setting (WP-295): *Save* a DSN, or *Remove* it with `null` — answers the
+   * state, never the DSN; `409` while `SENTRY_DSN` is set in the environment.
+   */
+  errorReporting(dsn: string | null): Promise<unknown>;
+  /** *Send a test error* (WP-295): the event's id and whether it was sent within the bound. */
+  errorReportingTest(): Promise<unknown>;
 }
 
 export interface LocalUiOptions {
@@ -301,6 +310,19 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
         return;
       case WORKER_LOCAL_PATHS.retry:
         send(response, 200, await options.api.retry());
+        return;
+      case WORKER_LOCAL_PATHS.errorReporting:
+        send(
+          response,
+          200,
+          await options.api.errorReporting(
+            parse(workerLocalErrorReportingRequestSchema, '{ dsn: null | "https://…" }').dsn,
+          ),
+        );
+        return;
+      case WORKER_LOCAL_PATHS.errorReportingTest:
+        parse(workerLocalErrorReportingTestRequestSchema, 'no field');
+        send(response, 200, await options.api.errorReportingTest());
         return;
       default:
         break;

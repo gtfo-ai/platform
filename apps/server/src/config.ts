@@ -22,7 +22,7 @@ import {
   workingCalendarSchema,
 } from '@platform/application';
 import { coreImageDigestsSchema, providerModeSchema } from '@platform/contracts';
-import { db, eventing, jobs } from '@platform/infrastructure';
+import { db, errorReporting, eventing, jobs } from '@platform/infrastructure';
 import * as z from 'zod';
 import { isTrustProxyEntry } from './client-address.js';
 import { ROLES, type RoleCapabilities, roleCapabilities } from './role.js';
@@ -75,6 +75,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   leaseSkewGraceSeconds: 'APP_LEASE_SKEW_GRACE',
   usagePauseDefaultSeconds: 'APP_WORKER_USAGE_PAUSE_DEFAULT',
   launcherToken: 'APP_LAUNCHER_TOKEN',
+  sentryDsn: 'SENTRY_DSN',
   workspaceControlRoot: 'APP_WORKSPACE_CONTROL_ROOT',
   modelEgressHosts: 'APP_MODEL_EGRESS_HOSTS',
   workerImageDigests: 'APP_WORKER_IMAGE_DIGESTS',
@@ -353,6 +354,25 @@ const serverConfigFields = z.strictObject({
   launcherToken: z
     .string()
     .min(32, 'must be at least 32 characters: it guards a surface that creates containers')
+    .nullable(),
+  /**
+   * `SENTRY_DSN(_FILE)` — where this process reports its own `error`/`fatal` log lines (TD-023's
+   * 2026-11-05 amendment, WP-295), or `null`: **off when unset**, and the SDK is then never loaded.
+   * Held to `errorReporting.parseErrorReportingDsn` — `https://<key>@<host>/<project id>`, `http:`
+   * only to loopback — and kept in its canonical spelling; a malformed one is a startup refusal
+   * naming the variable, never a silently disabled reporter. What an event carries is the
+   * reporter's allow-list (`packages/infrastructure/src/error-reporting/reporter.ts`).
+   */
+  sentryDsn: z
+    .string()
+    .refine(
+      (value) => errorReporting.parseErrorReportingDsn(value).ok,
+      `must be ${errorReporting.DSN_SHAPE_WORDS}`,
+    )
+    .transform((value) => {
+      const verdict = errorReporting.parseErrorReportingDsn(value);
+      return verdict.ok ? verdict.dsn : value;
+    })
     .nullable(),
   /**
    * `APP_WORKSPACE_CONTROL_ROOT` — where **this** process mounts TD-025 §2's `ctl` volume.
@@ -1178,6 +1198,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     claudeBinary: nullableString(env.APP_CLAUDE_BINARY),
     launcherUrl: nullableString(env.APP_LAUNCHER_URL),
     launcherToken: nullableString(readSecret('APP_LAUNCHER_TOKEN', env)),
+    sentryDsn: nullableString(readSecret('SENTRY_DSN', env)),
     workspaceControlRoot:
       env.APP_WORKSPACE_CONTROL_ROOT?.trim() || SERVER_CONFIG_DEFAULTS.workspaceControlRoot,
     modelEgressHosts:

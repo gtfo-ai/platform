@@ -417,6 +417,16 @@ user).
   Stopping the container is not a cancel: the core treats it as a lost worker.
 - What the page shows is what the worker uploads (redacted the same way); it is not a confidentiality
   boundary against the machine's owner, who controls the Docker daemon (TD-031's worker-UI amendment).
+- **Error reporting** (WP-295), a setting in the page's room: paste a Sentry DSN and *Save* (the
+  worker checks it — `https://<key>@<host>/<project id>`, `http:` only to `localhost` — and keeps it
+  as `sentry-dsn`, `0600`, in `worker-state`), *Send a test error*, or *Remove*. A change applies
+  without a restart. `SENTRY_DSN` in the worker's environment (`.env` beside `compose.worker.yml`)
+  **wins**: the page then says so and refuses *Save* and *Remove* (`409`). Each event is the
+  worker's own `error`/`fatal` log line — the error's type, its message (at most 1 KiB) and its
+  stack, tagged `role`, `worker_id`, `core_url`, `version`, `commit` and `run_id` — redacted by
+  the Claude token, each live run's token and credential, the page's token and the `wkr_`
+  credential, then the platform's patterns; never a transcript, prompt, tool input or ticket text.
+  The DSN names a host the developer chose: the worker sends its errors there and nowhere else.
 - *What this worker takes by itself* and *Take this one* (WP-293, protocol 3 — a core accepts `[2, 3]`,
   so a worker image older than protocol 2 must be updated first): the owner's **claim scope** (every
   project, named projects, or pick only) is stored on the core in `workers.claim_project_ids` and only
@@ -1494,9 +1504,25 @@ docker compose down -v                     # …and delete it; then: docker volu
 ```
 
 `LOG_LEVEL` (`trace`…`silent`) and `LOG_FORMAT` (`json`, `pretty`) are read at start-up. Logs carry
-`request_id`, `task_id`, `run_id` and `trace_id` where they apply. Set
-`OTEL_EXPORTER_OTLP_ENDPOINT` to export traces and metrics, and `SENTRY_DSN` to report errors; both
-are off when unset.
+`request_id`, `task_id`, `run_id` and `trace_id` where they apply. **Set `SENTRY_DSN` (or
+`SENTRY_DSN_FILE`) to report errors** to a Sentry project — off when unset (WP-295). Its value is a
+DSN, `https://<key>@<host>/<project id>` (`http:` only to `localhost`); anything else stops the
+start with a message naming the variable, not the value. What is reported, and what never is:
+
+- **Fed by the process's own `error` and `fatal` log lines only** — no auto-instrumentation, no
+  HTTP, console or uncaught-exception hooks of the SDK (an uncaught error is logged, and that line is
+  reported).
+- **Each event carries** the error's type, its message (at most 1 KiB) and its stack frames, and
+  the tags `role`, `core_url` (`APP_BASE_URL`), `version`, `commit` and, when the line names one,
+  `run_id`. Every other field — host name, contexts, breadcrumbs, request data, the line's other
+  fields — is dropped.
+- **Redacted before it is sent**: `APP_SECRET_KEY`, the database password, the launcher token, the
+  model credentials, the metrics and bootstrap passwords (each of at least 8 characters), then the
+  platform's credential patterns. Never a transcript, prompt, tool input, ticket text, project name
+  or ticket key. The residual: a library's error message that quotes untrusted text carries up to
+  1 KiB of it, redacted for secrets but not for meaning.
+
+**OpenTelemetry export is not built**: no source reads `OTEL_EXPORTER_OTLP_ENDPOINT` (backlog 885).
 
 `APP_WORKING_DAYS`, `APP_WORKING_HOURS` and `APP_HOLIDAYS`, read in `TZ`, are the **working calendar**
 every deadline the platform holds a person to is counted on (WP-56): a blocking question and a plan

@@ -18,7 +18,9 @@
  * (`shadow/`) — the batch tables of migration 0029, and the first writer of `shadow_reports`, which
  * has had a schema since migration 0008. WP-36 added the maintenance scheduler's three reads
  * (`maintenance/`), which write nothing and need no table: a scheduled chore's own task row is the
- * record that its period has been served. Later work packages add the rest.
+ * record that its period has been served. WP-295 added optional error reporting's SDK-free half
+ * (`error-reporting/`): the DSN rule, the event allow-list and the swappable reporter. Later work
+ * packages add the rest.
  */
 export * as ask from './ask/index.js';
 export * as bootstrap from './bootstrap/index.js';
@@ -27,6 +29,7 @@ export * as config from './config/index.js';
 export * as cost from './cost/index.js';
 export * as db from './db/index.js';
 export * as dependencies from './dependencies/index.js';
+export * as errorReporting from './error-reporting/index.js';
 export * as eventing from './events/index.js';
 export * as humanTime from './human-time/index.js';
 export * as integrations from './integrations/index.js';

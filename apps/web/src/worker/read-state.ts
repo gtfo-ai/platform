@@ -21,6 +21,7 @@ import type {
   WorkerLocalCancelResponse,
   WorkerLocalClaimScope,
   WorkerLocalCoreCheckResponse,
+  WorkerLocalErrorReportingTestResponse,
   WorkerLocalOffers,
   WorkerLocalState,
   WorkerLocalTakeResponse,
@@ -290,6 +291,10 @@ export const STATE: Spec = object({
     of: { t: 'enum', values: CLAIM_BLOCKERS },
     max: CLAIM_BLOCKERS.length,
   },
+  error_reporting: object({
+    source: nullable({ t: 'enum', values: SOURCES }),
+    host: nullable(str({ max: 253 })),
+  }),
   server_time: datetime,
 });
 
@@ -337,6 +342,12 @@ export const OFFERS: Spec = object({ offers: { t: 'array', of: OFFER, max: 50 } 
 
 /** `POST /api/local/offers/:id/take` — `workerLocalTakeResponseSchema` (WP-293). */
 export const TAKE: Spec = object({ run_id: uuid });
+
+/** `POST /api/local/error-reporting/test` — `workerLocalErrorReportingTestResponseSchema` (WP-295). */
+export const ERROR_REPORTING_TEST: Spec = object({
+  event_id: nullable(str({ max: 64 })),
+  delivered: { t: 'boolean' },
+});
 
 export const ERROR: Spec = object({
   error: object({ code: str({ max: 64 }), message: str({ max: 2_000 }) }),
@@ -439,6 +450,12 @@ export const readOffers = (value: unknown): WorkerLocalOffers | null =>
 /** A take's answer, or `null` (WP-293). */
 export const readTake = (value: unknown): WorkerLocalTakeResponse | null =>
   conforms(TAKE, value) ? (value as WorkerLocalTakeResponse) : null;
+
+/** *Send a test error*'s answer, or `null` (WP-295). */
+export const readErrorReportingTest = (
+  value: unknown,
+): WorkerLocalErrorReportingTestResponse | null =>
+  conforms(ERROR_REPORTING_TEST, value) ? (value as WorkerLocalErrorReportingTestResponse) : null;
 
 /** An error envelope's code and message, or `null`. */
 export const readError = (value: unknown): { code: string; message: string } | null =>

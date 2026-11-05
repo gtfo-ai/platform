@@ -14,6 +14,7 @@ import {
   workerLocalClaimScopeSchema,
   workerLocalCoreCheckResponseSchema,
   workerLocalCoreFailureSchema,
+  workerLocalErrorReportingTestResponseSchema,
   workerLocalErrorSchema,
   workerLocalLauncherSchema,
   workerLocalOffersSchema,
@@ -36,6 +37,7 @@ import {
   CORE_FAILURES,
   conforms,
   ERROR,
+  ERROR_REPORTING_TEST,
   HOOKS,
   LAUNCHERS,
   LOCAL_API_PREFIX,
@@ -46,6 +48,7 @@ import {
   readCancel,
   readClaimScope,
   readCoreCheck,
+  readErrorReportingTest,
   readOffers,
   readState,
   readTake,
@@ -228,6 +231,7 @@ const STATE = {
     auth: 'none',
   },
   claim_blockers: ['not_set_up'],
+  error_reporting: { source: 'file', host: 'o1.ingest.sentry.io' },
   server_time: '2026-11-05T10:05:00.000Z',
 };
 
@@ -278,6 +282,10 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     );
     expect(normal(CORE_CHECK)).toEqual(
       normal(specOf(workerLocalCoreCheckResponseSchema as unknown as ZodNode)),
+    );
+    // WP-295: *Send a test error*'s answer.
+    expect(normal(ERROR_REPORTING_TEST)).toEqual(
+      normal(specOf(workerLocalErrorReportingTestResponseSchema as unknown as ZodNode)),
     );
     expect(LOCAL_API_PREFIX).toBe(WORKER_LOCAL_API_PREFIX);
   });
@@ -380,6 +388,16 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     ['a device with an unknown key', withSetup({ device: { ...STATE.setup.device, code: 'x' } })],
     ['nine candidates', withSetup({ candidates: Array(9).fill(STATE.setup.candidates[0]) })],
     ['an unknown auth mode', withSetup({ auth: 'cookie' })],
+    // WP-295: the setting answers its source and host — never the DSN.
+    [
+      'an error-reporting block carrying the DSN',
+      { ...STATE, error_reporting: { ...STATE.error_reporting, dsn: 'https://k@h/1' } },
+    ],
+    [
+      'an unknown error-reporting source',
+      { ...STATE, error_reporting: { source: 'page', host: null } },
+    ],
+    ['a state with no error-reporting block', (({ error_reporting: _e, ...rest }) => rest)(STATE)],
   ];
 
   it('accepts what the schema accepts', () => {
@@ -412,6 +430,20 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     ]) {
       expect(workerLocalCoreCheckResponseSchema.safeParse(refused).success).toBe(false);
       expect(readCoreCheck(refused)).toBeNull();
+    }
+  });
+
+  it('reads a test error’s answer strictly, as the schema does (WP-295)', () => {
+    const answer = { event_id: '0123456789abcdef0123456789abcdef', delivered: true };
+    expect(workerLocalErrorReportingTestResponseSchema.safeParse(answer).success).toBe(true);
+    expect(readErrorReportingTest(answer)).toEqual(answer);
+    expect(readErrorReportingTest({ event_id: null, delivered: false })).toEqual({
+      event_id: null,
+      delivered: false,
+    });
+    for (const refused of [{ ...answer, dsn: 'https://k@h/1' }, { event_id: null }]) {
+      expect(workerLocalErrorReportingTestResponseSchema.safeParse(refused).success).toBe(false);
+      expect(readErrorReportingTest(refused)).toBeNull();
     }
   });
 

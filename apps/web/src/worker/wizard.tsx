@@ -53,7 +53,8 @@ const failureWords = (error: unknown): string => {
   return (error as Error).message;
 };
 
-const TextField = ({
+/** A labelled single-line field; also the *Error reporting* setting's (`error-reporting.tsx`). */
+export const TextField = ({
   label,
   value,
   onChange,

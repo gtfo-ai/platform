@@ -7,7 +7,7 @@
 # Third-party notices
 
 The platform itself is [Apache-2.0](LICENSE). This file accounts for everything else it ships:
-the **362 npm packages** its images and its browser bundle carry (plus 48
+the **379 npm packages** its images and its browser bundle carry (plus 48
 per-platform builds of those packages), and the **pinned binaries and container images** the
 Dockerfiles and `compose.yml` name. Bundled CLIs are *executed*, never linked.
 
@@ -34,9 +34,9 @@ sources disagree, so it cannot go stale quietly.
 
 | Licence | Packages |
 | --- | ---: |
-| MIT | 310 |
+| MIT | 320 |
 | ISC | 23 |
-| Apache-2.0 | 11 |
+| Apache-2.0 | 18 |
 | BSD-3-Clause | 8 |
 | BSD-2-Clause | 2 |
 | BlueOak-1.0.0 | 2 |
@@ -95,7 +95,7 @@ complete: `APP_VERSION` (build metadata stamped into the image label; empty by d
 
 ## npm packages
 
-362 packages, with the licence each one declares in its own `package.json`. Packages
+379 packages, with the licence each one declares in its own `package.json`. Packages
 that are built per platform are in the section after this one.
 
 | Package | Version | Licence |
@@ -149,13 +149,25 @@ that are built per platform are in the section after this one.
 | `@nodelib/fs.scandir` | 2.1.5 | MIT |
 | `@nodelib/fs.stat` | 2.0.5 | MIT |
 | `@nodelib/fs.walk` | 1.2.8 | MIT |
+| `@opentelemetry/api-logs` | 0.220.0 | Apache-2.0 |
 | `@opentelemetry/api` | 1.9.1 | Apache-2.0 |
+| `@opentelemetry/core` | 2.12.0 | Apache-2.0 |
+| `@opentelemetry/instrumentation` | 0.220.0 | Apache-2.0 |
+| `@opentelemetry/resources` | 2.12.0 | Apache-2.0 |
+| `@opentelemetry/sdk-trace-base` | 2.12.0 | Apache-2.0 |
+| `@opentelemetry/sdk-trace` | 2.12.0 | Apache-2.0 |
 | `@opentelemetry/semantic-conventions` | 1.43.0 | Apache-2.0 |
 | `@oxc-project/types` | 0.148.0 | MIT |
 | `@pinojs/redact` | 0.4.0 | MIT |
 | `@primer/octicons-react` | 19.42.0 | MIT |
 | `@prometheus-io/client` | 0.16.1 | Apache-2.0 |
 | `@rolldown/pluginutils` | 1.0.1 | MIT |
+| `@sentry/conventions` | 0.16.0 | MIT |
+| `@sentry/core` | 10.78.0 | MIT |
+| `@sentry/node-core` | 10.78.0 | MIT |
+| `@sentry/node` | 10.78.0 | MIT |
+| `@sentry/opentelemetry` | 10.78.0 | MIT |
+| `@sentry/server-utils` | 10.78.0 | MIT |
 | `@sigstore/bundle` | 5.0.0 | Apache-2.0 |
 | `@sigstore/core` | 4.0.1 | Apache-2.0 |
 | `@sigstore/protobuf-specs` | 0.5.2 | Apache-2.0 |
@@ -219,6 +231,7 @@ that are built per platform are in the section after this one.
 | `call-bind-apply-helpers` | 1.0.2 | MIT |
 | `call-bound` | 1.0.4 | MIT |
 | `chai` | 6.2.2 | MIT |
+| `cjs-module-lexer` | 2.3.0 | MIT |
 | `classcat` | 5.0.5 | MIT |
 | `close-with-grace` | 2.5.0 | MIT |
 | `colorette` | 2.0.20 | MIT |
@@ -257,6 +270,7 @@ that are built per platform are in the section after this one.
 | `es-define-property` | 1.0.1 | MIT |
 | `es-errors` | 1.3.0 | MIT |
 | `es-module-lexer` | 2.3.2 | MIT |
+| `es-module-lexer` | 3.0.4 | MIT |
 | `es-object-atoms` | 1.1.2 | MIT |
 | `escape-html` | 1.0.3 | MIT |
 | `estree-walker` | 3.0.3 | MIT |
@@ -301,6 +315,7 @@ that are built per platform are in the section after this one.
 | `http-errors` | 2.0.1 | MIT |
 | `iconv-lite` | 0.7.3 | MIT |
 | `ieee754` | 1.2.1 | BSD-3-Clause |
+| `import-in-the-middle` | 3.5.3 | Apache-2.0 |
 | `inherits` | 2.0.4 | ISC |
 | `ip-address` | 10.7.0 | MIT |
 | `ipaddr.js` | 1.9.1 | MIT |
@@ -339,6 +354,7 @@ that are built per platform are in the section after this one.
 | `minimatch` | 10.2.6 | BlueOak-1.0.0 |
 | `minimist` | 1.2.8 | MIT |
 | `minipass` | 7.1.3 | BlueOak-1.0.0 |
+| `module-details-from-path` | 1.0.4 | MIT |
 | `ms` | 2.1.3 | MIT |
 | `nanoid` | 3.3.18 | MIT |
 | `nanostores` | 1.5.3 | MIT |
@@ -392,6 +408,7 @@ that are built per platform are in the section after this one.
 | `real-require` | 0.2.0 | MIT |
 | `real-require` | 1.0.0 | MIT |
 | `require-from-string` | 2.0.2 | MIT |
+| `require-in-the-middle` | 8.0.1 | MIT |
 | `reselect` | 5.3.0 | MIT |
 | `ret` | 0.5.0 | MIT |
 | `reusify` | 1.1.0 | MIT |

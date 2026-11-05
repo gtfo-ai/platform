@@ -40,6 +40,8 @@
  * does not answer, *Try now*. *Pause*, *Resume* and *Drain* are **one control**: a status line says
  * the current hold, *Resume* is the one primary while held, and *Drain* sits behind *More* with its
  * explanation.
+ *
+ * **Error reporting** (WP-295) is a setting of the room, not a wizard step (`error-reporting.tsx`).
  */
 import type { WorkerLocalRun, WorkerLocalState } from '@platform/contracts';
 import {
@@ -59,6 +61,7 @@ import { type PhaseStage, PhaseTrack } from '../ui/phase-track.js';
 import { StatusIcon } from '../ui/status.js';
 import { ExternalLink, TerminalText, UntrustedText } from '../ui/untrusted.js';
 import { LocalCallError, type LocalClient } from './client.js';
+import { ErrorReporting } from './error-reporting.js';
 import { LauncherNotice } from './launcher-notice.js';
 import {
   CONNECTION_STATUS,
@@ -594,6 +597,8 @@ export const WorkerApp = ({
           worker first.
         </p>
       </section>
+
+      <ErrorReporting state={state} client={client} act={control} busy={busy} />
 
       <section aria-label="Worker log" className="flex flex-col gap-2">
         <h2 className="text-base font-semibold text-fg">Worker log</h2>

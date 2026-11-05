@@ -55,6 +55,12 @@
  * **Logs are redacted by exact value** before they leave the process: the Claude token, the worker
  * credential and every live run's token and run credential are replaced in each line (TD-031 §10a —
  * the worker's own redactor is the only one that knows them).
+ *
+ * **Optional error reporting** (WP-295, TD-023's 2026-11-05 amendment): with a DSN — `SENTRY_DSN`
+ * in the environment, which wins, or the page's *Error reporting* setting, kept as `sentry-dsn` in
+ * `worker-state` — each `error`/`fatal` line is reported, rebuilt from the reporter's allow-list
+ * and redacted by the same exact values plus TD-012's patterns. A change on the page swaps the
+ * client without a restart; *Send a test error* sends one.
  */
 import { rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -72,17 +78,29 @@ import {
   WORKER_PROTOCOL_VERSION,
   type WorkerLocalClaimScope,
   type WorkerLocalCoreFailure,
+  type WorkerLocalErrorReportingTestResponse,
   type WorkerLocalLauncher,
   type WorkerLocalOffers,
   type WorkerLocalState,
   type WorkerProtocolRange,
   workerLocalClaimScopeSchema,
+  workerLocalErrorReportingTestResponseSchema,
   workerLocalOffersSchema,
   workerLocalStateSchema,
 } from '@platform/contracts';
 import { localClaimBlockersOf } from '@platform/domain';
-import { launcher as launcherAdapters, runner as runnerAdapters } from '@platform/infrastructure';
+import {
+  errorReporting,
+  launcher as launcherAdapters,
+  runner as runnerAdapters,
+} from '@platform/infrastructure';
 import type { DestinationStream } from 'pino';
+import {
+  ErrorReportingTestError,
+  type ReportingTransport,
+  reportingLogHook,
+  sentryClientFactory,
+} from '../error-reporting.js';
 import { asLoggerPort, createLogger, type PinoLogger } from '../logging.js';
 import { repositoryPathOf } from '../pipeline.js';
 import { BUNDLED_WEB_ROOT, resolveBundleRoot } from '../web/bundle.js';
@@ -122,7 +140,9 @@ import {
   CORE_URL_FILE,
   readStoredClaudeToken,
   readStoredCoreUrl,
+  readStoredSentryDsn,
   removeFile,
+  SENTRY_DSN_FILE,
   writePrivateFile,
 } from './setup-files.js';
 import { ensureUiToken, plainUiAddressOf, uiAddressOf } from './ui-token.js';
@@ -161,7 +181,12 @@ export interface StartRemoteWorkerOptions {
   readonly claudeCli?: ClaudeCliLauncher;
   /** Test seam: how the wizard checks a platform address (default the global `fetch`). */
   readonly probeFetch?: CoreFetch;
+  /** Test seam: how the error reporter sends an envelope (default the SDK's HTTP transport). */
+  readonly errorReportingTransport?: ReportingTransport;
 }
+
+/** How long *Send a test error* waits for the event to be sent before it answers. */
+export const ERROR_REPORTING_TEST_FLUSH_MS = 5_000;
 
 /**
  * How long one launcher health probe may take before it counts as no answer (backlog 980). The
@@ -237,6 +262,8 @@ export interface RemoteWorkerRuntime {
   state(): RemoteWorkerState;
   /** What the local page shows, redacted by every secret this worker knows (WP-292). */
   localState(): WorkerLocalState;
+  /** The error reporter (WP-295) — a test flushes it before reading what its transport received. */
+  readonly errorReporter: errorReporting.ErrorReporter;
   /** The sessions in flight, by run id — a test reads how each one ended. */
   readonly sessions: ReadonlyMap<string, RunSession>;
   /** Every session this worker started, in order, kept after it ended. */
@@ -298,11 +325,40 @@ export const startRemoteWorker = async (
         logTail.splice(0, logTail.length - WORKER_LOCAL_LOG_TAIL);
     },
   );
+  /**
+   * Optional error reporting (WP-295): every exact value the log redacts, read per event, then
+   * TD-012's patterns (`sentryClientFactory`). Its tags are read when a line is reported: the
+   * worker's id and its platform change at the handshake and on the page.
+   */
+  const errorReporter = errorReporting.createErrorReporter({
+    createClient: sentryClientFactory({
+      secrets: () => exactSecretRedactor([...logSecrets.values()]),
+      ...(options.errorReportingTransport === undefined
+        ? {}
+        : { transport: options.errorReportingTransport }),
+    }),
+    // Below `error`, so a failure to report is never itself reported.
+    onFailure: (error) => loggerPort.warn({ err: error }, 'error reporting failed'),
+  });
+  const reportTags = (): errorReporting.ReportTags => {
+    const tags: errorReporting.ReportTags = {
+      role: REMOTE_WORKER_ROLE,
+      version: config.version ?? null,
+      commit: config.commit,
+    };
+    try {
+      return { ...tags, worker_id: workerId, core_url: coreUrl };
+    } catch {
+      // A line logged before the connection's state is declared (start-up) has no id to tag.
+      return tags;
+    }
+  };
   const logger = createLogger({
     level: config.logLevel,
     format: 'json',
     role: REMOTE_WORKER_ROLE,
     destination,
+    onError: reportingLogHook(errorReporter, reportTags),
   });
   const loggerPort: Logger = asLoggerPort(logger);
   const launcher =
@@ -334,6 +390,21 @@ export const startRemoteWorker = async (
   let claudeToken: string | null =
     config.claudeToken ?? (await readStoredClaudeToken(config.stateDir));
   if (claudeToken !== null) rememberSecret(WORKER_SECRET_NAMES.claudeToken, claudeToken);
+  // Error reporting (WP-295): environment → `worker-state` file → the page's setting.
+  const sentryFromEnvironment = (config.sentryDsn ?? null) !== null;
+  let sentryDsn: string | null = config.sentryDsn ?? (await readStoredSentryDsn(config.stateDir));
+  if (sentryDsn !== null) {
+    try {
+      await errorReporter.configure(sentryDsn);
+      loggerPort.info(
+        { host: new URL(sentryDsn).host, source: sentryFromEnvironment ? 'environment' : 'file' },
+        'error reporting is on: error lines are reported, redacted',
+      );
+    } catch {
+      // Heard by `onFailure` (a warning line); the worker runs on with reporting off.
+      sentryDsn = null;
+    }
+  }
   /** Claude refused the token this worker holds (WP-294 (6)): no claim until a new sign-in. */
   let claudeRejected = false;
   let candidates: { readonly url: string; readonly version: string }[] = [];
@@ -1254,6 +1325,54 @@ export const startRemoteWorker = async (
   };
 
   /**
+   * *Error reporting* (WP-295): *Save* a DSN, or *Remove* it with `null` — applied **without a
+   * restart** (the reporter closes its client and builds a new one). Refused while `SENTRY_DSN` is
+   * set in the environment, which wins; a malformed DSN is `422`, never echoed.
+   */
+  const setErrorReporting = async (dsn: string | null): Promise<void> => {
+    if (sentryFromEnvironment) {
+      throw new LocalUiError(
+        409,
+        'set_in_environment',
+        'this worker’s error reporting comes from SENTRY_DSN in its environment: change it there',
+      );
+    }
+    if (dsn === null) {
+      await removeFile(config.stateDir, SENTRY_DSN_FILE);
+      sentryDsn = null;
+      await errorReporter.configure(null);
+      loggerPort.info({}, 'error reporting was turned off on this worker’s page');
+      return;
+    }
+    const verdict = errorReporting.parseErrorReportingDsn(dsn);
+    if (!verdict.ok) {
+      throw new LocalUiError(422, 'invalid_dsn', `that is not ${errorReporting.DSN_SHAPE_WORDS}`);
+    }
+    await writePrivateFile(config.stateDir, SENTRY_DSN_FILE, verdict.dsn);
+    sentryDsn = verdict.dsn;
+    await errorReporter.configure(verdict.dsn);
+    loggerPort.info({ host: verdict.host }, 'error reporting is on: set on this worker’s page');
+  };
+
+  /** *Send a test error* (WP-295): one event through the reporter, then a bounded flush. */
+  const testErrorReporting = async (): Promise<WorkerLocalErrorReportingTestResponse> => {
+    if (errorReporter.dsn() === null) {
+      throw new LocalUiError(
+        409,
+        'error_reporting_off',
+        'error reporting is off on this worker: save a DSN first',
+      );
+    }
+    const error = new ErrorReportingTestError('this worker’s page');
+    const eventId = errorReporter.report({ error, message: error.message, tags: reportTags() });
+    const delivered = await errorReporter.flush(ERROR_REPORTING_TEST_FLUSH_MS);
+    return workerLocalErrorReportingTestResponseSchema.parse({
+      event_id: eventId,
+      delivered: eventId !== null && delivered,
+    });
+  };
+
+  /**
    * *Try now*: the core is asked again at once — or, on a connected worker whose launcher did not
    * answer or holds no image (S-22.19, R-L3), the launcher is, and the claim loop woken. A connected
    * worker with nothing to ask again answers `409`.
@@ -1370,6 +1489,10 @@ export const startRemoteWorker = async (
             ? null
             : { run: coreDigests.platform_runtime, egress: coreDigests.platform_egress },
       }),
+      error_reporting: {
+        source: sentryDsn === null ? null : sentryFromEnvironment ? 'environment' : 'file',
+        host: sentryDsn === null ? null : new URL(sentryDsn).host,
+      },
       server_time: new Date(now).toISOString(),
     };
     return workerLocalStateSchema.parse(redactKeysAndValues(pageRedactor(), value));
@@ -1578,6 +1701,8 @@ export const startRemoteWorker = async (
         signOut: acting(signOut),
         connectAgain: acting(connectAgain),
         retry: acting(retry),
+        errorReporting: acting(setErrorReporting),
+        errorReportingTest: testErrorReporting,
       },
     });
     uiServer = listening;
@@ -1614,6 +1739,7 @@ export const startRemoteWorker = async (
     setPaused,
     state,
     localState,
+    errorReporter,
     stop: async () => {
       stopping = true;
       cycle.abort();
@@ -1633,6 +1759,8 @@ export const startRemoteWorker = async (
       server = null;
       uiServer = null;
       uiAddress = null;
+      // Last: an error line written while stopping is still sent.
+      await errorReporter.close();
     },
   };
 };

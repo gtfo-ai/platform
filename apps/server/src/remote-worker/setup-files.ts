@@ -1,23 +1,27 @@
 /**
- * **What the first-run wizard keeps** — WP-294, TD-031's 2026-11-05 first-run amendment §1, §3–4.
+ * **What the first-run wizard keeps** — WP-294, TD-031's 2026-11-05 first-run amendment §1, §3–4 —
+ * and, since WP-295, the *Error reporting* setting.
  *
- * Two files in the `worker-state` volume beside `credential` and `ui-token`, each written `0600`
+ * Three files in the `worker-state` volume beside `credential` and `ui-token`, each written `0600`
  * with an atomic rename (a crash leaves the old file or the new one — `credential.ts`'s rule):
  *
  * | file | holds | written by |
  * |---|---|---|
  * | `core-url` | the platform's origin | *Connect to a platform* |
  * | `claude-token` | the developer's Claude token, the CLI's `sk-ant-oat01-…` | *Sign in to Claude* or *Paste a token instead* |
+ * | `sentry-dsn` | the *Error reporting* DSN (WP-295, TD-023's 2026-11-05 amendment §3) | the page's *Save*; *Remove* deletes it |
  *
  * Each is read only when the environment has no value (environment → file → wizard), and each is
- * deleted by the page's own undo: *Change platform* and *Sign out*.
+ * deleted by the page's own undo: *Change platform*, *Sign out* and *Remove*.
  */
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { errorReporting } from '@platform/infrastructure';
 import { coreOriginOf } from './config.js';
 
 export const CORE_URL_FILE = 'core-url';
 export const CLAUDE_TOKEN_FILE = 'claude-token';
+export const SENTRY_DSN_FILE = 'sentry-dsn';
 
 /**
  * A Claude token's shape: the CLI's long-lived OAuth token (V-WM4, V-WM10 — `sk-ant-oat01-`, 108
@@ -63,4 +67,12 @@ export const readStoredCoreUrl = async (stateDir: string): Promise<string | null
 export const readStoredClaudeToken = async (stateDir: string): Promise<string | null> => {
   const text = await readText(path.join(stateDir, CLAUDE_TOKEN_FILE));
   return text !== null && CLAUDE_TOKEN_SHAPE.test(text) ? text : null;
+};
+
+/** The stored error-reporting DSN, canonical, or `null` (none, or a file that no longer reads as one). */
+export const readStoredSentryDsn = async (stateDir: string): Promise<string | null> => {
+  const text = await readText(path.join(stateDir, SENTRY_DSN_FILE));
+  if (text === null) return null;
+  const verdict = errorReporting.parseErrorReportingDsn(text);
+  return verdict.ok ? verdict.dsn : null;
 };

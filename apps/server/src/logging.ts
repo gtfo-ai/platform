@@ -74,7 +74,16 @@ export interface LoggerOptions {
   readonly role: string;
   /** Test seam: pino writes here instead of stdout. */
   readonly destination?: DestinationStream;
+  /**
+   * Hears every `error` and `fatal` call — its fields (with the request's correlation fields under
+   * them) and its message — before the line is written: the error reporter's only feed (TD-023's
+   * 2026-11-05 amendment, WP-295). A hook that throws never stops the line from being logged.
+   */
+  readonly onError?: (fields: unknown, message: string | undefined) => void;
 }
+
+/** pino's `error` level; `fatal` is 60. */
+const ERROR_LEVEL = 50;
 
 export const createLogger = (options: LoggerOptions): PinoLogger => {
   const base = {
@@ -86,6 +95,36 @@ export const createLogger = (options: LoggerOptions): PinoLogger => {
     redact: { paths: [...REDACTED_PATHS], remove: false },
     /** Every line inside a request carries the request's correlation fields (TD-023). */
     mixin: (): Record<string, unknown> => ({ ...currentLogContext() }),
+    ...(options.onError === undefined
+      ? {}
+      : {
+          hooks: {
+            logMethod(args, method, level) {
+              if (level >= ERROR_LEVEL) {
+                const [first, second] = args as unknown[];
+                // pino reads an `Error` first argument as `{ err }`; so does the report.
+                const fields =
+                  first instanceof Error
+                    ? { ...currentLogContext(), err: first }
+                    : typeof first === 'object' && first !== null
+                      ? { ...currentLogContext(), ...first }
+                      : { ...currentLogContext() };
+                const message =
+                  typeof first === 'string'
+                    ? first
+                    : typeof second === 'string'
+                      ? second
+                      : undefined;
+                try {
+                  options.onError?.(fields, message);
+                } catch {
+                  // The report is the extra; the line below is the record, and it is written.
+                }
+              }
+              method.apply(this, args);
+            },
+          } satisfies NonNullable<PinoLoggerOptions['hooks']>,
+        }),
   } satisfies PinoLoggerOptions;
 
   if (options.destination !== undefined) {

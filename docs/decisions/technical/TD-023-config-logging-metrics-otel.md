@@ -115,3 +115,20 @@ The owner wants a DSN for the remote worker that a person can set at any time.
 - A DSN is a host a person chose: the worker sends its events there.
 - **OpenTelemetry stays unbuilt.** The operator guide is corrected by WP-295, and the gap is filed as
   backlog 885.
+
+**As built (WP-295, S-22.18).** Three facts of the build the amendment did not know; none changes
+a decision, and the first is the reviewer's to confirm:
+- **`@sentry/node` is pinned at 10.78.0, not 11.11.0.** The 11 line depends on
+  `@sentry/bundler-plugins`, which pulls the `sentry` CLI — licensed `FSL-1.1-Apache-2.0`, not an
+  open-source licence — and `oxc-parser`'s native bindings into the production tree (read off the
+  registry 2026-11-05). 10.78.0's tree is MIT and Apache-2.0 throughout (`THIRD_PARTY_NOTICES.md`:
+  17 new packages, about 37 MB unpacked). Moving to 11 is a licence question, BACKLOG 1040.
+- **The reporter is split at the dependency rule.** `packages/infrastructure/src/error-reporting/`
+  holds everything about what leaves the process — the DSN rule, the event allow-list, redaction
+  then bounding, the swappable reporter — and names no SDK; `apps/server/src/error-reporting.ts`
+  builds the `NodeClient` from its options and hooks, loading the SDK only once a DSN is set.
+  Decision 4 keeps `@sentry/node` out of `packages/infrastructure`'s manifest, so the module could
+  not import it.
+- **The core's exact values are a superset**: besides the three named, the model credentials, the
+  metrics password and the bootstrap password — each only at 8 characters or more, so the stock
+  development database password is left to the patterns (BACKLOG 1041).

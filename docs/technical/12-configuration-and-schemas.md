@@ -14,6 +14,7 @@ Neutral names, no product prefix for standard variables; `APP_` for product-spec
 | `DATABASE_URL` | `postgres://app:app@db:5432/app` | Postgres |
 | `LOG_LEVEL` | `info` | pino/structured logging level |
 | `LOG_FORMAT` | `json` | `json | pretty` |
+| `SENTRY_DSN` | unset (**off**) | optional error reporting (TD-023's 2026-11-05 amendment, WP-295), on the core **and** on `ROLE=remote-worker`; `_FILE` accepted. A Sentry DSN, `https://<key>@<host>/<project id>` (`http:` only to `localhost`/`127.0.0.1`/`[::1]`, no secret key, no path prefix) — anything else is a startup refusal that does not echo it. Fed only by the process's own `error`/`fatal` log lines; each event is rebuilt from an allow-list (the error's type, its message bounded at 1 KiB, its stack; the tags `role`, `worker_id`, `core_url`, `version`, `commit`, `run_id`) and redacted by the process's exact secrets and TD-012's patterns — no transcript, prompt, tool input, ticket text, project name or ticket key. Unset, the SDK is never loaded. On a worker it **wins** over the local page's *Error reporting* setting (`sentry-dsn` in `worker-state`), whose actions then answer `409` |
 | `TZ` | `UTC` | organisation default timezone seed |
 | `APP_BASE_URL` | `http://localhost:8080` | absolute links in tickets/Slack |
 | `APP_SECRET_KEY` | — (secret) | session signing, encryption of integration secrets at rest |

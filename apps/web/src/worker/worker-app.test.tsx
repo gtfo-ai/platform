@@ -80,6 +80,7 @@ const state = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalState => (
   logs: ['{"level":30,"time":1762337100000,"msg":"this worker claimed a run"}'],
   setup: setup(),
   claim_blockers: [],
+  error_reporting: { source: null, host: null },
   server_time: '2026-11-05T10:05:00.000Z',
   ...overrides,
 });
@@ -137,6 +138,19 @@ const fakeClient = (initial: WorkerLocalState) => {
     signOut: vi.fn(async () => current),
     connectAgain: vi.fn(async () => current),
     retry: vi.fn(async () => current),
+    // The *Error reporting* setting (WP-295): a DSN saved is shown by its host, never echoed.
+    setErrorReporting: vi.fn(async (dsn: string | null) => {
+      current = {
+        ...current,
+        error_reporting:
+          dsn === null ? { source: null, host: null } : { source: 'file', host: new URL(dsn).host },
+      };
+      return current;
+    }),
+    testErrorReporting: vi.fn(async () => ({
+      event_id: '0123456789abcdef0123456789abcdef',
+      delivered: true,
+    })),
     /** The worker moves on: the next poll answers this. */
     advance: (next: WorkerLocalState) => {
       current = next;
