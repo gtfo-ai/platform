@@ -20,7 +20,7 @@
 
 - Tasks delivered per day/week/month; by project, template, size.
 - LOC added/removed/changed per merged MR and aggregated per day (from MR diff stats, read once per merged MR; the platform's own merge requests only — WP-61).
-- Cost: per run, stage, task, project, org; per model; cache hit ratio (cache-read tokens / input tokens).
+- Cost: per run, stage, task, project, org; per model; cache hit ratio (cache-read tokens / all input tokens of the prompt: uncached input + cache writes + cache reads; amended 2026-11-05, S-23.19).
 - Why not LOC as a success metric: METR's RCT found experienced developers 19% slower while believing they were faster (research/01); LOC is shown for information, delivered-and-merged work is the target.
 - Budget utilisation and forecast.
 - Agent utilisation: parallel runs vs limit; queue wait time.

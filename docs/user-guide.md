@@ -1457,7 +1457,8 @@ whose subscription pays is not something a pushed commit may change.
 
 The organisation's delivery numbers over a range you choose — the last 7, 30, 90 or 365 days — and
 a granularity (by day, week or month), both at the top of the page beside **Download CSV**, which
-downloads the same figures with one row per metric and period.
+downloads the same figures with one row per metric and period. Each row names its unit: `count`, `usd`, `minutes`, `hours`, `ratio` (a fraction between 0 and 1)
+or `decimal` (an average such as returns per delivered task).
 
 The figures are grouped into sections: **Throughput** (tasks started, tasks delivered, merge rate,
 cycle time), **Quality** (first-pass acceptance, clean first-MR rate, human intervention rate,
