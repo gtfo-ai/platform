@@ -128,7 +128,21 @@ test.describe('on a laptop the top bar and the row under it stick', () => {
       .click();
     const startItem = page.getByRole('menuitem', { name: /^Start a ticket/ });
     await expect(startItem).toBeVisible();
-    expect((await boxOf(startItem)).top).toBeLessThan(frameBottom);
+    // Every item drawn where the tab row is must be the one on top there. Which items those are
+    // depends on how many the menu has (S-23.20 put *Add a worker* above *Start a ticket…*), so
+    // they are found by position, and at least one must overlap the row or the case proves nothing.
+    const items = page.getByRole('menuitem');
+    const overlapping: Locator[] = [];
+    for (let index = 0; index < (await items.count()); index += 1) {
+      const item = items.nth(index);
+      if ((await boxOf(item)).top < frameBottom) {
+        overlapping.push(item);
+      }
+    }
+    expect(overlapping.length).toBeGreaterThan(0);
+    for (const item of overlapping) {
+      expect(await onTop(item)).toBe(true);
+    }
     expect(await onTop(startItem)).toBe(true);
 
     // `#start-ticket`: the dialog's field takes the focus and nothing of the frame covers it.
