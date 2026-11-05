@@ -26,10 +26,6 @@ export const refSleep = (ms: number): Promise<void> =>
     setTimeout(resolve, ms);
   });
 
-/** `process.arch` → the OCI architecture an index names. */
-const ociArchitecture = (): string =>
-  process.arch === 'x64' ? 'amd64' : process.arch === 'arm64' ? 'arm64' : process.arch;
-
 export interface StartedUpdater {
   readonly logger: PinoLogger;
   readonly updater: Updater;
@@ -61,11 +57,9 @@ export const startUpdaterProcess = (
     docker: createDockerCli(),
     fetch: (url, init) => fetch(url, init),
     logger: port,
-    registry,
     verifier,
     containerId: env.HOSTNAME ?? hostname(),
     templatePath: IMAGE_TEMPLATE_PATH,
-    architecture: ociArchitecture(),
     applyEnvironment,
     now: () => new Date(),
     sleep: refSleep,

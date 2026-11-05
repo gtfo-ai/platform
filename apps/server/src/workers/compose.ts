@@ -13,7 +13,8 @@
  *    `<APP_IMAGE_REPOSITORY>/<image>@sha256:…`, the core's own digest — **pinned**, so a worker runs
  *    what its core advertises and never `latest`; the variable stays, so the updater's managed `.env`
  *    block re-pins it (TD-032 decision 4);
- *  - `${APP_CORE_URL:?…}` → `${APP_CORE_URL:-<APP_BASE_URL>}`, the core that served the file.
+ *  - `${APP_CORE_URL:?…}` (and the updater's `${APP_CORE_URL:-}`) → `${APP_CORE_URL:-<APP_BASE_URL>}`,
+ *    the core that served the file.
  *
  * A template whose platform images are not all of that shape is refused rather than served half
  * pinned: the unit test holds the shipped file to it (every `image:` by digest, no `latest`).
@@ -92,7 +93,7 @@ export const renderWorkerCompose = (
     );
   }
   rendered = rendered.replace(
-    /\$\{APP_CORE_URL:\?[^}]*\}/g,
+    /\$\{APP_CORE_URL:[?-][^}]*\}/g,
     `\${APP_CORE_URL:-${input.coreUrl.replace(/\/+$/, '')}}`,
   );
   for (const line of rendered.split('\n')) {

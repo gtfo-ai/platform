@@ -8,10 +8,9 @@
  *
  * | variable | |
  * |---|---|
- * | `APP_CORE_URL` | the core it follows, required |
+ * | `APP_CORE_URL` | the core it follows; unset, the updater **idles** until it is (S-22.17's first-run page may start a worker before a core is known) |
  * | `APP_TRUSTED_IMAGE_REPOSITORY` | the `platform` image's repository, e.g. `ghcr.io/<owner>/platform`; the other three are `-launcher`, `-runtime`, `-egress` beside it (TD-032 §3) |
  * | `APP_TRUSTED_BUILDER` | `<owner>/<repo>/.github/workflows/<file>@<ref>` — the workflow whose attestation is trusted |
- * | `APP_TRUSTED_ATTESTATION_KEY` | optional: an SPKI public key (base64) that signs instead of the keyless identity (`attestation.ts`) |
  * | `APP_UPDATE_REGISTRY_ENDPOINTS` | optional: `host=origin,…`, where a registry is read from (`registry.ts`; not a trust decision) |
  * | `APP_UPDATE_POLL_SECONDS` | how often `release` is asked, default 300 (TD-032 §6: every 5 minutes) |
  * | `APP_UPDATE_CHECK_SECONDS` | the apply's `--wait-timeout` and its `core_handshake` bound, default 120 |
@@ -19,7 +18,6 @@
  * | `APP_WORKER_STATE_DIR` | the `worker-state` volume, read-only: the worker credential `GET release` and `update-report` carry |
  * | `APP_UPDATE_STATE_DIR` | the `updates` volume: `state.json` and the previous template |
  * | `PLATFORM_*_IMAGE` | the four references this worker runs — what an update is compared with |
- * | `APP_BUILT_AT` | this build's time (baked into the image) — the downgrade bound |
  *
  * **A worker without a verifier refuses to self-update, by name** (TD-032 §3): with either trusted
  * variable unset (or unreadable) the configuration still loads — the updater stays up and says, every
@@ -28,7 +26,7 @@
 import { db as dbAdapters } from '@platform/infrastructure';
 import { REFUSED_WORKER_VARIABLES } from '../remote-worker/config.js';
 import { WORKER_IMAGE_VARIABLE } from '../workers/compose.js';
-import { parseTrustedBuilder, parseTrustedKey, type VerifierPolicy } from './attestation.js';
+import { parseTrustedBuilder, type VerifierPolicy } from './attestation.js';
 import { IMAGE_KEYS, type ImageReferences } from './decide.js';
 import { parseImageRepositoryName, parseRegistryEndpoints } from './registry.js';
 
@@ -41,7 +39,8 @@ export const DEFAULT_WORKER_LOCAL_URL = 'http://remote-worker:8080';
 export const DEFAULT_UPDATE_STATE_DIR = '/var/lib/platform/updates';
 
 export interface UpdaterConfig {
-  readonly coreUrl: string;
+  /** `null` until a core is configured: the updater idles and says so (S-22.17). */
+  readonly coreUrl: string | null;
   /** `null`, with {@link UpdaterConfig.verifierMissing} naming why: this worker never self-updates. */
   readonly verifier: (VerifierPolicy & { readonly repository: string }) | null;
   readonly verifierMissing: string | null;
@@ -52,7 +51,6 @@ export interface UpdaterConfig {
   readonly workerStateDir: string;
   readonly stateDir: string;
   readonly running: ImageReferences;
-  readonly builtAt: string | null;
   readonly logLevel: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
 }
 
@@ -85,8 +83,7 @@ export const loadUpdaterConfig = (env: Env): UpdaterConfig => {
   }
   const read = (name: string): string => dbAdapters.readEnvWithFile(name, env)?.trim() ?? '';
   const coreUrl = read('APP_CORE_URL');
-  if (coreUrl === '') problems.push('APP_CORE_URL is required: the core this worker follows');
-  else {
+  if (coreUrl !== '') {
     try {
       const parsed = new URL(coreUrl);
       if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error();
@@ -142,19 +139,10 @@ export const loadUpdaterConfig = (env: Env): UpdaterConfig => {
       `APP_TRUSTED_BUILDER (${builderRaw}) is not <owner>/<repo>/.github/workflows/<file>@<ref>`,
     );
   }
-  let key: VerifierPolicy['key'] = null;
-  const keyRaw = read('APP_TRUSTED_ATTESTATION_KEY');
-  if (keyRaw !== '') {
-    try {
-      key = parseTrustedKey(keyRaw);
-    } catch (error) {
-      missing.push(`APP_TRUSTED_ATTESTATION_KEY is not a public key (${(error as Error).message})`);
-    }
-  }
   const verifier =
-    missing.length === 0 && builder !== null ? { repository: repositoryRaw, builder, key } : null;
+    missing.length === 0 && builder !== null ? { repository: repositoryRaw, builder } : null;
   return {
-    coreUrl,
+    coreUrl: coreUrl === '' ? null : coreUrl,
     verifier,
     verifierMissing:
       verifier === null
@@ -167,7 +155,6 @@ export const loadUpdaterConfig = (env: Env): UpdaterConfig => {
     workerStateDir: read('APP_WORKER_STATE_DIR') || '/var/lib/platform/worker-state',
     stateDir: read('APP_UPDATE_STATE_DIR') || DEFAULT_UPDATE_STATE_DIR,
     running: running as ImageReferences,
-    builtAt: read('APP_BUILT_AT') || null,
     logLevel,
   };
 };

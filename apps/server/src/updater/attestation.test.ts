@@ -9,10 +9,8 @@
  * digest and hashed. They are verified here with **no network**, against the Sigstore public-good
  * trusted root seeded in `@sigstore/tuf` (`forceCache`), which is the verifier's offline trust root.
  *
- * The key-signed half is the Docker check's shape: a bundle with a `publicKey` hint, signed by a key
- * this test makes, so every refusal can be planted.
+ * There is no keyed path (the orchestrator's ruling on PR #38): every signature here is the real one.
  */
-import { generateKeyPairSync, type KeyObject, sign } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -25,10 +23,15 @@ import {
   checkStatement,
   createAttestationVerifier,
   parseTrustedBuilder,
-  parseTrustedKey,
   type TrustedBuilder,
 } from './attestation.js';
-import { createRegistryClient, parseImageRepositoryName, sha256Of } from './registry.js';
+import {
+  createRegistryClient,
+  parseImageRepositoryName,
+  RegistryError,
+  sha256Of,
+} from './registry.js';
+import { createKeylessSignatureCheck, derUtf8 } from './signature.js';
 
 const FIXTURES = fileURLToPath(
   new URL('../../../../test/fixtures/attestations/ghcr-platform-640ca6a/', import.meta.url),
@@ -77,13 +80,15 @@ describe('the recorded GHCR attestation of sha-640ca6a, verified offline (V-WM6)
     const { client, asked } = recordedRegistry(ghcrTable());
     const verifier = createAttestationVerifier({
       registry: client,
-      policy: { builder: BUILDER, key: null },
-      trustedRoot: seededRoot,
+      policy: { builder: BUILDER },
+      signature: createKeylessSignatureCheck({ trustedRoot: seededRoot }),
     });
     await expect(verifier.verify(REPOSITORY, image, IMAGE_DIGEST)).resolves.toEqual({
       repository: REPOSITORY,
       digest: IMAGE_DIGEST,
       commit: '640ca6acb3bf411f1f74d2c13514888438f4cb6a',
+      // Rekor's integratedTime for the entry (1793877604), the order two builds are compared in.
+      loggedAt: new Date(1_793_877_604_000),
     });
     // The referrers API first (GHCR answers it 404), then the OCI 1.1 tag fallback.
     expect(asked[0]).toBe(`https://ghcr.io/v2/gtfo-ai/platform/referrers/${IMAGE_DIGEST}`);
@@ -99,8 +104,8 @@ describe('the recorded GHCR attestation of sha-640ca6a, verified offline (V-WM6)
       const { client } = recordedRegistry(ghcrTable());
       const verifier = createAttestationVerifier({
         registry: client,
-        policy: { builder: parseTrustedBuilder(builder) as TrustedBuilder, key: null },
-        trustedRoot: seededRoot,
+        policy: { builder: parseTrustedBuilder(builder) as TrustedBuilder },
+        signature: createKeylessSignatureCheck({ trustedRoot: seededRoot }),
       });
       await expect(verifier.verify(REPOSITORY, image, IMAGE_DIGEST)).rejects.toThrow(
         AttestationRefusedError,
@@ -112,21 +117,21 @@ describe('the recorded GHCR attestation of sha-640ca6a, verified offline (V-WM6)
     const { client } = recordedRegistry(ghcrTable());
     const verifier = createAttestationVerifier({
       registry: client,
-      policy: { builder: BUILDER, key: null },
-      trustedRoot: seededRoot,
+      policy: { builder: BUILDER },
+      signature: createKeylessSignatureCheck({ trustedRoot: seededRoot }),
     });
     await expect(
       verifier.verify('ghcr.io/gtfo-ai/platform-launcher', image, IMAGE_DIGEST),
     ).rejects.toThrow(/names no subject ghcr\.io\/gtfo-ai\/platform-launcher/);
   });
 
-  it('refuses a digest that carries no attestation, and one whose bundle bytes were altered', async () => {
+  it('refuses a digest that carries no attestation; bytes that do not hash are asked again, not refused', async () => {
     const other = `sha256:${'e'.repeat(64)}`;
     const { client } = recordedRegistry(ghcrTable());
     const verifier = createAttestationVerifier({
       registry: client,
-      policy: { builder: BUILDER, key: null },
-      trustedRoot: seededRoot,
+      policy: { builder: BUILDER },
+      signature: createKeylessSignatureCheck({ trustedRoot: seededRoot }),
     });
     await expect(verifier.verify(REPOSITORY, image, other)).rejects.toThrow(
       /carries no build attestation/,
@@ -141,19 +146,15 @@ describe('the recorded GHCR attestation of sha-640ca6a, verified offline (V-WM6)
     );
     const refusing = createAttestationVerifier({
       registry: altered.client,
-      policy: { builder: BUILDER, key: null },
-      trustedRoot: seededRoot,
+      policy: { builder: BUILDER },
+      signature: createKeylessSignatureCheck({ trustedRoot: seededRoot }),
     });
-    await expect(refusing.verify(REPOSITORY, image, IMAGE_DIGEST)).rejects.toThrow(
-      /do not hash to the digest/,
-    );
+    // Not a refusal: a registry serving the wrong bytes is asked again at the next poll.
+    const tamperedAnswer = refusing.verify(REPOSITORY, image, IMAGE_DIGEST);
+    await expect(tamperedAnswer).rejects.toThrow(/do not hash to the digest/);
+    await expect(tamperedAnswer).rejects.toBeInstanceOf(RegistryError);
   });
 });
-
-// ── A key-signed bundle (the Docker check's shape) ─────────────────────────────────────────────
-
-const pae = (type: string, body: Buffer): Buffer =>
-  Buffer.concat([Buffer.from(`DSSEv1 ${Buffer.byteLength(type)} ${type} ${body.length} `), body]);
 
 const statementFor = (repository: string, digest: string, builder = BUILDER) => ({
   _type: 'https://in-toto.io/Statement/v1',
@@ -173,118 +174,91 @@ const statementFor = (repository: string, digest: string, builder = BUILDER) => 
   },
 });
 
-const signedBundle = (privateKey: KeyObject, statement: unknown): Buffer => {
-  const payload = Buffer.from(JSON.stringify(statement));
-  const type = 'application/vnd.in-toto+json';
-  const signature = sign('sha256', pae(type, payload), privateKey);
-  return Buffer.from(
-    JSON.stringify({
-      mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json',
-      verificationMaterial: {
-        publicKey: { hint: 'worker-update-check' },
-        tlogEntries: [],
-        timestampVerificationData: { rfc3161Timestamps: [] },
+describe('what is a refusal, and what is asked again (review of PR #38)', () => {
+  it('throws a registry that answers 503 as it is — not a refusal — and verifies once it answers', async () => {
+    const table = ghcrTable();
+    let failing = true;
+    const asked: string[] = [];
+    const client = createRegistryClient({
+      fetch: async (url) => {
+        asked.push(url);
+        if (failing && url.includes('/blobs/')) {
+          failing = false;
+          return new Response('busy', { status: 503 });
+        }
+        const body = table[url];
+        return body === undefined
+          ? new Response('{}', { status: 404 })
+          : new Response(new Uint8Array(body), { status: 200 });
       },
-      dsseEnvelope: {
-        payload: payload.toString('base64'),
-        payloadType: type,
-        signatures: [{ sig: signature.toString('base64'), keyid: '' }],
-      },
-    }),
-  );
-};
-
-/** A local registry's table for one image digest and its one key-signed attestation. */
-const keyedTable = (digest: string, bundle: Buffer): Record<string, Buffer> => {
-  const empty = Buffer.from('{}');
-  const manifest = Buffer.from(
-    JSON.stringify({
-      schemaVersion: 2,
-      mediaType: 'application/vnd.oci.image.manifest.v1+json',
-      artifactType: 'application/vnd.dev.sigstore.bundle.v0.3+json',
-      config: {
-        mediaType: 'application/vnd.oci.empty.v1+json',
-        digest: sha256Of(empty),
-        size: 2,
-      },
-      layers: [
-        {
-          mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json',
-          digest: sha256Of(bundle),
-          size: bundle.length,
-        },
-      ],
-    }),
-  );
-  const index = Buffer.from(
-    JSON.stringify({
-      schemaVersion: 2,
-      mediaType: 'application/vnd.oci.image.index.v1+json',
-      manifests: [
-        {
-          mediaType: 'application/vnd.oci.image.manifest.v1+json',
-          digest: sha256Of(manifest),
-          size: manifest.length,
-          artifactType: 'application/vnd.dev.sigstore.bundle.v0.3+json',
-        },
-      ],
-    }),
-  );
-  const base = 'https://localhost:5000/v2/acme/platform';
-  return {
-    [`${base}/manifests/sha256-${digest.slice(7)}`]: index,
-    [`${base}/manifests/${sha256Of(manifest)}`]: manifest,
-    [`${base}/blobs/${sha256Of(bundle)}`]: bundle,
-  };
-};
-
-describe('a key-signed attestation (APP_TRUSTED_ATTESTATION_KEY)', () => {
-  const trusted = generateKeyPairSync('ec', { namedCurve: 'P-256' });
-  const stranger = generateKeyPairSync('ec', { namedCurve: 'P-256' });
-  const local = parseImageRepositoryName('localhost:5000/acme/platform') as NonNullable<
-    ReturnType<typeof parseImageRepositoryName>
-  >;
-  const digest = `sha256:${'d'.repeat(64)}`;
-  const trustedKey = parseTrustedKey(
-    trusted.publicKey.export({ format: 'der', type: 'spki' }).toString('base64'),
-  );
-  const verify = (bundle: Buffer, repository = 'localhost:5000/acme/platform') => {
-    const { client } = recordedRegistry(keyedTable(digest, bundle));
-    return createAttestationVerifier({
+    });
+    const verifier = createAttestationVerifier({
       registry: client,
-      policy: { builder: BUILDER, key: trustedKey },
-    }).verify(repository, local, digest);
-  };
-
-  it('verifies a bundle the trusted key signed', async () => {
-    await expect(
-      verify(
-        signedBundle(trusted.privateKey, statementFor('localhost:5000/acme/platform', digest)),
-      ),
-    ).resolves.toMatchObject({ digest, commit: 'a'.repeat(40) });
+      policy: { builder: BUILDER },
+      signature: createKeylessSignatureCheck({ trustedRoot: seededRoot }),
+    });
+    const first = verifier.verify(REPOSITORY, image, IMAGE_DIGEST);
+    await expect(first).rejects.toBeInstanceOf(RegistryError);
+    await expect(first).rejects.not.toBeInstanceOf(AttestationRefusedError);
+    await expect(verifier.verify(REPOSITORY, image, IMAGE_DIGEST)).resolves.toMatchObject({
+      commit: '640ca6acb3bf411f1f74d2c13514888438f4cb6a',
+    });
   });
 
-  it('refuses a bundle another key signed', async () => {
-    await expect(
-      verify(
-        signedBundle(stranger.privateKey, statementFor('localhost:5000/acme/platform', digest)),
-      ),
-    ).rejects.toThrow(AttestationRefusedError);
+  it('throws a trusted root that cannot be read as it is — not a refusal', async () => {
+    const { client } = recordedRegistry(ghcrTable());
+    const verifier = createAttestationVerifier({
+      registry: client,
+      policy: { builder: BUILDER },
+      signature: createKeylessSignatureCheck({
+        trustedRoot: async () => {
+          throw new Error('tuf-repo-cdn.sigstore.dev: ECONNRESET');
+        },
+      }),
+    });
+    await expect(verifier.verify(REPOSITORY, image, IMAGE_DIGEST)).rejects.toThrow(
+      /trusted root could not be read/,
+    );
+    await expect(verifier.verify(REPOSITORY, image, IMAGE_DIGEST)).rejects.not.toBeInstanceOf(
+      AttestationRefusedError,
+    );
   });
 
-  it('refuses a signed statement about another digest, another repository or another builder', async () => {
-    const otherBuilder = parseTrustedBuilder(
-      'acme/fork/.github/workflows/image.yml@refs/heads/main',
-    ) as TrustedBuilder;
-    for (const statement of [
-      statementFor('localhost:5000/acme/platform', `sha256:${'f'.repeat(64)}`),
-      statementFor('localhost:5000/acme/platform-egress', digest),
-      statementFor('localhost:5000/acme/platform', digest, otherBuilder),
-    ]) {
-      await expect(verify(signedBundle(trusted.privateKey, statement))).rejects.toThrow(
-        AttestationRefusedError,
-      );
-    }
+  it('reads the trusted root afresh after a refusal, and only then', async () => {
+    let roots = 0;
+    const counted = async () => {
+      roots += 1;
+      return seededRoot();
+    };
+    const check = createKeylessSignatureCheck({ trustedRoot: counted });
+    const verifyAs = (builder: string) => {
+      const { client } = recordedRegistry(ghcrTable());
+      return createAttestationVerifier({
+        registry: client,
+        policy: { builder: parseTrustedBuilder(builder) as TrustedBuilder },
+        signature: check,
+      }).verify(REPOSITORY, image, IMAGE_DIGEST);
+    };
+    await verifyAs('gtfo-ai/platform/.github/workflows/image.yml@refs/heads/main');
+    await verifyAs('gtfo-ai/platform/.github/workflows/image.yml@refs/heads/main');
+    expect(roots).toBe(1);
+    await expect(
+      verifyAs('gtfo-ai/platform/.github/workflows/ci.yml@refs/heads/main'),
+    ).rejects.toBeInstanceOf(AttestationRefusedError);
+    await verifyAs('gtfo-ai/platform/.github/workflows/image.yml@refs/heads/main');
+    expect(roots).toBe(2);
+  });
+
+  it('reads a Fulcio extension as a DER UTF8String, and nothing else as one', () => {
+    expect(derUtf8(Buffer.from([0x0c, 0x0f, ...Buffer.from('refs/heads/main')]))).toBe(
+      'refs/heads/main',
+    );
+    const long = 'x'.repeat(200);
+    expect(derUtf8(Buffer.from([0x0c, 0x81, 200, ...Buffer.from(long)]))).toBe(long);
+    // A raw string (Fulcio's v1 extensions), a wrong length, another tag: not a v2 value.
+    expect(derUtf8(Buffer.from('refs/heads/main'))).toBeNull();
+    expect(derUtf8(Buffer.from([0x0c, 0x05, 0x61]))).toBeNull();
+    expect(derUtf8(Buffer.from([0x13, 0x01, 0x61]))).toBeNull();
   });
 });
 

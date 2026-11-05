@@ -9,8 +9,10 @@ const digests = (hex: string) => ({
 });
 const RUNNING = digests('a');
 const NEWER = digests('b');
-const EARLY = '2026-11-01T00:00:00Z';
-const LATE = '2026-11-05T00:00:00Z';
+const EARLY = new Date('2026-11-01T00:00:00Z');
+const LATE = new Date('2026-11-05T00:00:00Z');
+const OLD_COMMIT = 'a'.repeat(40);
+const NEW_COMMIT = 'b'.repeat(40);
 
 const decide = (overrides: Partial<Parameters<typeof decideUpdate>[0]> = {}) =>
   decideUpdate({
@@ -18,8 +20,10 @@ const decide = (overrides: Partial<Parameters<typeof decideUpdate>[0]> = {}) =>
     advertised: NEWER,
     accepted: [1, 2],
     protocol: 2,
-    runningBuiltAt: EARLY,
-    targetBuiltAt: LATE,
+    runningCommit: OLD_COMMIT,
+    targetCommit: NEW_COMMIT,
+    runningAt: EARLY,
+    targetAt: LATE,
     ...overrides,
   });
 
@@ -35,34 +39,36 @@ describe('what the updater does with the core’s digests (TD-032 §3, §6)', ()
   });
 
   it('refuses a downgrade below the running build while the core still serves this protocol', () => {
-    const refused = decide({ runningBuiltAt: LATE, targetBuiltAt: EARLY });
+    const refused = decide({ runningAt: LATE, targetAt: EARLY });
     expect(refused.kind).toBe('refuse');
     expect(refused.kind === 'refuse' ? refused.why : '').toContain('downgrade is refused');
-    // The boundary: one second older is a downgrade, the same instant is not.
-    expect(decide({ runningBuiltAt: LATE, targetBuiltAt: '2026-11-04T23:59:59Z' }).kind).toBe(
+    // The boundary: one second earlier is a downgrade, the same instant is not.
+    expect(decide({ runningAt: LATE, targetAt: new Date(LATE.getTime() - 1000) }).kind).toBe(
       'refuse',
     );
-    expect(decide({ runningBuiltAt: LATE, targetBuiltAt: LATE }).kind).toBe('update');
+    expect(decide({ runningAt: LATE, targetAt: LATE }).kind).toBe('update');
+  });
+
+  it('never calls the same commit a downgrade, whatever its log time (a re-attested build)', () => {
+    expect(decide({ targetCommit: OLD_COMMIT, runningAt: LATE, targetAt: EARLY }).kind).toBe(
+      'update',
+    );
   });
 
   it('follows the core to an older build once its protocol range excludes this worker', () => {
-    expect(decide({ runningBuiltAt: LATE, targetBuiltAt: EARLY, accepted: [3, 4] })).toEqual({
+    expect(decide({ runningAt: LATE, targetAt: EARLY, accepted: [3, 4] })).toEqual({
       kind: 'update',
       downgrade: true,
     });
   });
 
-  it('refuses when either build time cannot be read — it could be a downgrade', () => {
-    for (const times of [
-      { runningBuiltAt: null },
-      { targetBuiltAt: null },
-      { targetBuiltAt: 'not a time' },
-    ]) {
+  it('refuses when either side cannot be ordered — an unattested running build is one', () => {
+    for (const times of [{ runningAt: null, runningCommit: null }, { targetAt: null }]) {
       const decision = decide(times);
       expect(decision.kind).toBe('refuse');
-      expect(decision.kind === 'refuse' ? decision.why : '').toContain('cannot be compared');
+      expect(decision.kind === 'refuse' ? decision.why : '').toContain('cannot be ordered');
     }
-    expect(decide({ targetBuiltAt: null, accepted: [9] }).kind).toBe('update');
+    expect(decide({ targetAt: null, accepted: [9] }).kind).toBe('update');
   });
 });
 

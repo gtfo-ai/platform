@@ -11,12 +11,18 @@
  *  - **a local registry** (`registry:2`, `127.0.0.1:<port>`) holding the check's images under
  *    `localhost:<port>/acme/…`, each an **attested** build: the check signs an in-toto SLSA
  *    provenance statement per digest as a Sigstore bundle with a key it generates, and pushes it as
- *    the digest's referrer through the OCI 1.1 tag fallback (`sha256-<hex>`) — GHCR's own shape. The
- *    worker's updater trusts that key (`APP_TRUSTED_ATTESTATION_KEY`): no test can mint a Fulcio
- *    certificate for this repository's workflow, so the keyless half is the unit tier's (the recorded
- *    GHCR bundle, `attestation.test.ts`). Four `platform` builds, each `FROM platform:<tag>` with its
- *    own `APP_BUILT_AT`: **old** (installed first), **new** (a good update), **bad** (its worker never
- *    answers `/readyz`; its apply runs normally) and **unattested** (pushed with no attestation);
+ *    the digest's referrer through the OCI 1.1 tag fallback (`sha256-<hex>`) — GHCR's own shape.
+ *    **The shipped updater verifies keylessly only** (the orchestrator's ruling on PR #38) and no
+ *    test can mint a Fulcio certificate for this repository's workflow, so **this check's own
+ *    `platform` builds replace one module**, `apps/server/src/updater/signature.ts`, with a stand-in
+ *    that checks the DSSE signature against the check's key (baked into those images, never in a
+ *    compose file) and reads the provenance's `startedOn` as the log time. Everything else — the
+ *    registry reads, the referrer fallback, the statement's subject, workflow and commit, the
+ *    one-commit rule, the downgrade bound, the apply — is the shipped code. The keyless signature
+ *    itself is the unit tier's (the recorded GHCR bundle, `attestation.test.ts`). Four builds of all
+ *    four images, each `FROM <image>:<tag>` and attested at its own commit and time: **old**
+ *    (installed first), **new** (a good update), **bad** (its worker never answers `/readyz`; its
+ *    apply runs normally) and **unattested** (pushed with no attestation);
  *  - **the core**: `compose.yml`, `workers_only` (no runner), on a fixed port, advertising the
  *    digests `APP_WORKER_IMAGE_DIGESTS` names — re-written and the `app` recreated to move them;
  *  - **the worker**, installed the way a person does: the compose file **downloaded from the core**
@@ -237,7 +243,7 @@ const keys = generateKeyPairSync('ec', { namedCurve: 'P-256' });
 const TRUSTED_KEY = keys.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
 
 /** A Sigstore bundle v0.3: a DSSE envelope over an SLSA provenance statement, signed by the check's key. */
-const attestation = (repository, digest) => {
+const attestation = (repository, digest, commit, at) => {
   const statement = {
     _type: 'https://in-toto.io/Statement/v1',
     subject: [{ name: repository, digest: { sha256: digest.slice('sha256:'.length) } }],
@@ -252,9 +258,13 @@ const attestation = (repository, digest) => {
             path: BUILDER.path,
           },
         },
-        resolvedDependencies: [{ digest: { gitCommit: '0'.repeat(40) } }],
+        resolvedDependencies: [{ digest: { gitCommit: commit } }],
       },
-      runDetails: { builder: { id: 'https://example.test/worker-update-check' } },
+      runDetails: {
+        builder: { id: 'https://example.test/worker-update-check' },
+        // Read as the log time by the check's signature stand-in (a real bundle's is Rekor's).
+        metadata: { startedOn: at },
+      },
     },
   };
   const payload = Buffer.from(JSON.stringify(statement));
@@ -281,8 +291,8 @@ const attestation = (repository, digest) => {
 };
 
 /** Pushes the attestation of `name@digest` as its referrer, under the OCI 1.1 tag fallback. */
-const attest = async (name, digest) => {
-  const bundle = attestation(`${NAMESPACE}/${name}`, digest);
+const attest = async (name, digest, commit, at) => {
+  const bundle = attestation(`${NAMESPACE}/${name}`, digest, commit, at);
   const empty = Buffer.from('{}');
   const emptyDigest = await pushBlob(name, empty);
   const bundleDigest = await pushBlob(name, bundle);
@@ -352,16 +362,56 @@ const publish = async (source, name, tag) => {
   return digestOf(name, tag);
 };
 
-/** A `platform` build `FROM platform:<tag>` with its own build time (and, for `bad`, a worker that never answers). */
-const derive = async (directory, label, builtAt, broken) => {
-  const context = path.join(directory, `image-${label}`);
+/**
+ * The check's stand-in for `apps/server/src/updater/signature.ts` (see the header): the same exports,
+ * a DSSE signature checked against the check's key instead of Fulcio and Rekor. Only the check's
+ * own images carry it.
+ */
+const SIGNATURE_STAND_IN = `import { createPublicKey, verify } from 'node:crypto';
+export const GITHUB_ACTIONS_ISSUER = 'https://token.actions.githubusercontent.com';
+export const builderIdentity = (builder) =>
+  'https://github.com/' + builder.repository + '/' + builder.workflowPath + '@' + builder.ref;
+export class SignatureRefusedError extends Error {}
+SignatureRefusedError.prototype.name = 'SignatureRefusedError';
+export class SignatureUnavailableError extends Error {}
+export const derUtf8 = () => null;
+const key = createPublicKey({
+  key: Buffer.from(process.env.CHECK_ATTESTATION_KEY ?? '', 'base64'),
+  format: 'der',
+  type: 'spki',
+});
+export const createKeylessSignatureCheck = () => ({
+  async verify(bundle) {
+    const envelope = bundle.content.dsseEnvelope;
+    const payload = Buffer.from(envelope.payload);
+    const type = envelope.payloadType;
+    const pae = Buffer.concat([
+      Buffer.from('DSSEv1 ' + Buffer.byteLength(type) + ' ' + type + ' ' + payload.length + ' '),
+      payload,
+    ]);
+    const signature = envelope.signatures[0]?.sig;
+    if (signature === undefined || !verify('sha256', pae, key, Buffer.from(signature))) {
+      throw new SignatureRefusedError('worker-update-check: not signed by the check key');
+    }
+    const at = JSON.parse(payload.toString('utf8')).predicate?.runDetails?.metadata?.startedOn;
+    return { loggedAt: new Date(at), commit: null };
+  },
+});
+`;
+
+/** One check build of an image: `FROM <image>:<tag>`, relabelled so its digest is its own. */
+const derive = async (directory, image, label, options = {}) => {
+  const context = path.join(directory, `image-${image}-${label}`);
   await run('mkdir', ['-p', context]);
-  const lines = [
-    `FROM platform:${TAG}`,
-    `ENV APP_BUILT_AT=${builtAt}`,
-    `LABEL org.platform.update-check="${label}"`,
-  ];
-  if (broken) {
+  const lines = [`FROM ${image}:${TAG}`, `LABEL org.platform.update-check="${label}"`];
+  if (image === 'platform') {
+    await writeFile(path.join(context, 'signature.ts'), SIGNATURE_STAND_IN);
+    lines.push(
+      `ENV CHECK_ATTESTATION_KEY=${TRUSTED_KEY}`,
+      'COPY signature.ts /app/apps/server/src/updater/signature.ts',
+    );
+  }
+  if (options.broken === true) {
     // The worker never listens (so it never handshakes); every other role runs as shipped.
     await writeFile(
       path.join(context, 'bad-main.mjs'),
@@ -370,7 +420,7 @@ const derive = async (directory, label, builtAt, broken) => {
     lines.push('COPY bad-main.mjs /opt/check/bad-main.mjs', 'CMD ["/opt/check/bad-main.mjs"]');
   }
   await writeFile(path.join(context, 'Dockerfile'), `${lines.join('\n')}\n`);
-  const tag = `agentic-update-check-${label}:${SUFFIX}`;
+  const tag = `agentic-update-check-${image}-${label}:${SUFFIX}`;
   await docker(['build', '--quiet', '-t', tag, context], { timeoutMs: 10 * 60_000 });
   return tag;
 };
@@ -497,38 +547,45 @@ const main = async () => {
     await waitForOk(stages, `http://127.0.0.1:${REGISTRY_PORT}/v2/`);
     stages.set('building and publishing the check’s images');
     const t = (hours) => new Date(Date.UTC(2026, 10, 5, hours)).toISOString();
-    const builds = {
-      old: await derive(directory, 'old', t(1), false),
-      new: await derive(directory, 'new', t(2), false),
-      bad: await derive(directory, 'bad', t(3), true),
-      unattested: await derive(directory, 'unattested', t(4), false),
+    /** Each build: its commit, its log time, whether it is attested, whether its worker is broken. */
+    const BUILDS = {
+      old: { commit: '1'.repeat(40), at: t(1), attested: true },
+      new: { commit: '2'.repeat(40), at: t(2), attested: true },
+      bad: { commit: '3'.repeat(40), at: t(3), attested: true, broken: true },
+      unattested: { commit: '4'.repeat(40), at: t(4), attested: false },
     };
-    derived.push(...Object.values(builds));
-    const platform = {};
-    for (const [label, source] of Object.entries(builds)) {
-      platform[label] = await publish(source, 'platform', label);
+    const IMAGES = {
+      platform: 'platform',
+      platform_launcher: 'platform-launcher',
+      platform_runtime: 'platform-runtime',
+      platform_egress: 'platform-egress',
+    };
+    /** label → key → registry digest. */
+    const published = {};
+    for (const [label, build] of Object.entries(BUILDS)) {
+      published[label] = {};
+      for (const [key, image] of Object.entries(IMAGES)) {
+        const source = await derive(directory, image, label, { broken: build.broken === true });
+        derived.push(source);
+        published[label][key] = await publish(source, image, label);
+        if (build.attested) await attest(image, published[label][key], build.commit, build.at);
+      }
     }
-    const others = {
-      platform_launcher: await publish(`platform-launcher:${TAG}`, 'platform-launcher', 'check'),
-      platform_runtime: await publish(`platform-runtime:${TAG}`, 'platform-runtime', 'check'),
-      platform_egress: await publish(`platform-egress:${TAG}`, 'platform-egress', 'check'),
-    };
-    for (const label of ['old', 'new', 'bad']) await attest('platform', platform[label]);
-    await attest('platform-launcher', others.platform_launcher);
-    await attest('platform-runtime', others.platform_runtime);
-    await attest('platform-egress', others.platform_egress);
-    // Nothing of the unattested build may be on the daemon, so a pull would be visible.
-    await docker(['image', 'rm', `${NAMESPACE}/platform:unattested`, builds.unattested]).catch(
-      () => undefined,
+    const platform = Object.fromEntries(
+      Object.keys(BUILDS).map((label) => [label, published[label].platform]),
     );
+    // Nothing of the unattested build may be on the daemon, so a pull would be visible.
+    for (const image of Object.values(IMAGES)) {
+      await docker(['image', 'rm', `${NAMESPACE}/${image}:unattested`]).catch(() => undefined);
+      await docker(['image', 'rm', `agentic-update-check-${image}-unattested:${SUFFIX}`]).catch(
+        () => undefined,
+      );
+    }
     const ref = (label) => `${NAMESPACE}/platform@${platform[label]}`;
     const digestsFor = (label) =>
-      [
-        `platform=${platform[label]}`,
-        `platform_launcher=${others.platform_launcher}`,
-        `platform_runtime=${others.platform_runtime}`,
-        `platform_egress=${others.platform_egress}`,
-      ].join(',');
+      Object.keys(IMAGES)
+        .map((key) => `${key}=${published[label][key]}`)
+        .join(',');
 
     // ── The core, advertising the old build ───────────────────────────────────────────────
     const advertise = async (label) => {
@@ -575,7 +632,6 @@ const main = async () => {
         `APP_WORKER_UI_PORT=${UI_PORT}`,
         `APP_TRUSTED_IMAGE_REPOSITORY=${NAMESPACE}/platform`,
         `APP_TRUSTED_BUILDER=${BUILDER.repository}/${BUILDER.path}@${BUILDER.ref}`,
-        `APP_TRUSTED_ATTESTATION_KEY=${TRUSTED_KEY}`,
         `APP_UPDATE_REGISTRY_ENDPOINTS=${REGISTRY}=http://host.docker.internal:${REGISTRY_PORT}`,
         'APP_UPDATE_POLL_SECONDS=10',
         'APP_UPDATE_CHECK_SECONDS=60',
@@ -730,7 +786,7 @@ const main = async () => {
       'the managed block pins the new build; the previous file is kept',
       envText.includes(`PLATFORM_IMAGE=${ref('new')}`) &&
         !previousText.includes('PLATFORM_IMAGE=') &&
-        previousText.includes('APP_TRUSTED_ATTESTATION_KEY='),
+        previousText.includes('APP_TRUSTED_BUILDER='),
     );
     const configFiles = (
       await docker([

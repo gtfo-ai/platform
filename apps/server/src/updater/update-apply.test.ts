@@ -246,6 +246,18 @@ describe('an update that does not come up', () => {
       'up -d --wait --wait-timeout 5 docker-socket-proxy launcher remote-worker',
     ]);
     expect(ups[1]?.args).toContain(path.join(w.stateDir, PREVIOUS_TEMPLATE_FILE));
+    // The worker is restarted after the rollback's up: if that up left it as it was, it is still the
+    // drained process (review of PR #38). Its next start clears a drain's pause, and only a drain's.
+    expect(
+      composeCalls(w.calls)
+        .map(verb)
+        .filter((line) => !line.startsWith('config')),
+    ).toEqual([
+      'pull --quiet',
+      'up -d --wait --wait-timeout 5 docker-socket-proxy launcher remote-worker',
+      'up -d --wait --wait-timeout 5 docker-socket-proxy launcher remote-worker',
+      'restart remote-worker',
+    ]);
     expect(ups[1]?.env.PLATFORM_IMAGE).toBe(refs('a').platform);
     expect(await readFile(w.envFile, 'utf8')).toBe('LOG_LEVEL=debug\n');
     expect(w.reports).toEqual([
@@ -284,6 +296,7 @@ describe('an update that does not come up', () => {
     const up = composeCalls(w.calls).find((call) => verb(call).startsWith('up '));
     expect(up?.args).toContain(w.templatePath);
     expect(up?.env.PLATFORM_IMAGE).toBe(refs('a').platform);
+    expect(composeCalls(w.calls).map(verb)).toContain('restart remote-worker');
   });
 });
 

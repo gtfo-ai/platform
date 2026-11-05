@@ -39,7 +39,11 @@ import type { Logger } from '@platform/application';
 import { type CoreImageDigests, WORKER_PROTOCOL_VERSION } from '@platform/contracts';
 import { CoreCallError, createCoreClient } from '../remote-worker/core-client.js';
 import { reportResult } from './apply.js';
-import { AttestationRefusedError, type AttestationVerifier } from './attestation.js';
+import {
+  AttestationRefusedError,
+  type AttestationVerifier,
+  type VerifiedBuild,
+} from './attestation.js';
 import type { UpdaterConfig } from './config.js';
 import {
   decideUpdate,
@@ -58,7 +62,7 @@ import {
   updatePlanSchema,
   writeState,
 } from './plan.js';
-import { builtAtOfImage, parseImageRepositoryName, type RegistryClient } from './registry.js';
+import { parseImageRepositoryName } from './registry.js';
 
 /** How often the worker's `/internal/state` is read for a `426` and, while draining, for idle. */
 export const WORKER_STATE_POLL_MS = 15_000;
@@ -70,15 +74,12 @@ export interface UpdaterDeps {
   readonly docker: DockerRun;
   readonly fetch: (url: string, init?: RequestInit) => Promise<Response>;
   readonly logger: Logger;
-  readonly registry: RegistryClient;
   /** `null` when {@link UpdaterConfig.verifier} is: this worker never self-updates. */
   readonly verifier: AttestationVerifier | null;
   /** This container's id (`HOSTNAME`), whose compose labels name the project. */
   readonly containerId: string;
   /** The template this image carries — the rollback's, written before an apply starts. */
   readonly templatePath: string;
-  /** `amd64` / `arm64`: which image of an index carries the build time. */
-  readonly architecture: string;
   /** The environment the apply container is given beside the plan (`DOCKER_HOST`, `LOG_LEVEL`). */
   readonly applyEnvironment: Readonly<Record<string, string>>;
   readonly now: () => Date;
@@ -206,10 +207,13 @@ export interface Updater {
 
 export const createUpdater = (deps: UpdaterDeps): Updater => {
   const { config, docker, logger } = deps;
-  const core = createCoreClient({
-    baseUrl: config.coreUrl,
-    fetch: (url, init) => deps.fetch(url, init),
-  });
+  /** `null` while no core is configured: the updater idles (S-22.17's first-run page). */
+  const core =
+    config.coreUrl === null
+      ? null
+      : createCoreClient({ baseUrl: config.coreUrl, fetch: (url, init) => deps.fetch(url, init) });
+  /** The running set's verified build — its commit and time — once read (it does not change). */
+  let runningBuild: { readonly commit: string | null; readonly at: Date | null } | null = null;
   /** Advertised sets this updater will not try again: refused, rolled back or failed. */
   const settled = new Set<string>();
   let stopped = false;
@@ -254,7 +258,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     if (settled.has(key)) return;
     settled.add(key);
     logger.error({ advertised, why }, `this worker refuses the update its core advertises: ${why}`);
-    await reportResult({ ...deps, workerStateDir: config.workerStateDir }, config.coreUrl, {
+    await reportResult({ ...deps, workerStateDir: config.workerStateDir }, config.coreUrl ?? '', {
       from: running,
       to: advertised,
       result: 'failed',
@@ -298,7 +302,59 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     );
   };
 
+  /**
+   * The four attestations of a set: their one commit and earliest log time, a refusal naming why
+   * (one does not verify, or they name no one commit), or `null` for a failure that is not a refusal
+   * (a registry or the trust root did not answer) — asked again at the next poll.
+   */
+  const verifySet = async (
+    digests: CoreImageDigests,
+  ): Promise<
+    | { readonly kind: 'verified'; readonly commit: string; readonly at: Date }
+    | { readonly kind: 'refused'; readonly why: string }
+    | null
+  > => {
+    if (config.verifier === null || deps.verifier === null) {
+      return { kind: 'refused', why: config.verifierMissing ?? 'no verifier is configured' };
+    }
+    const repositories = repositoriesOf(config.verifier.repository);
+    const builds: VerifiedBuild[] = [];
+    for (const key of IMAGE_KEYS) {
+      const image = parseImageRepositoryName(repositories[key]);
+      if (image === null) {
+        return { kind: 'refused', why: `${repositories[key]} is not an image repository` };
+      }
+      try {
+        builds.push(await deps.verifier.verify(repositories[key], image, digests[key]));
+      } catch (error) {
+        if (error instanceof AttestationRefusedError)
+          return { kind: 'refused', why: error.message };
+        logger.warn(
+          { err: error, image: repositories[key] },
+          'the attestation could not be read; asked again later',
+        );
+        return null;
+      }
+    }
+    const commits = new Set(builds.map((build) => build.commit));
+    const [commit] = [...commits];
+    if (commits.size !== 1 || commit === null || commit === undefined) {
+      return {
+        kind: 'refused',
+        why: `the four images do not name one commit (${builds
+          .map((build) => `${build.repository}: ${build.commit ?? 'none'}`)
+          .join(', ')}); a mixed set is refused`,
+      };
+    }
+    const at = new Date(Math.min(...builds.map((build) => build.loggedAt.getTime())));
+    return { kind: 'verified', commit, at };
+  };
+
   const tick = async (): Promise<void> => {
+    if (core === null) {
+      logger.info({}, 'no core is configured yet (APP_CORE_URL); the updater waits');
+      return;
+    }
     const token = await credential();
     if (token === null) {
       logger.debug({}, 'this worker is not logged in yet; there is nothing to follow');
@@ -318,73 +374,47 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     const running = runningDigestsOf(config.running);
     const advertised = answer.digests;
     if (advertised === null || running === null || sameDigests(running, advertised)) {
-      const decision = decideUpdate({
-        running,
-        advertised,
-        accepted: answer.accepted,
-        protocol: WORKER_PROTOCOL_VERSION,
-        runningBuiltAt: config.builtAt,
-        targetBuiltAt: null,
-      });
-      logger.debug({ why: decision.kind === 'none' ? decision.why : null }, 'nothing to update');
+      logger.debug({}, 'nothing to update');
       return;
     }
     if (settled.has(digestsKey(advertised))) return;
-    if (config.verifier === null || deps.verifier === null) {
-      await refuse(running, advertised, config.verifierMissing ?? 'no verifier is configured');
+    // 1. Every digest's attestation, before anything else is read or pulled; one commit for all four.
+    const target = await verifySet(advertised);
+    if (target === null) return;
+    if (target.kind === 'refused') {
+      await refuse(running, advertised, target.why);
       return;
     }
-    const repositories = repositoriesOf(config.verifier.repository);
-    // 1. Every digest's attestation, before anything else is read or pulled.
-    for (const key of IMAGE_KEYS) {
-      const image = parseImageRepositoryName(repositories[key]);
-      if (image === null) {
-        await refuse(running, advertised, `${repositories[key]} is not an image repository`);
-        return;
-      }
-      try {
-        await deps.verifier.verify(repositories[key], image, advertised[key]);
-      } catch (error) {
-        if (error instanceof AttestationRefusedError) {
-          await refuse(running, advertised, error.message);
-          return;
-        }
-        logger.warn(
-          { err: error, image: repositories[key] },
-          'the attestation could not be read; asked again later',
-        );
-        return;
-      }
-    }
-    logger.info({ advertised }, 'every advertised digest’s build attestation verifies');
-    // 2. Not a downgrade (unless the core no longer serves this worker).
-    let targetBuiltAt: string | null;
-    try {
-      targetBuiltAt = await builtAtOfImage(
-        deps.registry,
-        parseImageRepositoryName(repositories.platform) as NonNullable<
-          ReturnType<typeof parseImageRepositoryName>
-        >,
-        advertised.platform,
-        deps.architecture,
-      );
-    } catch (error) {
-      logger.warn({ err: error }, 'the new build’s time could not be read; asked again later');
-      return;
+    logger.info(
+      { advertised, commit: target.commit },
+      'every advertised digest’s build attestation verifies, all four at one commit',
+    );
+    // 2. Not a downgrade (unless the core no longer serves this worker): the running set's build,
+    // read the same way. A running set that does not verify cannot be ordered.
+    if (runningBuild === null) {
+      const current = await verifySet(running);
+      if (current === null) return;
+      runningBuild =
+        current.kind === 'verified'
+          ? { commit: current.commit, at: current.at }
+          : { commit: null, at: null };
     }
     const decision = decideUpdate({
       running,
       advertised,
       accepted: answer.accepted,
       protocol: WORKER_PROTOCOL_VERSION,
-      runningBuiltAt: config.builtAt,
-      targetBuiltAt,
+      runningCommit: runningBuild.commit,
+      targetCommit: target.commit,
+      runningAt: runningBuild.at,
+      targetAt: target.at,
     });
     if (decision.kind === 'none') return;
     if (decision.kind === 'refuse') {
       await refuse(running, advertised, decision.why);
       return;
     }
+    const repositories = repositoriesOf(config.verifier?.repository ?? '');
     const to = Object.fromEntries(
       IMAGE_KEYS.map((key) => [key, `${repositories[key]}@${advertised[key]}`]),
     ) as unknown as ImageReferences;
@@ -429,7 +459,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       to,
       from_digests: running,
       to_digests: advertised,
-      core_url: config.coreUrl,
+      core_url: config.coreUrl ?? '',
       worker_url: config.workerUrl,
       check_seconds: config.checkSeconds,
     };
@@ -451,6 +481,9 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
   };
 
   const recover = async (): Promise<void> => {
+    const coreUrl = config.coreUrl;
+    // Nothing to report to, and nothing applied without a core: there is nothing to recover.
+    if (coreUrl === null) return;
     const state = await readState(config.stateDir);
     if (state === null) return;
     if (isTerminal(state)) {
@@ -458,7 +491,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       if (!state.reported) {
         const reported = await reportResult(
           { ...deps, workerStateDir: config.workerStateDir },
-          config.coreUrl,
+          coreUrl,
           {
             from: state.from_digests,
             to: state.to_digests,
@@ -501,7 +534,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
         to: state.to,
         from_digests: state.from_digests,
         to_digests: state.to_digests,
-        core_url: config.coreUrl,
+        core_url: coreUrl,
         worker_url: config.workerUrl,
         check_seconds: config.checkSeconds,
       },

@@ -221,11 +221,11 @@ services:
     user: '0:0'
     environment:
       ROLE: updater
-      APP_CORE_URL: ${APP_CORE_URL:?set APP_CORE_URL to the core's https URL}
+      # Not required here: a worker started before it knows its core (S-22.17's first-run page) has an
+      # updater that waits. The core's rendered file defaults it to the core, as the worker's.
+      APP_CORE_URL: ${APP_CORE_URL:-}
       APP_TRUSTED_IMAGE_REPOSITORY: ${APP_TRUSTED_IMAGE_REPOSITORY:-ghcr.io/gtfo-ai/platform}
       APP_TRUSTED_BUILDER: ${APP_TRUSTED_BUILDER:-gtfo-ai/platform/.github/workflows/image.yml@refs/heads/main}
-      # A public key that signs instead of the keyless identity (the Docker check's); empty: keyless.
-      APP_TRUSTED_ATTESTATION_KEY: ${APP_TRUSTED_ATTESTATION_KEY:-}
       # Where a registry is read from (a mirror); every read is by digest, so not a trust decision.
       APP_UPDATE_REGISTRY_ENDPOINTS: ${APP_UPDATE_REGISTRY_ENDPOINTS:-}
       APP_UPDATE_POLL_SECONDS: ${APP_UPDATE_POLL_SECONDS:-300}

@@ -254,6 +254,17 @@ describe('compose.worker.yml rendered for a first install (WP-284 (3), backlog 7
       'APP_TRUSTED_BUILDER: ${APP_TRUSTED_BUILDER:-gtfo-ai/platform/.github/workflows/image.yml@refs/heads/main}',
     );
     expect(updater).toContain('worker-state:/var/lib/platform/worker-state:ro');
+    // No keyed trust path ships (the orchestrator's ruling on PR #38).
+    expect(source).not.toContain('APP_TRUSTED_ATTESTATION_KEY');
+    // Optional in the template (S-22.17's first run), the core's own URL once rendered.
+    expect(updater).toContain('APP_CORE_URL: ${APP_CORE_URL:-}');
+    const rendered = renderWorkerCompose(source, {
+      digests: DIGESTS,
+      repository: 'ghcr.io/acme',
+      coreUrl: 'https://core.example.test',
+    });
+    const renderedUpdater = rendered.slice(rendered.indexOf('\n  updater:\n'));
+    expect(renderedUpdater).toContain('APP_CORE_URL: ${APP_CORE_URL:-https://core.example.test}');
     expect(updater).not.toContain('docker.sock');
     // Its proxy is the only other service on its internal network; the launcher's is not shared.
     const proxy = service('updater-docker-proxy');

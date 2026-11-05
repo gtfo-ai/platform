@@ -19,7 +19,7 @@
  *   `cosign` 3.1.4 is 136–146 MB per architecture. **sigstore-js** (`@sigstore/verify`,
  *   `@sigstore/bundle`, `@sigstore/tuf` — GitHub's and npm's own provenance verifier) verified the real
  *   bundle in-process, anonymously, and refused it with a wrong workflow in the identity
- *   (`UNTRUSTED_SIGNER_ERROR`). Its size in the image is ~11 MB of `node_modules`.
+ *   (`UNTRUSTED_SIGNER_ERROR`). It adds 2.2 MB to the image's `node_modules` (`du`; `make-fetch-happen` and its tree were already there).
  * - **The offline trust root**: the Sigstore public-good TUF root embedded in `@sigstore/tuf`
  *   (`seeds.json`). The verifier asks TUF for the current `trusted_root.json` (Fulcio, Rekor and CT
  *   keys) from `tuf-repo-cdn.sigstore.dev`, verified against that root, so a key rotation upstream is
@@ -36,17 +36,29 @@
  *     expected repository and whose **digest** is the advertised one; the provenance's workflow
  *     (repository, path, ref) equal to `APP_TRUSTED_BUILDER` again.
  *
- * **A trusted key instead of the keyless identity** (`APP_TRUSTED_ATTESTATION_KEY`, an SPKI public key
- * in base64): the same bundle format with a `publicKey` hint and no transparency log — what the
- * Docker check signs its own images with, because no test can mint a Fulcio certificate for this
- * repository's workflow. Points 1 and 3 are unchanged; point 2 becomes "signed by this key". It is
- * configured on the worker like the identity, so it is not the core's choice either.
+ * **Keyless only** (the orchestrator's ruling on S-22.10's review): a keyed trust path would be a
+ * second trust root TD-032 §3 never decided. The signature half is `signature.ts`.
+ *
+ * **What is a refusal and what is not.** Only a signature, certificate, bundle or statement that does
+ * not verify refuses a digest (reported once per advertised set, `updater.ts`). A registry that does
+ * not answer, answers `5xx`, or serves bytes that do not hash to the digest asked, and a trusted
+ * root that cannot be fetched, are **thrown as they are** — the updater asks again at its next poll.
  */
-import { createPublicKey, type KeyObject } from 'node:crypto';
 import { bundleFromJSON } from '@sigstore/bundle';
-import { getTrustedRoot } from '@sigstore/tuf';
-import { toSignedEntity, toTrustMaterial, Verifier } from '@sigstore/verify';
 import type { ImageRepository, RegistryClient } from './registry.js';
+import {
+  builderIdentity,
+  createKeylessSignatureCheck,
+  type SignatureCheck,
+  SignatureRefusedError,
+  type TrustedBuilder,
+} from './signature.js';
+
+export {
+  builderIdentity,
+  GITHUB_ACTIONS_ISSUER,
+  type TrustedBuilder,
+} from './signature.js';
 
 /** The bundle artifact type `attest-build-provenance` pushes (v0.3; v0.2 accepted too). */
 export const SIGSTORE_BUNDLE_ARTIFACT_TYPES = [
@@ -55,7 +67,6 @@ export const SIGSTORE_BUNDLE_ARTIFACT_TYPES = [
   'application/vnd.dev.sigstore.bundle+json;version=0.2',
 ] as const;
 export const SLSA_PROVENANCE_V1 = 'https://slsa.dev/provenance/v1';
-export const GITHUB_ACTIONS_ISSUER = 'https://token.actions.githubusercontent.com';
 /** At most this many referrers are tried for one digest; a bundle is a few KiB. */
 export const MAX_ATTESTATION_CANDIDATES = 8;
 export const BUNDLE_MAX_BYTES = 1024 * 1024;
@@ -65,12 +76,6 @@ export const BUNDLE_MAX_BYTES = 1024 * 1024;
  * `gtfo-ai/platform/.github/workflows/image.yml@refs/heads/main`. The ref defaults to
  * `refs/heads/main`. Its `https://github.com/` form is the Fulcio certificate's identity.
  */
-export interface TrustedBuilder {
-  readonly repository: string;
-  readonly workflowPath: string;
-  readonly ref: string;
-}
-
 export const parseTrustedBuilder = (raw: string): TrustedBuilder | null => {
   const value = raw.trim();
   const at = value.lastIndexOf('@');
@@ -82,21 +87,9 @@ export const parseTrustedBuilder = (raw: string): TrustedBuilder | null => {
   return { repository: match[1] as string, workflowPath: match[2] as string, ref };
 };
 
-export const builderIdentity = (builder: TrustedBuilder): string =>
-  `https://github.com/${builder.repository}/${builder.workflowPath}@${builder.ref}`;
-
 export interface VerifierPolicy {
   readonly builder: TrustedBuilder;
-  /** `null`: keyless — Fulcio, Rekor and the certificate identity. Else this key, no log. */
-  readonly key: KeyObject | null;
 }
-
-/** `APP_TRUSTED_ATTESTATION_KEY`: base64 of an SPKI DER public key, or a PEM. */
-export const parseTrustedKey = (raw: string): KeyObject => {
-  const value = raw.trim();
-  if (value.startsWith('-----BEGIN')) return createPublicKey(value);
-  return createPublicKey({ key: Buffer.from(value, 'base64'), format: 'der', type: 'spki' });
-};
 
 /** A digest that does not verify: refused and reported, nothing pulled (TD-032 §3). */
 export class AttestationRefusedError extends Error {
@@ -107,19 +100,14 @@ export class AttestationRefusedError extends Error {
 export interface VerifiedBuild {
   readonly repository: string;
   readonly digest: string;
-  /** The commit the provenance names, when it names one. */
+  /**
+   * The commit the provenance names — the certificate's source repository digest agrees with it
+   * when both name one — or `null`. The updater requires the four images to name one commit.
+   */
   readonly commit: string | null;
+  /** The transparency log's time for the attestation: the order two builds are compared in. */
+  readonly loggedAt: Date;
 }
-
-type TrustedRoot = Parameters<typeof toTrustMaterial>[0];
-
-const EMPTY_ROOT: TrustedRoot = {
-  mediaType: 'application/vnd.dev.sigstore.trustedroot+json;version=0.1',
-  tlogs: [],
-  certificateAuthorities: [],
-  ctlogs: [],
-  timestampAuthorities: [],
-};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -189,34 +177,28 @@ export interface AttestationVerifier {
 export const createAttestationVerifier = (input: {
   readonly registry: RegistryClient;
   readonly policy: VerifierPolicy;
-  /** Test seam: the trusted root (default: TUF, from the embedded public-good root). */
-  readonly trustedRoot?: () => Promise<TrustedRoot>;
-  /** Where TUF caches its metadata. */
+  /** The signature half (default: keyless, `signature.ts`); a test hands its own. */
+  readonly signature?: SignatureCheck;
+  /** Where TUF caches its metadata (the default signature check's). */
   readonly tufCachePath?: string;
 }): AttestationVerifier => {
   const { registry, policy } = input;
-  let verifier: Verifier | null = null;
-  const verifierOf = async (): Promise<Verifier> => {
-    if (policy.key !== null) {
-      const key = policy.key;
-      return new Verifier(
-        toTrustMaterial(EMPTY_ROOT, () => ({ publicKey: key, validFor: () => true })),
-        { tlogThreshold: 0, ctlogThreshold: 0, timestampThreshold: 0 },
-      );
-    }
-    // A fresh root at most once per process start and per refusal: TUF refreshes it from the seed.
-    if (verifier !== null) return verifier;
-    const root = await (
-      input.trustedRoot ??
-      (() =>
-        getTrustedRoot(input.tufCachePath === undefined ? {} : { cachePath: input.tufCachePath }))
-    )();
-    verifier = new Verifier(toTrustMaterial(root), { tlogThreshold: 1, ctlogThreshold: 1 });
-    return verifier;
-  };
+  const signature =
+    input.signature ??
+    createKeylessSignatureCheck(
+      input.tufCachePath === undefined ? {} : { tufCachePath: input.tufCachePath },
+    );
+
+  /** What refuses: a signature, a bundle or a statement that does not verify. Nothing else. */
+  const isRefusal = (error: unknown): boolean =>
+    error instanceof AttestationRefusedError ||
+    error instanceof SignatureRefusedError ||
+    error instanceof SyntaxError ||
+    (error instanceof Error && error.name === 'ValidationError');
 
   return {
     async verify(repository, image, digest) {
+      // Registry failures propagate from here: the next poll asks again.
       const candidates = (await registry.referrers(image, digest))
         .filter(
           (entry) =>
@@ -233,31 +215,24 @@ export const createAttestationVerifier = (input: {
       }
       const reasons: string[] = [];
       for (const candidate of candidates) {
+        // Fetched outside the refusal: a registry that fails here is not a refusal.
+        const manifest = await registry.manifest(image, candidate.digest);
+        const layers = Array.isArray(manifest.body.layers) ? manifest.body.layers : [];
+        const layer = layers.find(
+          (entry): entry is { digest: string } =>
+            isRecord(entry) && typeof entry.digest === 'string',
+        );
+        if (layer === undefined) {
+          reasons.push('the referrer has no layer');
+          continue;
+        }
+        const bytes = await registry.blob(image, layer.digest, BUNDLE_MAX_BYTES);
         try {
-          const manifest = await registry.manifest(image, candidate.digest);
-          const layers = Array.isArray(manifest.body.layers) ? manifest.body.layers : [];
-          const layer = layers.find(
-            (entry): entry is { digest: string } =>
-              isRecord(entry) && typeof entry.digest === 'string',
-          );
-          if (layer === undefined) throw new AttestationRefusedError('the referrer has no layer');
-          const bytes = await registry.blob(image, layer.digest, BUNDLE_MAX_BYTES);
           const bundle = bundleFromJSON(JSON.parse(bytes.toString('utf8')));
           if (bundle.content.$case !== 'dsseEnvelope') {
             throw new AttestationRefusedError('the bundle carries no DSSE envelope');
           }
-          const signer = (await verifierOf()).verify(
-            toSignedEntity(bundle),
-            policy.key === null
-              ? {
-                  subjectAlternativeName: builderIdentity(policy.builder),
-                  extensions: { issuer: GITHUB_ACTIONS_ISSUER },
-                }
-              : undefined,
-          );
-          if (policy.key === null && signer.identity?.subjectAlternativeName === undefined) {
-            throw new AttestationRefusedError('the bundle was not signed by a certificate');
-          }
+          const signed = await signature.verify(bundle, policy.builder);
           const envelope = bundle.content.dsseEnvelope;
           if (envelope.payloadType !== 'application/vnd.in-toto+json') {
             throw new AttestationRefusedError(`the envelope carries ${envelope.payloadType}`);
@@ -268,8 +243,14 @@ export const createAttestationVerifier = (input: {
             digest,
             builder: policy.builder,
           });
-          return { repository, digest, commit };
+          if (commit !== null && signed.commit !== null && commit !== signed.commit) {
+            throw new AttestationRefusedError(
+              `the provenance names commit ${commit} and the certificate ${signed.commit}`,
+            );
+          }
+          return { repository, digest, commit: commit ?? signed.commit, loggedAt: signed.loggedAt };
         } catch (error) {
+          if (!isRefusal(error)) throw error;
           reasons.push((error as Error).message);
         }
       }

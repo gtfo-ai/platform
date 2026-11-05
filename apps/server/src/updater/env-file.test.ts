@@ -68,6 +68,8 @@ describe('pinning and the rollback, on disk', () => {
     await writeFile(file, original, { mode: 0o640 });
     await pinReferences(file, refs('c'));
     expect(await readFile(previousOf(file), 'utf8')).toBe(original);
+    // The kept copy is private whatever the original's mode.
+    expect((await stat(previousOf(file))).mode & 0o777).toBe(0o600);
     expect(managedReferencesOf(await readFile(file, 'utf8'))).toEqual(refs('c'));
     expect((await stat(file)).mode & 0o777).toBe(0o640);
     await restorePrevious(file);

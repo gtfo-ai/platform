@@ -125,10 +125,12 @@ export const pinReferences = async (file: string, references: ImageReferences): 
   );
   if (exists) {
     await copyFile(file, previousOf(file));
+    // Private whatever the original's mode: it may hold the shell's token a person wrote in.
+    await chmod(previousOf(file), 0o600);
     const owner = await stat(path.dirname(file));
     await chown(previousOf(file), owner.uid, owner.gid).catch(() => undefined);
   } else {
-    await writeFileAtomically(previousOf(file), '');
+    await writeFileAtomically(previousOf(file), '', 0o600);
   }
   await writeFileAtomically(file, rewriteManagedBlock(current, references));
 };

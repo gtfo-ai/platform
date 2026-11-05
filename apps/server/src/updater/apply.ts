@@ -302,6 +302,7 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
   const upAndCheck = async (
     template: string,
     references: ImageReferences,
+    options: { readonly restartWorker?: boolean } = {},
   ): Promise<{ readonly ok: boolean; readonly detail: string }> => {
     const expectedPlatform = references.platform;
     try {
@@ -319,6 +320,12 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
         references,
         (plan.check_seconds + 60) * 1000,
       );
+      // A rollback's `up` may leave the worker as it was — still the drained process, when the
+      // forward `up` failed before it recreated it. A restart clears a drain's pause (and only a
+      // drain's: an owner's *Pause* survives it, TD-031's 2026-11-05 amendment).
+      if (options.restartWorker === true) {
+        await compose(template, ['restart', WORKER_SERVICE], references);
+      }
     } catch (error) {
       return { ok: false, detail: `up failed: ${(error as Error).message}` };
     }
@@ -351,7 +358,7 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
       );
       return;
     }
-    const back = await upAndCheck(previousTemplate, plan.from);
+    const back = await upAndCheck(previousTemplate, plan.from, { restartWorker: true });
     await finish(
       back.ok ? 'rolled_back' : 'failed',
       back.ok ? why : `${why}; the rollback did not come back either: ${back.detail}`,

@@ -7,11 +7,14 @@
  *
  *  - **nothing** when they are equal, when the core names none (`null`), or when this worker does not
  *    run pinned digests (a `platform:dev` checkout never self-updates: it is not the core's build);
- *  - **refuse** a downgrade — a target `platform` image built **before** the running one — unless the
+ *  - **refuse** a downgrade — a target build attested **before** the running one — unless the
  *    core's protocol range excludes this worker's protocol, in which case following the core is the
  *    only way to keep working (TD-032 §3's residual: a compromised core may steer a worker to an older
- *    attested build; this is the bound). A build time either side cannot read is not an order, so it
- *    is refused the same way;
+ *    attested build; this is the bound). A build is its **commit**: the four images of a set must
+ *    name one (the updater refuses a mixed set before it asks this), the same commit is never a
+ *    downgrade, and two commits are ordered by the transparency log's time of their attestations —
+ *    the earliest of each set's four. A time either side cannot establish is not an order, so it is
+ *    refused the same way;
  *  - **update** otherwise. Verification is not decided here: every advertised digest is verified
  *    before this decision is even asked (`updater.ts`), so a refusal for a bad attestation comes first.
  */
@@ -64,9 +67,12 @@ export const decideUpdate = (input: {
   readonly accepted: readonly number[];
   /** This build's `WORKER_PROTOCOL_VERSION`. */
   readonly protocol: number;
-  /** `APP_BUILT_AT` of the running build and of the advertised `platform` image. */
-  readonly runningBuiltAt: string | null;
-  readonly targetBuiltAt: string | null;
+  /** The commit each set's four attestations name, `null` when the set has none in common. */
+  readonly runningCommit: string | null;
+  readonly targetCommit: string | null;
+  /** The earliest transparency-log time of each set's four attestations, `null` when unknown. */
+  readonly runningAt: Date | null;
+  readonly targetAt: Date | null;
 }): UpdateDecision => {
   if (input.advertised === null) {
     return { kind: 'none', why: 'the core names no digests (digests_unresolved)' };
@@ -81,17 +87,21 @@ export const decideUpdate = (input: {
     return { kind: 'none', why: 'this worker runs the digests its core advertises' };
   }
   const excluded = !input.accepted.includes(input.protocol);
-  const running = input.runningBuiltAt === null ? Number.NaN : Date.parse(input.runningBuiltAt);
-  const target = input.targetBuiltAt === null ? Number.NaN : Date.parse(input.targetBuiltAt);
+  if (input.targetCommit !== null && input.targetCommit === input.runningCommit) {
+    return { kind: 'update', downgrade: false };
+  }
+  const running = input.runningAt?.getTime() ?? Number.NaN;
+  const target = input.targetAt?.getTime() ?? Number.NaN;
   const ordered = Number.isFinite(running) && Number.isFinite(target);
   const older = ordered && target < running;
   if (!ordered || older) {
     if (excluded) return { kind: 'update', downgrade: older };
+    const when = (at: Date | null) => at?.toISOString() ?? 'unknown';
     return {
       kind: 'refuse',
       why: ordered
-        ? `the advertised platform image was built at ${input.targetBuiltAt}, before this worker's build (${input.runningBuiltAt}); a downgrade is refused while the core still serves this worker's protocol ${input.protocol}`
-        : `the build times cannot be compared (running ${input.runningBuiltAt ?? 'unknown'}, advertised ${input.targetBuiltAt ?? 'unknown'}), so this could be a downgrade; refused while the core still serves this worker's protocol ${input.protocol}`,
+        ? `the advertised build (commit ${input.targetCommit}) was attested at ${when(input.targetAt)}, before this worker's build (commit ${input.runningCommit}, ${when(input.runningAt)}); a downgrade is refused while the core still serves this worker's protocol ${input.protocol}`
+        : `the builds cannot be ordered (running ${input.runningCommit ?? 'unattested'} at ${when(input.runningAt)}, advertised ${input.targetCommit ?? 'unknown'} at ${when(input.targetAt)}), so this could be a downgrade; refused while the core still serves this worker's protocol ${input.protocol}`,
     };
   }
   return { kind: 'update', downgrade: false };

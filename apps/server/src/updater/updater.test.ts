@@ -13,16 +13,25 @@ import { AttestationRefusedError, type AttestationVerifier } from './attestation
 import type { UpdaterConfig } from './config.js';
 import type { DockerRun } from './docker.js';
 import { PREVIOUS_TEMPLATE_FILE, readState } from './plan.js';
-import type { RegistryClient } from './registry.js';
+import { RegistryError } from './registry.js';
 import { applyContainerArgs, createUpdater, discoverSelf } from './updater.js';
 
 const CREDENTIAL = `wkr_${'a'.repeat(26)}_${'b'.repeat(43)}`;
+/** One build's four images: each set's digests are its own (a release rebuilds all four). */
 const digests = (hex: string) => ({
-  platform: `sha256:${hex.repeat(64)}`,
-  platform_launcher: `sha256:${'1'.repeat(64)}`,
-  platform_runtime: `sha256:${'2'.repeat(64)}`,
-  platform_egress: `sha256:${'3'.repeat(64)}`,
+  platform: `sha256:${hex.repeat(63)}0`,
+  platform_launcher: `sha256:${hex.repeat(63)}1`,
+  platform_runtime: `sha256:${hex.repeat(63)}2`,
+  platform_egress: `sha256:${hex.repeat(63)}3`,
 });
+/** The build a digest belongs to: its set's letter, as the fake attestations name it. */
+const setOf = (digest: string): string => digest.slice('sha256:'.length, 'sha256:'.length + 1);
+/** When each set's attestations were logged: `e` older than `a` (running) older than `b`. */
+const LOGGED: Readonly<Record<string, string>> = {
+  e: '2026-10-01T00:00:00Z',
+  a: '2026-11-01T00:00:00Z',
+  b: '2026-11-05T00:00:00Z',
+};
 const refsOf = (hex: string) => ({
   platform: `ghcr.io/acme/platform@${digests(hex).platform}`,
   platform_launcher: `ghcr.io/acme/platform-launcher@${digests(hex).platform_launcher}`,
@@ -57,9 +66,11 @@ const SELF = {
 const world = async (options: {
   readonly advertised: ReturnType<typeof digests> | null;
   readonly refuse?: string;
-  readonly targetBuiltAt?: string;
+  /** The first verification throws this (a registry that answers 503), later ones answer. */
+  readonly transientOnce?: Error;
   readonly verifier?: boolean;
   readonly idleAfter?: number;
+  readonly coreUrl?: string | null;
 }) => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'updater-state-'));
   const workerStateDir = await mkdtemp(path.join(tmpdir(), 'updater-worker-'));
@@ -117,31 +128,29 @@ const world = async (options: {
     return { stdout: '', stderr: '' };
   };
   const verified: string[] = [];
+  let transient = options.transientOnce;
   const verifier: AttestationVerifier = {
     async verify(repository, _image, digest) {
       verified.push(`${repository}@${digest}`);
+      if (transient !== undefined) {
+        const error = transient;
+        transient = undefined;
+        throw error;
+      }
       if (options.refuse !== undefined && digest === options.advertised?.platform) {
         throw new AttestationRefusedError(options.refuse);
       }
-      return { repository, digest, commit: null };
+      const set = setOf(digest);
+      return {
+        repository,
+        digest,
+        commit: set.repeat(40),
+        loggedAt: new Date(LOGGED[set] ?? '2026-11-03T00:00:00Z'),
+      };
     },
   };
-  const registry: RegistryClient = {
-    manifest: async (_repository, digest) => ({
-      digest,
-      mediaType: 'application/vnd.oci.image.manifest.v1+json',
-      body: { config: { digest: `sha256:${'c'.repeat(64)}` } },
-    }),
-    referrers: async () => [],
-    blob: async () =>
-      Buffer.from(
-        JSON.stringify({
-          config: { Env: [`APP_BUILT_AT=${options.targetBuiltAt ?? '2026-11-05T00:00:00Z'}`] },
-        }),
-      ),
-  };
   const config: UpdaterConfig = {
-    coreUrl: 'https://core.example.test',
+    coreUrl: options.coreUrl === undefined ? 'https://core.example.test' : options.coreUrl,
     verifier:
       options.verifier === false
         ? null
@@ -152,7 +161,6 @@ const world = async (options: {
               workflowPath: '.github/workflows/image.yml',
               ref: 'refs/heads/main',
             },
-            key: null,
           },
     verifierMissing:
       options.verifier === false
@@ -165,7 +173,6 @@ const world = async (options: {
     workerStateDir,
     stateDir,
     running: refsOf('a'),
-    builtAt: '2026-11-01T00:00:00Z',
     logLevel: 'silent',
   };
   const updater = createUpdater({
@@ -173,11 +180,9 @@ const world = async (options: {
     docker,
     fetch,
     logger: silentLogger,
-    registry,
     verifier: options.verifier === false ? null : verifier,
     containerId: 'self',
     templatePath,
-    architecture: 'arm64',
     applyEnvironment: { DOCKER_HOST: 'tcp://updater-docker-proxy:2375' },
     now: () => new Date('2026-11-05T12:00:00Z'),
     sleep: async () => undefined,
@@ -189,12 +194,14 @@ describe('the updater’s poll', () => {
   it('verifies all four digests, pulls them, drains, waits until idle, then starts the apply from the new image', async () => {
     const w = await world({ advertised: digests('b'), idleAfter: 2 });
     await w.updater.tick();
-    expect(w.verified).toEqual([
-      `ghcr.io/acme/platform@${digests('b').platform}`,
-      `ghcr.io/acme/platform-launcher@${digests('b').platform_launcher}`,
-      `ghcr.io/acme/platform-runtime@${digests('b').platform_runtime}`,
-      `ghcr.io/acme/platform-egress@${digests('b').platform_egress}`,
-    ]);
+    const setVerified = (hex: string) => [
+      `ghcr.io/acme/platform@${digests(hex).platform}`,
+      `ghcr.io/acme/platform-launcher@${digests(hex).platform_launcher}`,
+      `ghcr.io/acme/platform-runtime@${digests(hex).platform_runtime}`,
+      `ghcr.io/acme/platform-egress@${digests(hex).platform_egress}`,
+    ];
+    // The advertised four first; then the running four, the downgrade bound's other side.
+    expect(w.verified).toEqual([...setVerified('b'), ...setVerified('a')]);
     expect(w.events).toEqual([
       'release',
       ...Object.values(refsOf('b')).map((ref) => `pull ${ref}`),
@@ -237,12 +244,42 @@ describe('the updater’s poll', () => {
     ]);
   });
 
-  it('refuses a downgrade, reported once', async () => {
-    const w = await world({ advertised: digests('b'), targetBuiltAt: '2026-10-01T00:00:00Z' });
+  it('refuses a downgrade to an older attested build, reported once', async () => {
+    const w = await world({ advertised: digests('e') });
+    await w.updater.tick();
+    await w.updater.tick();
+    expect(w.events).toEqual(['release', 'release']);
+    expect(w.reports).toEqual([expect.objectContaining({ result: 'failed', to: digests('e') })]);
+    expect(JSON.stringify(w.reports)).toContain('downgrade is refused');
+  });
+
+  it('refuses the running platform beside an older attested launcher: four images, one commit (review of PR #38)', async () => {
+    const mixed = { ...digests('a'), platform_launcher: digests('e').platform_launcher };
+    const w = await world({ advertised: mixed });
     await w.updater.tick();
     expect(w.events).toEqual(['release']);
-    expect(w.reports).toEqual([expect.objectContaining({ result: 'failed' })]);
-    expect(JSON.stringify(w.reports)).toContain('downgrade is refused');
+    expect(w.reports).toEqual([expect.objectContaining({ result: 'failed', to: mixed })]);
+    expect(JSON.stringify(w.reports)).toContain('do not name one commit');
+  });
+
+  it('asks again after a registry that answered 503 — nothing reported, and the next poll updates (review of PR #38)', async () => {
+    const w = await world({
+      advertised: digests('b'),
+      transientOnce: new RegistryError('ghcr.io answered 503'),
+    });
+    await w.updater.tick();
+    expect(w.events).toEqual(['release']);
+    expect(w.reports).toEqual([]);
+    await w.updater.tick();
+    expect(w.events).toContain('start apply');
+    expect(w.reports).toEqual([]);
+  });
+
+  it('idles without a core URL: no release asked, nothing reported (S-22.17)', async () => {
+    const w = await world({ advertised: digests('b'), coreUrl: null });
+    await w.updater.tick();
+    expect(w.events).toEqual([]);
+    expect(w.reports).toEqual([]);
   });
 
   it('refuses by name without a verifier, verifying and pulling nothing', async () => {
