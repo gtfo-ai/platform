@@ -407,7 +407,7 @@ running containers through the apply's process environment, never written to a f
 compose project is its code's property — every Compose call names the project. To update by hand
 instead, remove the `updater` and `updater-docker-proxy` services, download the compose file again and
 `docker compose up -d`. A second worker on one machine sets its own project name,
-`APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_EGRESS_NETWORK` and
+`APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and
 `APP_WORKER_UI_PORT`.
 
 ### If `/readyz` is 503

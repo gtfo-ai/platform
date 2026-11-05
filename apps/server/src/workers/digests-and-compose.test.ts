@@ -270,7 +270,7 @@ describe('compose.worker.yml rendered for a first install (WP-284 (3), backlog 7
     }
     expect(source).toMatch(/\n {2}updater-docker:\n {4}internal: true/);
     // A second worker on one daemon can move the run network too (the Docker checks do).
-    expect(source).toContain('name: ${APP_WORKER_RUN_EGRESS_NETWORK:-agentic-worker-run-egress}');
+    expect(source).toContain('name: ${APP_WORKER_RUN_NETWORK:-agentic-worker-run-egress}');
   });
 
   it('changes nothing but the image defaults and the APP_CORE_URL line (TD-031’s 2026-11-05 amendment §3)', () => {

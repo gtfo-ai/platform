@@ -46,7 +46,7 @@
 # **Its volumes and run network have their own names**, so a worker and a core can share one daemon
 # (the Docker check does) without one's `ctl` volume or run network being the other's. A second
 # worker on the same machine sets `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`,
-# `APP_WORKER_RUN_EGRESS_NETWORK` and `APP_WORKER_UI_PORT` (and its own project name).
+# `APP_WORKER_RUN_NETWORK` and `APP_WORKER_UI_PORT` (and its own project name).
 #
 # **It updates itself** (`updater`, WP-287): it follows the core's digests, verifying each build's
 # attestation first, and keeps them in a marked block of the env file beside this one (`.env`, or the

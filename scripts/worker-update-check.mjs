@@ -571,7 +571,7 @@ const main = async () => {
       [
         `APP_WORKER_CONTROL_VOLUME=${BUNDLE}-ctl`,
         `APP_WORKER_CACHE_VOLUME=${BUNDLE}-repo-cache`,
-        `APP_WORKER_RUN_EGRESS_NETWORK=${BUNDLE}-run-egress`,
+        `APP_WORKER_RUN_NETWORK=${BUNDLE}-run-egress`,
         `APP_WORKER_UI_PORT=${UI_PORT}`,
         `APP_TRUSTED_IMAGE_REPOSITORY=${NAMESPACE}/platform`,
         `APP_TRUSTED_BUILDER=${BUILDER.repository}/${BUILDER.path}@${BUILDER.ref}`,
