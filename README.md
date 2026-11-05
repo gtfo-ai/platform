@@ -31,6 +31,89 @@ write. **Trying it on a Mac with GitLab, Jira Cloud and your own Claude subscrip
 [The first local test](docs/first-local-test.md) is a runbook for exactly that, from an empty clone
 to a first ticket.
 
+## Run a worker on your machine (worker mode)
+
+A **worker** runs a core's agent runs on your own machine, with your own Claude subscription (BD-032).
+It holds no database and no platform secret; your Claude token reaches each run's CLI and nothing else.
+The full description is the operator guide's
+[remote worker section](docs/operator-guide.md#a-remote-worker-on-a-developers-machine-wp-283-wp-284).
+
+**Before you start**
+
+- Docker with Compose v2, running (`docker info` answers).
+- The core's URL (the address you open the platform at), and an account on it that is a `member` or
+  above of the project.
+- A Claude subscription token: run `claude setup-token` yourself and keep its output private.
+- On the core, the project's execution setting must send runs to workers — `workers_only`, or `hybrid`
+  (the default) — and a git integration whose runs use a static token or a deploy key needs
+  `remote_run_credential: allow` set on it by an administrator; the project's execution setting says
+  so when it does not.
+
+**Steps** (in an empty directory that is **not** inside a git repository, so the token can never be
+committed)
+
+```bash
+# 1. The compose file, pinned to the core's own images, with APP_CORE_URL already set to the core.
+curl -fsSo compose.worker.yml https://<core>/api/worker/v1/compose.yml
+
+# 2. Your Claude token, into a .env beside it: typed at a silent prompt, never printed.
+read -rs CLAUDE_TOKEN && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$CLAUDE_TOKEN" > .env && unset CLAUDE_TOKEN && chmod 600 .env
+
+# 3. Start the bundle (it pulls the run, egress and git-helper images first).
+docker compose -f compose.worker.yml up -d
+
+# 4. The code to approve, and where.
+docker compose -f compose.worker.yml logs remote-worker | grep user_code
+```
+
+Open the `verification_uri` the log line names (`https://<core>/workers/approve`) while signed in to
+the platform, enter the `user_code`, name the machine and approve. The core's **Workers** screen shows
+steps 1 and 3 for your instance, ready to copy.
+
+**Check that it works**
+
+```bash
+docker compose -f compose.worker.yml exec remote-worker curl -fsS localhost:8080/readyz
+# {"status":"ok","checks":{"core_handshake":"ok"}}
+```
+
+The machine is then listed on the core's **Workers** screen with its last-seen time.
+
+**Stop it**
+
+```bash
+# Drain: claim nothing more, finish what is running.
+docker compose -f compose.worker.yml exec remote-worker curl -fsS -X POST localhost:8080/internal/drain
+# Stop: any run in flight is handed back to the core; the credential stays in the worker-state volume.
+docker compose -f compose.worker.yml down
+```
+
+To log the machine out, revoke it on the Workers screen. Removing the bundle's volumes as well
+(`--volumes` on the `down`) also deletes its stored credential.
+
+**Let Claude Code do it for you.** In an empty directory, paste this into Claude Code with your
+core's URL in place of `<URL>`:
+
+```text
+Set up an Agentic platform worker on this machine. The core is at <URL>.
+1. Check that Docker is running (`docker info`); if it is not, stop and tell me.
+2. Make sure this directory is empty and not inside a git repository, then run:
+   curl -fsSo compose.worker.yml <URL>/api/worker/v1/compose.yml
+3. Do NOT run `claude setup-token` yourself, and never read, print, log or commit the token. Ask me to
+   run `claude setup-token` in my own terminal, then to run this command myself in this directory and
+   paste the token at its silent prompt:
+   read -rs CLAUDE_TOKEN && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$CLAUDE_TOKEN" > .env && unset CLAUDE_TOKEN && chmod 600 .env
+   Wait until I say it is done. Check only that .env exists and is not empty (`test -s .env`); never open it.
+4. Start the bundle: docker compose -f compose.worker.yml up -d
+5. Show me the device code and the approval URL from:
+   docker compose -f compose.worker.yml logs remote-worker | grep user_code
+   and wait until I say I approved it in the browser.
+6. Verify with:
+   docker compose -f compose.worker.yml exec remote-worker curl -fsS localhost:8080/readyz
+   and tell me whether core_handshake is ok. If it is not, show me the last 50 lines of
+   `docker compose -f compose.worker.yml logs remote-worker`.
+```
+
 ## Layout
 
 ```
