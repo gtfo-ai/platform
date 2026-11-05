@@ -123,6 +123,8 @@ const until = async (what: string, check: () => boolean): Promise<void> => {
 const start = async (options: {
   readonly sentryDsn?: string | null;
   readonly storedDsn?: string;
+  /** A transport that cannot be built: the reporter's client then fails to construct. */
+  readonly brokenTransport?: boolean;
 }) => {
   const stateDir = mkdtempSync(path.join(scratch, 'state-'));
   writeFileSync(path.join(stateDir, CREDENTIAL_FILE), `${CREDENTIAL}\n`, { mode: 0o600 });
@@ -162,7 +164,12 @@ const start = async (options: {
     logDestination: { write: () => undefined },
     webRoot: path.join(scratch, 'no-web-bundle'),
     sleep: async () => {},
-    errorReportingTransport: recorder.transport,
+    errorReportingTransport:
+      options.brokenTransport === true
+        ? () => {
+            throw new Error('this transport cannot be built');
+          }
+        : recorder.transport,
   });
   await worker.listen();
   const running = worker;
@@ -353,6 +360,17 @@ describe('the worker’s Error reporting setting (WP-295 (3))', () => {
     expect(carrying(recorder.sent, 'ErrorReportingTestError').map((entry) => entry.host)).toEqual([
       'a.sentry.example.test',
     ]);
+  });
+});
+
+describe('the page reads the reporter, not the stored value (review of PR #60)', () => {
+  it('says Off when the stored DSN’s client could not be built, and the worker runs on', async () => {
+    const { worker: running, stateDir } = await start({ storedDsn: DSN_A, brokenTransport: true });
+    // The file is still there — the setting was made — but nothing is being sent.
+    expect(readFileSync(path.join(stateDir, SENTRY_DSN_FILE), 'utf8')).toBe(`${DSN_A}\n`);
+    expect(running.errorReporter.dsn()).toBeNull();
+    expect(running.localState().error_reporting).toEqual({ source: null, host: null });
+    expect(running.localState().connection).toBe('connected');
   });
 });
 

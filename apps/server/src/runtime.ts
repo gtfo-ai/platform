@@ -44,8 +44,15 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { InboundConnectionsHandle, Jobs, Logger, WebhookIngress } from '@platform/application';
+import type {
+  InboundConnectionsHandle,
+  Jobs,
+  Logger,
+  SecretRedactor,
+  WebhookIngress,
+} from '@platform/application';
 import {
+  composeSecretRedactors,
   createDeadLetterCommands,
   createLiveRuns,
   createWorkingCalendar,
@@ -240,9 +247,19 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
    */
   const build = buildInfo(env);
   const reportingSecrets = exactSecretRedactor(coreReportingSecrets(config));
+  /**
+   * The run credentials this process mints (WP-76's one registry, `stack.runSecrets`), set once the
+   * integration stack is composed below — read per event, so a credential minted after start is
+   * redacted from the next report. An integration's own credentials are decrypted per call and held
+   * in no process registry, so only the patterns cover them here (BACKLOG 1043).
+   */
+  let runSecretsRedactor: SecretRedactor | null = null;
   const errorReporter = errorReportingAdapters.createErrorReporter({
     createClient: sentryClientFactory({
-      secrets: () => reportingSecrets,
+      secrets: () =>
+        runSecretsRedactor === null
+          ? reportingSecrets
+          : composeSecretRedactors(reportingSecrets, runSecretsRedactor),
       ...(options.errorReportingTransport === undefined
         ? {}
         : { transport: options.errorReportingTransport }),
@@ -435,6 +452,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             logger: loggerPort,
           })
         : null;
+    if (stack !== null) runSecretsRedactor = stack.runSecrets.redactor;
 
     /**
      * The runs this process is executing (WP-27), for the process's own run-command inbox.

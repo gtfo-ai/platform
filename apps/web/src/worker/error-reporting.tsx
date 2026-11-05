@@ -22,7 +22,7 @@ import { TextField } from './wizard.js';
 
 /** What one event carries, and what it never does. */
 export const ERROR_REPORTING_CONTENTS =
-  'Each error this worker logs is sent to that address: the error’s type, its message (at most 1 KiB, with this worker’s secrets and anything shaped like a credential removed) and its stack, tagged with this worker’s id, its platform’s address, its version and the run’s id. Never a transcript, a prompt, a tool’s input, ticket text, a project name or a ticket key.';
+  'Each error this worker logs is sent to that address: the error’s type, its message (at most 1 KiB, with this worker’s secrets and anything shaped like a credential removed) and its stack, tagged with this worker’s id, its platform’s address, its version and the run’s id. No transcript, prompt, tool input, project name or ticket key is sent — but an error message a library wrote can quote other text, up to 1 KiB of it, with secrets removed and nothing else.';
 
 type Act = (action: () => Promise<WorkerLocalState>) => Promise<void>;
 

@@ -15,6 +15,7 @@ import {
   REPORT_TAG_NAMES,
   reportOfLogCall,
   shapeBreadcrumb,
+  shapeEnvelope,
   shapeReportedEvent,
 } from './reporter.js';
 
@@ -108,6 +109,7 @@ describe('the event that leaves the process (beforeSend)', () => {
                 lineno: 12,
                 colno: 3,
                 in_app: true,
+                module: 'remote-worker.runtime',
                 vars: { token: SECRET },
                 context_line: `const token = '${SECRET}'`,
                 pre_context: ['x'],
@@ -139,7 +141,6 @@ describe('the event that leaves the process (beforeSend)', () => {
       function: 'runCycle',
       lineno: 12,
       colno: 3,
-      in_app: true,
     });
     const text = JSON.stringify(shaped);
     for (const gone of ['alice-laptop', 'the customer wrote', '10.0.0.1', 'a prompt', 'ACME']) {
@@ -189,6 +190,82 @@ describe('the event that leaves the process (beforeSend)', () => {
     // A throwing hook would be captured by the SDK as an internal exception that skips the hook.
     expect(shapeReportedEvent(sdkEvent(), throwing)).toBeNull();
     expect(shapeBreadcrumb({ message: SECRET }, throwing)).toBeNull();
+  });
+});
+
+describe('every bound is applied after redaction (review of PR #60)', () => {
+  it('cuts a type, a frame’s file and function and a tag only once the secret is a placeholder', () => {
+    // Each secret straddles its field's bound: cut first, its first eight characters would stay.
+    const at = (max: number) => `${'x'.repeat(max - 8)}${SECRET}`;
+    const shaped = shapeReportedEvent(
+      {
+        exception: {
+          values: [
+            {
+              type: at(128),
+              value: 'boom',
+              stacktrace: { frames: [{ filename: at(512), function: at(512), lineno: 1 }] },
+            },
+          ],
+        },
+        tags: { core_url: at(256) },
+      },
+      redactor,
+    );
+    const text = JSON.stringify(shaped);
+    expect(text).not.toContain(SECRET.slice(0, 8));
+    // Each placeholder was cut too, past its first eight characters — never the secret.
+    expect(text.match(/\[REDACTE/g)?.length).toBe(4);
+    const [value] = (shaped as { exception: { values: Record<string, unknown>[] } }).exception
+      .values;
+    expect(String(value?.type)).toMatch(/ … \[cut]$/);
+  });
+});
+
+describe('the envelope that leaves the process (the transport’s gate)', () => {
+  const event = {
+    event_id: 'cd'.repeat(16),
+    server_name: 'alice-laptop.local',
+    contexts: { os: { name: 'darwin' } },
+    exception: { values: [{ type: 'Error', value: `internal: ${SECRET}` }] },
+  };
+  it('keeps only event items, each through the allow-list and the redactor, under a rebuilt header', () => {
+    const shaped = shapeEnvelope(
+      [
+        {
+          event_id: 'cd'.repeat(16),
+          sent_at: '2026-11-05T10:00:00.000Z',
+          sdk: { name: 'sentry.javascript.node', version: '10.78.0', packages: [{ name: 'x' }] },
+          trace: { trace_id: 'ab', public_key: 'k', release: SECRET },
+          dsn: `https://k@${SECRET}.test/1`,
+        },
+        [
+          [{ type: 'event' }, event],
+          [{ type: 'session' }, { sid: SECRET }],
+          [{ type: 'attachment', filename: 'a.txt' }, new Uint8Array([1, 2])],
+          [{ type: 'client_report' }, { discarded_events: [] }],
+        ],
+      ],
+      redactor,
+    );
+    expect(shaped?.[0]).toEqual({
+      event_id: 'cd'.repeat(16),
+      sent_at: '2026-11-05T10:00:00.000Z',
+      sdk: { name: 'sentry.javascript.node', version: '10.78.0' },
+    });
+    const items = shaped?.[1] as [Record<string, unknown>, Record<string, unknown>][];
+    expect(items.map(([header]) => header)).toEqual([{ type: 'event' }]);
+    const text = JSON.stringify(shaped);
+    expect(text).not.toContain(SECRET);
+    expect(text).not.toContain('alice-laptop');
+    expect(text).toContain('internal: [REDACTED:integration:planted]');
+  });
+
+  it('sends nothing when no event survives, or the envelope is not one', () => {
+    expect(shapeEnvelope([{}, [[{ type: 'session' }, { sid: 'x' }]]], redactor)).toBeNull();
+    expect(shapeEnvelope([{}, [[{ type: 'event' }, { contexts: {} }]]], redactor)).toBeNull();
+    expect(shapeEnvelope('not an envelope', redactor)).toBeNull();
+    expect(shapeEnvelope([{}, 'items'], redactor)).toBeNull();
   });
 });
 
