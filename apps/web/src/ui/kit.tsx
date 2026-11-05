@@ -1,67 +1,73 @@
 /**
- * The small component set every screen is built from.
+ * The small component set every screen is built from — the API every screen imports, now drawn in
+ * TD-033's visual language.
  *
- * Hand-written on plain elements rather than vendored from shadcn/ui: TD-013 names shadcn on Base
- * UI, and Base UI's only published version today is `1.0.0-rc.0`. Taking a release candidate as
- * the foundation of every screen is a dependency decision with a blast radius, and it is not one a
- * foundation work package should make quietly — so the primitives here are deliberately thin
- * (a class name and the right element), the APG behaviours they need are native, and swapping any
- * one of them for its Base UI equivalent is a change inside this file. Recorded as follow-up and
- * as Q46.
+ * Until TD-033 these were hand-written on plain elements because Base UI had only a release
+ * candidate (Q46). It is at 1.9 now and TD-033 adopted it for the five behaviours that need real
+ * APG work (menu, dialog, tooltip, popover, tabs); those and the rest of the primitive kit live
+ * one per file beside this one (`button.tsx`, `status.tsx`, `action-menu.tsx`, …). This module keeps
+ * the names the screens already use and re-implements them on that kit, so no screen import broke:
+ * `Button` maps its old `ghost` tone onto `invisible`, `Card` is GitHub's Box, `EmptyState` is a
+ * `Blankslate`, `ErrorNotice` a danger `Flash` and `Metric`'s definition a `Tooltip`.
  *
  * Everything that displays text a human did not write goes through `untrusted.tsx`, never through
  * these.
  */
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactElement, ReactNode } from 'react';
+import type { InputHTMLAttributes, ReactElement, ReactNode } from 'react';
 import { useId } from 'react';
 import { PlatformUpdatedError } from '../api/http.js';
+import { Blankslate } from './blankslate.js';
+import {
+  Button as PrimitiveButton,
+  type ButtonProps as PrimitiveButtonProps,
+  type ButtonTone as PrimitiveButtonTone,
+} from './button.js';
+import { cx, FOCUS_RING } from './cx.js';
+import { Flash } from './flash.js';
+import { Tooltip } from './tooltip.js';
 import { UntrustedText } from './untrusted.js';
 
-export const cx = (...parts: (string | false | null | undefined)[]): string =>
-  parts.filter((part) => typeof part === 'string' && part !== '').join(' ');
+export { cx } from './cx.js';
 
 // ── Button ───────────────────────────────────────────────────────────────────
 
-export type ButtonTone = 'default' | 'primary' | 'danger' | 'ghost';
+/** `ghost` is the pre-TD-033 name of `invisible`, kept so no call site had to change. */
+export type ButtonTone = PrimitiveButtonTone | 'ghost';
 
-const BUTTON_TONES: Record<ButtonTone, string> = {
-  default: 'bg-surface text-fg border-line hover:bg-surface-muted',
-  primary: 'bg-accent text-accent-fg border-transparent hover:opacity-90',
-  danger: 'bg-danger text-white border-transparent hover:opacity-90',
-  ghost: 'bg-transparent text-fg-muted border-transparent hover:bg-surface-muted',
-};
-
-export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+export interface ButtonProps extends Omit<PrimitiveButtonProps, 'tone'> {
   readonly tone?: ButtonTone;
 }
 
-export const Button = ({ tone = 'default', className, ...rest }: ButtonProps): ReactElement => (
-  <button
-    // An explicit `type` on every button: the default inside a form is `submit`, which is how a
-    // "cancel" button comes to submit the form it sits in.
-    type="button"
-    className={cx(
-      'inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium',
-      'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
-      'disabled:cursor-not-allowed disabled:opacity-50',
-      BUTTON_TONES[tone],
-      className,
-    )}
-    {...rest}
-  />
+export const Button = ({ tone = 'default', ...rest }: ButtonProps): ReactElement => (
+  <PrimitiveButton tone={tone === 'ghost' ? 'invisible' : tone} {...rest} />
 );
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
 
+/**
+ * GitHub's Box: a quiet border, 6 px radius (`rounded-lg`, which `styles.css` sets to Primer's 6 px),
+ * the page's own ground. `header` is the subtle row on
+ * top (a title, counts, actions); without it the box is the plain bordered card every screen used.
+ */
 export const Card = ({
   children,
   className,
+  header,
 }: {
   readonly children: ReactNode;
   readonly className?: string;
-}): ReactElement => (
-  <div className={cx('rounded-lg border border-line bg-surface p-4', className)}>{children}</div>
-);
+  readonly header?: ReactNode;
+}): ReactElement =>
+  header === undefined ? (
+    <div className={cx('rounded-lg border border-line bg-canvas p-4', className)}>{children}</div>
+  ) : (
+    <div className="overflow-hidden rounded-lg border border-line bg-canvas">
+      <div className="flex min-h-11 items-center gap-3 border-b border-line bg-subtle px-4 py-2 text-sm font-semibold">
+        {header}
+      </div>
+      <div className={cx('p-4', className)}>{children}</div>
+    </div>
+  );
 
 export const SectionHeading = ({
   children,
@@ -70,20 +76,21 @@ export const SectionHeading = ({
   readonly children: ReactNode;
   readonly actions?: ReactNode;
 }): ReactElement => (
-  <div className="flex items-baseline justify-between gap-4 pb-3">
-    <h2 className="text-sm font-semibold tracking-wide text-fg-muted uppercase">{children}</h2>
+  <div className="flex items-center justify-between gap-4 pb-2">
+    <h2 className="text-base font-semibold text-fg">{children}</h2>
     {actions}
   </div>
 );
 
 export type BadgeTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
 
+/** A Primer Label: an outlined pill whose word carries the meaning, the tint only reinforces it. */
 const BADGE_TONES: Record<BadgeTone, string> = {
-  neutral: 'bg-surface-muted text-fg-muted',
-  accent: 'bg-accent/15 text-accent',
-  success: 'bg-success/15 text-success',
-  warning: 'bg-warning/20 text-warning',
-  danger: 'bg-danger/15 text-danger',
+  neutral: 'border-line text-fg-muted',
+  accent: 'border-link/50 text-link',
+  success: 'border-success/50 bg-success-bg text-success',
+  warning: 'border-attention/50 bg-attention-bg text-attention',
+  danger: 'border-danger/50 bg-danger-bg text-danger',
 };
 
 export const Badge = ({
@@ -95,7 +102,7 @@ export const Badge = ({
 }): ReactElement => (
   <span
     className={cx(
-      'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
+      'inline-flex items-center rounded-full border px-2 py-px text-xs leading-[1.125rem] font-medium whitespace-nowrap',
       BADGE_TONES[tone],
     )}
   >
@@ -121,7 +128,10 @@ export const Field = ({ label, hint, id, ...rest }: FieldProps): ReactElement =>
       </label>
       <input
         id={inputId}
-        className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+        className={cx(
+          'h-8 rounded-md border border-line-input bg-canvas px-3 text-sm text-fg placeholder:text-fg-subtle',
+          FOCUS_RING,
+        )}
         {...(hint === undefined ? {} : { 'aria-describedby': hintId })}
         {...rest}
       />
@@ -149,16 +159,15 @@ export const EmptyState = ({
   readonly title: string;
   readonly hint: string;
   readonly action?: ReactNode;
-}): ReactElement => (
-  <div className="flex flex-col items-start gap-2 rounded-lg border border-dashed border-line p-6">
-    <p className="text-sm font-medium">{title}</p>
-    <p className="max-w-prose text-sm text-fg-muted">{hint}</p>
-    {action}
-  </div>
-);
+}): ReactElement =>
+  action === undefined ? (
+    <Blankslate informational title={title} hint={hint} />
+  ) : (
+    <Blankslate title={title} hint={hint} action={action} />
+  );
 
 export const Loading = ({ label }: { readonly label: string }): ReactElement => (
-  <p role="status" aria-live="polite" className="p-4 text-sm text-fg-muted">
+  <p role="status" aria-live="polite" className="py-3 text-sm text-fg-muted">
     {label}
   </p>
 );
@@ -197,16 +206,13 @@ export const ErrorNotice = ({
   }
   const text = detail ?? (error === undefined ? undefined : String(error));
   return (
-    <div role="alert" className="rounded-lg border border-danger/40 bg-danger/10 p-4 text-sm">
-      <p className="font-medium">
-        <UntrustedText value={title} />
-      </p>
-      {text === undefined ? null : (
-        <p className="pt-1 text-fg-muted">
+    <Flash tone="danger" live="alert" title={<UntrustedText value={title} />}>
+      {text === undefined ? undefined : (
+        <p>
           <UntrustedText value={text} />
         </p>
       )}
-    </div>
+    </Flash>
   );
 };
 
@@ -215,8 +221,10 @@ export const ErrorNotice = ({
 /**
  * product/10: "Every number shown has a tooltip with its definition."
  *
- * The definition is attached with `aria-describedby` as well as `title`, so it reaches a screen
- * reader and a keyboard user rather than only a mouse.
+ * The label is the trigger of a Base UI `Tooltip` (TD-033 § 5), so the definition opens on hover
+ * **and on keyboard focus** — the old `title=` reached neither a keyboard nor a touch screen. It is
+ * also attached with `aria-describedby` to a hidden node, because Base UI does not tie a tooltip to
+ * its trigger for assistive tech, and a definition a screen reader cannot reach is not a definition.
  */
 export const Metric = ({
   label,
@@ -230,10 +238,21 @@ export const Metric = ({
   const id = useId();
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-xs text-fg-muted" title={definition} aria-describedby={id}>
-        {label}
-      </span>
-      <span className="text-lg font-semibold tabular-nums">{value}</span>
+      <Tooltip content={definition}>
+        {/* A focusable span, not a button: the label opens a definition, it performs nothing. */}
+        <span
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: a tooltip trigger must be reachable by Tab, or the definition is mouse-only.
+          tabIndex={0}
+          aria-describedby={id}
+          className={cx(
+            'w-fit rounded-sm text-xs text-fg-muted underline decoration-fg-subtle decoration-dotted underline-offset-4 hover:text-fg',
+            FOCUS_RING,
+          )}
+        >
+          {label}
+        </span>
+      </Tooltip>
+      <span className="text-xl font-semibold tabular-nums">{value}</span>
       <span id={id} hidden>
         {definition}
       </span>

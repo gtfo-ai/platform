@@ -5,6 +5,8 @@
  * whole application can be mounted in a test process against a fake server, and `mountApp` is the
  * two lines the browser runs. `apps/server`'s `runtime.ts` is the same shape on the other side.
  */
+
+import { CSPProvider } from '@base-ui/react/csp-provider';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
@@ -113,17 +115,22 @@ export const createApp = (options: CreateAppOptions = {}): App => {
     >
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
-          <ServicesProvider services={services}>
-            <RealtimeProvider
-              transcripts={transcripts}
-              enabled={options.realtime !== false}
-              {...(options.openStream === undefined ? {} : { openStream: options.openStream })}
-              updateSubscriptions={updateSubscriptions}
-              onReconnected={onReconnected}
-            >
-              <RouterProvider router={router} />
-            </RealtimeProvider>
-          </ServicesProvider>
+          {/* The production policy has no nonce and no `'unsafe-inline'` (`apps/server/src/web/
+              csp.ts`), so no Base UI component may inject a `<style>` element: the few that would
+              (a scroll area, an aligned select) draw their styles from the stylesheet instead. */}
+          <CSPProvider disableStyleElements>
+            <ServicesProvider services={services}>
+              <RealtimeProvider
+                transcripts={transcripts}
+                enabled={options.realtime !== false}
+                {...(options.openStream === undefined ? {} : { openStream: options.openStream })}
+                updateSubscriptions={updateSubscriptions}
+                onReconnected={onReconnected}
+              >
+                <RouterProvider router={router} />
+              </RealtimeProvider>
+            </ServicesProvider>
+          </CSPProvider>
         </ThemeProvider>
       </QueryClientProvider>
     </ErrorBoundary>

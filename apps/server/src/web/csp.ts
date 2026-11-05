@@ -17,7 +17,7 @@
  * | a `<style>` element or a `style=` attribute? | **none** — Tailwind 4 emits one stylesheet at build time; `style=` and `<style` appear **0** times in `apps/web/src` |
  * | styles written at runtime?                  | CSSOM only — the chunk's only style writes are React's `element.style[name] = …` / `setProperty`, and **no** `cssText`, `setAttribute('style', …)`, `insertRule` or `adoptedStyleSheets` |
  * | `eval`, `new Function`, WebAssembly, workers?| **one** `Function(\`\`)` in the main chunk — zod's JIT probe, which `script-src 'self'` refuses with an `eval` violation; `apps/web/src/zod-jitless.ts` disables the JIT before any other import in `main.tsx`, which is the only reason the probe never runs (measured: with that import removed, `test/web-e2e/csp.spec.ts` fails on `blocked: "eval"`). No `eval`, WebAssembly or worker otherwise |
- * | anything fetched from another origin?       | **none** — the CSS has no `url(…)`, no `@font-face` and no `@import`; the absolute URLs in the chunk are XML namespaces, JSON-Schema `$id`s and React's error link, none of which is fetched |
+ * | anything fetched from another origin?       | **none** — the CSS has no `@import` and, since TD-033, one `@font-face` whose one `url(…)` is the self-hosted Inter woff2 Vite writes into `/assets/` (same origin, so `font-src 'self'` was enough and did not change; `csp.spec.ts` loads it under the policy); the absolute URLs in the chunk are XML namespaces, JSON-Schema `$id`s and React's error link, none of which is fetched |
  * | where does the app talk?                    | its own origin — `fetch('/api/…')` with an empty base URL (`api/http.ts`) and `new EventSource('/events')` |
  *
  * So `'unsafe-inline'` buys this bundle nothing, and neither does a nonce — which is what made the
@@ -35,10 +35,14 @@
  * - **`script-src 'self'` is what governs a CSSOM style write**, not `style-src` — an attacker who
  *   is already running script in this origin is past every directive here.
  * - **A library that writes a `style` attribute or injects a `<style>` element will be blocked.**
- *   technical/09's planned stack (`@base-ui/react`, CodeMirror 6, Recharts, shiki in a worker) is
- *   not in this bundle; the React `style` prop stays fine, the other spellings do not, and a
- *   worker would need `worker-src`. That fails in the browser with a console violation the day it
- *   is added — loudly, in development, which is the direction this project chooses.
+ *   `@base-ui/react` is in the bundle since TD-033: its popups are positioned through CSSOM writes,
+ *   and the two parts that would inject a `<style>` element (a scroll area, an aligned select) are
+ *   switched off by `<CSPProvider disableStyleElements>` in `apps/web/src/app/app.tsx`;
+ *   `csp.spec.ts` opens a menu and a tooltip under this policy with no violation. The rest of
+ *   technical/09's planned stack (CodeMirror 6, Recharts, shiki in a worker) is not in this
+ *   bundle; the React `style` prop stays fine, the other spellings do not, and a worker would need
+ *   `worker-src`. That fails in the browser with a console violation the day it is added —
+ *   loudly, in development, which is the direction this project chooses.
  * - **`require-trusted-types-for 'script'` is deliberately absent.** react-dom writes `innerHTML`
  *   itself (two sites in the chunk, one of them its `<script>`-element workaround), so the
  *   directive would need a Trusted Types policy the application does not have; shipping it would
@@ -76,7 +80,7 @@ const DIRECTIVES: readonly string[] = [
   "style-src 'self'",
   // The bundle ships no image and the app renders no remote one; a favicon request is same-origin.
   "img-src 'self'",
-  // No `@font-face`, no font file in the bundle: nothing to allow beyond the origin.
+  // One `@font-face` (Inter, TD-033), its woff2 served from `/assets/`: nothing beyond the origin.
   "font-src 'self'",
   // `fetch('/api/…')` and `new EventSource('/events')`, both with an empty base URL.
   "connect-src 'self'",

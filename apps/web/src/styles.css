@@ -1,79 +1,232 @@
 /*
- * Theme tokens and the one Tailwind entry point (technical/09 § "Accessibility, theming, i18n").
+ * Theme tokens and the one Tailwind entry point (technical/09 § "Accessibility, theming, i18n",
+ * TD-033 § 2: GitHub's grammar in the sign-in page's colours).
  *
- * Light/dark/system through CSS variables and `color-scheme`. The selected theme is written to
- * `<html data-theme>` by `ui/theme.tsx`; `system` writes the resolved value, so every rule below
- * has exactly one selector to look at and nothing depends on a media query at render time.
+ * Dark (the default) / light / system through CSS variables and `color-scheme`. The selected theme
+ * is written to `<html data-theme>` by `ui/theme.tsx`; `system` writes the resolved value, so every
+ * rule below has exactly one selector to look at and nothing depends on a media query at render
+ * time. `[data-theme="dark"]` is also a scope: the sign-in page sets it on its own wrapper.
  *
- * `@theme inline` maps Tailwind's colour utilities onto those variables rather than onto literals,
- * which is what makes `bg-surface` mean something different under `[data-theme='dark']` without a
- * second set of utilities.
+ * Three blocks, and **base hex values appear in these three blocks only** (`ui/contrast.test.ts`
+ * holds that, and computes the WCAG ratio of every declared pair in both themes):
+ *
+ * 1. `:root` — the brand palette (`--brand-*`), the sign-in page's `--signin-*` aliased onto it, and
+ *    the top bar, which is night in **both** themes (the brand anchor; the wordmark lives on it).
+ * 2. `:root, [data-theme="dark"]` — the Primer-tier semantic tokens for dark.
+ * 3. `[data-theme="light"]` — the same names for light. It must declare every name block 2 does:
+ *    `<html data-theme="light">` matches `:root` too, so a name it forgot would silently be dark.
+ *
+ * `@theme inline` maps Tailwind's utilities onto the semantic variables rather than onto literals,
+ * which is what makes `bg-canvas` mean something different under each theme. The utility names
+ * that existed before TD-033 (`bg-surface`, `bg-surface-muted`, `border-line`, `text-fg-muted`,
+ * `text-accent`, `bg-warning/20`, …) are kept as aliases of the new tokens, so every screen took
+ * the new look without an edit.
  */
 @import "tailwindcss";
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-:root {
-  color-scheme: light;
-  --app-canvas: oklch(0.985 0.002 250);
-  --app-surface: oklch(1 0 0);
-  --app-surface-muted: oklch(0.965 0.004 250);
-  --app-border: oklch(0.9 0.006 250);
-  --app-fg: oklch(0.22 0.01 250);
-  --app-fg-muted: oklch(0.5 0.012 250);
-  --app-accent: oklch(0.55 0.16 262);
-  --app-accent-fg: oklch(0.99 0 0);
-  --app-danger: oklch(0.55 0.19 27);
-  --app-warning: oklch(0.68 0.15 75);
-  --app-success: oklch(0.6 0.13 155);
+/*
+ * Inter Variable, self-hosted (TD-033 § 3): the latin subset of `@fontsource-variable/inter`
+ * (OFL-1.1) as one woff2, which Vite copies into `dist/assets/` with a hashed name — so the
+ * production policy's `font-src 'self'` already allows it. The weight axis is 100–900, so the
+ * sign-in headline's `font-black` is Inter Black on every operating system rather than whatever
+ * the visitor's `system-ui` is. Characters outside the latin range fall back to the system stack.
+ */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("@fontsource-variable/inter/files/inter-latin-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 /*
- * The sign-in page's palette (WP-291). One page, always dark, whatever the selected theme: it is
- * the instance's front door rather than a screen of the app, and it is drawn before a theme can be
- * read from a user. The dither field (`features/dither-field.ts`) draws `night`, `lit` and `beacon`
- * itself. Measured contrast: text on night 15.2:1, on ink 13.7:1; muted on night 7.5:1, on ink
- * 6.7:1, on a lit cell 4.52:1; night on beacon (the button) 10.2:1;
- * a text field's edge 4.1:1 on its fill and 3.7:1 on the ink block.
+ * The brand palette (the sign-in page's, WP-291, plus deep night and hover from TD-033 § 2). The
+ * sign-in page reads `--signin-*`, which are now aliases of the palette: the values are the ones
+ * WP-291 measured (text on night 15.2:1, muted on night 7.5:1, night on beacon 10.2:1, the field's
+ * edge 4.1:1 on its night fill), and the dark theme reads the same palette, so the two cannot drift.
  */
 :root {
-  --signin-night: #15132b;
-  --signin-ink: #1f1c3d;
-  --signin-lit: #3a3570;
+  --brand-deep-night: #0f0d22;
+  --brand-night: #15132b;
+  --brand-ink: #1f1c3d;
+  --brand-hover: #29254d;
+  --brand-lit: #3a3570;
+  --brand-edge: #7671b0;
+  --brand-text: #ece9ff;
+  --brand-muted: #a7a2cc;
+  --brand-lavender: #b3a8ff;
+  --brand-beacon: #f4b860;
+
+  --signin-night: var(--brand-night);
+  --signin-ink: var(--brand-ink);
+  --signin-lit: var(--brand-lit);
   /* A text field's edge (WCAG 1.4.11): 4.1:1 on the field's night fill, 3.7:1 on the ink block. */
-  --signin-edge: #7671b0;
-  --signin-text: #ece9ff;
-  --signin-muted: #a7a2cc;
-  --signin-beacon: #f4b860;
+  --signin-edge: var(--brand-edge);
+  --signin-text: var(--brand-text);
+  --signin-muted: var(--brand-muted);
+  --signin-beacon: var(--brand-beacon);
+
+  /*
+   * The top bar: night in both themes. It is a `data-theme="dark"` scope (`app/shell.tsx`), so what
+   * is drawn on it reads the dark tokens; this ground is the one name the light block never sets.
+   */
+  --bg-header: var(--brand-deep-night);
+
+  /* Avatars: initials in night on a pastel of the lavender/amber family, the same in both themes. */
+  --avatar-fg: var(--brand-night);
+  --avatar-1: var(--brand-lavender);
+  --avatar-2: var(--brand-beacon);
+  --avatar-3: #d3a6ff;
+  --avatar-4: #8fd6c4;
+  --avatar-5: #f5a8c4;
+  --avatar-6: #a9c6ff;
 }
 
+:root,
 [data-theme="dark"] {
   color-scheme: dark;
-  --app-canvas: oklch(0.19 0.008 260);
-  --app-surface: oklch(0.23 0.009 260);
-  --app-surface-muted: oklch(0.27 0.01 260);
-  --app-border: oklch(0.33 0.012 260);
-  --app-fg: oklch(0.95 0.004 260);
-  --app-fg-muted: oklch(0.72 0.01 260);
-  --app-accent: oklch(0.72 0.14 262);
-  --app-accent-fg: oklch(0.18 0.01 260);
-  --app-danger: oklch(0.7 0.16 27);
-  --app-warning: oklch(0.78 0.14 75);
-  --app-success: oklch(0.74 0.13 155);
+  --bg-canvas: var(--brand-night);
+  --bg-subtle: var(--brand-ink);
+  --bg-muted: var(--brand-hover);
+  --bg-inset: var(--brand-deep-night);
+  --border-default: var(--brand-lit);
+  --border-muted: #2c2856;
+  --border-input: var(--brand-edge);
+  --fg-default: var(--brand-text);
+  --fg-muted: var(--brand-muted);
+  --fg-subtle: #9893c4;
+  --fg-link: var(--brand-lavender);
+  --fg-on-emphasis: var(--brand-night);
+  --accent-selected: var(--brand-beacon);
+  --action-primary-bg: var(--brand-beacon);
+  --action-primary-hover: #f7c67f;
+  --action-primary-border: var(--brand-beacon);
+  --action-primary-fg: var(--brand-night);
+  --success-fg: #6fdc9c;
+  --success-bg: #173a35;
+  --danger-fg: #ff8b8b;
+  --danger-bg: #3f1c33;
+  --attention-fg: #f2cc60;
+  --attention-bg: #3a2f22;
+  --done-fg: #d3a6ff;
+  --done-bg: #2f2050;
+  --running-fg: var(--brand-beacon);
+  --running-bg: #3a2c26;
+  --focus-ring: var(--brand-lavender);
+  --shadow-overlay: 0 8px 24px rgb(8 6 24 / 0.55), 0 0 0 1px var(--border-default);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-canvas: #ffffff;
+  --bg-subtle: #f6f5fb;
+  --bg-muted: #ecebf5;
+  --bg-inset: #f1f0f8;
+  --border-default: #dcd9ec;
+  --border-muted: #ebe9f4;
+  --border-input: #807ba8;
+  --fg-default: #1b1838;
+  --fg-muted: #5c5785;
+  --fg-subtle: #66618b;
+  --fg-link: #5646d6;
+  --fg-on-emphasis: #ffffff;
+  /* The beacon underline is 1.8:1 on white; this darker amber is the light theme's (≥ 3:1). */
+  --accent-selected: #b7791f;
+  --action-primary-bg: var(--brand-beacon);
+  --action-primary-hover: #f0aa45;
+  --action-primary-border: #d9993f;
+  --action-primary-fg: var(--brand-night);
+  --success-fg: #1a7f37;
+  --success-bg: #dafbe1;
+  --danger-fg: #cf222e;
+  --danger-bg: #ffebe9;
+  --attention-fg: #875b00;
+  --attention-bg: #fff8c5;
+  --done-fg: #8250df;
+  --done-bg: #fbefff;
+  --running-fg: #9a5c00;
+  --running-bg: #fff1dc;
+  --focus-ring: #5646d6;
+  --shadow-overlay: 0 8px 24px rgb(27 24 56 / 0.16), 0 0 0 1px var(--border-default);
+}
+
+@theme {
+  /* Body text Inter Variable with the system stack behind it; monospace stays the system's. */
+  --font-sans:
+    "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  /* GitHub's scale: 12 / 14 (body) / 16 / 20 / 24 / 32. `lg` is the page title, as `xl`. */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.25rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.25rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl: 2rem;
+  --text-3xl--line-height: 2.5rem;
+  /* Radius 6 px for every box (Primer), 12 px reserved for dialogs (`rounded-xl`). */
+  --radius-lg: 0.375rem;
 }
 
 @theme inline {
-  --color-canvas: var(--app-canvas);
-  --color-surface: var(--app-surface);
-  --color-surface-muted: var(--app-surface-muted);
-  --color-line: var(--app-border);
-  --color-fg: var(--app-fg);
-  --color-fg-muted: var(--app-fg-muted);
-  --color-accent: var(--app-accent);
-  --color-accent-fg: var(--app-accent-fg);
-  --color-danger: var(--app-danger);
-  --color-warning: var(--app-warning);
-  --color-success: var(--app-success);
+  /* The semantic tokens (TD-033 § 2). */
+  --color-header: var(--bg-header);
+  --color-canvas: var(--bg-canvas);
+  --color-subtle: var(--bg-subtle);
+  --color-muted: var(--bg-muted);
+  --color-inset: var(--bg-inset);
+  --color-line: var(--border-default);
+  --color-line-muted: var(--border-muted);
+  --color-line-input: var(--border-input);
+  --color-fg: var(--fg-default);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-link: var(--fg-link);
+  --color-on-emphasis: var(--fg-on-emphasis);
+  --color-selected: var(--accent-selected);
+  --color-primary: var(--action-primary-bg);
+  --color-primary-hover: var(--action-primary-hover);
+  --color-primary-line: var(--action-primary-border);
+  --color-primary-fg: var(--action-primary-fg);
+  --color-success: var(--success-fg);
+  --color-success-bg: var(--success-bg);
+  --color-danger: var(--danger-fg);
+  --color-danger-bg: var(--danger-bg);
+  --color-attention: var(--attention-fg);
+  --color-attention-bg: var(--attention-bg);
+  --color-done: var(--done-fg);
+  --color-done-bg: var(--done-bg);
+  --color-running: var(--running-fg);
+  --color-running-bg: var(--running-bg);
+  --color-focus: var(--focus-ring);
+  --color-avatar-fg: var(--avatar-fg);
+  --color-avatar-1: var(--avatar-1);
+  --color-avatar-2: var(--avatar-2);
+  --color-avatar-3: var(--avatar-3);
+  --color-avatar-4: var(--avatar-4);
+  --color-avatar-5: var(--avatar-5);
+  --color-avatar-6: var(--avatar-6);
+  --shadow-overlay: var(--shadow-overlay);
+
+  /* The names every screen used before TD-033, aliased so none of them needed an edit. */
+  --color-surface: var(--bg-canvas);
+  --color-surface-muted: var(--bg-subtle);
+  --color-accent: var(--fg-link);
+  --color-accent-fg: var(--fg-on-emphasis);
+  --color-warning: var(--attention-fg);
+
   --color-signin-night: var(--signin-night);
   --color-signin-ink: var(--signin-ink);
   --color-signin-lit: var(--signin-lit);
@@ -91,10 +244,12 @@ body,
 
 body {
   margin: 0;
-  background-color: var(--app-canvas);
-  color: var(--app-fg);
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background-color: var(--bg-canvas);
+  color: var(--fg-default);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  -webkit-font-smoothing: antialiased;
 }
 
 /*
@@ -106,10 +261,55 @@ body {
 @layer base {
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
+  [role="menuitem"]:not([aria-disabled="true"]),
+  [role="menuitemradio"]:not([aria-disabled="true"]),
+  [role="menuitemcheckbox"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
   input:is([type="submit"], [type="button"], [type="reset"]):not(:disabled),
   select:not(:disabled),
   summary {
     cursor: pointer;
+  }
+}
+
+/*
+ * The running beacon (`ui/status.tsx`): a slow pulse, so a running agent reads as alive from
+ * across the room. Reduced motion stops it on its first frame (fully opaque) — the rule below the
+ * global one, because the global rule only shortens an animation and this one should not run.
+ */
+@keyframes status-running-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.status-running {
+  animation: status-running-pulse 1.6s ease-in-out infinite;
+}
+
+/* The skeleton's shimmer (`ui/skeleton.tsx`), on the same terms. */
+@keyframes skeleton-shimmer {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.skeleton-shimmer {
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-running,
+  .skeleton-shimmer {
+    animation: none;
   }
 }
 

@@ -115,7 +115,9 @@ test.describe('authentication', () => {
     await signIn(page);
     await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Sign out' }).click();
+    // Sign out sits in the top bar's account menu since TD-033: one "open the menu" step.
+    await page.getByRole('button', { name: 'Account menu' }).click();
+    await page.getByRole('menuitem', { name: 'Sign out' }).click();
     await page.goto('/inbox');
     await expect(page).toHaveURL(/\/sign-in/);
   });

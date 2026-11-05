@@ -9,6 +9,9 @@
  * `system` stores the *preference*, never the resolved value: a laptop that switches to dark at
  * sunset has to move the app with it, which it cannot do if the resolution was frozen at the
  * moment the user chose.
+ *
+ * **The default is `dark`** (TD-033 § 2): the brand is night and ink, the sign-in page is always
+ * dark, and a first visit should look like it. `system` and `light` stay one choice away.
  */
 import {
   createContext,
@@ -25,6 +28,9 @@ export type ResolvedTheme = 'light' | 'dark';
 
 export const THEME_STORAGE_KEY = 'agentic.theme';
 
+/** What a browser that has never chosen gets (TD-033 § 2). */
+export const DEFAULT_THEME: ThemePreference = 'dark';
+
 export const isThemePreference = (value: unknown): value is ThemePreference =>
   value === 'light' || value === 'dark' || value === 'system';
 
@@ -39,11 +45,11 @@ export const resolveTheme = (preference: ThemePreference, prefersDark: boolean):
 export const readStoredTheme = (storage: Pick<Storage, 'getItem'> | undefined): ThemePreference => {
   try {
     const stored = storage?.getItem(THEME_STORAGE_KEY);
-    return isThemePreference(stored) ? stored : 'system';
+    return isThemePreference(stored) ? stored : DEFAULT_THEME;
   } catch {
     // A browser with storage disabled (or a privacy mode that throws on access) still gets a
     // themed app; it just cannot remember the choice.
-    return 'system';
+    return DEFAULT_THEME;
   }
 };
 

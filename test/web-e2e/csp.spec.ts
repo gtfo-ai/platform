@@ -24,6 +24,13 @@
  *     inline `<script>` and a `<style>` element are injected into the same page and must both be
  *     refused — without which "zero violations" would also be the reading for a browser that
  *     received no header at all.
+ *
+ * And two proofs TD-033 asked for before any screen depends on them: **Base UI opens under the
+ * policy** — its menus and tooltips are positioned by Floating UI through CSSOM writes, which
+ * `script-src 'self'` governs and `style-src 'self'` does not, so the top bar's account menu and a
+ * `Metric` tooltip are opened in the built bundle and must appear, positioned, with no violation —
+ * and **Inter is served by `'self'`**, so `font-src 'self'` stayed unchanged and the sign-in
+ * headline is Inter Black.
  */
 import { expect, type Page, test } from '@playwright/test';
 import { IDS } from './support/fixtures.js';
@@ -132,4 +139,88 @@ test('the policy is enforced: an inline script and a <style> element are both re
       message: 'the browser recorded no policy violation for either probe',
     })
     .toEqual([expect.stringMatching(/^script-src/), expect.stringMatching(/^style-src/)]);
+});
+
+test('Base UI opens a menu and a tooltip under the policy without a violation (TD-033)', async ({
+  page,
+}) => {
+  await signIn(page);
+  await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+
+  // The account menu: a Base UI Menu, positioned by CSSOM writes.
+  const trigger = page.getByRole('button', { name: 'Account menu' });
+  await trigger.click();
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await expect(page.getByRole('menuitemradio', { name: 'Dark' })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  // Positioned against its trigger rather than left at the top of the document: the CSSOM write
+  // took effect, which is what the policy question was.
+  const [menuBox, triggerBox] = await Promise.all([menu.boundingBox(), trigger.boundingBox()]);
+  expect(menuBox).not.toBeNull();
+  expect(triggerBox).not.toBeNull();
+  if (menuBox !== null && triggerBox !== null) {
+    expect(menuBox.y).toBeGreaterThanOrEqual(triggerBox.y + triggerBox.height - 1);
+    expect(Math.abs(menuBox.x + menuBox.width - (triggerBox.x + triggerBox.width))).toBeLessThan(
+      40,
+    );
+  }
+  await page.getByRole('menuitemradio', { name: 'Light' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+
+  // A Metric's definition: a Base UI Tooltip, opened from the keyboard.
+  await page.goto('/stats');
+  const label = page.getByText('Tasks delivered', { exact: true });
+  await expect(label).toBeVisible();
+  await label.focus();
+  const tooltip = page.locator('[data-tooltip]');
+  await expect(tooltip).toBeVisible();
+  // The fixture's definition of `tasks_delivered` (`support/fixtures.ts`).
+  await expect(tooltip).toHaveText(
+    'Tasks whose merge request merged, counted at merge time (product/19 §10).',
+  );
+  const [tipBox, labelBox] = await Promise.all([tooltip.boundingBox(), label.boundingBox()]);
+  if (tipBox !== null && labelBox !== null) {
+    expect(tipBox.y + tipBox.height).toBeLessThanOrEqual(labelBox.y + 1);
+  }
+
+  expect(await violations(page)).toEqual([]);
+});
+
+test('Inter is served from this origin and the sign-in headline is Inter Black (TD-033)', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const headline = page.getByRole('heading', { name: 'Tickets in, merge requests out.' });
+  await expect(headline).toBeVisible();
+  const font = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const heading = document.querySelector('h1');
+    const style = heading === null ? null : getComputedStyle(heading);
+    return {
+      family: style?.fontFamily ?? '',
+      weight: style?.fontWeight ?? '',
+      black: document.fonts.check('900 16px "Inter Variable"'),
+      loaded: [...document.fonts].filter(
+        (face) => face.family.replaceAll('"', '') === 'Inter Variable' && face.status === 'loaded',
+      ).length,
+      files: performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .filter((name) => name.endsWith('.woff2')),
+    };
+  });
+  expect(font.family).toMatch(/^"?Inter Variable"?,/);
+  expect(font.weight).toBe('900');
+  expect(font.black).toBe(true);
+  expect(font.loaded).toBeGreaterThan(0);
+  expect(font.files.length).toBeGreaterThan(0);
+  for (const file of font.files) {
+    expect(new URL(file).origin).toBe(new URL(page.url()).origin);
+  }
+  expect(await violations(page)).toEqual([]);
 });

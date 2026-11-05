@@ -151,7 +151,8 @@ test('settings shows the session, the user list and the instance version', async
   await page.goto('/settings');
   await expect(page.getByText('operator@example.invalid').first()).toBeVisible();
   await expect(page.getByText('0.0.0-fake')).toBeVisible();
-  await expect(page.getByLabel('Theme preference')).toHaveValue('system');
+  // A browser that has never chosen gets the dark default (TD-033 § 2).
+  await expect(page.getByLabel('Theme preference')).toHaveValue('dark');
 });
 
 test('org settings carries the organisation budgets WP-30 gave it a writer for', async ({

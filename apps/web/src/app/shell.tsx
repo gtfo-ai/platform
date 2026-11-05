@@ -1,5 +1,11 @@
 /**
- * The application shell: navigation, theme control, connection status, sign-out.
+ * The application shell: navigation, connection status, and the account menu (theme, sign-out).
+ *
+ * The top bar is **night in both themes** (TD-033 § 2, the brand anchor the wordmark lives on): it
+ * is a `data-theme="dark"` scope, so everything drawn in it — the badge, the links, the focus
+ * ring — reads the dark tokens whatever the page's theme is. The account menu is Base UI's
+ * (`ui/action-menu.tsx`); it replaced a theme `<select>` and a bare sign-out button, and its popup is
+ * portalled to `<body>`, so the menu itself is drawn in the page's theme.
  *
  * The connection badge is not decoration. This app never polls (see `queries.ts`), so a stream
  * that has stopped delivering is a screen that has silently stopped updating — the failure product
@@ -7,11 +13,28 @@
  * says whether the promise is being kept, and it is `aria-live` so it is announced rather than only
  * shown.
  */
+
+import { DeviceDesktopIcon } from '@primer/octicons-react/DeviceDesktopIcon';
+import { MoonIcon } from '@primer/octicons-react/MoonIcon';
+import { SignOutIcon } from '@primer/octicons-react/SignOutIcon';
+import { SunIcon } from '@primer/octicons-react/SunIcon';
+import { TriangleDownIcon } from '@primer/octicons-react/TriangleDownIcon';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate } from '@tanstack/react-router';
 import { type ReactElement, useSyncExternalStore } from 'react';
-import { displayName } from '../auth/session.js';
+import { displayName, type SessionUser } from '../auth/session.js';
 import { useRealtime } from '../realtime/provider.js';
+import {
+  ActionMenu,
+  ActionMenuHeader,
+  ActionMenuItem,
+  ActionMenuRadioGroup,
+  ActionMenuRadioItem,
+  ActionMenuSeparator,
+} from '../ui/action-menu.js';
+import { Avatar } from '../ui/avatar.js';
+import { FOCUS_RING } from '../ui/cx.js';
+import { Flash } from '../ui/flash.js';
 import { Badge, type BadgeTone, Button, cx } from '../ui/kit.js';
 import { Logo } from '../ui/logo.js';
 import { type ThemePreference, useTheme } from '../ui/theme.js';
@@ -54,24 +77,75 @@ export const connectionLabel = (
   }
 };
 
-const ThemeControl = (): ReactElement => {
+/** The three choices, in the order the menu offers them. */
+export const THEME_CHOICES: readonly {
+  readonly value: ThemePreference;
+  readonly label: string;
+  readonly icon: ReactElement;
+}[] = [
+  { value: 'dark', label: 'Dark', icon: <MoonIcon size={16} /> },
+  { value: 'light', label: 'Light', icon: <SunIcon size={16} /> },
+  { value: 'system', label: 'System', icon: <DeviceDesktopIcon size={16} /> },
+];
+
+/**
+ * The avatar menu: who is signed in, the theme (a radio group named "Theme"), and "Sign out". The
+ * trigger is named "Account menu"; the theme and sign-out keep the names they had as a `<select>`
+ * and a button, one "open the menu" step further in.
+ */
+const AccountMenu = ({
+  user,
+  onSignOut,
+}: {
+  readonly user: SessionUser | null;
+  readonly onSignOut: () => void;
+}): ReactElement => {
   const { preference, setPreference } = useTheme();
+  const name = user === null ? 'Not signed in' : displayName(user);
   return (
-    <label className="flex items-center gap-1 text-xs text-fg-muted">
-      Theme
-      <select
-        aria-label="Theme"
-        value={preference}
-        onChange={(event) => {
-          setPreference(event.target.value as ThemePreference);
-        }}
-        className="rounded-md border border-line bg-surface px-1.5 py-1 text-xs"
-      >
-        <option value="system">System</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-      </select>
-    </label>
+    <ActionMenu
+      label="Account menu"
+      trigger={
+        <button
+          type="button"
+          aria-label="Account menu"
+          className={cx(
+            'inline-flex items-center gap-1 rounded-full p-0.5 pr-1 text-fg-muted hover:text-fg',
+            FOCUS_RING,
+          )}
+        >
+          <Avatar name={name} size={24} decorative />
+          <TriangleDownIcon size={16} />
+        </button>
+      }
+    >
+      <ActionMenuHeader>
+        {user === null ? (
+          'Not signed in'
+        ) : (
+          <>
+            Signed in as <span className="font-semibold text-fg">{name}</span>
+            <span className="block">{`Role: ${user.role}`}</span>
+          </>
+        )}
+      </ActionMenuHeader>
+      <ActionMenuSeparator />
+      <ActionMenuRadioGroup label="Theme" value={preference} onValueChange={setPreference}>
+        {THEME_CHOICES.map((choice) => (
+          <ActionMenuRadioItem key={choice.value} value={choice.value} leadingIcon={choice.icon}>
+            {choice.label}
+          </ActionMenuRadioItem>
+        ))}
+      </ActionMenuRadioGroup>
+      {user === null ? null : (
+        <>
+          <ActionMenuSeparator />
+          <ActionMenuItem leadingIcon={<SignOutIcon size={16} />} onSelect={onSignOut}>
+            Sign out
+          </ActionMenuItem>
+        </>
+      )}
+    </ActionMenu>
   );
 };
 
@@ -89,24 +163,25 @@ export const PlatformUpdatedBanner = (): ReactElement | null => {
     return null;
   }
   return (
-    <div
-      role="alert"
+    <Flash
+      tone="info"
+      live="alert"
       data-testid="platform-updated"
-      className="flex flex-wrap items-center gap-3 border-b border-accent/40 bg-accent/10 px-4 py-2 text-sm"
+      className="rounded-none border-x-0 border-t-0"
+      title="The platform was updated — reload this page."
+      action={
+        <Button
+          tone="primary"
+          onClick={() => {
+            window.location.reload();
+          }}
+        >
+          Reload
+        </Button>
+      }
     >
-      <span className="font-medium">The platform was updated — reload this page.</span>
-      <span className="text-fg-muted">
-        This tab still runs the previous version, which cannot read the new server's answers.
-      </span>
-      <Button
-        tone="primary"
-        onClick={() => {
-          window.location.reload();
-        }}
-      >
-        Reload
-      </Button>
-    </div>
+      This tab still runs the previous version, which cannot read the new server's answers.
+    </Flash>
   );
 };
 
@@ -121,8 +196,11 @@ export const AppShell = (): ReactElement => {
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-2">
-        <Link to="/" className="rounded-sm py-1">
+      <header
+        data-theme="dark"
+        className="flex flex-wrap items-center gap-3 border-b border-line bg-header px-4 py-2 text-fg"
+      >
+        <Link to="/" className={cx('rounded-sm py-1', FOCUS_RING)}>
           <Logo label="Agentic" className="w-20" />
         </Link>
         <nav aria-label="Primary" className="flex flex-wrap gap-1">
@@ -130,8 +208,11 @@ export const AppShell = (): ReactElement => {
             <Link
               key={item.to}
               to={item.to}
-              className={cx('rounded-md px-2 py-1 text-sm text-fg-muted hover:bg-surface-muted')}
-              activeProps={{ className: 'bg-surface-muted text-fg' }}
+              className={cx(
+                'rounded-md px-2 py-1 text-sm text-fg-muted hover:bg-subtle hover:text-fg',
+                FOCUS_RING,
+              )}
+              activeProps={{ className: 'bg-subtle font-semibold text-fg' }}
               activeOptions={{ exact: item.to === '/' }}
             >
               {item.label}
@@ -142,25 +223,17 @@ export const AppShell = (): ReactElement => {
           <span data-testid="connection-status" role="status" aria-live="polite">
             <Badge tone={connection.tone}>{connection.text}</Badge>
           </span>
-          <ThemeControl />
-          {user === null ? null : (
-            <>
-              <span className="text-xs text-fg-muted">{displayName(user)}</span>
-              <Button
-                tone="ghost"
-                onClick={() => {
-                  void auth.signOut().then(async () => {
-                    // The whole cache, not just the session: what is in it belongs to the account
-                    // that is signing out, and the next person at this browser is not that account.
-                    queryClient.clear();
-                    await navigate({ to: '/sign-in', search: {} });
-                  });
-                }}
-              >
-                Sign out
-              </Button>
-            </>
-          )}
+          <AccountMenu
+            user={user}
+            onSignOut={() => {
+              void auth.signOut().then(async () => {
+                // The whole cache, not just the session: what is in it belongs to the account
+                // that is signing out, and the next person at this browser is not that account.
+                queryClient.clear();
+                await navigate({ to: '/sign-in', search: {} });
+              });
+            }}
+          />
         </div>
       </header>
       <PlatformUpdatedBanner />
@@ -170,7 +243,7 @@ export const AppShell = (): ReactElement => {
           sit behind that one and could never fire (standing rule 22), so the backstop is one ring
           further out instead — `ErrorBoundary` in `app/app.tsx`, which catches what the router
           cannot see. `ui/error-boundary.tsx` records the measurement behind that split. */}
-      <main className="min-h-0 flex-1 p-4">
+      <main className="min-h-0 flex-1 px-4 py-6 sm:px-6">
         <Outlet />
       </main>
     </div>

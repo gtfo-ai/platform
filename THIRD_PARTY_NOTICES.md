@@ -7,7 +7,7 @@
 # Third-party notices
 
 The platform itself is [Apache-2.0](LICENSE). This file accounts for everything else it ships:
-the **318 npm packages** its images and its browser bundle carry (plus 48
+the **330 npm packages** its images and its browser bundle carry (plus 48
 per-platform builds of those packages), and the **pinned binaries and container images** the
 Dockerfiles and `compose.yml` name. Bundled CLIs are *executed*, never linked.
 
@@ -34,7 +34,7 @@ sources disagree, so it cannot go stale quietly.
 
 | Licence | Packages |
 | --- | ---: |
-| MIT | 282 |
+| MIT | 293 |
 | ISC | 15 |
 | BSD-3-Clause | 7 |
 | Apache-2.0 | 6 |
@@ -43,6 +43,7 @@ sources disagree, so it cannot go stale quietly.
 | (MIT OR CC0-1.0) | 1 |
 | BlueOak-1.0.0 | 1 |
 | MPL-2.0 | 1 |
+| OFL-1.1 | 1 |
 | [unverified] proprietary — © Anthropic PBC, all rights reserved | 1 |
 
 ## Pinned binaries and container images
@@ -88,7 +89,7 @@ complete: `APP_VERSION` (build metadata stamped into the image label; empty by d
 
 ## npm packages
 
-318 packages, with the licence each one declares in its own `package.json`. Packages
+330 packages, with the licence each one declares in its own `package.json`. Packages
 that are built per platform are in the section after this one.
 
 | Package | Version | Licence |
@@ -100,6 +101,8 @@ that are built per platform are in the section after this one.
 | `@babel/parser` | 7.29.8 | MIT |
 | `@babel/runtime` | 7.29.7 | MIT |
 | `@babel/types` | 7.29.8 | MIT |
+| `@base-ui/react` | 1.9.0 | MIT |
+| `@base-ui/utils` | 0.5.0 | MIT |
 | `@bcoe/v8-coverage` | 1.0.2 | MIT |
 | `@better-auth/core` | 1.7.3 | MIT |
 | `@better-auth/drizzle-adapter` | 1.7.3 | MIT |
@@ -123,6 +126,11 @@ that are built per platform are in the section after this one.
 | `@fastify/sse` | 0.6.0 | MIT |
 | `@fastify/swagger` | 9.8.1 | MIT |
 | `@fastify/under-pressure` | 9.1.0 | MIT |
+| `@floating-ui/core` | 1.8.0 | MIT |
+| `@floating-ui/dom` | 1.8.0 | MIT |
+| `@floating-ui/react-dom` | 2.1.9 | MIT |
+| `@floating-ui/utils` | 0.2.12 | MIT |
+| `@fontsource-variable/inter` | 5.3.0 | OFL-1.1 |
 | `@hono/node-server` | 2.1.1 | MIT |
 | `@jridgewell/resolve-uri` | 3.1.2 | MIT |
 | `@jridgewell/sourcemap-codec` | 1.6.0 | MIT |
@@ -138,6 +146,7 @@ that are built per platform are in the section after this one.
 | `@opentelemetry/semantic-conventions` | 1.43.0 | Apache-2.0 |
 | `@oxc-project/types` | 0.148.0 | MIT |
 | `@pinojs/redact` | 0.4.0 | MIT |
+| `@primer/octicons-react` | 19.42.0 | MIT |
 | `@prometheus-io/client` | 0.16.1 | Apache-2.0 |
 | `@rolldown/pluginutils` | 1.0.1 | MIT |
 | `@stablelib/base64` | 1.0.1 | MIT |
@@ -154,6 +163,7 @@ that are built per platform are in the section after this one.
 | `@types/estree` | 1.0.9 | MIT |
 | `@types/node` | 24.13.3 | MIT |
 | `@types/pg` | 8.23.1 | MIT |
+| `@types/react` | 19.3.0 | MIT |
 | `@types/whatwg-mimetype` | 3.0.2 | MIT |
 | `@types/ws` | 8.18.1 | MIT |
 | `@vitest/coverage-v8` | 5.0.0 | MIT |
@@ -196,6 +206,7 @@ that are built per platform are in the section after this one.
 | `cors` | 2.8.6 | MIT |
 | `cron-parser` | 5.10.0 | MIT |
 | `cross-spawn` | 7.0.6 | MIT |
+| `csstype` | 3.2.3 | MIT |
 | `dateformat` | 4.6.3 | MIT |
 | `debug` | 4.4.3 | MIT |
 | `defu` | 6.1.7 | MIT |
@@ -345,6 +356,7 @@ that are built per platform are in the section after this one.
 | `real-require` | 0.2.0 | MIT |
 | `real-require` | 1.0.0 | MIT |
 | `require-from-string` | 2.0.2 | MIT |
+| `reselect` | 5.3.0 | MIT |
 | `ret` | 0.5.0 | MIT |
 | `reusify` | 1.1.0 | MIT |
 | `rfdc` | 1.4.1 | MIT |
@@ -399,6 +411,7 @@ that are built per platform are in the section after this one.
 | `undici-types` | 7.18.2 | MIT |
 | `unpipe` | 1.0.0 | MIT |
 | `use-sync-external-store` | 1.6.0 | MIT |
+| `use-sync-external-store` | 1.7.0 | MIT |
 | `vary` | 1.1.2 | MIT |
 | `vite` | 8.2.2 | MIT |
 | `vitest` | 5.0.0 | MIT |

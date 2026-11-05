@@ -19,6 +19,11 @@ describe('the pointer cursor', () => {
   it.each([
     'button:not(:disabled)',
     '[role="button"]:not([aria-disabled="true"])',
+    // Base UI's menu items and tabs (TD-033): `div`s with a role, which Preflight leaves at `default`.
+    '[role="menuitem"]:not([aria-disabled="true"])',
+    '[role="menuitemradio"]:not([aria-disabled="true"])',
+    '[role="menuitemcheckbox"]:not([aria-disabled="true"])',
+    '[role="tab"]:not([aria-disabled="true"])',
     'input:is([type="submit"], [type="button"], [type="reset"]):not(:disabled)',
     'select:not(:disabled)',
     'summary',

@@ -45,6 +45,10 @@ from the dashboard, into a project: its **board**, **knowledge**, **pipeline** a
 Screens that show live data subscribe to a server-sent event stream, so agent counts, task states
 and transcripts move without a refresh.
 
+**Your avatar, at the right of the top bar, opens the account menu**: who you are signed in as and
+with which role, the **Theme** (Dark, Light or System — dark until you choose) and **Sign out**. The
+theme is also on **Settings**.
+
 **After the platform is upgraded, an open tab asks for a reload.** A banner under the navigation
 says *The platform was updated — reload this page*, with a **Reload** button, in place of the error
 an old page would otherwise show when the new server's answers no longer match what it expects. The
