@@ -19,6 +19,13 @@
  *
  * Every string a person, a tracker or an agent wrote (the title, the ticket key, the transcript, a
  * log line) is a React text node through `ui/untrusted.tsx` (BD-022).
+ *
+ * **The page shows the model's thinking text on purpose**, unlike the platform's run dialog: it is
+ * served on the developer's own machine, to the person whose subscription the run spends, about a
+ * run that machine is executing — the same words the worker uploads, nothing more.
+ *
+ * A run's stage is a `PhaseTrack` only when the page knows **more than one** stage; the worker's
+ * package names one, so today it is the stage's name as text — a strip of one dot says nothing.
  */
 import type { WorkerLocalRun, WorkerLocalState } from '@platform/contracts';
 import {
@@ -33,7 +40,7 @@ import { Seat } from '../ui/bot/seat.js';
 import { Button } from '../ui/button.js';
 import { Flash } from '../ui/flash.js';
 import { ROLE_LABEL, stageLabel } from '../ui/humanize.js';
-import { PhaseTrack } from '../ui/phase-track.js';
+import { type PhaseStage, PhaseTrack } from '../ui/phase-track.js';
 import { StatusIcon } from '../ui/status.js';
 import { ExternalLink, TerminalText, UntrustedText } from '../ui/untrusted.js';
 import { LocalCallError, type LocalClient } from './client.js';
@@ -50,6 +57,10 @@ import {
   WORKER_MODE_WORDS,
   workerModeOf,
 } from './model.js';
+
+/** A message as a sentence: its first letter capitalised (the worker's words start lower-case). */
+export const sentence = (text: string): string =>
+  text === '' ? text : `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 
 /** How often the page asks the worker for its state. */
 export const POLL_MS = 2_000;
@@ -104,6 +115,14 @@ const RunCard = ({
 }): ReactElement => {
   const desk = deskOf(run, state, now);
   const spend = spendWords(run);
+  /** What the page knows of the run's pipeline: its own stage, and no other. */
+  const stages: readonly PhaseStage[] = [
+    {
+      id: run.stage ?? run.role,
+      label: run.stage === null ? ROLE_LABEL[run.role] : stageLabel(run.stage),
+      state: 'current',
+    },
+  ];
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   // One key per confirmed cancel: a retry of the same press is a replay, never a second cancel.
@@ -144,18 +163,13 @@ const RunCard = ({
           <UntrustedText value={run.title ?? 'A task with no title'} />
         </h3>
       </header>
-      <PhaseTrack
-        stages={[
-          {
-            id: run.stage ?? run.role,
-            label: run.stage === null ? ROLE_LABEL[run.role] : stageLabel(run.stage),
-            state: 'current',
-          },
-        ]}
-        activity={desk.activity}
-        detail={desk.detail}
-        size="sm"
-      />
+      {stages.length > 1 ? (
+        <PhaseTrack stages={stages} size="sm" />
+      ) : (
+        <p data-stage="" className="text-sm font-medium text-fg">
+          {stages[0]?.label}
+        </p>
+      )}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
         <dt className="text-fg-muted">Doing</dt>
         <dd className="flex items-center gap-1.5 text-fg">
@@ -277,8 +291,23 @@ export const WorkerApp = ({
   }
   if (state === null) {
     return (
-      <main className="p-6 text-fg-muted" aria-busy="true">
-        {error ?? 'Asking the worker what it is doing…'}
+      <main className="mx-auto flex max-w-5xl flex-col gap-4 p-6" aria-busy={error === null}>
+        <h1 className="text-xl font-semibold text-fg">This worker</h1>
+        {error === null ? (
+          <p className="text-sm text-fg-muted">Asking the worker what it is doing…</p>
+        ) : (
+          <Flash
+            tone="danger"
+            title="The page could not read the worker"
+            action={
+              <Button size="sm" onClick={() => window.location.reload()}>
+                Reload
+              </Button>
+            }
+          >
+            <UntrustedText value={sentence(error)} />
+          </Flash>
+        )}
       </main>
     );
   }
@@ -333,7 +362,7 @@ export const WorkerApp = ({
 
       {error === null ? null : (
         <Flash tone="danger" title="That did not work">
-          <UntrustedText value={error} />
+          <UntrustedText value={sentence(error)} />
         </Flash>
       )}
       {state.update_pending === true ? (
@@ -355,7 +384,7 @@ export const WorkerApp = ({
         </div>
         <ul
           aria-label={`Desks in ${name}`}
-          className="worker-floor flex flex-wrap gap-x-5 gap-y-4 p-4"
+          className="worker-floor flex flex-wrap justify-center gap-x-8 gap-y-4 p-4"
         >
           {state.runs.map((run) => {
             const desk = deskOf(run, state, at);
@@ -368,8 +397,13 @@ export const WorkerApp = ({
                   mug={desk.phase % 2 === 0}
                   bubble={<span className="font-medium">{desk.bubble}</span>}
                   nameplate={
-                    <span className="font-mono">
-                      <UntrustedText value={desk.nameplate} />
+                    <span data-nameplate="" className="flex flex-col items-center">
+                      {desk.nameplate.ticket === null ? null : (
+                        <span className="font-mono">
+                          <UntrustedText value={desk.nameplate.ticket} />
+                        </span>
+                      )}
+                      <span>{desk.nameplate.stage}</span>
                     </span>
                   }
                 />

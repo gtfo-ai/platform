@@ -116,7 +116,45 @@ describe('the worker’s local page (WP-292)', () => {
     expect(desks[1]?.getAttribute('data-desk')).toBe('free');
     expect(desks[1]?.getAttribute('data-pose')).toBe('sleeping');
     expect(container.textContent).toContain('1 of 2 busy');
-    expect(container.querySelector('[data-phase-track]')).not.toBeNull();
+    // One known stage is its name as text, never a strip of one dot (review of PR #30).
+    expect(container.querySelector('[data-phase-track]')).toBeNull();
+    expect(container.querySelector(`[data-run="${RUN_ID}"] [data-stage]`)?.textContent).toBe(
+      'Implementation',
+    );
+    // "Now: …" once on the desk and once in the Doing row — not a third time under the title.
+    expect(container.textContent?.split('Now: Reading files')).toHaveLength(3);
+  });
+
+  it('puts the ticket key and the stage on two nameplate lines, whole', async () => {
+    const { container } = renderPage(
+      fakeClient(state({ runs: [run({ ticket_key: 'AUT-1234', stage: 'conflict_resolution' })] })),
+    );
+    await screen.findByText('Runs on this machine');
+    const plate = container.querySelector(`[data-desk="${RUN_ID}"] [data-nameplate]`);
+    expect([...(plate?.children ?? [])].map((line) => line.textContent)).toEqual([
+      'AUT-1234',
+      'Conflict resolution',
+    ]);
+  });
+
+  it('shows what a tool call is about — its path — never its raw JSON input', async () => {
+    const { container } = renderPage(fakeClient(state()));
+    await screen.findByText('Runs on this machine');
+    const latest = container.querySelector('[aria-label="What the agent did last"]')?.textContent;
+    expect(latest).toContain('a.ts');
+    expect(latest).not.toContain('{"path"');
+  });
+
+  it('says a failed read in the page’s layout, as a sentence, with a Reload button', async () => {
+    const client = fakeClient(state());
+    client.state.mockRejectedValue(
+      new LocalCallError(200, 'unreadable', 'the worker’s answer is not one this page can read'),
+    );
+    renderPage(client);
+    const flash = await screen.findByText('The worker’s answer is not one this page can read');
+    expect(flash.closest('[data-flash="danger"]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'This worker' })).toBeTruthy();
   });
 
   it('renders the title as text, and says tokens and cost are not reported until they are', async () => {

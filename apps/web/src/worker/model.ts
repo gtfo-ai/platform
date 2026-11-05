@@ -82,8 +82,12 @@ export interface DeskView {
   readonly meta: ActivityMeta;
   /** "Now: Reading files", or the activity's word. Platform text. */
   readonly bubble: string;
-  /** "ACME-7 · Code review" — the ticket key is the tracker's text. */
-  readonly nameplate: string;
+  /**
+   * The nameplate's two lines: the ticket key (the tracker's text, `null` without one) above the
+   * stage's name — two lines rather than one joined line, which a desk's width cut short
+   * ("AUT-1234 · Implementati…", the UI-redesign review of PR #30).
+   */
+  readonly nameplate: { readonly ticket: string | null; readonly stage: string };
   readonly detail: string | null;
   readonly phase: BotPhase;
 }
@@ -120,7 +124,7 @@ export const deskOf = (run: WorkerLocalRun, state: WorkerLocalState, nowMs: numb
     meta,
     detail,
     bubble: run.cancel_requested ? 'Stopping…' : detail === null ? meta.label : `Now: ${detail}`,
-    nameplate: run.ticket_key === null ? stage : `${run.ticket_key} · ${stage}`,
+    nameplate: { ticket: run.ticket_key, stage },
     phase: botPhaseOf(run.run_id),
   };
 };
@@ -156,6 +160,24 @@ export const spendWords = (run: WorkerLocalRun): { tokens: string; cost: string 
   cost: run.cost_usd === null ? 'not reported yet' : `$${run.cost_usd.toFixed(2)}`,
 });
 
+/** The input fields that say what a tool call is about, in the order they are asked. */
+const SUMMARY_FIELDS = ['file_path', 'path', 'command', 'pattern', 'query', 'url', 'description'];
+
+/**
+ * What a tool call is about, as plain text: its path, its command or its query — never the raw
+ * JSON of its input (the UI-redesign review of PR #30). The first named field that holds a
+ * string, else the input's first string value, else nothing; one line, at most 160 characters.
+ * Deliberately not `viz/flow`'s `argumentSummary`: that module is lazy and stays out of this entry.
+ */
+export const argumentSummaryOf = (input: Readonly<Record<string, unknown>>): string => {
+  const named = SUMMARY_FIELDS.map((field) => input[field]).find(
+    (value): value is string => typeof value === 'string' && value.trim() !== '',
+  );
+  const any = Object.values(input).find((value): value is string => typeof value === 'string');
+  const text = (named ?? any ?? '').replace(/\s+/g, ' ').trim();
+  return text.length > 160 ? `${text.slice(0, 159)}…` : text;
+};
+
 export interface TailLine {
   readonly id: string;
   /** Platform text: what kind of entry it is. */
@@ -188,7 +210,7 @@ export const tailLinesOf = (run: WorkerLocalRun, limit = 12): TailLine[] => {
         lines.push({
           id: block.id,
           label: toolActivityLabel(block.toolName),
-          text: JSON.stringify(block.input).slice(0, 240),
+          text: argumentSummaryOf(block.input),
         });
         break;
       case 'progress':
