@@ -8,6 +8,11 @@ Populate the project's knowledge base with the context a senior colleague would 
 
 ## Flow (UI wizard, resumable, each step skippable)
 
+> **Amendment 2026-11-05 (TD-033 decision 9, S-23.8).** The wizard follows NN/g's wizard rules: optional steps (business
+> context, history) are skippable, while **Connect, technical discovery and How autonomous gate *Continue***, because the steps
+> after them read what they produce. A skipped optional step is not recorded (it shows as not done, BACKLOG 824). Every step
+> stays resumable and revisitable.
+
 ### Step 1 — Connect (required)
 Repository, task-management binding (Jira project + pick-up rule), Slack channel, observability bindings. The platform clones the repository and validates access.
 
