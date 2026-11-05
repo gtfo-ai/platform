@@ -33,10 +33,9 @@ export interface SettingsGroup<TId extends string = string> {
 export const ORG_SETTINGS_GROUPS = [
   {
     label: 'Personal',
-    sections: [
-      { id: 'appearance', label: 'Appearance' },
-      { id: 'session', label: 'Session' },
-    ],
+    // No Appearance: one dark theme (TD-033's 2026-11-05 amendment), so `/settings/appearance`
+    // is an unknown section and redirects to Session like any other.
+    sections: [{ id: 'session', label: 'Session' }],
   },
   {
     label: 'Organisation',
@@ -117,7 +116,7 @@ export const isOrgSectionFor = (
 
 /** The section `/settings` opens: the first one the caller may see. */
 export const firstOrgSection = (role: UserRole | undefined): OrgSettingsSectionId =>
-  orgSettingsGroupsFor(role)[0]?.sections[0]?.id ?? 'appearance';
+  orgSettingsGroupsFor(role)[0]?.sections[0]?.id ?? 'session';
 
 export const isProjectSection = (section: string): section is ProjectSettingsSectionId =>
   PROJECT_SETTINGS_GROUPS.some((group: SettingsGroup<ProjectSettingsSectionId>) =>

@@ -22,7 +22,7 @@ export const MetricStrip = ({
     aria-label={label}
     data-metric-strip=""
     className={cx(
-      'flex flex-wrap overflow-hidden rounded-md border border-line bg-canvas [&>*]:min-w-36 [&>*]:flex-1 [&>*]:border-line [&>*]:px-4 [&>*]:py-3 [&>*:not(:last-child)]:border-r',
+      'flex flex-wrap overflow-hidden rounded-md border border-line bg-default [&>*]:min-w-36 [&>*]:flex-1 [&>*]:border-line [&>*]:px-4 [&>*]:py-3 [&>*:not(:last-child)]:border-r',
       className,
     )}
   >

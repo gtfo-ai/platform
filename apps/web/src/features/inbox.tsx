@@ -220,7 +220,7 @@ const QuestionRow = ({
               value={text}
               onChange={(event) => setText(event.target.value)}
               className={cx(
-                'rounded-md border border-line-input bg-canvas px-3 py-2 text-sm text-fg',
+                'rounded-md border border-line-input bg-inset px-3 py-2 text-sm text-fg',
                 FOCUS_RING,
               )}
             />

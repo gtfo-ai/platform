@@ -1,12 +1,12 @@
 /**
  * The application shell — the frame of every signed-in screen (TD-033 § 1; research/19 § 5.1).
  *
- * **The top bar** is night in both themes (TD-033 § 2, the brand anchor the wordmark lives on): it
- * is a `data-theme="dark"` scope, so everything drawn in it reads the dark tokens whatever the
- * page's theme is. Left to right: the wordmark (Home); inside a project, `/ <name> ▾`, the
+ * **The top bar** is deep night (TD-033 § 2, the brand anchor the wordmark lives on), the page's own
+ * colour since TD-033's 2026-11-05 amendment, so its bottom border is what separates the two. Left
+ * to right: the wordmark (Home); inside a project, `/ <name> ▾`, the
  * breadcrumb that is also the project switcher; then the running indicator with the connection dot,
  * the `+` menu, the inbox with its count, and the avatar menu. Menus are Base UI's
- * (`ui/action-menu.tsx`) and portalled to `<body>`, so a menu itself is drawn in the page's theme.
+ * (`ui/action-menu.tsx`) and portalled to `<body>`, drawn on the card ground (`bg-default`).
  *
  * **The second row** is the organisation's UnderlineNav (`NAV`) outside a project; inside one, the
  * project's own layout (`app/project-frame.tsx`) draws its header and tabs instead, as a GitHub
@@ -21,20 +21,17 @@
 
 import type { ProjectSummary } from '@platform/contracts';
 import { DependabotIcon } from '@primer/octicons-react/DependabotIcon';
-import { DeviceDesktopIcon } from '@primer/octicons-react/DeviceDesktopIcon';
 import { GearIcon } from '@primer/octicons-react/GearIcon';
 import { GraphIcon } from '@primer/octicons-react/GraphIcon';
 import { HomeIcon } from '@primer/octicons-react/HomeIcon';
 import { InboxIcon } from '@primer/octicons-react/InboxIcon';
 import { LogIcon } from '@primer/octicons-react/LogIcon';
-import { MoonIcon } from '@primer/octicons-react/MoonIcon';
 import { PlayIcon } from '@primer/octicons-react/PlayIcon';
 import { PlugIcon } from '@primer/octicons-react/PlugIcon';
 import { PlusIcon } from '@primer/octicons-react/PlusIcon';
 import { RepoIcon } from '@primer/octicons-react/RepoIcon';
 import { ServerIcon } from '@primer/octicons-react/ServerIcon';
 import { SignOutIcon } from '@primer/octicons-react/SignOutIcon';
-import { SunIcon } from '@primer/octicons-react/SunIcon';
 import { TriangleDownIcon } from '@primer/octicons-react/TriangleDownIcon';
 import type { Icon } from '@primer/octicons-react/types';
 import { useQueryClient } from '@tanstack/react-query';
@@ -66,7 +63,6 @@ import { type BadgeTone, Button, cx, formatInteger } from '../ui/kit.js';
 import { Logo } from '../ui/logo.js';
 import type { NavBreakpoint, NavItem, NavLinkProps } from '../ui/nav-item.js';
 import { StatusIcon } from '../ui/status.js';
-import { type ThemePreference, useTheme } from '../ui/theme.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
@@ -163,21 +159,9 @@ export const connectionLabel = (
   }
 };
 
-/** The three choices, in the order the menu offers them. */
-export const THEME_CHOICES: readonly {
-  readonly value: ThemePreference;
-  readonly label: string;
-  readonly icon: ReactElement;
-}[] = [
-  { value: 'dark', label: 'Dark', icon: <MoonIcon size={16} /> },
-  { value: 'light', label: 'Light', icon: <SunIcon size={16} /> },
-  { value: 'system', label: 'System', icon: <DeviceDesktopIcon size={16} /> },
-];
-
 /**
- * The avatar menu: who is signed in, the theme (a radio group named "Theme"), and "Sign out". The
- * trigger is named "Account menu"; the theme and sign-out keep the names they had as a `<select>`
- * and a button, one "open the menu" step further in.
+ * The avatar menu: who is signed in and "Sign out". The trigger is named "Account menu"; there is
+ * no theme choice (one dark theme, TD-033's 2026-11-05 amendment).
  */
 const AccountMenu = ({
   user,
@@ -186,7 +170,6 @@ const AccountMenu = ({
   readonly user: SessionUser | null;
   readonly onSignOut: () => void;
 }): ReactElement => {
-  const { preference, setPreference } = useTheme();
   const name = user === null ? 'Not signed in' : displayName(user);
   return (
     <ActionMenu
@@ -214,14 +197,6 @@ const AccountMenu = ({
           </>
         )}
       </ActionMenuHeader>
-      <ActionMenuSeparator />
-      <ActionMenuRadioGroup label="Theme" value={preference} onValueChange={setPreference}>
-        {THEME_CHOICES.map((choice) => (
-          <ActionMenuRadioItem key={choice.value} value={choice.value} leadingIcon={choice.icon}>
-            {choice.label}
-          </ActionMenuRadioItem>
-        ))}
-      </ActionMenuRadioGroup>
       {user === null ? null : (
         <>
           <ActionMenuSeparator />
@@ -565,7 +540,7 @@ export const AppShell = (): ReactElement => {
 
   return (
     <div className="flex min-h-full flex-col">
-      <header data-theme="dark" className="border-b border-line bg-header text-fg">
+      <header className="border-b border-line bg-header text-fg">
         <div className="flex h-14 items-center gap-2 px-4 sm:px-6">
           <Link
             to="/"

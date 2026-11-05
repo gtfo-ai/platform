@@ -53,7 +53,7 @@ export const Dialog = ({
       <BaseDialog.Popup
         data-dialog-size={size}
         {...(initialFocus === undefined ? {} : { initialFocus })}
-        className={`fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-4rem)] ${size === 'lg' ? 'w-[min(60rem,calc(100vw-2rem))]' : 'w-[min(34rem,calc(100vw-2rem))]'} -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-line bg-canvas text-fg shadow-overlay outline-none`}
+        className={`fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-4rem)] ${size === 'lg' ? 'w-[min(60rem,calc(100vw-2rem))]' : 'w-[min(34rem,calc(100vw-2rem))]'} -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-line bg-default text-fg shadow-overlay outline-none`}
       >
         <div className="flex items-start gap-3 border-b border-line px-4 py-3">
           <div className="flex min-w-0 flex-1 flex-col gap-1">

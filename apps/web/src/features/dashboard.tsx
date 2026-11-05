@@ -590,7 +590,7 @@ const RailBox = ({
 }): ReactElement => (
   <section
     aria-label={label}
-    className="flex flex-col gap-3 rounded-md border border-line bg-canvas p-4"
+    className="flex flex-col gap-3 rounded-md border border-line bg-default p-4"
   >
     <h2 className="text-sm font-semibold text-fg">{title}</h2>
     {children}
@@ -739,7 +739,7 @@ const SetupBox = ({
       aria-label="Set up"
       data-home-box="setup"
       className={cx(
-        'flex flex-col gap-4 rounded-md border border-line bg-canvas',
+        'flex flex-col gap-4 rounded-md border border-line bg-default',
         size === 'page' ? 'p-6' : 'p-4',
       )}
     >

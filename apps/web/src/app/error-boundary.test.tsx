@@ -12,9 +12,10 @@
  *   route match and the route-level boundary (`defaultErrorComponent`) is what contains it. The
  *   assertion is that the navigation is *still on screen*, which is precisely what was not true
  *   before this change;
- * - a **`matchMedia`** that throws is called by `ThemeProvider`, which sits outside
- *   `RouterProvider`, so nothing the router installs can see it. The assertion is that the
- *   document still says something at all.
+ * - a **query client** whose `mount` throws is called by `QueryClientProvider`'s effect, which
+ *   sits outside `RouterProvider`, so nothing the router installs can see it. The assertion is that
+ *   the document still says something at all. (It was a throwing `matchMedia` under the theme
+ *   provider until S-23.17 removed theme switching, and with it the provider.)
  *
  * A third arrangement was tried and rejected as evidence: an `EventSource` factory that throws is
  * reached through `useTopics` **inside a screen**, so the route boundary catches it and it tests
@@ -23,6 +24,7 @@
  * Both are mutation-checked: deleting `defaultErrorComponent` kills the first, deleting the
  * `ErrorBoundary` from `app/app.tsx` kills the second.
  */
+import { QueryClient } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -274,23 +276,21 @@ describe('the application when a component throws', () => {
 
   it('does not go blank when a provider outside the router fails', async () => {
     openAt('/agents');
-    // A browser API that misbehaves, which is the shape of failure the router cannot see:
-    // `ThemeProvider` asks `matchMedia` for the OS preference while it renders, and it sits
-    // outside `RouterProvider`. (`localStorage` is *not* usable for this — `readStoredTheme`
-    // already catches a storage that throws, which is the right behaviour and no test of a
-    // boundary.)
-    vi.spyOn(globalThis, 'matchMedia').mockImplementation(() => {
-      throw new Error('matchMedia is not available');
+    // A provider that fails, which is the shape of failure the router cannot see:
+    // `QueryClientProvider` mounts its client in an effect, and it sits outside `RouterProvider`.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.spyOn(queryClient, 'mount').mockImplementation(() => {
+      throw new Error('the query cache is not available');
     });
     const onError = vi.fn();
-    const app = createApp({ fetchImpl, realtime: false, onError });
+    const app = createApp({ fetchImpl, realtime: false, onError, queryClient });
     const { container } = render(app.element);
 
     const fallback = await screen.findByTestId('error-fallback');
     // Nothing the router installs can reach this, so the area is the application's and the whole
     // tree — shell included — has been replaced by the fallback rather than by an empty document.
     expect(fallback.getAttribute('data-error-area')).toBe('application');
-    expect(fallback.textContent).toContain('matchMedia is not available');
+    expect(fallback.textContent).toContain('the query cache is not available');
     expect(container.textContent).not.toBe('');
     expect(screen.getByRole('button', { name: 'Reload the page' })).toBeTruthy();
     expect(onError).toHaveBeenCalledTimes(1);

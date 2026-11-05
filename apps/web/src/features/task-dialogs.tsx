@@ -116,7 +116,7 @@ export const useStageCommandForm = (
 
 export type StageCommandForm = ReturnType<typeof useStageCommandForm>;
 
-const INPUT = 'rounded-md border border-line bg-surface px-2 py-1 text-sm';
+const INPUT = 'rounded-md border border-line bg-inset px-2 py-1 text-sm';
 
 const StagePicker = ({ form }: { readonly form: StageCommandForm }): ReactElement => (
   // The label beside the select rather than around it, so its name is "Stage" and not the options.

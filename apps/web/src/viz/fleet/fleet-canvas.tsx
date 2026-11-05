@@ -144,7 +144,7 @@ const SeatNode = ({ data }: NodeProps<MapFlowNode>): ReactElement => {
               'rounded-full border px-1.5 text-[11px] font-medium',
               seat.state === 'revoked'
                 ? 'border-danger/40 bg-danger-bg text-danger'
-                : 'border-line bg-canvas text-fg-muted',
+                : 'border-line bg-default text-fg-muted',
             )}
           >
             {badge}

@@ -19,7 +19,6 @@ import { RealtimeProvider } from '../realtime/provider.js';
 import { createAppRouter, type RouterContext } from '../routes/tree.js';
 import { createTranscriptStore } from '../transcript/store.js';
 import { ErrorBoundary } from '../ui/error-boundary.js';
-import { ThemeProvider } from '../ui/theme.js';
 import { BUNDLE_COMMIT } from './build-commit.js';
 import { createPlatformVersionWatch, serverCommitReader } from './platform-version.js';
 import { type Services, ServicesProvider } from './services.js';
@@ -114,24 +113,22 @@ export const createApp = (options: CreateAppOptions = {}): App => {
       {...(options.onError === undefined ? {} : { onError: options.onError })}
     >
       <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          {/* The production policy has no nonce and no `'unsafe-inline'` (`apps/server/src/web/
-              csp.ts`), so no Base UI component may inject a `<style>` element: the few that would
-              (a scroll area, an aligned select) draw their styles from the stylesheet instead. */}
-          <CSPProvider disableStyleElements>
-            <ServicesProvider services={services}>
-              <RealtimeProvider
-                transcripts={transcripts}
-                enabled={options.realtime !== false}
-                {...(options.openStream === undefined ? {} : { openStream: options.openStream })}
-                updateSubscriptions={updateSubscriptions}
-                onReconnected={onReconnected}
-              >
-                <RouterProvider router={router} />
-              </RealtimeProvider>
-            </ServicesProvider>
-          </CSPProvider>
-        </ThemeProvider>
+        {/* The production policy has no nonce and no `'unsafe-inline'` (`apps/server/src/web/
+            csp.ts`), so no Base UI component may inject a `<style>` element: the few that would
+            (a scroll area, an aligned select) draw their styles from the stylesheet instead. */}
+        <CSPProvider disableStyleElements>
+          <ServicesProvider services={services}>
+            <RealtimeProvider
+              transcripts={transcripts}
+              enabled={options.realtime !== false}
+              {...(options.openStream === undefined ? {} : { openStream: options.openStream })}
+              updateSubscriptions={updateSubscriptions}
+              onReconnected={onReconnected}
+            >
+              <RouterProvider router={router} />
+            </RealtimeProvider>
+          </ServicesProvider>
+        </CSPProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   );

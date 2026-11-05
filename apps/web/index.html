@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="dark" />
     <title>Agentic platform</title>
   </head>
   <body>
     <!--
-      No inline theme bootstrap script on purpose: an inline <script> is the first thing a strict
-      Content-Security-Policy has to allow, and the theme is applied synchronously in main.tsx
-      before the first render instead (src/ui/theme.tsx).
+      No inline script on purpose: an inline <script> is the first thing a strict
+      Content-Security-Policy has to allow. There is one dark theme (TD-033's 2026-11-05
+      amendment), set by src/styles.css alone, so nothing has to run before the first paint.
     -->
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

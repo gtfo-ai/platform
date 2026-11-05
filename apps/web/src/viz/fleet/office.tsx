@@ -16,9 +16,9 @@
  * review · working: Reading files · worker jan-mbp". The drawings are `aria-hidden`; the bubble and
  * the nameplate are text. Pressing a desk opens the run's dialog, as on the map and in the list.
  *
- * **Always the dark brand room**, in both themes: the section is a `data-theme="dark"` scope (as the
- * top bar is), so its text reads the dark tokens on the night floor. `prefers-reduced-motion` gives
- * every bot its first frame (`animated={false}`, beside `bot.css`'s own media rule); each run's bot
+ * **The dark brand room**, on its own night floor, its text in the one dark theme's tokens (the
+ * scope it once needed went with theme switching). `prefers-reduced-motion` gives every bot its
+ * first frame (`animated={false}`, beside `bot.css`'s own media rule); each run's bot
  * takes the phase of its id, so a room of typing bots does not type in lockstep.
  *
  * A lazy chunk of its own (`features/agents.tsx` imports it with `import()`). Pure DOM and SVG: no
@@ -540,7 +540,6 @@ export const Office = ({
     <section
       aria-label="Office"
       data-office=""
-      data-theme="dark"
       data-motion={animated ? 'on' : 'reduced'}
       className="office flex flex-col gap-4 rounded-lg p-4 text-fg"
     >

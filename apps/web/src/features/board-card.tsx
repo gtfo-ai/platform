@@ -623,7 +623,7 @@ const ReturnDialog = ({
             onChange={(event) => {
               setStage(event.target.value);
             }}
-            className="h-8 rounded-md border border-line-input bg-canvas px-2 text-sm text-fg"
+            className="h-8 rounded-md border border-line-input bg-inset px-2 text-sm text-fg"
           >
             {stages.map((option) => (
               <option key={option} value={option}>
@@ -644,7 +644,7 @@ const ReturnDialog = ({
             }}
             rows={3}
             placeholder="What the stage should do differently"
-            className="rounded-md border border-line-input bg-canvas px-3 py-1.5 text-sm text-fg placeholder:text-fg-subtle"
+            className="rounded-md border border-line-input bg-inset px-3 py-1.5 text-sm text-fg placeholder:text-fg-subtle"
           />
         </div>
         {error === null ? null : <ErrorNotice title="The task was not returned." error={error} />}
@@ -687,7 +687,7 @@ export const TaskCard = ({ task, projectKey, projectId, may, agent, nowMs }: Tas
       data-agent-working={agentWorking(agent) ? 'true' : undefined}
       aria-label={sanitiseUntrusted(task.ticket.key)}
       className={cx(
-        'flex flex-col gap-2 rounded-lg border bg-canvas p-3 shadow-sm',
+        'flex flex-col gap-2 rounded-lg border bg-default p-3 shadow-sm',
         agentWorking(agent) ? 'border-running/60' : 'border-line',
       )}
     >

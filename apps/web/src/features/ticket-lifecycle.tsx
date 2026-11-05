@@ -300,7 +300,7 @@ const SlotRow = ({
         id={id}
         aria-invalid={refusal === undefined ? undefined : true}
         aria-describedby={`${id}-hint`}
-        className={`rounded-md border bg-surface px-2 py-1 text-sm ${
+        className={`rounded-md border bg-inset px-2 py-1 text-sm ${
           refusal === undefined ? 'border-line' : 'border-danger'
         }`}
         value={value}
@@ -347,7 +347,7 @@ const ReturnedRow = ({
         multiple
         aria-invalid={refusal === undefined ? undefined : true}
         aria-describedby={`${id}-hint`}
-        className={`rounded-md border bg-surface px-2 py-1 text-sm ${
+        className={`rounded-md border bg-inset px-2 py-1 text-sm ${
           refusal === undefined ? 'border-line' : 'border-danger'
         }`}
         value={[...value]}

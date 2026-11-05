@@ -59,9 +59,9 @@ export const Card = ({
   readonly header?: ReactNode;
 }): ReactElement =>
   header === undefined ? (
-    <div className={cx('rounded-lg border border-line bg-canvas p-4', className)}>{children}</div>
+    <div className={cx('rounded-lg border border-line bg-default p-4', className)}>{children}</div>
   ) : (
-    <div className="overflow-hidden rounded-lg border border-line bg-canvas">
+    <div className="overflow-hidden rounded-lg border border-line bg-default">
       <div className="flex min-h-11 items-center gap-3 border-b border-line bg-subtle px-4 py-2 text-sm font-semibold">
         {header}
       </div>
@@ -131,7 +131,7 @@ export const Field = ({ label, hint, id, ...rest }: FieldProps): ReactElement =>
       <input
         id={inputId}
         className={cx(
-          'h-8 rounded-md border border-line-input bg-canvas px-3 text-sm text-fg placeholder:text-fg-subtle',
+          'h-8 rounded-md border border-line-input bg-inset px-3 text-sm text-fg placeholder:text-fg-subtle',
           FOCUS_RING,
         )}
         {...(hint === undefined ? {} : { 'aria-describedby': hintId })}

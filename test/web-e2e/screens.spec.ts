@@ -305,11 +305,10 @@ test('settings opens its first section and shows the session, the user list and 
 }) => {
   // S-23.11b: one section per page, beside a NavList; the bare URL opens the first.
   await page.goto('/settings');
-  await expect(page).toHaveURL(/\/settings\/appearance$/);
-  // A browser that has never chosen gets the dark default (TD-033 § 2).
-  await expect(page.getByLabel('Theme preference')).toHaveValue('dark');
+  // One dark theme (TD-033's 2026-11-05 amendment): no Appearance section, so Session is first.
+  await expect(page).toHaveURL(/\/settings\/session$/);
+  await expect(page.getByLabel('Theme preference')).toHaveCount(0);
   const nav = page.getByRole('navigation', { name: 'Settings' });
-  await nav.getByRole('link', { name: 'Session' }).click();
   await expect(page.getByText('operator@example.invalid').first()).toBeVisible();
   await nav.getByRole('link', { name: 'Users' }).click();
   await expect(page.getByRole('list', { name: 'Users' }).getByText('Fake Operator')).toBeVisible();
@@ -582,12 +581,24 @@ test('the wizard’s step 1 maps the ticket lifecycle from the tracker’s own s
   });
 });
 
-test('the theme control switches the document theme', async ({ page }) => {
-  await page.goto('/settings');
-  await page.getByLabel('Theme preference').selectOption('dark');
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  await page.getByLabel('Theme preference').selectOption('light');
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+test('the retired Appearance URL lands on Session, and a box sits above the page', async ({
+  page,
+}) => {
+  await page.goto('/settings/appearance');
+  await expect(page).toHaveURL(/\/settings\/session$/);
+  await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
+  // TD-033's 2026-11-05 amendment: the page is the top bar's deep night, a card one step lighter.
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
+    'rgb(15, 13, 34)',
+  );
+  const nav = page.getByRole('navigation', { name: 'Settings' });
+  await nav.getByRole('link', { name: 'Users' }).click();
+  const users = page.getByRole('list', { name: 'Users' });
+  await expect(users).toBeVisible();
+  const box = users.locator('xpath=ancestor-or-self::*[contains(@class, "bg-default")][1]');
+  expect(await box.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
+    'rgb(21, 19, 43)',
+  );
 });
 
 test('the project panels render the vault, the proposals and the budget meter', async ({

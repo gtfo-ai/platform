@@ -149,7 +149,7 @@ export const typedValues = (
 // ── Controls ─────────────────────────────────────────────────────────────────
 
 const SELECT = cx(
-  'h-8 rounded-md border border-line-input bg-canvas px-2 text-sm text-fg',
+  'h-8 rounded-md border border-line-input bg-inset px-2 text-sm text-fg',
   FOCUS_RING,
 );
 

@@ -80,7 +80,7 @@ export const FeedbackForm = ({
             setText(event.target.value);
           }}
           placeholder="What was good or wrong about this work?"
-          className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
+          className="rounded-md border border-line bg-inset px-2 py-1 text-sm"
         />
         <Button type="submit" disabled={pending || text.trim() === ''}>
           Send feedback

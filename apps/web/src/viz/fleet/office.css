@@ -1,8 +1,8 @@
 /*
  * The office's room (`office.tsx`, TD-033 decision 8 (c)) — always the dark brand room: every
- * colour here is a brand token (`--signin-*`, `--brand-*`) or a semantic token read inside the
- * office's `data-theme="dark"` scope, and none is a base value of its own (`ui/contrast.test.ts`
- * keeps those in `styles.css`'s token blocks). Imported by the office's lazy chunk only.
+ * colour here is a brand token (`--signin-*`, `--brand-*`) or a semantic token of the one dark
+ * theme, and none is a base value of its own (`ui/contrast.test.ts`
+ * keeps those in `styles.css`'s token block). Imported by the office's lazy chunk only.
  *
  * The walls are night ink with a lit baseboard, the floor a quiet two-ink checker, a door plate is
  * a beacon sign with night letters (10.2:1), and the help desk glows beacon while somebody waits

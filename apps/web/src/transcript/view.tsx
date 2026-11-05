@@ -373,7 +373,7 @@ export const TranscriptView = ({
           }}
           placeholder="Search transcript"
           aria-label="Search transcript"
-          className="w-56 rounded-md border border-line bg-surface px-2 py-1 text-sm"
+          className="w-56 rounded-md border border-line bg-inset px-2 py-1 text-sm"
         />
         <Button
           tone={following ? 'primary' : 'default'}
@@ -398,7 +398,7 @@ export const TranscriptView = ({
         ref={scroller}
         data-testid="transcript-scroller"
         className={cx(
-          'flex min-h-0 flex-col gap-0.5 overflow-y-auto rounded-md border border-line bg-canvas py-1',
+          'flex min-h-0 flex-col gap-0.5 overflow-y-auto rounded-md border border-line bg-default py-1',
           scrollerClassName ?? 'flex-1',
         )}
         onScroll={(event) => {

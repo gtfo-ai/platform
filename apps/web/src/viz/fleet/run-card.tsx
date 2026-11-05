@@ -119,7 +119,7 @@ export const FleetRunCard = ({
               'self-start truncate rounded-full border px-2 py-px text-[11px] font-medium',
               run.meta.tone === 'running'
                 ? 'border-running/40 bg-running-bg text-running'
-                : 'border-line bg-canvas text-fg-muted',
+                : 'border-line bg-default text-fg-muted',
             )}
           >
             {`Now: ${run.activity.detail}`}
@@ -139,7 +139,7 @@ export const FleetRunCard = ({
       </span>
       {run.phases.length === 0 ? null : <PhaseTrack stages={run.phases} size="sm" />}
       <span className="mt-auto flex min-w-0 items-center gap-1.5 text-[11px] text-fg-muted">
-        <span className="truncate rounded border border-line bg-canvas px-1 font-mono">
+        <span className="truncate rounded border border-line bg-default px-1 font-mono">
           {model}
         </span>
         <span className="shrink-0 tabular-nums">{elapsed}</span>

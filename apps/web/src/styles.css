@@ -2,31 +2,28 @@
  * Theme tokens and the one Tailwind entry point (technical/09 § "Accessibility, theming, i18n",
  * TD-033 § 2: GitHub's grammar in the sign-in page's colours).
  *
- * Dark (the default) / light / system through CSS variables and `color-scheme`. The selected theme
- * is written to `<html data-theme>` by `ui/theme.tsx`; `system` writes the resolved value, so every
- * rule below has exactly one selector to look at and nothing depends on a media query at render
- * time. `[data-theme="dark"]` is also a scope: the sign-in page sets it on its own wrapper.
+ * **One theme, dark** (TD-033's amendment of 2026-11-05, the product owner's decision): no light
+ * theme, no `system` option, no `data-theme` switching. `color-scheme: dark` is set on the root, so
+ * form controls, scrollbars and the browser's own UI are dark too.
  *
- * Three blocks, and **base hex values appear in these three blocks only** (`ui/contrast.test.ts`
- * holds that, and computes the WCAG ratio of every declared pair in both themes):
+ * **Base hex values appear in the one `:root` block only** (`ui/contrast.test.ts` holds that, and
+ * computes the WCAG ratio of every declared pair): the brand palette (`--brand-*`), the sign-in
+ * page's `--signin-*` aliased onto it, and the semantic tokens. The layers, darkest first:
  *
- * 1. `:root` — the brand palette (`--brand-*`), the sign-in page's `--signin-*` aliased onto it, and
- *    the top bar, which is night in **both** themes (the brand anchor; the wordmark lives on it).
- * 2. `:root, [data-theme="dark"]` — the Primer-tier semantic tokens for dark.
- * 3. `[data-theme="light"]` — the same names for light. It must declare every name block 2 does:
- *    `<html data-theme="light">` matches `:root` too, so a name it forgot would silently be dark.
+ * - the page (`--bg-canvas`) is deep night, the top bar's own colour (`--bg-header`); the top bar is
+ *   separated from it by its bottom border, as on GitHub's dark dimmed theme;
+ * - the inputs' fill (`--bg-inset`) is deep night too, so a field reads as sunk into a card;
+ * - cards, boxes, list boxes, dialogs and menus (`--bg-default`) sit one step lighter, on night;
+ * - box header rows (`--bg-subtle`) are ink, and the hover state (`--bg-muted`) one step above.
  *
- * `@theme inline` maps Tailwind's utilities onto the semantic variables rather than onto literals,
- * which is what makes `bg-canvas` mean something different under each theme. The utility names
- * that existed before TD-033 (`bg-surface`, `bg-surface-muted`, `border-line`, `text-fg-muted`,
- * `text-accent`, `bg-warning/20`, …) are kept as aliases of the new tokens, so every screen took
- * the new look without an edit.
+ * `@theme inline` maps Tailwind's utilities onto the semantic variables rather than onto literals.
+ * The utility names that existed before TD-033 (`bg-surface`, `bg-surface-muted`, `border-line`,
+ * `text-fg-muted`, `text-accent`, `bg-warning/20`, …) are kept as aliases of the new tokens, so every
+ * screen took the new look without an edit.
  */
 @import "tailwindcss";
 /* The office bot's motion (`ui/bot/`), beside its components so the worker entry can share it. */
 @import "./ui/bot/bot.css";
-
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /*
  * Inter Variable, self-hosted (TD-033 § 3): the latin subset of `@fontsource-variable/inter`
@@ -49,11 +46,13 @@
 
 /*
  * The brand palette (the sign-in page's, WP-291, plus deep night and hover from TD-033 § 2). The
- * sign-in page reads `--signin-*`, which are now aliases of the palette: the values are the ones
- * WP-291 measured (text on night 15.2:1, muted on night 7.5:1, night on beacon 10.2:1, the field's
- * edge 4.1:1 on its night fill), and the dark theme reads the same palette, so the two cannot drift.
+ * sign-in page reads `--signin-*`, which are aliases of the palette: the values are the ones WP-291
+ * measured (text on night 15.2:1, muted on night 7.5:1, night on beacon 10.2:1, the field's edge
+ * 4.1:1 on its night fill), and the semantic tokens read the same palette, so the two cannot drift.
  */
 :root {
+  color-scheme: dark;
+
   --brand-deep-night: #0f0d22;
   --brand-night: #15132b;
   --brand-ink: #1f1c3d;
@@ -74,29 +73,13 @@
   --signin-muted: var(--brand-muted);
   --signin-beacon: var(--brand-beacon);
 
-  /*
-   * The top bar: night in both themes. It is a `data-theme="dark"` scope (`app/shell.tsx`), so what
-   * is drawn on it reads the dark tokens; this ground is the one name the light block never sets.
-   */
+  /* The top bar and the page share deep night; the bar's bottom border separates them. */
   --bg-header: var(--brand-deep-night);
-
-  /* Avatars: initials in night on a pastel of the lavender/amber family, the same in both themes. */
-  --avatar-fg: var(--brand-night);
-  --avatar-1: var(--brand-lavender);
-  --avatar-2: var(--brand-beacon);
-  --avatar-3: #d3a6ff;
-  --avatar-4: #8fd6c4;
-  --avatar-5: #f5a8c4;
-  --avatar-6: #a9c6ff;
-}
-
-:root,
-[data-theme="dark"] {
-  color-scheme: dark;
-  --bg-canvas: var(--brand-night);
+  --bg-canvas: var(--brand-deep-night);
+  --bg-inset: var(--brand-deep-night);
+  --bg-default: var(--brand-night);
   --bg-subtle: var(--brand-ink);
   --bg-muted: var(--brand-hover);
-  --bg-inset: var(--brand-deep-night);
   --border-default: var(--brand-lit);
   --border-muted: #2c2856;
   --border-input: var(--brand-edge);
@@ -122,40 +105,15 @@
   --running-bg: #3a2c26;
   --focus-ring: var(--brand-lavender);
   --shadow-overlay: 0 8px 24px rgb(8 6 24 / 0.55), 0 0 0 1px var(--border-default);
-}
 
-[data-theme="light"] {
-  color-scheme: light;
-  --bg-canvas: #ffffff;
-  --bg-subtle: #f6f5fb;
-  --bg-muted: #ecebf5;
-  --bg-inset: #f1f0f8;
-  --border-default: #dcd9ec;
-  --border-muted: #ebe9f4;
-  --border-input: #807ba8;
-  --fg-default: #1b1838;
-  --fg-muted: #5c5785;
-  --fg-subtle: #66618b;
-  --fg-link: #5646d6;
-  --fg-on-emphasis: #ffffff;
-  /* The beacon underline is 1.8:1 on white; this darker amber is the light theme's (≥ 3:1). */
-  --accent-selected: #b7791f;
-  --action-primary-bg: var(--brand-beacon);
-  --action-primary-hover: #f0aa45;
-  --action-primary-border: #d9993f;
-  --action-primary-fg: var(--brand-night);
-  --success-fg: #1a7f37;
-  --success-bg: #dafbe1;
-  --danger-fg: #cf222e;
-  --danger-bg: #ffebe9;
-  --attention-fg: #875b00;
-  --attention-bg: #fff8c5;
-  --done-fg: #8250df;
-  --done-bg: #fbefff;
-  --running-fg: #9a5c00;
-  --running-bg: #fff1dc;
-  --focus-ring: #5646d6;
-  --shadow-overlay: 0 8px 24px rgb(27 24 56 / 0.16), 0 0 0 1px var(--border-default);
+  /* Avatars: initials in night on a pastel of the lavender/amber family. */
+  --avatar-fg: var(--brand-night);
+  --avatar-1: var(--brand-lavender);
+  --avatar-2: var(--brand-beacon);
+  --avatar-3: #d3a6ff;
+  --avatar-4: #8fd6c4;
+  --avatar-5: #f5a8c4;
+  --avatar-6: #a9c6ff;
 }
 
 @theme {
@@ -186,6 +144,7 @@
   /* The semantic tokens (TD-033 § 2). */
   --color-header: var(--bg-header);
   --color-canvas: var(--bg-canvas);
+  --color-default: var(--bg-default);
   --color-subtle: var(--bg-subtle);
   --color-muted: var(--bg-muted);
   --color-inset: var(--bg-inset);
@@ -223,7 +182,7 @@
   --shadow-overlay: var(--shadow-overlay);
 
   /* The names every screen used before TD-033, aliased so none of them needed an edit. */
-  --color-surface: var(--bg-canvas);
+  --color-surface: var(--bg-default);
   --color-surface-muted: var(--bg-subtle);
   --color-accent: var(--fg-link);
   --color-accent-fg: var(--fg-on-emphasis);

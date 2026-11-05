@@ -142,7 +142,7 @@ export const StatisticsScreen = (): ReactElement => {
         actions={
           <>
             <select
-              className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
+              className="rounded-md border border-line bg-inset px-2 py-1 text-sm"
               value={range}
               onChange={(event) => setRange(event.target.value as (typeof RANGES)[number])}
               aria-label="Range"
@@ -154,7 +154,7 @@ export const StatisticsScreen = (): ReactElement => {
               ))}
             </select>
             <select
-              className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
+              className="rounded-md border border-line bg-inset px-2 py-1 text-sm"
               value={bucket}
               onChange={(event) => setBucket(event.target.value as (typeof BUCKETS)[number])}
               aria-label="Bucket"

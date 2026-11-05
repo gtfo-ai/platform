@@ -334,7 +334,7 @@ const RetryDialog = ({
             onChange={(event) => {
               setEffort(event.target.value as Effort);
             }}
-            className="rounded-md border border-line bg-surface px-2 py-1 text-sm text-fg"
+            className="rounded-md border border-line bg-inset px-2 py-1 text-sm text-fg"
           >
             <option value="">{configuredLabel(record.retry_defaults?.effort ?? null)}</option>
             <option value="low">low</option>
@@ -728,7 +728,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                       setSteer(event.target.value);
                     }}
                     placeholder="Send a message to the running agent…"
-                    className="flex-1 rounded-md border border-line bg-surface px-2 py-1 text-sm"
+                    className="flex-1 rounded-md border border-line bg-inset px-2 py-1 text-sm"
                   />
                   <Button
                     type="submit"

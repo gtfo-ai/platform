@@ -3,8 +3,8 @@
  * of sections (`features/settings-sections.ts`) and one section per page at `/settings/<section>`,
  * each with one Save where it writes anything (research/19 § 5.2):
  *
- *  - **Personal** — *Appearance* (the theme, this browser's own choice, applied as it is picked) and
- *    *Session* (who is signed in, with which role);
+ *  - **Personal** — *Session* (who is signed in, with which role); there is no *Appearance*, since
+ *    the application has one dark theme (TD-033's 2026-11-05 amendment);
  *  - **Organisation** — *Policies* (the command, autonomy and WIP maximums) and *Notifications*
  *    (quiet hours, digest, the default chat account), the two halves of the organisation settings
  *    document (`features/org-settings.tsx`, `GET/PATCH /api/org`, WP-93), and *Budgets* — BD-010's
@@ -42,7 +42,6 @@ import { Badge, ErrorNotice, formatDateTime, Loading } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
 import { StatusIcon } from '../ui/status.js';
-import { type ThemePreference, useTheme } from '../ui/theme.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { DeadLetters } from './dead-letters.js';
 import { FailedJobs } from './failed-jobs.js';
@@ -51,44 +50,6 @@ import { Budgets } from './operating-mode.js';
 import { OrganisationNotifications, OrganisationPolicies } from './org-settings.js';
 import { SettingsFrame, SettingsSectionHeader } from './settings-frame.js';
 import { type OrgSettingsSectionId, orgSettingsGroupsFor } from './settings-sections.js';
-
-const THEME_LABEL: Readonly<Record<ThemePreference, string>> = {
-  system: 'Same as the system',
-  light: 'Light',
-  dark: 'Dark',
-};
-
-const Appearance = (): ReactElement => {
-  const { preference, resolved, setPreference } = useTheme();
-  return (
-    <>
-      <SettingsSectionHeader
-        title="Appearance"
-        description="How this application looks in this browser. A choice applies as you pick it, and is kept in this browser only."
-      />
-      <label className="flex w-fit flex-col gap-1 text-sm">
-        Theme
-        <select
-          aria-label="Theme preference"
-          value={preference}
-          onChange={(event) => {
-            setPreference(event.target.value as ThemePreference);
-          }}
-          className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
-        >
-          {(['system', 'light', 'dark'] as const).map((option) => (
-            <option key={option} value={option}>
-              {THEME_LABEL[option]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <p className="text-xs text-fg-muted">
-        {`Showing the ${resolved === 'dark' ? 'dark' : 'light'} theme.`}
-      </p>
-    </>
-  );
-};
 
 const Session = (): ReactElement => {
   const session = useSession();
@@ -253,7 +214,6 @@ const Instance = (): ReactElement => {
 };
 
 const SECTION: Readonly<Record<OrgSettingsSectionId, () => ReactElement>> = {
-  appearance: Appearance,
   session: Session,
   policies: () => (
     <>

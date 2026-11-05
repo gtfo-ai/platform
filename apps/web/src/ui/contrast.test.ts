@@ -1,22 +1,22 @@
 /**
- * The colour tokens' contrast, enforced rather than remembered (TD-033 § 2).
+ * The colour tokens' contrast, enforced rather than remembered (TD-033 § 2 and its 2026-11-05
+ * amendment: one dark theme, the page darker than its cards).
  *
- * technical/09 used to carry hand-measured ratios; this computes them. It parses `styles.css`,
- * resolves each theme the way the cascade does — `:root` (the palette and the top bar), then
- * `:root, [data-theme="dark"]`, then, for light, `[data-theme="light"]` on top, because
- * `<html data-theme="light">` matches `:root` as well — and asks WCAG 2.2's question of every pair
- * declared below:
+ * technical/09 used to carry hand-measured ratios; this computes them. It parses `styles.css`'s one
+ * `:root` block, resolves every `var(--x)` the way the cascade does, and asks WCAG 2.2's question of
+ * every pair declared below:
  *
- * - **4.5:1** for text (1.4.3): every foreground a screen writes text in, on every ground it sits on;
+ * - **4.5:1** for text (1.4.3): every foreground a screen writes text in, on **both** grounds a
+ *   screen has — the page (`--bg-canvas`) and the card (`--bg-default`) — and on the header rows,
+ *   hover state and inputs' fill that sit on them;
  * - **3:1** for the non-text pairs (1.4.11): the input border, the focus ring, the selected-tab
  *   underline and the status icons, against the grounds they are drawn on.
  *
  * The pair list is the policy. A token that regresses fails here by name; a new token that a screen
  * writes text in belongs in the list. Two structural checks keep the parse honest (standing rule 4):
- * both themes must resolve every token the pairs name to a hex value, and the light block must
- * re-declare every name the dark block declares, or it would silently inherit dark. The checker
- * itself is calibrated against a planted regression, so "no failures" cannot be the reading of a
- * checker that checks nothing.
+ * every token the pairs name must resolve to a hex value, and no `[data-theme]` rule may come back.
+ * The checker itself is calibrated against a planted regression, so "no failures" cannot be the
+ * reading of a checker that checks nothing.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -52,21 +52,8 @@ const declarationsOf = (css: string, selector: string): Map<string, string> => {
   return found;
 };
 
-const SELECTORS = {
-  root: ':root',
-  dark: ':root,\n[data-theme="dark"]',
-  light: '[data-theme="light"]',
-} as const;
-
-const themesOf = (css: string): { readonly dark: Tokens; readonly light: Tokens } => {
-  const root = declarationsOf(css, SELECTORS.root);
-  const dark = declarationsOf(css, SELECTORS.dark);
-  const light = declarationsOf(css, SELECTORS.light);
-  return {
-    dark: new Map([...root, ...dark]),
-    light: new Map([...root, ...dark, ...light]),
-  };
-};
+/** The one theme: `:root` holds the palette and every semantic token (TD-033's 2026-11-05 amendment). */
+const tokensOf = (css: string): Tokens => declarationsOf(css, ':root');
 
 /** A token's value with every `var(--x)` resolved; `undefined` when it does not end in a hex. */
 const resolve = (tokens: Tokens, name: string, depth = 0): string | undefined => {
@@ -105,7 +92,10 @@ const text = (fgs: readonly string[], bgs: readonly string[]): Pair[] =>
 const nonText = (fgs: readonly string[], bgs: readonly string[]): Pair[] =>
   fgs.flatMap((fg) => bgs.map((bg) => ({ fg, bg, min: 3 as const })));
 
-const GROUNDS = ['--bg-canvas', '--bg-subtle', '--bg-muted'] as const;
+/** The two grounds every screen has: the page and the card (TD-033's 2026-11-05 amendment). */
+const PAGE_AND_CARD = ['--bg-canvas', '--bg-default'] as const;
+/** What sits on them: box header rows and selected rows, the hover state, the inputs' fill. */
+const GROUNDS = [...PAGE_AND_CARD, '--bg-subtle', '--bg-muted', '--bg-inset'] as const;
 const STATUSES = ['success', 'danger', 'attention', 'done', 'running'] as const;
 const AVATARS = [
   '--avatar-1',
@@ -120,13 +110,12 @@ const AVATARS = [
 const PAIRS: readonly Pair[] = [
   // Body text, muted text, placeholders and links on every ground a row can have.
   ...text(['--fg-default', '--fg-muted', '--fg-subtle', '--fg-link'], GROUNDS),
-  ...text(['--fg-default', '--fg-muted'], ['--bg-inset']),
   // The beacon button, and text on the link colour used as a fill (`bg-accent text-accent-fg`).
   ...text(['--action-primary-fg'], ['--action-primary-bg', '--action-primary-hover']),
   ...text(['--fg-on-emphasis'], ['--fg-link']),
-  // Status words (StateLabel, Flash, Badge): on the page, on a box header, and on their own tint.
+  // Status words (StateLabel, Flash, Badge): on the page, on a card, on a box header, on their tint.
   ...STATUSES.flatMap((status) =>
-    text([`--${status}-fg`], ['--bg-canvas', '--bg-subtle', `--${status}-bg`]),
+    text([`--${status}-fg`], [...PAGE_AND_CARD, '--bg-subtle', `--${status}-bg`]),
   ),
   // A Flash's title and body sit on its tint.
   ...text(
@@ -138,14 +127,11 @@ const PAIRS: readonly Pair[] = [
   // Non-text: a field's edge, the focus ring and the selected underline on what they border.
   ...nonText(
     ['--border-input', '--focus-ring', '--accent-selected'],
-    ['--bg-canvas', '--bg-subtle'],
+    [...PAGE_AND_CARD, '--bg-subtle', '--bg-inset'],
   ),
 ];
 
-/**
- * The top bar is a `data-theme="dark"` scope in both themes (`app/shell.tsx`), so what is drawn on
- * its night ground is the dark tokens' — checked against the dark theme only, where they resolve.
- */
+/** What is drawn on the top bar's ground (`app/shell.tsx`). */
 const HEADER_PAIRS: readonly Pair[] = [
   ...text(['--fg-default', '--fg-muted', '--fg-link'], ['--bg-header', '--bg-subtle']),
   ...STATUSES.flatMap((status) => text([`--${status}-fg`], ['--bg-header', `--${status}-bg`])),
@@ -166,33 +152,28 @@ const failures = (tokens: Tokens, pairs: readonly Pair[]): string[] =>
       : [`${pair.fg} ${fg} on ${pair.bg} ${bg}: ${ratio.toFixed(2)}:1 < ${pair.min}:1`];
   });
 
-const THEMES = themesOf(CSS);
+const TOKENS = tokensOf(CSS);
 
-describe('the colour tokens (TD-033 § 2)', () => {
-  it('parses all three token blocks', () => {
+describe('the colour tokens (TD-033 § 2, one dark theme)', () => {
+  it('parses the token block', () => {
     // An empty parse would report no failures for ever.
-    expect(declarationsOf(CSS, SELECTORS.root).size).toBeGreaterThan(20);
-    expect(declarationsOf(CSS, SELECTORS.dark).size).toBeGreaterThan(25);
-    expect(declarationsOf(CSS, SELECTORS.light).size).toBeGreaterThan(25);
+    expect(TOKENS.size).toBeGreaterThan(50);
     expect(PAIRS.length).toBeGreaterThan(50);
   });
 
-  it('declares in the light block every name the dark block declares', () => {
-    const dark = [...declarationsOf(CSS, SELECTORS.dark).keys()].sort();
-    const light = [...declarationsOf(CSS, SELECTORS.light).keys()].sort();
-    expect(light).toEqual(dark);
+  it('has one theme: no `[data-theme]` rule, and `color-scheme: dark` on the root', () => {
+    expect(withoutComments(CSS)).not.toMatch(/data-theme/);
+    expect(withoutComments(CSS)).not.toMatch(/prefers-color-scheme/);
+    expect(/:root\s*\{[^}]*color-scheme:\s*dark;/.test(withoutComments(CSS))).toBe(true);
   });
 
-  it.each(['dark', 'light'] as const)(
-    'meets 4.5:1 for text and 3:1 for the rest in %s',
-    (theme) => {
-      expect(failures(THEMES[theme], PAIRS)).toEqual([]);
-    },
-  );
+  it('meets 4.5:1 for text and 3:1 for the rest, on the page and on a card', () => {
+    expect(failures(TOKENS, PAIRS)).toEqual([]);
+  });
 
-  it('meets the same bars on the top bar, which is a dark scope in both themes', () => {
+  it('meets the same bars on the top bar', () => {
     expect(HEADER_PAIRS.length).toBeGreaterThan(10);
-    expect(failures(THEMES.dark, HEADER_PAIRS)).toEqual([]);
+    expect(failures(TOKENS, HEADER_PAIRS)).toEqual([]);
   });
 
   it('keeps the sign-in palette at the values WP-291 measured', () => {
@@ -200,7 +181,7 @@ describe('the colour tokens (TD-033 § 2)', () => {
       Object.fromEntries(
         ['night', 'ink', 'lit', 'edge', 'text', 'muted', 'beacon'].map((name) => [
           name,
-          resolve(THEMES.dark, `--signin-${name}`),
+          resolve(TOKENS, `--signin-${name}`),
         ]),
       ),
     ).toEqual({
@@ -214,39 +195,55 @@ describe('the colour tokens (TD-033 § 2)', () => {
     });
   });
 
-  it('draws the dark theme in the brand palette and the top bar night in both themes', () => {
-    expect(resolve(THEMES.dark, '--bg-canvas')).toBe('#15132b');
-    expect(resolve(THEMES.dark, '--bg-subtle')).toBe('#1f1c3d');
-    expect(resolve(THEMES.dark, '--action-primary-bg')).toBe('#f4b860');
-    expect(resolve(THEMES.light, '--bg-canvas')).toBe('#ffffff');
-    for (const theme of [THEMES.dark, THEMES.light]) {
-      expect(resolve(theme, '--bg-header')).toBe('#0f0d22');
-    }
+  it("puts the page on the top bar's deep night and the cards one step lighter", () => {
+    expect(resolve(TOKENS, '--bg-header')).toBe('#0f0d22');
+    expect(resolve(TOKENS, '--bg-canvas')).toBe('#0f0d22');
+    expect(resolve(TOKENS, '--bg-default')).toBe('#15132b');
+    expect(resolve(TOKENS, '--bg-subtle')).toBe('#1f1c3d');
+    expect(resolve(TOKENS, '--bg-muted')).toBe('#29254d');
+    expect(resolve(TOKENS, '--action-primary-bg')).toBe('#f4b860');
+    // The order is the point: each layer is lighter than the one it sits on.
+    const layers = ['--bg-canvas', '--bg-default', '--bg-subtle', '--bg-muted'].map((name) =>
+      luminance(resolve(TOKENS, name) ?? '#000000'),
+    );
+    expect(layers).toEqual([...layers].sort((a, b) => a - b));
+    expect(new Set(layers).size).toBe(layers.length);
   });
 
-  it('keeps base hex values inside the token blocks', () => {
-    const blocks = [SELECTORS.root, SELECTORS.dark, SELECTORS.light].map((selector) =>
-      [...declarationsOf(CSS, selector).values()].join(';'),
-    );
+  it('maps the cards and the pre-TD-033 surface alias onto the card ground', () => {
+    // `bg-surface` (the error boundary's card, the office nameplate) and `bg-default` (Box, Card,
+    // ListBox, dialogs, menus) must not read the page colour, or the cards vanish into the page.
+    expect(withoutComments(CSS)).toMatch(/--color-surface:\s*var\(--bg-default\);/);
+    expect(withoutComments(CSS)).toMatch(/--color-default:\s*var\(--bg-default\);/);
+  });
+
+  it('keeps base hex values inside the token block', () => {
+    const inBlock = [...declarationsOf(CSS, ':root').values()].join(';');
     const everywhere = withoutComments(CSS).match(/#[0-9a-f]{3,8}\b/gi) ?? [];
-    const inBlocks = blocks.join(';').match(/#[0-9a-f]{3,8}\b/gi) ?? [];
+    const declared = inBlock.match(/#[0-9a-f]{3,8}\b/gi) ?? [];
     expect(everywhere.length).toBeGreaterThan(0);
-    expect(everywhere.length).toBe(inBlocks.length);
+    expect(everywhere.length).toBe(declared.length);
   });
 
   it('is a checker that can fail: a planted regression is reported by name', () => {
-    // Lavender links on a white page (2.2:1): the calibration for the two cases above.
-    const planted = CSS.replace('--fg-link: #5646d6;', '--fg-link: #b3a8ff;');
+    // Subtle text dimmed to the border colour: 1.6:1 on the page.
+    const planted = CSS.replace('--fg-subtle: #9893c4;', '--fg-subtle: #3a3570;');
     expect(planted).not.toBe(CSS);
-    const found = failures(themesOf(planted).light, PAIRS);
-    expect(found.some((line) => line.startsWith('--fg-link #b3a8ff on --bg-canvas #ffffff'))).toBe(
-      true,
-    );
-    // And the beacon underline, 1.8:1 on white, fails the 3:1 rule.
-    const underline = CSS.replace('--accent-selected: #b7791f;', '--accent-selected: #f4b860;');
-    expect(failures(themesOf(underline).light, PAIRS)).toContain(
-      '--accent-selected #f4b860 on --bg-canvas #ffffff: 1.77:1 < 3:1',
-    );
+    const found = failures(tokensOf(planted), PAIRS);
+    expect(
+      found.some((line) => line.startsWith('--fg-subtle #3a3570 on --bg-canvas #0f0d22')),
+    ).toBe(true);
+    expect(
+      found.some((line) => line.startsWith('--fg-subtle #3a3570 on --bg-default #15132b')),
+    ).toBe(true);
+    // And an input edge at the border colour fails the 3:1 rule on a card.
+    const edge = CSS.replace('--border-input: var(--brand-edge);', '--border-input: #2c2856;');
+    expect(edge).not.toBe(CSS);
+    expect(
+      failures(tokensOf(edge), PAIRS).some((line) =>
+        line.startsWith('--border-input #2c2856 on --bg-default #15132b'),
+      ),
+    ).toBe(true);
   });
 
   it('computes the WCAG ratio (reference values)', () => {

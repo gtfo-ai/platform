@@ -350,7 +350,7 @@ const TERMINAL_TONE: Readonly<Record<TerminalLine['tone'], string>> = {
  * A run's log as terminal lines (the flow canvas's stage dialog, S-23.5): one `<span>` per line, the
  * text with ANSI sequences stripped and then the character filter applied, exactly as
  * `TerminalText` does — never interpreted, never linkified. The same dark palette as
- * `TerminalText`, so a log reads as a terminal in both themes.
+ * `TerminalText`, so a log reads as a terminal.
  */
 export const TerminalLines = ({
   lines,

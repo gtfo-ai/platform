@@ -1,10 +1,10 @@
 /*
  * The flow canvas in the platform's tokens (TD-033 decision 8 (a)): React Flow's own variables
- * pointed at the semantic tokens of `styles.css`, so the canvas follows the theme without a second
- * palette — a dotted ground on the canvas colour, controls like the rest of the kit, dashed
+ * pointed at the semantic tokens of `styles.css`, so the canvas needs no second
+ * palette — a dotted ground on the page colour, controls like the rest of the kit, dashed
  * connectors. Imported by `flow-canvas.tsx` only, so it travels in the canvas's lazy chunk beside
  * `@xyflow/react/dist/style.css`, and it holds no base colour of its own (`ui/contrast.test.ts`
- * keeps those in `styles.css`'s token blocks).
+ * keeps those in `styles.css`'s token block).
  */
 .agentic-flow .react-flow {
   --xy-background-color: var(--bg-canvas);

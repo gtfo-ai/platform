@@ -1,20 +1,18 @@
 /**
- * The top bar's account menu (TD-033 § 5) — the shell's theme `<select>` and its sign-out button,
- * moved behind one Base UI menu. Driven through `createApp` with a fake server, so the real shell,
- * theme provider and auth client are in the path:
+ * The top bar's account menu (TD-033 § 5) — who is signed in and the sign-out button, behind one
+ * Base UI menu. Driven through `createApp` with a fake server, so the real shell and auth client are
+ * in the path:
  *
  * - the trigger is named "Account menu" and the menu says who is signed in, with the role;
- * - "Theme" is a radio group of Dark / Light / System whose choice reaches `<html data-theme>`
- *   and is remembered;
- * - "Sign out" signs out and returns to the sign-in page;
- * - the top bar itself is a dark scope in both themes.
+ * - there is no theme choice: one dark theme (TD-033's 2026-11-05 amendment), and nothing writes
+ *   `<html data-theme>` or remembers a theme in `localStorage`;
+ * - "Sign out" signs out and returns to the sign-in page.
  */
 import { QueryClient } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionResponse } from '../auth/session.js';
-import { THEME_STORAGE_KEY } from '../ui/theme.js';
 import { createApp } from './app.js';
 
 const SESSION: SessionResponse = {
@@ -77,25 +75,17 @@ describe('the account menu', () => {
     expect(menu.textContent).toContain('Role: maintainer');
   });
 
-  it('chooses the theme from a radio group, starting at the dark default', async () => {
+  it('offers no theme choice and writes no theme anywhere', async () => {
     const user = userEvent.setup();
     start({ signedIn: true, signOuts: 0 });
     await user.click(await screen.findByRole('button', { name: 'Account menu' }));
-    const theme = await screen.findByRole('group', { name: 'Theme' });
-    const choices = within(theme).getAllByRole('menuitemradio');
-    expect(choices.map((choice) => choice.textContent)).toEqual(['Dark', 'Light', 'System']);
-    expect(
-      within(theme).getByRole('menuitemradio', { name: 'Dark' }).getAttribute('aria-checked'),
-    ).toBe('true');
-    expect(document.documentElement.dataset['theme']).toBe('dark');
-
-    await user.click(within(theme).getByRole('menuitemradio', { name: 'Light' }));
-    await waitFor(() => {
-      expect(document.documentElement.dataset['theme']).toBe('light');
-    });
-    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('light');
-    // The top bar stays night: it is a dark scope whatever the page's theme is.
-    expect(screen.getByRole('banner').getAttribute('data-theme')).toBe('dark');
+    const menu = await screen.findByRole('menu');
+    expect(screen.queryByRole('group', { name: 'Theme' })).toBeNull();
+    expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(0);
+    expect(menu.textContent).not.toMatch(/Dark|Light|System/);
+    expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
+    expect(screen.getByRole('banner').hasAttribute('data-theme')).toBe(false);
+    expect(localStorage.getItem('agentic.theme')).toBeNull();
   });
 
   it('signs out and returns to the sign-in page', async () => {

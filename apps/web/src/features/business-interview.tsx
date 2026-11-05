@@ -159,7 +159,7 @@ export const BusinessInterview = ({
               onChange={(event) => {
                 update(id, { text: event.target.value });
               }}
-              className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
+              className="rounded-md border border-line bg-inset px-2 py-1 text-sm"
             />
             <label className="flex items-center gap-2 text-xs">
               <input

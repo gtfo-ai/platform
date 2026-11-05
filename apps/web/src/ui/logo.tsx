@@ -2,7 +2,7 @@
  * The platform's wordmark: "agentic." in pixel letters, its i-dot and full stop in beacon amber.
  *
  * Inlined rather than loaded from a file, for two reasons. The letters take `currentColor`, so one
- * mark reads on the always-dark sign-in page and on the shell's header in either theme; and an
+ * mark reads on the always-dark sign-in page and on the shell's header; and an
  * `<img src>` would be a URL attribute, which `no-html.test.ts` admits only through `untrusted.tsx`.
  * The paths are the designer's SVG unchanged (a 5-unit grid, like the sign-in page's pixels); the
  * amber is the `--signin-beacon` token rather than the file's `#F6BB60`, a hair away.

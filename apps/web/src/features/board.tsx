@@ -242,7 +242,7 @@ const ViewToggle = ({
   const item = (current: boolean): string =>
     cx(
       'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium',
-      current ? 'bg-canvas text-fg shadow-sm ring-1 ring-line' : 'text-fg-muted hover:text-fg',
+      current ? 'bg-default text-fg shadow-sm ring-1 ring-line' : 'text-fg-muted hover:text-fg',
       FOCUS_RING,
     );
   return (
@@ -334,7 +334,7 @@ const Columns = ({ items, projectKey, projectId, may, agents, nowMs }: ViewProps
 );
 
 const SELECT = cx(
-  'h-7 rounded-md border border-line-input bg-canvas px-2 text-sm text-fg',
+  'h-7 rounded-md border border-line-input bg-inset px-2 text-sm text-fg',
   FOCUS_RING,
 );
 

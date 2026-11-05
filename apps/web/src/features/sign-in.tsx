@@ -12,7 +12,7 @@
  *
  * ## The page (WP-291, technical/09 § "The sign-in page")
  *
- * The instance's front door, always dark whatever the selected theme: a headline on the left over
+ * The instance's front door, dark like the rest of the application, on its own night ground: a headline on the left over
  * an animated ordered-dither field (`dither-canvas.tsx`), the form on a solid ink block on the
  * right, one column on a narrow screen. The bootstrap hint — *which* account to use — is shown only
  * while `GET /api/setup-state` says nobody has signed in yet; a failed read shows **nothing**,
@@ -129,11 +129,7 @@ export const SignInScreen = (): ReactElement => {
   };
 
   return (
-    // `data-theme="dark"` so the kit's error notice is drawn in its dark tokens on this page.
-    <main
-      data-theme="dark"
-      className="relative isolate flex min-h-full flex-col bg-signin-night text-signin-text"
-    >
+    <main className="relative isolate flex min-h-full flex-col bg-signin-night text-signin-text">
       <DitherCanvas />
       <div className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col px-5 py-6 sm:px-10 lg:px-16">
         <Logo label="Agentic platform" className="w-28 text-signin-text" />

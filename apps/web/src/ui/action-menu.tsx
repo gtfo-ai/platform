@@ -48,7 +48,7 @@ export const ActionMenu = (props: ActionMenuProps): ReactElement => (
     />
     <Menu.Portal>
       <Menu.Positioner sideOffset={6} align={props.align ?? 'end'} className="z-50 outline-none">
-        <Menu.Popup className="min-w-52 rounded-lg border border-line bg-canvas py-1 text-sm text-fg shadow-overlay outline-none transition-opacity duration-100 data-ending-style:opacity-0 data-starting-style:opacity-0">
+        <Menu.Popup className="min-w-52 rounded-lg border border-line bg-default py-1 text-sm text-fg shadow-overlay outline-none transition-opacity duration-100 data-ending-style:opacity-0 data-starting-style:opacity-0">
           {props.children}
         </Menu.Popup>
       </Menu.Positioner>
@@ -123,7 +123,7 @@ export const ActionMenuDownloadItem = ({
   readonly render: ReactElement<Record<string, unknown>>;
 }): ReactElement => <Menu.LinkItem render={render} className={ITEM} closeOnClick />;
 
-/** A labelled radio group of items (the theme choice). */
+/** A labelled radio group of items (the project switcher's). */
 export const ActionMenuRadioGroup = <Value extends string>({
   label,
   value,
@@ -158,7 +158,7 @@ export const ActionMenuRadioItem = ({
   readonly children: ReactNode;
   readonly leadingIcon?: ReactNode;
   /**
-   * `false` (the default) keeps the menu open, so a theme can be tried on; `true` for a choice that
+   * `false` (the default) keeps the menu open, so a choice can be tried on; `true` for a choice that
    * leaves the page, as the project switcher's does.
    */
   readonly closeOnClick?: boolean;

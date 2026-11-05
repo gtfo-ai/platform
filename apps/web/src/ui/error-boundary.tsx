@@ -18,7 +18,7 @@
  *    inside `<main>` and the navigation stays usable — the difference is asserted in
  *    `app/error-boundary.test.tsx`.
  * 2. **The application** — `ErrorBoundary` around everything in `app/app.tsx`, outside every
- *    provider. It is the backstop for what the router cannot see: a throw in `ThemeProvider`,
+ *    provider. It is the backstop for what the router cannot see: a throw in `QueryClientProvider`,
  *    `RealtimeProvider` (including from its effects, which React routes to a boundary too),
  *    `ServicesProvider`, or in the router's own render.
  *

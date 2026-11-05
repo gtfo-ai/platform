@@ -168,9 +168,18 @@ test('Base UI opens a menu and a tooltip under the policy without a violation (T
   await trigger.click();
   const menu = page.getByRole('menu');
   await expect(menu).toBeVisible();
-  await expect(page.getByRole('menuitemradio', { name: 'Dark' })).toHaveAttribute(
-    'aria-checked',
-    'true',
+  // One dark theme (TD-033's 2026-11-05 amendment): no theme group, nothing on `<html>`, and the
+  // layers the owner asked for — the page on the top bar's deep night, the menu one step lighter.
+  await expect(page.getByRole('menuitemradio')).toHaveCount(0);
+  await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
+    'rgb(15, 13, 34)',
+  );
+  expect(
+    await page.getByRole('banner').evaluate((element) => getComputedStyle(element).backgroundColor),
+  ).toBe('rgb(15, 13, 34)');
+  expect(await menu.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
+    'rgb(21, 19, 43)',
   );
   // Positioned against its trigger rather than left at the top of the document: the CSSOM write
   // took effect, which is what the policy question was.
@@ -183,8 +192,6 @@ test('Base UI opens a menu and a tooltip under the policy without a violation (T
       40,
     );
   }
-  await page.getByRole('menuitemradio', { name: 'Light' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.keyboard.press('Escape');
   await expect(menu).toBeHidden();
 
@@ -374,10 +381,6 @@ test('the Agents page draws its map, office and list under the policy, titles as
   await expect(
     page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
   ).toBeVisible();
-  // The light theme, so the office's dark room is a choice of its own and not the page's.
-  await page.evaluate(() => {
-    localStorage.setItem('agentic.theme', 'light');
-  });
   await page.setViewportSize({ width: 1280, height: 900 });
 
   // The map: the default view, its own lazy chunk; a card per live run, the working one animated.
@@ -404,7 +407,7 @@ test('the Agents page draws its map, office and list under the policy, titles as
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
 
-  // The office: its own lazy chunk, the dark brand room in the light theme, a desk per run.
+  // The office: its own lazy chunk, the dark brand room on deep night, a desk per run.
   await page.getByRole('button', { name: 'Office' }).click();
   await expect(page).toHaveURL(/\?view=office$/);
   const office = page.locator('[data-office]');

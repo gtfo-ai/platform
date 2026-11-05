@@ -74,8 +74,7 @@ Screens that show live data subscribe to a server-sent event stream, so agent co
 and transcripts move without a refresh.
 
 **Your avatar, at the right of the top bar, opens the account menu**: who you are signed in as and
-with which role, the **Theme** (Dark, Light or System — dark until you choose) and **Sign out**. The
-theme is also on **Settings**.
+with which role, and **Sign out**. There is one theme, dark, so there is nothing to choose.
 
 **After the platform is upgraded, an open tab asks for a reload.** A banner under the navigation
 says *The platform was updated — reload this page*, with a **Reload** button, in place of the error
@@ -1324,14 +1323,13 @@ parameters. A *refused* command records nothing.
 
 ## 11. Settings
 
-**Settings** is one page per section, picked from the list on the left — **Appearance · Session ·
+**Settings** is one page per section, picked from the list on the left — **Session ·
 Policies · Notifications · Budgets · Users · Provider identities · Dead letters · Failed jobs ·
 Instance** — grouped as *Personal*, *Organisation*, *People* and *Operations*; opening **Settings**
 opens the first. A section that changes something has **one Save** at its foot: it stays disabled
-(*Nothing has changed.*) until you change something, and it saves only what you changed. *Appearance*
-is the exception — the theme applies as you pick it, and is kept in this browser only. *Provider
+(*Nothing has changed.*) until you change something, and it saves only what you changed. *Provider
 identities*, *Dead letters* and *Failed jobs* are an administrator's and are shown to an
-administrator only; anybody else who opens one of their addresses lands on *Appearance*. *Instance*
+administrator only; anybody else who opens one of their addresses lands on *Session*. *Instance*
 is everybody's.
 
 - **Session** — who is signed in, and with which role.

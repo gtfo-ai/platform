@@ -49,7 +49,7 @@ export const ConnectionTestResult = ({
   const { ok, checks } = test.data;
   return (
     <div
-      className="flex flex-col gap-1.5 rounded-md border border-line bg-canvas p-3 text-xs"
+      className="flex flex-col gap-1.5 rounded-md border border-line bg-default p-3 text-xs"
       data-connection-test={ok ? 'passed' : 'failed'}
     >
       <p

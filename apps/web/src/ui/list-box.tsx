@@ -19,7 +19,7 @@ export const ListBox = ({
   readonly children: ReactNode;
   readonly className?: string;
 }): ReactElement => (
-  <div className={cx('overflow-hidden rounded-md border border-line bg-canvas', className)}>
+  <div className={cx('overflow-hidden rounded-md border border-line bg-default', className)}>
     {header}
     <ul aria-label={label} className="divide-y divide-line">
       {children}

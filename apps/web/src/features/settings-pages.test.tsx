@@ -134,25 +134,25 @@ describe('the org settings sub-routes', () => {
     open('/settings');
     const nav = await screen.findByRole('navigation', { name: 'Settings' });
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings/appearance');
+      expect(window.location.pathname).toBe('/settings/session');
     });
-    expect(within(nav).getByRole('link', { name: 'Appearance' }).getAttribute('aria-current')).toBe(
+    expect(within(nav).getByRole('link', { name: 'Session' }).getAttribute('aria-current')).toBe(
       'page',
     );
-    expect(within(nav).getByRole('link', { name: 'Session' }).getAttribute('aria-current')).toBe(
-      null,
-    );
+    // One dark theme (TD-033's 2026-11-05 amendment): no Appearance section and no theme control.
+    expect(within(nav).queryByRole('link', { name: 'Appearance' })).toBeNull();
     // Every group, in order, for the administrator.
     expect(
       within(nav)
         .getAllByRole('heading')
         .map((heading) => heading.textContent),
     ).toEqual(['Personal', 'Organisation', 'People', 'Operations']);
-    expect(screen.getByLabelText('Theme preference')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Session' })).toBeTruthy();
+    expect(screen.queryByLabelText('Theme preference')).toBeNull();
   });
 
   it('moves between sections through the NavList', async () => {
-    open('/settings/appearance');
+    open('/settings/session');
     const nav = await screen.findByRole('navigation', { name: 'Settings' });
     await userEvent.setup().click(within(nav).getByRole('link', { name: 'Instance' }));
     expect(await screen.findByRole('heading', { name: 'Instance' })).toBeTruthy();
@@ -165,16 +165,25 @@ describe('the org settings sub-routes', () => {
   it('redirects an unknown section to the first one', async () => {
     open('/settings/no-such-section');
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings/appearance');
+      expect(window.location.pathname).toBe('/settings/session');
     });
-    expect(await screen.findByLabelText('Theme preference')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Session' })).toBeTruthy();
+  });
+
+  it('redirects the retired Appearance bookmark to Session, with no theme control anywhere', async () => {
+    open('/settings/appearance');
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/settings/session');
+    });
+    expect(await screen.findByRole('heading', { name: 'Session' })).toBeTruthy();
+    expect(screen.queryByLabelText('Theme preference')).toBeNull();
   });
 
   it('shows the administrator’s sections to nobody else, and redirects their paths before any read', async () => {
     world.role = 'maintainer';
     open('/settings/dead-letters');
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings/appearance');
+      expect(window.location.pathname).toBe('/settings/session');
     });
     const nav = await screen.findByRole('navigation', { name: 'Settings' });
     expect(
@@ -182,7 +191,6 @@ describe('the org settings sub-routes', () => {
         .getAllByRole('link')
         .map((link) => link.textContent),
     ).toEqual([
-      'Appearance',
       'Session',
       'Policies',
       'Notifications',
@@ -197,7 +205,7 @@ describe('the org settings sub-routes', () => {
     world.requested = [];
     open('/settings/identities');
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings/appearance');
+      expect(window.location.pathname).toBe('/settings/session');
     });
     expect(world.requested).not.toContain('/api/org/identities');
     cleanup();
@@ -353,7 +361,7 @@ describe('the section tables', () => {
           group.sections.map((section) => section.id),
         ]),
       ).toEqual([
-        ['Personal', ['appearance', 'session']],
+        ['Personal', ['session']],
         ['Organisation', ['policies', 'notifications', 'budgets']],
         ['People', ['users']],
         ['Operations', ['instance']],

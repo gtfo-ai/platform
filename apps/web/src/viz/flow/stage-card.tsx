@@ -239,7 +239,7 @@ export const StageCard = ({
       {chip === null && facts === null ? null : (
         <span className="mt-auto flex min-w-0 items-center gap-1.5 text-[11px] text-fg-muted">
           {chip === null ? null : (
-            <span className="truncate rounded border border-line bg-canvas px-1 font-mono">
+            <span className="truncate rounded border border-line bg-default px-1 font-mono">
               {chip}
             </span>
           )}

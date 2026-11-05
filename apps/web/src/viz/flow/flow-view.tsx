@@ -212,7 +212,7 @@ export const PipelineFlow = ({ projectId }: { readonly projectId: string | null 
             onChange={(event) => {
               setChosen(event.target.value);
             }}
-            className="rounded-md border border-line-input bg-canvas px-2 py-1 text-sm"
+            className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
           >
             {items.map((item) => (
               <option key={item.template} value={item.template}>

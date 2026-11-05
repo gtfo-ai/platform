@@ -190,7 +190,7 @@ export const BreakdownPanel = ({
                   setReason(event.target.value);
                 }}
                 placeholder="Why (optional, kept on the rows you decide)"
-                className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
+                className="rounded-md border border-line bg-inset px-2 py-1 text-sm"
               />
               <div className="flex flex-wrap items-center gap-2">
                 {/* Not the beacon: on the task page the header holds the one primary action. */}

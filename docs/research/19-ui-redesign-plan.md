@@ -55,6 +55,8 @@ green button). The sign-in page already has the same structure:
 In-progress is amber on GitHub (the spinning dot on a running workflow). It is amber here too, so a running
 agent and the beacon share a hue. That is intentional: the beacon is "the thing happening / the thing to do".
 
+> **Superseded 2026-11-05 (TD-033 amendment): dark only.** There is no light theme and no theme switch; the page is deep night and cards sit on night.
+
 **Light theme.** product/10 requires dark and light. The light theme is GitHub-light with a purple cast:
 canvas white, subtle `#f6f5fb`, border `#dcd9ec`, fg `#1b1838`, muted `#5c5785`, links indigo ≈ `#5646d6`.
 **The top bar stays night in both themes.** That is the brand anchor, and the wordmark lives on it. The

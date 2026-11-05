@@ -1,6 +1,6 @@
 /**
  * The wordmark: one accessible image with the name it is given, its letters in the surrounding
- * text colour (so it follows the theme) and only its two accents in amber.
+ * text colour (so it follows its ground) and only its two accents in amber.
  */
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
