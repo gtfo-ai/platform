@@ -135,6 +135,33 @@ Set up an Agentic platform worker on this machine. The core is at <URL>.
    — and that I open it in my own browser. Do not open it, and do not print the token anywhere else.
 ```
 
+## Develop the worker (dev mode)
+
+The steps above are **prod mode**: no clone, the core's own images. To change the worker itself, run
+it from this checkout instead — images built from your working tree, the local page hot-reloading,
+no self-update. It is a compose project of its own (`agentic-worker-dev`, page on port 7358, its own
+volumes and run network), so it runs beside a prod worker on the same machine.
+
+```bash
+# 1. Settings: the core defaults to your local `pnpm dev` server (give it a test project of its own —
+#    two installations polling one binding duplicate every action); Autix works too.
+cp .env.worker.example .env.worker && chmod 600 .env.worker
+read -rs T && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$T" >> .env.worker && unset T
+
+# 2. Build the images from the working tree (`:dev`; Docker's cache skips what did not change) and
+#    start the worker. Run it again after a change; `--no-build` only (re)starts.
+pnpm worker:dev
+pnpm worker:dev logs remote-worker | grep user_code    # approve it on the core, as above
+
+# 3. The local page from Vite with hot reload (Ctrl-C stops it); it prints the address to open.
+pnpm worker:dev ui
+
+pnpm worker:dev ps                 # or: logs -f remote-worker, down
+```
+
+`compose.worker.dev.yml` is the override (`:dev` images, the updater off, the dev names);
+`.env.worker.example` lists every setting.
+
 ## Layout
 
 ```

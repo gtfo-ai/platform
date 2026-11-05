@@ -23,7 +23,8 @@
  * `web` stage too), becomes the string literal `__PLATFORM_BUILD_COMMIT__`, or `dev` when there is
  * none. The SPA compares it with the server's to tell an upgraded server from a contract defect
  * (`src/app/build-commit.ts`). Read at config time, like `APP_DEV_API_URL`; nothing else of the
- * environment reaches the bundle.
+ * environment reaches the bundle. `APP_DEV_WORKER_URL` is the third config-time variable: the dev
+ * worker's page, for `pnpm worker:dev ui` (`src/worker/dev-proxy.ts`).
  *
  * **The font's licence and its preload** (S-23.13a, BACKLOG 801 and 803): `interFontPlugin`
  * (`vite-plugins/inter-font.mjs`) writes Inter's OFL-1.1 text to `dist/inter-OFL.txt` and a
@@ -39,6 +40,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { BUILD_COMMIT_GLOBAL, bundleCommitFrom } from './src/app/build-commit.js';
+import { workerLocalProxy } from './src/worker/dev-proxy.js';
 import { INTER_PACKAGE, interFontPlugin } from './vite-plugins/inter-font.mjs';
 
 const apiTarget = process.env.APP_DEV_API_URL ?? 'http://127.0.0.1:8080';
@@ -90,6 +92,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      // The worker's dev mode (S-22.16, `pnpm worker:dev ui`): `/api/local` to the dev worker, set
+      // only when `APP_DEV_WORKER_URL` is, and first — Vite takes the first prefix that matches.
+      ...workerLocalProxy(process.env.APP_DEV_WORKER_URL),
       '/api': { target: apiTarget, changeOrigin: false },
       // SSE through a proxy needs the response streamed rather than buffered; Vite's proxy does
       // that already, but the explicit entry documents that `/events` is not part of `/api`.
