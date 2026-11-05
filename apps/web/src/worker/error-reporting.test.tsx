@@ -157,7 +157,10 @@ describe('Error reporting on the worker’s page (WP-295 (3))', () => {
         initial={stateWith({ source: 'environment', host: 'o0.ingest.sentry.example.test' })}
       />,
     );
-    expect(container.textContent).toContain('set in the worker’s environment (SENTRY_DSN)');
+    expect(container.textContent).toContain(
+      'set in the worker’s configuration, which overrides this page',
+    );
+    expect(container.textContent).not.toContain('SENTRY_DSN');
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
     expect(container.querySelector('input')).toBeNull();

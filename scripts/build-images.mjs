@@ -89,6 +89,8 @@ const IMAGES = [
   // 559 → 634 MB on arm64** (main at d925201b against PR #38). Docker Desktop's containerd store
   // reports the same arm64 image as **932 MB**, so the 801 MB below (a Docker Desktop number, WP-82)
   // plus 76 is not a sum to expect: the two daemons do not measure alike (BACKLOG 952).
+  // **WP-295 adds `@sentry/node` 10.78.0 and its tree (~37 MB of `node_modules`)**: 621 → 656 MB on
+  // amd64 and 635 → 670 MB on arm64 on CI's runners (PR #60); the launcher image is unchanged.
   // **Measured on `linux/arm64` only** (Docker Desktop): the 1.0 GB budget was a 25 % margin over
   // 801 MB there. `amd64` is **unmeasured** — CI's `image.yml` amd64 leg is the first measurement,
   // and a red size check there means the margin is wrong, not the image.
