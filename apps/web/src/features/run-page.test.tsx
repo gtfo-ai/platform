@@ -330,7 +330,7 @@ describe('the summary strip and what the agent is doing now', () => {
       expect(text).toContain(word);
     }
     expect(text).toContain('7');
-    expect(text).toContain('1,200 in · 340 out');
+    expect(text).toContain('1,200 in · 340 out · 9,000 cached');
   });
 
   it('says Now: in the activity vocabulary and lists the newest live activity', async () => {
@@ -379,5 +379,13 @@ describe('the transcript as log steps', () => {
     );
     // The steer box sits under the log while the run is live.
     expect(screen.getByRole('textbox', { name: 'Steer the agent' })).toBeTruthy();
+  });
+
+  it('offers no steer box to a run still waiting for a seat, which the server would refuse', async () => {
+    const created: RunRecord = { ...LIVE, status: 'created', started_at: null };
+    open(created, detail(), []);
+    expect(await screen.findByRole('button', { name: 'Cancel run' })).toBeTruthy();
+    await screen.findByTestId('transcript-scroller');
+    expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
   });
 });

@@ -943,7 +943,7 @@ is laid out like a GitHub Actions job:
   icon, the stage, the role and the attempt (*Implementation · Developer · attempt 3*). The actions
   are on the right. **Cancel run** is there while the run is live — the only coloured button then,
   and it asks before it cancels. **Re-run ▾** becomes the primary button once a run has failed. The
-  **···** menu holds **Take over…** (**Hand back…** while the task is taken over), which opens the
+  **···** menu holds **Take over…** (**Taken over: resume / hand back…** while the task is taken over), which opens the
   same take-over form and hand-back the task page has, and **Download transcript**, the run's
   transcript as a JSONL file.
 - **The left column** is the task's runs in stage order, each with its status icon, the one you
@@ -951,7 +951,7 @@ is laid out like a GitHub Actions job:
   (described under *Settings* below), where an unsuccessful run's unfinished work was saved, and the
   version of the role prompt the run was given.
 - **The summary strip** gives the status, the model, the effort, the cost (marked *est.* when the
-  platform estimated it), the elapsed time, the turns and the tokens. Hover or focus a label for
+  platform estimated it), the elapsed time, the turns and the tokens (in, out, and read from the prompt cache). Hover or focus a label for
   what its number means.
 - **While the run is live**, a *Now:* line says what the agent is doing, in the words the board and
   the Agents screen use (*Reading files*, *Running a command*, *No activity for 6 min*), with its
@@ -1015,8 +1015,8 @@ only in the run's workspace volume, which is kept for three days. A run you **ca
 take the task over instead if you want its work.
 
 **Steering a live run is accepted, then applied or refused** (WP-85). The steer box sits under
-the log and stays at the bottom of the window while the run is live; a run that has ended has
-none. A steer pushes a turn into a
+the log and stays at the bottom of the window while the run is live — from the moment it is claimed
+(*starting*); a run still waiting for a seat, or one that has ended, has none. A steer pushes a turn into a
 session that is already running, which only the process running that session can do — on a stock
 instance the `runner` container, never the process serving this application. So the message is
 recorded and handed to the runner through the database: the screen says *Accepted* at once, and

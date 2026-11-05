@@ -26,6 +26,7 @@ import { cx, FOCUS_RING } from '../ui/cx.js';
 import { Badge, Button, formatInteger, formatUsd } from '../ui/kit.js';
 import { StatusIcon } from '../ui/status.js';
 import { CodeText, JsonView, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import type { ToolBlock, TranscriptBlock } from './blocks.js';
 import { ToolBody } from './renderers.js';
 import { stepOpenByDefault, stepStatus, stepSummary, stepTiming, stepTitle } from './steps.js';
@@ -91,8 +92,16 @@ const LogRow = ({
 
 /**
  * A disclosure row of the log — a tool call's step, a thinking block, the CLI's own start-up
- * notice. A native `<details>`, so the keyboard and the expanded state come from the browser; held
- * in state so a re-render (a frame arriving) never folds a step somebody opened.
+ * notice. A native `<details>`, so the keyboard and the expanded state come from the browser.
+ *
+ * **Open follows `defaultOpen` until the reader toggles it**: a step open because it was running
+ * closes when it succeeds, and one somebody opened or closed stays as they left it — a frame
+ * arriving never folds or unfolds it under them. The browser fires `toggle` for the attribute React
+ * sets as well as for a click, so only a toggle that disagrees with what this render asked for is
+ * the reader's.
+ *
+ * Nothing interactive goes inside `<summary>`: a link there is nested interactive content and takes
+ * the click that should toggle the step, so the summary's words are plain text.
  */
 const Step = ({
   kind,
@@ -105,14 +114,20 @@ const Step = ({
   readonly children: ReactNode;
   readonly defaultOpen?: boolean;
 }): ReactElement => {
-  const [open, setOpen] = useState(defaultOpen);
+  const [chosen, setChosen] = useState<boolean | null>(null);
+  const open = chosen ?? defaultOpen;
+  const rendered = useRef(open);
+  rendered.current = open;
   return (
     <article data-block-kind={kind}>
       <details
         data-log-step={kind}
         open={open}
         onToggle={(event) => {
-          setOpen(event.currentTarget.open);
+          const now = event.currentTarget.open;
+          if (now !== rendered.current) {
+            setChosen(now);
+          }
         }}
         className="group rounded-md"
       >
@@ -153,12 +168,13 @@ const ToolStep = ({ block }: { readonly block: ToolBlock }): ReactElement => {
               status === 'failure' ? 'text-danger' : 'text-fg',
             )}
           >
-            {/* The tool's name comes from the model: text node, never an attribute or a class. */}
-            <UntrustedText value={stepTitle(block.toolName)} />
+            {/* The tool's name comes from the model: filtered plain text, never a link, an
+                attribute or a class — a link inside <summary> would take the toggle's click. */}
+            {sanitiseUntrusted(stepTitle(block.toolName))}
           </span>
           {summary === '' ? null : (
             <span className="min-w-0 flex-1 truncate font-mono text-xs text-fg-muted">
-              <UntrustedText value={summary} />
+              {sanitiseUntrusted(summary)}
             </span>
           )}
           <span
@@ -257,8 +273,7 @@ const BlockView = ({ block }: { readonly block: TranscriptBlock }): ReactElement
           kind="system"
           summary={
             <span className="text-xs text-fg-muted">
-              {'System · '}
-              <UntrustedText value={block.subtype} />
+              {`System · ${sanitiseUntrusted(block.subtype)}`}
             </span>
           }
         >

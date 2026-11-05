@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ToolBlock, TranscriptBlock } from './blocks.js';
 import { toolRendererKind } from './renderers.js';
@@ -279,5 +280,107 @@ describe('TranscriptView', () => {
     expect(screen.queryByTestId('paused-updates')).toBeNull();
     expect(screen.getByRole('button', { name: 'Following' })).toBeTruthy();
     expect(scroller.scrollTop).toBe(1000);
+  });
+
+  it('writes a step’s tool and summary as plain text, so a model’s URL or markup is no link and the step still toggles', async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <TranscriptView
+        blocks={[
+          tool({
+            toolName: 'javascript:alert(1)',
+            input: { command: 'curl https://evil.example.test/x <img src=x onerror=alert(1)>' },
+          }),
+        ]}
+      />,
+    );
+    const step = container.querySelector('[data-log-step="tool"]') as HTMLDetailsElement;
+    const summary = step.querySelector('summary') as HTMLElement;
+    expect(summary.textContent).toContain('javascript:alert(1)');
+    expect(summary.textContent).toContain(
+      'curl https://evil.example.test/x <img src=x onerror=alert(1)>',
+    );
+    // Nothing interactive and no element made of it inside <summary>.
+    expect(summary.querySelector('a, img, button, input')).toBeNull();
+    expect(step.open).toBe(false);
+    await user.click(summary);
+    expect(step.open).toBe(true);
+    await user.click(summary);
+    expect(step.open).toBe(false);
+  });
+
+  it('closes a step that was open because it ran once it succeeds', () => {
+    const view = render(<TranscriptView blocks={[tool({ result: null })]} />);
+    const step = () => view.container.querySelector('[data-log-step="tool"]') as HTMLDetailsElement;
+    expect(step().open).toBe(true);
+    view.rerender(
+      <TranscriptView
+        blocks={[
+          tool({ at: '2026-11-05T10:00:02.000Z', result: { isError: false, content: 'ok' } }),
+        ]}
+      />,
+    );
+    expect(step().open).toBe(false);
+  });
+
+  it('leaves a step the reader toggled as they left it when its result arrives', async () => {
+    const user = userEvent.setup();
+    const view = render(<TranscriptView blocks={[tool({ result: null })]} />);
+    const step = () => view.container.querySelector('[data-log-step="tool"]') as HTMLDetailsElement;
+    const summary = () => step().querySelector('summary') as HTMLElement;
+    // Closed by hand, then opened again: from now on it is the reader's.
+    await user.click(summary());
+    expect(step().open).toBe(false);
+    await user.click(summary());
+    expect(step().open).toBe(true);
+    view.rerender(
+      <TranscriptView
+        blocks={[
+          tool({ at: '2026-11-05T10:00:02.000Z', result: { isError: false, content: 'ok' } }),
+        ]}
+      />,
+    );
+    expect(step().open).toBe(true);
+  });
+
+  it('keeps following when only the last call’s result arrives or a streaming block grows', () => {
+    const streaming = (text: string) => ({
+      kind: 'text' as const,
+      id: 's',
+      seq: 2,
+      at: AT,
+      text,
+      streaming: true,
+    });
+    const running = tool({ result: null });
+    const view = render(<TranscriptView blocks={[running]} />);
+    const scroller = screen.getByTestId('transcript-scroller');
+    const grow = (height: number) => {
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: height });
+    };
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 });
+    grow(1000);
+    view.rerender(<TranscriptView blocks={[{ ...running }]} />);
+
+    // The same count, the same last block: only its result and its time moved.
+    grow(1400);
+    view.rerender(
+      <TranscriptView
+        blocks={[
+          { ...running, at: '2026-11-05T10:00:05.000Z', result: { isError: false, content: 'x' } },
+        ]}
+      />,
+    );
+    expect(scroller.scrollTop).toBe(scroller.scrollHeight);
+    expect(scroller.scrollTop).toBe(1400);
+
+    // A streaming block's next words: one block more, then the same block longer.
+    grow(1600);
+    view.rerender(<TranscriptView blocks={[running, streaming('half a')]} />);
+    expect(scroller.scrollTop).toBe(1600);
+    grow(1900);
+    view.rerender(<TranscriptView blocks={[running, streaming('half a sentence')]} />);
+    expect(scroller.scrollTop).toBe(scroller.scrollHeight);
+    expect(scroller.scrollTop).toBe(1900);
   });
 });

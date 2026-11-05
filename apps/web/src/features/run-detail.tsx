@@ -229,10 +229,10 @@ const RunSummary = ({
         label="Tokens"
         value={
           <span className="text-base whitespace-nowrap">
-            {`${formatInteger(record.usage.input_tokens)} in · ${formatInteger(record.usage.output_tokens)} out`}
+            {`${formatInteger(record.usage.input_tokens)} in · ${formatInteger(record.usage.output_tokens)} out · ${formatInteger(record.usage.cache_read_tokens)} cached`}
           </span>
         }
-        definition={`Uncached input tokens and output tokens billed for this run. A further ${formatInteger(record.usage.cache_read_tokens)} input tokens were served from the prompt cache, billed at a lower rate.`}
+        definition="Uncached input tokens and output tokens billed for this run, then the input tokens served from the prompt cache, which are billed at a lower rate."
       />
     </div>
   </Card>
@@ -558,7 +558,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                 setDialog('take_over');
               }}
             >
-              {detail.taken_over === null ? 'Take over…' : 'Hand back…'}
+              {detail.taken_over === null ? 'Take over…' : 'Taken over: resume / hand back…'}
             </ActionMenuItem>
             <ActionMenuSeparator />
           </>
@@ -706,7 +706,9 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                 blocks={snapshot.blocks}
                 scrollerClassName="h-[max(20rem,calc(100dvh-16rem))]"
               />
-              {live ? (
+              {/* `created` is live but has no session yet: the server refuses a steer there
+                  (`run_not_live`), so the box appears once the run is claimed. */}
+              {record.status === 'starting' || record.status === 'running' ? (
                 <form
                   data-steer=""
                   className="sticky bottom-0 z-10 flex gap-2 border-t border-line bg-canvas py-3"
