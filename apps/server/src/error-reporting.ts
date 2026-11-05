@@ -26,6 +26,31 @@ type NodeClientOptions = ConstructorParameters<typeof NodeClient>[0];
 /** How a client sends an envelope — `makeNodeTransport`, or a test's recorder. */
 export type ReportingTransport = NodeClientOptions['transport'];
 
+type SentEnvelope = Parameters<ReturnType<ReportingTransport>['send']>[0];
+
+/**
+ * The transport behind the last gate (review of PR #60): every envelope is shaped and redacted by
+ * `errorReporting.shapeEnvelope` before the inner transport serialises it — so an internal exception
+ * the SDK raises on its own, which skips `beforeSend`, leaves through the same allow-list and the
+ * same redactor. An envelope with nothing left to send, or no redactor to send it through, is
+ * dropped and answered as sent (the SDK then records nothing as failed).
+ */
+export const gatedTransport =
+  (inner: ReportingTransport, redactor: () => SecretRedactor | null): ReportingTransport =>
+  (transportOptions) => {
+    const transport = inner(transportOptions);
+    return {
+      send: (envelope) => {
+        const current = redactor();
+        const shaped = current === null ? null : errorReporting.shapeEnvelope(envelope, current);
+        return shaped === null
+          ? Promise.resolve({})
+          : transport.send(shaped as unknown as SentEnvelope);
+      },
+      flush: (timeout) => transport.flush(timeout),
+    };
+  };
+
 /** Builds `NodeClient`s over the process's redactor; `transport` is the test seam (no network). */
 export const sentryClientFactory =
   (options: {
@@ -53,7 +78,7 @@ export const sentryClientFactory =
       integrations: [],
       dsn,
       stackParser: sentry.defaultStackParser,
-      transport: options.transport ?? sentry.makeNodeTransport,
+      transport: gatedTransport(options.transport ?? sentry.makeNodeTransport, redactor),
       beforeSend: (event) => {
         const current = redactor();
         return current === null
@@ -126,16 +151,22 @@ const databasePasswordOf = (url: string): string | null => {
 };
 
 /**
- * The core's exact values (the amendment's decision 2): `APP_SECRET_KEY`, the database password and
- * the launcher token — and the other secrets the process holds, the model credentials, the metrics
- * password and the bootstrap password. A value shorter than `MIN_SECRET_LENGTH` cannot be an exact
- * value (it would erase ordinary words), so it is left to the pattern redactor — **a stated gap**:
- * `postgres://app:app@…`, the stock development URL, has a three-character password no reporter can
- * redact by value.
+ * The core's exact values (the amendment's decision 2): `APP_SECRET_KEY`, the database URL and its
+ * password, and the launcher token — and every other secret the configuration holds (each read from
+ * its variable or its `_FILE`), the model credentials, the metrics password and the bootstrap
+ * password. A value shorter than `MIN_SECRET_LENGTH` cannot be an exact value (it would erase
+ * ordinary words): `postgres://app:app@…`, the stock development URL, is redacted **whole**, but its
+ * three-character password quoted on its own is left to the pattern redactor (BACKLOG 1041).
+ *
+ * The run credentials this process mints are not here: they are registered after start, and the
+ * runtime composes the stack's run-scoped registry beside these (`runtime.ts`).
  */
 export const coreReportingSecrets = (config: CoreSecretSources): readonly InjectedSecret[] => {
   const candidates: readonly (readonly [string, string | null])[] = [
     ['app_secret_key', config.secretKey],
+    // The whole URL as well as its password: an error that quotes the connection string is redacted
+    // whole, even when the password alone is too short to be an exact value (`app`, the stock one).
+    ['database_url', config.database.url],
     ['database_password', databasePasswordOf(config.database.url)],
     ['launcher_token', config.launcherToken],
     ['anthropic_api_key', config.modelApiKey],

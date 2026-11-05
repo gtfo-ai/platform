@@ -392,17 +392,17 @@ export const startRemoteWorker = async (
   if (claudeToken !== null) rememberSecret(WORKER_SECRET_NAMES.claudeToken, claudeToken);
   // Error reporting (WP-295): environment → `worker-state` file → the page's setting.
   const sentryFromEnvironment = (config.sentryDsn ?? null) !== null;
-  let sentryDsn: string | null = config.sentryDsn ?? (await readStoredSentryDsn(config.stateDir));
-  if (sentryDsn !== null) {
+  const startingDsn = config.sentryDsn ?? (await readStoredSentryDsn(config.stateDir));
+  if (startingDsn !== null) {
     try {
-      await errorReporter.configure(sentryDsn);
+      await errorReporter.configure(startingDsn);
       loggerPort.info(
-        { host: new URL(sentryDsn).host, source: sentryFromEnvironment ? 'environment' : 'file' },
+        { host: new URL(startingDsn).host, source: sentryFromEnvironment ? 'environment' : 'file' },
         'error reporting is on: error lines are reported, redacted',
       );
     } catch {
-      // Heard by `onFailure` (a warning line); the worker runs on with reporting off.
-      sentryDsn = null;
+      // Heard by `onFailure` (a warning line); the worker runs on with reporting off — and the
+      // page says *Off*, because it reads the reporter rather than the stored value.
     }
   }
   /** Claude refused the token this worker holds (WP-294 (6)): no claim until a new sign-in. */
@@ -1339,7 +1339,6 @@ export const startRemoteWorker = async (
     }
     if (dsn === null) {
       await removeFile(config.stateDir, SENTRY_DSN_FILE);
-      sentryDsn = null;
       await errorReporter.configure(null);
       loggerPort.info({}, 'error reporting was turned off on this worker’s page');
       return;
@@ -1349,7 +1348,6 @@ export const startRemoteWorker = async (
       throw new LocalUiError(422, 'invalid_dsn', `that is not ${errorReporting.DSN_SHAPE_WORDS}`);
     }
     await writePrivateFile(config.stateDir, SENTRY_DSN_FILE, verdict.dsn);
-    sentryDsn = verdict.dsn;
     await errorReporter.configure(verdict.dsn);
     loggerPort.info({ host: verdict.host }, 'error reporting is on: set on this worker’s page');
   };
@@ -1489,10 +1487,11 @@ export const startRemoteWorker = async (
             ? null
             : { run: coreDigests.platform_runtime, egress: coreDigests.platform_egress },
       }),
-      error_reporting: {
-        source: sentryDsn === null ? null : sentryFromEnvironment ? 'environment' : 'file',
-        host: sentryDsn === null ? null : new URL(sentryDsn).host,
-      },
+      // What the reporter sends to now, not what was stored: a client that failed to build is *Off*.
+      error_reporting: ((dsn: string | null) => ({
+        source: dsn === null ? null : sentryFromEnvironment ? 'environment' : 'file',
+        host: dsn === null ? null : new URL(dsn).host,
+      }))(errorReporter.dsn()),
       server_time: new Date(now).toISOString(),
     };
     return workerLocalStateSchema.parse(redactKeysAndValues(pageRedactor(), value));

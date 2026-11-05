@@ -11,8 +11,8 @@
  *   `http:` only to a loopback host, no secret key, no path prefix, no query.
  * - **What an event carries** ({@link shapeReportedEvent}, the `beforeSend` hook): an **allow-list**
  *   rebuilt from the SDK's event — the id, the time, the level, the platform, the error's type, its
- *   message bounded at {@link ERROR_MESSAGE_MAX_BYTES} and its stack frames (file, function, line,
- *   column), a log line's own message when it carried no error, and the tags
+ *   message bounded at {@link ERROR_MESSAGE_MAX_BYTES} and its stack frames (file, function, line
+ *   and column only), a log line's own message when it carried no error, and the tags
  *   {@link REPORT_TAG_NAMES}. **Everything else is dropped**, whatever the SDK or a scope put there:
  *   no `server_name`, no `contexts`, no `extra`, no `user`, no `request`, no breadcrumbs, no SDK
  *   processing metadata (so no trace header in the envelope either). No transcript, prompt, tool
@@ -27,6 +27,9 @@
  * - **A hook never throws**: the SDK answers a throwing `beforeSend` by capturing the throw as an
  *   *internal* exception, and an internal exception skips `beforeSend` — so a hook that failed
  *   would send its own error unredacted. Each hook catches and drops the event instead.
+ * - **The transport is the last gate** ({@link shapeEnvelope}): an internal exception the SDK
+ *   raises on its own skips `beforeSend` too, so every envelope is shaped and redacted again before
+ *   it is serialised — only event items, each through the same allow-list.
  *
  * The residual is the amendment's: a third-party error message that quotes untrusted text carries
  * up to 1 KiB of it, redacted for exact values and patterns, not for meaning.
@@ -133,8 +136,9 @@ type Unknown = Readonly<Record<string, unknown>>;
 const isRecord = (value: unknown): value is Unknown =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const text = (value: unknown, max: number): string | undefined =>
-  typeof value === 'string' ? value.slice(0, max) : undefined;
+/** A string as it came — **never cut here**: every bound is applied after redaction. */
+const text = (value: unknown): string | undefined =>
+  typeof value === 'string' ? value : undefined;
 
 const integer = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
@@ -147,15 +151,14 @@ const defined = (entries: Record<string, unknown>): JsonObject =>
 
 const LEVELS = new Set(['fatal', 'error', 'warning', 'log', 'info', 'debug']);
 
+/** A stack frame: its file, function, line and column — nothing else (no module, no `in_app`). */
 const frameOf = (frame: unknown): JsonObject | null => {
   if (!isRecord(frame)) return null;
   return defined({
-    filename: text(frame.filename, FRAME_TEXT_MAX_CHARS),
-    function: text(frame.function, FRAME_TEXT_MAX_CHARS),
-    module: text(frame.module, FRAME_TEXT_MAX_CHARS),
+    filename: text(frame.filename),
+    function: text(frame.function),
     lineno: integer(frame.lineno),
     colno: integer(frame.colno),
-    in_app: typeof frame.in_app === 'boolean' ? frame.in_app : undefined,
   });
 };
 
@@ -169,9 +172,8 @@ const exceptionOf = (value: unknown): JsonObject | null => {
         .filter((frame): frame is JsonObject => frame !== null)
     : [];
   return defined({
-    type: text(value.type, NAME_MAX_CHARS),
-    // Bounded after redaction (below), never here: a cut here could split a secret.
-    value: typeof value.value === 'string' ? value.value : undefined,
+    type: text(value.type),
+    value: text(value.value),
     stacktrace: kept.length === 0 ? undefined : { frames: kept },
   });
 };
@@ -181,7 +183,7 @@ const tagsOf = (value: unknown): JsonObject | undefined => {
   const tags: Record<string, string> = {};
   for (const name of REPORT_TAG_NAMES) {
     const tag = value[name];
-    if (typeof tag === 'string' && tag !== '') tags[name] = tag.slice(0, TAG_MAX_CHARS);
+    if (typeof tag === 'string' && tag !== '') tags[name] = tag;
   }
   return Object.keys(tags).length === 0 ? undefined : tags;
 };
@@ -192,8 +194,16 @@ const messageOf = (value: unknown): string | undefined => {
   return undefined;
 };
 
-/** Bounds every exception value and the message, after redaction. */
-const boundMessages = (event: JsonObject): JsonObject => {
+/** `text` bounded at `max` characters, marked when cut — applied to redacted text only. */
+const cut = (value: unknown, max: number): unknown =>
+  typeof value === 'string' && value.length > max ? `${value.slice(0, max)} … [cut]` : value;
+
+/**
+ * Every bound of the event, applied **after** redaction (a cut before it could split a secret and
+ * leave the half that no longer matches in clear): the message and each exception's value at
+ * {@link ERROR_MESSAGE_MAX_BYTES}, a type, a frame's file and function, and each tag.
+ */
+const boundEvent = (event: JsonObject): JsonObject => {
   const out: Record<string, unknown> = { ...event };
   if (typeof out.message === 'string') {
     out.message = boundUtf8(out.message, ERROR_MESSAGE_MAX_BYTES);
@@ -201,12 +211,40 @@ const boundMessages = (event: JsonObject): JsonObject => {
   const exception = out.exception;
   if (isRecord(exception) && Array.isArray(exception.values)) {
     out.exception = {
-      values: exception.values.map((value: unknown) =>
-        isRecord(value) && typeof value.value === 'string'
-          ? { ...value, value: boundUtf8(value.value, ERROR_MESSAGE_MAX_BYTES) }
-          : value,
-      ),
+      values: exception.values.map((value: unknown) => {
+        if (!isRecord(value)) return value;
+        const frames = isRecord(value.stacktrace) ? value.stacktrace.frames : undefined;
+        return defined({
+          type: cut(value.type, NAME_MAX_CHARS),
+          value:
+            typeof value.value === 'string'
+              ? boundUtf8(value.value, ERROR_MESSAGE_MAX_BYTES)
+              : undefined,
+          stacktrace: Array.isArray(frames)
+            ? {
+                frames: frames.map((frame: unknown) =>
+                  isRecord(frame)
+                    ? {
+                        ...frame,
+                        ...(frame.filename === undefined
+                          ? {}
+                          : { filename: cut(frame.filename, FRAME_TEXT_MAX_CHARS) }),
+                        ...(frame.function === undefined
+                          ? {}
+                          : { function: cut(frame.function, FRAME_TEXT_MAX_CHARS) }),
+                      }
+                    : frame,
+                ),
+              }
+            : undefined,
+        });
+      }),
     };
+  }
+  if (isRecord(out.tags)) {
+    out.tags = Object.fromEntries(
+      Object.entries(out.tags).map(([name, value]) => [name, cut(value, TAG_MAX_CHARS)]),
+    );
   }
   return out as JsonObject;
 };
@@ -239,7 +277,7 @@ export const shapeReportedEvent = (event: unknown, redactor: SecretRedactor): Js
       exception: exceptionValues.length === 0 ? undefined : { values: exceptionValues },
       tags: tagsOf(event.tags),
     });
-    return boundMessages(redactor.redactJson(rebuilt).value);
+    return boundEvent(redactor.redactJson(rebuilt).value);
   } catch {
     // Never thrown back into the SDK: a throwing hook's error is sent as an internal exception,
     // which skips this hook (see the docblock). Dropping the event is the only safe answer.
@@ -247,20 +285,75 @@ export const shapeReportedEvent = (event: unknown, redactor: SecretRedactor): Js
   }
 };
 
-/** `beforeBreadcrumb`: the time, category, level and message only, redacted — or `null`. */
+/** `beforeBreadcrumb`: the time, category, level and message only, redacted, then bounded. */
 export const shapeBreadcrumb = (crumb: unknown, redactor: SecretRedactor): JsonObject | null => {
   try {
     if (!isRecord(crumb)) return null;
     const rebuilt = defined({
       timestamp: typeof crumb.timestamp === 'number' ? crumb.timestamp : undefined,
-      category: text(crumb.category, 64),
+      category: text(crumb.category),
       level: typeof crumb.level === 'string' && LEVELS.has(crumb.level) ? crumb.level : undefined,
-      message: typeof crumb.message === 'string' ? crumb.message : undefined,
+      message: text(crumb.message),
     });
     const redacted = redactor.redactJson(rebuilt).value;
-    return typeof redacted.message === 'string'
-      ? { ...redacted, message: boundUtf8(redacted.message, ERROR_MESSAGE_MAX_BYTES) }
-      : redacted;
+    return defined({
+      ...redacted,
+      category: cut(redacted.category, 64),
+      message:
+        typeof redacted.message === 'string'
+          ? boundUtf8(redacted.message, ERROR_MESSAGE_MAX_BYTES)
+          : undefined,
+    });
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * **The envelope that leaves the process — the transport's own gate** (review of PR #60).
+ *
+ * `beforeSend` does not see everything the SDK sends: an error *inside* the SDK's event pipeline
+ * (an event processor that throws, a scope's hook) is captured as an **internal** exception, and an
+ * internal exception skips `beforeSend` entirely. So the transport is wrapped as well
+ * (`apps/server`'s `sentryClientFactory`), and every envelope is rebuilt here before it is
+ * serialised: **only `event` items are kept**, each shaped again by {@link shapeReportedEvent}
+ * (idempotent over an already shaped event), and the header is rebuilt to its id, its time and the
+ * SDK's name and version, redacted. Sessions, client reports, attachments, spans and a trace header
+ * never leave. `null` — nothing to send — when no event survives or anything went wrong.
+ */
+export const shapeEnvelope = (envelope: unknown, redactor: SecretRedactor): unknown[] | null => {
+  try {
+    if (!Array.isArray(envelope) || envelope.length !== 2) return null;
+    const [headers, items] = envelope as [unknown, unknown];
+    if (!Array.isArray(items)) return null;
+    const kept: [JsonObject, JsonObject][] = [];
+    for (const item of items) {
+      if (!Array.isArray(item) || item.length !== 2) continue;
+      const [itemHeader, payload] = item as [unknown, unknown];
+      if (!isRecord(itemHeader) || itemHeader.type !== 'event') continue;
+      const shaped = shapeReportedEvent(payload, redactor);
+      if (shaped !== null) kept.push([{ type: 'event' }, shaped]);
+    }
+    if (kept.length === 0) return null;
+    const header = isRecord(headers) ? headers : {};
+    const sdk = isRecord(header.sdk) ? header.sdk : {};
+    const rebuilt = defined({
+      event_id: text(header.event_id),
+      sent_at: text(header.sent_at),
+      sdk:
+        typeof sdk.name === 'string' && typeof sdk.version === 'string'
+          ? { name: sdk.name, version: sdk.version }
+          : undefined,
+    });
+    const redacted = redactor.redactJson(rebuilt).value;
+    return [
+      defined({
+        event_id: cut(redacted.event_id, 64),
+        sent_at: cut(redacted.sent_at, 64),
+        sdk: redacted.sdk,
+      }),
+      kept,
+    ];
   } catch {
     return null;
   }

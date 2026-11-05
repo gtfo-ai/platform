@@ -132,6 +132,13 @@ a decision, and the first is the reviewer's to confirm:
   builds the `NodeClient` from its options and hooks, loading the SDK only once a DSN is set.
   Decision 4 keeps `@sentry/node` out of `packages/infrastructure`'s manifest, so the module could
   not import it.
-- **The core's exact values are a superset**: besides the three named, the model credentials, the
-  metrics password and the bootstrap password — each only at 8 characters or more, so the stock
-  development database password is left to the patterns (BACKLOG 1041).
+- **The core's exact values are a superset**: besides the three named, the whole `DATABASE_URL`,
+  the model credentials, the metrics password, the bootstrap password and every run credential the
+  process mints (`stack.runSecrets`, read per event) — each only at 8 characters or more, so the
+  stock development password quoted on its own is left to the patterns (BACKLOG 1041). An
+  integration's credentials are in no process registry and are covered by the patterns only
+  (BACKLOG 1043).
+- **The transport is a second gate** (review of PR #60): the SDK sends its own internal errors
+  without `beforeSend`, so every envelope is rebuilt to event items only, shaped by the same
+  allow-list and redacted again before it is serialised. A stack frame carries its file, function,
+  line and column only — no module, no `in_app`.

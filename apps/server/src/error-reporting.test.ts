@@ -166,6 +166,38 @@ describe.each([
   );
 });
 
+describe('an error the SDK raises itself leaves through the same gate (review of PR #60)', () => {
+  it('finds no secret in the envelope of an internal exception, which skips beforeSend', async () => {
+    const recorder = recordingTransport();
+    const secret = WORKER_SECRETS[0].value;
+    const reporter = reporterOver(exactSecretRedactor([...WORKER_SECRETS]), recorder.transport);
+    await reporter.configure(DSN_A);
+    // An event processor that throws once: the SDK captures the throw as an *internal* exception
+    // (`mechanism.type: 'internal'`), and an internal exception is sent without `beforeSend`.
+    let thrown = false;
+    getIsolationScope().addEventProcessor((event) => {
+      if (thrown) return event;
+      thrown = true;
+      throw new Error(`the processor failed holding ${secret}`);
+    });
+    try {
+      reporter.report({ error: new Error('the first error'), message: 'x', tags: TAGS });
+      await reporter.flush();
+    } finally {
+      getIsolationScope().clear();
+    }
+    // Not vacuous: the SDK did send its own internal event, through the transport's gate.
+    const internal = recorder.sent.filter((entry) => entry.body.includes('the processor failed'));
+    expect(internal).toHaveLength(1);
+    expect(internal[0]?.body).not.toContain(secret);
+    expect(internal[0]?.body).toContain('the processor failed holding [REDACTED:integration:');
+    // And it was shaped too: nothing of the scope or the machine.
+    expect(Object.keys(eventOf(internal[0]?.body ?? '')).sort()).toEqual(
+      ['event_id', 'exception', 'level', 'platform', 'timestamp'].sort(),
+    );
+  });
+});
+
 describe('the event is the allow-list (WP-295 (1))', () => {
   it('carries the type, the bounded message, the stack and the six tags — and nothing else', async () => {
     const recorder = recordingTransport();
@@ -185,9 +217,9 @@ describe('the event is the allow-list (WP-295 (1))', () => {
       getIsolationScope().clear();
     }
     const event = eventOf(recorder.sent[0]?.body ?? '');
-    // `sdk` is the SDK's name and version, which it writes into the envelope after `beforeSend`.
+    // The SDK writes `sdk` into the event after `beforeSend`; the transport's gate drops it again.
     expect(Object.keys(event).sort()).toEqual(
-      ['event_id', 'exception', 'level', 'platform', 'sdk', 'tags', 'timestamp'].sort(),
+      ['event_id', 'exception', 'level', 'platform', 'tags', 'timestamp'].sort(),
     );
     expect(event.tags).toEqual(TAGS);
     const [exception] = (event.exception as { values: Record<string, unknown>[] }).values;
@@ -298,14 +330,20 @@ describe('SENTRY_DSN on the core (WP-295 (4))', () => {
   it('redacts the core’s secrets by value, and leaves one too short to the patterns', () => {
     expect(coreReportingSecrets(CORE_CONFIG).map((secret) => secret.name)).toEqual([
       'app_secret_key',
+      'database_url',
       'database_password',
       'launcher_token',
     ]);
-    // The stock development password (`app`) cannot be an exact value: it would erase ordinary words.
+    // The stock development password (`app`) cannot be an exact value — it would erase ordinary
+    // words — but the URL that carries it is one, so a quoted connection string is redacted whole.
+    const stock = coreReportingSecrets({ ...CORE_CONFIG, database: { url: base.DATABASE_URL } });
+    expect(stock.map((secret) => secret.name)).toEqual([
+      'app_secret_key',
+      'database_url',
+      'launcher_token',
+    ]);
     expect(
-      coreReportingSecrets({ ...CORE_CONFIG, database: { url: base.DATABASE_URL } }).map(
-        (secret) => secret.name,
-      ),
-    ).toEqual(['app_secret_key', 'launcher_token']);
+      exactSecretRedactor(stock).redactText(`connect ECONNREFUSED ${base.DATABASE_URL}`).value,
+    ).toBe('connect ECONNREFUSED [REDACTED:integration:database_url]');
   });
 });

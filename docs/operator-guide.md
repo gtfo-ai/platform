@@ -425,7 +425,9 @@ user).
   worker's own `error`/`fatal` log line — the error's type, its message (at most 1 KiB) and its
   stack, tagged `role`, `worker_id`, `core_url`, `version`, `commit` and `run_id` — redacted by
   the Claude token, each live run's token and credential, the page's token and the `wkr_`
-  credential, then the platform's patterns; never a transcript, prompt, tool input or ticket text.
+  credential, then the platform's patterns. No transcript, prompt, tool input, project name or
+  ticket key is a field of an event; the residual is the core's: a library's error message that
+  quotes untrusted text carries up to 1 KiB of it, redacted for secrets but not for meaning.
   The DSN names a host the developer chose: the worker sends its errors there and nowhere else.
 - *What this worker takes by itself* and *Take this one* (WP-293, protocol 3 — a core accepts `[2, 3]`,
   so a worker image older than protocol 2 must be updated first): the owner's **claim scope** (every
@@ -1512,14 +1514,18 @@ start with a message naming the variable, not the value. What is reported, and w
 - **Fed by the process's own `error` and `fatal` log lines only** — no auto-instrumentation, no
   HTTP, console or uncaught-exception hooks of the SDK (an uncaught error is logged, and that line is
   reported).
-- **Each event carries** the error's type, its message (at most 1 KiB) and its stack frames, and
+- **Each event carries** the error's type, its message (at most 1 KiB) and its stack frames (file,
+  function, line and column only), and
   the tags `role`, `core_url` (`APP_BASE_URL`), `version`, `commit` and, when the line names one,
   `run_id`. Every other field — host name, contexts, breadcrumbs, request data, the line's other
   fields — is dropped.
-- **Redacted before it is sent**: `APP_SECRET_KEY`, the database password, the launcher token, the
+- **Redacted before it is sent** — in `beforeSend` and again at the transport, which also holds the
+  SDK's own internal errors: `APP_SECRET_KEY`, the whole `DATABASE_URL` and its password, the
+  launcher token, every run credential the process minted, the
   model credentials, the metrics and bootstrap passwords (each of at least 8 characters), then the
-  platform's credential patterns. Never a transcript, prompt, tool input, ticket text, project name
-  or ticket key. The residual: a library's error message that quotes untrusted text carries up to
+  platform's credential patterns. An integration's own credentials are covered by the patterns
+  only (backlog 1043). No transcript, prompt, tool input, project name or ticket key is a field of
+  an event. The residual: a library's error message that quotes untrusted text carries up to
   1 KiB of it, redacted for secrets but not for meaning.
 
 **OpenTelemetry export is not built**: no source reads `OTEL_EXPORTER_OTLP_ENDPOINT` (backlog 885).
