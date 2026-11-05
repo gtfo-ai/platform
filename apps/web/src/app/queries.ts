@@ -1293,7 +1293,7 @@ export const useOnboardingCommands = (mint?: MintKey) => {
      * `config` is `bindings.config` — the project's overlay on the account's settings — and it is
      * sent per item rather than omitted, because `PUT …/bindings` replaces the set: a caller that
      * dropped it would erase the notification channel WP-32 stores there every time somebody
-     * pressed "Save bindings" on another screen. Both call sites therefore send back what they
+     * saved the connections on another screen. Both call sites therefore send back what they
      * read; the notifications control is the one that changes a value.
      */
     putBindings: useMutation({

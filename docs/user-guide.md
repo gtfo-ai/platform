@@ -177,10 +177,20 @@ Then: the integrations the project uses. This step **binds and tests** them; it 
 An integration has to exist first: an admin creates it on the **Integrations** screen (section 9) or
 with the request in the operator guide's §4 — **Add an integration** in this section opens that
 screen. *Continue* opens once a ticket tracker and a git integration are bound. Once one exists it appears here as a checkbox, "Test connection" makes one real call to the provider and records the
-result, and "Bind" attaches it to this project. The result is shown beside the integration you
+result. The result is shown beside the integration you
 tested, as on the Integrations screen: *testing…* while the call runs, then **Last test: passed** or
 **Last test: failed** with each check the provider answered, or a notice that the test could not be
 run. A wrong token is therefore a failed test here rather than a failed run tomorrow.
+
+The checkboxes start at what the project already binds, and the save button **replaces the
+project's set with the ticked ones**, so it is labelled with what it will change: *Save 2
+connections* when you tick one more, *Remove the git host connection* when you untick one, and *No
+changes to save* (switched off) while the ticks equal what is bound. Binding the tracker
+and then the git host in a second press keeps both. Unticking a bound integration asks first, naming
+what stops working (the tracker stops feeding tickets, the git host stops merge requests, chat stops
+receiving questions); only *Remove connection* in that dialog sends the change. The integration
+itself is never deleted here. The project settings' *Connections* section is the same selection
+and the same button.
 
 You never paste a credential into the browser, at any point. What is named is the *environment
 variable* the server should read, and the server seals the value itself.
@@ -219,7 +229,7 @@ is saved; if the tracker cannot be read at that moment, the form says the status
 loaded and nothing was saved, and keeps your choices so you can save again. A name you saved earlier
 that the tracker no longer lists is shown above the slots as *Not listed*, and the slot is empty
 until you pick again. **Binding a tracker in this step for the first time also saves its lifecycle**
-with every slot empty and the claim on — the step says so under *Bind* before you press it — so a
+with every slot empty and the claim on — the step says so under the save button before you press it — so a
 project set up here claims unless you switch the claim off. A binding that already has a lifecycle
 keeps it as it is. A tracker binding with no lifecycle saved (one bound before the lifecycle
 existed) neither claims nor moves tickets, and re-saving the bindings does not change that; saving

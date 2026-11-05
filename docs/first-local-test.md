@@ -431,7 +431,7 @@ no retry, and a second run is a second turn.
      (`https://gitlab.com/<group>/<project>.git` — an SSH `git@…` address is not a URL and is
      refused), and the **Default branch** — **`develop`** for Autix, `dev` for GoParking; the field
      is required, because the platform's fallback `main` is the wrong branch for both. Then tick
-     both integrations, **Test connection**, **Bind**. Once the GitLab integration is bound, the step
+     both integrations, **Test connection**, **Save 2 connections**. Once the GitLab integration is bound, the step
      shows the default branch **GitLab** reports and where it says the CI configuration lives; if
      the stored branch differs, a notice says so (*"GitLab's default branch is X; this project uses
      Y"*), the field is prefilled with GitLab's and **Save default branch** changes it. The same control is on the project's settings page. A maintainer can change it

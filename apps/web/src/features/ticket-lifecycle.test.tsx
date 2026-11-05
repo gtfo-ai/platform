@@ -534,7 +534,7 @@ describe('the wizard writes the default block for a tracker it binds (backlog 55
       'the claim on',
     );
     expect(state.puts).toHaveLength(0);
-    await user.click(screen.getByRole('button', { name: 'Bind 1 integration' }));
+    await user.click(screen.getByRole('button', { name: 'Save 1 connection' }));
     await waitFor(() => expect(state.puts).toHaveLength(1));
     expect(trackerConfigOf(state.puts[0])).toEqual({
       lifecycle: { claim: true, take_assigned_tickets: false },
@@ -545,17 +545,26 @@ describe('the wizard writes the default block for a tracker it binds (backlog 55
     const state = world({ bindings: bindingsWith({ lifecycle: { claim: false } }) });
     openWizard(state);
     const user = userEvent.setup();
+    // S-23.21: the stored tracker starts checked — the selection is the stored set — and the
+    // stored block draws no default-block notice.
+    const stored = within(
+      await waitFor(() => {
+        const row = document.querySelector<HTMLElement>(`[data-integration-row="${TRACKER}"]`);
+        expect(row).not.toBeNull();
+        return row as HTMLElement;
+      }),
+    ).getByRole('checkbox') as HTMLInputElement;
+    await waitFor(() => expect(stored.checked).toBe(true));
+    expect(document.querySelector('[data-lifecycle="wizard-default"]')).toBeNull();
+    // Binding a second integration re-sends the stored tracker with its block untouched.
     await user.click(
       within(
-        await waitFor(() => {
-          const row = document.querySelector<HTMLElement>(`[data-integration-row="${TRACKER}"]`);
-          expect(row).not.toBeNull();
-          return row as HTMLElement;
-        }),
+        document.querySelector<HTMLElement>(
+          `[data-integration-row="${OTHER_TRACKER}"]`,
+        ) as HTMLElement,
       ).getByRole('checkbox'),
     );
-    expect(document.querySelector('[data-lifecycle="wizard-default"]')).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'Bind 1 integration' }));
+    await user.click(screen.getByRole('button', { name: 'Save 3 connections' }));
     await waitFor(() => expect(state.puts).toHaveLength(1));
     expect(trackerConfigOf(state.puts[0])).toEqual({ lifecycle: { claim: false } });
   });
@@ -565,7 +574,11 @@ describe('the wizard writes the default block for a tracker it binds (backlog 55
     renderSettings(state);
     await lifecycleCard();
     const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: 'Save bindings' }));
+    // S-23.21: an unchanged set cannot be saved, so the re-save binds a second integration too.
+    const picker = screen.getByRole('group', { name: 'Which integrations this project uses' });
+    // The second tracker, listed after the stored one.
+    await user.click(within(picker).getAllByRole('checkbox')[1] as HTMLElement);
+    await user.click(screen.getByRole('button', { name: 'Save 3 connections' }));
     await waitFor(() => expect(state.puts).toHaveLength(1));
     expect(trackerConfigOf(state.puts[0])).toEqual({});
   });

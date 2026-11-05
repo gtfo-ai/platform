@@ -10,7 +10,8 @@
  *   shows its answer beside the integration it tested, through the Integrations screen's own
  *   `ConnectionTestResult` (WP-155, backlog 451). A tracker bound here for the first time also gets
  *   the default lifecycle block, claim on (backlog 552, TD-029 decision 1), and the step says so
- *   before the bind.
+ *   before the bind. The selection starts at the stored bindings and the save names its change
+ *   (`binding-selection.tsx`, S-23.21): the PUT replaces the set, and an empty start unbound it.
  * - **Ticket lifecycle** is `features/ticket-lifecycle.tsx`, the same component the project settings
  *   page renders (WP-182).
  *
@@ -19,14 +20,11 @@
 import type { ProjectSummary } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, type ReactNode, useState } from 'react';
-import {
-  useBindableIntegrations,
-  useOnboardingCommands,
-  useProjectBindings,
-} from '../app/queries.js';
+import { useBindableIntegrations, useOnboardingCommands } from '../app/queries.js';
 import { buttonClassName } from '../ui/button.js';
 import { Badge, Button, EmptyState, ErrorNotice, Field } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { SaveBindingsButton, useBindingSelection } from './binding-selection.js';
 import { ConnectionTestResult } from './connection-test-result.js';
 import { DefaultBranch } from './default-branch.js';
 import {
@@ -120,10 +118,10 @@ const CreateProjectForm = ({
 /** Integrations: test and bind what exists. */
 const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): ReactElement => {
   const integrations = useBindableIntegrations();
-  const bindings = useProjectBindings(project.id);
   const commands = useOnboardingCommands();
-  const [selected, setSelected] = useState<readonly string[]>([]);
-  const stored = bindings.data?.items ?? [];
+  // S-23.21: seeded from the stored bindings, as the settings page's is — the PUT replaces the set.
+  const selection = useBindingSelection(project.id);
+  const { stored, selected } = selection;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-col gap-1">
@@ -138,14 +136,9 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
-                  checked={selected.includes(integration.id)}
-                  onChange={(event) =>
-                    setSelected(
-                      event.target.checked
-                        ? [...selected, integration.id]
-                        : selected.filter((id) => id !== integration.id),
-                    )
-                  }
+                  checked={selection.isSelected(integration.id)}
+                  disabled={!selection.ready}
+                  onChange={(event) => selection.toggle(integration.id, event.target.checked)}
                 />
                 <UntrustedText value={integration.name} />
               </label>
@@ -187,16 +180,17 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
         </p>
       )}
       <div>
-        <Button
-          disabled={commands.putBindings.isPending}
-          onClick={() =>
+        <SaveBindingsButton
+          selection={selection}
+          pending={commands.putBindings.isPending}
+          onSave={(ids) =>
             commands.putBindings.mutate({
               projectId: project.id,
               // Each binding keeps the configuration it already has — the notification channel lives
               // there (WP-32), and re-sending the set without it would erase it. A tracker bound here
               // for the first time also gets the default lifecycle block, claim on (backlog 552,
               // TD-029 decision 1); a stored one is untouched.
-              items: selected.map((id) => ({
+              items: ids.map((id) => ({
                 integration_id: id,
                 config: wizardBindingConfig({
                   integration: integrations.items.find((item) => item.id === id) ?? null,
@@ -206,10 +200,14 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
               })),
             })
           }
-        >
-          Bind {selected.length} integration{selected.length === 1 ? '' : 's'}
-        </Button>
+        />
       </div>
+      {selection.error === null ? null : (
+        <ErrorNotice
+          title="The project’s bindings could not be loaded, so none can be changed."
+          error={selection.error}
+        />
+      )}
       {commands.putBindings.isError ? (
         <ErrorNotice title="The bindings were not saved." error={commands.putBindings.error} />
       ) : null}
@@ -228,7 +226,7 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
           form below.
         </p>
       ) : null}
-      {bindings.isSuccess && stored.length > 0 ? (
+      {selection.ready && stored.length > 0 ? (
         <p className="text-xs text-fg-muted" data-bound="">
           Bound: {stored.map((item) => item.name).join(', ')}
         </p>

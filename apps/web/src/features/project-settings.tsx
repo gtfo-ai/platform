@@ -52,11 +52,10 @@
  */
 import type { EffectiveConfigResponse, ProjectSummary } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
-import { type ReactElement, useEffect, useState } from 'react';
+import type { ReactElement } from 'react';
 import {
   useBindableIntegrations,
   useOnboardingCommands,
-  useProjectBindings,
   useProjectByKey,
   useProjectConfig,
   useProjectReadiness,
@@ -73,6 +72,7 @@ import {
   Loading,
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
+import { SaveBindingsButton, useBindingSelection } from './binding-selection.js';
 import { BusinessInterview } from './business-interview.js';
 import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
 import { ExecutionSettings } from './execution-settings.js';
@@ -136,18 +136,12 @@ const exportSentence = (status: 'exported' | 'unchanged' | 'open'): string =>
 // ── Connections ──────────────────────────────────────────────────────────────
 
 const Connections = ({ project }: { readonly project: Project }): ReactElement => {
-  const bindings = useProjectBindings(project.id);
   const integrations = useBindableIntegrations();
   const commands = useOnboardingCommands();
-  const [selected, setSelected] = useState<readonly string[] | null>(null);
-  const bound = bindings.data?.items ?? [];
-  // Seeded from the server once the bindings arrive, so the checkboxes start at what is in force
-  // rather than at empty — a "Save bindings" pressed on an unseeded form would unbind everything.
-  useEffect(() => {
-    if (bindings.isSuccess && selected === null) {
-      setSelected(bound.map((binding) => binding.integration_id));
-    }
-  }, [bindings.isSuccess, bound, selected]);
+  // Seeded from the stored bindings, and again whenever that read changes — the wizard's own
+  // selection (`binding-selection.tsx`, S-23.21): a save pressed on an empty start unbinds everything.
+  const selection = useBindingSelection(project.id);
+  const bound = selection.stored;
 
   return (
     <>
@@ -155,7 +149,7 @@ const Connections = ({ project }: { readonly project: Project }): ReactElement =
         title="Connections"
         description="The ticket tracker, git host and chat this project uses, and how its tickets move."
       />
-      {bindings.isSuccess && bound.length === 0 ? (
+      {selection.ready && bound.length === 0 ? (
         <EmptyState
           title="No integrations bound"
           hint="A project needs a ticket board and a git host before the pipeline can start anything."
@@ -181,14 +175,9 @@ const Connections = ({ project }: { readonly project: Project }): ReactElement =
           <label key={integration.id} className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
-              checked={(selected ?? []).includes(integration.id)}
-              onChange={(event) =>
-                setSelected(
-                  event.target.checked
-                    ? [...(selected ?? []), integration.id]
-                    : (selected ?? []).filter((id) => id !== integration.id),
-                )
-              }
+              checked={selection.isSelected(integration.id)}
+              disabled={!selection.ready}
+              onChange={(event) => selection.toggle(integration.id, event.target.checked)}
             />
             <UntrustedText value={integration.name} />
             <Badge>{INTEGRATION_TYPE_LABEL[integration.type]}</Badge>
@@ -196,9 +185,10 @@ const Connections = ({ project }: { readonly project: Project }): ReactElement =
         ))}
       </fieldset>
       <div>
-        <Button
-          disabled={commands.putBindings.isPending}
-          onClick={() => {
+        <SaveBindingsButton
+          selection={selection}
+          pending={commands.putBindings.isPending}
+          onSave={(ids) => {
             // The **whole set**: a binding missing from the request is deleted, which is what
             // makes this re-submittable and what lets somebody correct a mistake without a
             // second endpoint (`PUT …/bindings`, WP-21).
@@ -206,16 +196,20 @@ const Connections = ({ project }: { readonly project: Project }): ReactElement =
               projectId: project.id,
               // With the configuration each binding already carries: the notification channel is
               // a key of it (WP-32), and this button must not be a way to lose it.
-              items: (selected ?? []).map((id) => ({
+              items: ids.map((id) => ({
                 integration_id: id,
-                config: bindingConfigOf(bindings.data?.items ?? [], id),
+                config: bindingConfigOf(bound, id),
               })),
             });
           }}
-        >
-          Save bindings
-        </Button>
+        />
       </div>
+      {selection.error === null ? null : (
+        <ErrorNotice
+          title="The project’s bindings could not be loaded, so none can be changed."
+          error={selection.error}
+        />
+      )}
       {commands.putBindings.isError ? (
         <ErrorNotice title="The bindings were not saved." error={commands.putBindings.error} />
       ) : null}
