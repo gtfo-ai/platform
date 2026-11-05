@@ -628,7 +628,7 @@ const Wizard = ({
     <div className="flex flex-col gap-4">
       {header}
       <div className="grid gap-6 md:grid-cols-[15rem_minmax(0,1fr)]">
-        <nav aria-label="Setup steps" className="flex flex-col gap-4">
+        <nav aria-label="Setup" className="flex flex-col gap-4">
           <Stepper
             label="Setup steps"
             steps={stepStates(current, done, projectKey, reads.discoveryRunning)}
