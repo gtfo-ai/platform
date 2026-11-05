@@ -91,17 +91,21 @@ $installerExitCode = & {
 
   function Invoke-Compose {
     param([string[]]$Arguments)
+    # Removed, not emptied: PowerShell hands a .NET string parameter '' for $null, and an empty
+    # APP_TRUSTED_BUILDER would still reach Compose and switch the updater's verification off.
     $saved = @{}
     foreach ($name in $Scrubbed) {
       $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-      [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+      Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
     }
     Push-Location -LiteralPath $WorkerDir
     try {
       return (Invoke-Native -File 'docker' -Arguments (@('compose', '--project-name', $Project) + $Arguments))
     } finally {
       Pop-Location
-      foreach ($name in $Scrubbed) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
+      foreach ($name in $Scrubbed) {
+        if ($null -ne $saved[$name]) { Set-Item -LiteralPath "Env:$name" -Value $saved[$name] }
+      }
     }
   }
 
