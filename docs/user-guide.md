@@ -519,7 +519,12 @@ finished — without reloading the page.
 **A new instance is set up from here.** For an admin, while there is no project — or no
 integration — Home is a **setup checklist** instead of the boxes: *Connect your tracker and git
 host*, *Create a project*, *Run technical discovery*, *Choose how autonomous agents are*, *Start
-your first ticket*. Each step is ticked from what the platform already knows (an integration of
+your first ticket* — and, on a platform whose server runs no agent work (the project's *Execution*
+settings say so), **Connect a worker** before the ticket, because nothing runs until a developer's
+computer does. That step is ticked once a worker can take work; a worker that exists but cannot is
+named with the reason (*jan-mbp can't take work yet: not connected*), and *Continue setup* opens the
+**Add a worker** wizard at *Ready to work* for it. On a platform whose server runs agent work the
+step is not there at all. Each step is ticked from what the platform already knows (an integration of
 each kind exists, a project exists, its readiness was evaluated, its operating mode was applied, it
 has a ticket's task), never from what this browser remembers, so a step done in another tab or
 through the API is ticked too. **Continue setup** opens the first step that is not done — the
@@ -586,7 +591,9 @@ on its own: an event from the platform refreshes the lists, the clock moves *ela
 every 15 seconds, and the *Now: …* of up to twelve runs on screen follows their transcripts live
 (at most one refresh a second).
 With nothing running, the map and the list say *No agent is working* with a way to a board, and the
-office shows everyone asleep under the same words.
+office shows everyone asleep under the same words. On a platform whose server runs no agent work and
+with no worker of yours connected, they say **Waiting for a worker** instead, with **Add a worker**,
+and the queue and the office's bench say their runs wait *for a worker* rather than *for a seat*.
 
 What it cannot show yet: how many runs the platform server takes at once (no reading reports it, so
 its seat says *2 running* rather than a slot count, and the free-seat count is the workers' alone);
@@ -1441,27 +1448,34 @@ pipeline comes back to the Developer with the failing job's log, and Discovery a
 by reading the CI configuration rather than running anything (the evidence says so). The same key is
 `verification.mode: ci` in `.agentic/config.yml`, which may switch a project to CI but never back.
 
-**Execution** (since WP-278) is where a project's agent runs execute, the *Execution* section of its
+**Execution** (since WP-278) is who runs a project's agents, the *Execution* section of its
 settings, and only an administrator may change it. Every agent run is first *offered*, and whoever may take it
 does:
 
-- **Mode** — *The server only* (the instance's own runner), *Workers only* (developers' registered
-  machines, the **Workers** page), or *Server and workers* (the default, one pool for both).
-- **Preferred** — in the hybrid mode, which side may take a run first (the server, by default);
-  the other side may take it after **Fallback after** seconds — 15 when the server is preferred,
-  300 when workers are, unless you set a number.
-- **Assignee head start** — a worker of the person a question was asked by gets this long (120 s by
-  default) to take the run before anybody else, while that worker is online. A ticket's assignee
-  does not get it yet: the platform does not keep who a ticket is assigned to.
-- **Offer timeout** — a run nobody takes within this long (a day by default) is withdrawn and its
-  task goes to **Needs you** with the brief *no claimant took this run*; a question is answered
-  as failed. Check the mode, and whether a worker or the server runner is actually running.
+- **Who runs this project's agents** — *Workers only* (developers' own computers, the **Workers**
+  page), *Prefer workers*, *Prefer the platform server* (the default) or *Platform server only*.
+  The line under the choice says what it means.
+- **If no worker takes it within …** / **If the platform server hasn't taken it within …** — with
+  a preference, how long the first side has before the other may take the run too (the fallback):
+  15 s when the server is preferred, 5 min when workers are, unless you choose another duration.
+- **Head start for the assignee's worker** — a worker of the person a question was asked by gets
+  this long (2 min by default) to take the run before anybody else, while that worker is online. A
+  ticket's assignee does not get it yet: the platform does not keep who a ticket is assigned to.
+- **Give up and ask a person after** — a run nobody takes within this long (a day by default) is
+  withdrawn and its task goes to **Needs you** with the brief *no claimant took this run*; a
+  question is answered as failed. Check the choice, and whether a worker or the platform server is
+  actually running.
 
-The section shows whether the instance has a server runner right now. With none, a hybrid project's
-runs are offered to workers at once rather than after the fallback, and a *server only* project's
-runs wait — the card says which. A change applies to runs offered after you save it. This is never
-a key of `.agentic/config.yml`: the file refuses an `execution` key, because where code runs and
-whose subscription pays is not something a pushed commit may change.
+Each duration is a list of presets; **Custom…** takes a number of seconds. The section says in a
+sentence whether the platform server runs agent work on this platform right now. With none, a
+project that prefers the server has its runs offered to workers at once rather than after the
+fallback, and a *platform server only* project's runs wait — the card says which. When the project's
+git connection gives runs a long-lived token or a deploy key, the card says that workers can't take
+its runs (sending that credential to a developer's computer is off) and links **Open the git
+connection**, where an administrator can allow it. A change applies to runs offered after you save
+it. This is never a key of `.agentic/config.yml` (*Why isn't this in the repository's
+configuration?* says so): where code runs and whose subscription pays is not something a pushed
+commit may change.
 
 ## 12. Statistics
 
@@ -1508,13 +1522,55 @@ busy*); **Details** holds the image digests it reported and when it was register
 dialog that says what it does before anything happens: the machine's credential stops at its next
 call, and any run it holds is ended by the lease sweep and planned again.
 
-A machine is added from its own terminal: it shows a code like `BCDF-GHJK`, and you approve it at
-**/workers/approve** while signed in. Before you decide, the page shows where the request came from,
-which client sent it and how old the code is. **Approve only a code your own machine is showing you
-now** — somebody who sends you a code is asking you to give their machine your access — and a code
-older than five minutes asks you to confirm that a second time. Name the machine and approve, or
-deny; the machine collects its credential at its next poll. The worker program itself, and running
-stages on it, arrive with the rest of the worker protocol.
+#### Add a worker
+
+**Add a worker** — in the top bar's **+** menu, for everybody signed in — is a five-step wizard at
+`/workers/new`, with the steps on the left, one primary button per step and **Save and exit** at
+the top right. The step is in the address, so a link (or Home's checklist) opens it where you left
+off.
+
+1. **Install.** What a worker is, what you need (Docker on that computer and a Claude
+   subscription), and **one line** to run there, built from this platform's own address — the one
+   for the system your browser reports first, the other behind a click:
+   `curl -fsSL <platform>/api/worker/v1/install.sh | sh` on macOS or Linux,
+   `irm <platform>/api/worker/v1/install.ps1 | iex` in Windows PowerShell. **Read the script first**
+   opens the script itself. It checks that Docker runs, puts the worker in `~/agentic-worker`,
+   starts it and opens http://127.0.0.1:7357, the worker's own page. (The installer is being built
+   beside this wizard; until it is served, use *Set it up by hand*.) **Set it up by hand** holds the
+   `curl` that downloads `compose.worker.yml` and the `APP_CORE_URL=…` line for a `.env.worker` file
+   beside it. The platform cannot see an install, so this step is done when you tick **I've done
+   this**.
+2. **Start it and sign in.** The worker's page opens at http://127.0.0.1:7357 and walks you through
+   signing in to Claude, then shows the code to approve. **If you set it up by hand**:
+   `claude setup-token` signs in to your Claude subscription. The browser then says *Build
+   something great — you can close this window*: the token is printed in the **terminal** where you
+   ran the command, not in the browser, and may wrap over two lines — join them — and goes into
+   `.env.worker` as `CLAUDE_CODE_OAUTH_TOKEN` (the step also gives a command that writes it without
+   printing it). Don't authorize again: every run creates a new token. Then
+   `docker compose --env-file .env.worker -f compose.worker.yml up -d`, and open
+   http://127.0.0.1:7357. Three troubleshooting items: *Safari can't connect to localhost:…/callback*
+   (the command was stopped before you authorized: run it again in a terminal that stays open),
+   *downloading the script or compose.yml answers 503 or 426* (the platform needs an update: ask an
+   administrator), and *the page at 127.0.0.1:7357 doesn't open* (`docker compose ps` in the
+   worker's folder; set up by hand without the token, the worker refuses to start). *Continue* is
+   never held here: you may already have the code.
+3. **Approve.** **Approve the code** opens the approval page (below) in a new tab. The step is done
+   once a new worker of yours appears — this page asks every 5 seconds while you wait.
+4. **Ready to work.** Whether that worker can take work now, line by line: connected, not paused by
+   its owner, not held by a Claude usage limit — each one it fails says what to do. Its images, its
+   version and which projects give it work are not checked here yet; the worker's own page shows
+   them.
+5. **Choose projects** (optional). Each of your projects, and whether workers run its stages; for
+   one that does not, an administrator gets **Use workers for …** (its *Execution* settings) and
+   anyone else is told to ask one. The wizard ends on **Open the board** of the first project
+   workers run, or **Go to Workers** when there is none.
+
+**The approval page**, `/workers/approve`: the worker's page shows a code like `BCDF-GHJK`, and you
+type it here while signed in. Before you decide, the page shows where the request came from, which
+client sent it and how old the code is. **Approve only a code your own machine is showing you now**
+— somebody who sends you a code is asking you to give their machine your access — and a code older
+than five minutes asks you to confirm that a second time. Name the machine and approve, or deny; the
+machine collects its credential the next time it asks, within seconds.
 
 A machine its owner paused from the worker's own page reads **Paused by its owner**: it takes no new
 work until it is resumed there. That page — on the developer's machine only, at the address the

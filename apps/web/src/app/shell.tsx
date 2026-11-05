@@ -21,6 +21,7 @@
  */
 
 import type { ProjectSummary } from '@platform/contracts';
+import { DeviceDesktopIcon } from '@primer/octicons-react/DeviceDesktopIcon';
 import { InboxIcon } from '@primer/octicons-react/InboxIcon';
 import { PlayIcon } from '@primer/octicons-react/PlayIcon';
 import { PlusIcon } from '@primer/octicons-react/PlusIcon';
@@ -342,21 +343,25 @@ export const ProjectSwitcher = ({
 
 /**
  * `+ ▾`: *New project* for an admin (`project.create` is admin-only, so nobody else is offered a
- * wizard whose first command answers 403), *Start a ticket…* inside a project whose tasks read says
- * the caller may start one (`can_start_task`) — it opens the board's start form, the one place a
- * ticket is started. With neither, there is no menu.
+ * wizard whose first command answers 403), *Add a worker* for everybody signed in (`worker.register`
+ * is any active user's — TD-031 §10c, the approver is the worker's owner — S-23.20), *Start a
+ * ticket…* inside a project whose tasks read says the caller may start one (`can_start_task`) — it
+ * opens the board's start form, the one place a ticket is started. With none of them, there is no
+ * menu.
  */
 const CreateMenu = ({
   project,
   canCreateProject,
+  canAddWorker,
 }: {
   readonly project: ProjectSummary | null;
   readonly canCreateProject: boolean;
+  readonly canAddWorker: boolean;
 }): ReactElement | null => {
   const navigate = useNavigate();
   const tasks = useProjectTasks(project?.id ?? null);
   const canStart = project !== null && tasks.data?.can_start_task === true;
-  if (!canCreateProject && !canStart) {
+  if (!canCreateProject && !canAddWorker && !canStart) {
     return null;
   }
   return (
@@ -385,6 +390,16 @@ const CreateMenu = ({
           }}
         >
           New project
+        </ActionMenuItem>
+      ) : null}
+      {canAddWorker ? (
+        <ActionMenuItem
+          leadingIcon={<DeviceDesktopIcon size={16} />}
+          onSelect={() => {
+            void navigate({ to: '/workers/new' });
+          }}
+        >
+          Add a worker
         </ActionMenuItem>
       ) : null}
       {project === null || !canStart ? null : (
@@ -525,7 +540,11 @@ export const AppShell = (): ReactElement => {
           <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
             <CommandLayer project={project} canCreateProject={user?.role === 'admin'} />
             <RunningIndicator running={counts.running} status={status} />
-            <CreateMenu project={project} canCreateProject={user?.role === 'admin'} />
+            <CreateMenu
+              project={project}
+              canCreateProject={user?.role === 'admin'}
+              canAddWorker={user !== null}
+            />
             <InboxButton count={counts.inbox} />
             <AccountMenu
               user={user}

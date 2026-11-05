@@ -129,6 +129,11 @@ interface Backend {
   removed: string[];
   runs: Map<string, RunRecord>;
   posted: string[];
+  /** S-23.20: the project's execution read's `server_claimant`; absent, the read answers 404. */
+  serverClaimant?: 'running' | 'none';
+  workers: typeof WORKERS;
+  /** How many times the execution read was answered. */
+  executionReads: number;
 }
 
 const backend = (agents: AgentsResponse = AGENTS, inbox: typeof INBOX = INBOX): Backend => ({
@@ -138,6 +143,8 @@ const backend = (agents: AgentsResponse = AGENTS, inbox: typeof INBOX = INBOX): 
   removed: [],
   runs: new Map(),
   posted: [],
+  workers: WORKERS,
+  executionReads: 0,
 });
 
 const fetchFor = (state: Backend) =>
@@ -172,7 +179,21 @@ const fetchFor = (state: Backend) =>
       }
     }
     if (path === '/api/org/agents') return json(state.agents);
-    if (path === '/api/workers') return json(WORKERS);
+    if (path === '/api/workers') return json(state.workers);
+    if (path === `/api/projects/${PROJECT}/execution` && state.serverClaimant !== undefined) {
+      state.executionReads += 1;
+      return json({
+        mode: 'hybrid',
+        prefer: 'server',
+        fallback_after_seconds: null,
+        assignee_window_seconds: 120,
+        offer_timeout_seconds: 86_400,
+        effective_fallback_after_seconds: 15,
+        stored: false,
+        server_claimant: state.serverClaimant,
+        notice: null,
+      });
+    }
     if (path === '/api/org/inbox') return json(state.inbox);
     if (path === '/api/projects') return json({ items: [project] });
     if (/^\/api\/runs\/[^/]+\/messages$/.test(path)) return json({ items: [], next_seq: null });
@@ -634,6 +655,63 @@ describe('the list', () => {
     const runs = await screen.findByRole('list', { name: 'Runs' });
     await user.click(await within(runs).findByRole('button', { name: /^demo · DEMO-3/ }));
     expect(await screen.findByRole('dialog', { name: 'DEMO-3 · Architecture' })).toBeDefined();
+  });
+});
+
+describe('on a platform with no server runner (S-23.20)', () => {
+  const offline = {
+    ...WORKERS,
+    items: WORKERS.items.map((item) => ({ ...item, last_seen_at: at(10 * 60_000) })),
+  };
+
+  it('waits for a worker, with the way to add one, when no worker is connected', async () => {
+    media(1280);
+    const nobody = { questions: [], approvals: [] };
+    const state = {
+      ...backend({ items: [] }, nobody),
+      serverClaimant: 'none' as const,
+      workers: offline,
+    };
+    start('/agents', state);
+    expect(await screen.findByRole('heading', { name: 'Waiting for a worker' })).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Add a worker' }).getAttribute('href')).toBe(
+      '/workers/new',
+    );
+    cleanup();
+
+    start('/agents?view=office', { ...state, topics: new Set(), removed: [] });
+    const room = await office();
+    expect(
+      await within(room).findByRole('heading', { name: 'Waiting for a worker' }),
+    ).toBeDefined();
+    expect(within(room).getByText('Bench · waiting for a worker')).toBeDefined();
+  });
+
+  it('says the queue waits for a worker on the office’s bench', async () => {
+    media(1280);
+    start('/agents?view=office', { ...backend(), serverClaimant: 'none', workers: offline });
+    const room = await office();
+    await waitFor(() => {
+      expect(within(room).getByText(/^Bench · \d+ waiting for a worker$/)).toBeDefined();
+    });
+  });
+
+  it('says nothing of the kind once a worker is connected, or where the server runs agent work', async () => {
+    media(1280);
+    const nobody = { questions: [], approvals: [] };
+    for (const state of [
+      // A worker is connected (seen a minute ago)…
+      { ...backend({ items: [] }, nobody), serverClaimant: 'none' as const },
+      // …or the server runs agent work.
+      { ...backend({ items: [] }, nobody), serverClaimant: 'running' as const, workers: offline },
+    ]) {
+      start('/agents', state);
+      // Asserted only once the read that decides it has answered.
+      await waitFor(() => expect(state.executionReads).toBeGreaterThan(0));
+      expect(await screen.findByRole('heading', { name: 'No agent is working' })).toBeDefined();
+      expect(screen.queryByRole('heading', { name: 'Waiting for a worker' })).toBeNull();
+      cleanup();
+    }
   });
 });
 

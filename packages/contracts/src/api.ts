@@ -823,6 +823,15 @@ export const projectExecutionResponseSchema = putProjectExecutionRequestSchema.e
   notice: z.string().max(1024).nullable(),
 });
 
+/**
+ * The sentence `notice` carries when the project's git integration keeps its run credential off
+ * developers' machines (WP-283, TD-031 decision 5, Q124 (a)). One constant for both ends: the server
+ * writes it, and the settings screen recognises it to say it in its own words with a link to that
+ * integration (S-23.20) rather than showing a configuration key.
+ */
+export const REMOTE_RUN_CREDENTIAL_REFUSED_NOTICE =
+  'Remote workers take none of this project’s runs: its git integration gives runs a static token or a deploy key, and only an administrator’s remote_run_credential: allow on that integration lets either reach a developer’s machine.';
+
 /** Its answer to a write: the setting as written, and `performed: false` for a replay. */
 export const putProjectExecutionResponseSchema = z.strictObject({
   execution: projectExecutionResponseSchema,

@@ -1,0 +1,256 @@
+/**
+ * The *Add a worker* wizard's steps, what each one being *done* means, and the commands it shows
+ * (S-23.20; TD-033 decision 9's wizard shape, research/19 § 6, the worker UX review § 3).
+ *
+ * Pure and dependency-free apart from the contracts, so the route tree can validate `?step=` against
+ * {@link WORKER_WIZARD_STEP_IDS} without pulling the wizard's chunk into the initial bundle, and so
+ * the rules are unit-tested as rules (`worker-wizard-steps.test.ts`).
+ *
+ * ## Done-ness is the server's — with one stated exception
+ *
+ * | step | done when | may be passed when |
+ * |---|---|---|
+ * | install | the person says so (*I've done this*, kept in the URL as `?installed=true`), or a worker of theirs from this wizard exists | done |
+ * | start | a worker of theirs from this wizard exists | always — a person may already hold the code |
+ * | approve | a worker of theirs from this wizard exists (`GET /api/workers`) | done |
+ * | ready | that worker can take work (`worker-readiness.ts`, a stub of the server's N1) | done |
+ * | projects *(optional)* | some project of theirs lets workers run it | — (the last step) |
+ *
+ * **Install is the one step whose done-ness is the person's word**: running the installer is
+ * invisible to the platform. The core cannot tell that a pending device code is this person's either (the
+ * request is anonymous by design, TD-031 §10c), so *start* is done only when *approve* is.
+ *
+ * **A worker "from this wizard"** is the newest active worker of the signed-in person created at or
+ * after `?since=` — the instant the wizard was opened, kept in the URL so *Save and exit* and Home
+ * resume it. The wizard writes `since` a little before its own clock ({@link SINCE_SKEW_MS}), because
+ * `created_at` is the server's clock and the browser's may run ahead of it.
+ *
+ * ## The commands
+ *
+ * Install is **one command per OS** — the core's installer script ({@link WORKER_INSTALL_PATHS},
+ * S-22.20), which checks Docker, puts the bundle in {@link WORKER_INSTALL_DIR}, starts it and opens
+ * the worker's own page — with the compose file and `.env.worker` lines behind *Set it up by hand*.
+ * Start is then the worker's own page, which signs in to Claude; the hand-made sign-in
+ * (`claude setup-token`) stays as that step's fallback.
+ */
+import {
+  type ProjectExecutionResponse,
+  REMOTE_RUN_CREDENTIAL_REFUSED_NOTICE,
+  WORKER_API_PREFIX,
+  WORKER_PATHS,
+  type WorkerSummary,
+} from '@platform/contracts';
+
+export const WORKER_WIZARD_STEP_IDS = ['install', 'start', 'approve', 'ready', 'projects'] as const;
+
+export type WorkerWizardStepId = (typeof WORKER_WIZARD_STEP_IDS)[number];
+
+export const WORKER_WIZARD_STEPS: Readonly<
+  Record<WorkerWizardStepId, { readonly label: string; readonly optional: boolean }>
+> = {
+  install: { label: 'Install', optional: false },
+  start: { label: 'Start it and sign in', optional: false },
+  approve: { label: 'Approve', optional: false },
+  ready: { label: 'Ready to work', optional: false },
+  projects: { label: 'Choose projects', optional: true },
+};
+
+/** How far before its own clock the wizard records `since` (server and browser clocks differ). */
+export const SINCE_SKEW_MS = 2 * 60_000;
+
+/** What the wizard knows; `null` is "not read yet". */
+export interface WorkerWizardFacts {
+  /** The person ticked *I've done this* on the install step. */
+  readonly installed: boolean;
+  /** The worker from this wizard; `null` while the workers read is in flight, `false` for none. */
+  readonly worker: WorkerSummary | false | null;
+  /** That worker can take work now; `null` while unknown. */
+  readonly canClaim: boolean | null;
+  /** Some project of the person's lets workers run it; `null` while unknown. */
+  readonly projectTakesWorkers: boolean | null;
+}
+
+export type WorkerWizardDoneness = Readonly<Record<WorkerWizardStepId, boolean | null>>;
+
+export const workerWizardDonenessOf = (facts: WorkerWizardFacts): WorkerWizardDoneness => {
+  const exists = facts.worker === null ? null : facts.worker !== false;
+  return {
+    install: facts.installed || exists === true ? true : exists === null ? null : false,
+    start: exists,
+    approve: exists,
+    ready: exists === false ? false : exists === null ? null : facts.canClaim,
+    projects: facts.projectTakesWorkers,
+  };
+};
+
+/** Whether a person may move past `step` (see the table in the module note). */
+const passable = (step: WorkerWizardStepId, done: WorkerWizardDoneness): boolean | null =>
+  step === 'start' ? true : done[step];
+
+const indexOf = (step: WorkerWizardStepId): number => WORKER_WIZARD_STEP_IDS.indexOf(step);
+
+export const previousWorkerStep = (step: WorkerWizardStepId): WorkerWizardStepId | null =>
+  WORKER_WIZARD_STEP_IDS[indexOf(step) - 1] ?? null;
+export const nextWorkerStep = (step: WorkerWizardStepId): WorkerWizardStepId | null =>
+  WORKER_WIZARD_STEP_IDS[indexOf(step) + 1] ?? null;
+
+/**
+ * The first required step before `step` that may not be passed yet — what keeps `step` closed — or
+ * `null` when nothing does; `undefined` while one of them has not been read.
+ */
+export const blockingWorkerStepOf = (
+  step: WorkerWizardStepId,
+  done: WorkerWizardDoneness,
+): WorkerWizardStepId | null | undefined => {
+  for (const earlier of WORKER_WIZARD_STEP_IDS.slice(0, indexOf(step))) {
+    if (WORKER_WIZARD_STEPS[earlier].optional) {
+      continue;
+    }
+    const may = passable(earlier, done);
+    if (may === null) {
+      return undefined;
+    }
+    if (!may) {
+      return earlier;
+    }
+  }
+  return null;
+};
+
+/** Where the wizard opens with no `?step=`: the first step not done; `null` while unknown. */
+export const resumeWorkerStepOf = (done: WorkerWizardDoneness): WorkerWizardStepId | null => {
+  const required = WORKER_WIZARD_STEP_IDS.filter((step) => !WORKER_WIZARD_STEPS[step].optional);
+  for (const step of required) {
+    if (done[step] === null) {
+      return null;
+    }
+    if (done[step] === false) {
+      return step;
+    }
+  }
+  return 'projects';
+};
+
+/** Why *Continue* is off on `step`, in the step's words — or `null` when it may be pressed. */
+export const workerContinueBlockerOf = (
+  step: WorkerWizardStepId,
+  done: WorkerWizardDoneness,
+): string | null => {
+  const may = WORKER_WIZARD_STEPS[step].optional ? true : passable(step, done);
+  if (may === true) {
+    return null;
+  }
+  if (may === null) {
+    return 'Checking your workers…';
+  }
+  switch (step) {
+    case 'install':
+      return 'Tick “I’ve done this” once the file is downloaded.';
+    case 'approve':
+      return 'Continue opens once the code is approved and the worker connects.';
+    case 'ready':
+      return 'Continue opens once the worker can take work.';
+    default:
+      return null;
+  }
+};
+
+/** The newest active worker of `userId` created at or after `sinceMs`, or `false` for none. */
+export const wizardWorkerOf = (
+  items: readonly WorkerSummary[],
+  userId: string,
+  sinceMs: number,
+): WorkerSummary | false =>
+  items
+    .filter(
+      (worker) =>
+        worker.user.id === userId &&
+        worker.state === 'active' &&
+        Date.parse(worker.created_at) >= sinceMs,
+    )
+    .reduce<WorkerSummary | false>(
+      (newest, worker) =>
+        newest === false || Date.parse(worker.created_at) > Date.parse(newest.created_at)
+          ? worker
+          : newest,
+      false,
+    );
+
+/** The project's git integration keeps its run credential off developers' machines (WP-283). */
+export const credentialKeepsWorkersOff = (execution: ProjectExecutionResponse): boolean =>
+  execution.notice?.includes(REMOTE_RUN_CREDENTIAL_REFUSED_NOTICE) === true;
+
+/** Workers may run the project's stages: its mode admits them and its credential lets them. */
+export const projectTakesWorkers = (execution: ProjectExecutionResponse): boolean =>
+  execution.mode !== 'server_only' && !credentialKeepsWorkersOff(execution);
+
+/**
+ * The one-command installer's paths on the core (S-22.20): **intended, not live yet** — the other
+ * session is building them (BACKLOG 927). One constant, so a changed path is one edit.
+ */
+export const WORKER_INSTALL_PATHS = {
+  unix: `${WORKER_API_PREFIX}/install.sh`,
+  windows: `${WORKER_API_PREFIX}/install.ps1`,
+} as const;
+
+/** Which installer a computer runs: a POSIX shell's, or PowerShell's. */
+export type InstallOs = keyof typeof WORKER_INSTALL_PATHS;
+
+/**
+ * The installer to show first, from what the browser says it runs on — a guess about the computer
+ * the person is reading on, which is usually the one they install on; the other one is a click away.
+ */
+export const preferredInstallOs = (platform: string): InstallOs =>
+  // `Windows`/`Win32`/`Win64` — never a bare `win`, which `Darwin` contains.
+  /\bWin(?:dows|32|64)\b/.test(platform) ? 'windows' : 'unix';
+
+/** The commands the wizard shows, built from this platform's own origin. */
+export interface WorkerInstallCommands {
+  readonly origin: string;
+  /** The installer's URL and the line that runs it, per OS. */
+  readonly installer: Readonly<Record<InstallOs, { readonly url: string; readonly run: string }>>;
+  readonly download: string;
+  readonly coreUrlLine: string;
+  readonly signIn: string;
+  readonly writeToken: string;
+  readonly up: string;
+  readonly ps: string;
+}
+
+/** The compose arguments every command after the download uses. */
+const COMPOSE = 'docker compose --env-file .env.worker -f compose.worker.yml';
+
+/**
+ * The commands for `origin` — the page's own origin, the platform this browser talks to. Normalised
+ * through `URL` so a trailing slash or a path never reaches a command; the values are shown as text
+ * fields (`ui/copy-field.tsx`), never as markup.
+ */
+export const workerInstallCommands = (pageOrigin: string): WorkerInstallCommands => {
+  const origin = new URL(pageOrigin).origin;
+  return {
+    origin,
+    installer: {
+      unix: {
+        url: `${origin}${WORKER_INSTALL_PATHS.unix}`,
+        run: `curl -fsSL ${origin}${WORKER_INSTALL_PATHS.unix} | sh`,
+      },
+      windows: {
+        url: `${origin}${WORKER_INSTALL_PATHS.windows}`,
+        run: `irm ${origin}${WORKER_INSTALL_PATHS.windows} | iex`,
+      },
+    },
+    download: `curl -fsSo compose.worker.yml ${origin}${WORKER_API_PREFIX}/${WORKER_PATHS.composeFile}`,
+    coreUrlLine: `APP_CORE_URL=${origin}`,
+    signIn: 'claude setup-token',
+    // A silent prompt, so the token is never printed or kept in the shell's history.
+    writeToken: `read -rs T && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\\n' "$T" >> .env.worker && unset T`,
+    up: `${COMPOSE} up -d`,
+    ps: `${COMPOSE} ps`,
+  };
+};
+
+/** The worker's own page on the computer it runs on (`compose.worker.yml`'s default port). */
+export const WORKER_LOCAL_PAGE = 'http://127.0.0.1:7357';
+
+/** Where the installer puts the worker's bundle (S-22.20). */
+export const WORKER_INSTALL_DIR = '~/agentic-worker';

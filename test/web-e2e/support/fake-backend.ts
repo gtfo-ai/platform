@@ -729,6 +729,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         // statistics.test.tsx` drives the JSON half against this same shape).
         '/api/org/stats': fixtures.orgStats,
         [`/api/projects/${fixtures.IDS.project}/autonomy`]: fixtures.autonomy,
+        // S-23.20: the execution read Home, the Agents page and the worker wizard ask.
+        [`/api/projects/${fixtures.IDS.project}/execution`]: fixtures.projectExecution,
         [`/api/projects/${fixtures.IDS.project}/rediscovery`]: fixtures.rediscoveryGate,
         [`/api/projects/${fixtures.IDS.project}/audit`]: fixtures.projectAudit,
         [`/api/projects/${fixtures.IDS.project}/kb/tree`]: fixtures.kbTree,

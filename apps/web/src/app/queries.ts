@@ -5,6 +5,8 @@
  * invalidation signal (`realtime/query-bridge.ts`), and a background refetch interval on top of it
  * would hide a broken stream behind data that happens to be fresh — the failure that is hardest to
  * notice and worst to debug. If the stream is down, the connection badge in the header says so.
+ * The one exception is a read no event announces: the *Add a worker* wizard asks for the workers
+ * every 5 s while the person waits for a machine (`features/worker-wizard.tsx` says why).
  */
 import type { BusinessInterviewRequest } from '@platform/contracts';
 import {

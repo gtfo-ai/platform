@@ -20,6 +20,7 @@ import type {
   TaskDetailResponse,
   TaskRecord,
   UserRole,
+  WorkerSummary,
 } from '@platform/contracts';
 import { sseFrameSchema } from '@platform/contracts';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
@@ -28,6 +29,7 @@ import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import type { EventStream } from '../realtime/client.js';
 import { firstNameOf, greetingFor } from './dashboard.js';
+import { workerFixture } from './worker.test-fixture.js';
 
 const CONSEQUENCE =
   'Its credentials cannot be decrypted (a changed APP_SECRET_KEY or a damaged secrets row), so the prompt files of every project are withheld: each repository reading stores the configuration and none of .agentic/prompts/ until the credentials are re-sealed or the account is retired.';
@@ -230,6 +232,9 @@ interface World {
   /** Projects whose dial was applied. */
   materialised: Set<string>;
   monthCap: { limit: number; spent: number } | null;
+  /** S-23.20: the execution read's `server_claimant`; absent, the read answers 404. */
+  serverClaimant?: 'running' | 'none';
+  workers: WorkerSummary[];
   asked: string[];
 }
 
@@ -245,6 +250,7 @@ const newWorld = (over: Partial<World> = {}): World => ({
   evaluated: new Set(),
   materialised: new Set([PROJECT(1)]),
   monthCap: null,
+  workers: [],
   asked: [],
   ...over,
 });
@@ -261,6 +267,21 @@ const fetchFor = (world: World) =>
     if (path.startsWith('/api/auth/get-session')) return json(session(world.role, world.name));
     if (path === '/api/integrations') return json({ items: world.integrations });
     if (path === '/api/projects') return json({ items: world.projects });
+    if (path === '/api/workers')
+      return json({ items: world.workers, scope: 'all', timezone: 'UTC' });
+    if (/^\/api\/projects\/[^/]+\/execution$/.test(path) && world.serverClaimant !== undefined) {
+      return json({
+        mode: 'hybrid',
+        prefer: 'server',
+        fallback_after_seconds: null,
+        assignee_window_seconds: 120,
+        offer_timeout_seconds: 86_400,
+        effective_fallback_after_seconds: 15,
+        stored: false,
+        server_claimant: world.serverClaimant,
+        notice: null,
+      });
+    }
     if (path === '/api/org/agents') {
       return json({
         items: world.runs.map((entry) => ({
@@ -666,6 +687,60 @@ describe('Home on a new instance: the setup checklist', () => {
     await screen.findByRole('region', { name: 'Set up' });
     await waitFor(() => {
       expect(stepStates()).toEqual(['done', 'done', 'done', 'done', 'current']);
+    });
+    expect(primaries(container)[0]?.getAttribute('href')).toBe('/projects/p1#start-ticket');
+  });
+
+  it('adds Connect a worker before the first ticket only where the platform has no server runner', async () => {
+    // A server runner: no worker step, and the workers are not even asked for.
+    let world = newWorld({ tasks: [], serverClaimant: 'running' });
+    start(world);
+    await screen.findByRole('region', { name: 'Set up' });
+    await waitFor(() => {
+      expect(stepStates()).toEqual(['done', 'done', 'done', 'done', 'current']);
+    });
+    expect(world.asked).toContain(`/api/projects/${PROJECT(1)}/execution`);
+    expect(world.asked).not.toContain('/api/workers');
+    cleanup();
+
+    // None, and no worker yet: the step leads, to the wizard.
+    world = newWorld({ tasks: [], serverClaimant: 'none' });
+    const { container } = start(world);
+    await screen.findByRole('region', { name: 'Set up' });
+    await waitFor(() => {
+      expect(stepStates()).toEqual(['done', 'done', 'done', 'done', 'current', 'upcoming']);
+    });
+    expect(screen.getByRole('link', { name: 'Connect a worker' })).toBeTruthy();
+    expect(primaries(container)[0]?.getAttribute('href')).toBe('/workers/new');
+  });
+
+  it('names a worker that cannot take work and resumes the wizard at Ready for it', async () => {
+    const created = minutesAgo(30);
+    const world = newWorld({
+      tasks: [],
+      serverClaimant: 'none',
+      workers: [
+        workerFixture({ name: 'jan-mbp', created_at: created, last_seen_at: minutesAgo(20) }),
+      ],
+    });
+    const { container } = start(world);
+    await screen.findByRole('region', { name: 'Set up' });
+    await screen.findByText('jan-mbp can’t take work yet: not connected.');
+    expect(primaries(container)[0]?.getAttribute('href')).toBe(
+      `/workers/new?step=ready&since=${encodeURIComponent(created)}`,
+    );
+  });
+
+  it('ticks Connect a worker once a worker can take work', async () => {
+    const world = newWorld({
+      tasks: [],
+      serverClaimant: 'none',
+      workers: [workerFixture({ created_at: minutesAgo(30), last_seen_at: minutesAgo(0) })],
+    });
+    const { container } = start(world);
+    await screen.findByRole('region', { name: 'Set up' });
+    await waitFor(() => {
+      expect(stepStates()).toEqual(['done', 'done', 'done', 'done', 'done', 'current']);
     });
     expect(primaries(container)[0]?.getAttribute('href')).toBe('/projects/p1#start-ticket');
   });

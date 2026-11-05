@@ -45,11 +45,18 @@ import { layoutFleet, type MapEdgeTone, type MapLayout, type MapNode } from './l
 import { type Fleet, type FleetNeed, type FleetSeat, seatTitle, slotsWords } from './model.js';
 import { FleetRunCard } from './run-card.js';
 
+/**
+ * What a run in the queue waits for: any seat, or — on a platform where nothing on the server runs
+ * agent work and no worker is connected — a worker (S-23.20).
+ */
+export type QueueWait = 'seat' | 'worker';
+
 interface MapData extends Record<string, unknown> {
   readonly node: MapNode;
   readonly fleet: Fleet;
   readonly now: number;
   readonly onOpen: (runId: string) => void;
+  readonly waitingFor: QueueWait;
 }
 type MapFlowNode = Node<MapData, MapNode['kind']>;
 type MapFlowEdge = Edge<Record<string, never>>;
@@ -204,9 +211,13 @@ const QueueNode = ({ data }: NodeProps<MapFlowNode>): ReactElement => {
         Queue
       </span>
       <span className="text-xs text-fg-muted">
-        {waiting === 0
-          ? 'No run is waiting for a seat.'
-          : `${waiting} waiting for a seat — the server or a worker picks each up.`}
+        {data.waitingFor === 'worker'
+          ? waiting === 0
+            ? 'Waiting for a worker — add one to run agent work.'
+            : `${waiting} waiting for a worker — add one to run them.`
+          : waiting === 0
+            ? 'No run is waiting for a seat.'
+            : `${waiting} waiting for a seat — the server or a worker picks each up.`}
       </span>
     </div>
   );
@@ -280,6 +291,7 @@ export const toFleetFlow = (
   fleet: Fleet,
   now: number,
   onOpen: (runId: string) => void,
+  waitingFor: QueueWait = 'seat',
 ): { nodes: MapFlowNode[]; edges: MapFlowEdge[] } => ({
   nodes: layout.nodes.map((node) => ({
     id: node.id,
@@ -287,7 +299,7 @@ export const toFleetFlow = (
     position: { x: node.x, y: node.y },
     width: node.width,
     height: node.height,
-    data: { node, fleet, now, onOpen },
+    data: { node, fleet, now, onOpen, waitingFor },
     draggable: false,
     selectable: false,
     connectable: false,
@@ -314,15 +326,17 @@ export const FleetCanvas = ({
   fleet,
   now,
   onOpen,
+  waitingFor = 'seat',
 }: {
   readonly fleet: Fleet;
   readonly now: number;
   readonly onOpen: (runId: string) => void;
+  readonly waitingFor?: QueueWait;
 }): ReactElement => {
   const layout = useMemo(() => layoutFleet(fleet), [fleet]);
   const { nodes, edges } = useMemo(
-    () => toFleetFlow(layout, fleet, now, onOpen),
-    [layout, fleet, now, onOpen],
+    () => toFleetFlow(layout, fleet, now, onOpen, waitingFor),
+    [layout, fleet, now, onOpen, waitingFor],
   );
   return (
     <section

@@ -26,6 +26,7 @@ import {
   projectExecutionResponseSchema,
   putProjectExecutionRequestSchema,
   putProjectExecutionResponseSchema,
+  REMOTE_RUN_CREDENTIAL_REFUSED_NOTICE,
   type UserRole,
 } from '@platform/contracts';
 import {
@@ -104,9 +105,11 @@ export const executionDocument = (
   });
 };
 
-/** Why no remote worker takes this project's runs, as the settings screen says it (WP-283). */
-export const REMOTE_CREDENTIAL_REFUSED_NOTICE =
-  'Remote workers take none of this project’s runs: its git integration gives runs a static token or a deploy key, and only an administrator’s remote_run_credential: allow on that integration lets either reach a developer’s machine.';
+/**
+ * Why no remote worker takes this project's runs, as the settings screen says it (WP-283) — the
+ * contracts' constant, because the screen recognises the sentence (S-23.20).
+ */
+export const REMOTE_CREDENTIAL_REFUSED_NOTICE = REMOTE_RUN_CREDENTIAL_REFUSED_NOTICE;
 
 export const registerProjectExecutionRoutes = async (
   app: FastifyInstance,

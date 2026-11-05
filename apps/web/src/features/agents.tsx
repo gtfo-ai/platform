@@ -29,6 +29,7 @@ import { ListUnorderedIcon } from '@primer/octicons-react/ListUnorderedIcon';
 import { WorkflowIcon } from '@primer/octicons-react/WorkflowIcon';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { lazy, type ReactElement, Suspense, useCallback, useState } from 'react';
+import { useProjects } from '../app/queries.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
 import { ErrorNotice } from '../ui/kit.js';
@@ -42,6 +43,9 @@ import { FleetRunDialog } from '../viz/fleet/run-dialog.js';
 import { useFleet } from '../viz/fleet/use-fleet.js';
 import { useWideViewport } from '../viz/flow/flow-view.js';
 import { chosenView, type FleetView, readStoredView, storeView } from './agents-view.js';
+import { setupProjectOf } from './home-setup.js';
+import { useWorkerNeed } from './worker-need.js';
+import { isWorkerOnline } from './worker-readiness.js';
 
 /** The map's own chunk: `@xyflow/react` is fetched only when the map is shown. */
 const FleetCanvas = lazy(() => import('../viz/fleet/fleet-canvas.js'));
@@ -86,22 +90,41 @@ const runById = (fleet: Fleet, id: string | null): FleetRun | null => {
   return fleet.queue.find((run) => run.id === id) ?? null;
 };
 
-const NothingRuns = ({ inOffice = false }: { readonly inOffice?: boolean }): ReactElement => (
-  <Blankslate
-    title="No agent is working"
-    hint={
-      inOffice
-        ? 'Everyone is asleep. Start a ticket on a board and an agent takes a desk here the moment its stage starts.'
-        : 'Start a ticket on a board: an agent appears here the moment its stage starts, on the platform server or on a worker.'
-    }
-    action={
-      <Link to="/projects" className={buttonClassName('default')}>
-        Choose a board
-      </Link>
-    }
-    {...(inOffice ? { className: 'border-0' } : {})}
-  />
-);
+const NothingRuns = ({
+  inOffice = false,
+  waitingForWorker,
+}: {
+  readonly inOffice?: boolean;
+  /** Nothing on the server runs agent work here and no worker is connected (S-23.20). */
+  readonly waitingForWorker: boolean;
+}): ReactElement =>
+  waitingForWorker ? (
+    <Blankslate
+      title="Waiting for a worker"
+      hint="This platform has no server runner, so agent work runs on developers’ own computers — and none you can see is connected. Add yours and its runs start here."
+      action={
+        <Link to="/workers/new" className={buttonClassName('default')}>
+          Add a worker
+        </Link>
+      }
+      {...(inOffice ? { className: 'border-0' } : {})}
+    />
+  ) : (
+    <Blankslate
+      title="No agent is working"
+      hint={
+        inOffice
+          ? 'Everyone is asleep. Start a ticket on a board and an agent takes a desk here the moment its stage starts.'
+          : 'Start a ticket on a board: an agent appears here the moment its stage starts, on the platform server or on a worker.'
+      }
+      action={
+        <Link to="/projects" className={buttonClassName('default')}>
+          Choose a board
+        </Link>
+      }
+      {...(inOffice ? { className: 'border-0' } : {})}
+    />
+  );
 
 export const AgentsScreen = (): ReactElement => {
   const search = useSearch({ strict: false }) as { readonly view?: unknown };
@@ -115,6 +138,14 @@ export const AgentsScreen = (): ReactElement => {
   };
 
   const { fleet, now, agents, workers } = useFleet();
+  // S-23.20: on a platform where nothing on the server runs agent work, an empty page or a queue
+  // waits for a worker — and says so, with the way to add one.
+  const projects = useProjects();
+  const need = useWorkerNeed(setupProjectOf(projects.data?.items ?? [])?.id ?? null);
+  const waitingForWorker =
+    need === true &&
+    workers.isSuccess &&
+    !workers.data.items.some((item) => item.state === 'active' && isWorkerOnline(item, now));
   const wide = useWideViewport();
   const [openId, setOpenId] = useState<string | null>(null);
   const [last, setLast] = useState<FleetRun | null>(null);
@@ -180,14 +211,19 @@ export const AgentsScreen = (): ReactElement => {
 
       {agents.isSuccess && view === 'map' ? (
         nothing ? (
-          <NothingRuns />
+          <NothingRuns waitingForWorker={waitingForWorker} />
         ) : wide ? (
           <div
             data-testid="fleet-canvas-frame"
             className="h-[min(72vh,680px)] min-h-[420px] overflow-hidden rounded-lg border border-line"
           >
             <Suspense fallback={<Skeleton label="Drawing the map…" className="h-full w-full" />}>
-              <FleetCanvas fleet={fleet} now={now} onOpen={onOpen} />
+              <FleetCanvas
+                fleet={fleet}
+                now={now}
+                onOpen={onOpen}
+                waitingFor={waitingForWorker ? 'worker' : 'seat'}
+              />
             </Suspense>
           </div>
         ) : (
@@ -203,14 +239,17 @@ export const AgentsScreen = (): ReactElement => {
           <Office
             fleet={fleet}
             onOpen={onOpen}
-            {...(nothing ? { empty: <NothingRuns inOffice /> } : {})}
+            waitingFor={waitingForWorker ? 'worker' : 'seat'}
+            {...(nothing
+              ? { empty: <NothingRuns inOffice waitingForWorker={waitingForWorker} /> }
+              : {})}
           />
         </Suspense>
       ) : null}
 
       {agents.isSuccess && view === 'list' ? (
         nothing ? (
-          <NothingRuns />
+          <NothingRuns waitingForWorker={waitingForWorker} />
         ) : (
           <FleetList fleet={fleet} now={now} onOpen={onOpen} />
         )

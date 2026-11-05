@@ -134,6 +134,57 @@ describe('setupChecklist', () => {
   });
 });
 
+describe('setupChecklist’s worker step (S-23.20)', () => {
+  const upToWorker = facts({
+    connect: 'done',
+    project: 'done',
+    discovery: 'done',
+    autonomy: 'done',
+  });
+
+  it('is absent on a platform whose server runs agent work — not optional, absent', () => {
+    expect(setupChecklist(ALL_DONE, 'acme').steps.map((step) => step.id)).not.toContain('worker');
+    expect(setupChecklist(ALL_DONE, 'acme').complete).toBe(true);
+  });
+
+  it('sits between the autonomy and the first ticket, and leads there when it is not done', () => {
+    const checklist = setupChecklist({ ...upToWorker, worker: 'todo' }, 'acme');
+    expect(checklist.steps.map((step) => step.id)).toEqual([
+      'connect',
+      'project',
+      'discovery',
+      'autonomy',
+      'worker',
+      'ticket',
+    ]);
+    expect(checklist.next?.id).toBe('worker');
+    expect(checklist.next?.label).toBe('Connect a worker');
+    expect(checklist.next?.hint).toMatch(/no server runner/);
+    expect(checklist.next?.destination).toEqual({ to: '/workers/new' });
+  });
+
+  it('names a worker that exists but cannot take work, and resumes the wizard at Ready for it', () => {
+    const checklist = setupChecklist({ ...upToWorker, worker: 'todo' }, 'acme', {
+      name: 'jan-mbp',
+      reason: 'not connected',
+      createdAt: '2026-11-05T09:00:00.000Z',
+    });
+    expect(checklist.next?.hint).toBe('jan-mbp can’t take work yet: not connected.');
+    expect(checklist.next?.destination).toEqual({
+      to: '/workers/new',
+      step: 'ready',
+      since: '2026-11-05T09:00:00.000Z',
+    });
+  });
+
+  it('holds the checklist while it is being read, and is ticked like any other step', () => {
+    expect(setupChecklist({ ...ALL_DONE, worker: 'pending' }, 'acme').settling).toBe(true);
+    const done = setupChecklist({ ...ALL_DONE, worker: 'done' }, 'acme');
+    expect(done.complete).toBe(true);
+    expect(done.steps).toHaveLength(6);
+  });
+});
+
 describe('setupProjectOf', () => {
   it('follows the oldest project, and none when there is none', () => {
     expect(setupProjectOf([])).toBeNull();

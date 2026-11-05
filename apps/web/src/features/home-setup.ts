@@ -1,7 +1,8 @@
 /**
  * The first-run setup checklist's done-ness (research/19 § 5.2 "Home", TD-033 § 9).
  *
- * Five steps — connect, create a project, run discovery, choose the autonomy, start a ticket — and
+ * Five steps — connect, create a project, run discovery, choose the autonomy, start a ticket (and,
+ * on a platform with no server runner, connect a worker before the ticket) — and
  * **every ✓ is a fact the server answered**, never a flag this tab stored: a person who did a step
  * in another tab, in another browser or through the API sees it ticked on the next read. This
  * module is the pure half (facts in, steps out), so the table of answers is asserted directly in
@@ -15,6 +16,11 @@
  * - **discovery** — the setup project's `readiness_level` is above 0 (only an evaluation writes
  *   it), or `GET /api/projects/:id/readiness` answers 200 rather than its 409 `readiness_not_evaluated`;
  * - **autonomy** — `GET /api/projects/:id/autonomy` says the dial was `materialised` (applied);
+ * - **worker** (S-23.20) — **only on a platform that needs one**: the setup project's execution
+ *   read says nothing on the server would run it (`worker-need.ts`). Then it is done when an active
+ *   worker can take work (`worker-readiness.ts`, a stub of the server's answer); on a platform whose
+ *   server runs agent work the step is **absent**, not optional — an optional step on a checklist
+ *   that disappears when complete would hold it open forever;
  * - **ticket** — the setup project's task list holds a task whose ticket is a provider's, not one
  *   of the platform's own one-off tasks (discovery, review-only, the lint: `provider: 'platform'`).
  *
@@ -26,15 +32,39 @@
 /** One fact: answered yes, answered no, not answered yet, or the read failed. */
 export type SetupFact = 'done' | 'todo' | 'pending' | 'unknown';
 
-export const SETUP_STEP_IDS = ['connect', 'project', 'discovery', 'autonomy', 'ticket'] as const;
+export const SETUP_STEP_IDS = [
+  'connect',
+  'project',
+  'discovery',
+  'autonomy',
+  'worker',
+  'ticket',
+] as const;
 export type SetupStepId = (typeof SETUP_STEP_IDS)[number];
 
-export type SetupFacts = Readonly<Record<SetupStepId, SetupFact>>;
+/**
+ * The facts; `worker` is **absent** on a platform that does not need one, and then so is its step.
+ */
+export type SetupFacts = Readonly<Record<Exclude<SetupStepId, 'worker'>, SetupFact>> & {
+  readonly worker?: SetupFact;
+};
+
+/**
+ * A worker that exists but cannot take work yet: the step names it and why, and *Continue setup*
+ * opens the wizard at *Ready to work* for it.
+ */
+export interface BlockedWorker {
+  /** Its name, already sanitised (`ui/untrusted-text.ts`): the hint is a plain string. */
+  readonly name: string;
+  readonly reason: string;
+  readonly createdAt: string;
+}
 
 /** Where a step is done: a screen of this app, resolved to a `<Link>` by the screen. */
 export type SetupDestination =
   | { readonly to: '/integrations' }
   | { readonly to: '/onboarding'; readonly project?: string }
+  | { readonly to: '/workers/new'; readonly step?: 'ready'; readonly since?: string }
   | { readonly to: '/projects/$key'; readonly key: string; readonly hash: string };
 
 export interface SetupStep {
@@ -72,6 +102,10 @@ const LABELS: Readonly<Record<SetupStepId, { readonly label: string; readonly hi
     label: 'Choose how autonomous agents are',
     hint: 'How much an agent may do before a person looks.',
   },
+  worker: {
+    label: 'Connect a worker',
+    hint: 'This platform has no server runner: agent work runs on a developer’s own computer.',
+  },
   ticket: {
     label: 'Start your first ticket',
     hint: 'Give the pipeline one ticket and watch it work.',
@@ -90,6 +124,7 @@ const START_TICKET_HASH = 'start-ticket';
 export const setupChecklist = (
   facts: SetupFacts,
   setupProjectKey: string | null,
+  blockedWorker: BlockedWorker | null = null,
 ): SetupChecklist => {
   const destination = (id: SetupStepId): SetupDestination => {
     switch (id) {
@@ -97,6 +132,10 @@ export const setupChecklist = (
         return { to: '/integrations' };
       case 'project':
         return { to: '/onboarding' };
+      case 'worker':
+        return blockedWorker === null
+          ? { to: '/workers/new' }
+          : { to: '/workers/new', step: 'ready', since: blockedWorker.createdAt };
       case 'discovery':
       case 'autonomy':
         return setupProjectKey === null
@@ -108,10 +147,18 @@ export const setupChecklist = (
           : { to: '/projects/$key', key: setupProjectKey, hash: START_TICKET_HASH };
     }
   };
-  const steps = SETUP_STEP_IDS.map((id): SetupStep => {
+  const steps = SETUP_STEP_IDS.flatMap((id): SetupStep[] => {
+    const given = id === 'worker' ? facts.worker : facts[id];
+    if (given === undefined) {
+      return [];
+    }
     const needsProject = id === 'discovery' || id === 'autonomy' || id === 'ticket';
-    const fact = needsProject && setupProjectKey === null ? 'todo' : facts[id];
-    return { id, ...LABELS[id], fact, destination: destination(id) };
+    const fact = needsProject && setupProjectKey === null ? 'todo' : given;
+    const hint =
+      id === 'worker' && fact !== 'done' && blockedWorker !== null
+        ? `${blockedWorker.name} can’t take work yet: ${blockedWorker.reason}.`
+        : LABELS[id].hint;
+    return [{ id, label: LABELS[id].label, hint, fact, destination: destination(id) }];
   });
   const next = steps.find((step) => step.fact !== 'done') ?? null;
   return {

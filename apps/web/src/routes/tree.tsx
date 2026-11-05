@@ -60,6 +60,7 @@ import {
 } from '../features/settings-sections.js';
 import { SignInScreen } from '../features/sign-in.js';
 import { taskSearchSchema } from '../features/task-tab.js';
+import { WORKER_WIZARD_STEP_IDS } from '../features/worker-wizard-steps.js';
 import { ErrorFallback } from '../ui/error-boundary.js';
 import { Skeleton } from '../ui/skeleton.js';
 
@@ -237,6 +238,40 @@ const workerApproveRoute = route(
   '/workers/approve',
   lazyRouteComponent(() => import('../features/workers.js'), 'WorkerApproveScreen'),
 );
+
+const WorkerWizardScreen = lazyRouteComponent(
+  () => import('../features/worker-wizard.js'),
+  'WorkerWizardScreen',
+);
+
+/**
+ * `?step=<id>&since=<instant>&installed=true` — the *Add a worker* wizard's step, when it was opened
+ * and whether the person confirmed the install (S-23.20, `features/worker-wizard-steps.ts`). In the
+ * URL for `?project=`'s reason: *Save and exit* and Home's checklist resume exactly there. A value
+ * that does not parse is dropped, never a router error — an unknown step resumes, an unknown
+ * `since` is replaced by now.
+ */
+const workerWizardSearchSchema = z.object({
+  step: z.enum(WORKER_WIZARD_STEP_IDS).optional().catch(undefined),
+  since: z.iso.datetime().optional().catch(undefined),
+  installed: z.boolean().optional().catch(undefined),
+});
+
+const workerWizardRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/workers/new',
+  validateSearch: workerWizardSearchSchema,
+  component: withPreload(function WorkerWizard() {
+    const search = workerWizardRoute.useSearch();
+    return (
+      <WorkerWizardScreen
+        step={search.step}
+        since={search.since}
+        installed={search.installed === true}
+      />
+    );
+  }, WorkerWizardScreen),
+});
 
 const BoardScreen = lazyRouteComponent(() => import('../features/board.js'), 'BoardScreen');
 const TaskDetailScreen = lazyRouteComponent(
@@ -477,6 +512,7 @@ export const routeTree = rootRoute.addChildren([
     onboardingRoute,
     workersRoute,
     workerApproveRoute,
+    workerWizardRoute,
     projectRoute.addChildren([
       boardRoute,
       projectTaskRoute,

@@ -461,10 +461,12 @@ const Lobby = ({
   fleet,
   animated,
   onOpen,
+  waitingFor,
 }: {
   readonly fleet: Fleet;
   readonly animated: boolean;
   readonly onOpen: (runId: string) => void;
+  readonly waitingFor: 'seat' | 'worker';
 }): ReactElement => {
   const bench = fleet.queue.slice(0, OFFICE_LOBBY_SHOWN);
   const help = fleet.needs.slice(0, OFFICE_LOBBY_SHOWN);
@@ -477,8 +479,10 @@ const Lobby = ({
         <div className="flex flex-col gap-2">
           <h3 className="office-label">
             {fleet.queue.length === 0
-              ? 'Bench · nobody is waiting for a seat'
-              : `Bench · ${fleet.queue.length} waiting for a seat`}
+              ? waitingFor === 'worker'
+                ? 'Bench · waiting for a worker'
+                : 'Bench · nobody is waiting for a seat'
+              : `Bench · ${fleet.queue.length} waiting for a ${waitingFor}`}
           </h3>
           {bench.length === 0 ? (
             <EmptyBench />
@@ -528,11 +532,14 @@ export const Office = ({
   fleet,
   onOpen,
   empty,
+  waitingFor = 'seat',
 }: {
   readonly fleet: Fleet;
   readonly onOpen: (runId: string) => void;
   /** Drawn over the rooms when nothing runs: everyone is asleep, and this says what to do. */
   readonly empty?: ReactNode;
+  /** What the bench waits for: any seat, or a worker on a platform with no server runner. */
+  readonly waitingFor?: 'seat' | 'worker';
 }): ReactElement => {
   const reduced = useReducedMotion();
   const animated = !reduced;
@@ -545,7 +552,7 @@ export const Office = ({
     >
       {empty === undefined ? null : <div className="office-empty">{empty}</div>}
       <div className="grid gap-4 xl:grid-cols-[minmax(20rem,26rem)_1fr]">
-        <Lobby fleet={fleet} animated={animated} onOpen={onOpen} />
+        <Lobby fleet={fleet} animated={animated} onOpen={onOpen} waitingFor={waitingFor} />
         <div className="flex min-w-0 flex-col gap-4">
           {fleet.seats.map((seat) => (
             <Room key={seat.id} seat={seat} animated={animated} onOpen={onOpen} />

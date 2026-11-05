@@ -59,6 +59,7 @@ import { type Step, Stepper } from '../ui/stepper.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import {
+  type BlockedWorker,
   PLATFORM_TICKET_PROVIDER,
   type SetupChecklist,
   type SetupDestination,
@@ -67,6 +68,8 @@ import {
   setupProjectOf,
 } from './home-setup.js';
 import { ReadinessLabel } from './readiness-label.js';
+import { useWorkerNeed, useWorkersWhen } from './worker-need.js';
+import { WORKER_BLOCKER_WORDS, workerReadinessOf } from './worker-readiness.js';
 
 type ProjectItem = NonNullable<ReturnType<typeof useProjects>['data']>['items'][number];
 
@@ -700,6 +703,19 @@ const DestinationLink = ({
           {children}
         </Link>
       );
+    case '/workers/new':
+      return (
+        <Link
+          to="/workers/new"
+          search={{
+            ...(destination.step === undefined ? {} : { step: destination.step }),
+            ...(destination.since === undefined ? {} : { since: destination.since }),
+          }}
+          className={className}
+        >
+          {children}
+        </Link>
+      );
     case '/projects/$key':
       return (
         <Link
@@ -779,6 +795,10 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
   );
   const autonomy = useProjectAutonomy(setupId);
   const tasks = useProjectTasks(setupId);
+  // S-23.20: the worker step exists only where nothing on the server would run the project.
+  const need = useWorkerNeed(setupId);
+  const workers = useWorkersWhen(need === true);
+  const { now } = useServices();
 
   const connect: SetupFact = integrations.isPending
     ? 'pending'
@@ -813,6 +833,38 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
       ? 'unknown'
       : 'pending';
 
+  const nowMs = now();
+  const active = (workers.data?.items ?? []).filter((item) => item.state === 'active');
+  const worker: SetupFact | undefined =
+    need === 'pending'
+      ? 'pending'
+      : need !== true
+        ? undefined
+        : workers.isSuccess
+          ? active.some((item) => workerReadinessOf(item, nowMs).can_claim)
+            ? 'done'
+            : 'todo'
+          : workers.isError
+            ? 'unknown'
+            : 'pending';
+  // The newest worker that exists but cannot take work: the step says which, and why.
+  const newest = active.reduce<(typeof active)[number] | null>(
+    (latest, item) =>
+      latest === null || Date.parse(item.created_at) > Date.parse(latest.created_at)
+        ? item
+        : latest,
+    null,
+  );
+  const blocker = newest === null ? undefined : workerReadinessOf(newest, nowMs).claim_blockers[0];
+  const blockedWorker: BlockedWorker | null =
+    worker !== 'todo' || newest === null || blocker === undefined
+      ? null
+      : {
+          name: sanitiseUntrusted(newest.name),
+          reason: WORKER_BLOCKER_WORDS[blocker].word.toLowerCase(),
+          createdAt: newest.created_at,
+        };
+
   return {
     checklist: setupChecklist(
       {
@@ -820,9 +872,11 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
         project: projects.length > 0 ? 'done' : 'todo',
         discovery,
         autonomy: autonomyFact,
+        ...(worker === undefined ? {} : { worker }),
         ticket,
       },
       setup?.key ?? null,
+      blockedWorker,
     ),
     noIntegration: integrations.isSuccess && integrations.items.length === 0,
   };

@@ -477,7 +477,7 @@ const SECTION: Readonly<
     <>
       <SettingsSectionHeader
         title="Execution"
-        description="Where this project’s agent runs execute: on the server, on developers’ workers, or both."
+        description="Who runs this project’s agents: the platform server, developers’ own computers (workers), or both."
       />
       <ExecutionSettings projectId={project.id} />
     </>

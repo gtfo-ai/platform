@@ -280,12 +280,21 @@ describe('the top bar', () => {
     ).toBeTruthy();
   });
 
-  it('offers New project to an admin only, and to nobody else no menu without a ticket to start', async () => {
+  it('offers New project to an admin only, and Add a worker to everybody signed in', async () => {
     const user = userEvent.setup();
-    // `project.create` is admin-only: a member is not offered a wizard that would answer 403.
+    // `project.create` is admin-only: a member is not offered a wizard that would answer 403 —
+    // but `worker.register` is any signed-in user's (S-23.20), so a member has the menu too.
     start({ projects: [project(1)], canStart: true }, '/');
-    await within(await banner()).findByRole('button', { name: 'Account menu' });
-    expect(within(await banner()).queryByRole('button', { name: 'Create new…' })).toBeNull();
+    await user.click(await within(await banner()).findByRole('button', { name: 'Create new…' }));
+    expect(
+      within(await screen.findByRole('menu'))
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Add a worker']);
+    await user.click(within(await screen.findByRole('menu')).getByRole('menuitem'));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workers/new');
+    });
     cleanup();
 
     start({ projects: [project(1)], canStart: true }, '/projects/p1/pipeline');
@@ -293,7 +302,7 @@ describe('the top bar', () => {
     await waitFor(async () => {
       await user.click(within(await banner()).getByRole('button', { name: 'Create new…' }));
       const items = within(await screen.findByRole('menu')).getAllByRole('menuitem');
-      expect(items.map((item) => item.textContent)).toEqual(['Start a ticket…']);
+      expect(items.map((item) => item.textContent)).toEqual(['Add a worker', 'Start a ticket…']);
     });
     cleanup();
   });
@@ -307,7 +316,7 @@ describe('the top bar', () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((item) => item.textContent),
-    ).toEqual(['New project']);
+    ).toEqual(['New project', 'Add a worker']);
     cleanup();
 
     start({ projects: [project(1)], canStart: false, role: 'admin' }, '/projects/p1');

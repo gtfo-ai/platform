@@ -188,6 +188,14 @@ const SCREENS: readonly Screen[] = [
     },
   },
   {
+    name: 'the add-a-worker wizard, step 1',
+    path: '/workers/new',
+    ready: async (page) => {
+      await expect(page.getByRole('heading', { level: 2, name: 'Install' })).toBeVisible();
+      await expect(page.getByRole('list', { name: /steps/i })).toBeVisible();
+    },
+  },
+  {
     name: 'the new-project wizard, step 1',
     path: '/onboarding',
     ready: async (page) => {

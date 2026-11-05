@@ -45,6 +45,7 @@ import {
   pipelineGraphSchema,
   projectAuditResponseSchema,
   projectBindingsResponseSchema,
+  projectExecutionResponseSchema,
   projectSummarySchema,
   rediscoveryGateResponseSchema,
   runCommandsResponseSchema,
@@ -1032,6 +1033,22 @@ export const workers = workersResponseSchema.parse({
   ],
   scope: 'all',
   timezone: 'UTC',
+});
+
+/**
+ * S-23.20: the project's execution setting — the platform server runs agent work here, so Home
+ * shows no *Connect a worker* step and the Agents page waits for a seat, not for a worker.
+ */
+export const projectExecution = projectExecutionResponseSchema.parse({
+  mode: 'hybrid',
+  prefer: 'server',
+  fallback_after_seconds: null,
+  assignee_window_seconds: 120,
+  offer_timeout_seconds: 86_400,
+  effective_fallback_after_seconds: 15,
+  stored: false,
+  server_claimant: 'running',
+  notice: null,
 });
 
 /** The fleet's two other runs have no transcript yet. */
