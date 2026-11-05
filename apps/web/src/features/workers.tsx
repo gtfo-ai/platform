@@ -242,7 +242,9 @@ const WorkerRow = ({
   const state = workerRowState(worker, nowMs, timezone);
   const update = lastUpdateText(worker, nowMs);
   const active = worker.state === 'active';
-  const blocked = active && worker.claim_blockers.length > 0;
+  const takes = workerReadinessOf(worker).takes;
+  // A pick-only worker's state already says what it takes, and it is not blocked: no Why?.
+  const blocked = active && takes === 'no';
   return (
     <ListRow
       leading={<StatusIcon status={state.status} label={state.word} />}
@@ -263,10 +265,14 @@ const WorkerRow = ({
               <>
                 <span aria-hidden="true">·</span>
                 <span data-last-claimed="">{lastClaimedText(worker, nowMs)}</span>
-                <span aria-hidden="true">·</span>
-                <span data-claim-scope="">
-                  <UntrustedText value={claimScopeWords(worker)} />
-                </span>
+                {takes === 'picked_only' ? null : (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span data-claim-scope="">
+                      <UntrustedText value={claimScopeWords(worker)} />
+                    </span>
+                  </>
+                )}
               </>
             ) : null}
             {update === null ? null : (

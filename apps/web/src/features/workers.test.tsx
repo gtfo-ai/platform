@@ -575,6 +575,14 @@ describe('the Workers screen', () => {
     expect(state?.textContent).toBe('Takes only runs its owner picks');
     expect(state?.getAttribute('data-worker-state')).toBe('idle');
     expect(screen.getByText('1 ready')).toBeTruthy();
+    // Said once, by the state; and nothing is blocked, so there is no Why?.
+    expect(container.querySelector('[data-claim-scope]')).toBeNull();
+    expect(container.querySelector('[data-why]')).toBeNull();
+    expect(
+      container
+        .querySelector('[data-worker]')
+        ?.textContent?.match(/Takes only runs its owner picks/g),
+    ).toHaveLength(1);
   });
 
   it('asks for the list again every 15 s while the page is open', async () => {
