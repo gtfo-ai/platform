@@ -32,11 +32,12 @@
  * is carried over **from the running container's own environment** — through `docker compose`'s
  * process environment only (`docker.ts`): never a file, never an argument, never a log line.
  */
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Logger } from '@platform/application';
 import type { CoreImageDigests } from '@platform/contracts';
 import { createCoreClient } from '../remote-worker/core-client.js';
+import { readStoredCredential } from '../remote-worker/credential.js';
 import { WORKER_IMAGE_VARIABLE } from '../workers/compose.js';
 import { IMAGE_KEYS, type ImageReferences } from './decide.js';
 import {
@@ -188,10 +189,18 @@ export const reportResult = async (
     readonly detail: string | null;
   },
 ): Promise<boolean> => {
-  let credential: string;
+  // The first line only, and only for this core (WP-294: the second line names its core).
+  let origin: string | undefined;
   try {
-    credential = (await readFile(path.join(deps.workerStateDir, 'credential'), 'utf8')).trim();
+    origin = new URL(coreUrl).origin;
   } catch {
+    origin = undefined;
+  }
+  const credential =
+    origin === undefined
+      ? null
+      : await readStoredCredential(deps.workerStateDir, origin).catch(() => null);
+  if (credential === null) {
     deps.logger.warn({}, 'this worker has no credential yet, so the update is not reported');
     return false;
   }

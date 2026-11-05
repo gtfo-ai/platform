@@ -202,6 +202,22 @@ export interface CoreReleaseAnswer {
   readonly upgradeRequired: boolean;
 }
 
+/**
+ * A transport failure's message with the bearer taken out (review of PR #42): Node's `fetch` names a
+ * header value it refuses (`… is an invalid header value`), so a credential that ever carried a line
+ * break would otherwise reach the error — and every log line that serialises it. Each whitespace-
+ * separated piece of the bearer is replaced, not only the whole.
+ */
+export const withoutBearer = (message: string, bearer: string | null): string => {
+  if (bearer === null) return message;
+  let text = message;
+  const pieces = [bearer, ...bearer.split(/\s+/)].filter((piece) => piece.length >= 8);
+  for (const piece of pieces.sort((a, b) => b.length - a.length)) {
+    text = text.split(piece).join('[REDACTED:bearer]');
+  }
+  return text;
+};
+
 export const createCoreClient = (options: CoreClientOptions): CoreClient => {
   const fetcher: CoreFetch = options.fetch ?? ((url, init) => fetch(url, init));
   const timeoutMs = options.timeoutMs ?? CORE_CALL_TIMEOUT_MS;
@@ -246,7 +262,7 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
         'transient',
         null,
         null,
-        `${input.verb}: the core could not be reached (${(error as Error).message})`,
+        `${input.verb}: the core could not be reached (${withoutBearer((error as Error).message, input.bearer)})`,
       );
     } finally {
       clearTimeout(timer);
