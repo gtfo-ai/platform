@@ -74,6 +74,8 @@ beforeAll(async () => {
       signOut: async () => ({}),
       connectAgain: async () => ({}),
       retry: async () => ({}),
+      errorReporting: async () => ({}),
+      errorReportingTest: async () => ({}),
     },
   });
   await new Promise<void>((resolve) => worker.listen(workerPort, '127.0.0.1', resolve));

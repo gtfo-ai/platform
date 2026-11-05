@@ -133,20 +133,19 @@ const databasePasswordOf = (url: string): string | null => {
  * `postgres://app:app@…`, the stock development URL, has a three-character password no reporter can
  * redact by value.
  */
-export const coreReportingSecrets = (config: CoreSecretSources): readonly InjectedSecret[] =>
-  (
-    [
-      ['app_secret_key', config.secretKey],
-      ['database_password', databasePasswordOf(config.database.url)],
-      ['launcher_token', config.launcherToken],
-      ['anthropic_api_key', config.modelApiKey],
-      ['claude_code_oauth_token', config.modelOauthToken],
-      ['metrics_password', config.metricsPassword],
-      ['bootstrap_admin_password', config.bootstrapAdminPassword],
-    ] as const
-  )
-    .filter((entry): entry is readonly [string, string] => {
-      const value = entry[1];
-      return value !== null && value.length >= MIN_SECRET_LENGTH;
-    })
-    .map(([name, value]) => ({ name, value }));
+export const coreReportingSecrets = (config: CoreSecretSources): readonly InjectedSecret[] => {
+  const candidates: readonly (readonly [string, string | null])[] = [
+    ['app_secret_key', config.secretKey],
+    ['database_password', databasePasswordOf(config.database.url)],
+    ['launcher_token', config.launcherToken],
+    ['anthropic_api_key', config.modelApiKey],
+    ['claude_code_oauth_token', config.modelOauthToken],
+    ['metrics_password', config.metricsPassword],
+    ['bootstrap_admin_password', config.bootstrapAdminPassword],
+  ];
+  const secrets: InjectedSecret[] = [];
+  for (const [name, value] of candidates) {
+    if (value !== null && value.length >= MIN_SECRET_LENGTH) secrets.push({ name, value });
+  }
+  return secrets;
+};

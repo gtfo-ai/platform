@@ -122,7 +122,10 @@ a decision, and the first is the reviewer's to confirm:
   `@sentry/bundler-plugins`, which pulls the `sentry` CLI — licensed `FSL-1.1-Apache-2.0`, not an
   open-source licence — and `oxc-parser`'s native bindings into the production tree (read off the
   registry 2026-11-05). 10.78.0's tree is MIT and Apache-2.0 throughout (`THIRD_PARTY_NOTICES.md`:
-  17 new packages, about 37 MB unpacked). Moving to 11 is a licence question, BACKLOG 1040.
+  17 new packages, about 37 MB unpacked). Measured on CI's runners (`image.yml`, PR #60 against
+  `main` at `1bd7a337`): `platform` **621 → 656 MB on amd64 and 635 → 670 MB on arm64**, inside
+  TD-018's 1.0 GB budget; `platform-launcher` unchanged at 447 / 469 MB. Moving to 11 is a licence
+  question, BACKLOG 1040.
 - **The reporter is split at the dependency rule.** `packages/infrastructure/src/error-reporting/`
   holds everything about what leaves the process — the DSN rule, the event allow-list, redaction
   then bounding, the swappable reporter — and names no SDK; `apps/server/src/error-reporting.ts`

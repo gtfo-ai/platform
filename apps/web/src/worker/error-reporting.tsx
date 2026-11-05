@@ -9,7 +9,8 @@
  *
  * What an event carries is said here in the words of the amendment, because a person deciding to
  * send their machine's errors to a host they chose is owed that sentence before they press *Save*.
- * The page loads no SDK: `@sentry/*` is refused under `apps/web/src` by a census.
+ * The page loads no SDK: `@sentry/*` is refused under `apps/web/src` by a census. Its copy names no
+ * environment variable (S-23.22's census): the operator guide names the setting.
  */
 import type { WorkerLocalState } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
@@ -81,7 +82,7 @@ export const ErrorReporting = ({
           <>
             On, sending to <UntrustedText value={setting.host} />
             {fromEnvironment
-              ? ' — set in the worker’s environment (SENTRY_DSN); change it there.'
+              ? ' — set in the worker’s configuration, which overrides this page (the operator guide names the setting).'
               : '.'}
           </>
         )}
