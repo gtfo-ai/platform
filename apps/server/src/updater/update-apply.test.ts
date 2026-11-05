@@ -404,8 +404,9 @@ describe('the install folder, kept current (S-22.21, TD-032 decision 4, backlog 
   it('hands Docker back the folder source it reported for the updater’s mount (a Windows folder), on every Compose call', async () => {
     const w = await world({});
     await runApply(w.plan, w.deps);
-    const calls = composeCalls(w.calls);
-    expect(calls.length).toBeGreaterThan(3);
+    // Every call that reaches the daemon: `config --no-interpolate` only reads the file.
+    const calls = composeCalls(w.calls).filter((call) => !call.args.includes('config'));
+    expect(calls.length).toBeGreaterThan(2);
     // From the folder as project directory, `${APP_WORKER_BUNDLE_DIR:-.}` would name the
     // container's path; the recreated updater must mount the person's folder again.
     for (const call of calls) expect(call.env.APP_WORKER_BUNDLE_DIR).toBe(FOLDER_SOURCE);
