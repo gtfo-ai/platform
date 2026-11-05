@@ -843,6 +843,17 @@ not a confidentiality boundary against the machine's owner, who controls the Doc
 the run credential from the container (§5's tampered-worker residual). Before Docker Engine 28.0.0 a
 host on the same L2 segment can reach a loopback publish; the token holds there.
 
+**Amendment (2026-11-05, orchestrator-authorised, S-22.19) — one claim-blocker vocabulary, both sides.** *Why a
+connected worker takes nothing* has one answer list, `WORKER_CLAIM_BLOCKERS` / `workerClaimBlockerSchema` in
+`packages/contracts/src/workers.ts`, ordered most fundamental first (the first is the sentence a screen shows):
+`not_set_up`, `revoked`, `offline`, `protocol_outdated`, `claude_rejected`, `paused`, `draining`, `usage_limited`,
+`launcher_unreachable`, `images_missing`, `images_outdated`, `no_eligible_project`; the words are one exhaustive
+table, `WORKER_CLAIM_BLOCKER_WORDS` in `apps/web/src/ui/humanize.ts`, read by the SPA and the local page. The core
+answers its half on `GET /api/workers` (`claim_blockers`, `can_claim`, `last_claimed_at`) from the claim's own
+predicates minus the per-offer ones — *draining* is a hold whose newest `worker.pause` row says `via: *_drain*`, and
+*pick only* is no blocker — and the worker answers its half on `GET /api/local/state` from what it holds (its
+launcher, its images, its connection); neither side bumps the protocol.
+
 ## Amendment (2026-11-04, orchestrator-authorised, WP-278) — decision 8: what "no server claimant" does to each mode
 
 §8's *"a core with no claimant composed for the server treats every project as `workers_only`"* is read

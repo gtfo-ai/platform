@@ -16,7 +16,11 @@ import {
   workerUserCodeSchema,
 } from './worker.js';
 import {
+  orderClaimBlockers,
   revokeWorkerResponseSchema,
+  WORKER_CLAIM_BLOCKERS,
+  workerClaimBlockerSchema,
+  workerClaimBlockersSchema,
   workerDeviceDecisionRequestSchema,
   workerDeviceDecisionResponseSchema,
   workerDeviceLookupRequestSchema,
@@ -244,5 +248,29 @@ describe('the people’s half', () => {
         expired_runs: 2,
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('the claim-blocker vocabulary (S-22.19)', () => {
+  it('is one closed list, most fundamental first', () => {
+    expect(workerClaimBlockerSchema.options).toEqual([...WORKER_CLAIM_BLOCKERS]);
+    expect(WORKER_CLAIM_BLOCKERS[0]).toBe('not_set_up');
+    expect(workerClaimBlockerSchema.safeParse('pick_only').success).toBe(false);
+  });
+
+  it('accepts a list only distinct and in the vocabulary’s order', () => {
+    expect(workerClaimBlockersSchema.safeParse([]).success).toBe(true);
+    expect(workerClaimBlockersSchema.safeParse(['offline', 'images_outdated']).success).toBe(true);
+    expect(workerClaimBlockersSchema.safeParse(['images_outdated', 'offline']).success).toBe(false);
+    expect(workerClaimBlockersSchema.safeParse(['paused', 'paused']).success).toBe(false);
+    expect(workerClaimBlockersSchema.safeParse([...WORKER_CLAIM_BLOCKERS]).success).toBe(true);
+  });
+
+  it('orders and de-duplicates what a side collected', () => {
+    expect(orderClaimBlockers(['images_outdated', 'offline', 'images_outdated'])).toEqual([
+      'offline',
+      'images_outdated',
+    ]);
+    expect(orderClaimBlockers([])).toEqual([]);
   });
 });
