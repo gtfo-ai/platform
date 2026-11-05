@@ -106,7 +106,11 @@ try: TD-021 puts the `claude` binary in it (217 MB) beside the six agent CLIs (2
 half a gigabyte before anything of ours. *(Amended by WP-82, PROGRESS backlog 34: the product and
 launcher images no longer carry the SDK's optional platform package — 207 MiB — because the SDK
 resolves it only when `pathToClaudeCodeExecutable` is unset, and a containerised run always sets it.
-They measured 1.1 GB and 966 MB with it, against budgets of 1.4 GB each. The new figures and budgets are **`linux/arm64` only** — margins of 25 % (801 MB against 1.0 GB) and 36 % (661 MB against 900 MB); `amd64` is **unmeasured**, and CI's `image.yml` amd64 leg is its first measurement.)*
+They measured 1.1 GB and 966 MB with it, against budgets of 1.4 GB each. The new figures and budgets are **`linux/arm64` only** — margins of 25 % (801 MB against 1.0 GB) and 36 % (661 MB against 900 MB); `amd64` is **unmeasured**, and CI's `image.yml` amd64 leg is its first measurement.)* *(Amended by WP-287, S-22.10: the product image carries the worker updater's Docker CLI and
+Compose plugin, pinned by checksum, and sigstore-js — ~76 MB. CI's `image.yml` measures it at
+**620 MB (amd64) and 634 MB (arm64)**, up from 540 and 559 MB; Docker Desktop's containerd store
+reports the same arm64 image as 932 MB, so the figures above, taken on Docker Desktop, and CI's
+are not one scale — BACKLOG 952. Both are under the 1.0 GB budget.)*
 
 **And they bound the *unpacked* size, which is not the number two obvious commands return.** On a
 containerd image store `docker image inspect --format '{{.Size}}'` and `docker save … | wc -c` both

@@ -84,10 +84,11 @@ const IMAGES = [
   // (`docker/app.Dockerfile` has the reasoning, `launcher-control-plane-check.mjs --runner-image
   // platform:dev` the measurement). It measured 1.1 GB before, and now fits technical/11's 1 GB.
   // **WP-287 adds the updater's Docker CLI (41.6 MB) and Compose plugin (32.0 MB), pinned by
-  // checksum, and sigstore-js (~3 MB of `node_modules`): ~77 MB**, measured by `docker history` on
-  // `linux/arm64` — **932 MB** there, a 7 % margin under the 1.0 GB budget (TD-018, TD-032 §4's
-  // ≈ 78 MB estimate). The amd64 CLI bundle is larger (86 vs 78 MB compressed), so the amd64 leg of
-  // `image.yml` is again the first measurement.
+  // checksum, and sigstore-js (2.2 MB of `node_modules`, by `du`): ~76 MB.** Measured where the
+  // budget is checked, CI's runners (`image.yml`, `docker images`): **540 → 620 MB on amd64 and
+  // 559 → 634 MB on arm64** (main at d925201b against PR #38). Docker Desktop's containerd store
+  // reports the same arm64 image as **932 MB**, so the 801 MB below (a Docker Desktop number, WP-82)
+  // plus 76 is not a sum to expect: the two daemons do not measure alike (BACKLOG 952).
   // **Measured on `linux/arm64` only** (Docker Desktop): the 1.0 GB budget was a 25 % margin over
   // 801 MB there. `amd64` is **unmeasured** — CI's `image.yml` amd64 leg is the first measurement,
   // and a red size check there means the margin is wrong, not the image.
