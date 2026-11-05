@@ -189,6 +189,32 @@ describe('compose.worker.dev.yml runs beside a prod worker on one daemon', () =>
     expect(devEnv.APP_WORKSPACE_EGRESS_NETWORK).toBe(dev.compose.networks?.['run-egress']?.name);
   });
 
+  it('fixes no container name in either file (a daemon-global name a prod worker would hold)', () => {
+    for (const file of [base, dev]) {
+      expect(uncommented(file.text)).not.toMatch(/^\s*container_name\s*:/m);
+      for (const [name, service] of Object.entries(file.compose.services)) {
+        expect(service, name).not.toHaveProperty('container_name');
+      }
+    }
+  });
+
+  it("replaces every base service's published ports with dev ports of its own", () => {
+    const publishing = Object.entries(base.compose.services).filter(
+      ([, service]) => (service.ports ?? []).length > 0,
+    );
+    expect(publishing.map(([name]) => name)).toContain('remote-worker');
+    for (const [name, service] of publishing) {
+      expect(dev.doc.getIn(['services', name, 'ports'], true)?.tag, name).toBe('!override');
+      const hostPorts = (ports: readonly string[]): string[] =>
+        ports.map((port) => defaultOf(port).split(':').slice(-2, -1)[0] ?? '');
+      const prod = hostPorts(service.ports ?? []);
+      for (const port of hostPorts(devService(name).ports ?? [])) {
+        expect(port, name).toMatch(/^\d+$/);
+        expect(prod, name).not.toContain(port);
+      }
+    }
+  });
+
   it('publishes the local page on its own loopback port, replacing the base list', () => {
     const worker = devService('remote-worker');
     expect(dev.doc.getIn(['services', 'remote-worker', 'ports'], true)?.tag).toBe('!override');
