@@ -59,6 +59,17 @@ const CODE_SENTENCE: Readonly<Record<string, string>> = {
   too_many_requests: 'Too many requests. Wait a moment and try again.',
   rate_limited: 'Too many requests. Wait a moment and try again.',
   invalid_response: 'The server’s answer could not be read. Reload the page.',
+  idempotency_key_in_flight:
+    'The same request is still being performed. Wait a moment, then check whether it was done.',
+  idempotency_key_reused:
+    'This was already sent with different details. Reload the page and try again.',
+  ticket_has_task: 'That ticket already has a task. Open it from the board.',
+  task_exists: 'That ticket already has a task. Open it from the board.',
+  discovery_in_flight: 'A discovery is already running for this project. Wait for it to finish.',
+  project_has_live_tasks:
+    'The project has tasks still in progress. Wait for them to finish or cancel them first.',
+  missing_secret:
+    'An environment variable you named is not set on the server. Ask an administrator to set it, then try again.',
 };
 
 /** The refusals whose `details` name an integration's settings rather than a form's fields. */

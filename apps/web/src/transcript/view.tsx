@@ -299,7 +299,10 @@ const BlockView = ({ block }: { readonly block: TranscriptBlock }): ReactElement
       return (
         <LogRow kind="result" label="The run ended" tone="border-t border-line pt-2">
           <span className="flex flex-wrap gap-4 text-xs">
-            <span>Ended because: {terminalReasonLabel(block.terminalReason)}</span>
+            <span>
+              {/* A reason this build has no word for is the producer's own string, title-cased. */}
+              Ended because: <UntrustedText value={terminalReasonLabel(block.terminalReason)} />
+            </span>
             <span>turns: {formatInteger(block.numTurns)}</span>
             <span>
               cost: {formatUsd(block.costUsd)}

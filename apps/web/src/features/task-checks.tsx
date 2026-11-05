@@ -27,7 +27,7 @@ import { ChevronRightIcon } from '@primer/octicons-react/ChevronRightIcon';
 import { type ReactElement, type ReactNode, useId } from 'react';
 import { useArtifactBody } from '../app/queries.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
-import { Badge, Card, formatMinutes, formatUsd, Metric } from '../ui/kit.js';
+import { Badge, Card, ErrorReason, formatMinutes, formatUsd, Metric } from '../ui/kit.js';
 import { type Status, StatusIcon } from '../ui/status.js';
 import { Tooltip } from '../ui/tooltip.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
@@ -192,10 +192,16 @@ const useAcceptanceRows = (
   }
   const parsed = body.isError ? null : acceptanceVerdictDataSchema.safeParse(body.data.data);
   if (parsed === null || !parsed.success) {
-    const why = body.isError
-      ? `The Acceptance Verdict v${latest.version} was not served: ${String(body.error)}`
-      : `The Acceptance Verdict v${latest.version} does not read as one, so nothing is shown from it.`;
-    const basis = <UntrustedText value={why} />;
+    const basis = body.isError ? (
+      <ErrorReason
+        lead={`The Acceptance Verdict v${latest.version} was not served:`}
+        error={body.error}
+      />
+    ) : (
+      <UntrustedText
+        value={`The Acceptance Verdict v${latest.version} does not read as one, so nothing is shown from it.`}
+      />
+    );
     return rows(
       { value: 'unavailable', status: 'skipped', basis },
       { value: 'unavailable', status: 'skipped', basis },

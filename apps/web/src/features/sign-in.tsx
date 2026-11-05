@@ -40,18 +40,27 @@ import { Logo } from '../ui/logo.js';
 import { DitherCanvas } from './dither-canvas.js';
 import { PeekBot } from './peek-bot.js';
 
-/** What a user is told. Server messages are shown; anything else gets a message we wrote. */
+/**
+ * What a user is told — always a sentence we wrote. A refusal of the credentials and an unreachable
+ * server say themselves; anything else is *Sign-in failed.*, with `errorSentence`'s words and the
+ * server's own message behind *Technical details* ({@link signInNoticeError}, S-23.22).
+ */
 export const signInMessage = (error: unknown): string => {
-  if (error instanceof ApiError) {
-    return error.status === 401 || error.status === 403
-      ? 'Those credentials were not accepted.'
-      : error.message;
+  if (isCredentialRefusal(error)) {
+    return 'Those credentials were not accepted.';
   }
   if (error instanceof NetworkError) {
     return 'The server could not be reached.';
   }
   return 'Sign-in failed.';
 };
+
+const isCredentialRefusal = (error: unknown): boolean =>
+  error instanceof ApiError && (error.status === 401 || error.status === 403);
+
+/** The error the notice explains, or `undefined` when the title already says all there is. */
+export const signInNoticeError = (error: unknown): unknown =>
+  isCredentialRefusal(error) || error instanceof NetworkError ? undefined : error;
 
 export const SIGN_IN_HEADLINE = 'Tickets in, merge requests out.';
 
@@ -173,7 +182,12 @@ export const SignInScreen = (): ReactElement => {
                     setPassword(event.target.value);
                   }}
                 />
-                {signIn.isError ? <ErrorNotice title={signInMessage(signIn.error)} /> : null}
+                {signIn.isError ? (
+                  <ErrorNotice
+                    title={signInMessage(signIn.error)}
+                    error={signInNoticeError(signIn.error)}
+                  />
+                ) : null}
                 <button
                   type="submit"
                   disabled={signIn.isPending}

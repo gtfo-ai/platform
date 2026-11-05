@@ -42,6 +42,10 @@ export const ADMIN_NAME =
 const OPT_OUT: Readonly<Record<string, string>> = {
   // S-23.20 owns this file while S-23.22 lands; BACKLOG 933 moves its `.agentic/config.yml`.
   'apps/web/src/features/execution-settings.tsx': 'owned by S-23.20 (BACKLOG 933)',
+  // The worker's local page (`worker/*`, another slice's) names `APP_WORKER_UI_AUTH` to the person
+  // who runs that worker and set it; BACKLOG 938 decides whether it moves behind the disclosure.
+  'apps/web/src/worker/worker-app.tsx':
+    'the worker operator’s own page, owned elsewhere (BACKLOG 938)',
 };
 
 /** Every administrator-only name in `source` outside a comment, with its line. */

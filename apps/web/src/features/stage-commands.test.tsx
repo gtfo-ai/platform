@@ -420,6 +420,34 @@ describe('the stage picker (S-23.22)', () => {
     });
   });
 
+  it.each(['Return to stage…', 'Rework…'] as const)(
+    'keeps %s on the first stage the task entered, never quietly the current one',
+    async (item) => {
+      const user = userEvent.setup();
+      render(
+        createApp({ fetchImpl: fetchFor(escalatedAtCi('needs_human'), []), realtime: false })
+          .element,
+      );
+      await openStageDialog(user, item);
+      expect((screen.getByLabelText('Stage') as HTMLSelectElement).value).toBe('refinement');
+    },
+  );
+
+  it('keeps a stage a person picked for Return when they open Retry next', async () => {
+    const user = userEvent.setup();
+    render(
+      createApp({ fetchImpl: fetchFor(escalatedAtCi('needs_human'), []), realtime: false }).element,
+    );
+    await openStageDialog(user, 'Return to stage…');
+    await user.selectOptions(screen.getByLabelText('Stage'), 'implementation');
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    await openStageDialog(user, 'Retry stage…');
+    expect((screen.getByLabelText('Stage') as HTMLSelectElement).value).toBe('implementation');
+  });
+
   it('shows a refused stage command with the reason, in plain words', async () => {
     const user = userEvent.setup();
     const refusing = (async (input: RequestInfo | URL, init?: RequestInit) =>

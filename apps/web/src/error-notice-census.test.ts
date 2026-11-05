@@ -35,6 +35,16 @@
  * code, and the server's diagnostic behind *Technical details*, both need the error. The second
  * census refuses an `<ErrorNotice` whose `title` mentions "refused" and that has no `error={…}`
  * attribute. The same syntactic limits apply: a title held in a variable is not read.
+ *
+ * ## No error is stringified for a screen (review of PR #51)
+ *
+ * Three screens still put `String(error)` in front of the person — a status line, a Checks row's
+ * basis, the sign-in notice's title — which is the server's diagnostic in the open. The third census
+ * refuses `String(…)` of anything named `error`/`err` (or a `.error`) in any application source but
+ * the two that own the text: `api/read-error.ts`, which produces the diagnostic `ErrorNotice` and
+ * `ErrorReason` fold under *Technical details*, and `ui/error-boundary.tsx`, which shows a
+ * *component's* crash (sanitised and bounded), not a server's answer. It cannot see `` `${error}` ``,
+ * `error.toString()`, `error.message`, or an error held under another name.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -153,6 +163,35 @@ export const refusedNoticesWithoutError = (source: string): string[] =>
       : [];
   });
 
+/** The files allowed to stringify an error, each with its reason (see the module note). */
+const STRINGIFY_ALLOWED: Readonly<Record<string, string>> = {
+  'api/read-error.ts': 'produces the diagnostic shown behind Technical details',
+  'ui/error-boundary.tsx': 'a component crash, sanitised and bounded, not a server answer',
+};
+
+/** Every `String(…)` in `source` whose argument names an error, comments removed. */
+export const stringifiedErrors = (source: string): string[] => {
+  const code = withoutComments(source);
+  const found: string[] = [];
+  for (const match of code.matchAll(/\bString\(/g)) {
+    const open = match.index + match[0].length - 1;
+    let depth = 0;
+    let end = open;
+    for (; end < code.length; end += 1) {
+      if (code[end] === '(') depth += 1;
+      else if (code[end] === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    const argument = code.slice(open + 1, end);
+    if (/\berr(?:or)?\b|\.error\b/i.test(argument)) {
+      found.push(`String(${argument})`);
+    }
+  }
+  return found;
+};
+
 const walk = (directory: string): string[] =>
   readdirSync(directory).flatMap((entry) => {
     const path = join(directory, entry);
@@ -261,5 +300,51 @@ describe('a "…refused." ErrorNotice is handed the refusal (S-23.22)', () => {
     ['another component', '<Other title="That was refused." />'],
   ])('does not flag %s', (_name, source) => {
     expect(refusedNoticesWithoutError(source)).toEqual([]);
+  });
+});
+
+describe('no error is stringified for a screen (review of PR #51)', () => {
+  it('finds none outside the two files that own the text, and each of those still does', () => {
+    const offenders: string[] = [];
+    const used = new Set<string>();
+    for (const path of sourceFiles()) {
+      const name = relative(SOURCE_ROOT, path);
+      const found = stringifiedErrors(readFileSync(path, 'utf8'));
+      if (found.length === 0) continue;
+      if (Object.hasOwn(STRINGIFY_ALLOWED, name)) {
+        used.add(name);
+        continue;
+      }
+      offenders.push(...found.map((each) => `${name}: ${each}`));
+    }
+    expect(offenders).toEqual([]);
+    expect(Object.keys(STRINGIFY_ALLOWED).filter((name) => !used.has(name))).toEqual([]);
+  });
+
+  it.each([
+    [
+      'JSX text',
+      '<p>Could not: <UntrustedText value={String(gate.error)} /></p>',
+      ['String(gate.error)'],
+    ],
+    [
+      'a template literal',
+      // Split so the literal is not read as a template by the linter.
+      'const why = `not served: $' + '{String(body.error)}`;',
+      ['String(body.error)'],
+    ],
+    ['a bare error', 'return { detail: String(error) };', ['String(error)']],
+    ['a nested call', 'String(pick(err, 1))', ['String(pick(err, 1))']],
+  ])('flags %s', (_name, source, expected) => {
+    expect(stringifiedErrors(source)).toEqual(expected);
+  });
+
+  it.each([
+    ['a number', 'String(count)'],
+    ['an id', 'String(task.id)'],
+    ['a comment', '// String(error)\nconst a = 1;'],
+    ['a word that contains err', 'String(terrain)'],
+  ])('does not flag %s', (_name, source) => {
+    expect(stringifiedErrors(source)).toEqual([]);
   });
 });

@@ -223,14 +223,51 @@ export const ErrorNotice = ({
           <UntrustedText value={text} />
         </p>
       )}
-      {technical === null ? undefined : (
-        <DetailsDisclosure summary="Technical details" className="mt-1">
-          <p className="font-mono text-xs [overflow-wrap:anywhere]">
-            <UntrustedText value={technical} />
-          </p>
-        </DetailsDisclosure>
-      )}
+      {technical === null ? undefined : <TechnicalDetails text={technical} className="mt-1" />}
     </Flash>
+  );
+};
+
+/** A diagnostic — the server's own message — folded under a collapsed *Technical details*. */
+export const TechnicalDetails = ({
+  text,
+  className,
+}: {
+  readonly text: string;
+  readonly className?: string;
+}): ReactElement => (
+  <DetailsDisclosure
+    summary="Technical details"
+    {...(className === undefined ? {} : { className })}
+  >
+    <p className="font-mono text-xs [overflow-wrap:anywhere]">
+      <UntrustedText value={text} />
+    </p>
+  </DetailsDisclosure>
+);
+
+/**
+ * Why something failed, inline — for a sentence that is not a whole notice (a Checks row's basis, a
+ * status line): `errorSentence`'s words, and the diagnostic behind *Technical details*. Never
+ * `String(error)` in the open (S-23.22, review of PR #51).
+ */
+export const ErrorReason = ({
+  error,
+  lead,
+}: {
+  readonly error: unknown;
+  /** Platform text before the sentence: "Where the last discovery is could not be read:". */
+  readonly lead?: string;
+}): ReactElement => {
+  const said = errorSentence(error);
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span>
+        {lead === undefined ? null : `${lead} `}
+        <UntrustedText value={said.sentence} />
+      </span>
+      {said.technical === null ? null : <TechnicalDetails text={said.technical} />}
+    </span>
   );
 };
 

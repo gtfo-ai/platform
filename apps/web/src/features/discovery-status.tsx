@@ -36,7 +36,7 @@ import { type ReactElement, useSyncExternalStore } from 'react';
 import { useProjectReadiness, useRediscoveryGate, useTask } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
-import { Badge, type BadgeTone, formatDateTime, formatInteger } from '../ui/kit.js';
+import { Badge, type BadgeTone, ErrorReason, formatDateTime, formatInteger } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { latestProgressOf, liveStageRun } from './live-stage.js';
 
@@ -127,7 +127,7 @@ export const DiscoveryStatus = ({
   if (gate.isError) {
     return (
       <p className="text-xs text-fg-muted" data-discovery-phase="unknown">
-        Where the last discovery is could not be read: <UntrustedText value={String(gate.error)} />
+        <ErrorReason lead="Where the last discovery is could not be read:" error={gate.error} />
       </p>
     );
   }

@@ -52,6 +52,9 @@ const fetchFor = () =>
     if (url.includes('/api/auth/sign-in/email')) {
       const body = JSON.parse(String(init?.body ?? '{}')) as { password?: string };
       world.signInBodies.push(body);
+      if (body.password === 'server-breaks') {
+        return json({ error: { code: 'internal', message: 'pool exhausted on db-1' } }, 500);
+      }
       if (body.password !== 'fake-password-0000') {
         return json(
           { code: 'INVALID_EMAIL_OR_PASSWORD', message: 'Invalid email or password' },
@@ -151,6 +154,25 @@ describe('the form', () => {
       'Those credentials were not accepted.',
     );
     expect(window.location.pathname).toBe('/sign-in');
+  });
+
+  // Review of PR #51: any other failure is our sentence, the server's text behind Technical details.
+  it('says any other failure in its own words, the server’s message folded away', async () => {
+    await renderPage();
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'operator@example.invalid' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'server-breaks' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Sign-in failed.');
+    expect(alert.textContent).toContain('The server could not do this right now.');
+    const details = alert.querySelector('details');
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain('pool exhausted on db-1');
+    const visible = alert.cloneNode(true) as HTMLElement;
+    visible.querySelector('details')?.remove();
+    expect(visible.textContent).not.toContain('pool exhausted');
   });
 
   it('signs in and lands on the deep link that was refused', async () => {

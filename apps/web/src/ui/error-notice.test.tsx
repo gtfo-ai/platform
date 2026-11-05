@@ -122,6 +122,28 @@ describe('ErrorNotice keeps the server’s text behind Technical details (S-23.2
     ],
     [new ApiError(404, 'not_found', 'no task 1f'), 'It was not found.'],
     [new ApiError(409, 'some_new_code', 'x'), 'This is not possible in the state it is in now.'],
+    // Review of PR #51: these read only the status's sentence before.
+    [
+      new ApiError(400, 'missing_secret', 'JIRA_TOKEN is not set'),
+      'An environment variable you named is not set on the server.',
+    ],
+    [new ApiError(409, 'ticket_has_task', 'ACME-1 has task 1f'), 'That ticket already has a task.'],
+    [
+      new ApiError(409, 'discovery_in_flight', 'task 1f is running'),
+      'A discovery is already running for this project.',
+    ],
+    [
+      new ApiError(409, 'project_has_live_tasks', '3 live tasks'),
+      'The project has tasks still in progress.',
+    ],
+    [
+      new ApiError(409, 'idempotency_key_reused', 'key k1 was used for another body'),
+      'This was already sent with different details.',
+    ],
+    [
+      new ApiError(409, 'idempotency_key_in_flight', 'key k1 in flight'),
+      'The same request is still being performed.',
+    ],
     [
       new ApiError(400, 'invalid_body', 'body/reason must be string', [
         { path: '/reason', message: 'x' },

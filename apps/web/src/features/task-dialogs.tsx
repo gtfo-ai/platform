@@ -81,9 +81,11 @@ export const retryOutcomeText = (answer: RetryStageResponse): string => {
 };
 
 /**
- * The stage the pickers start on: the task's **current** stage when it has entered it — *Retry
- * stage* "runs the current stage again" (user guide § 4) — else the first it entered (S-23.22; it
- * used to be the first always, so Retry offered Refinement on a task at Code review).
+ * The stage *Retry stage*'s picker starts on: the task's **current** stage when it has entered it —
+ * Retry "runs the current stage again" (user guide § 4) — else the first it entered (S-23.22; it used
+ * to be the first always, so Retry offered Refinement on a task at Code review). Return and Rework
+ * keep the first entered stage as their default, so a careless Return never quietly re-runs the
+ * stage the task is at (review of PR #51).
  */
 export const defaultCommandStage = (
   options: readonly string[],
@@ -98,8 +100,9 @@ export const useStageCommandForm = (
   currentStage: string | null = null,
 ) => {
   const options = [...new Set(stages.map((entry) => entry.stage))];
-  const fallback = defaultCommandStage(options, currentStage);
+  const retryFallback = defaultCommandStage(options, currentStage);
   const [stage, setStage] = useState<string | null>(null);
+  const picked = stage !== null && options.includes(stage) ? stage : null;
   const [reason, setReason] = useState('');
   const [instructions, setInstructions] = useState('');
   // Ticked by default, as the server's own default is (WP-152 ruling (b)) — and ticked again for
@@ -111,8 +114,10 @@ export const useStageCommandForm = (
   const attachGateFeedback = feedbackKey === null || untickedFor !== feedbackKey;
   return {
     options,
-    // Until a person picks, the default follows the task (it may move while the page is open).
-    selected: stage !== null && options.includes(stage) ? stage : fallback,
+    /** Return and Rework: the person's pick, else the first stage the task entered. */
+    selected: picked ?? options[0] ?? '',
+    /** Retry: the person's pick, else the current stage — which follows the task until a pick. */
+    retrySelected: picked ?? retryFallback,
     setStage,
     reason,
     setReason,
@@ -132,13 +137,20 @@ export type StageCommandForm = ReturnType<typeof useStageCommandForm>;
 
 const INPUT = 'rounded-md border border-line-input bg-inset px-2 py-1 text-sm';
 
-const StagePicker = ({ form }: { readonly form: StageCommandForm }): ReactElement => (
+const StagePicker = ({
+  form,
+  value = form.selected,
+}: {
+  readonly form: StageCommandForm;
+  /** The stage shown selected — `form.retrySelected` in the Retry dialog. */
+  readonly value?: string;
+}): ReactElement => (
   // The label beside the select rather than around it, so its name is "Stage" and not the options.
   <div className="flex items-center gap-2 text-xs text-fg-muted">
     <label htmlFor="stage-command">Stage</label>
     <select
       id="stage-command"
-      value={form.selected}
+      value={value}
       onChange={(event) => {
         form.setStage(event.target.value);
       }}
@@ -356,14 +368,14 @@ export const TaskDialogs = ({
             event.preventDefault();
             commands.retryStage.mutate(
               {
-                stage: form.selected,
+                stage: form.retrySelected,
                 ...(form.reason.trim() === '' ? {} : { reason: form.reason }),
               },
               { onSuccess: close },
             );
           }}
         >
-          <StagePicker form={form} />
+          <StagePicker form={form} value={form.retrySelected} />
           <input
             aria-label="Reason"
             value={form.reason}

@@ -139,6 +139,30 @@ describe('TranscriptView', () => {
     expect(row?.textContent).not.toContain(reason);
   });
 
+  // Review of PR #51: an unknown reason is the producer's string, so it goes through UntrustedText.
+  it('renders an unknown reason as untrusted text', () => {
+    const { container } = render(
+      <TranscriptView
+        blocks={[
+          {
+            kind: 'result',
+            id: 'r',
+            seq: 1,
+            at: AT,
+            terminalReason: 'odd\u202Ereason',
+            numTurns: 2,
+            durationMs: 10,
+            costUsd: 1.5,
+            isEstimate: false,
+          },
+        ]}
+      />,
+    );
+    const row = container.querySelector('[data-block-kind="result"]');
+    expect(row?.textContent).toContain('Ended because:');
+    expect(row?.textContent).not.toContain('\u202E');
+  });
+
   it('renders a progress line as untrusted text, with its percentage and a cut marked (backlog 496)', () => {
     const summary = '<b>slice 2</b> pushed';
     const { container } = render(
