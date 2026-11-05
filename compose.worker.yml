@@ -87,7 +87,11 @@ services:
   # fresh volume is root's, and the copy keeps the binary's 0755 so the worker's user can run it.
   pull-runtime-image:
     image: ${PLATFORM_RUNTIME_IMAGE:-platform-runtime:dev}
-    entrypoint: ['cp', '/usr/local/bin/claude', '/opt/claude-cli/claude']
+    # Copied beside it, then renamed: a running sign-in never meets a half-written binary.
+    entrypoint:
+      - sh
+      - -c
+      - cp /usr/local/bin/claude /opt/claude-cli/claude.new && mv -f /opt/claude-cli/claude.new /opt/claude-cli/claude
     user: '0'
     volumes:
       - claude-cli:/opt/claude-cli

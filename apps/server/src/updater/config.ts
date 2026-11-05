@@ -8,7 +8,7 @@
  *
  * | variable | |
  * |---|---|
- * | `APP_CORE_URL` | the core it follows; unset, the updater **idles** until it is (S-22.17's first-run page may start a worker before a core is known) |
+ * | `APP_CORE_URL` | the core it follows; unset, the updater follows the platform chosen on the worker's page (`core-url` in `worker-state`, read at every poll — WP-294) and **idles** while there is none |
  * | `APP_TRUSTED_IMAGE_REPOSITORY` | the `platform` image's repository, e.g. `ghcr.io/<owner>/platform`; the other three are `-launcher`, `-runtime`, `-egress` beside it (TD-032 §3) |
  * | `APP_TRUSTED_BUILDER` | `<owner>/<repo>/.github/workflows/<file>@<ref>` — the workflow whose attestation is trusted |
  * | `APP_UPDATE_REGISTRY_ENDPOINTS` | optional: `host=origin,…`, where a registry is read from (`registry.ts`; not a trust decision) |

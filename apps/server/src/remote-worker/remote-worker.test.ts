@@ -1997,6 +1997,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     setupToken: (env) => {
       const child = spawn(process.execPath, [FAKE_CLAUDE, 'setup-token'], {
         env: { ...env },
+        cwd: env.HOME,
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: true,
       });
@@ -2092,6 +2093,13 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       }
       // The Claude step's actions refuse nothing here, but no platform is set: a code is refused.
       expect((await post(port, 'claude/code', { code: 'x' })).status).toBe(409);
+      // A code is only the characters Claude's page shows: a line break or a control character
+      // would answer the CLI's next prompt, so it is refused before anything (review of PR #42).
+      for (const code of ['abc\rdef', 'abc\ndef', 'abc def', 'ab\u0003c']) {
+        const refused = await post(port, 'claude/code', { code });
+        expect(`${JSON.stringify(code)} ${refused.status}`).toBe(`${JSON.stringify(code)} 400`);
+        expect(refused.text).not.toContain(code);
+      }
     } finally {
       await worker.stop();
     }
@@ -2450,6 +2458,10 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
           ['core', { url: 'https://core.example.test' }],
           ['claude/token', { token: SIGN_IN_FIXTURE.token }],
           ['claude/code', { code: SIGN_IN_FIXTURE.good_code }],
+          ['claude/sign-in', { action: 'start' }],
+          ['claude/sign-out', {}],
+          ['connect-again', {}],
+          ['retry', {}],
         ];
         for (const [verb, body] of writes) {
           const path_ = `/api/local/${verb}`;
@@ -2470,6 +2482,9 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
           }
         }
         expect(existsSync(path.join(stateDir, 'core-url'))).toBe(false);
+        // No refused write started a sign-in or restarted anything.
+        expect(worker.localState().setup.sign_in.phase).toBe('idle');
+        expect(worker.localState().connection).toBe('needs_platform');
         // Accepted from the page itself: same-origin, JSON, the exact Origin.
         const accepted = await ask({
           method: 'POST',

@@ -53,6 +53,7 @@ import { ExternalLink, TerminalText, UntrustedText } from '../ui/untrusted.js';
 import { LocalCallError, type LocalClient } from './client.js';
 import {
   CONNECTION_WORDS,
+  CONTROL_HINTS,
   coreRunUrl,
   deskOf,
   elapsedWords,
@@ -376,20 +377,32 @@ export const WorkerApp = ({
             <span data-connection={state.connection}>{CONNECTION_WORDS[state.connection]}</span>
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            tone={held ? 'primary' : 'default'}
-            disabled={busy || state.connection !== 'connected'}
-            onClick={() => void control(() => client.pause(!held))}
-          >
-            {held ? 'Resume' : 'Pause'}
-          </Button>
-          <Button
-            disabled={busy || state.draining || state.connection !== 'connected'}
-            onClick={() => void control(() => client.drain())}
-          >
-            Drain
-          </Button>
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="flex max-w-56 flex-col gap-1">
+            <Button
+              tone={held ? 'primary' : 'default'}
+              aria-describedby="worker-pause-hint"
+              disabled={busy || state.connection !== 'connected'}
+              onClick={() => void control(() => client.pause(!held))}
+            >
+              {held ? 'Resume' : 'Pause'}
+            </Button>
+            <p id="worker-pause-hint" data-hint="pause" className="text-xs text-fg-muted">
+              {held ? CONTROL_HINTS.resume : CONTROL_HINTS.pause}
+            </p>
+          </div>
+          <div className="flex max-w-56 flex-col gap-1">
+            <Button
+              aria-describedby="worker-drain-hint"
+              disabled={busy || state.draining || state.connection !== 'connected'}
+              onClick={() => void control(() => client.drain())}
+            >
+              Drain
+            </Button>
+            <p id="worker-drain-hint" data-hint="drain" className="text-xs text-fg-muted">
+              {CONTROL_HINTS.drain}
+            </p>
+          </div>
         </div>
       </header>
 
