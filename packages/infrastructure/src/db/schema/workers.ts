@@ -3,7 +3,16 @@
  * The DDL is authoritative and the parity test enforces it; the migration's header carries the
  * reasoning (what is hashed, what revocation writes, why the codes are rows).
  */
-import { integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 /** One registered machine, tied to the user who approved its device code. */
 export const workers = pgTable('workers', {
@@ -42,6 +51,56 @@ export const workerDeviceCodes = pgTable('worker_device_codes', {
   consumedAt: timestamp('consumed_at', { withTimezone: true }),
   workerId: uuid('worker_id'),
 });
+
+/**
+ * A remote run's mutating platform tool calls (migration 0099, WP-282, TD-031 §10b): a claim before
+ * the call, the redacted answer after it, keyed by the run and the SHA-256 of the `tool_use_id`.
+ */
+export const runToolCalls = pgTable(
+  'run_tool_calls',
+  {
+    runId: uuid('run_id').notNull(),
+    toolUseDigest: text('tool_use_digest').notNull(),
+    toolName: text('tool_name').notNull(),
+    inputDigest: text('input_digest').notNull(),
+    leaseEpoch: integer('lease_epoch').notNull(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    result: jsonb('result'),
+    isError: boolean('is_error'),
+    redactionCount: integer('redaction_count').notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.runId, table.toolUseDigest] })],
+);
+
+/** Tool approvals a remote run asked for, decided once and delivered once (migration 0099). */
+export const runToolApprovals = pgTable('run_tool_approvals', {
+  id: uuid('id').primaryKey(),
+  runId: uuid('run_id').notNull(),
+  toolUseDigest: text('tool_use_digest').notNull(),
+  toolName: text('tool_name').notNull(),
+  leaseEpoch: integer('lease_epoch').notNull(),
+  requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+  decision: text('decision').$type<'allow' | 'deny'>(),
+  reason: text('reason'),
+  questionId: uuid('question_id'),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+});
+
+/** The SDK session mirror of a remote run, one redacted JSONL line per row (migration 0099). */
+export const runSessionLines = pgTable(
+  'run_session_lines',
+  {
+    runId: uuid('run_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    lineNo: integer('line_no').notNull(),
+    line: text('line').notNull(),
+    redactionCount: integer('redaction_count').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.runId, table.sessionId, table.lineNo] })],
+);
 
 export type WorkerRow = typeof workers.$inferSelect;
 export type WorkerDeviceCodeRow = typeof workerDeviceCodes.$inferSelect;

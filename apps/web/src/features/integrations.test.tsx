@@ -379,6 +379,49 @@ describe('the integrations list', () => {
   });
 
   /**
+   * WP-282 (TD-031 decision 5, Q124 (a)): the remote-worker opt-in is a GitLab configuration choice,
+   * offered as a typed control with the residual it accepts written beside it — and sent as typed.
+   */
+  it('offers remote_run_credential with its residual beside the switch, and sends the choice', async () => {
+    const gitlab: IntegrationSummary = {
+      ...JIRA,
+      type: 'git',
+      provider: 'gitlab',
+      name: 'ACME GitLab',
+      config: { base_url: 'https://gitlab.example.test', run_credential: 'static' },
+    };
+    const { sent, fetchImpl } = recorder({ items: [gitlab] });
+    renderApp(fetchImpl);
+    const user = userEvent.setup();
+    await choose(user, 'ACME GitLab', 'Edit configuration');
+    const form = await screen.findByRole('form', { name: 'Configuration of ACME GitLab' });
+    const control = form.querySelector(
+      'select[data-config-key="remote_run_credential"]',
+    ) as HTMLSelectElement | null;
+    expect(control).not.toBeNull();
+    expect([...(control?.options ?? [])].map((option) => option.value)).toEqual([
+      '',
+      'allow',
+      'deny',
+    ]);
+    // The residual sits beside the switch, as text, and on no other field.
+    const residual = control?.parentElement?.querySelector('[data-config-residual]');
+    expect(residual?.textContent).toMatch(/90 days/);
+    expect(residual?.textContent).toMatch(/every project the key is enabled on/);
+    expect(residual?.textContent).toMatch(/Default: deny/);
+    expect(form.querySelectorAll('[data-config-residual]')).toHaveLength(1);
+    fireEvent.change(control as HTMLSelectElement, { target: { value: 'allow' } });
+    await user.click(screen.getByRole('button', { name: 'Save configuration' }));
+    await waitFor(() => {
+      expect(sent.some((each) => each.method === 'PATCH')).toBe(true);
+    });
+    const patch = sent.find((each) => each.method === 'PATCH')?.body as
+      | { config?: Record<string, unknown> }
+      | undefined;
+    expect(patch?.config?.remote_run_credential).toBe('allow');
+  });
+
+  /**
    * WP-114, PROGRESS backlog 332: each optional field is a control of its declared type, and what
    * it sends is typed — a boolean as a boolean, a number as a number, a list as a list. (The same
    * holds in the wizard's *Optional settings*, `integration-wizard.test.tsx`.)

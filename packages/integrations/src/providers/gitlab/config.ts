@@ -115,6 +115,18 @@ export const gitlabConfigSchema = z.strictObject({
    */
   run_token_owner: z.enum(['dedicated_user', 'operator']).default('dedicated_user'),
   /**
+   * Whether a **remote worker** (BD-032) may run this binding's project when its run credential is
+   * `static` or `deploy_key` (TD-031 decision 5, WP-282 — Q124, built as its recommendation (a):
+   * opt-in, **default `deny`**). With `deny` the claim's eligibility excludes the project from every
+   * remote worker, and its runs wait for the server's runner. `allow` puts the static token on a
+   * developer's machine for the run's life, or makes the core a signing oracle for the deploy key
+   * for the run's life: the reach widens from one project for hours (a minted token) to one project
+   * for up to 90 days (static) or every project the deploy key is enabled on (deploy key), and
+   * per-run revocation is lost. A `minted` project needs no opt-in. Changed by an administrator
+   * through `PATCH /api/integrations/:id` (`integration.write`), audited with its value.
+   */
+  remote_run_credential: z.enum(['allow', 'deny']).default('deny'),
+  /**
    * Secret. The static run credential, scopes `read_repository` and `write_repository` only: the
    * **personal access token of a dedicated user** who is a member of only the bound project with the
    * Developer role, or — with `run_token_owner: operator` — the operator's own. Never the API

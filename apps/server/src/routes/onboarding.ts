@@ -189,6 +189,25 @@ const integrationParamsSchema = z.strictObject({ integration_id: z.uuid() });
 export const PROBE_TIMEOUT_MS = 10_000;
 
 /**
+ * The audit's half of the remote-worker opt-in (WP-282, Q124 (a)): the value a `PATCH` set — or
+ * `deny`, the default, for one that removed the key — and nothing for a `PATCH` that did not touch
+ * it. Only `allow` and `deny` are recorded; any other text is the schema's to refuse, never the
+ * audit's to copy.
+ */
+export const remoteRunCredentialAudit = (
+  config: Readonly<Record<string, unknown>> | undefined,
+  remove: readonly string[] | undefined,
+): { remote_run_credential?: 'allow' | 'deny' } => {
+  const set = config?.remote_run_credential;
+  if (set === 'allow' || set === 'deny') {
+    return { remote_run_credential: set };
+  }
+  return remove?.includes('remote_run_credential') === true
+    ? { remote_run_credential: 'deny' }
+    : {};
+};
+
+/**
  * A written `pipeline.wip` limit above the organisation's maximum is **refused by name** (WP-91,
  * backlog 224): the organisation's value bounds the project's, and a write that states more is a
  * project trying to widen it. Refused rather than clamped, because the side that writes is the side
@@ -602,7 +621,12 @@ export const registerOnboardingRoutes = async (
         audit: {
           userId: actor.userId,
           action: 'integration.config.write',
-          params: { integration_id: integrationId },
+          params: {
+            integration_id: integrationId,
+            // WP-282 (TD-031 decision 5, Q124 (a)): the remote-worker opt-in is a trust decision, so
+            // its audit row says which way it went — a value from a closed list, never a credential.
+            ...remoteRunCredentialAudit(request.body.config, request.body.remove),
+          },
         },
       });
       if (result.status === 'not_found') {

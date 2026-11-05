@@ -20,6 +20,12 @@
  *  4. **The release** (backlog 701): the claim undone, the epoch kept, the exclusion appended once, a
  *     repeat recognised, `run_started` after the marker, `lease_lost` under another epoch.
  *  5. **The run token's holder** and **a run's live minted credentials** read from the tables.
+ *  6. **WP-282's statements** (`postgres-remote-run-calls.ts`): one transcript row per `(run_id,
+ *     seq)` on a table whose key carries the partition column; a tool call's claim, answer and
+ *     take-over; an approval decided once and delivered once; the session mirror once per position;
+ *     and `ssh_signatures` counted in the statement that checks the fence — one cap per run however
+ *     many connections (API replicas) race for it, nothing counted under a stale epoch, another
+ *     worker or a settled offer.
  */
 import {
   claimRunOffer,
@@ -30,12 +36,12 @@ import {
   type StoredTask,
   type Transaction,
 } from '@platform/application';
-import type { Id, IsoDateTime, Slug } from '@platform/contracts';
+import type { Id, IsoDateTime, Slug, TranscriptEvent } from '@platform/contracts';
 import { FEATURE_TEMPLATE, type OfferRouting, SHIPPED_TEMPLATES } from '@platform/domain';
 import { pipeline, recovery } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
-import { createTestClient } from '../support/postgres.js';
+import { createTestClient, createTestPool } from '../support/postgres.js';
 
 const NOW = '2026-11-04T09:00:00.000Z' as IsoDateTime;
 const PAST = '2026-11-04T08:00:00.000Z' as IsoDateTime;
@@ -476,7 +482,7 @@ describe('the worker claim’s eligibility is its own statement (TD-031 §8)', (
     },
   );
 
-  it('refuses a project whose git integration declares a static or deploy-key run credential (WP-282’s opt-in)', async () => {
+  it('refuses a project whose git integration declares a static or deploy-key run credential unless remote_run_credential is allow (WP-282, Q124 (a))', async () => {
     for (const source of ['static', 'deploy_key'] as const) {
       const w = await world();
       const runId = await offered(w);
@@ -489,14 +495,36 @@ describe('the worker claim’s eligibility is its own statement (TD-031 §8)', (
         'insert into bindings (project_id, integration_id) values ($1, $2) returning id',
         [w.projectId, integration?.id],
       );
+      // Absent is `deny`, and so is `deny` said explicitly.
       expect(await claim(w.w1, runId)).toBeNull();
       await sql(
-        "update integrations set config = jsonb_build_object('run_credential', 'minted') where id = $1",
+        "update integrations set config = config || jsonb_build_object('remote_run_credential', 'deny') where id = $1",
+        [integration?.id],
+      );
+      expect(await claim(w.w1, runId)).toBeNull();
+      // The opt-in admits it, the credential source unchanged.
+      await sql(
+        "update integrations set config = config || jsonb_build_object('remote_run_credential', 'allow') where id = $1",
         [integration?.id],
       );
       expect((await claim(w.w1, runId))?.runId).toBe(runId);
       expect(binding?.id).toBeDefined();
     }
+  });
+
+  it('admits a minted project with no opt-in at all', async () => {
+    const w = await world();
+    const runId = await offered(w);
+    const [integration] = await sql<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name, config)
+       values ($1, 'git', 'gitlab', $2, jsonb_build_object('run_credential', 'minted')) returning id`,
+      [orgId, `git-${nextId()}`],
+    );
+    await sql('insert into bindings (project_id, integration_id) values ($1, $2)', [
+      w.projectId,
+      integration?.id,
+    ]);
+    expect((await claim(w.w1, runId))?.runId).toBe(runId);
   });
 
   it('refuses an ask offer: an ask’s ending is not served to a worker before WP-283', async () => {
@@ -777,5 +805,208 @@ describe('a run’s live minted credentials, whatever its status (WP-281)', () =
     expect((await live(new Date(now - 30_000).toISOString())).map((row) => row.revokeId)).toEqual([
       'acme/remote#91',
     ]);
+  });
+});
+
+describe('WP-282: the run-scoped calls’ statements', () => {
+  const calls = pipeline.createPostgresRemoteRunCallStore();
+  const digest = (n: number): string => n.toString(16).padStart(64, '0');
+
+  /** A claimed run of a fresh world: the offer `claimed` at epoch 1 by `w1`. */
+  const claimed = async () => {
+    const w = await world();
+    const runId = await offered(w);
+    expect((await claim(w.w1, runId))?.runId).toBe(runId);
+    return { w, runId };
+  };
+
+  const entry = (runId: Id, seq: number, text: string, at: Date = new Date()): TranscriptEvent =>
+    ({
+      run_id: runId,
+      seq,
+      created_at: at.toISOString(),
+      redaction_count: 0,
+      kind: 'assistant',
+      model: 'claude-opus-5',
+      content: [{ type: 'text', text }],
+    }) as TranscriptEvent;
+
+  it('transcript: one row per (run_id, seq), whatever instant a repeat names', async () => {
+    const { runId } = await claimed();
+    expect(
+      await inTx((tx) =>
+        calls.appendTranscript(tx, runId, [entry(runId, 0, 'first'), entry(runId, 1, 'b')]),
+      ),
+    ).toBe(2);
+    const later = new Date(Date.now() + 1_000);
+    expect(
+      await inTx((tx) =>
+        calls.appendTranscript(tx, runId, [entry(runId, 0, 'again', later), entry(runId, 2, 'c')]),
+      ),
+    ).toBe(1);
+    const rows = await sql<{ seq: number; text: string }>(
+      `select seq, payload -> 'content' -> 0 ->> 'text' as text
+         from run_messages where run_id = $1 order by seq`,
+      [runId],
+    );
+    expect(rows).toEqual([
+      { seq: 0, text: 'first' },
+      { seq: 1, text: 'b' },
+      { seq: 2, text: 'c' },
+    ]);
+  });
+
+  it('tool calls: a claim, its answer; a fresh claim refused; a stale one taken over only for the same call', async () => {
+    const { runId } = await claimed();
+    const claimOf = (at: string, takeOverBefore: string | null, input = digest(1)) =>
+      inTx((tx) =>
+        calls.claimToolCall(tx, {
+          runId,
+          toolUseDigest: digest(9),
+          toolName: 'open_mr',
+          inputDigest: input,
+          epoch: 1,
+          at: at as IsoDateTime,
+          takeOverBefore: takeOverBefore as IsoDateTime | null,
+        }),
+      );
+    expect(await claimOf('2026-11-04T09:00:00.000Z', null)).toBe(true);
+    expect(await claimOf('2026-11-04T09:01:00.000Z', null)).toBe(false);
+    // Stale, but another input: never taken over.
+    expect(await claimOf('2026-11-04T09:10:00.000Z', '2026-11-04T09:05:00.000Z', digest(2))).toBe(
+      false,
+    );
+    expect(await claimOf('2026-11-04T09:10:00.000Z', '2026-11-04T09:05:00.000Z')).toBe(true);
+    await inTx((tx) =>
+      calls.completeToolCall(tx, {
+        runId,
+        toolUseDigest: digest(9),
+        result: { iid: 7 },
+        isError: false,
+        redactionCount: 1,
+        at: '2026-11-04T09:11:00.000Z' as IsoDateTime,
+      }),
+    );
+    const found = await inTx((tx) => calls.findToolCall(tx, runId, digest(9)));
+    expect(found).toMatchObject({
+      toolName: 'open_mr',
+      inputDigest: digest(1),
+      answer: { result: { iid: 7 }, isError: false },
+    });
+    // An answered call is never claimed again, however old.
+    expect(await claimOf('2026-11-04T10:00:00.000Z', '2026-11-04T09:59:00.000Z')).toBe(false);
+  });
+
+  it('approvals: one per tool use, decided once, delivered once', async () => {
+    const { runId } = await claimed();
+    const open = (id: Id) =>
+      inTx((tx) =>
+        calls.openApproval(tx, {
+          id,
+          runId,
+          toolUseDigest: digest(3),
+          toolName: 'WebFetch',
+          epoch: 1,
+          at: NOW,
+        }),
+      );
+    const first = await open(nextId());
+    expect(first.created).toBe(true);
+    expect(await open(nextId())).toEqual({ id: first.id, created: false });
+    for (const decision of ['deny', 'allow'] as const) {
+      await inTx((tx) =>
+        calls.decideApproval(tx, {
+          id: first.id,
+          decision,
+          reason: decision,
+          questionId: null,
+          at: NOW,
+        }),
+      );
+    }
+    const take = () => inTx((tx) => calls.takeDecidedApprovals(tx, { runId, at: NOW, limit: 10 }));
+    expect(await take()).toEqual([
+      { approvalId: first.id, decision: 'deny', reason: 'deny', questionId: null },
+    ]);
+    expect(await take()).toEqual([]);
+  });
+
+  it('session lines: stored once per position', async () => {
+    const { runId } = await claimed();
+    const append = (fromLine: number, lines: string[]) =>
+      inTx((tx) =>
+        calls.appendSessionLines(tx, {
+          runId,
+          sessionId: 'sess-1',
+          fromLine,
+          lines: lines.map((text) => ({ text, redactionCount: 0 })),
+        }),
+      );
+    expect(await append(0, ['a', 'b'])).toBe(2);
+    expect(await append(1, ['b', 'c'])).toBe(1);
+    expect(await inTx((tx) => calls.sessionLineCount(tx, runId))).toBe(3);
+  });
+
+  it('ssh signatures: counted under the fence up to the cap; a stale epoch, another worker and a settled offer count nothing', async () => {
+    const { w, runId } = await claimed();
+    const count = (epoch: number, workerId: Id) =>
+      inTx((tx) => calls.countSignature(tx, { runId, epoch, workerId, max: 2 }));
+    expect(await count(1, w.w1)).toEqual({ kind: 'counted', signatures: 1 });
+    expect(await count(2, w.w1)).toEqual({ kind: 'lost' });
+    expect(await count(1, w.w2)).toEqual({ kind: 'lost' });
+    expect(await count(1, w.w1)).toEqual({ kind: 'counted', signatures: 2 });
+    expect(await count(1, w.w1)).toEqual({ kind: 'cap' });
+    // The run's terminal writer closes the offer: from then on, nothing is counted.
+    await sql("update run_offers set state = 'settled', settled_at = now() where run_id = $1", [
+      runId,
+    ]);
+    expect(await count(1, w.w1)).toEqual({ kind: 'lost' });
+    const [row] = await sql<{ ssh_signatures: number }>(
+      'select ssh_signatures from run_offers where run_id = $1',
+      [runId],
+    );
+    expect(row?.ssh_signatures).toBe(2);
+  });
+
+  it('ssh signatures: one cap per run however many connections race for it', async () => {
+    const { w, runId } = await claimed();
+    // Two pools stand for two `ROLE=api` replicas: 40 requests against a cap of 25.
+    const replicas = [
+      createTestPool(database.connectionString, { max: 4 }),
+      createTestPool(database.connectionString, { max: 4 }),
+    ];
+    try {
+      const attempt = async (replica: (typeof replicas)[number]) => {
+        const client = await replica.connect();
+        try {
+          await client.query('begin');
+          const answer = await calls.countSignature(
+            { adapter: 'postgres', client } as unknown as Transaction,
+            { runId, epoch: 1, workerId: w.w1, max: 25 },
+          );
+          await client.query('commit');
+          return answer.kind;
+        } catch (error) {
+          await client.query('rollback');
+          throw error;
+        } finally {
+          client.release();
+        }
+      };
+      const kinds = await Promise.all(
+        Array.from({ length: 40 }, (_, index) =>
+          attempt(replicas[index % 2] as (typeof replicas)[number]),
+        ),
+      );
+      expect(kinds.filter((kind) => kind === 'counted')).toHaveLength(25);
+      expect(kinds.filter((kind) => kind === 'cap')).toHaveLength(15);
+      const [row] = await sql<{ ssh_signatures: number }>(
+        'select ssh_signatures from run_offers where run_id = $1',
+        [runId],
+      );
+      expect(row?.ssh_signatures).toBe(25);
+    } finally {
+      await Promise.all(replicas.map((replica) => replica.end()));
+    }
   });
 });

@@ -158,6 +158,17 @@ const SELECT = cx(
  * boolean and a choice — whose first option, for an optional field, is the provider's default — a
  * number input for a number, and text otherwise. Labelled in words, with the key in the hint.
  */
+/**
+ * What switching a field costs, said beside its control (WP-282): a field whose value is a trust
+ * decision carries the residual the decision accepts, in platform text, so the administrator reads
+ * it where the choice is made. Keyed by field name; a field without one shows only its hint.
+ */
+export const CONFIG_FIELD_RESIDUALS: Readonly<Record<string, string>> = {
+  // TD-031 decision 5, Q124 (a), BD-032's residual — default `deny`.
+  remote_run_credential:
+    'With allow, a remote worker runs this project with its static run token or its deploy key: a static token sits on a developer’s machine for the run’s life and is valid for up to 90 days on the project; a deploy key makes this core sign for the run, and its reach is every project the key is enabled on. Neither can be revoked per run. Minted run credentials need no opt-in. Default: deny.',
+};
+
 export const ConfigFieldControl = ({
   field,
   provider,
@@ -208,6 +219,11 @@ export const ConfigFieldControl = ({
         <p id={`${id}-hint`} className="text-xs text-fg-muted">
           {hint}
         </p>
+        {CONFIG_FIELD_RESIDUALS[field.name] === undefined ? null : (
+          <p className="text-xs text-fg-muted" data-config-residual={field.name}>
+            {CONFIG_FIELD_RESIDUALS[field.name]}
+          </p>
+        )}
       </div>
     );
   }

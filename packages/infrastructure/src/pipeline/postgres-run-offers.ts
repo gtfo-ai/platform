@@ -119,9 +119,9 @@ const RUNNING_ROLES = ['member', 'maintainer', 'admin'] as const;
  *   claim) and is a project member at `member` or above, and it is not paused;
  * - `now ≥ workers_from`, or the worker's user is the offer's assignee inside its head start — a
  *   `null` `workers_from` is *never* (`server_only`, and an offer written before WP-278);
- * - the project's run credential is `minted`: a git binding whose integration declares
- *   `run_credential: static` or `deploy_key` is admitted only behind `remote_run_credential: allow`
- *   (decision 5, Q124 (a)), which is WP-282's — until then such a project is excluded.
+ * - the project's run credential is `minted`, or — WP-282, decision 5, Q124 (a) — a git binding whose
+ *   integration declares `run_credential: static` or `deploy_key` **and** `remote_run_credential:
+ *   allow` (absent is `deny`, the default: such a project is excluded).
  */
 const WORKER_ELIGIBLE = `(
          o.kind = 'stage'
@@ -147,7 +147,8 @@ const WORKER_ELIGIBLE = `(
             where b.project_id = o.project_id
               and i.type = 'git'
               and i.retired_at is null
-              and coalesce(i.config ->> 'run_credential', 'minted') <> 'minted'))`;
+              and coalesce(i.config ->> 'run_credential', 'minted') <> 'minted'
+              and coalesce(i.config ->> 'remote_run_credential', 'deny') <> 'allow'))`;
 
 /**
  * TD-031 §2's claim. `$1` narrows it to one run's offer, or is null for the oldest eligible open

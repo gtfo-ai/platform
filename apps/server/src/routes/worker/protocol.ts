@@ -9,6 +9,10 @@
  *   POST /api/worker/v1/runs/:id/finish         run token
  *   POST /api/worker/v1/runs/:id/late-cost      run token
  *
+ * and, registered from here with the same authentication (WP-282, `run-calls.ts`): `transcript`,
+ * `tools/:name`, `approvals`, `session` and `ssh-sign`. The heartbeat delivers the run's decided
+ * approvals beside its commands, and is held only while neither is pending.
+ *
  * Every verb under `/api/worker/v1/` first passes {@link registerWorkerProtocolCheck}: `Cache-Control:
  * no-store`, and an `X-Worker-Protocol` the core does not accept answered `426` **before**
  * authentication — the device flow's two verbs included (backlog 712: TD-031 §9 asks the header on
@@ -40,6 +44,7 @@
 import {
   type Broadcast,
   type DeliveredRunCommand,
+  type RemoteRunCalls,
   type RemoteRuns,
   RUN_OFFERS_TOPIC,
   type RunTokenSubject,
@@ -85,6 +90,7 @@ import { HttpError } from '../../errors.js';
 import type { WorkerStore } from '../../queries/worker-queries.js';
 import type { WorkerRelease } from '../../workers/release.js';
 import { authenticateWorkerCredential } from '../../workers/secrets.js';
+import { registerWorkerRunCallRoutes } from './run-calls.js';
 
 /** How often a held claim asks again with no notification: an offer's `workers_from` passing. */
 export const WORKER_CLAIM_POLL_MS = 5_000;
@@ -150,6 +156,12 @@ export interface WorkerProtocolRoutesOptions {
    * first, and answer an authenticated one `503 worker_protocol_unavailable` by name.
    */
   readonly remoteRuns: RemoteRuns | null;
+  /**
+   * The run-scoped calls besides the claim (WP-282): transcript, tools, approvals, session mirror,
+   * SSH signing. `null`/absent: those routes answer an authenticated caller `503` by name, and the
+   * heartbeat delivers no approval.
+   */
+  readonly runCalls?: RemoteRunCalls | null;
   readonly release: () => WorkerRelease | null;
   /** Where offers and commands are announced — the process's one `LISTEN`; `null` holds by time. */
   readonly broadcast: Broadcast | null;
@@ -478,7 +490,7 @@ export const registerWorkerProtocolRoutes = async (
         summary:
           'Renew a run’s lease and collect its commands — held up to 20 s (TD-031 §§2, 9, 14)',
         description:
-          'Run token. Renews the 10-minute lease, fenced on the epoch, the worker and the worker still able to act (one statement, backlog 714); stamps the acks of delivered commands (`applied`, or `refused` with one of the four existing reasons); answers the run’s pending `run_commands` (steer, cancel, take-over) and decided approvals. With nothing pending it is held until a command is recorded or 20 s pass. `409 lease_lost`: stop the session and destroy the workspace (WP-281).',
+          'Run token. Renews the 10-minute lease, fenced on the epoch, the worker and the worker still able to act (one statement, backlog 714); stamps the acks of delivered commands (`applied`, or `refused` with one of the four existing reasons); answers the run’s pending `run_commands` (steer, cancel, take-over) and decided approvals. With nothing pending it is held until a command is recorded, an approval is decided, or 20 s pass; a decided approval is delivered once (WP-282). `409 lease_lost`: stop the session and destroy the workspace (WP-281).',
         tags: ['worker'],
         params: runParamsSchema,
         body: workerHeartbeatRequestSchema,
@@ -507,8 +519,15 @@ export const registerWorkerProtocolRoutes = async (
       if (answer.kind === 'lease_lost') {
         throw leaseLost(runId);
       }
+      // TD-031 §9: decided approvals ride the heartbeat beside the commands (WP-282). A decision
+      // wakes the lease holder's command topic, which the hold below listens on.
+      const decided = async () =>
+        options.runCalls === undefined || options.runCalls === null
+          ? []
+          : options.runCalls.deliverApprovals({ runId });
       let commands = answer.commands;
-      if (commands.length === 0) {
+      let approvals = await decided();
+      if (commands.length === 0 && approvals.length === 0) {
         await hold(
           options.broadcast,
           [runCommandsTopic(workerLeaseOwner(subject.workerId))],
@@ -517,14 +536,18 @@ export const registerWorkerProtocolRoutes = async (
         );
         if (!presence.gone()) {
           commands = await remote.pending({ runId, workerId: subject.workerId });
+          approvals = await decided();
         }
       }
       return {
         lease_expires_at: answer.leaseExpiresAt,
         commands: commands.map(wireCommand),
-        // TD-031 §9's decided approvals ride here once a worker can open one (`approvals`, WP-282);
-        // none can be opened before it, so none is pending a delivery.
-        approvals: [],
+        approvals: approvals.map((approval) => ({
+          approval_id: approval.approvalId,
+          decision: approval.decision,
+          reason: approval.reason.slice(0, 4_096),
+          question_id: approval.questionId,
+        })),
       };
     },
   );
@@ -697,4 +720,12 @@ export const registerWorkerProtocolRoutes = async (
       }
     },
   );
+
+  registerWorkerRunCallRoutes(app, {
+    runCalls: options.runCalls ?? null,
+    path,
+    authenticateRun,
+    runHolder,
+    leaseLost,
+  });
 };

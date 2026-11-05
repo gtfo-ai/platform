@@ -320,6 +320,11 @@ export interface MemoryPipelineStoreOptions {
    * binding), or `null` for a project with no git binding. Unwired is `minted` for every project.
    */
   readonly runCredentialSource?: (projectId: Id) => 'minted' | 'static' | 'deploy_key' | null;
+  /**
+   * The git integration's `remote_run_credential` (WP-282, TD-031 decision 5, Q124 (a)): `allow`
+   * admits a `static` or `deploy_key` project to a remote claim. Unwired is `deny`, the default.
+   */
+  readonly remoteRunCredential?: (projectId: Id) => 'allow' | 'deny';
 }
 
 /** A remote worker as {@link MemoryPipelineStoreOptions.remoteWorkers} answers it (WP-281). */
@@ -1654,7 +1659,13 @@ export const createMemoryPipelineStore = (
       return false;
     }
     const source = options.runCredentialSource?.(candidate.projectId) ?? null;
-    if (source !== null && source !== 'minted') return false;
+    if (
+      source !== null &&
+      source !== 'minted' &&
+      (options.remoteRunCredential?.(candidate.projectId) ?? 'deny') !== 'allow'
+    ) {
+      return false;
+    }
     const { workersFrom, assigneeUserId, assigneeUntil } = candidate.routing;
     const now = Date.parse(claim.now);
     return (

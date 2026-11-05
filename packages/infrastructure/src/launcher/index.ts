@@ -7,6 +7,7 @@
  * the whole point of the split, and `apps/launcher/src/docker-access.test.ts` enforces it off disk.
  */
 export * from './client.js';
+export * from './deploy-key-signer.js';
 export * from './protocol.js';
 export * from './provisioner.js';
 export * from './remote-package.js';

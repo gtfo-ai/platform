@@ -57,6 +57,7 @@ import type {
   Broadcast,
   DeadLetterCommands,
   ProjectSettingsPort,
+  RemoteRunCalls,
   RemoteRuns,
   WebhookIngress,
 } from '@platform/application';
@@ -302,6 +303,8 @@ export interface BuildAppOptions {
    */
   readonly workerProtocol?: {
     readonly remoteRuns: RemoteRuns | null;
+    /** The run-scoped calls besides the claim (WP-282); absent, they answer `503` by name. */
+    readonly runCalls?: RemoteRunCalls | null;
     readonly broadcast: Broadcast | null;
     readonly release: () => WorkerRelease | null;
     /** The held requests' bounds; absent, TD-031 §9's 25 s and 20 s (a test shortens them). */
@@ -651,6 +654,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     await registerWorkerProtocolRoutes(app, {
       store: workerStore,
       remoteRuns: options.workerProtocol?.remoteRuns ?? null,
+      runCalls: options.workerProtocol?.runCalls ?? null,
       broadcast: options.workerProtocol?.broadcast ?? null,
       release: workerRelease,
       ...(options.workerProtocol?.holds?.claimMs === undefined

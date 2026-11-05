@@ -675,7 +675,7 @@ export const savedWorkOf = (
 };
 
 /** The spec's SSH half of a deploy key — its public key without a comment, and the provider's route. */
-const gitSshOf = (minted: MintedRunGitCredential): WorkspaceGitSsh => {
+export const gitSshOf = (minted: MintedRunGitCredential): WorkspaceGitSsh => {
   const ssh = minted.ssh;
   if (ssh === undefined) {
     throw new WorkspaceError(

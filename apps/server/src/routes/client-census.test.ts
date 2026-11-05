@@ -271,11 +271,7 @@ const probe = async (path: string): Promise<Probe> => {
  * client file — measured: run after them, these probes met `Service Unavailable` on a busy host.
  */
 const WORKER_VERBS_SERVED_LATER: Readonly<Partial<Record<keyof typeof WORKER_PATHS, string>>> = {
-  transcript: 'WP-282',
-  tool: 'WP-282',
-  approvals: 'WP-282',
-  session: 'WP-282',
-  sshSign: 'WP-282',
+  // WP-282 served `transcript`, `tools/:name`, `approvals`, `session` and `ssh-sign`.
   pause: 'WP-285',
   release: 'WP-284',
   composeFile: 'WP-284',
@@ -325,6 +321,7 @@ describe('the worker as a second client (WP-281)', () => {
         .sort(),
     );
     expect(served).toContain('finish');
+    expect(served).toContain('sshSign');
   }, 15_000);
 
   it('answers 426 to every served verb that carries no protocol header — the device flow’s too (backlog 712)', async () => {

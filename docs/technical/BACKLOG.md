@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 747, so the next is **748**), its grade
+line with the next free number (the highest is 753, so the next is **754**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -18,11 +18,12 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 446 | minor | — | WP-144 criterion (3), a real `docker compose stop runner` mid-run, not built; needs fake providers reachable from a compose stack |
 | 538 | minor | — | Two installations sharing one tracker service account both see themselves as assignee, so the claim does not stop double work |
 | 741 | minor | WP-283 | WP-281's worker claim takes **stage** offers only: an ask's ending (`AskExecutor.settle`) is not composed on the worker routes, so an ask offer waits for the server claimant or its `offer_timeout`; TD-031 §13's asker's-worker head start needs the ask settle on `finish` |
-| 742 | minor | WP-282 | The heartbeat answers `approvals: []` always: no worker can open a tool approval before WP-282's `approvals` verb, which must deliver its decision on the heartbeat (TD-031 §9) |
 | 743 | minor | WP-284 | `handshake`'s `compose_bundle_digest` is the SHA-256 of the four advertised image digests (`apps/server/src/workers/release.ts`) until WP-284 renders `compose.worker.yml` and advertises the file's own digest |
 | 744 | minor | — | TD-031 §2's admission re-check at the claim (`cost/guard.ts` and the task cap, an admission refused at the claim withdrawing the offer and pausing the task) is made by neither claimant — the server's (WP-276) nor a remote worker's (WP-281); both rely on the admission at offer time |
-| 745 | minor | WP-282 | A remote run's minted credential is added to the minting API process's run-scoped secret registry only; a `finish` answered by another replica settles (artifact redaction) without its exact value, relying on the pattern rules — WP-282's re-redaction should rebuild the run's exact-value redactor from stored state |
 | 747 | minor | — | `image.yml`'s concurrency group is per branch, so a newer push to `main` replaces a still-pending image build of the previous push, and that push never gets its `sha-<7>` image (found in review of PR #5) |
+| 750 | minor | — | A remote run's SDK session mirror is stored redacted (`run_session_lines`, WP-282) and nothing reads it: no `SessionMirrorPort` over it exists, so a resume of a remote run on another host starts a fresh session; the in-process mirror has no production store either (`session-mirror.ts`) |
+| 751 | minor | — | A decided remote tool approval is delivered on one heartbeat (`delivered_at`, WP-282); a heartbeat response the worker never receives loses it and the worker's own timeout denies — fail closed today (the port only denies), a lost `allow` once a port can ask a human |
+| 752 | minor | WP-283 | `tools/report_progress` on the core has no progress door (the runner holds it), so it answers the refusal sentence: the remote worker must answer `report_progress` from its own runner and upload the row through `transcript` |
 | 730 | minor | — | A stage offer names no assignee (WP-278): the ticket's assignee is read at intake (`TicketRead.assignee`) and dropped, so BD-032 decision 5's head start reaches only an ask's asker until a mapped assignee user is stored on the task |
 | 733 | minor | — | Offer timestamps (`server_from`, `workers_from`, `expires_at`) are written from the offering process's clock and compared with the claimant's, while claimant liveness uses the database's clock; a process clock ahead of the claimant's delays a server claim by the skew (WP-278) |
 | 809 | minor | — | S-23.2 humanized the board, task, run, Agents and Inbox words only; raw enum values still print in `settings.tsx` (user role/status), `integrations.tsx`/`onboarding-connect.tsx`/`project-settings.tsx` (integration type, health), `project-panels.tsx`/`business-interview.tsx` (proposal type/kind/status), `run-command-log.tsx`, `breakdown-panel.tsx`, `workers.tsx`, `identities.tsx`, `ask-thread.tsx` and the board/task template badge — each needs its record in `ui/humanize.ts` as its screen is redone |
@@ -87,6 +88,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 831 | nit | — | The inbox reads each item's task (`useTasks`) for its project and ticket key, as Home does: one request per distinct task; a project id and ticket key on the inbox item (a server projection) would make the per-project filter and the `PROJ · KEY` line one read |
 | 832 | nit | — | The Integrations list's "bound to N projects" is every project's `GET …/bindings` (`useProjectsByIntegration`): one request per project on each visit; a count on `IntegrationSummary` would be one read |
 | 833 | nit | — | The task page's answer box is still named `Answer question <uuid>` for assistive tech (`task-detail.tsx`); the inbox's is a visible *Your answer* label since S-23.11a |
+| 753 | nit | — | `ssh-sign` does not re-read `remote_run_credential` per signature: an integration switched to `deny` mid-run keeps signing for runs already claimed until they end (TD-031 decision 5 names the claim's eligibility only) |
 | 132 | ? | — | Unexplained once: authenticated GET /api/artifacts/:id answered 200 with an empty body in verify:e2e; instrumented, not seen since |
 | 7 | ? | — | "Carried, not yet scheduled": a bullet list of carried nits (route-sealed credential never opened by the loader, volume retention, …) |
 
@@ -97,6 +99,8 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 
 | # | Closed by | Item |
 |---|---|---|
+| 742 | S-22.7 (WP-282) | The heartbeat delivers the run's decided approvals (`POST runs/:id/approvals` opens one; the process that opened it asks the `ToolApprovalPort` after the commit and wakes the heartbeat), each once; `protocol.contract.test.ts` › "approvals: the id, the same id for a repeat, and the decision on the next heartbeat — once" |
+| 745 | S-22.7 (WP-282) | A remote run's settle and transcript ingest redact with the run's redactor rebuilt from stored state — the project's binding redactors (static token, deploy key, API tokens) over the platform's rules and recorded minted shapes (`worker-run-calls.ts`, `worker-protocol.ts`'s `settleRedactorFor`); a minted token's exact value remains the minting process's alone, replaced elsewhere by its shape |
 | 841 | S-23.9a (review of PR #20) | The tasks page carries `can_cancel_task` and `can_return_to_stage` beside `can_start_task` (`task.cancel`/`task.return_to_stage` over the caller's role, once per page), and the card's menu hides Cancel and Return to stage without them (`apps/web/src/features/board-card.test.tsx` › "offers a member neither Cancel nor Return to stage, which are a maintainer’s", `manual-start.e2e.test.ts`) |
 | 800 | S-23.5 | `csp.spec.ts` opens the first screen `Dialog` — the flow canvas's stage dialog, from the Pipeline tab and from a task's live canvas — in the built bundle under the production policy, centred, closed by Escape with focus returned, and no violation |
 | 813 | S-23.4 (verified, review of PR #14) | The shell reads `GET /api/org/inbox` and `GET /api/org/agents` on every screen: both allow a `viewer` (`task.read` and `run.read` are `viewer` in `packages/domain/src/permissions.ts`; `apps/server/src/routes/org.ts`), and a refused or failed read draws no count rather than a zero (`app/frame.test.tsx`, "no number at all before the read answers") |

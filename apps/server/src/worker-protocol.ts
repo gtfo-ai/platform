@@ -8,7 +8,8 @@
  * server run does:
  *
  * - **settle** — `settleRun` over a PostgreSQL pipeline store, the platform's pattern redactor
- *   (`stack.platformRedactor`, the stage executor's), the project settings port, the working
+ *   (`stack.platformRedactor`, the stage executor's) — since WP-282 under the run's project binding
+ *   redactors, rebuilt from stored state (backlog 745) — the project settings port, the working
  *   calendar, this process's `agentRunEnvironment` (the settle redactor's values) and the late-cost
  *   recorder over the cost store — the stage executor's settle collaborators, one for one;
  * - **the package** — `createRemoteRunPackager` over the run-workspace project source, the git
@@ -30,6 +31,7 @@ import {
   type RemoteRuns,
   RUN_CREDENTIAL_TTL_SECONDS,
   revokeRunCredentialsNow,
+  type SecretRedactor,
   settleRun,
   type WorkingCalendar,
 } from '@platform/application';
@@ -52,6 +54,7 @@ import {
   createProjectSettingsPort,
   type IntegrationStack,
 } from './pipeline.js';
+import { remoteRunCredentialOf } from './worker-run-calls.js';
 import { runTokens } from './workers/secrets.js';
 import { createRunGitCredentialMinter, createRunWorkspaceProjectSource } from './workspaces.js';
 
@@ -70,6 +73,18 @@ export interface ComposeRemoteRunsOptions {
   };
   readonly modelEgressHosts: readonly string[];
   readonly runRegistryHosts: readonly string[];
+  /**
+   * The run's redactor base rebuilt from stored state (WP-282, backlog 745): the project's binding
+   * redactors over `stack.platformRedactor` — what a settle answered by a replica that never minted
+   * this run's credential redacts the artifact with, beside the run's own step 1 that `settleRun`
+   * composes. Absent, the platform's rules alone (the WP-281 behaviour).
+   */
+  readonly runRedactors?: {
+    readonly baseFor: (run: {
+      readonly runId: Id;
+      readonly projectId: Id;
+    }) => Promise<SecretRedactor>;
+  };
   readonly logger: Logger;
 }
 
@@ -112,6 +127,33 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
     stack: options.stack,
   });
   const credentialStore = recoveryAdapters.createPostgresRunCredentialStore();
+  /**
+   * The settle's base redactor (backlog 745): the run's project bindings over the platform's rules,
+   * read outside any transaction before the settle opens its own. A binding that fails to load must
+   * not keep a finished run from settling, so it falls back to the platform's rules — the WP-281
+   * behaviour — and says so.
+   */
+  const settleRedactorFor = async (runId: Id): Promise<SecretRedactor> => {
+    if (options.runRedactors === undefined) {
+      return options.stack.platformRedactor;
+    }
+    try {
+      const { rows } = await options.pool.query<{ project_id: Id }>(
+        'select project_id from runs where id = $1',
+        [runId],
+      );
+      const projectId = rows[0]?.project_id;
+      return projectId === undefined
+        ? options.stack.platformRedactor
+        : await options.runRedactors.baseFor({ runId, projectId });
+    } catch (error) {
+      options.logger.error(
+        { err: error, run_id: runId },
+        'a remote run’s binding redactors could not be rebuilt for its settle; it settles with the platform’s pattern rules',
+      );
+      return options.stack.platformRedactor;
+    }
+  };
   return createRemoteRuns({
     unitOfWork,
     store,
@@ -133,6 +175,8 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
       runRegistryHosts: options.runRegistryHosts,
       credentialTtlSeconds: RUN_CREDENTIAL_TTL_SECONDS,
       clock: runnerAdapters.systemClock,
+      // WP-282 (Q124 (a)): a static token or a deploy key reaches a worker only behind the opt-in.
+      remoteRunCredential: async (spec) => remoteRunCredentialOf(options.pool)(spec.projectId),
       logger: options.logger,
     }),
     credentials: {
@@ -160,7 +204,7 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
           context: context('pipeline'),
           calendar: options.calendar,
           lateCost,
-          redactor: options.stack.platformRedactor,
+          redactor: await settleRedactorFor(request.runId),
           settings: async (projectId, tx) => settings.forProject(projectId, tx),
           eventStore: options.eventing.store,
           jobs: options.jobs,

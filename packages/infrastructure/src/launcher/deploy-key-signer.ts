@@ -83,12 +83,22 @@ export interface DeployKeySigner {
   readonly refusals: number;
 }
 
-/** Builds the signer, or throws naming the fault (never the key) when the key pair is unusable. */
-export const createDeployKeySigner = (input: {
+/**
+ * WP-146's narrow check and its signature, **without a count** — the oracle the core answers a
+ * remote worker's `ssh-sign` with (WP-282, TD-031 decision 5), where the count is a database
+ * counter shared by every API replica (`run_offers.ssh_signatures`) and lands between the two calls.
+ * {@link createDeployKeySigner} is this oracle with the in-process count the server's runner keeps.
+ * Throws naming the fault (never the key) when the key pair is unusable.
+ */
+export const createDeployKeyOracle = (input: {
   readonly privateKey: string;
   readonly publicKey: string;
-  readonly maxSignatures?: number;
-}): DeployKeySigner => {
+}): {
+  /** The run's own key, data of a bounded size, an RFC 4252 §7 user-authentication for `git`. */
+  admits(request: DeployKeySignRequest): boolean;
+  /** The SSH signature blob; throws for a request {@link admits} refuses. */
+  sign(request: DeployKeySignRequest): Buffer;
+} => {
   const fault = deployKeyPairFault(input.privateKey, input.publicKey);
   const reading = parseOpenSshEd25519PrivateKey(input.privateKey);
   if (fault !== null || !reading.ok) {
@@ -96,6 +106,30 @@ export const createDeployKeySigner = (input: {
   }
   const key = reading.material;
   const blob = sshEd25519PublicKeyBlob(key.publicKey);
+  const admits = ({ keyBlob, data }: DeployKeySignRequest): boolean =>
+    keyBlob.equals(blob) &&
+    data.length > 0 &&
+    data.length <= MAX_SIGNED_DATA_BYTES &&
+    isGitUserauthRequest(data, blob);
+  return {
+    admits,
+    sign: (request) => {
+      if (!admits(request)) {
+        throw new Error('the deploy-key oracle refuses this request (WP-146)');
+      }
+      // Ed25519 has no hash choice, so the agent's `SSH_AGENT_RSA_SHA2_*` flags do not apply.
+      return signSshEd25519(key, request.data);
+    },
+  };
+};
+
+/** Builds the signer, or throws naming the fault (never the key) when the key pair is unusable. */
+export const createDeployKeySigner = (input: {
+  readonly privateKey: string;
+  readonly publicKey: string;
+  readonly maxSignatures?: number;
+}): DeployKeySigner => {
+  const oracle = createDeployKeyOracle(input);
   const max = input.maxSignatures ?? MAX_DEPLOY_KEY_SIGNATURES;
   let signatures = 0;
   let refusals = 0;
@@ -106,13 +140,8 @@ export const createDeployKeySigner = (input: {
     get refusals() {
       return refusals;
     },
-    sign: async ({ keyBlob, data }) => {
-      if (
-        !keyBlob.equals(blob) ||
-        data.length === 0 ||
-        data.length > MAX_SIGNED_DATA_BYTES ||
-        !isGitUserauthRequest(data, blob)
-      ) {
+    sign: async (request) => {
+      if (!oracle.admits(request)) {
         refusals += 1;
         return null;
       }
@@ -121,8 +150,7 @@ export const createDeployKeySigner = (input: {
         return null;
       }
       signatures += 1;
-      // Ed25519 has no hash choice, so the agent's `SSH_AGENT_RSA_SHA2_*` flags do not apply.
-      return signSshEd25519(key, data);
+      return oracle.sign(request);
     },
   };
 };

@@ -124,6 +124,7 @@ import { createTaskStartCommands } from './task-start.js';
 import { createTicketStatusReader } from './ticket-statuses.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
 import { composeRemoteRuns } from './worker-protocol.js';
+import { composeRemoteRunCalls } from './worker-run-calls.js';
 import { workerReleaseOf } from './workers/release.js';
 import {
   composeOrphanWorkspaceReaper,
@@ -1200,6 +1201,25 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * the revoke) and a job client (a settle's retry), both of which an API process holds.
      */
     const workerStore = createPostgresWorkerStore(database.db);
+    const workerAgent = {
+      providerMode: config.providerMode,
+      modelApiKey: config.modelApiKey,
+      modelOauthToken: config.modelOauthToken,
+    };
+    // WP-282: the run-scoped calls besides the claim — transcript, tools, approvals, the session
+    // mirror and SSH signing — and the run's redactor rebuilt from stored state, which the settle
+    // below redacts with too (backlog 745).
+    const runCalls =
+      capabilities.api && stack !== null
+        ? composeRemoteRunCalls({
+            pool: database.pool,
+            eventing,
+            stack,
+            secretKey: config.secretKey,
+            agent: workerAgent,
+            logger: loggerPort,
+          })
+        : null;
     const remoteRuns =
       capabilities.api && stack !== null && jobs !== null
         ? composeRemoteRuns({
@@ -1216,6 +1236,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             },
             modelEgressHosts: config.modelEgressHosts,
             runRegistryHosts: config.runRegistryHosts,
+            ...(runCalls === null ? {} : { runRedactors: runCalls.redactors }),
             logger: loggerPort,
           })
         : null;
@@ -1230,6 +1251,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       workers: workerStore,
       workerProtocol: {
         remoteRuns,
+        runCalls: runCalls?.calls ?? null,
         broadcast: eventing.broadcast,
         release: () => workerRelease,
       },

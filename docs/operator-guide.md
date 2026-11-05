@@ -1444,6 +1444,17 @@ Stated here so an operator meets them in a document rather than in production:
   refused before its workspace exists, naming the branch and the setting. The scope proof is the
   platform's **only** use of a run token against the GitLab API (audited as `check_run_token_scope`,
   the value in no row).
+
+  **On a remote worker** (BD-032, WP-282) a static token or a deploy key is used only when the git
+  integration says `remote_run_credential: allow` — **`deny` is the default**, and with it the project's
+  runs are never claimed by a worker (on a `workers_only` project they wait, and the execution settings
+  say why). Set it with **Edit configuration** on the Integrations screen (admin; the audit row records
+  the value), where the residual is written beside the switch: with `allow` a static token sits on the
+  developer's machine for the run's life and is valid for up to 90 days on the project; a deploy key
+  **never leaves the core** — the worker asks `ssh-sign` for every signature (at most 128 per run,
+  counted in the database whichever API replica answers) — but the core then signs for that run, whose
+  reach is every project the key is enabled on; neither is revoked per run. A minted credential needs no
+  opt-in. This is Q124, built as its recommendation (a), still open with the owner.
 - **`docker compose up` cannot pull the published images** without the retagging step in §2, because
   `compose.yml` names them without a registry.
 - **`compose.yml` passes the `app` service a fixed list of variables**, so `.env` is not the app's

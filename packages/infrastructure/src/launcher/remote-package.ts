@@ -12,11 +12,15 @@
  *   `secretEnvNames` emptied — the core never puts a secret value, or the name of one, in a package;
  *   the worker adds its own model credential locally (TD-031 §4);
  * - the credential is **minted after the claim committed** (the caller's ordering) for exactly the
- *   scope the spec asks — `push` for a writing run, `read` otherwise — and only a `minted` one
- *   travels: a static run token or a deploy key is WP-282's opt-in, and the claim's eligibility
- *   already keeps such a project off a worker, so one met here (a binding changed between the claim
- *   and the mint) is a **retryable** start failure: the re-planned offer's eligibility then answers
- *   who may claim it (TD-031's 2026-11-05 amendment, item 2);
+ *   scope the spec asks — `push` for a writing run, `read` otherwise. A `minted` one travels. A
+ *   **static** run token or a **deploy key** reaches a worker only behind the git integration's
+ *   `remote_run_credential: allow` (WP-282, TD-031 decision 5, Q124 (a)), re-read here because the
+ *   claim's eligibility read it in another transaction: with `allow`, a static token travels as the
+ *   package's credential (`source: 'static'`), and a deploy key **never does** — the package carries
+ *   no credential, the spec carries the SSH route and the public key (`withGitSsh`), and the worker
+ *   signs through `ssh-sign` (TD-031's 2026-11-04 amendment); with `deny` (a binding changed between
+ *   the claim and the mint) it is a **retryable** start failure: the re-planned offer's eligibility
+ *   then answers who may claim it (TD-031's 2026-11-05 amendment, item 2);
  * - the package is validated by `runPackageSchema` — its refinements (one run, no credential in an
  *   environment, the 4 MiB bound) are the last word — and refused, never cut.
  *
@@ -43,13 +47,15 @@ import {
   silentLogger,
   WorkspaceError,
 } from '@platform/application';
-import { type RunCredentialPayload, runPackageSchema } from '@platform/contracts';
+import { type RunCredentialPayload, type RunSpec, runPackageSchema } from '@platform/contracts';
 import { type PlatformSkillCatalogue, runSkillsFor } from '../workspace/skills.js';
 import {
+  gitSshOf,
   type MintedRunGitCredential,
   type RunGitCredentialMinter,
   type RunWorkspaceProjectSource,
   runWorkspaceSpecFor,
+  withGitSsh,
 } from './provisioner.js';
 
 export interface RemoteRunPackagerOptions {
@@ -63,6 +69,12 @@ export interface RemoteRunPackagerOptions {
   readonly runRegistryHosts: readonly string[];
   readonly credentialTtlSeconds: number;
   readonly clock: RunnerClock;
+  /**
+   * The project's git integration `remote_run_credential` (WP-282, Q124 (a)), read at packaging:
+   * `allow` lets a static token or a deploy key reach a remote worker. Required — an absent opt-in
+   * check is an open one (standing rule 31).
+   */
+  readonly remoteRunCredential: (spec: RunSpec) => Promise<'allow' | 'deny'>;
   readonly logger?: Logger;
 }
 
@@ -101,6 +113,8 @@ export const createRemoteRunPackager = (options: RemoteRunPackagerOptions): Remo
       // What the launcher writes is decided before a credential exists, so its refusal revokes nothing.
       const skills = runSkillsFor(spec.runId, workspace.skills, options.skills);
       let minted: MintedRunGitCredential | null = null;
+      /** A deploy key's route and public key go on the spec; the key itself stays here (WP-282). */
+      let packagedWorkspace = workspace;
       if (workspace.repo !== null) {
         const scope = workspace.readOnly ? 'read' : 'push';
         let answer: Awaited<ReturnType<RunGitCredentialMinter['mint']>>;
@@ -138,16 +152,22 @@ export const createRemoteRunPackager = (options: RemoteRunPackagerOptions): Remo
           );
         } else {
           minted = answer.credential;
-          if ((minted.source ?? 'minted') !== 'minted') {
+          const source = minted.source ?? 'minted';
+          if (source !== 'minted' && (await options.remoteRunCredential(spec)) !== 'allow') {
             await revokeQuietly(spec.runId, minted);
             // The binding changed between the claim and the mint: retryable, so the re-planned
             // offer's eligibility answers who may claim it (TD-031's 2026-11-05 amendment, item 2).
             throw new RunStartError(
-              `run ${spec.runId}'s project now gives a ${minted.source} run credential, which reaches a remote worker only behind remote_run_credential: allow (TD-031 decision 5, WP-282)`,
+              `run ${spec.runId}'s project now gives a ${source} run credential, which reaches a remote worker only behind remote_run_credential: allow (TD-031 decision 5, WP-282)`,
               { retryable: true, diagnosis: RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS },
             );
           }
-          if (scope === 'read' && minted.scope === 'push') {
+          if (source === 'deploy_key') {
+            // TD-031 decision 5: the key never leaves the core. Its route and public key go on the
+            // spec, the package carries no credential, and the worker forwards every signature to
+            // `ssh-sign`. Nothing is revoked: removing the key from the project is its revocation.
+            packagedWorkspace = withGitSsh(workspace, gitSshOf(minted));
+          } else if (source === 'minted' && scope === 'read' && minted.scope === 'push') {
             await revokeQuietly(spec.runId, minted);
             throw refusal(
               spec.runId,
@@ -158,7 +178,7 @@ export const createRemoteRunPackager = (options: RemoteRunPackagerOptions): Remo
         }
       }
       const credential: RunCredentialPayload | null =
-        minted === null
+        minted === null || minted.source === 'deploy_key'
           ? null
           : {
               host: project.gitHost,
@@ -166,14 +186,14 @@ export const createRemoteRunPackager = (options: RemoteRunPackagerOptions): Remo
               password: minted.password,
               scope: minted.scope,
               expiresAt: minted.expiresAt,
-              source: 'minted',
+              source: minted.source ?? 'minted',
             };
       const parsed = runPackageSchema.safeParse({
         runId: spec.runId,
         epoch: input.epoch,
         runToken: input.runToken,
         run: { ...spec, secretEnvNames: [] },
-        workspace,
+        workspace: packagedWorkspace,
         credential,
         skills,
         images: { run: input.images.run, egress: input.images.egress },

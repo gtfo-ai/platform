@@ -668,7 +668,7 @@ export interface HarnessOptions {
    */
   readonly remoteWorkers?: Pick<
     MemoryPipelineStoreOptions,
-    'remoteWorkers' | 'runCredentialSource'
+    'remoteWorkers' | 'runCredentialSource' | 'remoteRunCredential'
   >;
   /** Platform users by id → display name, for `NotificationStore.userName` (WP-73, backlog 234). */
   readonly users?: Readonly<Record<string, string>>;

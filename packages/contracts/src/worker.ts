@@ -137,6 +137,11 @@ export const WORKER_PATHS = {
 export const WORKER_PACKAGE_MAX_BYTES = 4 * 1024 * 1024;
 /** One `transcript` batch's bound (TD-031 §9). Enforced on the body by the route (WP-282). */
 export const WORKER_TRANSCRIPT_BATCH_MAX_BYTES = 256 * 1024;
+/**
+ * One `session` batch's bound on the wire (WP-282): the route's body limit, so a worker chunks the
+ * session file's lines below it. A single line may be at most 1 MiB ({@link workerSessionRequestSchema}).
+ */
+export const WORKER_SESSION_BATCH_MAX_BYTES = 4 * 1024 * 1024;
 /** How long `claims` is held before it answers `204` (TD-031 §9). */
 export const WORKER_CLAIM_HOLD_MS = 25_000;
 /** How long `heartbeat` is held before it answers with nothing pending (TD-031 §9). */

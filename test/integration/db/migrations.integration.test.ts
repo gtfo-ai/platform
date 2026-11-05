@@ -102,6 +102,10 @@ const EXPECTED_TABLES = [
   'run_offers',
   // WP-275a, migration 0095: the run's planned spec, sealed, cleared at its terminal write.
   'run_plans',
+  // WP-282, migration 0099: what a remote run's calls to the core leave behind (TD-031 §§9–10).
+  'run_session_lines',
+  'run_tool_approvals',
+  'run_tool_calls',
   'runs',
   'secrets',
   // WP-278, migration 0097: the processes running the server claimant, renewed on its poll.
@@ -302,6 +306,11 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // WP-275a (migration 0095): `read_write` — written once at the run's creation, its seal
       // cleared by the run's terminal writer.
       row('run_plans', 'read_write', null),
+      // WP-282 (migration 0099): a tool call's claim completed in place, an approval decided and
+      // delivered in place; the session mirror cascades with its run.
+      row('run_session_lines', 'read_write', null),
+      row('run_tool_approvals', 'read_write', null),
+      row('run_tool_calls', 'read_write', null),
       // WP-278 (migration 0097): a claimant's row renewed in place and deleted by its holder.
       row('server_claimants', 'read_write', null),
       row('sessions', 'read_write', null),

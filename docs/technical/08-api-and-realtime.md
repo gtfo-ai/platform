@@ -444,7 +444,8 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
   offer (an ask's ending is not served to a worker before WP-283), not excluded, the offer's images
   held, the worker not revoked, its user may act (backlog 714), not paused, a project member at
   `member`+, `workers_from` reached or the assignee's head start, and the project's run credential
-  `minted` (`static`/`deploy_key` wait for WP-282's `remote_run_credential: allow`). The claim writes
+  `minted` — or `static`/`deploy_key` behind the git integration's `remote_run_credential: allow`
+  (WP-282, default `deny`). The claim writes
   `run_offers.worker_id`, `runs.worker_id`, the run token's SHA-256 and its epoch, and the offer's
   `image_digests`; the git credential is minted **after** it commits. A run that cannot be packaged
   settles `not_started` under the worker's claim — **a mint failure included, never a release**
@@ -459,8 +460,9 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
   worker still able to act (backlog 714), stamps the acks of delivered commands (`applied`, or one of
   the four existing refusals — only for a command pending for this run), and answers the run's pending
   `run_commands` (steer, cancel, take-over, delivered until acked). With nothing pending it is held up
-  to 20 s, woken by the worker's command topic. `approvals` is `[]` until a worker can open one
-  (WP-282).
+  to 20 s, woken by the worker's command topic. Since WP-282 it also answers the run's **decided
+  approvals** (`approvals`), each delivered once, and is held only while neither is pending — a
+  decision wakes the same topic.
 - **`release`** is admitted while the run is `starting` with no spawn marker and undoes the claim only
   (TD-031's 2026-11-04 amendment §4): offer `claimed → open` at the same epoch, lease and
   `runs.worker_id` cleared, run `starting → created`, `run.offer.released`, the worker added to
@@ -478,7 +480,53 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
 - **`late-cost`** is `cost/late.ts` for a run another writer ended under this claim; `409 run_live`
   while the run is live.
 
-**The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above; WP-282 to WP-284 the rest):
+**The run-scoped calls besides the claim are served since WP-282** (`apps/server/src/routes/worker/
+run-calls.ts`, registered by `protocol.ts` with its run-token authentication; the commands
+`packages/application/src/pipeline/remote-run-calls.ts`, composed by `apps/server/src/worker-run-calls.ts`;
+their stores migration 0099). Every body names an epoch; the run must be held under it by the
+authenticated worker, else `409 lease_lost` (`410 run_gone` for a run that no longer exists):
+
+- **`transcript`** — a batch of at most 256 KiB (`413` past it) for a run held under the epoch, live or
+  ended within the token's window. Each entry is validated, **re-redacted** by the run's redactor
+  rebuilt from stored state — the project's binding redactors (every sealed secret: API tokens, a static
+  run token, a deploy key), this process's model credential, the platform's pattern rules with every
+  recorded minted-credential shape, and this process's run-scoped registry — and stored **once per
+  `(run_id, seq)`** whatever `created_at` a repeat names. An undecodable entry, one naming another run
+  or `seq`, or one dated outside seven days back / ten minutes ahead is stored at its `seq` as a
+  `system` entry with subtype `ingest_refused` (paths and messages, redacted, never the entry) and
+  listed in `refused_seqs`; a `seq` past 2³¹−1 is `400 seq_out_of_range`. The `run:<id>` stream is
+  announced as for a server run. `200 {stored, refused_seqs}`.
+- **`tools/:name`** — a live run only. The production `PlatformToolPort` (the server runner's own
+  composition) with a context rebuilt from the run's stored plan: project, task, mode, `promptHolds`,
+  the run's redactor. A tool the run's role was not given (`RunSpec.platformTools`) is `403
+  tool_not_granted`, never performed (BD-021); an unknown name is `400`. The input is re-parsed by the
+  tool's strict schema — an invalid one is answered `is_error: true` with its paths, as the in-process
+  MCP server answers. A **mutating** tool (`MUTATING_PLATFORM_TOOLS`) is claimed on `(run_id,
+  sha256(tool_use_id))` before it performs and completed with its redacted answer: a repeat answers the
+  stored answer and performs nothing, `409 tool_call_in_flight` while the first performs, `409
+  tool_use_id_reused` for another tool or input; an unanswered claim older than five minutes is taken
+  over (the executor's own idempotency key stands under it). `200 {result, is_error}`.
+- **`approvals`** — a live run only; one approval per `(run_id, tool_use_id)`, the same id for a repeat.
+  The process that opened it asks the `ToolApprovalPort` after the commit (this build's:
+  `unattendedToolApprovals`, BD-025's deny) with the request's text redacted, writes the decision once
+  and wakes the heartbeat. `200 {approval_id}`.
+- **`session`** — the SDK session mirror (TD-007), lines from `from_line`, each redacted, stored once per
+  position (at most 4 MiB a batch and 200 000 lines a run, `409 session_mirror_full` past it). `204`.
+- **`ssh-sign`** — a run **live at the presented epoch** (a sign after the terminal write is `409
+  lease_lost`, so a worker exports before `finish`); WP-146's oracle unchanged (the run's own key, an
+  RFC 4252 §7 user-authentication for `git`, bounded data — a request it refuses is `signature: null`
+  and counts nothing), and every signature counted against `MAX_DEPLOY_KEY_SIGNATURES` (128) in
+  `run_offers.ssh_signatures`, **in the statement that checks the offer's state, epoch and worker** —
+  one cap per run whichever replica or caller (runlet relay, helpers' relayed socket) asks. A run given
+  no deploy key (`runs.credential_source`) is answered `null`. `200 {signature}`.
+
+The opt-in itself is the GitLab configuration key `remote_run_credential: allow | deny` (default `deny`),
+written through `PATCH /api/integrations/:id` (`integration.write`, admin), whose `human_actions` row
+carries the value; the Integrations screen shows the residual beside the switch. With `allow`, a static
+token travels in the package and a deploy key never does (the package carries the SSH route and the public
+key; the worker signs through `ssh-sign`).
+
+**The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls; WP-283 and WP-284 the rest):
 `packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (1), `ACCEPTED_WORKER_PROTOCOLS`
 (`[N-1, N]`, today `[1]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
 paths, the bounds, and a strict zod schema for every request and response body of TD-031 §9. Two
