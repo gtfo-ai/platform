@@ -864,6 +864,9 @@ export const projectExecutionWaitingSchema = z.strictObject({
 });
 export type ProjectExecutionWaiting = z.infer<typeof projectExecutionWaitingSchema>;
 
+/** The most workers a project's execution read lists (the store's `limit`). */
+export const PROJECT_EXECUTION_WORKERS_MAX = 500;
+
 export const projectExecutionResponseSchema = putProjectExecutionRequestSchema.extend({
   effective_fallback_after_seconds: z.int().nonnegative(),
   stored: z.boolean(),
@@ -873,7 +876,7 @@ export const projectExecutionResponseSchema = putProjectExecutionRequestSchema.e
    * The registered (not revoked) workers the reader may see — every one for an administrator, their
    * own otherwise — and whether each would take this project's runs (S-22.19, N2).
    */
-  workers: z.array(projectExecutionWorkerSchema).max(500),
+  workers: z.array(projectExecutionWorkerSchema).max(PROJECT_EXECUTION_WORKERS_MAX),
   waiting: projectExecutionWaitingSchema,
 });
 

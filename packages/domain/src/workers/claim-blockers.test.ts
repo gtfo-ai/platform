@@ -19,6 +19,7 @@ const OLD = `sha256:${'0'.repeat(64)}`;
 
 const ready: CoreWorkerClaimFacts = {
   revoked: false,
+  ownerMayAct: true,
   online: true,
   protocolVersion: 3,
   hold: null,
@@ -26,6 +27,7 @@ const ready: CoreWorkerClaimFacts = {
   heldDigests: [RUN, EGRESS],
   coreDigests: { run: RUN, egress: EGRESS },
   eligibleProjects: 1,
+  pickOnly: false,
 };
 
 describe('the core’s half', () => {
@@ -43,14 +45,21 @@ describe('the core’s half', () => {
     [{ heldDigests: [RUN, OLD] }, ['images_outdated']],
     [{ heldDigests: [OLD, EGRESS] }, ['images_outdated']],
     [{ eligibleProjects: 0 }, ['no_eligible_project']],
+    [{ ownerMayAct: false }, ['owner_disabled']],
+    [{ pickOnly: true }, ['pick_only']],
+    [{ coreDigests: null }, ['platform_images_unresolved']],
   ] as const)('names %j', (change, expected) => {
     expect(coreClaimBlockersOf({ ...ready, ...change })).toEqual(expected);
   });
 
-  it('says nothing about images it cannot compare, and nothing about projects it did not ask', () => {
-    expect(coreClaimBlockersOf({ ...ready, heldDigests: [OLD], coreDigests: null })).toEqual([]);
+  it('names a core that cannot name its images — every claim is 503 then — and compares nothing with it', () => {
+    // The review of PR #54: no digests is a refusal of every claim, never "can claim".
+    expect(coreClaimBlockersOf({ ...ready, heldDigests: [OLD], coreDigests: null })).toEqual([
+      'platform_images_unresolved',
+    ]);
     // An empty list is missing whatever the core can name.
     expect(coreClaimBlockersOf({ ...ready, heldDigests: [], coreDigests: null })).toEqual([
+      'platform_images_unresolved',
       'images_missing',
     ]);
     expect(coreClaimBlockersOf({ ...ready, eligibleProjects: null })).toEqual([]);
@@ -142,6 +151,7 @@ describe('both halves', () => {
         fc.property(
           fc.record({
             revoked: fc.boolean(),
+            ownerMayAct: fc.boolean(),
             online: fc.boolean(),
             protocolVersion: fc.option(fc.integer({ min: 1, max: 9 })),
             hold: fc.constantFrom(null, 'paused' as const, 'draining' as const),
@@ -149,6 +159,7 @@ describe('both halves', () => {
             heldDigests: fc.array(digest, { maxLength: 3 }),
             coreDigests: fc.option(fc.constant({ run: RUN, egress: EGRESS })),
             eligibleProjects: fc.option(fc.nat(3)),
+            pickOnly: fc.boolean(),
           }),
           fc.record({
             connection: fc.constantFrom(

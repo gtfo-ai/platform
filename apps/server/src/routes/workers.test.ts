@@ -469,8 +469,12 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
       imageDigests: [OLD_IMAGE, EGRESS_IMAGE],
     });
     expect((await read()).claim_blockers).toEqual(['images_outdated']);
+    // A core that cannot name its own images answers every claim 503 (review of PR #54).
     digests = null;
-    expect((await read()).claim_blockers).toEqual([]);
+    expect(await read()).toMatchObject({
+      claim_blockers: ['platform_images_unresolved'],
+      can_claim: false,
+    });
     digests = { run: RUN_IMAGE, egress: EGRESS_IMAGE };
     await store.recordContact({
       workerId: alice.workerId,
@@ -505,13 +509,25 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     store.recordClaim(alice.workerId, claimedAt);
     expect((await read()).last_claimed_at).toBe(claimedAt.toISOString());
 
+    store.setUserMayAct(ALICE, false);
+    expect((await read()).claim_blockers).toEqual(['owner_disabled', 'no_eligible_project']);
+    store.setUserMayAct(ALICE, true);
+
     world.actor = { userId: ALICE, role: 'member' };
     await instance.inject({ method: 'DELETE', url: `/api/workers/${alice.workerId}` });
     expect((await read()).claim_blockers).toEqual(['revoked']);
   });
 
-  it('counts a pick-only worker’s every project, and a scope naming none that admits workers as none (S-22.19)', async () => {
-    const { app: instance, store, world } = await build();
+  it('says pick only, counts its every project, and a scope naming none that admits workers as none (S-22.19)', async () => {
+    const RUN_IMAGE = `sha256:${'a'.repeat(64)}`;
+    const EGRESS_IMAGE = `sha256:${'b'.repeat(64)}`;
+    const {
+      app: instance,
+      store,
+      world,
+    } = await build({
+      coreDigests: () => ({ run: RUN_IMAGE, egress: EGRESS_IMAGE }),
+    });
     const alice = await register(instance, world, ALICE);
     const OTHER = '00000000-0000-4000-8000-0000002315b2';
     store.addProject({ id: PROJECT, key: 'ACME', name: 'Acme' }, [ALICE]);
@@ -520,15 +536,16 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     await store.recordContact({
       workerId: alice.workerId,
       protocolVersion: 3,
-      imageDigests: [`sha256:${'a'.repeat(64)}`],
+      imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
     });
     const blockers = async () => {
       world.actor = { userId: ALICE, role: 'member' };
       return (await instance.inject({ method: 'GET', url: '/api/workers' })).json().items[0]
         .claim_blockers;
     };
+    // Pick only claims nothing by itself: not "no project gives it work", and not "can claim".
     await store.setClaimScope({ workerId: alice.workerId, projectIds: [] });
-    expect(await blockers()).toEqual([]);
+    expect(await blockers()).toEqual(['pick_only']);
     await store.setClaimScope({ workerId: alice.workerId, projectIds: [OTHER] });
     expect(await blockers()).toEqual(['no_eligible_project']);
     await store.setClaimScope({ workerId: alice.workerId, projectIds: [OTHER, PROJECT] });

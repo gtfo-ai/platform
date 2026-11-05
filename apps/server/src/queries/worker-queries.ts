@@ -30,6 +30,7 @@ import { resolveBudgetTimezone } from '@platform/application';
 import {
   type CoreImageDigests,
   type JsonObject,
+  PROJECT_EXECUTION_WORKERS_MAX,
   WORKER_SCOPE_PROJECTS_MAX,
   type WorkerManualPauseVia,
   type WorkerUpdateResult,
@@ -153,6 +154,8 @@ export interface WorkerClaimRowFacts {
   readonly online: boolean;
   /** `paused_until` still ahead (a usage limit). */
   readonly usagePaused: boolean;
+  /** Its user may act — not disabled, under no ban in force (`USER_MAY_ACT_SQL`, the claim's). */
+  readonly ownerMayAct: boolean;
   /**
    * The owner's hold (`manually_paused_at`), told apart by the newest `worker.pause` row's `via`:
    * `draining` for `worker_ui_drain`/`worker_internal_drain`, `paused` otherwise; `null` for none.
@@ -162,11 +165,15 @@ export interface WorkerClaimRowFacts {
    * Projects that would give it work: its user may run there (the effective role), the project's
    * mode is not `server_only`, its run credential may reach a worker, and the claim scope names it —
    * `null` (every project) and `[]` (*pick only*, whose picks ignore the scope) count every project.
+   * `null` when not asked (a project's execution read asks its own question).
    */
-  readonly eligibleProjects: number;
+  readonly eligibleProjects: number | null;
   /** Its newest claim (`run_offers.claimed_at`), or `null`. */
   readonly lastClaimedAt: Date | null;
 }
+
+/** The most workers a project's execution read lists (`projectExecutionResponseSchema.workers`). */
+export const PROJECT_WORKERS_MAX = PROJECT_EXECUTION_WORKERS_MAX;
 
 /** A listed worker, and whether its user may run in the project asked about (S-22.19). */
 export interface ProjectWorkerRow extends WorkerListRow {
@@ -483,9 +490,10 @@ const CREDENTIAL_REFUSED_P = sql.raw(pipelineAdapters.remoteRunCredentialRefused
  * (a seed, or a row the audit lost) reads as the owner's pause. The project count asks the claim's
  * own predicates (`userMayRunInProjectSql`, `remoteRunCredentialRefusedSql`) per project.
  */
-const CLAIM_FACTS_OF_WORKER = sql`
+const CLAIM_FACTS_OF_WORKER_ROW = sql`
   (w.last_seen_at is not null
      and w.last_seen_at > now() - make_interval(secs => ${WORKER_CONNECTED_SECONDS})) as online,
+  ${USER_MAY_ACT} as owner_may_act,
   (w.paused_until is not null and w.paused_until > now()) as usage_paused,
   case when w.manually_paused_at is null then null
        else (select h.params ->> 'via'
@@ -493,7 +501,10 @@ const CLAIM_FACTS_OF_WORKER = sql`
               where h.action = 'worker.pause' and h.params ->> 'worker_id' = w.id::text
               order by h.created_at desc, h.id desc
               limit 1) end as hold_via,
-  (select max(o.claimed_at) from run_offers o where o.worker_id = w.id) as last_claimed_at,
+  (select max(o.claimed_at) from run_offers o where o.worker_id = w.id) as last_claimed_at`;
+
+/** {@link CLAIM_FACTS_OF_WORKER_ROW} and the count of projects that would give it work. */
+const CLAIM_FACTS_OF_WORKER = sql`${CLAIM_FACTS_OF_WORKER_ROW},
   (select count(*)::int
      from projects p
      left join project_execution_settings s on s.project_id = p.id
@@ -505,10 +516,12 @@ const CLAIM_FACTS_OF_WORKER = sql`
 
 type ClaimFactsSql = {
   online: boolean;
+  owner_may_act: boolean;
   usage_paused: boolean;
   hold_via: string | null;
   last_claimed_at: Date | string | null;
-  eligible_projects: number;
+  /** Absent from a project's read, which asks its own question. */
+  eligible_projects?: number;
 };
 
 /** A hold's `via` → the vocabulary's hold. */
@@ -525,8 +538,9 @@ export const holdOf = (
 const toClaimFacts = (row: WorkerRowSql & ClaimFactsSql): WorkerClaimRowFacts => ({
   online: row.online === true,
   usagePaused: row.usage_paused === true,
+  ownerMayAct: row.owner_may_act === true,
   hold: holdOf(row.manually_paused_at !== null, row.hold_via),
-  eligibleProjects: Number(row.eligible_projects ?? 0),
+  eligibleProjects: row.eligible_projects === undefined ? null : Number(row.eligible_projects),
   lastClaimedAt: at(row.last_claimed_at),
 });
 
@@ -748,14 +762,15 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
     const { rows } = await database.execute<
       WorkerRowSql & ClaimFactsSql & { may_run_in_project: boolean }
     >(sql`
-      select w.*, u.email, u.name as user_name, ${RUNNING_OF_WORKER}, ${CLAIM_FACTS_OF_WORKER},
+      select w.*, u.email, u.name as user_name, ${RUNNING_OF_WORKER}, ${CLAIM_FACTS_OF_WORKER_ROW},
              ${mayRun} as may_run_in_project
         from workers w
         join users u on u.id = w.user_id
        cross join (select ${projectId}::uuid as pid) q
        where w.revoked_at is null
          and ${userId === null ? sql`true` : sql`w.user_id = ${userId}`}
-       order by w.created_at desc, w.id desc`);
+       order by w.created_at desc, w.id desc
+       limit ${PROJECT_WORKERS_MAX}`);
     return rows.map((row) => ({
       ...toWorkerListRow(row),
       claimFacts: toClaimFacts(row),

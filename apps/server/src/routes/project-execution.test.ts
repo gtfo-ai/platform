@@ -73,6 +73,7 @@ const workerRow = (overrides: Partial<ProjectWorkerRow> = {}): ProjectWorkerRow 
   running: [],
   claimFacts: {
     online: true,
+    ownerMayAct: true,
     usagePaused: false,
     hold: null,
     eligibleProjects: 1,
@@ -348,6 +349,7 @@ describe('who would run this project, and what waits (S-22.19, N2)', () => {
         workerRow({
           claimFacts: {
             online: true,
+            ownerMayAct: true,
             usagePaused: false,
             hold: null,
             eligibleProjects: 0,

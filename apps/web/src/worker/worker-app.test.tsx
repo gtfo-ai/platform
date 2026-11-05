@@ -671,6 +671,17 @@ describe('why it takes nothing, and one control for its hold (S-22.19)', () => {
     expect(screen.queryByRole('button', { name: 'Try now' })).toBeNull();
   });
 
+  it('says a stopping worker is stopping, never connected but not taking work (review of PR #54)', async () => {
+    const { container } = renderPage(
+      fakeClient(state({ connection: 'stopped', claim_blockers: ['offline'] })),
+    );
+    await screen.findByText('Runs on this machine');
+    expect(container.querySelector('[data-hold-line]')?.textContent).toBe(
+      'Stopping: the worker is shutting down and takes no new work.',
+    );
+    expect(container.textContent).not.toContain('Connected, but not taking work');
+  });
+
   it('keeps Drain behind More with its explanation, and a drain makes Resume the one primary', async () => {
     const client = fakeClient(state());
     const { container } = renderPage(client);

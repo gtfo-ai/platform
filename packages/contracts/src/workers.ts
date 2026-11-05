@@ -141,7 +141,10 @@ export const workerSummarySchema = z.strictObject({
    * core would admit a claim from it now.
    */
   claim_blockers: workerClaimBlockersSchema,
-  /** `claim_blockers` is empty: the core would admit a claim from it now (S-22.19). */
+  /**
+   * `claim_blockers` is empty: the core would admit an **automatic** claim from it now (S-22.19).
+   * A *pick only* worker (`pick_only`) is `false` here and may still take a run picked on its page.
+   */
   can_claim: z.boolean(),
   /** When it last claimed a run (`run_offers.claimed_at`), or `null` — its first run is a milestone. */
   last_claimed_at: isoDateTimeSchema.nullable(),
