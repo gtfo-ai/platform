@@ -102,7 +102,7 @@ export const Badge = ({
 }): ReactElement => (
   <span
     className={cx(
-      'inline-flex items-center rounded-full border px-2 py-px text-xs leading-[1.125rem] font-medium whitespace-nowrap',
+      'inline-flex max-w-full items-center rounded-full border px-2 py-px text-xs leading-[1.125rem] font-medium whitespace-nowrap',
       BADGE_TONES[tone],
     )}
   >

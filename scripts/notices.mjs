@@ -76,6 +76,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { INTER_LICENCE_ASSET, INTER_PACKAGE } from './inter-font.mjs';
 import { isProgram } from './is-program.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -218,6 +219,20 @@ const NON_SPDX_DECLARATIONS = {
     licence: '[unverified] proprietary — © Anthropic PBC, all rights reserved',
     note: "The README it points at has no licence section; the package ships `LICENSE.md`, which reads in full: “© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.” Its platform-specific packages, listed in the section below, carry the `claude` executable itself — 217 MB of the product image. **Whether that binary may be redistributed inside a public image is TD-018's open item and is still unverified**; the fallback TD-018 records — install it at image build from the official source, or at first start — is unchanged by this file.",
   },
+};
+
+/**
+ * npm packages whose licence **text** the product ships beside them, because the licence requires
+ * it (S-23.13a, BACKLOG 803) — the one exception to "Licence *texts*" under *What this file does not
+ * cover*. The value is where the text is, and it is printed in the package's row. An entry whose
+ * package left the production closure is refused, so a stale claim cannot outlive the file.
+ *
+ * Inter is OFL-1.1, whose condition 2 makes the copyright notice and licence travel with every copy
+ * of the font; the web bundle carries the font, so `apps/web`'s build writes the package's own
+ * `LICENSE` beside it (`scripts/inter-font.mjs`, which owns the file name).
+ */
+export const LICENCE_TEXTS_SHIPPED = {
+  [INTER_PACKAGE]: `text shipped as \`${INTER_LICENCE_ASSET}\` at the root of the web bundle`,
 };
 
 // ── The lockfile ─────────────────────────────────────────────────────────────────────────────────
@@ -538,8 +553,21 @@ const HEADER = `<!--
 
 const escapeCell = (text) => text.replaceAll('|', '\\|');
 
-export const renderNotices = ({ ids, variantOf, declared, pinned }) => {
+export const renderNotices = ({
+  ids,
+  variantOf,
+  declared,
+  pinned,
+  shippedTexts = LICENCE_TEXTS_SHIPPED,
+}) => {
   const resolved = new Map(ids.map((id) => [id, resolveLicence(id, declared[id])]));
+  const names = new Set(ids.map((id) => splitPackageId(id).name));
+  const unshipped = Object.keys(shippedTexts).filter((name) => !names.has(name));
+  if (unshipped.length > 0) {
+    throw new Error(
+      `LICENCE_TEXTS_SHIPPED names packages the production closure does not carry: ${unshipped.join(', ')}; remove the entry (and whatever ships its text)`,
+    );
+  }
 
   const counts = new Map();
   for (const { licence } of resolved.values()) {
@@ -629,7 +657,8 @@ export const renderNotices = ({ ids, variantOf, declared, pinned }) => {
     ...ids.map((id) => {
       const { name, version } = splitPackageId(id);
       const { licence } = resolved.get(id);
-      return `| \`${escapeCell(name)}\` | ${escapeCell(version)} | ${escapeCell(licence)} |`;
+      const text = Object.hasOwn(shippedTexts, name) ? ` (${shippedTexts[name]})` : '';
+      return `| \`${escapeCell(name)}\` | ${escapeCell(version)} | ${escapeCell(licence)}${escapeCell(text)} |`;
     }),
     '',
     ...ids
@@ -675,7 +704,8 @@ export const renderNotices = ({ ids, variantOf, declared, pinned }) => {
     '  egress image.',
     '- **Licence *texts*.** The table records what each package declares, not the body of its licence.',
     '  A distribution that must carry the texts collects them from the packages themselves; every one',
-    '  is present under `node_modules` and inside the images.',
+    '  is present under `node_modules` and inside the images. The exception is a licence that makes',
+    '  its text travel with the work, which the row then says: Inter’s OFL-1.1 ships with the web bundle.',
     '- **Whether a declaration is true.** Where a package’s own files disagree with its manifest, the',
     '  note beside it says what was read.',
     '- **Transitive obligations.** A copyleft dependency is listed, not analysed.',

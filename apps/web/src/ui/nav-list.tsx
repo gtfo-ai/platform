@@ -3,11 +3,19 @@
  *
  * Groups take an optional heading. The current item carries `aria-current="page"`, a subtle fill and
  * a bar in the link colour on its leading edge, as GitHub's settings sidebar does.
+ *
+ * **On a narrow screen it is a disclosure** (S-23.13a): below `stackBelow` — the breakpoint at which
+ * the caller's grid stacks the column above the content — the same list sits inside a `<details>`
+ * whose summary names the current item, so a phone sees the section it is on and one line, not
+ * thirteen links before the content. The width is read through `matchMedia` (as UnderlineNav's
+ * overflow is) and only one of the two shapes is rendered, so there is one landmark either way; the
+ * disclosure is keyed by the current item, so choosing one closes it.
  */
+import { ChevronDownIcon } from '@primer/octicons-react/ChevronDownIcon';
 import type { ReactElement } from 'react';
-import { useId } from 'react';
+import { useCallback, useId, useSyncExternalStore } from 'react';
 import { cx, FOCUS_RING } from './cx.js';
-import type { NavItem } from './nav-item.js';
+import { NAV_BREAKPOINT_PX, type NavBreakpoint, type NavItem } from './nav-item.js';
 import { renderNavItem } from './nav-render.js';
 
 export interface NavListGroup {
@@ -54,18 +62,79 @@ const Group = ({ group }: { readonly group: NavListGroup }): ReactElement => {
   );
 };
 
+const minWidthQuery = (breakpoint: NavBreakpoint): string =>
+  `(min-width: ${NAV_BREAKPOINT_PX[breakpoint]}px)`;
+
+/** Whether the viewport has reached `breakpoint`; `true` where there is no `matchMedia`. */
+const useReached = (breakpoint: NavBreakpoint): boolean => {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+        return () => undefined;
+      }
+      const list = window.matchMedia(minWidthQuery(breakpoint));
+      list.addEventListener('change', onChange);
+      return () => {
+        list.removeEventListener('change', onChange);
+      };
+    },
+    [breakpoint],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    () =>
+      typeof window === 'undefined' || typeof window.matchMedia !== 'function'
+        ? true
+        : window.matchMedia(minWidthQuery(breakpoint)).matches,
+    () => true,
+  );
+};
+
 export const NavList = ({
   label,
   groups,
   className,
+  stackBelow = 'md',
 }: {
   readonly label: string;
   readonly groups: readonly NavListGroup[];
   readonly className?: string;
-}): ReactElement => (
-  <nav aria-label={label} className={cx('pl-2', className)}>
-    {groups.map((group, index) => (
-      <Group key={group.label ?? index} group={group} />
-    ))}
-  </nav>
-);
+  /** Where the caller's layout stacks this column above the content: a disclosure below it. */
+  readonly stackBelow?: NavBreakpoint;
+}): ReactElement => {
+  const wide = useReached(stackBelow);
+  const list = groups.map((group, index) => <Group key={group.label ?? index} group={group} />);
+  if (wide) {
+    return (
+      <nav aria-label={label} className={cx('pl-2', className)}>
+        {list}
+      </nav>
+    );
+  }
+  const current = groups.flatMap((group) => group.items).find((item) => item.current === true);
+  return (
+    <nav
+      aria-label={label}
+      data-nav-list="disclosure"
+      className={cx('rounded-md border border-line bg-canvas', className)}
+    >
+      <details key={current?.id ?? ''} className="group">
+        <summary
+          className={cx(
+            'flex cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 text-sm [&::-webkit-details-marker]:hidden',
+            FOCUS_RING,
+          )}
+        >
+          <span className="min-w-0 flex-1 truncate">
+            <span className="text-fg-muted">{label}: </span>
+            <span className="font-semibold text-fg">{current?.label ?? 'choose'}</span>
+          </span>
+          <span aria-hidden="true" className="inline-flex text-fg-muted group-open:rotate-180">
+            <ChevronDownIcon size={16} />
+          </span>
+        </summary>
+        <div className="border-t border-line py-1 pr-2 pl-4">{list}</div>
+      </details>
+    </nav>
+  );
+};

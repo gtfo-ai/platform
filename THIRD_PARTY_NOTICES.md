@@ -130,7 +130,7 @@ that are built per platform are in the section after this one.
 | `@floating-ui/dom` | 1.8.0 | MIT |
 | `@floating-ui/react-dom` | 2.1.9 | MIT |
 | `@floating-ui/utils` | 0.2.12 | MIT |
-| `@fontsource-variable/inter` | 5.3.0 | OFL-1.1 |
+| `@fontsource-variable/inter` | 5.3.0 | OFL-1.1 (text shipped as `inter-OFL.txt` at the root of the web bundle) |
 | `@hono/node-server` | 2.1.1 | MIT |
 | `@jridgewell/resolve-uri` | 3.1.2 | MIT |
 | `@jridgewell/sourcemap-codec` | 1.6.0 | MIT |
@@ -521,7 +521,8 @@ platform-bound, rather than a build of the project that pulls it in. The images 
   egress image.
 - **Licence *texts*.** The table records what each package declares, not the body of its licence.
   A distribution that must carry the texts collects them from the packages themselves; every one
-  is present under `node_modules` and inside the images.
+  is present under `node_modules` and inside the images. The exception is a licence that makes
+  its text travel with the work, which the row then says: Inter’s OFL-1.1 ships with the web bundle.
 - **Whether a declaration is true.** Where a package’s own files disagree with its manifest, the
   note beside it says what was read.
 - **Transitive obligations.** A copyleft dependency is listed, not analysed.

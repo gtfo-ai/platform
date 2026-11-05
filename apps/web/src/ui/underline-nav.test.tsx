@@ -161,3 +161,73 @@ describe('NavList', () => {
     expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy();
   });
 });
+
+describe('NavList on a narrow screen (S-23.13a)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const settings = (onSelect: () => void) => [
+    {
+      label: 'Organisation',
+      items: [
+        { id: 'general', label: 'General', onSelect },
+        { id: 'users', label: 'Users', current: true, onSelect },
+      ],
+    },
+  ];
+
+  it('is a disclosure naming the current item below its breakpoint, and the list from it up', async () => {
+    viewport(767);
+    const onSelect = vi.fn();
+    const { container, unmount } = render(<NavList label="Settings" groups={settings(onSelect)} />);
+    const nav = screen.getByRole('navigation', { name: 'Settings' });
+    expect(nav.getAttribute('data-nav-list')).toBe('disclosure');
+    const details = container.querySelector('details');
+    expect(details?.open).toBe(false);
+    // The summary says where the reader is, and the one landmark still holds every item.
+    expect(container.querySelector('summary')?.textContent).toBe('Settings: Users');
+    expect(within(nav).getByRole('list', { name: 'Organisation' })).toBeTruthy();
+    expect(within(nav).getByRole('button', { name: 'Users' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    await userEvent.setup().click(within(nav).getByRole('button', { name: 'General' }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    unmount();
+
+    // At the breakpoint itself it is the sidebar again: no disclosure.
+    viewport(768);
+    const wide = render(<NavList label="Settings" groups={settings(() => undefined)} />);
+    expect(wide.container.querySelector('details')).toBeNull();
+    expect(screen.getByRole('navigation', { name: 'Settings' }).hasAttribute('data-nav-list')).toBe(
+      false,
+    );
+  });
+
+  it('closes again when the current item changes, and honours the caller’s breakpoint', () => {
+    viewport(900);
+    const groups = settings(() => undefined);
+    const { container, rerender } = render(
+      <NavList label="Runs" groups={groups} stackBelow="lg" />,
+    );
+    const details = container.querySelector('details') as HTMLDetailsElement;
+    details.open = true;
+    rerender(
+      <NavList
+        label="Runs"
+        stackBelow="lg"
+        groups={[
+          {
+            label: 'Organisation',
+            items: [
+              { id: 'general', label: 'General', current: true },
+              { id: 'users', label: 'Users' },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(container.querySelector('details')?.open).toBe(false);
+    expect(container.querySelector('summary')?.textContent).toBe('Runs: General');
+  });
+});

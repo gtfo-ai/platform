@@ -12,7 +12,7 @@
 import type { TaskDetailResponse } from '@platform/contracts';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import { retryOutcomeText } from './task-dialogs.js';
@@ -173,6 +173,17 @@ const openStageDialog = async (
   await user.click(await screen.findByRole('menuitem', { name: item }));
   return await screen.findByRole('dialog');
 };
+
+/**
+ * The race this file's first screen lost under parallel load (S-23.13a): the first test to open
+ * the task page paid the on-demand transform of its lazy chunk inside a `findBy…`/`waitFor`'s 1 s bound —
+ * measured alone at 600–740 ms for the first test against 40–90 ms for every later one — so a loaded
+ * host pushed it past the bound. The chunks are imported once here, under the hook's own bound, so
+ * each wait measures the screen rather than the transform; no wait in a test was widened.
+ */
+beforeAll(async () => {
+  await import('./task-detail.js');
+}, 60_000);
 
 afterEach(() => {
   cleanup();

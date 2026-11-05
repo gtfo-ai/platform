@@ -139,6 +139,8 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
   '.json': 'application/json; charset=utf-8',
+  // `dist/inter-OFL.txt`, the font's licence (S-23.13a).
+  '.txt': 'text/plain; charset=utf-8',
 };
 
 interface Stream {

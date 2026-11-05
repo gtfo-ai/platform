@@ -203,6 +203,9 @@ export const PipelineFlow = ({ projectId }: { readonly projectId: string | null 
     <FlowView
       graph={templateFlow(selected)}
       label={templateName(selected.template)}
+      // Taller than a task's (S-23.13a): the tab is the canvas, and the return curves under the row
+      // need the room at a legible zoom.
+      canvasClassName="h-[600px]"
       toolbar={
         <label htmlFor={pickerId} className="flex items-center gap-2 text-sm">
           <span className="font-medium">Template</span>

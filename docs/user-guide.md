@@ -43,7 +43,8 @@ server on every request — the browser only hides what you cannot do.
 row under the top bar, its current entry underlined in amber. **Projects** carries the number of
 projects, **Inbox** what waits for you (open questions plus pending approvals) and **Agents** the
 runs in flight; a count that is zero, or not loaded yet, is not drawn. On a narrow screen the last
-entries move into a **More navigation** (`···`) menu at the end of the row. There is no
+entries move into a **More navigation** (`···`) menu at the end of the row, and the running pill
+shows only its number. There is no
 *Onboarding* entry: a project is set up once, so the wizard is **New project** — in the top bar's
 **+** menu and on the **Projects** page.
 
@@ -1183,7 +1184,7 @@ conflict resolution behind the rebase check) or that the pipeline skips (marked 
 the row, and every way a stage can send the task back is a dashed curve below it with its limit
 (*Review ≤3*: the review may send the work back at most three times). Click a card for the stage's
 configuration: its role, model, what it writes, its loops and where each of its outcomes goes. A gate's card says what it waits for (*Waits for the CI pipeline*). Drag
-to pan; the **+**, **−** and **Fit all** buttons zoom (Fit all shows the whole pipeline); **Full
+to pan; it opens on the first stages at a size you can read, the **+**, **−** and **Fit all** buttons zoom (Fit all shows the whole pipeline); **Full
 screen** gives the graph the window, Escape gives it back. On a narrow screen, or with **List**, the
 same stages are an ordered list.
 
@@ -1324,7 +1325,8 @@ parameters. A *refused* command records nothing.
 
 ## 11. Settings
 
-**Settings** is one page per section, picked from the list on the left — **Session ·
+**Settings** is one page per section, picked from the list on the left (on a phone, a one-line
+menu above the section that names the one you are on) — **Session ·
 Policies · Notifications · Budgets · Users · Provider identities · Dead letters · Failed jobs ·
 Instance** — grouped as *Personal*, *Organisation*, *People* and *Operations*; opening **Settings**
 opens the first. A section that changes something has **one Save** at its foot: it stays disabled

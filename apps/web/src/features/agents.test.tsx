@@ -11,7 +11,7 @@ import type { AgentsResponse, RunRecord, TaskDetailResponse } from '@platform/co
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryKeys } from '../api/keys.js';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
@@ -235,6 +235,21 @@ const deskOf = async (name: RegExp) => {
   return { button, desk: button.closest('li') as HTMLElement };
 };
 
+/**
+ * The race this file's first screen lost under parallel load (S-23.13a): the first test to open
+ * the Agents page, the map or the office paid the on-demand transform of its lazy chunk inside a `findBy…`/`waitFor`'s 1 s bound —
+ * measured alone at 600–740 ms for the first test against 40–90 ms for every later one — so a loaded
+ * host pushed it past the bound. The chunks are imported once here, under the hook's own bound, so
+ * each wait measures the screen rather than the transform; no wait in a test was widened.
+ */
+beforeAll(async () => {
+  await Promise.all([
+    import('./agents.js'),
+    import('../viz/fleet/fleet-canvas.js'),
+    import('../viz/fleet/office.js'),
+  ]);
+}, 60_000);
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -267,7 +282,11 @@ describe('the Agents page', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Office' }));
     await office();
-    expect(window.location.search).toBe('?view=office');
+    // The office is drawn from the stored choice at once; the URL is the router's navigate, which
+    // settles after it — so the URL is waited for, not read in the same tick.
+    await waitFor(() => {
+      expect(window.location.search).toBe('?view=office');
+    });
     expect(window.localStorage.getItem(FLEET_VIEW_STORAGE_KEY)).toBe('office');
     cleanup();
 
@@ -421,11 +440,15 @@ describe('the office', () => {
 
     // The help desk: the question nobody's run holds and the permission ask, each a link to its task.
     const help = screen.getByRole('list', { name: 'At the help desk' });
+    // DEMO-9's ticket key arrives with its own task read, which may answer after the office drew.
+    await waitFor(() => {
+      expect(
+        within(help)
+          .getAllByRole('link')
+          .map((link) => link.getAttribute('aria-label')),
+      ).toEqual(['DEMO-9 · asks · Three or five?', 'DEMO-2 · asks · Asking to use Bash']);
+    });
     const links = within(help).getAllByRole('link');
-    expect(links.map((link) => link.getAttribute('aria-label'))).toEqual([
-      'DEMO-9 · asks · Three or five?',
-      'DEMO-2 · asks · Asking to use Bash',
-    ]);
     expect(links[0]?.getAttribute('href')).toBe(`/tasks/${uuid(1009)}`);
     expect(document.querySelector('[data-help-desk]')?.getAttribute('data-help-desk')).toBe('lit');
   });
@@ -572,6 +595,11 @@ describe('the list', () => {
     const user = userEvent.setup();
     const runs = await screen.findByRole('list', { name: 'Runs' });
     await within(runs).findByText(`demo · DEMO-1 · Checkout ${HOSTILE}`);
+    // Each row's ticket line arrives with its own task read, in whatever order the server answers:
+    // wait for all six, not the one named above (found with shuffled answer delays, S-23.13a).
+    await waitFor(() => {
+      expect(within(runs).getAllByRole('button', { name: /^demo · DEMO-/ })).toHaveLength(6);
+    });
     const titles = within(runs)
       .getAllByRole('button', { name: /^demo · DEMO-/ })
       .map((button) => button.textContent);

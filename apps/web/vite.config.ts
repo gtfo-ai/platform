@@ -24,19 +24,33 @@
  * none. The SPA compares it with the server's to tell an upgraded server from a contract defect
  * (`src/app/build-commit.ts`). Read at config time, like `APP_DEV_API_URL`; nothing else of the
  * environment reaches the bundle.
+ *
+ * **The font's licence and its preload** (S-23.13a, BACKLOG 801 and 803): `interFontPlugin`
+ * (`scripts/inter-font.mjs`) writes Inter's OFL-1.1 text to `dist/inter-OFL.txt` and a
+ * `<link rel="preload" as="font" crossorigin>` for the hashed woff2 into `index.html`. The
+ * licence is read here, from the package itself, so the text shipped is the text of the version
+ * installed.
  */
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
+import { INTER_PACKAGE, interFontPlugin } from '../../scripts/inter-font.mjs';
 import { BUILD_COMMIT_GLOBAL, bundleCommitFrom } from './src/app/build-commit.js';
 
 const apiTarget = process.env.APP_DEV_API_URL ?? 'http://127.0.0.1:8080';
 
+const interLicence = readFileSync(
+  createRequire(import.meta.url).resolve(`${INTER_PACKAGE}/LICENSE`),
+  'utf8',
+);
+
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), interFontPlugin({ licenceText: interLicence })],
   define: { [BUILD_COMMIT_GLOBAL]: JSON.stringify(bundleCommitFrom(process.env.APP_COMMIT)) },
   build: {
     outDir: 'dist',

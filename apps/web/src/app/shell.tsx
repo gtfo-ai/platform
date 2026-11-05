@@ -285,8 +285,17 @@ export const RunningIndicator = ({
           decorative
           size={12}
         />
+        {/* Below `sm` the count stands alone, so the top bar fits a 390 px phone (S-23.13a); the
+            word stays for a screen reader. */}
         <span className="tabular-nums">
-          {running === undefined ? 'Agents' : `${formatInteger(running)} running`}
+          {running === undefined ? (
+            'Agents'
+          ) : (
+            <>
+              {formatInteger(running)}
+              <span className="max-sm:sr-only"> running</span>
+            </>
+          )}
         </span>
       </Link>
       <span aria-hidden="true" className="h-4 w-px bg-line" />
@@ -408,7 +417,9 @@ const CreateMenu = ({
           )}
         >
           <PlusIcon size={16} />
-          <TriangleDownIcon size={16} />
+          <span className="inline-flex max-sm:hidden">
+            <TriangleDownIcon size={16} />
+          </span>
         </button>
       }
     >
@@ -541,7 +552,7 @@ export const AppShell = (): ReactElement => {
   return (
     <div className="flex min-h-full flex-col">
       <header className="border-b border-line bg-header text-fg">
-        <div className="flex h-14 items-center gap-2 px-4 sm:px-6">
+        <div className="flex h-14 items-center gap-2 px-3 sm:px-6">
           <Link
             to="/"
             activeOptions={{ exact: true }}
@@ -557,7 +568,7 @@ export const AppShell = (): ReactElement => {
               <ProjectSwitcher current={project} projects={projects.data?.items ?? []} />
             </nav>
           )}
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
             <RunningIndicator running={counts.running} status={status} />
             <CreateMenu project={project} canCreateProject={user?.role === 'admin'} />
             <InboxButton count={counts.inbox} />

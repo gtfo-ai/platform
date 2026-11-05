@@ -13,8 +13,8 @@
  *
  * Positions come from `layout.ts`, never from React Flow: each node is handed its size, so the
  * first paint is already laid out. A task's first view frames the current stage with two cards
- * either side (`focusOf`) at zoom ≥ 0.75; a template's fits every stage, however small; the
- * *Fit all* control shows every stage. Every return curve is a custom edge (`FlowEdgePath`) that
+ * either side (`focusOf`) at zoom ≥ 0.75; a template's frames the start of its row at zoom ≥ 0.5
+ * (`firstViewOf`), and the reader pans along it; the *Fit all* control shows every stage. Every return curve is a custom edge (`FlowEdgePath`) that
  * dips below the row and carries its loop pill (on a task, only once spent, or while pointed at or
  * beside a focused card — `pillShown`); a spacer node at the deepest curve's bottom keeps a fit of
  * the whole graph from cutting the curves off (React Flow fits nodes, not edges).
@@ -234,25 +234,45 @@ export const toReactFlow = (
 };
 
 /**
- * How far out a template's first view may zoom to show **every** stage. The shipped feature
- * template is thirteen stages on its row — about 3 750 px of cards — so at a 1 190 px page the fit
- * lands near 0.26: the shape of the whole pipeline, with the names small; the zoom buttons and the
- * list give the words. A two-row "snake" was weighed and not taken: the tab's 380 px canvas is
- * height-bound once the cards above the row and the return curves below it are counted, so two rows
- * would reach about 0.4 for a layout whose cross-row returns no longer read as returns. Also the
- * canvas's own floor, so *Fit all* on a task's long row fits too.
+ * The canvas's own floor: how far out *Fit all* may zoom to show **every** stage. The shipped
+ * feature template is thirteen stages on its row — about 3 750 px of cards — so at a 1 190 px page
+ * the whole row fits near 0.26: the shape of the pipeline, with the names too small to read.
  */
 export const TEMPLATE_FIT_MIN_ZOOM = 0.2;
 
 /**
- * The first view's fit. A template is read whole — every stage, nothing cut off, padding 0.08. A
- * task is read around where it is — the current stage with two either side (`focus`), never below
- * 0.75, so the cards stay legible at a page's width.
+ * A template's first view is **not** that fit (S-23.13a, the owner's reading: at 0.26 no stage name
+ * is legible). It frames the first {@link TEMPLATE_FIRST_VIEW_SPAN} stages of the row and never
+ * zooms out past {@link TEMPLATE_FIRST_VIEW_MIN_ZOOM}, so the names read at a glance; the reader
+ * pans along the row, and *Fit all* still shows the whole shape. Six stages are about 1 730 px of
+ * cards: 0.63 at a 1 190 px page, 0.5 at about 950 px — the narrowest page that draws the canvas
+ * clamps at the floor rather than shrinking the names. A two-row "snake" was weighed again and not
+ * taken: its cross-row returns no longer read as returns, and on the taller canvas a row of six
+ * gives the same legibility with the layout everyone already reads left to right.
  */
-export const firstViewOf = (focus: readonly string[] | null) =>
-  focus === null
-    ? { padding: 0.08, minZoom: TEMPLATE_FIT_MIN_ZOOM, maxZoom: 1 }
-    : { nodes: focus.map((id) => ({ id })), padding: 0.15, minZoom: 0.75, maxZoom: 1 };
+export const TEMPLATE_FIRST_VIEW_MIN_ZOOM = 0.5;
+export const TEMPLATE_FIRST_VIEW_SPAN = 6;
+
+/**
+ * The first view's fit. A template is read from its start — its first stages, padding 0.08, never
+ * below 0.5. A task is read around where it is — the current stage with two either side (`focus`),
+ * never below 0.75, so the cards stay legible at a page's width.
+ */
+export const firstViewOf = (mode: FlowGraph['mode'], focus: readonly string[]) => ({
+  // No stage to frame (a graph with no row) fits whatever there is.
+  ...(focus.length === 0 ? {} : { nodes: focus.map((id) => ({ id })) }),
+  ...(mode === 'template'
+    ? { padding: 0.08, minZoom: TEMPLATE_FIRST_VIEW_MIN_ZOOM, maxZoom: 1 }
+    : { padding: 0.15, minZoom: 0.75, maxZoom: 1 }),
+});
+
+/** The stages a first view frames: a task's around its current stage, a template's from its start. */
+export const firstViewFocus = (
+  mode: FlowGraph['mode'],
+  mainPath: readonly string[],
+  current: string | null,
+): readonly string[] =>
+  mode === 'template' ? mainPath.slice(0, TEMPLATE_FIRST_VIEW_SPAN) : focusOf(mainPath, current);
 
 export const FlowCanvas = ({
   graph,
@@ -289,10 +309,10 @@ export const FlowCanvas = ({
     )?.id ?? null;
   // Computed once per graph shape: a live frame re-renders the canvas, and a fit that moved with
   // every frame would yank the view from under a reader who had panned away.
-  const focusKey = graph.mode === 'task' ? focusOf(layout.mainPath, current).join(',') : '';
+  const focusKey = firstViewFocus(graph.mode, layout.mainPath, current).join(',');
   const fitViewOptions = useMemo(
-    () => firstViewOf(focusKey === '' ? null : focusKey.split(',')),
-    [focusKey],
+    () => firstViewOf(graph.mode, focusKey === '' ? [] : focusKey.split(',')),
+    [graph.mode, focusKey],
   );
   return (
     <section

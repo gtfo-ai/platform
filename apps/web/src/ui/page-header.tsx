@@ -43,7 +43,11 @@ export const PageHeader = ({
     >
       {back === undefined ? null : <div className="text-sm text-fg-muted">{back}</div>}
       <div className="flex flex-wrap items-start gap-3">
-        <Title className="min-w-0 flex-1 text-xl font-semibold break-words text-fg">{title}</Title>
+        {/* `basis-64`: the title keeps 16 rem before the actions wrap onto a line of their own,
+            rather than being squeezed to a word per line on a phone (S-23.13a). */}
+        <Title className="min-w-0 flex-1 basis-64 text-xl font-semibold break-words text-fg">
+          {title}
+        </Title>
         {actions === undefined ? null : (
           <div data-page-actions="" className="flex shrink-0 flex-wrap items-center gap-2">
             {actions}

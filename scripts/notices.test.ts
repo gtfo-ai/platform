@@ -6,8 +6,10 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 // The on-disk specifier, because this module is a `.mjs` the CLI also runs directly.
+import { INTER_LICENCE_ASSET, INTER_PACKAGE } from './inter-font.mjs';
 import {
   assertPinnedArtefactsAgree,
+  LICENCE_TEXTS_SHIPPED,
   packageIdOf,
   parseLockfile,
   parseYamlDocuments,
@@ -325,6 +327,8 @@ describe('the rendered document', () => {
         'native-darwin-arm64@3.0.0': 'WOULD-BE-READ-FROM-THE-VARIANT',
       },
       pinned: new Map(),
+      // The fixture's closure carries no Inter, whose shipped text the default table names.
+      shippedTexts: {},
     });
     expect(rendered).toContain('| `native-linux-x64` | 3.0.0 | `native` |');
     expect(rendered).toContain('| `native-darwin-arm64` | 3.0.0 | `native` |');
@@ -332,6 +336,37 @@ describe('the rendered document', () => {
     // …and the family's own licence is stated once, in the package table.
     expect(rendered).toContain('| `native` | 3.0.0 | Apache-2.0 |');
     expect(rendered).toContain('| ISC | 1 |');
+  });
+
+  it('says in a package’s row where its licence text ships, and refuses a claim about a package it does not carry (S-23.13a)', () => {
+    const { ids, variantOf } = productionClosure(parseLockfile(FIXTURE_LOCKFILE));
+    const declared = { 'shipped@1.0.0': 'OFL-1.1', 'nested@2.0.0': 'ISC', 'native@3.0.0': 'MIT' };
+    const rendered = renderNotices({
+      ids,
+      variantOf,
+      declared,
+      pinned: new Map(),
+      shippedTexts: { shipped: 'text shipped as `shipped-OFL.txt`' },
+    });
+    expect(rendered).toContain(
+      '| `shipped` | 1.0.0 | OFL-1.1 (text shipped as `shipped-OFL.txt`) |',
+    );
+    expect(rendered).toContain('| `nested` | 2.0.0 | ISC |');
+    // The summary still counts the licence, not the sentence.
+    expect(rendered).toContain('| OFL-1.1 | 1 |');
+    expect(() =>
+      renderNotices({
+        ids,
+        variantOf,
+        declared,
+        pinned: new Map(),
+        shippedTexts: { 'left-the-closure': 'text shipped as `gone.txt`' },
+      }),
+    ).toThrow(/production closure does not carry: left-the-closure/);
+    // The shipped table names Inter, by the file name the web build writes.
+    expect(LICENCE_TEXTS_SHIPPED).toEqual({
+      [INTER_PACKAGE]: `text shipped as \`${INTER_LICENCE_ASSET}\` at the root of the web bundle`,
+    });
   });
 });
 

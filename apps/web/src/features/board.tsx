@@ -284,10 +284,12 @@ interface ViewProps {
 
 const Columns = ({ items, projectKey, projectId, may, agents, nowMs }: ViewProps): ReactElement => (
   // It scrolls sideways below `xl`. Not a tab stop of its own: every card holds a link and a menu
-  // button, and focusing one scrolls its column into view.
+  // button, and focusing one scrolls its column into view. `relative`, so the screen-reader-only
+  // counts (`sr-only` is `position: absolute`) of a column scrolled out of view are clipped by this
+  // box rather than positioned against the page — which they widened by 267 px at 1 024 (S-23.13a).
   <div
     data-board-columns=""
-    className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 xl:grid xl:grid-cols-5 xl:overflow-visible"
+    className="relative flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 xl:grid xl:grid-cols-5 xl:overflow-visible"
   >
     {BOARD_COLUMNS.map((column) => {
       const tasks = items.filter((task) => columnFor(task.state) === column.id);

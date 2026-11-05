@@ -4,9 +4,17 @@
  * (`test/web-e2e/csp.spec.ts`).
  */
 import { describe, expect, it } from 'vitest';
-import { firstViewOf, pillShown, TEMPLATE_FIT_MIN_ZOOM, toReactFlow } from './flow-canvas.js';
+import {
+  firstViewFocus,
+  firstViewOf,
+  pillShown,
+  TEMPLATE_FIRST_VIEW_MIN_ZOOM,
+  TEMPLATE_FIRST_VIEW_SPAN,
+  TEMPLATE_FIT_MIN_ZOOM,
+  toReactFlow,
+} from './flow-canvas.js';
 import { FEATURE_GRAPH } from './graph.test-fixture.js';
-import { layoutFlow } from './layout.js';
+import { focusOf, layoutFlow } from './layout.js';
 import { type FlowEdge, templateFlow } from './model.js';
 
 const template = templateFlow(FEATURE_GRAPH);
@@ -41,19 +49,33 @@ describe('loop pills', () => {
 });
 
 describe('the first view', () => {
-  it('fits every stage of a template, and a task around its current stage at ≥ 0.75', () => {
-    expect(firstViewOf(null)).toEqual({
+  it('frames a template’s first six stages at ≥ 0.5, and a task around its current stage at ≥ 0.75', () => {
+    // S-23.13a: the shipped feature template's whole row fitted at 0.26, which no name survives.
+    const layout = layoutFlow(template.nodes, template.edges);
+    const focus = firstViewFocus('template', layout.mainPath, null);
+    expect(focus).toEqual(layout.mainPath.slice(0, TEMPLATE_FIRST_VIEW_SPAN));
+    expect(focus[0]).toBe(layout.mainPath[0]);
+    expect(focus).toHaveLength(6);
+    expect(firstViewOf('template', focus)).toEqual({
+      nodes: focus.map((id) => ({ id })),
       padding: 0.08,
-      minZoom: TEMPLATE_FIT_MIN_ZOOM,
+      minZoom: TEMPLATE_FIRST_VIEW_MIN_ZOOM,
       maxZoom: 1,
     });
-    // Low enough for the shipped feature template's thirteen-stage row at a 1 190 px page.
+    expect(TEMPLATE_FIRST_VIEW_MIN_ZOOM).toBeGreaterThanOrEqual(0.5);
+    // *Fit all* is the canvas's floor, still low enough for the thirteen-stage row at 1 190 px.
     expect(TEMPLATE_FIT_MIN_ZOOM).toBeLessThanOrEqual(0.25);
-    expect(firstViewOf(['a', 'b'])).toEqual({
+    // A task's first view ignores the template's span: two either side of where it is.
+    expect(firstViewFocus('task', layout.mainPath, 'implementation')).toEqual(
+      focusOf(layout.mainPath, 'implementation'),
+    );
+    expect(firstViewOf('task', ['a', 'b'])).toEqual({
       nodes: [{ id: 'a' }, { id: 'b' }],
       padding: 0.15,
       minZoom: 0.75,
       maxZoom: 1,
     });
+    // Nothing to frame fits whatever there is, rather than handing React Flow an empty node list.
+    expect(firstViewOf('template', [])).toEqual({ padding: 0.08, minZoom: 0.5, maxZoom: 1 });
   });
 });

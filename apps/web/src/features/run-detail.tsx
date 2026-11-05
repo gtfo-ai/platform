@@ -474,16 +474,25 @@ const BackToTask = ({
   <Link
     to="/tasks/$taskId"
     params={{ taskId }}
-    className={cx('inline-flex items-center gap-1.5 rounded-sm hover:text-fg', FOCUS_RING)}
+    className={cx(
+      'inline-flex max-w-full items-center gap-1.5 rounded-sm hover:text-fg',
+      FOCUS_RING,
+    )}
   >
-    <ArrowLeftIcon size={16} />
+    <span className="inline-flex shrink-0">
+      <ArrowLeftIcon size={16} />
+    </span>
     {ticketKey === null ? (
       'Back to the task'
     ) : (
       <>
-        {/* The key and the title are the tracker's text (BD-022). */}
-        <UntrustedText value={ticketKey} className="font-semibold text-fg" />
-        {title === null ? null : <UntrustedText value={title} />}
+        {/* The key and the title are the tracker's text (BD-022). The key never breaks; the title
+            gives way on a narrow screen (S-23.13a). */}
+        <UntrustedText
+          value={ticketKey}
+          className="shrink-0 font-semibold whitespace-nowrap text-fg"
+        />
+        {title === null ? null : <UntrustedText value={title} className="min-w-0 truncate" />}
       </>
     )}
   </Link>
@@ -675,6 +684,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
       <div className="grid gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
         <aside className="flex flex-col gap-3">
           <NavList
+            stackBelow="lg"
             label="Runs of this task"
             groups={[
               {

@@ -30,7 +30,8 @@
  * `script-src 'self'` governs and `style-src 'self'` does not, so the top bar's account menu and a
  * `Metric` tooltip are opened in the built bundle and must appear, positioned, with no violation —
  * and **Inter is served by `'self'`**, so `font-src 'self'` stayed unchanged and the sign-in
- * headline is Inter Black.
+ * headline is Inter Black. Since S-23.13a the woff2 is also **preloaded** (one request, in CORS
+ * mode) and the font's OFL-1.1 text is served beside the bundle.
  *
  * Since S-23.5, the **flow canvas** (`@xyflow/react`, a lazy chunk with its own stylesheet) and the
  * first screen **Dialog** (Base UI, the stage dialog): the Pipeline tab's canvas is drawn, laid out
@@ -248,6 +249,46 @@ test('Inter is served from this origin and the sign-in headline is Inter Black (
   expect(await violations(page)).toEqual([]);
 });
 
+test('the woff2 is preloaded from this origin and Inter’s OFL text ships beside it (S-23.13a)', async ({
+  page,
+  request,
+}) => {
+  await page.goto('/');
+  await expect(
+    page.getByRole('heading', { name: 'Tickets in, merge requests out.' }),
+  ).toBeVisible();
+  // BACKLOG 801: one preload, for the very file the stylesheet's @font-face loads — in CORS mode,
+  // or the browser fetches the font a second time.
+  const preloads = await page.evaluate(() =>
+    [...document.querySelectorAll('link[rel="preload"][as="font"]')].map((link) => ({
+      href: (link as HTMLLinkElement).href,
+      type: link.getAttribute('type'),
+      crossorigin: link.getAttribute('crossorigin'),
+    })),
+  );
+  expect(preloads).toHaveLength(1);
+  expect(preloads[0]?.type).toBe('font/woff2');
+  expect(preloads[0]?.crossorigin).toBe('');
+  expect(new URL(preloads[0]?.href ?? '').origin).toBe(new URL(page.url()).origin);
+  const loaded = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return performance
+      .getEntriesByType('resource')
+      .map((entry) => entry.name)
+      .filter((name) => name.endsWith('.woff2'));
+  });
+  // Fetched once: the preload is the request the @font-face then uses.
+  expect(loaded).toEqual([preloads[0]?.href]);
+  // BACKLOG 803: OFL-1.1 condition 2 — the licence travels with the font.
+  const licence = await request.get('/inter-OFL.txt');
+  expect(licence.ok()).toBe(true);
+  expect(licence.headers()['content-type']).toMatch(/^text\/plain/);
+  const text = await licence.text();
+  expect(text).toContain('SIL OPEN FONT LICENSE Version 1.1');
+  expect(text).toContain('Copyright 2016 The Inter Project Authors');
+  expect(await violations(page)).toEqual([]);
+});
+
 test('the flow canvas and its stage dialog open under the policy without a violation (S-23.5)', async ({
   page,
   request,
@@ -257,33 +298,52 @@ test('the flow canvas and its stage dialog open under the policy without a viola
     page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
   ).toBeVisible();
 
-  // The Pipeline tab: a template, drawn by the lazy chunk, laid out left to right — and opened
-  // whole: at a 1 190 px page no stage of the thirteen-stage feature row is cut off.
+  // The Pipeline tab: a template, drawn by the lazy chunk, laid out left to right. It opens on the
+  // start of its row at a zoom the names read at (S-23.13a: the whole thirteen-stage row fitted at
+  // 0.26, which no name survives), and *Fit all* shows every stage.
   await page.setViewportSize({ width: 1190, height: 900 });
   await page.goto(`/projects/${PROJECT_KEY}/pipeline`);
   const template = page.locator('[data-flow-canvas="template"]');
   await expect(template).toBeVisible();
-  const canvasBox = await page.getByTestId('flow-canvas-frame').boundingBox();
+  const canvasBox = await page.getByTestId('flow-canvas-frame').first().boundingBox();
+  // The template's canvas is the tall one (≈ 600 px), not a task's 380.
+  expect(canvasBox?.height ?? 0).toBeGreaterThanOrEqual(560);
   const cards = template.locator('[data-stage-card]');
   await expect(cards).toHaveCount(15);
+  const outside = async (): Promise<number> => {
+    const boxes = await cards.evaluateAll((elements) =>
+      elements.map((element) => element.getBoundingClientRect().toJSON() as DOMRect),
+    );
+    return boxes.filter(
+      (box) =>
+        canvasBox === null ||
+        box.left < canvasBox.x ||
+        box.top < canvasBox.y ||
+        box.right > canvasBox.x + canvasBox.width ||
+        box.bottom > canvasBox.y + canvasBox.height,
+    ).length;
+  };
+  /** React Flow's zoom: the scale of the viewport's transform. */
+  const zoom = async (): Promise<number> =>
+    await template
+      .locator('.react-flow__viewport')
+      .evaluate((element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).a);
   await expect
-    .poll(
-      async () => {
-        const boxes = await cards.evaluateAll((elements) =>
-          elements.map((element) => element.getBoundingClientRect().toJSON() as DOMRect),
-        );
-        return boxes.filter(
-          (box) =>
-            canvasBox === null ||
-            box.left < canvasBox.x ||
-            box.top < canvasBox.y ||
-            box.right > canvasBox.x + canvasBox.width ||
-            box.bottom > canvasBox.y + canvasBox.height,
-        ).length;
-      },
-      { message: 'a stage card of the template is outside the canvas on first view' },
-    )
+    .poll(zoom, { message: 'the template’s first view zooms out below 0.5' })
+    .toBeGreaterThanOrEqual(0.5);
+  // The first stage is in view on the first paint; some of the row is not, and is panned to.
+  const firstBox = await template.locator('[data-stage-card]').first().boundingBox();
+  expect(firstBox).not.toBeNull();
+  if (firstBox !== null && canvasBox !== null) {
+    expect(firstBox.x).toBeGreaterThanOrEqual(canvasBox.x);
+    expect(firstBox.x + firstBox.width).toBeLessThanOrEqual(canvasBox.x + canvasBox.width);
+  }
+  expect(await outside()).toBeGreaterThan(0);
+  await template.getByRole('button', { name: 'Fit all' }).click();
+  await expect
+    .poll(outside, { message: 'a stage card of the template is outside the canvas after Fit all' })
     .toBe(0);
+  expect(await zoom()).toBeLessThan(0.5);
   const refinement = template.locator('[data-stage-card="refinement"]');
   const implementation = template.locator('[data-stage-card="implementation"]');
   await expect(implementation).toBeVisible();

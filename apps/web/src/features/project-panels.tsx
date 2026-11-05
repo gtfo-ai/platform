@@ -308,7 +308,9 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
             hint="Knowledge lives in the repository under the project's knowledge directory. Setting up a project drafts it; the Librarian keeps it current."
           />
         ) : null}
-        {files.length === 0 ? null : <NavList label="Knowledge files" groups={groups} />}
+        {files.length === 0 ? null : (
+          <NavList label="Knowledge files" groups={groups} stackBelow="lg" />
+        )}
       </aside>
 
       <section className="flex min-w-0 flex-col gap-4">

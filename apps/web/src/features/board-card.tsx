@@ -262,7 +262,9 @@ const ConflictBadge = ({
   readonly conflict: NonNullable<TaskListItem['conflict']>;
 }): ReactElement => (
   <Badge tone="warning">
+    {/* A long peer key gives way at the badge's edge on a narrow row, rather than past the box. */}
     <span
+      className="min-w-0 truncate"
       title={`Touches the same files as ${sanitiseUntrusted(conflict.other_ticket_key)}: ${conflict.path_count} overlapping path(s)${
         conflict.truncated
           ? ', and the comparison did not read every file of both merge requests, so there may be more'

@@ -55,4 +55,8 @@ export declare const renderNotices: (input: {
   readonly variantOf: Readonly<Record<string, readonly string[]>>;
   readonly declared: Record<string, string | null>;
   readonly pinned: Map<string, PinnedArtefact>;
+  /** Package name → where its licence text ships; defaults to {@link LICENCE_TEXTS_SHIPPED}. */
+  readonly shippedTexts?: Readonly<Record<string, string>>;
 }) => string;
+/** npm packages whose licence text the product ships, and where (S-23.13a). */
+export declare const LICENCE_TEXTS_SHIPPED: Readonly<Record<string, string>>;

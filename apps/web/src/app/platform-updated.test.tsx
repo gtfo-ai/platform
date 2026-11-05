@@ -16,7 +16,7 @@
 import { QueryClient } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { act } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionResponse } from '../auth/session.js';
 import type { EventStream } from '../realtime/client.js';
 import { createApp } from './app.js';
@@ -64,6 +64,17 @@ const server = (state: { commit: string | null; versionReads: number }) =>
     if (url.endsWith('/events/subscriptions')) return json({});
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
+
+/**
+ * The race this file's first screen lost under parallel load (S-23.13a): the first test to open
+ * the task page paid the on-demand transform of its lazy chunk inside a `findBy…`/`waitFor`'s 1 s bound —
+ * measured alone at 600–740 ms for the first test against 40–90 ms for every later one — so a loaded
+ * host pushed it past the bound. The chunks are imported once here, under the hook's own bound, so
+ * each wait measures the screen rather than the transform; no wait in a test was widened.
+ */
+beforeAll(async () => {
+  await import('../features/task-detail.js');
+}, 60_000);
 
 afterEach(() => {
   cleanup();
