@@ -46,7 +46,7 @@
  *     of racing — the lock is released at commit, and under READ COMMITTED the next holder's read
  *     sees the previous holder's sequence. The application role holds `SELECT` only on
  *     `event_streams` and must not lock its row (technical/03), which is why the lock is advisory;
- *     the transaction is two inserts long, so serialising it costs one round trip per writer;
+ *     the transaction is about six statements plus a NOTIFY long, so serialising it is cheap;
  *  2. the read goes through the **transaction's own connection**, never a second one from the pool,
  *     so the lock adds no connection to the pool floor;
  *  3. the `events_enforce_stream_seq` trigger still guards the append (migration 0005), and a
@@ -75,6 +75,7 @@ import {
 } from '@platform/application';
 import type { DomainEvent, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
+import { PostgresEventStore } from '../events/postgres-event-store.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 
@@ -112,15 +113,9 @@ const INSERT_ACTION = `insert into integration_actions
  */
 const LOCK_STREAM = `select pg_advisory_xact_lock(hashtextextended('integration_stream/' || $1, 0))`;
 
-const NEXT_SEQUENCE = `select coalesce(
-    (select last_seq from event_streams where stream_type = 'integration' and stream_id = $1),
-    0) + 1 as next`;
-
 /** The integration stream's next sequence, on the caller's connection — inside its transaction. */
-export const readNextSequence = async (sql: SqlExecutor, integrationId: Id): Promise<number> => {
-  const { rows } = await sql.query<{ next: string | number }>(NEXT_SEQUENCE, [integrationId]);
-  return Number(rows[0]?.next ?? 1);
-};
+export const readNextSequence = async (sql: SqlExecutor, integrationId: Id): Promise<number> =>
+  new PostgresEventStore(sql).nextStreamSequence('integration', integrationId);
 
 /**
  * The minted credential's shape, upserted **in the audit row's transaction** (WP-80, TD-012's M5

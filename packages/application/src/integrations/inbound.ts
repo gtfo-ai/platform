@@ -219,7 +219,10 @@ export interface WebhookIngressOptions {
    */
   readonly decisions: InboundDecisionApplier;
   readonly unitOfWork: UnitOfWork;
-  /** Read side, for `nextStreamSequence`; called outside the transaction, as the audit log does. */
+  /**
+   * Read side, for `nextStreamSequence`; called outside the transaction. (The audit log no longer
+   * does this: since BACKLOG 970 it locks the integration stream and reads inside its transaction.)
+   */
   readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly ids: { next(): Id };
   readonly clock: { now(): IsoDateTime };
@@ -453,9 +456,10 @@ export const recordNormalisedDelivery = async (
 
   for (let attempt = 1; ; attempt += 1) {
     const at = options.clock.now();
-    // Read before the transaction opens, exactly as `createPostgresIntegrationAuditLog` does:
-    // the `events_enforce_stream_seq` trigger takes the row lock, so a stale sequence is a
-    // `StreamConflictError` and never a silently mis-ordered stream.
+    // Read before the transaction opens — which the audit log no longer does (it locks its stream
+    // and reads inside its transaction, BACKLOG 970). The `events_enforce_stream_seq` trigger
+    // takes the row lock, so a stale sequence is a `StreamConflictError` and never a silently
+    // mis-ordered stream.
     const sequences = new Map<Id, number>();
     for (const group of record.byProject) {
       sequences.set(
