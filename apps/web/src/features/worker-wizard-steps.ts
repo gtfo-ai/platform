@@ -29,7 +29,9 @@
  *
  * Install is **one command per OS** — the core's installer script ({@link WORKER_INSTALL_PATHS},
  * S-22.20), which checks Docker, puts the bundle in {@link WORKER_INSTALL_DIR}, starts it and opens
- * the worker's own page — with the compose file and `.env.worker` lines behind *Set it up by hand*.
+ * the worker's own page — with the compose file and `.env.worker` lines behind *Set it up by hand*,
+ * **once {@link INSTALLER_AVAILABLE} says the core serves it**; until then the by-hand setup is the
+ * step.
  * Start is then the worker's own page, which signs in to Claude; the hand-made sign-in
  * (`claude setup-token`) stays as that step's fallback.
  */
@@ -188,6 +190,14 @@ export const projectTakesWorkers = (execution: ProjectExecutionResponse): boolea
  * The one-command installer's paths on the core (S-22.20): **intended, not live yet** — the other
  * session is building them (BACKLOG 927). One constant, so a changed path is one edit.
  */
+/**
+ * Whether the core serves the installer at {@link WORKER_INSTALL_PATHS} yet. **Flip it to `true`
+ * when S-22.20 lands** (BACKLOG 927): until then the paths answer 404, and since every push to
+ * `main` is a release the wizard must not show them — Install shows the by-hand setup instead. When
+ * `true`, the one-line installer is the default and the by-hand setup moves into a disclosure.
+ */
+export const INSTALLER_AVAILABLE: boolean = false;
+
 export const WORKER_INSTALL_PATHS = {
   unix: `${WORKER_API_PREFIX}/install.sh`,
   windows: `${WORKER_API_PREFIX}/install.ps1`,
@@ -232,11 +242,11 @@ export const workerInstallCommands = (pageOrigin: string): WorkerInstallCommands
     installer: {
       unix: {
         url: `${origin}${WORKER_INSTALL_PATHS.unix}`,
-        run: `curl -fsSL ${origin}${WORKER_INSTALL_PATHS.unix} | sh`,
+        run: `curl -fsSL '${origin}${WORKER_INSTALL_PATHS.unix}' | sh`,
       },
       windows: {
         url: `${origin}${WORKER_INSTALL_PATHS.windows}`,
-        run: `irm ${origin}${WORKER_INSTALL_PATHS.windows} | iex`,
+        run: `irm '${origin}${WORKER_INSTALL_PATHS.windows}' | iex`,
       },
     },
     download: `curl -fsSo compose.worker.yml ${origin}${WORKER_API_PREFIX}/${WORKER_PATHS.composeFile}`,

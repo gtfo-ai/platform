@@ -1,6 +1,7 @@
 /**
  * The *Add a worker* wizard (S-23.20) in the built bundle, against the fake backend: entered from the
- * top bar's `+` menu, its installer line and its by-hand commands carry this page's origin, Install
+ * top bar's `+` menu, its by-hand commands carry this page's origin (no installer line until the
+ * core serves one), Install
  * continues on the person's word, Start points at the worker's page and keeps the hand-made Claude
  * sign-in and its troubleshooting as fallbacks, Approve is done by a worker of this
  * person created since the wizard opened, and Ready lists what stops that worker in words.
@@ -31,30 +32,9 @@ test('Add a worker: from the + menu through Install and Start, with this platfor
   await expect(page).toHaveURL(/[?&]since=/);
 
   const origin = new URL(baseURL ?? '').origin;
-  // The installer of the platform the browser reports comes first (Playwright's *Desktop Chrome*
-  // reports Windows); the other is behind a disclosure.
-  const windowsFirst = /\bWin(?:dows|32|64)\b/.test(await page.evaluate(() => navigator.userAgent));
-  const shown = windowsFirst
-    ? {
-        os: 'windows',
-        label: 'Windows (PowerShell)',
-        run: `irm ${origin}/api/worker/v1/install.ps1 | iex`,
-        url: `${origin}/api/worker/v1/install.ps1`,
-      }
-    : {
-        os: 'unix',
-        label: 'macOS or Linux (Terminal)',
-        run: `curl -fsSL ${origin}/api/worker/v1/install.sh | sh`,
-        url: `${origin}/api/worker/v1/install.sh`,
-      };
-  const installer = page.locator(`[data-installer="${shown.os}"]`);
-  await expect(installer.getByLabel(shown.label, { exact: true })).toBeVisible();
-  await expect(installer.getByLabel(shown.label, { exact: true })).toHaveValue(shown.run);
-  await expect(installer.getByRole('link', { name: 'Read the script first' })).toHaveAttribute(
-    'href',
-    shown.url,
-  );
-  await page.getByText('Set it up by hand', { exact: true }).click();
+  // Until the core serves the one-line installer (S-22.20, `INSTALLER_AVAILABLE`), the by-hand
+  // setup is the step itself and no installer line is shown.
+  await expect(page.locator('[data-installer]')).toHaveCount(0);
   await expect(page.getByLabel('Download the worker’s compose file', { exact: true })).toHaveValue(
     `curl -fsSo compose.worker.yml ${origin}/api/worker/v1/compose.yml`,
   );
@@ -63,6 +43,9 @@ test('Add a worker: from the + menu through Install and Start, with this platfor
       exact: true,
     }),
   ).toHaveValue(`APP_CORE_URL=${origin}`);
+  await expect(page.getByLabel('Start the worker', { exact: true })).toHaveValue(
+    'docker compose --env-file .env.worker -f compose.worker.yml up -d',
+  );
 
   const toStart = page.getByRole('button', { name: 'Continue to Start it and sign in' });
   await expect(toStart).toBeDisabled();

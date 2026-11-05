@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { NOW, USER_ID, workerFixture } from './worker.test-fixture.js';
 import {
   blockingWorkerStepOf,
+  INSTALLER_AVAILABLE,
   preferredInstallOs,
   projectTakesWorkers,
   resumeWorkerStepOf,
@@ -145,12 +146,15 @@ describe('workerInstallCommands', () => {
     const { installer } = workerInstallCommands('https://agentic.example.test/');
     expect(installer.unix).toEqual({
       url: 'https://agentic.example.test/api/worker/v1/install.sh',
-      run: 'curl -fsSL https://agentic.example.test/api/worker/v1/install.sh | sh',
+      run: "curl -fsSL 'https://agentic.example.test/api/worker/v1/install.sh' | sh",
     });
     expect(installer.windows).toEqual({
       url: 'https://agentic.example.test/api/worker/v1/install.ps1',
-      run: 'irm https://agentic.example.test/api/worker/v1/install.ps1 | iex',
+      run: "irm 'https://agentic.example.test/api/worker/v1/install.ps1' | iex",
     });
+  });
+  it('keeps the installer hidden until the core serves it (flip with S-22.20, BACKLOG 927)', () => {
+    expect(INSTALLER_AVAILABLE).toBe(false);
   });
   it('shows the installer of the platform the browser reports first', () => {
     expect(preferredInstallOs('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).toBe('windows');

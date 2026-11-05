@@ -104,7 +104,7 @@ const LABELS: Readonly<Record<SetupStepId, { readonly label: string; readonly hi
   },
   worker: {
     label: 'Connect a worker',
-    hint: 'This platform has no server runner: agent work runs on a developer’s own computer.',
+    hint: 'Nothing on the platform server runs this project’s agents: a developer’s own computer has to.',
   },
   ticket: {
     label: 'Start your first ticket',

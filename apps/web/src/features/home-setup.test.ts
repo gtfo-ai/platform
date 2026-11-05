@@ -159,7 +159,9 @@ describe('setupChecklist’s worker step (S-23.20)', () => {
     ]);
     expect(checklist.next?.id).toBe('worker');
     expect(checklist.next?.label).toBe('Connect a worker');
-    expect(checklist.next?.hint).toMatch(/no server runner/);
+    expect(checklist.next?.hint).toBe(
+      'Nothing on the platform server runs this project’s agents: a developer’s own computer has to.',
+    );
     expect(checklist.next?.destination).toEqual({ to: '/workers/new' });
   });
 

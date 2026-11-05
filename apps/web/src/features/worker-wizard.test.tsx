@@ -147,22 +147,14 @@ describe('Add a worker: Install', () => {
     ]);
 
     const origin = window.location.origin;
-    // One line, the browser's platform first (happy-dom reports neither Windows), the other behind
-    // a disclosure; each with its script to read first.
-    const first = document.querySelector('[data-installer="unix"]') as HTMLElement;
-    expect(first.closest('details')).toBeNull();
-    expect(
-      (within(first).getByLabelText('macOS or Linux (Terminal)') as HTMLInputElement).value,
-    ).toBe(`curl -fsSL ${origin}/api/worker/v1/install.sh | sh`);
-    expect(
-      within(first).getByRole('link', { name: 'Read the script first' }).getAttribute('href'),
-    ).toBe(`${origin}/api/worker/v1/install.sh`);
-    const windows = document.querySelector('[data-installer="windows"]') as HTMLElement;
-    expect(windows.closest('details')?.textContent).toContain('On Windows (PowerShell) instead');
-    expect((within(windows).getByLabelText('Windows (PowerShell)') as HTMLInputElement).value).toBe(
-      `irm ${origin}/api/worker/v1/install.ps1 | iex`,
+    // INSTALLER_AVAILABLE is false until the core serves the installer (S-22.20): no one-line
+    // installer is shown, and the by-hand setup is the step, not a disclosure.
+    expect(document.querySelector('[data-installer]')).toBeNull();
+    expect(screen.queryByText(/install\.(sh|ps1)/)).toBeNull();
+    expect(document.querySelector('[data-by-hand]')?.closest('details')).toBeNull();
+    expect((screen.getByLabelText('Start the worker') as HTMLInputElement).value).toBe(
+      `docker compose --env-file .env.worker -f compose.worker.yml up -d`,
     );
-    // By hand: the compose file and the .env.worker line, behind their own disclosure.
     const download = screen.getByLabelText(
       'Download the worker’s compose file',
     ) as HTMLInputElement;
@@ -227,7 +219,7 @@ describe('Add a worker: Start it and sign in', () => {
     expect(
       (screen.getByLabelText('Run this in the worker’s folder') as HTMLInputElement).value,
     ).toBe('claude setup-token');
-    expect((screen.getByLabelText('Start the worker') as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText('Then start the worker again') as HTMLInputElement).value).toBe(
       'docker compose --env-file .env.worker -f compose.worker.yml up -d',
     );
     expect(screen.getByRole('link', { name: 'http://127.0.0.1:7357' })).toBeTruthy();

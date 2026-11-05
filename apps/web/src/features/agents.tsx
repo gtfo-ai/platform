@@ -101,7 +101,7 @@ const NothingRuns = ({
   waitingForWorker ? (
     <Blankslate
       title="Waiting for a worker"
-      hint="This platform has no server runner, so agent work runs on developers’ own computers — and none you can see is connected. Add yours and its runs start here."
+      hint="Nothing on the platform server runs this project’s agents, so they run on developers’ own computers — and none you can see is connected. Add yours and its runs start here."
       action={
         <Link to="/workers/new" className={buttonClassName('default')}>
           Add a worker

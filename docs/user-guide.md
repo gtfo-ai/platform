@@ -1530,30 +1530,27 @@ the top right. The step is in the address, so a link (or Home's checklist) opens
 off.
 
 1. **Install.** What a worker is, what you need (Docker on that computer and a Claude
-   subscription), and **one line** to run there, built from this platform's own address — the one
-   for the system your browser reports first, the other behind a click:
-   `curl -fsSL <platform>/api/worker/v1/install.sh | sh` on macOS or Linux,
-   `irm <platform>/api/worker/v1/install.ps1 | iex` in Windows PowerShell. **Read the script first**
-   opens the script itself. It checks that Docker runs, puts the worker in `~/agentic-worker`,
-   starts it and opens http://127.0.0.1:7357, the worker's own page. (The installer is being built
-   beside this wizard; until it is served, use *Set it up by hand*.) **Set it up by hand** holds the
-   `curl` that downloads `compose.worker.yml` and the `APP_CORE_URL=…` line for a `.env.worker` file
-   beside it. The platform cannot see an install, so this step is done when you tick **I've done
-   this**.
+   subscription), and three lines to copy, built from this platform's own address: the `curl` that
+   downloads `compose.worker.yml`, the `APP_CORE_URL=…` line for a `.env.worker` file beside it, and
+   `docker compose --env-file .env.worker -f compose.worker.yml up -d`; then open
+   http://127.0.0.1:7357 on that computer. (Once the platform serves its one-line installer —
+   `curl -fsSL '<platform>/api/worker/v1/install.sh' | sh`, or `irm … install.ps1 | iex` in Windows
+   PowerShell, which checks Docker, puts the worker in `~/agentic-worker`, starts it and opens that
+   page — the installer is shown first, for the system your browser reports, with **Read the script
+   first**, and these lines move under *Set it up by hand*. It is being built beside this wizard.)
+   The platform cannot see an install, so this step is done when you tick **I've done this**.
 2. **Start it and sign in.** The worker's page opens at http://127.0.0.1:7357 and walks you through
-   signing in to Claude, then shows the code to approve. **If you set it up by hand**:
-   `claude setup-token` signs in to your Claude subscription. The browser then says *Build
-   something great — you can close this window*: the token is printed in the **terminal** where you
-   ran the command, not in the browser, and may wrap over two lines — join them — and goes into
-   `.env.worker` as `CLAUDE_CODE_OAUTH_TOKEN` (the step also gives a command that writes it without
-   printing it). Don't authorize again: every run creates a new token. Then
-   `docker compose --env-file .env.worker -f compose.worker.yml up -d`, and open
-   http://127.0.0.1:7357. Three troubleshooting items: *Safari can't connect to localhost:…/callback*
-   (the command was stopped before you authorized: run it again in a terminal that stays open),
-   *downloading the script or compose.yml answers 503 or 426* (the platform needs an update: ask an
-   administrator), and *the page at 127.0.0.1:7357 doesn't open* (`docker compose ps` in the
-   worker's folder; set up by hand without the token, the worker refuses to start). *Continue* is
-   never held here: you may already have the code.
+   signing in to Claude, then shows the code to approve. **If you set it up by hand** holds the
+   terminal way: `claude setup-token` signs in to your Claude subscription. The browser then says
+   *Build something great — you can close this window*: the token is printed in the **terminal**
+   where you ran the command, not in the browser, and may wrap over two lines — join them — and goes
+   into `.env.worker` as `CLAUDE_CODE_OAUTH_TOKEN` (the step also gives a command that writes it
+   without printing it), then start the worker again. Don't authorize again: every run creates a new
+   token. Three troubleshooting items: *Safari can't connect to localhost:…/callback* (the command
+   was stopped before you authorized: run it again in a terminal that stays open), *downloading the
+   script or compose.yml answers 503 or 426* (the platform needs an update: ask an administrator),
+   and *the page at 127.0.0.1:7357 doesn't open* (`docker compose ps` in the worker's folder, and
+   read what starting it prints). *Continue* is never held here: you may already have the code.
 3. **Approve.** **Approve the code** opens the approval page (below) in a new tab. The step is done
    once a new worker of yours appears — this page asks every 5 seconds while you wait.
 4. **Ready to work.** Whether that worker can take work now, line by line: connected, not paused by

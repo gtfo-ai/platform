@@ -55,6 +55,7 @@ import {
 import {
   blockingWorkerStepOf,
   credentialKeepsWorkersOff,
+  INSTALLER_AVAILABLE,
   type InstallOs,
   nextWorkerStep,
   preferredInstallOs,
@@ -174,13 +175,37 @@ const Installer = ({
   </div>
 );
 
+/** The compose file, the `.env.worker` line and the start command: setting the worker up by hand. */
+const ByHand = ({ commands }: { readonly commands: WorkerInstallCommands }): ReactElement => (
+  <div className="flex flex-col gap-3" data-by-hand="">
+    <p className="text-sm">In an empty folder on the computer that will run agent work, run:</p>
+    <CopyField label="Download the worker’s compose file" value={commands.download} />
+    <CopyField
+      label="Then create a file named .env.worker beside it, with this line"
+      value={commands.coreUrlLine}
+    />
+    <p className="text-xs text-fg-muted">
+      That line tells the worker which platform it works for: this one,{' '}
+      <code>{commands.origin}</code>.
+    </p>
+    <CopyField label="Start the worker" value={commands.up} />
+    <p className="text-xs text-fg-muted">
+      Then open <code>{WORKER_LOCAL_PAGE}</code> on that computer: the worker’s own page guides the
+      next two steps.
+    </p>
+  </div>
+);
+
 const InstallStep = ({
   commands,
+  installerAvailable,
   firstOs,
   installed,
   onInstalled,
 }: {
   readonly commands: WorkerInstallCommands;
+  /** {@link INSTALLER_AVAILABLE}: the one-line installer is served, so it is the way shown first. */
+  readonly installerAvailable: boolean;
   /** The installer the browser's platform suggests; the other is behind a disclosure. */
   readonly firstOs: InstallOs;
   readonly installed: boolean;
@@ -201,32 +226,28 @@ const InstallStep = ({
           <li>A Claude subscription: the worker signs in with it, and its runs use it.</li>
         </ul>
       </div>
-      <div className="flex flex-col gap-3">
-        <p className="text-sm">On the computer that will run agent work, run this one line:</p>
-        <Installer os={firstOs} commands={commands} />
-        <DetailsDisclosure summary={`On ${INSTALL_OS_LABEL[otherOs]} instead`}>
-          <Installer os={otherOs} commands={commands} />
-        </DetailsDisclosure>
-        <p className="max-w-prose text-xs text-fg-muted">
-          The script checks that Docker runs, puts the worker in <code>{WORKER_INSTALL_DIR}</code>,
-          starts it for <code>{commands.origin}</code> and opens <code>{WORKER_LOCAL_PAGE}</code>,
-          the worker’s own page, which guides the next two steps.
-        </p>
-      </div>
-      <DetailsDisclosure summary="Set it up by hand">
-        <div className="flex flex-col gap-3">
-          <p className="text-sm">In an empty folder on that computer:</p>
-          <CopyField label="Download the worker’s compose file" value={commands.download} />
-          <CopyField
-            label="Then create a file named .env.worker beside it, with this line"
-            value={commands.coreUrlLine}
-          />
-          <p className="text-xs text-fg-muted">
-            That line tells the worker which platform it works for: this one. The next step says how
-            to sign in to Claude and start it by hand.
-          </p>
-        </div>
-      </DetailsDisclosure>
+      {installerAvailable ? (
+        <>
+          <div className="flex flex-col gap-3">
+            <p className="text-sm">On the computer that will run agent work, run this one line:</p>
+            <Installer os={firstOs} commands={commands} />
+            <DetailsDisclosure summary={`On ${INSTALL_OS_LABEL[otherOs]} instead`}>
+              <Installer os={otherOs} commands={commands} />
+            </DetailsDisclosure>
+            <p className="max-w-prose text-xs text-fg-muted">
+              The script checks that Docker runs, puts the worker in{' '}
+              <code>{WORKER_INSTALL_DIR}</code>, starts it for <code>{commands.origin}</code> and
+              opens <code>{WORKER_LOCAL_PAGE}</code>, the worker’s own page, which guides the next
+              two steps.
+            </p>
+          </div>
+          <DetailsDisclosure summary="Set it up by hand">
+            <ByHand commands={commands} />
+          </DetailsDisclosure>
+        </>
+      ) : (
+        <ByHand commands={commands} />
+      )}
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -250,30 +271,22 @@ const StartStep = ({ commands }: { readonly commands: WorkerInstallCommands }): 
       it didn’t open, open it yourself on that computer.
     </p>
     <DetailsDisclosure summary="If you set it up by hand">
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">1. Sign in to Claude</h3>
-          <CopyField label="Run this in the worker’s folder" value={commands.signIn} />
-          <p className="max-w-prose text-sm" data-setup-token="">
-            Your browser opens. Once you authorize, it says{' '}
-            <em>Build something great — you can close this window</em>. The token appears in the{' '}
-            <strong>terminal</strong> where you ran the command, not in the browser — it may wrap
-            over two lines; join them. Copy it into <code>.env.worker</code> as{' '}
-            <code>CLAUDE_CODE_OAUTH_TOKEN</code>.{' '}
-            <strong>Don’t authorize again: every run creates a new token.</strong>
-          </p>
-          <CopyField
-            label="Or paste it into .env.worker without it being printed"
-            value={commands.writeToken}
-          />
-        </div>
-        <div className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">2. Start the worker</h3>
-          <CopyField label="Start the worker" value={commands.up} />
-          <p className="text-sm">
-            Then open <code>{WORKER_LOCAL_PAGE}</code> on that computer.
-          </p>
-        </div>
+      <div className="flex flex-col gap-2">
+        <p className="text-sm">To sign in from a terminal instead of the worker’s page:</p>
+        <CopyField label="Run this in the worker’s folder" value={commands.signIn} />
+        <p className="max-w-prose text-sm" data-setup-token="">
+          Your browser opens. Once you authorize, it says{' '}
+          <em>Build something great — you can close this window</em>. The token appears in the{' '}
+          <strong>terminal</strong> where you ran the command, not in the browser — it may wrap over
+          two lines; join them. Copy it into <code>.env.worker</code> as{' '}
+          <code>CLAUDE_CODE_OAUTH_TOKEN</code>.{' '}
+          <strong>Don’t authorize again: every run creates a new token.</strong>
+        </p>
+        <CopyField
+          label="Or paste it into .env.worker without it being printed"
+          value={commands.writeToken}
+        />
+        <CopyField label="Then start the worker again" value={commands.up} />
       </div>
     </DetailsDisclosure>
     <Troubleshooting>
@@ -299,8 +312,7 @@ const StartStep = ({ commands }: { readonly commands: WorkerInstallCommands }): 
         <CopyField label="Show the worker’s containers" value={commands.ps} />
         <p>
           The worker must be listed as running. If it is missing, start it again and read what it
-          prints: set up by hand without <code>CLAUDE_CODE_OAUTH_TOKEN</code> in{' '}
-          <code>.env.worker</code>, it refuses to start.
+          prints.
         </p>
       </Trouble>
     </Troubleshooting>
@@ -512,7 +524,7 @@ const ProjectsStep = ({
 
 const PURPOSE: Readonly<Record<WorkerWizardStepId, string>> = {
   install:
-    'Install the worker on the computer that will run agent work: one command. A few minutes; nothing is charged.',
+    'Install the worker on the computer that will run agent work. A few minutes; nothing is charged.',
   start:
     'Sign the worker in to your Claude subscription on its own page. A few minutes, once per computer.',
   approve: 'Let this platform trust the computer: approve the code its page shows.',
@@ -722,6 +734,7 @@ const Wizard = ({ place }: { readonly place: WizardPlace }): ReactElement => {
     ) : current === 'install' ? (
       <InstallStep
         commands={commands}
+        installerAvailable={INSTALLER_AVAILABLE}
         firstOs={preferredInstallOs(globalThis.navigator?.userAgent ?? '')}
         installed={place.installed}
         onInstalled={(installed) => {
