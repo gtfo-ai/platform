@@ -271,10 +271,9 @@ const probe = async (path: string): Promise<Probe> => {
  * client file — measured: run after them, these probes met `Service Unavailable` on a busy host.
  */
 const WORKER_VERBS_SERVED_LATER: Readonly<Partial<Record<keyof typeof WORKER_PATHS, string>>> = {
-  // WP-282 served `transcript`, `tools/:name`, `approvals`, `session` and `ssh-sign`.
+  // WP-282 served `transcript`, `tools/:name`, `approvals`, `session` and `ssh-sign`; WP-284
+  // `release` and `compose.yml`.
   pause: 'WP-285',
-  release: 'WP-284',
-  composeFile: 'WP-284',
   updateReport: 'WP-287',
 };
 const PUBLIC_WORKER_VERBS: readonly (keyof typeof WORKER_PATHS)[] = ['device', 'deviceToken'];

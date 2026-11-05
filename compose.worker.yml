@@ -1,0 +1,174 @@
+# A remote worker (BD-032): one compose file and nothing else (BD-032 decision 9, TD-032 decision 3).
+#
+#   curl -fsS -H 'X-Worker-Protocol: 1' -H "Authorization: Bearer <worker credential>" \
+#        https://<core>/api/worker/v1/compose.yml > compose.worker.yml     # or: from the image
+#   CLAUDE_CODE_OAUTH_TOKEN=<claude setup-token> docker compose -f compose.worker.yml up -d
+#   docker compose -f compose.worker.yml logs remote-worker   # the device code to approve
+#
+# **This file is a template baked into the `platform` image** at `/opt/platform/compose.worker.yml`
+# (`docker/app.Dockerfile`). The core renders it for a first install (`GET /api/worker/v1/compose.yml`,
+# WP-284): every `${PLATFORM_*_IMAGE:-…}` default below becomes the core's own image **by digest**
+# and `${APP_CORE_URL:-…}` the core's URL — the variables stay, so the updater's managed `.env` block
+# (TD-032 decision 4, WP-287) can re-pin them. A worker follows its core's digests, never `latest`.
+# `scripts/worker-compose-check.mjs` brings this file up against a core on one daemon.
+#
+# ## What is deliberate
+#
+# **The worker holds no database, no instance secret key and no integration secret** (BD-032
+# decision 1): `remote-worker` is refused at start if `DATABASE_URL` or `APP_SECRET_KEY` reaches it,
+# so nothing here passes an `env_file`. Its one secret of its own is the developer's
+# `CLAUDE_CODE_OAUTH_TOKEN`, which goes into the CLI's environment of each run and nowhere else
+# (BD-032 decision 2) — `${CLAUDE_CODE_OAUTH_TOKEN:?…}` refuses to start without it.
+#
+# **The networks are the core's (TD-028).** `docker-socket-proxy` is the only service with the
+# Docker socket, on an `internal: true` network only the launcher joins; the launcher's control plane
+# is on a second `internal: true` network only it and `remote-worker` join, with no published port.
+# `remote-worker` also joins `default`, its route to the core over HTTPS (BD-032 decision 11) — its
+# local listener (`/readyz`, `/internal/drain`, `/internal/state`) is **not published** and is reached
+# on this compose network only.
+#
+# **The launcher applies the `relayed` carriage** (TD-031's 2026-11-04 amendment, backlog 693): a
+# deploy key never reaches this machine; the mirror and export helpers sign through a helper agent
+# socket the worker serves on the `ctl` volume and forwards to the core.
+#
+# **The launcher token is generated at first start** (`launcher-token`, a one-shot of the platform
+# image): 32 random bytes on a volume only the launcher and the worker mount, kept across restarts.
+#
+# **Its volumes and run network have their own names**, so a worker and a core can share one daemon
+# (the Docker check does) without one's `ctl` volume or run network being the other's.
+
+name: agentic-worker
+
+services:
+  launcher-token:
+    image: ${PLATFORM_IMAGE:-platform:dev}
+    command: ['apps/server/src/remote-worker/launcher-token.ts', '/var/lib/platform/launcher-token/token']
+    volumes:
+      - launcher-token:/var/lib/platform/launcher-token
+    network_mode: none
+    restart: 'no'
+
+  remote-worker:
+    image: ${PLATFORM_IMAGE:-platform:dev}
+    environment:
+      ROLE: remote-worker
+      APP_CORE_URL: ${APP_CORE_URL:?set APP_CORE_URL to the core's https URL}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token)}
+      APP_WORKER_CONCURRENCY: ${APP_WORKER_CONCURRENCY:-1}
+      APP_WORKER_STATE_DIR: /var/lib/platform/worker-state
+      APP_LAUNCHER_URL: http://launcher:7780
+      APP_LAUNCHER_TOKEN_FILE: /var/lib/platform/launcher-token/token
+      APP_WORKSPACE_CONTROL_ROOT: /run/agentic/ctl
+      # The image references the worker reports holding, by digest (TD-031 decision 4).
+      PLATFORM_IMAGE: ${PLATFORM_IMAGE:-platform:dev}
+      PLATFORM_LAUNCHER_IMAGE: ${PLATFORM_LAUNCHER_IMAGE:-platform-launcher:dev}
+      PLATFORM_RUNTIME_IMAGE: ${PLATFORM_RUNTIME_IMAGE:-platform-runtime:dev}
+      PLATFORM_EGRESS_IMAGE: ${PLATFORM_EGRESS_IMAGE:-platform-egress:dev}
+      HOST: 0.0.0.0
+      PORT: 8080
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - worker-state:/var/lib/platform/worker-state
+      - launcher-token:/var/lib/platform/launcher-token:ro
+      - ctl:/run/agentic/ctl
+    # Group 0, so the run's helper agent socket can be `<uid>:0` `0660` — what the mirror helper (root,
+    # no capabilities) reaches, as WP-279 measured (backlog 705).
+    group_add: ['0']
+    networks:
+      - default
+      - launcher-api
+    depends_on:
+      launcher-token:
+        condition: service_completed_successfully
+      launcher:
+        condition: service_started
+    # A stop hands every run back (`shutdown`), which settles each through the core.
+    stop_grace_period: 60s
+    restart: unless-stopped
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0@sha256:9e4b9e7517a6b660f2cc903a19b257b1852d5b3344794e3ea334ff00ae677ac2
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      IMAGES: 1
+      INFO: 1
+      POST: 1
+      EXEC: 0
+      BUILD: 0
+      SECRETS: 0
+      CONFIGS: 0
+      SWARM: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      PLUGINS: 0
+      SYSTEM: 0
+      AUTH: 0
+      DISTRIBUTION: 0
+      SESSION: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-proxy
+    restart: unless-stopped
+
+  launcher:
+    image: ${PLATFORM_LAUNCHER_IMAGE:-platform-launcher:dev}
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      APP_LAUNCHER_DEPLOY_KEY_CARRIAGE: relayed
+      APP_LAUNCHER_TOKEN_FILE: /var/lib/platform/launcher-token/token
+      APP_LAUNCHER_PORT: 7780
+      APP_WORKSPACE_CONTROL_VOLUME: ${APP_WORKER_CONTROL_VOLUME:-agentic-worker-ctl}
+      APP_WORKSPACE_CONTROL_ROOT: /run/agentic/ctl
+      APP_WORKSPACE_CACHE_VOLUME: ${APP_WORKER_CACHE_VOLUME:-agentic-worker-repo-cache}
+      APP_WORKSPACE_RUNTIME_IMAGE: ${PLATFORM_RUNTIME_IMAGE:-platform-runtime:dev}
+      APP_WORKSPACE_EGRESS_IMAGE: ${PLATFORM_EGRESS_IMAGE:-platform-egress:dev}
+      APP_WORKSPACE_GIT_IMAGE: ${APP_WORKSPACE_GIT_IMAGE:-alpine/git:v2.49.1}
+      APP_WORKSPACE_MIRROR_MEMORY_MB: ${APP_WORKSPACE_MIRROR_MEMORY_MB:-2048}
+      APP_WORKSPACE_HELPER_NETWORK: agentic-worker-run-egress
+      APP_WORKSPACE_EGRESS_NETWORK: agentic-worker-run-egress
+      APP_WORKSPACE_EXPORT_DIR: /var/lib/app/exports
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ctl:/run/agentic/ctl
+      - launcher-token:/var/lib/platform/launcher-token:ro
+      - exports:/var/lib/app/exports
+    networks:
+      - docker-proxy
+      - run-egress
+      - launcher-api
+    depends_on:
+      launcher-token:
+        condition: service_completed_successfully
+      docker-socket-proxy:
+        condition: service_started
+    stop_grace_period: 60s
+    restart: unless-stopped
+
+  # Inert until WP-287 (TD-032 decision 6): the worker's updater. Under a profile nobody enables, so
+  # `up` never starts it; WP-287 gives it its own socket proxy and `ROLE=updater`.
+  updater:
+    image: ${PLATFORM_IMAGE:-platform:dev}
+    environment:
+      ROLE: updater
+    profiles: ['updater']
+    network_mode: none
+    restart: 'no'
+
+volumes:
+  worker-state:
+  launcher-token:
+  exports:
+  ctl:
+    name: ${APP_WORKER_CONTROL_VOLUME:-agentic-worker-ctl}
+
+networks:
+  run-egress:
+    name: agentic-worker-run-egress
+  docker-proxy:
+    internal: true
+  launcher-api:
+    internal: true

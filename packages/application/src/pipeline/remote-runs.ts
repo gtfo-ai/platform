@@ -154,6 +154,15 @@ export interface RemoteRunsOptions {
   readonly tokens: RunTokens;
   /** `settleRun` over this process's settle collaborators — a stage run's ending. */
   readonly settle: (request: SettleRunRequest) => Promise<SettleRunResult>;
+  /**
+   * An **ask** run's ending — the ask's own (`AskExecutor.settle`, TD-031 decision 13), WP-283
+   * (backlog 741): a worker claims ask offers too, so `finish` of a run that serves an ask settles
+   * here. Every production composition supplies it (`apps/server/src/worker-protocol.ts`); a test
+   * composition without one has its ask run's `finish` throw by name rather than settle it as a stage.
+   */
+  readonly settleAsk?: (
+    request: SettleRunRequest,
+  ) => Promise<{ readonly kind: 'settled' | 'already_settled' | 'task_gone' }>;
   readonly lateCost: LateCostRecorder;
   /** @default WORKER_REMOTE_LEASE_TTL_MS */
   readonly leaseTtlMs?: number;
@@ -378,6 +387,43 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
         'a remote claim that could not be packaged could not be settled either; the lease sweep ends its row',
       );
     }
+  };
+
+  /** Whether the run serves an ask (its row names one) — its ending is then the ask's (backlog 741). */
+  const isAskRun = async (runId: Id): Promise<boolean> =>
+    unitOfWork.transaction(async (scope) => {
+      const row = await store.runs.load(scope.tx, runId);
+      return row !== null && row.stage === null && (row.askId ?? null) !== null;
+    });
+
+  /** An ask's ending, and the run's as its row then stores it — what `finish` answers. */
+  const settleAskRun = async (
+    request: SettleRunRequest,
+  ): Promise<Pick<SettleRunResult, 'kind' | 'ending'>> => {
+    if (options.settleAsk === undefined) {
+      throw new Error(
+        `run ${request.runId} serves an ask and this process composed no ask settle (backlog 741)`,
+      );
+    }
+    const settled = await options.settleAsk(request);
+    if (settled.kind === 'task_gone') {
+      return { kind: 'task_gone', ending: null };
+    }
+    const row = await unitOfWork.transaction(async (scope) =>
+      store.runs.lockSettlement(scope.tx, request.runId),
+    );
+    return {
+      kind: settled.kind,
+      ending:
+        row === null || isActiveRunStatus(row.status)
+          ? null
+          : {
+              runId: request.runId,
+              epoch: row.leaseEpoch,
+              status: row.status,
+              terminalReason: row.terminalReason,
+            },
+    };
   };
 
   const release: RemoteRuns['release'] = async (input) => {
@@ -641,14 +687,17 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
     },
 
     finish: async (input) => {
-      let settled: SettleRunResult;
+      const request: SettleRunRequest = {
+        runId: input.runId,
+        fence: { epoch: input.epoch, owner: workerLeaseOwner(input.workerId) },
+        outcome: input.outcome,
+        stopReason: input.stopReason,
+      };
+      let settled: Pick<SettleRunResult, 'kind' | 'ending'>;
       try {
-        settled = await options.settle({
-          runId: input.runId,
-          fence: { epoch: input.epoch, owner: workerLeaseOwner(input.workerId) },
-          outcome: input.outcome,
-          stopReason: input.stopReason,
-        });
+        settled = (await isAskRun(input.runId))
+          ? await settleAskRun(request)
+          : await options.settle(request);
       } catch (error) {
         if (error instanceof LeaseLostError) {
           return { kind: 'lease_lost' };

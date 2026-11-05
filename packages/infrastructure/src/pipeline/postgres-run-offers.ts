@@ -110,8 +110,9 @@ const RUNNING_ROLES = ['member', 'maintainer', 'admin'] as const;
  * **A remote worker's eligibility for offer `o`** (WP-281, TD-031 decision 8), checked inside the one
  * claim statement:
  *
- * - a **stage** offer — an ask's ending (TD-031 §13) is not served to a remote worker before WP-283,
- *   which composes the ask's settle on the worker routes;
+ * - a **stage** or an **ask** offer — since WP-283 (backlog 741) the worker routes compose the ask's
+ *   own ending (TD-031 §13), so an ask goes to the asker's worker inside its head start (the offer's
+ *   `assignee_user_id` is the asker) and then to the pool;
  * - the worker is not excluded from it (`excluded_worker_ids`, decisions 6 and 12);
  * - it holds the offer's run and egress images — the digests the offer names, or the core's own for
  *   an offer that names none (decision 4);
@@ -124,8 +125,7 @@ const RUNNING_ROLES = ['member', 'maintainer', 'admin'] as const;
  *   allow` (absent is `deny`, the default: such a project is excluded).
  */
 const WORKER_ELIGIBLE = `(
-         o.kind = 'stage'
-     and not ($7::uuid = any(o.excluded_worker_ids))
+         not ($7::uuid = any(o.excluded_worker_ids))
      and coalesce(o.image_digests ->> 'run', $9::text) = any($8::text[])
      and coalesce(o.image_digests ->> 'egress', $10::text) = any($8::text[])
      and exists (

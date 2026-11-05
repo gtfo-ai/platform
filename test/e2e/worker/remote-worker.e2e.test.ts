@@ -1,0 +1,680 @@
+/**
+ * **The first usable worker** — WP-283 criterion (4): two `apps/server` processes (`ROLE=worker` for
+ * the pipeline, `ROLE=api` for the worker protocol — neither with a launcher) and one or two
+ * `remote-worker`s (`../support/remote-worker.ts`: the production composition over HTTP, its own
+ * `apps/launcher` control plane relaying over the fake workspace provider, the scripted Claude CLI).
+ *
+ *  1. A task runs to **Ready** on remote workers alone; two workers never run one offer; the Claude
+ *     token reaches no request, no transcript row and no log line; every export precedes `finish`;
+ *     the run page names the worker (`seat`); and an **ask** is claimed by the asker's worker inside
+ *     its window, never by the other.
+ *  2. **Hybrid**: with the server's claimant full, the next run goes to the worker.
+ *  3. A **core restart** mid-run is survived — the run outlives the API process on its lease.
+ *  4. **Revoke** mid-run fences: the worker's next call is `401`, it stops and finishes nothing.
+ *  5. **Steer and cancel** arrive on the heartbeat and are acked applied.
+ *  6. A **take-over** of a remote deploy-key run pushes the branch **through the helper socket** and
+ *     records no tarball (backlog 688); the run page names the worker.
+ *  7. The **Autix shape** — a static operator token with `remote_run_credential: allow` — runs to
+ *     Ready with the token in the package and in no transcript row, tool body or log line; with
+ *     `deny` the worker claims nothing and the execution setting says why.
+ *  8. A **deploy-key** project with `allow` runs to Ready with no private key in any package or
+ *     create request, each mirror fetch signing once through the helper socket against the core's
+ *     oracle — the signature verified, the count on the offer (backlog 693).
+ */
+import { createPublicKey, verify } from 'node:crypto';
+import { FAKE_DEPLOY_KEY } from '@platform/application';
+import type { Id, JsonObject, RunPackage } from '@platform/contracts';
+import { secrets as secretAdapters } from '@platform/infrastructure';
+import { afterEach, describe, expect, it } from 'vitest';
+import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
+import {
+  APP_SECRET_KEY,
+  GIT_INTEGRATION_ID,
+  inboundEvent,
+  type PipelineE2E,
+  type ScenarioSpec,
+  startPipeline,
+} from '../support/pipeline.js';
+import type { CapturedCoreRequest, WorkerUnderTest } from '../support/remote-worker.js';
+import {
+  CORE_DIGESTS_ENV,
+  startCoreProxy,
+  startWorkerUnderTest,
+  WORKER_CLAUDE_TOKEN,
+} from '../support/remote-worker.js';
+import { featureScenarios, TICKETS } from '../support/scenarios.js';
+
+const cleanups: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) {
+    await cleanup();
+  }
+});
+
+/** Obviously fake (rule 93): a hyphen after FAKE, and no provider's real token pattern. */
+const STATIC_RUN_TOKEN = 'FAKE-wp283-static-operator-run-token-0001';
+const QUESTION = 'which module sums the footer?';
+const ANSWER = 'the invoice renderer sums the model';
+
+const ticketMatched = (pipeline: PipelineE2E, key = 'ACME-1') =>
+  inboundEvent('ticket.matched', {
+    project_id: pipeline.projectId,
+    ticket: {
+      provider: 'fake-task-management',
+      key,
+      url: `https://tickets.example.test/browse/${key}`,
+    },
+    rule: 'label:agentic',
+    priority: 'High',
+    issue_type: 'Story',
+    epic: null,
+    links: [],
+  });
+
+const signIn = async (baseUrl: string): Promise<Client> => {
+  const client = new Client(baseUrl);
+  const response = await client.post('/api/auth/sign-in/email', {
+    email: BOOTSTRAP_EMAIL,
+    password: BOOTSTRAP_PASSWORD,
+  });
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  return client;
+};
+
+const send = async (client: Client, path: string, body: unknown, key?: string) =>
+  client.json<Record<string, unknown>>(path, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(key === undefined ? {} : { 'idempotency-key': key }),
+    },
+    body: JSON.stringify(body),
+  });
+
+/** The harness's scenario for a claimed run: its stage's, or the ask's answer. */
+const scenarioFor =
+  (pipeline: PipelineE2E, overrides: Readonly<Record<string, Partial<ScenarioSpec>>> = {}) =>
+  (pkg: RunPackage): ScenarioSpec => {
+    if (pkg.run.stage === null) {
+      return {
+        costUsd: 0.05,
+        structuredOutput: { answer: ANSWER, citations: [], unanswered: [], confidence: 'high' },
+      };
+    }
+    const stage = pkg.run.stage;
+    const base = (featureScenarios(pipeline.world) as Record<string, ScenarioSpec>)[stage];
+    if (base === undefined) throw new Error(`no scenario for stage ${stage}`);
+    return { ...base, ...(overrides[stage] ?? {}) };
+  };
+
+interface Topology {
+  readonly pipeline: PipelineE2E;
+  readonly api: { readonly baseUrl: string; stop(): Promise<void> };
+  readonly captured: CapturedCoreRequest[];
+}
+
+/** The core: the pipeline on `ROLE=worker`, the worker protocol on `ROLE=api`; no launcher on either. */
+const core = async (
+  label: string,
+  options: {
+    readonly gitRunCredentials?: boolean;
+    readonly beforeReport?: Parameters<typeof startPipeline>[0]['beforeReport'];
+  } = {},
+): Promise<Topology> => {
+  const pipeline = await startPipeline({
+    scenarios: featureScenarios,
+    label,
+    tickets: TICKETS,
+    role: 'worker',
+    agent: 'none',
+    env: { APP_WORKER_IMAGE_DIGESTS: CORE_DIGESTS_ENV },
+    ...(options.gitRunCredentials === true ? { gitRunCredentials: true } : {}),
+    ...(options.beforeReport === undefined ? {} : { beforeReport: options.beforeReport }),
+  });
+  cleanups.push(() => pipeline.stop());
+  const api = await pipeline.addProcess({ name: 'api', role: 'api', agent: 'none' });
+  return { pipeline, api, captured: [] };
+};
+
+const worker = async (
+  topology: Topology,
+  options: Omit<Parameters<typeof startWorkerUnderTest>[1], 'captured' | 'coreUrl' | 'scenario'> & {
+    readonly coreUrl?: string;
+    readonly scenario?: (pkg: RunPackage) => ScenarioSpec;
+  },
+): Promise<WorkerUnderTest> => {
+  const started = await startWorkerUnderTest(topology.pipeline, {
+    ...options,
+    coreUrl: options.coreUrl ?? topology.api.baseUrl,
+    scenario: options.scenario ?? scenarioFor(topology.pipeline),
+    captured: topology.captured,
+  });
+  cleanups.push(() => started.stop());
+  return started;
+};
+
+const adminId = async (pipeline: PipelineE2E): Promise<string> => {
+  const [row] = await pipeline.query<{ id: string }>('select id from users where email = $1', [
+    BOOTSTRAP_EMAIL,
+  ]);
+  if (row === undefined) throw new Error('the bootstrap administrator has no row yet');
+  return row.id;
+};
+
+const setExecution = (
+  pipeline: PipelineE2E,
+  settings: {
+    readonly mode: 'hybrid' | 'workers_only' | 'server_only';
+    readonly prefer: 'server' | 'workers';
+    readonly fallbackAfterSeconds?: number | null;
+    readonly assigneeWindowSeconds?: number;
+  },
+) =>
+  pipeline.query(
+    `insert into project_execution_settings
+       (project_id, mode, prefer, fallback_after_seconds, assignee_window_seconds)
+     values ($1, $2, $3, $4, $5)
+     on conflict (project_id) do update
+       set mode = excluded.mode, prefer = excluded.prefer,
+           fallback_after_seconds = excluded.fallback_after_seconds,
+           assignee_window_seconds = excluded.assignee_window_seconds`,
+    [
+      pipeline.projectId,
+      settings.mode,
+      settings.prefer,
+      settings.fallbackAfterSeconds ?? null,
+      settings.assigneeWindowSeconds ?? 120,
+    ],
+  );
+
+/** Switches the seeded git integration to a static token or a deploy key, sealed as the API would. */
+const switchRunCredential = async (
+  pipeline: PipelineE2E,
+  shape: 'static' | 'deploy_key',
+  remote: 'allow' | 'deny',
+): Promise<void> => {
+  const key = secretAdapters.deriveSecretKey(APP_SECRET_KEY);
+  const [field, value] =
+    shape === 'static'
+      ? ['run_token', STATIC_RUN_TOKEN]
+      : ['run_ssh_private_key', FAKE_DEPLOY_KEY.privateKey];
+  const secretId = crypto.randomUUID();
+  await pipeline.query('insert into secrets (id, ciphertext, key_id) values ($1, $2, $3)', [
+    secretId,
+    secretAdapters.sealSecret(key, secretAdapters.secretDocument(field, value), secretId),
+    key.keyId,
+  ]);
+  const expires = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+  const config: JsonObject =
+    shape === 'static'
+      ? {
+          run_credential: 'static',
+          run_token_owner: 'operator',
+          run_token_username: 'agentic-runner',
+          run_token_expires_at: expires,
+          remote_run_credential: remote,
+        }
+      : {
+          run_credential: 'deploy_key',
+          run_ssh_public_key: FAKE_DEPLOY_KEY.publicKey,
+          remote_run_credential: remote,
+        };
+  await pipeline.query(
+    `update integrations
+        set config = config || $2::jsonb, secret_ids = secret_ids || array[$3::uuid]
+      where id = $1`,
+    [GIT_INTEGRATION_ID, JSON.stringify(config), secretId],
+  );
+};
+
+const ready = (pipeline: PipelineE2E) =>
+  pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
+
+/** Every stage run of the task, with who executed it. */
+const stageRuns = (pipeline: PipelineE2E) =>
+  pipeline.query<{
+    id: string;
+    stage: string | null;
+    status: string;
+    worker_id: string | null;
+    claimant_kind: string | null;
+    lease_epoch: number | null;
+    ssh_signatures: number | null;
+  }>(
+    `select r.id, r.stage, r.status::text as status, r.worker_id, o.claimant_kind::text,
+            o.lease_epoch, o.ssh_signatures
+       from runs r left join run_offers o on o.run_id = r.id
+      order by r.created_at`,
+  );
+
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const verifiesWithDeployKey = (data: Buffer, signatureBlob: Buffer): boolean => {
+  const raw = Buffer.from(FAKE_DEPLOY_KEY.publicKey.split(' ')[1] ?? '', 'base64').subarray(19);
+  const key = createPublicKey({
+    key: Buffer.concat([ED25519_SPKI_PREFIX, raw]),
+    format: 'der',
+    type: 'spki',
+  });
+  return verify(null, data, key, signatureBlob.subarray(19));
+};
+
+describe('the first usable worker (WP-283)', () => {
+  it('runs a task to Ready on remote workers, one claim per offer, the token nowhere, and the asker’s worker takes the ask', async () => {
+    const topology = await core('worker-ready');
+    const { pipeline } = topology;
+    // Workers only, preferred: a stage offer (no assignee, backlog 730) is open to both at once,
+    // and an ask is the asker's alone for the hour of its window (TD-031 §§8, 13).
+    await setExecution(pipeline, {
+      mode: 'workers_only',
+      prefer: 'workers',
+      assigneeWindowSeconds: 3_600,
+    });
+    const admin = await signIn(topology.api.baseUrl);
+    const sequence: string[] = [];
+    const logs: string[] = [];
+    const asker = await worker(topology, {
+      name: 'asker-laptop',
+      userId: await adminId(pipeline),
+      sequence,
+      logs,
+      echo: () => `my token is ${WORKER_CLAUDE_TOKEN}`,
+    });
+    const other = await worker(topology, {
+      name: 'other-laptop',
+      sequence,
+      logs,
+      echo: () => `my token is ${WORKER_CLAUDE_TOKEN}`,
+    });
+
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await ready(pipeline);
+
+    const runs = await stageRuns(pipeline);
+    expect(runs.length).toBeGreaterThan(3);
+    for (const run of runs) {
+      // Every run on a worker, under its first and only claim.
+      expect(run, run.stage ?? 'ask').toMatchObject({
+        status: 'completed',
+        claimant_kind: 'worker',
+        lease_epoch: 1,
+      });
+      expect([asker.workerId, other.workerId]).toContain(run.worker_id);
+    }
+    // Two workers never ran one offer: each run was claimed once and packaged to one worker.
+    const claimed = await pipeline.query<{ run_id: string; claims: number }>(
+      `select stream_id as run_id, count(*)::int as claims from events
+        where type = 'run.claimed' group by stream_id`,
+    );
+    expect(claimed.every((row) => row.claims === 1)).toBe(true);
+    const packaged = [...asker.packages, ...other.packages].map((pkg) => pkg.runId);
+    expect(new Set(packaged).size).toBe(packaged.length);
+    expect(packaged.sort()).toEqual(runs.map((run) => run.id).sort());
+
+    // The Claude token: in no request, no stored transcript row, no log line — and redacted, not
+    // absent, where the model said it (rule 42's positive half).
+    expect(topology.captured.length).toBeGreaterThan(0);
+    for (const request of topology.captured) {
+      expect(`${request.verb} ${request.body}`).not.toContain(WORKER_CLAUDE_TOKEN);
+      expect(JSON.stringify(request.headers)).not.toContain(WORKER_CLAUDE_TOKEN);
+    }
+    const transcript = await pipeline.transcript();
+    expect(JSON.stringify(transcript)).not.toContain(WORKER_CLAUDE_TOKEN);
+    expect(JSON.stringify(transcript)).toContain('[REDACTED:integration:claude_code_oauth_token]');
+    expect(logs.join('\n')).not.toContain(WORKER_CLAUDE_TOKEN);
+
+    // Every export (the workspace's end) before the run's finish (amendment §4).
+    for (const run of runs) {
+      const end = sequence.indexOf(`end:${run.id}`);
+      expect(end, run.id).toBeGreaterThan(-1);
+      expect(end).toBeLessThan(sequence.indexOf(`finish:${run.id}`));
+    }
+
+    // The run page names who executed the run (WP-283 (5)).
+    const first = runs[0] as (typeof runs)[number];
+    const page = await admin.json<{ seat: unknown }>(`/api/runs/${first.id}`);
+    expect(page.status).toBe(200);
+    expect(page.body.seat).toMatchObject({
+      kind: 'worker',
+      worker_id: first.worker_id,
+      worker_name: first.worker_id === asker.workerId ? 'asker-laptop' : 'other-laptop',
+    });
+
+    // The ask: the administrator asks, so the administrator's worker has the window.
+    const task = await pipeline.task();
+    const asked = await send(admin, `/api/tasks/${task.id}/ask`, { question: QUESTION }, 'ask-1');
+    expect(asked.status, JSON.stringify(asked.body)).toBe(200);
+    await pipeline.waitFor('the ask to be answered', async () => {
+      const rows = await pipeline.query<{ status: string }>('select status from task_asks');
+      return rows[0]?.status === 'answered';
+    });
+    const [askRun] = await pipeline.query<{ worker_id: string; kind: string }>(
+      `select o.worker_id, o.kind::text as kind from run_offers o
+         join task_asks a on a.run_id = o.run_id`,
+    );
+    expect(askRun).toEqual({ worker_id: asker.workerId, kind: 'ask' });
+  }, 300_000);
+
+  it('gives the worker the next run while the server’s claimant is full (hybrid)', async () => {
+    let releaseServer: () => void = () => {};
+    const serverHeld = new Promise<void>((resolve) => {
+      releaseServer = resolve;
+    });
+    const topology = await core('worker-hybrid', {
+      // The server's one slot is held on its first run until the worker has taken the other.
+      beforeReport: (spec) => (spec.stage === 'refinement' ? serverHeld : undefined),
+    });
+    const { pipeline } = topology;
+    await setExecution(pipeline, { mode: 'hybrid', prefer: 'server', fallbackAfterSeconds: 1 });
+    const runner = await pipeline.addProcess({
+      name: 'runner',
+      role: 'worker',
+      agent: 'fake-runner',
+      env: { APP_RUNNER_CONCURRENCY: '1' },
+    });
+    cleanups.push(() => runner.stop());
+    // Run before the runner's stop (cleanups run in reverse): a held run would hold its stop too.
+    cleanups.push(async () => releaseServer());
+    const laptop = await worker(topology, { name: 'hybrid-laptop' });
+
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-1'), ticketMatched(pipeline, 'ACME-2')]);
+    await pipeline.waitFor('one refinement on each side', async () => {
+      const rows = await pipeline.query<{ claimant_kind: string | null }>(
+        `select o.claimant_kind::text from run_offers o where o.stage = 'refinement'
+            and o.state in ('claimed', 'settled')`,
+      );
+      return rows.length === 2;
+    });
+    releaseServer();
+    const sides = await pipeline.query<{ claimant_kind: string; worker_id: string | null }>(
+      `select o.claimant_kind::text, o.worker_id from run_offers o where o.stage = 'refinement'
+        order by o.claimed_at`,
+    );
+    expect(sides.map((side) => side.claimant_kind).sort()).toEqual(['server', 'worker']);
+    expect(sides.find((side) => side.claimant_kind === 'worker')?.worker_id).toBe(laptop.workerId);
+  }, 300_000);
+
+  it('survives a core restart mid-run: the run outlives the API process on its lease', async () => {
+    const topology = await core('worker-restart');
+    const { pipeline } = topology;
+    const proxy = await startCoreProxy(topology.api.baseUrl);
+    cleanups.push(() => proxy.close());
+    let reachedRefinement: () => void = () => {};
+    const atRefinement = new Promise<void>((resolve) => {
+      reachedRefinement = resolve;
+    });
+    let releaseRun: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    await worker(topology, {
+      name: 'restart-laptop',
+      coreUrl: proxy.url,
+      hold: async (pkg) => {
+        if (pkg.run.stage !== 'refinement') return;
+        reachedRefinement();
+        await released;
+      },
+    });
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await atRefinement;
+
+    // The API process goes away mid-run; the worker's calls fail and are retried.
+    proxy.retarget(null);
+    await topology.api.stop();
+    const replacement = await pipeline.addProcess({ name: 'api-2', role: 'api', agent: 'none' });
+    proxy.retarget(replacement.baseUrl);
+    releaseRun();
+
+    await ready(pipeline);
+    const [refinement] = await pipeline.query<{ status: string; lease_epoch: number }>(
+      `select r.status::text as status, o.lease_epoch from runs r join run_offers o on o.run_id = r.id
+        where r.stage = 'refinement'`,
+    );
+    // The same run under its first claim — never re-offered.
+    expect(refinement).toEqual({ status: 'completed', lease_epoch: 1 });
+  }, 300_000);
+
+  it('fences a revoked worker mid-run: its next call is 401, it stops and finishes nothing', async () => {
+    const topology = await core('worker-revoke');
+    const { pipeline } = topology;
+    const laptop = await worker(topology, {
+      name: 'revoked-laptop',
+      // The refinement waits for a user turn that never comes, so only the revoke can end it.
+      scenario: scenarioFor(pipeline, { refinement: { awaitSteers: 1 } }),
+    });
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await pipeline.waitFor('the refinement run to be running', async () => {
+      const rows = await pipeline.query("select 1 from runs where status = 'running'");
+      return rows.length === 1;
+    });
+    const [run] = await pipeline.query<{ id: string }>(
+      "select id from runs where status = 'running'",
+    );
+    const admin = await signIn(topology.api.baseUrl);
+    const revoked = await admin.json(`/api/workers/${laptop.workerId}`, { method: 'DELETE' });
+    expect(revoked.status, JSON.stringify(revoked.body)).toBeLessThan(300);
+
+    await pipeline.waitFor('the worker to stop the session', async () =>
+      laptop.runtime.history.some((session) => session.state.ending === 'lease_lost'),
+    );
+    expect(
+      topology.captured.some(
+        (request) => request.verb === 'runs/:id/finish' && request.worker === laptop.name,
+      ),
+    ).toBe(false);
+    // The workspace was given back (destroyed), and with no export.
+    expect(laptop.launcherEnds.map((end) => end.runId)).toContain(run?.id);
+    expect(laptop.launcherEnds.find((end) => end.runId === run?.id)?.body.export).toBeNull();
+    // The revoke expired the lease in its own transaction (WP-280), for the sweep to end the row.
+    const [lease] = await pipeline.query<{ expired: boolean }>(
+      'select lease_expires_at <= now() as expired from runs where id = $1',
+      [run?.id],
+    );
+    expect(lease?.expired).toBe(true);
+  }, 300_000);
+
+  it('delivers a steer and a cancel on the heartbeat, each acked applied', async () => {
+    const topology = await core('worker-steer-cancel');
+    const { pipeline } = topology;
+    const laptop = await worker(topology, {
+      name: 'steered-laptop',
+      scenario: scenarioFor(pipeline, { refinement: { awaitSteers: 2 } }),
+    });
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await pipeline.waitFor('the refinement run to be running', async () => {
+      const rows = await pipeline.query("select 1 from runs where status = 'running'");
+      return rows.length === 1;
+    });
+    const [run] = await pipeline.query<{ id: string }>(
+      "select id from runs where status = 'running'",
+    );
+    const runId = run?.id as string;
+    const admin = await signIn(topology.api.baseUrl);
+    const steer = await send(
+      admin,
+      `/api/runs/${runId}/steer`,
+      { message: 'mind the footer' },
+      's1',
+    );
+    expect(steer.status, JSON.stringify(steer.body)).toBe(202);
+    await pipeline.waitFor('the steer to be applied', async () => {
+      const rows = await pipeline.query(
+        "select 1 from run_commands where run_id = $1 and kind = 'steer' and applied_at is not null",
+        [runId],
+      );
+      return rows.length === 1;
+    });
+    expect(JSON.stringify(laptop.clis.get(runId)?.stdin)).toContain('mind the footer');
+
+    const cancel = await send(admin, `/api/runs/${runId}/cancel`, {}, 'c1');
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(202);
+    await pipeline.waitFor('the run to end cancelled', async () => {
+      const [row] = await pipeline.query<{ status: string }>(
+        'select status::text as status from runs where id = $1',
+        [runId],
+      );
+      return row?.status === 'cancelled';
+    });
+    const [command] = await pipeline.query<{ applied: boolean }>(
+      "select applied_at is not null as applied from run_commands where run_id = $1 and kind = 'cancel'",
+      [runId],
+    );
+    expect(command?.applied).toBe(true);
+  }, 300_000);
+
+  it('takes over a remote deploy-key run: the branch pushed through the helper socket, no tarball', async () => {
+    const topology = await core('worker-take-over', { gitRunCredentials: true });
+    const { pipeline } = topology;
+    await switchRunCredential(pipeline, 'deploy_key', 'allow');
+    const laptop = await worker(topology, {
+      name: 'taken-laptop',
+      scenario: scenarioFor(pipeline, { refinement: { awaitSteers: 1 } }),
+    });
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await pipeline.waitFor('the refinement run to be running', async () => {
+      const rows = await pipeline.query("select 1 from runs where status = 'running'");
+      return rows.length === 1;
+    });
+    const [run] = await pipeline.query<{ id: string }>(
+      "select id from runs where status = 'running'",
+    );
+    const runId = run?.id as string;
+    const task = await pipeline.task();
+    const admin = await signIn(topology.api.baseUrl);
+    const taken = await send(admin, `/api/tasks/${task.id}/take-over`, { tarball: true }, 't1');
+    expect(taken.status, JSON.stringify(taken.body)).toBeLessThan(300);
+    await pipeline.waitFor('the run to end', async () => {
+      const [row] = await pipeline.query<{ status: string }>(
+        'select status::text as status from runs where id = $1',
+        [runId],
+      );
+      return row?.status === 'cancelled';
+    });
+
+    // The stop was recorded with no tarball, and the worker's launcher was asked for none.
+    const [command] = await pipeline.query<{ payload: JsonObject }>(
+      "select payload from run_commands where run_id = $1 and kind = 'take_over'",
+      [runId],
+    );
+    expect(command?.payload).toMatchObject({ tarball: false });
+    const end = laptop.launcherEnds.find((entry) => entry.runId === runId);
+    expect(end?.body.export).toMatchObject({ tarball: false });
+    // The mirror fetch and the export's push each signed once, through the helper socket, by the
+    // core's oracle — and the core counted both on the run's offer.
+    const kinds = laptop.provider.relayedSignatures.map((signature) => signature.kind);
+    expect(kinds).toEqual(['mirror', 'export']);
+    for (const signature of laptop.provider.relayedSignatures) {
+      expect(verifiesWithDeployKey(signature.data, signature.signature)).toBe(true);
+    }
+    const [offer] = await pipeline.query<{ ssh_signatures: number }>(
+      'select ssh_signatures from run_offers where run_id = $1',
+      [runId],
+    );
+    expect(offer?.ssh_signatures).toBe(2);
+    // The run page names the worker that executed it.
+    const page = await admin.json<{ seat: unknown }>(`/api/runs/${runId}`);
+    expect(page.body.seat).toMatchObject({ kind: 'worker', worker_id: laptop.workerId });
+  }, 300_000);
+
+  it('runs the Autix shape — a static operator token, allowed — to Ready with the token in no row; denied, the worker claims nothing and the setting says why', async () => {
+    const topology = await core('worker-autix', { gitRunCredentials: true });
+    const { pipeline } = topology;
+    await setExecution(pipeline, { mode: 'workers_only', prefer: 'workers' });
+    await switchRunCredential(pipeline, 'static', 'allow');
+    const logs: string[] = [];
+    const laptop = await worker(topology, {
+      name: 'autix-laptop',
+      logs,
+      echo: () => `the push token is ${STATIC_RUN_TOKEN}`,
+    });
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await ready(pipeline);
+
+    // In the package — the claim carried it to the worker…
+    expect(laptop.packages.length).toBeGreaterThan(0);
+    for (const pkg of laptop.packages) {
+      if (pkg.workspace.repo === null) continue;
+      expect(pkg.credential).toMatchObject({ source: 'static', password: STATIC_RUN_TOKEN });
+    }
+    // …and in no transcript row, tool call body or log line.
+    const transcript = JSON.stringify(await pipeline.transcript());
+    expect(transcript).not.toContain(STATIC_RUN_TOKEN);
+    expect(transcript).toContain('REDACTED');
+    for (const request of topology.captured) {
+      if (request.verb.startsWith('runs/:id/tools/') || request.verb === 'runs/:id/transcript') {
+        expect(request.body).not.toContain(STATIC_RUN_TOKEN);
+      }
+    }
+    expect(logs.join('\n')).not.toContain(STATIC_RUN_TOKEN);
+
+    // Denied: a second task's offer is never the worker's, and the setting says why.
+    await pipeline.query(
+      `update integrations set config = config || '{"remote_run_credential":"deny"}'::jsonb
+        where id = $1`,
+      [GIT_INTEGRATION_ID],
+    );
+    const before = laptop.packages.length;
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-2')]);
+    await pipeline.waitFor('the second task’s offer to be open', async () => {
+      const rows = await pipeline.query(
+        "select 1 from run_offers o join tasks t on t.id = o.task_id where t.ticket_key = 'ACME-2' and o.state = 'open'",
+      );
+      return rows.length === 1;
+    });
+    // Several of the worker's held claims answer 204 meanwhile (each holds up to 25 s).
+    const claimsBefore = topology.captured.filter((request) => request.verb === 'claims').length;
+    await pipeline.waitFor(
+      'two more claims to be answered',
+      async () =>
+        topology.captured.filter((request) => request.verb === 'claims').length >= claimsBefore + 2,
+    );
+    expect(laptop.packages.length).toBe(before);
+    const admin = await signIn(topology.api.baseUrl);
+    const execution = await admin.json<{ notice: string | null }>(
+      `/api/projects/${pipeline.projectId}/execution`,
+    );
+    expect(execution.status).toBe(200);
+    expect(execution.body.notice).toContain('remote_run_credential: allow');
+  }, 300_000);
+
+  it('runs a deploy-key project to Ready with no private key anywhere, each mirror signing once through the helper socket', async () => {
+    const topology = await core('worker-deploy-key', { gitRunCredentials: true });
+    const { pipeline } = topology;
+    await switchRunCredential(pipeline, 'deploy_key', 'allow');
+    const laptop = await worker(topology, { name: 'deploy-key-laptop' });
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await ready(pipeline);
+
+    const keyBody = FAKE_DEPLOY_KEY.privateKey
+      .split('\n')
+      .filter((line) => !line.startsWith('-----') && line.length > 20);
+    const carried = JSON.stringify([laptop.packages, laptop.launcherCreates]);
+    for (const fragment of keyBody) {
+      expect(carried).not.toContain(fragment);
+    }
+    const repoRuns = laptop.packages.filter((pkg) => pkg.workspace.repo !== null);
+    expect(repoRuns.length).toBeGreaterThan(0);
+    for (const pkg of repoRuns) {
+      expect(pkg.credential).toBeNull();
+      expect(pkg.workspace.repo?.ssh?.connectHost).toBe('altssh.git.example.test');
+    }
+    for (const create of laptop.launcherCreates) {
+      if ((create.spec as { repo: unknown }).repo === null) continue;
+      expect(create).toMatchObject({ credential: null });
+      expect(create.helperAgentSocket).toMatch(/^helper-[0-9a-f-]{36}\/agent\.sock$/);
+    }
+    // One signature per mirror fetch — one per run with a checkout — each the core's, verified.
+    const mirrors = laptop.provider.relayedSignatures.filter(
+      (signature) => signature.kind === 'mirror',
+    );
+    expect(mirrors).toHaveLength(repoRuns.length);
+    for (const signature of mirrors) {
+      expect(verifiesWithDeployKey(signature.data, signature.signature)).toBe(true);
+    }
+    const counted = await pipeline.query<{ run_id: Id; ssh_signatures: number }>(
+      'select run_id, ssh_signatures from run_offers where run_id = any($1::uuid[])',
+      [repoRuns.map((pkg) => pkg.runId)],
+    );
+    expect(counted.every((row) => row.ssh_signatures === 1)).toBe(true);
+  }, 300_000);
+});

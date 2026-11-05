@@ -8,6 +8,8 @@
  *   POST /api/worker/v1/runs/:id/spawn          run token
  *   POST /api/worker/v1/runs/:id/finish         run token
  *   POST /api/worker/v1/runs/:id/late-cost      run token
+ *   GET  /api/worker/v1/release                 worker credential (WP-284)
+ *   GET  /api/worker/v1/compose.yml             worker credential (WP-284)
  *
  * and, registered from here with the same authentication (WP-282, `run-calls.ts`): `transcript`,
  * `tools/:name`, `approvals`, `session` and `ssh-sign`. The heartbeat delivers the run's decided
@@ -78,6 +80,7 @@ import {
   workerLateCostResponseSchema,
   workerLeaseLostBodySchema,
   workerPauseReasonSchema,
+  workerReleaseResponseSchema,
   workerRunReleaseRequestSchema,
   workerSpawnRequestSchema,
   workerSpawnResponseSchema,
@@ -163,6 +166,8 @@ export interface WorkerProtocolRoutesOptions {
    */
   readonly runCalls?: RemoteRunCalls | null;
   readonly release: () => WorkerRelease | null;
+  /** Why `release()` is `null`, naming the image (WP-284) — the `503 digests_unresolved`'s words. */
+  readonly unresolved?: () => string | null;
   /** Where offers and commands are announced — the process's one `LISTEN`; `null` holds by time. */
   readonly broadcast: Broadcast | null;
   readonly now?: () => Date;
@@ -195,11 +200,13 @@ const leaseLost = (runId: string): HttpError =>
     `run ${runId} is not held under this claim any more: stop the session and destroy the workspace (TD-031 §2)`,
   );
 
-const digestsUnresolved = (): HttpError =>
+const digestsUnresolved = (why: string | null = null): HttpError =>
   new HttpError(
     503,
     'digests_unresolved',
-    'this core cannot name its image digests (APP_WORKER_IMAGE_DIGESTS is unset), so it advertises and packages nothing',
+    why === null
+      ? 'this core cannot name its image digests yet (it resolves them from its registry, or APP_WORKER_IMAGE_DIGESTS pins them), so it advertises and packages nothing'
+      : `this core cannot name its image digests, so it advertises and packages nothing: ${why}`,
   );
 
 /** The protocol the request spoke; the check has already admitted it. */
@@ -306,6 +313,7 @@ export const registerWorkerProtocolRoutes = async (
   const claimPollMs = options.claimPollMs ?? WORKER_CLAIM_POLL_MS;
   const path = (verb: string): string => `${WORKER_API_PREFIX}/${verb}`;
   const remote = options.remoteRuns ?? unavailableRemoteRuns;
+  const unresolved = (): HttpError => digestsUnresolved(options.unresolved?.() ?? null);
 
   /**
    * **Authentication runs in `preValidation`** — after the protocol check, before the body is
@@ -362,6 +370,22 @@ export const registerWorkerProtocolRoutes = async (
     return { workerId: subject.workerId, row };
   };
 
+  /** A worker verb with no body: the contact is recorded, no digests reported. */
+  const workerContact = async (request: FastifyRequest): Promise<void> => {
+    const subject = workers.get(request);
+    if (subject === undefined) {
+      throw unauthenticated('the worker credential is missing');
+    }
+    const row = await options.store.recordContact({
+      workerId: subject.workerId,
+      protocolVersion: protocolOf(request),
+      imageDigests: null,
+    });
+    if (row === null) {
+      throw unauthenticated('the worker credential names no worker');
+    }
+  };
+
   /** The run the token authenticated — only its own. */
   const runHolder = (request: FastifyRequest): RunTokenSubject => {
     const subject = runs.get(request);
@@ -400,7 +424,7 @@ export const registerWorkerProtocolRoutes = async (
       const { row } = await worker(request, request.body.image_digests);
       const release = options.release();
       if (release === null) {
-        throw digestsUnresolved();
+        throw unresolved();
       }
       const paused = row.pausedUntil !== null && row.pausedUntil.getTime() > now().getTime();
       return {
@@ -445,7 +469,7 @@ export const registerWorkerProtocolRoutes = async (
       const { workerId } = await worker(request, request.body.image_digests);
       const release = options.release();
       if (release === null) {
-        throw digestsUnresolved();
+        throw unresolved();
       }
       if (request.body.paused) {
         return reply.code(204).send(null);
@@ -718,6 +742,71 @@ export const registerWorkerProtocolRoutes = async (
         case 'run_gone':
           throw new HttpError(410, 'run_gone', `run ${runId} no longer exists`);
       }
+    },
+  );
+
+  typed.get(
+    path(WORKER_PATHS.release),
+    {
+      preValidation: authenticateWorker,
+      schema: {
+        summary: 'This core’s image digests and protocol range (TD-032 decision 3)',
+        description:
+          'Worker credential. The core’s four images by digest — its own `sha-<7>` tags resolved with the anonymous OCI `HEAD`, or `APP_WORKER_IMAGE_DIGESTS` — and the protocol range it serves. No compose file: an updater applies digests only and reads the template from the verified new image (TD-032 §3). `503 digests_unresolved` naming the image while they cannot be resolved (WP-284).',
+        tags: ['worker'],
+        response: {
+          200: workerReleaseResponseSchema,
+          401: apiErrorSchema,
+          426: workerUpgradeRequiredBodySchema,
+          503: apiErrorSchema,
+        },
+      },
+    },
+    async (request): Promise<z.output<typeof workerReleaseResponseSchema>> => {
+      await workerContact(request);
+      const release = options.release();
+      if (release === null) {
+        throw unresolved();
+      }
+      return {
+        protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [...ACCEPTED_WORKER_PROTOCOLS] },
+        digests: release.digests,
+      };
+    },
+  );
+
+  typed.get(
+    path(WORKER_PATHS.composeFile),
+    {
+      preValidation: authenticateWorker,
+      schema: {
+        summary:
+          '`compose.worker.yml`, pinned to this core’s digests — first install only (TD-032 §3)',
+        description:
+          'Worker credential. The template baked into this core’s image (`/opt/platform/compose.worker.yml`) with every platform image pinned **by digest** to this core’s own and `APP_CORE_URL` defaulted to this core — for a person to read and run on a first install (BD-032 decision 9). No updater ever applies a file the core served. Its SHA-256 is the handshake’s `compose_bundle_digest`. `503 digests_unresolved` naming the image, or `503 compose_template_unavailable` (WP-284).',
+        tags: ['worker'],
+        // **No `response` block**, for `transcript.jsonl`'s reason (`downloads.ts`): the body is a
+        // YAML file, not one JSON document, and a serialiser compiled for one would quote it.
+      },
+    },
+    async (request, reply) => {
+      await workerContact(request);
+      const release = options.release();
+      if (release === null) {
+        throw unresolved();
+      }
+      if (release.composeFile === null) {
+        throw new HttpError(
+          503,
+          'compose_template_unavailable',
+          'this core’s image carries no readable compose.worker.yml template (or one whose images cannot all be pinned by digest), so it serves no compose file',
+        );
+      }
+      return reply
+        .code(200)
+        .header('content-type', 'application/yaml; charset=utf-8')
+        .header('content-disposition', 'attachment; filename="compose.worker.yml"')
+        .send(release.composeFile);
     },
   );
 

@@ -2534,11 +2534,31 @@ export const retryDefaultsSchema = z.strictObject({
 });
 
 /**
+ * Who holds a run (S-23.15, TD-033 decision 8 (b)): the server's own claimant or a named worker,
+ * read off the run's offer (`run_offers.claimant_kind`, migration 0094) and the worker it names
+ * (`run_offers.worker_id`, else `runs.worker_id`, migration 0096). `null` on the agents item is
+ * *not claimed yet* — an open offer, or a run with no offer row. `worker_name` is the machine's
+ * name its owner chose: untrusted text (BD-022), rendered as text.
+ */
+export const runSeatSchema = z.strictObject({
+  kind: z.enum(['server', 'worker']),
+  worker_id: idSchema.nullable(),
+  worker_name: nonEmptyStringSchema.max(200).nullable(),
+});
+export type RunSeat = z.infer<typeof runSeatSchema>;
+
+/**
  * `GET /api/runs/:run_id` — the run's record plus `retry_defaults` (WP-167). `retry_defaults` is
  * `null` exactly for an ask run (`stage: null`), which has no stage to run again.
+ *
+ * `seat` (WP-283 (5)) is who **executed** the run — the server's claimant or a named worker, the
+ * agents list's own {@link runSeatSchema}, read off `runs.worker_id` and the run's offer — so the run
+ * page can say *executed by*. `null` while no claimant took it. Optional on the wire for one change:
+ * the server always sends it, and the run page reads it from S-23.10's summary strip.
  */
 export const runReadResponseSchema = runRecordSchema.extend({
   retry_defaults: retryDefaultsSchema.nullable(),
+  seat: runSeatSchema.nullable().optional(),
 });
 
 export const steerRunRequestSchema = z.strictObject({
@@ -2580,20 +2600,6 @@ export const orgModelsResponseSchema = z.strictObject({
   // The retry's own bound: an id past 128 characters is not listed (`queries/cost-queries.ts`).
   models: z.array(z.strictObject({ model_id: nonEmptyStringSchema.max(128) })),
 });
-
-/**
- * Who holds a run (S-23.15, TD-033 decision 8 (b)): the server's own claimant or a named worker,
- * read off the run's offer (`run_offers.claimant_kind`, migration 0094) and the worker it names
- * (`run_offers.worker_id`, else `runs.worker_id`, migration 0096). `null` on the agents item is
- * *not claimed yet* — an open offer, or a run with no offer row. `worker_name` is the machine's
- * name its owner chose: untrusted text (BD-022), rendered as text.
- */
-export const runSeatSchema = z.strictObject({
-  kind: z.enum(['server', 'worker']),
-  worker_id: idSchema.nullable(),
-  worker_name: nonEmptyStringSchema.max(200).nullable(),
-});
-export type RunSeat = z.infer<typeof runSeatSchema>;
 
 /** The longest tool name {@link runActivitySchema} publishes; a longer one is published as `other`. */
 export const RUN_ACTIVITY_TOOL_NAME_MAX_CHARS = 64;

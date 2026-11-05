@@ -39,6 +39,7 @@ import { ticketLifecycleSchema } from '@platform/contracts';
 import * as z from 'zod';
 import { isFakeLogSelector } from '../logs/fake.js';
 import type { AnyProviderRegistration } from '../registry.js';
+import type { StaticRunCredentialSupport } from '../static-run-credential.js';
 
 /**
  * The delivery body as the adapter's normaliser may read it: the loader's redactor applied to the
@@ -97,6 +98,39 @@ export interface FakeRegistrationOptions<TPort> {
   readonly token: string;
 }
 
+/**
+ * The fake git provider's **run credentials beside minting** (WP-283): TD-028 decision 13's static
+ * run token and decision 13b's deploy key, under GitLab's own key names, read by the **production**
+ * readers (`staticRunCredentialOf`, `deployKeyRunCredentialOf`) exactly as GitLab's are. Its SSH
+ * route is the fake host's — `altssh.git.example.test:443` — since no other host is ever asked.
+ */
+export const FAKE_GIT_RUN_CREDENTIAL: StaticRunCredentialSupport = {
+  modeField: 'run_credential',
+  tokenField: 'run_token',
+  apiTokenField: 'token',
+  usernameField: 'run_token_username',
+  expiresAtField: 'run_token_expires_at',
+  mintingField: 'mint_credentials',
+  maxLifetimeDays: 90,
+  ownerField: 'run_token_owner',
+  scopeProofHint: 'fake git: this token can call the fake API',
+  deployKey: {
+    modeValue: 'deploy_key',
+    privateKeyField: 'run_ssh_private_key',
+    publicKeyField: 'run_ssh_public_key',
+    sshRoute: () => ({
+      httpsPrefix: 'https://git.example.test/',
+      sshPrefix: 'ssh://git@altssh.git.example.test:443/',
+      connectHost: 'altssh.git.example.test',
+      connectPort: 443,
+      hostKeyAlias: 'git.example.test',
+      knownHosts: [
+        'git.example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEFAKEFAKEFAKEFAKEFAKE',
+      ],
+    }),
+  },
+};
+
 const refuseWrongToken = (providerId: string, expected: string, actual: unknown): void => {
   if (actual !== expected) {
     // Never the value: this message reaches a log and a test failure.
@@ -126,6 +160,17 @@ const fakeGitConfigSchema = z.strictObject({
    * tier states it here. Absent is `false`: a poll-only binding, GitLab's answer with no secret.
    */
   receives_webhooks: z.boolean().default(false),
+  // WP-283: the run credentials of {@link FAKE_GIT_RUN_CREDENTIAL}, under GitLab's key names, and the
+  // remote-worker opt-in the claim reads off `integrations.config` (Q124 (a)).
+  run_credential: z.enum(['minted', 'static', 'deploy_key']).optional(),
+  run_token: z.string().min(1).optional(),
+  run_token_username: z.string().min(1).optional(),
+  run_token_expires_at: z.string().optional(),
+  run_token_owner: z.enum(['dedicated_user', 'operator']).optional(),
+  mint_credentials: z.boolean().optional(),
+  run_ssh_private_key: z.string().min(1).optional(),
+  run_ssh_public_key: z.string().min(1).optional(),
+  remote_run_credential: z.enum(['allow', 'deny']).optional(),
 });
 
 /** The prebuilt git port, answering `pollPlan()` from **this binding's** config (WP-110). */
@@ -144,7 +189,10 @@ const withGitPollPlan = (port: GitProviderPort, config: unknown): GitProviderPor
 };
 
 export const fakeGitRegistration = (
-  options: FakeRegistrationOptions<GitProviderPort>,
+  options: FakeRegistrationOptions<GitProviderPort> & {
+    /** WP-283: declare {@link FAKE_GIT_RUN_CREDENTIAL}, so a binding may name a static token or a deploy key. */
+    readonly runCredentials?: boolean;
+  },
 ): AnyProviderRegistration => ({
   id: FAKE_GIT_PROVIDER_ID,
   type: 'git',
@@ -167,6 +215,12 @@ export const fakeGitRegistration = (
       shape: 'fake git: the fake declares its prefix as `credentialPrefix`',
     },
   },
+  ...(options.runCredentials === true
+    ? {
+        staticRunCredential: FAKE_GIT_RUN_CREDENTIAL,
+        secretFields: ['token', 'run_token', 'run_ssh_private_key'],
+      }
+    : {}),
   create: ({ config, secrets, redactor }) => {
     refuseWrongToken(FAKE_GIT_PROVIDER_ID, options.token, secrets.token);
     return withGitPollPlan(withInboundRedactor(options.port, redactor), config);

@@ -22,7 +22,7 @@
  * 714's re-check under concurrency) are PostgreSQL's and are asserted in
  * `test/integration/pipeline/remote-claim.integration.test.ts`.
  */
-import { createPublicKey, verify } from 'node:crypto';
+import { createHash, createPublicKey, verify } from 'node:crypto';
 import {
   createRemoteRunCalls,
   createRemoteRuns,
@@ -50,6 +50,7 @@ import {
   workerHeartbeatResponseSchema,
   workerLateCostResponseSchema,
   workerLeaseLostBodySchema,
+  workerReleaseResponseSchema,
   workerSpawnResponseSchema,
   workerSshSignResponseSchema,
   workerToolCallResponseSchema,
@@ -71,6 +72,7 @@ import {
   type MemoryWorkerStore,
 } from '../../../apps/server/src/queries/worker-store-memory.js';
 import { SseHub } from '../../../apps/server/src/sse/hub.js';
+import { readWorkerComposeTemplate } from '../../../apps/server/src/workers/compose.js';
 import { workerReleaseOf } from '../../../apps/server/src/workers/release.js';
 import {
   hashSecret,
@@ -332,7 +334,12 @@ const world = async (
           },
           maxSignatures: 2,
         });
-  const release = workerReleaseOf(options.release === false ? null : DIGESTS);
+  // WP-284: the shipped template, rendered for this core — the compose bundle digest is its own.
+  const release = workerReleaseOf(options.release === false ? null : DIGESTS, {
+    template: readWorkerComposeTemplate()?.text ?? null,
+    repository: 'ghcr.io/acme',
+    coreUrl: 'https://core.example.test',
+  });
   // The production composition (`buildApp`): the protocol check is registered before the device
   // flow and the protocol's verbs, exactly as a process that serves the API registers them.
   const app = await buildApp({
@@ -388,6 +395,10 @@ const world = async (
       runCalls,
       broadcast: harness.memory.broadcast,
       release: () => release,
+      unresolved: () =>
+        release === null
+          ? 'ghcr.io/acme/platform-runtime:sha-feedc0d could not be resolved to a digest: answered 404'
+          : null,
       holds: { claimMs: 30, heartbeatMs: 30, claimPollMs: 10 },
     },
   });
@@ -752,6 +763,79 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
       expect(`${verb} ${response.statusCode} ${response.json().error?.code}`).toBe(
         `${verb} 503 digests_unresolved`,
       );
+    }
+  });
+
+  it('release: the digests and the protocol range, no compose file; 401 without a credential (WP-284)', async () => {
+    const w = await world();
+    const response = await w.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.release),
+      headers: bearer(w.alice.credential),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(workerReleaseResponseSchema.parse(response.json())).toEqual({
+      protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [WORKER_PROTOCOL_VERSION] },
+      digests: DIGESTS,
+    });
+    const anonymous = await w.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.release),
+      headers: PROTOCOL,
+    });
+    expect(`${anonymous.statusCode} ${anonymous.json().error?.code}`).toBe('401 unauthenticated');
+    const noProtocol = await w.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.release),
+      headers: { authorization: `Bearer ${w.alice.credential}` },
+    });
+    expect(noProtocol.statusCode).toBe(426);
+  });
+
+  it('compose.yml: the template pinned to this core’s digests, whose SHA-256 is the handshake’s compose_bundle_digest (WP-284, backlog 743)', async () => {
+    const w = await world();
+    const response = await w.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.composeFile),
+      headers: bearer(w.alice.credential),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('application/yaml; charset=utf-8');
+    expect(response.headers['cache-control']).toBe('no-store');
+    const file = response.body;
+    expect(file).toContain(`ghcr.io/acme/platform@${DIGESTS.platform}`);
+    expect(file).toContain(`ghcr.io/acme/platform-launcher@${DIGESTS.platform_launcher}`);
+    expect(file).toContain(`ghcr.io/acme/platform-runtime@${DIGESTS.platform_runtime}`);
+    expect(file).toContain(`ghcr.io/acme/platform-egress@${DIGESTS.platform_egress}`);
+    expect(file).toContain('${APP_CORE_URL:-https://core.example.test}');
+    const handshake = await post(w, WORKER_PATHS.handshake, '', w.alice.credential, {
+      image_digests: HELD,
+      commit: null,
+    });
+    expect(workerHandshakeResponseSchema.parse(handshake.json()).compose_bundle_digest).toBe(
+      createHash('sha256').update(file, 'utf8').digest('hex'),
+    );
+    const anonymous = await w.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.composeFile),
+      headers: PROTOCOL,
+    });
+    expect(`${anonymous.statusCode} ${anonymous.json().error?.code}`).toBe('401 unauthenticated');
+  });
+
+  it('release and compose.yml answer 503 digests_unresolved naming the image (WP-284)', async () => {
+    const w = await world({ release: false });
+    for (const verb of [WORKER_PATHS.release, WORKER_PATHS.composeFile]) {
+      const response = await w.app.inject({
+        method: 'GET',
+        url: url(verb),
+        headers: bearer(w.alice.credential),
+      });
+      expect(`${verb} ${response.statusCode} ${response.json().error?.code}`).toBe(
+        `${verb} 503 digests_unresolved`,
+      );
+      expect(response.json().error?.message).toContain('ghcr.io/acme/platform-runtime');
     }
   });
 

@@ -441,7 +441,9 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
 - **`claims`** is held up to 25 s, woken by `pg_notify('run_offers')` and a 5 s poll (a
   `workers_from` passing is announced by nothing); `204` with nothing claimable, at once for a
   `paused` worker. The one claim checks TD-031 §8's eligibility **in its statement** — a **stage**
-  offer (an ask's ending is not served to a worker before WP-283), not excluded, the offer's images
+  or an **ask** offer (WP-283, backlog 741: `finish` of a run that serves an ask settles through the
+  ask's own ending, `AskExecutor.settle`, composed on the worker routes — an ask's offer names the asker
+  as its assignee, so the asker's online worker has its head start), not excluded, the offer's images
   held, the worker not revoked, its user may act (backlog 714), not paused, a project member at
   `member`+, `workers_from` reached or the assignee's head start, and the project's run credential
   `minted` — or `static`/`deploy_key` behind the git integration's `remote_run_credential: allow`
@@ -454,8 +456,9 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
   spaces the attempts 30 s apart and escalates the task after three; no worker is excluded. The server
   claimant judges a mint error the same way (`classifyProvisionFailure`). `200` is the run package (`runPackageSchema`): the stored
   spec with no secret value and `secretEnvNames` empty, the minted credential, the skills, the images
-  by digest, `limits.leaseTtlMs` 600 000. `503 digests_unresolved` while `APP_WORKER_IMAGE_DIGESTS` is
-  unset (WP-284 resolves the core's own).
+  by digest, `limits.leaseTtlMs` 600 000. `503 digests_unresolved`, naming the image, while the core
+  cannot name its images — since WP-284 it resolves its own `sha-<7>` digests (below) and
+  `APP_WORKER_IMAGE_DIGESTS` is the override.
 - **`heartbeat`** renews the 10-minute lease in one statement fenced on the epoch, the worker and the
   worker still able to act (backlog 714), stamps the acks of delivered commands (`applied`, or one of
   the four existing refusals — only for a command pending for this run), and answers the run's pending
@@ -520,13 +523,53 @@ authenticated worker, else `409 lease_lost` (`410 run_gone` for a run that no lo
   one cap per run whichever replica or caller (runlet relay, helpers' relayed socket) asks. A run given
   no deploy key (`runs.credential_source`) is answered `null`. `200 {signature}`.
 
+**`release` and `compose.yml` are served since WP-284** (worker credential, both `GET`; TD-032
+decision 3). The core resolves its four images' digests **itself**: `sha-<first 7 of APP_COMMIT>` of
+`platform`, `platform-launcher`, `platform-runtime` and `platform-egress` in `APP_IMAGE_REPOSITORY`
+(default `ghcr.io/gtfo-ai`) with the anonymous OCI `HEAD` — a `401` Bearer challenge, an anonymous token
+from its `https` realm, the `HEAD` again, `Docker-Content-Digest` read (research/17 § 6;
+`apps/server/src/workers/digests.ts`) — once per process, a failure retried after a minute;
+`APP_WORKER_IMAGE_DIGESTS` replaces the whole resolution. `GET release` answers `{protocol, digests}` and
+no compose file. `GET compose.yml` answers `application/yaml`: the template **baked into the image** at
+`/opt/platform/compose.worker.yml` (a checkout's own `compose.worker.yml` where there is no `/opt/platform`)
+with every `${PLATFORM_*_IMAGE:-…}` default pinned to `<repository>/<image>@<digest>` and `APP_CORE_URL`
+defaulted to this core — for a person's first install only; no updater applies a file the core served.
+Its SHA-256 is `handshake`'s `compose_bundle_digest` (backlog 743). Both answer `503 digests_unresolved`
+naming the image; `compose.yml` answers `503 compose_template_unavailable` for a template that cannot be
+read or pinned. **Residual, stated:** TD-031 §9 authenticates `compose.yml` with the worker credential,
+which a machine that has never logged in does not have; a first install reads the template from the
+image or the repository until a decision says otherwise (backlog 760).
+
+**The worker's half is `ROLE=remote-worker` since WP-283** (`apps/server/src/remote-worker/`; `main.ts`
+dispatches on the role before `loadServerConfig`, which the worker never reads). It refuses
+`DATABASE_URL` and `APP_SECRET_KEY` (and their `_FILE` variants) by name; logs in with the device flow
+and keeps the credential `0600` in `APP_WORKER_STATE_DIR`; handshakes; holds `claims` while a slot of
+`APP_WORKER_CONCURRENCY` is free; and runs each package on the server's own runner
+(`createWorkspaceClaudeRunner` over `createClaudeRunner`) through its own launcher, `relayed` — with an
+HTTP transcript sink (batched, in `seq` order), an HTTP `PlatformToolPort` (a fresh `tool_use_id` per
+call, kept across that call's retries; `report_progress` answered by the runner's own progress door and
+uploaded as a transcript row, backlog 752), approvals opened over HTTP and decided on the heartbeat,
+`ssh.sign` frames and a per-run **helper agent socket** (`helper-<run>/agent.sock` on the `ctl` volume,
+the runlet's agent codec, `<uid>:0` `0660`, backlog 705/708) forwarded to `ssh-sign`. `spawn` is asked
+before the CLI; the workspace is released — every export — **before** `finish`; a `409 lease_lost`, a
+`401` or a `410` stops the session and exports nothing; so does **self-termination**, `TTL − ½·renew`
+(585 s) on the monotonic clock without a renewal. Every call is retried with jitter until then. The
+Claude token is put in the run's spec for the CLI's environment only (`secretEnvNames`, so the runner
+redacts it by exact value) and every outbound body passes an exact-value redactor of it, the run token
+and the run credential; the logs are redacted the same way. A take-over of a remote run exports the
+branch and **no tarball** — the core records it so (`tarball: false` on the `run_commands` row) and the
+worker asks its launcher for none (TD-031 §14, backlog 688). Its local listener — `GET /healthz`,
+`GET /readyz` (`core_handshake`), `POST /internal/drain`, `GET /internal/state` — is on the worker's
+compose network only. `GET /api/runs/:run_id` gains `seat` (the agents list's `{kind, worker_id,
+worker_name}`) so the run page can say who executed a run (WP-283 (5)).
+
 The opt-in itself is the GitLab configuration key `remote_run_credential: allow | deny` (default `deny`),
 written through `PATCH /api/integrations/:id` (`integration.write`, admin), whose `human_actions` row
 carries the value; the Integrations screen shows the residual beside the switch. With `allow`, a static
 token travels in the package and a deploy key never does (the package carries the SSH route and the public
 key; the worker signs through `ssh-sign`).
 
-**The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls; WP-283 and WP-284 the rest):
+**The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls, WP-284 `release` and `compose.yml`; `pause` and `update-report` are WP-285's and WP-287's):
 `packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (1), `ACCEPTED_WORKER_PROTOCOLS`
 (`[N-1, N]`, today `[1]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
 paths, the bounds, and a strict zod schema for every request and response body of TD-031 §9. Two

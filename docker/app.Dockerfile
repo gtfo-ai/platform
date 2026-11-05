@@ -137,8 +137,16 @@ COPY --from=web --chown=agentic:agentic /src/apps/web/dist ./apps/web/dist
 # knowledge indexer keeps its per-project bare mirrors (`APP_KNOWLEDGE_MIRROR_ROOT`, TD-026). Both
 # are data: the compose file gives each a named volume. Created here so the directory exists and is
 # owned by the uid the process runs as, rather than appearing as `root:root` on first mount.
+# WP-284 (TD-032 decision 3): the worker compose template, baked in so the core renders the bytes of
+# the build it runs (`GET /api/worker/v1/compose.yml`) and an updater reads it from a verified new
+# image, never from the core. Root-owned and read-only: nothing at run time writes it.
+COPY compose.worker.yml /opt/platform/compose.worker.yml
+
+# `/var/lib/platform/*` are a remote worker's two volumes (`compose.worker.yml`): a named volume
+# takes the ownership of the directory it is first mounted over, so the image's `agentic` owns them.
 RUN mkdir -p /var/lib/app/exports /var/lib/app/knowledge \
- && chown -R agentic:agentic /var/lib/app
+      /var/lib/platform/worker-state /var/lib/platform/launcher-token \
+ && chown -R agentic:agentic /var/lib/app /var/lib/platform
 
 # Build metadata, reported by `GET /api/version` (`runtime.ts` § buildInfo). Empty in a checkout.
 ARG APP_VERSION=

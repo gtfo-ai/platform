@@ -12,9 +12,33 @@
  */
 import process from 'node:process';
 import closeWithGrace from 'close-with-grace';
+import { REMOTE_WORKER_ROLE } from './remote-worker/config.js';
+import { startRemoteWorker } from './remote-worker/runtime.js';
 import { startRuntime } from './runtime.js';
 
+/**
+ * `ROLE=remote-worker` (WP-283) is not one of the core's roles: it composes no database, no secret
+ * key and nothing of the pipeline, so it never reaches `loadServerConfig`, which requires both.
+ */
+const mainRemoteWorker = async (): Promise<void> => {
+  const worker = await startRemoteWorker();
+  closeWithGrace({ delay: 60_000 }, async ({ err, signal }: { err?: Error; signal?: string }) => {
+    if (err !== undefined) {
+      worker.logger.error({ err }, 'uncaught error, shutting down');
+    } else {
+      worker.logger.info({ signal }, 'signal received, handing every run back and stopping');
+    }
+    await worker.stop();
+  });
+  const address = await worker.listen();
+  worker.logger.info({ address, role: REMOTE_WORKER_ROLE }, 'listening');
+};
+
 const main = async (): Promise<void> => {
+  if (process.env.ROLE?.trim() === REMOTE_WORKER_ROLE) {
+    await mainRemoteWorker();
+    return;
+  }
   const runtime = await startRuntime();
 
   closeWithGrace(

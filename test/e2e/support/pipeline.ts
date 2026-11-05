@@ -142,7 +142,7 @@ export const TICKET_BINDING_TOKEN = 'FAKE-ticket-binding-token-not-a-real-secret
 export const CHAT_BINDING_TOKEN = 'FAKE-chat-binding-token-not-a-real-secret';
 
 /** The instance's own `APP_SECRET_KEY`; the seeded `secrets` rows are sealed under it. */
-const APP_SECRET_KEY = 'e2e-test-secret-key-not-a-real-secret-0000';
+export const APP_SECRET_KEY = 'e2e-test-secret-key-not-a-real-secret-0000';
 
 /** How long a test waits for the instance's own timers before calling it a failure. */
 const SETTLE_TIMEOUT_MS = 90_000;
@@ -793,6 +793,12 @@ export interface StartPipelineOptions {
    * opens is one the route sealed. Absent registers no Sentry, as before.
    */
   readonly sentry?: { readonly fetch: SentryFetch };
+  /**
+   * WP-283: the fake git registration declares a static run token and a deploy key beside minting
+   * (`FAKE_GIT_RUN_CREDENTIAL`, GitLab's key names), so a test can switch its seeded integration to
+   * either through `integrations.config` and its sealed secrets. Absent, minting only, as before.
+   */
+  readonly gitRunCredentials?: boolean;
 }
 
 /** The fake observability world a test asks for (WP-89). */
@@ -1383,7 +1389,11 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     (processName: string) =>
     (registryOptions: PipelineProviderRegistryOptions): IntegrationRegistry =>
       createIntegrationRegistry([
-        fakeGitRegistration({ port: recordingGit(processName), token: GIT_BINDING_TOKEN }),
+        fakeGitRegistration({
+          port: recordingGit(processName),
+          token: GIT_BINDING_TOKEN,
+          ...(options.gitRunCredentials === true ? { runCredentials: true } : {}),
+        }),
         fakeTaskManagementRegistration({ port: tickets, token: TICKET_BINDING_TOKEN }),
         // WP-89: registered always, bound only when a test seeds them — a registration is not a
         // binding, and the pre-fetch reads the `bindings` table.

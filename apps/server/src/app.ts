@@ -90,6 +90,7 @@ import { listHistoryBootstraps } from './queries/bootstrap-queries.js';
 import { listedModelIds, listOrgBudgets, writeBudget } from './queries/cost-queries.js';
 import {
   findProjectExecution,
+  remoteRunCredentialRefused,
   serverClaimantRunning,
   writeProjectExecution,
 } from './queries/execution-queries.js';
@@ -307,6 +308,8 @@ export interface BuildAppOptions {
     readonly runCalls?: RemoteRunCalls | null;
     readonly broadcast: Broadcast | null;
     readonly release: () => WorkerRelease | null;
+    /** Why `release()` is `null` — the `503 digests_unresolved`'s words, naming the image (WP-284). */
+    readonly unresolved?: () => string | null;
     /** The held requests' bounds; absent, TD-031 §9's 25 s and 20 s (a test shortens them). */
     readonly holds?: {
       readonly claimMs?: number;
@@ -657,6 +660,9 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       runCalls: options.workerProtocol?.runCalls ?? null,
       broadcast: options.workerProtocol?.broadcast ?? null,
       release: workerRelease,
+      ...(options.workerProtocol?.unresolved === undefined
+        ? {}
+        : { unresolved: options.workerProtocol.unresolved }),
       ...(options.workerProtocol?.holds?.claimMs === undefined
         ? {}
         : { claimHoldMs: options.workerProtocol.holds.claimMs }),
@@ -731,6 +737,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         writeExecution: async (projectId, settings) =>
           writeProjectExecution(options.database, projectId, settings),
         serverClaimantRunning: async () => serverClaimantRunning(options.database),
+        remoteRunCredentialRefused: async (projectId) =>
+          remoteRunCredentialRefused(options.database, projectId),
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
         releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),

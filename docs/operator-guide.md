@@ -323,6 +323,30 @@ curl -fsS localhost:8080/readyz         # {"status":"ok","checks":{...}}
 Then open <http://localhost:8080/> and sign in with the bootstrap administrator. The
 [user guide](user-guide.md) starts there.
 
+### A remote worker on a developer's machine (WP-283, WP-284)
+
+A worker runs agent runs on a developer's machine with the developer's own Claude subscription
+(BD-032). It is one file, `compose.worker.yml` — the copy in this repository, the one baked into the
+`platform` image at `/opt/platform/compose.worker.yml`, or the core's
+`GET /api/worker/v1/compose.yml`, which pins every image to the core's own digests:
+
+```bash
+APP_CORE_URL=https://agentic.example.com \
+CLAUDE_CODE_OAUTH_TOKEN=<the output of `claude setup-token`> \
+docker compose -f compose.worker.yml up -d
+docker compose -f compose.worker.yml logs remote-worker   # the code to approve at /workers/approve
+```
+
+The worker holds no database, no `APP_SECRET_KEY` and no integration secret, and refuses to start with
+either of the first two. It logs in with the device code (approve it signed in to the platform; the
+credential is kept in the `worker-state` volume — delete it, or revoke the worker on the Workers
+screen, to log out); its launcher token is generated at first start. The Claude token reaches each
+run's CLI and nothing else. `docker compose exec remote-worker curl -fsS localhost:8080/readyz` reads
+`core_handshake: ok` once the core accepted it; `POST /internal/drain` stops it claiming. A project
+whose git integration gives runs a static token or a deploy key runs on a worker only with
+`remote_run_credential: allow` on that integration — the project's execution setting says so when it
+does not. The worker section of this guide is completed by WP-290.
+
 ### If `/readyz` is 503
 
 That is a real answer, not a glitch, and the body says which check failed:
@@ -440,11 +464,13 @@ the worker device flow's limits (at most 20 pending codes per client address, 20
 on it — so behind a CDN, list the CDN's ranges in `APP_TRUST_PROXY` and name its header here, or
 every developer behind the CDN shares one address's limit.
 
-`APP_WORKER_IMAGE_DIGESTS` (WP-281) names the core's four images by digest —
-`platform=sha256:…,platform_launcher=sha256:…,platform_runtime=sha256:…,platform_egress=sha256:…` —
-which the remote-worker protocol advertises on its handshake and names a run package's run and egress
-images by. Unset, a worker's `handshake` and `claims` answer `503 digests_unresolved` (the device flow
-still works); WP-284 resolves the core's own digests and keeps this as the override. Every request to
+The core advertises its four images **by digest** to remote workers and names a run package's run and
+egress images by them. Since WP-284 it resolves its own: the `sha-<7>` tags of the build it runs
+(`APP_COMMIT`) in `APP_IMAGE_REPOSITORY` (default `ghcr.io/gtfo-ai`), asked anonymously of the registry.
+`APP_WORKER_IMAGE_DIGESTS` — `platform=sha256:…,platform_launcher=sha256:…,platform_runtime=sha256:…,platform_egress=sha256:…`
+— replaces that for a mirror or an air-gapped registry. While neither has an answer, a worker's
+`handshake`, `claims`, `release` and `compose.yml` answer `503 digests_unresolved` naming the image (the
+device flow still works). Every request to
 `/api/worker/v1/`, the device flow's included, must carry `X-Worker-Protocol`; a worker the core does
 not serve is answered `426 upgrade_required`.
 

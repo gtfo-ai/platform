@@ -1644,7 +1644,7 @@ export const createMemoryPipelineStore = (
     const worker = claim.worker;
     if (worker === undefined) return false;
     const known = options.remoteWorkers?.(worker.workerId);
-    if (known === undefined || !known.usable || candidate.kind !== 'stage') return false;
+    if (known === undefined || !known.usable) return false;
     if (known.pausedUntil !== null && Date.parse(known.pausedUntil) > Date.parse(claim.now)) {
       return false;
     }

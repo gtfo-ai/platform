@@ -9,9 +9,10 @@
  *  1. **The eligibility is the claim's own statement** (`WORKER_ELIGIBLE` in
  *     `postgres-run-offers.ts`): each of TD-031 §8's clauses refuses on its own — a revoked worker, a
  *     ban in force (and not an expired one), a pause, a member below `member`, an exclusion, an image
- *     not held, `workers_from` not reached (or never), a static or deploy-key run credential, an ask
- *     offer — with a positive control that claims the same offer once the fact is put back; the
- *     assignee's head start admits the assignee's worker and no one else's.
+ *     not held, `workers_from` not reached (or never), a static or deploy-key run credential — with
+ *     a positive control that claims the same offer once the fact is put back; the assignee's head
+ *     start admits the assignee's worker and no one else's, for a stage offer and (WP-283, backlog
+ *     741) for an ask's, whose assignee is the asker.
  *  2. **What the claim writes**: `worker_id` on the offer and the run, the token's hash and epoch, the
  *     offer's `image_digests`, the lease under `worker:<id>`.
  *  3. **Backlog 714**: the claim, the renewal, the spawn marker and `finish`'s fence re-ask the
@@ -562,10 +563,19 @@ describe('the worker claim’s eligibility is its own statement (TD-031 §8)', (
     expect((await claim(w.w1, runId))?.runId).toBe(runId);
   });
 
-  it('refuses an ask offer: an ask’s ending is not served to a worker before WP-283', async () => {
+  it('claims an ask offer for the asker’s worker inside its head start, and nobody else’s (WP-283, backlog 741)', async () => {
     const w = await world();
-    const runId = await offered(w, { kind: 'ask' });
-    expect(await claim(w.w1, runId)).toBeNull();
+    await sql("update project_members set role = 'member' where user_id = $1", [w.bob]);
+    const runId = await offered(w, {
+      kind: 'ask',
+      routing: workersRouting({
+        workersFrom: FUTURE,
+        assigneeUserId: w.alice,
+        assigneeUntil: FUTURE,
+      }),
+    });
+    expect(await claim(w.w2, runId)).toBeNull();
+    expect((await claim(w.w1, runId))?.runId).toBe(runId);
   });
 
   it('gives the assignee’s worker the head start and nobody else', async () => {

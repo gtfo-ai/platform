@@ -109,6 +109,10 @@ const EXPECTED_COMMIT_MESSAGE_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/run-commands.ts', 1],
   // Two forwards since backlog 467: the take-over's export and the unfinished work's.
   ['packages/infrastructure/src/launcher/provisioner.ts', 2],
+  // WP-283: a remote worker's two forwards of the same two — the take-over's export and the
+  // unfinished work's, to its own launcher — and the delivered take-over's message into the stop.
+  ['apps/server/src/remote-worker/workspaces.ts', 2],
+  ['apps/server/src/remote-worker/run-session.ts', 1],
   ['apps/launcher/src/control-plane.ts', 1],
   ['apps/launcher/src/service.ts', 1],
   // Backlog 467: one declaration (`UnfinishedWorkExport.commitMessage`) and the second **writer**
@@ -169,9 +173,10 @@ describe('product/19 §7 — the take-over and an unsuccessful run are the only 
     const found = census(COMMIT_MESSAGE_KEY);
     expect(asObject(found)).toEqual(asObject(EXPECTED_COMMIT_MESSAGE_SITES));
     // Stated as the number the rule rests on, rather than left to be counted off the map: five
-    // declarations and six forwards are not writers, so the writers are the total minus eleven.
+    // declarations and nine forwards (three of them a remote worker's, WP-283) are not writers, so
+    // the writers are the total minus fourteen.
     const sites = [...found.values()].reduce((sum, count) => sum + count, 0);
-    expect(sites - 11).toBe(2);
+    expect(sites - 14).toBe(2);
   }, 15_000);
 
   it('sees a writer after a `//` inside a string on the same line (backlog 269)', () => {

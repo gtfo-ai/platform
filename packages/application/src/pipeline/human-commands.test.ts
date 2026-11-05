@@ -3105,6 +3105,24 @@ describe('take a task over', () => {
     await holder.stop();
   });
 
+  it('records the stop with no tarball when a remote worker holds the run (TD-031 §14, backlog 688)', async () => {
+    const harness = await asking();
+    const stored = taskOf(harness);
+    const runId = await seedLiveRun(harness, 'refinement' as Slug);
+    await leaseTo(harness, runId, 'worker:00000000-0000-4000-8000-0000000283c1');
+
+    await takeOverTaskCommand(harness.humanCommands, {
+      taskId: stored.task.id,
+      userId: USER,
+      authorName: 'Ada Lovelace',
+      tarball: true,
+    });
+
+    expect(harness.store.runCommandRows()).toMatchObject([
+      { runId, instruction: { kind: 'take_over', branch: 'agentic/ACME-1', tarball: false } },
+    ]);
+  });
+
   /**
    * The other half of the steer: a take-over with no live run is a take-over. The work is on the
    * branch, the task pauses, `exported: false` is what the operator is told, and no stop is

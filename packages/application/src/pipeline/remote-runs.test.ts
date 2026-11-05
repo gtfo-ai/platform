@@ -768,6 +768,69 @@ describe('finish (TD-031 §3, the four-field request)', () => {
   });
 });
 
+describe('finish of an ask run (WP-283, backlog 741)', () => {
+  it('settles through the ask’s own ending, never settleRun, and answers the row’s ending', async () => {
+    const stageSettles: SettleRunRequest[] = [];
+    const w = await world({
+      settle: async (request) => {
+        stageSettles.push(request);
+        throw new Error('a stage settle for an ask run');
+      },
+    });
+    await claimAs(w, W1);
+    await w.remote.spawn({ runId: w.runId, workerId: W1, epoch: 1, now: w.harness.clock.now() });
+    const asked: SettleRunRequest[] = [];
+    // The same commands, over a store whose row for this run reads as an ask's (stage null, an
+    // ask id) — the one fact `finish` routes on.
+    const store = {
+      ...w.harness.store,
+      runs: new Proxy(w.harness.store.runs, {
+        get: (target, key, receiver) =>
+          key === 'load'
+            ? async (tx: unknown, runId: Id) => {
+                const row = await target.load(tx as never, runId);
+                return row === null || runId !== w.runId
+                  ? row
+                  : { ...row, stage: null, askId: '00000000-0000-4000-8000-0000000283aa' };
+              }
+            : Reflect.get(target, key, receiver),
+      }),
+    };
+    const remote = createRemoteRuns({
+      unitOfWork: w.harness.memory,
+      store,
+      eventStore: w.harness.memory.store,
+      context: w.harness.commands.context,
+      runPlans: createTestRunPlanSealer(),
+      packager: { build: async () => ({ kind: 'package', package: {} as WorkerRunPackage }) },
+      credentials: { revoke: async () => {} },
+      tokens: w.tokens,
+      settle: async (request) => {
+        stageSettles.push(request);
+        throw new Error('a stage settle for an ask run');
+      },
+      settleAsk: async (request) => {
+        asked.push(request);
+        // The ask's ending ends the row through the same settle machinery a stage's uses.
+        await w.harness.runtime.executor.settle(request).catch(() => undefined);
+        return { kind: 'settled' };
+      },
+      lateCost: { record: async () => ({ recorded: true, charge: null }) },
+    });
+    const answer = await remote.finish({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      outcome: ranOutcome(w.runId),
+      stopReason: null,
+    });
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.fence).toEqual({ epoch: 1, owner: `worker:${W1}` });
+    expect(stageSettles).toHaveLength(0);
+    expect(answer).toMatchObject({ kind: 'settled', ending: { epoch: 1, status: 'completed' } });
+  });
+});
+
 describe('the core’s spawn marker beats the claimant’s word (rule 16)', () => {
   /**
    * PR #9 review: a run whose CLI spawn marker is written and whose claimant then reports it

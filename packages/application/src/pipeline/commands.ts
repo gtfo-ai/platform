@@ -77,6 +77,7 @@ import {
   type ReadyHeadCheckData,
 } from './jobs.js';
 import { closeStageOffer, endWithdrawnRun } from './offer-withdrawal.js';
+import { isWorkerLeaseOwner } from './offers.js';
 import { toRunAggregate } from './run-aggregate.js';
 import { type RunCommandWakeUp, runCommandsTopic } from './run-commands.js';
 import type { ProjectSettingsPort } from './settings.js';
@@ -2272,7 +2273,10 @@ export const takeOverTaskCommand = async (
             kind: 'take_over',
             branch,
             commitMessage: `wip: hand-over to ${actorLabel(input.authorName)}`,
-            tarball: input.tarball,
+            // TD-031 §14 (backlog 688): a run a remote worker holds exports its branch and no
+            // tarball — there is no upload verb, so a tarball would stay on the developer's machine
+            // where the person who asked for it cannot download it. Recorded so, not just ignored.
+            tarball: input.tarball && !isWorkerLeaseOwner(live.leaseOwner),
             keepUntil: new Date(
               Date.parse(context.clock.now()) + TAKEN_OVER_WORKSPACE_KEEP_DAYS * DAY_MS,
             ).toISOString() as IsoDateTime,

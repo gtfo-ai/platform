@@ -85,3 +85,27 @@ export const serverClaimantRunning = async (
     .limit(1);
   return rows.length > 0;
 };
+
+/**
+ * Whether this project's runs are **closed to remote workers by its run credential** (WP-283,
+ * TD-031 decision 5, Q124 (a)): a live git binding whose integration gives runs a static token or a
+ * deploy key and does not set `remote_run_credential: allow` — the claim's own clause
+ * (`postgres-run-offers.ts`'s `WORKER_ELIGIBLE`), read for the execution setting to say why.
+ */
+export const remoteRunCredentialRefused = async (
+  database: Pick<Database, 'execute'>,
+  projectId: string,
+): Promise<boolean> => {
+  const result = await database.execute<{ refused: boolean }>(sql`
+    select exists (
+      select 1
+        from bindings b
+        join integrations i on i.id = b.integration_id
+       where b.project_id = ${projectId}
+         and i.type = 'git'
+         and i.retired_at is null
+         and coalesce(i.config ->> 'run_credential', 'minted') <> 'minted'
+         and coalesce(i.config ->> 'remote_run_credential', 'deny') <> 'allow'
+    ) as refused`);
+  return result.rows[0]?.refused === true;
+};

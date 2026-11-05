@@ -125,7 +125,9 @@ import { createTicketStatusReader } from './ticket-statuses.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
 import { composeRemoteRuns } from './worker-protocol.js';
 import { composeRemoteRunCalls } from './worker-run-calls.js';
-import { workerReleaseOf } from './workers/release.js';
+import { readWorkerComposeTemplate } from './workers/compose.js';
+import { createCoreDigestSource } from './workers/digests.js';
+import { createWorkerReleaseSource } from './workers/release.js';
 import {
   composeOrphanWorkspaceReaper,
   composeRunWorkspaces,
@@ -1240,7 +1242,37 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             logger: loggerPort,
           })
         : null;
-    const workerRelease = workerReleaseOf(config.workerImageDigests);
+    /**
+     * WP-284 (TD-032 decision 3): the core's own four digests, resolved once with the anonymous OCI
+     * `HEAD` (or pinned by `APP_WORKER_IMAGE_DIGESTS`), and `compose.worker.yml` rendered from the
+     * template baked into this image. Resolved in the background from here on; until it answers, the
+     * worker protocol answers `503 digests_unresolved` naming the image.
+     */
+    const composeTemplate = readWorkerComposeTemplate(config.workerComposeTemplate);
+    if (composeTemplate === null) {
+      logger.warn(
+        { template: config.workerComposeTemplate ?? '/opt/platform/compose.worker.yml' },
+        'the worker compose template cannot be read; GET /api/worker/v1/compose.yml answers 503 compose_template_unavailable',
+      );
+    }
+    const workerDigests = createCoreDigestSource({
+      override: config.workerImageDigests,
+      repository: config.imageRepository,
+      commit: buildInfo(env).commit,
+      onFailure: (error) =>
+        logger.warn(
+          { image: error.image, reason: error.message },
+          'this core cannot name its image digests yet; workers are answered 503 digests_unresolved',
+        ),
+    });
+    const workerRelease = createWorkerReleaseSource(workerDigests, {
+      template: composeTemplate?.text ?? null,
+      repository: config.imageRepository,
+      coreUrl: config.baseUrl,
+    });
+    if (capabilities.api && config.workerImageDigests === null) {
+      void workerDigests.refresh();
+    }
 
     const app = await buildApp({
       config,
@@ -1253,7 +1285,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         remoteRuns,
         runCalls: runCalls?.calls ?? null,
         broadcast: eventing.broadcast,
-        release: () => workerRelease,
+        release: workerRelease.current,
+        unresolved: workerRelease.unresolved,
       },
       setupState,
       hub,

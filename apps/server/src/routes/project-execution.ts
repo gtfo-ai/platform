@@ -60,6 +60,11 @@ export interface ProjectExecutionQueries {
   ) => Promise<ExecutionWrite>;
   /** Whether the instance has a server claimant running now (`server_claimants`). */
   readonly serverClaimantRunning: () => Promise<boolean>;
+  /**
+   * Whether the project's run credential keeps remote workers off its runs (WP-283, Q124 (a)): a
+   * static token or a deploy key without `remote_run_credential: allow`. Absent answers `false`.
+   */
+  readonly remoteRunCredentialRefused?: (projectId: string) => Promise<boolean>;
   readonly claimAttempt: IdempotencyRecords['claimAttempt'];
   readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
   readonly recordAction: (input: HumanActionInput) => Promise<void>;
@@ -82,16 +87,26 @@ const wireOf = (settings: ExecutionSettings): JsonObject => ({
 export const executionDocument = (
   stored: ExecutionSettings | null,
   serverClaimant: boolean,
+  workersRefused = false,
 ): ProjectExecutionResponse => {
   const settings = stored ?? DEFAULT_EXECUTION_SETTINGS;
+  const notices = [
+    executionNotice(settings.mode, serverClaimant),
+    // WP-283 (TD-031 decision 5, Q124 (a)): the claim's own clause, said where the setting is read.
+    workersRefused && settings.mode !== 'server_only' ? REMOTE_CREDENTIAL_REFUSED_NOTICE : null,
+  ].filter((notice): notice is string => notice !== null);
   return projectExecutionResponseSchema.parse({
     ...wireOf(settings),
     effective_fallback_after_seconds: effectiveFallbackAfterSeconds(settings),
     stored: stored !== null,
     server_claimant: serverClaimant ? 'running' : 'none',
-    notice: executionNotice(settings.mode, serverClaimant),
+    notice: notices.length === 0 ? null : notices.join(' '),
   });
 };
+
+/** Why no remote worker takes this project's runs, as the settings screen says it (WP-283). */
+export const REMOTE_CREDENTIAL_REFUSED_NOTICE =
+  'Remote workers take none of this project’s runs: its git integration gives runs a static token or a deploy key, and only an administrator’s remote_run_credential: allow on that integration lets either reach a developer’s machine (TD-031 decision 5).';
 
 export const registerProjectExecutionRoutes = async (
   app: FastifyInstance,
@@ -112,6 +127,7 @@ export const registerProjectExecutionRoutes = async (
     return executionDocument(
       await queries.execution(projectId),
       await queries.serverClaimantRunning(),
+      (await queries.remoteRunCredentialRefused?.(projectId)) ?? false,
     );
   };
 

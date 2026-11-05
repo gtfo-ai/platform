@@ -162,6 +162,10 @@ export interface RecordedClaim {
 /** The `lease_owner` a remote worker's claim writes: `worker:<id>` (TD-031 §2, WP-281). */
 export const workerLeaseOwner = (workerId: Id): string => `worker:${workerId}`;
 
+/** Whether a lease owner is a remote worker's (`worker:<id>`) rather than a server claimant's. */
+export const isWorkerLeaseOwner = (owner: string | null): boolean =>
+  owner !== null && owner.startsWith('worker:');
+
 /**
  * `run.claimed` for a claim the repository granted — the run `created → starting` in the log. The
  * claimant is the server's runner unless `worker` names the remote worker that claimed (WP-281).

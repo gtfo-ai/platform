@@ -32,7 +32,7 @@
  * | 5 | `updateMirror` performs no fetch, so a URL that does not resolve still "updates". | **Kinder** | The fake refuses a `create` whose project has no mirror (stricter than nothing, same as Docker's failing clone), asserted by `provider-suite.ts` › "refuses to create a workspace before the mirror exists". The refusal is for a spec **with** a repository only: a repo-less spec (WP-74) clones nothing in either implementation, and `provider-suite.ts` › "creates a workspace with no checkout and no mirror, and keeps its container, socket and skills" holds both to that. |
  * | 6 | No image pull, no daemon, so `engine_unavailable` never happens. | Kinder | Nothing pins it. Stated so no one reads the fake's reliability as the system's. |
  * | 7 | No repository, so a `repo.checkoutCommit` the mirror does not hold is not refused: the fake has no objects to look it up in (WP-105). | **Kinder** — a spec naming a lost shadow base creates a workspace here | `workspace/provider.test.ts` › "refuses a checkout commit the mirror does not hold, by name, before the run container" and the daemon case in `test/e2e/workspace/docker-workspace.e2e.test.ts` › "refuses a shadow base the mirror does not hold, and checks out one it does, detached". |
- * | 9 | No daemon, so an image digest is "local" when it is in `localImageDigests` — **every** digest when that option is absent (WP-279). | **Kinder** when absent | Both implementations refuse a digest that is not local: `provider-suite.ts` › "refuses an image digest that is not on the daemon, naming it, before creating anything" passes `localImageDigests` to the fake and a digest no image has to Docker. The relayed helper agent socket (WP-279) is accepted and recorded, never connected to — the helper's own mount and ssh are `workspace/provider.test.ts`'s and `scripts/deploy-key-check.mjs`'s. |
+ * | 9 | No daemon, so an image digest is "local" when it is in `localImageDigests` — **every** digest when that option is absent (WP-279). | **Kinder** when absent | Both implementations refuse a digest that is not local: `provider-suite.ts` › "refuses an image digest that is not on the daemon, naming it, before creating anything" passes `localImageDigests` to the fake and a digest no image has to Docker. The relayed helper agent socket (WP-279) is accepted and recorded, and — only with `relayedSigning` (WP-283) — asked for one signature per mirror update and export, as the helper's `ssh` asks it; the helper's own mount and ssh are `workspace/provider.test.ts`'s and `scripts/deploy-key-check.mjs`'s. |
  * | 8 | No image, so its shim protocol label is this build's `RUNLET_PROTOCOL_VERSION` by definition: an image with **no** label cannot be expressed (WP-151). | Neither for a mismatch, **kinder** for an absent label | A runner protocol the "image" does not speak is refused in both implementations: `provider-suite.ts` › "refuses a spec whose runner speaks another shim protocol than the run image, before creating anything". The absent label is the Docker provider's alone: `workspace/runtime-protocol.test.ts` › "refuses an image with no protocol label, and one with a label that is not a number". |
  *
  * Three places the fake is deliberately **stricter**, which is always allowed: it refuses a second
@@ -43,6 +43,7 @@
  * workspace that is gone — WP-27).
  */
 
+import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import path from 'node:path';
@@ -64,12 +65,14 @@ import type {
   WorkspaceSpec,
 } from '@platform/application';
 import {
+  isRelayedSsh,
   MAX_LABELLED_RUNS,
   WORKSPACE_LABELS,
   WorkspaceError,
   workspaceSpecSchema,
 } from '@platform/application';
 import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
+import { signThroughAgent } from '../runlet/helper-agent.js';
 import { egressProxyUrl, renderEgressConfig } from './egress.js';
 import { type DockerCreateBody, runContainerCreateBody } from './hardening.js';
 import {
@@ -136,7 +139,44 @@ export interface FakeWorkspaceProviderOptions {
    * links of its own.
    */
   readonly tracked?: readonly FakeTrackedEntry[];
+  /**
+   * **Sign through a relayed helper agent socket** (WP-283, backlog 693): with this set, a mirror
+   * update or an export handed a `relayed_ssh` access connects to the socket under `controlRoot`,
+   * lists its identity and asks it to sign one synthetic RFC 4252 user-authentication blob for
+   * `git` with that key — what the Docker provider's helper `ssh` does once per connection — and
+   * fails the way a helper's `git` would when the agent refuses. Absent, the socket is recorded and
+   * never connected to (divergence 9).
+   */
+  readonly relayedSigning?: { readonly controlRoot: string };
 }
+
+/** One signature a relayed helper agent made for a mirror update or an export (WP-283). */
+export interface FakeRelayedSignature {
+  readonly kind: 'mirror' | 'export';
+  readonly keyBlob: Buffer;
+  readonly data: Buffer;
+  readonly signature: Buffer;
+}
+
+/** A synthetic RFC 4252 §7 user-authentication request for user `git` with `keyBlob`. */
+export const syntheticUserauthBlob = (keyBlob: Buffer, session: Buffer): Buffer => {
+  const string = (value: Buffer | string): Buffer => {
+    const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : value;
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(bytes.length, 0);
+    return Buffer.concat([length, bytes]);
+  };
+  return Buffer.concat([
+    string(session),
+    Buffer.from([50]),
+    string('git'),
+    string('ssh-connection'),
+    string('publickey'),
+    Buffer.from([1]),
+    string('ssh-ed25519'),
+    string(keyBlob),
+  ]);
+};
 
 /** One index entry of the fake's clone: a path and its git mode (`100644`, `120000`, `160000`). */
 export interface FakeTrackedEntry {
@@ -172,13 +212,43 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
   readonly #seen = new Set<string>();
   readonly #tracked: readonly FakeTrackedEntry[];
   readonly events: FakeWorkspaceEvent[] = [];
+  /** Every signature a relayed helper agent made (WP-283), when `relayedSigning` is set. */
+  readonly relayedSignatures: FakeRelayedSignature[] = [];
+  readonly #relayedSigning: { readonly controlRoot: string } | null;
 
   constructor(options: FakeWorkspaceProviderOptions) {
+    this.#relayedSigning = options.relayedSigning ?? null;
     this.#controlRoot = options.controlRoot ?? '/tmp/agentic-fake-ctl';
     this.#localImageDigests = options.localImageDigests ?? null;
     this.#now = options.now ?? (() => new Date());
     this.#mintToken = options.mintToken ?? mintRunToken;
     this.#tracked = options.tracked ?? DEFAULT_FAKE_TRACKED;
+  }
+
+  /** One SSH connection's signature through a relayed helper agent, as the helper's `ssh` asks it. */
+  async #signRelayed(kind: 'mirror' | 'export', access: WorkspaceGitAccess | null): Promise<void> {
+    if (this.#relayedSigning === null || access === null || !isRelayedSsh(access)) return;
+    const session = randomBytes(32);
+    let data: Buffer = Buffer.alloc(0);
+    const answer = await signThroughAgent({
+      socketPath: path.join(this.#relayedSigning.controlRoot, access.agentSocket),
+      data: (keyBlob) => {
+        data = syntheticUserauthBlob(keyBlob, session);
+        return data;
+      },
+    });
+    if (answer === null) {
+      throw new WorkspaceError(
+        'workspace_failed',
+        `the ${kind} helper's ssh was refused by the relayed agent (Permission denied (publickey))`,
+      );
+    }
+    this.relayedSignatures.push({
+      kind,
+      keyBlob: answer.keyBlob,
+      data,
+      signature: answer.signature,
+    });
   }
 
   #record(kind: FakeWorkspaceEvent['kind'], runId: string): void {
@@ -205,8 +275,9 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
         detail: input.repo.url.slice(0, 80),
       });
     }
-    this.#mirrors.add(input.repo.cacheKey);
     this.gitAccess.push({ kind: 'mirror', access: input.credential });
+    await this.#signRelayed('mirror', input.credential);
+    this.#mirrors.add(input.repo.cacheKey);
     this.#record('mirror', input.projectId);
     return { cachePath: `/cache/${input.repo.cacheKey}.git`, updated: true };
   }
@@ -482,6 +553,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     const run = this.#run(handle.runId);
     this.gitAccess.push({ kind: 'export', access: credential });
     assertHasCheckout(handle);
+    await this.#signRelayed('export', credential);
     if (run.volumeRemoved) {
       throw new WorkspaceError('not_found', 'the workspace volume has been purged', {
         runId: handle.runId,

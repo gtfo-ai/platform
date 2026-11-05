@@ -23,8 +23,10 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  createAskExecutor,
   createLateCostRecorder,
   createRemoteRuns,
+  createRunStopReasons,
   type Jobs,
   type Logger,
   markTransactions,
@@ -38,11 +40,13 @@ import {
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { type CommandContext, SHIPPED_TEMPLATES } from '@platform/domain';
 import {
+  ask as askAdapters,
   cost as costAdapters,
   type eventing as eventingAdapters,
   launcher as launcherAdapters,
   pipeline as pipelineAdapters,
   recovery as recoveryAdapters,
+  redaction as redactionAdapters,
   runner as runnerAdapters,
   secrets as secretAdapters,
 } from '@platform/infrastructure';
@@ -53,6 +57,7 @@ import {
   createProjectIntegrationsPort,
   createProjectSettingsPort,
   type IntegrationStack,
+  unavailableClaudeRunner,
 } from './pipeline.js';
 import { remoteRunCredentialOf } from './worker-run-calls.js';
 import { runTokens } from './workers/secrets.js';
@@ -176,14 +181,49 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
     runRedactors: options.runRedactors,
     logger: options.logger,
   });
+  const runPlans = secretAdapters.createEnvelopeRunPlanSealer(
+    secretAdapters.deriveSecretKey(options.secretKey),
+  );
+  const runEnvironment = agentRunEnvironment(options.agent);
+  /**
+   * **An ask's ending, for a worker that ran it** (WP-283, backlog 741, TD-031 decision 13): the
+   * ask executor's own `settle`, which reads everything from stored state. It is composed here for
+   * that one method — the routes plan nothing and run nothing, so its runner and planner refuse by
+   * name if anything ever asked them.
+   */
+  const askExecutor = createAskExecutor({
+    unitOfWork,
+    asks: askAdapters.createPostgresAskStore(),
+    store,
+    runner: unavailableClaudeRunner(),
+    planner: {
+      plan: async () => {
+        throw new Error('the worker protocol settles asks; it never plans one');
+      },
+    },
+    stopReasons: createRunStopReasons(),
+    settings: async (projectId) => settings.forProject(projectId),
+    context: context('ask'),
+    redactor: redactionAdapters.patternRedactor(),
+    askedByLabel: async (userId) => {
+      const { rows } = await options.pool.query<{ name: string }>(
+        'select name from users where id = $1',
+        [userId],
+      );
+      return rows[0]?.name ?? 'a platform user';
+    },
+    jobs: options.jobs,
+    runPlans,
+    runEnvironment,
+    eventStore: options.eventing.store,
+    logger: options.logger,
+  });
   return createRemoteRuns({
     unitOfWork,
     store,
     eventStore: options.eventing.store,
     context: context('worker-protocol'),
-    runPlans: secretAdapters.createEnvelopeRunPlanSealer(
-      secretAdapters.deriveSecretKey(options.secretKey),
-    ),
+    runPlans,
     packager: launcherAdapters.createRemoteRunPackager({
       projects: createRunWorkspaceProjectSource(options.pool),
       credentials: createRunGitCredentialMinter({
@@ -230,11 +270,12 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
           settings: async (projectId, tx) => settings.forProject(projectId, tx),
           eventStore: options.eventing.store,
           jobs: options.jobs,
-          runEnvironment: agentRunEnvironment(options.agent),
+          runEnvironment,
           logger: options.logger,
         },
         request,
       ),
+    settleAsk: async (request) => askExecutor.settle(request),
     lateCost,
     logger: options.logger,
   });

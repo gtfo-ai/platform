@@ -12,7 +12,12 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
-import { registerProjectExecutionRoutes, SET_EXECUTION_ACTION } from './project-execution.js';
+import {
+  executionDocument,
+  REMOTE_CREDENTIAL_REFUSED_NOTICE,
+  registerProjectExecutionRoutes,
+  SET_EXECUTION_ACTION,
+} from './project-execution.js';
 
 const PROJECT = '00000000-0000-4000-8000-000000002781';
 const USER = '00000000-0000-4000-8000-000000002783';
@@ -207,5 +212,21 @@ describe('PUT /api/projects/:id/execution', () => {
       before: { mode: 'workers_only' },
       after: { mode: 'server_only' },
     });
+  });
+});
+
+describe('the execution setting says why remote workers take none of a project’s runs (WP-283)', () => {
+  it('names the run credential when it keeps workers off, and says nothing of it otherwise', () => {
+    expect(executionDocument(null, true, true).notice).toContain(REMOTE_CREDENTIAL_REFUSED_NOTICE);
+    expect(executionDocument(null, true, false).notice ?? '').not.toContain('Remote workers');
+    // A `server_only` project is closed to workers by its own setting already.
+    const serverOnly = {
+      mode: 'server_only',
+      prefer: 'server',
+      fallbackAfterSeconds: null,
+      assigneeWindowSeconds: 120,
+      offerTimeoutSeconds: 86_400,
+    } as ExecutionSettings;
+    expect(executionDocument(serverOnly, true, true).notice ?? '').not.toContain('Remote workers');
   });
 });

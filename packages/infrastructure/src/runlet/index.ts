@@ -10,6 +10,7 @@ export * from './config.js';
 export * from './connection.js';
 export * from './credential-helper.js';
 export * from './framing.js';
+export * from './helper-agent.js';
 export * from './logger.js';
 export * from './shim.js';
 export * from './spawn-adapter.js';

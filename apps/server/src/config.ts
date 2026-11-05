@@ -77,6 +77,8 @@ const SOURCE_VARIABLE: Record<string, string> = {
   workspaceControlRoot: 'APP_WORKSPACE_CONTROL_ROOT',
   modelEgressHosts: 'APP_MODEL_EGRESS_HOSTS',
   workerImageDigests: 'APP_WORKER_IMAGE_DIGESTS',
+  imageRepository: 'APP_IMAGE_REPOSITORY',
+  workerComposeTemplate: 'APP_WORKER_COMPOSE_TEMPLATE',
 };
 
 /**
@@ -224,10 +226,25 @@ const serverConfigFields = z.strictObject({
    * `APP_WORKER_IMAGE_DIGESTS` (WP-281): the core's four images by digest — what the worker
    * protocol's handshake and `426` advertise and what a run package names its run and egress images
    * by (TD-031 decision 4, TD-032 decision 3). `null` (unset) answers `503 digests_unresolved` on
-   * `handshake` and `claims`. WP-284 resolves the core's own `sha-<7>` digests and keeps this as the
-   * override.
+   * `handshake` and `claims` while the core cannot resolve its own. Since WP-284 the core resolves
+   * its own `sha-<7>` digests (`workers/digests.ts`) and this is the **override** — a mirror, an
+   * air-gapped registry — which, set, is the whole answer and nothing is resolved.
    */
   workerImageDigests: coreImageDigestsSchema.nullable(),
+  /**
+   * `APP_IMAGE_REPOSITORY` (WP-284, TD-032 decision 3): `<registry>/<namespace>` where this build's
+   * four images are published as `<image>:sha-<7>` — what the core resolves its own digests in and
+   * what the rendered `compose.worker.yml` names them by. The default is where `image.yml` publishes
+   * this repository's images (`ghcr.io/<owner>`, the owner of `org.opencontainers.image.source`).
+   */
+  imageRepository: z
+    .string()
+    .regex(/^[a-z0-9.-]+(?::[0-9]{1,5})?\/[a-z0-9._/-]+$/, 'expected <registry>/<namespace>'),
+  /**
+   * `APP_WORKER_COMPOSE_TEMPLATE` (WP-284): where `compose.worker.yml`'s template is read; `null`
+   * reads the copy baked into the image (`/opt/platform/compose.worker.yml`), else the checkout's.
+   */
+  workerComposeTemplate: z.string().min(1).nullable(),
 
   /**
    * How often the ticket poller's sweep lists the polling bindings and re-arms any whose chain was
@@ -594,6 +611,8 @@ export const SERVER_CONFIG_DEFAULTS = {
   runnerConcurrency: 1,
   leaseSkewGraceSeconds: 120,
   workerImageDigests: null,
+  imageRepository: 'ghcr.io/gtfo-ai',
+  workerComposeTemplate: null,
   pollSweepIntervalMs: 60_000,
   argon2: { memoryCostKib: 19_456, timeCost: 2, parallelism: 1 },
 } as const;
@@ -1175,6 +1194,10 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
       SERVER_CONFIG_DEFAULTS.leaseSkewGraceSeconds,
     ),
     workerImageDigests: imageDigestsFromEnv(env.APP_WORKER_IMAGE_DIGESTS),
+    imageRepository:
+      nonEmpty(env.APP_IMAGE_REPOSITORY)?.replace(/\/+$/, '') ??
+      SERVER_CONFIG_DEFAULTS.imageRepository,
+    workerComposeTemplate: nonEmpty(env.APP_WORKER_COMPOSE_TEMPLATE) ?? null,
     pollSweepIntervalMs: numberFromEnv(
       nonEmpty(env.APP_POLL_SWEEP_INTERVAL_MS) ?? env[DEPRECATED_POLL_SWEEP_INTERVAL_VARIABLE],
       SERVER_CONFIG_DEFAULTS.pollSweepIntervalMs,

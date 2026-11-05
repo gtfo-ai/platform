@@ -34,7 +34,14 @@
  * `queries/pipeline-queries.ts`, and is what `app.ts` composes.
  */
 import { configuredStageAgent, type ProjectSettingsPort } from '@platform/application';
-import type { Id, RetryDefaults, RunCommandRecord, RunRecord, UserRole } from '@platform/contracts';
+import type {
+  Id,
+  RetryDefaults,
+  RunCommandRecord,
+  RunRecord,
+  RunSeat,
+  UserRole,
+} from '@platform/contracts';
 import {
   apiErrorSchema,
   contextPackRecordSchema,
@@ -52,6 +59,7 @@ import { requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findProjectRole, findRunProjectId } from '../queries/identity-queries.js';
+import { seatsFor } from '../queries/live-view-queries.js';
 import {
   findRun,
   findRunContextPack,
@@ -71,7 +79,8 @@ import { scopedProject, scopeToProject } from './scope.js';
 export interface RunQueries {
   readonly runProjectId: (runId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
-  readonly run: (runId: string) => Promise<RunRecord | null>;
+  /** The run's record and, since WP-283 (5), who executed it (`seat`, the agents list's own). */
+  readonly run: (runId: string) => Promise<(RunRecord & { readonly seat?: RunSeat | null }) | null>;
   readonly messages: (runId: string, query: RunMessagesQuery) => Promise<RunMessagePage>;
   readonly prompt: (runId: string) => Promise<RunPrompt>;
   readonly commands: (runId: string) => Promise<readonly RunCommandRecord[]>;
@@ -92,7 +101,12 @@ export const databaseRunQueries = (
 ): RunQueries => ({
   runProjectId: async (runId) => findRunProjectId(database, runId),
   projectRole: async (projectId, userId) => findProjectRole(database, projectId, userId),
-  run: async (runId) => findRun(database, runId),
+  run: async (runId) => {
+    const run = await findRun(database, runId);
+    if (run === null) return null;
+    const seats = await seatsFor(database, [runId]);
+    return { ...run, seat: seats.get(runId) ?? null };
+  },
   messages: async (runId, query) => listRunMessages(database, runId, query),
   prompt: async (runId) => findRunPrompt(database, runId),
   commands: async (runId) => listRunCommands(database, runId),
