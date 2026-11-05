@@ -580,6 +580,11 @@ describe('the wizard writes the default block for a tracker it binds (backlog 55
     await user.click(within(picker).getAllByRole('checkbox')[1] as HTMLElement);
     await user.click(screen.getByRole('button', { name: 'Save 3 connections' }));
     await waitFor(() => expect(state.puts).toHaveLength(1));
+    // The stored tracker is in the set the save sends — absent, `trackerConfigOf` would read `{}`.
+    const sent = (state.puts[0] as { items: { integration_id: string }[] }).items.map(
+      (item) => item.integration_id,
+    );
+    expect(sent).toContain(TRACKER);
     expect(trackerConfigOf(state.puts[0])).toEqual({});
   });
 });

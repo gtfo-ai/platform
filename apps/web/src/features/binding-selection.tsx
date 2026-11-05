@@ -10,7 +10,8 @@
  * read there is no selection at all, and nothing can be saved.
  *
  * The save says what it will do: it is disabled while the selection equals the stored set, it is
- * labelled with the change (*Save 2 connections*, *Remove the git host connection*), and a removal
+ * labelled with the change (*Save 2 connections*, *Remove the git host connection*, *Save 1
+ * connection, remove 1*), and a removal
  * asks first, naming what stops working. The wizard's step said "Bind 0 integrations" and unbound
  * everything (the final UX audit, § 0 item 1).
  *
@@ -100,7 +101,8 @@ export const bindingSaveLabel = (selection: BindingSelection): string => {
       ? `Remove the ${INTEGRATION_TYPE_LABEL[only.type].toLowerCase()} connection`
       : `Remove ${plural(selection.removed.length, 'connection')}`;
   }
-  return `Save ${plural(selection.selected.length, 'connection')}`;
+  const save = `Save ${plural(selection.selected.length, 'connection')}`;
+  return selection.removed.length === 0 ? save : `${save}, remove ${selection.removed.length}`;
 };
 
 /**
@@ -135,7 +137,11 @@ export const SaveBindingsButton = ({
       open={confirming}
       onOpenChange={setConfirming}
       title={title}
-      description="The project stops using it as soon as you confirm. The integration itself is kept, and can be bound again."
+      description={
+        selection.removed.length === 1
+          ? 'The project stops using it as soon as you confirm. The integration itself is kept, and can be bound again.'
+          : 'The project stops using them as soon as you confirm. The integrations themselves are kept, and can be bound again.'
+      }
       trigger={<Button disabled={disabled}>{label}</Button>}
       footer={
         <>

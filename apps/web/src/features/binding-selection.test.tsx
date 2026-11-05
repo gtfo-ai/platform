@@ -72,8 +72,16 @@ const INTEGRATIONS: readonly IntegrationSummary[] = [
   integration(GIT, 'git', 'gitlab', 'Git host (fake)'),
 ];
 
+/** Bound to the project but not offered by the picker (retired, or not readable for this role). */
+const UNLISTED = integration(
+  '00000000-0000-4000-8000-0000000000d4',
+  'communication',
+  'slack',
+  'Chat (unlisted)',
+);
+
 const bindingOf = (id: string, config: Record<string, unknown> = {}): ProjectBindingSummary => {
-  const found = INTEGRATIONS.find((item) => item.id === id);
+  const found = [...INTEGRATIONS, UNLISTED].find((item) => item.id === id);
   if (found === undefined) {
     throw new Error(`no fixture integration ${id}`);
   }
@@ -219,5 +227,46 @@ describe.each(Object.entries(SCREENS))('%s', (_screen, path) => {
     expect(state.puts[0]?.items).toEqual([
       { integration_id: TRACKER, config: { lifecycle: { claim: false } } },
     ]);
+  });
+  it('keeps a stored binding the picker does not list through a save', async () => {
+    const state: World = {
+      bindings: [bindingOf(UNLISTED.id, { channel: '#delivery' })],
+      puts: [],
+    };
+    open(state);
+    const user = userEvent.setup();
+    await user.click(await checkbox('Tracker (fake)'));
+    expect(screen.queryByRole('checkbox', { name: /Chat \(unlisted\)/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Save 2 connections' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect(state.puts[0]?.items).toEqual([
+      { integration_id: UNLISTED.id, config: { channel: '#delivery' } },
+      // The wizard adds the tracker's default lifecycle block; the settings page sends none.
+      expect.objectContaining({ integration_id: TRACKER }),
+    ]);
+  });
+
+  it('labels a save that adds and removes with both, and says "them" for two removals', async () => {
+    const state: World = { bindings: [bindingOf(TRACKER)], puts: [] };
+    open(state);
+    const user = userEvent.setup();
+    await waitFor(async () => expect((await checkbox('Tracker (fake)')).checked).toBe(true));
+    await user.click(await checkbox('Tracker (fake)'));
+    await user.click(await checkbox('Git host (fake)'));
+    await user.click(screen.getByRole('button', { name: 'Save 1 connection, remove 1' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('The project stops using it as soon as you confirm.');
+    await user.click(within(dialog).getByRole('button', { name: 'Remove connection' }));
+    await waitFor(() => expect(state.puts).toHaveLength(1));
+    expect(putIds(state.puts[0])).toEqual([GIT]);
+    cleanup();
+    open({ bindings: [bindingOf(TRACKER), bindingOf(GIT)], puts: [] });
+    await waitFor(async () => expect((await checkbox('Git host (fake)')).checked).toBe(true));
+    await user.click(await checkbox('Tracker (fake)'));
+    await user.click(await checkbox('Git host (fake)'));
+    await user.click(screen.getByRole('button', { name: 'Remove 2 connections' }));
+    const both = await screen.findByRole('dialog');
+    expect(both.textContent).toContain('The project stops using them as soon as you confirm.');
+    expect(both.textContent).toContain('The integrations themselves are kept');
   });
 });
