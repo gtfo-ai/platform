@@ -500,6 +500,55 @@ the last 30 days. **New project** at the top right opens the wizard; with no pro
 says what a project is and offers the same. How many things wait for you is not shown per project
 yet — the inbox's count in the top bar is the total.
 
+### Agents
+
+**Agents** in the top navigation answers *what are my agents and workers doing right now, and what
+needs me*. Under the title one line says it in words — *2 working · 1 needs you · 1 waiting · 3 free
+seats*, and *· 1 stuck* when an agent has been silent too long — and while something needs you the
+page's one button is **Open inbox**. Below it, three views of the same live data; the one you pick is
+remembered in this browser and is part of the address (`/agents?view=office`), so it can be sent to
+somebody:
+
+- **Map** (the default): your organisation on the left, then one card per **seat** — the platform
+  server, and each worker machine with its owner, *2 of 3 slots busy* and a *Paused* badge when it is
+  paused — and to the right of each seat the runs it holds, then its free slots. Under the seats the
+  **Queue** holds the runs no seat has picked up yet, and under the organisation **Needs you** lists
+  what waits for a person, each a link to its task. A run's card shows its ticket key and title, the
+  project, its status (*● Working*, *Thinking*, *Needs you*, *Stuck*, *Waiting*), the *Now: Reading
+  files* line, the task's whole pipeline as a strip of stages with the current one named, the model,
+  how long it has run and what it has cost so far. A connector is dashed and moving while the agent
+  works and solid amber while it waits for you. Drag to pan; the buttons in the corner zoom and fit.
+  On a narrow screen the list is shown instead.
+- **Office**: the same seats as a pixel office, always in the dark brand colours. Each worker is a
+  room with its name on the door plate, and the server is the *Platform room*. Each run sits at a desk
+  as the platform's robot, posed by what the agent is doing — typing, thinking (a growing thought
+  bubble), a raised hand with a *!* when it needs you, scratching its head with a *?* when it is stuck,
+  a coffee while it starts up — with a speech bubble saying *Now: …* and a nameplate with the ticket
+  and the stage. A free desk has a sleeping robot (a coffee on a paused worker); a run that has just
+  finished cheers for a moment, one that failed slumps. Runs waiting for a seat sit on the bench in the
+  **Lobby**, and what needs you stands at the beacon-lit **help desk**, each a link to its task. If
+  your system asks for reduced motion, every robot holds still. Each desk is a button whose name says
+  everything the drawing does, in words — *DEMO-1 · Code review · working: Reading files · worker
+  jan-mbp* — so a screen reader hears what a glance sees.
+- **List**: every live run as a row, what needs you first, then what is stuck, then the rest oldest
+  first — project, ticket and title, the stage, what the agent is doing, where it runs, the model, the
+  stage strip, how long and how much — with a `···` menu: **Open run**, **Open task** and **Cancel
+  run…**, which asks before it stops the agent. Below it, what needs you and every seat with its slots.
+  This is the view that always tells the whole story; the other two never say anything it does not.
+
+A card, a desk or a row opens the same dialog: the run's **Live activity** beside its **log**, where it
+runs, and **Open task** / **Open run** — steering and stopping stay on the run page. The page updates
+on its own: an event from the platform refreshes the lists, the clock moves *elapsed* and *stuck*
+every 15 seconds, and the *Now: …* of up to twelve runs on screen follows their transcripts live.
+With nothing running, the map and the list say *No agent is working* with a way to a board, and the
+office shows everyone asleep under the same words.
+
+What it cannot show yet: how many runs the platform server takes at once (no reading reports it, so
+its seat says *2 running* rather than a slot count, and the free-seat count is the workers' alone);
+whether a worker is draining; a worker that is not yours unless you are an administrator (its runs
+are still shown, on a seat named from the run); and an escalated task with no question or approval
+(Home's *Needs you* lists those).
+
 ## 3. The board
 
 **A project → Board**, the project's first tab. Five columns — **Queued**, **Active**, **Needs you**,

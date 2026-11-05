@@ -323,6 +323,7 @@ export const StageDialog = ({
   onClose,
   artifacts,
   seat,
+  taskId,
 }: {
   readonly graph: FlowGraph;
   readonly open: boolean;
@@ -336,6 +337,11 @@ export const StageDialog = ({
   readonly artifacts?: TaskDetailResponse['artifacts'];
   /** Task mode: the live run's seat off the agents read. */
   readonly seat?: Seat;
+  /**
+   * The run's task, for an *Open task* link — where the dialog is opened away from the task's page
+   * (the Agents page's fleet, S-23.6). Absent on the task page itself.
+   */
+  readonly taskId?: string;
 }): ReactElement | null => {
   const { now } = useServices();
   if (node === null) {
@@ -403,6 +409,15 @@ export const StageDialog = ({
                 className="text-sm text-accent underline"
               >
                 {`Open artifact (${ARTIFACT_TYPE_LABEL[artifact.artifact_type]} v${artifact.version})`}
+              </Link>
+            )}
+            {taskId === undefined ? null : (
+              <Link
+                to="/tasks/$taskId"
+                params={{ taskId }}
+                className="text-sm text-accent underline"
+              >
+                Open task
               </Link>
             )}
             {run === null ? null : (

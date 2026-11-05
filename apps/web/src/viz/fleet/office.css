@@ -1,0 +1,115 @@
+/*
+ * The office's room (`office.tsx`, TD-033 decision 8 (c)) — always the dark brand room: every
+ * colour here is a brand token (`--signin-*`, `--brand-*`) or a semantic token read inside the
+ * office's `data-theme="dark"` scope, and none is a base value of its own (`ui/contrast.test.ts`
+ * keeps those in `styles.css`'s token blocks). Imported by the office's lazy chunk only.
+ *
+ * The walls are night ink with a lit baseboard, the floor a quiet two-ink checker, a door plate is
+ * a beacon sign with night letters (10.2:1), and the help desk glows beacon while somebody waits
+ * there. The bots' own motion is `ui/bot/bot.css`; the lamp's glow here blinks, and stands lit and
+ * still under `prefers-reduced-motion`.
+ */
+.office {
+  background-color: var(--brand-deep-night);
+  border: 1px solid var(--signin-lit);
+}
+
+.office-room {
+  overflow: hidden;
+  border: 3px solid var(--signin-lit);
+  border-radius: 6px;
+  background-color: var(--signin-night);
+}
+
+.office-wall {
+  background-color: var(--signin-ink);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 11px,
+    var(--brand-hover) 11px 12px
+  );
+  border-bottom: 4px solid var(--signin-lit);
+}
+
+.office-floor {
+  background-color: var(--signin-night);
+  background-image: repeating-conic-gradient(var(--signin-ink) 0 25%, transparent 0 50%);
+  background-size: 32px 32px;
+}
+
+.office-plate {
+  max-width: 100%;
+  padding: 1px 8px;
+  border: 2px solid var(--brand-deep-night);
+  border-radius: 2px;
+  background-color: var(--signin-beacon);
+  box-shadow: 0 2px 0 var(--brand-deep-night);
+  color: var(--signin-night);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.office-badge {
+  padding: 0 6px;
+  border: 1px solid var(--signin-edge);
+  border-radius: 9999px;
+  color: var(--signin-text);
+}
+
+.office-label {
+  color: var(--signin-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.office-empty {
+  padding: 12px 16px;
+  border: 1px solid var(--signin-lit);
+  border-radius: 6px;
+  background-color: var(--signin-ink);
+}
+
+.office-help {
+  border: 2px dashed var(--signin-lit);
+}
+
+.office-help--lit {
+  border-style: solid;
+  border-color: var(--signin-beacon);
+  box-shadow: inset 0 0 36px -14px var(--signin-beacon);
+}
+
+.office-hit {
+  background-color: transparent;
+  cursor: pointer;
+}
+
+.office-hit:hover {
+  background-color: color-mix(in srgb, var(--signin-text) 6%, transparent);
+}
+
+.office-lamp--off .office-lamp {
+  opacity: 0.45;
+}
+
+@keyframes office-lamp-glow {
+  0% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.office-lamp-glow {
+  animation: office-lamp-glow 1.2s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .office-lamp-glow {
+    animation: none;
+  }
+}

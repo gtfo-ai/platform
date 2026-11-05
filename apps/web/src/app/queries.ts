@@ -623,6 +623,23 @@ export const useTasks = (taskIds: readonly string[]) => {
   });
 };
 
+/**
+ * {@link useTaskPipeline} for a handful of tasks — the Agents page's runs (S-23.6), whose
+ * `PhaseTrack` shows every stage of the task's frozen pipeline rather than only those entered.
+ * Same keys and the same no-retry-on-an-answer rule as the task page's.
+ */
+export const useTaskPipelines = (taskIds: readonly string[]) => {
+  const { endpoints } = useServices();
+  return useQueries({
+    queries: taskIds.map((taskId) => ({
+      queryKey: queryKeys.taskPipeline(taskId),
+      queryFn: () => endpoints.taskPipeline(taskId),
+      retry: (failures: number, error: Error) => !(error instanceof ApiError) && failures < 3,
+      ...FOREVER,
+    })),
+  });
+};
+
 export const useAgents = () => {
   const { endpoints } = useServices();
   return useQuery({

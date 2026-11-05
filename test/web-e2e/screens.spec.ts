@@ -7,7 +7,7 @@
  * back.
  */
 import { expect, test } from '@playwright/test';
-import { failedJobs, IDS, PROJECT_KEY } from './support/fixtures.js';
+import { failedJobs, HOSTILE, IDS, PROJECT_KEY } from './support/fixtures.js';
 import { commandLog, resetBackend, signIn } from './support/harness.js';
 
 test.beforeEach(async ({ page, request }) => {
@@ -263,12 +263,25 @@ test('answering a question sends the command and the question leaves the inbox',
   await expect(page.getByRole('link', { name: 'Decide on the task' })).toBeVisible();
 });
 
-test('the agents view lists the running run and links to it', async ({ page }) => {
-  await page.goto('/agents');
-  await expect(
-    page.getByRole('link', { name: 'Implementation · Developer', exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText('claude-opus-5')).toBeVisible();
+test('the agents list shows every live run and opens one’s dialog with a link to the run', async ({
+  page,
+}) => {
+  await page.goto('/agents?view=list');
+  const runs = page.getByRole('list', { name: 'Runs' });
+  // What needs a person first: DEMO-1 has an open question, DEMO-5 is thinking, DEMO-6 waits.
+  await expect(runs.getByRole('button', { name: /^demo_service · DEMO-/ })).toHaveText([
+    `demo_service · DEMO-1 · Checkout ${HOSTILE.script}`,
+    `demo_service · DEMO-5 · Flaky retries ${HOSTILE.image}`,
+    'demo_service · DEMO-6 · Export the invoice as CSV',
+  ]);
+  await expect(runs.getByText('worker jan-mbp')).toBeVisible();
+  await expect(runs.getByText('claude-opus-5').first()).toBeVisible();
+  await runs.getByRole('button', { name: /^demo_service · DEMO-1/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'DEMO-1 · Implementation' });
+  await expect(dialog.getByRole('link', { name: 'Open run' })).toHaveAttribute(
+    'href',
+    `/runs/${IDS.run}`,
+  );
 });
 
 test('the audit log renders an entry with its diff', async ({ page }) => {

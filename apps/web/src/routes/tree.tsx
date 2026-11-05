@@ -46,6 +46,7 @@ import { queryKeys } from '../api/keys.js';
 import { ProjectFrame, type ProjectTab } from '../app/project-frame.js';
 import type { Services } from '../app/services.js';
 import { AppShell } from '../app/shell.js';
+import { FLEET_VIEWS } from '../features/agents-view.js';
 import { DashboardScreen } from '../features/dashboard.js';
 import { WIZARD_STEP_IDS } from '../features/onboarding-steps.js';
 import { SignInScreen } from '../features/sign-in.js';
@@ -107,10 +108,15 @@ const projectsRoute = route(
   '/projects',
   lazyRouteComponent(() => import('../features/projects.js'), 'ProjectsScreen'),
 );
-const agentsRoute = route(
-  '/agents',
-  lazyRouteComponent(() => import('../features/agents.js'), 'AgentsScreen'),
-);
+/** `?view=map|office|list` — the Agents page's view (S-23.6); an unknown value is no choice. */
+const agentsSearchSchema = z.object({ view: z.enum(FLEET_VIEWS).optional().catch(undefined) });
+
+const agentsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/agents',
+  validateSearch: agentsSearchSchema,
+  component: lazyRouteComponent(() => import('../features/agents.js'), 'AgentsScreen'),
+});
 const inboxRoute = route(
   '/inbox',
   lazyRouteComponent(() => import('../features/inbox.js'), 'InboxScreen'),

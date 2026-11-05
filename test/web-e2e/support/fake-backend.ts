@@ -698,7 +698,18 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         '/api/version': fixtures.version,
         '/api/org/users': fixtures.orgUsers,
         '/api/org/audit': fixtures.audit,
-        '/api/org/agents': fixtures.agents,
+        // S-23.6: each newest entry is stamped "now", so the fleet reads as working in a browser
+        // whose clock is not the fixtures' (a stale one reads as stuck, which is a different test).
+        '/api/org/agents': {
+          items: fixtures.agents.items.map((item) =>
+            item.activity === null
+              ? item
+              : { ...item, activity: { ...item.activity, at: new Date().toISOString() } },
+          ),
+        },
+        '/api/workers': fixtures.workers,
+        [`/api/runs/${fixtures.IDS.runWorker}/messages`]: fixtures.emptyRunMessages,
+        [`/api/runs/${fixtures.IDS.runQueued}/messages`]: fixtures.emptyRunMessages,
         '/api/org/models': fixtures.orgModels,
         '/api/org/inbox': {
           questions: fixtures.inbox.questions.filter((item) => !answeredQuestions.has(item.id)),
@@ -739,6 +750,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         [`/api/tasks/${fixtures.IDS.taskBug}`]: fixtures.bugTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskTaken}`]: fixtures.takenOverTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskEpic}`]: fixtures.epicTaskDetail,
+        [`/api/tasks/${fixtures.IDS.taskFleetWorker}`]: fixtures.fleetWorkerTaskDetail,
+        [`/api/tasks/${fixtures.IDS.taskFleetQueued}`]: fixtures.fleetQueuedTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskEpic}/breakdown`]: fixtures.epicBreakdown,
         [`/api/runs/${fixtures.IDS.run}`]: fixtures.runRead,
         [`/api/runs/${fixtures.IDS.run}/messages`]: fixtures.runMessages,

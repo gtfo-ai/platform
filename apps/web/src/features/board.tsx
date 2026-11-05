@@ -213,7 +213,9 @@ const StartTicketDialog = ({
           void navigate({
             to: '/projects/$key',
             params: { key: projectKey },
-            search: (previous) => previous,
+            // Keep the search as it is (`?view=list`): `true` rather than `(previous) => previous`,
+            // whose `previous` is every route's search — the Agents page's `view` included.
+            search: true,
             replace: true,
           });
         }

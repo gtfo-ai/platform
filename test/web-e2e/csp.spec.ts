@@ -37,10 +37,15 @@
  * and opened in the built bundle, the task page's live canvas follows a `run:<id>` frame into its
  * stage dialog's log, both with no violation — and the live edge's dash animation stops under
  * reduced motion, which React Flow's own stylesheet does not do.
+ *
+ * Since S-23.6, the **Agents page's three views**: the fleet map (a second lazy canvas chunk), the
+ * pixel office (a lazy chunk of SVG text grids, always the dark room) and the list, each over the
+ * fixtures' three runs, two workers and hostile titles — drawn, opened and switched under the
+ * policy, the tracker's text as text, and the office's bots still under reduced motion.
  */
 import type { SseFrame } from '@platform/contracts';
 import { expect, type Page, test } from '@playwright/test';
-import { IDS, liveTranscriptEvent, PROJECT_KEY } from './support/fixtures.js';
+import { HOSTILE, IDS, liveTranscriptEvent, PROJECT_KEY } from './support/fixtures.js';
 import { publishFrame, resetBackend, signIn, waitForStreamCarrying } from './support/harness.js';
 
 interface CollectedViolation {
@@ -288,9 +293,12 @@ test('the flow canvas and its stage dialog open under the policy without a viola
     () =>
       performance
         .getEntriesByType('resource')
-        .filter((entry) => /\/assets\/flow-canvas-[^/]+\.(js|css)$/.test(entry.name)).length,
+        // The canvas's own chunk, and the library's with its stylesheet (`vite.config.ts`'s
+        // `xyflow` group, shared with the fleet map since S-23.6).
+        .filter((entry) => /\/assets\/(flow-canvas|xyflow)-[^/]+\.(js|css)$/.test(entry.name))
+        .length,
   );
-  expect(lazyChunks).toBe(2);
+  expect(lazyChunks).toBe(3);
 
   // The stage dialog: a Base UI Dialog, opened from the card, closed by Escape, focus returned.
   await implementation.click();
@@ -361,5 +369,91 @@ test('a live edge stops its dash animation under reduced motion (S-23.5)', async
   expect(await animation()).toBe('dashdraw');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect.poll(animation).toBe('none');
+  expect(await violations(page)).toEqual([]);
+});
+
+test('the Agents page draws its map, office and list under the policy, titles as text (S-23.6)', async ({
+  page,
+}) => {
+  await signIn(page);
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
+  // The light theme, so the office's dark room is a choice of its own and not the page's.
+  await page.evaluate(() => {
+    localStorage.setItem('agentic.theme', 'light');
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // The map: the default view, its own lazy chunk; a card per live run, the working one animated.
+  await page.goto('/agents');
+  const map = page.locator('[data-fleet-canvas]');
+  await expect(map).toBeVisible();
+  await expect(page.locator('[data-fleet-counts]')).toHaveText(
+    '1 working · 2 need you · 1 waiting · 2 free seats',
+  );
+  const cards = map.locator('[data-fleet-run]');
+  await expect(cards).toHaveCount(3);
+  await expect(map.locator('[data-fleet-run]').filter({ hasText: 'DEMO-5' })).toContainText(
+    `Flaky retries ${HOSTILE.image}`,
+  );
+  await expect(map.locator('.react-flow__edge.animated')).not.toHaveCount(0);
+  await expect(map.locator('[data-fleet-node="seat"]')).toHaveCount(3);
+  await page
+    .getByRole('button', { name: /^DEMO-5 · Investigation · thinking · worker jan-mbp$/ })
+    .click();
+  const dialog = page.getByRole('dialog', { name: 'DEMO-5 · Investigation' });
+  await expect(dialog.getByText(/Watch-only — the agent runs on/)).toContainText('jan-mbp');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+
+  // The office: its own lazy chunk, the dark brand room in the light theme, a desk per run.
+  await page.getByRole('button', { name: 'Office' }).click();
+  await expect(page).toHaveURL(/\?view=office$/);
+  const office = page.locator('[data-office]');
+  await expect(office).toBeVisible();
+  expect(await office.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
+    'rgb(15, 13, 34)',
+  );
+  await expect(
+    office.getByRole('button', {
+      name: /^DEMO-1 · Implementation · needs you · the platform server$/,
+    }),
+  ).toBeVisible();
+  await expect(
+    office.getByRole('button', { name: /^DEMO-6 · Refinement · waiting: Starting · no seat yet$/ }),
+  ).toBeVisible();
+  await expect(office.locator('[data-door-plate]').filter({ hasText: 'night-owl' })).toHaveText(
+    `night-owl ${HOSTILE.image}`,
+  );
+  // Calibrated first: the blink runs, then stops under reduced motion.
+  const blink = office.locator('[data-desk] g.bot-blink').first();
+  expect(await blink.evaluate((element) => getComputedStyle(element).animationName)).toBe(
+    'bot-blink',
+  );
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect
+    .poll(async () => await blink.evaluate((element) => getComputedStyle(element).animationName))
+    .toBe('none');
+  await expect(office).toHaveAttribute('data-motion', 'reduced');
+
+  // The list: every run as a row.
+  await page.getByRole('button', { name: 'List' }).click();
+  // The rows themselves: each row's phase strip is a list of its own.
+  await expect(page.getByRole('list', { name: 'Runs' }).locator(':scope > li')).toHaveCount(3);
+
+  const loaded = await page.evaluate(
+    () =>
+      performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .filter((name) => /\/assets\/(fleet-canvas|office|xyflow)-[^/]+\.(js|css)$/.test(name))
+        .length,
+  );
+  // The map's chunk and the canvas library's, the office's — each a script and a stylesheet.
+  expect(loaded).toBe(6);
+  // No hostile string became an element.
+  expect(await page.evaluate(() => (window as { __pwned?: boolean }).__pwned)).toBeUndefined();
+  await expect(page.locator('img')).toHaveCount(0);
   expect(await violations(page)).toEqual([]);
 });

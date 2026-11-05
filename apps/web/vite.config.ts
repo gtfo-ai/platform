@@ -13,9 +13,10 @@
  * measures the *initial* graph — the entry chunk plus everything `index.html` preloads — so a hand
  * written chunk split that moves bytes out of the entry chunk and into a preloaded one would lower
  * no number that matters. What lowers it is a route that is genuinely lazy, and those are declared
- * with `lazyRouteComponent` in `src/routes/`. The one chunk group below is not a size decision:
- * it keeps zod and `src/zod-jitless.ts` together so the JIT is off before any schema is built
- * (S-23.4), and the budget counts the chunk like any other initial asset.
+ * with `lazyRouteComponent` in `src/routes/`. Neither chunk group below is a size decision: `zod`
+ * keeps zod and `src/zod-jitless.ts` together so the JIT is off before any schema is built
+ * (S-23.4), and the budget counts the chunk like any other initial asset; `xyflow` names the lazy
+ * chunk the two canvases share (S-23.6), which no screen's first paint loads.
  *
  * **The build's commit is compiled in** (WP-154 (d), PROGRESS backlog 487): `APP_COMMIT`, the value
  * the image build already passes for `GET /api/version` (`docker/app.Dockerfile` declares it in the
@@ -50,6 +51,18 @@ export default defineConfig({
         codeSplitting: {
           groups: [
             { name: 'zod', test: /[\\/]node_modules[\\/]zod[\\/]|[\\/]src[\\/]zod-jitless\.ts$/ },
+            // The canvas library, its own dependencies, its stylesheet and the canvas tokens
+            // (`viz/flow/flow.css`), which the pipeline's canvas and the fleet map (S-23.6) share:
+            // one lazy chunk with a name a test can find, rather than whatever the bundler calls a
+            // chunk two imports share. Named, not followed (`includeDependenciesRecursively`):
+            // following them dragged this chunk into the initial graph (`bundle:check`, measured),
+            // because they reach modules the entry uses too — `use-sync-external-store` is
+            // zustand's dependency and the router's (`@tanstack/react-store`).
+            {
+              name: 'xyflow',
+              test: /[\\/]node_modules[\\/](@xyflow[\\/]|d3-[a-z-]+[\\/]|zustand[\\/]|classcat[\\/])|[\\/]src[\\/]viz[\\/]flow[\\/]flow\.css$/,
+              includeDependenciesRecursively: false,
+            },
           ],
         },
       },

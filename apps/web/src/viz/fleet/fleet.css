@@ -1,0 +1,16 @@
+/*
+ * The fleet map's connectors (`fleet-canvas.tsx`), on top of `../flow/flow.css`'s canvas tokens —
+ * imported by the map's lazy chunk only, and holding no base colour of its own. A run that works is
+ * flow.css's animated beacon dash; a run that waits for a person is a **solid**, heavier beacon line,
+ * so the two differ by shape and not by colour alone; a run that just ended is a faint line.
+ */
+.agentic-fleet .fleet-edge--needs_you .react-flow__edge-path {
+  stroke: var(--running-fg);
+  stroke-width: 2.5;
+  stroke-dasharray: none;
+}
+
+.agentic-fleet .fleet-edge--ended .react-flow__edge-path {
+  stroke: var(--fg-subtle);
+  opacity: 0.6;
+}

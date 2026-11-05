@@ -61,6 +61,7 @@ import {
   ticketStatusesResponseSchema,
   transcriptEventSchema,
   versionResponseSchema,
+  workersResponseSchema,
 } from '@platform/contracts';
 import { compilePipeline, resolveIterationLimits, SHIPPED_TEMPLATES } from '@platform/domain';
 import { SHIPPED_PROVIDERS, toIntegrationProvider } from '@platform/integrations';
@@ -87,6 +88,13 @@ export const IDS = {
   taskEpic: id(23),
   childA: id(90),
   childB: id(91),
+  // S-23.6: the fleet — a run a worker holds, a run waiting for a seat, and two machines.
+  runWorker: id(41),
+  runQueued: id(42),
+  taskFleetWorker: id(24),
+  taskFleetQueued: id(25),
+  worker: id(100),
+  workerPaused: id(101),
 } as const;
 
 export const PROJECT_KEY = 'demo_service';
@@ -831,6 +839,105 @@ export const orgModels = orgModelsResponseSchema.parse({
   ],
 });
 
+/**
+ * S-23.6: two more tasks for the fleet — DEMO-5, a bug a worker is investigating (its title hostile,
+ * so the map, the office and the list render tracker text as text), and DEMO-6, whose refinement
+ * waits for a seat. Neither has a question or an approval, so their agents are not "needs you".
+ */
+export const fleetWorkerTaskDetail = taskDetailResponseSchema.parse({
+  ...bugTaskDetail,
+  task: {
+    ...bugTask,
+    id: IDS.taskFleetWorker,
+    ticket: { provider: 'jira', key: 'DEMO-5', url: HOSTILE.safeUrl },
+    ticket_title: `Flaky retries ${HOSTILE.image}`,
+    state: 'active',
+    current_stage: 'investigation',
+  },
+  stages: [
+    {
+      stage: 'refinement',
+      attempt: 1,
+      state: 'completed',
+      entered_at: now,
+      exited_at: now,
+      outcome: 'approve',
+    },
+    {
+      stage: 'investigation',
+      attempt: 1,
+      state: 'running',
+      entered_at: now,
+      exited_at: null,
+      outcome: null,
+    },
+  ],
+  questions: [],
+  approvals: [],
+  runs: [],
+});
+
+export const fleetQueuedTaskDetail = taskDetailResponseSchema.parse({
+  ...bugTaskDetail,
+  task: {
+    ...bugTask,
+    id: IDS.taskFleetQueued,
+    ticket: { provider: 'jira', key: 'DEMO-6', url: HOSTILE.safeUrl },
+    ticket_title: 'Export the invoice as CSV',
+    state: 'active',
+    current_stage: 'refinement',
+  },
+  stages: [
+    {
+      stage: 'refinement',
+      attempt: 1,
+      state: 'pending',
+      entered_at: now,
+      exited_at: null,
+      outcome: null,
+    },
+  ],
+  questions: [],
+  approvals: [],
+  runs: [],
+});
+
+/** S-23.6: DEMO-5's investigation, held by the worker `jan-mbp`, thinking. */
+export const runWorker = runRecordSchema.parse({
+  ...run,
+  id: IDS.runWorker,
+  task_id: IDS.taskFleetWorker,
+  stage: 'investigation',
+  role: 'investigator',
+  model: 'claude-sonnet-5',
+  effort: 'medium',
+  prompt_version: 'investigator@1.0.0',
+  cost: { usd: 0.8, is_estimate: true, price_list_id: null },
+  model_usage: [],
+});
+
+/** S-23.6: DEMO-6's refinement, offered and not claimed yet — the queue. */
+export const runQueued = runRecordSchema.parse({
+  ...run,
+  id: IDS.runQueued,
+  task_id: IDS.taskFleetQueued,
+  stage: 'refinement',
+  role: 'product_manager',
+  status: 'created',
+  session_id: null,
+  started_at: null,
+  last_output_at: null,
+  num_turns: 0,
+  model_usage: [],
+  cost: null,
+  wall_ms: 0,
+});
+
+/**
+ * `GET /api/org/agents` — every run that has not ended, with its seat and newest entry (S-23.15).
+ * The fake backend restamps each `activity.at` to the moment it answers (`fake-backend.ts`), so a
+ * run reads as working in a browser whose clock is not the fixtures' `now`, rather than as stuck.
+ */
 export const agents = agentsResponseSchema.parse({
   items: [
     {
@@ -842,8 +949,67 @@ export const agents = agentsResponseSchema.parse({
       seat: { kind: 'server', worker_id: null, worker_name: null },
       activity: { kind: 'tool', tool_name: 'Read', at: now },
     },
+    {
+      run: runWorker,
+      project_id: IDS.project,
+      task_id: IDS.taskFleetWorker,
+      role: 'investigator',
+      last_output_at: now,
+      seat: { kind: 'worker', worker_id: IDS.worker, worker_name: 'jan-mbp' },
+      activity: { kind: 'thinking', tool_name: null, at: now },
+    },
+    {
+      run: runQueued,
+      project_id: IDS.project,
+      task_id: IDS.taskFleetQueued,
+      role: 'product_manager',
+      last_output_at: null,
+      seat: null,
+      activity: null,
+    },
   ],
 });
+
+/** S-23.6: the machines — one with a free slot or two, one paused with a hostile name. */
+export const workers = workersResponseSchema.parse({
+  items: [
+    {
+      id: IDS.worker,
+      name: 'jan-mbp',
+      user: { id: IDS.user, email: 'operator@example.invalid', name: 'Fake Operator' },
+      created_at: now,
+      last_seen_at: now,
+      protocol_version: 1,
+      image_digests: [],
+      state: 'active',
+      revoked_at: null,
+      paused_until: null,
+      paused_reason: null,
+      concurrency: 3,
+      running: [{ run_id: IDS.runWorker, task_id: IDS.taskFleetWorker, project_id: IDS.project }],
+    },
+    {
+      id: IDS.workerPaused,
+      name: `night-owl ${HOSTILE.image}`,
+      user: { id: IDS.user, email: 'operator@example.invalid', name: 'Fake Operator' },
+      created_at: now,
+      last_seen_at: now,
+      protocol_version: 1,
+      image_digests: [],
+      state: 'active',
+      revoked_at: null,
+      // Far ahead of any browser's clock: paused for the whole run of the suite.
+      paused_until: '2099-01-01T00:00:00.000Z',
+      paused_reason: 'usage_limited',
+      concurrency: 2,
+      running: [],
+    },
+  ],
+  scope: 'all',
+});
+
+/** The fleet's two other runs have no transcript yet. */
+export const emptyRunMessages = runMessagesResponseSchema.parse({ items: [], next_seq: null });
 
 export const inbox = inboxResponseSchema.parse({
   questions: [question],
@@ -1296,6 +1462,8 @@ export const taskPipelines: Readonly<Record<string, unknown>> = {
   [IDS.taskBug]: graphOf(bugTask.template, {}),
   [IDS.taskTaken]: featurePipeline,
   [IDS.taskEpic]: graphOf(epicTaskDetail.task.template, {}),
+  [IDS.taskFleetWorker]: graphOf('bug', {}),
+  [IDS.taskFleetQueued]: graphOf('bug', {}),
 };
 
 export const projectPipelines = { items: [featurePipeline, graphOf('bug', {})] };

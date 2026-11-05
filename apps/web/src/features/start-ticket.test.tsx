@@ -162,6 +162,17 @@ describe('starting a ticket by hand (WP-122, S-23.9a)', () => {
     });
   });
 
+  it('drops #start-ticket on close and keeps the board’s own search (`?view=list`)', async () => {
+    window.history.pushState({}, '', '/projects/acme?view=list#start-ticket');
+    open({ canStart: true });
+    await screen.findByRole('dialog', { name: 'Start a ticket' });
+    await userEvent.setup().keyboard('{Escape}');
+    await waitFor(() => {
+      expect(window.location.hash).toBe('');
+    });
+    expect(window.location.search).toBe('?view=list');
+  });
+
   it('offers no form to a caller who may not start', async () => {
     // …not even on `#start-ticket`, the address the header links to.
     window.history.pushState({}, '', '/projects/acme#start-ticket');
