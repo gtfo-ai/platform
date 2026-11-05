@@ -13,7 +13,7 @@ import type {
   TakenOver,
   TaskDetailResponse,
 } from '@platform/contracts';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -207,6 +207,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+type User = ReturnType<typeof userEvent.setup>;
+
+/** S-23.9b: the task page's commands are in the header's `···` menu; this opens it. */
+const openTaskMenu = async (user: User): Promise<HTMLElement> => {
+  await user.click(await screen.findByRole('button', { name: 'Task actions' }));
+  return await screen.findByRole('menu');
+};
+
+/** …and *Take over…* opens the dialog with the form the panel had, under the same labels. */
+const openTakeOver = async (user: User): Promise<void> => {
+  await openTaskMenu(user);
+  await user.click(await screen.findByRole('menuitem', { name: 'Take over…' }));
+  await screen.findByRole('dialog', { name: 'Take over this task' });
+};
+
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   window.history.pushState({}, '', `/tasks/${TASK}`);
@@ -219,14 +234,16 @@ describe('the take-over control on the task screen', () => {
     const { container } = render(
       createApp({ fetchImpl: fetchFor(detail(), sent), realtime: false }).element,
     );
-    await screen.findByRole('button', { name: 'Take over' });
+    await openTakeOver(user);
     await user.type(screen.getByLabelText('Why you are taking it over'), 'the agent is looping');
     await user.click(screen.getByRole('checkbox', { name: /archive the workspace/ }));
     await user.click(screen.getByRole('button', { name: 'Take over' }));
 
+    // Accepted: the dialog closes and the page carries the answer.
     await waitFor(() => {
       expect(container.textContent).toContain('git fetch && git checkout agentic/acme-1');
     });
+    expect(screen.queryByRole('dialog')).toBeNull();
     const takeOver = sent.find((entry) => entry.path.endsWith('/take-over'));
     expect(takeOver?.body).toEqual({ tarball: true, reason: 'the agent is looping' });
     // The SPA's per-intent key (`app/idempotency.ts`), never a request without one.
@@ -240,14 +257,18 @@ describe('the take-over control on the task screen', () => {
   });
 
   it('offers no take-over on a finished task', async () => {
-    const finished = detail();
+    const user = userEvent.setup();
+    // Exportable, so the finished task's menu has an item and the absence below is the rule.
+    const finished = detail({ can_export: true });
     const { container } = render(
       createApp({
         fetchImpl: fetchFor({ ...finished, task: { ...finished.task, state: 'done' } }, []),
         realtime: false,
       }).element,
     );
-    await screen.findByText('Stage commands');
+    const menu = await openTaskMenu(user);
+    expect(within(menu).getByRole('menuitem', { name: 'Download JSON' })).toBeTruthy();
+    expect(within(menu).queryByRole('menuitem', { name: 'Take over…' })).toBeNull();
     expect(container.textContent).not.toContain('Take over');
   });
 });
@@ -275,6 +296,9 @@ describe('a take-over in force', () => {
     );
     expect(hrefs).toEqual([`/api/runs/${RUN}/transcript.jsonl`, `/api/runs/${RUN}/export.tar`]);
 
+    // The hand-back is the header's one primary action while a take-over is in force (S-23.9b).
+    await user.click(screen.getByRole('button', { name: 'Hand back…' }));
+    await screen.findByRole('dialog', { name: 'Hand the task back' });
     // The picker is the compiled pipeline's enabled stages, exactly — nothing the route refuses.
     const picker = screen.getByLabelText('Resume at') as HTMLSelectElement;
     expect([...picker.options].map((option) => option.value)).toEqual(TAKEN_OVER.hand_back_stages);
@@ -304,6 +328,7 @@ describe('a take-over in force', () => {
     expect(container.textContent).toContain('No stage to hand back to');
     expect(container.textContent).toContain('cannot be read on this build');
     expect(screen.queryByRole('button', { name: 'Hand back' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Hand back…' })).toBeNull();
   });
 
   /**
@@ -333,6 +358,7 @@ describe('a take-over in force', () => {
     expect(container.textContent).toContain('This task was merged');
     expect(container.textContent).not.toContain('cannot be read on this build');
     expect(screen.queryByRole('button', { name: 'Hand back' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Hand back…' })).toBeNull();
   });
 });
 
@@ -355,19 +381,23 @@ describe('a merged task (WP-194)', () => {
   };
 
   it('offers neither Pause nor the take-over form, and says why', async () => {
+    const user = userEvent.setup();
     const { container } = render(
       createApp({
         fetchImpl: fetchFor(escalated({ stages: [mergedGate] }), []),
         realtime: false,
       }).element,
     );
+    // Escalated, so Resume is the header's primary action — the way into the retrospective.
     await screen.findByRole('button', { name: 'Resume' });
-    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
+    expect(container.textContent).toContain('nothing to take over or pause');
+    const menu = await openTaskMenu(user);
+    expect(within(menu).queryByRole('menuitem', { name: 'Pause' })).toBeNull();
+    expect(within(menu).queryByRole('menuitem', { name: 'Take over…' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Take over' })).toBeNull();
     expect(screen.queryByRole('form', { name: `Take task ${TASK} over` })).toBeNull();
-    expect(container.textContent).toContain('nothing to take over or pause');
     // Cancel stays: the refusal's way out.
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: 'Cancel task…' })).toBeTruthy();
   });
 
   it('still shows a take-over in force, with the hand-back’s merged sentence', async () => {
@@ -380,18 +410,24 @@ describe('a merged task (WP-194)', () => {
         realtime: false,
       }).element,
     );
+    const user = userEvent.setup();
     await screen.findByText('Taken over by a human');
     expect(container.textContent).toContain('This task was merged, so it never goes back');
-    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
+    const menu = await openTaskMenu(user);
+    expect(within(menu).queryByRole('menuitem', { name: 'Pause' })).toBeNull();
+    expect(within(menu).queryByRole('menuitem', { name: 'Take over…' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Take over' })).toBeNull();
   });
 
   it('an unmerged task in the same state is offered both', async () => {
+    const user = userEvent.setup();
     const { container } = render(
       createApp({ fetchImpl: fetchFor(escalated({}), []), realtime: false }).element,
     );
-    await screen.findByRole('button', { name: 'Take over' });
-    expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+    const menu = await openTaskMenu(user);
+    expect(within(menu).getByRole('menuitem', { name: 'Pause' })).toBeTruthy();
+    await user.click(within(menu).getByRole('menuitem', { name: 'Take over…' }));
+    expect(await screen.findByRole('button', { name: 'Take over' })).toBeTruthy();
     expect(screen.getByRole('form', { name: `Take task ${TASK} over` })).toBeTruthy();
     expect(container.textContent).not.toContain('nothing to take over or pause');
   });
@@ -585,13 +621,15 @@ describe('the task screen’s runs list marks saved work (backlog 467)', () => {
       terminal_reason: 'timed_out',
       saved_work: { branch: 'agentic/acme-1', commit_sha: null, pushed: false },
     };
+    // The runs list is the Runs tab since S-23.9b.
+    window.history.pushState({}, '', `/tasks/${TASK}?tab=runs`);
     render(
       createApp({
         fetchImpl: fetchFor(detail({ runs: [saved, notPushed] }), []),
         realtime: false,
       }).element,
     );
-    await screen.findByText('Stage commands');
+    await screen.findByRole('list', { name: 'Runs' });
     // One badge: a push that did not succeed left nothing on the branch to mark.
     expect(screen.getAllByText('work saved to branch')).toHaveLength(1);
   });

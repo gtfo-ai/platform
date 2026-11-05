@@ -82,7 +82,7 @@ export const FeedbackForm = ({
           placeholder="What was good or wrong about this work?"
           className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
         />
-        <Button type="submit" tone="primary" disabled={pending || text.trim() === ''}>
+        <Button type="submit" disabled={pending || text.trim() === ''}>
           Send feedback
         </Button>
       </form>

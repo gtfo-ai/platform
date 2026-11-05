@@ -10,12 +10,12 @@
  * Driven through `createApp` with a fake server, as `take-over.test.tsx` is.
  */
 import type { TaskDetailResponse } from '@platform/contracts';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { retryOutcomeText } from './task-detail.js';
+import { retryOutcomeText } from './task-dialogs.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -156,6 +156,21 @@ const fetchFor = (task: TaskDetailResponse | (() => TaskDetailResponse), sent: S
 
 const HINT = 'This task is waiting for a person';
 
+type User = ReturnType<typeof userEvent.setup>;
+
+/**
+ * S-23.9b: the stage commands moved from an inline card into the header's `···` menu, each opening a
+ * dialog with the fields the card had — under the same labels. This is the one added step.
+ */
+const openStageDialog = async (
+  user: User,
+  item: 'Retry stage…' | 'Return to stage…' | 'Rework…',
+): Promise<HTMLElement> => {
+  await user.click(await screen.findByRole('button', { name: 'Task actions' }));
+  await user.click(await screen.findByRole('menuitem', { name: item }));
+  return await screen.findByRole('dialog');
+};
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -174,9 +189,15 @@ describe('the stage commands on an escalated task (backlog 483)', () => {
       createApp({ fetchImpl: fetchFor(escalatedAtCi('needs_human'), sent), realtime: false })
         .element,
     );
-    await screen.findByRole('button', { name: 'Return to stage' });
-    expect(container.textContent).toContain(HINT);
+    // The callout says the controls are the way out, and offers them inline as the menu does.
+    await waitFor(() => {
+      expect(container.textContent).toContain(HINT);
+    });
+    const callout = screen.getByRole('region', { name: 'Needs you' });
+    expect(within(callout).getByRole('button', { name: 'Return to stage…' })).toBeTruthy();
+    expect(within(callout).getByRole('button', { name: 'Rework…' })).toBeTruthy();
 
+    await openStageDialog(user, 'Return to stage…');
     await user.selectOptions(screen.getByLabelText('Stage'), 'implementation');
     await user.type(screen.getByLabelText('Reason'), 'no merge request was opened; open one');
     await user.click(screen.getByRole('button', { name: 'Return to stage' }));
@@ -190,7 +211,14 @@ describe('the stage commands on an escalated task (backlog 483)', () => {
       reason: 'no merge request was opened; open one',
     });
     expect(returned?.key).toMatch(/.+/);
+    // Accepted, so the dialog closed; the rework is the callout's own control this time.
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
 
+    await user.click(within(callout).getByRole('button', { name: 'Rework…' }));
+    // The stage picked for the return is still the one addressed.
+    expect((screen.getByLabelText('Stage') as HTMLSelectElement).value).toBe('implementation');
     await user.type(screen.getByLabelText('Rework instructions'), 'open it from the tool');
     await user.click(screen.getByRole('button', { name: 'Rework' }));
     await waitFor(() => {
@@ -211,20 +239,32 @@ describe('the stage commands on an escalated task (backlog 483)', () => {
         stage('retrospective', 1, 'failed', 'escalated'),
       ],
     };
+    const user = userEvent.setup();
     const { container } = render(
       createApp({ fetchImpl: fetchFor(merged, []), realtime: false }).element,
     );
-    await screen.findByRole('button', { name: 'Return to stage' });
-    expect(container.textContent).toContain('This task was merged and is waiting for a person');
+    await waitFor(() => {
+      expect(container.textContent).toContain('This task was merged and is waiting for a person');
+    });
+    // The retrospective is the way out: the callout offers the retry, never a return or a rework.
+    const callout = screen.getByRole('region', { name: 'Needs you' });
+    expect(within(callout).getByRole('button', { name: 'Retry stage…' })).toBeTruthy();
+    expect(within(callout).queryByRole('button', { name: 'Return to stage…' })).toBeNull();
+    // The menu still carries all three — the server is the one that refuses a return.
+    await openStageDialog(user, 'Return to stage…');
+    expect(screen.getByRole('button', { name: 'Return to stage' })).toBeTruthy();
     expect(container.textContent).not.toContain('Send it back to a stage it has run');
   });
 
   it('says nothing about a person waiting on a task that is running', async () => {
+    const user = userEvent.setup();
     const { container } = render(
       createApp({ fetchImpl: fetchFor(escalatedAtCi('active'), []), realtime: false }).element,
     );
-    await screen.findByRole('button', { name: 'Return to stage' });
+    await openStageDialog(user, 'Return to stage…');
+    expect(screen.getByRole('button', { name: 'Return to stage' })).toBeTruthy();
     expect(container.textContent).not.toContain(HINT);
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
   });
 });
 
@@ -245,6 +285,7 @@ describe('the box that attaches the gate’s last failure (WP-152)', () => {
     const sent: Sent[] = [];
     const user = userEvent.setup();
     render(createApp({ fetchImpl: fetchFor(withFeedback(), sent), realtime: false }).element);
+    await openStageDialog(user, 'Return to stage…');
     const box = await screen.findByRole('checkbox', { name: BOX });
     expect((box as HTMLInputElement).checked).toBe(true);
     expect(box.closest('label')?.textContent).toContain('6,012 characters, cut from 20,657');
@@ -266,6 +307,7 @@ describe('the box that attaches the gate’s last failure (WP-152)', () => {
     const sent: Sent[] = [];
     const user = userEvent.setup();
     render(createApp({ fetchImpl: fetchFor(withFeedback(), sent), realtime: false }).element);
+    await openStageDialog(user, 'Rework…');
     await user.click(await screen.findByRole('checkbox', { name: BOX }));
     await user.selectOptions(screen.getByLabelText('Stage'), 'implementation');
     await user.type(screen.getByLabelText('Rework instructions'), 'start over');
@@ -289,7 +331,17 @@ describe('the box that attaches the gate’s last failure (WP-152)', () => {
     const user = userEvent.setup();
     let current = withFeedback();
     render(createApp({ fetchImpl: fetchFor(() => current, sent), realtime: false }).element);
+    await openStageDialog(user, 'Return to stage…');
     await user.click(await screen.findByRole('checkbox', { name: BOX }));
+    expect(((await screen.findByRole('checkbox', { name: BOX })) as HTMLInputElement).checked).toBe(
+      false,
+    );
+    // The untick outlives the dialog: closed and opened again on the same attempt, it holds.
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    await openStageDialog(user, 'Return to stage…');
     expect(((await screen.findByRole('checkbox', { name: BOX })) as HTMLInputElement).checked).toBe(
       false,
     );
@@ -301,6 +353,14 @@ describe('the box that attaches the gate’s last failure (WP-152)', () => {
     await user.selectOptions(screen.getByLabelText('Stage'), 'implementation');
     await user.type(screen.getByLabelText('Reason'), 'note');
     await user.click(screen.getByRole('button', { name: 'Return to stage' }));
+    // Accepted: the dialog closes; opened again, it offers the later attempt's box.
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    await waitFor(() => {
+      expect(sent.some((entry) => entry.path.endsWith('/return-to-stage'))).toBe(true);
+    });
+    await openStageDialog(user, 'Return to stage…');
     await waitFor(() => {
       const box = screen.getByRole('checkbox', { name: BOX });
       expect(box.closest('label')?.textContent).toContain('812 characters');
@@ -312,10 +372,12 @@ describe('the box that attaches the gate’s last failure (WP-152)', () => {
   });
 
   it('offers no box, and sends no field, when there is nothing to attach', async () => {
+    const user = userEvent.setup();
     render(
       createApp({ fetchImpl: fetchFor(escalatedAtCi('needs_human'), []), realtime: false }).element,
     );
-    await screen.findByRole('button', { name: 'Return to stage' });
+    await openStageDialog(user, 'Return to stage…');
+    expect(screen.getByRole('button', { name: 'Return to stage' })).toBeTruthy();
     expect(screen.queryByRole('checkbox', { name: BOX })).toBeNull();
   });
 });
@@ -327,7 +389,8 @@ describe('what a retry says it did (backlog 494)', () => {
     render(
       createApp({ fetchImpl: fetchFor(escalatedAtCi('active'), sent), realtime: false }).element,
     );
-    await user.click(await screen.findByRole('button', { name: 'Retry stage' }));
+    await openStageDialog(user, 'Retry stage…');
+    await user.click(screen.getByRole('button', { name: 'Retry stage' }));
     const said =
       'Attempt 2 of ci_gate is queued. The run still in flight is being stopped; the new attempt starts once it has ended.';
     // A live region, beside the connection indicator's: the answer is announced, not only drawn.

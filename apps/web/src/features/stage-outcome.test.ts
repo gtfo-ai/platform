@@ -5,7 +5,7 @@
  */
 import { taskStageOutcomeWordSchema } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { stageOutcomeSentence, stageOutcomeWordSentence } from './task-detail.js';
+import { stageOutcomeSentence, stageOutcomeWordSentence } from './stage-outcome.js';
 
 describe('the stage outcome sentences', () => {
   it('gives every platform word a sentence of its own, never the word itself', () => {

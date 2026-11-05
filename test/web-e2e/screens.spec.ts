@@ -141,8 +141,8 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
 
   await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
-  // Scoped to the timeline: `refinement` is also an option of the stage-command select. The
-  // timeline names the stage in words (TD-033).
+  // Scoped to the timeline: the flow's cards and the phase strip name the stage too. The timeline
+  // names the stage in words (TD-033), on the Overview tab the page opens on (S-23.9b).
   // S-23.5: the flow's list of stages is an `<ol>` too, so the timeline is named.
   await expect(
     page
@@ -151,15 +151,28 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   ).toBeVisible();
   // The stage's outcome word, through the word→sentence table (WP-73, backlog 213).
   await expect(page.getByText('Verdict: approve.')).toBeVisible();
+  // The runs are the Runs tab since S-23.9b; the rail beside it stays.
+  await page.getByRole('navigation', { name: 'Task' }).getByRole('link', { name: /^Runs/ }).click();
   await expect(
-    page.getByRole('link', { name: 'Implementation · Developer', exact: true }),
+    page
+      .getByRole('list', { name: 'Runs' })
+      .getByRole('link', { name: 'Implementation · Developer', exact: true }),
   ).toBeVisible();
   await expect(page.getByText('Cost so far', { exact: true })).toBeVisible();
+  /**
+   * S-23.9b: the rail's Checks is a merge box — each row's value is on the row, and the sentence
+   * it rests on is in the row's expandable detail, so each basis below is read after one click.
+   */
+  const check = (id: string) => page.locator(`[data-check="${id}"]`);
+  const expand = async (id: string) => {
+    await check(id).locator('summary').click();
+  };
   // WP-28: the refinement estimate, what it rests on and product/19 §10's accuracy — three numbers
   // the Checks panel showed as `$0.00` under the label *"Estimate"* before this row, because it read
   // `cost_estimated_usd` (then a column nothing wrote; since WP-47 a projection over the ledger's
   // estimated entries) instead of `estimate_usd`.
   await expect(page.getByText('$12.00')).toBeVisible();
+  await expand('estimate');
   await expect(page.getByText('From 7 finished tasks in this project.')).toBeVisible();
   await expect(page.getByText('0.35×')).toBeVisible();
   await expect(page.getByText('payments')).toBeVisible();
@@ -170,6 +183,7 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
    */
   await expect(page.getByText('Coverage delta', { exact: true })).toBeVisible();
   await expect(page.getByText('+2.5 pp')).toBeVisible();
+  await expand('coverage');
   await expect(page.getByText(/81\.5 % on bbbbbbb, against 79\.0 % on main/)).toBeVisible();
   /**
    * WP-38's two Checks items, in the browser: the dependency the gate found with the licence a
@@ -178,6 +192,7 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
    */
   await expect(page.getByText('Dependencies', { exact: true })).toBeVisible();
   await expect(page.getByText('1 added · waiting')).toBeVisible();
+  await expand('dependencies');
   // Strict-mode exact: the same package is named twice on this panel — once in the sentence with
   // its licence, and once as the registry link `safeHref` refused (`xss.spec.ts` counts that one).
   await expect(page.getByText('npm:left-pad', { exact: true })).toBeVisible();
@@ -191,6 +206,7 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await expect(page.getByText('Review threads', { exact: true })).toBeVisible();
   await expect(page.getByText('2 open · 1 resolved')).toBeVisible();
   await expect(page.getByText('CI status', { exact: true })).toBeVisible();
+  await expand('ci');
   await expect(page.getByText('This task has not entered ci_gate.')).toBeVisible();
   await expect(page.getByText('Business verdict', { exact: true })).toBeVisible();
   await expect(page.getByText('no verdict', { exact: true })).toBeVisible();
@@ -610,7 +626,15 @@ test('the task screen sends retry-stage, return-to-stage, rework and feedback', 
   await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
   expect(await commandLog(request), 'the log was not empty before the first click').toEqual([]);
 
-  await page.getByLabel('Stage').selectOption('refinement');
+  // S-23.9b: each stage command is in the header's `···` menu and opens a dialog with the fields
+  // the inline card had, under the same labels; the stage picked stays picked between them.
+  const menu = async (item: string) => {
+    await page.getByRole('button', { name: 'Task actions' }).click();
+    await page.getByRole('menuitem', { name: item }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+  };
+  await menu('Retry stage…');
+  await page.getByLabel('Stage', { exact: true }).selectOption('refinement');
   await page.getByRole('button', { name: 'Retry stage' }).click();
   await expect
     .poll(async () => (await commandLog(request)).map((entry) => entry.path))
@@ -622,14 +646,18 @@ test('the task screen sends retry-stage, return-to-stage, rework and feedback', 
 
   // `returnToStageRequestSchema` requires a reason, so the button stays disabled without one —
   // the client refuses a request the server would reject rather than sending it.
+  await menu('Return to stage…');
   const returnButton = page.getByRole('button', { name: 'Return to stage' });
   await expect(returnButton).toBeDisabled();
-  await page.getByLabel('Reason').fill('the spec missed the retry budget');
+  await page.getByLabel('Reason', { exact: true }).fill('the spec missed the retry budget');
   await expect(returnButton).toBeEnabled();
   await returnButton.click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 
+  await menu('Rework…');
   await page.getByLabel('Rework instructions').fill('split the helper out');
   await page.getByRole('button', { name: 'Rework' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 
   await page.getByLabel('Feedback on this task').fill('the plan was good');
   await page.getByRole('button', { name: 'Send feedback' }).click();
@@ -727,8 +755,12 @@ test('a queued task says there is no stage to act on rather than offering a brok
 }) => {
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskBug}`);
   await expect(page.getByRole('heading', { name: 'DEMO-2' })).toBeVisible();
-  await expect(page.getByText('No stage to act on yet')).toBeVisible();
-  await expect(page.getByLabel('Stage')).toHaveCount(0);
+  // S-23.9b: the timeline says there is none, and the menu offers no stage command at all.
+  await expect(page.getByText('No stages yet')).toBeVisible();
+  await page.getByRole('button', { name: 'Task actions' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Cancel task…' })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'Retry stage…' })).toHaveCount(0);
+  await expect(page.getByLabel('Stage', { exact: true })).toHaveCount(0);
 });
 
 test('the task screen takes a task over and renders what the response carries (WP-44)', async ({
@@ -737,6 +769,8 @@ test('the task screen takes a task over and renders what the response carries (W
 }) => {
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
   await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
+  await page.getByRole('button', { name: 'Task actions' }).click();
+  await page.getByRole('menuitem', { name: 'Take over…' }).click();
   await page.getByLabel('Why you are taking it over').fill('the agent is looping');
   await page.getByRole('checkbox', { name: /archive the workspace/ }).check();
   await page.getByRole('button', { name: 'Take over', exact: true }).click();
@@ -769,6 +803,8 @@ test('a taken-over task that escalated still shows the branch, the downloads and
     `/api/runs/${IDS.run}/export.tar`,
   );
 
+  // The hand-back is the header's one primary action while the take-over is in force (S-23.9b).
+  await page.getByRole('button', { name: 'Hand back…' }).click();
   const picker = page.getByLabel('Resume at');
   await expect(picker.locator('option')).toHaveText([
     'refinement',

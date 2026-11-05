@@ -2,10 +2,12 @@
  * Flash: a message that belongs to the page — an error, a warning, a confirmation (Primer's Flash).
  *
  * Icon, tinted ground and a word-bearing title, so the tone is never carried by colour alone.
+ * `beacon` is what needs a person — the task page's needs-you callout — in `needs_you`'s colours.
  * `danger` is announced (`role="alert"`) because a failure that appears without the user doing
  * anything must reach a screen reader; the others are not live unless the caller asks (`live`).
  */
 import { AlertIcon } from '@primer/octicons-react/AlertIcon';
+import { BellFillIcon } from '@primer/octicons-react/BellFillIcon';
 import { CheckCircleIcon } from '@primer/octicons-react/CheckCircleIcon';
 import { InfoIcon } from '@primer/octicons-react/InfoIcon';
 import { StopIcon } from '@primer/octicons-react/StopIcon';
@@ -13,7 +15,7 @@ import type { Icon } from '@primer/octicons-react/types';
 import type { ReactElement, ReactNode } from 'react';
 import { cx } from './cx.js';
 
-export type FlashTone = 'info' | 'warning' | 'danger' | 'success';
+export type FlashTone = 'info' | 'warning' | 'danger' | 'success' | 'beacon';
 
 const TONES: Record<
   FlashTone,
@@ -27,6 +29,8 @@ const TONES: Record<
     icon: 'text-success',
     glyph: CheckCircleIcon,
   },
+  // What needs a person (S-23.9b, the task page's callout): the beacon, as `needs_you` draws it.
+  beacon: { box: 'border-running/60 bg-running-bg', icon: 'text-running', glyph: BellFillIcon },
 };
 
 export const Flash = ({

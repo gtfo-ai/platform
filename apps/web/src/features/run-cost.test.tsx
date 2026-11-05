@@ -8,7 +8,7 @@
  * (`runRecordSchema`, `taskDetailResponseSchema`) read the `null` before a screen renders it.
  */
 import type { RunReadResponse, RunRecord, TaskDetailResponse } from '@platform/contracts';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
@@ -218,11 +218,14 @@ describe('a run nobody measured, on screen (WP-119)', () => {
       cost: { usd: 0.4, is_estimate: false, price_list_id: null },
     };
     const shown = unmeasured(SECOND, 'implementation');
-    const { view } = open(shown, [measured, shown], noSettings, `/tasks/${TASK}`);
+    // S-23.9b: the run list is the Runs tab.
+    const { view } = open(shown, [measured, shown], noSettings, `/tasks/${TASK}?tab=runs`);
+    const list = await screen.findByRole('list', { name: 'Runs' });
     await waitFor(() => {
-      expect(view.container.textContent).toContain('$0.40');
+      expect(list.textContent).toContain('$0.40');
     });
-    expect(view.container.textContent).toContain(NOT_MEASURED);
+    expect(list.textContent).toContain(NOT_MEASURED);
+    expect(list.textContent).not.toContain('$0.00 ·');
     expect(view.container.textContent).not.toContain('$0.00 ·');
   });
 });

@@ -26,14 +26,19 @@ export const TimelineItem = ({
   badge,
   time,
   children,
+  ...data
 }: {
   /** A StatusIcon (decorative) or an Octicon. */
   readonly badge?: ReactNode;
   /** When it happened, already formatted. */
   readonly time?: ReactNode;
   readonly children: ReactNode;
+  readonly 'data-testid'?: string;
 }): ReactElement => (
-  <li className="relative flex gap-3 pb-4 last:pb-0 before:absolute before:top-8 before:bottom-0 before:left-[15px] before:w-0.5 before:bg-line last:before:hidden">
+  <li
+    {...data}
+    className="relative flex gap-3 pb-4 last:pb-0 before:absolute before:top-8 before:bottom-0 before:left-[15px] before:w-0.5 before:bg-line last:before:hidden"
+  >
     <span
       aria-hidden="true"
       className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full border border-line bg-subtle text-fg-muted"

@@ -229,7 +229,7 @@ export const AskThread = ({
           }}
         />
         <div className="flex items-center gap-2">
-          <Button type="submit" tone="primary" disabled={ask.isPending || question.trim() === ''}>
+          <Button type="submit" disabled={ask.isPending || question.trim() === ''}>
             Ask
           </Button>
           <span className="text-xs text-fg-muted">

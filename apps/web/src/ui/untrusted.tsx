@@ -13,6 +13,7 @@
  */
 import {
   type AnchorHTMLAttributes,
+  type ComponentPropsWithRef,
   type HTMLAttributes,
   type ReactElement,
   type Ref,
@@ -214,11 +215,12 @@ export const DownloadLink = ({
   path,
   label,
   className,
+  ...host
 }: {
   readonly path: string;
   readonly label: string;
   readonly className?: string;
-}): ReactElement => {
+} & DownloadLinkHostProps): ReactElement => {
   // A regular expression rather than a quoted prefix: the client census reads every quoted
   // `/api/…` literal in the app as a path it calls (`routes/client-census.test.ts`).
   const safe =
@@ -227,17 +229,28 @@ export const DownloadLink = ({
     new URL(path, 'http://platform.invalid').pathname === path;
   if (!safe) {
     return (
-      <span className={`text-fg-muted ${className ?? ''}`} data-link-refused="true">
+      <span {...host} className={`text-fg-muted ${className ?? ''}`} data-link-refused="true">
         {label}
       </span>
     );
   }
+  // The host's props first, so nothing it passes can replace the vetted `href`.
   return (
-    <a href={path} download className={className}>
+    <a {...host} href={path} download className={className}>
       {label}
     </a>
   );
 };
+
+/**
+ * What a host component may add to a {@link DownloadLink} when it renders one as its own element —
+ * a menu's link item merges its role, focus and handlers in (S-23.9b, the task page's ··· menu).
+ * Never the URL: `href` and `download` are this module's, and `children` is the label.
+ */
+export type DownloadLinkHostProps = Omit<
+  ComponentPropsWithRef<'a'>,
+  'href' | 'download' | 'children' | 'className'
+>;
 
 /**
  * One line or paragraph of untrusted text, with bare `http(s)` URLs turned into links.

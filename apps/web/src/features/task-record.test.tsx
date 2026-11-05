@@ -7,6 +7,7 @@
  */
 import type { TaskDetailResponse } from '@platform/contracts';
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
@@ -94,6 +95,8 @@ const open = (options: {
   readonly canExport: boolean;
   readonly audit?: { readonly status: number; readonly message: string };
   readonly task?: Partial<TaskDetailResponse['task']>;
+  /** S-23.9b: *Who did what* is the Activity tab. */
+  readonly tab?: 'activity';
 }) => {
   const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
@@ -115,7 +118,11 @@ const open = (options: {
     if (path.startsWith(`/api/tasks/${TASK}/`)) return json({ items: [], next_cursor: null });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
-  window.history.pushState({}, '', `/tasks/${TASK}`);
+  window.history.pushState(
+    {},
+    '',
+    options.tab === undefined ? `/tasks/${TASK}` : `/tasks/${TASK}?tab=${options.tab}`,
+  );
   return render(createApp({ fetchImpl, realtime: false }).element);
 };
 
@@ -130,15 +137,21 @@ beforeEach(() => {
 
 describe('the task record’s download (WP-122, backlog 381)', () => {
   it('offers Download JSON to a member, as a download of the export path', async () => {
+    const user = userEvent.setup();
     const view = open({ canExport: true });
+    // S-23.9b: in the header's `···` menu, still an `<a download>` written by `DownloadLink`.
+    await user.click(await view.findByRole('button', { name: 'Task actions' }));
     const link = (await view.findByText('Download JSON')).closest('a');
     expect(link?.getAttribute('href')).toBe(`/api/tasks/${TASK}/export`);
     expect(link?.hasAttribute('download')).toBe(true);
   });
 
   it('offers nothing to a viewer, whom the export route would refuse', async () => {
+    const user = userEvent.setup();
     const view = open({ canExport: false });
     await view.findByText('DEMO-1');
+    await user.click(await view.findByRole('button', { name: 'Task actions' }));
+    expect(await view.findByRole('menuitem', { name: 'Cancel task…' })).toBeTruthy();
     expect(view.queryByText('Download JSON')).toBeNull();
     expect(view.container.querySelector(`a[href="/api/tasks/${TASK}/export"]`)).toBeNull();
   });
@@ -146,7 +159,11 @@ describe('the task record’s download (WP-122, backlog 381)', () => {
 
 describe('Who did what, when its read fails (WP-122, backlog 385)', () => {
   it('does not name a 503 a permission problem', async () => {
-    open({ canExport: false, audit: { status: 503, message: 'the audit store is not reachable' } });
+    open({
+      canExport: false,
+      audit: { status: 503, message: 'the audit store is not reachable' },
+      tab: 'activity',
+    });
     expect(
       await screen.findByText("This task's activity could not be loaded.", {}, { timeout: 5_000 }),
     ).toBeTruthy();
@@ -156,7 +173,11 @@ describe('Who did what, when its read fails (WP-122, backlog 385)', () => {
   });
 
   it('keeps the Not shown notice and the role sentence for a 403', async () => {
-    open({ canExport: false, audit: { status: 403, message: 'role member may not read' } });
+    open({
+      canExport: false,
+      audit: { status: 403, message: 'role member may not read' },
+      tab: 'activity',
+    });
     expect(await screen.findByText('Not shown', {}, { timeout: 5_000 })).toBeTruthy();
     expect(document.body.textContent).toContain('reading the record needs the maintainer role');
   });

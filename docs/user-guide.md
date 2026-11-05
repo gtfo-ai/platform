@@ -581,10 +581,35 @@ what* lists it: the start, with the person who pressed it. Pressing **Start** tw
 
 ## 4. Task detail
 
-Left: the stage timeline. Centre: artifacts, runs, questions and approvals. Right: checks, cost and
-links. Live on that task's topic.
+The task page reads like a pull request: what the task is, where it is, and what you do now. It is
+live on that task's topic.
 
-**The Flow, at the top of the page**, is the task's own pipeline as a graph, the way it was frozen
+- **The header** is the ticket's title with its key after it in grey (the key alone when the
+  platform never read the title), the task's state as a label with its icon, and one line: the
+  template, the stage it is in, what it has cost so far and how long ago it was opened. Under it,
+  the phase strip — one glyph per stage, the current one pulsing — names the stage and what the agent
+  is doing now. On the right is **one button, chosen by what the task is waiting for**: *Hand back…*
+  while you hold it (below), *Answer* when an agent asked a question (it takes you to the answer
+  box), *Approve…* when a plan or a budget waits for a maintainer, *Resume* when the task is paused
+  or waiting for a person — and none when nothing waits on you. Everything else is in the **`···`**
+  menu beside it: *Pause*, *Resume*, *Take over…*, *Retry stage…*, *Return to stage…*, *Rework…*,
+  *Raise this task's cap…*, *Download JSON* and *Cancel task…*. A command with fields, or one you
+  cannot undo, opens a dialog with those fields; the menu leaves out what the platform would refuse
+  for anybody (Pause and Take over on a merged task, any stage command on a task that has entered no
+  stage, a take-over of a finished task).
+- **The needs-you box**, under the header, appears only when something waits on a person: each open
+  question with its answer box, each pending approval with *Approve* and *Reject*, an escalation
+  with the word its stage was closed with (*"Escalated: the gate could not decide in its allotted
+  checks."*) and *Return to stage…*, *Rework…* and *Retry stage…*, and an epic's proposed breakdown
+  while a maintainer has something left to decide on it.
+- **Four tabs**: *Overview* (the flow, the running stage, the stage timeline, Ask the task and
+  feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status,
+  model, cost and duration) and *Activity* (who did what). The tab is in the address (`?tab=runs`),
+  so a link opens the same tab; a link to an artifact opens the Artifacts tab on it.
+- **On the right, Checks** — the merge box (below) — then the cost against the task's cap, then the
+  ticket and the merge request.
+
+**The Flow, at the top of the Overview**, is the task's own pipeline as a graph, the way it was frozen
 when the task started. Each card says where the task is: *Done* with how long the stage took and what
 its run cost, *Sent back*, *Failed*, *Skipped*, *Upcoming*, *Disabled* — and on the current stage
 what the agent is doing, *Working* with *Now: Reading files*, *Needs you* when a question or approval
@@ -609,7 +634,7 @@ showing an empty transcript. A stage that runs no agent — a gate such as the C
 plan approval — or one whose agent has not started yet says *No run for this stage* and links
 nothing.
 
-**While an agent is working on a stage**, a panel at the top of the centre column says so: a pulsing
+**While an agent is working on a stage**, a panel on the Overview says so: a pulsing
 dot, the stage and the role, how long the run has been going, and the **latest progress line** the
 agent reported — *"slice 2 of 4 pushed; next the endpoint"* — with its percentage when it gave one
 and how long ago it said it. The line updates live as the agent reports, and *Watch the run* opens
@@ -621,18 +646,19 @@ Below that line, the panel shows **the run's transcript as it happens** — the 
 run page, arriving live — bounded to the newest 30 blocks, with *Open the full run* for the whole session, its search and the
 steer box.
 
-Every artifact in the centre column **opens**: *Open* shows the document the stage produced, on this
-page, as text. It is model output, so it is rendered the way everything else untrusted is — as
+Every artifact on the **Artifacts** tab **opens**: choosing one on the left shows the document the
+stage produced, on this page, as text — its prose, with the raw JSON behind *Raw JSON* (open when the
+document has no prose of its own). It is model output, so it is rendered the way everything else untrusted is — as
 characters, never as markup and never as a link. The line above it says how many credentials the
 platform replaced in it before storing it. An artifact produced **before** the upgrade that
 introduced that redaction is not shown at all: nothing redacted it, artifacts are never rewritten,
 and the platform will not publish a document it cannot vouch for — it says so by name instead.
 
-**Download JSON**, beside the task's key, is the task's whole record as one document — everything
+**Download JSON**, in the `···` menu, is the task's whole record as one document — everything
 this page shows, each run's record, the task's events and, for a maintainer, who did what — offered to
 a member or above. A viewer is not offered it; the export would refuse them.
 
-**The claim and the QA stage** show under the task's key when there is something to show (the
+**The claim and the QA stage** show under the header's meta line when there is something to show (the
 project's ticket lifecycle, step 1). *ticket claimed* means the platform assigned the ticket to its
 own account and the tracker confirmed it; *claim (shadow)* means a shadow task recorded what it would
 have assigned and assigned nothing; *claim released* means the claim was given back — on a cancel, a
@@ -643,8 +669,8 @@ status, so a person tests it before Ready for merge (below).
 
 ### What you can do from here
 
-The commands in the table below, plus **take over**, **hand back** and **ask the task** (after the
-checks panel); a run's own commands — retry, cancel and steer — are on the run screen (section 5).
+The commands in the table below — the header's one button and the `···` menu — plus **take over**,
+**hand back** and **ask the task** (below); a run's own commands — retry, cancel and steer — are on the run screen (section 5).
 Each is an operation the task aggregate either performs or **refuses by name** — a refusal comes back as an
 error naming the transition, not as a silent no-op — and each accepted one leaves a row in the audit.
 
@@ -672,9 +698,11 @@ stops the run and leaves the task waiting for a human, where **Resume** still fi
 
 The stage list offered by *retry*, *return to stage* and *rework* comes from the task's **own**
 history rather than from the pipeline template, for the same reason as the board's columns; a task
-that has entered no stage yet gets an empty state rather than a control that can only fail. Each
-form's submit button stays disabled until the command's own required fields are filled, so you do not
-send a request the server will reject.
+that has entered no stage yet is offered none of the three rather than a control that can only fail.
+The three dialogs share the stage you picked, and an untick of *Attach the gate's last failure*
+holds for that escalation until the gate escalates again. Each dialog's submit button stays disabled
+until the command's own required fields are filled, so you do not send a request the server will
+reject; it closes when the command was accepted, and a refusal is shown inside it.
 
 Double-clicking a command is safe: every write carries an idempotency key, and a replay performs
 nothing twice. Two requests under one key that arrive **at the same moment** are safe too since WP-67:
@@ -740,7 +768,16 @@ not to obey. A shadow task posts none of this: each write is recorded as what it
 
 ### The checks panel
 
-The product defines eleven merge-readiness checks, and the panel shows **all eleven**:
+The checks are a **merge box**, as on a pull request: one line on top — *All required checks pass*,
+*2 checks need attention* (something failed, or waits on a person), or *3 required checks are not
+decided yet* — and one row per check with a status icon, its name and its value. Point at (or tab to)
+a name for its definition; open a row for the sentence its value rests on — which attempt of a gate,
+what the estimate was computed from, which base the coverage was measured against, which packages and
+licences, which reviewers and why. A check that has not been made, or whose record cannot say what it
+found (*not reached*, *not recorded*, *unavailable*), is never counted as a pass. Under the box,
+**Cost so far** is drawn against the task's cap, beside the estimate's accuracy and the human time.
+
+The product defines eleven merge-readiness checks, and the box shows **all eleven**:
 
 - **Acceptance criteria** and **Business verdict** — read from the latest Acceptance Verdict the
   business review wrote: how many criteria were met, not met or untestable (each with the
@@ -783,7 +820,8 @@ such, and so are the failing jobs past the fifth.
 
 ### Taking over, the epic breakdown, and asking the task
 
-- **Take over** and **hand back** are on this screen (and on the run screen, for the run's task).
+- **Take over** (the `···` menu) and **hand back** (the header's button while you hold the task)
+  are on this screen, each in a dialog (and on the run screen, for the run's task).
   **Take over** pauses the pipeline, interrupts the running agent, commits and
   pushes its work in progress on `agentic/<ticket>` and answers with the branch, the
   `claude --resume` command and whether the workspace was exported — the panel shows exactly those,
@@ -825,13 +863,14 @@ such, and so are the failing jobs past the fifth.
   recorded never moves it back. The CI gate does not rely on that record at all: it asks GitLab for
   the merge request's current head each time and judges **that** commit's pipeline, so a green
   pipeline for an older commit never passes it.
-- An **epic split** task carries a **Proposed breakdown** panel: one row per child ticket the agent
+- An **epic split** task carries a **Proposed breakdown** panel — in the needs-you box while a
+  maintainer has children left to decide, on the Overview otherwise: one row per child ticket the agent
   proposed, with its acceptance criteria, a checkbox per child and one button. Accepting **creates
   those tickets in your tracker** — one per accepted child, never twice — and rejecting keeps the row
   with your reason. Only a maintainer sees the checkboxes; everybody who can read the task can read
   the queue. The feature is off until a project turns on **Epic split** in its operating-mode
   features.
-- **Ask the task** (member) is a thread at the bottom of the page: ask *"why did you choose X?"* and
+- **Ask the task** (member) is a thread on the Overview, under the stage timeline: ask *"why did you choose X?"* and
   the answer is written from the task's audit trail and artifacts, citing the exact run, artifact or
   action it rests on — each citation is a link into this application, never a link the model wrote.
   An ask starts a run and spends the project's money, which is why it needs a member rather than a

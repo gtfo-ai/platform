@@ -10,7 +10,7 @@ import {
   humanTimeWithheldText,
   reviewersBasisText,
   reviewersValueText,
-} from './task-detail.js';
+} from './task-checks-text.js';
 
 /**
  * The estimate's provenance line on the task page (WP-28, Q71 (b)).

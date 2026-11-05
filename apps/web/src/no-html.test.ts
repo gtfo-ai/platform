@@ -360,7 +360,8 @@ describe('the web application', () => {
       .filter((path) => stripBlockComments(readFileSync(path, 'utf8')).includes('<ExternalLink'))
       .map((path) => relative(SOURCE_ROOT, path));
 
-    expect(users).toContain(join('features', 'task-detail.tsx'));
+    // The task page's links moved to its rail at S-23.9b.
+    expect(users).toContain(join('features', 'task-checks.tsx'));
   });
 
   it('links the board card’s provider URLs through the menu’s safe link item', () => {

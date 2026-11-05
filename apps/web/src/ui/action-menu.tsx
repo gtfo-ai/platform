@@ -112,6 +112,17 @@ export const ActionMenuLinkItem = ({
   />
 );
 
+/**
+ * An item that is a same-origin download: Base UI's `Menu.LinkItem` drawn **as the caller's element**, which must
+ * spread props and accept a ref — `ui/untrusted.tsx`'s `DownloadLink`, so the one module that may
+ * write a URL attribute still writes this one (`no-html.test.ts`). The task page's *Download JSON*.
+ */
+export const ActionMenuDownloadItem = ({
+  render,
+}: {
+  readonly render: ReactElement<Record<string, unknown>>;
+}): ReactElement => <Menu.LinkItem render={render} className={ITEM} closeOnClick />;
+
 /** A labelled radio group of items (the theme choice). */
 export const ActionMenuRadioGroup = <Value extends string>({
   label,

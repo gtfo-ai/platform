@@ -23,6 +23,11 @@
  *   pipeline, enabled stages only, computed by the server exactly as the hand-back route checks it
  *   — so it offers nothing the route would refuse with `409 stage_not_in_template`.
  *
+ * **Its parts are exported** (S-23.9b): the run screen renders the whole panel, and the task page
+ * composes the same parts — the details in a *Taken over* box, the form in its `···` menu's
+ * *Take over…* dialog, the hand-back in its primary *Hand back…* dialog — so the two screens still
+ * cannot drift into two answers.
+ *
  * ## What it does not do
  *
  * It does not decide who may press the buttons: take-over and hand-back are `member` and the server
@@ -82,7 +87,7 @@ export const workspaceExportText = (value: TakeOverResponse['workspace_export'])
     : 'No run was in flight, so nothing was exported: the branch holds whatever the last run pushed.';
 
 /** The branch, the session and the resume lines — the same shape whichever surface answered. */
-const ResumeLines = ({
+export const ResumeLines = ({
   branch,
   sessionId,
   sessionPending,
@@ -182,16 +187,22 @@ export const TakeOverDownloads = ({
     </div>
   );
 
-const HandBack = ({
+/**
+ * The hand-back form — inline on the run screen's panel, in the task page's *Hand back…* dialog
+ * (S-23.9b). `onDone` is called when the hand-back was accepted, which is when the dialog closes.
+ */
+export const HandBackForm = ({
   taskId,
   takenOver,
   merged,
   commands,
+  onDone,
 }: {
   readonly taskId: string;
   readonly takenOver: TakenOver;
   readonly merged: boolean;
   readonly commands: ReturnType<typeof useTakeOverCommands>;
+  readonly onDone?: () => void;
 }): ReactElement => {
   const options = takenOver.hand_back_stages;
   const [stage, setStage] = useState(
@@ -218,7 +229,10 @@ const HandBack = ({
       aria-label={`Hand task ${taskId} back`}
       onSubmit={(event) => {
         event.preventDefault();
-        commands.handBack.mutate({ stage: selected, summary: summary.trim() });
+        commands.handBack.mutate(
+          { stage: selected, summary: summary.trim() },
+          onDone === undefined ? {} : { onSuccess: onDone },
+        );
       }}
     >
       <label className="flex items-center gap-2 text-xs text-fg-muted" htmlFor="hand-back-stage">
@@ -264,8 +278,135 @@ const HandBack = ({
 };
 
 /**
- * The control, for the task screen and the run screen alike — one component, so the two surfaces
- * cannot drift into two answers.
+ * What a take-over in force shows: when, from where, whether an escalation still holds it, the
+ * resume lines and the downloads — everything of the panel but the hand-back, which the task page
+ * puts behind its *Hand back…* primary action (S-23.9b) and the run screen keeps inline.
+ */
+export const TakenOverDetails = ({
+  state,
+  takenOver,
+  runs,
+  answered,
+}: {
+  readonly state: TaskState;
+  readonly takenOver: TakenOver;
+  readonly runs: readonly Pick<RunRecord, 'id' | 'started_at'>[];
+  /** The take-over command's own answer, when this page made it. */
+  readonly answered: TakeOverResponse | undefined;
+}): ReactElement => (
+  <>
+    <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+      <Badge tone="warning">taken over</Badge>
+      <span>at {formatDateTime(takenOver.at)}</span>
+      <span>
+        from <UntrustedText value={takenOver.stage} />
+      </span>
+      {state === 'needs_human' ? <Badge tone="danger">escalated — still held</Badge> : null}
+    </div>
+    <ResumeLines
+      branch={takenOver.branch}
+      sessionId={takenOver.session_id}
+      sessionPending={takenOver.run_id !== null}
+      commands={takenOver.resume_commands}
+    />
+    {answered === undefined ? null : (
+      <p className="text-xs text-fg-muted">{workspaceExportText(answered.workspace_export)}</p>
+    )}
+    <TakeOverDownloads {...takeOverRunOf(takenOver, runs)} />
+  </>
+);
+
+/** Why a merged task offers no take-over and no pause (WP-194, backlog 563). */
+export const MERGED_NO_TAKE_OVER =
+  'This task was merged, so there is nothing to take over or pause: its branch is already in the default branch. Cancel the task — or, once it is waiting for a human, resume it into the retrospective.';
+
+/**
+ * The take-over form: an optional reason and the optional tarball. Inline on the run screen's panel,
+ * in the task page's *Take over…* dialog (S-23.9b); `onDone` is called when the command answered.
+ */
+export const TakeOverForm = ({
+  taskId,
+  commands,
+  onDone,
+}: {
+  readonly taskId: string;
+  readonly commands: ReturnType<typeof useTakeOverCommands>;
+  readonly onDone?: () => void;
+}): ReactElement => {
+  const [reason, setReason] = useState('');
+  const [tarball, setTarball] = useState(false);
+  return (
+    <>
+      <p className="text-xs text-fg-muted">
+        Pauses the pipeline, stops a run in flight gracefully and hands you the branch to finish on
+        your own machine. Hand it back at any stage when you are done.
+      </p>
+      <form
+        className="flex flex-col gap-2"
+        aria-label={`Take task ${taskId} over`}
+        onSubmit={(event) => {
+          event.preventDefault();
+          commands.takeOver.mutate(
+            { tarball, reason: reason.trim() },
+            onDone === undefined ? {} : { onSuccess: onDone },
+          );
+        }}
+      >
+        <input
+          aria-label="Why you are taking it over"
+          value={reason}
+          onChange={(event) => {
+            setReason(event.target.value);
+          }}
+          placeholder="Why (optional, recorded in the audit)"
+          className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
+        />
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={tarball}
+            onChange={(event) => {
+              setTarball(event.target.checked);
+            }}
+          />
+          Also archive the workspace (without .git and node_modules) for download
+        </label>
+        <div>
+          <Button type="submit" tone="danger" disabled={commands.takeOver.isPending}>
+            Take over
+          </Button>
+        </div>
+      </form>
+      {commands.takeOver.isError ? (
+        <ErrorNotice title="The take-over was refused." error={commands.takeOver.error} />
+      ) : null}
+    </>
+  );
+};
+
+/** The take-over command's answer — the four fields the response carries, in their own tense. */
+export const TakeOverAnswer = ({
+  answered,
+}: {
+  readonly answered: TakeOverResponse;
+}): ReactElement => (
+  <div className="flex flex-col gap-2">
+    <ResumeLines
+      branch={answered.branch}
+      sessionId={answered.session_id}
+      sessionPending={answered.workspace_export === 'requested'}
+      commands={answered.resume_commands}
+    />
+    <p className="text-xs text-fg-muted">{workspaceExportText(answered.workspace_export)}</p>
+  </div>
+);
+
+/** States in which there is nothing left to take over. */
+export const takeOverFinished = (state: TaskState): boolean => FINISHED.has(state);
+
+/**
+ * The control as one panel, for the run screen — the task page composes the same parts into its
+ * header's menu and dialogs (S-23.9b), so the two surfaces cannot drift into two answers.
  */
 export const TakeOverPanel = ({
   taskId,
@@ -285,8 +426,6 @@ export const TakeOverPanel = ({
   readonly runs: readonly Pick<RunRecord, 'id' | 'started_at'>[];
 }): ReactElement | null => {
   const commands = useTakeOverCommands(taskId);
-  const [reason, setReason] = useState('');
-  const [tarball, setTarball] = useState(false);
   const answered = commands.takeOver.data;
 
   if (takenOver !== null) {
@@ -294,27 +433,8 @@ export const TakeOverPanel = ({
       <div>
         <SectionHeading>Taken over by a human</SectionHeading>
         <Card className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
-            <Badge tone="warning">taken over</Badge>
-            <span>at {formatDateTime(takenOver.at)}</span>
-            <span>
-              from <UntrustedText value={takenOver.stage} />
-            </span>
-            {state === 'needs_human' ? <Badge tone="danger">escalated — still held</Badge> : null}
-          </div>
-          <ResumeLines
-            branch={takenOver.branch}
-            sessionId={takenOver.session_id}
-            sessionPending={takenOver.run_id !== null}
-            commands={takenOver.resume_commands}
-          />
-          {answered === undefined ? null : (
-            <p className="text-xs text-fg-muted">
-              {workspaceExportText(answered.workspace_export)}
-            </p>
-          )}
-          <TakeOverDownloads {...takeOverRunOf(takenOver, runs)} />
-          <HandBack taskId={taskId} takenOver={takenOver} merged={merged} commands={commands} />
+          <TakenOverDetails state={state} takenOver={takenOver} runs={runs} answered={answered} />
+          <HandBackForm taskId={taskId} takenOver={takenOver} merged={merged} commands={commands} />
         </Card>
       </div>
     );
@@ -325,17 +445,13 @@ export const TakeOverPanel = ({
   }
 
   // WP-194 (backlog 563): since WP-165 the server refuses a merged task's take-over (`409
-  // task_merged`), so the form is not offered; the reason is said instead, as `HandBack` says it.
+  // task_merged`), so the form is not offered; the reason is said instead, as `HandBackForm` says it.
   if (merged) {
     return (
       <div>
         <SectionHeading>Take over</SectionHeading>
         <Card>
-          <p className="text-xs text-fg-muted">
-            This task was merged, so there is nothing to take over or pause: its branch is already
-            in the default branch. Cancel the task — or, once it is waiting for a human, resume it
-            into the retrospective.
-          </p>
+          <p className="text-xs text-fg-muted">{MERGED_NO_TAKE_OVER}</p>
         </Card>
       </div>
     );
@@ -345,59 +461,8 @@ export const TakeOverPanel = ({
     <div>
       <SectionHeading>Take over</SectionHeading>
       <Card className="flex flex-col gap-2">
-        <p className="text-xs text-fg-muted">
-          Pauses the pipeline, stops a run in flight gracefully and hands you the branch to finish
-          on your own machine. Hand it back at any stage when you are done.
-        </p>
-        <form
-          className="flex flex-col gap-2"
-          aria-label={`Take task ${taskId} over`}
-          onSubmit={(event) => {
-            event.preventDefault();
-            commands.takeOver.mutate({ tarball, reason: reason.trim() });
-          }}
-        >
-          <input
-            aria-label="Why you are taking it over"
-            value={reason}
-            onChange={(event) => {
-              setReason(event.target.value);
-            }}
-            placeholder="Why (optional, recorded in the audit)"
-            className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
-          />
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              checked={tarball}
-              onChange={(event) => {
-                setTarball(event.target.checked);
-              }}
-            />
-            Also archive the workspace (without .git and node_modules) for download
-          </label>
-          <div>
-            <Button type="submit" tone="danger" disabled={commands.takeOver.isPending}>
-              Take over
-            </Button>
-          </div>
-        </form>
-        {commands.takeOver.isError ? (
-          <ErrorNotice title="The take-over was refused." error={commands.takeOver.error} />
-        ) : null}
-        {answered === undefined ? null : (
-          <div className="flex flex-col gap-2">
-            <ResumeLines
-              branch={answered.branch}
-              sessionId={answered.session_id}
-              sessionPending={answered.workspace_export === 'requested'}
-              commands={answered.resume_commands}
-            />
-            <p className="text-xs text-fg-muted">
-              {workspaceExportText(answered.workspace_export)}
-            </p>
-          </div>
-        )}
+        <TakeOverForm taskId={taskId} commands={commands} />
+        {answered === undefined ? null : <TakeOverAnswer answered={answered} />}
       </Card>
     </div>
   );

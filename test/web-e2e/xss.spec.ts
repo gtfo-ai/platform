@@ -223,6 +223,11 @@ test('a hostile scheme in a DTO url never reaches an href on the task screen', a
   // The positive control stays the **ticket** link, which is still a rendered DTO URL on this
   // screen (`HOSTILE.safeUrl`), so "no hostile href" is not true because nothing links at all.
   await expect(page.locator(`main a[href="${HOSTILE.safeUrl}"]`).first()).toBeVisible();
+  // The artifacts are the Artifacts tab since S-23.9b.
+  await page
+    .getByRole('navigation', { name: 'Task' })
+    .getByRole('link', { name: /^Artifacts/ })
+    .click();
   // The artifact rows are links this app built — `?artifact=<id>` — and carry no DTO URL.
   await expect(page.locator('main a[href*="artifact="]').first()).toBeVisible();
   // …and the `vbscript:` and `file:` artifacts and the `data:` merge request reach no href.
@@ -240,6 +245,8 @@ test('a hostile scheme in a DTO url never reaches an href on the task screen', a
   // artifacts were refused *by `safeHref` at render time*, and now they are not rendered as URLs at
   // all, so there is nothing to refuse. Counted rather than bounded below, so a link that quietly
   // disappears fails here too (rule 42).
+  // The registry link is in the Dependencies row's detail (S-23.9b's merge box).
+  await page.locator('[data-check="dependencies"] summary').click();
   await expect(page.getByText('npm:left-pad', { exact: true })).toBeVisible();
   expect(await page.locator('[data-link-refused]').count()).toBe(2);
 

@@ -269,6 +269,28 @@ describe('DownloadLink (WP-44)', () => {
     expect(container.querySelector('a')).toBeNull();
     expect(screen.getByText('Transcript').getAttribute('data-link-refused')).toBe('true');
   });
+
+  /**
+   * S-23.9b: a host element (the task page's menu item) merges its role and handlers in. Probed from
+   * JavaScript, because the type already forbids it: a host's `href`, `download` or `children` never
+   * replace the vetted path, the attribute or the label.
+   */
+  it('takes a host’s props, and never its href, download or label', () => {
+    const host = {
+      role: 'menuitem',
+      href: 'javascript:alert(1)',
+      download: 'evil.sh',
+      children: 'Something else',
+    } as unknown as Record<string, never>;
+    const { container } = render(
+      <DownloadLink path="/api/tasks/abc/export" label="Download JSON" {...host} />,
+    );
+    const anchor = container.querySelector('a');
+    expect(anchor?.getAttribute('role')).toBe('menuitem');
+    expect(anchor?.getAttribute('href')).toBe('/api/tasks/abc/export');
+    expect(anchor?.getAttribute('download')).toBe('');
+    expect(anchor?.textContent).toBe('Download JSON');
+  });
 });
 
 describe('CopyableUrl (WP-95)', () => {

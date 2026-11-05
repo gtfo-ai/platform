@@ -49,6 +49,7 @@ import { AppShell } from '../app/shell.js';
 import { DashboardScreen } from '../features/dashboard.js';
 import { WIZARD_STEP_IDS } from '../features/onboarding-steps.js';
 import { SignInScreen } from '../features/sign-in.js';
+import { taskSearchSchema } from '../features/task-tab.js';
 import { ErrorFallback } from '../ui/error-boundary.js';
 import { Skeleton } from '../ui/skeleton.js';
 
@@ -265,18 +266,19 @@ const boardRoute = createRoute({
 });
 
 /**
- * `?artifact=<id>` — which artifact's body the task screen has open (WP-52).
+ * `?artifact=<id>` — which artifact's body the task screen has open (WP-52) — and, since S-23.9b,
+ * `?tab=`, which of its four tabs is shown; both are `taskSearchSchema` (`features/task-tab.ts`).
  *
- * It is a **search parameter and not component state** because it is what makes an artifact
- * *addressable*: the ask thread's `artifact` citation is a link that sets it, and a reader can send
- * somebody the URL. Both task routes declare it, so `<Link to="." search={…}>` works from either
- * without the component having to know which one it is on.
+ * They are **search parameters and not component state** because they make a place *addressable*:
+ * the ask thread's `artifact` citation is a link that sets one, and a reader can send somebody the
+ * URL. Both task routes declare them, so `<Link to="." search={…}>` works from either without the
+ * component having to know which one it is on.
  *
- * `z.string()` rather than `z.uuid()`: the value is compared against the ids the task's own
- * projection returned and an unknown one shows nothing, so a bad id is a no-op rather than a router
- * error — and the value never reaches an attribute (`apps/web/src/no-html.test.ts`).
+ * `artifact` is `z.string()` rather than `z.uuid()`: the value is compared against the ids the
+ * task's own projection returned and an unknown one shows nothing, so a bad id is a no-op rather
+ * than a router error — and the value never reaches an attribute (`apps/web/src/no-html.test.ts`).
+ * An unknown `tab` is dropped the same way and opens the Overview.
  */
-const taskSearchSchema = z.object({ artifact: z.string().optional() });
 
 /** A task in its project: the Board's tab, under the project's header, with its own `<h1>`. */
 const projectTaskRoute = createRoute({

@@ -151,10 +151,15 @@ describe('raising a task’s cap (WP-131)', () => {
   it('offers the raise on a task its budget paused, and sends the raise then the resume', async () => {
     const user = userEvent.setup();
     const { view, sent } = open({ pausedReason: 'budget', scope: 'task' });
+    // S-23.9b: the raise is in the header's `···` menu and opens a dialog with the same field.
+    await user.click(await view.findByRole('button', { name: 'Task actions' }));
+    await user.click(await view.findByRole('menuitem', { name: "Raise this task's cap…" }));
     await waitFor(() => {
-      expect(view.getByText("Raise this task's cap")).toBeTruthy();
+      expect(view.getByText("Raise this task's cap", { selector: 'button' })).toBeTruthy();
     });
-    const button = view.getByText("Raise this task's cap").closest('button') as HTMLButtonElement;
+    const button = view.getByText("Raise this task's cap", {
+      selector: 'button',
+    }) as HTMLButtonElement;
     // Nothing above the cap entered yet: the button cannot send a figure the server would refuse.
     expect(button.disabled).toBe(true);
     await user.type(view.getByLabelText('New cap (USD)'), '80');
@@ -176,10 +181,15 @@ describe('raising a task’s cap (WP-131)', () => {
    * `can_raise_budget: false`), a pause a person made, and a running task.
    */
   it.each(NOT_OFFERED)('does not offer it for $label', async ({ shape }) => {
+    const user = userEvent.setup();
     const { view } = open(shape);
     await waitFor(() => {
       expect(view.container.textContent).toContain('Cost so far');
     });
+    // The menu is open — every case here can be cancelled — and it carries no raise.
+    await user.click(await view.findByRole('button', { name: 'Task actions' }));
+    expect(await view.findByRole('menuitem', { name: 'Cancel task…' })).toBeTruthy();
+    expect(view.queryByRole('menuitem', { name: "Raise this task's cap…" })).toBeNull();
     expect(view.queryByText("Raise this task's cap")).toBeNull();
   });
 });

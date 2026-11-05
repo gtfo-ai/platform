@@ -1,4 +1,4 @@
-/** Flash: four tones, each with its own icon; danger announced, the others only on request. */
+/** Flash: five tones, each with its own icon; danger announced, the others only on request. */
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Button } from './button.js';
@@ -21,11 +21,12 @@ describe('Flash', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
   });
 
-  it('does not announce info, warning or success unless asked', () => {
+  it('does not announce info, warning, success or beacon unless asked', () => {
     render(
       <>
         <Flash tone="info">i</Flash>
         <Flash tone="warning">w</Flash>
+        <Flash tone="beacon">b</Flash>
         <Flash tone="success" live="status">
           s
         </Flash>
@@ -35,7 +36,7 @@ describe('Flash', () => {
     expect(screen.getByRole('status').textContent).toBe('s');
   });
 
-  it.each(['info', 'warning', 'danger', 'success'] as FlashTone[])(
+  it.each(['info', 'warning', 'danger', 'success', 'beacon'] as FlashTone[])(
     'draws %s with a hidden icon, so the tone is never colour alone',
     (tone) => {
       const { container } = render(<Flash tone={tone} title="t" />);
@@ -47,7 +48,7 @@ describe('Flash', () => {
   it('gives each tone a different icon', () => {
     const { container } = render(
       <div>
-        {(['info', 'warning', 'danger', 'success'] as const).map((tone) => (
+        {(['info', 'warning', 'danger', 'success', 'beacon'] as const).map((tone) => (
           <Flash key={tone} tone={tone} title={tone} />
         ))}
       </div>,
@@ -55,6 +56,6 @@ describe('Flash', () => {
     const paths = [...container.querySelectorAll('[data-flash] svg path')].map((path) =>
       path.getAttribute('d'),
     );
-    expect(new Set(paths).size).toBe(4);
+    expect(new Set(paths).size).toBe(5);
   });
 });
