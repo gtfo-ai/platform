@@ -137,7 +137,10 @@ describe('compose.worker.dev.yml enables no updater', () => {
     const updaters = Object.entries(base.compose.services).filter(
       ([name, service]) => /updater/.test(name) || service.environment?.ROLE === 'updater',
     );
-    expect(updaters.map(([name]) => name)).toContain('updater');
+    // The updater and its socket proxy (S-22.10), which mounts the socket with POST allowed.
+    expect(updaters.map(([name]) => name)).toEqual(
+      expect.arrayContaining(['updater', 'updater-docker-proxy']),
+    );
     for (const [name] of updaters) {
       expect(devService(name).profiles, name).toEqual(['worker-dev-never']);
       // Without `!override` compose merges the two lists, and the base's own profile survives.

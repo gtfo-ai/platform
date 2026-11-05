@@ -19,8 +19,9 @@
 # pinned to a registry digest. (`pull-git-image` keeps the base's third-party pin: it is not ours.)
 #
 # **The updater is off** — a dev worker never self-updates (it would replace the images this
-# checkout built). `updater` is moved under a profile nobody enables, with `!override`, so whatever
-# profile list the base gives it is replaced rather than merged.
+# checkout built). `updater` — and `updater-docker-proxy`, its socket proxy — are moved under a
+# profile nobody enables, with `!override`, so whatever profile list the base gives them is replaced
+# rather than merged.
 #
 # **Every name a prod worker holds has a dev name of its own**, so a dev worker runs beside a prod
 # one on the same daemon (the owner's case, and the developer's): the project (`agentic-worker-dev`),
@@ -71,6 +72,16 @@ services:
 
   updater:
     image: platform:dev
+    profiles: !override ['worker-dev-never']
+    environment:
+      PLATFORM_IMAGE: platform:dev
+      PLATFORM_LAUNCHER_IMAGE: platform-launcher:dev
+      PLATFORM_RUNTIME_IMAGE: platform-runtime:dev
+      PLATFORM_EGRESS_IMAGE: platform-egress:dev
+
+  # The updater's own socket proxy (S-22.10) mounts the Docker socket with POST allowed: with the
+  # updater off it has nothing to serve, so it is off too (review of PR #38).
+  updater-docker-proxy:
     profiles: !override ['worker-dev-never']
 
 volumes:

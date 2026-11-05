@@ -981,8 +981,10 @@ describe('compose.worker.yml + compose.worker.dev.yml (S-22.16)', () => {
   });
 
   it('starts no updater, even with the base file’s own profile enabled', () => {
-    expect(Object.keys(merged().services)).not.toContain('updater');
-    expect(Object.keys(merged('updater').services)).not.toContain('updater');
+    for (const service of ['updater', 'updater-docker-proxy']) {
+      expect(Object.keys(merged().services)).not.toContain(service);
+      expect(Object.keys(merged('updater').services)).not.toContain(service);
+    }
     // The same profile does start it from the base file alone — the case is not vacuous.
     const baseOnly = config(
       ['compose.worker.yml'],
@@ -990,5 +992,10 @@ describe('compose.worker.yml + compose.worker.dev.yml (S-22.16)', () => {
       projectWith(prodValues),
     );
     expect(Object.keys(baseOnly.services)).toContain('updater');
+    // And the base starts both without any profile (S-22.10: a prod worker follows its core).
+    const plain = config(['compose.worker.yml'], {}, projectWith(prodValues));
+    expect(Object.keys(plain.services)).toEqual(
+      expect.arrayContaining(['updater', 'updater-docker-proxy']),
+    );
   });
 });
