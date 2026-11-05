@@ -67,6 +67,13 @@ const base = load(BASE_COMPOSE_FILE);
 const dev = load(DEV_COMPOSE_FILE);
 const devService = (name: string): Service => dev.compose.services[name] ?? {};
 
+/** The YAML without its comment lines, whose prose names variables in passing. */
+const uncommented = (text: string): string =>
+  text
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+
 /** `${NAME:-default}` → `default`; a literal stays itself. What the value is with nothing set. */
 const defaultOf = (value: string): string =>
   value.replace(/\$\{[A-Z0-9_]+:-([^}]*)\}/g, '$1').replace(/\$\{[A-Z0-9_]+\}/g, '');
@@ -218,6 +225,33 @@ describe('.env.worker.example', () => {
   it('defaults the core to the local dev core and holds no token', () => {
     expect(values.get('APP_CORE_URL')).toBe('http://host.docker.internal:8080');
     expect(values.get('CLAUDE_CODE_OAUTH_TOKEN')).toBe('');
+  });
+
+  it('lists every variable the two files read in dev mode, set or commented out', () => {
+    // The prod names the dev override replaces, and so never reads (`compose.worker.dev.yml`).
+    const replacedInDev = new Set([
+      'PLATFORM_IMAGE',
+      'PLATFORM_LAUNCHER_IMAGE',
+      'PLATFORM_RUNTIME_IMAGE',
+      'PLATFORM_EGRESS_IMAGE',
+      'APP_WORKER_UI_PORT',
+      'APP_WORKER_CONTROL_VOLUME',
+      'APP_WORKER_CACHE_VOLUME',
+    ]);
+    const read = new Set(
+      [...uncommented(`${base.text}\n${dev.text}`).matchAll(/\$\{([A-Z][A-Z0-9_]*)/g)].map(
+        ([, name]) => name,
+      ),
+    );
+    const listed = new Set(
+      [...example.matchAll(/^(?:# )?([A-Z][A-Z0-9_]*)=/gm)].map(([, name]) => name),
+    );
+    expect(read.size).toBeGreaterThan(5);
+    for (const name of read) {
+      if (name === undefined || replacedInDev.has(name)) continue;
+      expect(listed.has(name), name).toBe(true);
+    }
+    expect(values.get('APP_WORKER_UI')).toBe('enabled');
   });
 
   it('lists every APP_WORKER_DEV_* variable the dev override reads, with its default', () => {
