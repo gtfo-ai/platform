@@ -12,7 +12,8 @@
  *    server's own runner (`createWorkspaceClaudeRunner` over `createClaudeRunner`) and this worker's
  *    launcher;
  *  - a **local listener** on the worker's compose network only (never published): `GET /healthz`,
- *    `GET /readyz` (`core_handshake`), `POST /internal/drain` (stop claiming, finish what runs —
+ *    `GET /readyz` (`core_handshake` and, since backlog 980, `launcher` — ready is both),
+ *    `POST /internal/drain` (stop claiming, finish what runs —
  *    what the updater asks before it applies, TD-032 decision 6) and `GET /internal/state`;
  *  - **the local page** (WP-292, `local-ui.ts`): a second listener on container port 7357, published
  *    on `127.0.0.1` only — with no token by default (`APP_WORKER_UI_AUTH=none`), or behind one kept
@@ -71,6 +72,7 @@ import {
   WORKER_PROTOCOL_VERSION,
   type WorkerLocalClaimScope,
   type WorkerLocalCoreFailure,
+  type WorkerLocalLauncher,
   type WorkerLocalOffers,
   type WorkerLocalState,
   type WorkerProtocolRange,
@@ -106,7 +108,7 @@ import {
 import { CoreCheckError, checkCoreAddress, probeCoreCandidates } from './core-probe.js';
 import { CREDENTIAL_FILE, ensureCredential } from './credential.js';
 import { createLocalUiServer, LocalUiError } from './local-ui.js';
-import { backoffMs, sleepMs } from './retry.js';
+import { backoffMs, RETRY_MAX_MS, sleepMs } from './retry.js';
 import {
   type RunSession,
   redactKeysAndValues,
@@ -150,6 +152,8 @@ export interface StartRemoteWorkerOptions {
   readonly spawnFor?: PackageWorkspaceOptions['spawnFor'];
   /** Test seam: the waits between retries. */
   readonly sleep?: (ms: number) => Promise<void>;
+  /** Test seam: one launcher health probe's bound (default {@link LAUNCHER_PROBE_TIMEOUT_MS}). */
+  readonly launcherProbeTimeoutMs?: number;
   /** Test seam: where the local page's bundle is (default the image's `apps/web/dist`). */
   readonly webRoot?: string;
   /** Test seam: how the sign-in starts `claude` (default `script(1)` around the configured CLI). */
@@ -157,6 +161,16 @@ export interface StartRemoteWorkerOptions {
   /** Test seam: how the wizard checks a platform address (default the global `fetch`). */
   readonly probeFetch?: CoreFetch;
 }
+
+/**
+ * How long one launcher health probe may take before it counts as no answer (backlog 980). The
+ * control client's own bound is ten minutes — a create's — and a probe that hung that long held the
+ * claim loop with it.
+ */
+export const LAUNCHER_PROBE_TIMEOUT_MS = 10_000;
+
+/** What `/readyz`'s `launcher` says: the last health probe answered, did not, or none was made. */
+export type LauncherReach = WorkerLocalLauncher;
 
 /** How often a usage-paused claim loop looks again before the reset (WP-285): a minute at most. */
 export const USAGE_PAUSE_RECHECK_MS = 60_000;
@@ -297,6 +311,20 @@ export const startRemoteWorker = async (
       token: config.launcherToken,
       logger: loggerPort,
     });
+  const probeTimeoutMs = options.launcherProbeTimeoutMs ?? LAUNCHER_PROBE_TIMEOUT_MS;
+  /**
+   * The health probe's own client (review of PR #48): bounded at {@link LAUNCHER_PROBE_TIMEOUT_MS}
+   * by its `fetch`, so a lost race below leaves no ten-minute request open. A test's launcher seam
+   * is its own prober; the race is then the bound.
+   */
+  const launcherProbe =
+    options.launcher ??
+    launcherAdapters.createLauncherControlClient({
+      baseUrl: config.launcherUrl,
+      token: config.launcherToken,
+      logger: loggerPort,
+      timeoutMs: probeTimeoutMs,
+    });
 
   // ── The wizard's inputs (WP-294): environment → `worker-state` file → the page ──────────────
   const coreFromEnvironment = config.coreUrl !== null;
@@ -343,6 +371,14 @@ export const startRemoteWorker = async (
   const usagePauseRemainingMs = (): number =>
     usagePausedUntil === null ? 0 : Math.max(0, Date.parse(usagePausedUntil) - Date.now());
   let heldDigests: string[] = [];
+  /** Whether this worker's launcher answered its last health probe (`/readyz`'s `launcher`). */
+  let launcherReach: LauncherReach = 'unknown';
+  /** The re-probe loop while the launcher does not answer (backlog 980), else `null`. */
+  let launcherWatch: Promise<void> | null = null;
+  /** The claim out now was sent holding no image: the core can match nothing to it. */
+  let claimSentHoldingNothing = false;
+  /** The claim was called off because the launcher answered again: claim at once, no backoff. */
+  let reclaimNow = false;
   const sessions = new Map<string, RunSession>();
   const history: RunSession[] = [];
   let claimAbort: AbortController | null = null;
@@ -401,10 +437,30 @@ export const startRemoteWorker = async (
    * Resolved, the worker's own pinned references are held too (it is running from them).
    * Unresolved, or with no launcher answer, nothing is held and no offer matches — so a worker whose
    * images are still being pulled claims nothing it could not start.
+   *
+   * **A launcher that does not answer is asked again** (backlog 980): the first self-update on Autix
+   * started `remote-worker` a second before `launcher`, the start's probe failed, and the worker sat
+   * *connected* and claiming nothing for seven minutes. Each probe is bounded
+   * ({@link LAUNCHER_PROBE_TIMEOUT_MS}, not the control client's ten-minute create bound), a failed
+   * one starts {@link watchLauncher} — a re-probe with backoff, besides the one before every claim —
+   * and the outage is logged once when it starts and once when it ends.
    */
-  const refreshHeldDigests = async (): Promise<void> => {
+  const refreshHeldDigests = async (): Promise<boolean> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const health = await launcher.health();
+      const health = await Promise.race([
+        launcherProbe.health(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(`the launcher’s health check did not answer within ${probeTimeoutMs} ms`),
+              ),
+            probeTimeoutMs,
+          );
+          (timer as { unref?: () => void }).unref?.();
+        }),
+      ]);
       heldDigests =
         health.images === null
           ? []
@@ -416,13 +472,55 @@ export const startRemoteWorker = async (
                 ...(health.heldImageDigests ?? []),
               ]),
             ].slice(0, MAX_REPORTED_IMAGE_DIGESTS);
+      const recovered = launcherReach === 'unreachable';
+      launcherReach = 'ok';
+      if (recovered) {
+        loggerPort.info(
+          { held_images: heldDigests.length },
+          'this worker’s launcher answers its health check again: it reports its images as held and claims',
+        );
+      }
+      return true;
     } catch (error) {
       heldDigests = [];
-      loggerPort.warn(
-        { err: error },
-        'this worker’s launcher did not answer its health check, so it reports no image as held and claims nothing',
-      );
+      if (launcherReach !== 'unreachable') {
+        loggerPort.warn(
+          { err: error },
+          'this worker’s launcher did not answer its health check, so it reports no image as held and claims nothing; it asks again with backoff',
+        );
+      }
+      launcherReach = 'unreachable';
+      watchLauncher();
+      return false;
+    } finally {
+      clearTimeout(timer);
     }
+  };
+
+  /**
+   * While the launcher does not answer: ask it again with backoff (≤ {@link RETRY_MAX_MS}), and once
+   * it does, call off a claim that went out holding nothing — the core could match no offer to it, so
+   * nothing is lost — so the next one reports the images at once rather than up to 25 s later.
+   */
+  const watchLauncher = (): void => {
+    if (launcherWatch !== null || stopping) return;
+    launcherWatch = (async () => {
+      for (let attempt = 0; !stopping && launcherReach === 'unreachable'; attempt += 1) {
+        await sleep(backoffMs(attempt));
+        if (stopping || launcherReach !== 'unreachable') break;
+        if (await refreshHeldDigests()) {
+          if (claimAbort !== null && claimSentHoldingNothing) {
+            reclaimNow = true;
+            claimAbort.abort();
+          }
+          wakeClaims();
+        }
+      }
+    })().finally(() => {
+      launcherWatch = null;
+      // A probe that failed while this loop was ending found it still set: start it again.
+      if (launcherReach === 'unreachable' && !stopping) watchLauncher();
+    });
   };
 
   const handshake = async (client: CoreClient, signal: AbortSignal): Promise<boolean> => {
@@ -632,6 +730,7 @@ export const startRemoteWorker = async (
       try {
         // Asked before every claim: an image pulled (or removed) since the last one counts now.
         await refreshHeldDigests();
+        claimSentHoldingNothing = heldDigests.length === 0;
         const claiming = client.claim(
           credential as string,
           {
@@ -650,6 +749,10 @@ export const startRemoteWorker = async (
         if (pkg !== null) startSession(client, pkg);
       } catch (error) {
         if (stopping || signal.aborted) break;
+        if (reclaimNow) {
+          reclaimNow = false;
+          continue;
+        }
         if (draining || manuallyPausedAt !== null || taking || usagePauseRemainingMs() > 0) {
           continue;
         }
@@ -676,6 +779,8 @@ export const startRemoteWorker = async (
       } finally {
         claimAbort = null;
         claimInFlight = null;
+        claimSentHoldingNothing = false;
+        reclaimNow = false;
       }
     }
   };
@@ -1193,6 +1298,7 @@ export const startRemoteWorker = async (
       usage_paused_until: usagePauseRemainingMs() > 0 ? usagePausedUntil : null,
       usage_paused_estimated: usagePauseRemainingMs() > 0 && usagePausedEstimated,
       draining,
+      launcher: launcherReach,
       update_pending:
         coreDigests === null || (config.platformImageDigest ?? null) === null
           ? null
@@ -1294,6 +1400,10 @@ export const startRemoteWorker = async (
     await claimLoop(client, signal);
   };
 
+  // Asked at once, before (and whatever) the wizard asks: the page says whether the launcher answers
+  // even while this worker has no platform yet, and the watch starts if it does not (backlog 980).
+  void refreshHeldDigests();
+
   const main = (async () => {
     while (!stopping) {
       const signal = cycle.signal;
@@ -1344,10 +1454,13 @@ export const startRemoteWorker = async (
       return;
     }
     if (request.method === 'GET' && path === '/readyz') {
-      const ok = connection === 'connected';
+      // Ready is connected **and** a launcher that answers (backlog 980): the updater's apply checks
+      // this, so an update is not called good while its worker cannot reach its launcher.
+      const connected = connection === 'connected';
+      const ok = connected && launcherReach === 'ok';
       send(response, ok ? 200 : 503, {
         status: ok ? 'ok' : 'down',
-        checks: { core_handshake: ok ? 'ok' : connection },
+        checks: { core_handshake: connected ? 'ok' : connection, launcher: launcherReach },
       });
       return;
     }

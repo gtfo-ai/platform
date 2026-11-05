@@ -1316,6 +1316,8 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     readonly claudeCli?: ClaudeCliLauncher;
     readonly probeFetch?: CoreFetch;
     readonly sleep?: (ms: number) => Promise<void>;
+    /** The launcher's health check (default: it answers, holding the run and egress images). */
+    readonly health?: () => Promise<unknown>;
   }) => {
     const lines: string[] = [];
     const launcher = fakeLauncher(options.core.events);
@@ -1348,7 +1350,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       coreFetch: options.core.fetch,
       launcher: {
         ...(launcher.client as object),
-        health: async () => ({ images: { run: DIGEST, egress: DIGEST } }),
+        health: options.health ?? (async () => ({ images: { run: DIGEST, egress: DIGEST } })),
       } as unknown as launcherAdapters.LauncherControlClient,
       spawnFor: () => {
         const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(options.script?.() ?? script(1), {
@@ -1486,6 +1488,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
         protocol: WORKER_PROTOCOL_VERSION,
         manually_paused_at: null,
         draining: false,
+        launcher: 'ok',
         update_pending: false,
         concurrency: 1,
       });
@@ -2054,6 +2057,41 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     workerLocalStateSchema.parse(
       JSON.parse((await request(port, { path: '/api/local/state', headers })).text),
     );
+
+  it('serves the page and says the launcher does not answer while it is down, before any setup (backlog 980)', async () => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    const core = fakeCore({});
+    const probed = probe([]);
+    let up = false;
+    const { worker } = await start({
+      stateDir,
+      core,
+      auth: 'none',
+      coreUrl: null,
+      claudeToken: null,
+      probeFetch: probed.fetch,
+      sleep: yielding,
+      health: async () => {
+        if (!up) throw new Error('the launcher control plane could not be reached');
+        return { images: { run: DIGEST, egress: DIGEST } };
+      },
+    });
+    try {
+      const port = portOf(worker.uiAddress());
+      await until('the page says so', () => worker.localState().launcher === 'unreachable');
+      expect(await localState(port)).toMatchObject({
+        connection: 'needs_platform',
+        launcher: 'unreachable',
+      });
+      // The wizard is not blocked by it: it is still asked for a platform, and nothing calls a core.
+      expect(core.captured).toEqual([]);
+      up = true;
+      await until('the page says it answers', () => worker.localState().launcher === 'ok');
+      expect((await localState(port)).launcher).toBe('ok');
+    } finally {
+      await worker.stop();
+    }
+  });
 
   it('starts with no platform, no Claude token and no credential: serves the page, calls no core, claims nothing (WP-294 (1))', async () => {
     const stateDir = mkdtempSync(path.join(scratch, 'state-'));

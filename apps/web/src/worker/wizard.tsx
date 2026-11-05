@@ -29,6 +29,7 @@ import { Flash } from '../ui/flash.js';
 import { Stepper } from '../ui/stepper.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { LocalCallError, type LocalClient } from './client.js';
+import { LauncherNotice } from './launcher-notice.js';
 import {
   approvalLinkOf,
   CORE_FAILURE_WORDS,
@@ -572,6 +573,7 @@ export const Wizard = ({
           <UntrustedText value={error} />
         </Flash>
       )}
+      <LauncherNotice state={state} />
       <div className="grid gap-6 md:grid-cols-[15rem_1fr]">
         <Stepper label="Setup steps" steps={view.steps} />
         <section

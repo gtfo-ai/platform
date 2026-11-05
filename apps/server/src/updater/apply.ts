@@ -15,8 +15,10 @@
  *  3. **up** `-d --wait --wait-timeout <check>` every long-running service but the updater and its
  *     proxy, with the template **this image carries** (`/opt/platform/compose.worker.yml`) — never a
  *     file the core served (TD-032 §3);
- *  4. **check**: the worker's `/readyz` reads `core_handshake: ok` within the same bound, from a
- *     `remote-worker` container running the new `platform` reference;
+ *  4. **check**: the worker's `/readyz` reads `core_handshake: ok` (and `launcher: ok`, backlog 980)
+ *     within the same bound, from a `remote-worker` container running the new `platform` reference.
+ *     `up --wait` waits for the launcher's healthcheck too, and a worker that started before its
+ *     launcher listened asks it again with backoff, so the check reads `launcher: ok` once it answers;
  *  5. **report** `succeeded` (`POST update-report`), and **recreate the updater last**: its
  *     replacement is the new build's.
  *
@@ -150,7 +152,11 @@ export const servicesToUp = (model: ComposeModel): string[] =>
 const referencesEnvironment = (references: ImageReferences): Record<string, string> =>
   Object.fromEntries(IMAGE_KEYS.map((key) => [WORKER_IMAGE_VARIABLE[key], references[key]]));
 
-/** Waits for the worker's `/readyz` to read `core_handshake: ok`, within `seconds`. */
+/**
+ * Waits for the worker's `/readyz` to read `core_handshake: ok` — and `launcher: ok` where the worker
+ * reports one (backlog 980; a build before it does not, and a rollback may bring one up) — within
+ * `seconds`. An update whose worker cannot reach its launcher claims nothing, so it is no success.
+ */
 export const waitForHandshake = async (
   deps: Pick<ApplyDeps, 'fetch' | 'sleep' | 'now'>,
   workerUrl: string,
@@ -164,10 +170,15 @@ export const waitForHandshake = async (
         signal: AbortSignal.timeout(5_000),
       });
       const body = (await response.json().catch(() => null)) as {
-        checks?: { core_handshake?: unknown };
+        checks?: { core_handshake?: unknown; launcher?: unknown };
       } | null;
-      last = `${response.status} core_handshake=${String(body?.checks?.core_handshake ?? 'absent')}`;
-      if (response.status === 200 && body?.checks?.core_handshake === 'ok') {
+      const launcher = body?.checks?.launcher;
+      last = `${response.status} core_handshake=${String(body?.checks?.core_handshake ?? 'absent')} launcher=${String(launcher ?? 'absent')}`;
+      if (
+        response.status === 200 &&
+        body?.checks?.core_handshake === 'ok' &&
+        (launcher === undefined || launcher === 'ok')
+      ) {
         return { ok: true, last };
       }
     } catch (error) {
@@ -343,7 +354,7 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
     if (!handshake.ok) {
       return {
         ok: false,
-        detail: `the worker's /readyz did not read core_handshake: ok within ${plan.check_seconds} s (${handshake.last})`,
+        detail: `the worker's /readyz did not read core_handshake and launcher: ok within ${plan.check_seconds} s (${handshake.last})`,
       };
     }
     if (image !== expectedPlatform) {
