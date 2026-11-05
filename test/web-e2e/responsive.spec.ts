@@ -15,8 +15,6 @@ import { expect, type Page, test } from '@playwright/test';
 import { IDS, PROJECT_KEY } from './support/fixtures.js';
 import { resetBackend, signIn } from './support/harness.js';
 
-test.use({ colorScheme: 'dark' });
-
 const PHONE = { width: 390, height: 844 };
 const LAPTOP = { width: 1024, height: 768 };
 

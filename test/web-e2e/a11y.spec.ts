@@ -5,8 +5,8 @@
  * 2.0 A and AA and 2.1 AA.
  *
  * **Dark only.** The product has one theme (TD-033 as amended by S-23.17, the owner's decision), so
- * every screen is measured in it; the browser is asked for a dark colour scheme so the reading does
- * not depend on whether the build still honours a light one.
+ * every screen is measured once, in it, and each case asserts the page really is drawn dark (the
+ * root's computed `color-scheme`) rather than trusting it.
  *
  * **Why a list of screens, not a crawl.** Each entry waits for something the screen draws only once
  * its reads have answered (`ready`), so axe never measures a skeleton and reports a clean page that
@@ -23,8 +23,6 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, type Page, test } from '@playwright/test';
 import { IDS, PROJECT_KEY } from './support/fixtures.js';
 import { resetBackend, signIn } from './support/harness.js';
-
-test.use({ colorScheme: 'dark' });
 
 /** The rule sets research/19's D4 names. */
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21aa'];
@@ -197,7 +195,9 @@ for (const screen of SCREENS) {
     await page.goto(screen.path);
     await screen.ready(page);
     await screen.open?.(page);
-    expect(await page.evaluate(() => document.documentElement.dataset['theme'])).toBe('dark');
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe(
+      'dark',
+    );
     const results = await new AxeBuilder({ page }).withTags(TAGS).analyze();
     // Named by rule, element and message, so a failure reads as the fix it needs.
     const found = results.violations.flatMap((violation) =>
