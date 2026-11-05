@@ -19,11 +19,15 @@
  *
  * ## The settings applied
  *
- * `loop_limit` is the ceiling from the limits handed in — a task's **frozen** `iteration_limits`,
- * or the project's `iterationLimitsFor` for a template — and `model`/`effort` come from
- * {@link GraphSettings.agentOf}: for a task, the model and effort of the latest run of that stage
- * when one exists (what it actually ran with), else the project's configured value
- * (`configuredStageAgent`), which is what a run started now would use.
+ * `loop` and `loop_limit` are **per edge**: a stage may leave backwards by more than one loop
+ * (`ready_for_merge` spends `human_rounds` on a review comment and `rebase_rechecks` when the
+ * default branch moves), so a node-level loop would have to pick one. The ceiling comes from the
+ * limits handed in — a task's **frozen** `iteration_limits`, or the project's `iterationLimitsFor`
+ * for a template. `model`/`effort` come from {@link GraphSettings.agentOf}: for a task, the model
+ * and effort of the latest run of that stage when one exists (what it actually ran with), else the
+ * project's configured value (`configuredStageAgent`), which is what a run started now would use —
+ * and `null` (`agentOf` answers `null`) when the project's stored settings do not parse, because
+ * the defaults standing in for them are not what a run would use (no run starts on them).
  */
 import type {
   DomainEventType,
@@ -53,7 +57,8 @@ export interface StageAgent {
 
 export interface GraphSettings {
   readonly limits: IterationLimits;
-  readonly agentOf: (stage: string) => StageAgent;
+  /** `null`: the stage's model and effort cannot be stated (published as `null`, never a default). */
+  readonly agentOf: (stage: string) => StageAgent | null;
 }
 
 type EdgeKind = PipelineGraphEdge['kind'];
@@ -126,12 +131,20 @@ const edgeOf = (
   kind: EdgeKind,
   onEvent: DomainEventType | null,
   decision: PipelineDecision,
+  limits: IterationLimits,
 ): PipelineGraphEdge | null => {
   switch (decision.kind) {
     case 'enter':
-      return { from, to: decision.stage, kind, on_event: onEvent, loop: null };
+      return { from, to: decision.stage, kind, on_event: onEvent, loop: null, loop_limit: null };
     case 'return':
-      return { from, to: decision.to, kind, on_event: onEvent, loop: decision.loop };
+      return {
+        from,
+        to: decision.to,
+        kind,
+        on_event: onEvent,
+        loop: decision.loop,
+        loop_limit: limits[decision.loop],
+      };
     default:
       return null;
   }
@@ -153,6 +166,7 @@ export const pipelineGraphOf = (
         question.kind,
         question.onEvent,
         interpret(compiled, question.signal),
+        settings.limits,
       );
       if (edge !== null) {
         edges.push(edge);
@@ -160,7 +174,6 @@ export const pipelineGraphOf = (
     }
   }
   const nodes = compiled.stages.map((stage): PipelineGraphNode => {
-    const loop = edges.find((edge) => edge.from === stage.id && edge.loop !== null)?.loop ?? null;
     const agent = stage.kind === 'agent' ? settings.agentOf(stage.id) : null;
     return {
       id: stage.id,
@@ -170,8 +183,6 @@ export const pipelineGraphOf = (
       advisory: stage.advisory,
       model: agent?.model ?? null,
       effort: agent?.effort ?? null,
-      loop,
-      loop_limit: loop === null ? null : settings.limits[loop as keyof IterationLimits],
     };
   });
   return { template: compiled.templateId, nodes, edges };

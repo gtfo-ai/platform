@@ -127,6 +127,21 @@ export const projectTemplateGraph = (
   };
 };
 
+/**
+ * A task's stage → the model and effort it ran (or would run) with: the latest run's when the stage
+ * has run, else the project's configured value — and `null` when there is no run and the project's
+ * stored settings do not parse (`configRefusal`): the defaults standing in for them are not what a
+ * run would use, since no run starts on them (the project route's `project_config_refused`, read
+ * per stage). `settings` is `null` only when every agent stage has a run.
+ */
+export const taskStageAgent =
+  (byStage: ReadonlyMap<string, StageAgent>, settings: ProjectSettings | null) =>
+  (stage: string): StageAgent | null =>
+    byStage.get(stage) ??
+    (settings === null || settings.configRefusal !== undefined
+      ? null
+      : configuredStageAgent(settings, stage));
+
 export interface PipelineGraphReaders {
   readonly taskGraph: (taskId: string) => Promise<TaskGraphResult>;
   readonly projectGraphs: (
@@ -182,10 +197,7 @@ export const databasePipelineGraphReaders = (
       kind: 'graph',
       graph: pipelineGraphOf(compiled.pipeline, {
         limits: compiled.limits,
-        // `settings` is read exactly when some agent stage has no run, so it is non-null whenever
-        // the fallback is reached.
-        agentOf: (stage) =>
-          byStage.get(stage) ?? configuredStageAgent(settings as ProjectSettings, stage),
+        agentOf: taskStageAgent(byStage, settings),
       }),
     };
   },

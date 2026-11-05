@@ -120,7 +120,7 @@ import {
 import { HttpError } from '../errors.js';
 import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
-import { latestActivityFor, seatsFor } from './live-view-queries.js';
+import { latestActivityFor, newestEntryPerRun, seatsFor } from './live-view-queries.js';
 
 const {
   approvals,
@@ -372,13 +372,16 @@ const toRunRecord = (
 /**
  * Each run's newest `progress` transcript row → `RunRecord.latest_progress` (PROGRESS backlog 496).
  *
- * One query for the whole list, `distinct on (run_id)` over the primary key's `(run_id, seq)` order.
+ * One query for the whole list: a `lateral` probe per run (`newestEntryPerRun`, S-23.15) — the
+ * primary key `(run_id, seq, created_at)` walked backwards in each partition from the run's own
+ * `created_at` on, stopped at the first `progress` row, never a sort of the run's transcript.
  * A run that reported nothing is absent from the map and publishes `null`. A row this release cannot
  * read is refused by name, as `/messages` refuses it, rather than published as "no progress": the
  * runner validated it against the same schema when it wrote it, so a mismatch is a fault to see.
  *
  * The cost is stated: there is no partial index on `kind = 'progress'` (migration 0084 could not
- * name the label it added), so for a run that reported nothing the read walks that run's rows.
+ * name the label it added), so for a run that reported nothing the probe walks that run's rows
+ * (BACKLOG 808).
  */
 export const latestProgressFor = async (
   database: Database,
@@ -388,18 +391,22 @@ export const latestProgressFor = async (
   if (runIds.length === 0) {
     return byRun;
   }
-  const rows = await database
-    .selectDistinctOn([runMessages.runId], {
-      runId: runMessages.runId,
-      seq: runMessages.seq,
-      payload: runMessages.payload,
-      blobId: runMessages.blobId,
-    })
-    .from(runMessages)
-    .where(and(inArray(runMessages.runId, [...runIds]), eq(runMessages.kind, 'progress')))
-    .orderBy(asc(runMessages.runId), desc(runMessages.seq));
+  const { rows } = await database.execute<{
+    run_id: string;
+    seq: number;
+    payload: unknown;
+    blob_id: string | null;
+  }>(newestEntryPerRun(runIds, sql`m.payload, m.blob_id`, { progressOnly: true }));
   for (const row of rows) {
-    byRun.set(row.runId, latestProgressOfRow(row));
+    byRun.set(
+      row.run_id,
+      latestProgressOfRow({
+        runId: row.run_id,
+        seq: row.seq,
+        payload: row.payload,
+        blobId: row.blob_id,
+      }),
+    );
   }
   return byRun;
 };

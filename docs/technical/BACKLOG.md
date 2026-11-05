@@ -48,7 +48,6 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 715 | minor | — | Device-flow limit keys an exact IPv6 address (rotate within a /64 to dodge the 20 per address), and ~10 addresses fill the 200 instance slots for 10 min; key IPv6 on its /64 and alert on the instance limit |
 | 722 | minor | WP-281 | `/readyz` on a process that is not a claimant (`app` beside a busy `runner`) reads `claimants: none` and degrades after an offer waits 5 min, though another process's server claimant is alive and only busy. The liveness row exists since WP-278 (`server_claimants`, migration 0097, renewed by every running server claimant); `/readyz` only needs to read it beside WP-281's connected-worker count |
 | 806 | minor | — | TD-033's `waiting` activity puts the office bot "on the bench", and no bench pose or prop exists (`ui/bot/`, S-23.3): S-23.6 needs one drawn (research/18's recipe) or a stated stand-in |
-| 800 | nit | — | S-23.15's activity read (and `latestProgressFor`) is `distinct on (run_id)` over `run_messages` with no `created_at` bound, so each live run probes the primary-key index of every partition; bounding by the run's `created_at` would prune the older months |
 | 713 | nit | — | worker_device_codes rows are never deleted; bounded by the 200-pending limit per ten minutes, but grow with use; add a sweep of consumed/expired rows |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
 | 422 | nit | — | pipeline.outbound polls at 0.5 s in every process; idle cost on a large job table and drain above N = 50 never measured |
@@ -68,6 +67,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 732 | nit | — | An offer withdrawn before any claim (`run_plan_missing`, WP-278's `offer_timeout`) escalates with `escalate`'s wording — *stopped without a result … open the run's transcript* — for a run that never started and has no transcript |
 | 721 | nit | — | An ask's settle (WP-276) re-reads the task's run and audit lines a citation may name at settle time, not at plan time, so a citation of a line written after the plan is kept; storing the plan's lines would need a column |
 | 807 | nit | — | Sipping's steam (`ui/bot/poses.ts`) crosses the right eye's edge by one pixel per frame: the mug sits below the visor's 4-column gap between the eyes and the steam is 5 wide; a 4-wide steam frame would clear it |
+| 808 | nit | — | `latestProgressFor` (S-23.15's lateral probe, `newestEntryPerRun`) still walks every row of a run that reported no progress, partition by partition, because there is no partial index on `run_messages.kind = 'progress'` (migration 0084 could not name the label it added); a later migration can add one |
 | 132 | ? | — | Unexplained once: authenticated GET /api/artifacts/:id answered 200 with an empty body in verify:e2e; instrumented, not seen since |
 | 7 | ? | — | "Carried, not yet scheduled": a bullet list of carried nits (route-sealed credential never opened by the loader, volume retention, …) |
 

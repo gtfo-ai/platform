@@ -36,6 +36,11 @@ let database: MigratedDatabase;
 let pool: pg.Pool;
 let drizzled: ReturnType<typeof drizzle<typeof db.schema>>;
 
+/**
+ * Taken at module load, so every entry is stamped **before** the runs it belongs to are inserted
+ * (`runs.created_at` is the database's `now()`): the activity and progress probes' lower bound
+ * (`RUN_CLOCK_SKEW_ALLOWANCE`) is what still reads them — a strict `>= runs.created_at` would not.
+ */
 const AT = recentInstant();
 const CANARY = 'CANARY-S2315-do-not-publish';
 const HOSTILE_TOOL = `Read ${CANARY} <script>`;
@@ -276,10 +281,13 @@ describe('GET /api/tasks/:id/pipeline — the frozen snapshot (S-23.15)', () => 
       kind: 'pass',
       on_event: null,
       loop: null,
+      loop_limit: null,
     });
     const node = (id: string) => graph.nodes.find((entry) => entry.id === id);
-    expect(node('code_review')?.loop_limit).toBe(5);
-    expect(node('ci_gate')?.loop_limit).toBe(3);
+    const back = (from: string) =>
+      graph.edges.find((edge) => edge.from === from && edge.loop !== null)?.loop_limit;
+    expect(back('code_review')).toBe(5);
+    expect(back('ci_gate')).toBe(3);
     // The latest implementation run's model; a stage that never ran takes the configured default.
     expect(node('implementation')).toMatchObject({ model: 'claude-haiku-4-5', effort: 'low' });
     expect(node('code_review')?.model).toBe('claude-opus-5');

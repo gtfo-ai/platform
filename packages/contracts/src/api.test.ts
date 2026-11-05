@@ -530,18 +530,24 @@ describe('the live views’ reads (S-23.15)', () => {
           advisory: false,
           model: null,
           effort: null,
-          loop: 'ci_fix',
-          loop_limit: 3,
         },
       ],
       edges: [
-        { from: 'ci_gate', to: 'implementation', kind: 'fail', on_event: null, loop: 'ci_fix' },
+        {
+          from: 'ci_gate',
+          to: 'implementation',
+          kind: 'fail',
+          on_event: null,
+          loop: 'ci_fix',
+          loop_limit: 3,
+        },
         {
           from: 'ready_for_merge',
           to: 'merged_gate',
           kind: 'on',
           on_event: 'mr.merged',
           loop: null,
+          loop_limit: null,
         },
       ],
     };

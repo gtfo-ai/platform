@@ -17,8 +17,6 @@ const GRAPH = {
       advisory: false,
       model: null,
       effort: null,
-      loop: null,
-      loop_limit: null,
     },
   ],
   edges: [],

@@ -15,7 +15,11 @@ import {
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { compileTaskPipeline, frozenLimits, pipelineGraphOf } from './pipeline-graph.js';
-import { enabledTemplateIds, projectTemplateGraph } from './pipeline-graph-queries.js';
+import {
+  enabledTemplateIds,
+  projectTemplateGraph,
+  taskStageAgent,
+} from './pipeline-graph-queries.js';
 
 const PROJECT = '00000000-0000-4000-8000-000000002315' as Id;
 
@@ -115,11 +119,17 @@ describe('the compiled stage graph of every shipped template', () => {
           expect(edge.loop).toBe(backwards ? returnLoopFor(edge.from, edge.to) : null);
           expect(edge.on_event === null).toBe(edge.kind !== 'on');
         }
+        for (const edge of graph.edges) {
+          // A ceiling exactly where there is a loop, and it is that loop's.
+          expect(edge.loop_limit).toBe(
+            edge.loop === null
+              ? null
+              : resolveIterationLimits()[
+                  edge.loop as keyof ReturnType<typeof resolveIterationLimits>
+                ],
+          );
+        }
         for (const node of graph.nodes) {
-          // A node's loop is one of its own return edges', and its ceiling is that loop's.
-          const own = graph.edges.filter((edge) => edge.from === node.id && edge.loop !== null);
-          expect(node.loop).toBe(own[0]?.loop ?? null);
-          expect(node.loop_limit === null).toBe(node.loop === null);
           // Only an agent stage has a model and an effort.
           expect(node.model === null).toBe(node.kind !== 'agent');
           expect(node.effort === null).toBe(node.kind !== 'agent');
@@ -161,17 +171,22 @@ describe('the compiled stage graph of every shipped template', () => {
       advisory: false,
       model: null,
       effort: null,
-      loop: 'ci_fix',
-      loop_limit: 3,
     });
     expect(nodes.find((node) => node.id === 'implementation')).toMatchObject({
       kind: 'agent',
       role: 'developer',
       model: 'model-of-implementation',
       effort: 'medium',
-      loop: 'architecture_revisions',
-      loop_limit: 2,
     });
+    // The ready stage leaves backwards by two loops, each on its own edge with its own ceiling.
+    expect(
+      graphOf('feature')
+        .edges.filter((edge) => edge.from === 'ready_for_merge' && edge.loop !== null)
+        .map((edge) => [edge.to, edge.loop, edge.loop_limit]),
+    ).toEqual([
+      ['implementation', 'human_rounds', 3],
+      ['rebase_gate', 'rebase_rechecks', 10],
+    ]);
     // `qa` is a node either way; with the task's `qa_stage` false it is disabled and has no edges.
     expect(nodes.find((node) => node.id === 'qa')).toMatchObject({ kind: 'human', enabled: false });
   });
@@ -208,7 +223,7 @@ describe('the compiled stage graph of every shipped template', () => {
     ).toEqual(['approve']);
   });
 
-  it('applies the limits it is handed to the nodes', () => {
+  it('applies the limits it is handed to the edges', () => {
     const graph = pipelineGraphOf(
       compilePipeline('feature', SHIPPED_TEMPLATES.feature as PipelineTemplate, null, false),
       {
@@ -216,7 +231,9 @@ describe('the compiled stage graph of every shipped template', () => {
         agentOf: () => ({ model: 'm', effort: 'low' }),
       },
     );
-    expect(graph.nodes.find((node) => node.id === 'ci_gate')?.loop_limit).toBe(7);
+    expect(
+      graph.edges.find((edge) => edge.from === 'ci_gate' && edge.kind === 'fail'),
+    ).toMatchObject({ loop: 'ci_fix', loop_limit: 7 });
   });
 });
 
@@ -266,6 +283,32 @@ describe("a task's frozen pipeline", () => {
         SHIPPED_TEMPLATES,
       ).kind,
     ).toBe('not_compilable');
+  });
+
+  it("states a stage's model off its latest run, else the configured one — and none under a refused config", () => {
+    const ran = new Map([
+      ['implementation', { model: 'claude-haiku-4-5', effort: 'low' as const }],
+    ]);
+    const readable = defaultProjectSettings(PROJECT, {
+      config: { stages: { code_review: { model: 'claude-sonnet-5', effort: 'high' } } },
+    });
+    const ok = taskStageAgent(ran, readable);
+    expect(ok('implementation')).toEqual({ model: 'claude-haiku-4-5', effort: 'low' });
+    expect(ok('code_review')).toEqual({ model: 'claude-sonnet-5', effort: 'high' });
+    // Stored settings that do not parse: the stage that ran keeps its run's figures, and one
+    // that did not is null — never the defaults standing in for the refused document.
+    const refused = taskStageAgent(ran, { ...readable, configRefusal: 'stages: not a map' });
+    expect(refused('implementation')).toEqual({ model: 'claude-haiku-4-5', effort: 'low' });
+    expect(refused('code_review')).toBeNull();
+    const graph = pipelineGraphOf(
+      compilePipeline('feature', SHIPPED_TEMPLATES.feature as PipelineTemplate, null, false),
+      { limits: resolveIterationLimits(), agentOf: refused },
+    );
+    expect(graph.nodes.find((node) => node.id === 'code_review')).toMatchObject({
+      model: null,
+      effort: null,
+    });
+    expect(pipelineGraphSchema.parse(graph)).toEqual(graph);
   });
 
   it('reads frozen limits over the defaults and refuses a malformed value', () => {
@@ -336,7 +379,10 @@ describe("a project's templates", () => {
       model: 'claude-sonnet-5',
       effort: 'low',
     });
-    expect(configured.graph.nodes.find((node) => node.id === 'ci_gate')?.loop_limit).toBe(6);
+    expect(
+      configured.graph.edges.find((edge) => edge.from === 'ci_gate' && edge.kind === 'fail')
+        ?.loop_limit,
+    ).toBe(6);
     // A stage nobody configured keeps the template's default.
     expect(configured.graph.nodes.find((node) => node.id === 'code_review')?.model).toBe(
       'claude-opus-5',

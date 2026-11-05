@@ -61,6 +61,7 @@ import {
   organisationSettingsSchema,
   riskClassSchema,
 } from './config.js';
+import { domainEventTypeSchema } from './events.js';
 import { liveDomainEventSchema, liveDomainEventTypeSchema } from './live-events.js';
 import { taskStageOutcomeSchema, taskStageStateSchema } from './pipeline.js';
 import {
@@ -2609,8 +2610,8 @@ export const agentsResponseSchema = z.strictObject({
 
 /**
  * One stage of a compiled pipeline, as the flow canvas draws it. `model`/`effort` are an agent
- * stage's (null for every other kind); `loop` is the bounded loop a return *out of* this stage
- * spends, when the graph has such an edge, and `loop_limit` its ceiling.
+ * stage's (null for every other kind, and for one whose value cannot be stated). The loops are on
+ * the **edges**: one stage may leave backwards by more than one.
  */
 export const pipelineGraphNodeSchema = z.strictObject({
   id: stageIdSchema,
@@ -2620,15 +2621,13 @@ export const pipelineGraphNodeSchema = z.strictObject({
   advisory: z.boolean(),
   model: nonEmptyStringSchema.max(128).nullable(),
   effort: effortSchema.nullable(),
-  loop: slugSchema.nullable(),
-  loop_limit: z.int().nonnegative().nullable(),
 });
 
 /**
  * One transition the interpreter would take: `next` (a system stage completing), `approve` and
  * `return` (an agent's verdicts), `pass`/`fail` (a gate), `on` (a human stage's event, named in
  * `on_event`). `loop` is set exactly when the edge is a return — it goes backwards and spends that
- * bounded loop.
+ * bounded loop — and `loop_limit` is that loop's ceiling for the task (frozen) or the project.
  */
 export const pipelineGraphEdgeSchema = z.strictObject({
   from: stageIdSchema,
@@ -2636,6 +2635,7 @@ export const pipelineGraphEdgeSchema = z.strictObject({
   kind: z.enum(['next', 'approve', 'return', 'pass', 'fail', 'on']),
   on_event: domainEventTypeSchema.nullable(),
   loop: slugSchema.nullable(),
+  loop_limit: z.int().nonnegative().nullable(),
 });
 
 /** `GET /api/tasks/:task_id/pipeline`, and one entry of the project read. */

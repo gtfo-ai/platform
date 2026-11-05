@@ -26,16 +26,18 @@
  * published as the literal `other`. A tool name is the model's choice, so it is untrusted (BD-022)
  * even bounded; the bound is what keeps it from being a channel for text.
  *
- * **The cost is stated**: `distinct on (run_id)` over the primary key's `(run_id, seq)` order, for
- * the live runs only — the same plan `latestProgressFor` uses, but with no `kind` filter, so it
- * stops at each run's first index entry in every partition.
+ * **The cost** ({@link newestEntryPerRun}): one `lateral` subquery per listed run, `where run_id =
+ * … order by seq desc limit 1` — a backward probe of the primary key `(run_id, seq, created_at)`
+ * in each partition, merged and stopped at the first row, never a sort of the run's transcript.
+ * It is bounded below by the run's own `created_at` (less {@link RUN_CLOCK_SKEW_ALLOWANCE}), so the
+ * partitions older than the run are pruned at run time.
  */
 import type { RunActivity, RunSeat } from '@platform/contracts';
 import { RUN_ACTIVITY_TOOL_NAME_MAX_CHARS, runActivityToolNameSchema } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
-import { asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { eq, inArray, type SQL, sql } from 'drizzle-orm';
 
-const { runMessages, runOffers, runs, workers } = dbAdapters.schema;
+const { runOffers, runs, workers } = dbAdapters.schema;
 
 type Database = dbAdapters.Database;
 
@@ -183,6 +185,45 @@ export const activityOfEntry = (facts: ActivityFacts): RunActivity => {
 };
 
 /**
+ * How far before its run's `created_at` a transcript entry may be stamped and still be read.
+ *
+ * `runs.created_at` is the database's clock; an entry's `created_at` is the producer's — the
+ * runner's, or a remote worker's (S-22.x) — so a strict bound would drop the newest entry of a run
+ * whose producer's clock is behind. A day keeps the bound a partition pruner (the partitions are
+ * monthly) without trusting two clocks to agree to the second.
+ */
+export const RUN_CLOCK_SKEW_ALLOWANCE = '1 day';
+
+/**
+ * Each listed run's newest `run_messages` row (optionally its newest `progress` row) with
+ * `columns` read off it as `m`: one `lateral` probe per run, ordered by `seq` and stopped at the
+ * first row. A run with no such row is absent from the answer. The ids are bound one parameter
+ * each; `columns` is SQL this module writes, never caller text.
+ */
+export const newestEntryPerRun = (
+  runIds: readonly string[],
+  columns: SQL,
+  options: { readonly progressOnly?: boolean } = {},
+): SQL => sql`
+  select r.id as run_id, e.*
+    from unnest(array[${sql.join(
+      runIds.map((id) => sql`${id}`),
+      sql`, `,
+    )}]::uuid[]) as listed(id)
+    join runs r on r.id = listed.id
+    cross join lateral (
+      select m.seq, m.created_at, ${columns}
+        from run_messages m
+       where m.run_id = r.id
+         and m.created_at >= r.created_at - ${sql.raw(`interval '${RUN_CLOCK_SKEW_ALLOWANCE}'`)}
+         ${options.progressOnly === true ? sql`and m.kind = 'progress'` : sql``}
+       order by m.seq desc
+       limit 1
+    ) e`;
+
+const at = (value: Date | string): Date => (value instanceof Date ? value : new Date(value));
+
+/**
  * Each run's newest transcript entry → its activity, in one query. A run with no entry is absent
  * from the map. The `payload` column is read only through the four JSON paths below.
  */
@@ -194,35 +235,40 @@ export const latestActivityFor = async (
   if (runIds.length === 0) {
     return byRun;
   }
-  const block = sql`coalesce(${runMessages.payload} -> 'block', ${runMessages.payload} -> 'content' -> -1)`;
-  const rows = await database
-    .selectDistinctOn([runMessages.runId], {
-      runId: runMessages.runId,
-      seq: runMessages.seq,
-      createdAt: runMessages.createdAt,
-      kind: runMessages.kind,
-      blobId: runMessages.blobId,
-      columnToolName: sql<string | null>`left(${runMessages.toolName}, 65)`,
-      hook: sql<string | null>`${runMessages.payload} ->> 'hook'`,
-      decision: sql<string | null>`${runMessages.payload} ->> 'decision'`,
-      blockType: sql<string | null>`left(${block} ->> 'type', 32)`,
-      blockToolName: sql<string | null>`left(${block} ->> 'tool_name', 65)`,
-    })
-    .from(runMessages)
-    .where(inArray(runMessages.runId, [...runIds]))
-    .orderBy(asc(runMessages.runId), desc(runMessages.seq));
+  const block = sql`coalesce(m.payload -> 'block', m.payload -> 'content' -> -1)`;
+  const { rows } = await database.execute<{
+    run_id: string;
+    created_at: Date | string;
+    kind: string;
+    blob_id: string | null;
+    column_tool_name: string | null;
+    hook: string | null;
+    decision: string | null;
+    block_type: string | null;
+    block_tool_name: string | null;
+  }>(
+    newestEntryPerRun(
+      runIds,
+      sql`m.kind::text as kind, m.blob_id,
+          left(m.tool_name, 65) as column_tool_name,
+          m.payload ->> 'hook' as hook,
+          m.payload ->> 'decision' as decision,
+          left(${block} ->> 'type', 32) as block_type,
+          left(${block} ->> 'tool_name', 65) as block_tool_name`,
+    ),
+  );
   for (const row of rows) {
     byRun.set(
-      row.runId,
+      row.run_id,
       activityOfEntry({
         kind: row.kind,
-        at: row.createdAt,
-        blobbed: row.blobId !== null,
-        columnToolName: row.columnToolName,
+        at: at(row.created_at),
+        blobbed: row.blob_id !== null,
+        columnToolName: row.column_tool_name,
         hook: row.hook,
         decision: row.decision,
-        blockType: row.blockType,
-        blockToolName: row.blockToolName,
+        blockType: row.block_type,
+        blockToolName: row.block_tool_name,
       }),
     );
   }

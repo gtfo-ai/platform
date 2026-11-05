@@ -34,8 +34,6 @@ const GRAPH: PipelineGraph = {
       advisory: false,
       model: null,
       effort: null,
-      loop: null,
-      loop_limit: null,
     },
     {
       id: 'done',
@@ -45,11 +43,11 @@ const GRAPH: PipelineGraph = {
       advisory: false,
       model: null,
       effort: null,
-      loop: null,
-      loop_limit: null,
     },
   ],
-  edges: [{ from: 'intake', to: 'done', kind: 'next', on_event: null, loop: null }],
+  edges: [
+    { from: 'intake', to: 'done', kind: 'next', on_event: null, loop: null, loop_limit: null },
+  ],
 };
 
 interface World {
