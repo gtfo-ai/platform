@@ -63,8 +63,8 @@ import { LauncherNotice } from './launcher-notice.js';
 import {
   CONNECTION_STATUS,
   CONNECTION_WORDS,
-  claimBlockerOf,
   CONTROL_HINTS,
+  claimBlockerOf,
   coreRunUrl,
   deskOf,
   elapsedWords,
