@@ -162,22 +162,32 @@ export const startRemoteWorker = async (
   let coreProtocol: WorkerProtocolRange | null = null;
   let coreDigests: CoreImageDigests | null = null;
   let lastHandshakeAt: string | null = null;
-  let heldDigests: string[] = [...config.imageDigests];
+  let heldDigests: string[] = [];
   const sessions = new Map<string, RunSession>();
   const history: RunSession[] = [];
   let claimAbort: AbortController | null = null;
   let slotFreed: (() => void) | null = null;
 
-  /** The digests this worker holds: its pinned references and what its launcher resolves. */
+  /**
+   * The digests this worker **holds** — only what its launcher resolves on the local daemon now
+   * (backlog 704): its health check answers the run and egress images it is configured with, by the
+   * daemon's id, or `null` when either is missing. Resolved, they are held under both names — the
+   * id and the registry digest of the pinned reference the launcher resolved, which is the one a
+   * core advertises. Unresolved, or with no launcher answer, nothing is held and no offer matches —
+   * so a worker whose images are still being pulled claims nothing it could not start.
+   */
   const refreshHeldDigests = async (): Promise<void> => {
     try {
       const health = await launcher.health();
-      const extra = health.images === null ? [] : [health.images.run, health.images.egress];
-      heldDigests = [...new Set([...config.imageDigests, ...extra])];
+      heldDigests =
+        health.images === null
+          ? []
+          : [...new Set([...config.imageDigests, health.images.run, health.images.egress])];
     } catch (error) {
+      heldDigests = [];
       loggerPort.warn(
         { err: error },
-        'this worker’s launcher did not answer its health check; the pinned image digests are reported alone',
+        'this worker’s launcher did not answer its health check, so it reports no image as held and claims nothing',
       );
     }
   };
@@ -285,6 +295,8 @@ export const startRemoteWorker = async (
       }
       claimAbort = new AbortController();
       try {
+        // Asked before every claim: an image pulled (or removed) since the last one counts now.
+        await refreshHeldDigests();
         const pkg = await core.claim(
           credential as string,
           {

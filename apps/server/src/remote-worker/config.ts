@@ -17,7 +17,7 @@
  * | `APP_WORKSPACE_CONTROL_ROOT` | where the `ctl` volume is mounted, required |
  * | `APP_WORKER_STATE_DIR` | the `worker-state` volume: the worker credential lives here (0600) |
  * | `APP_WORKER_CONCURRENCY` | runs at once, default 1 |
- * | `PLATFORM_IMAGE`, `PLATFORM_LAUNCHER_IMAGE`, `PLATFORM_RUNTIME_IMAGE`, `PLATFORM_EGRESS_IMAGE` | the image references `compose.worker.yml` pins; their `@sha256:` digests are what this worker reports it holds |
+ * | `PLATFORM_RUNTIME_IMAGE`, `PLATFORM_EGRESS_IMAGE` | the run and egress references `compose.worker.yml` pins; their `@sha256:` digests are what this worker reports it holds — only while its launcher resolves them on the local daemon |
  * | `HOST`, `PORT` | the local listener: `/healthz`, `/readyz`, `/internal/*` (compose network only) |
  * | `LOG_LEVEL` | |
  */
@@ -41,13 +41,11 @@ export const REFUSED_WORKER_VARIABLES = [
   'APP_SECRET_KEY_FILE',
 ] as const;
 
-/** The image references whose digests a worker reports holding (TD-031 decision 4). */
-export const WORKER_IMAGE_VARIABLES = [
-  'PLATFORM_IMAGE',
-  'PLATFORM_LAUNCHER_IMAGE',
-  'PLATFORM_RUNTIME_IMAGE',
-  'PLATFORM_EGRESS_IMAGE',
-] as const;
+/**
+ * The image references a run needs — its run and egress images — whose registry digests a worker
+ * reports holding **once its launcher resolves them locally** (TD-031 decision 4; `runtime.ts`).
+ */
+export const WORKER_IMAGE_VARIABLES = ['PLATFORM_RUNTIME_IMAGE', 'PLATFORM_EGRESS_IMAGE'] as const;
 
 export interface RemoteWorkerConfig {
   readonly coreUrl: string;
@@ -57,7 +55,7 @@ export interface RemoteWorkerConfig {
   readonly controlRoot: string;
   readonly stateDir: string;
   readonly concurrency: number;
-  /** The `sha256:` digests named by the `PLATFORM_*_IMAGE` references, de-duplicated. */
+  /** The `sha256:` digests the run and egress references name, de-duplicated (reported only when local). */
   readonly imageDigests: readonly string[];
   readonly host: string;
   readonly port: number;

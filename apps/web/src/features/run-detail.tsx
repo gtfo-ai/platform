@@ -184,14 +184,14 @@ const elapsedOf = (record: RunRecord, nowMs: number): string => {
 export const executedByOf = (
   seat: RunSeat | null | undefined,
 ):
-  | { readonly kind: 'worker'; readonly name: string | null }
+  | { readonly kind: 'worker'; readonly name: string | null; readonly user: string | null }
   | { readonly kind: 'server' }
   | null =>
   seat === null || seat === undefined
     ? null
     : seat.kind === 'server'
       ? { kind: 'server' }
-      : { kind: 'worker', name: seat.worker_name };
+      : { kind: 'worker', name: seat.worker_name, user: seat.user_name ?? null };
 
 const ExecutedBy = ({ seat }: { readonly seat: RunSeat | null | undefined }): ReactElement => {
   const executed = executedByOf(seat);
@@ -204,7 +204,14 @@ const ExecutedBy = ({ seat }: { readonly seat: RunSeat | null | undefined }): Re
   return (
     <span className="text-base break-all">
       {executed.name === null ? 'a remote worker' : <UntrustedText value={executed.name} />}{' '}
-      (worker)
+      {executed.user === null ? (
+        '(worker)'
+      ) : (
+        <>
+          (<UntrustedText value={executed.user} />
+          ’s worker)
+        </>
+      )}
     </span>
   );
 };

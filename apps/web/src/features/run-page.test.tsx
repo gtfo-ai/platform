@@ -342,6 +342,15 @@ describe('the summary strip and what the agent is doing now', () => {
       },
       'Executed byalice-laptop (worker)',
     ],
+    [
+      {
+        kind: 'worker',
+        worker_id: '00000000-0000-4000-8000-0000000283e1',
+        worker_name: 'alice-laptop',
+        user_name: 'Alice',
+      },
+      'Executed byalice-laptop (Alice’s worker)',
+    ],
     [{ kind: 'server', worker_id: null, worker_name: null }, 'Executed bythe platform server'],
     [null, 'Executed bynot claimed yet'],
   ] as const)(

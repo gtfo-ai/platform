@@ -12,7 +12,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { formatCodeAge, PHISHING_WARNING, typedUserCode } from './workers.js';
+import { formatCodeAge, PHISHING_WARNING, typedUserCode, workerInstallLines } from './workers.js';
 
 const SESSION: SessionResponse = {
   user: {
@@ -197,6 +197,19 @@ describe('the Workers screen', () => {
     window.history.pushState({}, '', '/workers');
   });
 
+  it('shows the two install lines, built from the page’s own origin (TD-031’s 2026-11-05 amendment §4)', async () => {
+    const { fetchImpl } = fetchFor('missing', []);
+    render(createApp({ fetchImpl, realtime: false }).element);
+    const download = await screen.findByLabelText('1. Download the worker’s compose file');
+    expect((download as HTMLInputElement).value).toBe(
+      `curl -fsSo compose.worker.yml ${window.location.origin}/api/worker/v1/compose.yml`,
+    );
+    const start = screen.getByLabelText('2. Start it with your Claude token (claude setup-token)');
+    expect((start as HTMLInputElement).value).toBe(
+      'CLAUDE_CODE_OAUTH_TOKEN=… docker compose -f compose.worker.yml up -d',
+    );
+  });
+
   it('lists a worker with its state, protocol and digests, and revokes it through a dialog and DELETE', async () => {
     const { fetchImpl, sent } = fetchFor('missing', [worker()]);
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
@@ -319,6 +332,12 @@ describe('the Workers screen', () => {
 });
 
 describe('the page’s pure helpers', () => {
+  it('builds the download line from an origin with or without a trailing slash', () => {
+    expect(workerInstallLines('https://core.example.test/')[0]).toBe(
+      'curl -fsSo compose.worker.yml https://core.example.test/api/worker/v1/compose.yml',
+    );
+  });
+
   it('normalises a typed code and refuses a partial or foreign one', () => {
     expect(typedUserCode('bcdf ghjk')).toBe('BCDF-GHJK');
     expect(typedUserCode('BCDF-GHJ')).toBeNull();

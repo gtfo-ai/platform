@@ -106,7 +106,7 @@ export const executionDocument = (
 
 /** Why no remote worker takes this project's runs, as the settings screen says it (WP-283). */
 export const REMOTE_CREDENTIAL_REFUSED_NOTICE =
-  'Remote workers take none of this project’s runs: its git integration gives runs a static token or a deploy key, and only an administrator’s remote_run_credential: allow on that integration lets either reach a developer’s machine (TD-031 decision 5).';
+  'Remote workers take none of this project’s runs: its git integration gives runs a static token or a deploy key, and only an administrator’s remote_run_credential: allow on that integration lets either reach a developer’s machine.';
 
 export const registerProjectExecutionRoutes = async (
   app: FastifyInstance,

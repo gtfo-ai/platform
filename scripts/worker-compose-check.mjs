@@ -28,7 +28,7 @@
  *     `POST /api/workers/device/approve` as the bootstrap administrator; the worker stores its
  *     credential and its `/readyz` reads `core_handshake: ok` (asked from inside its container: the
  *     listener is on the compose network only, never published);
- *  4. `GET /api/worker/v1/compose.yml` with that credential pins every image by digest and names
+ *  4. `GET /api/worker/v1/compose.yml`, with no credential and no header, pins every image by digest and names
  *     no `latest`, and its SHA-256 is the handshake's `compose_bundle_digest` (backlog 743);
  *  5. the worker's launcher answers `deployKeyCarriage: relayed` on its health;
  *  6. **canaries**: the Claude token is in no container's configured environment but the
@@ -361,7 +361,8 @@ const main = async () => {
     // 4. compose.yml, pinned by digest, its SHA-256 the handshake's bundle digest.
     const worker = new Client(coreUrl);
     const headers = { 'x-worker-protocol': '1', authorization: `Bearer ${credential}` };
-    const file = await worker.json('/api/worker/v1/compose.yml', { headers });
+    // Public, with no header at all (TD-031's 2026-11-05 amendment): a person's first-install download.
+    const file = await worker.json('/api/worker/v1/compose.yml');
     const images = [...String(file.text).matchAll(/^\s*image:\s*(\S+)\s*$/gm)].map(
       (match) => match[1],
     );

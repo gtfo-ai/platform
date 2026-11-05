@@ -145,6 +145,21 @@ describe('the seat a run’s offer licenses', () => {
     });
   });
 
+  it('names the worker’s user beside the machine when the user is known (WP-283 (5))', () => {
+    expect(
+      seatOf(seat({ runWorkerId: WORKER, workerName: 'alice-laptop', userName: 'Alice' })),
+    ).toEqual({
+      kind: 'worker',
+      worker_id: WORKER,
+      worker_name: 'alice-laptop',
+      user_name: 'Alice',
+    });
+    // A server seat names no user.
+    expect(
+      seatOf(seat({ offerState: 'claimed', claimantKind: 'server', userName: 'Alice' })),
+    ).not.toHaveProperty('user_name');
+  });
+
   it('is nobody’s for an open offer and for a run with no offer — never guessed to be the server’s', () => {
     expect(seatOf(seat({ offerState: 'open' }))).toBeNull();
     expect(seatOf(seat({}))).toBeNull();

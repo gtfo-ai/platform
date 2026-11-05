@@ -523,8 +523,9 @@ authenticated worker, else `409 lease_lost` (`410 run_gone` for a run that no lo
   one cap per run whichever replica or caller (runlet relay, helpers' relayed socket) asks. A run given
   no deploy key (`runs.credential_source`) is answered `null`. `200 {signature}`.
 
-**`release` and `compose.yml` are served since WP-284** (worker credential, both `GET`; TD-032
-decision 3). The core resolves its four images' digests **itself**: `sha-<first 7 of APP_COMMIT>` of
+**`release` and `compose.yml` are served since WP-284** (TD-032 decision 3): `GET release` with the
+worker credential, `GET compose.yml` **public** — no credential, and the one path the `X-Worker-Protocol`
+check skips (TD-031's 2026-11-05 amendment, backlog 760). The core resolves its four images' digests **itself**: `sha-<first 7 of APP_COMMIT>` of
 `platform`, `platform-launcher`, `platform-runtime` and `platform-egress` in `APP_IMAGE_REPOSITORY`
 (default `ghcr.io/gtfo-ai`) with the anonymous OCI `HEAD` — a `401` Bearer challenge, an anonymous token
 from its `https` realm, the `HEAD` again, `Docker-Content-Digest` read (research/17 § 6;
@@ -536,9 +537,12 @@ with every `${PLATFORM_*_IMAGE:-…}` default pinned to `<repository>/<image>@<d
 defaulted to this core — for a person's first install only; no updater applies a file the core served.
 Its SHA-256 is `handshake`'s `compose_bundle_digest` (backlog 743). Both answer `503 digests_unresolved`
 naming the image; `compose.yml` answers `503 compose_template_unavailable` for a template that cannot be
-read or pinned. **Residual, stated:** TD-031 §9 authenticates `compose.yml` with the worker credential,
-which a machine that has never logged in does not have; a first install reads the template from the
-image or the repository until a decision says otherwise (backlog 760).
+read or pinned. A first install is `curl -fsSo compose.worker.yml https://<core>/api/worker/v1/compose.yml`
+and `CLAUDE_CODE_OAUTH_TOKEN=… docker compose -f compose.worker.yml up -d`, both shown on the Workers
+screen from the page's origin. **Residual, stated:** an anonymous caller learns the registry namespace and
+the canonical base URL (the digests and the protocol range already reach it through the `426`). The
+bundle **pulls** the run, egress and git-helper images itself (three one-shot services the launcher waits
+for), so a clean machine can run; a worker reports as held only what its launcher resolves locally.
 
 **The worker's half is `ROLE=remote-worker` since WP-283** (`apps/server/src/remote-worker/`; `main.ts`
 dispatches on the role before `loadServerConfig`, which the worker never reads). It refuses
@@ -556,7 +560,8 @@ before the CLI; the workspace is released — every export — **before** `finis
 (585 s) on the monotonic clock without a renewal. Every call is retried with jitter until then. The
 Claude token is put in the run's spec for the CLI's environment only (`secretEnvNames`, so the runner
 redacts it by exact value) and every outbound body passes an exact-value redactor of it, the run token
-and the run credential; the logs are redacted the same way. A take-over of a remote run exports the
+and the run credential — values **and object keys** (the emitting site's duty the shared walk assigns
+it); the logs are redacted the same way. A take-over of a remote run exports the
 branch and **no tarball** — the core records it so (`tarball: false` on the `run_commands` row) and the
 worker asks its launcher for none (TD-031 §14, backlog 688). Its local listener — `GET /healthz`,
 `GET /readyz` (`core_handshake`), `POST /internal/drain`, `GET /internal/state` — is on the worker's

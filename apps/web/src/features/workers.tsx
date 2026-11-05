@@ -21,12 +21,13 @@
  * requesting machine's own text and are rendered as text (BD-022).
  */
 import type { WorkerSummary } from '@platform/contracts';
-import { WORKER_USER_CODE_ALPHABET } from '@platform/contracts';
+import { WORKER_API_PREFIX, WORKER_PATHS, WORKER_USER_CODE_ALPHABET } from '@platform/contracts';
 import { ServerIcon } from '@primer/octicons-react/ServerIcon';
 import { type ReactElement, useState } from 'react';
 import { useSettingsCommands, useWorkerDevice, useWorkers } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { Blankslate } from '../ui/blankslate.js';
+import { CopyField } from '../ui/copy-field.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { Dialog } from '../ui/dialog.js';
 import { Flash } from '../ui/flash.js';
@@ -200,6 +201,16 @@ const WorkerRow = ({
   );
 };
 
+/**
+ * The two lines that install a worker (TD-031's 2026-11-05 amendment §4): the public, pinned
+ * compose file from this instance, then the bundle with the developer's own Claude token. Built from
+ * the page's own origin — the core the browser is talking to — so no endpoint is needed.
+ */
+export const workerInstallLines = (origin: string): readonly [string, string] => [
+  `curl -fsSo compose.worker.yml ${origin.replace(/\/+$/, '')}${WORKER_API_PREFIX}/${WORKER_PATHS.composeFile}`,
+  'CLAUDE_CODE_OAUTH_TOKEN=… docker compose -f compose.worker.yml up -d',
+];
+
 export const WorkersScreen = (): ReactElement => {
   const workers = useWorkers();
   const commands = useSettingsCommands();
@@ -207,6 +218,7 @@ export const WorkersScreen = (): ReactElement => {
   const nowMs = now();
   const items = workers.data?.items ?? [];
   const active = items.filter((worker) => worker.state === 'active').length;
+  const install = workerInstallLines(window.location.origin);
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
@@ -220,6 +232,13 @@ export const WorkersScreen = (): ReactElement => {
           </span>
         }
       />
+      <div data-worker-install="" className="flex flex-col gap-2">
+        <CopyField label="1. Download the worker’s compose file" value={install[0]} />
+        <CopyField
+          label="2. Start it with your Claude token (claude setup-token)"
+          value={install[1]}
+        />
+      </div>
       {workers.isPending ? <Skeleton label="Loading workers…" /> : null}
       {workers.isError ? (
         <ErrorNotice title="The workers could not be loaded." error={workers.error} />

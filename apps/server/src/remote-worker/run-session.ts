@@ -125,17 +125,40 @@ export const workerSecretRedactor = (input: {
   ]);
 
 /**
- * Every body the run-scoped client sends, through `redactor` first — exact values only, because a
- * pattern rule may match an SSH signature's base64 or a digest and corrupt it.
+ * A JSON value with every string **and every object key** passed through `redactor`.
+ *
+ * The shared walk (`SecretRedactor.redactJson`) leaves keys alone by design and gives the job to the
+ * **emitting site**, which alone knows what a collision costs (`integrations/redaction.ts`'s
+ * docblock). This is that site for everything a worker sends: a model may put its own environment in
+ * a key of a tool's input as easily as in a value. Two keys that redact to one name keep both, the
+ * later one suffixed `#<n>` — a collision here costs nothing but a name the core never reads.
+ */
+export const redactKeysAndValues = (redactor: SecretRedactor, input: unknown): unknown => {
+  if (typeof input === 'string') return redactor.redactText(input).value;
+  if (Array.isArray(input)) return input.map((item) => redactKeysAndValues(redactor, item));
+  if (input !== null && typeof input === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input)) {
+      let name = redactor.redactText(key).value;
+      for (let suffix = 2; Object.hasOwn(out, name); suffix += 1) {
+        name = `${redactor.redactText(key).value}#${suffix}`;
+      }
+      out[name] = redactKeysAndValues(redactor, value);
+    }
+    return out;
+  }
+  return input;
+};
+
+/**
+ * Every body the run-scoped client sends, keys and values, through `redactor` first — exact values
+ * only, because a pattern rule may match an SSH signature's base64 or a digest and corrupt it.
  */
 export const guardedRunClient = (
   client: RunScopedClient,
   redactor: SecretRedactor,
 ): RunScopedClient => {
-  const guard = (body: unknown): unknown =>
-    typeof body === 'object' && body !== null && !Array.isArray(body)
-      ? redactor.redactJson(body as JsonObject).value
-      : body;
+  const guard = (body: unknown): unknown => redactKeysAndValues(redactor, body);
   return {
     heartbeat: (body, signal) => client.heartbeat(guard(body), signal),
     transcript: (body) => client.transcript(guard(body)),
@@ -246,6 +269,79 @@ export interface RunSession {
   /** Hands the run back (the worker is stopping): the session ends `shutdown`, then `finish`. */
   shutdown(): void;
 }
+
+/**
+ * **The worker's `PlatformToolPort`** (TD-031 §10b): every tool but `report_progress` is asked of the
+ * core's `POST runs/:id/tools/:name`. A call gets a **fresh `tool_use_id`, kept across its own
+ * retries** — the MCP layer never sees the SDK's id — so the core performs a mutating tool once per
+ * call however often a transient failure makes the worker ask again (`(run_id, tool_use_id)`). The
+ * input is redacted, keys and values, before it leaves. `report_progress` is answered by the runner's
+ * own progress door (backlog 752): the line is a transcript row of this run, uploaded like any other.
+ */
+export const createRemoteToolPort = (options: {
+  readonly core: RunScopedClient;
+  readonly epoch: number;
+  readonly redactor: SecretRedactor;
+  /** A run-scoped call, retried until it answers or the session gives up. */
+  readonly call: <T>(what: string, run: () => Promise<T>) => Promise<T>;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly giveUp: () => boolean;
+}): PlatformToolPort => {
+  const { core, epoch, call, sleep, giveUp } = options;
+  const callTool = async (
+    name: string,
+    input: unknown,
+    context: PlatformToolContext,
+  ): Promise<JsonValue> => {
+    const toolUseId = randomUUID();
+    const body = {
+      epoch,
+      tool_use_id: toolUseId,
+      input: redactKeysAndValues(options.redactor, input ?? {}),
+    };
+    let answer: Awaited<ReturnType<RunScopedClient['tool']>>;
+    for (;;) {
+      try {
+        answer = await call(`tools/${name}`, () => core.tool(name, body));
+        break;
+      } catch (error) {
+        if (
+          error instanceof CoreCallError &&
+          error.code === 'tool_call_in_flight' &&
+          !giveUp() &&
+          !context.signal.aborted
+        ) {
+          await sleep(1_000);
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (answer.is_error) {
+      const text =
+        typeof answer.result === 'string' ? answer.result : JSON.stringify(answer.result);
+      // The MCP layer prefixes "<name> failed: " itself; the core's words already carry it.
+      throw new Error(text.startsWith(`${name} failed: `) ? text.slice(name.length + 9) : text);
+    }
+    return answer.result;
+  };
+  const asText = (value: JsonValue): string =>
+    typeof value === 'string' ? value : JSON.stringify(value);
+  return {
+    askHuman: async (input, context) => asText(await callTool('ask_human', input, context)),
+    notifyHuman: async (input, context) => {
+      await callTool('notify_human', input, context);
+    },
+    reportProgress: async (input, context) => reportProgressTool(input, context),
+    getTaskContext: (input, context) => callTool('get_task_context', input, context),
+    getConversation: (input, context) => callTool('get_conversation', input, context),
+    kbSearch: (input, context) => callTool('kb_search', input, context),
+    addTicketComment: (input, context) => callTool('add_ticket_comment', input, context),
+    openMergeRequest: (input, context) => callTool('open_mr', input, context),
+    updateMrDescription: (input, context) => callTool('update_mr_description', input, context),
+    createFollowupTicket: (input, context) => callTool('create_followup_ticket', input, context),
+  };
+};
 
 export const startRunSession = (options: RunSessionOptions): RunSession => {
   const { pkg, logger } = options;
@@ -367,63 +463,7 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
   const sink = stopReasons.observe(uploader);
 
   // ── platform tools through the core (TD-031 §10b) ─────────────────────────
-  const callTool = async (
-    name: string,
-    input: unknown,
-    context: PlatformToolContext,
-  ): Promise<JsonValue> => {
-    // A fresh id per call, kept across this call's retries: the core performs a mutating tool once
-    // per `(run_id, tool_use_id)`, so a retried `open_mr` opens one merge request.
-    const toolUseId = randomUUID();
-    const body = {
-      epoch,
-      tool_use_id: toolUseId,
-      input: local.redactJson((input ?? {}) as JsonObject).value,
-    };
-    let answer: Awaited<ReturnType<RunScopedClient['tool']>>;
-    for (;;) {
-      try {
-        answer = await call(`tools/${name}`, () => core.tool(name, body));
-        break;
-      } catch (error) {
-        if (
-          error instanceof CoreCallError &&
-          error.code === 'tool_call_in_flight' &&
-          !giveUp() &&
-          !context.signal.aborted
-        ) {
-          await sleep(1_000);
-          continue;
-        }
-        throw error;
-      }
-    }
-    if (answer.is_error) {
-      const text =
-        typeof answer.result === 'string' ? answer.result : JSON.stringify(answer.result);
-      // The MCP layer prefixes "<name> failed: " itself; the core's words already carry it.
-      throw new Error(text.startsWith(`${name} failed: `) ? text.slice(name.length + 9) : text);
-    }
-    return answer.result;
-  };
-  const asText = (value: JsonValue): string =>
-    typeof value === 'string' ? value : JSON.stringify(value);
-  const tools: PlatformToolPort = {
-    askHuman: async (input, context) => asText(await callTool('ask_human', input, context)),
-    notifyHuman: async (input, context) => {
-      await callTool('notify_human', input, context);
-    },
-    // Backlog 752: the progress door is this runner's, so the line is recorded here and reaches the
-    // core as a transcript entry like any other — the core's own tool has no door to answer with.
-    reportProgress: async (input, context) => reportProgressTool(input, context),
-    getTaskContext: (input, context) => callTool('get_task_context', input, context),
-    getConversation: (input, context) => callTool('get_conversation', input, context),
-    kbSearch: (input, context) => callTool('kb_search', input, context),
-    addTicketComment: (input, context) => callTool('add_ticket_comment', input, context),
-    openMergeRequest: (input, context) => callTool('open_mr', input, context),
-    updateMrDescription: (input, context) => callTool('update_mr_description', input, context),
-    createFollowupTicket: (input, context) => callTool('create_followup_ticket', input, context),
-  };
+  const tools = createRemoteToolPort({ core, epoch, redactor: local, call, sleep, giveUp });
 
   // ── approvals: opened on the core, decided on a heartbeat ─────────────────
   const waiting = new Map<string, (decision: ToolApprovalDecision) => void>();
@@ -443,7 +483,7 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
               tool_use_id: randomUUID(),
               tool_name: request.toolName.slice(0, 256),
               detail: local.redactText(request.detail).value.slice(0, 16_384),
-              input: local.redactJson(request.input).value,
+              input: redactKeysAndValues(local, request.input) as JsonObject,
               reason: local.redactText(request.reason).value.slice(0, 4_096),
             }),
           )

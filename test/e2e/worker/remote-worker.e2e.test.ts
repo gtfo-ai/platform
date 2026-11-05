@@ -22,6 +22,9 @@
  *     oracle — the signature verified, the count on the offer (backlog 693).
  */
 import { createPublicKey, verify } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { FAKE_DEPLOY_KEY } from '@platform/application';
 import type { Id, JsonObject, RunPackage } from '@platform/contracts';
 import { secrets as secretAdapters } from '@platform/infrastructure';
@@ -113,26 +116,39 @@ interface Topology {
   readonly captured: CapturedCoreRequest[];
 }
 
-/** The core: the pipeline on `ROLE=worker`, the worker protocol on `ROLE=api`; no launcher on either. */
+/**
+ * The core: the pipeline's process and a `ROLE=api` process the workers talk to; no launcher on
+ * either, so neither composes a server claimant. The pipeline's process is `ROLE=all` rather than
+ * `worker` because the bootstrap administrator is created only by a process that serves the API and
+ * only while `users` is empty — and the harness seeds its own user right after the first process
+ * starts (CI's first run of this file: every sign-in `401`).
+ */
 const core = async (
   label: string,
   options: {
     readonly gitRunCredentials?: boolean;
     readonly beforeReport?: Parameters<typeof startPipeline>[0]['beforeReport'];
+    /** The `ROLE=api` process's own environment beyond the harness's. */
+    readonly apiEnv?: Readonly<Record<string, string>>;
   } = {},
 ): Promise<Topology> => {
   const pipeline = await startPipeline({
     scenarios: featureScenarios,
     label,
     tickets: TICKETS,
-    role: 'worker',
+    role: 'all',
     agent: 'none',
     env: { APP_WORKER_IMAGE_DIGESTS: CORE_DIGESTS_ENV },
     ...(options.gitRunCredentials === true ? { gitRunCredentials: true } : {}),
     ...(options.beforeReport === undefined ? {} : { beforeReport: options.beforeReport }),
   });
   cleanups.push(() => pipeline.stop());
-  const api = await pipeline.addProcess({ name: 'api', role: 'api', agent: 'none' });
+  const api = await pipeline.addProcess({
+    name: 'api',
+    role: 'api',
+    agent: 'none',
+    ...(options.apiEnv === undefined ? {} : { env: options.apiEnv }),
+  });
   return { pipeline, api, captured: [] };
 };
 
@@ -241,7 +257,7 @@ const stageRuns = (pipeline: PipelineE2E) =>
     lease_epoch: number | null;
     ssh_signatures: number | null;
   }>(
-    `select r.id, r.stage, r.status::text as status, r.worker_id, o.claimant_kind::text,
+    `select r.id, o.stage, r.status::text as status, r.worker_id, o.claimant_kind::text,
             o.lease_epoch, o.ssh_signatures
        from runs r left join run_offers o on o.run_id = r.id
       order by r.created_at`,
@@ -428,7 +444,7 @@ describe('the first usable worker (WP-283)', () => {
     await ready(pipeline);
     const [refinement] = await pipeline.query<{ status: string; lease_epoch: number }>(
       `select r.status::text as status, o.lease_epoch from runs r join run_offers o on o.run_id = r.id
-        where r.stage = 'refinement'`,
+        where o.stage = 'refinement'`,
     );
     // The same run under its first claim — never re-offered.
     expect(refinement).toEqual({ status: 'completed', lease_epoch: 1 });
@@ -523,7 +539,13 @@ describe('the first usable worker (WP-283)', () => {
   }, 300_000);
 
   it('takes over a remote deploy-key run: the branch pushed through the helper socket, no tarball', async () => {
-    const topology = await core('worker-take-over', { gitRunCredentials: true });
+    // The API reads the shared export volume, so "no tarball" is the route's own answer (backlog 688).
+    const exportDir = mkdtempSync(path.join(tmpdir(), 'worker-take-over-exports-'));
+    cleanups.push(async () => rmSync(exportDir, { recursive: true, force: true }));
+    const topology = await core('worker-take-over', {
+      gitRunCredentials: true,
+      apiEnv: { APP_WORKSPACE_EXPORT_DIR: exportDir },
+    });
     const { pipeline } = topology;
     await switchRunCredential(pipeline, 'deploy_key', 'allow');
     const laptop = await worker(topology, {
@@ -571,9 +593,17 @@ describe('the first usable worker (WP-283)', () => {
       [runId],
     );
     expect(offer?.ssh_signatures).toBe(2);
-    // The run page names the worker that executed it.
+    // The run page names the worker that executed it, and the run's tarball read says there is none:
+    // the branch is where a remote run's work went (TD-031 §14, backlog 688).
     const page = await admin.json<{ seat: unknown }>(`/api/runs/${runId}`);
-    expect(page.body.seat).toMatchObject({ kind: 'worker', worker_id: laptop.workerId });
+    expect(page.body.seat).toMatchObject({
+      kind: 'worker',
+      worker_id: laptop.workerId,
+      worker_name: 'taken-laptop',
+      user_name: 'taken-laptop',
+    });
+    const tarball = await admin.json<{ error?: { code: string } }>(`/api/runs/${runId}/export.tar`);
+    expect(`${tarball.status} ${tarball.body?.error?.code}`).toBe('404 export_not_found');
   }, 300_000);
 
   it('runs the Autix shape — a static operator token, allowed — to Ready with the token in no row; denied, the worker claims nothing and the setting says why', async () => {

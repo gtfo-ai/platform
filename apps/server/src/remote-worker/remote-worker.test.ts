@@ -21,6 +21,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import type { PlatformToolContext, RunProgressRecorder } from '@platform/application';
 import {
   type RunPackage,
   runPackageSchema,
@@ -28,6 +29,7 @@ import {
   WORKER_PROTOCOL_VERSION,
   WORKER_REMOTE_LEASE_RENEW_MS,
   WORKER_REMOTE_LEASE_TTL_MS,
+  workerApprovalRequestSchema,
   workerFinishRequestSchema,
   workerHeartbeatRequestSchema,
   workerSpawnRequestSchema,
@@ -40,9 +42,20 @@ import {
 import { afterAll, describe, expect, it } from 'vitest';
 import { asLoggerPort, createLogger } from '../logging.js';
 import { loadRemoteWorkerConfig, REFUSED_WORKER_VARIABLES } from './config.js';
-import { type CoreFetch, createCoreClient } from './core-client.js';
-import { selfTerminationMsOf } from './retry.js';
-import { startRunSession } from './run-session.js';
+import {
+  CoreCallError,
+  type CoreFetch,
+  createCoreClient,
+  type RunScopedClient,
+} from './core-client.js';
+import { retrying, selfTerminationMsOf } from './retry.js';
+import {
+  createRemoteToolPort,
+  guardedRunClient,
+  redactKeysAndValues,
+  startRunSession,
+  workerSecretRedactor,
+} from './run-session.js';
 import { packageWorkspaceProvisioner } from './workspaces.js';
 
 /** Obviously fake, and in no shape a pattern rule knows: only the exact-value redactor can catch it. */
@@ -53,6 +66,10 @@ const RUN_ID = '00000000-0000-4000-8000-000000002831';
 const TASK_ID = '00000000-0000-4000-8000-000000002832';
 const PROJECT_ID = '00000000-0000-4000-8000-000000002833';
 const DIGEST = `sha256:${'a'.repeat(64)}`;
+const APPROVAL_ID = '00000000-0000-4000-8000-0000000028d1';
+/** What this worker's launcher answers — distinct from the package's own values (backlog 695). */
+const LAUNCHER_WORKDIR = '/work/launcher-checkout';
+const LAUNCHER_CLI = '/opt/launcher-image/bin/claude';
 
 const scratch = mkdtempSync(path.join(tmpdir(), 'remote-worker-'));
 afterAll(() => {
@@ -109,7 +126,7 @@ const runPackage = (): RunPackage =>
   });
 
 /** What the scripted model does: it echoes the Claude token and writes it to stderr. */
-const script = (awaitSteers = 0): runnerAdapters.FakeCliScript => [
+const script = (awaitSteers = 0, askApproval = false): runnerAdapters.FakeCliScript => [
   {
     step: 'emit',
     message: {
@@ -131,6 +148,17 @@ const script = (awaitSteers = 0): runnerAdapters.FakeCliScript => [
     },
   },
   { step: 'await_user' },
+  ...(askApproval
+    ? [
+        {
+          step: 'can_use_tool' as const,
+          tool_name: 'WebFetch',
+          input: { url: `https://example.test/?t=${CLAUDE_TOKEN}`, [CLAUDE_TOKEN]: 'as a key' },
+          tool_use_id: 'toolu_approval_1',
+          decision_reason: `asked because ${CLAUDE_TOKEN}`,
+        },
+      ]
+    : []),
   { step: 'stderr', text: `debug: CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_TOKEN}\n` },
   {
     step: 'emit',
@@ -215,6 +243,8 @@ const fakeCore = (options: {
 }) => {
   const captured: Captured[] = [];
   const events: string[] = [];
+  /** Approvals opened and not yet delivered: the next beat answers each `deny`, once. */
+  const opened: string[] = [];
   let beats = 0;
   const fetch: CoreFetch = async (url, init) => {
     const verb = new URL(url).pathname.replace('/api/worker/v1/', '').replace(RUN_ID, ':id');
@@ -233,6 +263,18 @@ const fakeCore = (options: {
         beats += 1;
         const scripted = options.beat?.(beats) ?? null;
         if (scripted !== null) return answer(scripted.status, scripted.body);
+        if (opened.length > 0) {
+          return answer(200, {
+            lease_expires_at: '2026-11-05T10:10:00.000Z',
+            commands: [],
+            approvals: opened.splice(0).map((approval_id) => ({
+              approval_id,
+              decision: 'deny',
+              reason: 'denied on the core',
+              question_id: null,
+            })),
+          });
+        }
         // A held request with nothing pending, shortened; it ends early when the worker goes away.
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, 20);
@@ -272,6 +314,10 @@ const fakeCore = (options: {
       }
       case 'runs/:id/late-cost':
         return answer(200, { recorded: false });
+      case 'runs/:id/approvals':
+        workerApprovalRequestSchema.parse(parsed);
+        opened.push(APPROVAL_ID);
+        return answer(200, { approval_id: APPROVAL_ID });
       default:
         return answer(404, { error: { code: 'not_found', message: verb } });
     }
@@ -292,9 +338,9 @@ const fakeLauncher = (events: string[]) => {
         attachment: {
           socketPath: path.join(scratch, RUN_ID, 'control.sock'),
           token: 'fake-attach-token',
-          workdir: '/work/repo',
+          workdir: LAUNCHER_WORKDIR,
         },
-        claudeCodePath: '/usr/local/bin/claude',
+        claudeCodePath: LAUNCHER_CLI,
         credentialScope: 'push',
         existingProtectedPaths: { state: 'unlisted', reason: 'a unit fake' },
         replayed: false,
@@ -317,6 +363,7 @@ const fakeLauncher = (events: string[]) => {
 const run = (options: {
   readonly core: ReturnType<typeof fakeCore>;
   readonly awaitSteers?: number;
+  readonly askApproval?: boolean;
   readonly monotonic?: () => number;
   readonly sleep?: (ms: number) => Promise<void>;
 }) => {
@@ -352,30 +399,33 @@ const run = (options: {
         exportsAllowed,
         repositoryPathOf: () => 'acme/api',
         spawnFor: () => {
-          cli = runnerAdapters.fakeSpawnClaudeCodeProcess(script(options.awaitSteers), {
-            interruptedResult: {
-              type: 'result',
-              subtype: 'error_during_execution',
-              is_error: true,
-              num_turns: 1,
-              duration_ms: 1,
-              duration_api_ms: 1,
-              stop_reason: null,
-              total_cost_usd: 0.01,
-              usage: {
-                input_tokens: 1,
-                output_tokens: 1,
-                cache_read_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-                cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+          cli = runnerAdapters.fakeSpawnClaudeCodeProcess(
+            script(options.awaitSteers, options.askApproval),
+            {
+              interruptedResult: {
+                type: 'result',
+                subtype: 'error_during_execution',
+                is_error: true,
+                num_turns: 1,
+                duration_ms: 1,
+                duration_api_ms: 1,
+                stop_reason: null,
+                total_cost_usd: 0.01,
+                usage: {
+                  input_tokens: 1,
+                  output_tokens: 1,
+                  cache_read_input_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                  cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+                },
+                modelUsage: {},
+                permission_denials: [],
+                errors: [],
+                uuid: '00000004-0000-4000-8000-000000000000',
+                session_id: 'fake-session-wp283',
               },
-              modelUsage: {},
-              permission_denials: [],
-              errors: [],
-              uuid: '00000004-0000-4000-8000-000000000000',
-              session_id: 'fake-session-wp283',
             },
-          });
+          );
           const spawn = cli.spawn;
           return (spawnOptions) => {
             options.core.events.push('cli:spawned');
@@ -439,6 +489,12 @@ describe('a remote run, from its package to its finish (WP-283 (1)–(2))', () =
     const { session, launcher, lines, cli } = run({ core });
     expect(await session.done).toBe('settled');
 
+    // Backlog 695: the CLI runs where this worker's launcher said — its checkout and its run image's
+    // binary — never the core's planned `workspacePath`/`claudeCodePath` from the package.
+    const spawned = cli()?.spawnOptions;
+    expect(runPackage().run.workspacePath).not.toBe(LAUNCHER_WORKDIR);
+    expect(spawned?.cwd).toBe(LAUNCHER_WORKDIR);
+    expect(JSON.stringify([spawned?.command, ...(spawned?.args ?? [])])).toContain(LAUNCHER_CLI);
     // The Claude token went into the CLI's environment — and only there.
     expect(cli()?.spawnOptions?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(CLAUDE_TOKEN);
     expect(JSON.stringify(launcher.creates)).not.toContain(CLAUDE_TOKEN);
@@ -485,14 +541,11 @@ describe('a remote run, from its package to its finish (WP-283 (1)–(2))', () =
     expect(launcher.ends).toHaveLength(1);
   });
 
-  it('self-terminates after TTL − ½·renew without a renewal, and pushes nothing more', async () => {
+  it('self-terminates at exactly TTL − ½·renew (585 s) without a renewal — not a millisecond before — and pushes nothing more', async () => {
+    // The claim's answer is the session's first renewal, read at monotonic 0.
     let now = 0;
     const core = fakeCore({
-      beat: () => {
-        // Every beat fails on the network, and the monotonic clock passes the bound meanwhile.
-        now += 600_000;
-        return { status: 503, body: { error: { code: 'unavailable', message: 'deploying' } } };
-      },
+      beat: () => ({ status: 503, body: { error: { code: 'unavailable', message: 'deploying' } } }),
     });
     const { session } = run({
       core,
@@ -500,6 +553,10 @@ describe('a remote run, from its package to its finish (WP-283 (1)–(2))', () =
       monotonic: () => now,
       sleep: () => new Promise((resolve) => setTimeout(resolve, 1)),
     });
+    now = 584_999;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(session.state.ending).toBeNull();
+    now = 585_000;
     expect(await session.done).toBe('self_terminated');
     expect(core.events).not.toContain('core:finish');
   });
@@ -612,5 +669,187 @@ describe('the package’s workspace release (WP-283, TD-031 §2 and §14)', () =
     });
     expect(launcher.creates[0]?.helperAgentSocket).toBeUndefined();
     expect(JSON.stringify(launcher.creates)).not.toContain(CLAUDE_TOKEN);
+  });
+});
+
+describe('every body a worker sends passes its exact-value guard (WP-283 (2))', () => {
+  /** A token planted deep — in a value, a nested array and a key — of a body of each verb's shape. */
+  const planted = (extra: Record<string, unknown>): Record<string, unknown> => ({
+    epoch: 3,
+    ...extra,
+    deep: [{ note: `x ${CLAUDE_TOKEN} y`, [CLAUDE_TOKEN]: { again: [CLAUDE_TOKEN] } }],
+  });
+  const VERBS: readonly [keyof RunScopedClient, Record<string, unknown>][] = [
+    ['heartbeat', planted({ acks: [] })],
+    ['transcript', planted({ entries: [{ seq: 1, event: { text: CLAUDE_TOKEN } }] })],
+    ['tool', planted({ tool_use_id: 'u1', input: { query: CLAUDE_TOKEN } })],
+    ['approval', planted({ detail: CLAUDE_TOKEN, input: { [CLAUDE_TOKEN]: 1 } })],
+    ['sshSign', planted({ key_blob: 'AAAA', data: 'AAAA', flags: 0 })],
+    ['spawn', planted({})],
+    ['release', planted({ reason: 'shutdown' })],
+    // The error bodies: a run's error text and a start failure's own words.
+    [
+      'finish',
+      planted({
+        outcome: { kind: 'not_started', failure: 'x', detail: `launcher said ${CLAUDE_TOKEN}` },
+        error: `${CLAUDE_TOKEN} in an error`,
+      }),
+    ],
+    ['lateCost', planted({ session_id: CLAUDE_TOKEN })],
+  ];
+
+  it('names all nine run verbs', () => {
+    const client = createCoreClient({ baseUrl: 'https://core.example.test' }).forRun(
+      RUN_ID,
+      RUN_TOKEN,
+    );
+    expect(VERBS.map(([verb]) => verb).sort()).toEqual(Object.keys(client).sort());
+  });
+
+  it.each(VERBS)(
+    '%s: no token in the body it sends, first attempt and retry alike',
+    async (verb, body) => {
+      const sent: string[] = [];
+      let attempts = 0;
+      const record = async (payload: unknown) => {
+        sent.push(JSON.stringify(payload));
+        attempts += 1;
+        // The first attempt fails as a network failure does, so the retry's body is seen too.
+        if (attempts === 1) throw new CoreCallError('transient', 503, null, 'down');
+        return {} as never;
+      };
+      const inner: RunScopedClient = {
+        heartbeat: record,
+        transcript: record,
+        tool: (_name, payload) => record(payload),
+        approval: record,
+        sshSign: record,
+        spawn: record,
+        release: record,
+        finish: record,
+        lateCost: record,
+      };
+      const guarded = guardedRunClient(
+        inner,
+        workerSecretRedactor({
+          claudeToken: CLAUDE_TOKEN,
+          runToken: RUN_TOKEN,
+          runCredential: null,
+        }),
+      );
+      const send = (): Promise<unknown> =>
+        verb === 'tool'
+          ? guarded.tool('kb_search', body)
+          : (guarded[verb] as (payload: unknown) => Promise<unknown>)(body);
+      await retrying(send, { giveUp: () => false, sleep: async () => {} });
+      expect(sent).toHaveLength(2);
+      for (const text of sent) {
+        expect(text).not.toContain(CLAUDE_TOKEN);
+        expect(text).toContain('[REDACTED:integration:claude_code_oauth_token]');
+      }
+    },
+  );
+
+  it('redacts object keys as well as values, keeping two keys that redact alike', () => {
+    const redactor = workerSecretRedactor({
+      claudeToken: CLAUDE_TOKEN,
+      runToken: RUN_TOKEN,
+      runCredential: RUN_CREDENTIAL,
+    });
+    const out = redactKeysAndValues(redactor, {
+      [CLAUDE_TOKEN]: 1,
+      // Already the placeholder: the token's key redacts to this one, and both are kept.
+      '[REDACTED:integration:claude_code_oauth_token]': 1,
+      nested: { [RUN_CREDENTIAL]: [CLAUDE_TOKEN] },
+      [`x${CLAUDE_TOKEN}`]: 2,
+      [`x${RUN_TOKEN}`]: 3,
+    });
+    const text = JSON.stringify(out);
+    expect(text).not.toContain(CLAUDE_TOKEN);
+    expect(text).not.toContain(RUN_CREDENTIAL);
+    expect(text).not.toContain(RUN_TOKEN);
+    expect(Object.keys(out as object)).toHaveLength(5);
+    expect(Object.keys(out as object)).toContain(
+      '[REDACTED:integration:claude_code_oauth_token]#2',
+    );
+  });
+});
+
+describe('the worker’s tool port (TD-031 §10b; backlog 752)', () => {
+  const context = (progress?: RunProgressRecorder): PlatformToolContext => ({
+    runId: RUN_ID as never,
+    taskId: TASK_ID as never,
+    projectId: PROJECT_ID as never,
+    mode: 'normal',
+    signal: new AbortController().signal,
+    ...(progress === undefined ? {} : { progress }),
+  });
+  const port = (tool: RunScopedClient['tool']) =>
+    createRemoteToolPort({
+      core: { tool } as RunScopedClient,
+      epoch: 3,
+      redactor: workerSecretRedactor({
+        claudeToken: CLAUDE_TOKEN,
+        runToken: RUN_TOKEN,
+        runCredential: null,
+      }),
+      call: (_what, send) => retrying(send, { giveUp: () => false, sleep: async () => {} }),
+      sleep: async () => {},
+      giveUp: () => false,
+    });
+
+  it('asks the core again after a 503 under the same tool_use_id, and sends no token', async () => {
+    const bodies: { tool_use_id: string; input: unknown }[] = [];
+    const tools = port(async (name, body) => {
+      expect(name).toBe('open_mr');
+      bodies.push(body as { tool_use_id: string; input: unknown });
+      if (bodies.length === 1) throw new CoreCallError('transient', 503, null, 'deploying');
+      return { result: { status: 'opened', iid: 7 }, is_error: false };
+    });
+    const answer = await tools.openMergeRequest(
+      { title: 'a change', description: `see ${CLAUDE_TOKEN}` },
+      context(),
+    );
+    expect(answer).toEqual({ status: 'opened', iid: 7 });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]?.tool_use_id).toBe(bodies[1]?.tool_use_id);
+    expect(JSON.stringify(bodies)).not.toContain(CLAUDE_TOKEN);
+    // A second call of the tool is a second call: a fresh id.
+    await tools.openMergeRequest({ title: 'b', description: 'c' }, context());
+    expect(bodies[2]?.tool_use_id).not.toBe(bodies[0]?.tool_use_id);
+  });
+
+  it('answers report_progress from the runner’s own door and asks the core nothing (backlog 752)', async () => {
+    const asked: string[] = [];
+    const recorded: unknown[] = [];
+    const tools = port(async (name) => {
+      asked.push(name);
+      return { result: 'unused', is_error: false };
+    });
+    const answer = await tools.reportProgress(
+      { summary: 'wrote the totals test' },
+      context({
+        record: async (report: unknown) => {
+          recorded.push(report);
+          return { recorded: true };
+        },
+      } as unknown as RunProgressRecorder),
+    );
+    expect(asked).toEqual([]);
+    expect(recorded).toHaveLength(1);
+    expect(typeof answer).toBe('string');
+  });
+});
+
+describe('an approval the runner asks for, through the core (TD-031 §9)', () => {
+  it('opens it with no token in its body and hands the model the decision the heartbeat delivered', async () => {
+    const core = fakeCore({});
+    const { session, cli } = run({ core, askApproval: true });
+    expect(await session.done).toBe('settled');
+    const opened = core.captured.filter((request) => request.verb === 'runs/:id/approvals');
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.body).not.toContain(CLAUDE_TOKEN);
+    expect(opened[0]?.body).toContain('[REDACTED:integration:claude_code_oauth_token]');
+    expect(JSON.stringify(cli()?.callbacks)).toContain('denied on the core');
   });
 });

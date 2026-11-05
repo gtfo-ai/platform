@@ -276,7 +276,12 @@ const WORKER_VERBS_SERVED_LATER: Readonly<Partial<Record<keyof typeof WORKER_PAT
   pause: 'WP-285',
   updateReport: 'WP-287',
 };
-const PUBLIC_WORKER_VERBS: readonly (keyof typeof WORKER_PATHS)[] = ['device', 'deviceToken'];
+const PUBLIC_WORKER_VERBS: readonly (keyof typeof WORKER_PATHS)[] = [
+  'device',
+  'deviceToken',
+  // TD-031's 2026-11-05 amendment (backlog 760): a person's first-install download, no credential.
+  'composeFile',
+];
 
 describe('the worker as a second client (WP-281)', () => {
   const workerUrl = (verb: string): string =>
@@ -328,10 +333,13 @@ describe('the worker as a second client (WP-281)', () => {
       keyof typeof WORKER_PATHS,
       string,
     ][]) {
-      if (WORKER_VERBS_SERVED_LATER[name] !== undefined) continue;
+      if (WORKER_VERBS_SERVED_LATER[name] !== undefined || name === 'composeFile') continue;
       const probed = await askWorker(verb, {});
       expect(`${name} ${probed.status} ${probed.code}`).toBe(`${name} 426 upgrade_required`);
     }
+    // The one exception (TD-031's 2026-11-05 amendment): `GET compose.yml` with no header is not 426.
+    const download = await app.inject({ method: 'GET', url: workerUrl(WORKER_PATHS.composeFile) });
+    expect(download.statusCode).not.toBe(426);
   }, 15_000);
 });
 

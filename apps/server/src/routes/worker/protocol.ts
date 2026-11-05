@@ -9,7 +9,7 @@
  *   POST /api/worker/v1/runs/:id/finish         run token
  *   POST /api/worker/v1/runs/:id/late-cost      run token
  *   GET  /api/worker/v1/release                 worker credential (WP-284)
- *   GET  /api/worker/v1/compose.yml             worker credential (WP-284)
+ *   GET  /api/worker/v1/compose.yml             none — a person's first-install download (WP-284 (6))
  *
  * and, registered from here with the same authentication (WP-282, `run-calls.ts`): `transcript`,
  * `tools/:name`, `approvals`, `session` and `ssh-sign`. The heartbeat delivers the run's decided
@@ -127,10 +127,22 @@ export const upgradeRequiredBody = (
   digests: options.release()?.digests ?? null,
 });
 
+/** The one worker path a person fetches: the first-install compose file (TD-031's 2026-11-05 amendment). */
+export const WORKER_COMPOSE_FILE_PATH = `${WORKER_API_PREFIX}/${WORKER_PATHS.composeFile}`;
+
+/**
+ * Whether a request is the public compose-file download — `GET` (or the `HEAD` Fastify answers for
+ * it) of exactly {@link WORKER_COMPOSE_FILE_PATH}, any query — the one path the protocol check skips
+ * (TD-031's 2026-11-05 amendment §2). It is a human download, not a protocol message.
+ */
+export const isPublicComposeDownload = (method: string, url: string): boolean =>
+  (method === 'GET' || method === 'HEAD') && url.split('?')[0] === WORKER_COMPOSE_FILE_PATH;
+
 /**
  * `Cache-Control: no-store` and the protocol check on every `/api/worker/v1/` request, **first**
  * (`onRequest`, before body parsing and authentication). Registered on the root instance before any
- * worker route.
+ * worker route. The public compose-file download is the one exception to the check, never to
+ * `no-store` (TD-031's 2026-11-05 amendment).
  */
 export const registerWorkerProtocolCheck = (
   app: FastifyInstance,
@@ -142,6 +154,9 @@ export const registerWorkerProtocolCheck = (
       return;
     }
     reply.header('cache-control', 'no-store');
+    if (isPublicComposeDownload(request.method, request.url)) {
+      return;
+    }
     const version = parseWorkerProtocolHeader(request.headers[WORKER_PROTOCOL_HEADER]);
     if (version === null || !isAcceptedWorkerProtocol(version)) {
       const body = workerUpgradeRequiredBodySchema.parse(upgradeRequiredBody(options, version));
@@ -778,19 +793,17 @@ export const registerWorkerProtocolRoutes = async (
   typed.get(
     path(WORKER_PATHS.composeFile),
     {
-      preValidation: authenticateWorker,
       schema: {
         summary:
           '`compose.worker.yml`, pinned to this core’s digests — first install only (TD-032 §3)',
         description:
-          'Worker credential. The template baked into this core’s image (`/opt/platform/compose.worker.yml`) with every platform image pinned **by digest** to this core’s own and `APP_CORE_URL` defaulted to this core — for a person to read and run on a first install (BD-032 decision 9). No updater ever applies a file the core served. Its SHA-256 is the handshake’s `compose_bundle_digest`. `503 digests_unresolved` naming the image, or `503 compose_template_unavailable` (WP-284).',
+          'Public, and outside the `X-Worker-Protocol` check (TD-031’s 2026-11-05 amendment): a person’s first-install download, which no worker calls and which holds no secret. A credential, if presented, is ignored and no contact is recorded. The template baked into this core’s image (`/opt/platform/compose.worker.yml`) with every platform image pinned **by digest** to this core’s own and `APP_CORE_URL` defaulted to this core — for a person to read and run on a first install (BD-032 decision 9). No updater ever applies a file the core served. Its SHA-256 is the handshake’s `compose_bundle_digest`. `503 digests_unresolved` naming the image, or `503 compose_template_unavailable` (WP-284).',
         tags: ['worker'],
         // **No `response` block**, for `transcript.jsonl`'s reason (`downloads.ts`): the body is a
         // YAML file, not one JSON document, and a serialiser compiled for one would quote it.
       },
     },
-    async (request, reply) => {
-      await workerContact(request);
+    async (_request, reply) => {
       const release = options.release();
       if (release === null) {
         throw unresolved();

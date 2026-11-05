@@ -793,13 +793,11 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     expect(noProtocol.statusCode).toBe(426);
   });
 
-  it('compose.yml: the template pinned to this core’s digests, whose SHA-256 is the handshake’s compose_bundle_digest (WP-284, backlog 743)', async () => {
+  it('compose.yml: public and outside the protocol check — the template pinned to this core’s digests, whose SHA-256 is the handshake’s compose_bundle_digest (WP-284 (6), backlog 743, 760)', async () => {
     const w = await world();
-    const response = await w.app.inject({
-      method: 'GET',
-      url: url(WORKER_PATHS.composeFile),
-      headers: bearer(w.alice.credential),
-    });
+    // No credential and no protocol header: a person's first-install download (TD-031's
+    // 2026-11-05 amendment).
+    const response = await w.app.inject({ method: 'GET', url: url(WORKER_PATHS.composeFile) });
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-type']).toBe('application/yaml; charset=utf-8');
     expect(response.headers['cache-control']).toBe('no-store');
@@ -809,6 +807,15 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     expect(file).toContain(`ghcr.io/acme/platform-runtime@${DIGESTS.platform_runtime}`);
     expect(file).toContain(`ghcr.io/acme/platform-egress@${DIGESTS.platform_egress}`);
     expect(file).toContain('${APP_CORE_URL:-https://core.example.test}');
+    // A credential, if presented, is ignored: the same bytes, no contact recorded.
+    const before = w.store.worker(w.alice.workerId)?.lastSeenAt ?? null;
+    const credentialed = await w.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.composeFile),
+      headers: bearer(w.alice.credential),
+    });
+    expect(credentialed.body).toBe(file);
+    expect(w.store.worker(w.alice.workerId)?.lastSeenAt ?? null).toEqual(before);
     const handshake = await post(w, WORKER_PATHS.handshake, '', w.alice.credential, {
       image_digests: HELD,
       commit: null,
@@ -816,12 +823,11 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     expect(workerHandshakeResponseSchema.parse(handshake.json()).compose_bundle_digest).toBe(
       createHash('sha256').update(file, 'utf8').digest('hex'),
     );
-    const anonymous = await w.app.inject({
-      method: 'GET',
-      url: url(WORKER_PATHS.composeFile),
-      headers: PROTOCOL,
-    });
-    expect(`${anonymous.statusCode} ${anonymous.json().error?.code}`).toBe('401 unauthenticated');
+    // Only GET skips the check: any other method on the path, and every other verb, is still 426.
+    const posted = await w.app.inject({ method: 'POST', url: url(WORKER_PATHS.composeFile) });
+    expect(posted.statusCode).toBe(426);
+    const release = await w.app.inject({ method: 'GET', url: url(WORKER_PATHS.release) });
+    expect(release.statusCode).toBe(426);
   });
 
   it('release and compose.yml answer 503 digests_unresolved naming the image (WP-284)', async () => {
@@ -830,7 +836,8 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
       const response = await w.app.inject({
         method: 'GET',
         url: url(verb),
-        headers: bearer(w.alice.credential),
+        // compose.yml takes none (TD-031's 2026-11-05 amendment); release still needs the worker's.
+        headers: verb === WORKER_PATHS.release ? bearer(w.alice.credential) : {},
       });
       expect(`${verb} ${response.statusCode} ${response.json().error?.code}`).toBe(
         `${verb} 503 digests_unresolved`,

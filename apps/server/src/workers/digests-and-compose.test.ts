@@ -22,7 +22,9 @@ import {
   type DigestFetch,
   DigestsUnresolvedError,
   parseBearerChallenge,
+  readBounded,
   resolveCoreDigests,
+  TOKEN_ANSWER_MAX_CHARS,
 } from './digests.js';
 import { workerReleaseOf } from './release.js';
 
@@ -82,6 +84,23 @@ describe('the core’s own digests (WP-284, research/17 § 6)', () => {
     expect(resolved).toEqual(DIGESTS);
     expect(registry.calls.filter((call) => call.startsWith('HEAD'))).toHaveLength(8);
     expect(registry.calls.filter((call) => call.includes('/token'))).toHaveLength(4);
+  });
+
+  it('reads a token answer no further than its bound (review of PR #27)', async () => {
+    let served = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        served += 1;
+        controller.enqueue(new Uint8Array(16 * 1024).fill(0x61));
+      },
+    });
+    await expect(readBounded(new Response(endless), TOKEN_ANSWER_MAX_CHARS)).rejects.toThrow(
+      /longer than/,
+    );
+    expect(served).toBeLessThan(10);
+    expect(await readBounded(new Response('{"token":"t"}'), TOKEN_ANSWER_MAX_CHARS)).toBe(
+      '{"token":"t"}',
+    );
   });
 
   it('names the image it could not resolve', async () => {
@@ -183,6 +202,64 @@ describe('compose.worker.yml rendered for a first install (WP-284 (3), backlog 7
       .filter((line) => !line.trimStart().startsWith('#'))
       .join('\n');
     expect(declarations).not.toMatch(/DATABASE_URL|APP_SECRET_KEY|env_file/);
+  });
+
+  it('pulls every image a run needs before the launcher starts, so a clean machine can run (review of PR #27)', () => {
+    const source = template as string;
+    /** The block of one service: its lines up to the next service at the same indent. */
+    const service = (name: string): string => {
+      const start = source.indexOf(`\n  ${name}:\n`);
+      expect(start, name).toBeGreaterThan(-1);
+      const rest = source.slice(start + 1);
+      const end = rest.slice(1).search(/\n {2}[a-z][a-z-]*:\n/);
+      return end < 0 ? rest : rest.slice(0, end + 1);
+    };
+    const launcher = service('launcher');
+    const imageOf = (block: string): string => /\n\s+image:\s*(\S+)/.exec(block)?.[1] ?? '';
+    // Each image the launcher creates a run from is the image of a one-shot that `up` must pull and
+    // complete before the launcher starts — and the launcher itself pulls nothing (TD-031 §4).
+    for (const [pull, variable] of [
+      ['pull-runtime-image', 'APP_WORKSPACE_RUNTIME_IMAGE'],
+      ['pull-egress-image', 'APP_WORKSPACE_EGRESS_IMAGE'],
+      ['pull-git-image', 'APP_WORKSPACE_GIT_IMAGE'],
+    ] as const) {
+      const launcherValue = new RegExp(`${variable}: (\\S+)`).exec(launcher)?.[1];
+      expect(imageOf(service(pull)), pull).toBe(launcherValue);
+      expect(launcher).toMatch(
+        new RegExp(`${pull}:\\n\\s+condition: service_completed_successfully`),
+      );
+    }
+    // The git helper is pinned by digest even before rendering: it is no core image.
+    expect(imageOf(service('pull-git-image'))).toMatch(/@sha256:[0-9a-f]{64}\}$/);
+  });
+
+  it('changes nothing but the image defaults and the APP_CORE_URL line (TD-031’s 2026-11-05 amendment §3)', () => {
+    const source = template as string;
+    const rendered = renderWorkerCompose(source, {
+      digests: DIGESTS,
+      repository: 'ghcr.io/acme',
+      coreUrl: 'https://core.example.test',
+    });
+    const before = source.split('\n');
+    const after = rendered.split('\n');
+    expect(after).toHaveLength(before.length);
+    /** A line with the three inputs' places blanked: what must be equal on both sides. */
+    const shape = (line: string): string =>
+      line
+        .replace(/\$\{(PLATFORM_[A-Z_]*IMAGE):-[^}]*\}/g, '$${$1:-·}')
+        .replace(/\$\{APP_CORE_URL:[?-][^}]*\}/g, '$${APP_CORE_URL:·}');
+    let changed = 0;
+    for (const [index, line] of before.entries()) {
+      const next = after[index] as string;
+      if (next === line) continue;
+      changed += 1;
+      expect(`${index + 1}: ${shape(next)}`).toBe(`${index + 1}: ${shape(line)}`);
+      // …and what the blanked places now hold is exactly the core's digests, repository and URL.
+      expect(next).toMatch(
+        /\$\{PLATFORM_[A-Z_]*IMAGE:-ghcr\.io\/acme\/platform[a-z-]*@sha256:[0-9a-f]{64}\}|\$\{APP_CORE_URL:-https:\/\/core\.example\.test\}/,
+      );
+    }
+    expect(changed).toBeGreaterThan(4);
   });
 
   it('refuses a template whose platform image cannot be pinned, rather than serve it half pinned', () => {

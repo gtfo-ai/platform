@@ -186,6 +186,35 @@ describe('the remote worker process (WP-283 (1), (3))', () => {
     expect(core.verbs.filter((verb) => verb === 'claims').length).toBe(claimsAtDrain);
   });
 
+  it('reports as held only what its launcher resolves locally: nothing until the images are pulled (backlog 704)', async () => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    writeFileSync(path.join(stateDir, CREDENTIAL_FILE), `${CREDENTIAL}\n`, { mode: 0o600 });
+    const core = fakeCore();
+    let pulled = false;
+    const RUN_ID_DIGEST = `sha256:${'d'.repeat(64)}`;
+    worker = await startRemoteWorker({
+      config: config(stateDir),
+      coreFetch: core.fetch,
+      launcher: {
+        health: async () => ({
+          images: pulled ? { run: RUN_ID_DIGEST, egress: RUN_ID_DIGEST } : null,
+        }),
+      } as unknown as launcherAdapters.LauncherControlClient,
+      sleep: async () => {},
+    });
+    const claims = () =>
+      core.verbs
+        .map((verb, index) => (verb === 'claims' ? core.bodies[index] : null))
+        .filter((body): body is string => body !== null)
+        .map((body) => workerClaimRequestSchema.parse(JSON.parse(body)).image_digests);
+    await until('a claim with nothing held', () => claims().length > 0);
+    expect(claims()[0]).toEqual([]);
+    pulled = true;
+    await until('a claim after the pull', () => claims().some((held) => held.length > 0));
+    // The pinned reference's registry digest and the daemon's id, both of the resolved images.
+    expect(claims().find((held) => held.length > 0)).toEqual([DIGEST, RUN_ID_DIGEST]);
+  });
+
   it('reuses a stored credential, and stops claiming when the core refuses it (revoked)', async () => {
     const stateDir = mkdtempSync(path.join(scratch, 'state-'));
     const core = fakeCore({ handshake: 401 });

@@ -2544,6 +2544,11 @@ export const runSeatSchema = z.strictObject({
   kind: z.enum(['server', 'worker']),
   worker_id: idSchema.nullable(),
   worker_name: nonEmptyStringSchema.max(200).nullable(),
+  /**
+   * WP-283 (5): the worker's **user** — whose machine ran it — by display name, present on a worker
+   * seat whose user is known. Untrusted text like the machine's name. Absent on a server seat.
+   */
+  user_name: nonEmptyStringSchema.max(200).optional(),
 });
 export type RunSeat = z.infer<typeof runSeatSchema>;
 

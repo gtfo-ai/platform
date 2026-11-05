@@ -37,7 +37,7 @@ import { RUN_ACTIVITY_TOOL_NAME_MAX_CHARS, runActivityToolNameSchema } from '@pl
 import { db as dbAdapters } from '@platform/infrastructure';
 import { eq, inArray, type SQL, sql } from 'drizzle-orm';
 
-const { runOffers, runs, workers } = dbAdapters.schema;
+const { runOffers, runs, users, workers } = dbAdapters.schema;
 
 type Database = dbAdapters.Database;
 
@@ -49,6 +49,8 @@ export interface SeatFacts {
   readonly runWorkerId: string | null;
   /** The name of the worker `offerWorkerId ?? runWorkerId` names, when its row exists. */
   readonly workerName: string | null;
+  /** That worker's user's display name (WP-283 (5)), when the worker's row exists. */
+  readonly userName?: string | null;
 }
 
 /** The seat a run's facts license, or `null` (not claimed yet). Pure, for its unit test. */
@@ -65,6 +67,9 @@ export const seatOf = (facts: SeatFacts): RunSeat | null => {
       kind: 'worker',
       worker_id: workerId,
       worker_name: workerId === null ? null : facts.workerName,
+      ...(workerId === null || facts.userName === null || facts.userName === undefined
+        ? {}
+        : { user_name: facts.userName.slice(0, 200) }),
     };
   }
   return null;
@@ -87,10 +92,12 @@ export const seatsFor = async (
       claimantKind: runOffers.claimantKind,
       offerWorkerId: runOffers.workerId,
       workerName: workers.name,
+      userName: users.name,
     })
     .from(runs)
     .leftJoin(runOffers, eq(runOffers.runId, runs.id))
     .leftJoin(workers, eq(workers.id, sql`coalesce(${runOffers.workerId}, ${runs.workerId})`))
+    .leftJoin(users, eq(users.id, workers.userId))
     .where(inArray(runs.id, [...runIds]));
   for (const row of rows) {
     const seat = seatOf({
@@ -99,6 +106,7 @@ export const seatsFor = async (
       offerWorkerId: row.offerWorkerId,
       runWorkerId: row.runWorkerId,
       workerName: row.workerName,
+      userName: row.userName,
     });
     if (seat !== null) {
       byRun.set(row.runId, seat);

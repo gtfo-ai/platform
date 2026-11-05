@@ -38,6 +38,9 @@ export const CORE_IMAGES = [
 /** How long after a failed resolution the next caller tries again. */
 export const DIGEST_RETRY_MS = 60_000;
 
+/** The most bytes of a token answer read from a registry's realm (GHCR's is under 1 KiB). */
+export const TOKEN_ANSWER_MAX_CHARS = 64 * 1024;
+
 /** One registry request's bound. */
 export const DIGEST_REQUEST_TIMEOUT_MS = 10_000;
 
@@ -118,6 +121,25 @@ const timed = async (
   }
 };
 
+/** A response body as text, read no further than `max` bytes — past it the read is cancelled. */
+export const readBounded = async (response: Response, max: number): Promise<string> => {
+  if (response.body === null) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`the registry's token answer is longer than ${max} bytes`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+};
+
 /** One image's `sha-<7>` digest, through the anonymous token flow when the registry asks for one. */
 export const resolveImageDigest = async (input: {
   readonly registry: string;
@@ -154,7 +176,14 @@ export const resolveImageDigest = async (input: {
     if (!tokenAnswer.ok) {
       throw new Error(`the registry's token endpoint answered ${tokenAnswer.status}`);
     }
-    const body = (await tokenAnswer.json()) as { token?: unknown; access_token?: unknown };
+    // Bounded: a token answer is a few KiB; a registry that streams more is refused, never buffered.
+    const text = await readBounded(tokenAnswer, TOKEN_ANSWER_MAX_CHARS);
+    let body: { token?: unknown; access_token?: unknown };
+    try {
+      body = JSON.parse(text) as { token?: unknown; access_token?: unknown };
+    } catch {
+      throw new Error("the registry's token answer is not JSON");
+    }
     const token =
       typeof body.token === 'string'
         ? body.token

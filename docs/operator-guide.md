@@ -326,26 +326,27 @@ Then open <http://localhost:8080/> and sign in with the bootstrap administrator.
 ### A remote worker on a developer's machine (WP-283, WP-284)
 
 A worker runs agent runs on a developer's machine with the developer's own Claude subscription
-(BD-032). It is one file, `compose.worker.yml` — the copy in this repository, the one baked into the
-`platform` image at `/opt/platform/compose.worker.yml`, or the core's
-`GET /api/worker/v1/compose.yml`, which pins every image to the core's own digests:
+(BD-032). It is one file, `compose.worker.yml`, which the core serves **publicly**, pinned to its own
+image digests and with `APP_CORE_URL` already set to it (TD-031's 2026-11-05 amendment). The Workers
+screen shows these two lines for your instance:
 
 ```bash
-APP_CORE_URL=https://agentic.example.com \
-CLAUDE_CODE_OAUTH_TOKEN=<the output of `claude setup-token`> \
-docker compose -f compose.worker.yml up -d
+curl -fsSo compose.worker.yml https://agentic.example.com/api/worker/v1/compose.yml
+CLAUDE_CODE_OAUTH_TOKEN=<the output of `claude setup-token`> docker compose -f compose.worker.yml up -d
 docker compose -f compose.worker.yml logs remote-worker   # the code to approve at /workers/approve
 ```
 
-The worker holds no database, no `APP_SECRET_KEY` and no integration secret, and refuses to start with
+`up` pulls the run, egress and git-helper images first, so a clean machine needs nothing else. The
+worker holds no database, no `APP_SECRET_KEY` and no integration secret, and refuses to start with
 either of the first two. It logs in with the device code (approve it signed in to the platform; the
 credential is kept in the `worker-state` volume — delete it, or revoke the worker on the Workers
 screen, to log out); its launcher token is generated at first start. The Claude token reaches each
-run's CLI and nothing else. `docker compose exec remote-worker curl -fsS localhost:8080/readyz` reads
-`core_handshake: ok` once the core accepted it; `POST /internal/drain` stops it claiming. A project
-whose git integration gives runs a static token or a deploy key runs on a worker only with
-`remote_run_credential: allow` on that integration — the project's execution setting says so when it
-does not. The worker section of this guide is completed by WP-290.
+run's CLI and nothing else. `docker compose -f compose.worker.yml exec remote-worker curl -fsS
+localhost:8080/readyz` reads `core_handshake: ok` once the core accepted it, and
+`docker compose -f compose.worker.yml exec remote-worker curl -fsS -X POST localhost:8080/internal/drain`
+stops it claiming. A project whose git integration gives runs a static token or a deploy key runs on
+a worker only with `remote_run_credential: allow` on that integration — the project's execution
+setting says so when it does not. The worker section of this guide is completed by WP-290.
 
 ### If `/readyz` is 503
 
