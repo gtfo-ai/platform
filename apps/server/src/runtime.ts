@@ -163,6 +163,14 @@ export interface ServerRuntime {
    * (`test/integration/redaction/shape-refresh-roles.integration.test.ts`) reads it.
    */
   readonly mintedCredentialShapes: Pick<redactionAdapters.MintedCredentialShapeRefresh, 'status'>;
+  /**
+   * Whether **this process** composed the server claimant (WP-277, TD-031 decision 13) — its
+   * configuration, never its `ROLE`. A **labelled seam** like `jobs`: since WP-281 `/readyz`'s
+   * `claimants` is the **instance's** answer (another process's fresh `server_claimants` row reads
+   * `server` too, backlog 722), and the liveness row's holder is module state every instance of one
+   * Node process shares, so this is the per-process fact the e2e role table reads.
+   */
+  readonly claimantComposed: boolean;
   /** The address the HTTP server is listening on, once `listen()` has run. */
   listen(): Promise<string>;
   stop(): Promise<void>;
@@ -1299,6 +1307,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       pool: database.pool,
       heldConnections,
       mintedCredentialShapes: shapes,
+      claimantComposed,
       listen: async () => app.listen({ port: config.port, host: config.host }),
       stop: async () => {
         if (shuttingDown) {

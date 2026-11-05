@@ -1145,8 +1145,10 @@ describe('a core with no launcher (WP-277)', () => {
   /**
    * **The role table** (WP-277 criterion 5, TD-028's 2026-11-04 amendment): whether a process is a
    * claimant is its **configuration** — a runner (here the fake) composed or not — never its `ROLE`.
-   * Every role with a worker half takes `stage.execute` either way; `/readyz`'s `claimants` is the
-   * per-process answer an operator reads.
+   * Every role with a worker half takes `stage.execute` either way. The table reads the per-process
+   * fact (`ServerRuntime.claimantComposed`); `/readyz`'s `claimants` is the **instance's** answer
+   * since WP-281 (backlog 722) — `none` while no process claims, then `server` on **every** process,
+   * a no-runner one included, once one does — and is asserted as that.
    */
   it('makes a claimant of configuration, never of ROLE: runner and worker alike, with and without a runner', async () => {
     const pipeline = await startPipeline({
@@ -1159,9 +1161,13 @@ describe('a core with no launcher (WP-277)', () => {
     harness = pipeline;
     const claimantsOf = async (baseUrl: string) =>
       ((await (await fetch(`${baseUrl}/readyz`)).json()) as { claimants?: string }).claimants;
-    const table: Record<string, string | undefined> = {
-      'all, no runner': await claimantsOf(pipeline.instance.baseUrl),
+    // The instance has no claimant yet: the one process reads `none`.
+    expect(await claimantsOf(pipeline.instance.baseUrl)).toBe('none');
+    const composed = (claimant: boolean): string => (claimant ? 'server' : 'none');
+    const table: Record<string, string> = {
+      'all, no runner': composed(pipeline.instance.runtime.claimantComposed),
     };
+    const baseUrls: string[] = [pipeline.instance.baseUrl];
     for (const [role, agent] of [
       ['runner', 'fake-runner'],
       ['worker', 'fake-runner'],
@@ -1174,9 +1180,10 @@ describe('a core with no launcher (WP-277)', () => {
         agent,
         env: { APP_DB_POOL_MAX: String(floorOf(role)) },
       });
-      table[`${role}, ${agent === 'none' ? 'no runner' : 'a runner'}`] = await claimantsOf(
-        process.baseUrl,
+      table[`${role}, ${agent === 'none' ? 'no runner' : 'a runner'}`] = composed(
+        process.runtime.claimantComposed,
       );
+      baseUrls.push(process.baseUrl);
     }
     expect(table).toEqual({
       'all, no runner': 'none',
@@ -1185,6 +1192,10 @@ describe('a core with no launcher (WP-277)', () => {
       'runner, no runner': 'none',
       'indexer, no runner': 'none',
     });
+    // The instance-wide line (WP-281, backlog 722): a claimant runs, so every process says so.
+    for (const baseUrl of baseUrls) {
+      expect(await claimantsOf(baseUrl)).toBe('server');
+    }
   }, 300_000);
 
   it('evaluates a gate with no runner: a task handed back to a gate stage settles it', async () => {
