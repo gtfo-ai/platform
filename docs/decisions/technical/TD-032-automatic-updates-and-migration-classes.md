@@ -433,7 +433,11 @@ older build.
    pins the managed block of the folder's `.env`, keeping the person's own lines. It then runs Compose
    with `--project-directory /var/lib/platform/host-bundle` and the fixed `--project-name`, and hands
    the mount's source back as `APP_WORKER_BUNDLE_DIR`. So the folder on disk is always what runs, and
-   a setting a newer template reads for the first time is read from the folder's `.env`.
+   a setting a newer template reads for the first time is read from the folder's `.env`. The file
+   rewritten is the one Compose recorded it ran (only its name is read off the label), else the
+   first of Compose's default names that **is a worker bundle**; another project's `compose.yml` in
+   the folder is never touched. A git checkout (a folder holding `.git`) is never rewritten, because
+   its files are tracked: only its `.env` is pinned and the image's template runs.
 3. **Rollback source.** Before writing, the previous compose file is kept in the `updates` volume
    (`previous-bundle/<update id>/`) and the previous `.env` beside it in the folder (`.env.previous`).
    A rollback puts both back byte for byte and brings the project up from them. The image template the

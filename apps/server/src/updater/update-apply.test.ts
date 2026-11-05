@@ -4,7 +4,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,6 +88,8 @@ const world = async (options: {
   readonly envFile?: string | null;
   /** The folder's compose file (default: the first install's, the core's render of build `a`). */
   readonly bundle?: string | null;
+  /** Compose's `config_files` label on the worker (default: none recorded). */
+  readonly configFiles?: string;
 }) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'apply-'));
   const stateDir = await mkdtemp(path.join(tmpdir(), 'apply-state-'));
@@ -125,7 +127,12 @@ const world = async (options: {
                 'LOG_LEVEL=info',
                 `PLATFORM_IMAGE=${workerImage}`,
               ],
-              Labels: { 'com.docker.compose.service': 'remote-worker' },
+              Labels: {
+                'com.docker.compose.service': 'remote-worker',
+                ...(options.configFiles === undefined
+                  ? {}
+                  : { 'com.docker.compose.project.config_files': options.configFiles }),
+              },
             },
             State: { Running: true },
           },
@@ -445,6 +452,38 @@ describe('the install folder, kept current (S-22.21, TD-032 decision 4, backlog 
     // With no compose file of its own, the rollback runs the previous image's template.
     const ups = composeCalls(w.calls).filter((call) => verb(call).startsWith('up '));
     expect(ups[1]?.args).toContain(path.join(w.stateDir, PREVIOUS_TEMPLATE_FILE));
+  });
+
+  it('rewrites the file Compose recorded it ran — by its name only, from a Windows label', async () => {
+    const w = await world({
+      bundle: null,
+      configFiles: 'C:\\Users\\dev\\agentic-worker\\my-worker.yml',
+    });
+    const own = path.join(path.dirname(w.bundleFile), 'my-worker.yml');
+    await writeFile(own, rendered('a'));
+    await runApply(w.plan, w.deps);
+    expect(await readFile(own, 'utf8')).toBe(rendered('b'));
+    await expect(stat(w.bundleFile)).rejects.toThrow();
+  });
+
+  it('never rewrites another project’s compose file in the folder', async () => {
+    const w = await world({ bundle: null });
+    const core = path.join(path.dirname(w.bundleFile), 'compose.yml');
+    await writeFile(core, 'services:\n  app:\n    image: postgres\n');
+    await runApply(w.plan, w.deps);
+    expect(await readFile(core, 'utf8')).toBe('services:\n  app:\n    image: postgres\n');
+    expect(await readFile(w.bundleFile, 'utf8')).toBe(rendered('b'));
+  });
+
+  it('leaves a git checkout’s tracked files alone: the env file is pinned, the image’s template runs', async () => {
+    const w = await world({});
+    await mkdir(path.join(path.dirname(w.bundleFile), '.git'));
+    const state = await runApply(w.plan, w.deps);
+    expect(state.result).toBe('succeeded');
+    expect(await readFile(w.bundleFile, 'utf8')).toBe(rendered('a'));
+    expect(managedReferencesOf(await readFile(w.envFile, 'utf8'))).toEqual(refs('b'));
+    const up = composeCalls(w.calls).find((call) => verb(call).startsWith('up -d --wait'));
+    expect(up?.args).toContain(w.templatePath);
   });
 
   it('keeps the person’s own file name (compose.worker.yml, the old README’s)', async () => {

@@ -265,8 +265,8 @@ export const PREVIOUS_BUNDLE_DIRECTORY = 'previous-bundle';
 const KEPT_ABSENT = '.absent';
 
 /**
- * The names Compose looks for in a folder, in its order, then the name the README once used. The
- * first that exists is the person's file; none, and the apply writes `compose.yaml`.
+ * The names Compose looks for in a folder, in its order, then the name the README once used: where
+ * the person's file is looked for when Compose's label names none that is a worker bundle here.
  */
 export const BUNDLE_FILE_NAMES = [
   'compose.yaml',
@@ -282,9 +282,25 @@ const exists = async (file: string): Promise<boolean> =>
     () => false,
   );
 
-export const bundleFileIn = async (folder: string): Promise<string> => {
-  for (const name of BUNDLE_FILE_NAMES) {
-    if (await exists(path.join(folder, name))) return path.join(folder, name);
+/** Whether a file is a worker bundle: it declares the `updater` service. Never another project's file. */
+const isWorkerBundle = async (file: string): Promise<boolean> =>
+  readFile(file, 'utf8').then(
+    (text) => /\n {2}updater:\n/.test(text) && text.includes('ROLE: updater'),
+    () => false,
+  );
+
+/**
+ * The person's compose file in the folder: the one Compose recorded it ran (only the **name** of the
+ * label's first file, `com.docker.compose.project.config_files`, is used — a Windows label's
+ * directory is meaningless here), else the first of {@link BUNDLE_FILE_NAMES} there; either only
+ * when it is a worker bundle, so a folder that also holds another project's `compose.yml` keeps it.
+ * None, and the apply writes `compose.yaml`.
+ */
+export const bundleFileIn = async (folder: string, configFiles: string | null): Promise<string> => {
+  const recorded = configFiles?.split(',')[0]?.trim().split(/[\\/]/).pop() ?? '';
+  const names = [...(/^[A-Za-z0-9._-]+$/.test(recorded) ? [recorded] : []), ...BUNDLE_FILE_NAMES];
+  for (const name of names) {
+    if (await isWorkerBundle(path.join(folder, name))) return path.join(folder, name);
   }
   return path.join(folder, BUNDLE_FILE_NAMES[0]);
 };
@@ -306,7 +322,16 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
     envFile: plan.env_file,
   };
   /** The folder's compose file — the one the person runs — which this apply keeps current. */
-  const bundleFile = await bundleFileIn(plan.working_dir);
+  const recordedFiles =
+    (await projectContainers(docker, plan.project).catch(() => []))
+      .map((container) => container.Config?.Labels?.['com.docker.compose.project.config_files'])
+      .find((label): label is string => typeof label === 'string' && label !== '') ?? null;
+  const bundleFile = await bundleFileIn(plan.working_dir, recordedFiles);
+  /**
+   * A git checkout (the repository's own `compose.worker.yml`, run from a clone) is never rewritten:
+   * its files are tracked. Its `.env` is pinned as before, and the image's template is what runs.
+   */
+  const writeBack = !(await exists(path.join(plan.working_dir, '.git')));
   /** Where the folder's files are kept before they are rewritten: the rollback's source. */
   const kept = path.join(deps.stateDir, PREVIOUS_BUNDLE_DIRECTORY, plan.id);
   let state: UpdateState = {
@@ -529,14 +554,16 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
   // 3. Write it back into the folder and pin `.env`, the previous files kept first (S-22.21): the
   // folder then holds what runs, so a person's own `docker compose up` there is this build.
   try {
-    await mkdir(kept, { recursive: true });
-    if (await exists(bundleFile)) {
-      await copyFile(bundleFile, path.join(kept, path.basename(bundleFile)));
-    } else {
-      await writeFile(path.join(kept, KEPT_ABSENT), '');
+    if (writeBack) {
+      await mkdir(kept, { recursive: true });
+      if (await exists(bundleFile)) {
+        await copyFile(bundleFile, path.join(kept, path.basename(bundleFile)));
+      } else {
+        await writeFile(path.join(kept, KEPT_ABSENT), '');
+      }
     }
     await pinReferences(plan.env_file, plan.to);
-    await writeFileAtomically(bundleFile, rendered);
+    if (writeBack) await writeFileAtomically(bundleFile, rendered);
     await save({ step: 'pinned' });
   } catch (error) {
     const detail = `the install folder could not be written: ${(error as Error).message}`;
@@ -547,7 +574,8 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
   }
 
   // 4–5. Up from the folder, and check.
-  const up = await upAndCheck(bundleFile, plan.to);
+  const running = writeBack ? bundleFile : deps.templatePath;
+  const up = await upAndCheck(running, plan.to);
   if (!up.ok) {
     await rollback(up.detail, previousTemplate);
     return state;
@@ -557,7 +585,7 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
   // 6. Report, then the updater last.
   await finish('succeeded', null);
   try {
-    await compose(bundleFile, ['up', '-d', '--no-deps', 'updater'], plan.to);
+    await compose(running, ['up', '-d', '--no-deps', 'updater'], plan.to);
   } catch (error) {
     logger.error(
       { err: error },
