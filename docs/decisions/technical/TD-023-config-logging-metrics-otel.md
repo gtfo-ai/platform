@@ -56,3 +56,62 @@ Single `config.ts` parsed with zod 4 at boot (fail fast; `z.stringbool()` for bo
 > above. The list in the decision line is otherwise unchanged: `agent_runs_active`,
 > `agent_tokens_total`, `agent_cost_usd_total`, `queue_depth` and `queue_job_age_seconds` are still
 > named there and the metrics module states which of them have a source on this build.
+
+## Amendment (2026-11-05, architect, session 22) — Sentry is built for the worker and the core, redacted by construction; OpenTelemetry is still not (owner request; slice S-22.18, WP-295)
+
+**Context.** The decision line promises `@sentry/node` when `SENTRY_DSN` is set, and so does
+`docs/operator-guide.md:1370`. That promise is not met:
+- No source in `apps/` or `packages/` reads `SENTRY_DSN`, or `OTEL_EXPORTER_OTLP_ENDPOINT` either.
+- `pnpm-lock.yaml` holds no `@sentry/*` package.
+
+The owner wants a DSN for the remote worker that a person can set at any time.
+
+`@sentry/node` 11.11.0 is MIT-licensed. Its unpacked size is 1.6 MB, with seven direct dependencies:
+`@sentry/core`, `@opentelemetry/api` and five `@sentry/*` packages ([registry.npmjs.org/@sentry/node/latest](https://registry.npmjs.org/@sentry/node/latest), read 2026-11-05).
+
+**Decision.**
+1. **One reporter for both roles.** It lives in `packages/infrastructure` and uses `@sentry/node`'s
+   `NodeClient` with:
+   - **no default integrations** (no auto-instrumentation, no console or HTTP breadcrumbs);
+   - `sendDefaultPii: false`.
+
+   It is fed **only** by the composition's own `error`/`fatal` log path. Each event carries:
+   - the error's type;
+   - the error's message, bounded at 1 KiB;
+   - the stack;
+   - the tags `role`, `worker_id`, `core_url`, `version`/`commit` and `run_id`.
+
+   Every other field is dropped. Being explicit is what lets the content be stated:
+   - **No transcript, prompt, tool input, ticket text, project name or ticket key**, ever (BD-022, and
+     the developer's privacy).
+   - A run id is enough for whoever can read the run on the core.
+2. **Redaction before sending.** `beforeSend` and `beforeBreadcrumb` pass the whole event through two
+   redactors:
+   - **The exact-value redactor.** On the worker it covers the Claude token, each live run's token and
+     credential, the UI token and the `wkr_` credential. On the core it covers `APP_SECRET_KEY`, the
+     database password and the launcher token.
+   - **The shipped pattern redactor** (TD-012).
+3. **Where the DSN comes from.**
+   - **On the worker**, `SENTRY_DSN(_FILE)` from the environment wins. Otherwise a `sentry-dsn` file in
+     `worker-state` is used, set from the local page's *Error reporting* setting.
+     - The setting is a settings item, not a wizard step: *Save*, *Send a test error*, *Remove*.
+     - It is validated as `https://<key>@<host>/<project id>`, with `http:` only for loopback.
+     - A change applies **without a restart**: the reporter closes its client and builds a new one.
+   - **On the core**, the DSN is read from the environment only, and reporting is off when unset.
+4. **`@sentry/node` is a dependency of `apps/server` only.**
+   - `THIRD_PARTY_NOTICES.md` is regenerated.
+   - The image's size delta is measured against TD-018.
+   - No `@sentry/*` reaches `apps/web`: a census test enforces this, and `worker.html` keeps its 120 kB.
+
+**Rejected.**
+- *The SDK's default `init`*: auto-instrumentation and breadcrumbs collect what nobody listed.
+- *A restart to apply*: a setting that bounces a worker mid-run is worse than a swapped client.
+- *Docs-only correction for the core*: the core reuses the same module, so the cost is one
+  composition line.
+
+**Residuals.**
+- An error message is redacted for exact values and patterns, not for meaning. A third-party message
+  that quotes untrusted text could carry up to 1 KiB of it.
+- A DSN is a host a person chose: the worker sends its events there.
+- **OpenTelemetry stays unbuilt.** The operator guide is corrected by WP-295, and the gap is filed as
+  backlog 885.

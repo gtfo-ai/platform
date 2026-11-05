@@ -1089,3 +1089,90 @@ empty, because the server claims within `fallback_after`. A tampered worker can 
 `claims` already admits for it.
 
 **Built by S-22.15** (WP-293).
+
+## Amendment (2026-11-05, architect, session 22) — the worker-UI amendment: the first run is a wizard on the local page — platform, Claude sign-in, approval (owner request; slice S-22.17, WP-294)
+
+**Context.** The owner's first real run (2026-11-05) failed before the page existed. The reasons:
+- `compose.worker.yml:96` has `${CLAUDE_CODE_OAUTH_TOKEN:?…}`, so `up` fails at parse.
+- `config.ts:119, 136` refuses to start without `APP_CORE_URL` and without the token.
+- The device code reaches only a log line (`credential.ts:91-98`); `onCode` is not wired (`runtime.ts:627-633`).
+- While the worker waits, the page draws the room, and its mode defaults to *Taking work* (`model.ts:42-46`).
+- `claude` exists only in `platform-runtime` (`runtime.Dockerfile:165`). The `platform` image deletes the SDK's binary (`app.Dockerfile:108`).
+- `GET release` needs the worker credential (`protocol.ts:11, 434`).
+- `claude setup-token` *"opens the same browser authorization flow as `/login`"*. If the browser shows a code instead of redirecting, it is pasted at *"Paste code here if prompted"*. The token is printed and saved nowhere ([code.claude.com/docs/en/authentication](https://code.claude.com/docs/en/authentication), read 2026-11-05).
+
+**Decision.**
+
+1. **The worker starts with nothing.**
+   - Without a core URL, Claude token or credential, it serves the page, claims nothing and calls no core until step (c).
+   - Compose changes: `APP_CORE_URL: ${APP_CORE_URL:-}` in the template (the core's render still fills the default) and `${CLAUDE_CODE_OAUTH_TOKEN:-}`. An empty value counts as absent.
+   - Each value is taken from the **environment** (`_FILE` included) first, then the `worker-state` file, then the wizard. A value from the environment is shown as such and is changed there, not on the page.
+2. **A three-step wizard:** (a) platform, (b) Claude, (c) approval.
+   - Each step is skipped when already satisfied. Each advances by itself on the existing 2 s state poll.
+   - While a step is open, the page shows a **Stepper** (TD-033 §9: done once) *instead of* the room. No mode chip, no Pause, Drain or Cancel.
+   - `WorkerLocalState` (local only, not the protocol) gains a `setup` block. `connection` gains `needs_platform`, `needs_claude` and `core_unreachable`.
+   - Every word is an exhaustive `Record` in `worker/model.ts`, the `humanize.ts` mechanism, in sentence case.
+3. **(a) Connect to a platform.** This step runs only when the environment has no URL. A core-served file always carries one, so prod skips it. In dev mode (S-22.16) it is the main path.
+   - **Detect.** The **worker** probes a fixed list: `http://host.docker.internal:{8080,5173}`, plus `APP_WORKER_CORE_CANDIDATES` (environment only). The browser does not probe, because its CSP allows `connect-src 'self'` and its loopback is not the core's. The page offers each candidate that answers as *Use the platform running on this machine*. Compose adds `extra_hosts: host.docker.internal:host-gateway` (Linux).
+   - **Type.** A field, checked live by the worker:
+     - The URL is `https:`, or `http:` only for `host.docker.internal`, `localhost`, `127.0.0.1` or `[::1]`, and has no userinfo.
+     - The worker sends `GET /api/version` and `GET /api/worker/v1/release` with `X-Worker-Protocol`, `redirect: 'error'`, a 5 s timeout, a 64 KiB cap and **no credential**.
+     - Answers are parsed by the strict schemas. Only parsed fields (host, version, protocol fit) are shown, as text (BD-022).
+     - A failure is a class (*no answer*, *not a platform*, *certificate*, *needs another worker version* from the `426`). The body is never echoed.
+     - SSRF: the person holds the bearer and owns the machine, so the fetch reaches nothing they could not `curl`. The bounds keep the worker from becoming a reader of arbitrary bodies.
+   - **Stored** as `core-url`.
+   - **Change platform** (menu, idle only, *Drain* offered first) deletes `credential`, which belongs to one core. The file now records its core's origin and is ignored for another. The Claude token is kept.
+   - The image pins belong to the core the file came from. If the new core's digests differ, claims are refused (images held, §8), and the page shows that core's `curl … compose.yml` + `up -d`. S-22.10's updater re-pins from the **effective** URL.
+4. **(b) Sign in to Claude: the official CLI, never a re-implementation** of Anthropic's OAuth client. Their client changes, and Q123 is open.
+   - **Binary.** The existing `pull-runtime-image` one-shot copies `/usr/local/bin/claude` into a `claude-cli` volume, mounted read-only in `remote-worker`. That is the exact CLI runs execute. The core image does not grow and the worker gets no Docker client (TD-021).
+   - **Process.** The worker runs `claude setup-token` under a pty (`script(1)`, not a native `node-pty`) with:
+     - an environment scrubbed of every token variable;
+     - a fresh temporary `HOME`/`CLAUDE_CONFIG_DIR`, deleted afterwards;
+     - a wide terminal;
+     - one session at a time, a 10 min cap, and *Cancel*.
+   - **What it reads**, and nothing else:
+     - the sign-in URL: a primary *Open Claude sign-in* through `safeHref`, only if it is `https:` on the Anthropic host list the slice measures;
+     - the paste prompt: a field, *Paste the code Claude shows you*;
+     - the token, by shape (V-WM4).
+   - **The localhost callback cannot complete**, because the CLI listens inside the container on an unpublished port. Pasting the code is the route (V-WM10).
+   - **Never logged.** CLI output enters no log line or tail. The code and the token join the exact redactor at once.
+   - **Fallback, always visible:** *Paste a token instead*, with `claude setup-token` in a `CopyField`.
+   - **Check and store.** The token is checked once with the cheapest call the pinned CLI offers (V-WM10; at most one no-tool, one-turn `claude -p`). It is stored as `claude-token`: 0600, atomic, read at each run start, and in no request to any core (WP-283 (2)'s capture test extended).
+   - **Sign out / change Claude account** (idle only, *Drain* first) deletes the file. It does not revoke the token at Anthropic, and the page says so.
+5. **(c) Approve this machine.**
+   - The code is the page's **dominant element**: large monospace letters, with *Copy*.
+   - The primary button is *Open the approval page*, linking `<verification_uri>?code=<user_code>`, rendered only if its origin is the core's.
+     - The core's `/workers/approve` prefills from `?code=` and strips it from the address.
+     - It keeps every warning and the explicit *Approve*, and never approves by itself. This is RFC 8628 §3.3.1's `verification_uri_complete`. The §5.4 residual, a phisher's link that prefills, equals a phisher's typed code.
+   - A countdown runs from `expires_at` against `server_time`. A new code appears without a reload: `ensureCredential` already loops on expiry and denial.
+   - Approval advances to the room.
+6. **`GET /api/worker/v1/release` becomes public**, as `compose.yml` did. Its range and digests already reach anonymous callers through the `426`, and the compose bundle digest is a hash of a public file. The protocol header check stays. **No protocol bump**: no shape changes. An older core's `401` reads *checked partly* and the wizard continues on `/api/version`.
+7. **Failures, each with one next action:**
+   - **Claude rejected.** An authentication failure, from the check or from a run's stream (golden fixture `documented-adapted`), stops claiming locally and returns to (b): *Claude no longer accepts this sign-in*, then *Sign in again*. The run in flight ends as any CLI failure. A usage limit stays WP-285's pause.
+   - **Core unreachable.** `core_unreachable` shows the class and the address, *Retrying in N s* and *Try now*.
+   - **Revoked.** *This machine was removed from `<host>`*, then *Connect again*, which deletes the credential and starts a new device flow without a restart.
+   - `upgrade_required` is unchanged.
+8. **New `POST /api/local/*` verbs:** `core/check`, `core`, `claude/sign-in`, `claude/code`, `claude/token`, `claude/sign-out`, `connect-again`, `retry`.
+   - **WP-292's bearer, `Host` and `Origin` checks are enough to write a secret.** Whoever can read the bearer (the logs or the volume) controls Docker and can already read a run's token. No cookie means nothing for CSRF to ride. `Host` stops rebinding.
+   - They come with these guards:
+     - **write-only**: no answer carries the token, the code or the credential (planted-value test);
+     - bounded bodies;
+     - a malformed token is refused without echo;
+     - a value that comes from the environment answers `409`.
+9. **The address.** `up -d` prints no container output, so a profiled one-shot, `address`, prints the page's URL (`ensureUiToken`, exclusive create). Compose starts a profiled service that is targeted explicitly ([docs.docker.com/compose/how-tos/profiles](https://docs.docker.com/compose/how-tos/profiles/)). The file is saved as `compose.yaml` in its own directory, so no `-f` is needed.
+
+**Rejected.**
+- *An own OAuth client*: see 4.
+- *`claude` in the `platform` image*: every core would carry it, and WP-82 removed it.
+- *A sign-in container from the launcher*: a TTY attach through the socket proxy, plus an egress list.
+- *Paste-only*: the owner asked for the easiest path; it is kept as the fallback.
+- *Detection in the browser*: the CSP and CORS block it.
+- *`http:` to any host*.
+- *A dimmed room*: it still reads as working.
+
+**Residuals.**
+- The CLI's screen text is not a contract. A process test replays V-WM10's measured transcript through a fake `claude`, and it is re-measured at every CLI pin bump. The paste fallback always works.
+- A worker whose token was rejected stays *online* to routing until its contact ages out (backlog 884).
+- Q123 is unchanged.
+
+**Built by S-22.17** (WP-294).
