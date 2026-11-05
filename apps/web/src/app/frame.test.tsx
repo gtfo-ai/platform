@@ -287,9 +287,13 @@ describe('the top bar', () => {
     cleanup();
 
     start({ projects: [project(1)], canStart: true }, '/projects/p1/pipeline');
-    await screen.findByRole('link', { name: 'Start a ticket' });
-    await user.click(within(await banner()).getByRole('button', { name: 'Create new…' }));
-    menu = await screen.findByRole('menu');
+    await screen.findByRole('navigation', { name: 'Project' });
+    // The tasks read is what offers the start; wait for it through the menu itself.
+    await waitFor(async () => {
+      await user.click(within(await banner()).getByRole('button', { name: 'Create new…' }));
+      menu = await screen.findByRole('menu');
+      expect(within(menu).getByRole('menuitem', { name: 'Start a ticket…' })).toBeTruthy();
+    });
     await user.click(within(menu).getByRole('menuitem', { name: 'Start a ticket…' }));
     await waitFor(() => {
       expect(`${window.location.pathname}${window.location.hash}`).toBe(
@@ -301,6 +305,39 @@ describe('the top bar', () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(field);
     });
+
+    // A second press, on the board at the same URL: no navigation happens, the focus still moves.
+    const header = await screen.findByRole('link', { name: 'Start a ticket' });
+    field.blur();
+    expect(document.activeElement).not.toBe(field);
+    await user.click(header);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(field);
+    });
+  });
+
+  it('marks the current page inside the More menu when it has collapsed there', async () => {
+    const user = userEvent.setup();
+    // A 700 px viewport: Workers through Settings are in the menu; Agents stays in the row.
+    const real = window.matchMedia.bind(window);
+    vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => {
+      const min = /min-width: (\d+)px/.exec(query);
+      if (min === null) {
+        return real(query);
+      }
+      return {
+        matches: Number(min[1]) <= 700,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      } as unknown as MediaQueryList;
+    });
+    start({ projects: [project(1)] }, '/settings');
+    await user.click(await screen.findByRole('button', { name: 'More navigation' }));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: 'Settings (current)' })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: 'Statistics' })).toBeTruthy();
+    expect(within(menu).queryByRole('menuitem', { name: /^Agents/ })).toBeNull();
   });
 });
 
@@ -384,6 +421,34 @@ describe('the project layout route', () => {
     expect(screen.queryByRole('link', { name: 'Start a ticket' })).toBeNull();
   });
 
+  it('keeps the header’s Start a ticket to the board, so a sub-page or a task keeps its own primary', async () => {
+    for (const path of [
+      '/projects/p1/budgets',
+      '/projects/p1/tasks/00000000-0000-4000-8000-0000000003a1',
+    ]) {
+      const asked: string[] = [];
+      const base = fetchFor({ projects: [project(1)], canStart: true });
+      window.history.pushState({}, '', path);
+      render(
+        createApp({
+          fetchImpl: (async (input: RequestInfo | URL) => {
+            asked.push(String(input));
+            return base(input);
+          }) as typeof fetch,
+          realtime: false,
+        }).element,
+      );
+      await screen.findByRole('navigation', { name: 'Project' });
+      // The tasks read answered `can_start_task: true`, so the absence below is the rule.
+      await waitFor(() => {
+        expect(asked.some((url) => /\/api\/projects\/[^/]+\/tasks/.test(url))).toBe(true);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(screen.queryByRole('link', { name: 'Start a ticket' }), path).toBeNull();
+      cleanup();
+    }
+  });
+
   it('keeps a task’s page on the Board tab and leaves the page its own h1', async () => {
     start({ projects: [project(1)] }, '/projects/p1/tasks/00000000-0000-4000-8000-0000000003a1');
     const tabs = await screen.findByRole('navigation', { name: 'Project' });
@@ -400,6 +465,11 @@ describe('the project layout route', () => {
     expect(await screen.findByText('No such project')).toBeTruthy();
     expect(screen.queryByRole('navigation', { name: 'Project' })).toBeNull();
     expect(screen.getAllByText('No such project')).toHaveLength(1);
+    // The way out: the project list.
+    const main = screen.getByRole('main');
+    expect(within(main).getByRole('link', { name: 'All projects' }).getAttribute('href')).toBe(
+      '/projects',
+    );
   });
 });
 

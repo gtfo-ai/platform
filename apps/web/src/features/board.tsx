@@ -13,7 +13,7 @@
 import { createTaskRequestSchema, type TaskRecord } from '@platform/contracts';
 import { Link, useLocation } from '@tanstack/react-router';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
-import { START_TICKET_ANCHOR } from '../app/project-frame.js';
+import { START_TICKET_ANCHOR, useStartTicketRequests } from '../app/project-frame.js';
 import { useProjectByKey, useProjectTasks, useStartTask } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
@@ -203,11 +203,14 @@ export const StartTicketForm = ({ projectId }: { readonly projectId: string }): 
   // scrolls the form into view, and the key field takes the focus so the next keystroke is the key.
   const form = useRef<HTMLFormElement>(null);
   const hash = useLocation({ select: (location) => location.hash });
+  // Keyed on the press count as well as the hash: a second press on the board is the same URL, so
+  // the hash does not change, and the form must still take the focus.
+  const requests = useStartTicketRequests();
   useEffect(() => {
-    if (hash === START_TICKET_ANCHOR) {
+    if (hash === START_TICKET_ANCHOR && requests >= 0) {
       form.current?.querySelector('input')?.focus();
     }
-  }, [hash]);
+  }, [hash, requests]);
   return (
     <form
       ref={form}

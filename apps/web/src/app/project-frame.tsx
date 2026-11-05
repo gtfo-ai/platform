@@ -24,7 +24,7 @@ import { GearIcon } from '@primer/octicons-react/GearIcon';
 import { ProjectIcon } from '@primer/octicons-react/ProjectIcon';
 import { WorkflowIcon } from '@primer/octicons-react/WorkflowIcon';
 import { Link, Outlet, useMatches } from '@tanstack/react-router';
-import type { ReactElement } from 'react';
+import { type ReactElement, useSyncExternalStore } from 'react';
 import { ReadinessLabel } from '../features/readiness-label.js';
 import { useTopics } from '../realtime/provider.js';
 import { buttonClassName } from '../ui/button.js';
@@ -38,6 +38,34 @@ import { useProjectByKey, useProjectTasks } from './queries.js';
 
 /** The board's start form's id: the header's *Start a ticket* and the `+` menu's both go there. */
 export const START_TICKET_ANCHOR = 'start-ticket';
+
+/**
+ * One count per *Start a ticket* press, so the board's form takes the focus on **every** press — a
+ * second press on the board itself is the same location, which the router does not navigate to
+ * again, so the hash alone changes only the first time.
+ */
+let startTicketRequests = 0;
+const startTicketListeners = new Set<() => void>();
+
+export const requestStartTicket = (): void => {
+  startTicketRequests += 1;
+  for (const listener of startTicketListeners) {
+    listener();
+  }
+};
+
+const subscribeStartTicket = (listener: () => void): (() => void) => {
+  startTicketListeners.add(listener);
+  return () => {
+    startTicketListeners.delete(listener);
+  };
+};
+
+const readStartTicket = (): number => startTicketRequests;
+
+/** The number of *Start a ticket* presses so far: a dependency that changes on each one. */
+export const useStartTicketRequests = (): number =>
+  useSyncExternalStore(subscribeStartTicket, readStartTicket, readStartTicket);
 
 /** The project's sections, in order — the `staticData.tab` each child route declares. */
 export const PROJECT_TABS = [
@@ -119,6 +147,11 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
         <EmptyState
           title="No such project"
           hint={`No project has the key "${projectKey}". Check the link, or pick one from the project list.`}
+          action={
+            <Link to="/projects" className={buttonClassName('default')}>
+              All projects
+            </Link>
+          }
         />
       </div>
     );
@@ -131,7 +164,10 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
     current: (frame.tab ?? 'board') === tab,
     render: (props: NavLinkProps) => tabLink(tab, project.key, props),
   }));
-  const canStart = tasks.data?.can_start_task === true;
+  // The header's primary only on the board itself: a sub-page and a task's page each keep their
+  // own one primary action (research/19 § 3.1), and the `+` menu still offers the start there.
+  const canStart =
+    tasks.data?.can_start_task === true && frame.tab === 'board' && !frame.ownsHeading;
 
   return (
     <div className="flex flex-col">
@@ -165,6 +201,7 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
                       hash={START_TICKET_ANCHOR}
                       // An action, not a place: never marked as the current page.
                       activeOptions={{ exact: true, includeHash: true }}
+                      onClick={requestStartTicket}
                       className={buttonClassName('primary')}
                     >
                       Start a ticket

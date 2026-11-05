@@ -70,7 +70,7 @@ import { type ThemePreference, useTheme } from '../ui/theme.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
-import { pageWidth, START_TICKET_ANCHOR } from './project-frame.js';
+import { pageWidth, requestStartTicket, START_TICKET_ANCHOR } from './project-frame.js';
 import { useAgents, useInbox, useProjects, useProjectTasks, useSession } from './queries.js';
 import { useServices } from './services.js';
 
@@ -439,6 +439,7 @@ const CreateMenu = ({ project }: { readonly project: ProjectSummary | null }): R
         <ActionMenuItem
           leadingIcon={<PlayIcon size={16} />}
           onSelect={() => {
+            requestStartTicket();
             void navigate({
               to: '/projects/$key',
               params: { key: project.key },
@@ -511,6 +512,13 @@ const NavMore = ({ items }: { readonly items: readonly NavItem[] }): ReactElemen
         {...(item.onSelect === undefined ? {} : { onSelect: item.onSelect })}
       >
         {item.label}
+        {/* The page you are on, when it has collapsed in here: said in words, so a screen reader
+            hears it too (the row's underline is not in the menu). */}
+        {item.current === true ? (
+          <span data-nav-current="" className="text-xs text-fg-muted">
+            (current)
+          </span>
+        ) : null}
         {item.counter === undefined ? null : <Counter count={item.counter} className="ml-auto" />}
       </ActionMenuItem>
     ))}
