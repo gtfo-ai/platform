@@ -1,174 +1,314 @@
 /**
  * **The local page's boundary check** (WP-292) — what the page accepts from `/api/local/*`.
  *
- * The worker serialises its answers with `@platform/contracts`'s `worker-local.ts` zod schemas. The
- * page cannot import them: its initial graph has a budget of its own (≤ 120 kB gz, TD-031's
- * worker-UI amendment §3) and React plus zod's chunk alone measured 127 kB. So this module checks
- * each answer **structurally and strictly** — every key named, no key more, every bound the schema
- * states — and refuses rather than repairs, the schemas' own rule. `read-state.test.ts` holds the
- * key lists to the zod shapes in both directions and runs the same fixtures through both, so a field
- * added to one and not the other fails a test, not a page.
+ * The worker parses every answer with `@platform/contracts`'s `worker-local.ts` zod schemas before
+ * it sends it. The page does not import them: its initial graph has a budget of its own (≤ 120 kB
+ * gz) and React plus zod's chunk alone measured 127 kB — TD-031's 2026-11-05 amendment, decision 4,
+ * which admits a hand-written guard for this one entry on three conditions, all kept here.
+ *
+ * The guard is **declarative**: each answer's shape is a {@link Spec} tree — every key at every
+ * depth, strict (no key more), each value's type, enum members, literal tags, string and array
+ * bounds, integer floors, which keys may be absent and which may be `null` — and {@link conforms}
+ * walks a value against it, refusing rather than repairing. `read-state.test.ts` walks the same
+ * tree against the zod schema **in both directions** (keys, enum members, bounds, optionality and
+ * nullability at every depth) and runs the same accept and refuse fixtures through both, so a field
+ * added to one and not the other fails a test, not a page. Opaque JSON (a `system` entry's `data`,
+ * a tool's `input`, a structured output) is checked as JSON and no deeper, exactly as zod does.
  *
  * Every value is still rendered as text: this decides only whether the page reads the answer.
  */
-import type {
-  WorkerLocalCancelResponse,
-  WorkerLocalRun,
-  WorkerLocalState,
-} from '@platform/contracts';
-import { ROLE_LABEL } from '../ui/humanize.js';
+import type { WorkerLocalCancelResponse, WorkerLocalState } from '@platform/contracts';
+import { ROLE_LABEL, TERMINAL_REASON_LABEL } from '../ui/humanize.js';
 
 /** The local verbs' prefix — `WORKER_LOCAL_API_PREFIX`, held equal by the test. */
 export const LOCAL_API_PREFIX = '/api/local';
 
-type Json = Record<string, unknown>;
+/** One node of an answer's shape — the vocabulary the test maps onto zod's own. */
+export type Spec =
+  | {
+      readonly t: 'string';
+      readonly format?: 'uuid' | 'datetime';
+      readonly min?: number;
+      readonly max?: number;
+    }
+  | { readonly t: 'int'; readonly min?: number; readonly max?: number }
+  | { readonly t: 'number'; readonly min?: number }
+  | { readonly t: 'boolean' }
+  | { readonly t: 'enum'; readonly values: readonly string[] }
+  | { readonly t: 'literal'; readonly value: string }
+  | { readonly t: 'object'; readonly keys: Readonly<Record<string, Spec>> }
+  | { readonly t: 'array'; readonly of: Spec; readonly min?: number; readonly max?: number }
+  /** A discriminated union of objects, by `tag`. */
+  | { readonly t: 'union'; readonly tag: string; readonly options: readonly Spec[] }
+  | { readonly t: 'nullable'; readonly of: Spec }
+  /** The key may be absent. */
+  | { readonly t: 'optional'; readonly of: Spec }
+  /** Any JSON object with string keys (`jsonObjectSchema`). */
+  | { readonly t: 'json-object' }
+  /** Any JSON value (`jsonValueSchema`). */
+  | { readonly t: 'json' };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const str = (extra: Omit<Extract<Spec, { t: 'string' }>, 't'> = {}): Spec => ({
+  t: 'string',
+  ...extra,
+});
+const nonEmpty: Spec = str({ min: 1 });
+const uuid: Spec = str({ format: 'uuid' });
+const datetime: Spec = str({ format: 'datetime' });
+const count: Spec = { t: 'int', min: 0 };
+const nullable = (of: Spec): Spec => ({ t: 'nullable', of });
+const nullish = (of: Spec): Spec => ({ t: 'optional', of: nullable(of) });
+const object = (keys: Record<string, Spec>): Spec => ({ t: 'object', keys });
 
-export const STATE_KEYS = [
-  'worker_id',
-  'worker_name',
-  'connection',
-  'protocol',
-  'core_protocol',
-  'core_url',
-  'last_handshake_at',
-  'manually_paused_at',
-  'usage_paused_until',
-  'draining',
-  'update_pending',
-  'concurrency',
-  'runs',
-  'logs',
-  'server_time',
-] as const;
-
-export const RUN_KEYS = [
-  'run_id',
-  'task_id',
-  'project_id',
-  'project_key',
-  'ticket_key',
-  'title',
-  'stage',
-  'role',
-  'attempt',
-  'phase',
-  'started_at',
-  'elapsed_ms',
-  'tokens',
-  'cost_usd',
-  'cancel_requested',
-  'transcript',
-] as const;
-
-export const CANCEL_KEYS = ['run_id', 'accepted', 'task_state'] as const;
-
-const CONNECTIONS = new Set([
+/** The agent roles — `ROLE_LABEL`'s keys, which the test holds to `agentRoleSchema`. */
+export const ROLES: readonly string[] = Object.keys(ROLE_LABEL);
+export const TERMINAL_REASONS: readonly string[] = Object.keys(TERMINAL_REASON_LABEL);
+export const CONNECTIONS = [
   'logging_in',
   'handshaking',
   'connected',
   'revoked',
   'upgrade_required',
   'stopped',
-]);
-const PHASES = new Set(['provisioning', 'running', 'finishing', 'ended']);
+] as const;
+export const PHASES = ['provisioning', 'running', 'finishing', 'ended'] as const;
+export const HOOKS = [
+  'PreToolUse',
+  'PostToolUse',
+  'SubagentStart',
+  'SubagentStop',
+  'PreCompact',
+  'PostCompact',
+  'Stop',
+  'UserPromptSubmit',
+  'PostModelSwitch',
+] as const;
 
-const isObject = (value: unknown): value is Json =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-const exactKeys = (value: Json, keys: readonly string[]): boolean => {
-  const own = Object.keys(value);
-  return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+const contentBlock: Spec = {
+  t: 'union',
+  tag: 'type',
+  options: [
+    object({ type: { t: 'literal', value: 'text' }, text: str() }),
+    object({ type: { t: 'literal', value: 'thinking' }, thinking: str() }),
+    object({
+      type: { t: 'literal', value: 'tool_use' },
+      tool_use_id: nonEmpty,
+      tool_name: nonEmpty,
+      input: { t: 'json-object' },
+    }),
+    object({
+      type: { t: 'literal', value: 'tool_result' },
+      tool_use_id: nonEmpty,
+      is_error: { t: 'boolean' },
+      content: str(),
+    }),
+  ],
 };
-const text = (value: unknown, max: number): boolean =>
-  typeof value === 'string' && value.length <= max;
-const textOrNull = (value: unknown, max: number): boolean => value === null || text(value, max);
-const iso = (value: unknown): boolean => typeof value === 'string' && ISO.test(value);
-const isoOrNull = (value: unknown): boolean => value === null || iso(value);
-const uuid = (value: unknown): boolean => typeof value === 'string' && UUID.test(value);
-const int = (value: unknown, min: number, max = Number.MAX_SAFE_INTEGER): boolean =>
-  typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 
-const isRun = (value: unknown): value is WorkerLocalRun =>
-  isObject(value) &&
-  exactKeys(value, RUN_KEYS) &&
-  uuid(value.run_id) &&
-  uuid(value.task_id) &&
-  uuid(value.project_id) &&
-  textOrNull(value.project_key, 64) &&
-  textOrNull(value.ticket_key, 256) &&
-  textOrNull(value.title, 500) &&
-  textOrNull(value.stage, 128) &&
-  typeof value.role === 'string' &&
-  Object.hasOwn(ROLE_LABEL, value.role) &&
-  int(value.attempt, 1) &&
-  typeof value.phase === 'string' &&
-  PHASES.has(value.phase) &&
-  iso(value.started_at) &&
-  int(value.elapsed_ms, 0) &&
-  (value.tokens === null || int(value.tokens, 0)) &&
-  (value.cost_usd === null ||
-    (typeof value.cost_usd === 'number' &&
-      Number.isFinite(value.cost_usd) &&
-      value.cost_usd >= 0)) &&
-  typeof value.cancel_requested === 'boolean' &&
-  Array.isArray(value.transcript) &&
-  value.transcript.length <= 40 &&
-  value.transcript.every(
-    (entry) => isObject(entry) && typeof entry.kind === 'string' && typeof entry.seq === 'number',
-  );
+const usage = {
+  input_tokens: count,
+  output_tokens: count,
+  cache_write_5m_tokens: count,
+  cache_write_1h_tokens: count,
+  cache_read_tokens: count,
+};
+const usd: Spec = { t: 'number', min: 0 };
+
+/** A transcript entry — `transcriptEventSchema`, kind by kind. */
+const entry = (kind: string, keys: Record<string, Spec>): Spec =>
+  object({
+    run_id: uuid,
+    seq: count,
+    created_at: datetime,
+    parent_tool_use_id: nullish(nonEmpty),
+    redaction_count: count,
+    kind: { t: 'literal', value: kind },
+    ...keys,
+  });
+
+export const TRANSCRIPT_ENTRY: Spec = {
+  t: 'union',
+  tag: 'kind',
+  options: [
+    entry('system', {
+      subtype: nonEmpty,
+      session_id: nullish(nonEmpty),
+      model: nullish(nonEmpty),
+      data: { t: 'json-object' },
+    }),
+    entry('assistant', { model: nonEmpty, content: { t: 'array', of: contentBlock } }),
+    entry('user', { content: { t: 'array', of: contentBlock } }),
+    entry('result', {
+      terminal_reason: { t: 'enum', values: TERMINAL_REASONS },
+      num_turns: count,
+      duration_ms: count,
+      usage: object(usage),
+      model_usage: { t: 'array', of: object({ ...usage, model: nonEmpty, usd }) },
+      cost: object({ usd, is_estimate: { t: 'boolean' }, price_list_id: nullish(uuid) }),
+      structured_output: nullish({ t: 'json' }),
+    }),
+    entry('stream_block', {
+      block_index: count,
+      block: contentBlock,
+      first_delta_at: datetime,
+      last_delta_at: datetime,
+    }),
+    entry('hook', {
+      hook: { t: 'enum', values: HOOKS },
+      tool_name: nullish(nonEmpty),
+      tool_use_id: nullish(nonEmpty),
+      decision: nullish({ t: 'enum', values: ['allow', 'ask', 'deny'] }),
+      reason: nullish(str()),
+      question_id: nullish(uuid),
+    }),
+    entry('steer', { message: nonEmpty, author_user_id: uuid }),
+    entry('compaction', {
+      phase: { t: 'enum', values: ['pre', 'post'] },
+      pre_tokens: nullish(count),
+      post_tokens: nullish(count),
+    }),
+    entry('progress', {
+      summary: str({ min: 1, max: 2_000 }),
+      percent_complete: nullish({ t: 'int', min: 0, max: 100 }),
+      truncated: { t: 'boolean' },
+    }),
+  ],
+};
+
+export const RUN: Spec = object({
+  run_id: uuid,
+  task_id: uuid,
+  project_id: uuid,
+  project_key: nullable(str({ max: 64 })),
+  ticket_key: nullable(str({ max: 256 })),
+  title: nullable(str({ max: 500 })),
+  stage: nullable(str({ max: 128 })),
+  role: { t: 'enum', values: ROLES },
+  attempt: { t: 'int', min: 1 },
+  phase: { t: 'enum', values: PHASES },
+  started_at: datetime,
+  elapsed_ms: count,
+  tokens: nullable(count),
+  cost_usd: nullable({ t: 'number', min: 0 }),
+  cancel_requested: { t: 'boolean' },
+  transcript: { t: 'array', of: TRANSCRIPT_ENTRY, max: 40 },
+});
+
+export const STATE: Spec = object({
+  worker_id: nullable(uuid),
+  worker_name: nullable(str({ max: 200 })),
+  connection: { t: 'enum', values: CONNECTIONS },
+  protocol: { t: 'int', min: 1 },
+  core_protocol: nullable(
+    object({
+      current: { t: 'int', min: 1 },
+      accepted: { t: 'array', of: { t: 'int', min: 1 }, min: 1, max: 2 },
+    }),
+  ),
+  core_url: str({ max: 2_048 }),
+  last_handshake_at: nullable(datetime),
+  manually_paused_at: nullable(datetime),
+  usage_paused_until: nullable(datetime),
+  draining: { t: 'boolean' },
+  update_pending: nullable({ t: 'boolean' }),
+  concurrency: { t: 'int', min: 1, max: 64 },
+  runs: { t: 'array', of: RUN, max: 64 },
+  logs: { t: 'array', of: str({ max: 2_032 }), max: 200 },
+  server_time: datetime,
+});
+
+export const CANCEL: Spec = object({
+  run_id: uuid,
+  accepted: { t: 'boolean' },
+  task_state: str({ max: 64 }),
+});
+
+export const ERROR: Spec = object({
+  error: object({ code: str({ max: 64 }), message: str({ max: 2_000 }) }),
+});
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isJson = (value: unknown, depth = 0): boolean => {
+  if (depth > 64) return false;
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every((item) => isJson(item, depth + 1));
+  return isRecord(value) && Object.values(value).every((item) => isJson(item, depth + 1));
+};
+
+const within = (n: number, min: number | undefined, max: number | undefined): boolean =>
+  (min === undefined || n >= min) && (max === undefined || n <= max);
+
+/** Whether `value` has the shape `spec` names — strictly: an unknown key is a refusal. */
+export const conforms = (spec: Spec, value: unknown): boolean => {
+  switch (spec.t) {
+    case 'string':
+      return (
+        typeof value === 'string' &&
+        within(value.length, spec.min, spec.max) &&
+        (spec.format === undefined || (spec.format === 'uuid' ? UUID : DATETIME).test(value))
+      );
+    case 'int':
+      return (
+        typeof value === 'number' &&
+        Number.isSafeInteger(value) &&
+        within(value, spec.min, spec.max)
+      );
+    case 'number':
+      return (
+        typeof value === 'number' && Number.isFinite(value) && within(value, spec.min, undefined)
+      );
+    case 'boolean':
+      return typeof value === 'boolean';
+    case 'enum':
+      return typeof value === 'string' && spec.values.includes(value);
+    case 'literal':
+      return value === spec.value;
+    case 'nullable':
+      return value === null || conforms(spec.of, value);
+    case 'optional':
+      return value === undefined || conforms(spec.of, value);
+    case 'json':
+      return isJson(value);
+    case 'json-object':
+      return isRecord(value) && isJson(value);
+    case 'array':
+      return (
+        Array.isArray(value) &&
+        within(value.length, spec.min, spec.max) &&
+        value.every((item) => conforms(spec.of, item))
+      );
+    case 'object': {
+      if (!isRecord(value)) return false;
+      if (Object.keys(value).some((key) => !Object.hasOwn(spec.keys, key))) return false;
+      return Object.entries(spec.keys).every(([key, child]) =>
+        Object.hasOwn(value, key) ? conforms(child, value[key]) : child.t === 'optional',
+      );
+    }
+    case 'union': {
+      if (!isRecord(value)) return false;
+      const option = spec.options.find(
+        (candidate) =>
+          candidate.t === 'object' && conforms(candidate.keys[spec.tag] as Spec, value[spec.tag]),
+      );
+      return option !== undefined && conforms(option, value);
+    }
+  }
+};
 
 /** The state, or `null` for an answer this page does not read. */
-export const readState = (value: unknown): WorkerLocalState | null => {
-  if (!isObject(value) || !exactKeys(value, STATE_KEYS)) return null;
-  const protocol = value.core_protocol;
-  const ok =
-    (value.worker_id === null || uuid(value.worker_id)) &&
-    textOrNull(value.worker_name, 200) &&
-    typeof value.connection === 'string' &&
-    CONNECTIONS.has(value.connection) &&
-    int(value.protocol, 1) &&
-    (protocol === null ||
-      (isObject(protocol) &&
-        exactKeys(protocol, ['current', 'accepted']) &&
-        int(protocol.current, 1) &&
-        Array.isArray(protocol.accepted) &&
-        protocol.accepted.length >= 1 &&
-        protocol.accepted.length <= 2 &&
-        protocol.accepted.every((version) => int(version, 1)))) &&
-    text(value.core_url, 2_048) &&
-    isoOrNull(value.last_handshake_at) &&
-    isoOrNull(value.manually_paused_at) &&
-    isoOrNull(value.usage_paused_until) &&
-    typeof value.draining === 'boolean' &&
-    (value.update_pending === null || typeof value.update_pending === 'boolean') &&
-    int(value.concurrency, 1, 64) &&
-    Array.isArray(value.runs) &&
-    value.runs.length <= 64 &&
-    value.runs.every(isRun) &&
-    Array.isArray(value.logs) &&
-    value.logs.length <= 200 &&
-    value.logs.every((line) => text(line, 2_032)) &&
-    iso(value.server_time);
-  return ok ? (value as unknown as WorkerLocalState) : null;
-};
+export const readState = (value: unknown): WorkerLocalState | null =>
+  conforms(STATE, value) ? (value as WorkerLocalState) : null;
 
 /** A cancel's answer, or `null`. */
 export const readCancel = (value: unknown): WorkerLocalCancelResponse | null =>
-  isObject(value) &&
-  exactKeys(value, CANCEL_KEYS) &&
-  uuid(value.run_id) &&
-  typeof value.accepted === 'boolean' &&
-  text(value.task_state, 64)
-    ? (value as unknown as WorkerLocalCancelResponse)
-    : null;
+  conforms(CANCEL, value) ? (value as WorkerLocalCancelResponse) : null;
 
 /** An error envelope's code and message, or `null`. */
-export const readError = (value: unknown): { code: string; message: string } | null => {
-  if (!isObject(value) || !exactKeys(value, ['error']) || !isObject(value.error)) return null;
-  const { code, message } = value.error;
-  return exactKeys(value.error, ['code', 'message']) && text(code, 64) && text(message, 2_000)
-    ? { code: code as string, message: message as string }
-    : null;
-};
+export const readError = (value: unknown): { code: string; message: string } | null =>
+  conforms(ERROR, value) ? (value as { error: { code: string; message: string } }).error : null;

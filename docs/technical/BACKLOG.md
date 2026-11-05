@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 774, so the next is **775**), its grade
+line with the next free number (the highest is 775, so the next is **776**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -29,6 +29,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 772 | minor | — | The local page's *tokens* are known only from the run's `result` entry: the normalised transcript drops the SDK's per-turn usage, so a running run reads *not reported yet* until it ends (WP-292 (2)); a usage field on the `assistant` entry, or a progress counter from the runner, would give "tokens so far" |
 | 773 | minor | — | WP-292 (6), the local page's Docker assertions in `scripts/worker-compose-check.mjs` (published on 127.0.0.1 only, not on the host's other address, 421/401, no run container reaches the UI port), are written and **not run** (Docker paused on the machine that wrote them) |
 | 774 | nit | — | The core serves `apps/web/dist` and so also answers `/worker.html` — the worker's page, whose `/api/local/*` calls then 404 on the core; harmless, but the SPA fallback's allow-list could refuse the file by name |
+| 775 | minor | — | The worker page's `#token=…` address stays in the browser's history and address-bar autocomplete after the page strips it with `history.replaceState` (WP-292): anyone with the browser profile can reopen the page until the token is rotated; a one-shot exchange (the fragment traded for a session-scoped token on first load) or rotation at every start would close it (review of PR #30) |
 | 762 | minor | — | `APP_IMAGE_REPOSITORY` defaults to `ghcr.io/gtfo-ai` in code; a fork's core resolves nothing until it is set — `image.yml` could bake the publishing owner into the image as the default (S-22.8) |
 | 763 | minor | — | A worker reports as held the `@sha256:` digests of its `PLATFORM_*_IMAGE` references plus its launcher's image ids; whether the core's `sha-<7>` registry digest is one the worker's launcher finds locally is backlog 704 / V-WM8 — measure with `worker-compose-check.mjs` (S-22.8) |
 | 809 | minor | — | S-23.2 humanized the board, task, run, Agents and Inbox words only; raw enum values still print in `settings.tsx` (user role/status), `integrations.tsx`/`onboarding-connect.tsx`/`project-settings.tsx` (integration type, health), `project-panels.tsx`/`business-interview.tsx` (proposal type/kind/status), `run-command-log.tsx`, `breakdown-panel.tsx`, `workers.tsx`, `identities.tsx`, `ask-thread.tsx` and the board/task template badge — each needs its record in `ui/humanize.ts` as its screen is redone |

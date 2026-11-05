@@ -13,11 +13,12 @@
  * (BD-011: a worker has no price list, so no estimate is invented) and `tokens` likewise.
  *
  * **The worker serialises with these schemas; the page reads their types and checks each answer
- * with a structural guard of its own** (`apps/web/src/worker/read-state.ts`), held to these shapes
- * key for key by a test. Measured at WP-292: the page's initial graph is React (~60 kB gz), the
+ * with a structural guard of its own** (`apps/web/src/worker/read-state.ts`), held to these shapes —
+ * keys at every depth, enum members, bounds, nullability, both ways — by a test (TD-031's 2026-11-05
+ * amendment, decision 4). Measured at WP-292: the page's initial graph is React (~60 kB gz), the
  * shared stylesheet (~10 kB) and the page — and with zod's chunk (24.5 kB gz) it was 127 kB, over
- * the page's own 120 kB budget (TD-031's worker-UI amendment §3). The deviation from "zod at every
- * boundary" is stated there and in BACKLOG for the architect.
+ * the page's own 120 kB budget (TD-031's worker-UI amendment §3). The exception to "zod at every
+ * boundary" is ruled for this entry only (TD-031's 2026-11-05 amendment, decision 4).
  */
 import * as z from 'zod';
 import { agentRoleSchema, idSchema, isoDateTimeSchema } from './common.js';
