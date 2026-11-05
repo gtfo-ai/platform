@@ -42,6 +42,8 @@ const buildDist = (options: {
   readonly preload?: string;
   readonly missingAsset?: boolean;
   readonly noAssets?: boolean;
+  /** The worker's page (WP-292): the same tags by default, or its own, or none at all. */
+  readonly worker?: { readonly preload?: string } | 'absent';
 }): Dist => {
   const path = mkdtempSync(join(tmpdir(), 'bundle-budget-'));
   temporaryDirectories.push(path);
@@ -67,10 +69,29 @@ const buildDist = (options: {
         '<link rel="stylesheet" crossorigin href="/assets/styles.css">',
       ].join('\n    ');
 
-  writeFileSync(
-    join(path, 'index.html'),
-    `<!doctype html>\n<html>\n  <head>\n    ${tags}\n  </head>\n  <body><div id="root"></div></body>\n</html>\n`,
-  );
+  const page = (head: string) =>
+    `<!doctype html>\n<html>\n  <head>\n    ${head}\n  </head>\n  <body><div id="root"></div></body>\n</html>\n`;
+  writeFileSync(join(path, 'index.html'), page(tags));
+  if (options.worker !== 'absent') {
+    const workerPreload = options.worker?.preload;
+    if (workerPreload !== undefined) {
+      writeFileSync(join(path, 'assets', 'worker-preload.js'), workerPreload);
+    }
+    writeFileSync(
+      join(path, 'worker.html'),
+      page(
+        options.worker === undefined
+          ? tags
+          : [
+              '<script type="module" crossorigin src="/assets/entry.js"></script>',
+              ...(workerPreload === undefined
+                ? []
+                : ['<link rel="modulepreload" href="/assets/worker-preload.js">']),
+              '<link rel="stylesheet" crossorigin href="/assets/styles.css">',
+            ].join('\n    '),
+      ),
+    );
+  }
 
   const initialBytes =
     gzipSync(Buffer.from(options.entry)).byteLength +
@@ -174,6 +195,57 @@ describe('the bundle budget guard', () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('does not exist');
+  });
+
+  it('measures the worker’s page on its own budget, and fails naming it (WP-292)', () => {
+    const dist = buildDist({ entry: 'a'.repeat(5000), styles: 'b'.repeat(2000) });
+    const passed = run(['--dist', dist.path, '--budget-bytes', '300000']);
+    expect(passed.status).toBe(0);
+    expect(passed.stdout).toContain(
+      `worker.html: ${dist.initialBytes} B gzipped over 2 initial assets, budget 120000 B`,
+    );
+    // Under the SPA's budget, over the worker page's: the worker page's line fails.
+    const over = run([
+      '--dist',
+      dist.path,
+      '--budget-bytes',
+      '300000',
+      '--worker-budget-bytes',
+      '10',
+    ]);
+    expect(over.status).toBe(1);
+    expect(over.stdout).toContain('FAIL: bundle:check');
+    expect(over.stderr).toContain(
+      `worker.html: the initial bundle is ${dist.initialBytes} B gzipped`,
+    );
+  });
+
+  it('fails when the worker’s page is missing from the build, rather than measuring nothing', () => {
+    const dist = buildDist({ entry: 'a', styles: 'b', worker: 'absent' });
+    const result = run(['--dist', dist.path, '--budget-bytes', '300000']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('worker.html does not exist');
+  });
+
+  it('refuses the lazy visualisations in the worker page’s initial graph, and admits them in the SPA’s', () => {
+    const leaked = buildDist({
+      entry: 'a',
+      styles: 'b',
+      worker: { preload: 'const c = "office-desk office-desk--free";' },
+    });
+    const refused = run(['--dist', leaked.path, '--budget-bytes', '300000']);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain(
+      'viz/fleet (the office) is in the initial graph (/assets/worker-preload.js)',
+    );
+    // The SPA preloads what it likes of it: the marker in index.html's graph is no refusal.
+    const spa = buildDist({
+      entry: 'a',
+      styles: 'b',
+      preload: 'const c = "office-desk";',
+      worker: {},
+    });
+    expect(run(['--dist', spa.path, '--budget-bytes', '300000']).status).toBe(0);
   });
 
   it('rejects a budget that is not a positive integer', () => {

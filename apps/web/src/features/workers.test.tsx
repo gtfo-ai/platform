@@ -48,6 +48,7 @@ const worker = (overrides: Partial<WorkerSummary> = {}): WorkerSummary => ({
   state: 'active',
   revoked_at: null,
   paused_until: null,
+  manually_paused_at: null,
   paused_reason: null,
   concurrency: 1,
   running: [],
@@ -301,12 +302,20 @@ describe('the Workers screen', () => {
       name: 'bob-desktop',
       last_seen_at: '2026-11-04T12:09:30.000Z',
       paused_until: '2026-11-04T13:00:00.000Z',
+      manually_paused_at: null,
       paused_reason: 'usage_limited',
     });
-    const { fetchImpl } = fetchFor('missing', [online, paused]);
+    // WP-292: the owner's hold from the worker's local page.
+    const held = worker({
+      id: '00000000-0000-4000-8000-0000000002a2',
+      name: 'carol-laptop',
+      last_seen_at: '2026-11-04T12:09:30.000Z',
+      manually_paused_at: '2026-11-04T12:05:00.000Z',
+    });
+    const { fetchImpl } = fetchFor('missing', [online, paused, held]);
     const { container } = render(createApp({ fetchImpl, realtime: false, now: () => NOW }).element);
     await waitFor(() => {
-      expect(container.querySelectorAll('[data-worker]')).toHaveLength(2);
+      expect(container.querySelectorAll('[data-worker]')).toHaveLength(3);
     });
     const rowOf = (id: string) =>
       container.querySelector(`[data-worker="${id}"]`)?.closest('li')?.textContent ?? '';
@@ -316,6 +325,8 @@ describe('the Workers screen', () => {
     expect(rowOf(paused.id)).toContain('Paused until');
     expect(rowOf(paused.id)).toContain('Hit a usage limit');
     expect(rowOf(paused.id)).not.toContain('usage_limited');
+    expect(rowOf(held.id)).toContain('Paused by its owner');
+    expect(rowOf(held.id)).not.toContain('Online');
   });
 
   it('offers no revoke for a revoked worker', async () => {

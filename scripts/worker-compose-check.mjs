@@ -34,6 +34,13 @@
  *  6. **canaries**: the Claude token is in no container's configured environment but the
  *     `remote-worker`'s, and in no log line of the bundle; no worker container carries a
  *     `DATABASE_URL` or an `APP_SECRET_KEY`;
+ *  6b. **the local page** (WP-292 (6), written in S-22.13 and **not yet run** — Docker was paused on
+ *     the machine that wrote it): the page's address is in the worker's log once, its token in the
+ *     fragment; the publish is `127.0.0.1` only (`docker compose port`); the page and
+ *     `/api/local/state` answer on `127.0.0.1` with the token, `401` without it and `421` for a
+ *     foreign `Host`; the same port on the host's **other** address answers nothing; and a container
+ *     on the worker's run egress network — where a run container lives (TD-025) — reaches neither
+ *     the worker's name nor its address on the UI port;
  *  7. nothing is left: both projects are taken down with their volumes.
  *
  * ## What it does not do yet, stated (BACKLOG 761)
@@ -54,7 +61,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -90,6 +97,8 @@ const ADMIN_EMAIL = 'operator@example.test';
 const ADMIN_PASSWORD = 'wp284-not-a-real-password';
 const CLAUDE_TOKEN = 'FAKE-wp284-claude-oauth-token-not-a-credential-0001';
 const ORIGIN = 'http://worker-compose-check.example.test';
+/** The host port the bundle publishes the worker's page on (`APP_WORKER_UI_PORT`), off the default. */
+const UI_PORT = 37357;
 const TIMEOUT_MS = 15 * 60 * 1000;
 const DOCKER_QUERY_MS = 60_000;
 
@@ -240,6 +249,7 @@ const main = async () => {
         `PLATFORM_EGRESS_IMAGE=platform-egress:${TAG}`,
         `APP_WORKER_CONTROL_VOLUME=${BUNDLE}-ctl`,
         `APP_WORKER_CACHE_VOLUME=${BUNDLE}-repo-cache`,
+        `APP_WORKER_UI_PORT=${UI_PORT}`,
         '',
       ].join('\n'),
     );
@@ -429,6 +439,122 @@ const main = async () => {
     const logs = (await bundle(['logs'])).stdout;
     check('the Claude token is in no log line of the bundle', !logs.includes(CLAUDE_TOKEN));
     check('the worker credential is in no log line of the bundle', !logs.includes(credential));
+
+    // 6b. The local page (WP-292 (6)).
+    stages.set('the worker’s local page');
+    const uiToken = /#token=([A-Za-z0-9_-]{43})/.exec(logs)?.[1] ?? null;
+    check('the worker logs its page’s address with the token in the fragment', uiToken !== null);
+    const published = (await bundle(['port', 'remote-worker', '7357'])).stdout.trim();
+    check(
+      'the page is published on 127.0.0.1 only',
+      published === `127.0.0.1:${UI_PORT}`,
+      published,
+    );
+    const page = `http://127.0.0.1:${UI_PORT}`;
+    const asked = async (route, headers = {}) => {
+      const { response, body } = await boundedFetch(stages, `${page}${route}`, { headers });
+      return { status: response.status, body, headers: response.headers };
+    };
+    const html = await asked('/');
+    check(
+      'the page is served on 127.0.0.1',
+      html.status === 200 && html.body.includes('id="root"'),
+    );
+    const state = await asked('/api/local/state', { authorization: `Bearer ${uiToken}` });
+    check(
+      'the page’s state answers with the token, naming the worker',
+      state.status === 200 && state.body.includes('"worker_name":"check-laptop"'),
+      `${state.status} ${state.body.slice(0, 120)}`,
+    );
+    check(
+      'the page’s state carries no secret',
+      !state.body.includes(CLAUDE_TOKEN) &&
+        !state.body.includes(credential) &&
+        !state.body.includes(String(uiToken)),
+    );
+    check(
+      'the page answers no CORS header and sets no cookie',
+      [...state.headers.keys()].every(
+        (name) => !name.startsWith('access-control-') && name !== 'set-cookie',
+      ),
+    );
+    check('without the token the state is 401', (await asked('/api/local/state')).status === 401);
+    check(
+      'a foreign Host is 421',
+      (
+        await run('curl', [
+          '-s',
+          '-o',
+          '/dev/null',
+          '-w',
+          '%{http_code}',
+          '-H',
+          'host: rebinding.example.test',
+          `${page}/api/local/state`,
+        ])
+      ).stdout.trim() === '421',
+    );
+    const other = Object.values(networkInterfaces())
+      .flat()
+      .find((address) => address?.family === 'IPv4' && !address.internal)?.address;
+    if (other === undefined) {
+      check('the host has another address to try the page on', false, 'none found');
+    } else {
+      let reached = 'no answer';
+      try {
+        const response = await fetch(`http://${other}:${UI_PORT}/`, {
+          signal: AbortSignal.timeout(5_000),
+        });
+        reached = `answered ${response.status}`;
+      } catch {
+        // refused or timed out: the page is not on this address
+      }
+      check(
+        `the page is not reachable on the host’s other address (${other})`,
+        reached === 'no answer',
+        reached,
+      );
+    }
+    const workerAddress = (
+      await run(
+        'docker',
+        [
+          'inspect',
+          '--format',
+          '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}',
+          workerContainer,
+        ],
+        { timeout: DOCKER_QUERY_MS },
+      )
+    ).stdout
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    const probe = (
+      await run(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '--network',
+          'agentic-worker-run-egress',
+          '--entrypoint',
+          'node',
+          `platform:${TAG}`,
+          '-e',
+          `const targets = ${JSON.stringify(['remote-worker', ...workerAddress])};
+         Promise.all(targets.map((host) => fetch('http://' + host + ':7357/', { signal: AbortSignal.timeout(5000) })
+           .then((r) => host + ' reached ' + r.status, () => host + ' unreachable')))
+           .then((lines) => console.log(lines.join('\\n')));`,
+        ],
+        { timeout: DOCKER_QUERY_MS },
+      )
+    ).stdout;
+    check(
+      'a container on the run egress network reaches no UI port of the worker',
+      !probe.includes(' reached '),
+      probe.trim().replaceAll('\n', '; '),
+    );
   } catch (error) {
     failures.push(`${stages.current}: ${String(error)}`);
     await describeInstance(core, 'core').catch(() => undefined);

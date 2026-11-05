@@ -1,0 +1,49 @@
+/*
+ * The worker's local page's room (WP-292) — the idea of the Agents page's office (`viz/fleet/
+ * office.css`), not its code: that chunk is lazy and stays out of this entry. One dark room with a
+ * door plate naming the worker and its desks in a row. Every colour is a token of `styles.css`
+ * (`--brand-*`, `--signin-*`), none a value of its own (`ui/contrast.test.ts` holds those).
+ */
+.worker-room {
+  overflow: hidden;
+  border: 3px solid var(--signin-lit);
+  border-radius: 6px;
+  background-color: var(--signin-night);
+}
+
+.worker-wall {
+  background-color: var(--signin-ink);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 11px,
+    var(--brand-hover) 11px 12px
+  );
+  border-bottom: 4px solid var(--signin-lit);
+}
+
+.worker-floor {
+  background-color: var(--signin-night);
+  background-image: repeating-conic-gradient(var(--signin-ink) 0 25%, transparent 0 50%);
+  background-size: 32px 32px;
+}
+
+.worker-plate {
+  max-width: 100%;
+  padding: 1px 8px;
+  border: 2px solid var(--brand-deep-night);
+  border-radius: 2px;
+  background-color: var(--signin-beacon);
+  box-shadow: 0 2px 0 var(--brand-deep-night);
+  color: var(--signin-night);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.worker-badge {
+  padding: 0 6px;
+  border: 1px solid var(--signin-edge);
+  border-radius: 9999px;
+  color: var(--signin-text);
+}

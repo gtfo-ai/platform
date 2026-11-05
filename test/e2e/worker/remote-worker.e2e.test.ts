@@ -20,9 +20,14 @@
  *  8. A **deploy-key** project with `allow` runs to Ready with no private key in any package or
  *     create request, each mirror fetch signing once through the helper socket against the core's
  *     oracle — the signature verified, the count on the offer (backlog 693).
+ *  9. **Cancel from the worker's local page** (WP-292 (5)): a user below `run.cancel` is `403` and
+ *     the run continues; at `member` the run ends `cancelled` through the `run_commands` row the
+ *     worker's heartbeat delivers, the task is `paused`, and one `human_actions` row `run.cancel`
+ *     carries `via: worker_ui` and the worker's user.
  */
 import { createPublicKey, verify } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { FAKE_DEPLOY_KEY } from '@platform/application';
@@ -41,6 +46,7 @@ import {
 import type { CapturedCoreRequest, WorkerUnderTest } from '../support/remote-worker.js';
 import {
   CORE_DIGESTS_ENV,
+  E2E_UI_PUBLISHED_PORT,
   startCoreProxy,
   startWorkerUnderTest,
   WORKER_CLAUDE_TOKEN,
@@ -706,5 +712,117 @@ describe('the first usable worker (WP-283)', () => {
       [repoRuns.map((pkg) => pkg.runId)],
     );
     expect(counted.every((row) => row.ssh_signatures === 1)).toBe(true);
+  }, 300_000);
+
+  it('cancels from the worker’s local page: 403 below run.cancel, else cancelled through the heartbeat, the task paused, audited via worker_ui (WP-292)', async () => {
+    const topology = await core('worker-local-cancel');
+    const { pipeline } = topology;
+    const laptop = await worker(topology, {
+      name: 'local-page-laptop',
+      ui: true,
+      scenario: scenarioFor(pipeline, { refinement: { awaitSteers: 2 } }),
+    });
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await pipeline.waitFor('the refinement run to be running', async () => {
+      const rows = await pipeline.query("select 1 from runs where status = 'running'");
+      return rows.length === 1;
+    });
+    const [run] = await pipeline.query<{ id: string; task_id: string }>(
+      "select id, task_id from runs where status = 'running'",
+    );
+    const runId = run?.id as string;
+    const token = readFileSync(path.join(laptop.stateDir, 'ui-token'), 'utf8').trim();
+    const port = Number(new URL(laptop.runtime.uiAddress() ?? '').port);
+    const host = `127.0.0.1:${E2E_UI_PUBLISHED_PORT}`;
+    /** The page's own request: its Host, its Origin, its token, a key per press. */
+    const cancel = (key: string) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const request = http.request(
+          {
+            host: '127.0.0.1',
+            port,
+            method: 'POST',
+            path: `/api/local/runs/${runId}/cancel`,
+            headers: {
+              host,
+              origin: `http://${host}`,
+              authorization: `Bearer ${token}`,
+              'content-type': 'application/json',
+              'idempotency-key': key,
+            },
+          },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on('data', (chunk: Buffer) => chunks.push(chunk));
+            response.on('end', () =>
+              resolve({
+                status: response.statusCode ?? 0,
+                body: Buffer.concat(chunks).toString('utf8'),
+              }),
+            );
+          },
+        );
+        request.on('error', reject);
+        request.end(JSON.stringify({ reason: 'leaving for the day' }));
+      });
+
+    // Below run.cancel — a viewer, in the organisation and in the project: 403, and nothing moves.
+    await pipeline.query("update users set role = 'viewer' where id = $1", [laptop.userId]);
+    await pipeline.query(
+      "update project_members set role = 'viewer' where project_id = $1 and user_id = $2",
+      [pipeline.projectId, laptop.userId],
+    );
+    const refused = await cancel('local-cancel-viewer');
+    expect(refused.status, refused.body).toBe(403);
+    expect(
+      await pipeline.query("select 1 from run_commands where run_id = $1 and kind = 'cancel'", [
+        runId,
+      ]),
+    ).toEqual([]);
+    expect(
+      await pipeline.query(
+        "select 1 from human_actions where action = 'run.cancel' and params ->> 'run_id' = $1",
+        [runId],
+      ),
+    ).toEqual([]);
+    const [still] = await pipeline.query<{ status: string }>(
+      'select status::text as status from runs where id = $1',
+      [runId],
+    );
+    expect(still?.status).toBe('running');
+
+    // At member: accepted, delivered on the heartbeat, the run cancelled and the task paused.
+    await pipeline.query("update users set role = 'member' where id = $1", [laptop.userId]);
+    await pipeline.query(
+      "update project_members set role = 'member' where project_id = $1 and user_id = $2",
+      [pipeline.projectId, laptop.userId],
+    );
+    const accepted = await cancel('local-cancel-member');
+    expect(accepted.status, accepted.body).toBe(200);
+    expect(JSON.parse(accepted.body)).toMatchObject({ run_id: runId, accepted: true });
+    await pipeline.waitFor('the run to end cancelled', async () => {
+      const [row] = await pipeline.query<{ status: string }>(
+        'select status::text as status from runs where id = $1',
+        [runId],
+      );
+      return row?.status === 'cancelled';
+    });
+    const [command] = await pipeline.query<{ applied: boolean }>(
+      "select applied_at is not null as applied from run_commands where run_id = $1 and kind = 'cancel'",
+      [runId],
+    );
+    expect(command?.applied).toBe(true);
+    const [task] = await pipeline.query<{ state: string }>(
+      'select state::text as state from tasks where id = $1',
+      [run?.task_id],
+    );
+    expect(task?.state).toBe('paused');
+    const audit = await pipeline.query<{ user_id: string; params: JsonObject }>(
+      "select user_id, params from human_actions where action = 'run.cancel' and params ->> 'run_id' = $1",
+      [runId],
+    );
+    expect(audit).toHaveLength(1);
+    expect(audit[0]?.user_id).toBe(laptop.userId);
+    expect(audit[0]?.params).toMatchObject({ via: 'worker_ui', worker_id: laptop.workerId });
   }, 300_000);
 });

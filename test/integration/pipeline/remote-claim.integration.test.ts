@@ -415,6 +415,15 @@ describe('the worker claim’s eligibility is its own statement (TD-031 §8)', (
       },
     ],
     [
+      'a worker its owner paused from the local page (WP-292)',
+      async (w) => {
+        await sql('update workers set manually_paused_at = now() where id = $1', [w.w1]);
+      },
+      async (w) => {
+        await sql('update workers set manually_paused_at = null where id = $1', [w.w1]);
+      },
+    ],
+    [
       'a user below member (viewer)',
       async (w) => {
         await sql("update project_members set role = 'viewer' where user_id = $1", [w.alice]);

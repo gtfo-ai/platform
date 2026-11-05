@@ -79,10 +79,28 @@ docker compose -f compose.worker.yml exec remote-worker curl -fsS localhost:8080
 
 The machine is then listed on the core's **Workers** screen with its last-seen time.
 
+**Open the local page**
+
+The worker serves a page on this machine only — what it is doing (its state and slots, each run's
+project, ticket, stage, the agent's latest steps and the worker's log) with **Pause/Resume**,
+**Drain** and **Cancel run**. Its address carries a token and is printed at every start:
+
+```bash
+docker compose -f compose.worker.yml logs remote-worker | grep token=
+# … "this worker's page: http://127.0.0.1:7357/#token=… (open it on this machine; …)"
+```
+
+Open that address in a browser on this machine (it answers on `127.0.0.1` only). Run the same
+command to find it again. To change the token, delete `ui-token` in the `worker-state` volume and
+restart the worker; `APP_WORKER_UI_PORT` in `.env` picks another port, and `APP_WORKER_UI=disabled`
+turns the page off. **Cancel run** pauses the run's task, exactly as the task page's cancel does;
+stopping the container is not a cancel (the core treats it as a lost worker and plans the stage
+again).
+
 **Stop it**
 
 ```bash
-# Drain: claim nothing more, finish what is running.
+# Drain: claim nothing more, finish what is running (the local page's Drain does the same).
 docker compose -f compose.worker.yml exec remote-worker curl -fsS -X POST localhost:8080/internal/drain
 # Stop: any run in flight is handed back to the core; the credential stays in the worker-state volume.
 docker compose -f compose.worker.yml down
@@ -112,6 +130,9 @@ Set up an Agentic platform worker on this machine. The core is at <URL>.
    docker compose -f compose.worker.yml exec remote-worker curl -fsS localhost:8080/readyz
    and tell me whether core_handshake is ok. If it is not, show me the last 50 lines of
    `docker compose -f compose.worker.yml logs remote-worker`.
+7. Tell me the address of the worker's local page — the line from
+   docker compose -f compose.worker.yml logs remote-worker | grep token=
+   — and that I open it in my own browser. Do not open it, and do not print the token anywhere else.
 ```
 
 ## Layout

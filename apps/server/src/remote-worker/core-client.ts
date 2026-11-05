@@ -44,6 +44,8 @@ import {
   workerHandshakeResponseSchema,
   workerHeartbeatResponseSchema,
   workerLateCostResponseSchema,
+  workerManualPauseResponseSchema,
+  workerRunCancelResponseSchema,
   workerSpawnResponseSchema,
   workerSshSignResponseSchema,
   workerToolCallResponseSchema,
@@ -137,6 +139,14 @@ export interface RunScopedClient {
   release(body: unknown): Promise<void>;
   finish(body: unknown): Promise<z.output<typeof workerFinishResponseSchema>>;
   lateCost(body: unknown): Promise<z.output<typeof workerLateCostResponseSchema>>;
+  /**
+   * A person's cancel from the local page (WP-292): the core's `run.cancel` as the worker's user,
+   * under `idempotencyKey`. A `403` is a `refused` error carrying the core's words.
+   */
+  cancel(
+    body: unknown,
+    idempotencyKey: string,
+  ): Promise<z.output<typeof workerRunCancelResponseSchema>>;
 }
 
 export interface CoreClient {
@@ -148,6 +158,11 @@ export interface CoreClient {
   ): Promise<z.output<typeof workerHandshakeResponseSchema>>;
   /** `null` is `204`: nothing was claimable within the hold. */
   claim(credential: string, body: unknown, signal?: AbortSignal): Promise<RunPackage | null>;
+  /** The owner's hold on claiming (WP-292, protocol 2): `{ paused }`, a state assertion. */
+  manualPause(
+    credential: string,
+    body: unknown,
+  ): Promise<z.output<typeof workerManualPauseResponseSchema>>;
   forRun(runId: string, runToken: string): RunScopedClient;
 }
 
@@ -164,6 +179,7 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
     readonly body: unknown;
     readonly runScoped: boolean;
     readonly signal?: AbortSignal;
+    readonly idempotencyKey?: string;
   }): Promise<{ readonly status: number; readonly body: unknown }> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -177,6 +193,9 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
           'content-type': 'application/json',
           [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL_VERSION),
           ...(input.bearer === null ? {} : { authorization: `Bearer ${input.bearer}` }),
+          ...(input.idempotencyKey === undefined
+            ? {}
+            : { 'idempotency-key': input.idempotencyKey }),
         },
         body: JSON.stringify(input.body ?? {}),
         signal: controller.signal,
@@ -305,6 +324,11 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
       }
       throw refusal(WORKER_PATHS.claims, answer, false);
     },
+    manualPause: (credential, body) =>
+      expect(
+        { verb: WORKER_PATHS.manualPause, bearer: credential, body, runScoped: false },
+        workerManualPauseResponseSchema,
+      ),
     forRun: (runId, runToken) => {
       const verb = (path: string, name?: string): string =>
         path.replace(':id', runId).replace(':name', name ?? '');
@@ -343,6 +367,17 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
         },
         finish: (body) => runCall(WORKER_PATHS.finish, body, workerFinishResponseSchema),
         lateCost: (body) => runCall(WORKER_PATHS.lateCost, body, workerLateCostResponseSchema),
+        cancel: (body, idempotencyKey) =>
+          expect(
+            {
+              verb: verb(WORKER_PATHS.runCancel),
+              bearer: runToken,
+              body,
+              runScoped: true,
+              idempotencyKey,
+            },
+            workerRunCancelResponseSchema,
+          ),
       };
     },
   };

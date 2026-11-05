@@ -1,0 +1,15 @@
+-- migration-class: additive
+-- 0099 — the owner's hold on a remote worker's claiming (WP-292, TD-031's 2026-11-04 worker-UI
+-- amendment, decision 4).
+--
+-- `manually_paused_at` is set by the worker's local page (`POST /api/worker/v1/manual-pause`, a
+-- state assertion) and cleared by its *Resume* — or by the worker's next start after a drain, which
+-- remembers in its `worker-state` volume that the pause was a drain's. While it is set the claim's
+-- eligibility and the online-assignee rule (TD-031 §8) leave the worker out; runs it already holds
+-- continue.
+--
+-- **A column of its own, not a new `paused_reason`.** `paused_reason`'s CHECK admits only
+-- `usage_limited` (0096), so a second value would need the constraint dropped — a `contract`
+-- migration (TD-032 §1) — and it would conflate a person's hold, which has no end, with a usage
+-- limit's timer (`paused_until`). The two pauses are independent: either keeps the worker out.
+alter table workers add column manually_paused_at timestamptz;

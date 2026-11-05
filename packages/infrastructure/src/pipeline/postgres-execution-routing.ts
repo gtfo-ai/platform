@@ -63,6 +63,7 @@ export const createPostgresExecutionRoutingRepository = (): ExecutionRoutingRepo
           where w.user_id = $2
             and w.state = 'active'
             and (w.paused_until is null or w.paused_until <= $3::timestamptz)
+            and w.manually_paused_at is null
             and w.last_seen_at > now() - make_interval(secs => $4::float8)
             and m.role::text = any($5::text[])
        ) as online`,

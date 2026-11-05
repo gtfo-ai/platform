@@ -182,6 +182,8 @@ describe('a comment stripper is recognised by its shape', () => {
     'packages/infrastructure/src/db/migration-scanner.ts probe':
       "the same SQL tokenizer testing `sql.startsWith('/*', index)` for a nested block comment (WP-271)",
     'apps/web/src/app/shell.tsx chars': "a route comparison, `item.to === '/'`",
+    'apps/server/src/remote-worker/local-ui.ts chars':
+      "the worker's local page's root path, `pathname === '/'` (WP-292)",
     'packages/domain/src/readiness/ci-rules.ts chars':
       'the opening `/` of a regular-expression literal in a GitLab `rules:if` expression (WP-143) — a tokenizer of another language, which has no comments',
     'packages/domain/src/policies/command-policy.ts chars':

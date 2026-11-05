@@ -85,6 +85,9 @@ export const workerState = (
   if (worker.state === 'revoked') {
     return { status: 'cancelled', word: 'Revoked' };
   }
+  if (worker.manually_paused_at !== null) {
+    return { status: 'paused', word: 'Paused by its owner' };
+  }
   if (worker.paused_until !== null && Date.parse(worker.paused_until) > nowMs) {
     return { status: 'paused', word: `Paused until ${formatDateTime(worker.paused_until)}` };
   }

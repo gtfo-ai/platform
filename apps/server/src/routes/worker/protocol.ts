@@ -10,6 +10,8 @@
  *   POST /api/worker/v1/runs/:id/late-cost      run token
  *   GET  /api/worker/v1/release                 worker credential (WP-284)
  *   GET  /api/worker/v1/compose.yml             none — a person's first-install download (WP-284 (6))
+ *   POST /api/worker/v1/manual-pause            worker credential, protocol ≥ 2 (WP-292, `owner-verbs.ts`)
+ *   POST /api/worker/v1/runs/:id/cancel         run token, protocol ≥ 2 (WP-292, `owner-verbs.ts`)
  *
  * and, registered from here with the same authentication (WP-282, `run-calls.ts`): `transcript`,
  * `tools/:name`, `approvals`, `session` and `ssh-sign`. The heartbeat delivers the run's decided
@@ -67,6 +69,7 @@ import {
   WORKER_HEARTBEAT_HOLD_MS,
   WORKER_PATHS,
   WORKER_PROTOCOL_HEADER,
+  WORKER_PROTOCOL_LOCAL_UI,
   WORKER_PROTOCOL_VERSION,
   type WorkerUpgradeRequiredBody,
   workerClaimRequestSchema,
@@ -93,6 +96,7 @@ import { HttpError } from '../../errors.js';
 import type { WorkerStore } from '../../queries/worker-queries.js';
 import type { WorkerRelease } from '../../workers/release.js';
 import { authenticateWorkerCredential } from '../../workers/secrets.js';
+import { registerWorkerOwnerVerbs, type WorkerRunCancelPort } from './owner-verbs.js';
 import { registerWorkerRunCallRoutes } from './run-calls.js';
 
 /** How often a held claim asks again with no notification: an offer's `workers_from` passing. */
@@ -180,6 +184,13 @@ export interface WorkerProtocolRoutesOptions {
    * heartbeat delivers no approval.
    */
   readonly runCalls?: RemoteRunCalls | null;
+  /**
+   * The task page's cancel, for the worker's local page (WP-292). `null`/absent: `runs/:id/cancel`
+   * answers an authenticated caller `503 commands_unavailable` by name.
+   */
+  readonly runCancel?: WorkerRunCancelPort | null;
+  /** `APP_BASE_URL`, for the owner verbs' `426` (`compose_url`). @default `http://localhost` */
+  readonly baseUrl?: string;
   readonly release: () => WorkerRelease | null;
   /** Why `release()` is `null`, naming the image (WP-284) — the `503 digests_unresolved`'s words. */
   readonly unresolved?: () => string | null;
@@ -455,6 +466,15 @@ export const registerWorkerProtocolRoutes = async (
             paused && row.pausedReason !== null
               ? workerPauseReasonSchema.parse(row.pausedReason)
               : null,
+          // TD-031's worker-UI amendment §5: a version-1 worker's strict schema refuses the key.
+          ...(protocolOf(request) >= WORKER_PROTOCOL_LOCAL_UI
+            ? {
+                manually_paused_at:
+                  row.manuallyPausedAt === null
+                    ? null
+                    : (row.manuallyPausedAt.toISOString() as IsoDateTime),
+              }
+            : {}),
         },
         server_time: isoNow(now),
       };
@@ -481,14 +501,17 @@ export const registerWorkerProtocolRoutes = async (
       },
     },
     async (request, reply) => {
-      const { workerId } = await worker(request, request.body.image_digests);
+      const { workerId, row } = await worker(request, request.body.image_digests);
       const release = options.release();
       if (release === null) {
         throw unresolved();
       }
-      if (request.body.paused) {
+      // The owner's hold (WP-292) answers at once, as a worker's own `paused` does: the claim's
+      // eligibility would refuse it anyway, and holding the request would only keep a slot busy.
+      if (request.body.paused || row.manuallyPausedAt !== null) {
         return reply.code(204).send(null);
       }
+      const v1 = protocolOf(request) < WORKER_PROTOCOL_LOCAL_UI;
       const presence = presenceOf(reply);
       const deadline = Date.now() + claimHoldMs;
       for (;;) {
@@ -502,7 +525,9 @@ export const registerWorkerProtocolRoutes = async (
           now: isoNow(now),
         });
         if (answer.kind === 'claimed') {
-          return reply.code(200).send(answer.package);
+          // A version-1 worker's strict package schema refuses the display block (amendment §5).
+          const { display: _display, ...v1Package } = answer.package;
+          return reply.code(200).send(v1 ? v1Package : answer.package);
         }
         const remaining = deadline - Date.now();
         if (answer.kind === 'not_packaged' || remaining <= 0 || presence.gone()) {
@@ -822,6 +847,25 @@ export const registerWorkerProtocolRoutes = async (
         .send(release.composeFile);
     },
   );
+
+  registerWorkerOwnerVerbs(app, {
+    store: options.store,
+    runCancel: options.runCancel ?? null,
+    path,
+    upgradeBody: (presented) =>
+      upgradeRequiredBody(
+        { release: options.release, baseUrl: options.baseUrl ?? 'http://localhost' },
+        presented,
+      ),
+    authenticateWorker,
+    authenticateRun,
+    workerOf: async (request) => {
+      await workerContact(request);
+      return workers.get(request) as { readonly workerId: Id };
+    },
+    runHolder,
+    now,
+  });
 
   registerWorkerRunCallRoutes(app, {
     runCalls: options.runCalls ?? null,

@@ -348,6 +348,30 @@ stops it claiming. A project whose git integration gives runs a static token or 
 a worker only with `remote_run_credential: allow` on that integration — the project's execution
 setting says so when it does not. The worker section of this guide is completed by WP-290.
 
+**The worker's local page** (WP-292). The worker serves a page on the developer's machine: its
+connection, pause state and slots, each run's project, ticket, title, stage, agent, elapsed time,
+tokens and cost (both only once the run reported them), the agent's latest steps and the worker's own
+log — with **Pause/Resume**, **Drain** and **Cancel run**, each decided by the core (protocol 2's
+`manual-pause` and `runs/:id/cancel`; one `human_actions` row each, `via: worker_ui`, the worker's
+user). Its address is printed at every start, the token in the fragment:
+
+```bash
+docker compose -f compose.worker.yml logs remote-worker | grep token=
+```
+
+- `compose.worker.yml` publishes it **on `127.0.0.1` only** — `127.0.0.1:${APP_WORKER_UI_PORT:-7357}:7357`
+  — never on the machine's other addresses; `APP_WORKER_UI_PORT` picks the host port (the page checks
+  that its `Host` names it: `localhost`, `127.0.0.1` or `[::1]` with that port, else `421`).
+- `APP_WORKER_UI=disabled` starts no listener (the loopback publish then answers nothing).
+- The token is 32 random bytes in `worker-state/ui-token` (`0600`); **rotate it** by deleting the file
+  and restarting the worker. Every call carries it as a bearer header; there is no cookie and no CORS
+  header, and a change must come from the page's own origin (`403` otherwise).
+- *Drain* holds the core's pause as a drain's: the worker finishes what runs, takes nothing new, **stays
+  up idle**, and its next start clears that pause — only a drain's; a *Pause* survives a restart.
+  Stopping the container is not a cancel: the core treats it as a lost worker.
+- What the page shows is what the worker uploads (redacted the same way); it is not a confidentiality
+  boundary against the machine's owner, who controls the Docker daemon (TD-031's worker-UI amendment).
+
 ### If `/readyz` is 503
 
 That is a real answer, not a glitch, and the body says which check failed:

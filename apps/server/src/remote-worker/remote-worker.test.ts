@@ -18,7 +18,16 @@
  *  - self-termination: a session whose renewals fail for `TTL − ½·renew` stops and pushes nothing;
  *  - a steer and a cancel delivered on the heartbeat are applied and acked before `finish`.
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PlatformToolContext, RunProgressRecorder } from '@platform/application';
@@ -30,8 +39,13 @@ import {
   WORKER_REMOTE_LEASE_RENEW_MS,
   WORKER_REMOTE_LEASE_TTL_MS,
   workerApprovalRequestSchema,
+  workerClaimRequestSchema,
   workerFinishRequestSchema,
+  workerHandshakeRequestSchema,
   workerHeartbeatRequestSchema,
+  workerLocalStateSchema,
+  workerManualPauseRequestSchema,
+  workerRunCancelRequestSchema,
   workerSpawnRequestSchema,
   workerTranscriptRequestSchema,
 } from '@platform/contracts';
@@ -56,6 +70,8 @@ import {
   startRunSession,
   workerSecretRedactor,
 } from './run-session.js';
+import { DRAIN_MARKER_FILE, startRemoteWorker } from './runtime.js';
+import { UI_TOKEN_FILE } from './ui-token.js';
 import { packageWorkspaceProvisioner } from './workspaces.js';
 
 /** Obviously fake, and in no shape a pattern rule knows: only the exact-value redactor can catch it. */
@@ -67,6 +83,9 @@ const TASK_ID = '00000000-0000-4000-8000-000000002832';
 const PROJECT_ID = '00000000-0000-4000-8000-000000002833';
 const DIGEST = `sha256:${'a'.repeat(64)}`;
 const APPROVAL_ID = '00000000-0000-4000-8000-0000000028d1';
+const WORKER_ID = '00000000-0000-4000-8000-0000000029f1';
+/** A stored worker credential, so the runtime skips the device flow. */
+const WORKER_CREDENTIAL = `wkr_${'a'.repeat(26)}_${'C'.repeat(43)}`;
 /** What this worker's launcher answers — distinct from the package's own values (backlog 695). */
 const LAUNCHER_WORKDIR = '/work/launcher-checkout';
 const LAUNCHER_CLI = '/opt/launcher-image/bin/claude';
@@ -240,9 +259,15 @@ interface Captured {
 const fakeCore = (options: {
   /** The heartbeat's answer by beat number (from 1); absent is a renewal with nothing pending. */
   readonly beat?: (n: number) => { readonly status: number; readonly body: unknown } | null;
+  /** The worker verbs too (WP-292): handshake, one claimed package, then `204`s. */
+  readonly claims?: readonly RunPackage[];
 }) => {
   const captured: Captured[] = [];
   const events: string[] = [];
+  /** Commands the next beat delivers — what a recorded `run_commands` row is (WP-292's cancel). */
+  const pendingCommands: { id: string; kind: 'cancel'; payload: Record<string, never> }[] = [];
+  const claims = [...(options.claims ?? [])];
+  let manuallyPausedAt: string | null = null;
   /** Approvals opened and not yet delivered: the next beat answers each `deny`, once. */
   const opened: string[] = [];
   let beats = 0;
@@ -263,6 +288,13 @@ const fakeCore = (options: {
         beats += 1;
         const scripted = options.beat?.(beats) ?? null;
         if (scripted !== null) return answer(scripted.status, scripted.body);
+        if (pendingCommands.length > 0) {
+          return answer(200, {
+            lease_expires_at: '2026-11-05T10:10:00.000Z',
+            commands: pendingCommands.splice(0),
+            approvals: [],
+          });
+        }
         if (opened.length > 0) {
           return answer(200, {
             lease_expires_at: '2026-11-05T10:10:00.000Z',
@@ -318,6 +350,59 @@ const fakeCore = (options: {
         workerApprovalRequestSchema.parse(parsed);
         opened.push(APPROVAL_ID);
         return answer(200, { approval_id: APPROVAL_ID });
+      case 'handshake':
+        workerHandshakeRequestSchema.parse(parsed);
+        return answer(200, {
+          protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [1, WORKER_PROTOCOL_VERSION] },
+          digests: {
+            platform: DIGEST,
+            platform_launcher: DIGEST,
+            platform_runtime: DIGEST,
+            platform_egress: DIGEST,
+          },
+          compose_bundle_digest: 'e'.repeat(64),
+          worker: {
+            id: WORKER_ID,
+            name: 'alice-laptop',
+            concurrency: 1,
+            paused_until: null,
+            paused_reason: null,
+            manually_paused_at: manuallyPausedAt,
+          },
+          server_time: '2026-11-05T10:00:00.000Z',
+        });
+      case 'claims': {
+        workerClaimRequestSchema.parse(parsed);
+        const next = claims.shift();
+        if (next !== undefined) return answer(200, next);
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 20);
+          init.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+        return answer(204, null);
+      }
+      case 'manual-pause': {
+        const { paused } = workerManualPauseRequestSchema.parse(parsed);
+        const performed = (manuallyPausedAt !== null) !== paused;
+        if (performed) manuallyPausedAt = paused ? '2026-11-05T10:05:00.000Z' : null;
+        return answer(200, { manually_paused_at: manuallyPausedAt, performed });
+      }
+      case 'runs/:id/cancel': {
+        workerRunCancelRequestSchema.parse(parsed);
+        const commandId = '00000000-0000-4000-8000-0000000029c1';
+        pendingCommands.push({ id: commandId, kind: 'cancel', payload: {} });
+        return answer(202, {
+          run_id: RUN_ID,
+          task_id: TASK_ID,
+          status: 'running',
+          task_state: 'paused',
+          performed: true,
+          command_id: commandId,
+        });
+      }
       default:
         return answer(404, { error: { code: 'not_found', message: verb } });
     }
@@ -696,9 +781,11 @@ describe('every body a worker sends passes its exact-value guard (WP-283 (2))', 
       }),
     ],
     ['lateCost', planted({ session_id: CLAUDE_TOKEN })],
+    // WP-292: the local page's cancel carries a person's reason.
+    ['cancel', planted({ reason: `stop it ${CLAUDE_TOKEN}` })],
   ];
 
-  it('names all nine run verbs', () => {
+  it('names all ten run verbs', () => {
     const client = createCoreClient({ baseUrl: 'https://core.example.test' }).forRun(
       RUN_ID,
       RUN_TOKEN,
@@ -728,6 +815,7 @@ describe('every body a worker sends passes its exact-value guard (WP-283 (2))', 
         release: record,
         finish: record,
         lateCost: record,
+        cancel: (payload) => record(payload),
       };
       const guarded = guardedRunClient(
         inner,
@@ -740,7 +828,9 @@ describe('every body a worker sends passes its exact-value guard (WP-283 (2))', 
       const send = (): Promise<unknown> =>
         verb === 'tool'
           ? guarded.tool('kb_search', body)
-          : (guarded[verb] as (payload: unknown) => Promise<unknown>)(body);
+          : verb === 'cancel'
+            ? guarded.cancel(body, 'local-ui-cancel-key-1')
+            : (guarded[verb] as (payload: unknown) => Promise<unknown>)(body);
       await retrying(send, { giveUp: () => false, sleep: async () => {} });
       expect(sent).toHaveLength(2);
       for (const text of sent) {
@@ -851,5 +941,486 @@ describe('an approval the runner asks for, through the core (TD-031 §9)', () =>
     expect(opened[0]?.body).not.toContain(CLAUDE_TOKEN);
     expect(opened[0]?.body).toContain('[REDACTED:integration:claude_code_oauth_token]');
     expect(JSON.stringify(cli()?.callbacks)).toContain('denied on the core');
+  });
+});
+
+describe('a run’s tail for the local page (WP-292 (2))', () => {
+  it('keeps the entries as uploaded — no Claude token, no run credential — and the reported tokens and cost', async () => {
+    const core = fakeCore({});
+    const { session } = run({ core });
+    expect(await session.done).toBe('settled');
+    const tail = JSON.stringify(session.state.tail);
+    expect(session.state.tail.length).toBeGreaterThan(0);
+    // The scripted model echoed both; the tail is what left for the core, redacted.
+    expect(tail).not.toContain(CLAUDE_TOKEN);
+    expect(tail).not.toContain(RUN_CREDENTIAL);
+    expect(tail).toContain('[REDACTED:integration:');
+    expect(session.state.tokens).toBe(15);
+    expect(session.state.costUsd).toBe(0.25);
+  });
+});
+
+describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
+  /** A web bundle with the page and one asset, as the image's `apps/web/dist` carries them. */
+  const webRoot = (): string => {
+    const root = mkdtempSync(path.join(scratch, 'web-'));
+    writeFileSync(path.join(root, 'worker.html'), '<!doctype html><div id="root"></div>');
+    writeFileSync(path.join(root, 'index.html'), '<!doctype html><p>the SPA</p>');
+    writeFileSync(path.join(root, '.env'), 'NOT_SERVED=1');
+    mkdirSync(path.join(root, 'assets'));
+    writeFileSync(path.join(root, 'assets', 'worker-abc.js'), 'console.log(1)');
+    return root;
+  };
+  const PUBLISHED = 7357;
+
+  /** One raw request, with the `Host` and headers a browser (or an attacker) would send. */
+  const request = (
+    port: number,
+    input: {
+      readonly method?: string;
+      readonly path: string;
+      readonly host?: string;
+      readonly headers?: Record<string, string>;
+      readonly body?: unknown;
+    },
+  ): Promise<{ status: number; headers: http.IncomingHttpHeaders; text: string }> =>
+    new Promise((resolve, reject) => {
+      const payload = input.body === undefined ? undefined : JSON.stringify(input.body);
+      const outgoing = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          method: input.method ?? 'GET',
+          path: input.path,
+          headers: {
+            host: input.host ?? `127.0.0.1:${PUBLISHED}`,
+            ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
+            ...input.headers,
+          },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          response.on('end', () =>
+            resolve({
+              status: response.statusCode ?? 0,
+              headers: response.headers,
+              text: Buffer.concat(chunks).toString('utf8'),
+            }),
+          );
+        },
+      );
+      outgoing.on('error', reject);
+      outgoing.end(payload);
+    });
+
+  const until = async (what: string, check: () => boolean): Promise<void> => {
+    for (let tries = 0; tries < 1_000; tries += 1) {
+      if (check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`timed out waiting for ${what}`);
+  };
+
+  const start = async (options: {
+    readonly stateDir: string;
+    readonly core: ReturnType<typeof fakeCore>;
+    readonly ui?: boolean;
+  }) => {
+    const lines: string[] = [];
+    const launcher = fakeLauncher(options.core.events);
+    const worker = await startRemoteWorker({
+      config: {
+        coreUrl: 'https://core.example.test',
+        claudeToken: CLAUDE_TOKEN,
+        launcherUrl: 'http://launcher:7780',
+        launcherToken: 'FAKE-launcher-token-000000000000000000',
+        controlRoot: scratch,
+        stateDir: options.stateDir,
+        concurrency: 1,
+        imageDigests: [DIGEST],
+        host: '127.0.0.1',
+        port: 0,
+        logLevel: 'info',
+        commit: null,
+        ui: {
+          enabled: options.ui ?? true,
+          host: '127.0.0.1',
+          listenPort: 0,
+          publishedPort: PUBLISHED,
+        },
+        platformImageDigest: DIGEST,
+      },
+      coreFetch: options.core.fetch,
+      launcher: {
+        ...(launcher.client as object),
+        health: async () => ({ images: { run: DIGEST, egress: DIGEST } }),
+      } as unknown as launcherAdapters.LauncherControlClient,
+      spawnFor: () => {
+        const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(script(1), {
+          interruptedResult: {
+            type: 'result',
+            subtype: 'error_during_execution',
+            is_error: true,
+            num_turns: 1,
+            duration_ms: 1,
+            duration_api_ms: 1,
+            stop_reason: null,
+            total_cost_usd: 0.01,
+            usage: {
+              input_tokens: 1,
+              output_tokens: 1,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+              cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+            },
+            modelUsage: {},
+            permission_denials: [],
+            errors: [],
+            uuid: '00000005-0000-4000-8000-000000000000',
+            session_id: 'fake-session-wp283',
+          },
+        });
+        return cli.spawn;
+      },
+      logDestination: { write: (line: string) => lines.push(line) },
+      webRoot: webRoot(),
+      sleep: async () => {},
+    });
+    await worker.listen();
+    return { worker, lines };
+  };
+
+  const stateDirWithCredential = (): string => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    writeFileSync(path.join(stateDir, 'credential'), `${WORKER_CREDENTIAL}\n`, { mode: 0o600 });
+    return stateDir;
+  };
+
+  const portOf = (address: string | null): number => Number(new URL(address ?? '').port);
+
+  it('serves the page behind its token, Host and Origin checks; shows the run with no secret in it; and cancels through the core', async () => {
+    const stateDir = stateDirWithCredential();
+    const pkg = runPackageSchema.parse({
+      ...runPackage(),
+      display: { projectKey: 'ACME', ticketKey: 'ACME-7', title: 'Fix the login page' },
+    });
+    const core = fakeCore({ claims: [pkg] });
+    const { worker, lines } = await start({ stateDir, core });
+    try {
+      const port = portOf(worker.uiAddress());
+      // (1) The token: created once 0600, logged once as a fragment, on stdout only.
+      const tokenFile = path.join(stateDir, UI_TOKEN_FILE);
+      expect(statSync(tokenFile).mode & 0o777).toBe(0o600);
+      const token = readFileSync(tokenFile, 'utf8').trim();
+      const announced = lines.filter((line) => line.includes(token));
+      expect(announced).toHaveLength(1);
+      expect(announced[0]).toContain(`http://127.0.0.1:${PUBLISHED}/#token=${token}`);
+      const auth = { authorization: `Bearer ${token}` };
+
+      await until('the run is running', () =>
+        [...worker.sessions.values()].some(
+          (session) => session.state.phase === 'running' && session.state.tail.length >= 2,
+        ),
+      );
+      // Planted in a log line too: the log tail is redacted by the same values.
+      worker.logger.info(
+        { planted: `${CLAUDE_TOKEN} ${RUN_CREDENTIAL} ${token} ${WORKER_CREDENTIAL}` },
+        'a line that carries every secret',
+      );
+
+      const answers: { status: number; headers: http.IncomingHttpHeaders }[] = [];
+      const ask = async (input: Parameters<typeof request>[1]) => {
+        const answer = await request(port, input);
+        answers.push(answer);
+        return answer;
+      };
+      // 401: no bearer, a wrong one.
+      expect((await ask({ path: '/api/local/state' })).status).toBe(401);
+      expect(
+        (
+          await ask({
+            path: '/api/local/state',
+            headers: { authorization: `Bearer ${'x'.repeat(43)}` },
+          })
+        ).status,
+      ).toBe(401);
+      // 421: a foreign Host, and the right name on the wrong port — even with the token.
+      for (const host of [
+        'evil.example.test',
+        `evil.example.test:${PUBLISHED}`,
+        '127.0.0.1:9',
+        '',
+      ]) {
+        expect((await ask({ path: '/api/local/state', host, headers: auth })).status, host).toBe(
+          421,
+        );
+      }
+      // The three names it does answer to.
+      for (const host of [
+        `localhost:${PUBLISHED}`,
+        `127.0.0.1:${PUBLISHED}`,
+        `[::1]:${PUBLISHED}`,
+      ]) {
+        expect((await ask({ path: '/api/local/state', host, headers: auth })).status, host).toBe(
+          200,
+        );
+      }
+      // 403: a mutation with no Origin, or a foreign one — with the token.
+      for (const origin of [
+        undefined,
+        'https://evil.example.test',
+        `http://localhost:${PUBLISHED}`,
+      ]) {
+        const refused = await ask({
+          method: 'POST',
+          path: '/api/local/pause',
+          headers: { ...auth, ...(origin === undefined ? {} : { origin }) },
+          body: { paused: true },
+        });
+        expect(refused.status, String(origin)).toBe(403);
+      }
+      expect(core.captured.some((call) => call.verb === 'manual-pause')).toBe(false);
+
+      // (2) The view, and no secret on it.
+      const state = await ask({ path: '/api/local/state', headers: auth });
+      const parsed = workerLocalStateSchema.parse(JSON.parse(state.text));
+      expect(parsed).toMatchObject({
+        worker_id: WORKER_ID,
+        worker_name: 'alice-laptop',
+        connection: 'connected',
+        protocol: WORKER_PROTOCOL_VERSION,
+        manually_paused_at: null,
+        draining: false,
+        update_pending: false,
+        concurrency: 1,
+      });
+      expect(parsed.runs).toHaveLength(1);
+      expect(parsed.runs[0]).toMatchObject({
+        run_id: RUN_ID,
+        project_key: 'ACME',
+        ticket_key: 'ACME-7',
+        title: 'Fix the login page',
+        role: pkg.run.role,
+        phase: 'running',
+        tokens: null,
+        cost_usd: null,
+      });
+      expect(parsed.runs[0]?.transcript.length).toBeGreaterThan(0);
+      expect(parsed.logs.some((line) => line.includes('a line that carries every secret'))).toBe(
+        true,
+      );
+      for (const secret of [CLAUDE_TOKEN, RUN_CREDENTIAL, RUN_TOKEN, token, WORKER_CREDENTIAL]) {
+        expect(state.text).not.toContain(secret);
+      }
+      // The static half: the page and its asset; nothing else of the bundle.
+      expect((await ask({ path: '/' })).text).toContain('<div id="root">');
+      expect((await ask({ path: '/assets/worker-abc.js' })).status).toBe(200);
+      for (const refused of [
+        '/index.html',
+        '/.env',
+        '/assets/../index.html',
+        '/assets/%2e%2e/.env',
+      ]) {
+        expect((await ask({ path: refused })).status, refused).toBe(404);
+      }
+
+      // (5) Cancel: asked of the core with a key, delivered on this worker's heartbeat.
+      const origin = { origin: `http://127.0.0.1:${PUBLISHED}` };
+      expect(
+        (
+          await ask({
+            method: 'POST',
+            path: `/api/local/runs/${RUN_ID}/cancel`,
+            headers: { ...auth, ...origin },
+            body: {},
+          })
+        ).status,
+      ).toBe(400);
+      const cancelled = await ask({
+        method: 'POST',
+        path: `/api/local/runs/${RUN_ID}/cancel`,
+        headers: { ...auth, ...origin, 'idempotency-key': 'page-cancel-1' },
+        body: { reason: 'leaving' },
+      });
+      expect(cancelled.status).toBe(200);
+      expect(JSON.parse(cancelled.text)).toEqual({
+        run_id: RUN_ID,
+        accepted: true,
+        task_state: 'paused',
+      });
+      const asked = core.captured.find((call) => call.verb === 'runs/:id/cancel');
+      expect(asked?.headers['idempotency-key']).toBe('page-cancel-1');
+      expect(asked?.headers.authorization).toBe(`Bearer ${RUN_TOKEN}`);
+      await until('the run ends', () => worker.sessions.size === 0);
+      const finish = core.captured.find((call) => call.verb === 'runs/:id/finish');
+      const finished = workerFinishRequestSchema.parse(JSON.parse(finish?.body ?? '{}'));
+      expect(finished.stop_reason).toBe('cancelled');
+      expect(finished.outcome).toMatchObject({ kind: 'ran', status: 'cancelled' });
+      const acks = core.captured
+        .filter((call) => call.verb === 'runs/:id/heartbeat')
+        .flatMap((call) => workerHeartbeatRequestSchema.parse(JSON.parse(call.body)).acks);
+      expect(acks).toContainEqual({
+        command_id: '00000000-0000-4000-8000-0000000029c1',
+        outcome: 'applied',
+      });
+
+      // (4) Pause and resume: the core's manual-pause, and the page reads it back.
+      const paused = await ask({
+        method: 'POST',
+        path: '/api/local/pause',
+        headers: { ...auth, ...origin },
+        body: { paused: true },
+      });
+      expect(paused.status).toBe(200);
+      expect(
+        workerLocalStateSchema.parse(JSON.parse(paused.text)).manually_paused_at,
+      ).not.toBeNull();
+      const resumed = await ask({
+        method: 'POST',
+        path: '/api/local/pause',
+        headers: { ...auth, ...origin },
+        body: { paused: false },
+      });
+      expect(workerLocalStateSchema.parse(JSON.parse(resumed.text)).manually_paused_at).toBeNull();
+      expect(
+        core.captured
+          .filter((call) => call.verb === 'manual-pause')
+          .map((call) => JSON.parse(call.body)),
+      ).toEqual([{ paused: true }, { paused: false }]);
+
+      // Every answer: no CORS header, no cookie, and the security headers.
+      for (const answer of answers) {
+        expect(
+          Object.keys(answer.headers).filter((name) => name.startsWith('access-control-')),
+        ).toEqual([]);
+        expect(answer.headers['set-cookie']).toBeUndefined();
+        expect(answer.headers['cache-control']).toBe('no-store');
+        expect(answer.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+        expect(answer.headers['x-content-type-options']).toBe('nosniff');
+      }
+      // Nothing secret reached the core either (the reason travelled redacted).
+      expect(JSON.stringify(core.captured.map((call) => call.body))).not.toContain(CLAUDE_TOKEN);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('drains: claims nothing more and remembers it; the next start clears a drain’s pause — only a drain’s', async () => {
+    const stateDir = stateDirWithCredential();
+    const core = fakeCore({});
+    const first = await start({ stateDir, core });
+    const token = readFileSync(path.join(stateDir, UI_TOKEN_FILE), 'utf8').trim();
+    const port = portOf(first.worker.uiAddress());
+    await until('a claim', () => core.captured.some((call) => call.verb === 'claims'));
+    const drained = await request(port, {
+      method: 'POST',
+      path: '/api/local/drain',
+      headers: { authorization: `Bearer ${token}`, origin: `http://127.0.0.1:${PUBLISHED}` },
+      body: {},
+    });
+    expect(drained.status).toBe(202);
+    expect(workerLocalStateSchema.parse(JSON.parse(drained.text))).toMatchObject({
+      draining: true,
+      manually_paused_at: '2026-11-05T10:05:00.000Z',
+    });
+    expect(existsSync(path.join(stateDir, DRAIN_MARKER_FILE))).toBe(true);
+    const claimsAtDrain = core.captured.filter((call) => call.verb === 'claims').length;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(core.captured.filter((call) => call.verb === 'claims').length).toBe(claimsAtDrain);
+    await first.worker.stop();
+
+    // The next start: the drain's pause is cleared, the marker removed, and it claims again.
+    const pausesBefore = core.captured.filter((call) => call.verb === 'manual-pause').length;
+    const capturedBefore = core.captured.length;
+    const second = await start({ stateDir, core });
+    try {
+      // The marker's removal is the last thing the clearing writes, after the core answered.
+      await until(
+        'the drain’s marker removed',
+        () => !existsSync(path.join(stateDir, DRAIN_MARKER_FILE)),
+      );
+      expect(
+        core.captured
+          .slice(capturedBefore)
+          .filter((call) => call.verb === 'manual-pause')
+          .map((call) => JSON.parse(call.body)),
+      ).toEqual([{ paused: false }]);
+      const claimsBefore = core.captured.filter((call) => call.verb === 'claims').length;
+      await until(
+        'a claim after the restart',
+        () => core.captured.filter((call) => call.verb === 'claims').length > claimsBefore,
+      );
+      // A token survives a restart (rotated only by deleting the file).
+      expect(readFileSync(path.join(stateDir, UI_TOKEN_FILE), 'utf8').trim()).toBe(token);
+      // An owner's pause is not a drain's: it survives the next start, untouched.
+      const port2 = portOf(second.worker.uiAddress());
+      await request(port2, {
+        method: 'POST',
+        path: '/api/local/pause',
+        headers: { authorization: `Bearer ${token}`, origin: `http://127.0.0.1:${PUBLISHED}` },
+        body: { paused: true },
+      });
+      expect(existsSync(path.join(stateDir, DRAIN_MARKER_FILE))).toBe(false);
+    } finally {
+      await second.worker.stop();
+    }
+    const resumesBefore = core.captured.filter(
+      (call) => call.verb === 'manual-pause' && JSON.parse(call.body).paused === false,
+    ).length;
+    const third = await start({ stateDir, core });
+    try {
+      await until('the handshake', () => third.worker.state().connection === 'connected');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(
+        core.captured.filter(
+          (call) => call.verb === 'manual-pause' && JSON.parse(call.body).paused === false,
+        ),
+      ).toHaveLength(resumesBefore);
+      expect(third.worker.localState().manually_paused_at).not.toBeNull();
+      const claims = core.captured.filter((call) => call.verb === 'claims').length;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(core.captured.filter((call) => call.verb === 'claims').length).toBe(claims);
+    } finally {
+      await third.worker.stop();
+    }
+    expect(pausesBefore).toBeGreaterThan(0);
+  });
+
+  it('opens no port and makes no token with APP_WORKER_UI=disabled', async () => {
+    const stateDir = stateDirWithCredential();
+    const core = fakeCore({});
+    const { worker } = await start({ stateDir, core, ui: false });
+    try {
+      expect(worker.uiAddress()).toBeNull();
+      expect(existsSync(path.join(stateDir, UI_TOKEN_FILE))).toBe(false);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('reads APP_WORKER_UI and APP_WORKER_UI_PORT, refusing a value it does not know', () => {
+    const base = {
+      APP_CORE_URL: 'https://core.example.test',
+      CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
+      APP_LAUNCHER_URL: 'http://launcher:7780',
+      APP_LAUNCHER_TOKEN: 'FAKE-launcher-token-0000000000000000',
+      APP_WORKSPACE_CONTROL_ROOT: '/run/agentic/ctl',
+    };
+    expect(loadRemoteWorkerConfig(base).ui).toEqual({
+      enabled: true,
+      host: '0.0.0.0',
+      listenPort: 7357,
+      publishedPort: 7357,
+    });
+    expect(
+      loadRemoteWorkerConfig({ ...base, APP_WORKER_UI: 'disabled', APP_WORKER_UI_PORT: '8123' }).ui,
+    ).toMatchObject({ enabled: false, publishedPort: 8123, listenPort: 7357 });
+    expect(() => loadRemoteWorkerConfig({ ...base, APP_WORKER_UI: 'on' })).toThrow(
+      /APP_WORKER_UI must be enabled or disabled/,
+    );
+    expect(() => loadRemoteWorkerConfig({ ...base, APP_WORKER_UI_PORT: '0' })).toThrow(
+      /APP_WORKER_UI_PORT must be a TCP port/,
+    );
   });
 });

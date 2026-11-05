@@ -16,6 +16,8 @@
  * - **Revocation writes exactly what TD-031 §7 says**: the worker's *live* runs' lease expires, an
  *   ended run's does not, another worker's does not, and a second revoke performs nothing.
  * - **A non-administrator cannot see another person's worker exist** (`not_found`).
+ * - **The owner's pause is a state assertion** (WP-292): one `human_actions` row per change, the
+ *   worker's user, `via: worker_ui`; a repeat keeps the first instant and writes nothing.
  *
  * ## What it does not assert
  *
@@ -383,6 +385,51 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
         now: at(0),
       });
       expect(await world.store.countConnected()).toEqual({ connected: 0, paused: 0 });
+    });
+
+    it('holds and releases the owner’s pause as a state assertion: one audit row per change (WP-292)', async () => {
+      const world = await harness.create();
+      const owner = await world.addUser('manual-pause@example.test');
+      const worker = await registerWorker(world, owner);
+      const pauseAudit = async () =>
+        (await world.audit()).filter(
+          (row) => row.action === 'worker.pause' || row.action === 'worker.resume',
+        );
+      // Resuming a worker nobody paused writes nothing.
+      expect(
+        await world.store.setManualPause({ workerId: worker, paused: false, now: at(0) }),
+      ).toEqual({ status: 'set', manuallyPausedAt: null, performed: false });
+      expect(await pauseAudit()).toEqual([]);
+      const paused = await world.store.setManualPause({
+        workerId: worker,
+        paused: true,
+        now: at(5_000),
+      });
+      expect(paused).toEqual({ status: 'set', manuallyPausedAt: at(5_000), performed: true });
+      // A repeat keeps the first instant and writes no second row.
+      expect(
+        await world.store.setManualPause({ workerId: worker, paused: true, now: at(9_000) }),
+      ).toEqual({ status: 'set', manuallyPausedAt: at(5_000), performed: false });
+      const listed = (await world.store.listWorkers(owner)).find((row) => row.id === worker);
+      expect(listed?.manuallyPausedAt).toEqual(at(5_000));
+      // A connected, manually paused worker is counted paused.
+      await world.store.recordContact({ workerId: worker, protocolVersion: 2, imageDigests: null });
+      expect(await world.store.countConnected()).toEqual({ connected: 1, paused: 1 });
+      expect(
+        await world.store.setManualPause({ workerId: worker, paused: false, now: at(12_000) }),
+      ).toEqual({ status: 'set', manuallyPausedAt: null, performed: true });
+      expect(await world.store.countConnected()).toEqual({ connected: 1, paused: 0 });
+      expect(await pauseAudit()).toEqual([
+        { action: 'worker.pause', userId: owner, params: { worker_id: worker, via: 'worker_ui' } },
+        { action: 'worker.resume', userId: owner, params: { worker_id: worker, via: 'worker_ui' } },
+      ]);
+      expect(
+        await world.store.setManualPause({
+          workerId: '00000000-0000-4000-8000-00000029ffff',
+          paused: true,
+          now: at(0),
+        }),
+      ).toEqual({ status: 'not_found' });
     });
 
     it('answers a repeated decision with the recorded one, writes nothing, and refuses a different one', async () => {

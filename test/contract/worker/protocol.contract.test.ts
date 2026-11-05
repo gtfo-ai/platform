@@ -24,6 +24,7 @@
  */
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import {
+  cancelRunCommand,
   createRemoteRunCalls,
   createRemoteRuns,
   exactSecretRedactor,
@@ -37,10 +38,13 @@ import {
   workerLeaseOwner,
 } from '@platform/application';
 import {
+  ACCEPTED_WORKER_PROTOCOLS,
   type DomainEvent,
   domainEventSchemasByType,
   type Id,
+  type JsonObject,
   runPackageSchema,
+  type UserRole,
   WORKER_API_PREFIX,
   WORKER_PATHS,
   WORKER_PROTOCOL_VERSION,
@@ -50,7 +54,10 @@ import {
   workerHeartbeatResponseSchema,
   workerLateCostResponseSchema,
   workerLeaseLostBodySchema,
+  workerManualPauseResponseSchema,
   workerReleaseResponseSchema,
+  workerRunCancelResponseSchema,
+  workerSettingsSchema,
   workerSpawnResponseSchema,
   workerSshSignResponseSchema,
   workerToolCallResponseSchema,
@@ -63,6 +70,7 @@ import { PLATFORM_SKILLS } from '@platform/prompts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../../apps/server/src/app.js';
 import type { Auth } from '../../../apps/server/src/auth/better-auth.js';
+import { runCommandIdFor } from '../../../apps/server/src/commands.js';
 import { loadServerConfig } from '../../../apps/server/src/config.js';
 import { createLogger } from '../../../apps/server/src/logging.js';
 import { createMetrics } from '../../../apps/server/src/metrics.js';
@@ -71,6 +79,8 @@ import {
   createMemoryWorkerStore,
   type MemoryWorkerStore,
 } from '../../../apps/server/src/queries/worker-store-memory.js';
+import { memoryAttemptRecords } from '../../../apps/server/src/routes/idempotency-memory.js';
+import type { WorkerRunCancelPort } from '../../../apps/server/src/routes/worker/owner-verbs.js';
 import { SseHub } from '../../../apps/server/src/sse/hub.js';
 import { readWorkerComposeTemplate } from '../../../apps/server/src/workers/compose.js';
 import { workerReleaseOf } from '../../../apps/server/src/workers/release.js';
@@ -176,6 +186,16 @@ interface World {
   readonly alice: { workerId: Id; credential: string };
   readonly bob: { workerId: Id; credential: string };
   readonly runId: Id;
+  /** The worker's cancel's records (WP-292): the audit rows and the roles its guard reads. */
+  readonly cancel: {
+    readonly actions: {
+      userId: string;
+      action: string;
+      params: JsonObject;
+      taskId?: string | null;
+    }[];
+    readonly projectRoles: Map<string, UserRole | null>;
+  };
 }
 
 let opened: App | undefined;
@@ -187,6 +207,9 @@ afterEach(async () => {
 
 /** A project secret only the core's rebuilt redactor knows (rule 93: a hyphen after FAKE). */
 const PROJECT_SECRET = 'FAKE-project-secret-0282-cccccccccccc';
+
+/** The display block the world's packager adds (WP-292). */
+const DISPLAY = { projectKey: 'ACME', ticketKey: 'ACME-1', title: 'Fix the login page' } as const;
 
 const world = async (
   options: {
@@ -216,6 +239,7 @@ const world = async (
           userId: row.userId as Id,
           usable: row.state === 'active' && store.userMayAct(row.userId),
           pausedUntil: row.pausedUntil === null ? null : (row.pausedUntil.toISOString() as never),
+          manuallyPaused: row.manuallyPausedAt !== null,
           memberOf: (projectId) => projectId === PROJECT,
         };
       },
@@ -263,6 +287,8 @@ const world = async (
       modelEgressHosts: ['api.anthropic.com'],
       runRegistryHosts: [],
       remoteRunCredential: async () => 'deny',
+      // WP-292: the local page's names for the run — sent to a protocol-2 worker only.
+      display: async () => DISPLAY,
       credentialTtlSeconds: 86_400,
       clock: { now: () => harness.clock.epochMs, setTimer: () => () => {} },
     }),
@@ -342,6 +368,46 @@ const world = async (
   });
   // The production composition (`buildApp`): the protocol check is registered before the device
   // flow and the protocol's verbs, exactly as a process that serves the API registers them.
+  // WP-292: the worker's cancel, over the harness's own command — the task page's `cancelRun`.
+  const actions: World['cancel']['actions'] = [];
+  const attempts = new Map<string, { bodyDigest: string | null; params: JsonObject }>();
+  const projectRoles = new Map<string, UserRole | null>([
+    [ALICE, 'member'],
+    [BOB, 'member'],
+  ]);
+  const runCancel: WorkerRunCancelPort = {
+    cancelRun: async (input) =>
+      cancelRunCommand(harness.humanCommands, {
+        runId: input.runId as Id,
+        userId: input.userId as Id,
+        ...(input.idempotencyKey === null
+          ? {}
+          : { commandId: runCommandIdFor(input.userId, 'run.cancel', input.idempotencyKey) }),
+      }),
+    runProjectId: async () => PROJECT,
+    runPosition: async (runId) => {
+      const run = await harness.store.runs.load({} as never, runId as Id);
+      if (run === null) return null;
+      const task = await harness.store.tasks.load({} as never, run.taskId);
+      return task === null
+        ? null
+        : { status: run.status, taskId: run.taskId, taskState: task.task.state };
+    },
+    projectRole: async (_projectId, userId) => projectRoles.get(userId) ?? null,
+    userRole: async () => 'viewer',
+    ...memoryAttemptRecords(attempts),
+    recordAction: async (input) => {
+      actions.push({ ...input });
+      const key = input.params.idempotency_key;
+      const digest = input.params.body_digest;
+      if (typeof key === 'string') {
+        attempts.set(`${input.userId}|${input.action}|${key}`, {
+          bodyDigest: typeof digest === 'string' ? digest : null,
+          params: input.params,
+        });
+      }
+    },
+  };
   const app = await buildApp({
     config: loadServerConfig({
       DATABASE_URL: 'postgres://app:app@db:5432/app',
@@ -393,6 +459,7 @@ const world = async (
     workerProtocol: {
       remoteRuns: remote,
       runCalls,
+      runCancel,
       broadcast: harness.memory.broadcast,
       release: () => release,
       unresolved: () =>
@@ -413,6 +480,7 @@ const world = async (
     alice: await registerWorker(store, ALICE),
     bob: await registerWorker(store, BOB),
     runId: harness.store.offerRows()[0]?.runId as Id,
+    cancel: { actions, projectRoles },
   };
 };
 
@@ -479,6 +547,9 @@ const bodies = (epoch: number) => ({
     reason: 'ask list',
   },
   [WORKER_PATHS.session]: { epoch, session_id: 'sess-1', from_line: 0, lines: ['{"a":1}'] },
+  // WP-292: the owner verbs (protocol 2).
+  [WORKER_PATHS.manualPause]: { paused: true },
+  [WORKER_PATHS.runCancel]: { reason: 'leaving for the day' },
   [WORKER_PATHS.sshSign]: {
     epoch,
     key_blob: deployKeyBlob().toString('base64'),
@@ -521,6 +592,9 @@ function userauth(user = 'git'): Buffer {
 
 /** The verbs WP-281 serves: two authenticated by the worker credential, five by a run token. */
 const WORKER_VERBS = [WORKER_PATHS.handshake, WORKER_PATHS.claims] as const;
+/** WP-292's owner verbs: the same authentication as their neighbours, at protocol 2 only. */
+const OWNER_WORKER_VERBS = [WORKER_PATHS.manualPause] as const;
+const OWNER_RUN_VERBS = [WORKER_PATHS.runCancel] as const;
 const RUN_VERBS = [
   WORKER_PATHS.heartbeat,
   WORKER_PATHS.runRelease,
@@ -564,6 +638,8 @@ describe('the worker protocol (WP-281): 426 before anything else, on every verb 
         WORKER_PATHS.deviceToken,
         ...WORKER_VERBS,
         ...RUN_VERBS,
+        ...OWNER_WORKER_VERBS,
+        ...OWNER_RUN_VERBS,
       ]) {
         const response = await w.app.inject({
           method: 'POST',
@@ -577,7 +653,7 @@ describe('the worker protocol (WP-281): 426 before anything else, on every verb 
         const body = workerUpgradeRequiredBodySchema.parse(response.json());
         expect(body).toMatchObject({
           error: { code: 'upgrade_required' },
-          accepted: [WORKER_PROTOCOL_VERSION],
+          accepted: [...ACCEPTED_WORKER_PROTOCOLS],
           compose_url: 'https://core.example.test/api/worker/v1/compose.yml',
           digests: DIGESTS,
         });
@@ -617,7 +693,7 @@ describe('the worker protocol (WP-281): 401 on every authenticated verb (census)
     );
     expect(bobs.runId).not.toBe(pkg.runId);
     const wrongWorker = `wkr_${'a'.repeat(26)}_${'b'.repeat(43)}`;
-    for (const verb of WORKER_VERBS) {
+    for (const verb of [...WORKER_VERBS, ...OWNER_WORKER_VERBS]) {
       for (const headers of [PROTOCOL, bearer(wrongWorker), bearer(pkg.runToken)]) {
         const response = await w.app.inject({
           method: 'POST',
@@ -631,7 +707,7 @@ describe('the worker protocol (WP-281): 401 on every authenticated verb (census)
         expect(response.headers['cache-control']).toBe('no-store');
       }
     }
-    for (const verb of RUN_VERBS) {
+    for (const verb of [...RUN_VERBS, ...OWNER_RUN_VERBS]) {
       for (const [runId, headers] of [
         [w.runId, PROTOCOL],
         [w.runId, bearer(w.alice.credential)],
@@ -737,7 +813,7 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     expect(first.statusCode).toBe(200);
     const body = workerHandshakeResponseSchema.parse(first.json());
     expect(body).toMatchObject({
-      protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [WORKER_PROTOCOL_VERSION] },
+      protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [...ACCEPTED_WORKER_PROTOCOLS] },
       digests: DIGESTS,
       worker: { id: w.alice.workerId, paused_until: null },
     });
@@ -776,7 +852,7 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     expect(response.statusCode).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');
     expect(workerReleaseResponseSchema.parse(response.json())).toEqual({
-      protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [WORKER_PROTOCOL_VERSION] },
+      protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [...ACCEPTED_WORKER_PROTOCOLS] },
       digests: DIGESTS,
     });
     const anonymous = await w.app.inject({
@@ -1250,5 +1326,212 @@ describe('the worker protocol (WP-282): the run-scoped calls besides the claim',
         `${verb} 503 worker_protocol_unavailable`,
       );
     }
+  });
+});
+
+describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the local page’s cancel', () => {
+  const V1 = { 'x-worker-protocol': '1' };
+  const asV1 = (secret: string) => ({ authorization: `Bearer ${secret}`, ...V1 });
+  /** The version-1 shapes, strict: what a version-1 worker parses with (TD-031's amendment §5). */
+  const v1Settings = workerSettingsSchema.omit({ manually_paused_at: true });
+  const v1PackageKeys = [
+    'runId',
+    'epoch',
+    'runToken',
+    'run',
+    'workspace',
+    'credential',
+    'skills',
+    'images',
+    'limits',
+  ].sort();
+
+  it('answers a version-1 worker its handshake and its package with no new key', async () => {
+    const w = await world();
+    const handshake = await w.app.inject({
+      method: 'POST',
+      url: url(WORKER_PATHS.handshake),
+      headers: asV1(w.alice.credential),
+      payload: bodies(1)[WORKER_PATHS.handshake],
+    });
+    expect(handshake.statusCode).toBe(200);
+    const worker = handshake.json().worker;
+    expect(v1Settings.safeParse(worker).success).toBe(true);
+    expect(Object.hasOwn(worker, 'manually_paused_at')).toBe(false);
+    const claim = await w.app.inject({
+      method: 'POST',
+      url: url(WORKER_PATHS.claims),
+      headers: asV1(w.alice.credential),
+      payload: bodies(1)[WORKER_PATHS.claims],
+    });
+    expect(claim.statusCode).toBe(200);
+    const pkg = claim.json() as Record<string, unknown>;
+    expect(Object.keys(pkg).sort()).toEqual(v1PackageKeys);
+    expect(runPackageSchema.safeParse(pkg).success).toBe(true);
+  });
+
+  it('answers a version-2 worker the display block and its manual pause', async () => {
+    const w = await world();
+    const handshake = await post(w, WORKER_PATHS.handshake, '', w.alice.credential, {
+      image_digests: HELD,
+      commit: null,
+    });
+    expect(
+      workerHandshakeResponseSchema.parse(handshake.json()).worker.manually_paused_at,
+    ).toBeNull();
+    const pkg = await claimAsAlice(w);
+    expect(pkg.display).toEqual(DISPLAY);
+  });
+
+  it('refuses both owner verbs at protocol 1 with 426, before the credential is read', async () => {
+    const w = await world();
+    for (const [verb, runId] of [
+      [WORKER_PATHS.manualPause, undefined],
+      [WORKER_PATHS.runCancel, w.runId],
+    ] as const) {
+      const response = await w.app.inject({
+        method: 'POST',
+        url: url(verb, runId),
+        headers: { ...V1, 'idempotency-key': 'k-426' },
+        payload: bodies(1)[verb],
+      });
+      expect(`${verb} ${response.statusCode}`).toBe(`${verb} 426`);
+      const body = workerUpgradeRequiredBodySchema.parse(response.json());
+      expect(body.error.message).toContain('protocol 2');
+    }
+  });
+
+  it('manual-pause: a state assertion — one audit row per change, the claim answered 204 while held', async () => {
+    const w = await world();
+    const pause = (paused: boolean) =>
+      post(w, WORKER_PATHS.manualPause, '', w.alice.credential, { paused });
+    const first = await pause(true);
+    expect(first.statusCode).toBe(200);
+    const held = workerManualPauseResponseSchema.parse(first.json());
+    expect(held.performed).toBe(true);
+    expect(held.manually_paused_at).not.toBeNull();
+    // Idempotent replay: the same state, nothing written.
+    const again = workerManualPauseResponseSchema.parse((await pause(true)).json());
+    expect(again).toEqual({ manually_paused_at: held.manually_paused_at, performed: false });
+    expect(w.store.audit.filter((row) => row.action === 'worker.pause')).toEqual([
+      {
+        userId: ALICE,
+        action: 'worker.pause',
+        params: { worker_id: w.alice.workerId, via: 'worker_ui' },
+      },
+    ]);
+    // The handshake now says so, and a claim is answered at once with nothing.
+    const handshake = await post(w, WORKER_PATHS.handshake, '', w.alice.credential, {
+      image_digests: HELD,
+      commit: null,
+    });
+    expect(workerHandshakeResponseSchema.parse(handshake.json()).worker.manually_paused_at).toBe(
+      held.manually_paused_at,
+    );
+    const refused = await post(
+      w,
+      WORKER_PATHS.claims,
+      '',
+      w.alice.credential,
+      bodies(1)[WORKER_PATHS.claims],
+    );
+    expect(refused.statusCode).toBe(204);
+    expect(w.harness.store.offerRows()[0]?.state).toBe('open');
+    // The claim's own eligibility leaves a held worker out too (the store's, not only the route's).
+    expect(
+      (
+        await w.remote.claim({
+          workerId: w.alice.workerId,
+          heldImageDigests: HELD,
+          images: { run: DIGESTS.platform_runtime, egress: DIGESTS.platform_egress },
+          now: new Date(w.harness.clock.epochMs).toISOString() as never,
+        })
+      ).kind,
+    ).not.toBe('claimed');
+    const resumed = workerManualPauseResponseSchema.parse((await pause(false)).json());
+    expect(resumed).toEqual({ manually_paused_at: null, performed: true });
+    expect(w.store.audit.filter((row) => row.action === 'worker.resume')).toHaveLength(1);
+    const claimed = await post(
+      w,
+      WORKER_PATHS.claims,
+      '',
+      w.alice.credential,
+      bodies(1)[WORKER_PATHS.claims],
+    );
+    expect(claimed.statusCode).toBe(200);
+  });
+
+  it('runs/:id/cancel: the task page’s cancel as the worker’s user — 202, the task paused, one audit row, delivered on the heartbeat', async () => {
+    const w = await world();
+    const pkg = await claimAsAlice(w);
+    const cancel = (key: string | null) =>
+      w.app.inject({
+        method: 'POST',
+        url: url(WORKER_PATHS.runCancel, pkg.runId),
+        headers: { ...bearer(pkg.runToken), ...(key === null ? {} : { 'idempotency-key': key }) },
+        payload: { reason: 'leaving for the day' },
+      });
+    expect((await cancel(null)).statusCode).toBe(400);
+    expect(w.cancel.actions).toEqual([]);
+    const first = await cancel('local-cancel-1');
+    expect(first.statusCode).toBe(202);
+    const answer = workerRunCancelResponseSchema.parse(first.json());
+    expect(answer).toMatchObject({ run_id: pkg.runId, task_state: 'paused', performed: true });
+    expect(answer.command_id).not.toBeNull();
+    expect(w.cancel.actions).toHaveLength(1);
+    expect(w.cancel.actions[0]).toMatchObject({
+      userId: ALICE,
+      action: 'run.cancel',
+      taskId: pkg.run.taskId,
+      params: {
+        run_id: pkg.runId,
+        via: 'worker_ui',
+        worker_id: w.alice.workerId,
+        command_id: answer.command_id,
+      },
+    });
+    // Idempotent replay: the first attempt's answer, nothing performed, no second row.
+    const replay = await cancel('local-cancel-1');
+    expect(replay.statusCode).toBe(202);
+    expect(workerRunCancelResponseSchema.parse(replay.json())).toMatchObject({
+      performed: false,
+      command_id: answer.command_id,
+    });
+    expect(w.cancel.actions).toHaveLength(1);
+    // The worker's own heartbeat delivers the stop.
+    const beat = await post(w, WORKER_PATHS.heartbeat, pkg.runId, pkg.runToken, {
+      epoch: pkg.epoch,
+      acks: [],
+    });
+    expect(beat.statusCode).toBe(200);
+    expect(workerHeartbeatResponseSchema.parse(beat.json()).commands).toEqual([
+      expect.objectContaining({ id: answer.command_id, kind: 'cancel' }),
+    ]);
+  });
+
+  it('runs/:id/cancel: a user below run.cancel is 403, and the run continues', async () => {
+    const w = await world();
+    const pkg = await claimAsAlice(w);
+    w.cancel.projectRoles.set(ALICE, 'viewer');
+    const response = await w.app.inject({
+      method: 'POST',
+      url: url(WORKER_PATHS.runCancel, pkg.runId),
+      headers: { ...bearer(pkg.runToken), 'idempotency-key': 'local-cancel-403' },
+      payload: {},
+    });
+    expect(`${response.statusCode} ${response.json().error?.code}`).toBe('403 forbidden');
+    expect(w.cancel.actions).toEqual([]);
+    expect(w.harness.store.runCommandRows()).toEqual([]);
+    const run = await w.harness.store.runs.load({} as never, pkg.runId as Id);
+    expect(run?.status).toBe('starting');
+    // The control that it was the role: as a member the same request is accepted.
+    w.cancel.projectRoles.set(ALICE, 'member');
+    const accepted = await w.app.inject({
+      method: 'POST',
+      url: url(WORKER_PATHS.runCancel, pkg.runId),
+      headers: { ...bearer(pkg.runToken), 'idempotency-key': 'local-cancel-403' },
+      payload: {},
+    });
+    expect(accepted.statusCode).toBe(202);
   });
 });

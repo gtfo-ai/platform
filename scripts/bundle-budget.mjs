@@ -49,11 +49,21 @@
  * by a marker string of its own, whatever the total — a budget with room to spare would otherwise
  * absorb it silently.
  *
+ * ## Two pages, two budgets (WP-292)
+ *
+ * `apps/web` has a second entry, `worker.html` — the worker's local page, served by a remote worker
+ * on `127.0.0.1` (TD-031's worker-UI amendment §3) — with a budget of its own: **≤ 120 kB gz**. Both
+ * pages are measured the same way, and **both must exist**: a build that lost the second entry is a
+ * failure, not a page with nothing to measure. The worker's page must also carry nothing of the
+ * lazy visualisations (`viz/*`) in its initial graph, refused by a marker of their own
+ * (`WORKER_FORBIDDEN`), however small the total stays.
+ *
  * Usage:
- *   node scripts/bundle-budget.mjs                     build, then measure apps/web/dist
- *   node scripts/bundle-budget.mjs --no-build          measure whatever is already in dist
- *   node scripts/bundle-budget.mjs --dist <dir>        measure a directory (used by the test)
- *   node scripts/bundle-budget.mjs --budget-bytes <n>  override the budget (used by the test)
+ *   node scripts/bundle-budget.mjs                            build, then measure apps/web/dist
+ *   node scripts/bundle-budget.mjs --no-build                 measure whatever is already in dist
+ *   node scripts/bundle-budget.mjs --dist <dir>               measure a directory (used by the test)
+ *   node scripts/bundle-budget.mjs --budget-bytes <n>         override the SPA's budget (the test)
+ *   node scripts/bundle-budget.mjs --worker-budget-bytes <n>  override the worker page's (the test)
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -66,6 +76,9 @@ const TARGET = 'bundle:check';
 
 /** TD-013, in SI kilobytes. */
 export const BUDGET_BYTES = 300_000;
+
+/** The worker's local page (TD-031's worker-UI amendment §3, WP-292), in SI kilobytes. */
+export const WORKER_BUDGET_BYTES = 120_000;
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -121,6 +134,15 @@ export const lazyOnlyViolations = (contents) => {
   return found;
 };
 
+/**
+ * What must never be in the worker page's initial graph (WP-292): the lazy visualisations of
+ * `viz/*` — named by a class their own code carries (the office's desk) — and React Flow.
+ */
+export const WORKER_FORBIDDEN = [
+  { name: 'viz/fleet (the office)', marker: 'office-desk' },
+  ...LAZY_ONLY,
+];
+
 /** `/assets/index-abc.js` in a built page is `<dist>/assets/index-abc.js` on disk. */
 export const assetPath = (dist, href) => join(dist, normalize(href.replace(/^\/+/, '')));
 
@@ -136,14 +158,32 @@ const argument = (name, fallback) => {
 };
 
 const dist = resolve(repositoryRoot, argument('--dist', 'apps/web/dist'));
-const budget = Number.parseInt(argument('--budget-bytes', String(BUDGET_BYTES)), 10);
+const budgetOf = (flag, fallback) => {
+  const raw = argument(flag, String(fallback));
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isInteger(value) || value <= 0 || String(value) !== raw.trim()) {
+    fail(`${flag} must be a positive integer, got ${JSON.stringify(raw)}`);
+  }
+  return value;
+};
+const pages = [
+  {
+    file: 'index.html',
+    budget: budgetOf('--budget-bytes', BUDGET_BYTES),
+    decision: 'TD-013',
+    forbidden: LAZY_ONLY,
+    advice: 'Make a route lazy (see routes/tree.tsx) rather than raising the number.',
+  },
+  {
+    file: 'worker.html',
+    budget: budgetOf('--worker-budget-bytes', WORKER_BUDGET_BYTES),
+    decision: 'TD-031’s worker-UI amendment',
+    forbidden: WORKER_FORBIDDEN,
+    advice:
+      'The worker’s page imports ui/* only: find what pulled more in rather than raising the number.',
+  },
+];
 const shouldBuild = !process.argv.includes('--no-build') && process.argv.indexOf('--dist') === -1;
-
-if (!Number.isInteger(budget) || budget <= 0) {
-  fail(
-    `--budget-bytes must be a positive integer, got ${JSON.stringify(argument('--budget-bytes'))}`,
-  );
-}
 
 if (shouldBuild) {
   const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
@@ -160,49 +200,52 @@ if (shouldBuild) {
   }
 }
 
-const indexHtml = join(dist, 'index.html');
-if (!existsSync(indexHtml)) {
-  fail(`${indexHtml} does not exist; run the build first (or pass --dist)`);
-}
-
-const assets = initialAssets(readFileSync(indexHtml, 'utf8'));
-if (assets.length === 0) {
-  // A budget computed over nothing is not a budget (standing rule 4).
-  fail(`no module script and no stylesheet was found in ${indexHtml}; the parser matched nothing`);
-}
-
-let total = 0;
-const rows = [];
-const contents = [];
-for (const href of assets) {
-  const path = assetPath(dist, href);
-  if (!existsSync(path)) {
-    fail(`${indexHtml} references ${href}, which is not in ${dist}`);
+/** One page's initial graph: its total and its assets' contents. */
+const measure = (page) => {
+  const html = join(dist, page.file);
+  if (!existsSync(html)) {
+    fail(`${html} does not exist; run the build first (or pass --dist)`);
   }
-  const body = readFileSync(path);
-  const bytes = gzipSync(body).byteLength;
-  total += bytes;
-  rows.push(`  ${href}  ${bytes} B gz`);
-  contents.push({ href, text: body.toString('utf8') });
-}
+  const assets = initialAssets(readFileSync(html, 'utf8'));
+  if (assets.length === 0) {
+    // A budget computed over nothing is not a budget (standing rule 4).
+    fail(`no module script and no stylesheet was found in ${html}; the parser matched nothing`);
+  }
+  let total = 0;
+  const rows = [];
+  const contents = [];
+  for (const href of assets) {
+    const path = assetPath(dist, href);
+    if (!existsSync(path)) {
+      fail(`${html} references ${href}, which is not in ${dist}`);
+    }
+    const body = readFileSync(path);
+    const bytes = gzipSync(body).byteLength;
+    total += bytes;
+    rows.push(`  ${page.file} ${href}  ${bytes} B gz`);
+    contents.push({ href, text: body.toString('utf8') });
+  }
+  process.stderr.write(`${rows.join('\n')}\n`);
+  const leaked = [];
+  for (const { href, text } of contents) {
+    for (const { name, marker } of page.forbidden) {
+      if (text.includes(marker)) leaked.push([name, href]);
+    }
+  }
+  if (leaked.length > 0) {
+    fail(
+      `${leaked.map(([name, href]) => `${name} is in the initial graph (${href})`).join('; ')}.\n` +
+        'It must stay in a lazy chunk: import it only from a module loaded with import().',
+    );
+  }
+  if (total > page.budget) {
+    fail(
+      `${page.file}: the initial bundle is ${total} B gzipped, over the ${page.budget} B budget of ${page.decision} by ${total - page.budget} B.\n` +
+        page.advice,
+    );
+  }
+  return `${page.file}: ${total} B gzipped over ${assets.length} initial assets, budget ${page.budget} B`;
+};
 
-process.stderr.write(`${rows.join('\n')}\n`);
-
-const leaked = lazyOnlyViolations(contents);
-if (leaked.length > 0) {
-  fail(
-    `${leaked.map(([name, href]) => `${name} is in the initial graph (${href})`).join('; ')}.\n` +
-      'It must stay in a lazy chunk: import it only from a module loaded with import().',
-  );
-}
-
-if (total > budget) {
-  fail(
-    `the initial bundle is ${total} B gzipped, over the ${budget} B budget of TD-013 by ${total - budget} B.\n` +
-      'Make a route lazy (see routes/tree.tsx) rather than raising the number.',
-  );
-}
-
-process.stdout.write(
-  `PASS: ${TARGET} (${total} B gzipped over ${assets.length} initial assets, budget ${budget} B)\n`,
-);
+const lines = pages.map(measure);
+process.stdout.write(`PASS: ${TARGET} (${lines.join('; ')})\n`);

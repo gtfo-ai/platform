@@ -3,6 +3,7 @@
 #   curl -fsSo compose.worker.yml https://<core>/api/worker/v1/compose.yml
 #   CLAUDE_CODE_OAUTH_TOKEN=<claude setup-token> docker compose -f compose.worker.yml up -d
 #   docker compose -f compose.worker.yml logs remote-worker   # the device code to approve
+#   docker compose -f compose.worker.yml logs remote-worker | grep token=   # this machine's page
 #
 # The download is public and needs no header (TD-031's 2026-11-05 amendment): it holds no secret,
 # and the file the core serves already names `APP_CORE_URL`.
@@ -28,6 +29,12 @@
 # `remote-worker` also joins `default`, its route to the core over HTTPS (BD-032 decision 11) — its
 # local listener (`/readyz`, `/internal/drain`, `/internal/state`) is **not published** and is reached
 # on this compose network only.
+#
+# **The worker's local page is published on loopback only** (WP-292, TD-031's worker-UI amendment §1):
+# `127.0.0.1:${APP_WORKER_UI_PORT:-7357}:7357` — never a bare port, which Docker publishes on every host
+# address (research/17 § 10). The page carries a token in its address (`#token=…`), printed at every
+# start; delete `ui-token` in the `worker-state` volume to change it. `APP_WORKER_UI=disabled` opens no
+# port. A run container joins only its per-run networks, so no run can reach it.
 #
 # **The launcher applies the `relayed` carriage** (TD-031's 2026-11-04 amendment, backlog 693): a
 # deploy key never reaches this machine; the mirror and export helpers sign through a helper agent
@@ -91,7 +98,12 @@ services:
       PLATFORM_EGRESS_IMAGE: ${PLATFORM_EGRESS_IMAGE:-platform-egress:dev}
       HOST: 0.0.0.0
       PORT: 8080
+      # The local page (WP-292): on, and the host port its address names (the `Host` it checks).
+      APP_WORKER_UI: ${APP_WORKER_UI:-enabled}
+      APP_WORKER_UI_PORT: ${APP_WORKER_UI_PORT:-7357}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - '127.0.0.1:${APP_WORKER_UI_PORT:-7357}:7357'
     volumes:
       - worker-state:/var/lib/platform/worker-state
       - launcher-token:/var/lib/platform/launcher-token:ro

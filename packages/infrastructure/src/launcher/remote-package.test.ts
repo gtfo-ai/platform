@@ -61,7 +61,11 @@ const ROUTE = {
 
 const packager = (
   mint: () => Promise<RunGitCredentialAnswer>,
-  remote: { readonly optIn?: 'allow' | 'deny'; readonly host?: string } = {},
+  remote: {
+    readonly optIn?: 'allow' | 'deny';
+    readonly host?: string;
+    readonly display?: Parameters<typeof createRemoteRunPackager>[0]['display'];
+  } = {},
 ) =>
   createRemoteRunPackager({
     projects: {
@@ -81,6 +85,7 @@ const packager = (
     runRegistryHosts: [],
     credentialTtlSeconds: 86_400,
     clock: manualClock(Date.parse('2026-11-04T09:00:00.000Z')),
+    ...(remote.display === undefined ? {} : { display: remote.display }),
   });
 
 const build = (built: ReturnType<typeof packager>, spec: RunSpec = stored()) =>
@@ -103,6 +108,30 @@ describe('the remote run package (WP-281)', () => {
     expect(pkg.run.secretEnvNames).toEqual([]);
     expect(Object.keys(pkg.run.env)).not.toContain('GITLAB_TOKEN');
     expect(minted.revoked()).toBe(0);
+  });
+
+  it('carries the display block when the core names the run, and none when it cannot (WP-292)', async () => {
+    const display = { projectKey: 'ACME', ticketKey: 'ACME-12', title: 'Fix the login' };
+    const named = await build(
+      packager(async () => ({ kind: 'minted', credential: credential() }), {
+        display: async () => display,
+      }),
+    );
+    expect(named.kind === 'package' ? named.package.display : null).toEqual(display);
+    const unnamed = await build(
+      packager(async () => ({ kind: 'minted', credential: credential() })),
+    );
+    expect(unnamed.kind === 'package' && 'display' in unnamed.package).toBe(false);
+    // A read that fails costs the page its names, never the run.
+    const failed = await build(
+      packager(async () => ({ kind: 'minted', credential: credential() }), {
+        display: async () => {
+          throw new Error('the database went away');
+        },
+      }),
+    );
+    expect(failed.kind).toBe('package');
+    expect(failed.kind === 'package' && 'display' in failed.package).toBe(false);
   });
 
   it.each([

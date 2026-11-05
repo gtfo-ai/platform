@@ -48,6 +48,16 @@ import { SseHub } from '../sse/hub.js';
 import { readSource, webSourceFiles, withoutComments } from './web-sources.js';
 
 /**
+ * The worker's local page (WP-292, `apps/web/worker.html`) is a second entry of `apps/web` whose
+ * `/api/local/*` calls go to the **remote worker** that serves it, never to this core — so its
+ * sources are not the core's client. Asserted, not assumed: the page names only `/api/local/` paths
+ * and this core serves none of them (the last case below).
+ */
+const WORKER_PAGE_SOURCES = 'apps/web/src/worker/';
+const coreClientFiles = (): string[] =>
+  webSourceFiles().filter((path) => !path.startsWith(WORKER_PAGE_SOURCES));
+
+/**
  * The endpoints the client calls and this server does not serve yet, each with the row that owns
  * it — the shape `apps/launcher/src/docker-access.test.ts` uses.
  *
@@ -348,7 +358,7 @@ describe('the client’s endpoint list against the server’s router', () => {
   it('finds the client’s paths on disk, including a file that is not committed yet', () => {
     // The scope, asserted before anything is concluded from it (standing rule 4): a census whose
     // sweep found nothing would report a perfectly clean result.
-    const files = webSourceFiles();
+    const files = coreClientFiles();
     expect(files).toContain('apps/web/src/api/endpoints.ts');
     expect(files.length).toBeGreaterThan(20);
     // Test files are out of scope by suffix, not by name: `api/http.test.ts` calls `/api/thing`.
@@ -373,7 +383,7 @@ describe('the client’s endpoint list against the server’s router', () => {
   // WP-249: under 300 ms in all 10 green CI runs (vitest printed no duration); the 15 s floor.
   it('serves every path the client names, or admits the gap with the row that owns it', async () => {
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -399,7 +409,7 @@ describe('the client’s endpoint list against the server’s router', () => {
   it('serves each route listed before its caller, guarded, and no client names it yet (WP-181)', async () => {
     const paths = new Set(
       clientPaths(
-        webSourceFiles().map((path) => ({
+        coreClientFiles().map((path) => ({
           path,
           source: readSource(path),
         })),
@@ -444,7 +454,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     expect(probed.status).toBe(401);
     expect(probed.code).toBe('unauthenticated');
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -472,7 +482,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     expect(probed.status).toBe(401);
     expect(probed.code).toBe('unauthenticated');
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -521,7 +531,9 @@ describe('the client’s endpoint list against the server’s router', () => {
     for (const path of ['/api/integrations/providers', '/api/integrations/{}']) {
       expect((await probe(path)).served, path).toBe(true);
     }
-    const paths = clientPaths(webSourceFiles().map((path) => ({ path, source: readSource(path) })));
+    const paths = clientPaths(
+      coreClientFiles().map((path) => ({ path, source: readSource(path) })),
+    );
     expect(paths).toEqual(
       expect.arrayContaining(['/api/integrations/providers', '/api/integrations/{}']),
     );
@@ -542,7 +554,9 @@ describe('the client’s endpoint list against the server’s router', () => {
     // Named positively (standing rule 10), each by its own method with no body: the re-seal takes a
     // body, so a guard that slipped back to `preHandler` would answer 400 here, not 401.
     expect((await probe('/api/integrations/{}/secrets')).served).toBe(true);
-    const paths = clientPaths(webSourceFiles().map((path) => ({ path, source: readSource(path) })));
+    const paths = clientPaths(
+      coreClientFiles().map((path) => ({ path, source: readSource(path) })),
+    );
     expect(paths).toEqual(
       expect.arrayContaining(['/api/integrations/{}/secrets', '/api/integrations/{}']),
     );
@@ -751,7 +765,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     // a route that leaves the client's list would otherwise drop silently out of both halves at
     // once (the shape `serves the seven reads WP-15h part 2 took off the gap list` already uses).
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -788,7 +802,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
 
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -807,7 +821,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     // landed** (PROGRESS backlog 70 and 108). What stays is the positive naming every family here
     // gets (standing rule 10), and the two downloads (backlog 68), which are new paths.
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -854,7 +868,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     expect(probed.code).toBe('unauthenticated');
 
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -869,7 +883,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     // that loses the call fails here, and a route that loses its registration or its guard fails
     // on the probe.
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -886,7 +900,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     // (WP-122), so the two-way equality above now covers it and the hand assertion that stood here
     // — *absent* from the client's list — is inverted, as the `kb/health` case was at WP-95.
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -903,7 +917,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     // read — so the probe above meets that one; the `POST` is asked by its own method, with no
     // body at all, so a guard that slipped to `preHandler` answers 400 here instead of 401.
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -921,7 +935,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     // asked with **no body at all**: both guards are `preValidation` hooks, and one that slipped back
     // to `preHandler` would answer the route's shape (400) instead of 401.
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -947,7 +961,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     // PROGRESS backlog 325: a job pg-boss gave up on had no list. Named positively (standing rule
     // 10), and asked with an invalid limit so a guard that slipped to `preHandler` answers 400.
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -964,7 +978,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     // is not the SPA's to call and is not here: it is public by design, and the worker is this
     // census's second client since WP-281 (`the worker as a second client`, below).
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -994,7 +1008,7 @@ describe('the client’s endpoint list against the server’s router', () => {
   it('serves the execution setting WP-278 added, the client calls it, and both methods refuse an anonymous caller', async () => {
     // Named positively (standing rule 10): TD-031 decision 8's read and its administrator's write.
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -1014,7 +1028,7 @@ describe('the client’s endpoint list against the server’s router', () => {
   // WP-291: walks the web sources like its neighbours, so it carries their 15 s floor (WP-249).
   it('serves the setup state to an anonymous caller, and the sign-in page names it (WP-291)', async () => {
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -1029,7 +1043,7 @@ describe('the client’s endpoint list against the server’s router', () => {
 
   it('refuses an anonymous caller on every served path that is not deliberately public', async () => {
     const paths = clientPaths(
-      webSourceFiles().map((path) => ({
+      coreClientFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
@@ -1080,4 +1094,18 @@ describe('the census’s own instruments', () => {
     ].join('\n');
     expect(clientPaths([{ path: 'x.ts', source }])).toEqual(['/api/version']);
   });
+});
+
+describe('the worker’s local page is not the core’s client (WP-292)', () => {
+  it('names only /api/local paths, and this core serves none of them', async () => {
+    const files = webSourceFiles().filter((path) => path.startsWith(WORKER_PAGE_SOURCES));
+    expect(files).toContain('apps/web/src/worker/read-state.ts');
+    const paths = clientPaths(files.map((path) => ({ path, source: readSource(path) })));
+    expect(paths).toEqual(['/api/local']);
+    for (const path of paths) {
+      const response = await app.inject({ method: 'GET', url: `${path}/state` });
+      expect(response.statusCode, path).toBe(404);
+    }
+    // A whole-tree walk: the census floor (WP-249).
+  }, 15_000);
 });

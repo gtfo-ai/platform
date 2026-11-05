@@ -22,7 +22,11 @@ import {
 import type { Id, JsonObject } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { remoteSettleRedactorFor } from './worker-protocol.js';
-import { createRemoteRunRedactors, projectBindingRedactor } from './worker-run-calls.js';
+import {
+  createRemoteRunRedactors,
+  projectBindingRedactor,
+  runDisplayOf,
+} from './worker-run-calls.js';
 
 const RUN = '00000000-0000-4000-8000-000000282101' as Id;
 const TASK = '00000000-0000-4000-8000-000000282102' as Id;
@@ -167,5 +171,37 @@ describe('the remote run’s redactor, rebuilt from stored state (backlog 745)',
       logger: silentLogger,
     });
     expect(await without(RUN)).toBe(platformRedactor);
+  });
+});
+
+describe('the local page’s names for a run (WP-292)', () => {
+  const poolOf = (rows: unknown[]) =>
+    ({ query: async () => ({ rows }) }) as unknown as Parameters<typeof runDisplayOf>[0];
+
+  it('names the project, the ticket and the snapshot’s title, cut to the block’s bound', async () => {
+    expect(
+      await runDisplayOf(
+        poolOf([
+          {
+            project_key: 'ACME',
+            ticket_key: 'ACME-7',
+            ticket_snapshot: { title: `Fix the login ${'x'.repeat(600)}` },
+          },
+        ]),
+      )('task'),
+    ).toEqual({
+      projectKey: 'ACME',
+      ticketKey: 'ACME-7',
+      title: `Fix the login ${'x'.repeat(486)}`,
+    });
+  });
+
+  it('answers a null title for no snapshot, and nothing for a task that is gone', async () => {
+    expect(
+      await runDisplayOf(
+        poolOf([{ project_key: 'ACME', ticket_key: 'ACME-7', ticket_snapshot: null }]),
+      )('task'),
+    ).toEqual({ projectKey: 'ACME', ticketKey: 'ACME-7', title: null });
+    expect(await runDisplayOf(poolOf([]))('task')).toBeNull();
   });
 });

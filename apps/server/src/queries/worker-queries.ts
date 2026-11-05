@@ -109,6 +109,8 @@ export interface WorkerListRow {
   readonly revokedAt: Date | null;
   readonly pausedUntil: Date | null;
   readonly pausedReason: string | null;
+  /** The owner's hold from the worker's local page (migration 0099, WP-292). */
+  readonly manuallyPausedAt: Date | null;
   readonly concurrency: number;
   /**
    * The live runs (`created`/`starting`/`running`) this worker **holds**, oldest first (S-23.15):
@@ -126,6 +128,16 @@ export interface WorkerRunRef {
   readonly taskId: string;
   readonly projectId: string;
 }
+
+/** What {@link WorkerStore.setManualPause} answers: the stored hold, and whether this call wrote it. */
+export type ManualPauseResult =
+  | { readonly status: 'not_found' }
+  | {
+      readonly status: 'set';
+      readonly manuallyPausedAt: Date | null;
+      /** `false`: the row already said so — nothing written, no audit row. */
+      readonly performed: boolean;
+    };
 
 export type RevokeWorkerResult =
   | { readonly status: 'not_found' }
@@ -165,6 +177,17 @@ export interface WorkerStore {
     readonly actorUserId: string;
     readonly now: Date;
   }): Promise<RevokeWorkerResult>;
+  /**
+   * The owner's hold on claiming (WP-292, TD-031's worker-UI amendment §4) — a **state assertion**:
+   * `paused` sets `manually_paused_at` (kept when already set) and `!paused` clears it, with **one**
+   * `human_actions` row per change (`worker.pause` / `worker.resume`, `params: {worker_id, via:
+   * 'worker_ui'}`, the worker's user). A repeat of the stored state writes nothing.
+   */
+  setManualPause(input: {
+    readonly workerId: string;
+    readonly paused: boolean;
+    readonly now: Date;
+  }): Promise<ManualPauseResult>;
   /** The deactivation write: the live runs of every worker of the user get `lease_expires_at = now()`. */
   expireUserWorkerLeases(userId: string): Promise<number>;
   findCredentialSubject(workerId: string): Promise<CredentialSubject | null>;
@@ -255,6 +278,7 @@ type WorkerRowSql = {
   revoked_at: Date | null;
   paused_until: Date | null;
   paused_reason: string | null;
+  manually_paused_at: Date | null;
   concurrency: number;
   running: { run_id: string; task_id: string; project_id: string }[];
 };
@@ -290,6 +314,7 @@ const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
   revokedAt: at(row.revoked_at),
   pausedUntil: at(row.paused_until),
   pausedReason: row.paused_reason,
+  manuallyPausedAt: at(row.manually_paused_at),
   concurrency: row.concurrency,
   running: row.running.map((run) => ({
     runId: run.run_id,
@@ -482,6 +507,29 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
     });
   },
 
+  async setManualPause({ workerId, paused, now }) {
+    return database.transaction(async (tx): Promise<ManualPauseResult> => {
+      const { rows } = await tx.execute<{ user_id: string; manually_paused_at: Date | null }>(sql`
+        select user_id, manually_paused_at from workers where id = ${workerId} for update`);
+      const row = rows[0];
+      if (row === undefined) {
+        return { status: 'not_found' };
+      }
+      const stored = at(row.manually_paused_at);
+      if ((stored !== null) === paused) {
+        return { status: 'set', manuallyPausedAt: stored, performed: false };
+      }
+      const next = paused ? now : null;
+      await tx.execute(sql`
+        update workers set manually_paused_at = ${next} where id = ${workerId}`);
+      const params: JsonObject = { worker_id: workerId, via: 'worker_ui' };
+      await tx.execute(sql`
+        insert into human_actions (user_id, action, params)
+        values (${row.user_id}, ${paused ? 'worker.pause' : 'worker.resume'}, ${JSON.stringify(params)}::jsonb)`);
+      return { status: 'set', manuallyPausedAt: next, performed: true };
+    });
+  },
+
   async expireUserWorkerLeases(userId) {
     const { rows } = await database.execute<{ id: string }>(
       expireLeasesSql(sql`select id from workers where user_id = ${userId}`),
@@ -511,7 +559,8 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
   async countConnected() {
     const { rows } = await database.execute<{ connected: number; paused: number }>(sql`
       select count(*)::int as connected,
-             count(*) filter (where paused_until > now())::int as paused
+             count(*) filter (where paused_until > now() or manually_paused_at is not null)::int
+               as paused
         from workers
        where state = 'active'
          and last_seen_at > now() - make_interval(secs => ${WORKER_CONNECTED_SECONDS})`);

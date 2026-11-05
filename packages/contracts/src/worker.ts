@@ -38,7 +38,7 @@
  * `export const WORKER_PROTOCOL_VERSION = <int>;` and `export const ACCEPTED_WORKER_PROTOCOLS = [<ints>] as const;`.
  */
 import * as z from 'zod';
-import { apiErrorSchema } from './api.js';
+import { apiErrorSchema, cancelRunRequestSchema, cancelRunResponseSchema } from './api.js';
 import {
   httpUrlSchema,
   idSchema,
@@ -67,13 +67,22 @@ import {
 // ── Versions ─────────────────────────────────────────────────────────────────
 
 /** The protocol this build speaks (TD-032 decision 7). A literal: `protocol:check` reads it as text. */
-export const WORKER_PROTOCOL_VERSION = 1;
+export const WORKER_PROTOCOL_VERSION = 2;
 
 /**
  * The protocols this build's core serves: `[N-1, N]`, without a `0`. A literal for the same reason as
  * {@link WORKER_PROTOCOL_VERSION}; `worker.test.ts` holds it to the shape.
  */
-export const ACCEPTED_WORKER_PROTOCOLS = [1] as const;
+export const ACCEPTED_WORKER_PROTOCOLS = [1, 2] as const;
+
+/**
+ * The first protocol that carries the worker's local UI (TD-031's 2026-11-04 worker-UI amendment §5,
+ * WP-292): the verbs `manual-pause` and `runs/:id/cancel`, the handshake's
+ * `worker.manually_paused_at` and the package's `display` block. A request at a lower version is
+ * answered the version-1 shapes — every schema here is strict, so a version-1 worker would refuse
+ * an unknown key — and is refused the two verbs with `426`.
+ */
+export const WORKER_PROTOCOL_LOCAL_UI = 2;
 
 /** Whether a worker announcing `version` is served by this build (else `426 upgrade_required`). */
 export const isAcceptedWorkerProtocol = (version: number): boolean =>
@@ -128,6 +137,10 @@ export const WORKER_PATHS = {
   finish: 'runs/:id/finish',
   lateCost: 'runs/:id/late-cost',
   pause: 'pause',
+  /** The owner's hold on claiming, from the worker's local page (WP-292, protocol 2). */
+  manualPause: 'manual-pause',
+  /** A person's cancel from the worker's local page — the core's `run.cancel` (WP-292, protocol 2). */
+  runCancel: 'runs/:id/cancel',
   release: 'release',
   composeFile: 'compose.yml',
   updateReport: 'update-report',
@@ -304,6 +317,19 @@ export const runImagesSchema = z.strictObject({
 });
 export type RunImages = z.infer<typeof runImagesSchema>;
 
+/**
+ * What the worker's local page names a run by (WP-292, protocol 2): the project's key, the ticket's
+ * key and the ticket's title — from the core's **redacted** ticket snapshot (WP-15f), so the title
+ * is untrusted text that has already passed the platform's redaction and is rendered as text
+ * (BD-022). `title` is `null` for a task with no snapshot. Sent only to a worker at protocol ≥ 2.
+ */
+export const runDisplaySchema = z.strictObject({
+  projectKey: nonEmptyStringSchema.max(64),
+  ticketKey: nonEmptyStringSchema.max(256),
+  title: z.string().max(500).nullable(),
+});
+export type RunDisplay = z.infer<typeof runDisplaySchema>;
+
 const textEncoder = new TextEncoder();
 
 /**
@@ -339,6 +365,8 @@ export const runPackageSchema = z
         .positive()
         .max(60 * 60_000),
     }),
+    /** The local page's names for the run — protocol ≥ 2 only ({@link runDisplaySchema}). */
+    display: runDisplaySchema.optional(),
   })
   .superRefine((pkg, context) => {
     const refuse = (path: (string | number)[], message: string): void => {
@@ -541,6 +569,12 @@ export const workerSettingsSchema = z.strictObject({
   concurrency: z.int().positive().max(64),
   paused_until: isoDateTimeSchema.nullable(),
   paused_reason: workerPauseReasonSchema.nullable(),
+  /**
+   * When the worker's owner paused claiming from the local page (WP-292), `null` while not paused.
+   * **Absent** at protocol 1: the core sends it only when `X-Worker-Protocol ≥ 2` (TD-031's
+   * worker-UI amendment §5).
+   */
+  manually_paused_at: isoDateTimeSchema.nullable().optional(),
 });
 
 /**
@@ -571,6 +605,22 @@ export const workerPauseRequestSchema = z.strictObject({
   until: isoDateTimeSchema,
   reason: workerPauseReasonSchema,
 });
+
+/**
+ * `POST manual-pause` `{ paused }` — a **state assertion** (WP-292): the owner's hold on claiming,
+ * stored in `workers.manually_paused_at`. Worker credential, protocol ≥ 2. Runs in flight continue.
+ */
+export const workerManualPauseRequestSchema = z.strictObject({ paused: z.boolean() });
+
+/**
+ * `POST manual-pause` → the stored state and whether this call changed it: a repeat of the stored
+ * state is `performed: false` and writes nothing (no second `human_actions` row).
+ */
+export const workerManualPauseResponseSchema = z.strictObject({
+  manually_paused_at: isoDateTimeSchema.nullable(),
+  performed: z.boolean(),
+});
+export type WorkerManualPauseResponse = z.infer<typeof workerManualPauseResponseSchema>;
 
 // ── Run-scoped calls (authenticated by the run token) ────────────────────────
 
@@ -755,6 +805,15 @@ export const RUN_STOPPED_REASONS = [
   'shutdown',
 ] as const;
 export const runStoppedReasonSchema = z.enum(RUN_STOPPED_REASONS);
+
+/**
+ * `POST runs/:id/cancel` (WP-292, protocol 2): a person's cancel from the worker's local page. The
+ * body is the task page's (`cancelRunRequestSchema`) and so is the answer: the core performs the
+ * **same** application command as `POST /api/runs/:run_id/cancel`, as the worker's user, under the
+ * same `run.cancel` permission, and pauses the task. Requires an `Idempotency-Key`.
+ */
+export const workerRunCancelRequestSchema = cancelRunRequestSchema;
+export const workerRunCancelResponseSchema = cancelRunResponseSchema;
 
 /** `POST runs/:id/spawn`: the CLI spawn marker, under the claim's epoch (WP-281). */
 export const workerSpawnRequestSchema = z.strictObject({ epoch: leaseEpochSchema });

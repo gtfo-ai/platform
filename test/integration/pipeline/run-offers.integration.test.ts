@@ -516,7 +516,7 @@ describe('the execution routing repository (WP-278, migration 0097)', () => {
     await read('delete from project_execution_settings where project_id = $1', [projectId]);
   });
 
-  it('answers an assignee online only for a member’s active, unpaused worker seen in the last minute', async () => {
+  it('answers an assignee online only for a member’s active, unpaused (usage or owner) worker seen in the last minute', async () => {
     const [user] = await read<{ id: string }>(
       "insert into users (email, name) values ('dev@example.test', 'Dev') returning id",
       [],
@@ -554,6 +554,16 @@ describe('the execution routing repository (WP-278, migration 0097)', () => {
       [userId],
     );
     expect(await online()).toBe(false);
+    // WP-292: the owner's hold from the local page keeps it out too, and lifting both lets it in —
+    // so the two `false`s above and below are each the pause's, not the clock's.
+    await read(
+      `update workers set paused_until = null, paused_reason = null, manually_paused_at = now()
+        where user_id = $1`,
+      [userId],
+    );
+    expect(await online()).toBe(false);
+    await read('update workers set manually_paused_at = null where user_id = $1', [userId]);
+    expect(await online()).toBe(true);
   });
 
   it('says a server claimant is running from its renewal until its release', async () => {

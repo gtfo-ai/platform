@@ -43,6 +43,7 @@ const summary = {
   state: 'active',
   revoked_at: null,
   paused_until: null,
+  manually_paused_at: null,
   paused_reason: null,
   concurrency: 1,
   running: [],

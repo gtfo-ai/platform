@@ -84,6 +84,7 @@ export const toWireWorker = (row: WorkerListRow): WorkerSummary => ({
   revoked_at: isoOrNull(row.revokedAt),
   paused_until: isoOrNull(row.pausedUntil),
   paused_reason: row.pausedReason === null ? null : workerPauseReasonSchema.parse(row.pausedReason),
+  manually_paused_at: isoOrNull(row.manuallyPausedAt),
   concurrency: row.concurrency,
   running: row.running.map((run) => ({
     run_id: run.runId,

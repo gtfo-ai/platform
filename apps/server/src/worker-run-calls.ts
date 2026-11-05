@@ -40,7 +40,7 @@ import {
   type RunDeployKeySigner,
   type SecretRedactor,
 } from '@platform/application';
-import type { Id } from '@platform/contracts';
+import { type Id, type RunDisplay, runDisplaySchema } from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import {
   type eventing as eventingAdapters,
@@ -55,6 +55,7 @@ import {
   createProjectIntegrationsPort,
   type IntegrationStack,
 } from './pipeline.js';
+import { ticketTitleOf } from './queries/pipeline-queries.js';
 
 /** How long a run's resolved bindings are reused (module docblock). */
 export const REMOTE_RUN_BINDINGS_TTL_MS = 30_000;
@@ -219,6 +220,39 @@ export const remoteRunCredentialOf =
       [projectId],
     );
     return rows[0]?.refused === false ? 'allow' : 'deny';
+  };
+
+/** The display block's title bound (`runDisplaySchema`). */
+const DISPLAY_TITLE_MAX_CHARS = 500;
+
+/**
+ * The worker's local page's names for a run (WP-292, TD-031's worker-UI amendment §3): the project's
+ * key and the task's ticket key and title. The title is read from `tasks.ticket_snapshot`, which is
+ * **bounded and redacted at its write** (WP-15f) — the same words the task page shows — and cut to
+ * the block's bound. `null` for a run whose task or project is gone.
+ */
+export const runDisplayOf =
+  (pool: Pick<pg.Pool, 'query'>) =>
+  async (taskId: string): Promise<RunDisplay | null> => {
+    const { rows } = await pool.query<{
+      project_key: string;
+      ticket_key: string;
+      ticket_snapshot: unknown;
+    }>(
+      `select p.key as project_key, t.ticket_key, t.ticket_snapshot
+         from tasks t join projects p on p.id = t.project_id
+        where t.id = $1`,
+      [taskId],
+    );
+    const row = rows[0];
+    if (row === undefined) return null;
+    const title = ticketTitleOf(row.ticket_snapshot);
+    const parsed = runDisplaySchema.safeParse({
+      projectKey: row.project_key,
+      ticketKey: row.ticket_key,
+      title: title === null ? null : title.slice(0, DISPLAY_TITLE_MAX_CHARS),
+    });
+    return parsed.success ? parsed.data : null;
   };
 
 export interface ComposeRemoteRunCallsOptions {

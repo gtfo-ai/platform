@@ -13,7 +13,22 @@
  *    launcher;
  *  - a **local listener** on the worker's compose network only (never published): `GET /healthz`,
  *    `GET /readyz` (`core_handshake`), `POST /internal/drain` (stop claiming, finish what runs —
- *    what the updater asks before it applies, TD-032 decision 6) and `GET /internal/state`.
+ *    what the updater asks before it applies, TD-032 decision 6) and `GET /internal/state`;
+ *  - **the local page** (WP-292, `local-ui.ts`): a second listener on container port 7357, published
+ *    on `127.0.0.1` only, behind a token kept in `worker-state` (`ui-token.ts`) — state, slots, each
+ *    run with its transcript tail, the log tail, and *Pause/Resume*, *Drain* and *Cancel run*.
+ *
+ * ## Pause, drain and cancel — the core decides each (TD-031's worker-UI amendment §4)
+ *
+ * *Pause* asks the core's `manual-pause` and, once it answered, claims nothing; *Resume* the
+ * reverse. *Drain* is the same hold plus a marker file (`drain-pause`) in `worker-state`: the worker
+ * finishes what runs and takes nothing new, and **its next start clears a drain's pause — only a
+ * drain's**; an owner's *Pause* survives a restart. `POST /internal/drain` (the updater's) is the
+ * same function. A drained worker **stays up, idle**, rather than exiting: `compose.worker.yml`
+ * restarts it `unless-stopped`, so an exit would be a restart, and the restart would clear the
+ * drain's pause and claim again — stopping is the person's `docker compose stop` (stated in the PR
+ * and BACKLOG). *Cancel run* is the core's `run.cancel` (`runs/:id/cancel`), whose stop this
+ * worker's own heartbeat delivers; the task is paused (Q126).
  *
  * A `401` on a worker verb is a revoked worker or user (TD-031 §7): it stops claiming and says so on
  * `/readyz`. A `426` is a core that no longer serves this protocol: it stops claiming and finishes
@@ -24,25 +39,39 @@
  * credential and every live run's token and run credential are replaced in each line (TD-031 §10a —
  * the worker's own redactor is the only one that knows them).
  */
+import { rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import path from 'node:path';
 import type { Logger } from '@platform/application';
 import { exactSecretRedactor } from '@platform/application';
 import {
   type CoreImageDigests,
   type RunPackage,
   shaSchema,
+  WORKER_LOCAL_LOG_LINE_MAX_CHARS,
+  WORKER_LOCAL_LOG_TAIL,
   WORKER_PROTOCOL_VERSION,
+  type WorkerLocalState,
   type WorkerProtocolRange,
+  workerLocalStateSchema,
 } from '@platform/contracts';
 import { launcher as launcherAdapters, runner as runnerAdapters } from '@platform/infrastructure';
 import type { DestinationStream } from 'pino';
 import { asLoggerPort, createLogger, type PinoLogger } from '../logging.js';
 import { repositoryPathOf } from '../pipeline.js';
+import { BUNDLED_WEB_ROOT, resolveBundleRoot } from '../web/bundle.js';
 import { loadRemoteWorkerConfig, REMOTE_WORKER_ROLE, type RemoteWorkerConfig } from './config.js';
 import { CoreCallError, type CoreFetch, createCoreClient, isTransient } from './core-client.js';
 import { ensureCredential } from './credential.js';
+import { createLocalUiServer, LocalUiError } from './local-ui.js';
 import { backoffMs, sleepMs } from './retry.js';
-import { type RunSession, startRunSession, WORKER_SECRET_NAMES } from './run-session.js';
+import {
+  type RunSession,
+  redactKeysAndValues,
+  startRunSession,
+  WORKER_SECRET_NAMES,
+} from './run-session.js';
+import { ensureUiToken, uiAddressOf } from './ui-token.js';
 import { type PackageWorkspaceOptions, packageWorkspaceProvisioner } from './workspaces.js';
 
 /** What `/readyz` and `/internal/state` say about this worker's connection to its core. */
@@ -67,7 +96,12 @@ export interface StartRemoteWorkerOptions {
   readonly spawnFor?: PackageWorkspaceOptions['spawnFor'];
   /** Test seam: the waits between retries. */
   readonly sleep?: (ms: number) => Promise<void>;
+  /** Test seam: where the local page's bundle is (default the image's `apps/web/dist`). */
+  readonly webRoot?: string;
 }
+
+/** The marker a drain leaves in `worker-state`: its pause is cleared at the next start (WP-292). */
+export const DRAIN_MARKER_FILE = 'drain-pause';
 
 export interface RemoteWorkerState {
   readonly role: typeof REMOTE_WORKER_ROLE;
@@ -94,11 +128,20 @@ export interface RemoteWorkerState {
 export interface RemoteWorkerRuntime {
   readonly config: RemoteWorkerConfig;
   readonly logger: PinoLogger;
-  /** Starts the local listener; answers its address. */
+  /** Starts the local listener — and the local page's, when enabled; answers the first's address. */
   listen(): Promise<string>;
-  /** Stop claiming and let the runs in flight finish (`POST /internal/drain`). */
-  drain(): void;
+  /** The local page's listener address once listening, `null` when disabled or not yet started. */
+  uiAddress(): string | null;
+  /**
+   * Stop claiming and let the runs in flight finish (`POST /internal/drain`, the page's *Drain*):
+   * the core's manual pause, remembered as a drain's so the next start clears it (WP-292).
+   */
+  drain(): Promise<void>;
+  /** The owner's *Pause* / *Resume* from the local page — the core's `manual-pause` (WP-292). */
+  setPaused(paused: boolean): Promise<void>;
   state(): RemoteWorkerState;
+  /** What the local page shows, redacted by every secret this worker knows (WP-292). */
+  localState(): WorkerLocalState;
   /** The sessions in flight, by run id — a test reads how each one ended. */
   readonly sessions: ReadonlyMap<string, RunSession>;
   /** Every session this worker started, in order, kept after it ended. */
@@ -107,14 +150,20 @@ export interface RemoteWorkerRuntime {
   stop(): Promise<void>;
 }
 
-/** A pino destination that replaces every value of `secrets()` in each line before it is written. */
+/**
+ * A pino destination that replaces every value of `secrets()` in each line before it is written —
+ * and hands the redacted line to `kept`, the local page's log tail (WP-292).
+ */
 const redactingDestination = (
   inner: DestinationStream,
   secrets: () => readonly { readonly name: string; readonly value: string }[],
+  kept: (line: string) => void = () => undefined,
 ): DestinationStream => ({
   write: (line: string) => {
     const known = secrets();
-    inner.write(known.length === 0 ? line : exactSecretRedactor(known).redactText(line).value);
+    const redacted = known.length === 0 ? line : exactSecretRedactor(known).redactText(line).value;
+    inner.write(redacted);
+    kept(redacted);
   },
 });
 
@@ -130,9 +179,24 @@ export const startRemoteWorker = async (
       { name: WORKER_SECRET_NAMES.claudeToken, value: config.claudeToken },
     ],
   ]);
+  const rawDestination = options.logDestination ?? {
+    write: (line: string) => process.stdout.write(line),
+  };
+  /** The local page's log tail: lines after the redactor, newest last (WP-292). */
+  const logTail: string[] = [];
   const destination = redactingDestination(
-    options.logDestination ?? { write: (line: string) => process.stdout.write(line) },
+    rawDestination,
     () => [...logSecrets.values()],
+    (line) => {
+      const trimmed = line.replace(/\n$/, '');
+      logTail.push(
+        trimmed.length > WORKER_LOCAL_LOG_LINE_MAX_CHARS
+          ? `${trimmed.slice(0, WORKER_LOCAL_LOG_LINE_MAX_CHARS)} … [cut]`
+          : trimmed,
+      );
+      if (logTail.length > WORKER_LOCAL_LOG_TAIL)
+        logTail.splice(0, logTail.length - WORKER_LOCAL_LOG_TAIL);
+    },
   );
   const logger = createLogger({
     level: config.logLevel,
@@ -162,11 +226,15 @@ export const startRemoteWorker = async (
   let coreProtocol: WorkerProtocolRange | null = null;
   let coreDigests: CoreImageDigests | null = null;
   let lastHandshakeAt: string | null = null;
+  /** The owner's (or a drain's) hold, as the core stored it (WP-292). */
+  let manuallyPausedAt: string | null = null;
+  let usagePausedUntil: string | null = null;
   let heldDigests: string[] = [];
   const sessions = new Map<string, RunSession>();
   const history: RunSession[] = [];
   let claimAbort: AbortController | null = null;
   let slotFreed: (() => void) | null = null;
+  const drainMarker = path.join(config.stateDir, DRAIN_MARKER_FILE);
 
   /**
    * The digests this worker **holds** — only what its launcher resolves on the local daemon now
@@ -206,6 +274,8 @@ export const startRemoteWorker = async (
         coreDigests = answer.digests;
         workerId = answer.worker.id;
         workerName = answer.worker.name;
+        manuallyPausedAt = answer.worker.manually_paused_at ?? null;
+        usagePausedUntil = answer.worker.paused_until;
         lastHandshakeAt = new Date().toISOString();
         connection = 'connected';
         loggerPort.info(
@@ -285,7 +355,15 @@ export const startRemoteWorker = async (
 
   const claimLoop = async (): Promise<void> => {
     let failures = 0;
-    while (!stopping && !draining && connection === 'connected') {
+    while (!stopping && connection === 'connected') {
+      // Drained or held by its owner: wait for *Resume* (WP-292) — never claim.
+      if (draining || manuallyPausedAt !== null) {
+        await new Promise<void>((resolve) => {
+          slotFreed = resolve;
+        });
+        slotFreed = null;
+        continue;
+      }
       if (sessions.size >= config.concurrency) {
         await new Promise<void>((resolve) => {
           slotFreed = resolve;
@@ -309,7 +387,8 @@ export const startRemoteWorker = async (
         failures = 0;
         if (pkg !== null) startSession(pkg);
       } catch (error) {
-        if (stopping || draining) break;
+        if (stopping) break;
+        if (draining || manuallyPausedAt !== null) continue;
         if (error instanceof CoreCallError && error.kind === 'unauthenticated') {
           connection = 'revoked';
           loggerPort.error({}, 'the core refused this worker’s credential; it stops claiming');
@@ -336,6 +415,196 @@ export const startRemoteWorker = async (
     }
   };
 
+  /** Wakes the claim loop: a slot freed, a resume, a drain or a stop. */
+  const wakeClaims = (): void => {
+    slotFreed?.();
+  };
+
+  const exists = async (file: string): Promise<boolean> =>
+    stat(file).then(
+      () => true,
+      () => false,
+    );
+
+  /** The core's `manual-pause`, stored here once it answered (WP-292). */
+  const assertPause = async (paused: boolean): Promise<void> => {
+    if (credential === null) {
+      throw new LocalUiError(
+        409,
+        'not_connected',
+        'this worker is not logged in to its core yet, so it cannot be paused there',
+      );
+    }
+    const answer = await core.manualPause(credential, { paused });
+    manuallyPausedAt = answer.manually_paused_at;
+  };
+
+  /**
+   * At start, after the handshake: a drain's pause is cleared — **only a drain's** (the marker
+   * says so); an owner's *Pause* survives a restart. Retried until the core answers or the worker
+   * stops; until then this worker claims nothing, which is what the pause said anyway.
+   */
+  const clearDrainPause = async (): Promise<void> => {
+    if (!(await exists(drainMarker))) return;
+    for (let attempt = 0; !stopping; attempt += 1) {
+      try {
+        await assertPause(false);
+        await rm(drainMarker, { force: true });
+        loggerPort.info({}, 'the last drain’s pause is cleared at this start; claiming again');
+        return;
+      } catch (error) {
+        if (
+          error instanceof CoreCallError &&
+          (error.kind === 'unauthenticated' || error.kind === 'upgrade_required')
+        ) {
+          loggerPort.error({ err: error }, 'the last drain’s pause could not be cleared');
+          return;
+        }
+        await sleep(backoffMs(attempt));
+      }
+    }
+  };
+
+  /** The owner's *Pause* / *Resume* (WP-292): the core first, then this worker. */
+  const setPaused = async (paused: boolean): Promise<void> => {
+    await assertPause(paused);
+    // Either way the hold is now the owner's, not a drain's: a later start leaves a *Pause* in place.
+    await rm(drainMarker, { force: true });
+    if (paused) {
+      claimAbort?.abort();
+    } else {
+      draining = false;
+    }
+    wakeClaims();
+    loggerPort.info(
+      { paused },
+      paused
+        ? 'this worker’s owner paused it: it claims nothing until resumed'
+        : 'this worker’s owner resumed it: claiming again',
+    );
+  };
+
+  /**
+   * *Drain* (WP-292) and `POST /internal/drain` (WP-283 (3)): claim nothing more at once, finish
+   * what runs, and hold the core's pause as a **drain's** — the marker makes the next start clear
+   * it. The core's pause is best-effort here: a drain the updater asks for must happen whether or
+   * not the core answers, and the claim loop is already stopped locally.
+   */
+  const drain = async (): Promise<void> => {
+    const first = !draining;
+    draining = true;
+    claimAbort?.abort();
+    wakeClaims();
+    if (first) {
+      loggerPort.info({ runs: sessions.size }, 'this worker is draining: it claims nothing more');
+    }
+    await writeFile(drainMarker, `${new Date().toISOString()}\n`, { mode: 0o600 }).catch(
+      (error: unknown) =>
+        loggerPort.warn({ err: error }, 'the drain marker could not be written in worker-state'),
+    );
+    try {
+      await assertPause(true);
+    } catch (error) {
+      loggerPort.warn(
+        { err: error },
+        'the core did not record the drain’s pause; this worker claims nothing either way',
+      );
+    }
+  };
+
+  /** A person's cancel from the local page: the core's `run.cancel` (WP-292, Q126). */
+  const cancelRun = async (input: {
+    readonly runId: string;
+    readonly reason: string | undefined;
+    readonly idempotencyKey: string;
+  }) => {
+    const session = sessions.get(input.runId);
+    if (session === undefined) {
+      throw new LocalUiError(404, 'run_not_here', 'this worker does not hold that run (any more)');
+    }
+    try {
+      const answer = await session.requestCancel({
+        reason: input.reason,
+        idempotencyKey: input.idempotencyKey,
+      });
+      loggerPort.info(
+        { run_id: input.runId, command_id: answer.command_id },
+        'a cancel from the local page was accepted by the core; the task is paused',
+      );
+      return {
+        run_id: answer.run_id,
+        accepted: answer.performed || answer.command_id !== null,
+        task_state: answer.task_state,
+      };
+    } catch (error) {
+      if (error instanceof CoreCallError && error.status !== null && error.status < 500) {
+        throw new LocalUiError(
+          error.status === 403 ? 403 : 409,
+          error.code ?? 'refused',
+          `the core refused the cancel: ${error.message}`,
+        );
+      }
+      throw new LocalUiError(
+        502,
+        'core_unreachable',
+        `the core did not answer the cancel: ${(error as Error).message}`,
+      );
+    }
+  };
+
+  /**
+   * Every secret this worker knows (WP-292): the log's — the Claude token, the credential, each
+   * live run's token and run credential — and, once the page listens, the page's own token.
+   */
+  let uiToken: string | null = null;
+  const pageRedactor = () => exactSecretRedactor([...logSecrets.values()]);
+
+  /**
+   * The local page's state (WP-292): read from this worker's memory only — no core read — and
+   * passed, keys and values, through every exact secret this worker knows before it is answered.
+   */
+  const localState = (): WorkerLocalState => {
+    const now = Date.now();
+    const value = {
+      worker_id: workerId,
+      worker_name: workerName,
+      connection,
+      protocol: WORKER_PROTOCOL_VERSION,
+      core_protocol: coreProtocol,
+      core_url: config.coreUrl,
+      last_handshake_at: lastHandshakeAt,
+      manually_paused_at: manuallyPausedAt,
+      usage_paused_until: usagePausedUntil,
+      draining,
+      update_pending:
+        coreDigests === null || (config.platformImageDigest ?? null) === null
+          ? null
+          : coreDigests.platform !== config.platformImageDigest,
+      concurrency: config.concurrency,
+      runs: [...sessions.values()].map((session) => ({
+        run_id: session.state.runId,
+        task_id: session.state.taskId,
+        project_id: session.state.projectId,
+        project_key: session.state.display?.projectKey ?? null,
+        ticket_key: session.state.display?.ticketKey ?? null,
+        title: session.state.display?.title ?? null,
+        stage: session.state.stage,
+        role: session.state.role,
+        attempt: session.state.attempt,
+        phase: session.state.phase,
+        started_at: session.state.startedAt,
+        elapsed_ms: Math.max(0, now - Date.parse(session.state.startedAt)),
+        tokens: session.state.tokens,
+        cost_usd: session.state.costUsd,
+        cancel_requested: session.state.cancelRequested,
+        transcript: [...session.state.tail],
+      })),
+      logs: [...logTail],
+      server_time: new Date(now).toISOString(),
+    };
+    return workerLocalStateSchema.parse(redactKeysAndValues(pageRedactor(), value));
+  };
+
   const main = (async () => {
     try {
       credential = await ensureCredential({
@@ -348,6 +617,7 @@ export const startRemoteWorker = async (
       if (credential === null) return;
       logSecrets.set('credential', { name: 'worker_credential', value: credential });
       if (!(await handshake())) return;
+      await clearDrainPause();
       await claimLoop();
     } catch (error) {
       loggerPort.error({ err: error }, 'the remote worker stopped claiming after an error');
@@ -376,14 +646,6 @@ export const startRemoteWorker = async (
     })),
   });
 
-  const drain = (): void => {
-    if (draining) return;
-    draining = true;
-    claimAbort?.abort();
-    slotFreed?.();
-    loggerPort.info({ runs: sessions.size }, 'this worker is draining: it claims nothing more');
-  };
-
   const send = (response: ServerResponse, status: number, body: unknown): void => {
     response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     response.end(JSON.stringify(body));
@@ -407,13 +669,82 @@ export const startRemoteWorker = async (
       return;
     }
     if (request.method === 'POST' && path === '/internal/drain') {
-      drain();
-      send(response, 202, state());
+      void drain().then(
+        () => send(response, 202, state()),
+        () => send(response, 202, state()),
+      );
       return;
     }
     send(response, 404, { error: { code: 'not_found', message: `${path} is not served here` } });
   };
   let server: Server | null = null;
+  let uiServer: Server | null = null;
+  let uiAddress: string | null = null;
+
+  const bind = async (listening: Server, port: number, host: string): Promise<string> => {
+    await new Promise<void>((resolve, reject) => {
+      listening.once('error', reject);
+      listening.listen(port, host, () => resolve());
+    });
+    const address = listening.address();
+    const bound = typeof address === 'object' && address !== null ? address.port : port;
+    return `http://${host}:${bound}`;
+  };
+
+  /**
+   * The local page's listener (WP-292): only when `APP_WORKER_UI=enabled`. The token is created
+   * once in `worker-state` and the page's address is logged **once per start**, written straight to
+   * the process's output — the one line that carries the token, which every other line, the log
+   * tail and every local answer redact.
+   */
+  const listenUi = async (): Promise<void> => {
+    const ui = config.ui;
+    if (ui === undefined || !ui.enabled) {
+      loggerPort.info({}, 'the local page is disabled (APP_WORKER_UI=disabled): no port is open');
+      return;
+    }
+    uiToken = await ensureUiToken(config.stateDir);
+    const token = uiToken;
+    logSecrets.set('ui_token', { name: 'worker_ui_token', value: token });
+    const webRoot = await resolveBundleRoot(options.webRoot ?? BUNDLED_WEB_ROOT);
+    const listening = createLocalUiServer({
+      token,
+      publishedPort: ui.publishedPort,
+      webRoot,
+      redact: (text) => pageRedactor().redactText(text).value,
+      api: {
+        state: localState,
+        pause: async (paused) => {
+          try {
+            await setPaused(paused);
+          } catch (error) {
+            if (error instanceof LocalUiError) throw error;
+            throw new LocalUiError(
+              502,
+              'core_unreachable',
+              `the core did not record the ${paused ? 'pause' : 'resume'}: ${(error as Error).message}`,
+            );
+          }
+          return localState();
+        },
+        drain: async () => {
+          await drain();
+          return localState();
+        },
+        cancel: cancelRun,
+      },
+    });
+    uiServer = listening;
+    uiAddress = await bind(listening, ui.listenPort, ui.host);
+    rawDestination.write(
+      `${JSON.stringify({
+        level: 30,
+        time: Date.now(),
+        role: REMOTE_WORKER_ROLE,
+        msg: `this worker's page: ${uiAddressOf(ui.publishedPort, token)} (open it on this machine; the address is printed at every start — delete ui-token in the worker-state volume to change it)`,
+      })}\n`,
+    );
+  };
 
   return {
     config,
@@ -423,16 +754,15 @@ export const startRemoteWorker = async (
     listen: async () => {
       const listening = createServer(handle);
       server = listening;
-      await new Promise<void>((resolve, reject) => {
-        listening.once('error', reject);
-        listening.listen(config.port, config.host, () => resolve());
-      });
-      const address = listening.address();
-      const port = typeof address === 'object' && address !== null ? address.port : config.port;
-      return `http://${config.host}:${port}`;
+      const address = await bind(listening, config.port, config.host);
+      await listenUi();
+      return address;
     },
+    uiAddress: () => uiAddress,
     drain,
+    setPaused,
     state,
+    localState,
     stop: async () => {
       stopping = true;
       claimAbort?.abort();
@@ -441,11 +771,15 @@ export const startRemoteWorker = async (
       await Promise.all([...sessions.values()].map((session) => session.done));
       await main;
       connection = 'stopped';
-      const open = server;
-      server = null;
-      if (open !== null) {
-        await new Promise<void>((resolve) => open.close(() => resolve()));
+      for (const open of [server, uiServer]) {
+        if (open !== null) {
+          open.closeAllConnections();
+          await new Promise<void>((resolve) => open.close(() => resolve()));
+        }
       }
+      server = null;
+      uiServer = null;
+      uiAddress = null;
     },
   };
 };

@@ -59,7 +59,7 @@ import {
   type IntegrationStack,
   unavailableClaudeRunner,
 } from './pipeline.js';
-import { remoteRunCredentialOf } from './worker-run-calls.js';
+import { remoteRunCredentialOf, runDisplayOf } from './worker-run-calls.js';
 import { runTokens } from './workers/secrets.js';
 import { createRunGitCredentialMinter, createRunWorkspaceProjectSource } from './workspaces.js';
 
@@ -239,6 +239,8 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
       clock: runnerAdapters.systemClock,
       // WP-282 (Q124 (a)): a static token or a deploy key reaches a worker only behind the opt-in.
       remoteRunCredential: async (spec) => remoteRunCredentialOf(options.pool)(spec.projectId),
+      // WP-292: the worker's local page names the run by its project, ticket and redacted title.
+      display: async (spec) => runDisplayOf(options.pool)(spec.taskId),
       logger: options.logger,
     }),
     credentials: {

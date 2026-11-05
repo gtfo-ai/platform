@@ -45,6 +45,12 @@ export default defineConfig({
     // is not shipped, so it neither helps nor hurts the number and is left off.
     sourcemap: false,
     rolldownOptions: {
+      // Two pages (WP-292): the SPA, and the worker's local page — served by a remote worker on
+      // 127.0.0.1, with its own budget line in `bundle:check` (≤ 120 kB gz).
+      input: {
+        index: fileURLToPath(new URL('index.html', import.meta.url)),
+        worker: fileURLToPath(new URL('worker.html', import.meta.url)),
+      },
       output: {
         // zod and the module that turns its JIT off, in one chunk of their own (S-23.4): an
         // ordering constraint, not a size one — see the docblock and `src/zod-jitless.ts`.

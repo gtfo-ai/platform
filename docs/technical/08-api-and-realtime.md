@@ -388,7 +388,7 @@ Per-user rate limits on mutating endpoints; webhook endpoints limited per integr
 A second authenticated surface, `/api/worker/v1/*`, for remote workers: device flow (`device`,
 `device/token`, unauthenticated and rate-limited), `handshake`, `claims` (held ≤ 25 s), `runs/:id/
 {heartbeat (held ≤ 20 s), transcript, tools/:name, approvals, session, ssh-sign, release, finish,
-late-cost}`, `pause`, `release` (digests + protocol range; the updater verifies attestations itself), `compose.yml` (first install only), `update-report`. Device-flow rate limits key on `APP_TRUSTED_CLIENT_IP_HEADER` only from a peer the widened `APP_TRUST_PROXY` (an address/CIDR list) trusts. Auth: a per-machine worker credential (`wkr_…`,
+late-cost, cancel}`, `pause`, `manual-pause`, `release` (digests + protocol range; the updater verifies attestations itself), `compose.yml` (first install only), `update-report`. Device-flow rate limits key on `APP_TRUSTED_CLIENT_IP_HEADER` only from a peer the widened `APP_TRUST_PROXY` (an address/CIDR list) trusts. Auth: a per-machine worker credential (`wkr_…`,
 stored SHA-256) or a per-run token; header `X-Worker-Protocol`; `426 upgrade_required` outside `[N-1,
 N]`; `409 lease_lost` on a stale epoch; `Cache-Control: no-store`. No request is held longer than 25 s, so
 the surface works through a CDN proxy (research/17 § 8). For people: `GET/DELETE /api/workers[/:id]`
@@ -568,6 +568,25 @@ worker asks its launcher for none (TD-031 §14, backlog 688). Its local listener
 compose network only. `GET /api/runs/:run_id` gains `seat` (the agents list's `{kind, worker_id,
 worker_name}`) so the run page can say who executed a run (WP-283 (5)).
 
+**Protocol 2 — the worker's local page (WP-292, TD-031's 2026-11-04 worker-UI amendment).** Two verbs,
+both `426` below protocol 2 (before the credential is read), and two keys a version-1 worker is never
+sent, because every schema is strict: the handshake's `worker.manually_paused_at` and the package's
+`display` block (`{projectKey, ticketKey, title}`, the title from the redacted ticket snapshot).
+`POST manual-pause {paused}` (worker credential) is a state assertion over `workers.manually_paused_at`
+(migration 0099) — one `human_actions` row `worker.pause`/`worker.resume` per change, `params: {worker_id,
+via: worker_ui}`, the worker's user, none for a repeat (`performed: false`); while it is set `claims`
+answers `204` at once and the claim's eligibility and the online-assignee rule leave the worker out.
+`POST runs/:id/cancel {reason?}` (run token, `Idempotency-Key` **required**) is `POST
+/api/runs/:run_id/cancel`'s command as the worker's user under the same `run.cancel` permission
+(`403 forbidden` below it, nothing recorded, the run continues), the same idempotency record and the same
+`human_actions` row plus `via: worker_ui` and `worker_id`; the worker holds the lease, so it answers `202`
+with the `command_id` its own heartbeat delivers, and the task is paused (Q126). The page itself is
+served by the worker, not the core: `worker.html` and `/api/local/{state, pause, drain, runs/:id/cancel}`
+on container port 7357, published `127.0.0.1:${APP_WORKER_UI_PORT:-7357}` only, behind a bearer token
+from the URL fragment, a `Host` allow-list (`421`), an `Origin` check on every `POST` (`403`), no CORS
+header and no cookie (`apps/server/src/remote-worker/local-ui.ts`); `APP_WORKER_UI=disabled` opens no
+port. The page polls `state` every 2 s.
+
 The opt-in itself is the GitLab configuration key `remote_run_credential: allow | deny` (default `deny`),
 written through `PATCH /api/integrations/:id` (`integration.write`, admin), whose `human_actions` row
 carries the value; the Integrations screen shows the residual beside the switch. With `allow`, a static
@@ -575,8 +594,8 @@ token travels in the package and a deploy key never does (the package carries th
 key; the worker signs through `ssh-sign`).
 
 **The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls, WP-284 `release` and `compose.yml`; `pause` and `update-report` are WP-285's and WP-287's):
-`packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (1), `ACCEPTED_WORKER_PROTOCOLS`
-(`[N-1, N]`, today `[1]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
+`packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (2 since WP-292), `ACCEPTED_WORKER_PROTOCOLS`
+(`[N-1, N]`, today `[1, 2]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
 paths, the bounds, and a strict zod schema for every request and response body of TD-031 §9. Two
 spellings, each stated there: the **HTTP DTOs are snake_case**, the house rule; the **run package**
 (`runPackageSchema`, the `200` of `claims`, published as `schemas/worker-run-package.schema.json`) is

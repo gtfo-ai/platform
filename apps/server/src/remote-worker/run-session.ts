@@ -80,6 +80,7 @@ import {
 } from '@platform/application';
 import type { Id, JsonObject, JsonValue, RunPackage, TranscriptEvent } from '@platform/contracts';
 import {
+  WORKER_LOCAL_TRANSCRIPT_TAIL,
   WORKER_REMOTE_LEASE_RENEW_MS,
   WORKER_TRANSCRIPT_BATCH_MAX_BYTES,
 } from '@platform/contracts';
@@ -169,6 +170,7 @@ export const guardedRunClient = (
     release: (body) => client.release(guard(body)),
     finish: (body) => client.finish(guard(body)),
     lateCost: (body) => client.lateCost(guard(body)),
+    cancel: (body, idempotencyKey) => client.cancel(guard(body), idempotencyKey),
   };
 };
 
@@ -226,17 +228,33 @@ const takeOverPayloadSchema = z.object({
   keep_until: z.string().min(1),
 });
 
-/** One run's live state, as `/internal/state` reads it. */
+/** One run's live state, as `/internal/state` and the local page read it. */
 export interface RunSessionState {
   readonly runId: string;
   readonly taskId: string;
+  readonly projectId: string;
   readonly stage: string | null;
+  readonly role: RunPackage['run']['role'];
+  readonly attempt: number;
+  /** The package's display block (protocol ≥ 2), or `null` from a core that sent none. */
+  readonly display: RunPackage['display'] | null;
   readonly epoch: number;
   readonly startedAt: string;
   phase: 'provisioning' | 'running' | 'finishing' | 'ended';
   ending: RunSessionEnding | null;
   /** Monotonic ms of the last successful renewal. */
   lastRenewal: number;
+  /**
+   * The newest transcript entries **as uploaded** — after the runner's redaction and this worker's
+   * exact-value redactor — oldest first, at most {@link WORKER_LOCAL_TRANSCRIPT_TAIL} (WP-292).
+   */
+  readonly tail: TranscriptEvent[];
+  /** Input + output tokens from the run's `result` entry; `null` until it reported them. */
+  tokens: number | null;
+  /** The cost the run's `result` entry reported, USD; `null` until reported (BD-011). */
+  costUsd: number | null;
+  /** A cancel was asked from the local page and the core accepted it. */
+  cancelRequested: boolean;
 }
 
 export interface RunSessionOptions {
@@ -268,6 +286,16 @@ export interface RunSession {
   readonly done: Promise<RunSessionEnding>;
   /** Hands the run back (the worker is stopping): the session ends `shutdown`, then `finish`. */
   shutdown(): void;
+  /**
+   * A person's cancel from the local page (WP-292): asked of the **core** — the task page's
+   * `run.cancel`, as the worker's user — never applied here. The core records a `run_commands` row
+   * this session's heartbeat delivers, which stops the run and is acked like any other cancel.
+   * Rejects with the core's refusal (a `403` for a user below `run.cancel`).
+   */
+  requestCancel(input: {
+    readonly reason: string | undefined;
+    readonly idempotencyKey: string;
+  }): Promise<Awaited<ReturnType<RunScopedClient['cancel']>>>;
 }
 
 /**
@@ -367,7 +395,15 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
   const state: RunSessionState = {
     runId,
     taskId: pkg.run.taskId,
+    projectId: pkg.run.projectId,
     stage: pkg.run.stage ?? null,
+    role: pkg.run.role,
+    attempt: pkg.run.attempt,
+    display: pkg.display ?? null,
+    tail: [],
+    tokens: null,
+    costUsd: null,
+    cancelRequested: false,
     epoch,
     startedAt: new Date(clock.now()).toISOString(),
     phase: 'provisioning',
@@ -447,9 +483,27 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
     });
     return flushing;
   };
+  /**
+   * The local page's tail (WP-292): the entry exactly as it is uploaded — the guarded client
+   * redacts keys and values by the same exact values on the way out — and the run's reported
+   * tokens and cost from its `result` entry, never an estimate (BD-011).
+   */
+  const keepForPage = (event: TranscriptEvent): void => {
+    const uploaded = redactKeysAndValues(exact, event) as TranscriptEvent;
+    state.tail.push(uploaded);
+    if (state.tail.length > WORKER_LOCAL_TRANSCRIPT_TAIL) {
+      state.tail.splice(0, state.tail.length - WORKER_LOCAL_TRANSCRIPT_TAIL);
+    }
+    if (event.kind === 'result') {
+      state.tokens = event.usage.input_tokens + event.usage.output_tokens;
+      // A figure the producer reported, never one somebody priced (`is_estimate`).
+      state.costUsd = event.cost.is_estimate ? null : event.cost.usd;
+    }
+  };
   const uploader: RunTranscriptSink = {
     append: async (event: TranscriptEvent) => {
       if (loss !== null) return;
+      keepForPage(event);
       queued.push({ seq: event.seq, event: event as unknown as JsonObject });
       void flush();
     },
@@ -841,6 +895,17 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
     done,
     shutdown: () => {
       handle?.stop({ reason: 'shutdown' }).catch(() => undefined);
+    },
+    requestCancel: async ({ reason, idempotencyKey }) => {
+      const answer = await core.cancel(
+        reason === undefined ? {} : { reason: local.redactText(reason).value },
+        idempotencyKey,
+      );
+      state.cancelRequested = true;
+      // The recorded stop wakes this run's held heartbeat on the core; waking ours as well means
+      // the beat that collects it is not one already parked for its full hold.
+      wakeBeat();
+      return answer;
     },
   };
 };

@@ -333,6 +333,8 @@ export interface MemoryRemoteWorker {
   /** Not revoked, and its user may act. */
   readonly usable: boolean;
   readonly pausedUntil: IsoDateTime | null;
+  /** The owner's hold from the worker's local page (WP-292); absent reads as not held. */
+  readonly manuallyPaused?: boolean;
   /** Whether the user is a member of the project at `member` or above. */
   readonly memberOf: (projectId: Id) => boolean;
 }
@@ -1648,6 +1650,7 @@ export const createMemoryPipelineStore = (
     if (known.pausedUntil !== null && Date.parse(known.pausedUntil) > Date.parse(claim.now)) {
       return false;
     }
+    if (known.manuallyPaused === true) return false;
     if (!known.memberOf(candidate.projectId)) return false;
     const remote = remoteOf(candidate.runId);
     if (remote.excluded.includes(worker.workerId)) return false;

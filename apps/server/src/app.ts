@@ -178,6 +178,7 @@ import { registerStatsRoutes } from './routes/stats.js';
 import { registerTaskStartRoutes } from './routes/task-start.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
+import type { WorkerRunCancelPort } from './routes/worker/owner-verbs.js';
 import {
   registerWorkerProtocolCheck,
   registerWorkerProtocolRoutes,
@@ -310,6 +311,11 @@ export interface BuildAppOptions {
     readonly release: () => WorkerRelease | null;
     /** Why `release()` is `null` — the `503 digests_unresolved`'s words, naming the image (WP-284). */
     readonly unresolved?: () => string | null;
+    /**
+     * The worker's cancel (WP-292). Absent: composed from `commands` and this process's database;
+     * a test passes its own (or `null`, which answers `503` by name).
+     */
+    readonly runCancel?: WorkerRunCancelPort | null;
     /** The held requests' bounds; absent, TD-031 §9's 25 s and 20 s (a test shortens them). */
     readonly holds?: {
       readonly claimMs?: number;
@@ -656,6 +662,26 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     });
     await registerWorkerProtocolRoutes(app, {
       store: workerStore,
+      baseUrl: config.baseUrl,
+      // WP-292: the task page's cancel, carried by a worker from its local page. Its reads and
+      // records are the command routes' own, bound to this process's database here.
+      runCancel:
+        options.workerProtocol?.runCancel !== undefined
+          ? options.workerProtocol.runCancel
+          : options.commands === null
+            ? null
+            : {
+                cancelRun: options.commands.cancelRun,
+                runProjectId: async (runId) => findRunProjectId(options.database, runId),
+                runPosition: async (runId) => findRunPosition(options.database, runId),
+                projectRole: async (projectId, userId) =>
+                  findProjectRole(options.database, projectId, userId),
+                userRole: async (userId) =>
+                  (await findUserById(options.database, userId))?.role ?? null,
+                claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+                releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
+                recordAction: async (input) => recordHumanAction(options.database, input),
+              },
       remoteRuns: options.workerProtocol?.remoteRuns ?? null,
       runCalls: options.workerProtocol?.runCalls ?? null,
       broadcast: options.workerProtocol?.broadcast ?? null,

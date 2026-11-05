@@ -51,6 +51,7 @@ interface WorkerRowMemory {
   protocolVersion: number | null;
   imageDigests: readonly string[];
   pausedUntil: Date | null;
+  manuallyPausedAt: Date | null;
 }
 
 export interface MemoryUser {
@@ -155,6 +156,7 @@ export const createMemoryWorkerStore = (
       revokedAt: worker.revokedAt,
       pausedUntil: worker.pausedUntil,
       pausedReason: worker.pausedUntil === null ? null : 'usage_limited',
+      manuallyPausedAt: worker.manuallyPausedAt,
       concurrency: 1,
       running: [...runs.values()]
         .filter((run) => run.workerId === worker.id && LIVE.has(run.status))
@@ -249,6 +251,7 @@ export const createMemoryWorkerStore = (
         protocolVersion: null,
         imageDigests: [],
         pausedUntil: null,
+        manuallyPausedAt: null,
       });
       row.consumedAt = now;
       row.workerId = mint.workerId;
@@ -348,6 +351,23 @@ export const createMemoryWorkerStore = (
       return { status: 'revoked', performed: true, revokedAt: now, expiredRuns };
     },
 
+    async setManualPause({ workerId, paused, now }) {
+      const worker = workers.get(workerId);
+      if (worker === undefined) {
+        return { status: 'not_found' };
+      }
+      if ((worker.manuallyPausedAt !== null) === paused) {
+        return { status: 'set', manuallyPausedAt: worker.manuallyPausedAt, performed: false };
+      }
+      worker.manuallyPausedAt = paused ? now : null;
+      audit.push({
+        userId: worker.userId,
+        action: paused ? 'worker.pause' : 'worker.resume',
+        params: { worker_id: workerId, via: 'worker_ui' },
+      });
+      return { status: 'set', manuallyPausedAt: worker.manuallyPausedAt, performed: true };
+    },
+
     async expireUserWorkerLeases(userId) {
       return expire(
         new Set([...workers.values()].filter((w) => w.userId === userId).map((w) => w.id)),
@@ -378,7 +398,9 @@ export const createMemoryWorkerStore = (
       return {
         connected: connected.length,
         paused: connected.filter(
-          (worker) => worker.pausedUntil !== null && worker.pausedUntil.getTime() > at,
+          (worker) =>
+            (worker.pausedUntil !== null && worker.pausedUntil.getTime() > at) ||
+            worker.manuallyPausedAt !== null,
         ).length,
       };
     },

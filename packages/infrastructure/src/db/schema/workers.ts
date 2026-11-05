@@ -29,6 +29,8 @@ export const workers = pgTable('workers', {
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
   pausedUntil: timestamp('paused_until', { withTimezone: true }),
   pausedReason: text('paused_reason').$type<'usage_limited'>(),
+  /** The owner's hold from the worker's local page (migration 0099, WP-292); `null` while not held. */
+  manuallyPausedAt: timestamp('manually_paused_at', { withTimezone: true }),
   concurrency: integer('concurrency').notNull().default(1),
 });
 

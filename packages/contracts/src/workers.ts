@@ -89,6 +89,8 @@ export const workerSummarySchema = z.strictObject({
   revoked_at: isoDateTimeSchema.nullable(),
   paused_until: isoDateTimeSchema.nullable(),
   paused_reason: workerPauseReasonSchema.nullable(),
+  /** The owner's hold from the worker's local page (WP-292): *paused by its owner*. */
+  manually_paused_at: isoDateTimeSchema.nullable(),
   concurrency: z.int().positive().max(64),
   /**
    * The live runs (`created`, `starting`, `running`) this worker holds (S-23.15): its claim of the

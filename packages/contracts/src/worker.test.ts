@@ -10,6 +10,7 @@ import {
   WORKER_PACKAGE_MAX_BYTES,
   WORKER_PATHS,
   WORKER_PROTOCOL_HEADER,
+  WORKER_PROTOCOL_LOCAL_UI,
   WORKER_PROTOCOL_VERSION,
   WORKER_USER_CODE_ALPHABET,
   workerApprovalRequestSchema,
@@ -180,9 +181,11 @@ const refusals = (value: unknown): string[] => {
 };
 
 describe('protocol versions (TD-032 decision 7)', () => {
-  it('ships N = 1, accepting [N-1, N] without a 0', () => {
-    expect(WORKER_PROTOCOL_VERSION).toBe(1);
-    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([1]);
+  it('ships N = 2, accepting [N-1, N] without a 0 (WP-292 bumped it)', () => {
+    expect(WORKER_PROTOCOL_VERSION).toBe(2);
+    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([1, 2]);
+    // The local UI's verbs and keys are protocol 2's: the version that introduced them is N.
+    expect(WORKER_PROTOCOL_LOCAL_UI).toBe(2);
     expect(ACCEPTED_WORKER_PROTOCOLS).toContain(WORKER_PROTOCOL_VERSION);
     for (const version of ACCEPTED_WORKER_PROTOCOLS) {
       expect([WORKER_PROTOCOL_VERSION - 1, WORKER_PROTOCOL_VERSION]).toContain(version);
@@ -192,8 +195,9 @@ describe('protocol versions (TD-032 decision 7)', () => {
 
   it('accepts exactly the listed versions', () => {
     expect(isAcceptedWorkerProtocol(1)).toBe(true);
+    expect(isAcceptedWorkerProtocol(2)).toBe(true);
     expect(isAcceptedWorkerProtocol(0)).toBe(false);
-    expect(isAcceptedWorkerProtocol(2)).toBe(false);
+    expect(isAcceptedWorkerProtocol(3)).toBe(false);
   });
 
   it('reads the X-Worker-Protocol header strictly; anything else is no protocol (426)', () => {
@@ -211,14 +215,32 @@ describe('protocol versions (TD-032 decision 7)', () => {
     const paths = Object.values(WORKER_PATHS);
     expect(new Set(paths).size).toBe(paths.length);
     // WP-281: the spawn marker joined TD-031 §9's seventeen (its 2026-11-04 amendment §4).
-    expect(paths).toHaveLength(18);
+    // WP-292: the local UI's two verbs (TD-031's worker-UI amendment §4).
+    expect(paths).toHaveLength(20);
     expect(paths).toContain('runs/:id/spawn');
+    expect(paths).toContain('manual-pause');
+    expect(paths).toContain('runs/:id/cancel');
   });
 });
 
 describe('runPackageSchema (TD-031 decision 4)', () => {
   it('admits a package the core would send', () => {
     expect(refusals(runPackage())).toEqual([]);
+  });
+
+  it('admits the display block (protocol 2), strictly and bounded (WP-292)', () => {
+    const display = { projectKey: 'ACME', ticketKey: 'ACME-12', title: 'Fix the login' };
+    expect(refusals({ ...runPackage(), display })).toEqual([]);
+    expect(refusals({ ...runPackage(), display: { ...display, title: null } })).toEqual([]);
+    expect(
+      runPackageSchema.safeParse({ ...runPackage(), display: { ...display, x: 1 } }).success,
+    ).toBe(false);
+    expect(
+      runPackageSchema.safeParse({
+        ...runPackage(),
+        display: { ...display, title: 'x'.repeat(501) },
+      }).success,
+    ).toBe(false);
   });
 
   it('is strict at every level: an unknown key is refused', () => {

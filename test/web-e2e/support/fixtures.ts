@@ -984,6 +984,7 @@ export const workers = workersResponseSchema.parse({
       state: 'active',
       revoked_at: null,
       paused_until: null,
+      manually_paused_at: null,
       paused_reason: null,
       concurrency: 3,
       running: [{ run_id: IDS.runWorker, task_id: IDS.taskFleetWorker, project_id: IDS.project }],
@@ -1000,6 +1001,7 @@ export const workers = workersResponseSchema.parse({
       revoked_at: null,
       // Far ahead of any browser's clock: paused for the whole run of the suite.
       paused_until: '2099-01-01T00:00:00.000Z',
+      manually_paused_at: null,
       paused_reason: 'usage_limited',
       concurrency: 2,
       running: [],

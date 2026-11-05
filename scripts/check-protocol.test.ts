@@ -71,9 +71,9 @@ const scratch = (): Scratch => {
 };
 
 describe('the constants this build ships', () => {
-  it('are N = 1 accepting [1] — [N-1, N] without a 0 (TD-031 decision 9)', () => {
-    expect(WORKER_PROTOCOL_VERSION).toBe(1);
-    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([1]);
+  it('are N = 2 accepting [1, 2] — [N-1, N] without a 0 (TD-031 decision 9; bumped by WP-292)', () => {
+    expect(WORKER_PROTOCOL_VERSION).toBe(2);
+    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([1, 2]);
   });
 
   it('are read back from the module text exactly as they are imported', () => {

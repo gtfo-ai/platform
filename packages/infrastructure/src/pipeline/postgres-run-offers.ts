@@ -117,7 +117,8 @@ const RUNNING_ROLES = ['member', 'maintainer', 'admin'] as const;
  * - it holds the offer's run and egress images — the digests the offer names, or the core's own for
  *   an offer that names none (decision 4);
  * - the worker is not revoked, its user may act (backlog 714: here, in the statement that commits the
- *   claim) and is a project member at `member` or above, and it is not paused;
+ *   claim) and is a project member at `member` or above, and it is not paused — neither by a usage
+ *   limit (`paused_until`) nor by its owner (`manually_paused_at`, WP-292);
  * - `now ≥ workers_from`, or the worker's user is the offer's assignee inside its head start — a
  *   `null` `workers_from` is *never* (`server_only`, and an offer written before WP-278);
  * - the project's run credential is `minted`, or — WP-282, decision 5, Q124 (a) — a git binding whose
@@ -137,6 +138,7 @@ const WORKER_ELIGIBLE = `(
               and w.revoked_at is null
               and ${USER_MAY_ACT_SQL}
               and (w.paused_until is null or w.paused_until <= $4::timestamptz)
+              and w.manually_paused_at is null
               and m.role::text = any(array[${RUNNING_ROLES.map((role) => `'${role}'`).join(', ')}])
               and (o.workers_from <= $4::timestamptz
                    or (o.assignee_user_id = w.user_id and $4::timestamptz < o.assignee_until)))

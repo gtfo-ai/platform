@@ -30,6 +30,9 @@
     },
     "limits": {
       "$ref": "#/$defs/anon_8b4b1efa"
+    },
+    "display": {
+      "$ref": "#/$defs/anon_6e26106a"
     }
   },
   "required": [
@@ -422,6 +425,36 @@
     "anon_6d600f46": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "anon_6e26106a": {
+      "type": "object",
+      "properties": {
+        "projectKey": {
+          "maxLength": 64,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "ticketKey": {
+          "maxLength": 256,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 500
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "projectKey",
+        "ticketKey",
+        "title"
+      ],
+      "additionalProperties": false
     },
     "anon_8b4b1efa": {
       "type": "object",

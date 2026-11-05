@@ -82,6 +82,8 @@ export interface WorkerUnderTest {
   /** Every package this worker claimed, in order. */
   readonly packages: readonly RunPackage[];
   readonly clis: ReadonlyMap<string, runnerAdapters.FakeCli>;
+  /** The worker's `worker-state` directory (its credential, its local page's `ui-token`). */
+  readonly stateDir: string;
   stop(): Promise<void>;
 }
 
@@ -106,7 +108,15 @@ export interface WorkerUnderTestOptions {
   readonly sequence?: string[];
   /** Words the scripted model also says, in an assistant message of its own (a planted secret). */
   readonly echo?: (pkg: RunPackage) => string | null;
+  /**
+   * The local page (WP-292) on an ephemeral port, its `Host` naming {@link E2E_UI_PUBLISHED_PORT};
+   * absent, disabled — what every case before WP-292 ran with.
+   */
+  readonly ui?: boolean;
 }
+
+/** The host port the e2e worker's page claims to be published on — what its `Host` must name. */
+export const E2E_UI_PUBLISHED_PORT = 7357;
 
 /** The scripted CLI's script with one more assistant message, before its `result`. */
 const withEcho = (
@@ -269,6 +279,12 @@ export const startWorkerUnderTest = async (
       port: 0,
       logLevel: options.logs === undefined ? 'silent' : 'debug',
       commit: null,
+      ui: {
+        enabled: options.ui === true,
+        host: '127.0.0.1',
+        listenPort: 0,
+        publishedPort: E2E_UI_PUBLISHED_PORT,
+      },
     },
     coreFetch,
     launcher,
@@ -319,6 +335,7 @@ export const startWorkerUnderTest = async (
     launcherEnds,
     packages,
     clis,
+    stateDir,
     stop: async () => {
       await runtime.stop();
       await controlPlane.close();

@@ -234,7 +234,8 @@ const firstLine = (text: string): string =>
     .find((line) => line !== '') ?? text;
 
 const isPaused = (worker: WorkerSummary, now: number): boolean =>
-  worker.paused_until !== null && Date.parse(worker.paused_until) > now;
+  worker.manually_paused_at !== null ||
+  (worker.paused_until !== null && Date.parse(worker.paused_until) > now);
 
 const seatIdOf = (seat: AgentItem['seat']): string | null => {
   if (seat === null) {

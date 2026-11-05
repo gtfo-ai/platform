@@ -1442,6 +1442,13 @@ older than five minutes asks you to confirm that a second time. Name the machine
 deny; the machine collects its credential at its next poll. The worker program itself, and running
 stages on it, arrive with the rest of the worker protocol.
 
+A machine its owner paused from the worker's own page reads **Paused by its owner**: it takes no new
+work until it is resumed there. That page — on the developer's machine only, at the address the
+worker prints — shows what the worker is doing and has **Cancel run**, which does exactly what the
+task page's *Cancel* does: the run stops and **its task is paused** until somebody resumes it.
+Stopping the worker's container is not a cancel; the platform treats it as a lost worker and plans
+the stage again.
+
 ## 13. The whole list of what is not there yet
 
 In one place, so it is not spread across thirteen sections:

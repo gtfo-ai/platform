@@ -47,7 +47,12 @@ import {
   silentLogger,
   WorkspaceError,
 } from '@platform/application';
-import { type RunCredentialPayload, type RunSpec, runPackageSchema } from '@platform/contracts';
+import {
+  type RunCredentialPayload,
+  type RunDisplay,
+  type RunSpec,
+  runPackageSchema,
+} from '@platform/contracts';
 import { type PlatformSkillCatalogue, runSkillsFor } from '../workspace/skills.js';
 import {
   gitSshOf,
@@ -75,6 +80,13 @@ export interface RemoteRunPackagerOptions {
    * check is an open one (standing rule 31).
    */
   readonly remoteRunCredential: (spec: RunSpec) => Promise<'allow' | 'deny'>;
+  /**
+   * The worker's local page's names for the run — the project's key, the ticket's key and title from
+   * the **redacted** ticket snapshot (WP-292). Absent or `null`: the package carries no `display`
+   * block, and the page names the run by its ids. The claims route strips the block for a
+   * version-1 worker.
+   */
+  readonly display?: (spec: RunSpec) => Promise<RunDisplay | null>;
   readonly logger?: Logger;
 }
 
@@ -188,6 +200,16 @@ export const createRemoteRunPackager = (options: RemoteRunPackagerOptions): Remo
               expiresAt: minted.expiresAt,
               source: minted.source ?? 'minted',
             };
+      // A display read that fails costs the page its names, never the run (WP-292).
+      const display = await (options.display?.(spec) ?? Promise.resolve(null)).catch(
+        (error: unknown) => {
+          logger.warn(
+            { err: error, run_id: spec.runId },
+            'the run’s display names could not be read; the package carries none',
+          );
+          return null;
+        },
+      );
       const parsed = runPackageSchema.safeParse({
         runId: spec.runId,
         epoch: input.epoch,
@@ -198,6 +220,7 @@ export const createRemoteRunPackager = (options: RemoteRunPackagerOptions): Remo
         skills,
         images: { run: input.images.run, egress: input.images.egress },
         limits: { leaseTtlMs: input.leaseTtlMs },
+        ...(display === null ? {} : { display }),
       });
       if (!parsed.success) {
         if (minted !== null) {
