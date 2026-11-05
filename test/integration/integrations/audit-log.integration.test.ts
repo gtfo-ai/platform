@@ -368,7 +368,8 @@ describe('two writers of one integration stream wait for each other (BACKLOG 970
           fn({
             ...scope,
             events: {
-              lockStreamSequence: scope.events.lockStreamSequence,
+              lockStreamSequence: (streamType, streamId) =>
+                scope.events.lockStreamSequence(streamType, streamId),
               append: async (events) => {
                 // This writer has read its sequence and inserted its row; another writer of the
                 // same stream records now, through the plain unit of work.

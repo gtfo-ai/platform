@@ -148,7 +148,8 @@ describe('two deliveries for one project (BACKLOG 971)', () => {
           fn({
             ...scope,
             events: {
-              lockStreamSequence: scope.events.lockStreamSequence,
+              lockStreamSequence: (streamType, streamId) =>
+                scope.events.lockStreamSequence(streamType, streamId),
               append: async (events, appendOptions) => {
                 attempts += 1;
                 const competitor = recordNormalisedDelivery(
