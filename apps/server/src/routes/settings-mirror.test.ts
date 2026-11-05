@@ -16,7 +16,8 @@
  * rule 85: a guard that reads only `git ls-files` is green on a file the author has not committed,
  * so it would pass locally and fail on CI.
  *
- * A "command" is a TanStack mutation **invoked**: `something.<name>.mutate(`. That is what a control
+ * A "command" is a TanStack mutation **invoked**: `something.<name>.mutate(` — or `.mutateAsync(`,
+ * which the budgets' one Save awaits per window (S-23.11b). That is what a control
  * a person can press compiles to, and it is why the closure matters — `features/operating-mode.tsx`
  * is rendered by the wizard *and* by the settings page, so every control in it belongs to both sets
  * without being written twice. Not having two of something is the only way a mirror stays true, and
@@ -77,7 +78,7 @@ const resolveRelative = (fromFile: string, specifier: string, known: ReadonlySet
 
 const RELATIVE_IMPORT = /from\s+'(\.[^']*)'/g;
 /** A TanStack mutation being fired: `commands.createProject.mutate(` — what a control compiles to. */
-const MUTATION_CALL = /\.([A-Za-z][A-Za-z0-9_]*)\.mutate\(/g;
+const MUTATION_CALL = /\.([A-Za-z][A-Za-z0-9_]*)\.mutate(?:Async)?\(/g;
 
 const commandsReachableFrom = (entry: string, files: ReadonlySet<string>): Set<string> => {
   const sources = new Map<string, string>();
@@ -192,6 +193,10 @@ describe('the mirror census’s own instruments', () => {
     expect(direct.has('setAutonomy')).toBe(true);
     const throughTheWizard = commandsReachableFrom(WIZARD, files);
     expect(throughTheWizard.has('setAutonomy')).toBe(true);
+    // `mutateAsync` is a control too: the budgets' one Save awaits each window (S-23.11b).
+    expect(
+      [...'commands.setOrgBudget.mutateAsync({'.matchAll(MUTATION_CALL)].map((m) => m[1]),
+    ).toEqual(['setOrgBudget']);
     // A mutation named only in prose is not a control.
     expect([
       ...withoutComments('/**\n * calls commands.notAControl.mutate() one day\n */\n').matchAll(

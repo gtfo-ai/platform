@@ -222,6 +222,33 @@ describe('missingSimilarityReason', () => {
 });
 
 describe('the Shadow screen', () => {
+  it('says a batch id the project’s batches do not name is not this project’s, and reads nothing by it', async () => {
+    // Review of PR #25: the id is compared with this project's batches before the batch is read,
+    // so another project's batch is never drawn under this project's tab.
+    const requested: string[] = [];
+    window.history.pushState(
+      {},
+      '',
+      '/projects/api/shadow?batch=00000000-0000-4000-8000-00000000ffff',
+    );
+    render(
+      createApp({
+        fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+          requested.push(String(input));
+          return fetchImpl(input, init);
+        }) as typeof fetch,
+        realtime: false,
+      }).element,
+    );
+    expect(await screen.findByText('No such batch in this project')).toBeTruthy();
+    expect(requested.some((url) => url.includes('/shadow-batches/'))).toBe(false);
+    expect(screen.queryByRole('region', { name: 'This batch in figures' })).toBeNull();
+    // …and the other direction: the project's own batch id is read and drawn.
+    cleanup();
+    await renderBatch();
+    expect(screen.queryByText('No such batch in this project')).toBeNull();
+  });
+
   it('lists each batch as a row that opens its page, and draws no aggregate on the list', async () => {
     const container = await renderScreen();
     const list = await screen.findByRole('list', { name: 'Shadow batches' });

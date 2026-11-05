@@ -1329,14 +1329,16 @@ Policies · Notifications · Budgets · Users · Provider identities · Dead let
 Instance** — grouped as *Personal*, *Organisation*, *People* and *Operations*; opening **Settings**
 opens the first. A section that changes something has **one Save** at its foot: it stays disabled
 (*Nothing has changed.*) until you change something, and it saves only what you changed. *Appearance*
-is the exception — the theme applies as you pick it, and is kept in this browser only. The
-*Operations* group is shown to an administrator only; anybody else who opens one of its addresses
-lands on *Appearance*.
+is the exception — the theme applies as you pick it, and is kept in this browser only. *Provider
+identities*, *Dead letters* and *Failed jobs* are an administrator's and are shown to an
+administrator only; anybody else who opens one of their addresses lands on *Appearance*. *Instance*
+is everybody's.
 
 - **Session** — who is signed in, and with which role.
 - **Budgets** — the **organisation budgets**, the caps that stop a new run anywhere in the
   organisation: one field per window (*Per day*, *Per week*, *Per month*, *In total*), each with what
-  has been spent of it; empty is no cap.
+  has been spent of it; empty is no cap. **Save budgets** writes each changed window in turn, and a
+  window the server refuses says so under its own field.
 - **Users** — everybody with an account, with their role and whether they are active.
 - **Provider identities** — which Slack, Jira or GitLab account is which person, without which a
   decision made in those tools is refused as unmapped.

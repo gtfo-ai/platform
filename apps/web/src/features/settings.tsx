@@ -204,13 +204,11 @@ const OrgBudgets = (): ReactElement => {
       <Budgets
         projectId={null}
         budgets={budgets.data?.items ?? []}
-        pending={commands.setOrgBudget.isPending}
-        error={commands.setOrgBudget.error}
         scopeLabel="Organisation"
         primary
-        onSave={(window, limitUsd) => {
-          commands.setOrgBudget.mutate({ window, limit_usd: limitUsd });
-        }}
+        onSave={(window, limitUsd) =>
+          commands.setOrgBudget.mutateAsync({ window, limit_usd: limitUsd })
+        }
       />
     </>
   );

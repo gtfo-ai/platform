@@ -432,15 +432,37 @@ export const ShadowScreen = ({
   const commands = useShadowCommands();
   const [keys, setKeys] = useState('');
 
+  const items = batches.data?.items ?? [];
+
   if (batchId !== null) {
-    return projectId === null ? (
-      <Loading label="Loading the batch" />
-    ) : (
-      <BatchPage batchId={batchId} projectId={projectId} projectKey={projectKey} />
-    );
+    // The id is compared with the batches **this project's** read returned before anything is
+    // asked by it, so another project's batch is never shown under this project's tab.
+    if (projectId === null || batches.isPending) {
+      return <Loading label="Loading the batch" />;
+    }
+    if (batches.error !== null) {
+      return <ErrorNotice title="Shadow batches could not be loaded." error={batches.error} />;
+    }
+    if (!items.some((batch) => batch.id === batchId)) {
+      return (
+        <div className="flex flex-col gap-3" data-shadow-batch="unknown">
+          <Link
+            to="/projects/$key/shadow"
+            params={{ key: projectKey }}
+            className="text-sm underline"
+          >
+            ← All shadow batches
+          </Link>
+          <EmptyState
+            title="No such batch in this project"
+            hint="The link names a shadow batch this project does not have. Pick one from the project’s batches."
+          />
+        </div>
+      );
+    }
+    return <BatchPage batchId={batchId} projectId={projectId} projectKey={projectKey} />;
   }
 
-  const items = batches.data?.items ?? [];
   const canStart = batches.data?.can_start ?? false;
   const blocked = batches.data?.blocked_reason ?? null;
 

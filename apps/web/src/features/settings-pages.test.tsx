@@ -39,7 +39,13 @@ interface World {
   role: UserRole;
   requested: string[];
   budgetPuts: unknown[];
-  budgetAnswer: { readonly status: number; readonly body: unknown };
+  /** What a `PUT /api/org/budgets` answers, given its body — possibly later. */
+  budgetAnswer: (body: unknown) => Answer | Promise<Answer>;
+}
+
+interface Answer {
+  readonly status: number;
+  readonly body: unknown;
 }
 
 let world: World;
@@ -50,8 +56,10 @@ const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise
   world.requested.push(path);
   if (url.includes('/api/auth/get-session')) return json(session(world.role));
   if (path === '/api/org/budgets' && init?.method === 'PUT') {
-    world.budgetPuts.push(JSON.parse(String(init.body)));
-    return json(world.budgetAnswer.body, world.budgetAnswer.status);
+    const body: unknown = JSON.parse(String(init.body));
+    world.budgetPuts.push(body);
+    const answer = await world.budgetAnswer(body);
+    return json(answer.body, answer.status);
   }
   if (path === '/api/org/budgets') {
     return json({
@@ -106,7 +114,7 @@ beforeEach(() => {
     role: 'admin',
     requested: [],
     budgetPuts: [],
-    budgetAnswer: { status: 200, body: {} },
+    budgetAnswer: () => ({ status: 200, body: {} }),
   };
 });
 
@@ -162,7 +170,7 @@ describe('the org settings sub-routes', () => {
     expect(await screen.findByLabelText('Theme preference')).toBeTruthy();
   });
 
-  it('shows Operations to nobody but an administrator, and redirects its paths before any read', async () => {
+  it('shows the administrator’s sections to nobody else, and redirects their paths before any read', async () => {
     world.role = 'maintainer';
     open('/settings/dead-letters');
     await waitFor(() => {
@@ -171,11 +179,31 @@ describe('the org settings sub-routes', () => {
     const nav = await screen.findByRole('navigation', { name: 'Settings' });
     expect(
       within(nav)
-        .getAllByRole('heading')
-        .map((heading) => heading.textContent),
-    ).toEqual(['Personal', 'Organisation', 'People']);
-    expect(within(nav).queryByRole('link', { name: 'Dead letters' })).toBeNull();
+        .getAllByRole('link')
+        .map((link) => link.textContent),
+    ).toEqual([
+      'Appearance',
+      'Session',
+      'Policies',
+      'Notifications',
+      'Budgets',
+      'Users',
+      // Instance reads the public version: everybody's (review of PR #25).
+      'Instance',
+    ]);
     expect(world.requested).not.toContain('/api/org/dead-letters');
+    // Provider identities is the administrator's on the server (`org.users.manage`) too.
+    cleanup();
+    world.requested = [];
+    open('/settings/identities');
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/settings/appearance');
+    });
+    expect(world.requested).not.toContain('/api/org/identities');
+    cleanup();
+    open('/settings/instance');
+    expect(await screen.findByRole('heading', { name: 'Instance' })).toBeTruthy();
+    expect(window.location.pathname).toBe('/settings/instance');
     // …and the other direction: the administrator's path renders the section and asks its read.
     cleanup();
     world.role = 'admin';
@@ -205,11 +233,11 @@ describe('the org settings sub-routes', () => {
     expect(primaries()).toEqual([save]);
   });
 
-  it('shows the server’s refusal of a budget save', async () => {
-    world.budgetAnswer = {
+  it('shows the server’s refusal of a budget save beside its field, keeping the draft', async () => {
+    world.budgetAnswer = () => ({
       status: 403,
       body: { error: { code: 'forbidden', message: 'role viewer may not perform budget.write' } },
-    };
+    });
     open('/settings/budgets');
     const user = userEvent.setup();
     const month = await screen.findByLabelText('Per month');
@@ -219,10 +247,52 @@ describe('the org settings sub-routes', () => {
     await user.clear(month);
     await user.type(month, '25');
     await user.click(screen.getByRole('button', { name: 'Save budgets' }));
-    expect(await screen.findByText('The budget was not saved.')).toBeTruthy();
+    expect(await screen.findByText('Per month: the cap was not saved.')).toBeTruthy();
     expect(document.body.textContent).toContain('role viewer may not perform budget.write');
     // The draft survives the refusal, so nothing typed is lost.
     expect((screen.getByLabelText('Per month') as HTMLInputElement).value).toBe('25');
+  });
+
+  it('sends two changed windows in turn, stays pending until both settle, and keeps the first one’s refusal', async () => {
+    // Review of PR #25: one mutation fired twice kept only the second call's state, so the day
+    // cap's refusal vanished behind the week's success.
+    let releaseDay: () => void = () => undefined;
+    const dayAnswered = new Promise<void>((resolve) => {
+      releaseDay = resolve;
+    });
+    world.budgetAnswer = (body) =>
+      (body as { window: string }).window === 'day'
+        ? dayAnswered.then(() => ({
+            status: 403,
+            body: { error: { code: 'forbidden', message: 'the day cap is refused' } },
+          }))
+        : { status: 200, body: {} };
+    open('/settings/budgets');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Per day'), '5');
+    await user.type(screen.getByLabelText('Per week'), '10');
+    await user.click(screen.getByRole('button', { name: 'Save budgets' }));
+    // The first window is in flight: the button is pending and the second has not been sent yet.
+    const pending = await screen.findByRole('button', { name: 'Saving…' });
+    expect((pending as HTMLButtonElement).disabled).toBe(true);
+    expect(world.budgetPuts).toEqual([{ window: 'day', limit_usd: 5 }]);
+    releaseDay();
+    await waitFor(() => {
+      expect(world.budgetPuts).toEqual([
+        { window: 'day', limit_usd: 5 },
+        { window: 'week', limit_usd: 10 },
+      ]);
+    });
+    const day = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-budget-window="day"]');
+      expect(found?.textContent).toContain('Per day: the cap was not saved.');
+      return found as HTMLElement;
+    });
+    expect(day.textContent).toContain('the day cap is refused');
+    expect(document.querySelector('[data-budget-window="week"]')?.textContent).not.toContain(
+      'was not saved',
+    );
+    expect(await screen.findByRole('button', { name: 'Save budgets' })).toBeTruthy();
   });
 
   it('draws each org section with at most one primary action', async () => {
@@ -275,14 +345,22 @@ describe('the project settings sub-routes', () => {
 });
 
 describe('the section tables', () => {
-  it('hide the administrator’s group from every other role, and from a session not yet read', () => {
+  it('hide the administrator’s sections from every other role, and from a session not yet read', () => {
     for (const role of ['maintainer', 'member', 'viewer', undefined] as const) {
-      expect(orgSettingsGroupsFor(role).map((group) => group.label)).toEqual([
-        'Personal',
-        'Organisation',
-        'People',
+      expect(
+        orgSettingsGroupsFor(role).map((group) => [
+          group.label,
+          group.sections.map((section) => section.id),
+        ]),
+      ).toEqual([
+        ['Personal', ['appearance', 'session']],
+        ['Organisation', ['policies', 'notifications', 'budgets']],
+        ['People', ['users']],
+        ['Operations', ['instance']],
       ]);
     }
-    expect(orgSettingsGroupsFor('admin').map((group) => group.label)).toContain('Operations');
+    expect(
+      orgSettingsGroupsFor('admin').flatMap((group) => group.sections.map(({ id }) => id)),
+    ).toEqual(ORG_SETTINGS_GROUPS.flatMap((group) => group.sections.map(({ id }) => id)));
   });
 });

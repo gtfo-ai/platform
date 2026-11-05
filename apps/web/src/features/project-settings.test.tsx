@@ -1001,3 +1001,49 @@ describe('the verification mode', () => {
     expect(screen.getByText(/choosing local here is not applied/)).toBeTruthy();
   });
 });
+
+/**
+ * The project budgets' one Save (review of PR #25): several changed windows are several requests,
+ * sent one after another, and a refusal of the first stays on the screen beside its own field when a
+ * later window succeeds — one mutation fired twice used to keep only the last call's answer.
+ */
+describe('the project budgets’ one Save', () => {
+  it('sends both changed windows, shows the first one’s refusal beside it, and nothing beside the second', async () => {
+    const puts: unknown[] = [];
+    const base = fetchFor({});
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (init?.method === 'PUT' && url.endsWith(`/api/projects/${PROJECT}/budgets`)) {
+        const body = JSON.parse(String(init.body)) as { window: string };
+        puts.push(body);
+        return body.window === 'day'
+          ? json(
+              { error: { code: 'forbidden', message: 'role member may not set the day cap' } },
+              403,
+            )
+          : json({});
+      }
+      return base(input, init);
+    };
+    render(createApp({ fetchImpl, realtime: false }).element);
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Per day'), '5');
+    await user.type(screen.getByLabelText('Per week'), '10');
+    await user.click(screen.getByRole('button', { name: 'Save budgets' }));
+    await waitFor(() => {
+      expect(puts).toEqual([
+        { window: 'day', limit_usd: 5 },
+        { window: 'week', limit_usd: 10 },
+      ]);
+    });
+    const day = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-budget-window="day"]');
+      expect(found?.textContent).toContain('Per day: the cap was not saved.');
+      return found as HTMLElement;
+    });
+    expect(day.textContent).toContain('role member may not set the day cap');
+    expect(document.querySelector('[data-budget-window="week"]')?.textContent).not.toContain(
+      'was not saved',
+    );
+  });
+});

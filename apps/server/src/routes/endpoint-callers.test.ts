@@ -12,7 +12,8 @@
  * This does. Two halves, because a command and a read are wired differently:
  *
  * - **A mutation** (`x: useMutation({…})` in `app/queries.ts`) must be **fired** somewhere —
- *   `something.x.mutate(` — which is what a button a person can press compiles to.
+ *   `something.x.mutate(` (or `mutateAsync(`, which a control awaits when it must collect each
+ *   answer, as the budgets' one Save does) — which is what a button a person can press compiles to.
  * - **A read hook** (`export const useX` in `app/queries.ts`) must be **called** somewhere outside
  *   that file.
  *
@@ -90,8 +91,8 @@ describe('every client command has a control', () => {
   it('fires every mutation `app/queries.ts` declares from somewhere outside it', () => {
     const fired = new Set(
       sourcesExcept([QUERIES]).flatMap(({ source }) =>
-        [...source.matchAll(/\.([A-Za-z][A-Za-z0-9_]*)\.mutate\(/g)].flatMap(([, name]) =>
-          name === undefined ? [] : [name],
+        [...source.matchAll(/\.([A-Za-z][A-Za-z0-9_]*)\.mutate(?:Async)?\(/g)].flatMap(
+          ([, name]) => (name === undefined ? [] : [name]),
         ),
       ),
     );

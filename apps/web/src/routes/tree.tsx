@@ -385,7 +385,8 @@ const pipelineRoute = projectPage(
 /**
  * product/10:20's Shadow screen (WP-34): the batches, and `?batch=<id>` — one batch's page (S-23.11b).
  * A search parameter for `?artifact=`'s reason: it makes a batch addressable. The id is compared
- * with the ids the batches read returned and reaches no attribute, so an unknown one says so.
+ * with the ids this project's batches read returned (`features/shadow.tsx`) before the batch is
+ * read, so another project's batch never shows under this tab; it reaches no attribute.
  */
 const shadowSearchSchema = z.object({ batch: z.string().optional() });
 

@@ -844,37 +844,66 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
  * (`shadowBudgetUsdOf`, `ShadowStore.shadowSpendSince`). The maintenance one still has none, and
  * the copy below says which is which.
  */
+type BudgetWindow = (typeof BUDGET_WINDOWS)[number];
+
 export const Budgets = ({
   projectId,
   budgets,
   onSave,
-  pending,
-  error,
   scopeLabel,
   primary = false,
 }: {
   readonly projectId: string | null;
   readonly budgets: readonly BudgetRecord[];
-  readonly onSave: (window: (typeof BUDGET_WINDOWS)[number], limitUsd: number | null) => void;
-  readonly pending: boolean;
-  readonly error: unknown;
+  /**
+   * Writes one window's cap and settles when the server has answered — rejecting with the refusal.
+   * `PUT …/budgets` is one window per request, so a Save of several windows is several calls.
+   */
+  readonly onSave: (window: BudgetWindow, limitUsd: number | null) => Promise<unknown>;
   readonly scopeLabel: string;
   /** The page's one primary action: the org Budgets page; never inside the wizard's step. */
   readonly primary?: boolean;
 }): ReactElement => {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  /** Each window's refusal from the last Save, shown beside its own field. */
+  const [failures, setFailures] = useState<Partial<Record<BudgetWindow, unknown>>>({});
   const owned = budgets.filter((budget) =>
     projectId === null ? budget.scope === 'org' : budget.scope_id === projectId,
   );
-  const stored = (window: (typeof BUDGET_WINDOWS)[number]): string => {
+  const stored = (window: BudgetWindow): string => {
     const existing = owned.find((budget) => budget.window === window);
     return existing === undefined ? '' : String(existing.limit_usd);
   };
   // One Save for the section (S-23.11b): it writes each window whose field differs from the cap
-  // the server holds, and nothing else — `PUT …/budgets` is one window per request.
+  // the server holds, and nothing else.
   const changed = BUDGET_WINDOWS.filter(
     (window) => drafts[window] !== undefined && drafts[window].trim() !== stored(window),
   );
+
+  /**
+   * The changed windows **one after another**, each awaited, every one sent whatever an earlier one
+   * answered. One mutation fired several times keeps only the last call's state, so a refusal of
+   * the first window would vanish behind the second's success (review of PR #25); each answer is
+   * kept here instead, and the button stays pending until all of them have settled.
+   */
+  const save = async (): Promise<void> => {
+    setSaving(true);
+    setFailures({});
+    const refused: Partial<Record<BudgetWindow, unknown>> = {};
+    for (const window of changed) {
+      const trimmed = (drafts[window] ?? '').trim();
+      try {
+        // An empty field removes the cap. It is not "zero": a zero cap would block every run for
+        // ever, and the table refuses it anyway.
+        await onSave(window, trimmed === '' ? null : Number(trimmed));
+      } catch (error) {
+        refused[window] = error;
+      }
+    }
+    setFailures(refused);
+    setSaving(false);
+  };
 
   return (
     <Section title={`${scopeLabel} budgets`}>
@@ -887,8 +916,9 @@ export const Budgets = ({
         {BUDGET_WINDOWS.map((window) => {
           const existing = owned.find((budget) => budget.window === window) ?? null;
           const draft = drafts[window] ?? stored(window);
+          const failure = failures[window];
           return (
-            <li key={window} className="flex flex-wrap items-end gap-2">
+            <li key={window} className="flex flex-col gap-1" data-budget-window={window}>
               <Field
                 label={BUDGET_WINDOW_LABEL[window]}
                 hint={
@@ -902,32 +932,30 @@ export const Budgets = ({
                 value={draft}
                 onChange={(event) => setDrafts({ ...drafts, [window]: event.target.value })}
               />
+              {failure === undefined ? null : (
+                <ErrorNotice
+                  title={`${BUDGET_WINDOW_LABEL[window]}: the cap was not saved.`}
+                  error={failure}
+                />
+              )}
             </li>
           );
         })}
       </ul>
       <div className="flex items-center gap-3 border-t border-line pt-3">
         <Button
-          disabled={pending || changed.length === 0}
+          disabled={saving || changed.length === 0}
           onClick={() => {
-            for (const window of changed) {
-              const trimmed = (drafts[window] ?? '').trim();
-              // An empty field removes the cap. It is not "zero": a zero cap would block every
-              // run for ever, and the table refuses it anyway.
-              onSave(window, trimmed === '' ? null : Number(trimmed));
-            }
+            void save();
           }}
           {...(primary ? { tone: 'primary' as const } : {})}
         >
-          Save budgets
+          {saving ? 'Saving…' : 'Save budgets'}
         </Button>
-        {changed.length === 0 ? (
+        {changed.length === 0 && !saving ? (
           <span className="text-xs text-fg-muted">Nothing has changed.</span>
         ) : null}
       </div>
-      {error === null || error === undefined ? null : (
-        <ErrorNotice title="The budget was not saved." error={error} />
-      )}
     </Section>
   );
 };
@@ -946,12 +974,10 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
       <Budgets
         projectId={projectId}
         budgets={budgets.data?.items ?? []}
-        pending={commands.setProjectBudget.isPending}
-        error={commands.setProjectBudget.error}
         scopeLabel="Project"
-        onSave={(window, limitUsd) => {
-          commands.setProjectBudget.mutate({ projectId, window, limit_usd: limitUsd });
-        }}
+        onSave={(window, limitUsd) =>
+          commands.setProjectBudget.mutateAsync({ projectId, window, limit_usd: limitUsd })
+        }
       />
       <Card className="flex flex-col gap-1 text-xs">
         <p className="font-semibold">Separate feature budgets</p>
