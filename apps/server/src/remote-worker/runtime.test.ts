@@ -149,7 +149,8 @@ describe('the remote worker process (WP-283 (1), (3))', () => {
     // RFC 8628 §3.5: `slow_down` adds five seconds to the interval.
     expect(waits.slice(0, 2)).toEqual([5_000, 10_000]);
     const file = path.join(stateDir, CREDENTIAL_FILE);
-    expect(readFileSync(file, 'utf8').trim()).toBe(CREDENTIAL);
+    // The credential, and the core it belongs to on the second line (WP-294).
+    expect(readFileSync(file, 'utf8')).toBe(`${CREDENTIAL}\nhttps://core.example.test\n`);
     expect(statSync(file).mode & 0o777).toBe(0o600);
     // The code a person types is logged; the credential and the Claude token are not.
     expect(lines.join('\n')).toContain('BCDF-GHJK');

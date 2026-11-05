@@ -11,8 +11,10 @@
  *
  * | variable | |
  * |---|---|
- * | `APP_CORE_URL` | the core's public origin (BD-032 decision 11), required |
- * | `CLAUDE_CODE_OAUTH_TOKEN(_FILE)` | the developer's Claude token (`claude setup-token`), required — it goes into the CLI's environment and nowhere else (BD-032 decision 2) |
+ * | `APP_CORE_URL` | the core's public origin (BD-032 decision 11); optional since WP-294 — absent (or empty), the page's wizard asks for it and keeps it as `core-url` in `worker-state` |
+ * | `CLAUDE_CODE_OAUTH_TOKEN(_FILE)` | the developer's Claude token (`claude setup-token`); optional since WP-294 — absent, the page's *Sign in to Claude* stores it as `claude-token`. It goes into the CLI's environment and nowhere else (BD-032 decision 2) |
+ * | `APP_WORKER_CORE_CANDIDATES` | more platform addresses the wizard probes, comma-separated, beside `http://host.docker.internal:{8080,5173}` (WP-294) |
+ * | `APP_WORKER_CLAUDE_CLI` | the `claude` binary the sign-in runs — the `claude-cli` volume's copy of the run image's CLI, default `/opt/claude-cli/claude` (WP-294) |
  * | `APP_LAUNCHER_URL`, `APP_LAUNCHER_TOKEN(_FILE)` | this worker's own launcher (TD-028), required |
  * | `APP_WORKSPACE_CONTROL_ROOT` | where the `ctl` volume is mounted, required |
  * | `APP_WORKER_STATE_DIR` | the `worker-state` volume: the worker credential lives here (0600) |
@@ -22,10 +24,19 @@
  * | `HOST`, `PORT` | the local listener: `/healthz`, `/readyz`, `/internal/*` (compose network only) |
  * | `APP_WORKER_UI` | `enabled` (default) or `disabled`: the local page on container port 7357 (WP-292); `disabled` opens no port |
  * | `APP_WORKER_UI_PORT` | the **host** port `compose.worker.yml` publishes the page on, `127.0.0.1` only (default 7357) — the `Host` header the page must carry names it |
+ * | `APP_WORKER_UI_AUTH` | `none` (default: no bearer, the page at `http://127.0.0.1:<port>`) or `token` (WP-292's `ui-token`, for a machine with more than one OS account) — TD-031's 2026-11-05 no-bearer amendment |
  * | `LOG_LEVEL` | |
+ *
+ * Each of the core URL and the Claude token is read **environment → `worker-state` file → wizard**
+ * (TD-031's first-run amendment §1): an empty value counts as absent, and a value from the
+ * environment is shown as such on the page, whose action for it answers `409`.
  */
 import { DEFAULT_USAGE_PAUSE_SECONDS } from '@platform/application';
-import { imageDigestSchema, WORKER_UI_CONTAINER_PORT } from '@platform/contracts';
+import {
+  imageDigestSchema,
+  WORKER_UI_CONTAINER_PORT,
+  type WorkerUiAuth,
+} from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
 
 /** The role name `main.ts` dispatches on. Not one of `ROLES`: it composes none of their workloads. */
@@ -33,6 +44,15 @@ export const REMOTE_WORKER_ROLE = 'remote-worker';
 
 /** Where the `worker-state` volume is mounted by default (`compose.worker.yml`). */
 export const DEFAULT_WORKER_STATE_DIR = '/var/lib/platform/worker-state';
+
+/** Where `compose.worker.yml` mounts the `claude-cli` volume's copy of the run image's CLI (WP-294). */
+export const DEFAULT_CLAUDE_CLI_PATH = '/opt/claude-cli/claude';
+
+/** The platforms the wizard probes on the developer's machine (TD-031's first-run amendment §3). */
+export const DEFAULT_CORE_CANDIDATES = [
+  'http://host.docker.internal:8080',
+  'http://host.docker.internal:5173',
+] as const;
 
 /** `APP_WORKER_CONCURRENCY`'s default (TD-031 §8: one run at a time). */
 export const DEFAULT_WORKER_CONCURRENCY = 1;
@@ -60,11 +80,44 @@ export interface WorkerUiConfig {
   readonly listenPort: number;
   /** `APP_WORKER_UI_PORT`: the host port the page is published on, which a `Host` header must name. */
   readonly publishedPort: number;
+  /** `APP_WORKER_UI_AUTH` (TD-031's no-bearer amendment): `none` reads no `Authorization`. */
+  readonly auth: WorkerUiAuth;
 }
 
+/**
+ * Whether a core address may be used: `https:`, or `http:` to this machine only, and no userinfo
+ * (TD-031's first-run amendment §3). Answers the origin, or `null`.
+ */
+export const LOCAL_HTTP_HOSTS: readonly string[] = [
+  'host.docker.internal',
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+];
+export const coreOriginOf = (value: string): string | null => {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (parsed.username !== '' || parsed.password !== '') return null;
+  if (parsed.protocol === 'https:') return parsed.origin;
+  if (parsed.protocol === 'http:' && LOCAL_HTTP_HOSTS.includes(parsed.hostname)) {
+    return parsed.origin;
+  }
+  return null;
+};
+
 export interface RemoteWorkerConfig {
-  readonly coreUrl: string;
-  readonly claudeToken: string;
+  /** `APP_CORE_URL`, or `null`: the wizard's *Connect to a platform* asks for it (WP-294). */
+  readonly coreUrl: string | null;
+  /** `CLAUDE_CODE_OAUTH_TOKEN(_FILE)`, or `null`: the wizard's *Sign in to Claude* (WP-294). */
+  readonly claudeToken: string | null;
+  /** More addresses the wizard probes (`APP_WORKER_CORE_CANDIDATES`); absent reads as none. */
+  readonly coreCandidates?: readonly string[];
+  /** The `claude` the sign-in runs (`APP_WORKER_CLAUDE_CLI`); absent reads as the default. */
+  readonly claudeCliPath?: string;
   readonly launcherUrl: string;
   readonly launcherToken: string;
   readonly controlRoot: string;
@@ -123,11 +176,12 @@ export const loadRemoteWorkerConfig = (env: Env): RemoteWorkerConfig => {
     }
     return value;
   };
-  const coreUrl = required('APP_CORE_URL', "the core's public URL this worker claims runs from");
-  if (coreUrl !== '') {
+  const coreRaw = read('APP_CORE_URL') || '';
+  let coreUrl: string | null = null;
+  if (coreRaw !== '') {
     let parsed: URL | null = null;
     try {
-      parsed = new URL(coreUrl);
+      parsed = new URL(coreRaw);
     } catch {
       parsed = null;
     }
@@ -138,12 +192,27 @@ export const loadRemoteWorkerConfig = (env: Env): RemoteWorkerConfig => {
       parsed.password !== ''
     ) {
       problems.push('APP_CORE_URL must be an http(s) URL with no credentials in it');
+    } else {
+      coreUrl = coreRaw;
     }
   }
-  const claudeToken = required(
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'the Claude Code subscription token (`claude setup-token`) this machine runs agents with',
-  );
+  const claudeToken = read('CLAUDE_CODE_OAUTH_TOKEN') || null;
+  const candidates: string[] = [];
+  for (const entry of (read('APP_WORKER_CORE_CANDIDATES') ?? '').split(',')) {
+    if (entry.trim() === '') continue;
+    const origin = coreOriginOf(entry);
+    if (origin === null) {
+      problems.push(
+        `APP_WORKER_CORE_CANDIDATES has ${JSON.stringify(entry.trim().slice(0, 200))}: each entry is an https URL, or http to this machine, with no credentials`,
+      );
+    } else if (!candidates.includes(origin)) {
+      candidates.push(origin);
+    }
+  }
+  const claudeCliPath = read('APP_WORKER_CLAUDE_CLI') || DEFAULT_CLAUDE_CLI_PATH;
+  if (!/^\/[A-Za-z0-9._/-]+$/.test(claudeCliPath)) {
+    problems.push('APP_WORKER_CLAUDE_CLI must be an absolute path of plain characters');
+  }
   const launcherUrl = required('APP_LAUNCHER_URL', "this worker's launcher (TD-028)");
   const launcherToken = required('APP_LAUNCHER_TOKEN', "the launcher's control-plane token");
   const controlRoot = required('APP_WORKSPACE_CONTROL_ROOT', 'where the ctl volume is mounted');
@@ -167,6 +236,10 @@ export const loadRemoteWorkerConfig = (env: Env): RemoteWorkerConfig => {
   const uiSwitch = read('APP_WORKER_UI') || 'enabled';
   if (uiSwitch !== 'enabled' && uiSwitch !== 'disabled') {
     problems.push('APP_WORKER_UI must be enabled or disabled');
+  }
+  const uiAuth = read('APP_WORKER_UI_AUTH') || 'none';
+  if (uiAuth !== 'none' && uiAuth !== 'token') {
+    problems.push('APP_WORKER_UI_AUTH must be none or token');
   }
   const uiPortRaw = read('APP_WORKER_UI_PORT') || String(WORKER_UI_CONTAINER_PORT);
   const uiPort = Number(uiPortRaw);
@@ -199,6 +272,8 @@ export const loadRemoteWorkerConfig = (env: Env): RemoteWorkerConfig => {
   return {
     coreUrl,
     claudeToken,
+    coreCandidates: candidates,
+    claudeCliPath,
     launcherUrl,
     launcherToken,
     controlRoot,
@@ -215,6 +290,7 @@ export const loadRemoteWorkerConfig = (env: Env): RemoteWorkerConfig => {
       host: '0.0.0.0',
       listenPort: WORKER_UI_CONTAINER_PORT,
       publishedPort: uiPort,
+      auth: uiAuth as WorkerUiAuth,
     },
     platformImageDigest: digestOfImageReference(read('PLATFORM_IMAGE') ?? ''),
   };

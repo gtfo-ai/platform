@@ -907,7 +907,7 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     expect(report.statusCode).toBe(204);
   });
 
-  it('release: the digests and the protocol range, no compose file; 401 without a credential (WP-284)', async () => {
+  it('release: the digests and the protocol range, no compose file; public — no credential is 200, no contact — and still 426 without the protocol header (WP-284, WP-294)', async () => {
     const w = await world();
     const response = await w.app.inject({
       method: 'GET',
@@ -920,12 +920,23 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
       protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [...ACCEPTED_WORKER_PROTOCOLS] },
       digests: DIGESTS,
     });
+    // TD-031's first-run amendment §6: a wizard with no credential checks an address with it.
+    const before = w.store.worker(w.alice.workerId)?.lastSeenAt ?? null;
     const anonymous = await w.app.inject({
       method: 'GET',
       url: url(WORKER_PATHS.release),
       headers: PROTOCOL,
     });
-    expect(`${anonymous.statusCode} ${anonymous.json().error?.code}`).toBe('401 unauthenticated');
+    expect(anonymous.statusCode).toBe(200);
+    expect(workerReleaseResponseSchema.parse(anonymous.json()).digests).toEqual(DIGESTS);
+    // A credential, if presented, is ignored: no contact is recorded for it.
+    expect(w.store.worker(w.alice.workerId)?.lastSeenAt ?? null).toEqual(before);
+    const unknown = await w.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.release),
+      headers: { ...PROTOCOL, authorization: 'Bearer wkr_not_a_real_credential' },
+    });
+    expect(unknown.statusCode).toBe(200);
     const noProtocol = await w.app.inject({
       method: 'GET',
       url: url(WORKER_PATHS.release),
@@ -977,8 +988,9 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
       const response = await w.app.inject({
         method: 'GET',
         url: url(verb),
-        // compose.yml takes none (TD-031's 2026-11-05 amendment); release still needs the worker's.
-        headers: verb === WORKER_PATHS.release ? bearer(w.alice.credential) : {},
+        // compose.yml takes no header at all (TD-031's 2026-11-05 amendment); release is public but
+        // keeps the protocol check (the first-run amendment §6).
+        headers: verb === WORKER_PATHS.release ? PROTOCOL : {},
       });
       expect(`${verb} ${response.statusCode} ${response.json().error?.code}`).toBe(
         `${verb} 503 digests_unresolved`,

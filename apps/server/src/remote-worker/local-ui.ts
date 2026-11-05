@@ -9,11 +9,16 @@
  *
  * 1. **`Host`** must be exactly `localhost`, `127.0.0.1` or `[::1]` with the published port —
  *    anything else is `421` (DNS rebinding: a page on another name that resolves to 127.0.0.1 sends
- *    its own name; `[unverified]` V-WM9 is the residual the token covers).
- * 2. **`/api/local/*`** needs `Authorization: Bearer <ui-token>`, compared in constant time — `401`.
- *    **No cookie** is ever read or set, so a cross-site request carries no credential and CSRF has
- *    nothing to ride; **no CORS header** is ever sent, so no other origin may read an answer.
- * 3. **A mutating call** (`POST`) must also carry an `Origin` equal to `http://<Host>` — `403`.
+ *    its own name; `[unverified]` V-WM9 is the residual).
+ * 2. **Under `APP_WORKER_UI_AUTH=token` only**, `/api/local/*` needs `Authorization: Bearer
+ *    <ui-token>`, compared in constant time — `401`. Under `none` (the default since WP-294, TD-031's
+ *    no-bearer amendment) no `Authorization` header is read at all. **No cookie** is ever read or
+ *    set, so a cross-site request carries no credential and CSRF has nothing to ride; **no CORS
+ *    header** is ever sent, so no other origin may read an answer.
+ * 3. **A mutating call** (`POST`), in both modes, must carry an `Origin` equal to `http://<Host>`
+ *    (absent is refused), `Content-Type: application/json` (so a cross-site `fetch` needs a
+ *    preflight, which is never answered) and, when the browser sends it, `Sec-Fetch-Site:
+ *    same-origin` — else `403`.
  * 4. Every answer: `Cache-Control: no-store`, the core's CSP (`default-src 'self'`, `frame-ancestors
  *    'none'`, …), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
  *
@@ -28,9 +33,15 @@ import {
   WORKER_LOCAL_PATHS,
   workerLocalCancelRequestSchema,
   workerLocalClaimScopeRequestSchema,
+  workerLocalClaudeCodeRequestSchema,
+  workerLocalClaudeTokenRequestSchema,
+  workerLocalCoreCheckRequestSchema,
+  workerLocalCoreRequestSchema,
   workerLocalPauseRequestSchema,
+  workerLocalSignInRequestSchema,
   workerLocalTakeRequestSchema,
 } from '@platform/contracts';
+import type * as z from 'zod';
 import { ASSET_DIRECTORY, decodeRequestPath, resolveBundleFile } from '../web/bundle.js';
 import { CONTENT_SECURITY_POLICY } from '../web/csp.js';
 import { isUiToken } from './ui-token.js';
@@ -75,10 +86,21 @@ export interface LocalUiApi {
   offers(): Promise<unknown>;
   /** *Take this one* — the core's pick, then the run starts here (WP-293). */
   take(runId: string): Promise<unknown>;
+  // The first-run wizard's verbs (WP-294, TD-031's first-run amendment §8): each answers the state,
+  // except `checkCore`, which answers only the fields the worker parsed. None answers a secret.
+  checkCore(url: string): Promise<unknown>;
+  setCore(url: string | null): Promise<unknown>;
+  signIn(action: 'start' | 'cancel'): Promise<unknown>;
+  claudeCode(code: string): Promise<unknown>;
+  claudeToken(token: string): Promise<unknown>;
+  signOut(): Promise<unknown>;
+  connectAgain(): Promise<unknown>;
+  retry(): Promise<unknown>;
 }
 
 export interface LocalUiOptions {
-  readonly token: string;
+  /** The page's bearer under `APP_WORKER_UI_AUTH=token`; `null` under `none` (no bearer is read). */
+  readonly token: string | null;
   /** The host port the page is published on (`APP_WORKER_UI_PORT`); `Host` must name it. */
   readonly publishedPort: number;
   /** The web bundle's realpath (`resolveBundleRoot`), or `null`: the page answers `503` by name. */
@@ -182,7 +204,7 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
     verb: string,
     host: string,
   ): Promise<void> => {
-    if (!isUiToken(options.token, bearerOf(request))) {
+    if (options.token !== null && !isUiToken(options.token, bearerOf(request))) {
       throw new LocalUiError(
         401,
         'unauthenticated',
@@ -204,7 +226,9 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
     if (request.method !== 'POST') {
       throw new LocalUiError(405, 'method_not_allowed', `${request.method} is not served here`);
     }
-    // A mutation names this page's own origin — exactly, and present (amendment §2).
+    // A mutation names this page's own origin — exactly, and present (amendment §2) — as JSON (a
+    // cross-site `fetch` with that type needs a preflight, never answered here), and is not a
+    // cross-site request by the browser's own word (TD-031's no-bearer amendment §2).
     if (request.headers.origin !== `http://${host}`) {
       throw new LocalUiError(
         403,
@@ -212,7 +236,75 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
         'a change is accepted only from this page itself (its Origin header)',
       );
     }
+    const contentType = (request.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase();
+    if (contentType !== 'application/json') {
+      throw new LocalUiError(403, 'content_type_refused', 'a change is sent as application/json');
+    }
+    const site = request.headers['sec-fetch-site'];
+    if (site !== undefined && site !== 'same-origin') {
+      throw new LocalUiError(
+        403,
+        'cross_site_refused',
+        'a change is accepted only from this page itself (Sec-Fetch-Site)',
+      );
+    }
     const body = await readBody(request);
+    const parse = <T extends z.ZodType>(schema: T, expected: string): z.output<T> => {
+      const parsed = schema.safeParse(body);
+      // Never echoed: a body here may carry a token or a code.
+      if (!parsed.success) throw new LocalUiError(400, 'invalid_body', `expected ${expected}`);
+      return parsed.data;
+    };
+    switch (verb) {
+      case WORKER_LOCAL_PATHS.coreCheck:
+        send(
+          response,
+          200,
+          await options.api.checkCore(parse(workerLocalCoreCheckRequestSchema, '{ url }').url),
+        );
+        return;
+      case WORKER_LOCAL_PATHS.core:
+        send(
+          response,
+          200,
+          await options.api.setCore(parse(workerLocalCoreRequestSchema, '{ url }').url),
+        );
+        return;
+      case WORKER_LOCAL_PATHS.claudeSignIn:
+        send(
+          response,
+          200,
+          await options.api.signIn(parse(workerLocalSignInRequestSchema, '{ action }').action),
+        );
+        return;
+      case WORKER_LOCAL_PATHS.claudeCode:
+        send(
+          response,
+          200,
+          await options.api.claudeCode(parse(workerLocalClaudeCodeRequestSchema, '{ code }').code),
+        );
+        return;
+      case WORKER_LOCAL_PATHS.claudeToken:
+        send(
+          response,
+          200,
+          await options.api.claudeToken(
+            parse(workerLocalClaudeTokenRequestSchema, '{ token }').token,
+          ),
+        );
+        return;
+      case WORKER_LOCAL_PATHS.claudeSignOut:
+        send(response, 200, await options.api.signOut());
+        return;
+      case WORKER_LOCAL_PATHS.connectAgain:
+        send(response, 200, await options.api.connectAgain());
+        return;
+      case WORKER_LOCAL_PATHS.retry:
+        send(response, 200, await options.api.retry());
+        return;
+      default:
+        break;
+    }
     if (verb === WORKER_LOCAL_PATHS.pause) {
       const parsed = workerLocalPauseRequestSchema.safeParse(body);
       if (!parsed.success) throw new LocalUiError(400, 'invalid_body', 'expected { paused }');

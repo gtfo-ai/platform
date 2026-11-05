@@ -66,6 +66,14 @@ beforeAll(async () => {
       setClaimScope: async () => ({}),
       offers: async () => ({}),
       take: async () => ({}),
+      checkCore: async () => ({}),
+      setCore: async () => ({}),
+      signIn: async () => ({}),
+      claudeCode: async () => ({}),
+      claudeToken: async () => ({}),
+      signOut: async () => ({}),
+      connectAgain: async () => ({}),
+      retry: async () => ({}),
     },
   });
   await new Promise<void>((resolve) => worker.listen(workerPort, '127.0.0.1', resolve));

@@ -47,7 +47,23 @@ export const WORKER_LOCAL_PATHS = {
   offers: 'offers',
   /** *Take this one* (WP-293): the core's `POST offers/:id/claim`, then the run starts here. */
   take: 'offers/:id/take',
+  // The first-run wizard (TD-031's 2026-11-05 first-run amendment §8, WP-294).
+  coreCheck: 'core/check',
+  core: 'core',
+  claudeSignIn: 'claude/sign-in',
+  claudeCode: 'claude/code',
+  claudeToken: 'claude/token',
+  claudeSignOut: 'claude/sign-out',
+  connectAgain: 'connect-again',
+  retry: 'retry',
 } as const;
+
+/**
+ * `APP_WORKER_UI_AUTH` (TD-031's 2026-11-05 no-bearer amendment): `none` (the default) needs no
+ * bearer on `/api/local/*`; `token` keeps WP-292's `ui-token` and its `401`.
+ */
+export const workerUiAuthSchema = z.enum(['none', 'token']);
+export type WorkerUiAuth = z.infer<typeof workerUiAuthSchema>;
 
 /** How many transcript entries per run, and how many log lines, the worker keeps for the page. */
 export const WORKER_LOCAL_TRANSCRIPT_TAIL = 40;
@@ -57,14 +73,107 @@ export const WORKER_LOCAL_LOG_LINE_MAX_CHARS = 2_000;
 
 /** What the worker's connection to its core is (`runtime.ts`'s `WorkerConnection`). */
 export const workerLocalConnectionSchema = z.enum([
+  // The wizard's open steps (WP-294): no platform yet, no Claude sign-in yet.
+  'needs_platform',
+  'needs_claude',
   'logging_in',
   'handshaking',
   'connected',
   'revoked',
   'upgrade_required',
+  /** The core did not answer (or not as a platform): retried with backoff, *Try now* on the page. */
+  'core_unreachable',
   'stopped',
 ]);
 export type WorkerLocalConnection = z.infer<typeof workerLocalConnectionSchema>;
+
+/** Where a value the worker runs with came from: its environment (changed there), or the page. */
+export const workerLocalSourceSchema = z.enum(['environment', 'file']);
+export type WorkerLocalSource = z.infer<typeof workerLocalSourceSchema>;
+
+/**
+ * Why a platform address was not taken, or why the core does not answer — a class, never the body
+ * it answered (TD-031's first-run amendment §3).
+ */
+export const workerLocalCoreFailureSchema = z.enum([
+  /** `http:` to a host that is not this machine, userinfo, or not a URL at all. */
+  'address_refused',
+  'no_answer',
+  'not_a_platform',
+  'certificate',
+  /** The core's `426`: it serves another worker protocol. */
+  'needs_other_version',
+]);
+export type WorkerLocalCoreFailure = z.infer<typeof workerLocalCoreFailureSchema>;
+
+/** Where the Claude sign-in (`claude setup-token` in a pty) is. */
+export const workerLocalSignInPhaseSchema = z.enum([
+  'idle',
+  'starting',
+  'waiting_for_code',
+  'checking',
+  'failed',
+]);
+export type WorkerLocalSignInPhase = z.infer<typeof workerLocalSignInPhaseSchema>;
+
+/** Why a sign-in did not end with a stored token — platform words are the page's, by this key. */
+export const workerLocalSignInFailureSchema = z.enum([
+  /** The CLI could not be started (no `claude-cli` volume). */
+  'cli_unavailable',
+  /** The CLI ended, or showed nothing this worker reads, before a token. */
+  'cli_ended',
+  /** Claude refused the pasted code. */
+  'code_refused',
+  /** The token was captured or pasted, and Claude refused it at the check. */
+  'token_rejected',
+  /** The check could not reach Claude. */
+  'check_failed',
+  /** Ten minutes passed. */
+  'timed_out',
+]);
+export type WorkerLocalSignInFailure = z.infer<typeof workerLocalSignInFailureSchema>;
+
+/**
+ * The first-run wizard's facts (WP-294) — local only, never the protocol. **Write-only secrets**:
+ * the Claude token, the pasted code and the credential appear here as their *source* or not at all.
+ */
+export const workerLocalSetupSchema = z.strictObject({
+  /** `null` while no platform is chosen; `environment` is changed there, not on the page. */
+  core_source: workerLocalSourceSchema.nullable(),
+  /** Platforms the worker found answering on this machine (`host.docker.internal`, the list). */
+  candidates: z
+    .array(z.strictObject({ url: z.string().max(2_048), version: z.string().max(128) }))
+    .max(8),
+  claude_source: workerLocalSourceSchema.nullable(),
+  /** Claude refused the token this worker holds: it claims nothing until a new sign-in. */
+  claude_rejected: z.boolean(),
+  sign_in: z.strictObject({
+    phase: workerLocalSignInPhaseSchema,
+    /** The CLI's sign-in address — `https:` on an Anthropic host only, else `null`. */
+    url: z.string().max(4_096).nullable(),
+    failure: workerLocalSignInFailureSchema.nullable(),
+  }),
+  /** The device code to approve, while one is open; `approve_url` is on the core's own origin. */
+  device: z
+    .strictObject({
+      user_code: z.string().max(16),
+      approve_url: z.string().max(2_048).nullable(),
+      expires_at: isoDateTimeSchema,
+    })
+    .nullable(),
+  /** Why the core is not answering, and when it is asked again. */
+  unreachable: z
+    .strictObject({
+      failure: workerLocalCoreFailureSchema,
+      retry_at: isoDateTimeSchema.nullable(),
+    })
+    .nullable(),
+  /** No run in flight: *Change platform* and *Sign out* are offered only then. */
+  idle: z.boolean(),
+  /** How the page is reached (`APP_WORKER_UI_AUTH`). */
+  auth: workerUiAuthSchema,
+});
+export type WorkerLocalSetup = z.infer<typeof workerLocalSetupSchema>;
 
 /** Where a run is on this machine. */
 export const workerLocalRunPhaseSchema = z.enum(['provisioning', 'running', 'finishing', 'ended']);
@@ -113,8 +222,11 @@ export const workerLocalStateSchema = z.strictObject({
       accepted: z.array(z.int().positive()).min(1).max(2),
     })
     .nullable(),
-  /** The core's origin, for the link to a run's page there (steer and take-over live on the core). */
-  core_url: z.string().max(2_048),
+  /**
+   * The core's origin, for the link to a run's page there (steer and take-over live on the core);
+   * `null` while no platform is chosen (WP-294).
+   */
+  core_url: z.string().max(2_048).nullable(),
   last_handshake_at: isoDateTimeSchema.nullable(),
   /** The owner's hold from this page (or a drain's), as the core stored it. */
   manually_paused_at: isoDateTimeSchema.nullable(),
@@ -133,6 +245,8 @@ export const workerLocalStateSchema = z.strictObject({
   runs: z.array(workerLocalRunSchema).max(64),
   /** The worker's own log, newest last, redacted (at most {@link WORKER_LOCAL_LOG_TAIL} lines). */
   logs: z.array(z.string().max(WORKER_LOCAL_LOG_LINE_MAX_CHARS + 32)).max(WORKER_LOCAL_LOG_TAIL),
+  /** The first-run wizard's facts (WP-294). */
+  setup: workerLocalSetupSchema,
   server_time: isoDateTimeSchema,
 });
 export type WorkerLocalState = z.infer<typeof workerLocalStateSchema>;
@@ -181,6 +295,39 @@ export const workerLocalTakeRequestSchema = z.strictObject({});
 /** `POST /api/local/offers/:id/take` → the run this worker claimed and now runs. */
 export const workerLocalTakeResponseSchema = z.strictObject({ run_id: idSchema });
 export type WorkerLocalTakeResponse = z.infer<typeof workerLocalTakeResponseSchema>;
+/** `POST /api/local/core/check` and `POST /api/local/core` `{ url }`; `core` takes `null` to forget it. */
+export const workerLocalCoreCheckRequestSchema = z.strictObject({
+  url: z.string().min(1).max(2_048),
+});
+export const workerLocalCoreRequestSchema = z.strictObject({
+  url: z.string().min(1).max(2_048).nullable(),
+});
+
+/** `POST /api/local/core/check` → only fields the worker parsed with the core's own schemas. */
+export const workerLocalCoreCheckResponseSchema = z.strictObject({
+  /** The origin the worker would use. */
+  url: z.string().max(2_048),
+  host: z.string().max(253),
+  version: z.string().max(128),
+  /** `unknown`: an older core whose `release` asked for a credential — *checked partly*. */
+  protocol_fit: z.enum(['fits', 'unknown']),
+});
+export type WorkerLocalCoreCheckResponse = z.infer<typeof workerLocalCoreCheckResponseSchema>;
+
+/** `POST /api/local/claude/sign-in` `{ action }`: start the CLI's sign-in, or cancel it. */
+export const workerLocalSignInRequestSchema = z.strictObject({
+  action: z.enum(['start', 'cancel']),
+});
+
+/** `POST /api/local/claude/code` `{ code }`: what Claude's page shows, written to the CLI. */
+export const workerLocalClaudeCodeRequestSchema = z.strictObject({
+  code: z.string().min(1).max(1_024),
+});
+
+/** `POST /api/local/claude/token` `{ token }`: a token from `claude setup-token`, pasted. */
+export const workerLocalClaudeTokenRequestSchema = z.strictObject({
+  token: z.string().min(1).max(1_024),
+});
 
 /** Every local answer that is not 2xx: `{ error: { code, message } }`, the API's envelope. */
 export const workerLocalErrorSchema = z.strictObject({

@@ -15,7 +15,10 @@ import type {
   AgentRole,
   RunStatus,
   TranscriptEvent,
+  WorkerLocalCoreFailure,
   WorkerLocalRun,
+  WorkerLocalSignInFailure,
+  WorkerLocalSignInPhase,
   WorkerLocalState,
 } from '@platform/contracts';
 import { type TranscriptBlock, toBlocks } from '../transcript/blocks.js';
@@ -70,13 +73,123 @@ export const workerModeWords = (state: WorkerLocalState, nowMs: number): string 
 
 /** The connection, in a person's words. */
 export const CONNECTION_WORDS: Readonly<Record<WorkerLocalState['connection'], string>> = {
+  needs_platform: 'Not connected to a platform yet',
+  needs_claude: 'Waiting for you to sign in to Claude',
   logging_in: 'Waiting for you to approve this machine on the platform',
   handshaking: 'Connecting to the platform',
   connected: 'Connected',
   revoked:
     'The platform no longer accepts this worker — it was removed, or its owner can no longer act',
   upgrade_required: 'The platform needs another version of this worker — update it',
+  core_unreachable: 'The platform is not answering',
   stopped: 'Stopped',
+};
+
+// ── The first-run wizard (WP-294, TD-031's 2026-11-05 first-run amendment §2) ─────────────────
+
+/** The wizard's three steps, in order. */
+export type WizardStepId = 'platform' | 'claude' | 'approve';
+
+export const WIZARD_STEP_WORDS: Readonly<Record<WizardStepId, string>> = {
+  platform: 'Connect to a platform',
+  claude: 'Sign in to Claude',
+  approve: 'Approve this machine',
+};
+
+/** Why a platform address was not taken, or why the platform is not answering. */
+export const CORE_FAILURE_WORDS: Readonly<Record<WorkerLocalCoreFailure, string>> = {
+  address_refused:
+    'Use an https address, or http only for this machine (localhost), with no user name or password in it.',
+  no_answer: 'Nothing answered at that address.',
+  not_a_platform: 'Something answered, but it is not the platform.',
+  certificate: 'The address’s certificate is not trusted.',
+  needs_other_version:
+    'The platform needs another version of this worker. Download its compose file again and run docker compose up -d.',
+};
+
+/** Where the Claude sign-in is. */
+export const SIGN_IN_PHASE_WORDS: Readonly<Record<WorkerLocalSignInPhase, string>> = {
+  idle: 'Not started',
+  starting: 'Starting Claude’s sign-in…',
+  waiting_for_code: 'Waiting for the code from Claude',
+  checking: 'Checking with Claude…',
+  failed: 'The sign-in did not finish',
+};
+
+/** Why a sign-in did not finish, and what to do. */
+export const SIGN_IN_FAILURE_WORDS: Readonly<Record<WorkerLocalSignInFailure, string>> = {
+  cli_unavailable:
+    'Claude’s sign-in could not start on this worker. Paste a token instead, or run docker compose up -d again.',
+  cli_ended: 'Claude’s sign-in stopped before it finished. Start it again.',
+  code_refused: 'Claude did not accept that code. Start again and paste the newest code.',
+  token_rejected: 'Claude did not accept this sign-in. Sign in again.',
+  check_failed: 'The sign-in could not be checked with Claude. Try again in a moment.',
+  timed_out: 'The sign-in took longer than ten minutes. Start it again.',
+};
+
+export interface WizardView {
+  readonly steps: readonly {
+    readonly id: WizardStepId;
+    readonly label: string;
+    readonly state: 'done' | 'current' | 'upcoming';
+    readonly hint?: string;
+  }[];
+  readonly current: WizardStepId;
+}
+
+/** The host of an origin, for "Connected to <host>" — or the text itself when it does not parse. */
+export const hostOf = (url: string): string => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
+
+/**
+ * The wizard, or `null` when the worker is connected and the page is the room. Each step is done
+ * when its value is there; the current one is the first that is not; the approval step also holds
+ * the waits that follow it (connecting, the platform not answering, revoked, update needed).
+ */
+export const wizardOf = (state: WorkerLocalState): WizardView | null => {
+  if (state.connection === 'connected' || state.connection === 'stopped') return null;
+  const current: WizardStepId =
+    state.connection === 'needs_platform'
+      ? 'platform'
+      : state.connection === 'needs_claude'
+        ? 'claude'
+        : 'approve';
+  const order: readonly WizardStepId[] = ['platform', 'claude', 'approve'];
+  const at = order.indexOf(current);
+  return {
+    current,
+    steps: order.map((id, index) => ({
+      id,
+      label: WIZARD_STEP_WORDS[id],
+      state: index < at ? 'done' : index === at ? 'current' : 'upcoming',
+      // The platform's host is named before the Claude step (TD-031's no-bearer amendment §3).
+      ...(id === 'platform' && state.core_url !== null ? { hint: hostOf(state.core_url) } : {}),
+    })),
+  };
+};
+
+/** Whole seconds until `iso`, never negative. */
+export const secondsUntil = (iso: string, nowMs: number): number =>
+  Math.max(0, Math.ceil((Date.parse(iso) - nowMs) / 1000));
+
+/** "9:41" — a countdown's minutes and seconds. */
+export const countdownWords = (seconds: number): string =>
+  `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+
+/** The approval link, only when it is on the platform's own origin (amendment §5). */
+export const approvalLinkOf = (state: WorkerLocalState): string | null => {
+  const url = state.setup.device?.approve_url ?? null;
+  if (url === null || state.core_url === null) return null;
+  try {
+    return new URL(url).origin === new URL(state.core_url).origin ? url : null;
+  } catch {
+    return null;
+  }
 };
 
 /** The run's phase on this machine, as the activity reads a run's status. */
@@ -273,5 +386,5 @@ export const logLineWords = (line: string): string => {
 };
 
 /** The core's page for a run — steer and take-over live there (amendment §4). */
-export const coreRunUrl = (coreUrl: string, runId: string): string =>
-  `${coreUrl.replace(/\/+$/, '')}/runs/${encodeURIComponent(runId)}`;
+export const coreRunUrl = (coreUrl: string | null, runId: string): string =>
+  `${(coreUrl ?? '').replace(/\/+$/, '')}/runs/${encodeURIComponent(runId)}`;

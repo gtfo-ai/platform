@@ -270,6 +270,12 @@ export interface RunSessionOptions {
   /** The core's run-scoped client for this run's id and token (`core-client.ts`). */
   readonly core: RunScopedClient;
   readonly claudeToken: string;
+  /**
+   * Told when the CLI reports that Claude refused the token (`authentication_failed`, WP-294 (6)):
+   * the worker stops claiming and its page returns to *Sign in to Claude*. The run itself ends as
+   * any CLI failure does.
+   */
+  readonly onClaudeRejected?: () => void;
   /** The package's workspace through this worker's launcher (`workspaces.ts`), given the session. */
   readonly provisionerFor: (session: {
     readonly sshSign: (request: {
@@ -828,6 +834,9 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
         logger,
         injectedSecretRedactorFor: () => exact,
         onTurnUsage: countTurn,
+        onAssistantError: (error) => {
+          if (error === 'authentication_failed') options.onClaudeRejected?.();
+        },
         spawnClaudeCodeProcess: spawnProcess,
         ...(cliEnvironment === undefined ? {} : { workspaceEnvironment: cliEnvironment }),
       }),

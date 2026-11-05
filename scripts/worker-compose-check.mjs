@@ -58,9 +58,13 @@
  *     fragment of the deploy key are in no log line of the bundle and the deploy key fragment in no
  *     bundle container's environment; no worker container carries a `DATABASE_URL` or an
  *     `APP_SECRET_KEY`;
- *  8. **the local page** (WP-292 (6)): the page's address is in the worker's log, its token in the
- *     fragment; the publish is `127.0.0.1` only; the page and `/api/local/state` answer on
- *     `127.0.0.1` with the token, `401` without it and `421` for a foreign `Host`; the same port on the
+ *  8. **the local page** (WP-292 (6), WP-294 (6)): under the default `APP_WORKER_UI_AUTH=none` the
+ *     worker logs the plain address `http://127.0.0.1:<port>` and creates no `ui-token`; the publish
+ *     is `127.0.0.1` only; the page and `/api/local/state` answer on `127.0.0.1` right after `up -d`
+ *     with **no token**, and `421` for a foreign `Host`; `claude --version` runs from the
+ *     `claude-cli` volume inside `remote-worker` (the run image's CLI, copied by the
+ *     `pull-runtime-image` one-shot); a one-off `remote-worker` started with **no token and no URL**
+ *     serves its page `200`, at the wizard's first step (`needs_platform`); the same port on the
  *     host's **other** address answers nothing; and **a run container** — each task's refinement run,
  *     through the fake CLI, against the worker's name and every address of it the check seeds into the
  *     repository (`.wcc-probe-targets`) — connects to none of them on the UI port. What a container on
@@ -1049,10 +1053,33 @@ const main = async () => {
       !logs.includes(key.fragment),
     );
 
-    // 8. The local page (WP-292 (6)).
+    // 8. The local page (WP-292 (6)), with no token by default (WP-294 (6)).
     stages.set('the worker’s local page');
-    const uiToken = /#token=([A-Za-z0-9_-]{43})/.exec(logs)?.[1] ?? null;
-    check('the worker logs its page’s address with the token in the fragment', uiToken !== null);
+    check(
+      'the worker logs its page’s plain address (APP_WORKER_UI_AUTH=none)',
+      logs.includes(`this worker's page: http://127.0.0.1:${UI_PORT}`) && !logs.includes('#token='),
+    );
+    const tokenFile = await bundle([
+      'exec',
+      '-T',
+      'remote-worker',
+      'sh',
+      '-c',
+      'test -e /var/lib/platform/worker-state/ui-token && echo present || echo absent',
+    ]);
+    check('no ui-token is created under none', tokenFile.stdout.trim() === 'absent');
+    const cli = await bundle([
+      'exec',
+      '-T',
+      'remote-worker',
+      '/opt/claude-cli/claude',
+      '--version',
+    ]).catch((error) => ({ stdout: String(error) }));
+    check(
+      'claude --version runs from the claude-cli volume inside remote-worker',
+      /Claude Code/.test(cli.stdout),
+      cli.stdout.trim().slice(0, 120),
+    );
     const published = (await bundle(['port', 'remote-worker', '7357'])).stdout.trim();
     check(
       'the page is published on 127.0.0.1 only',
@@ -1071,9 +1098,9 @@ const main = async () => {
       'the page is served on 127.0.0.1',
       html.status === 200 && html.body.includes('id="root"'),
     );
-    const local = await asked('/api/local/state', { authorization: `Bearer ${uiToken}` });
+    const local = await asked('/api/local/state');
     check(
-      'the page’s state answers with the token, naming the worker',
+      'the page’s state answers with no token, naming the worker',
       local.status === 200 && local.body.includes('"worker_name":"check-laptop"'),
       `${local.status} ${local.body.slice(0, 120)}`,
     );
@@ -1081,7 +1108,6 @@ const main = async () => {
       'the page’s state carries no secret',
       !local.body.includes(CLAUDE_TOKEN) &&
         !local.body.includes(credential) &&
-        !local.body.includes(String(uiToken)) &&
         !local.body.includes(RUN_TOKEN),
     );
     check(
@@ -1090,7 +1116,42 @@ const main = async () => {
         (name) => !name.startsWith('access-control-') && name !== 'set-cookie',
       ),
     );
-    check('without the token the state is 401', (await asked('/api/local/state')).status === 401);
+    // A worker started with nothing — no core URL, no Claude token — still serves its page, at the
+    // wizard's first step (WP-294 (1)): a one-off on another loopback port, removed at once.
+    const emptyPort = await freePort();
+    const empty = (
+      await bundle([
+        'run',
+        '-d',
+        '--rm',
+        '--no-deps',
+        '-e',
+        'APP_CORE_URL=',
+        '-e',
+        'CLAUDE_CODE_OAUTH_TOKEN=',
+        '-e',
+        `APP_WORKER_UI_PORT=${emptyPort}`,
+        '-p',
+        `127.0.0.1:${emptyPort}:7357`,
+        'remote-worker',
+      ])
+    ).stdout.trim();
+    try {
+      let emptyState = { status: 0, body: '' };
+      for (let tries = 0; tries < 60 && emptyState.status !== 200; tries += 1) {
+        await sleep(1_000);
+        emptyState = await boundedFetch(stages, `http://127.0.0.1:${emptyPort}/api/local/state`, {})
+          .then(({ response, body }) => ({ status: response.status, body }))
+          .catch(() => ({ status: 0, body: '' }));
+      }
+      check(
+        'a worker with no token and no URL serves its page 200, at the platform step',
+        emptyState.status === 200 && emptyState.body.includes('"connection":"needs_platform"'),
+        `${emptyState.status} ${emptyState.body.slice(0, 120)}`,
+      );
+    } finally {
+      await quietly(['rm', '-f', empty]);
+    }
     check(
       'a foreign Host is 421',
       (

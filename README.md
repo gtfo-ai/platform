@@ -43,96 +43,78 @@ The full description is the operator guide's
 - Docker with Compose v2, running (`docker info` answers).
 - The core's URL (the address you open the platform at), and an account on it that is a `member` or
   above of the project.
-- A Claude subscription token: run `claude setup-token` yourself and keep its output private.
+- A Claude subscription (the worker's page runs Claude's own sign-in; you never handle the token).
 - On the core, the project's execution setting must send runs to workers — `workers_only`, or `hybrid`
   (the default) — and a git integration whose runs use a static token or a deploy key needs
   `remote_run_credential: allow` set on it by an administrator; the project's execution setting says
   so when it does not.
 
-**Steps** (in an empty directory that is **not** inside a git repository, so the token can never be
-committed)
+**Steps**
 
 ```bash
-# 1. The compose file, pinned to the core's own images, with APP_CORE_URL already set to the core.
-curl -fsSo compose.worker.yml https://<core>/api/worker/v1/compose.yml
-
-# 2. Your Claude token, into a .env beside it: typed at a silent prompt, never printed.
-read -rs CLAUDE_TOKEN && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$CLAUDE_TOKEN" > .env && unset CLAUDE_TOKEN && chmod 600 .env
-
-# 3. Start the bundle (it pulls the run, egress and git-helper images first).
-docker compose -f compose.worker.yml up -d
-
-# 4. The code to approve, and where.
-docker compose -f compose.worker.yml logs remote-worker | grep user_code
+mkdir agentic-worker && cd agentic-worker
+curl -fsSo compose.yaml https://<core>/api/worker/v1/compose.yml
+docker compose up -d
 ```
 
-Open the `verification_uri` the log line names (`https://<core>/workers/approve`) while signed in to
-the platform, enter the `user_code`, name the machine and approve. The core's **Workers** screen shows
-steps 1 and 3 for your instance, ready to copy.
+Then open **http://127.0.0.1:7357** in a browser on this machine. The page walks you through what is
+left, one step at a time, and moves on by itself when a step is done:
+
+1. **Connect to a platform** — skipped: the downloaded file already names the core. (A file with no
+   `APP_CORE_URL` offers a platform running on this machine, or asks for an address and checks it.)
+2. **Sign in to Claude** — *Sign in with Claude* opens Claude's page; sign in and paste the code it
+   shows back into the worker's page. *Paste a token instead* (from `claude setup-token`) is always
+   there.
+3. **Approve this machine** — the page shows the code in large letters and an **Open the approval
+   page** button that opens the core's `/workers/approve` with the code filled in. Check the code,
+   name the machine, press *Approve*.
+
+The page then shows the worker's room: what it is doing (its slots, each run's project, ticket,
+stage, the agent's latest steps and the worker's log) with **Pause/Resume**, **Drain** and **Cancel
+run**. The core's **Workers** screen shows the first two commands for your instance, ready to copy.
+
+The page answers on `127.0.0.1` only and asks for no token. On a machine shared by more than one OS
+account, set `APP_WORKER_UI_AUTH=token` in a `.env` beside `compose.yaml`: the page's address then
+carries a token, printed at every start (`docker compose logs remote-worker | grep token=`).
+`APP_WORKER_UI_PORT` picks another port, and `APP_WORKER_UI=disabled` turns the page off. **Cancel
+run** pauses the run's task, exactly as the task page's cancel does; stopping the container is not a
+cancel (the core treats it as a lost worker and plans the stage again).
 
 **Check that it works**
 
 ```bash
-docker compose -f compose.worker.yml exec remote-worker curl -fsS localhost:8080/readyz
+docker compose exec remote-worker curl -fsS localhost:8080/readyz
 # {"status":"ok","checks":{"core_handshake":"ok"}}
 ```
 
 The machine is then listed on the core's **Workers** screen with its last-seen time.
 
-**Open the local page**
-
-The worker serves a page on this machine only — what it is doing (its state and slots, each run's
-project, ticket, stage, the agent's latest steps and the worker's log) with **Pause/Resume**,
-**Drain** and **Cancel run**. Its address carries a token and is printed at every start:
-
-```bash
-docker compose -f compose.worker.yml logs remote-worker | grep token=
-# … "this worker's page: http://127.0.0.1:7357/#token=… (open it on this machine; …)"
-```
-
-Open that address in a browser on this machine (it answers on `127.0.0.1` only). Run the same
-command to find it again. To change the token, delete `ui-token` in the `worker-state` volume and
-restart the worker; `APP_WORKER_UI_PORT` in `.env` picks another port, and `APP_WORKER_UI=disabled`
-turns the page off. **Cancel run** pauses the run's task, exactly as the task page's cancel does;
-stopping the container is not a cancel (the core treats it as a lost worker and plans the stage
-again).
-
 **Stop it**
 
 ```bash
 # Drain: claim nothing more, finish what is running (the local page's Drain does the same).
-docker compose -f compose.worker.yml exec remote-worker curl -fsS -X POST localhost:8080/internal/drain
-# Stop: any run in flight is handed back to the core; the credential stays in the worker-state volume.
-docker compose -f compose.worker.yml down
+docker compose exec remote-worker curl -fsS -X POST localhost:8080/internal/drain
+# Stop: any run in flight is handed back to the core; the sign-in and credential stay in worker-state.
+docker compose down
 ```
 
 To log the machine out, revoke it on the Workers screen. Removing the bundle's volumes as well
-(`--volumes` on the `down`) also deletes its stored credential.
+(`--volumes` on the `down`) also deletes its stored credential and Claude sign-in.
 
-**Let Claude Code do it for you.** In an empty directory, paste this into Claude Code with your
-core's URL in place of `<URL>`:
+**Let Claude Code do it for you.** Paste this into Claude Code with your core's URL in place of
+`<URL>`:
 
 ```text
 Set up an Agentic platform worker on this machine. The core is at <URL>.
 1. Check that Docker is running (`docker info`); if it is not, stop and tell me.
-2. Make sure this directory is empty and not inside a git repository, then run:
-   curl -fsSo compose.worker.yml <URL>/api/worker/v1/compose.yml
-3. Do NOT run `claude setup-token` yourself, and never read, print, log or commit the token. Ask me to
-   run `claude setup-token` in my own terminal, then to run this command myself in this directory and
-   paste the token at its silent prompt:
-   read -rs CLAUDE_TOKEN && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$CLAUDE_TOKEN" > .env && unset CLAUDE_TOKEN && chmod 600 .env
-   Wait until I say it is done. Check only that .env exists and is not empty (`test -s .env`); never open it.
-4. Start the bundle: docker compose -f compose.worker.yml up -d
-5. Show me the device code and the approval URL from:
-   docker compose -f compose.worker.yml logs remote-worker | grep user_code
-   and wait until I say I approved it in the browser.
-6. Verify with:
-   docker compose -f compose.worker.yml exec remote-worker curl -fsS localhost:8080/readyz
+2. Run: mkdir agentic-worker && cd agentic-worker && curl -fsSo compose.yaml <URL>/api/worker/v1/compose.yml
+3. Start it: docker compose up -d
+4. Tell me to open http://127.0.0.1:7357 in my own browser and follow its steps (Claude sign-in,
+   then approving the machine). Do not sign in to Claude yourself, and never read, print or log a
+   token. Wait until I say the page shows the worker's room.
+5. Verify with: docker compose exec remote-worker curl -fsS localhost:8080/readyz
    and tell me whether core_handshake is ok. If it is not, show me the last 50 lines of
-   `docker compose -f compose.worker.yml logs remote-worker`.
-7. Tell me the address of the worker's local page — the line from
-   docker compose -f compose.worker.yml logs remote-worker | grep token=
-   — and that I open it in my own browser. Do not open it, and do not print the token anywhere else.
+   `docker compose logs remote-worker`.
 ```
 
 ## Develop the worker (dev mode)

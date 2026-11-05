@@ -11,11 +11,17 @@ import {
   WORKER_LOCAL_API_PREFIX,
   workerLocalCancelResponseSchema,
   workerLocalClaimScopeSchema,
+  workerLocalCoreCheckResponseSchema,
+  workerLocalCoreFailureSchema,
   workerLocalErrorSchema,
   workerLocalOffersSchema,
   workerLocalRunSchema,
+  workerLocalSignInFailureSchema,
+  workerLocalSignInPhaseSchema,
+  workerLocalSourceSchema,
   workerLocalStateSchema,
   workerLocalTakeResponseSchema,
+  workerUiAuthSchema,
 } from '@platform/contracts';
 import { describe, expect, it, vi } from 'vitest';
 import { createLocalClient, LocalCallError, takeToken } from './client.js';
@@ -23,6 +29,8 @@ import {
   CANCEL,
   CLAIM_SCOPE,
   CONNECTIONS,
+  CORE_CHECK,
+  CORE_FAILURES,
   conforms,
   ERROR,
   HOOKS,
@@ -33,14 +41,19 @@ import {
   RUN as RUN_SPEC,
   readCancel,
   readClaimScope,
+  readCoreCheck,
   readOffers,
   readState,
   readTake,
+  SIGN_IN_FAILURES,
+  SIGN_IN_PHASES,
+  SOURCES,
   type Spec,
   STATE as STATE_SPEC,
   TAKE,
   TERMINAL_REASONS,
   TRANSCRIPT_ENTRY,
+  UI_AUTHS,
 } from './read-state.js';
 
 /**
@@ -194,6 +207,21 @@ const STATE = {
   concurrency: 2,
   runs: [RUN],
   logs: ['a line'],
+  setup: {
+    core_source: 'file',
+    candidates: [{ url: 'http://host.docker.internal:8080', version: '0.4.0' }],
+    claude_source: 'environment',
+    claude_rejected: false,
+    sign_in: { phase: 'idle', url: null, failure: null },
+    device: {
+      user_code: 'BCDF-GHJK',
+      approve_url: 'https://core.example.test/workers/approve?code=BCDF-GHJK',
+      expires_at: '2026-11-05T10:15:00.000Z',
+    },
+    unreachable: null,
+    idle: false,
+    auth: 'none',
+  },
   server_time: '2026-11-05T10:05:00.000Z',
 };
 
@@ -242,6 +270,9 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     expect(normal(TAKE)).toEqual(
       normal(specOf(workerLocalTakeResponseSchema as unknown as ZodNode)),
     );
+    expect(normal(CORE_CHECK)).toEqual(
+      normal(specOf(workerLocalCoreCheckResponseSchema as unknown as ZodNode)),
+    );
     expect(LOCAL_API_PREFIX).toBe(WORKER_LOCAL_API_PREFIX);
   });
 
@@ -251,6 +282,12 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     expect(sorted(PHASES)).toEqual(sorted(workerLocalRunSchema.shape.phase.options));
     expect(sorted(ROLES)).toEqual(sorted(agentRoleSchema.options));
     expect(sorted(TERMINAL_REASONS)).toEqual(sorted(runTerminalReasonSchema.options));
+    // The first-run wizard's enums (WP-294 (2)).
+    expect(sorted(SOURCES)).toEqual(sorted(workerLocalSourceSchema.options));
+    expect(sorted(CORE_FAILURES)).toEqual(sorted(workerLocalCoreFailureSchema.options));
+    expect(sorted(SIGN_IN_PHASES)).toEqual(sorted(workerLocalSignInPhaseSchema.options));
+    expect(sorted(SIGN_IN_FAILURES)).toEqual(sorted(workerLocalSignInFailureSchema.options));
+    expect(sorted(UI_AUTHS)).toEqual(sorted(workerUiAuthSchema.options));
     expect(HOOKS.length).toBeGreaterThan(0);
     expect(Object.keys(workerLocalStateSchema.shape.core_protocol.unwrap().shape).sort()).toEqual([
       'accepted',
@@ -267,6 +304,10 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
   });
 
   const withRun = (patch: Record<string, unknown>) => ({ ...STATE, runs: [{ ...RUN, ...patch }] });
+  const withSetup = (patch: Record<string, unknown>) => ({
+    ...STATE,
+    setup: { ...STATE.setup, ...patch },
+  });
   const { worker_name: _dropped, ...missingKey } = STATE;
   const refused: readonly [string, unknown][] = [
     ['an unknown key', { ...STATE, extra: 1 }],
@@ -321,6 +362,16 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     ],
     ['a progress percent past 100', withRun({ transcript: [progress({ percent_complete: 101 })] })],
     ['a steer with a non-uuid author', withRun({ transcript: [steer({ author_user_id: 'x' })] })],
+    ['a state with no setup block', (({ setup: _s, ...rest }) => rest)(STATE)],
+    ['an unknown key in setup', withSetup({ token: 'x' })],
+    [
+      'an unknown sign-in phase',
+      withSetup({ sign_in: { phase: 'done', url: null, failure: null } }),
+    ],
+    ['an unknown core failure', withSetup({ unreachable: { failure: 'teapot', retry_at: null } })],
+    ['a device with an unknown key', withSetup({ device: { ...STATE.setup.device, code: 'x' } })],
+    ['nine candidates', withSetup({ candidates: Array(9).fill(STATE.setup.candidates[0]) })],
+    ['an unknown auth mode', withSetup({ auth: 'cookie' })],
   ];
 
   it('accepts what the schema accepts', () => {
@@ -336,6 +387,24 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
   it.each(refused)('refuses %s, as the schema does', (_name, value) => {
     expect(workerLocalStateSchema.safeParse(value).success).toBe(false);
     expect(readState(value)).toBeNull();
+  });
+
+  it('reads a platform check’s answer strictly, as the schema does', () => {
+    const answer = {
+      url: 'https://core.example.test',
+      host: 'core.example.test',
+      version: '0.4.0',
+      protocol_fit: 'fits',
+    };
+    expect(workerLocalCoreCheckResponseSchema.safeParse(answer).success).toBe(true);
+    expect(readCoreCheck(answer)).toEqual(answer);
+    for (const refused of [
+      { ...answer, body: '<html>' },
+      { ...answer, protocol_fit: 'maybe' },
+    ]) {
+      expect(workerLocalCoreCheckResponseSchema.safeParse(refused).success).toBe(false);
+      expect(readCoreCheck(refused)).toBeNull();
+    }
   });
 
   it('reads a cancel’s answer strictly', () => {
@@ -481,5 +550,33 @@ describe('the token and the client (WP-292 (1))', () => {
     });
     expect(cancel?.init.credentials).toBe('omit');
     await expect(client.state()).rejects.toBeInstanceOf(LocalCallError);
+  });
+
+  it('sends no Authorization at all with no token (APP_WORKER_UI_AUTH=none), and every write as JSON', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify(STATE));
+    }) as unknown as typeof fetch;
+    const client = createLocalClient(null, fetchImpl);
+    await client.state();
+    await client.setCore('https://core.example.test');
+    await client.claudeToken('sk-ant-oat01-FAKE');
+    await client.signOut();
+    for (const call of calls) {
+      expect(Object.keys(call.init.headers as Record<string, string>)).not.toContain(
+        'authorization',
+      );
+    }
+    expect(calls.map((call) => call.url)).toEqual([
+      '/api/local/state',
+      '/api/local/core',
+      '/api/local/claude/token',
+      '/api/local/claude/sign-out',
+    ]);
+    for (const call of calls.slice(1)) {
+      expect(call.init.headers).toMatchObject({ 'content-type': 'application/json' });
+    }
+    expect(JSON.parse(calls[2]?.init.body as string)).toEqual({ token: 'sk-ant-oat01-FAKE' });
   });
 });

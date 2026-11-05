@@ -326,46 +326,87 @@ Then open <http://localhost:8080/> and sign in with the bootstrap administrator.
 ### A remote worker on a developer's machine (WP-283, WP-284, WP-287)
 
 A worker runs agent runs on a developer's machine with the developer's own Claude subscription
-(BD-032). It is one file, `compose.worker.yml`, which the core serves **publicly**, pinned to its own
-image digests and with `APP_CORE_URL` already set to it (TD-031's 2026-11-05 amendment). The Workers
-screen shows these two lines for your instance:
+(BD-032). It is one file, the worker compose file, which the core serves **publicly**, pinned to its
+own image digests and with `APP_CORE_URL` already set to it (TD-031's 2026-11-05 amendment). The
+Workers screen shows these two lines for your instance:
 
 ```bash
-curl -fsSo compose.worker.yml https://agentic.example.com/api/worker/v1/compose.yml
-CLAUDE_CODE_OAUTH_TOKEN=<the output of `claude setup-token`> docker compose -f compose.worker.yml up -d
-docker compose -f compose.worker.yml logs remote-worker   # the code to approve at /workers/approve
+mkdir agentic-worker && cd agentic-worker && curl -fsSo compose.yaml https://agentic.example.com/api/worker/v1/compose.yml
+docker compose up -d
 ```
 
-`up` pulls the run, egress and git-helper images first, so a clean machine needs nothing else. The
-worker holds no database, no `APP_SECRET_KEY` and no integration secret, and refuses to start with
-either of the first two. It logs in with the device code (approve it signed in to the platform; the
-credential is kept in the `worker-state` volume — delete it, or revoke the worker on the Workers
-screen, to log out); its launcher token is generated at first start. The Claude token reaches each
-run's CLI and nothing else. `docker compose -f compose.worker.yml exec remote-worker curl -fsS
-localhost:8080/readyz` reads `core_handshake: ok` once the core accepted it, and
-`docker compose -f compose.worker.yml exec remote-worker curl -fsS -X POST localhost:8080/internal/drain`
-stops it claiming. A project whose git integration gives runs a static token or a deploy key runs on
-a worker only with `remote_run_credential: allow` on that integration — the project's execution
-setting says so when it does not. The worker section of this guide is completed by WP-290.
+and then the developer opens **http://127.0.0.1:7357** on that machine. Saved as `compose.yaml` in a
+folder of its own, the file needs no `-f`. `up` pulls the run, egress and git-helper images first,
+so a clean machine needs nothing else.
 
-**The worker's local page** (WP-292). The worker serves a page on the developer's machine: its
+**The first run is a wizard on the worker's page** (WP-294, TD-031's 2026-11-05 first-run
+amendment). The worker starts with no core URL, no Claude token and no credential, calls no core and
+claims nothing until it has all three, and the page walks the developer through what is missing —
+each step skipped when its value is already there, each moving on by itself:
+
+1. **Connect to a platform.** Skipped when `APP_CORE_URL` is set (a core-served file always sets
+   it). Otherwise the worker offers each platform answering on this machine
+   (`http://host.docker.internal:8080` and `:5173`, plus `APP_WORKER_CORE_CANDIDATES`) and checks a
+   typed address itself — `https:`, or `http:` to this machine only, no user name or password,
+   `GET /api/version` and `GET /api/worker/v1/release` with no credential, no redirect followed, 5 s,
+   64 KiB — and keeps it as `core-url` in the `worker-state` volume.
+2. **Sign in to Claude.** Skipped when `CLAUDE_CODE_OAUTH_TOKEN` is set. Otherwise the worker runs
+   Claude's own `claude setup-token` — the run image's CLI, which the `pull-runtime-image` one-shot
+   copies into the `claude-cli` volume — under a pty, in a scrubbed environment and a temporary home;
+   the page offers Claude's sign-in page and a field for the code Claude shows. The token is checked
+   once with Claude and kept as `claude-token` (`0600`) in `worker-state`; *Paste a token instead*
+   takes the output of `claude setup-token` run anywhere. Nothing of the CLI's screen is logged.
+3. **Approve this machine.** The device code, large, with *Copy* and **Open the approval page**,
+   which opens the core's `/workers/approve?code=…` — the code filled in, every warning and the
+   explicit *Approve* unchanged. A new code appears by itself when one expires or is denied. The
+   credential is kept in `worker-state`, recorded for that core's origin.
+
+A value set in the environment wins over the page, which says so and refuses to change it there
+(`409`). Once connected, the page's *This machine* section offers **Change platform** (deletes the
+credential — and, under the default `APP_WORKER_UI_AUTH=none`, the stored Claude sign-in, so a
+repointed worker never runs a new core with the old account) and **Sign out of Claude** (deletes
+`claude-token`; Claude still lists the token until it is revoked in the Claude account) — both only
+while nothing runs. If Claude refuses the token — at the check, or on a run's stream — the worker
+stops claiming and the page returns to *Sign in to Claude*. If the core does not answer, the page
+names the address and the class (*no answer*, *not the platform*, *certificate*) with *Try now*; if
+the worker was revoked, *Connect again* starts a new device flow without a restart.
+
+The worker holds no database, no `APP_SECRET_KEY` and no integration secret, and refuses to start
+with either of the first two. Its launcher token is generated at first start. The Claude token
+reaches each run's CLI and nothing else. `docker compose exec remote-worker curl -fsS
+localhost:8080/readyz` reads `core_handshake: ok` once the core accepted it, and
+`docker compose exec remote-worker curl -fsS -X POST localhost:8080/internal/drain` stops it
+claiming. To log the machine out, revoke it on the Workers screen (or delete `credential` in
+`worker-state`). A project whose git integration gives runs a static token or a deploy key runs on a
+worker only with `remote_run_credential: allow` on that integration — the project's execution
+setting says so when it does not.
+
+**The worker's local page** (WP-292, WP-294). Once connected the page shows the worker's
 connection, pause state and slots, each run's project, ticket, title, stage, agent, elapsed time,
 tokens and cost (both only once the run reported them), the agent's latest steps and the worker's own
 log — with **Pause/Resume**, **Drain** and **Cancel run**, each decided by the core (protocol 2's
 `manual-pause` and `runs/:id/cancel`; one `human_actions` row each, `via: worker_ui`, the worker's
-user). Its address is printed at every start, the token in the fragment:
-
-```bash
-docker compose -f compose.worker.yml logs remote-worker | grep token=
-```
+user).
 
 - `compose.worker.yml` publishes it **on `127.0.0.1` only** — `127.0.0.1:${APP_WORKER_UI_PORT:-7357}:7357`
   — never on the machine's other addresses; `APP_WORKER_UI_PORT` picks the host port (the page checks
   that its `Host` names it: `localhost`, `127.0.0.1` or `[::1]` with that port, else `421`).
 - `APP_WORKER_UI=disabled` starts no listener (the loopback publish then answers nothing).
-- The token is 32 random bytes in `worker-state/ui-token` (`0600`); **rotate it** by deleting the file
-  and restarting the worker. Every call carries it as a bearer header; there is no cookie and no CORS
-  header, and a change must come from the page's own origin (`403` otherwise).
+- **`APP_WORKER_UI_AUTH`** (TD-031's 2026-11-05 no-bearer amendment): `none`, the default, needs no
+  token — the worker logs `this worker's page: http://127.0.0.1:7357` at each start. **On a machine
+  with more than one OS account, set `token`**: every call then carries a bearer from
+  `worker-state/ui-token` (32 random bytes, `0600`; rotate it by deleting the file and restarting),
+  the address with the token in its fragment is printed at every start
+  (`docker compose logs remote-worker | grep token=`), and a call without it is `401`.
+- In both modes there is no cookie and no CORS header, and a change (`POST`) is accepted only with
+  this page's exact `Origin`, as `application/json`, and — when the browser sends it — with
+  `Sec-Fetch-Site: same-origin` (`403` otherwise); no answer ever carries the Claude token, the code
+  or the credential.
+- **The residual under `none`**: another OS account on the same machine can reach the loopback port
+  and send any `Host` and `Origin` it likes, so it can do what the page does — read the redacted view,
+  pause, drain, cancel a run (recorded as the worker's user), sign Claude out, or repoint an idle
+  worker (which drops the developer's Claude sign-in rather than carrying it). `token` is the answer
+  for a shared machine.
 - *Drain* holds the core's pause as a drain's: the worker finishes what runs, takes nothing new, **stays
   up idle**, and its next start clears that pause — only a drain's; a *Pause* survives a restart, and
   a *Drain* pressed while paused leaves the *Pause* as it is (TD-031's 2026-11-05 amendment). The

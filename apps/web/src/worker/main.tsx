@@ -19,6 +19,6 @@ if (container === null) {
 const token = takeToken(browserTokenPlace());
 createRoot(container).render(
   <StrictMode>
-    <WorkerApp client={token === null ? null : createLocalClient(token)} />
+    <WorkerApp client={createLocalClient(token)} />
   </StrictMode>,
 );

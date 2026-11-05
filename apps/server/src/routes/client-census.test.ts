@@ -289,6 +289,9 @@ const PUBLIC_WORKER_VERBS: readonly (keyof typeof WORKER_PATHS)[] = [
   'deviceToken',
   // TD-031's 2026-11-05 amendment (backlog 760): a person's first-install download, no credential.
   'composeFile',
+  // TD-031's first-run amendment §6 (WP-294): a worker's wizard checks an address with it before it
+  // has a credential; the protocol check stays.
+  'release',
 ];
 
 describe('the worker as a second client (WP-281)', () => {

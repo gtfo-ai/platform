@@ -20,6 +20,7 @@
 import type {
   WorkerLocalCancelResponse,
   WorkerLocalClaimScope,
+  WorkerLocalCoreCheckResponse,
   WorkerLocalOffers,
   WorkerLocalState,
   WorkerLocalTakeResponse,
@@ -70,13 +71,41 @@ const object = (keys: Record<string, Spec>): Spec => ({ t: 'object', keys });
 export const ROLES: readonly string[] = Object.keys(ROLE_LABEL);
 export const TERMINAL_REASONS: readonly string[] = Object.keys(TERMINAL_REASON_LABEL);
 export const CONNECTIONS = [
+  'needs_platform',
+  'needs_claude',
   'logging_in',
   'handshaking',
   'connected',
   'revoked',
   'upgrade_required',
+  'core_unreachable',
   'stopped',
 ] as const;
+/** The first-run wizard's enums (WP-294) — each held to its zod enum by the test. */
+export const SOURCES = ['environment', 'file'] as const;
+export const CORE_FAILURES = [
+  'address_refused',
+  'no_answer',
+  'not_a_platform',
+  'certificate',
+  'needs_other_version',
+] as const;
+export const SIGN_IN_PHASES = [
+  'idle',
+  'starting',
+  'waiting_for_code',
+  'checking',
+  'failed',
+] as const;
+export const SIGN_IN_FAILURES = [
+  'cli_unavailable',
+  'cli_ended',
+  'code_refused',
+  'token_rejected',
+  'check_failed',
+  'timed_out',
+] as const;
+export const UI_AUTHS = ['none', 'token'] as const;
 export const PHASES = ['provisioning', 'running', 'finishing', 'ended'] as const;
 export const HOOKS = [
   'PreToolUse',
@@ -211,7 +240,7 @@ export const STATE: Spec = object({
       accepted: { t: 'array', of: { t: 'int', min: 1 }, min: 1, max: 2 },
     }),
   ),
-  core_url: str({ max: 2_048 }),
+  core_url: nullable(str({ max: 2_048 })),
   last_handshake_at: nullable(datetime),
   manually_paused_at: nullable(datetime),
   usage_paused_until: nullable(datetime),
@@ -221,7 +250,44 @@ export const STATE: Spec = object({
   concurrency: { t: 'int', min: 1, max: 64 },
   runs: { t: 'array', of: RUN, max: 64 },
   logs: { t: 'array', of: str({ max: 2_032 }), max: 200 },
+  setup: object({
+    core_source: nullable({ t: 'enum', values: SOURCES }),
+    candidates: {
+      t: 'array',
+      of: object({ url: str({ max: 2_048 }), version: str({ max: 128 }) }),
+      max: 8,
+    },
+    claude_source: nullable({ t: 'enum', values: SOURCES }),
+    claude_rejected: { t: 'boolean' },
+    sign_in: object({
+      phase: { t: 'enum', values: SIGN_IN_PHASES },
+      url: nullable(str({ max: 4_096 })),
+      failure: nullable({ t: 'enum', values: SIGN_IN_FAILURES }),
+    }),
+    device: nullable(
+      object({
+        user_code: str({ max: 16 }),
+        approve_url: nullable(str({ max: 2_048 })),
+        expires_at: datetime,
+      }),
+    ),
+    unreachable: nullable(
+      object({
+        failure: { t: 'enum', values: CORE_FAILURES },
+        retry_at: nullable(datetime),
+      }),
+    ),
+    idle: { t: 'boolean' },
+    auth: { t: 'enum', values: UI_AUTHS },
+  }),
   server_time: datetime,
+});
+
+export const CORE_CHECK: Spec = object({
+  url: str({ max: 2_048 }),
+  host: str({ max: 253 }),
+  version: str({ max: 128 }),
+  protocol_fit: { t: 'enum', values: ['fits', 'unknown'] },
 });
 
 export const CANCEL: Spec = object({
@@ -343,6 +409,10 @@ export const conforms = (spec: Spec, value: unknown): boolean => {
 /** The state, or `null` for an answer this page does not read. */
 export const readState = (value: unknown): WorkerLocalState | null =>
   conforms(STATE, value) ? (value as WorkerLocalState) : null;
+
+/** A platform check's answer (WP-294), or `null`. */
+export const readCoreCheck = (value: unknown): WorkerLocalCoreCheckResponse | null =>
+  conforms(CORE_CHECK, value) ? (value as WorkerLocalCoreCheckResponse) : null;
 
 /** A cancel's answer, or `null`. */
 export const readCancel = (value: unknown): WorkerLocalCancelResponse | null =>

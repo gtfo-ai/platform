@@ -530,9 +530,13 @@ authenticated worker, else `409 lease_lost` (`410 run_gone` for a run that no lo
   project's git integration no longer says `remote_run_credential: allow` — the opt-in is re-read per
   signature, not only at the claim (S-22.14, backlog 753). `200 {signature}`.
 
-**`release` and `compose.yml` are served since WP-284** (TD-032 decision 3): `GET release` with the
-worker credential, `GET compose.yml` **public** — no credential, and the one path the `X-Worker-Protocol`
-check skips (TD-031's 2026-11-05 amendment, backlog 760). The core resolves its four images' digests **itself**: `sha-<first 7 of APP_COMMIT>` of
+**`release` and `compose.yml` are served since WP-284** (TD-032 decision 3): `GET release` **public
+since WP-294** — no credential (one presented is ignored and records no contact), the `X-Worker-Protocol`
+check kept (`426` without it), because the wizard of a worker with no credential yet checks a typed
+address with it and its range and digests already reach an anonymous caller through the `426` (TD-031's
+first-run amendment §6; no protocol bump: no shape changed) — and `GET compose.yml` **public** — no
+credential, and the one path the `X-Worker-Protocol` check skips (TD-031's 2026-11-05 amendment, backlog
+760). The core resolves its four images' digests **itself**: `sha-<first 7 of APP_COMMIT>` of
 `platform`, `platform-launcher`, `platform-runtime` and `platform-egress` in `APP_IMAGE_REPOSITORY`
 (default `ghcr.io/gtfo-ai`) with the anonymous OCI `HEAD` — a `401` Bearer challenge, an anonymous token
 from its `https` realm, the `HEAD` again, `Docker-Content-Digest` read (research/17 § 6;
@@ -544,9 +548,11 @@ with every `${PLATFORM_*_IMAGE:-…}` default pinned to `<repository>/<image>@<d
 defaulted to this core — for a person's first install only; no updater applies a file the core served.
 Its SHA-256 is `handshake`'s `compose_bundle_digest` (backlog 743). Both answer `503 digests_unresolved`
 naming the image; `compose.yml` answers `503 compose_template_unavailable` for a template that cannot be
-read or pinned. A first install is `curl -fsSo compose.worker.yml https://<core>/api/worker/v1/compose.yml`
-and `CLAUDE_CODE_OAUTH_TOKEN=… docker compose -f compose.worker.yml up -d`, both shown on the Workers
-screen from the page's origin. **Residual, stated:** an anonymous caller learns the registry namespace and
+read or pinned. A first install is `mkdir agentic-worker && cd agentic-worker && curl -fsSo compose.yaml
+https://<core>/api/worker/v1/compose.yml` and `docker compose up -d`, both shown on the Workers screen from
+the page's origin, then `http://127.0.0.1:7357` on that machine (WP-294). The template's `APP_CORE_URL` is
+`${APP_CORE_URL:-}` since WP-294 and the render fills its default, so a served file skips the wizard's
+platform step. **Residual, stated:** an anonymous caller learns the registry namespace and
 the canonical base URL (the digests and the protocol range already reach it through the `426`). The
 bundle **pulls** the run, egress and git-helper images itself (three one-shot services the launcher waits
 for), so a clean machine can run; a worker reports as held only what its launcher resolves locally.
@@ -603,10 +609,27 @@ answers `204` at once and the claim's eligibility and the online-assignee rule l
 `human_actions` row plus `via: worker_ui` and `worker_id`; the worker holds the lease, so it answers `202`
 with the `command_id` its own heartbeat delivers, and the task is paused (Q126). The page itself is
 served by the worker, not the core: `worker.html` and `/api/local/{state, pause, drain, runs/:id/cancel}`
-on container port 7357, published `127.0.0.1:${APP_WORKER_UI_PORT:-7357}` only, behind a bearer token
-from the URL fragment, a `Host` allow-list (`421`), an `Origin` check on every `POST` (`403`), no CORS
-header and no cookie (`apps/server/src/remote-worker/local-ui.ts`); `APP_WORKER_UI=disabled` opens no
-port. The page polls `state` every 2 s.
+on container port 7357, published `127.0.0.1:${APP_WORKER_UI_PORT:-7357}` only, behind a `Host`
+allow-list (`421`), and on every `POST` an exact `Origin` (absent included), `Content-Type:
+application/json` and — when sent — `Sec-Fetch-Site: same-origin` (`403`), no CORS header and no cookie
+(`apps/server/src/remote-worker/local-ui.ts`); a bearer token from the URL fragment (`401`) only under
+`APP_WORKER_UI_AUTH=token` — the default `none` reads no `Authorization` (TD-031's 2026-11-05 no-bearer
+amendment); `APP_WORKER_UI=disabled` opens no port. The page polls `state` every 2 s.
+
+**The first-run wizard's local verbs (WP-294, TD-031's first-run amendment §8).** `state` gains
+`setup` — the sources of the core URL and the Claude token (`environment` or `file`), the platforms found
+on the machine, `claude_rejected`, the sign-in's `{phase, url, failure}`, the open device code
+`{user_code, approve_url, expires_at}` (`approve_url` only on the core's own origin), `unreachable`
+`{failure, retry_at}`, `idle` and `auth` — and `connection` gains `needs_platform`, `needs_claude` and
+`core_unreachable`; `core_url` is `null` until a platform is chosen. `POST core/check {url}` answers only
+parsed fields `{url, host, version, protocol_fit}` or `422` with the class as its code
+(`address_refused`, `no_answer`, `not_a_platform`, `certificate`, `needs_other_version`); `POST core
+{url}` checks and stores `core-url`, `{url: null}` is *Change platform* (idle only, `409 not_idle`; deletes
+the credential and, under `none`, `claude-token`); `POST claude/sign-in {action: start|cancel}`, `POST
+claude/code {code}` (`409 not_waiting_for_code`), `POST claude/token {token}` (`400 invalid_token`,
+never echoed) and `POST claude/sign-out` (idle only); `POST connect-again` (only when revoked) and `POST
+retry` (not when connected). Each answers the state; a value from the environment answers `409
+set_in_environment`; no answer carries the token, the code or the credential.
 
 **Protocol 3 — what a worker picks up (WP-293, TD-031's 2026-11-05 claim-scope amendment, Q127 (a)).**
 `WORKER_PROTOCOL_VERSION = 3`, accepted `[2, 3]` (so a version-1 worker is `426` at the protocol check).
