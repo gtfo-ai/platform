@@ -1,12 +1,14 @@
 /**
- * The Integrations screen's create and test controls — PROGRESS backlog 55, and 53 with them.
+ * The Integrations list and one integration's page (S-23.11a), driven through `createApp` with a
+ * fake server so the real router, query client and endpoint parsers are asserted.
  *
- * `POST /api/integrations` was served by WP-21 and **no component called it**: the wizard's own
- * docblock said this screen owned the control and this screen's said the wizard did. So the two
- * assertions here are the ones no existing tier made — that pressing a control produces the request
- * — plus the property backlog 53 is about, which only a double-submit can show.
+ * Every command the old cards carried is still pressed here and still produces its request — the
+ * probe, the `PATCH` a `config_refusal` names (WP-100), the re-seal and the retire (WP-114) — now
+ * through each row's `···` and a dialog, which is the one interaction step TD-033's consequences
+ * budget per moved control. The create moved to the wizard (`integration-wizard.test.tsx`).
+ * Labels changed deliberately where a config key became a human label: `poll_enabled` is *Poll for
+ * changes*, `api_token` is *API token*, and each key is still named in its control's hint.
  */
-
 import type { IntegrationSummary, IntegrationsResponse } from '@platform/contracts';
 import {
   configIssuesOf,
@@ -15,12 +17,15 @@ import {
   SHIPPED_PROVIDERS,
   toIntegrationProvider,
 } from '@platform/integrations';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 
 const INTEGRATION = '00000000-0000-4000-8000-0000000000d1';
+const PROJECT = '00000000-0000-4000-8000-0000000000e1';
+const NOW = Date.parse('2026-10-01T09:05:00.000Z');
 
 /** Annotated rather than bare — PROGRESS backlog 93, closed by WP-38. */
 const SESSION: SessionResponse = {
@@ -33,41 +38,27 @@ const SESSION: SessionResponse = {
   session: { id: '00000000-0000-4000-8000-000000000002' },
 };
 
-const INTEGRATIONS: IntegrationsResponse = {
-  items: [
-    {
-      id: INTEGRATION,
-      type: 'task_management',
-      provider: 'jira-cloud',
-      name: 'ACME Jira',
-      config: { base_url: 'https://acme.atlassian.net' },
-      health: { status: 'unknown', checked_at: null, detail: null },
-      config_refusal: null,
-      retired_at: null,
-      credentials_readable: null,
-      credentials_consequence: null,
-    },
-  ],
+const JIRA: IntegrationSummary = {
+  id: INTEGRATION,
+  type: 'task_management',
+  provider: 'jira-cloud',
+  name: 'ACME Jira',
+  config: { site_url: 'https://acme.atlassian.example.test', user_email: 'ops@example.test' },
+  health: { status: 'unknown', checked_at: null, detail: null },
+  config_refusal: null,
+  retired_at: null,
+  credentials_readable: null,
+  credentials_consequence: null,
 };
+
+const INTEGRATIONS: IntegrationsResponse = { items: [JIRA] };
 
 /**
  * `GET /api/integrations/providers` as the server answers it — built from the **real** catalogue
- * through the server's own projection (`toIntegrationProvider`), so these cases drive the form with
- * the fields the shipped providers actually require rather than a copy (WP-100, criterion 2).
+ * through the server's own projection (`toIntegrationProvider`), so the forms are driven with the
+ * fields the shipped providers actually declare rather than a copy (WP-100, criterion 2).
  */
 const PROVIDERS = { items: SHIPPED_PROVIDERS.map(toIntegrationProvider) };
-
-/**
- * A value per required field **name**, never per provider: a sixth provider whose required field is
- * not here fails the per-provider case by name, which is the point.
- */
-const SAMPLE_VALUES: Readonly<Record<string, string>> = {
-  base_url: 'https://provider.example.test',
-  site_url: 'https://acme.atlassian.example.test',
-  user_email: 'ops@example.test',
-  organization: 'acme',
-  channel: '#agentic',
-};
 
 /** The setup guide as the server answers it: the guide's text and the URL built from `APP_BASE_URL`. */
 const WEBHOOK_URL = `https://agentic.example.test/webhooks/jira-cloud/${INTEGRATION}`;
@@ -76,6 +67,23 @@ const GUIDE = {
   title: 'Jira Cloud',
   markdown: 'Create a webhook in Jira and paste the URL shown above.',
   webhook_url: WEBHOOK_URL,
+};
+
+const PROJECT_ROW = {
+  id: PROJECT,
+  key: 'acme',
+  name: 'Acme service',
+  repo_url: 'https://git.example.invalid/acme/service.git',
+  default_branch: 'main',
+  agentic_dir: '.agentic',
+  knowledge_dir: 'knowledge',
+  autonomy_level: 'supervised',
+  readiness_level: 2,
+  status: 'active',
+  created_at: '2026-06-01T09:00:00.000Z',
+  updated_at: '2026-06-01T09:00:00.000Z',
+  open_tasks: 1,
+  spent_usd_30d: 0,
 };
 
 const json = (body: unknown, status = 200): Response =>
@@ -88,8 +96,15 @@ interface Sent {
   readonly body: unknown;
 }
 
-const recorder = () => {
+interface World {
+  items?: IntegrationSummary[];
+  /** Projects and the integrations each binds; none by default. */
+  bound?: readonly string[];
+}
+
+const recorder = (world: World = {}) => {
   const sent: Sent[] = [];
+  const items = world.items ?? INTEGRATIONS.items;
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -105,26 +120,51 @@ const recorder = () => {
         return json({ ok: true, checks: [{ name: 'auth', ok: true, detail: 'reachable' }] });
       }
       if (url.endsWith('/secrets')) {
-        return json({
-          integration: INTEGRATIONS.items[0],
-          sealed_fields: ['api_token'],
-          performed: true,
-        });
+        return json({ integration: items[0], sealed_fields: ['api_token'], performed: true });
       }
       if (method === 'DELETE') {
         return json({
-          integration: { ...INTEGRATIONS.items[0], retired_at: '2026-10-01T09:00:00.000Z' },
+          integration: { ...items[0], retired_at: '2026-10-01T09:00:00.000Z' },
           destroyed_secrets: 1,
           performed: true,
         });
       }
+      if (method === 'PATCH') {
+        return json({ ...items[0], config_refusal: null });
+      }
       return json({ id: INTEGRATION, provider: 'jira-cloud', name: 'ACME Jira' });
     }
     if (url.includes('/api/auth/get-session')) return json(SESSION);
-    if (url.endsWith('/api/integrations')) return json(INTEGRATIONS);
+    if (url.endsWith('/api/integrations')) return json({ items });
     if (url.endsWith('/api/integrations/providers')) return json(PROVIDERS);
     if (url.endsWith(`/api/integrations/${INTEGRATION}/setup-guide`)) return json(GUIDE);
-    if (url.endsWith('/api/projects')) return json({ items: [] });
+    if (url.endsWith(`/api/integrations/${INTEGRATION}/refused-deliveries`)) {
+      return json({
+        items: [
+          {
+            delivery_id: 'jira:delivery-1',
+            received_at: '2026-10-01T08:00:00.000Z',
+            error: 'unmapped_identity: <b>U123</b>',
+            reasons: ['unmapped_identity'],
+            unmapped: [{ provider: 'slack', external_id: 'U123' }],
+          },
+        ],
+      });
+    }
+    if (url.endsWith('/api/projects')) {
+      return json({ items: world.bound === undefined ? [] : [PROJECT_ROW] });
+    }
+    if (url.endsWith(`/api/projects/${PROJECT}/bindings`)) {
+      return json({
+        items: (world.bound ?? []).map((integrationId) => ({
+          integration_id: integrationId,
+          type: 'task_management',
+          provider: 'jira-cloud',
+          name: 'ACME Jira',
+          config: {},
+        })),
+      });
+    }
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
   return { sent, fetchImpl };
@@ -140,179 +180,84 @@ beforeEach(() => {
   window.history.pushState({}, '', '/integrations');
 });
 
-const fillCreateForm = async (): Promise<void> => {
-  const select = await screen.findByLabelText('Provider');
-  await screen.findByRole('option', { name: /Jira Cloud/ });
-  fireEvent.change(select, { target: { value: 'jira-cloud' } });
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'ACME Jira' } });
-  fireEvent.change(screen.getByLabelText('site_url'), {
-    target: { value: 'https://acme.atlassian.example.test' },
-  });
-  fireEvent.change(screen.getByLabelText('user_email'), { target: { value: 'ops@example.test' } });
-  fireEvent.change(screen.getByLabelText('Environment variable for api_token'), {
-    target: { value: 'JIRA_API_TOKEN' },
-  });
+const renderApp = (fetchImpl: typeof fetch) =>
+  render(createApp({ fetchImpl, realtime: false, now: () => NOW }).element);
+
+/** Open a row's `···` and choose one of its items. */
+const choose = async (
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+  item: string,
+): Promise<void> => {
+  await user.click(await screen.findByRole('button', { name: `Actions for ${name}` }));
+  await user.click(await screen.findByRole('menuitem', { name: item }));
 };
 
-describe('the integrations screen', () => {
-  it('creates an integration by naming an environment variable, never a credential', async () => {
-    const { sent, fetchImpl } = recorder();
-    render(createApp({ fetchImpl, realtime: false }).element);
-    await screen.findByText('Add an integration');
-    await fillCreateForm();
-    fireEvent.click(screen.getByRole('button', { name: 'Add integration' }));
-
+// Six titles below are cited by name in PROGRESS.md (frozen history, `scripts/citations.test.ts`), so
+// they keep their words although a card became a row, a tab or a dialog: "says on the card…",
+// "offers an optional boolean…", "changes an optional boolean…", "retires after a confirmation…",
+// "lists a retired integration…" and "shows the webhook URL on the setup-guide card…".
+describe('the integrations list', () => {
+  it('lists a row with its health, provider, kind, last check and bindings, under one primary', async () => {
+    const { container } = renderApp(recorder({ bound: [INTEGRATION] }).fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Integrations' });
+    const row = within(list).getByRole('link', { name: 'ACME Jira' }).closest('li');
+    expect(row?.textContent).toContain('Jira Cloud');
+    expect(row?.textContent).toContain('Ticket tracker');
+    expect(row?.textContent).toContain('never checked');
+    // Words, never the raw enum.
+    expect(row?.textContent).toContain('Not checked');
+    expect(row?.textContent).not.toContain('task_management');
+    expect(row?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Not checked');
     await waitFor(() => {
-      expect(sent.some((entry) => entry.url.endsWith('/api/integrations'))).toBe(true);
+      expect(row?.textContent).toContain('Bound to 1 project');
     });
-    const created = sent.find((entry) => entry.url.endsWith('/api/integrations'));
-    expect(created?.method).toBe('POST');
-    expect(created?.body).toEqual({
-      type: 'task_management',
-      provider: 'jira-cloud',
-      name: 'ACME Jira',
-      // The provider's required fields (WP-100, backlog 328) — `{}` here was the defect.
-      config: { site_url: 'https://acme.atlassian.example.test', user_email: 'ops@example.test' },
-      // The **name** of the variable, never its value: the server reads its own environment and
-      // seals what it finds (TD-020, BD-002). A body carrying a token would be the defect.
-      secret_refs: { api_token: 'JIRA_API_TOKEN' },
-    });
-    // A create carries a key, because a double-clicked create is what the header exists for.
-    expect(created?.key).toMatch(/^[A-Za-z0-9._:-]+$/);
+    // The row is the way into its own page.
+    expect(within(list).getByRole('link', { name: 'ACME Jira' }).getAttribute('href')).toBe(
+      `/integrations/${INTEGRATION}`,
+    );
+    // One primary action on the page: New integration, to the wizard.
+    const primaries = [...container.querySelectorAll('a, button')].filter((element) =>
+      element.className.includes('border-primary-line'),
+    );
+    expect(primaries.map((element) => element.textContent)).toEqual(['New integration']);
+    expect(primaries[0]?.getAttribute('href')).toBe('/integrations/new');
   });
 
-  /**
-   * **PROGRESS backlog 53, end to end.**
-   *
-   * The client minted a fresh `crypto.randomUUID()` **per request**, so two sends of one intent
-   * carried two keys and the server — which answers a replay from the key — saw two first requests.
-   * Two clicks still make two requests (the client cannot know whether the first arrived); what
-   * changes is that the second carries a key the server recognises.
-   */
-  it('sends one key for a double-submitted create, and a new one for a corrected form', async () => {
-    const { sent, fetchImpl } = recorder();
-    render(createApp({ fetchImpl, realtime: false }).element);
-    await screen.findByText('Add an integration');
-    await fillCreateForm();
-    const submit = screen.getByRole('button', { name: 'Add integration' });
-    fireEvent.click(submit);
-    fireEvent.click(submit);
-
+  it('says when it was checked, in the row’s own units', async () => {
+    const checked: IntegrationSummary = {
+      ...JIRA,
+      health: { status: 'ok', checked_at: '2026-10-01T09:00:00.000Z', detail: null },
+    };
+    renderApp(recorder({ items: [checked] }).fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Integrations' });
+    expect(list.textContent).toContain('checked 5 m ago');
+    expect(list.textContent).toContain('Healthy');
+    // No project read answered with a project, so it is bound to none.
     await waitFor(() => {
-      expect(sent.filter((entry) => entry.url.endsWith('/api/integrations'))).toHaveLength(2);
+      expect(list.textContent).toContain('Not bound');
     });
-    const creates = sent.filter((entry) => entry.url.endsWith('/api/integrations'));
-    expect(creates[0]?.key).toBe(creates[1]?.key);
-
-    // A corrected form is a different intent, and the same key with a different body would be
-    // refused — so it must mint a new one (standing rule 42: the other direction).
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'ACME Jira EU' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add integration' }));
-    await waitFor(() => {
-      expect(sent.filter((entry) => entry.url.endsWith('/api/integrations'))).toHaveLength(3);
-    });
-    expect(sent.at(-1)?.key).not.toBe(creates[0]?.key);
   });
 
-  it('tests a connection and renders the provider’s own words as text', async () => {
+  it('tests a connection from the row’s menu and draws the provider’s words under the row', async () => {
     const { sent, fetchImpl } = recorder();
-    render(createApp({ fetchImpl, realtime: false }).element);
-    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }));
+    const { container } = renderApp(fetchImpl);
+    await choose(userEvent.setup(), 'ACME Jira', 'Test connection');
     await waitFor(() => {
       expect(
         sent.some((entry) => entry.url.includes(`/api/integrations/${INTEGRATION}/test`)),
       ).toBe(true);
     });
-    // The result reaches the screen — a button that fired and showed nothing is the control
-    // product/10 asks for only in the sense that it exists.
     expect(await screen.findByText('Last test: passed')).toBeTruthy();
-    expect(document.body.textContent).toContain('reachable');
+    const result = container.querySelector(`[data-connection-test-for="${INTEGRATION}"]`);
+    expect(result?.textContent).toContain('reachable');
+    // The check's name is said in words.
+    expect(result?.textContent).toContain('Auth');
   });
-
-  it('shows the server’s own refusal of a configuration, naming the path', async () => {
-    const { fetchImpl: base } = recorder();
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      if ((init?.method ?? 'GET') === 'POST' && String(input).endsWith('/api/integrations')) {
-        return json(
-          {
-            error: {
-              code: 'invalid_integration_config',
-              message:
-                'the configuration is refused by provider "jira-cloud"\'s schema at: user_email (Invalid email address)',
-              details: [{ path: 'user_email', message: 'Invalid email address' }],
-            },
-          },
-          400,
-        );
-      }
-      return base(input, init);
-    }) as typeof fetch;
-
-    render(createApp({ fetchImpl, realtime: false }).element);
-    await screen.findByText('Add an integration');
-    await fillCreateForm();
-    fireEvent.click(screen.getByRole('button', { name: 'Add integration' }));
-    expect(await screen.findByText('The integration was not created.')).toBeTruthy();
-    await waitFor(() => {
-      expect(document.body.textContent).toContain('user_email (Invalid email address)');
-    });
-  });
-
-  /**
-   * WP-100, criterion 2: **each** shipped provider created through the real client, with the form
-   * rendering the fields the provider's own schema requires — and the body it sends is then parsed
-   * with that same schema here (`configIssuesOf`), so "the form sends each provider's required
-   * fields" is a statement about a document the provider accepts, not about a list of keys.
-   */
-  it.each(SHIPPED_PROVIDERS.map((entry) => [entry.id, entry] as const))(
-    'creates a %s integration with every field its schema requires',
-    async (id, entry) => {
-      const { sent, fetchImpl } = recorder();
-      render(createApp({ fetchImpl, realtime: false }).element);
-      const select = await screen.findByLabelText('Provider');
-      await waitFor(() => {
-        expect(select.querySelector(`option[value="${id}"]`), id).not.toBeNull();
-      });
-      fireEvent.change(select, { target: { value: id } });
-      fireEvent.change(screen.getByLabelText('Name'), { target: { value: `acme ${id}` } });
-      const required = entry.configFields.filter((field) => field.required).map((f) => f.name);
-      expect(required.length, id).toBeGreaterThan(0);
-      for (const name of required) {
-        const value = SAMPLE_VALUES[name];
-        expect(value, `a sample value for ${id}'s ${name}`).toBeDefined();
-        fireEvent.change(screen.getByLabelText(name), { target: { value } });
-      }
-      // No credential field is offered as configuration: each is an environment-variable name.
-      for (const field of entry.secretFields) {
-        expect(screen.queryByLabelText(field), field).toBeNull();
-        expect(screen.getByLabelText(`Environment variable for ${field}`)).toBeTruthy();
-      }
-      const firstSecret = entry.secretFields[0] as string;
-      fireEvent.change(screen.getByLabelText(`Environment variable for ${firstSecret}`), {
-        target: { value: 'FAKE_PROVIDER_TOKEN_ENV' },
-      });
-      fireEvent.click(screen.getByRole('button', { name: 'Add integration' }));
-
-      await waitFor(() => {
-        expect(sent.some((each) => each.url.endsWith('/api/integrations'))).toBe(true);
-      });
-      const body = sent.find((each) => each.url.endsWith('/api/integrations'))?.body as {
-        type: string;
-        provider: string;
-        config: Record<string, unknown>;
-        secret_refs: Record<string, string>;
-      };
-      expect(body.provider).toBe(id);
-      expect(body.type).toBe(entry.type);
-      expect(Object.keys(body.config).sort()).toEqual([...required].sort());
-      expect(configIssuesOf(entry, body.config as never)).toEqual([]);
-      expect(body.secret_refs).toEqual({ [firstSecret]: 'FAKE_PROVIDER_TOKEN_ENV' });
-    },
-  );
 
   /**
    * WP-157 (a), PROGRESS backlog 413: an organisation account whose credentials will not decrypt
-   * says so on its own card, once, with the consequence the server wrote; a readable or unchecked
+   * says so on its own row, once, with the consequence the server wrote; a readable or unchecked
    * one says nothing.
    */
   it('says on the card that an organisation account’s credentials cannot be decrypted, and nothing otherwise', async () => {
@@ -329,17 +274,15 @@ describe('the integrations screen', () => {
       credentials_consequence:
         readable === false ? 'the prompt files of every project are withheld' : null,
     });
-    const items = [
-      chat('00000000-0000-4000-8000-0000000000b1', 'Broken chat', false),
-      chat('00000000-0000-4000-8000-0000000000b2', 'Readable chat', true),
-      chat('00000000-0000-4000-8000-0000000000b3', 'Unchecked chat', null),
-    ];
-    const { fetchImpl: base } = recorder();
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
-      (init?.method ?? 'GET') === 'GET' && String(input).endsWith('/api/integrations')
-        ? json({ items })
-        : base(input, init)) as typeof fetch;
-    render(createApp({ fetchImpl, realtime: false }).element);
+    renderApp(
+      recorder({
+        items: [
+          chat('00000000-0000-4000-8000-0000000000b1', 'Broken chat', false),
+          chat('00000000-0000-4000-8000-0000000000b2', 'Readable chat', true),
+          chat('00000000-0000-4000-8000-0000000000b3', 'Unchecked chat', null),
+        ],
+      }).fetchImpl,
+    );
     expect(await screen.findByText('Readable chat')).toBeTruthy();
     const notices = document.querySelectorAll('[data-credentials-unreadable]');
     expect(
@@ -349,49 +292,40 @@ describe('the integrations screen', () => {
   });
 
   /**
-   * WP-100, criterion 4 on the screen: a stored row that would not load says so on its card, and
-   * *Edit configuration* sends the `PATCH` the refusal names — the required field set, and the
-   * key the provider does not declare removed.
+   * WP-100, criterion 4 on the screen: a stored row that would not load says so on its row, and
+   * *Edit configuration* sends the `PATCH` the refusal names — the required field set, and the key
+   * the provider does not declare removed.
    */
   it('shows a stored configuration’s refusal and repairs it with the PATCH it names', async () => {
     const sentry = findShippedProvider('sentry') as ProviderCatalogueEntry;
     const broken: IntegrationSummary = {
-      id: INTEGRATION,
+      ...JIRA,
       type: 'errors',
       provider: 'sentry',
       name: 'ACME Sentry',
       config: { organisation: 'acme', base_url: 'https://sentry.example.test' },
-      health: { status: 'unknown', checked_at: null, detail: null },
       config_refusal: {
         code: 'invalid_integration_config',
         message: `integration ${INTEGRATION} has configuration that provider "sentry"'s schema refuses at: organisation, organization. Correct it with PATCH /api/integrations/${INTEGRATION}`,
         paths: ['organisation', 'organization'],
       },
-      retired_at: null,
-      credentials_readable: null,
-      credentials_consequence: null,
     };
-    const { sent, fetchImpl: base } = recorder();
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url = String(input);
-      if ((init?.method ?? 'GET') === 'GET' && url.endsWith('/api/integrations')) {
-        return json({ items: [broken] });
-      }
-      if (init?.method === 'PATCH') {
-        await base(input, init);
-        return json({ ...broken, config_refusal: null });
-      }
-      return base(input, init);
-    }) as typeof fetch;
-
-    render(createApp({ fetchImpl, realtime: false }).element);
+    const { sent, fetchImpl } = recorder({ items: [broken] });
+    renderApp(fetchImpl);
     expect(await screen.findByText('This configuration would not load.')).toBeTruthy();
     expect(document.body.textContent).toContain(`PATCH /api/integrations/${INTEGRATION}`);
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit configuration' }));
-    const field = await screen.findByLabelText('organization');
+    const user = userEvent.setup();
+    await choose(user, 'ACME Sentry', 'Edit configuration');
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Edit the configuration of ACME Sentry',
+    });
+    // The human label, with the key in its hint.
+    const field = within(dialog).getByLabelText('Organization');
+    expect(field.getAttribute('data-config-key')).toBe('organization');
+    expect(dialog.textContent).toContain('Key: organization.');
     fireEvent.change(field, { target: { value: 'acme' } });
     expect(document.querySelector('[data-config-remove]')?.textContent).toContain('organisation');
-    fireEvent.click(screen.getByRole('button', { name: 'Save configuration' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Save configuration' }));
 
     await waitFor(() => {
       expect(sent.some((each) => each.method === 'PATCH')).toBe(true);
@@ -403,14 +337,199 @@ describe('the integrations screen', () => {
     expect(
       configIssuesOf(sentry, { base_url: 'https://sentry.example.test', organization: 'acme' }),
     ).toEqual([]);
+    // A saved configuration closes its dialog.
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  it('changes an optional boolean through Edit configuration and sends only what changed', async () => {
+    const jira: IntegrationSummary = {
+      ...JIRA,
+      config: { ...JIRA.config, pickup_label: 'agentic' },
+    };
+    const { sent, fetchImpl } = recorder({ items: [jira] });
+    renderApp(fetchImpl);
+    const user = userEvent.setup();
+    await choose(user, 'ACME Jira', 'Edit configuration');
+    const form = await screen.findByRole('form', { name: 'Configuration of ACME Jira' });
+    // `poll_enabled` is a yes/no choice under its human label; its values are still sent typed.
+    const poll = within(form).getByLabelText('Poll for changes') as HTMLSelectElement;
+    expect(poll.getAttribute('data-config-key')).toBe('poll_enabled');
+    expect([...poll.options].map((option) => [option.value, option.textContent])).toEqual([
+      ['', 'Provider default'],
+      ['true', 'Yes'],
+      ['false', 'No'],
+    ]);
+    fireEvent.change(poll, { target: { value: 'false' } });
+    fireEvent.change(within(form).getByLabelText('Pickup label'), { target: { value: '' } });
+    await user.click(screen.getByRole('button', { name: 'Save configuration' }));
+    await waitFor(() => {
+      expect(sent.some((each) => each.method === 'PATCH')).toBe(true);
+    });
+    expect(sent.find((each) => each.method === 'PATCH')?.body).toEqual({
+      config: {
+        site_url: 'https://acme.atlassian.example.test',
+        user_email: 'ops@example.test',
+        poll_enabled: false,
+      },
+      // A stored optional value the operator cleared is removed; untouched ones are not sent.
+      remove: ['pickup_label'],
+    });
   });
 
   /**
+   * WP-114, PROGRESS backlog 332: each optional field is a control of its declared type, and what
+   * it sends is typed — a boolean as a boolean, a number as a number, a list as a list. (The same
+   * holds in the wizard's *Optional settings*, `integration-wizard.test.tsx`.)
+   */
+  it('offers an optional boolean as a typed control and sends a boolean', async () => {
+    const { sent, fetchImpl } = recorder();
+    renderApp(fetchImpl);
+    const user = userEvent.setup();
+    await choose(user, 'ACME Jira', 'Edit configuration');
+    const form = await screen.findByRole('form', { name: 'Configuration of ACME Jira' });
+    const poll = within(form).getByLabelText('Poll for changes');
+    expect(poll.tagName).toBe('SELECT');
+    expect(poll.getAttribute('data-config-kind')).toBe('boolean');
+    fireEvent.change(poll, { target: { value: 'true' } });
+    fireEvent.change(within(form).getByLabelText('Poll interval (seconds)'), {
+      target: { value: '120' },
+    });
+    fireEvent.change(within(form).getByLabelText('Project keys'), {
+      target: { value: 'ACME, OPS ,' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Save configuration' }));
+    await waitFor(() => {
+      expect(sent.some((each) => each.method === 'PATCH')).toBe(true);
+    });
+    const body = sent.find((each) => each.method === 'PATCH')?.body as {
+      config: Record<string, unknown>;
+    };
+    expect(body.config).toEqual({
+      site_url: 'https://acme.atlassian.example.test',
+      user_email: 'ops@example.test',
+      poll_enabled: true,
+      poll_interval_seconds: 120,
+      project_keys: ['ACME', 'OPS'],
+    });
+    const jira = findShippedProvider('jira-cloud') as ProviderCatalogueEntry;
+    expect(configIssuesOf(jira, body.config as never)).toEqual([]);
+  });
+
+  /** WP-114, PROGRESS backlog 331: the two commands, from the row's menu. */
+  it('re-seals a credential by naming a new environment variable, with an Idempotency-Key', async () => {
+    const { sent, fetchImpl } = recorder();
+    renderApp(fetchImpl);
+    const user = userEvent.setup();
+    await choose(user, 'ACME Jira', 'Replace credentials');
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Replace the credentials of ACME Jira',
+    });
+    const field = within(dialog).getByLabelText('New environment variable for API token');
+    expect(field.getAttribute('data-secret-key')).toBe('api_token');
+    fireEvent.change(field, { target: { value: 'JIRA_API_TOKEN_2026_10' } });
+    await user.click(within(dialog).getByRole('button', { name: 'Re-seal credentials' }));
+    await waitFor(() => {
+      expect(sent.some((each) => each.url.endsWith('/secrets'))).toBe(true);
+    });
+    const reseal = sent.find((each) => each.url.endsWith('/secrets'));
+    expect(reseal?.url).toMatch(new RegExp(`/api/integrations/${INTEGRATION}/secrets$`));
+    expect(reseal?.method).toBe('POST');
+    expect(reseal?.body).toEqual({ secret_refs: { api_token: 'JIRA_API_TOKEN_2026_10' } });
+    expect(reseal?.key).toMatch(/^[A-Za-z0-9._:-]+$/);
+    expect(await screen.findByText(/Re-sealed API token \(api_token\)/)).toBeTruthy();
+  });
+
+  it('retires after a confirmation, and shows the server’s refusal as it is', async () => {
+    const { sent, fetchImpl: base } = recorder({ bound: [INTEGRATION] });
+    let refuse = true;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'DELETE' && refuse) {
+        refuse = false;
+        return json(
+          {
+            error: {
+              code: 'integration_bound',
+              message: `integration ${INTEGRATION} is bound to project acme; remove it from each project's bindings first`,
+            },
+          },
+          409,
+        );
+      }
+      return base(input, init);
+    }) as typeof fetch;
+    renderApp(fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Integrations' });
+    await waitFor(() => {
+      expect(list.textContent).toContain('Bound to 1 project');
+    });
+    const user = userEvent.setup();
+    await choose(user, 'ACME Jira', 'Retire');
+    const dialog = await screen.findByRole('dialog', { name: 'Retire ACME Jira?' });
+    // The consequence, before anything is sent: credentials deleted, row kept, and the binding.
+    expect(dialog.textContent).toContain('credentials are deleted');
+    expect(dialog.textContent).toContain('It is bound to one project');
+    expect(sent.filter((each) => each.method === 'DELETE')).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Retire integration' }));
+    expect(await screen.findByText('The integration was not retired.')).toBeTruthy();
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('is bound to project acme');
+    });
+    await user.click(within(dialog).getByRole('button', { name: 'Retire integration' }));
+    await waitFor(() => {
+      expect(sent.filter((each) => each.method === 'DELETE')).toHaveLength(1);
+    });
+    expect(sent.find((each) => each.method === 'DELETE')?.url).toMatch(
+      new RegExp(`/api/integrations/${INTEGRATION}$`),
+    );
+  });
+
+  it('lists a retired integration as retired, with no control that writes', async () => {
+    const retired: IntegrationSummary = { ...JIRA, retired_at: '2026-10-01T09:00:00.000Z' };
+    const { container } = renderApp(recorder({ items: [retired] }).fetchImpl);
+    await waitFor(() => {
+      expect(container.querySelector(`[data-integration-retired="${INTEGRATION}"]`)).not.toBeNull();
+    });
+    expect(screen.queryByRole('button', { name: 'Actions for ACME Jira' })).toBeNull();
+    expect(container.textContent).toContain('Retired');
+    expect(container.textContent).toContain('1 retired');
+  });
+
+  /** WP-114, backlog 327's reading on this screen: only a 403 is the maintainer role. */
+  it('does not name a 503 a permission problem', async () => {
+    const { fetchImpl: base } = recorder();
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      (init?.method ?? 'GET') === 'GET' && String(input).endsWith('/api/integrations')
+        ? json({ error: { code: 'unavailable', message: 'the database is not answering' } }, 503)
+        : base(input, init)) as typeof fetch;
+    const { container } = renderApp(fetchImpl);
+    // The app retries a failed read once (`app.tsx`), so the notice arrives after that retry.
+    expect(
+      await screen.findByText('Integrations could not be loaded.', {}, { timeout: 5_000 }),
+    ).toBeTruthy();
+    expect(container.textContent).not.toContain('needs the maintainer role');
+    expect(container.textContent).toContain('the database is not answering');
+  });
+
+  it('offers a blankslate that leads to the wizard when there is none', async () => {
+    const { container } = renderApp(recorder({ items: [] }).fetchImpl);
+    expect(await screen.findByText('No integrations yet')).toBeTruthy();
+    expect(container.querySelector('[data-blankslate="actionable"] a')?.getAttribute('href')).toBe(
+      '/integrations/new',
+    );
+  });
+});
+
+describe('an integration’s page', () => {
+  /**
    * PROGRESS backlog 272 (WP-95): the webhook URL the API has published since WP-21 reaches the
-   * setup-guide card, as text with a copy control — and a provider with no inbound half says it has
-   * none rather than drawing an empty field (standing rule 42: both directions).
+   * setup guide, as text with a copy control — and a provider with no inbound half says it has none
+   * rather than drawing an empty field (standing rule 42: both directions).
    */
   it('shows the webhook URL on the setup-guide card and copies it', async () => {
+    // Before the clipboard is replaced: `userEvent.setup()` installs a clipboard stub of its own.
+    const user = userEvent.setup();
     const copied: string[] = [];
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -420,12 +539,18 @@ describe('the integrations screen', () => {
         },
       },
     });
-    const { fetchImpl } = recorder();
-    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-    fireEvent.click(await screen.findByRole('button', { name: 'Setup guide' }));
+    const { container } = renderApp(recorder().fetchImpl);
+    await choose(user, 'ACME Jira', 'Setup guide');
     await waitFor(() => {
       expect(container.querySelector('[data-copyable-url]')?.textContent).toBe(WEBHOOK_URL);
     });
+    expect(window.location.pathname).toBe(`/integrations/${INTEGRATION}`);
+    expect(window.location.search).toBe('?tab=setup-guide');
+    const tabs = screen.getByRole('navigation', { name: 'Integration' });
+    expect(
+      within(tabs).getByRole('link', { name: 'Setup guide' }).getAttribute('aria-current'),
+    ).toBe('page');
+    expect(document.body.textContent).toContain('Create a webhook in Jira');
     // Copied, never followed: the webhook route answers a provider's signed POST.
     expect(
       [...container.querySelectorAll('a')].some((anchor) => anchor.textContent === WEBHOOK_URL),
@@ -444,193 +569,59 @@ describe('the integrations screen', () => {
       }
       return base(input, init);
     }) as typeof fetch;
-    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-    fireEvent.click(await screen.findByRole('button', { name: 'Setup guide' }));
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}?tab=setup-guide`);
+    const { container } = renderApp(fetchImpl);
     await waitFor(() => {
       expect(container.querySelector('[data-webhook-url="none"]')).not.toBeNull();
     });
     expect(container.querySelector('[data-copyable-url]')).toBeNull();
   });
 
-  /**
-   * WP-114, PROGRESS backlog 332: an optional field is offered with a control of its declared type,
-   * and the value it sends is typed — a boolean as a boolean, a number as a number, a list as a list
-   * — while an optional field left alone is not sent at all.
-   */
-  it('offers an optional boolean as a typed control and sends a boolean', async () => {
-    const { sent, fetchImpl } = recorder();
-    render(createApp({ fetchImpl, realtime: false }).element);
-    await screen.findByText('Add an integration');
-    await fillCreateForm();
-    const poll = screen.getByLabelText('poll_enabled');
-    expect(poll.tagName).toBe('SELECT');
-    expect(poll.getAttribute('data-config-kind')).toBe('boolean');
-    expect([...(poll as HTMLSelectElement).options].map((option) => option.value)).toEqual([
-      '',
-      'true',
-      'false',
-    ]);
-    fireEvent.change(poll, { target: { value: 'true' } });
-    fireEvent.change(screen.getByLabelText('poll_interval_seconds'), { target: { value: '120' } });
-    fireEvent.change(screen.getByLabelText('project_keys'), { target: { value: 'ACME, OPS ,' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add integration' }));
-
-    await waitFor(() => {
-      expect(sent.some((entry) => entry.url.endsWith('/api/integrations'))).toBe(true);
-    });
-    const body = sent.find((entry) => entry.url.endsWith('/api/integrations'))?.body as {
-      config: Record<string, unknown>;
-    };
-    expect(body.config).toEqual({
-      site_url: 'https://acme.atlassian.example.test',
-      user_email: 'ops@example.test',
-      poll_enabled: true,
-      poll_interval_seconds: 120,
-      project_keys: ['ACME', 'OPS'],
-    });
-    // The typed document is one the provider's own schema accepts.
-    const jira = findShippedProvider('jira-cloud') as ProviderCatalogueEntry;
-    expect(configIssuesOf(jira, body.config as never)).toEqual([]);
-  });
-
-  it('changes an optional boolean through Edit configuration and sends only what changed', async () => {
-    const { sent, fetchImpl: base } = recorder();
-    const jira: IntegrationSummary = {
-      ...(INTEGRATIONS.items[0] as IntegrationSummary),
-      config: {
-        site_url: 'https://acme.atlassian.example.test',
-        user_email: 'ops@example.test',
-        pickup_label: 'agentic',
-      },
-    };
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      if ((init?.method ?? 'GET') === 'GET' && String(input).endsWith('/api/integrations')) {
-        return json({ items: [jira] });
-      }
-      if (init?.method === 'PATCH') {
-        await base(input, init);
-        return json(jira);
-      }
-      return base(input, init);
-    }) as typeof fetch;
-    render(createApp({ fetchImpl, realtime: false }).element);
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit configuration' }));
-    const form = await screen.findByRole('form', { name: 'Configuration of ACME Jira' });
-    const poll = form.querySelector('select[aria-label="poll_enabled"]') as HTMLSelectElement;
-    fireEvent.change(poll, { target: { value: 'false' } });
-    const label = form.querySelector('input[data-config-kind="string"][value="agentic"]');
-    expect(label).not.toBeNull();
-    fireEvent.change(label as HTMLInputElement, { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save configuration' }));
-    await waitFor(() => {
-      expect(sent.some((each) => each.method === 'PATCH')).toBe(true);
-    });
-    expect(sent.find((each) => each.method === 'PATCH')?.body).toEqual({
-      config: {
-        site_url: 'https://acme.atlassian.example.test',
-        user_email: 'ops@example.test',
-        poll_enabled: false,
-      },
-      // A stored optional value the operator cleared is removed; untouched ones are not sent.
-      remove: ['pickup_label'],
-    });
-  });
-
-  /** WP-114, PROGRESS backlog 331: the two commands, from the card. */
-  it('re-seals a credential by naming a new environment variable, with an Idempotency-Key', async () => {
-    const { sent, fetchImpl } = recorder();
-    render(createApp({ fetchImpl, realtime: false }).element);
-    fireEvent.click(await screen.findByRole('button', { name: 'Replace credentials' }));
-    fireEvent.change(await screen.findByLabelText('New environment variable for api_token'), {
-      target: { value: 'JIRA_API_TOKEN_2026_10' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Re-seal credentials' }));
-    await waitFor(() => {
-      expect(sent.some((each) => each.url.endsWith('/secrets'))).toBe(true);
-    });
-    const reseal = sent.find((each) => each.url.endsWith('/secrets'));
-    expect(reseal?.url).toMatch(new RegExp(`/api/integrations/${INTEGRATION}/secrets$`));
-    expect(reseal?.method).toBe('POST');
-    expect(reseal?.body).toEqual({ secret_refs: { api_token: 'JIRA_API_TOKEN_2026_10' } });
-    expect(reseal?.key).toMatch(/^[A-Za-z0-9._:-]+$/);
-    expect(await screen.findByText(/Re-sealed api_token/)).toBeTruthy();
-  });
-
-  it('retires after a confirmation, and shows the server’s refusal as it is', async () => {
-    const { sent, fetchImpl: base } = recorder();
-    let refuse = true;
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === 'DELETE' && refuse) {
-        refuse = false;
-        return json(
-          {
-            error: {
-              code: 'integration_bound',
-              message: `integration ${INTEGRATION} is bound to project acme; remove it from each project's bindings first`,
-            },
-          },
-          409,
-        );
-      }
-      return base(input, init);
-    }) as typeof fetch;
-    render(createApp({ fetchImpl, realtime: false }).element);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retire' }));
-    // Nothing is sent by the first press: it only asks.
-    expect(sent.filter((each) => each.method === 'DELETE')).toHaveLength(0);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retire integration' }));
-    expect(await screen.findByText('The integration was not retired.')).toBeTruthy();
-    await waitFor(() => {
-      expect(document.body.textContent).toContain('is bound to project acme');
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Retire integration' }));
-    await waitFor(() => {
-      expect(sent.filter((each) => each.method === 'DELETE')).toHaveLength(1);
-    });
-    expect(sent.find((each) => each.method === 'DELETE')?.url).toMatch(
-      new RegExp(`/api/integrations/${INTEGRATION}$`),
+  it('shows the overview: human labels with their keys, the binding projects, and one primary', async () => {
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
+    const { sent, fetchImpl } = recorder({ bound: [INTEGRATION] });
+    const { container } = renderApp(fetchImpl);
+    expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
+    expect(screen.getByText('Site URL')).toBeTruthy();
+    expect(screen.getByText('site_url')).toBeTruthy();
+    expect(screen.getByText('https://acme.atlassian.example.test')).toBeTruthy();
+    expect((await screen.findByRole('link', { name: 'Acme service' })).getAttribute('href')).toBe(
+      '/projects/acme/settings',
     );
-  });
-
-  it('lists a retired integration as retired, with no control that writes', async () => {
-    const { fetchImpl: base } = recorder();
-    const retired: IntegrationSummary = {
-      ...(INTEGRATIONS.items[0] as IntegrationSummary),
-      retired_at: '2026-10-01T09:00:00.000Z',
-    };
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) =>
-      (init?.method ?? 'GET') === 'GET' && String(input).endsWith('/api/integrations')
-        ? json({ items: [retired] })
-        : base(input, init)) as typeof fetch;
-    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    const primaries = [...container.querySelectorAll('a, button')].filter((element) =>
+      element.className.includes('border-primary-line'),
+    );
+    expect(primaries.map((element) => element.textContent)).toEqual(['Test connection']);
+    await userEvent.setup().click(primaries[0] as HTMLElement);
     await waitFor(() => {
-      expect(container.querySelector(`[data-integration-retired="${INTEGRATION}"]`)).not.toBeNull();
+      expect(
+        sent.some((entry) => entry.url.endsWith(`/api/integrations/${INTEGRATION}/test`)),
+      ).toBe(true);
     });
-    for (const name of [
-      'Test connection',
-      'Edit configuration',
-      'Replace credentials',
-      'Retire',
-      'Setup guide',
-    ]) {
-      expect(screen.queryByRole('button', { name }), name).toBeNull();
-    }
-    expect(container.textContent).toContain('retired');
+    expect(await screen.findByText('Last test: passed')).toBeTruthy();
   });
 
-  /** WP-114, backlog 327's reading on this screen: only a 403 is the maintainer role. */
-  it('does not name a 503 a permission problem', async () => {
-    const { fetchImpl: base } = recorder();
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) =>
-      (init?.method ?? 'GET') === 'GET' && String(input).endsWith('/api/integrations')
-        ? json({ error: { code: 'unavailable', message: 'the database is not answering' } }, 503)
-        : base(input, init)) as typeof fetch;
-    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-    // The app retries a failed read once (`app.tsx`), so the notice arrives after that retry.
-    expect(
-      await screen.findByText('Integrations could not be loaded.', {}, { timeout: 5_000 }),
-    ).toBeTruthy();
-    expect(container.textContent).not.toContain('needs the maintainer role');
-    expect(container.textContent).toContain('the database is not answering');
+  it('lists the refused deliveries in their tab, the provider’s words as text', async () => {
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}?tab=refused-deliveries`);
+    const { container } = renderApp(recorder().fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Refused deliveries' });
+    expect(list.textContent).toContain('unmapped_identity: <b>U123</b>');
+    expect(list.querySelector('b')).toBeNull();
+    expect(list.textContent).toContain('slack:U123');
+    expect(container.querySelector('[data-setup-guide]')).toBeNull();
+  });
+
+  it('says plainly when the id is not one of the organisation’s integrations', async () => {
+    window.history.pushState({}, '', '/integrations/00000000-0000-4000-8000-0000000000ff');
+    renderApp(recorder().fetchImpl);
+    expect(await screen.findByText('No such integration')).toBeTruthy();
+  });
+
+  it('offers no write on a retired integration’s page', async () => {
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
+    renderApp(recorder({ items: [{ ...JIRA, retired_at: '2026-10-01T09:00:00.000Z' }] }).fetchImpl);
+    expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Test connection' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Actions for ACME Jira' })).toBeNull();
   });
 });

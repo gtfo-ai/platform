@@ -108,8 +108,8 @@ test('ANSI sequences in shell output are stripped, not rendered as characters', 
 });
 
 test('a provider setup guide and a knowledge document are text as well', async ({ page }) => {
-  await page.goto('/integrations');
-  await page.getByRole('button', { name: 'Setup guide' }).click();
+  // S-23.11a: the guide is the Setup guide tab of the integration's own page.
+  await page.goto(`/integrations/${IDS.integration}?tab=setup-guide`);
   await expect(page.getByText('Create an API token.')).toBeVisible();
   await expect(page.locator('pre code').filter({ hasText: 'JIRA_API_TOKEN' })).toBeVisible();
   expect(await page.locator('main script').count()).toBe(0);

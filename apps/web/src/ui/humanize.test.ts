@@ -11,11 +11,14 @@ import {
   artifactTypeSchema,
   BUILTIN_GATE_STAGE_IDS,
   BUILTIN_STAGE_IDS,
+  integrationSummarySchema,
+  integrationTypeSchema,
   questionStatusSchema,
   runStatusSchema,
   runTerminalReasonSchema,
   taskStageStateSchema,
   taskStateSchema,
+  workerPauseReasonSchema,
 } from '@platform/contracts';
 import { ITERATION_LOOPS, READINESS_CRITERION_IDS, SHIPPED_STAGE_IDS } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
@@ -23,10 +26,15 @@ import {
   APPROVAL_KIND_LABEL,
   APPROVAL_STATUS_LABEL,
   ARTIFACT_TYPE_LABEL,
+  choiceLabel,
+  configFieldLabel,
   GATE_LABEL,
   LOOP_LABEL,
   loopLabel,
   ordinal,
+  INTEGRATION_HEALTH_LABEL,
+  INTEGRATION_TYPE_LABEL,
+  INTEGRATION_TYPE_PURPOSE,
   QUESTION_STATUS_LABEL,
   READINESS_CRITERION_LABEL,
   ROLE_LABEL,
@@ -39,6 +47,7 @@ import {
   TASK_STATE_LABEL,
   TERMINAL_REASON_LABEL,
   titleCase,
+  WORKER_PAUSE_REASON_LABEL,
 } from './humanize.js';
 
 const VOCABULARIES = [
@@ -52,6 +61,14 @@ const VOCABULARIES = [
   ['approval status', approvalStatusSchema.options, APPROVAL_STATUS_LABEL],
   ['question status', questionStatusSchema.options, QUESTION_STATUS_LABEL],
   ['gate', BUILTIN_GATE_STAGE_IDS, GATE_LABEL],
+  ['integration type', integrationTypeSchema.options, INTEGRATION_TYPE_LABEL],
+  ['integration purpose', integrationTypeSchema.options, INTEGRATION_TYPE_PURPOSE],
+  [
+    'integration health',
+    integrationSummarySchema.shape.health.shape.status.options,
+    INTEGRATION_HEALTH_LABEL,
+  ],
+  ['worker pause reason', workerPauseReasonSchema.options, WORKER_PAUSE_REASON_LABEL],
 ] as const;
 
 describe('humanize', () => {
@@ -114,6 +131,22 @@ describe('humanize', () => {
     );
     expect(readinessCriterionLabel('R99')).toBe('R99');
     expect(readinessCriterionLabel('constructor')).toBe('constructor');
+  });
+
+  it('labels a provider field in words, initialisms and units included', () => {
+    expect(configFieldLabel('site_url')).toBe('Site URL');
+    expect(configFieldLabel('api_token')).toBe('API token');
+    expect(configFieldLabel('team_id')).toBe('Team ID');
+    expect(configFieldLabel('run_ssh_public_key')).toBe('Run SSH public key');
+    expect(configFieldLabel('request_timeout_ms')).toBe('Request timeout (ms)');
+    expect(configFieldLabel('poll_interval_seconds')).toBe('Poll interval (seconds)');
+    expect(configFieldLabel('max_line_bytes')).toBe('Max line (bytes)');
+    expect(configFieldLabel('poll_enabled')).toBe('Poll for changes');
+    // A lone unit word is the field's name, not a unit of nothing.
+    expect(configFieldLabel('seconds')).toBe('Seconds');
+    expect(configFieldLabel('__')).toBe('__');
+    expect(choiceLabel('deploy_key')).toBe('Deploy key');
+    expect(choiceLabel(30)).toBe('30');
   });
 });
 

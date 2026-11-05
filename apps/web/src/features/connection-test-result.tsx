@@ -14,7 +14,9 @@
  */
 import type { TestIntegrationResponse } from '@platform/contracts';
 import type { ReactElement } from 'react';
-import { Badge, Card, ErrorNotice } from '../ui/kit.js';
+import { configFieldLabel } from '../ui/humanize.js';
+import { ErrorNotice } from '../ui/kit.js';
+import { StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 
 /** The slice of a `useMutation` result this reads — a mutation object satisfies it as it is. */
@@ -46,17 +48,37 @@ export const ConnectionTestResult = ({
   }
   const { ok, checks } = test.data;
   return (
-    <Card className="flex flex-col gap-1 text-xs">
-      <p className={ok ? 'font-semibold' : 'font-semibold text-danger'}>
+    <div
+      className="flex flex-col gap-1.5 rounded-md border border-line bg-canvas p-3 text-xs"
+      data-connection-test={ok ? 'passed' : 'failed'}
+    >
+      <p
+        className={
+          ok
+            ? 'flex items-center gap-1.5 font-semibold'
+            : 'flex items-center gap-1.5 font-semibold text-danger'
+        }
+      >
+        <StatusIcon status={ok ? 'success' : 'failure'} decorative />
         {ok ? 'Last test: passed' : 'Last test: failed'}
       </p>
-      {checks.map((check) => (
-        <p key={check.name}>
-          <Badge tone={check.ok ? 'success' : 'danger'}>{check.name}</Badge>{' '}
-          {/* The provider's own words about the operator's own instance (BD-022). */}
-          <UntrustedText value={check.detail} />
-        </p>
-      ))}
-    </Card>
+      <ul className="flex flex-col gap-1">
+        {checks.map((check) => (
+          <li key={check.name} className="flex items-start gap-1.5">
+            <StatusIcon
+              status={check.ok ? 'success' : 'failure'}
+              label={check.ok ? 'Passed' : 'Failed'}
+              size={12}
+              className="mt-0.5"
+            />
+            {/* The check's name is the platform's, in words; its detail is the provider's (BD-022). */}
+            <span className="font-medium">{configFieldLabel(check.name)}</span>
+            <span className="text-fg-muted">
+              <UntrustedText value={check.detail} />
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 };

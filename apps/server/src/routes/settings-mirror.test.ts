@@ -39,12 +39,17 @@ const WIZARD = 'apps/web/src/features/onboarding.tsx';
 
 /**
  * The settings screens product/10 names: the project's own page, the org page and the integrations
- * page, which is where product/10 puts "test connection" and where an integration is created.
+ * page, which is where product/10 puts "test connection" and where an integration is created. Since
+ * S-23.11a the integrations page is three route modules — the list, one integration's page and the
+ * add-integration wizard (`/integrations/new`), each lazily loaded, so none imports another — and all
+ * three are named here.
  */
 const SETTINGS_SCREENS = [
   'apps/web/src/features/project-settings.tsx',
   'apps/web/src/features/settings.tsx',
   'apps/web/src/features/integrations.tsx',
+  'apps/web/src/features/integration-detail.tsx',
+  'apps/web/src/features/integration-wizard.tsx',
 ];
 
 /**

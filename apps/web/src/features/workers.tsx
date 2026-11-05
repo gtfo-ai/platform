@@ -4,10 +4,12 @@
  *
  * ## `/workers`
  *
- * Your workers, or every worker for an administrator (`scope: all`): machine, user, last seen,
- * protocol, image digests, state, paused until — and *Revoke*. Revoking stops the credential at its
- * next call and expires the leases of the worker's live runs, so the lease sweep ends them; the card
- * says so before the press, not after.
+ * Your workers, or every worker for an administrator (`scope: all`), as a list box (S-23.11a, TD-033
+ * § 1): a state icon first — online (seen in the last minute), offline, paused or revoked — then the
+ * machine's name, its owner, when it was last seen, its protocol and how many of its slots are busy
+ * (`running` of `concurrency`); the image digests and the dates are behind *Details*. *Revoke* opens a
+ * dialog that says what it does before the press: the credential stops at its next call and the
+ * leases of the worker's live runs expire, so the lease sweep ends them.
  *
  * ## `/workers/approve`
  *
@@ -20,20 +22,31 @@
  */
 import type { WorkerSummary } from '@platform/contracts';
 import { WORKER_USER_CODE_ALPHABET } from '@platform/contracts';
+import { ServerIcon } from '@primer/octicons-react/ServerIcon';
 import { type ReactElement, useState } from 'react';
 import { useSettingsCommands, useWorkerDevice, useWorkers } from '../app/queries.js';
+import { useServices } from '../app/services.js';
+import { Blankslate } from '../ui/blankslate.js';
+import { DetailsDisclosure } from '../ui/details.js';
+import { Dialog } from '../ui/dialog.js';
+import { Flash } from '../ui/flash.js';
+import { WORKER_PAUSE_REASON_LABEL } from '../ui/humanize.js';
 import {
-  Badge,
   Button,
   Card,
-  EmptyState,
   ErrorNotice,
   Field,
   formatDateTime,
+  formatInteger,
   Loading,
-  SectionHeading,
 } from '../ui/kit.js';
+import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
+import { PageHeader } from '../ui/page-header.js';
+import { formatAgo } from '../ui/relative-time.js';
+import { Skeleton } from '../ui/skeleton.js';
+import { type Status, StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 
 /** TD-031 §10c's warning, word for word where it is quoted. */
 export const PHISHING_WARNING = 'Approve only a code your own machine is showing you now.';
@@ -57,109 +70,203 @@ export const formatCodeAge = (seconds: number): string => {
   return minutes === 0 ? `${rest} s` : `${minutes} min ${rest} s`;
 };
 
-const WorkerCard = ({
+/**
+ * A worker is **online** when it was seen in the last minute — TD-031's own definition of an online
+ * worker (a heartbeat in the last 60 s), the one the offer uses to prefer it.
+ */
+export const ONLINE_WITHIN_MS = 60_000;
+
+/** The row's state: revoked, paused (until when, and why), online, or offline. */
+export const workerState = (
+  worker: WorkerSummary,
+  nowMs: number,
+): { readonly status: Status; readonly word: string } => {
+  if (worker.state === 'revoked') {
+    return { status: 'cancelled', word: 'Revoked' };
+  }
+  if (worker.paused_until !== null && Date.parse(worker.paused_until) > nowMs) {
+    return { status: 'paused', word: `Paused until ${formatDateTime(worker.paused_until)}` };
+  }
+  const seen = worker.last_seen_at === null ? Number.NaN : Date.parse(worker.last_seen_at);
+  return nowMs - seen <= ONLINE_WITHIN_MS
+    ? { status: 'success', word: 'Online' }
+    : { status: 'idle', word: 'Offline' };
+};
+
+/** "1 of 2 busy" — the live runs it holds out of the runs it may hold at once. */
+export const slotsText = (worker: WorkerSummary): string =>
+  `${formatInteger(worker.running.length)} of ${formatInteger(worker.concurrency)} busy`;
+
+const WorkerRow = ({
   worker,
   showUser,
-  pending,
+  nowMs,
   onRevoke,
 }: {
   readonly worker: WorkerSummary;
   readonly showUser: boolean;
-  readonly pending: boolean;
+  readonly nowMs: number;
   readonly onRevoke: () => void;
-}): ReactElement => (
-  <Card className="flex flex-col gap-2">
-    <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="font-medium">
-        <UntrustedText value={worker.name} />
-      </span>
-      <Badge tone={worker.state === 'active' ? 'success' : 'danger'}>{worker.state}</Badge>
-      {worker.paused_until === null ? null : (
-        <Badge tone="neutral">{`paused until ${formatDateTime(worker.paused_until)}`}</Badge>
-      )}
-      {showUser ? (
-        <span className="text-xs text-fg-muted">
-          <UntrustedText value={worker.user.name ?? worker.user.email} />
+}): ReactElement => {
+  const [confirming, setConfirming] = useState(false);
+  const { status, word } = workerState(worker, nowMs);
+  const seen = worker.last_seen_at === null ? null : formatAgo(worker.last_seen_at, nowMs);
+  return (
+    <ListRow
+      leading={<StatusIcon status={status} label={word} />}
+      title={<UntrustedText value={worker.name} />}
+      meta={
+        <span className="flex flex-col gap-1" data-worker={worker.id}>
+          <span className="inline-flex flex-wrap items-center gap-1.5">
+            <span>{word}</span>
+            {worker.paused_reason === null || status !== 'paused' ? null : (
+              <span>{`· ${WORKER_PAUSE_REASON_LABEL[worker.paused_reason]}`}</span>
+            )}
+            {showUser ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <UntrustedText value={worker.user.name ?? worker.user.email} />
+              </>
+            ) : null}
+            <span aria-hidden="true">·</span>
+            <span>
+              {worker.last_seen_at === null
+                ? 'never seen'
+                : `seen ${seen ?? formatDateTime(worker.last_seen_at)}`}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {worker.protocol_version === null
+                ? 'protocol not reported'
+                : `protocol ${worker.protocol_version}`}
+            </span>
+          </span>
+          <DetailsDisclosure summary="Details" className="text-xs">
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+              <dt className="text-fg-muted">Registered</dt>
+              <dd>{formatDateTime(worker.created_at)}</dd>
+              {worker.revoked_at === null ? null : (
+                <>
+                  <dt className="text-fg-muted">Revoked</dt>
+                  <dd>{formatDateTime(worker.revoked_at)}</dd>
+                </>
+              )}
+              <dt className="text-fg-muted">Images</dt>
+              <dd className="font-mono break-all">
+                {worker.image_digests.length === 0
+                  ? 'none reported'
+                  : worker.image_digests.join(' ')}
+              </dd>
+            </dl>
+          </DetailsDisclosure>
         </span>
-      ) : null}
-    </div>
-    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-      <dt className="text-fg-muted">Last seen</dt>
-      <dd>{worker.last_seen_at === null ? 'never' : formatDateTime(worker.last_seen_at)}</dd>
-      <dt className="text-fg-muted">Protocol</dt>
-      <dd>{worker.protocol_version === null ? 'not reported' : String(worker.protocol_version)}</dd>
-      <dt className="text-fg-muted">Images</dt>
-      <dd className="font-mono break-all">
-        {worker.image_digests.length === 0 ? 'none reported' : worker.image_digests.join(' ')}
-      </dd>
-      <dt className="text-fg-muted">Registered</dt>
-      <dd>{formatDateTime(worker.created_at)}</dd>
-      {worker.revoked_at === null ? null : (
-        <>
-          <dt className="text-fg-muted">Revoked</dt>
-          <dd>{formatDateTime(worker.revoked_at)}</dd>
-        </>
-      )}
-    </dl>
-    {worker.state === 'active' ? (
-      <div className="flex flex-wrap items-center gap-2">
-        <Button tone="danger" disabled={pending} onClick={onRevoke}>
-          Revoke
-        </Button>
-        <span className="text-xs text-fg-muted">
-          Its credential stops working at the next call, and any run it holds is ended and planned
-          again.
-        </span>
-      </div>
-    ) : null}
-  </Card>
-);
+      }
+      {...(worker.state === 'active' ? { trailing: <span>{slotsText(worker)}</span> } : {})}
+      {...(worker.state === 'active'
+        ? {
+            actions: (
+              <Dialog
+                open={confirming}
+                onOpenChange={setConfirming}
+                title={`Revoke ${sanitiseUntrusted(worker.name)}?`}
+                description="Its credential stops working at its next call, and any run it holds is ended and planned again. The machine has to be approved anew to come back."
+                trigger={
+                  <Button tone="danger" size="sm">
+                    Revoke
+                  </Button>
+                }
+                footer={
+                  <>
+                    <Button onClick={() => setConfirming(false)}>Cancel</Button>
+                    <Button
+                      tone="danger"
+                      onClick={() => {
+                        setConfirming(false);
+                        onRevoke();
+                      }}
+                    >
+                      Revoke worker
+                    </Button>
+                  </>
+                }
+              />
+            ),
+          }
+        : {})}
+    />
+  );
+};
 
 export const WorkersScreen = (): ReactElement => {
   const workers = useWorkers();
   const commands = useSettingsCommands();
+  const { now } = useServices();
+  const nowMs = now();
   const items = workers.data?.items ?? [];
+  const active = items.filter((worker) => worker.state === 'active').length;
   return (
-    <div className="flex flex-col gap-3">
-      <SectionHeading>Workers</SectionHeading>
-      <p className="text-xs text-fg-muted">
-        Machines that run agent stages for this instance. A machine is added from its own terminal:
-        it shows a code, and you approve it at <span className="font-mono">/workers/approve</span>.
-      </p>
-      {workers.isPending ? <Loading label="Loading workers…" /> : null}
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="Workers"
+        divider={false}
+        meta={
+          <span>
+            Machines that run agent stages for this instance. A machine is added from its own
+            terminal: it shows a code, and you approve it at{' '}
+            <span className="font-mono">/workers/approve</span>.
+          </span>
+        }
+      />
+      {workers.isPending ? <Skeleton label="Loading workers…" /> : null}
       {workers.isError ? (
         <ErrorNotice title="The workers could not be loaded." error={workers.error} />
-      ) : null}
-      {workers.isSuccess && items.length === 0 ? (
-        <EmptyState
-          title="No worker is registered"
-          hint="Start a worker on your machine and approve the code it shows."
-        />
       ) : null}
       {commands.revokeWorker.isError ? (
         <ErrorNotice title="That worker was not revoked." error={commands.revokeWorker.error} />
       ) : null}
       {commands.revokeWorker.isSuccess ? (
-        <p className="text-xs" role="status">
-          {commands.revokeWorker.data.performed
-            ? 'The worker is revoked.'
-            : 'The worker was already revoked.'}
-        </p>
+        <Flash tone="success" live="status">
+          <p>
+            {commands.revokeWorker.data.performed
+              ? 'The worker is revoked.'
+              : 'The worker was already revoked.'}
+          </p>
+        </Flash>
       ) : null}
-      <div className="flex flex-col gap-2">
-        {items.map((worker) => (
-          <div key={worker.id} data-worker={worker.id}>
-            <WorkerCard
+      {workers.isSuccess && items.length === 0 ? (
+        <Blankslate
+          informational
+          size="spacious"
+          icon={<ServerIcon size={24} />}
+          title="No worker is registered"
+          hint="Start a worker on your machine and approve the code it shows."
+        />
+      ) : null}
+      {items.length === 0 ? null : (
+        <ListBox
+          label="Workers"
+          header={
+            <ListBoxHeader>
+              <span className="font-semibold text-fg">{`${formatInteger(active)} active`}</span>
+              {items.length === active ? null : (
+                <span className="text-fg-muted">{`${formatInteger(items.length - active)} revoked`}</span>
+              )}
+            </ListBoxHeader>
+          }
+        >
+          {items.map((worker) => (
+            <WorkerRow
+              key={worker.id}
               worker={worker}
               showUser={workers.data?.scope === 'all'}
-              pending={commands.revokeWorker.isPending}
+              nowMs={nowMs}
               onRevoke={() => {
                 commands.revokeWorker.mutate(worker.id);
               }}
             />
-          </div>
-        ))}
-      </div>
+          ))}
+        </ListBox>
+      )}
     </div>
   );
 };
@@ -180,12 +287,16 @@ export const WorkerApproveScreen = (): ReactElement => {
     !decision.isPending;
 
   return (
-    <div className="flex max-w-xl flex-col gap-3">
-      <SectionHeading>Approve a worker</SectionHeading>
-      <p className="text-sm" role="note">
-        <strong>{PHISHING_WARNING}</strong> Somebody who sends you a code is asking you to give
-        their machine your access.
-      </p>
+    <div className="flex max-w-xl flex-col gap-4">
+      <PageHeader
+        title="Approve a worker"
+        meta="Type the code your machine shows, check where the request came from, then name the machine."
+      />
+      <div role="note">
+        <Flash tone="warning" title={PHISHING_WARNING}>
+          <p>Somebody who sends you a code is asking you to give their machine your access.</p>
+        </Flash>
+      </div>
       <Field
         label="Code shown by the machine"
         placeholder="XXXX-XXXX"
@@ -206,8 +317,11 @@ export const WorkerApproveScreen = (): ReactElement => {
       ) : null}
       {device.isSuccess && !decision.isSuccess ? (
         <div data-device-request="true">
-          <Card className="flex flex-col gap-2">
-            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+          <Card
+            className="flex flex-col gap-3"
+            header={<h2 className="font-semibold">What the requesting machine sent</h2>}
+          >
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
               <dt className="text-fg-muted">Requested from</dt>
               <dd className="font-mono" data-device-ip="true">
                 <UntrustedText value={device.data.requested_ip} />
@@ -280,11 +394,13 @@ export const WorkerApproveScreen = (): ReactElement => {
         <ErrorNotice title="The code was not decided." error={decision.error} />
       ) : null}
       {decision.isSuccess ? (
-        <p className="text-sm" role="status">
-          {decision.data.decision === 'approve'
-            ? 'Approved. The machine picks up its credential at its next poll.'
-            : 'Denied. The machine is told so at its next poll.'}
-        </p>
+        <Flash tone={decision.data.decision === 'approve' ? 'success' : 'info'} live="status">
+          <p>
+            {decision.data.decision === 'approve'
+              ? 'Approved. The machine picks up its credential at its next poll.'
+              : 'Denied. The machine is told so at its next poll.'}
+          </p>
+        </Flash>
       ) : null}
     </div>
   );

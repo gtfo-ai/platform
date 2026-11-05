@@ -898,7 +898,13 @@ computed from whatever two samples the browser happened to see is a number with 
 ## 6. Inbox — questions and approvals
 
 **Inbox** in the top navigation: everything pending for you, across every project, answerable in
-place.
+place — laid out like GitHub's notifications. The left column filters the list: **All**,
+**Questions**, **Approvals**, or one project, each with its count. Each row starts with the
+*needs you* bell, then the question's first line (or *Plan approval is waiting for you*), and under it
+where it is — project · ticket · stage — how long ago it was asked and when it is due. Click a
+question's line and the row opens in place: the whole question, a **Your answer** box and **Answer**.
+An approval's row links to the task, where it is decided (**Decide on the task**). With nothing
+pending the page says *Nothing needs you*.
 
 A question the agent asks may also arrive in Slack, and all channels are equivalent — **the first
 answer wins**. An approval arrives in Slack with **Approve / Request changes** buttons; a click
@@ -924,7 +930,8 @@ default `escalation` and `budget_exhausted`, which the list replaces rather than
 A question is due after the project's question timeout — **1 working day** by default, counted on the
 organisation's working calendar, so one asked late on a Friday is due on Monday — and an expired
 question is not silently dropped; it moves the task to needing a human. It also **leaves the
-inbox**, because it can no longer be answered — the inbox says so above the list — and the task page
+inbox**, because it can no longer be answered — the inbox says so in one line under its title, with
+the rest behind **Learn more** — and the task page
 is where it is retried or cancelled. **Before that, one
 reminder**: halfway through the working time to the deadline, the project's chat channel gets a
 message saying the question is still unanswered, which names the task page (it has no buttons). A
@@ -1074,37 +1081,51 @@ dollars are list-price estimates (above), but they are what admission compares.
 
 ## 9. Integrations
 
-Per-provider cards with health, and each provider's **setup guide** — written for the provider's own
-screens, and the same text the operator reads. For a provider with an inbound webhook, the **Setup
-guide** card shows the webhook URL to paste into the provider, with a **Copy** button; a provider
-with no inbound half says it has none.
+**Integrations** lists the organisation's connected systems — ticket tracker, git host, chat, logs,
+error tracker — one row each: its health (*Healthy*, *Degraded*, *Down*, *Not checked*, or
+*Retired*) as an icon and a word, its name, its provider and kind, when it was last checked
+(*checked 5 m ago*), and how many projects bind it. Each row's **`···`** menu has **Test connection**
+(the answer appears under the row), **Setup guide**, **Edit configuration**, **Replace credentials**
+and **Retire**. Click a name to open the integration's own page, with three tabs:
 
-Nothing on this screen is a credential: the server strips every field a provider declares to be a
+- **Overview** — anything wrong with it, its configuration (each setting under its name in words,
+  with the key beside it, `site_url`), and the projects that bind it. **Test connection** is the
+  page's button, and the `···` beside it holds the rest.
+- **Setup guide** — the provider's own guide, written for the provider's screens and the same text
+  the operator reads. For a provider with an inbound webhook it shows the webhook URL to paste into
+  the provider, with a **Copy** button; a provider with no inbound half says it has none.
+- **Refused deliveries** — what the provider sent that the platform refused, and why (an unmapped
+  chat account, a decision the clicker may not make).
+
+Nothing on these screens is a credential: the server strips every field a provider declares to be a
 secret before publishing an integration's configuration, and publishes nothing at all for a provider
 this build does not ship — because it then cannot tell configuration from credential.
 
-**Add an integration** (admin) is a form on this screen, and **Test connection** is on each card as
-well as in the wizard beside the binding it is about; both show the same answer (since WP-155 — the
-wizard's button used to show nothing). Choose a provider and the form asks for the
-fields that provider requires — its URL, its organisation or channel — and, for each credential, the
-*environment variable* the server reads it from, which must be on the operator's allow-list (operator
-guide, §4). The form never takes a credential. The server checks the configuration against the
-provider's own schema before it stores anything, so a create can be refused for a reason outside the
-form, and the server's own message — naming the field — is shown.
-
-The form also offers the provider's optional settings, each as a control of its type (a yes/no
-choice, a number, a comma-separated list); leave one empty and the provider's default applies.
+**New integration** (admin) is a four-step wizard. **1. Choose a provider** — one card per provider,
+each saying what connecting it does. **2. Configure it** — a name of your choosing and the fields that
+provider requires (its URL, its organisation or channel), each labelled in words with its key in the
+hint; the provider's optional settings are under **Optional settings**, each a control of its type (a
+yes/no choice, a number, a comma-separated list) — leave one empty and the provider's default
+applies. **3. Name its credentials** — for each credential, the *environment variable* the server
+reads it from, which must be on the operator's allow-list (operator guide, §4); the value itself
+never crosses the browser. **Create integration** sends it; the server checks the configuration
+against the provider's own schema before it stores anything, so a create can be refused for a reason
+outside the form, and the server's own message — naming the field — is shown (go back a step with
+the step list to correct it). **4. Test the connection** — or skip it — and the wizard ends with
+**Bind it to a project**. **Test connection** shows the same answer here, on the integration's page,
+on its row and in the project wizard beside the binding it is about.
 
 An integration whose stored configuration would not load (one created before the form asked for
-these fields) says so on its card, naming the fields. **Edit configuration** fixes it: it asks for
-the required fields again, lets you change the optional ones, and removes the keys the provider does
-not declare.
+these fields) says so on its row, naming the fields. **Edit configuration** fixes it: a dialog asks
+for the required fields again, lets you change the optional ones, and removes the keys the provider
+does not declare.
 
-**Replace credentials** (admin) rotates a token: name the new environment variable for each
-credential you are replacing, and the server seals the new value and deletes the old one. **Retire**
-(admin) removes an integration you no longer use: its credentials are deleted and its card stays,
-marked *retired*, with no controls, because the audit still names it. A project that binds it, or a
-run credential it minted that is still live, refuses the retire, and the card says which.
+**Replace credentials** (admin) rotates a token: in its dialog, name the new environment variable for
+each credential you are replacing, and the server seals the new value and deletes the old one.
+**Retire** (admin) removes an integration you no longer use: a dialog says what it does first — its
+credentials are deleted and its row stays, marked *Retired*, with no menu, because the audit still
+names it. A project that binds it, or a run credential it minted that is still live, refuses the
+retire, and the dialog shows the server's reason.
 
 ## 10. Audit log
 
@@ -1194,9 +1215,12 @@ it says *no data in this range*, which is a different sentence from `0`.
 ### Workers
 
 **Workers** lists the machines registered to run agent stages for this instance — yours, or every
-one if you are an administrator — with when each was last seen, the protocol and image digests it
-reported, and whether it is active, paused or revoked. *Revoke* stops the machine's credential at its
-next call; any run it holds is ended by the lease sweep and planned again.
+one if you are an administrator. Each row starts with its state — **Online** (seen in the last
+minute), **Offline**, **Paused** (until when, and why) or **Revoked** — then the machine's name, its
+owner, when it was last seen, the protocol it speaks, and how many of its run slots are busy (*1 of 2
+busy*); **Details** holds the image digests it reported and when it was registered. **Revoke** opens a
+dialog that says what it does before anything happens: the machine's credential stops at its next
+call, and any run it holds is ended by the lease sweep and planned again.
 
 A machine is added from its own terminal: it shows a code like `BCDF-GHJK`, and you approve it at
 **/workers/approve** while signed in. Before you decide, the page shows where the request came from,

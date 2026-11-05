@@ -262,11 +262,13 @@ describe('the application when a component throws', () => {
     await screen.findByTestId('error-fallback');
 
     // The navigation the previous test proved is still there is also still *usable*.
-    fireEvent.click(screen.getByRole('link', { name: 'Inbox' }));
+    // Projects, because it reads no clock: since S-23.11a the Inbox prints each item's age, so with
+    // this broken clock it fails exactly as Agents does.
+    fireEvent.click(screen.getByRole('link', { name: 'Projects' }));
 
-    // The Inbox screen's own heading: since S-23.4 the screen is a lazy chunk, and the word
-    // "Inbox" is also the navigation's label, so only the heading proves the screen rendered.
-    expect(await screen.findByRole('heading', { name: 'Inbox' })).toBeTruthy();
+    // The Projects screen's own heading: since S-23.4 the screen is a lazy chunk, and the word
+    // "Projects" is also the navigation's label, so only the heading proves the screen rendered.
+    expect(await screen.findByRole('heading', { name: 'Projects' })).toBeTruthy();
     expect(screen.queryByTestId('error-fallback')).toBeNull();
   });
 

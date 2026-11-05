@@ -204,11 +204,15 @@ test('answering a question sends the command and the question leaves the inbox',
   page,
 }) => {
   await page.goto('/inbox');
-  const answerBox = page.getByLabel(`Answer question ${IDS.question}`);
+  // S-23.11a: a question row expands in place to its answer box — one more step than the card had.
+  const row = page.locator(`[data-inbox-question="${IDS.question}"]`);
+  await expect(row).toHaveAttribute('aria-expanded', 'false');
+  await row.click();
+  const answerBox = page.getByLabel('Your answer');
   await expect(answerBox).toBeVisible();
 
   await answerBox.fill('three');
-  await page.getByRole('button', { name: 'Answer' }).first().click();
+  await page.getByRole('button', { name: 'Answer', exact: true }).click();
 
   // The fake backend removes an answered question from `GET /api/org/inbox`, so the box
   // disappearing is evidence the POST arrived — with its CSRF header, which the fake enforces.
@@ -373,16 +377,26 @@ test('the project settings page re-evaluates readiness with its ceiling on the b
 
 test('the integrations screen carries the create and test controls', async ({ page }) => {
   // PROGRESS backlog 55: `POST /api/integrations` was served and no component called it, so the
-  // product's front door had a step that could only be taken with `curl`.
+  // product's front door had a step that could only be taken with `curl`. Since S-23.11a the probe
+  // is in each row's `···` and the create is the four-step wizard behind **New integration**.
   await page.goto('/integrations');
-  await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Add integration' })).toBeVisible();
+  await page.getByRole('button', { name: 'Actions for Jira (fake)' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Test connection' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('link', { name: 'New integration' }).click();
+  await expect(page).toHaveURL(/\/integrations\/new$/);
   // WP-100 (backlog 328): the chosen provider's own required fields, from the server's catalogue,
-  // and its credential as an environment-variable name.
-  await page.getByLabel('Provider').selectOption('jira-cloud');
-  await expect(page.getByLabel('site_url')).toBeVisible();
-  await expect(page.getByLabel('user_email')).toBeVisible();
-  await expect(page.getByLabel('Environment variable for api_token')).toBeVisible();
+  // labelled in words with the key in the hint, and its credential as an environment-variable name.
+  await page.getByRole('radio', { name: /Jira Cloud/ }).check();
+  await page.getByRole('button', { name: 'Continue to configuration' }).click();
+  await expect(page.getByLabel('Site URL')).toBeVisible();
+  await expect(page.getByText('Key: site_url.', { exact: false })).toBeVisible();
+  await page.getByLabel('Name').fill('Jira (second)');
+  await page.getByLabel('Site URL').fill('https://fake.atlassian.invalid');
+  await page.getByLabel('User email').fill('operator@example.invalid');
+  await page.getByRole('button', { name: 'Continue to credentials' }).click();
+  await expect(page.getByLabel('Environment variable for API token')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create integration' })).toBeVisible();
 });
 
 test('New project opens the wizard at Connect, and a project resumes where it stands (S-23.8)', async ({
@@ -428,7 +442,8 @@ test('the wizard’s Test connection shows a failed result beside the integratio
   // Waited on the last thing the page writes — the rendered verdict — then the log asserted as
   // what it implies (rule 87): exactly one probe reached the server.
   await expect(row.getByText('Last test: failed')).toBeVisible();
-  await expect(row.getByText('authenticated', { exact: true })).toBeVisible();
+  // The check's name in words since S-23.11a.
+  await expect(row.getByText('Authenticated', { exact: true })).toBeVisible();
   // The provider's words, as text (BD-022).
   await expect(row.getByText('401 <b>Unauthorized</b>: the API token was refused')).toBeVisible();
   await expect(row.locator('b')).toHaveCount(0);
@@ -547,7 +562,10 @@ test('statistics renders a number, a null ratio and an absence as three differen
 test('the integrations screen loads a provider setup guide on demand', async ({ page }) => {
   await page.goto('/integrations');
   await expect(page.getByText('Jira (fake)')).toBeVisible();
-  await page.getByRole('button', { name: 'Setup guide' }).click();
+  // S-23.11a: the guide is a tab of the integration's own page, reached from the row's `···`.
+  await page.getByRole('button', { name: 'Actions for Jira (fake)' }).click();
+  await page.getByRole('menuitem', { name: 'Setup guide' }).click();
+  await expect(page).toHaveURL(new RegExp(`/integrations/${IDS.integration}\\?tab=setup-guide$`));
   await expect(page.getByText('Create an API token.')).toBeVisible();
 });
 

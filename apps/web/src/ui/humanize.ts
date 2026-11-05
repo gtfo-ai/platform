@@ -17,11 +17,14 @@ import type {
   ArtifactType,
   BUILTIN_STAGE_IDS,
   BuiltinGateStageId,
+  IntegrationSummary,
+  IntegrationType,
   QuestionStatus,
   RunStatus,
   RunTerminalReason,
   TaskStageState,
   TaskState,
+  WorkerSummary,
 } from '@platform/contracts';
 
 /** The ticket flow's stages plus the four the one-off templates add (discovery, lint, history, spike). */
@@ -247,4 +250,94 @@ export const ordinal = (value: number): string => {
             ? 'rd'
             : 'th';
   return `${value}${suffix}`;
+};
+
+// ── Integrations and workers (S-23.11a) ──────────────────────────────────────
+
+/** What each kind of integration is, in the words of the person adding one. */
+export const INTEGRATION_TYPE_LABEL: Readonly<Record<IntegrationType, string>> = {
+  task_management: 'Ticket tracker',
+  git: 'Git host',
+  communication: 'Chat',
+  logs: 'Logs',
+  errors: 'Error tracker',
+};
+
+/** One line per kind: what connecting it does — the add-integration wizard's provider cards. */
+export const INTEGRATION_TYPE_PURPOSE: Readonly<Record<IntegrationType, string>> = {
+  task_management: 'Where tickets come from: the pipeline picks them up and moves their status.',
+  git: 'Where the code lives: agents push branches and open merge requests there.',
+  communication: 'Where questions, approvals and the daily digest are posted.',
+  logs: 'Log search the agents may read while they investigate a bug.',
+  errors: 'Error reports the agents may read while they investigate a bug.',
+};
+
+export type IntegrationHealth = IntegrationSummary['health']['status'];
+
+/** `integrations.health.status`; `unknown` is a connection nobody has tested yet. */
+export const INTEGRATION_HEALTH_LABEL: Readonly<Record<IntegrationHealth, string>> = {
+  ok: 'Healthy',
+  degraded: 'Degraded',
+  down: 'Down',
+  unknown: 'Not checked',
+};
+
+/** Words the field names use that are spelled as initialisms in a sentence. */
+const INITIALISMS: Readonly<Record<string, string>> = {
+  api: 'API',
+  id: 'ID',
+  ssh: 'SSH',
+  url: 'URL',
+  urls: 'URLs',
+};
+
+/** A trailing unit becomes a parenthesis: `request_timeout_ms` → "Request timeout (ms)". */
+const UNITS: Readonly<Record<string, string>> = {
+  ms: 'ms',
+  seconds: 'seconds',
+  bytes: 'bytes',
+};
+
+/** Names whose words alone would read wrong. */
+const FIELD_LABEL_OVERRIDES: Readonly<Record<string, string>> = {
+  poll_enabled: 'Poll for changes',
+};
+
+/**
+ * A provider field's human label — `site_url` → "Site URL", `api_token` → "API token",
+ * `poll_interval_seconds` → "Poll interval (seconds)". The field names are the providers' own schema
+ * keys (an open set, read off the server's catalogue), so this is a rule rather than a table: the
+ * words in sentence case, initialisms spelled as such, a trailing unit in parentheses. The key itself
+ * is still shown beside the label, in its hint, because it is what the operator guide and the
+ * server's refusals name.
+ */
+export const configFieldLabel = (name: string): string => {
+  const override = FIELD_LABEL_OVERRIDES[name];
+  if (override !== undefined) {
+    return override;
+  }
+  const words = name.split(/[_-]+/).filter((word) => word.length > 0);
+  const last = words.at(-1);
+  const unit = words.length > 1 && last !== undefined ? UNITS[last] : undefined;
+  const body = (unit === undefined ? words : words.slice(0, -1)).map(
+    (word) => INITIALISMS[word.toLowerCase()] ?? word.toLowerCase(),
+  );
+  const first = body[0];
+  if (first === undefined) {
+    return name;
+  }
+  const sentence = [`${first.charAt(0).toUpperCase()}${first.slice(1)}`, ...body.slice(1)].join(
+    ' ',
+  );
+  return unit === undefined ? sentence : `${sentence} (${unit})`;
+};
+
+/** A choice field's value as a word: `deploy_key` → "Deploy key"; a number stays a number. */
+export const choiceLabel = (value: string | number): string =>
+  typeof value === 'number' ? String(value) : configFieldLabel(value);
+
+export type WorkerPauseReason = NonNullable<WorkerSummary['paused_reason']>;
+
+export const WORKER_PAUSE_REASON_LABEL: Readonly<Record<WorkerPauseReason, string>> = {
+  usage_limited: 'Hit a usage limit',
 };

@@ -520,12 +520,14 @@ docker compose up -d                      # recreates app and runner, which both
 
 ### Creating one: the Integrations screen, or the API
 
-**Since WP-30 the browser can do this.** The Integrations screen has an "Add integration" form and a
-"Test connection" button on every card. Since WP-100 the form offers the providers this build ships
-and, for the one you choose, asks for a name, each field that provider **requires** (GitLab's and
-Loki's `base_url`, Jira Cloud's `site_url` and `user_email`, Sentry's `organization`, Slack's
-`channel`) and, for each credential field, the **name of the environment variable** the server
-should read it from — never the value. The field list comes from the server
+**Since WP-30 the browser can do this.** The Integrations screen's **New integration** opens a
+four-step wizard (provider, configuration, credentials, test connection), and *Test connection* is in
+every integration's `···` menu and on its own page. Since WP-100 the wizard offers the providers this
+build ships and, for the one you choose, asks for a name, each field that provider **requires**
+(GitLab's and Loki's `base_url`, Jira Cloud's `site_url` and `user_email`, Sentry's `organization`,
+Slack's `channel` — labelled in words, *Site URL*, with the key in the field's hint) and, for each
+credential field, the **name of the environment variable** the server should read it from — never
+the value. The field list comes from the server
 (`GET /api/integrations/providers`), read off each provider's own schema. (Until WP-30 no screen
 called `POST /api/integrations` at all — PROGRESS backlog 55 — and until WP-100 the form sent an
 empty configuration that every provider refused at the first test — backlog 328.)
@@ -533,7 +535,7 @@ empty configuration that every provider refused at the first test — backlog 32
 **The create checks the configuration before it stores anything.** A document the provider's schema
 refuses — a required field missing, a key the provider does not declare, a value of the wrong shape —
 answers `400` with the code `invalid_integration_config` and names each key path; no row is written.
-An integration created before WP-100 whose configuration would not load shows the refusal on its card
+An integration created before WP-100 whose configuration would not load shows the refusal on its row
 (and `/test` answers `409 invalid_integration_config`); **Edit configuration** repairs it, which is
 `PATCH /api/integrations/<id>` with `config` (keys to set) and `remove` (keys to delete), checked the
 same way as the create. Both forms offer the provider's **optional** fields too, each with a control
@@ -542,7 +544,7 @@ optional field left empty is not sent, so the provider's default applies (WP-114
 
 **Rotating a credential.** Make the new value readable under a name on `APP_INTEGRATION_SECRET_ENV`
 — which form, and whether that needs the container recreated, is the next paragraph — and press
-**Replace credentials** on the integration's card — `POST /api/integrations/<id>/secrets` with
+**Replace credentials** in the integration's `···` menu — `POST /api/integrations/<id>/secrets` with
 `{"secret_refs": {"<field>": "<VARIABLE>"}}` and an `Idempotency-Key`. The server reads and seals the value exactly as the create
 does, **deletes** the old sealed row, keeps the fields you did not name, and resets the health to
 *unknown*; press **Test connection** afterwards. A retry under the same key re-seals nothing.
@@ -569,7 +571,7 @@ so is making sure the container sees the new contents before you re-seal; **Test
 afterwards is the check that it did. The two paths were read off the code, not measured against a
 running instance.
 
-**Retiring an integration.** **Retire** on the card — `DELETE /api/integrations/<id>` — deletes the
+**Retiring an integration.** **Retire** in the integration's `···` menu, confirmed in a dialog — `DELETE /api/integrations/<id>` — deletes the
 integration's sealed credentials and keeps the row, marked retired, because the audit names it for
 every call it made. It is refused while a project binds it (`409 integration_bound`, naming the
 projects — unbind it first) and while a run credential it minted has not expired and was not
@@ -634,8 +636,8 @@ This guide does not repeat them.
 
 ### The webhook URL
 
-For a provider with an inbound half, the integrations screen's **Setup guide** card shows the URL to
-paste into the provider, with a **Copy** button — the same value the API publishes as the
+For a provider with an inbound half, an integration's **Setup guide** tab (its page under
+**Integrations**, or **Setup guide** in its `···` menu) shows the URL to paste into the provider, with a **Copy** button — the same value the API publishes as the
 `webhook_url` field of `GET /api/integrations/:id/setup-guide`. It is built from `APP_BASE_URL`:
 
 ```
@@ -832,7 +834,7 @@ files*, and its stages run without their prompt files. Fix the cause and press *
 `POST /api/projects/:project_id/config/refresh`); the next index run of the project does the same.
 One cause is **not** the project's: an organisation chat account whose credentials no longer decrypt
 (a changed `APP_SECRET_KEY`, a damaged `secrets` row) withholds the prompt files of **every** project.
-Since WP-157 that is said once — on the account's card under **Integrations** and as one banner on
+Since WP-157 that is said once — on the account's row under **Integrations** and as one banner on
 Home for a maintainer or admin. Re-seal its credentials there (or retire the account), then
 re-read the projects.
 The platform cannot un-leak a credential already committed to a project's history — rotate it.

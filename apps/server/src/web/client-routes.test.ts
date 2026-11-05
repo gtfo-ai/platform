@@ -52,6 +52,16 @@ describe('the SPA’s route tree against the server’s allow-list', () => {
     expect(paths.length).toBeGreaterThan(10);
   });
 
+  it('serves the shell for an integration’s own page and the add-integration wizard (S-23.11a)', () => {
+    // Both are declared by the tree, and both sit under the `integrations` segment, so a deep link
+    // or a reload of `/integrations/<id>?tab=setup-guide` is the client's — no new segment needed.
+    const paths = declaredPaths();
+    expect(paths).toContain('/integrations/$integrationId');
+    expect(paths).toContain('/integrations/new');
+    expect(isClientRoute(['integrations', '00000000-0000-4000-8000-0000000000d1'])).toBe(true);
+    expect(isClientRoute(['integrations', 'new'])).toBe(true);
+  });
+
   it('allows exactly the first segments the client declares', () => {
     expect(firstSegments(declaredPaths())).toEqual([...CLIENT_ROUTE_SEGMENTS].sort());
   });

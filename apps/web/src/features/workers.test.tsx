@@ -197,19 +197,32 @@ describe('the Workers screen', () => {
     window.history.pushState({}, '', '/workers');
   });
 
-  it('lists a worker with its protocol and digests, and revokes it through DELETE', async () => {
+  it('lists a worker with its state, protocol and digests, and revokes it through a dialog and DELETE', async () => {
     const { fetchImpl, sent } = fetchFor('missing', [worker()]);
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
     await waitFor(() => {
       expect(container.querySelector(`[data-worker="${worker().id}"]`)).not.toBeNull();
     });
-    const card = container.querySelector(`[data-worker="${worker().id}"]`)?.textContent ?? '';
-    expect(card).toContain('alice-laptop');
-    expect(card).toContain('active');
-    expect(card).toContain(`sha256:${'a'.repeat(64)}`);
-    expect(card).toContain('never');
+    const row = container.querySelector(`[data-worker="${worker().id}"]`)?.closest('li');
+    const text = row?.textContent ?? '';
+    expect(text).toContain('alice-laptop');
+    // Never seen: not online, and said in words rather than as `active` (S-23.11a).
+    expect(text).toContain('Offline');
+    expect(text).not.toContain('active');
+    expect(text).toContain('never seen');
+    expect(text).toContain('protocol 1');
+    expect(text).toContain('0 of 1 busy');
+    // The digests are behind Details, still in the row.
+    expect(text).toContain(`sha256:${'a'.repeat(64)}`);
+    expect(row?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Offline');
+
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Revoke' }));
+    // The first press only asks, and says what revoking does.
+    const dialog = await screen.findByRole('dialog', { name: 'Revoke alice-laptop?' });
+    expect(dialog.textContent).toContain('planned again');
+    expect(sent.some((entry) => entry.method === 'DELETE')).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Revoke worker' }));
     await waitFor(() => {
       expect(sent.some((entry) => entry.method === 'DELETE')).toBe(true);
     });
@@ -217,6 +230,54 @@ describe('the Workers screen', () => {
       `/api/workers/${worker().id}`,
     );
     expect(await screen.findByText('The worker is revoked.')).toBeTruthy();
+  });
+
+  it('sends nothing when the revoke is cancelled', async () => {
+    const { fetchImpl, sent } = fetchFor('missing', [worker()]);
+    render(createApp({ fetchImpl, realtime: false }).element);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Revoke' }));
+    await screen.findByRole('dialog');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(sent.some((entry) => entry.method === 'DELETE')).toBe(false);
+  });
+
+  it('says online, paused and how many slots are busy', async () => {
+    const NOW = Date.parse('2026-11-04T12:10:00.000Z');
+    const online = worker({
+      last_seen_at: '2026-11-04T12:09:30.000Z',
+      concurrency: 2,
+      running: [
+        {
+          run_id: '00000000-0000-4000-8000-0000000003a0',
+          task_id: '00000000-0000-4000-8000-0000000003a1',
+          project_id: '00000000-0000-4000-8000-0000000003a2',
+        },
+      ],
+    });
+    const paused = worker({
+      id: '00000000-0000-4000-8000-0000000002a1',
+      name: 'bob-desktop',
+      last_seen_at: '2026-11-04T12:09:30.000Z',
+      paused_until: '2026-11-04T13:00:00.000Z',
+      paused_reason: 'usage_limited',
+    });
+    const { fetchImpl } = fetchFor('missing', [online, paused]);
+    const { container } = render(createApp({ fetchImpl, realtime: false, now: () => NOW }).element);
+    await waitFor(() => {
+      expect(container.querySelectorAll('[data-worker]')).toHaveLength(2);
+    });
+    const rowOf = (id: string) =>
+      container.querySelector(`[data-worker="${id}"]`)?.closest('li')?.textContent ?? '';
+    expect(rowOf(online.id)).toContain('Online');
+    expect(rowOf(online.id)).toContain('1 of 2 busy');
+    expect(rowOf(online.id)).toContain('seen just now');
+    expect(rowOf(paused.id)).toContain('Paused until');
+    expect(rowOf(paused.id)).toContain('Hit a usage limit');
+    expect(rowOf(paused.id)).not.toContain('usage_limited');
   });
 
   it('offers no revoke for a revoked worker', async () => {
@@ -228,6 +289,7 @@ describe('the Workers screen', () => {
       expect(container.querySelector('[data-worker]')).not.toBeNull();
     });
     expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull();
+    expect(container.querySelector('[data-worker]')?.textContent).toContain('Revoked');
   });
 });
 

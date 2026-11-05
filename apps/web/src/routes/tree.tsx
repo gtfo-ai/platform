@@ -118,6 +118,42 @@ const integrationsRoute = route(
   '/integrations',
   lazyRouteComponent(() => import('../features/integrations.js'), 'IntegrationsScreen'),
 );
+// S-23.11a: one integration's page (its tabs a search parameter) and the add-integration wizard
+// (its step one). `new` is a static segment, which the router ranks above the `$integrationId` one.
+const IntegrationDetailScreen = lazyRouteComponent(
+  () => import('../features/integration-detail.js'),
+  'IntegrationDetailScreen',
+);
+const IntegrationWizardScreen = lazyRouteComponent(
+  () => import('../features/integration-wizard.js'),
+  'IntegrationWizardScreen',
+);
+/** `.catch`: an unknown tab or step is the first one, never a router error. */
+const integrationSearchSchema = z.object({
+  tab: z.enum(['setup-guide', 'refused-deliveries']).optional().catch(undefined),
+});
+const integrationWizardSearchSchema = z.object({
+  step: z.enum(['configuration', 'credentials', 'test']).optional().catch(undefined),
+});
+const integrationWizardRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/integrations/new',
+  validateSearch: integrationWizardSearchSchema,
+  component: withPreload(function IntegrationWizard() {
+    const { step } = integrationWizardRoute.useSearch();
+    return <IntegrationWizardScreen step={step} />;
+  }, IntegrationWizardScreen),
+});
+const integrationRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/integrations/$integrationId',
+  validateSearch: integrationSearchSchema,
+  component: withPreload(function Integration() {
+    const { integrationId } = integrationRoute.useParams();
+    const { tab } = integrationRoute.useSearch();
+    return <IntegrationDetailScreen integrationId={integrationId} tab={tab ?? 'overview'} />;
+  }, IntegrationDetailScreen),
+});
 const statsRoute = route(
   '/stats',
   lazyRouteComponent(() => import('../features/statistics.js'), 'StatisticsScreen'),
@@ -320,6 +356,8 @@ export const routeTree = rootRoute.addChildren([
     agentsRoute,
     inboxRoute,
     integrationsRoute,
+    integrationWizardRoute,
+    integrationRoute,
     statsRoute,
     auditRoute,
     settingsRoute,

@@ -48,8 +48,13 @@ describe('the bindable-integration selector (WP-122)', () => {
       .filter((path) => /\buseIntegrations\s*\(/.test(withoutComments(readFileSync(path, 'utf8'))))
       .map((path) => relative(SOURCE_ROOT, path))
       .sort();
-    // `queries.ts` defines it and `useBindableIntegrations` wraps it; the screen that lists retired
-    // rows on purpose is the one other reader.
-    expect(callers).toEqual(['app/queries.ts', 'features/integrations.tsx']);
+    // `queries.ts` defines it and `useBindableIntegrations` wraps it; the screens that show retired
+    // rows on purpose are the other readers: the list, and since S-23.11a one integration's own page
+    // (which finds its row in the list read and shows a retired one as retired, with no write).
+    expect(callers).toEqual([
+      'app/queries.ts',
+      'features/integration-detail.tsx',
+      'features/integrations.tsx',
+    ]);
   });
 });

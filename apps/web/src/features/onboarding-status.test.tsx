@@ -391,7 +391,8 @@ describe('step 1 shows what Test connection answered (WP-155 (b), backlog 451)',
       });
     });
     expect(await within(row).findByText('Last test: failed')).toBeTruthy();
-    expect(within(row).getByText('authenticated')).toBeTruthy();
+    // The check's name in words since S-23.11a (`authenticated` → *Authenticated*).
+    expect(within(row).getByText('Authenticated')).toBeTruthy();
     // The provider's words, as text (BD-022).
     expect(row.textContent).toContain('401 <b>Unauthorized</b>');
     expect(row.querySelector('b')).toBeNull();
