@@ -7,7 +7,14 @@ import type { RunRecord, TaskDetailResponse } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { FEATURE_GRAPH } from './graph.test-fixture.js';
 import { type FlowGraph, loopPill, taskFlow, templateFlow } from './model.js';
-import { attemptLabel, doneFacts, modelChip, stageCardName, statusWord } from './stage-card.js';
+import {
+  attemptLabel,
+  cardBody,
+  doneFacts,
+  modelChip,
+  stageCardName,
+  statusWord,
+} from './stage-card.js';
 
 const NOW = Date.parse('2026-11-05T10:10:00.000Z');
 
@@ -90,7 +97,18 @@ describe('a template (the Pipeline tab)', () => {
     expect(stageCardName(nodeOf(graph, 'implementation'))).toBe(
       'Implementation, Developer, claude-test · high',
     );
-    expect(stageCardName(nodeOf(graph, 'ci_gate'))).toBe('CI, Gate');
+    // A gate card says what it waits for: no role, and never an empty card.
+    expect(stageCardName(nodeOf(graph, 'ci_gate'))).toBe('CI, Waits for the CI pipeline');
+    expect(stageCardName(nodeOf(graph, 'rebase_gate'))).toBe(
+      'Rebase check, Checks the branch is up to date with the default branch',
+    );
+    expect(cardBody({ id: 'security_scan', kind: 'gate', role: null })).toBe(
+      'Waits for an event to settle it',
+    );
+    expect(cardBody({ id: 'constructor', kind: 'gate', role: null })).toBe(
+      'Waits for an event to settle it',
+    );
+    expect(stageCardName(nodeOf(graph, 'intake'))).toBe('Intake, System step');
     expect(stageCardName(nodeOf(graph, 'qa'))).toBe(
       'QA, Acceptance tester, Disabled, claude-test · high',
     );

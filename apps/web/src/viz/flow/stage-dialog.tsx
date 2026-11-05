@@ -13,6 +13,13 @@
  * stopping are the run page's (*Open run*). *Open artifact* opens the newest artifact of the type
  * the stage writes, on the task page.
  *
+ * **Who holds the topic, stated because no test can tell the two apart today.** On the task page
+ * `TaskFlow` already retains the live run's `run:<id>` for as long as it is mounted, and a run that
+ * has ended publishes nothing, so the dialog's own `useTopics` adds nothing there: the frames the
+ * tests drive arrive through `TaskFlow`'s retain. It is kept so the dialog stays live wherever it is
+ * opened without a `TaskFlow` beside it (the fleet map of S-23.6 reuses it); the provider counts
+ * retains, so the second one costs no subscription.
+ *
  * **For a template's stage** (no task, no run): the role, the model and effort, what it writes,
  * the loops it may spend and where each of its outcomes goes.
  *
@@ -36,7 +43,7 @@ import { StateLabel, type Status, StatusIcon } from '../../ui/status.js';
 import { TerminalLines, UntrustedText } from '../../ui/untrusted.js';
 import { type ActivityRow, activityRows, clockTime, logLines } from './activity-rows.js';
 import type { FlowGraph, FlowNode, FlowState } from './model.js';
-import { KIND_LOOK, modelChip, statusWord } from './stage-card.js';
+import { cardBody, KIND_LOOK, modelChip, statusWord } from './stage-card.js';
 
 type Seat = AgentsResponse['items'][number]['seat'];
 
@@ -104,19 +111,23 @@ const SeatNote = ({ live, seat }: { readonly live: boolean; readonly seat: Seat 
   </p>
 );
 
-/** Follows the end of a scroller until the reader scrolls up; `follow()` resumes. */
-const useFollowTail = (count: number) => {
+/**
+ * Follows the end of a scroller until the reader scrolls up; `follow()` resumes. Keyed on the
+ * **newest line's key**, not on the count: past `LOG_LINE_LIMIT` the count stops changing while
+ * lines still arrive, and a count-keyed follow would stop following exactly when a run is busiest.
+ */
+const useFollowTail = (newest: string | null) => {
   const ref = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
   useEffect(() => {
-    if (!following || count < 0) {
+    if (!following || newest === null) {
       return;
     }
     const element = ref.current;
     if (element !== null) {
       element.scrollTop = element.scrollHeight;
     }
-  }, [count, following]);
+  }, [newest, following]);
   const onScroll = (): void => {
     const element = ref.current;
     if (element === null) {
@@ -172,7 +183,7 @@ const RunPanels = ({ runId, live }: { readonly runId: string; readonly live: boo
   );
   const rows = activityRows(snapshot.blocks, { live });
   const lines = logLines(snapshot.blocks);
-  const tail = useFollowTail(lines.length);
+  const tail = useFollowTail(lines.at(-1)?.key ?? null);
   return (
     <div className="grid min-h-0 gap-4 md:grid-cols-[15rem_1fr]">
       <section aria-labelledby={`activity-${runId}`} className="flex min-h-0 flex-col gap-2">
@@ -348,7 +359,7 @@ export const StageDialog = ({
           {word}
         </StateLabel>
       )}
-      <span>{node.role === null ? KIND_LOOK[node.kind].word : ROLE_LABEL[node.role]}</span>
+      <span>{cardBody(node)}</span>
       {run === null ? null : (
         <>
           <span className="font-mono text-xs">{`${run.model} · ${run.effort}`}</span>

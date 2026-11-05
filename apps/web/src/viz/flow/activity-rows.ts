@@ -7,11 +7,14 @@
  * are the rows the unit tier holds, and the dialog is live because the blocks are (the `run:<id>`
  * frames land in the transcript store).
  *
- * **What is platform text and what is not.** A row's `label` is the platform's own word, from the
- * activity vocabulary (`toolActivityLabel` — "Reading files", "Running a command"); nothing the
- * model or a tool wrote reaches it. A log line's `prefix` is the platform's too (`$ `, `› Read `);
- * its `text` is the run's — a command, a file path, a tool's output, the model's words — and is
- * untrusted (BD-022): the dialog renders it through `ui/untrusted.tsx`'s `TerminalLines`.
+ * **What is platform text and what is not.** A row's `label` comes from the activity vocabulary
+ * (`toolActivityLabel` — "Reading files", "Running a command"); for a tool the vocabulary does not
+ * name it quotes the tool's name ("Using …"), and the name is the run's text, so it is filtered and
+ * bounded there (`toolWords` in `ui/activity.ts`). A log line's `prefix` is the platform's alone, a
+ * fixed glyph (`$ `, `› `, `▸ progress: `) that nothing the run wrote reaches; its `text` is the
+ * run's — the tool's name and its argument summary, a tool's output, the model's words — and is
+ * untrusted (BD-022): the dialog renders it through `ui/untrusted.tsx`'s `TerminalLines`, which
+ * strips ANSI and applies the character filter.
  */
 import type { TranscriptBlock } from '../../transcript/blocks.js';
 import { type Activity, toolActivityLabel } from '../../ui/activity.js';
@@ -22,7 +25,7 @@ export interface ActivityRow {
   readonly key: string;
   readonly at: string;
   readonly activity: Activity;
-  /** Platform text. */
+  /** The vocabulary's words; a quoted tool name in it is filtered and bounded (`toolWords`). */
   readonly label: string;
   readonly state: RowState;
 }
@@ -147,7 +150,7 @@ export type LogTone = 'command' | 'output' | 'error' | 'text' | 'note';
 export interface LogLine {
   readonly key: string;
   readonly tone: LogTone;
-  /** Platform text: `$ `, `› Read `, `▸ `. */
+  /** Platform text only, a fixed glyph: `$ `, `› `, `▸ progress: `. */
   readonly prefix: string;
   /** The run's own text — untrusted. */
   readonly text: string;
@@ -192,7 +195,7 @@ const tail = (value: string, lines: number): string[] => {
 
 /**
  * The log: each tool call on one line with its argument summary (`$ pnpm test`, `› Read
- * src/retry.ts`), the last {@link OUTPUT_TAIL_LINES} lines of its output beneath it, the model's text
+ * src/retry.ts` — the prefix `› `, the tool's name in the text), the last {@link OUTPUT_TAIL_LINES} lines of its output beneath it, the model's text
  * as its last lines, a progress line, a steer — the newest {@link LOG_LINE_LIMIT}. A thinking block
  * shows only that the model thought, not what: the run page has the whole transcript.
  */
@@ -202,11 +205,13 @@ export const logLines = (blocks: readonly TranscriptBlock[]): readonly LogLine[]
     switch (block.kind) {
       case 'tool': {
         const bash = block.toolName === 'Bash' || block.toolName === 'BashOutput';
+        const summary = argumentSummary(block.input);
         lines.push({
           key: `${block.id}:call`,
           tone: 'command',
-          prefix: bash ? '$ ' : `› ${block.toolName} `,
-          text: argumentSummary(block.input),
+          prefix: bash ? '$ ' : '› ',
+          // The tool's name is the run's text like its arguments: in `text`, never in `prefix`.
+          text: bash ? summary : summary === '' ? block.toolName : `${block.toolName} ${summary}`,
         });
         if (block.result !== null && block.result.content !== '') {
           const tone: LogTone = block.result.isError ? 'error' : 'output';

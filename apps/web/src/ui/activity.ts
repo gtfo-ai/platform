@@ -29,11 +29,15 @@
  * 5. No run: a free seat is `idle`; otherwise the task's state — merged or done → `done`, cancelled
  *    → `idle`, everything else → `waiting`.
  *
- * Pure and total: every input yields one activity, which a property test holds. No runtime import
- * but `./status.js`'s types, so `ui/` stays dependency-free for the worker entry.
+ * Pure and total: every input yields one activity, which a property test holds. Its runtime imports
+ * are `./untrusted-text.js` (pure, dependency-free) and `./status.js`'s types, so `ui/` stays
+ * dependency-free for the worker entry.
  *
- * The tool name is a bounded identifier the server stored; a sub-label built from it is still
- * rendered as React text, never as markup.
+ * **A tool name is the run's text, not the platform's.** The agents read bounds it to an identifier,
+ * but the live transcript carries whatever name the model or an MCP server sent — so a sub-label
+ * built from one (`Using …`, `Asking to use …`) goes through {@link toolWords}: the character filter
+ * (bidi overrides, control characters), whitespace collapsed, at most
+ * {@link TOOL_NAME_LABEL_MAX_CHARS} characters. It is still rendered as React text, never as markup.
  */
 import type {
   AgentRole,
@@ -44,6 +48,7 @@ import type {
 } from '@platform/contracts';
 import type { TranscriptBlock } from '../transcript/blocks.js';
 import type { Status } from './status.js';
+import { sanitiseUntrusted } from './untrusted-text.js';
 
 export const ACTIVITIES = [
   'working',
@@ -156,6 +161,20 @@ const TOOL_LABELS: readonly (readonly [readonly string[], string])[] = [
   [['TodoWrite'], 'Planning'],
 ];
 
+/** The longest tool name a sub-label quotes; a longer one is cut with an ellipsis. */
+export const TOOL_NAME_LABEL_MAX_CHARS = 64;
+
+/**
+ * A tool name as a sub-label may quote it: the character filter of `untrusted-text.ts` (Trojan-source
+ * bidi controls replaced, control characters removed), whitespace collapsed, and bounded.
+ */
+export const toolWords = (name: string): string => {
+  const flat = sanitiseUntrusted(name).replace(/\s+/g, ' ').trim();
+  return flat.length > TOOL_NAME_LABEL_MAX_CHARS
+    ? `${flat.slice(0, TOOL_NAME_LABEL_MAX_CHARS - 1)}…`
+    : flat;
+};
+
 /** The prefix the runner serves the platform's own MCP tools under (`runner/hooks.ts`). */
 export const PLATFORM_TOOL_PREFIX = 'mcp__platform__';
 
@@ -190,7 +209,7 @@ export const toolActivityLabel = (toolName: string): string => {
     }
   }
   const bare = /^mcp__[^_]+(?:_[^_]+)*__(.+)$/.exec(toolName)?.[1] ?? toolName;
-  return `Using ${bare}`;
+  return `Using ${toolWords(bare)}`;
 };
 
 /** The roles whose thinking is planning rather than doing. */
@@ -244,7 +263,9 @@ export const activityOf = (input: ActivityInput): ActivityResult => {
   if (live && run.status === 'running' && latest?.kind === 'waiting_permission') {
     return result(
       'needs_you',
-      latest.tool_name === null ? 'Waiting for permission' : `Asking to use ${latest.tool_name}`,
+      latest.tool_name === null
+        ? 'Waiting for permission'
+        : `Asking to use ${toolWords(latest.tool_name)}`,
     );
   }
 

@@ -14,6 +14,8 @@
  * imports nothing from `@xyflow/react`: the canvas wraps it, and the list fallback and the tests
  * render it without the canvas's chunk.
  */
+
+import type { BuiltinGateStageId } from '@platform/contracts';
 import { CheckCircleFillIcon } from '@primer/octicons-react/CheckCircleFillIcon';
 import { CircleIcon } from '@primer/octicons-react/CircleIcon';
 import { CircleSlashIcon } from '@primer/octicons-react/CircleSlashIcon';
@@ -60,6 +62,27 @@ export const KIND_LOOK: Readonly<
   system: { icon: GearIcon, word: 'System step' },
 };
 
+/**
+ * What a gate waits for, in one line — a gate card has no role to show, and an empty card reads
+ * as a stage with nothing in it. The platform's three gates by name (exhaustive over
+ * `BUILTIN_GATE_STAGE_IDS`), and a project's own gate in general words.
+ */
+export const GATE_BODY: Readonly<Record<BuiltinGateStageId, string>> = {
+  ci_gate: 'Waits for the CI pipeline',
+  rebase_gate: 'Checks the branch is up to date with the default branch',
+  merged_gate: 'Waits for the merge request to merge',
+};
+
+/** The line under a card's name: the role, a gate's body, or the kind in words. */
+export const cardBody = (node: Pick<FlowNode, 'id' | 'kind' | 'role'>): string =>
+  node.role !== null
+    ? ROLE_LABEL[node.role]
+    : node.kind === 'gate'
+      ? Object.hasOwn(GATE_BODY, node.id)
+        ? GATE_BODY[node.id as BuiltinGateStageId]
+        : 'Waits for an event to settle it'
+      : KIND_LOOK[node.kind].word;
+
 /** "2nd attempt", or `null` for a first one. */
 export const attemptLabel = (attempt: number | null): string | null =>
   attempt === null || attempt < 2 ? null : `${ordinal(attempt)} attempt`;
@@ -101,7 +124,7 @@ export const doneFacts = (node: FlowNode): string | null => {
 export const stageCardName = (node: FlowNode): string =>
   [
     node.label,
-    node.role === null ? KIND_LOOK[node.kind].word : ROLE_LABEL[node.role],
+    cardBody(node),
     statusWord(node),
     node.activity?.detail === null || node.activity?.detail === undefined
       ? null
@@ -178,9 +201,14 @@ export const StageCard = ({
           </span>
         )}
       </span>
-      {small ? null : (
-        <span className="truncate text-xs text-fg-muted">
-          {node.role === null ? KIND_LOOK[node.kind].word : ROLE_LABEL[node.role]}
+      {node.kind === 'system' ? null : (
+        <span
+          className={cx(
+            'text-fg-muted',
+            small ? 'line-clamp-2 text-[11px] leading-tight' : 'truncate text-xs',
+          )}
+        >
+          {cardBody(node)}
         </span>
       )}
       {word === null || look === null || Glyph === null ? null : (

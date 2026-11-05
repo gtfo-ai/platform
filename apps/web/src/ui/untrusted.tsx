@@ -257,9 +257,12 @@ export const TerminalText = ({ value, className }: UntrustedProps): ReactElement
 export interface TerminalLine {
   readonly key: string;
   readonly tone: 'command' | 'output' | 'error' | 'text' | 'note';
-  /** Platform text (`$ `, `› Read `); rendered as it is. */
+  /**
+   * Platform text only — a fixed glyph (`$ `, `› `), rendered as it is. Nothing the run wrote may
+   * go here (a tool's name included): that belongs in `text`, which is filtered.
+   */
   readonly prefix: string;
-  /** The run's text — a command, a path, a tool's output, the model's words. Untrusted. */
+  /** The run's text — a tool's name, a command, a path, output, the model's words. Untrusted. */
   readonly text: string;
 }
 

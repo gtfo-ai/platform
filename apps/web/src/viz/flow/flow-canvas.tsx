@@ -12,11 +12,12 @@
  * minimap: a graph of 5–15 stages fits the view.
  *
  * Positions come from `layout.ts`, never from React Flow: each node is handed its size, so the
- * first paint is already laid out. The first view frames five cards of the row — around the
- * current stage on a task, the start on a template (`focusOf`) — at a readable zoom; the fit button
- * shows the whole graph. Every return curve is a custom edge (`FlowEdgePath`) that dips below the
- * row and carries its loop pill; a spacer node at the deepest curve's bottom keeps that fit from
- * cutting the curves off (React Flow fits nodes, not edges).
+ * first paint is already laid out. A task's first view frames the current stage with two cards
+ * either side (`focusOf`) at zoom ≥ 0.75; a template's fits the whole graph at zoom ≥ 0.45; the
+ * *Fit all* control shows every stage. Every return curve is a custom edge (`FlowEdgePath`) that
+ * dips below the row and carries its loop pill (on a task, only once spent, or while pointed at or
+ * beside a focused card — `pillShown`); a spacer node at the deepest curve's bottom keeps a fit of
+ * the whole graph from cutting the curves off (React Flow fits nodes, not edges).
  *
  * Under the production CSP: React Flow positions through React's `style` prop (CSSOM), which
  * `style-src` does not govern, and injects no `<style>` element — `csp.spec.ts` opens this canvas in
@@ -40,7 +41,7 @@ import {
   Position,
   ReactFlow,
 } from '@xyflow/react';
-import { type ReactElement, useMemo } from 'react';
+import { type ReactElement, useMemo, useState } from 'react';
 import { cx } from '../../ui/cx.js';
 import { type EdgeRoute, type FlowLayout, focusOf, layoutFlow } from './layout.js';
 import type { FlowEdge, FlowGraph, FlowNode } from './model.js';
@@ -53,6 +54,7 @@ type FlowEdgeData = {
   readonly edge: FlowEdge;
   readonly route: EdgeRoute;
   readonly depth: number;
+  readonly showPill: boolean;
 };
 type FlowEdgeType = Edge<FlowEdgeData, 'flow'>;
 
@@ -125,7 +127,7 @@ const FlowEdgePath = ({
       targetPosition,
     });
   }
-  const pill = data?.edge.pill ?? null;
+  const pill = data?.showPill === true ? data.edge.pill : null;
   return (
     <>
       <BaseEdge id={id} path={path} {...(markerEnd === undefined ? {} : { markerEnd })} />
@@ -148,10 +150,23 @@ const NODE_TYPES = { stage: StageNode, spacer: SpacerNode };
 const EDGE_TYPES = { flow: FlowEdgePath };
 
 /** The graph and its layout → React Flow's nodes and edges. Exported for the unit tier. */
+/**
+ * Whether an edge's loop pill is drawn: always on a template (the ceilings are what it is read
+ * for); on a task only for a loop the task has spent, or while the reader points at the edge or
+ * focuses a card it touches — six unspent pills converging on one stage are a pile of text nobody
+ * can read, and the list beside the canvas says every one of them in words.
+ */
+export const pillShown = (
+  mode: FlowGraph['mode'],
+  edge: FlowEdge,
+  revealed: ReadonlySet<string>,
+): boolean => mode === 'template' || (edge.loopUsed ?? 0) > 0 || revealed.has(edge.id);
+
 export const toReactFlow = (
   graph: FlowGraph,
   layout: FlowLayout,
   onOpen: (id: string) => void,
+  revealed: ReadonlySet<string> = new Set(),
 ): { nodes: (StageNodeType | SpacerNodeType)[]; edges: FlowEdgeType[] } => {
   const placed = new Map(layout.nodes.map((node) => [node.id, node]));
   const nodes: (StageNodeType | SpacerNodeType)[] = graph.nodes.map((node) => {
@@ -207,11 +222,26 @@ export const toReactFlow = (
         height: 14,
         color: edge.live ? 'var(--running-fg)' : 'var(--border-input)',
       },
-      data: { edge, route, depth: placedEdge?.depth ?? 0 },
+      data: {
+        edge,
+        route,
+        depth: placedEdge?.depth ?? 0,
+        showPill: edge.pill !== null && pillShown(graph.mode, edge, revealed),
+      },
     };
   });
   return { nodes, edges };
 };
+
+/**
+ * The first view's fit. A template is read whole — every stage, as large as that allows, never
+ * below 0.45. A task is read around where it is — the current stage with two either side
+ * (`focus`), never below 0.75, so the cards stay legible at a page's width.
+ */
+export const firstViewOf = (focus: readonly string[] | null) =>
+  focus === null
+    ? { padding: 0.1, minZoom: 0.45, maxZoom: 1 }
+    : { nodes: focus.map((id) => ({ id })), padding: 0.15, minZoom: 0.75, maxZoom: 1 };
 
 export const FlowCanvas = ({
   graph,
@@ -224,9 +254,23 @@ export const FlowCanvas = ({
   readonly label: string;
 }): ReactElement => {
   const layout = useMemo(() => layoutFlow(graph.nodes, graph.edges), [graph]);
+  const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
+  const [focusedCard, setFocusedCard] = useState<string | null>(null);
+  const revealed = useMemo(
+    () =>
+      new Set(
+        graph.edges
+          .filter(
+            (edge) =>
+              edge.id === hoveredEdge || edge.from === focusedCard || edge.to === focusedCard,
+          )
+          .map((edge) => edge.id),
+      ),
+    [graph, hoveredEdge, focusedCard],
+  );
   const { nodes, edges } = useMemo(
-    () => toReactFlow(graph, layout, onOpen),
-    [graph, layout, onOpen],
+    () => toReactFlow(graph, layout, onOpen, revealed),
+    [graph, layout, onOpen, revealed],
   );
   const current =
     graph.nodes.find(
@@ -234,14 +278,9 @@ export const FlowCanvas = ({
     )?.id ?? null;
   // Computed once per graph shape: a live frame re-renders the canvas, and a fit that moved with
   // every frame would yank the view from under a reader who had panned away.
-  const focusKey = focusOf(layout.mainPath, current).join(',');
+  const focusKey = graph.mode === 'task' ? focusOf(layout.mainPath, current).join(',') : '';
   const fitViewOptions = useMemo(
-    () => ({
-      nodes: focusKey.split(',').map((id) => ({ id })),
-      padding: 0.15,
-      minZoom: 0.55,
-      maxZoom: 1,
-    }),
+    () => firstViewOf(focusKey === '' ? null : focusKey.split(',')),
     [focusKey],
   );
   return (
@@ -249,6 +288,14 @@ export const FlowCanvas = ({
       aria-label={label}
       data-flow-canvas={graph.mode}
       className="agentic-flow h-full w-full"
+      // A focused card reveals the loop pills of the edges it touches (`pillShown`).
+      onFocus={(event) => {
+        const card = (event.target as Element).closest('[data-stage-card]');
+        setFocusedCard(card?.getAttribute('data-stage-card') ?? null);
+      }}
+      onBlur={() => {
+        setFocusedCard(null);
+      }}
     >
       <ReactFlow
         nodes={nodes}
@@ -262,8 +309,18 @@ export const FlowCanvas = ({
             onOpen(clicked.id);
           }
         }}
+        // An edge that is neither selectable nor clicked gets `pointer-events: none`; listening for
+        // its click (which does nothing) is what lets a hover reveal its pill.
+        onEdgeClick={() => undefined}
+        onEdgeMouseEnter={(_event, edge) => {
+          setHoveredEdge(edge.id);
+        }}
+        onEdgeMouseLeave={() => {
+          setHoveredEdge(null);
+        }}
         fitView
         fitViewOptions={fitViewOptions}
+        ariaLabelConfig={{ 'controls.fitView.ariaLabel': 'Fit all' }}
         minZoom={0.3}
         maxZoom={1.75}
         nodesDraggable={false}

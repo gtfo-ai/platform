@@ -165,6 +165,36 @@ describe('the log', () => {
   });
 });
 
+describe('a hostile tool name (S-23.5 review)', () => {
+  const HOSTILE = 'evil\u202Etxt.exe\u0007';
+  const hostile = toBlocks([
+    assistant(1, [
+      { type: 'tool_use', tool_use_id: 'h', tool_name: HOSTILE, input: { path: 'a' } },
+    ]),
+    assistant(2, [{ type: 'tool_use', tool_use_id: 'b', tool_name: HOSTILE, input: {} }]),
+  ]);
+
+  it('reaches a row only filtered and bounded', () => {
+    expect(activityRows(hostile, { live: false }).map((row) => row.label)).toEqual([
+      'Using evil\uFFFDtxt.exe',
+      'Using evil\uFFFDtxt.exe',
+    ]);
+  });
+
+  it('is never in a log line’s prefix, only in its text, which the renderer filters', () => {
+    const calls = logLines(hostile);
+    expect(calls.map((line) => [line.prefix, line.text])).toEqual([
+      ['› ', `${HOSTILE} a`],
+      ['› ', HOSTILE],
+    ]);
+    // Every prefix the log can write is one of the platform's fixed glyphs.
+    const prefixes = new Set([...logLines(blocks), ...calls].map((line) => line.prefix));
+    expect(
+      [...prefixes].every((prefix) => ['$ ', '› ', '  ', '', '… thinking'].includes(prefix)),
+    ).toBe(true);
+  });
+});
+
 describe('argumentSummary', () => {
   it('reads the key that says most, collapses whitespace and cuts a long one', () => {
     expect(argumentSummary({ command: 'ls\n  -la' })).toBe('ls -la');

@@ -350,6 +350,50 @@ describe('the task page’s Flow section', () => {
     await waitFor(() => {
       expect(log.textContent).toContain('› Edit b.ts');
     });
+    // A tool name the run sent is the run's text: filtered on the card and in the row, and in the
+    // log only inside the text the renderer filters — never a bidi override or a control character.
+    act(() => {
+      app.services.transcripts.apply({
+        ...envelope,
+        seq: 4,
+        kind: 'assistant',
+        model: 'claude-test',
+        content: [
+          {
+            type: 'tool_use',
+            tool_use_id: 'evil',
+            tool_name: 'evil\u202Etxt.exe\u0007',
+            input: {},
+          },
+        ],
+      });
+    });
+    await within(dialog).findByText('Using evil\uFFFDtxt.exe');
+    await waitFor(() => {
+      expect(log.textContent).toContain('› evil\uFFFDtxt.exe');
+    });
+    expect(dialog.textContent).not.toContain('\u202E');
+    expect(dialog.textContent).not.toContain('\u0007');
+    const card = within(list).getByRole('button', { name: /^Implementation, /, hidden: true });
+    expect(card.getAttribute('aria-label')).toContain('Now: Using evil\uFFFDtxt.exe');
+    expect(card.textContent).not.toContain('\u202E');
+    expect(card.textContent).not.toContain('\u0007');
+    act(() => {
+      app.services.transcripts.apply({
+        ...envelope,
+        seq: 5,
+        kind: 'assistant',
+        model: 'claude-test',
+        content: [
+          {
+            type: 'tool_use',
+            tool_use_id: 'edit2',
+            tool_name: 'Edit',
+            input: { file_path: 'b.ts' },
+          },
+        ],
+      });
+    });
     // …and the card behind the dialog follows the transcript rather than the agents read.
     expect(
       within(list).getByRole('button', { name: /Now: Editing code/, hidden: true }),

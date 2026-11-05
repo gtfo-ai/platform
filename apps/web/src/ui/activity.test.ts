@@ -23,7 +23,9 @@ import {
   PLATFORM_TOOL_LABEL,
   STUCK_AFTER_MS,
   STUCK_TOOL_AFTER_MS,
+  TOOL_NAME_LABEL_MAX_CHARS,
   toolActivityLabel,
+  toolWords,
 } from './activity.js';
 import { STATUS_LOOK } from './status.js';
 
@@ -321,6 +323,28 @@ describe('toolActivityLabel', () => {
     ['Reader', 'Using Reader'],
   ])('%s → %s', (name, label) => {
     expect(toolActivityLabel(name)).toBe(label);
+  });
+});
+
+describe('a tool name the run sent (S-23.5 review)', () => {
+  // A right-to-left override and a BEL: the transcript carries whatever name it was given.
+  const HOSTILE = 'evil\u202Etxt.exe\u0007';
+
+  it('is filtered and bounded before a sub-label quotes it', () => {
+    expect(toolActivityLabel(HOSTILE)).toBe('Using evil\uFFFDtxt.exe');
+    expect(toolActivityLabel(`mcp__srv__${HOSTILE}`)).toBe('Using evil\uFFFDtxt.exe');
+    expect(toolWords('  a \n\t b  ')).toBe('a b');
+    const long = toolActivityLabel('x'.repeat(500));
+    expect(long).toBe(`Using ${'x'.repeat(TOOL_NAME_LABEL_MAX_CHARS - 1)}…`);
+    expect(toolWords('y'.repeat(TOOL_NAME_LABEL_MAX_CHARS))).toHaveLength(
+      TOOL_NAME_LABEL_MAX_CHARS,
+    );
+  });
+
+  it('is filtered in a permission ask too', () => {
+    expect(
+      activityOf({ run: running, latest: entry('waiting_permission', HOSTILE), now: NOW }).detail,
+    ).toBe('Asking to use evil\uFFFDtxt.exe');
   });
 });
 

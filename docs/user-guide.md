@@ -553,7 +553,9 @@ its run cost, *Sent back*, *Failed*, *Skipped*, *Upcoming*, *Disabled* — and o
 what the agent is doing, *Working* with *Now: Reading files*, *Needs you* when a question or approval
 is waiting, *Stuck* when it has been silent too long — with the model, and *2nd attempt* when the
 stage is running again. The connector into the stage that is running moves; a curve below the row
-counts how often a loop has been spent (*Review · used 1 of 3*). Click a card to watch that stage's
+counts how often a loop has been spent (*Review · used 1 of 3*) — shown once the loop has been used,
+or while you point at the curve or focus a card it touches. The graph opens on the current stage
+and its neighbours; **Fit all** shows the whole pipeline. Click a card to watch that stage's
 run: a **Live activity** list (the time, a dot, what the agent did — one row per tool call or burst
 of thinking or writing) beside a **Log** that follows the end of the run until you scroll up (*Follow
 the end* resumes), both updating as the agent works. It is watch-only and says where the agent runs
@@ -1003,8 +1005,8 @@ connected in the order a task goes when everything passes; a stage that only a f
 conflict resolution behind the rebase check) or that the pipeline skips (marked *Disabled*) sits above
 the row, and every way a stage can send the task back is a dashed curve below it with its limit
 (*Review ≤3*: the review may send the work back at most three times). Click a card for the stage's
-configuration: its role, model, what it writes, its loops and where each of its outcomes goes. Drag
-to pan; the **+**, **−** and fit buttons zoom (the fit button shows the whole pipeline); **Full
+configuration: its role, model, what it writes, its loops and where each of its outcomes goes. A gate's card says what it waits for (*Waits for the CI pipeline*). Drag
+to pan; the **+**, **−** and **Fit all** buttons zoom (Fit all shows the whole pipeline); **Full
 screen** gives the graph the window, Escape gives it back. On a narrow screen, or with **List**, the
 same stages are an ordered list.
 

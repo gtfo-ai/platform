@@ -46,6 +46,11 @@
   border: 0;
 }
 
+/* An edge listens for a click only so a hover can reveal its pill: it is not a control. */
+.agentic-flow .react-flow__edge {
+  cursor: default;
+}
+
 /* Dashed connectors; the way the task went is drawn brighter, the live one in the beacon. */
 .agentic-flow .react-flow__edge-path {
   stroke-dasharray: 6 5;

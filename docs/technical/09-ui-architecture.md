@@ -72,16 +72,20 @@ task's stage states are `PhaseTrack`'s — `phaseStagesFor` — plus *disabled*,
 activity is `activityOf`'s, a loop pill says "Review ≤3" or "Review · used 1 of 3"), `layout.ts` (no
 layout library: the main path is one row left → right, a stage entered only by a failure or a disabled
 one sits above it, a return between two cards of the row curves below, deeper the further it reaches;
-the first view frames five cards around the current stage, the fit button the whole graph) and
+a task's first view frames the current stage with two cards either side at zoom ≥ 0.75, a
+template's the whole graph at zoom ≥ 0.45, and *Fit all* shows every stage; on a task a loop pill
+is drawn only once spent, or while its edge is pointed at or a card it touches has focus) and
 `activity-rows.ts` (the dialog's "Live activity" rows — one per tool call, thinking burst and text
 burst — and its log lines, from the transcript's blocks). `stage-card.tsx` is the card, a real
-`<button>` with icon + colour + word for its state; `flow-list.tsx` is the same cards as an ordered
+`<button>` with icon + colour + word for its state (a gate's body says what it waits for); `flow-list.tsx` is the same cards as an ordered
 list — rendered `sr-only` beside the canvas (its buttons `tabindex="-1"`, so Tab lands only on the
 visible cards), and shown instead of it below 768 px or when the reader presses **List**;
 `stage-dialog.tsx` is the stage dialog, the first screen use of `ui/dialog.tsx` (`size="lg"`): for a run,
 its header, the live activity list, a terminal-like log (`TerminalLines` in `ui/untrusted.tsx`, following
 the end until the reader scrolls up), a watch-only note naming the seat and *Open run* / *Open artifact*;
-for a template, the stage's configuration, loops and outcomes. **`flow-canvas.tsx` is the only module
+for a template, the stage's configuration, loops and outcomes. A tool's name is the run's text: a
+sub-label quoting it ("Using …") is filtered and bounded (`toolWords` in `ui/activity.ts`), and in
+the log it is part of the filtered `text`, never of the platform's `prefix`. **`flow-canvas.tsx` is the only module
 that imports `@xyflow/react`** (MIT, pinned), with its stylesheet and `flow.css` (React Flow's variables
 on our tokens, dashed edges, the reduced-motion stop React Flow's `dashdraw` lacks), and `flow-view.tsx`
 loads it with `import()`: `pnpm bundle:check` refuses React Flow's class prefix in any initial asset
