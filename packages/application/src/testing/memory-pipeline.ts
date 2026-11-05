@@ -1862,10 +1862,7 @@ export const createMemoryPipelineStore = (
       if (previous === undefined) return [];
       const remote = remoteOf(previous.runId);
       const reason = runs.get(previous.runId)?.terminalReason ?? null;
-      const lost =
-        remote.workerId !== null && (reason === 'rate_limited' || reason === 'lease_expired')
-          ? [remote.workerId]
-          : [];
+      const lost = remote.workerId !== null && reason === 'lease_expired' ? [remote.workerId] : [];
       return [...new Set([...remote.excluded, ...lost])];
     },
     runTokenHolder: async (_tx, runId) => {

@@ -1453,8 +1453,9 @@ the stage again — once: a second lost run of the same stage goes to *Needs hum
 and the machines that held them.
 
 When a worker reaches its Claude **usage limit** the run it was doing ends — not as the task's failure
-— and the stage is offered once more to another claimant; the worker takes no work until the limit
-resets, then carries on by itself. Its own page and the Workers screen both say **Paused — usage limit
+— its unfinished work is pushed to the task's branch, and the stage is offered once more, continuing
+from that work: another worker takes it at once, or the same one once its limit resets. The limited
+worker takes no work until then, and carries on by itself. Its own page and the Workers screen both say **Paused — usage limit
 until 14:00** (in the organisation's timezone on the platform's screens; *until about* when the limit
 did not say when it resets, and the worker waits an hour), and the run's page says the same beside
 *Executed by*. A second usage limit on the same stage goes to *Needs human*. A person's *Pause* is a

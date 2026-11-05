@@ -5115,6 +5115,49 @@ describe('an unsuccessful Developer run’s unfinished work (backlog 467)', () =
     expect(implementationSpecs(harness)[1]?.userPrompt).not.toContain('A previous attempt');
   });
 
+  /**
+   * TD-031's 2026-11-05 amendment (BACKLOG 694): a usage limit's run saves its work, and the entry's
+   * re-plan — the **same** attempt of the **same** stage, no person involved — checks out that
+   * branch and is told the previous attempt's work is there.
+   */
+  it('continues a usage-limited Developer run’s re-plan from its saved work, same attempt (WP-285)', async () => {
+    const harness = harnessWith({
+      runs: {
+        ...happyRuns(),
+        implementation: {
+          status: 'failed',
+          terminalReason: 'rate_limited',
+          error: "the claimant's usage limit was reached (rate_limit_rejected)",
+          numTurns: 40,
+          savedWork: SAVED,
+          usageLimit: { signal: 'rate_limit_rejected', resetsAt: null },
+        } as never,
+      },
+    });
+    // The entry's re-plan completes, as the happy path's implementation does.
+    const repository = harness.store.runs as { insert: typeof harness.store.runs.insert };
+    const real = repository.insert.bind(harness.store.runs);
+    let implementationRuns = 0;
+    repository.insert = async (tx, run) => {
+      await real(tx, run);
+      if (run.stage === 'implementation') implementationRuns += 1;
+      if (implementationRuns === 2) {
+        harness.script('implementation', happyRuns().implementation as never);
+      }
+    };
+    await harness.publish([ticketMatched()]);
+
+    const [limited, replanned] = implementationSpecs(harness);
+    expect(harness.store.savedWorkOf(limited?.runId as never)).toEqual(SAVED);
+    expect(replanned?.attempt).toBe(limited?.attempt);
+    expect(replanned?.checkoutRef).toBe('agentic/ACME-1');
+    expect(replanned?.userPrompt).toContain(
+      'A previous attempt of this stage ended `rate_limited` after 40 turns without finishing.',
+    );
+    expect(limited?.userPrompt).not.toContain('A previous attempt');
+    expect(escalationOf(harness)).toEqual([]);
+  });
+
   it('records the branch on a task its overspent run paused', async () => {
     const harness = harnessWith({
       runs: {

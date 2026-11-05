@@ -986,8 +986,11 @@ re-offered once per stage entry (decision 12).
 > still owns the unit. One golden SDK-stream fixture per signal (`test/fixtures/claude/usage-limit-*`),
 > each with a `source` step marking it `documented-adapted`, not a recording. `settleRun` then counts the
 > entry's `usage_limited_runs`: the first re-plans it at once (the task untouched, `stage.execute`
-> enqueued after the commit, the new offer carrying the limited worker in its exclusions), the second
-> escalates with *usage limits ended this stage twice*. The claimant that ran the session pauses: a
+> enqueued after the commit), the second
+> escalates with *usage limits ended this stage twice*. *(TD-031's 2026-11-05 amendment)* The
+> re-planned offer **excludes nobody** — the limited worker's own pause refuses it until the reset — and
+> the limited run's unfinished work is **saved** (`rate_limited` is in `SAVED_UNFINISHED_WORK_REASONS`),
+> so the re-plan continues from the branch. The claimant that ran the session pauses: a
 > remote worker posts `pause` before its `finish` and claims nothing until the reset (it hands a run it
 > claimed meanwhile back with `release usage_limited` before its spawn call), and the server's claimant
 > does the same in `local` provider mode only (`RunClaimantOptions.usagePause`); either resumes by itself.
@@ -995,8 +998,7 @@ re-offered once per stage entry (decision 12).
 > about*. The lease sweep counts `lost_runs` in its ending's transaction and, for an entry's first loss,
 > revokes the run's minted credential after the commit and then enqueues `stage.execute` (the lost worker
 > excluded, any claimant may take it); the second loss escalates naming both runs and the machines that
-> held them. **Unfinished work of a `rate_limited` run is not saved** — the default of
-> `SAVED_UNFINISHED_WORK_REASONS`, left open by BACKLOG 694, not decided here. Steer, cancel and take-over reach a remote holder on its
+> held them. Steer, cancel and take-over reach a remote holder on its
 heartbeat response (decision 14).
 
 > **The claimant's spec is the stored plan (WP-275a, TD-031's 2026-11-04 amendment §2).** Transaction

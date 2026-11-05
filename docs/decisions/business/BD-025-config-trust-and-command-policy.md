@@ -163,7 +163,9 @@ the next attempt paid for the same exploration again. PROGRESS backlog 467.
    merge request under review, while what it loses is one `git merge` the next attempt repeats.
 2. **Which endings.** `error_max_turns`, `error_max_budget_usd` that did not keep an artifact (one that
    did is `completed`, BD-010's 2026-10-05 amendment), `error_max_structured_output_retries`,
-   `error_during_execution`, `timed_out`, `stalled` and `crash` (`SAVED_UNFINISHED_WORK_REASONS`). Not
+   `error_during_execution`, `timed_out`, `stalled`, `crash` and — since TD-031's 2026-11-05 amendment
+   (WP-285, BACKLOG 694) — `rate_limited`, a usage limit's ending, whose re-plan continues from the
+   branch (`SAVED_UNFINISHED_WORK_REASONS`). Not
    saved: a success; a person's cancel (a cancel is *throw it away* — the take-over is *keep it*); a
    take-over (exported by its own request); `shutdown` (the runner hands the stage back to start again
    by itself, and an export would lengthen a SIGTERM — discovered work in backlog 467); `permission_denied`

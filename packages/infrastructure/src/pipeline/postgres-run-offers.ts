@@ -258,12 +258,12 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
   },
   carriedExclusions: async (tx, entry): Promise<readonly Id[]> => {
     // TD-031 §12: the entry's newest stage offer — its exclusions, plus the worker it lost to the
-    // sweep or to a usage limit. `ordinality` keeps the order they were excluded in.
+    // sweep (never one a usage limit stopped: its own pause keeps it off, TD-031's 2026-11-05
+    // amendment). `ordinality` keeps the order they were excluded in.
     const { rows } = await sqlOf(tx).query<{ worker_id: string }>(
       `with previous as (
          select o.excluded_worker_ids,
-                case when r.terminal_reason in ('rate_limited', 'lease_expired')
-                     then o.worker_id end as lost_worker_id
+                case when r.terminal_reason = 'lease_expired' then o.worker_id end as lost_worker_id
            from run_offers o
            join runs r on r.id = o.run_id
           where o.kind = 'stage' and o.task_id = $1 and o.stage = $2 and o.attempt = $3

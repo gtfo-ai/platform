@@ -31,6 +31,8 @@ const SAVED: readonly RunTerminalReason[] = [
   'timed_out',
   'stalled',
   'crash',
+  // TD-031's 2026-11-05 amendment (BACKLOG 694): the re-planned run continues from it.
+  'rate_limited',
 ];
 
 /** The status a run ends with for each reason, as the runner maps them. */
@@ -47,8 +49,7 @@ const STATUS_OF: Readonly<Record<RunTerminalReason, RunStatus>> = {
   crash: 'failed',
   lease_expired: 'failed',
   shutdown: 'failed',
-  // WP-273: in the contract ahead of any writer (TD-031 decision 11 ends it `failed`). Not saved
-  // today; whether a usage-limited run's work is saved is WP-285's to decide, with its writer.
+  // WP-285: a usage limit ends the run `failed` (TD-031 decision 11).
   rate_limited: 'failed',
 };
 

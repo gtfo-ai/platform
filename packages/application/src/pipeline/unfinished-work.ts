@@ -54,6 +54,7 @@ import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
  * | `stalled` | it produced nothing for too long; what it had is still in the tree |
  * | `crash` | the session died after the workspace existed |
  * | `error_during_execution` | the CLI's own error ending; a crash by another name |
+ * | `rate_limited` | a usage limit cut a working session; the stage is re-planned at once and the next run continues from the branch (TD-031's 2026-11-05 amendment, BACKLOG 694) — the export is git only and spends no Claude quota |
  *
  * **Not saved**, each deliberately: `success` (the run delivered); `cancelled` (a person stopped
  * it — a cancel is "throw this away", and the take-over is the command for "keep it"); a take-over
@@ -71,6 +72,7 @@ export const SAVED_UNFINISHED_WORK_REASONS: ReadonlySet<RunTerminalReason> = new
   'timed_out',
   'stalled',
   'crash',
+  'rate_limited',
 ]);
 
 /**

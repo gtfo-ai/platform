@@ -1002,12 +1002,14 @@ const recordHandBack = async (
  * run's), its offer is closed by `finish` in this transaction, and the stage entry's
  * `usage_limited_runs` is counted in the same one: the **first** such ending re-plans the entry —
  * the task untouched, its stage row open, `stage.execute` enqueued after the commit
- * (`enqueueFollowOn`), the new offer carrying the limited worker in its exclusions
- * (`RunOfferRepository.carriedExclusions`) — and the **second** escalates with the brief *usage
- * limits ended this stage twice*. A task a person moved meanwhile is recorded onto and never re-run.
+ * (`enqueueFollowOn`) — and the **second** escalates with the brief *usage limits ended this stage
+ * twice*. The re-planned offer **excludes nobody** (TD-031's 2026-11-05 amendment): the limited
+ * worker's own pause refuses it at the claim until the reset, so another worker takes it at once,
+ * or the same one after the reset. A task a person moved meanwhile is recorded onto and never re-run.
  *
- * **Unfinished work is not saved** for this ending (`SAVED_UNFINISHED_WORK_REASONS`): whether it
- * should be is open (BACKLOG 694) and not decided here.
+ * **Unfinished work is saved** for this ending (`SAVED_UNFINISHED_WORK_REASONS`, BACKLOG 694 closed
+ * by the same amendment): the workspace pushed it before the `finish`, the re-planned run checks out
+ * the same branch, and its prompt is told the previous attempt's work is there.
  */
 const recordUsageLimited = async (
   scope: TransactionScope,
@@ -1065,10 +1067,11 @@ const recordUsageLimited = async (
       failed.events,
       `The "${job.stage}" stage of ${stored.task.ticket.key} was stopped by a usage limit ` +
         `${String(limited ?? 1)} times (attempt ${String(job.attempt)}; the last run is ${run.id}). ` +
-        'The first time the stage was offered again to another claimant; this time it is not. ' +
-        'The claimants that hit their limit pause until it resets. Nothing was wrong with the task: ' +
-        'hand it back at this stage once a claimant has usage left, or move the project to a ' +
-        'claimant whose subscription has room.',
+        'The first time the stage was offered again; this time it is not. The claimants that hit ' +
+        'their limit pause until it resets. Nothing was wrong with the task: hand it back at this ' +
+        'stage once a claimant has usage left, or move the project to a claimant whose ' +
+        'subscription has room.' +
+        (outcome.savedWork === undefined ? '' : ` ${savedWorkSentence(outcome.savedWork)}`),
     );
   }
   await scope.events.append(failed.events);

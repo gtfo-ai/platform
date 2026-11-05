@@ -1402,6 +1402,62 @@ describe('the worker protocol (WP-285): a usage limit’s pause', () => {
     expect(w.store.worker(w.alice.workerId)?.pausedUntilEstimated).toBe(false);
   });
 
+  /**
+   * TD-031's 2026-11-05 amendment: a usage limit excludes nobody from the re-offer. The limited
+   * worker's own pause keeps it off until the reset; another worker may take the re-offer at once,
+   * and on a single-worker core the same worker takes it back after its pause ends.
+   */
+  const limitAndReoffer = async () => {
+    const w = await world();
+    const pkg = await claimAsAlice(w);
+    await post(w, WORKER_PATHS.spawn, w.runId, pkg.runToken, { epoch: 1 });
+    const reset = w.harness.clock.epochMs + 60 * 60_000;
+    // As a worker does: its pause before the finish of the run its limit ended.
+    expect(
+      (
+        await post(w, WORKER_PATHS.pause, '', w.alice.credential, {
+          until: new Date(reset).toISOString(),
+          reason: 'usage_limited',
+        })
+      ).statusCode,
+    ).toBe(204);
+    const body = bodies(1)[WORKER_PATHS.finish];
+    const finished = await post(w, WORKER_PATHS.finish, w.runId, pkg.runToken, {
+      ...body,
+      outcome: { ...body.outcome, status: 'failed', terminal_reason: 'rate_limited' },
+    });
+    expect(finished.statusCode).toBe(200);
+    await w.harness.drain();
+    const reoffer = w.harness.store.offerRows().find((row) => row.state === 'open');
+    expect(reoffer, 'the stage is offered once more').toBeDefined();
+    expect(reoffer?.runId).not.toBe(w.runId);
+    const claim = (workerId: Id, at: number) =>
+      w.remote.claim({
+        workerId,
+        heldImageDigests: HELD,
+        images: { run: DIGESTS.platform_runtime, egress: DIGESTS.platform_egress },
+        now: new Date(at).toISOString() as never,
+      });
+    return { w, reset, reoffer, claim };
+  };
+
+  it('a single worker: limited, its stage re-offered excluding nobody, and it claims it back once its pause ends', async () => {
+    const { w, reset, reoffer, claim } = await limitAndReoffer();
+    expect((await claim(w.alice.workerId, reset - 1)).kind).not.toBe('claimed');
+    const back = await claim(w.alice.workerId, reset + 1);
+    expect(back.kind).toBe('claimed');
+    expect(back.kind === 'claimed' ? back.package.runId : null).toBe(reoffer?.runId);
+  });
+
+  it('another worker takes the re-offer at once, while the limited one waits out its pause', async () => {
+    const { w, reoffer, claim } = await limitAndReoffer();
+    const now = w.harness.clock.epochMs;
+    expect((await claim(w.alice.workerId, now)).kind).not.toBe('claimed');
+    const other = await claim(w.bob.workerId, now);
+    expect(other.kind).toBe('claimed');
+    expect(other.kind === 'claimed' ? other.package.runId : null).toBe(reoffer?.runId);
+  });
+
   it('refuses a pause past eight days, and a reason it does not know', async () => {
     const w = await world();
     const far = await post(w, WORKER_PATHS.pause, '', w.alice.credential, {

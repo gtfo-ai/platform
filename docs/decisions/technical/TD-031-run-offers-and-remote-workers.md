@@ -1238,3 +1238,17 @@ holding the right images, claimed nothing (Autix). Both statements now ask one p
 `userMayRunInProjectSql` (`packages/infrastructure/src/pipeline/running-role.ts`), whose role list is
 derived from the domain's `ROLE_LEVELS`. An organisation `viewer` still runs nothing without a
 membership at `member` or above, so `worker.register: viewer` still grants nothing by itself.
+
+## Amendment (2026-11-05, orchestrator-authorised, WP-285) — decision 11: a usage limit excludes no worker, and a limited run's work is saved
+
+1. **No exclusion for a usage limit.** A `rate_limited` ending re-plans the stage entry once with **no**
+   worker added to `excluded_worker_ids`; `lease_expired` (a lost worker) keeps the exclusion of §12.
+   Why: on a `workers_only` core with one worker (Autix), the exclusion left nobody to claim — a 24 h
+   `offer_timeout`, then *Needs human*. The limited worker's own pause (`paused_until`, refused at the
+   claim) keeps it off until the reset, so another worker takes the re-offer at once, or the same one
+   after the reset. A second limit still escalates (*usage limits ended this stage twice*).
+2. **The work is saved** (BACKLOG 694, adopted): `rate_limited` joins `SAVED_UNFINISHED_WORK_REASONS`.
+   The export is git only and spends no Claude quota, and the re-plan — the same attempt of the same
+   stage entry — checks out that branch and is told the previous attempt's work is there. BD-025's
+   2026-10-05 amendment, item 2, is amended to match.
+

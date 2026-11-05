@@ -1159,9 +1159,10 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           // WP-278: the ticket's assignee is not stored, so a stage offer has none yet (BACKLOG 730).
           assigneeUserId: null,
           /**
-           * WP-285/WP-286 (TD-031 §12): a re-planned entry carries its previous offer's exclusions,
-           * plus the worker a usage limit stopped or that lost the run — so the second run of the
-           * entry goes to another claimant. An entry's first offer carries nothing.
+           * WP-286 (TD-031 §12): a re-planned entry carries its previous offer's exclusions, plus
+           * the worker that lost the run — so the second run goes to another claimant. A usage
+           * limit excludes nobody: the limited worker's own pause keeps it off until its reset
+           * (TD-031's 2026-11-05 amendment). An entry's first offer carries nothing.
            */
           excludedWorkerIds: await store.offers.carriedExclusions(scope.tx, {
             taskId: job.taskId,
