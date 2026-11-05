@@ -17,7 +17,7 @@ dashboard), the current SPA (inventory in §2), and the sources in §10.
 local page, waits on M22's S-22.13), in **one theme, dark only** since S-23.17 (TD-033's amendment; D4's light
 and system choices are gone). The design language as built is technical/09 § "Visual design language (TD-033)".
 Still open, in `docs/technical/BACKLOG.md`: per-project *needs you* counts on Projects and the project header (810),
-the project header on `/tasks/$taskId` (811), the initial graph's last 10 kB (812), the remaining raw enum words (809),
+the project header on `/tasks/$taskId` (811), the initial graph's last 10 kB (812), the remaining raw enum words (903),
 Home's and the wizard's shared done-ness (825), the board's first page only (840), the wizard's draft and
 § 6's collapsible operating-mode panels (830, 822), the Agents page's missing reads (870–873), Statistics' charts (882),
 Home's dither strip (817) and Inter's preload and licence (801, 803).

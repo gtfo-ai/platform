@@ -72,6 +72,15 @@ describe('decideKey', () => {
     expect(decideKey(pending, press('toString'), 10).action).toBeNull();
   });
 
+  it('opens the palette or the sheet on / or ? even right after a g', () => {
+    const pending = decideKey(IDLE, press('g'), 0).state;
+    expect(decideKey(pending, press('/'), 10)).toEqual({
+      state: IDLE,
+      action: { kind: 'palette' },
+    });
+    expect(decideKey(pending, press('?'), 10)).toEqual({ state: IDLE, action: { kind: 'sheet' } });
+  });
+
   it('maps / ? j k, and nothing else', () => {
     expect(decideKey(IDLE, press('/'), 0).action).toEqual({ kind: 'palette' });
     expect(decideKey(IDLE, press('?', {}), 0).action).toEqual({ kind: 'sheet' });

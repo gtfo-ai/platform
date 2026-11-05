@@ -119,6 +119,14 @@ export const decideKey = (
   if (press.metaKey || press.ctrlKey || press.altKey || press.repeat === true) {
     return { state: IDLE, action: null };
   }
+  // `/` and `?` open what they open whatever came before them: a `g` followed by `/` is somebody
+  // who changed their mind, and the palette is what they asked for.
+  switch (press.key) {
+    case '/':
+      return { state: IDLE, action: { kind: 'palette' } };
+    case '?':
+      return { state: IDLE, action: { kind: 'sheet' } };
+  }
   const pending = state.pendingSince !== null && now - state.pendingSince <= CHORD_TIMEOUT_MS;
   if (pending) {
     const to = Object.hasOwn(JUMPS, press.key) ? JUMPS[press.key] : undefined;
@@ -127,10 +135,6 @@ export const decideKey = (
   switch (press.key) {
     case 'g':
       return { state: { pendingSince: now }, action: null };
-    case '/':
-      return { state: IDLE, action: { kind: 'palette' } };
-    case '?':
-      return { state: IDLE, action: { kind: 'sheet' } };
     case 'j':
       return { state: IDLE, action: { kind: 'row', step: 1 } };
     case 'k':
