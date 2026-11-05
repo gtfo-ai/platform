@@ -108,12 +108,16 @@ test.describe('authentication', () => {
     await page.getByRole('button', { name: 'Sign in' }).click();
 
     await expect(page).toHaveURL(/127\.0\.0\.1:\d+\/$/);
-    await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+    ).toBeVisible();
   });
 
   test('signing out returns to the sign-in page', async ({ page }) => {
     await signIn(page);
-    await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+    ).toBeVisible();
 
     // Sign out sits in the top bar's account menu since TD-033: one "open the menu" step.
     await page.getByRole('button', { name: 'Account menu' }).click();

@@ -88,7 +88,9 @@ test('the shell is served under the policy and the application runs without a vi
   // Sign in, land on a screen, then take a route whose chunk is imported dynamically: a policy
   // that allowed the entry module and nothing else would fail here rather than on the first paint.
   await signIn(page);
-  await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
   await page.goto(`/runs/${IDS.run}`);
   await expect(page.getByText('Reading the retry helper.')).toBeVisible();
 
@@ -145,7 +147,9 @@ test('Base UI opens a menu and a tooltip under the policy without a violation (T
   page,
 }) => {
   await signIn(page);
-  await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
 
   // The account menu: a Base UI Menu, positioned by CSSOM writes.
   const trigger = page.getByRole('button', { name: 'Account menu' });

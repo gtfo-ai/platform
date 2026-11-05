@@ -271,7 +271,7 @@ export const PlatformUpdatedBanner = (): ReactElement | null => {
 };
 
 /** The connection's dot, by the badge tone the words already had. */
-const CONNECTION_DOT: Readonly<Record<BadgeTone, string>> = {
+export const CONNECTION_DOT: Readonly<Record<BadgeTone, string>> = {
   success: 'bg-success',
   warning: 'bg-attention',
   danger: 'bg-danger',

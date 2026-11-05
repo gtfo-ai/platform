@@ -23,7 +23,9 @@ const PWNED = 'window.__pwned';
 test.beforeEach(async ({ page, request }) => {
   await resetBackend(request);
   await signIn(page);
-  await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
 });
 
 test('an injected project name renders as text, not as an element', async ({ page }) => {

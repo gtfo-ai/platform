@@ -48,7 +48,9 @@ const pingProbe = (topic: string): SseFrame => ({
 test.beforeEach(async ({ page, request }) => {
   await resetBackend(request);
   await signIn(page);
-  await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
 });
 
 test('a live transcript frame renders on the run screen', async ({ page, request }) => {

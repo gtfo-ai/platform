@@ -11,6 +11,7 @@ import {
   type UseQueryResult,
   useInfiniteQuery,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
@@ -82,6 +83,22 @@ export const useProjectTasks = (projectId: string | null, state?: string) => {
     queryFn: () => endpoints.projectTasks(projectId ?? '', state === undefined ? {} : { state }),
     enabled: projectId !== null,
     ...FOREVER,
+  });
+};
+
+/**
+ * {@link useProjectTasks} for several projects at once, one read each — Home's escalated tasks
+ * (`state: 'needs_human'`), across every project the caller may read. The keys are the board's, so a
+ * `project:<id>` frame refreshes both and neither caches a second copy.
+ */
+export const useProjectsTasks = (projectIds: readonly string[], state: string) => {
+  const { endpoints } = useServices();
+  return useQueries({
+    queries: projectIds.map((projectId) => ({
+      queryKey: queryKeys.projectTasks(projectId, { state }),
+      queryFn: () => endpoints.projectTasks(projectId, { state }),
+      ...FOREVER,
+    })),
   });
 };
 
@@ -553,6 +570,21 @@ export const useOrgStats = (query: {
     queryKey: queryKeys.orgStats(query),
     queryFn: () => endpoints.orgStats(query),
     ...FOREVER,
+  });
+};
+
+/**
+ * {@link useTask} for a handful of tasks — the rows Home draws, which need a ticket key the inbox and
+ * the agents reads do not carry. Same keys as the task page's, so opening a row reads nothing twice.
+ */
+export const useTasks = (taskIds: readonly string[]) => {
+  const { endpoints } = useServices();
+  return useQueries({
+    queries: taskIds.map((taskId) => ({
+      queryKey: queryKeys.task(taskId),
+      queryFn: () => endpoints.task(taskId),
+      ...FOREVER,
+    })),
   });
 };
 

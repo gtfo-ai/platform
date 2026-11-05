@@ -408,8 +408,42 @@ stage would be given now.
 
 ## 2. Home
 
-**Home** in the top navigation (it was called *Dashboard*). Spend, active agents and open work at a
-glance, and a way into each project. The agent count moves live. A maintainer or admin also sees **one banner** when an organisation chat account's credentials
+**Home** in the top navigation (it was called *Dashboard*), and the wordmark at the top left. It
+answers three questions in this order: what needs you, what is moving, and where to go.
+
+- **Needs you (N)** comes first: every open question and pending approval in the organisation, and
+  every task that was escalated to a person (*Needs you* on its board) and has no question or
+  approval of its own. Each row names the project, the ticket and the stage, the question's first
+  line (an agent's words, shown as plain text), how long it has waited, and the action — **Answer**,
+  **Approve** or **Open** — which opens the task. The oldest waits at the top; the box shows five
+  and **View inbox →** has the rest. When nothing waits it says *Nothing needs you right now.*
+- **Running now (N)**: every run that is running — its stage and role (the link to the run), the
+  project, the ticket, the model, how long it has run, what it has cost so far and the latest
+  progress line the agent reported. **Agents →** has the whole list.
+- **Projects**: one row per project — its name (the way into its board), its key, its readiness
+  level, its open tasks and its spend over the last 30 days — and **New project**, which opens the
+  wizard.
+- On the right, **Spend this month** — the organisation's monthly cap as *$412 of $1,000* with a
+  meter, when one is set, and the 30-day spend across all projects either way — and **Instance**:
+  whether the live connection is up, and the version.
+
+Every box refreshes on its own when something happens — a question asked, a run started or
+finished — without reloading the page.
+
+**A new instance is set up from here.** For an admin, while there is no project — or no
+integration — Home is a **setup checklist** instead of the boxes: *Connect your tracker and git
+host*, *Create a project*, *Run technical discovery*, *Choose how autonomous agents are*, *Start
+your first ticket*. Each step is ticked from what the platform already knows (an integration of
+each kind exists, a project exists, its readiness was evaluated, its operating mode was applied, it
+has a ticket's task), never from what this browser remembers, so a step done in another tab or
+through the API is ticked too. **Continue setup** opens the first step that is not done — the
+Integrations screen, the wizard (on the project, when it exists) or the board's *Start a ticket*
+form — and every step's name is a link to its own screen. Once a project exists, the checklist moves
+to the right-hand column as *Finish setting up*, and when every step is done it disappears. It
+follows the oldest project; a later project's steps are the wizard's to show. Every other role, on
+an instance with no project, is told that an admin sets it up.
+
+A maintainer or admin also sees **one banner** when an organisation chat account's credentials
 cannot be decrypted: every project's prompt files are withheld until the account is re-sealed or
 retired under **Integrations**, whose card for that account says the same (WP-157).
 

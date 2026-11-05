@@ -13,14 +13,51 @@ import { commandLog, resetBackend, signIn } from './support/harness.js';
 test.beforeEach(async ({ page, request }) => {
   await resetBackend(request);
   await signIn(page);
-  await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
 });
 
-test('the dashboard shows the organisation metrics and the project', async ({ page }) => {
-  await expect(page.getByText('Spend, 30 days')).toBeVisible();
-  // Twice on this screen: the organisation total and the project's own 30-day spend.
-  await expect(page.getByText('$12.50')).toHaveCount(2);
-  await expect(page.getByRole('link', { name: /Demo service/ })).toBeVisible();
+/**
+ * Home (S-23.7): what needs you first, then what is running, then the projects, with the spend and
+ * the instance in the rail. The fixture's organisation has a tracker and no git host, so the setup
+ * checklist sits in the rail too and its one primary button continues at the first undone step.
+ */
+test('Home: needs you, running now, the projects, the rail and the unfinished setup', async ({
+  page,
+}) => {
+  const needs = page.getByRole('list', { name: 'Needs you' });
+  // The agent's question, first line, as text; its row's action opens the task.
+  await expect(needs.getByText(/^Should the retry budget be 3 or 5\?/)).toBeVisible();
+  await expect(needs.getByText('Plan approval is waiting for you')).toBeVisible();
+  await expect(needs.getByRole('link', { name: /^Answer/ })).toHaveAttribute(
+    'href',
+    `/tasks/${IDS.taskFeature}`,
+  );
+  await expect(needs.getByText('DEMO-1').first()).toBeVisible();
+
+  const running = page.getByRole('list', { name: 'Running now' });
+  await expect(running.getByRole('link', { name: 'Implementation · Developer' })).toHaveAttribute(
+    'href',
+    `/runs/${IDS.run}`,
+  );
+
+  await expect(
+    page.getByRole('list', { name: 'Projects' }).getByRole('link', { name: /Demo service/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: 'Spend' }).getByText('Spend, 30 days'),
+  ).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Instance' }).getByText('Live')).toBeVisible();
+
+  const setup = page.getByRole('region', { name: 'Set up' });
+  await expect(
+    setup.getByRole('link', { name: /^Connect your tracker and git host/ }),
+  ).toHaveAttribute('href', '/integrations');
+  await expect(setup.getByRole('link', { name: 'Continue setup' })).toHaveAttribute(
+    'href',
+    '/integrations',
+  );
 });
 
 /**

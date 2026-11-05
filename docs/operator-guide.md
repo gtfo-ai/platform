@@ -833,7 +833,7 @@ files*, and its stages run without their prompt files. Fix the cause and press *
 One cause is **not** the project's: an organisation chat account whose credentials no longer decrypt
 (a changed `APP_SECRET_KEY`, a damaged `secrets` row) withholds the prompt files of **every** project.
 Since WP-157 that is said once — on the account's card under **Integrations** and as one banner on
-the dashboard for a maintainer or admin. Re-seal its credentials there (or retire the account), then
+Home for a maintainer or admin. Re-seal its credentials there (or retire the account), then
 re-read the projects.
 The platform cannot un-leak a credential already committed to a project's history — rotate it.
 
