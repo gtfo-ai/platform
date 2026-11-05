@@ -2,7 +2,7 @@
  * The task page's **needs-you callout** (S-23.9b; research/19 § 3 item 2 and § 5.2 "Task"): what a
  * person must do on this task, first on the page, with the action **inline**.
  *
- * Four things put it there, in this order:
+ * Five things put it there, in this order:
  *
  * - **open questions** — each answered here, with the same `answer` command the inbox sends; the
  *   agent wrote the question, so it is rendered as text (BD-022);
@@ -11,6 +11,8 @@
  *   outcome sentence, and the three ways out (return, rework, retry), which open the same dialogs as
  *   the header's `···` menu. The sentence is the escalated attempt's recorded word, not the
  *   escalation's brief: the task projection does not publish the brief (BACKLOG 850);
+ * - **a budget pause** — whose cap is spent, and where it is raised (the header's primary raises
+ *   a task's own cap);
  * - **a proposed breakdown waiting for a maintainer** — the epic split's panel, with its decision.
  *   A breakdown with nothing left to decide, or a caller who may not decide it, is on the Overview.
  *
@@ -26,7 +28,7 @@ import { type ReactElement, useState } from 'react';
 import type { useTaskCommands } from '../app/queries.js';
 import { Flash } from '../ui/flash.js';
 import { APPROVAL_KIND_LABEL, QUESTION_STATUS_LABEL, stageLabel } from '../ui/humanize.js';
-import { Badge, Button, Card, ErrorNotice, formatDateTime } from '../ui/kit.js';
+import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd } from '../ui/kit.js';
 import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { BreakdownPanel } from './breakdown-panel.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
@@ -178,16 +180,42 @@ const escalationReason = (
   return row === null || row.outcome === null ? null : stageOutcomeSentence(row.outcome);
 };
 
+/**
+ * Why a budget pause waits, and on whom (WP-131): only a task's **own** cap is raised from this page
+ * (the header's *Raise this task's cap…*, for a caller with `budget.write`); a project's or an
+ * organisation's is raised where that cap is set.
+ */
+export const budgetReason = (
+  task: Pick<TaskRecord, 'paused_budget_scope' | 'budget_cap_usd'>,
+  canRaise: boolean,
+): string => {
+  switch (task.paused_budget_scope) {
+    case 'task':
+      return canRaise
+        ? `It has spent its cap of ${formatUsd(task.budget_cap_usd)}. Raise the cap and it resumes at the stage it stopped at.`
+        : `It has spent its cap of ${formatUsd(task.budget_cap_usd)}. A person who may change budgets can raise it.`;
+    case 'project':
+      return 'Its project has spent its budget. It resumes once the project’s budget is raised, where that cap is set.';
+    case 'organization':
+      return 'The organisation has spent its budget. It resumes once the organisation’s budget is raised, where that cap is set.';
+    default:
+      return 'A budget it counts against is spent.';
+  }
+};
+
 /** Whether the callout has anything to say — the page draws nothing in its place otherwise. */
 export const calloutReasons = (input: {
   readonly state: TaskRecord['state'];
   readonly openQuestions: number;
   readonly pendingApprovals: number;
   readonly breakdownWaiting: boolean;
-}): readonly ('question' | 'approval' | 'escalation' | 'breakdown')[] => [
+  readonly pausedReason?: TaskRecord['paused_reason'];
+}): readonly ('question' | 'approval' | 'escalation' | 'budget' | 'breakdown')[] => [
   ...(input.openQuestions > 0 ? (['question'] as const) : []),
   ...(input.pendingApprovals > 0 ? (['approval'] as const) : []),
   ...(input.state === 'needs_human' ? (['escalation'] as const) : []),
+  // A budget pause waits on whoever may raise the cap (`ui/task-status.ts`' needs-you).
+  ...(input.state === 'paused' && input.pausedReason === 'budget' ? (['budget'] as const) : []),
   ...(input.breakdownWaiting ? (['breakdown'] as const) : []),
 ];
 
@@ -209,6 +237,8 @@ const calloutTitle = (
     }
     case 'escalation':
       return 'This task needs a person';
+    case 'budget':
+      return 'This task is paused for its budget';
     case 'breakdown':
       return 'The proposed breakdown is waiting for your decision';
   }
@@ -238,6 +268,7 @@ export const TaskCallout = ({
     openQuestions: openQuestions.length,
     pendingApprovals: pendingApprovals.length,
     breakdownWaiting,
+    pausedReason: task.paused_reason,
   });
   const [first] = reasons;
   if (first === undefined) {
@@ -317,6 +348,9 @@ export const TaskCallout = ({
                 </div>
               ) : null}
             </div>
+          ) : null}
+          {reasons.includes('budget') ? (
+            <p data-budget-reason="">{budgetReason(task, detail.can_raise_budget)}</p>
           ) : null}
           {breakdownWaiting ? <BreakdownPanel taskId={task.id} enabled /> : null}
         </div>

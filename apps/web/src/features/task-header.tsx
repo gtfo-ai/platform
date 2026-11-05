@@ -8,7 +8,8 @@
  *   how long ago it was opened; then the `PhaseTrack`.
  * - **One primary action, chosen by the state** ({@link taskPrimaryAction}): *Hand back…* while a
  *   take-over is in force, *Answer* for an open question (it moves focus into the callout's answer
- *   box), *Approve…* for a pending approval, *Resume* for a paused or escalated task — or none.
+ *   box), *Approve…* for a pending approval, *Raise this task's cap…* for a task its own cap paused
+ *   when the caller may raise it, *Resume* for a paused or escalated task — or none.
  *   Everything else is in the `···` menu, and a command with fields or no undo opens a dialog
  *   (`./task-dialogs.tsx`).
  *
@@ -16,9 +17,16 @@
  * retry, take over, feedback`; product/10 adds return-to-stage and rework. All of them are present:
  * pause, resume, cancel, answer, decide, retry-stage, return-to-stage, rework, feedback (the
  * Overview), take over and hand back (WP-44), raising the task's own cap (WP-131) and the record's
- * download (WP-122). A command the server would refuse for every caller is not offered: no Pause or
- * Take over on a merged task (WP-194), no take-over of a finished one, no Resume on a task that is
- * neither paused nor waiting for a person, and no stage command on a task that has entered no stage.
+ * download (WP-122). A command the server refuses for every caller is not offered: no Pause or
+ * Take over on a merged task (WP-194), and no return or rework there either (its way out is the
+ * retrospective), no take-over of a finished one, no stage command on a task that has entered no
+ * stage. Some are left out **by choice**: no Pause or Take over on a queued task (nothing runs
+ * yet), no Take over on a task a person paused (the pause already stops it), no Cancel once the
+ * task is merged or in its retrospective (the change is in the default branch; what is left is the
+ * record) — and Resume only for a task that is **paused** or **waiting for a person**. The server's
+ * resume admits more than that (`RESUMABLE_TASK_STATES` includes `waiting_approval`), but resuming
+ * past an open question or a pending approval would skip it, so the page never offers it (BACKLOG
+ * 854 has the server half).
  */
 import type { TaskDetailResponse, TaskState } from '@platform/contracts';
 import { ArrowLeftIcon } from '@primer/octicons-react/ArrowLeftIcon';
@@ -28,8 +36,8 @@ import { taskExportPath } from '../api/endpoints.js';
 import type { useTaskCommands } from '../app/queries.js';
 import {
   ActionMenu,
-  ActionMenuItem,
   ActionMenuDownloadItem,
+  ActionMenuItem,
   ActionMenuSeparator,
 } from '../ui/action-menu.js';
 import { activityOf } from '../ui/activity.js';
@@ -37,7 +45,8 @@ import { stageLabel, TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
 import { Badge, Button, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PageHeader } from '../ui/page-header.js';
 import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
-import { StateLabel, type Status } from '../ui/status.js';
+import { StateLabel } from '../ui/status.js';
+import { taskStatus } from '../ui/task-status.js';
 import { DownloadLink, UntrustedText } from '../ui/untrusted.js';
 import { liveStageRun } from './live-stage.js';
 import { takeOverFinished } from './take-over.js';
@@ -45,28 +54,19 @@ import { answerInputId } from './task-callout.js';
 import type { TaskDialog } from './task-dialogs.js';
 import { TicketClaimAndQa } from './ticket-claim.js';
 
-/** A task's state as the one status vocabulary draws it (icon + colour + word). */
-export const TASK_STATE_STATUS: Readonly<Record<TaskState, Status>> = {
-  queued: 'queued',
-  active: 'running',
-  returned: 'running',
-  waiting_answers: 'needs_you',
-  waiting_approval: 'needs_you',
-  paused: 'paused',
-  needs_human: 'needs_you',
-  ready_for_merge: 'waiting',
-  merged: 'success',
-  retro: 'running',
-  done: 'success',
-  cancelled: 'cancelled',
-};
-
 /** The header's one primary action. */
-export type TaskPrimaryAction = 'hand_back' | 'answer' | 'approve' | 'resume' | null;
+export type TaskPrimaryAction =
+  | 'hand_back'
+  | 'answer'
+  | 'approve'
+  | 'raise_budget'
+  | 'resume'
+  | null;
 
 /**
  * Which action is primary, by what the task is waiting for: the person who holds it, then the
- * agent's question, then a maintainer's approval, then a resume — the first that applies.
+ * agent's question, then a maintainer's approval, then the cap that paused it, then a resume — the
+ * first that applies.
  */
 export const taskPrimaryAction = (input: {
   readonly state: TaskState;
@@ -74,6 +74,8 @@ export const taskPrimaryAction = (input: {
   readonly canHandBack: boolean;
   readonly openQuestions: number;
   readonly pendingApprovals: number;
+  /** The task's own cap paused it and the caller may raise it. */
+  readonly canRaise?: boolean;
 }): TaskPrimaryAction => {
   if (input.canHandBack) {
     return 'hand_back';
@@ -84,10 +86,16 @@ export const taskPrimaryAction = (input: {
   if (input.pendingApprovals > 0) {
     return 'approve';
   }
+  if (input.canRaise === true) {
+    return 'raise_budget';
+  }
   return input.state === 'paused' || input.state === 'needs_human' ? 'resume' : null;
 };
 
-/** States a person may resume from: the server's resume admits these two. */
+/**
+ * States the page offers a resume from — by choice, a subset of what the server admits: a resume
+ * past an open question or approval would skip it (see the module note, BACKLOG 854).
+ */
 const RESUMABLE: ReadonlySet<TaskState> = new Set<TaskState>(['paused', 'needs_human']);
 
 export const TaskHeader = ({
@@ -114,11 +122,20 @@ export const TaskHeader = ({
   // refuses Pause and Take over on it (`409 task_merged`), so neither is offered (WP-194).
   const merged = stages.some((entry) => entry.stage === 'merged_gate');
   const finished = takeOverFinished(task.state);
+  // WP-131 review round 2: only a task **its own cap** paused, and only for a caller the route
+  // would admit (`can_raise_budget`, `budget.write`). A project's or an organisation's pause is
+  // raised where that cap is set, and the route refuses it too (409 `not_paused_by_task_cap`).
+  const canRaise =
+    detail.can_raise_budget &&
+    task.state === 'paused' &&
+    task.paused_reason === 'budget' &&
+    task.paused_budget_scope === 'task';
   const primary = taskPrimaryAction({
     state: task.state,
     canHandBack: takenOver !== null && takenOver.hand_back_stages.length > 0,
     openQuestions: openQuestions.length,
     pendingApprovals: pendingApprovals.length,
+    canRaise,
   });
   const liveRun = liveStageRun(runs);
   const doing = activityOf({
@@ -131,17 +148,17 @@ export const TaskHeader = ({
   const currentStage = task.current_stage ?? null;
   // A task that has entered no stage has no strip to draw; the Overview says it has none.
   const phase = phaseStagesFor(null, stages, currentStage);
-  // WP-131 review round 2: only a task **its own cap** paused, and only for a caller the route
-  // would admit (`can_raise_budget`, `budget.write`). A project's or an organisation's pause is
-  // raised where that cap is set, and the route refuses it too (409 `not_paused_by_task_cap`).
-  const canRaise =
-    detail.can_raise_budget &&
-    task.state === 'paused' &&
-    task.paused_reason === 'budget' &&
-    task.paused_budget_scope === 'task';
-  const canPause = !merged && !finished && task.state !== 'paused';
+  const queued = task.state === 'queued';
+  const canPause = !merged && !finished && !queued && task.state !== 'paused';
   const canResume = RESUMABLE.has(task.state);
-  const canTakeOver = takenOver === null && !finished && !merged;
+  const canTakeOver =
+    takenOver === null &&
+    !finished &&
+    !merged &&
+    !queued &&
+    !(task.state === 'paused' && task.paused_reason === 'manual');
+  // Merged or in its retrospective: the change is in the default branch, so no cancel is offered.
+  const canCancel = !finished && task.state !== 'merged' && task.state !== 'retro';
 
   const resume = (): void => {
     commands.resume.mutate('resumed from the UI');
@@ -180,6 +197,15 @@ export const TaskHeader = ({
       >
         Approve…
       </Button>
+    ) : primary === 'raise_budget' ? (
+      <Button
+        tone="primary"
+        onClick={() => {
+          onOpen('raise_budget');
+        }}
+      >
+        Raise this task's cap…
+      </Button>
     ) : primary === 'resume' ? (
       <Button tone="primary" disabled={commands.resume.isPending} onClick={resume}>
         Resume
@@ -194,7 +220,7 @@ export const TaskHeader = ({
     stageOptions > 0 ||
     canRaise ||
     detail.can_export ||
-    !finished;
+    canCancel;
   const menu = !anyItem ? null : (
     <ActionMenu label="Task actions">
       {canPause ? (
@@ -231,23 +257,28 @@ export const TaskHeader = ({
           >
             Retry stage…
           </ActionMenuItem>
-          <ActionMenuItem
-            onSelect={() => {
-              onOpen('return');
-            }}
-          >
-            Return to stage…
-          </ActionMenuItem>
-          <ActionMenuItem
-            onSelect={() => {
-              onOpen('rework');
-            }}
-          >
-            Rework…
-          </ActionMenuItem>
+          {/* A merged task never goes back before the merge (WP-152): the callout says so too. */}
+          {merged ? null : (
+            <>
+              <ActionMenuItem
+                onSelect={() => {
+                  onOpen('return');
+                }}
+              >
+                Return to stage…
+              </ActionMenuItem>
+              <ActionMenuItem
+                onSelect={() => {
+                  onOpen('rework');
+                }}
+              >
+                Rework…
+              </ActionMenuItem>
+            </>
+          )}
         </>
       )}
-      {canRaise ? (
+      {canRaise && primary !== 'raise_budget' ? (
         <ActionMenuItem
           onSelect={() => {
             onOpen('raise_budget');
@@ -269,7 +300,7 @@ export const TaskHeader = ({
           />
         </>
       ) : null}
-      {finished ? null : (
+      {!canCancel ? null : (
         <>
           <ActionMenuSeparator />
           <ActionMenuItem
@@ -321,7 +352,14 @@ export const TaskHeader = ({
         </>
       }
       state={
-        <StateLabel status={TASK_STATE_STATUS[task.state]}>
+        <StateLabel
+          status={taskStatus({
+            state: task.state,
+            paused_reason: task.paused_reason,
+            open_asks: openQuestions.length + pendingApprovals.length,
+            taken_over: takenOver !== null,
+          })}
+        >
           {TASK_STATE_LABEL[task.state]}
         </StateLabel>
       }

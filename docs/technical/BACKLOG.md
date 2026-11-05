@@ -14,6 +14,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 |---|---|---|---|
 | 171 | major | WP-58 (architect ruling pending) | KB query floor drops the subject word on a single-subject vault; a wrong page can outrank the right one on PostgreSQL (small-to-major) |
 | 693 | major | WP-283 | Ruled (c): on a remote worker the launcher's mirror and export helpers need the core-held SSH deploy key; worker must sign through the core |
+| 854 | major | — | `task.resume` is a `member` action and the domain admits it from `waiting_approval` (`RESUMABLE_TASK_STATES`, `packages/domain/src/permissions.ts:213`), so through `humanEnter` a member's resume may skip an approval only a maintainer may decide; traced by S-23.9b's reviewer, not tested end to end — needs a domain test and a ruling (the task page offers Resume only on `paused`/`needs_human`) |
 | 232 | minor | — | Storage gauge (org-dashboard panel, 50 GB warning, partition purge) not built; only Prometheus metrics exist |
 | 446 | minor | — | WP-144 criterion (3), a real `docker compose stop runner` mid-run, not built; needs fake providers reachable from a compose stack |
 | 538 | minor | — | Two installations sharing one tracker service account both see themselves as assignee, so the claim does not stop double work |
@@ -91,8 +92,8 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 832 | nit | — | The Integrations list's "bound to N projects" is every project's `GET …/bindings` (`useProjectsByIntegration`): one request per project on each visit; a count on `IntegrationSummary` would be one read |
 | 833 | nit | — | The task page's answer box is still named `Answer question <uuid>` for assistive tech (`task-detail.tsx`); the inbox's is a visible *Your answer* label since S-23.11a |
 | 753 | nit | — | `ssh-sign` does not re-read `remote_run_credential` per signature: an integration switched to `deny` mid-run keeps signing for runs already claimed until they end (TD-031 decision 5 names the claim's eligibility only) |
+| 833 | nit | — | The task page's answer box is still named `Answer question <uuid>` for assistive tech (`task-callout.tsx`); the inbox's is a visible *Your answer* label since S-23.11a |
 | 851 | nit | — | The task rail's links are the ticket and the merge request only: no task DTO field carries the chat thread's URL (`chat_threads` is server-side), so research/19 § 5.2's "ticket · MR · thread" lists two |
-| 852 | nit | — | `TASK_STATE_STATUS` (`features/task-header.tsx`, S-23.9b) maps a task's state onto the status vocabulary for the task page; the board's card (S-23.9a) may carry its own — one map in `ui/` would keep the two screens' icons from drifting |
 | 853 | nit | — | The stage timeline draws a return as the loop glyph and *try N*, not as an edge to the stage it went back to: the task DTO's stage rows carry no `returned_to` (it is in `task_stages`), so a loop's target is not on the page |
 | 132 | ? | — | Unexplained once: authenticated GET /api/artifacts/:id answered 200 with an empty body in verify:e2e; instrumented, not seen since |
 | 7 | ? | — | "Carried, not yet scheduled": a bullet list of carried nits (route-sealed credential never opened by the loader, volume retention, …) |
@@ -101,6 +102,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 
 | # | Grade | Closed by | Item |
 |---|---|---|---|
+| 852 | nit | S-23.9b (review) | `ui/task-status.ts` holds the task state → status map and `needsYou`, read by the task page's header and the board's card |
 
 | # | Closed by | Item |
 |---|---|---|

@@ -275,12 +275,14 @@ describe('DownloadLink (WP-44)', () => {
    * JavaScript, because the type already forbids it: a host's `href`, `download` or `children` never
    * replace the vetted path, the attribute or the label.
    */
-  it('takes a host’s props, and never its href, download or label', () => {
+  it('takes a host’s props, and never its href, download, ping, markup or label', () => {
     const host = {
       role: 'menuitem',
       href: 'javascript:alert(1)',
       download: 'evil.sh',
       children: 'Something else',
+      ping: 'https://evil.example/track',
+      ['dangerously' + 'SetInnerHTML']: { __html: '<img src=x onerror=alert(1)>' },
     } as unknown as Record<string, never>;
     const { container } = render(
       <DownloadLink path="/api/tasks/abc/export" label="Download JSON" {...host} />,
@@ -290,6 +292,8 @@ describe('DownloadLink (WP-44)', () => {
     expect(anchor?.getAttribute('href')).toBe('/api/tasks/abc/export');
     expect(anchor?.getAttribute('download')).toBe('');
     expect(anchor?.textContent).toBe('Download JSON');
+    expect(anchor?.hasAttribute('ping')).toBe(false);
+    expect(anchor?.querySelector('img')).toBeNull();
   });
 });
 

@@ -829,7 +829,12 @@ test('the epic split’s breakdown panel accepts a chosen child with one request
   request,
 }) => {
   await page.goto(`/tasks/${IDS.taskEpic}`);
-  await expect(page.getByText('Proposed breakdown')).toBeVisible();
+  // A maintainer has children left to decide, so the panel is in the needs-you box (S-23.9b).
+  await expect(
+    page
+      .getByRole('region', { name: 'Needs you' })
+      .getByRole('heading', { name: 'Proposed breakdown' }),
+  ).toBeVisible();
   await expect(page.getByText('Child A', { exact: true })).toBeVisible();
   await page.getByRole('checkbox', { name: 'Select child 2' }).check();
   await page.getByRole('button', { name: /Accept 1 — creates a ticket in your tracker/ }).click();

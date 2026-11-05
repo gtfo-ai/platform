@@ -248,6 +248,22 @@ describe('one primary action per state', () => {
       ['Approve…'],
     ],
     ['a paused task', detail({}, { state: 'paused', paused_reason: 'manual' }), ['Resume']],
+    [
+      'a task its own cap paused, for a caller who may raise it',
+      detail(
+        { can_raise_budget: true },
+        { state: 'paused', paused_reason: 'budget', paused_budget_scope: 'task' },
+      ),
+      ["Raise this task's cap…"],
+    ],
+    [
+      'a task its own cap paused, for a caller who may not',
+      detail(
+        { can_raise_budget: false },
+        { state: 'paused', paused_reason: 'budget', paused_budget_scope: 'task' },
+      ),
+      ['Resume'],
+    ],
     ['an escalated task', detail({}, { state: 'needs_human' }), ['Resume']],
     ['a running task', detail(), []],
   ];
@@ -355,6 +371,24 @@ describe('the needs-you callout', () => {
     );
   });
 
+  it('states a budget pause, and where the cap that stopped it is raised', async () => {
+    start(detail({}, { state: 'paused', paused_reason: 'budget', paused_budget_scope: 'project' }));
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    expect(callout.textContent).toContain('This task is paused for its budget');
+    expect(callout.querySelector('[data-budget-reason]')?.textContent).toContain(
+      'where that cap is set',
+    );
+    // The state is drawn as needing a person, with the state's own word.
+    expect(document.querySelector('[data-state-label="needs_you"]')?.textContent).toBe('Paused');
+  });
+
+  it('is not drawn for a task nothing waits on, nor for a pause a person made', async () => {
+    start(detail({}, { state: 'paused', paused_reason: 'manual' }));
+    await screen.findByText('Checks');
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
+    expect(document.querySelector('[data-state-label="paused"]')?.textContent).toBe('Paused');
+  });
+
   it('is not drawn for a task nothing waits on', async () => {
     start(detail());
     await screen.findByText('Checks');
@@ -384,6 +418,74 @@ describe('the ··· menu', () => {
         `/api/tasks/${TASK}/cancel`,
       ]);
     });
+  });
+
+  const menuItems = async (task: TaskDetailResponse): Promise<string[]> => {
+    const user = userEvent.setup();
+    start(task);
+    await user.click(await screen.findByRole('button', { name: 'Task actions' }));
+    const menu = await screen.findByRole('menu');
+    return within(menu)
+      .getAllByRole('menuitem')
+      .map((item) => item.textContent ?? '');
+  };
+
+  it.each([
+    [
+      'a queued task: no pause or take-over',
+      { state: 'queued' as const },
+      ['Pause', 'Take over…'],
+      'Cancel task…',
+    ],
+    [
+      'a task a person paused: no take-over',
+      { state: 'paused' as const, paused_reason: 'manual' as const },
+      ['Take over…', 'Pause', 'Resume'],
+      'Cancel task…',
+    ],
+    ['a merged task: no cancel', { state: 'merged' as const }, ['Cancel task…'], 'Retry stage…'],
+    [
+      'a task in its retrospective: no cancel',
+      { state: 'retro' as const },
+      ['Cancel task…'],
+      'Retry stage…',
+    ],
+  ])('%s', async (_name, task, absent, present) => {
+    const items = await menuItems(detail({}, task));
+    expect(items).toContain(present);
+    for (const item of absent) {
+      expect(items).not.toContain(item);
+    }
+  });
+
+  it('offers both on a running task, the control of the cases above', async () => {
+    const items = await menuItems(detail());
+    expect(items).toEqual(
+      expect.arrayContaining([
+        'Pause',
+        'Take over…',
+        'Return to stage…',
+        'Rework…',
+        'Cancel task…',
+      ]),
+    );
+  });
+
+  it('offers no return or rework once the task was merged', async () => {
+    const items = await menuItems(
+      detail(
+        {
+          stages: [
+            stage('merged_gate', 1, 'completed', 'pass'),
+            stage('retrospective', 1, 'failed', 'escalated'),
+          ],
+        },
+        { state: 'needs_human', current_stage: 'retrospective' },
+      ),
+    );
+    expect(items).toContain('Retry stage…');
+    expect(items).not.toContain('Return to stage…');
+    expect(items).not.toContain('Rework…');
   });
 
   it('offers no stage command for a task that has entered no stage', async () => {

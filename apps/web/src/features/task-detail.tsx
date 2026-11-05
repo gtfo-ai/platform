@@ -194,6 +194,8 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
               detail={detail.data}
               merged={merged}
               breakdownWaiting={breakdownWaiting}
+              // Its failure is still drawn — by the panel, which names it — never swallowed.
+              breakdownRead={breakdown.data !== undefined || breakdown.isError}
               commands={commands}
               nowMs={nowMs}
             />

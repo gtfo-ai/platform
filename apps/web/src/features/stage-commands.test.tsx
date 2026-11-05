@@ -250,9 +250,11 @@ describe('the stage commands on an escalated task (backlog 483)', () => {
     const callout = screen.getByRole('region', { name: 'Needs you' });
     expect(within(callout).getByRole('button', { name: 'Retry stage…' })).toBeTruthy();
     expect(within(callout).queryByRole('button', { name: 'Return to stage…' })).toBeNull();
-    // The menu still carries all three — the server is the one that refuses a return.
-    await openStageDialog(user, 'Return to stage…');
-    expect(screen.getByRole('button', { name: 'Return to stage' })).toBeTruthy();
+    // Nor does the menu: it offers the retry alone (S-23.9b review).
+    await user.click(screen.getByRole('button', { name: 'Task actions' }));
+    expect(await screen.findByRole('menuitem', { name: 'Retry stage…' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Return to stage…' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Rework…' })).toBeNull();
     expect(container.textContent).not.toContain('Send it back to a stage it has run');
   });
 

@@ -215,12 +215,17 @@ export const DownloadLink = ({
   path,
   label,
   className,
-  ...host
+  ...given
 }: {
   readonly path: string;
   readonly label: string;
   readonly className?: string;
 } & DownloadLinkHostProps): ReactElement => {
+  // The type already refuses `ping` and the raw-markup prop; a caller from JavaScript is refused
+  // here too, by name and by prefix.
+  const host = Object.fromEntries(
+    Object.entries(given).filter(([key]) => key !== 'ping' && !key.startsWith('dangerously')),
+  );
   // A regular expression rather than a quoted prefix: the client census reads every quoted
   // `/api/…` literal in the app as a path it calls (`routes/client-census.test.ts`).
   const safe =
@@ -245,12 +250,20 @@ export const DownloadLink = ({
 /**
  * What a host component may add to a {@link DownloadLink} when it renders one as its own element —
  * a menu's link item merges its role, focus and handlers in (S-23.9b, the task page's ··· menu).
- * Never the URL: `href` and `download` are this module's, and `children` is the label.
+ * Never a URL or markup: `href`, `download` and `ping` (a URL list the browser posts to) are this
+ * module's to write or not, `children` is the label and React's raw-markup prop is never taken.
  */
-export type DownloadLinkHostProps = Omit<
-  ComponentPropsWithRef<'a'>,
-  'href' | 'download' | 'children' | 'className'
+export type DownloadLinkHostProps = WithoutMarkupProps<
+  Omit<ComponentPropsWithRef<'a'>, 'href' | 'download' | 'children' | 'className' | 'ping'>
 >;
+
+/**
+ * A props type without React's raw-markup prop, removed by its prefix so this module never spells
+ * the name `no-html.test.ts` refuses anywhere in the sources.
+ */
+type WithoutMarkupProps<T> = {
+  [K in keyof T as K extends `dangerously${string}` ? never : K]: T[K];
+};
 
 /**
  * One line or paragraph of untrusted text, with bare `http(s)` URLs turned into links.

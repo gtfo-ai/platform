@@ -56,6 +56,7 @@ import { loopLabel, stageLabel, TASK_STATE_LABEL, titleCase } from '../ui/humani
 import { Badge, Button, ErrorNotice, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
 import { StatusIcon } from '../ui/status.js';
+import { needsYou as needsYouOf } from '../ui/task-status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 // A tooltip is text the browser renders, not markup — but it is still provider text, and
 // `sanitiseUntrusted` is what strips the bidi overrides and control characters that make a line
@@ -68,26 +69,15 @@ export type AgentEntry = AgentsResponse['items'][number];
 
 // ── What a card says ─────────────────────────────────────────────────────────
 
-/** The states in which the pipeline is waiting on a person (TD-033's `needs_you`). */
-const WAITING_ON_A_PERSON: ReadonlySet<TaskState> = new Set([
-  'waiting_answers',
-  'waiting_approval',
-  'needs_human',
-]);
-
 /** Questions plus approvals the task is waiting on. */
 export const asksOf = (task: TaskListItem): number => task.open_questions + task.pending_approvals;
 
 /**
- * Whether the task waits on a person: a waiting state, anything open in its inbox, or a pause only
- * a person ends — a budget pause (somebody raises the cap) or a take-over (the person hands it
- * back). A manual pause is somebody's choice and waits on nobody, so it is not needs-you.
+ * Whether the task waits on a person — `ui/task-status.ts`' one definition, which the task page
+ * reads too, so the card's ◆ and the page's state never disagree.
  */
 export const needsYou = (task: TaskListItem): boolean =>
-  WAITING_ON_A_PERSON.has(task.state) ||
-  asksOf(task) > 0 ||
-  (task.state === 'paused' &&
-    (task.paused_reason === 'budget' || task.paused_reason === 'taken_over'));
+  needsYouOf({ state: task.state, paused_reason: task.paused_reason, open_asks: asksOf(task) });
 
 /** "2 open questions and 1 approval waiting" — the count badge's reading. */
 export const asksLabel = (task: TaskListItem): string => {

@@ -151,9 +151,15 @@ describe('raising a task’s cap (WP-131)', () => {
   it('offers the raise on a task its budget paused, and sends the raise then the resume', async () => {
     const user = userEvent.setup();
     const { view, sent } = open({ pausedReason: 'budget', scope: 'task' });
-    // S-23.9b: the raise is in the header's `···` menu and opens a dialog with the same field.
-    await user.click(await view.findByRole('button', { name: 'Task actions' }));
-    await user.click(await view.findByRole('menuitem', { name: "Raise this task's cap…" }));
+    // S-23.9b: the raise is the header's one primary action here, and the callout says why it
+    // waits; it opens a dialog with the same field.
+    expect(
+      (await view.findByRole('region', { name: 'Needs you' })).querySelector('[data-budget-reason]')
+        ?.textContent,
+    ).toBe(
+      'It has spent its cap of $50.00. Raise the cap and it resumes at the stage it stopped at.',
+    );
+    await user.click(await view.findByRole('button', { name: "Raise this task's cap…" }));
     await waitFor(() => {
       expect(view.getByText("Raise this task's cap", { selector: 'button' })).toBeTruthy();
     });
@@ -186,7 +192,8 @@ describe('raising a task’s cap (WP-131)', () => {
     await waitFor(() => {
       expect(view.container.textContent).toContain('Cost so far');
     });
-    // The menu is open — every case here can be cancelled — and it carries no raise.
+    // Neither the header nor its menu — open, every case here can be cancelled — carries a raise.
+    expect(view.queryByRole('button', { name: "Raise this task's cap…" })).toBeNull();
     await user.click(await view.findByRole('button', { name: 'Task actions' }));
     expect(await view.findByRole('menuitem', { name: 'Cancel task…' })).toBeTruthy();
     expect(view.queryByRole('menuitem', { name: "Raise this task's cap…" })).toBeNull();

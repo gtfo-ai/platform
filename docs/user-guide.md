@@ -590,17 +590,22 @@ live on that task's topic.
   the phase strip — one glyph per stage, the current one pulsing — names the stage and what the agent
   is doing now. On the right is **one button, chosen by what the task is waiting for**: *Hand back…*
   while you hold it (below), *Answer* when an agent asked a question (it takes you to the answer
-  box), *Approve…* when a plan or a budget waits for a maintainer, *Resume* when the task is paused
-  or waiting for a person — and none when nothing waits on you. Everything else is in the **`···`**
+  box), *Approve…* when a plan or a budget waits for a maintainer, *Raise this task's cap…* when the
+  task's own cap paused it and you may raise budgets, *Resume* when the task is paused or waiting
+  for a person — and none when nothing waits on you. Resume is never offered past an open question
+  or a pending approval: answer or decide it instead. Everything else is in the **`···`**
   menu beside it: *Pause*, *Resume*, *Take over…*, *Retry stage…*, *Return to stage…*, *Rework…*,
   *Raise this task's cap…*, *Download JSON* and *Cancel task…*. A command with fields, or one you
-  cannot undo, opens a dialog with those fields; the menu leaves out what the platform would refuse
-  for anybody (Pause and Take over on a merged task, any stage command on a task that has entered no
-  stage, a take-over of a finished task).
+  cannot undo, opens a dialog with those fields. The menu leaves out what the platform would refuse
+  for anybody — Pause, Take over, Return and Rework on a merged task, any stage command on a task
+  that has entered no stage, a take-over of a finished task — and what would do nothing useful:
+  Pause and Take over on a queued task, Take over on a task somebody paused, Cancel once the task
+  is merged or in its retrospective.
 - **The needs-you box**, under the header, appears only when something waits on a person: each open
   question with its answer box, each pending approval with *Approve* and *Reject*, an escalation
   with the word its stage was closed with (*"Escalated: the gate could not decide in its allotted
-  checks."*) and *Return to stage…*, *Rework…* and *Retry stage…*, and an epic's proposed breakdown
+  checks."*) and *Return to stage…*, *Rework…* and *Retry stage…*, a budget pause with whose cap is
+  spent and where it is raised, and an epic's proposed breakdown
   while a maintainer has something left to decide on it.
 - **Four tabs**: *Overview* (the flow, the running stage, the stage timeline, Ask the task and
   feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status,

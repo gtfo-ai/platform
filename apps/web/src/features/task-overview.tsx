@@ -173,6 +173,7 @@ export const TaskOverview = ({
   detail,
   merged,
   breakdownWaiting,
+  breakdownRead,
   commands,
   nowMs,
 }: {
@@ -180,6 +181,11 @@ export const TaskOverview = ({
   readonly merged: boolean;
   /** The breakdown is in the needs-you callout, so the Overview does not draw it a second time. */
   readonly breakdownWaiting: boolean;
+  /**
+   * The breakdown read has answered (or failed): until then the panel is not drawn here, or a
+   * waiting breakdown would show on the Overview and then jump into the callout.
+   */
+  readonly breakdownRead: boolean;
   readonly commands: ReturnType<typeof useTaskCommands>;
   readonly nowMs: number;
 }): ReactElement => {
@@ -200,7 +206,7 @@ export const TaskOverview = ({
         <p className="text-xs text-fg-muted">{MERGED_NO_TAKE_OVER}</p>
       ) : null}
       <StageTimeline stages={stages} runs={runs} nowMs={nowMs} />
-      {task.template === EPIC_SPLIT_TEMPLATE && !breakdownWaiting ? (
+      {task.template === EPIC_SPLIT_TEMPLATE && breakdownRead && !breakdownWaiting ? (
         <BreakdownPanel taskId={task.id} enabled />
       ) : null}
       <AskThread taskId={task.id} artifacts={artifacts} />
