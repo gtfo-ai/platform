@@ -78,12 +78,6 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
       const pendingBroadcasts: BroadcastMessage[] = [];
       const sql: SqlExecutor = {
         query: async (text, values = []) => {
-          if (/pg_advisory_xact_lock/.test(text)) {
-            // BACKLOG 970: the stream lock, which is not a write and is released with the
-            // transaction — recorded as a step, never as a committed statement.
-            steps.push('lock');
-            return { rows: [], rowCount: 1 };
-          }
           if (/insert into integration_actions/.test(text)) {
             steps.push('insert');
           }
@@ -99,6 +93,13 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
           },
         },
         events: {
+          // BACKLOG 970/972: the shared stream lock and its read — a step, never a committed
+          // statement, because the lock is released with the transaction.
+          lockStreamSequence: async (streamType: StreamType, streamId: Id) => {
+            steps.push('lock', 'read');
+            sequenceReads.push({ streamType, streamId });
+            return nextSeq;
+          },
           append: async (events: readonly DomainEvent[]) => {
             if (remaining > 0) {
               remaining -= 1;
@@ -126,11 +127,6 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
   return {
     log: createPostgresIntegrationAuditLog({
       unitOfWork,
-      readSequence: async (_sql, streamId) => {
-        steps.push('read');
-        sequenceReads.push({ streamType: 'integration', streamId });
-        return nextSeq;
-      },
       ids: { next: () => `00000000-0000-4000-8000-00000000e00${sequenceReads.length}` as Id },
       ...(maxSequenceAttempts === undefined ? {} : { maxSequenceAttempts }),
     }),
