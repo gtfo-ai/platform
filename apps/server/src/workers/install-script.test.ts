@@ -18,6 +18,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -274,7 +275,27 @@ interface Stage {
   readonly log: string;
   readonly bundle: string;
   readonly bin: string;
+  /** The `PATH` a run gets. */
+  readonly path: string;
 }
+
+/** What `install.sh` and the stubs run besides the stubs (shell builtins aside). */
+const SYSTEM_TOOLS = [
+  'cat',
+  'cp',
+  'env',
+  'grep',
+  'head',
+  'ls',
+  'mkdir',
+  'mv',
+  'rm',
+  'rmdir',
+  'sed',
+  'sleep',
+  'sort',
+  'tail',
+];
 
 const stage = (options: { readonly docker?: boolean } = {}): Stage => {
   const root = mkdtempSync(path.join(tmpdir(), 'worker-install-'));
@@ -287,6 +308,18 @@ const stage = (options: { readonly docker?: boolean } = {}): Stage => {
     chmodSync(path.join(bin, name), 0o755);
   };
   if (options.docker !== false) write('docker', DOCKER_STUB);
+  // With no docker stub, a machine's own `docker` (CI's Ubuntu runner has one in /usr/bin) must not
+  // be found either: the run gets the system tools it needs through symlinks, and nothing else.
+  let searchPath = `${bin}:/usr/bin:/bin`;
+  if (options.docker === false) {
+    const system = path.join(root, 'system');
+    mkdirSync(system);
+    for (const tool of SYSTEM_TOOLS) {
+      const found = ['/usr/bin', '/bin'].map((dir) => path.join(dir, tool)).find(existsSync);
+      if (found !== undefined) symlinkSync(found, path.join(system, tool));
+    }
+    searchPath = `${bin}:${system}`;
+  }
   write('curl', CURL_STUB);
   write('open', LOGGING_STUB('open'));
   write('xdg-open', LOGGING_STUB('xdg-open'));
@@ -296,7 +329,16 @@ const stage = (options: { readonly docker?: boolean } = {}): Stage => {
   const log = path.join(root, 'calls.log');
   writeFileSync(log, '');
   writeFileSync(path.join(root, 'install.sh'), SH);
-  return { root, home, dir: path.join(home, 'agentic-worker'), state, log, bundle, bin };
+  return {
+    root,
+    home,
+    dir: path.join(home, 'agentic-worker'),
+    state,
+    log,
+    bundle,
+    bin,
+    path: searchPath,
+  };
 };
 
 const run = (
@@ -310,7 +352,7 @@ const run = (
     encoding: 'utf8',
     timeout: 20_000,
     env: {
-      PATH: `${s.bin}:/usr/bin:/bin`,
+      PATH: s.path,
       HOME: s.home,
       STUB_LOG: s.log,
       STUB_STATE: s.state,
