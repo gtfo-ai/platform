@@ -1176,3 +1176,52 @@ empty, because the server claims within `fallback_after`. A tampered worker can 
 - Q123 is unchanged.
 
 **Built by S-22.17** (WP-294).
+
+## Amendment (2026-11-05, architect, session 22) — the worker-UI amendment §2 and the first-run amendment §8–9: no bearer by default; `http://127.0.0.1:7357` opens the page (owner; S-22.17, WP-294)
+
+**Context.** The owner rejected the extra command (*"why do we need this as extra step"*). The
+first-run amendment §9 needed `docker compose run --rm address` because the page's bearer lives only
+in a log line, and `up -d` prints none. The token also leaves a reusable address in the browser's
+history (backlog 775).
+
+**Decision.**
+1. **`APP_WORKER_UI_AUTH=none|token`, default `none`.** Under `none` the worker:
+   - creates no `ui-token`;
+   - reads no `Authorization` header;
+   - logs `this worker's page: http://127.0.0.1:<port>` at each start.
+
+   `token` keeps WP-292's behaviour exactly: the 0600 `ui-token`, the fragment address and the
+   constant-time bearer `401`. It is the setting for a machine with more than one OS account.
+2. **The boundary that stays in both modes:**
+   - a `127.0.0.1`-only publish;
+   - the `Host` allow-list (`421`, DNS rebinding);
+   - on every `POST` (the wizard's token, code, URL and DSN writes included): an exact `Origin`
+     (`403`, absent included), `Content-Type: application/json` (so a cross-site `fetch` needs a
+     preflight, which is never answered), and `Sec-Fetch-Site: same-origin` when the header is
+     present;
+   - no CORS header and no cookie.
+
+   A browser page on another origin can therefore neither read an answer nor have a write accepted.
+   No answer ever carries a secret (first-run §8, unchanged).
+3. **Repointing never carries the developer's Claude sign-in.** Under `none`, *Change platform* also
+   deletes the stored `claude-token`, so the new core never runs with the old account. It is refused
+   (`409`) while the token comes from the environment. The stepper always names the platform's host
+   before the Claude step.
+4. **The address step is removed.** The quickstart is: download the file, `docker compose up -d`,
+   open `http://127.0.0.1:7357`. The profiled `address` one-shot of first-run §9 is not built.
+
+**Residuals, stated.**
+- **Another OS account on the same machine** can reach the loopback port and send any `Host` and
+  `Origin` it likes. It can do what the page does: read the redacted view, pause, drain, cancel a
+  run (the core records it as the worker's user), sign Claude out, set a DSN, or repoint an idle
+  worker. Through 3, the repoint drops the developer's Claude sign-in, so it costs the developer
+  their session, not their account. `token` mode is the answer for shared machines.
+- **A process running as the developer** gained nothing from the token. Any process that can reach
+  Docker could already read `worker-state` and `.env`. A process without Docker access was
+  previously stopped by the token and now reaches the page as any other local account does.
+- V-WM9 (DNS rebinding and Private Network Access) still holds for the `Host` check.
+
+**Rejected.**
+- *A one-shot bootstrap exchange* (the fragment traded for a session token): it still needs the
+  logged address.
+- *Opening the browser from the container*: it is impossible from inside a container.
