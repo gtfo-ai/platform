@@ -334,11 +334,6 @@ test('the flow canvas and its stage dialog open under the policy without a viola
 
   const runTopic = `run:${IDS.run}`;
   const probe: SseFrame = { frame: 'control', topic: runTopic, type: 'ping', detail: null };
-  // The page retains `run:<id>` while it loads, and a subscription answered by the stream a resync
-  // is replacing can lose it (a realtime-client race fixed in its own slice); a reconnect carries
-  // every retained topic, so the frame below proves the dialog follows the stream rather than that
-  // race's outcome.
-  expect((await request.post('/__test__/drop-streams')).ok()).toBe(true);
   await waitForStreamCarrying(request, runTopic, probe, 'ping');
   const frame: SseFrame = {
     frame: 'transcript',

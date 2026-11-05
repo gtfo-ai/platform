@@ -565,6 +565,7 @@ describe('the realtime client', () => {
 
       h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
       expect(h.subscriptions).toEqual([{ connection_id: 'connection-1', add: [RUN_TOPIC] }]);
+      await settle();
 
       h.client.setTopics([ORG_TOPIC, TASK_TOPIC]);
       expect(h.subscriptions).toEqual([
@@ -618,6 +619,81 @@ describe('the realtime client', () => {
 
       expect(h.streams, 'a stale refusal reopened the successor').toHaveLength(2);
       expect(h.client.reconnects()).toBe(1);
+    });
+  });
+
+  describe('one subscription POST at a time', () => {
+    /**
+     * A server that applies each POST when the test answers it, in the order the test answers —
+     * which is the network's order, not the client's.
+     */
+    const reorderingServer = (initial: readonly SseTopic[]) => {
+      const carried = new Set<string>(initial);
+      const pending: { body: { add?: string[]; remove?: string[] }; answer: () => void }[] = [];
+      const h = harness({
+        withSubscriptions: true,
+        answerSubscription: async (body) =>
+          await new Promise<void>((resolve) => {
+            const typed = body as { add?: string[]; remove?: string[] };
+            pending.push({
+              body: typed,
+              answer: () => {
+                for (const topic of typed.remove ?? []) carried.delete(topic);
+                for (const topic of typed.add ?? []) carried.add(topic);
+                resolve();
+              },
+            });
+          }),
+      });
+      /** Answers the newest pending POST first, until none is left. */
+      const answerNewestFirst = async (): Promise<void> => {
+        await settle();
+        while (pending.length > 0) {
+          pending.pop()?.answer();
+          await settle();
+        }
+      };
+      return { h, carried, pending, answerNewestFirst };
+    };
+
+    it('ends with the server carrying a topic removed and re-added while the first POST is pending', async () => {
+      const { h, carried, pending, answerNewestFirst } = reorderingServer([ORG_TOPIC, RUN_TOPIC]);
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      h.streams[0]?.opened();
+
+      h.client.setTopics([ORG_TOPIC]);
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      await settle();
+      expect(pending, 'a second POST went out while the first was pending').toHaveLength(1);
+
+      await answerNewestFirst();
+
+      expect([...carried].sort()).toEqual([ORG_TOPIC, RUN_TOPIC].sort());
+      expect(h.subscriptions).toEqual([
+        { connection_id: 'connection-1', remove: [RUN_TOPIC] },
+        { connection_id: 'connection-1', add: [RUN_TOPIC] },
+      ]);
+      expect(h.streams).toHaveLength(1);
+    });
+
+    it('sends what is left as one POST when the pending one settles', async () => {
+      const { h, carried, pending, answerNewestFirst } = reorderingServer([ORG_TOPIC]);
+      h.client.setTopics([ORG_TOPIC]);
+      h.streams[0]?.opened();
+
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC, TASK_TOPIC]);
+      h.client.setTopics([ORG_TOPIC, TASK_TOPIC, PROJECT_TOPIC]);
+      await settle();
+      expect(pending).toHaveLength(1);
+
+      await answerNewestFirst();
+
+      expect(h.subscriptions).toEqual([
+        { connection_id: 'connection-1', add: [RUN_TOPIC] },
+        { connection_id: 'connection-1', add: [TASK_TOPIC, PROJECT_TOPIC], remove: [RUN_TOPIC] },
+      ]);
+      expect([...carried].sort()).toEqual([ORG_TOPIC, TASK_TOPIC, PROJECT_TOPIC].sort());
     });
   });
 });

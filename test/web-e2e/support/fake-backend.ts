@@ -398,14 +398,6 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       json(response, 200, { commands });
       return;
     }
-    if (path === '/__test__/drop-streams' && method === 'POST') {
-      for (const stream of streams) {
-        stream.response.end();
-      }
-      streams.clear();
-      json(response, 200, { open: 0 });
-      return;
-    }
 
     // ── Auth (Better Auth's routes, in the shape the client calls them) ───────
     if (path === '/api/auth/get-session') {

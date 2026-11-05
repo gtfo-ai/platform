@@ -37,6 +37,12 @@
  * and removes), and every later change POSTs at once. A failed POST reopens, and the new URL
  * carries the whole desired set, so `carried` starts again from it.
  *
+ * **At most one POST per stream is in flight, and `carried` moves only when one succeeds.** Two
+ * concurrent POSTs — remove A, then add A — can reach the server in either order, and the
+ * reversed one leaves the client believing the stream carries A while the server dropped it. A
+ * change made while a POST is pending only moves the desired set; when the POST settles, one more
+ * POST sends whatever difference is left.
+ *
  * ### Why a `reset` drops the cursor
  * `reset` means "I cannot prove what you missed". Reconnecting with the same unplaceable cursor
  * would earn a second `reset` and a third; forgetting it asks for the live stream instead, and the
@@ -158,8 +164,10 @@ export const createRealtimeClient = (
   const cursors = new Map<string, number>();
   let topics: SseTopic[] = [];
   let source: EventStream | null = null;
-  /** The topics `source`'s URL carried at open, plus every POST since its `open`. See the module note. */
+  /** The topics `source`'s URL carried at open, plus every POST since that succeeded. See the module note. */
   let carried: readonly SseTopic[] = [];
+  /** The stream a subscription POST is pending for; at most one at a time. See the module note. */
+  let postingFor: EventStream | null = null;
   /** Whether `source` has fired `open`; until it has, a topic change is not POSTed. */
   let streamOpen = false;
   let status: RealtimeStatus = 'idle';
@@ -349,35 +357,49 @@ export const createRealtimeClient = (
 
   /**
    * Tells the server the difference between the desired set and what the open stream carries.
-   * Called only once `source` has fired `open` — the invariant in the module note.
+   * Called only once `source` has fired `open`, and never while a POST for it is pending — the
+   * invariants in the module note.
    */
   const syncSubscriptions = (): void => {
     const update = options.updateSubscriptions;
     const stream = source;
-    if (update === undefined || stream === null || !streamOpen) {
+    if (update === undefined || stream === null || !streamOpen || postingFor === stream) {
       return;
     }
     const added = topics.filter((topic) => !carried.includes(topic));
     const removed = carried.filter((topic) => !topics.includes(topic));
-    carried = [...topics];
     if (added.length === 0 && removed.length === 0) {
       return;
     }
+    postingFor = stream;
     void update({
       connection_id: connectionId,
       ...(added.length === 0 ? {} : { add: added }),
       ...(removed.length === 0 ? {} : { remove: removed }),
-    }).catch(() => {
-      // The stream is still open and still carrying its old topics; reopening resynchronises
-      // it. `hub.updateSubscriptions` replays nothing for an added topic anyway, so the owner
-      // refetches either way. A stream already replaced needs nothing: its successor's URL was
-      // built from the desired set, which already held this change.
-      if (disposed || source !== stream) {
-        return;
-      }
-      reconnects += 1;
-      open();
-    });
+    }).then(
+      () => {
+        // A stream already replaced is done with: its successor's `carried` came from its URL.
+        if (disposed || source !== stream) {
+          return;
+        }
+        postingFor = null;
+        carried = [...carried.filter((topic) => !removed.includes(topic)), ...added];
+        // Whatever changed while this POST was pending goes now, as one more POST.
+        syncSubscriptions();
+      },
+      () => {
+        // The stream is still open and still carrying its old topics; reopening resynchronises
+        // it. `hub.updateSubscriptions` replays nothing for an added topic anyway, so the owner
+        // refetches either way. A stream already replaced needs nothing: its successor's URL was
+        // built from the desired set, which already held this change.
+        if (disposed || source !== stream) {
+          return;
+        }
+        postingFor = null;
+        reconnects += 1;
+        open();
+      },
+    );
   };
 
   return {
