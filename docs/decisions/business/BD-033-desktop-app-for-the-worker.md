@@ -93,3 +93,11 @@ learnt to click through. A warning trained away on our app is a warning trained 
   S-24.0 measures and fixes this before any app work starts.
 - **Q123 matters more.** An app makes a personal-subscription worker one download away, so Anthropic's
   terms for that use should be answered before the first public release (S-24.0).
+
+## Parked (2026-11-05, orchestrator-authorised, owner's decision)
+
+The owner wants the easiest distribution with a great experience and does not mind the mechanism. A
+one-command install served by the core (S-22.20: `install.sh` for macOS and Linux, `install.ps1` for
+Windows; then the S-22.17 wizard, with the S-22.10 updater keeping the bundle current) covers it
+without signing costs or a second release pipeline. M24 is **parked, not cancelled**: this record
+and the owner's answers (Q128-Q133) stand, and it is un-parked on the owner's request.

@@ -1561,6 +1561,8 @@ screen as each row landed and once more at S-23.13b. What is still open is in
 
 ## Milestone M24 — the desktop app for the worker (architect, session 22; planned 2026-11-05, built after the worker is verified)
 
+> **Parked 2026-11-05** (owner's decision): the one-command install (S-22.20) replaces the desktop app for now; un-park on request.
+
 The owner asked on 2026-11-05 for a Tauri app for macOS and Windows that a colleague downloads from
 this repository's releases and sets up entirely inside it. The decisions are **BD-033** (who it is
 for, signing, an unsigned first release) and **TD-034** (the shell, the Docker verbs, the page window,
