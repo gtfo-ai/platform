@@ -989,6 +989,7 @@ export const workers = workersResponseSchema.parse({
       paused_until_estimated: false,
       concurrency: 3,
       running: [{ run_id: IDS.runWorker, task_id: IDS.taskFleetWorker, project_id: IDS.project }],
+      last_update: null,
     },
     {
       id: IDS.workerPaused,
@@ -1007,6 +1008,7 @@ export const workers = workersResponseSchema.parse({
       paused_until_estimated: false,
       concurrency: 2,
       running: [],
+      last_update: null,
     },
   ],
   scope: 'all',
