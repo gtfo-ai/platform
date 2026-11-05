@@ -241,7 +241,9 @@ test('the flow canvas and its stage dialog open under the policy without a viola
   request,
 }) => {
   await signIn(page);
-  await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
 
   // The Pipeline tab: a template, drawn by the lazy chunk, laid out left to right — and opened
   // whole: at a 1 190 px page no stage of the thirteen-stage feature row is cut off.
@@ -344,7 +346,9 @@ test('the flow canvas and its stage dialog open under the policy without a viola
 
 test('a live edge stops its dash animation under reduced motion (S-23.5)', async ({ page }) => {
   await signIn(page);
-  await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
   const animation = async (): Promise<string> =>
     await page
       .locator('[data-flow-canvas="task"] .react-flow__edge.animated path')
