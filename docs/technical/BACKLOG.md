@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 746, so the next is **747**), its grade
+line with the next free number (the highest is 747, so the next is **748**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -22,6 +22,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 743 | minor | WP-284 | `handshake`'s `compose_bundle_digest` is the SHA-256 of the four advertised image digests (`apps/server/src/workers/release.ts`) until WP-284 renders `compose.worker.yml` and advertises the file's own digest |
 | 744 | minor | — | TD-031 §2's admission re-check at the claim (`cost/guard.ts` and the task cap, an admission refused at the claim withdrawing the offer and pausing the task) is made by neither claimant — the server's (WP-276) nor a remote worker's (WP-281); both rely on the admission at offer time |
 | 745 | minor | WP-282 | A remote run's minted credential is added to the minting API process's run-scoped secret registry only; a `finish` answered by another replica settles (artifact redaction) without its exact value, relying on the pattern rules — WP-282's re-redaction should rebuild the run's exact-value redactor from stored state |
+| 747 | minor | — | `image.yml`'s concurrency group is per branch, so a newer push to `main` replaces a still-pending image build of the previous push, and that push never gets its `sha-<7>` image (found in review of PR #5) |
 | 730 | minor | — | A stage offer names no assignee (WP-278): the ticket's assignee is read at intake (`TicketRead.assignee`) and dropped, so BD-032 decision 5's head start reaches only an ask's asker until a mapped assignee user is stored on the task |
 | 733 | minor | — | Offer timestamps (`server_from`, `workers_from`, `expires_at`) are written from the offering process's clock and compared with the claimant's, while claimant liveness uses the database's clock; a process clock ahead of the claimant's delays a server claim by the skew (WP-278) |
 | 809 | minor | — | S-23.2 humanized the board, task, run, Agents and Inbox words only; raw enum values still print in `settings.tsx` (user role/status), `integrations.tsx`/`onboarding-connect.tsx`/`project-settings.tsx` (integration type, health), `project-panels.tsx`/`business-interview.tsx` (proposal type/kind/status), `run-command-log.tsx`, `breakdown-panel.tsx`, `workers.tsx`, `identities.tsx`, `ask-thread.tsx` and the board/task template badge — each needs its record in `ui/humanize.ts` as its screen is redone |
