@@ -31,6 +31,7 @@ import {
   createRunStopReasons,
   type Jobs,
   type Logger,
+  MAX_TRANSCRIPT_ENTRIES_PER_RUN,
   markTransactions,
   type RemoteRuns,
   RUN_CREDENTIAL_TTL_SECONDS,
@@ -104,6 +105,25 @@ const nowIso = (): IsoDateTime => new Date().toISOString() as IsoDateTime;
  * the platform's rules — the WP-281 behaviour — and says so; with no `runRedactors`, the platform's
  * rules alone.
  */
+/**
+ * The escalation's words for a remote run the worker stopped at the core's transcript bound (backlog
+ * 754, S-22.14): the worker's closed stop word is `cancelled`, so the core names the bound itself when
+ * the run ended cancelled with its transcript within one batch (1 000 rows, the worker's) of it.
+ */
+export const transcriptBoundDetail = async (
+  pool: Pick<pg.Pool, 'query'>,
+  request: { readonly runId: Id; readonly outcome: object },
+): Promise<string | null> => {
+  if ((request.outcome as { readonly status?: unknown }).status !== 'cancelled') return null;
+  const { rows } = await pool.query<{ count: string }>(
+    'select count(*)::text as count from run_messages where run_id = $1',
+    [request.runId],
+  );
+  return Number(rows[0]?.count ?? 0) > MAX_TRANSCRIPT_ENTRIES_PER_RUN - 1_000
+    ? `the core holds at most ${MAX_TRANSCRIPT_ENTRIES_PER_RUN} transcript entries of a remote run (transcript_full), so its worker stopped it`
+    : null;
+};
+
 export const remoteSettleRedactorFor =
   (options: {
     readonly pool: Pick<pg.Pool, 'query'>;
@@ -277,7 +297,7 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
           runEnvironment,
           logger: options.logger,
         },
-        request,
+        { ...request, endingDetail: await transcriptBoundDetail(options.pool, request) },
       ),
     settleAsk: async (request) => askExecutor.settle(request),
     lateCost,
