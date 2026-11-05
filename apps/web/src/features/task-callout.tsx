@@ -26,6 +26,7 @@ import type {
   TaskDetailResponse,
   TaskRecord,
 } from '@platform/contracts';
+import { MAX_COMMAND_TEXT_CHARS } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
 import type { useTaskCommands } from '../app/queries.js';
 import { ConfirmDialog } from '../ui/confirm-dialog.js';
@@ -173,7 +174,11 @@ const ApprovalCard = ({
             title={`Reject the ${kind}?`}
             consequence={rejectConsequence(approval.kind)}
             confirmLabel="Reject"
-            reason={{ label: 'Reason (recorded with the decision)', placeholder: 'Why (optional)' }}
+            reason={{
+              label: 'Reason (recorded with the decision)',
+              placeholder: 'Why (optional)',
+              maxLength: MAX_COMMAND_TEXT_CHARS,
+            }}
             pending={pending}
             error={commands.decide.error}
             errorTitle="That decision was refused."
@@ -211,17 +216,27 @@ const ApprovalCard = ({
 const EscalationText = ({
   merged,
   maySendBack,
+  mayResume,
 }: {
   readonly merged: boolean;
   /** The caller may return or rework (S-23.23); a member is told a maintainer does that. */
   readonly maySendBack: boolean;
+  /** The caller may resume (`can_resume`); otherwise the sentence offers no Resume. */
+  readonly mayResume: boolean;
 }): ReactElement =>
   merged ? (
-    <p>
-      This task was merged and is waiting for a person. Resume it to run its retrospective — a task
-      stopped at the merge gate resumes there too — or retry the retrospective or librarian stage it
-      stopped at; it cannot be sent back before the merge.
-    </p>
+    mayResume ? (
+      <p>
+        This task was merged and is waiting for a person. Resume it to run its retrospective — a
+        task stopped at the merge gate resumes there too — or retry the retrospective or librarian
+        stage it stopped at; it cannot be sent back before the merge.
+      </p>
+    ) : (
+      <p>
+        This task was merged and is waiting for a person who may resume it into its retrospective;
+        it cannot be sent back before the merge.
+      </p>
+    )
   ) : maySendBack ? (
     <p>
       This task is waiting for a person. Send it back to a stage it has run, with a note the stage
@@ -382,6 +397,7 @@ export const TaskCallout = ({
               <EscalationText
                 merged={merged}
                 maySendBack={detail.can_return || detail.can_rework}
+                mayResume={detail.can_resume}
               />
               {reason === null ? null : (
                 <p data-escalation-reason="">

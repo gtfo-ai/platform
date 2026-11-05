@@ -618,7 +618,7 @@ test('the project panels render the vault, the proposals and the budget meter', 
   await expect(page.getByText('The health report could not be loaded.')).toHaveCount(0);
 
   await page.goto(`/projects/${PROJECT_KEY}/budgets`);
-  await expect(page.getByLabel('Budget used')).toBeVisible();
+  await expect(page.getByLabel('Cap used')).toBeVisible();
   await expect(page.getByText('$100.00')).toBeVisible();
 
   await page.goto(`/projects/${PROJECT_KEY}/pipeline`);

@@ -1,8 +1,9 @@
 /**
  * The census's own calibration (S-23.23, checklist item 3): it fires on two beacons, names both,
  * ignores a dialog's, and does not take a quiet button, a counter or a toggle for one. The screens
- * are held to it in their own tests (`task-page`, `run-page`, `dead-letters`, `onboarding`,
- * `integrations`, `frame`), which render the real application.
+ * that call it render the real application: `run-page`, `dead-letters` and `onboarding`. The
+ * task-page and integrations tests count the same marker class with their own older helpers, and
+ * `platform-updated` checks the banner's Reload for it directly.
  */
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';

@@ -289,6 +289,5 @@ test('a provider account in the human-time breakdown is text, not markup', async
   expect(await page.evaluate(PWNED)).toBeUndefined();
 
   // And the two numbers product/09:29 keeps apart are both on the screen, unsummed.
-  await expect(page.getByText('tokens ·', { exact: false })).toBeVisible();
-  await expect(page.getByText('2 h 23 m human', { exact: false })).toBeVisible();
+  await expect(page.getByText('2 h 23 m of people’s time', { exact: false })).toBeVisible();
 });
