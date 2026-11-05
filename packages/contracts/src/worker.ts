@@ -933,10 +933,18 @@ export const workerReleaseResponseSchema = z.strictObject({
   digests: coreImageDigestsSchema,
 });
 
+/**
+ * How a worker's update ended (TD-032 decision 6): applied and checked; applied, unhealthy and put
+ * back; or not applied — refused (an attestation that does not verify, a downgrade, no verifier) or
+ * failed and not put back. The updater's `detail` says which.
+ */
+export const workerUpdateResultSchema = z.enum(['succeeded', 'rolled_back', 'failed']);
+export type WorkerUpdateResult = z.infer<typeof workerUpdateResultSchema>;
+
 /** `POST update-report`: how a worker's update ended (TD-032 decision 6). Answers `204`. */
 export const workerUpdateReportRequestSchema = z.strictObject({
   from: coreImageDigestsSchema,
   to: coreImageDigestsSchema,
-  result: z.enum(['succeeded', 'rolled_back', 'failed']),
+  result: workerUpdateResultSchema,
   detail: z.string().max(4_096).nullable(),
 });

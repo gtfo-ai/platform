@@ -282,8 +282,7 @@ const probe = async (path: string): Promise<Probe> => {
  */
 const WORKER_VERBS_SERVED_LATER: Readonly<Partial<Record<keyof typeof WORKER_PATHS, string>>> = {
   // WP-282 served `transcript`, `tools/:name`, `approvals`, `session` and `ssh-sign`; WP-284
-  // `release` and `compose.yml`; WP-285 `pause`.
-  updateReport: 'WP-287',
+  // `release` and `compose.yml`; WP-285 `pause`; WP-287 `update-report`.
 };
 const PUBLIC_WORKER_VERBS: readonly (keyof typeof WORKER_PATHS)[] = [
   'device',

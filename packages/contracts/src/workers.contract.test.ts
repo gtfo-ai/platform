@@ -48,6 +48,7 @@ const summary = {
   paused_reason: null,
   concurrency: 1,
   running: [],
+  last_update: null,
 };
 
 describe('the device flow’s machine half (TD-031 §10c)', () => {
@@ -189,6 +190,33 @@ describe('the people’s half', () => {
     ).toBe(false);
     const { running: _running, ...withoutRunning } = summary;
     expect(workerSummarySchema.safeParse(withoutRunning).success).toBe(false);
+  });
+
+  it('carries the last update a worker reported, strictly, or null (WP-287 (4))', () => {
+    const digests = {
+      platform: `sha256:${'a'.repeat(64)}`,
+      platform_launcher: `sha256:${'b'.repeat(64)}`,
+      platform_runtime: `sha256:${'c'.repeat(64)}`,
+      platform_egress: `sha256:${'d'.repeat(64)}`,
+    };
+    const update = {
+      result: 'rolled_back',
+      from: digests,
+      to: { ...digests, platform: `sha256:${'e'.repeat(64)}` },
+      detail: 'the worker did not read core_handshake: ok within 120 s',
+      reported_at: AT,
+    };
+    expect(workerSummarySchema.safeParse({ ...summary, last_update: update }).success).toBe(true);
+    for (const bad of [
+      { ...update, result: 'applied' },
+      { ...update, to: { ...digests, platform: 'platform:latest' } },
+      { ...update, detail: 'x'.repeat(4_097) },
+      { ...update, extra: true },
+    ]) {
+      expect(workerSummarySchema.safeParse({ ...summary, last_update: bad }).success).toBe(false);
+    }
+    const { last_update: _absent, ...withoutUpdate } = summary;
+    expect(workerSummarySchema.safeParse(withoutUpdate).success).toBe(false);
   });
 
   it('revokes by id and answers what it did', () => {

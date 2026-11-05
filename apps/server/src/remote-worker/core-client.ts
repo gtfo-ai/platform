@@ -45,11 +45,13 @@ import {
   workerHeartbeatResponseSchema,
   workerLateCostResponseSchema,
   workerManualPauseResponseSchema,
+  workerReleaseResponseSchema,
   workerRunCancelResponseSchema,
   workerSpawnResponseSchema,
   workerSshSignResponseSchema,
   workerToolCallResponseSchema,
   workerTranscriptResponseSchema,
+  workerUpgradeRequiredBodySchema,
 } from '@platform/contracts';
 import type * as z from 'zod';
 
@@ -166,6 +168,21 @@ export interface CoreClient {
   /** A usage limit's pause (WP-285, TD-031 §11): `{ until, reason, estimated? }`, `204`. */
   pause(credential: string, body: unknown): Promise<void>;
   forRun(runId: string, runToken: string): RunScopedClient;
+  /**
+   * `GET release` (TD-032 §3): the core's digests and the protocols it accepts. A `426` is not an
+   * error here — its body names the same two (TD-031 §9), which is what the updater follows.
+   */
+  release(credential: string): Promise<CoreReleaseAnswer>;
+  /** `POST update-report` (TD-032 §6): how this worker's update ended. Answers nothing (`204`). */
+  updateReport(credential: string, body: unknown): Promise<void>;
+}
+
+/** What `GET release` (or the `426` it may answer instead) says. */
+export interface CoreReleaseAnswer {
+  readonly accepted: readonly number[];
+  /** `null` while the core cannot name its digests (a `426` carrying `digests: null`). */
+  readonly digests: z.output<typeof workerReleaseResponseSchema>['digests'] | null;
+  readonly upgradeRequired: boolean;
 }
 
 export const createCoreClient = (options: CoreClientOptions): CoreClient => {
@@ -182,6 +199,7 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
     readonly runScoped: boolean;
     readonly signal?: AbortSignal;
     readonly idempotencyKey?: string;
+    readonly method?: 'GET' | 'POST';
   }): Promise<{ readonly status: number; readonly body: unknown }> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -189,17 +207,18 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
     input.signal?.addEventListener('abort', forward, { once: true });
     let response: Response;
     try {
+      const get = input.method === 'GET';
       response = await fetcher(url(input.verb), {
-        method: 'POST',
+        method: get ? 'GET' : 'POST',
         headers: {
-          'content-type': 'application/json',
+          ...(get ? {} : { 'content-type': 'application/json' }),
           [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL_VERSION),
           ...(input.bearer === null ? {} : { authorization: `Bearer ${input.bearer}` }),
           ...(input.idempotencyKey === undefined
             ? {}
             : { 'idempotency-key': input.idempotencyKey }),
         },
-        body: JSON.stringify(input.body ?? {}),
+        ...(get ? {} : { body: JSON.stringify(input.body ?? {}) }),
         signal: controller.signal,
         // The request carries a credential: a redirect would hand it to wherever it points.
         redirect: 'error',
@@ -339,6 +358,51 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
         runScoped: false,
       });
       if (answer.status !== 204) throw refusal(WORKER_PATHS.pause, answer, false);
+    },
+    release: async (credential) => {
+      const answer = await call({
+        verb: WORKER_PATHS.release,
+        bearer: credential,
+        body: null,
+        runScoped: false,
+        method: 'GET',
+      });
+      if (answer.status === 200) {
+        const parsed = workerReleaseResponseSchema.safeParse(answer.body);
+        if (!parsed.success) {
+          throw new CoreCallError(
+            'transient',
+            200,
+            null,
+            "release: the core's answer does not parse",
+          );
+        }
+        return {
+          accepted: parsed.data.protocol.accepted,
+          digests: parsed.data.digests,
+          upgradeRequired: false,
+        };
+      }
+      if (answer.status === 426) {
+        const parsed = workerUpgradeRequiredBodySchema.safeParse(answer.body);
+        if (parsed.success) {
+          return {
+            accepted: parsed.data.accepted,
+            digests: parsed.data.digests,
+            upgradeRequired: true,
+          };
+        }
+      }
+      throw refusal(WORKER_PATHS.release, answer, false);
+    },
+    updateReport: async (credential, body) => {
+      const answer = await call({
+        verb: WORKER_PATHS.updateReport,
+        bearer: credential,
+        body,
+        runScoped: false,
+      });
+      if (answer.status !== 204) throw refusal(WORKER_PATHS.updateReport, answer, false);
     },
     forRun: (runId, runToken) => {
       const verb = (path: string, name?: string): string =>

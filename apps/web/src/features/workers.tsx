@@ -115,6 +115,28 @@ export const workerState = (
     : { status: 'idle', word: 'Offline' };
 };
 
+const UPDATE_RESULT_WORD: Readonly<
+  Record<NonNullable<WorkerSummary['last_update']>['result'], string>
+> = {
+  succeeded: 'Updated',
+  rolled_back: 'Update rolled back',
+  failed: 'Update not applied',
+};
+
+/**
+ * The last update the worker's updater reported (WP-287 (4)): how it ended and when — `null` when it
+ * never reported one. The updater's own words are in the row's details, as text.
+ */
+export const lastUpdateText = (worker: WorkerSummary, nowMs: number): string | null => {
+  const update = worker.last_update;
+  if (update === null) return null;
+  const when = formatAgo(update.reported_at, nowMs) ?? formatDateTime(update.reported_at);
+  return `${UPDATE_RESULT_WORD[update.result]} ${when}`;
+};
+
+/** `sha256:abcdef…` → `abcdef0` — a digest short enough to read in a row. */
+const shortDigest = (digest: string): string => digest.replace(/^sha256:/, '').slice(0, 12);
+
 /** "1 of 2 busy" — the live runs it holds out of the runs it may hold at once. */
 export const slotsText = (worker: WorkerSummary): string =>
   `${formatInteger(worker.running.length)} of ${formatInteger(worker.concurrency)} busy`;
@@ -139,6 +161,7 @@ const WorkerRow = ({
   const [confirming, setConfirming] = useState(false);
   const { status, word } = workerState(worker, nowMs, timezone);
   const seen = worker.last_seen_at === null ? null : formatAgo(worker.last_seen_at, nowMs);
+  const update = lastUpdateText(worker, nowMs);
   return (
     <ListRow
       leading={<StatusIcon status={status} label={word} />}
@@ -170,6 +193,12 @@ const WorkerRow = ({
                 ? 'protocol not reported'
                 : `protocol ${worker.protocol_version}`}
             </span>
+            {update === null ? null : (
+              <>
+                <span aria-hidden="true">·</span>
+                <span data-last-update={worker.last_update?.result}>{update}</span>
+              </>
+            )}
           </span>
           <DetailsDisclosure summary="Details" className="text-xs">
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
@@ -187,6 +216,22 @@ const WorkerRow = ({
                   ? 'none reported'
                   : worker.image_digests.join(' ')}
               </dd>
+              {worker.last_update === null ? null : (
+                <>
+                  <dt className="text-fg-muted">Last update</dt>
+                  <dd className="break-all">
+                    <span className="font-mono">
+                      {`platform ${shortDigest(worker.last_update.from.platform)} → ${shortDigest(worker.last_update.to.platform)}`}
+                    </span>
+                    {worker.last_update.detail === null ? null : (
+                      <>
+                        {' — '}
+                        <UntrustedText value={worker.last_update.detail} />
+                      </>
+                    )}
+                  </dd>
+                </>
+              )}
             </dl>
           </DetailsDisclosure>
         </span>

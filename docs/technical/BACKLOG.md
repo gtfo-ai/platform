@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 891, so the next is **892**), its grade
+line with the next free number (the highest is 900, so the next is **901**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -86,6 +86,12 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 883 | minor | — | The org *Policies* and *Notifications* forms remount on the document's `updated_at`, so a background refetch after another administrator's save discards unsaved edits (main behaves the same; found in review of PR #25) |
 | 887 | minor | — | Offers written before WP-278 have null `server_from` and `workers_from`; a worker reads a null `workers_from` as *never* and such an offer has no `expires_at`, so on a core with no server runner it waits forever (measured on Autix). The upgrade should have back-filled open offers' routing from the project's effective setting, or the sweep should re-route them; workaround: pause, then resume the task |
 | 888 | minor | — | `assigneeOnline` (`postgres-execution-routing.ts`) does not apply `USER_MAY_ACT_SQL`: a disabled or banned user's live worker still earns an assignee head start it can never claim (pre-existing; found in review of PR #35) |
+| 895 | minor | — | `GET /api/workers`' `last_update` reads the newest `worker.update` row per worker from `human_actions`, which has no index on `action` or on `params->>'worker_id'` (S-22.10): one filtered pass per list read, fine at a team's scale; an expression index (a migration) when the audit table is large |
+| 896 | minor | — | After a self-update the worker runs the template **the new image carries** (TD-032 §3), while the person's own `compose.worker.yml` on disk is still the first-install file: a later hand-run `docker compose -f compose.worker.yml up` runs the new digests (the managed block) with the old template, which differs once a release changes the template — writing the applied template beside it, or saying so on the local page, is a decision (S-22.10) |
+| 897 | minor | — | The apply never recreates `updater-docker-proxy`, the proxy it talks to Docker through, so a release that changes that service's definition reaches a machine only at the person's next `docker compose up` (S-22.10) |
+| 898 | minor | — | The downgrade bound orders builds by the `platform` image's `APP_BUILT_AT` (covered by the attested digest), not by a verified transparency-log time: a re-run of `image.yml` at an older `main` commit (TD-019's stated residual) gets a newer build time and is not refused as a downgrade (S-22.10) |
+| 899 | minor | — | A keyless self-update needs `tuf-repo-cdn.sigstore.dev` reachable from the worker (the verifier refreshes the Sigstore trusted root through TUF from the root `@sigstore/tuf` embeds); a worker that cannot reach it refuses every update and reports it — a mirror setting, or the seeded root as an explicit offline mode, is not built (S-22.10) |
+| 900 | minor | — | The updater and the worker's launcher still pin `tecnativa/docker-socket-proxy:0.3.0` (2024-09-09), two minors behind v0.5.0 — TD-032's Consequences asked the updater row to file the bump (S-22.10) |
 | 713 | nit | — | worker_device_codes rows are never deleted; bounded by the 200-pending limit per ten minutes, but grow with use; add a sweep of consumed/expired rows |
 | 874 | nit | — | A run that leaves the agents list is read once (`GET /api/runs/:id`) to cheer or slump at its desk for 20 s; a run that started and ended between two agents reads, or ended while the page was closed, never shows — a `run.finished`/`run.failed` frame carrying its ending would make it exact |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |

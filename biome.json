@@ -13,7 +13,8 @@
       "!**/coverage",
       "!pnpm-lock.yaml",
       "!docs",
-      "!schemas"
+      "!schemas",
+      "!test/fixtures/attestations"
     ]
   },
   "formatter": {

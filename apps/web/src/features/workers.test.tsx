@@ -53,6 +53,7 @@ const worker = (overrides: Partial<WorkerSummary> = {}): WorkerSummary => ({
   paused_until_estimated: false,
   concurrency: 1,
   running: [],
+  last_update: null,
   ...overrides,
 });
 
@@ -380,6 +381,53 @@ describe('the Workers screen', () => {
     expect(rowOf(lapsed.id)).toContain('Online');
     expect(rowOf(lapsed.id)).not.toContain('Paused');
     expect(rowOf(both.id)).toContain('Paused by its owner');
+  });
+
+  it('shows the last update its updater reported, its own words as text (WP-287 (4))', async () => {
+    const NOW = Date.parse('2026-11-04T12:10:00.000Z');
+    const digests = (hex: string) => ({
+      platform: `sha256:${hex.repeat(64)}`,
+      platform_launcher: `sha256:${'1'.repeat(64)}`,
+      platform_runtime: `sha256:${'2'.repeat(64)}`,
+      platform_egress: `sha256:${'3'.repeat(64)}`,
+    });
+    const updated = worker({
+      last_update: {
+        result: 'succeeded',
+        from: digests('a'),
+        to: digests('b'),
+        detail: null,
+        reported_at: '2026-11-04T12:09:30.000Z',
+      },
+    });
+    const refused = worker({
+      id: '00000000-0000-4000-8000-0000000002a3',
+      name: 'dave-laptop',
+      last_update: {
+        result: 'failed',
+        from: digests('a'),
+        to: digests('c'),
+        detail: `the attestation does not verify ${HOSTILE_AGENT}`,
+        reported_at: '2026-11-04T12:09:30.000Z',
+      },
+    });
+    const never = worker({ id: '00000000-0000-4000-8000-0000000002a4', name: 'erin-laptop' });
+    const { fetchImpl } = fetchFor('missing', [updated, refused, never]);
+    const { container } = render(createApp({ fetchImpl, realtime: false, now: () => NOW }).element);
+    await waitFor(() => {
+      expect(container.querySelectorAll('[data-worker]')).toHaveLength(3);
+    });
+    const rowOf = (id: string) => container.querySelector(`[data-worker="${id}"]`)?.closest('li');
+    expect(rowOf(updated.id)?.textContent).toContain('Updated just now');
+    expect(rowOf(updated.id)?.textContent).toContain(
+      `platform ${'a'.repeat(12)} → ${'b'.repeat(12)}`,
+    );
+    expect(rowOf(refused.id)?.textContent).toContain('Update not applied just now');
+    expect(rowOf(refused.id)?.textContent).toContain('the attestation does not verify');
+    // The updater's words are text: the hostile markup is in the row as characters, not as an element.
+    expect(rowOf(refused.id)?.querySelector('img')).toBeNull();
+    expect(rowOf(never.id)?.textContent).not.toContain('Update');
+    expect(rowOf(never.id)?.querySelector('[data-last-update]')).toBeNull();
   });
 
   it('offers no revoke for a revoked worker', async () => {

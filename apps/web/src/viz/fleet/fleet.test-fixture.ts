@@ -96,6 +96,7 @@ export const worker = (n: number, overrides: Partial<WorkerSummary> = {}): Worke
   paused_reason: null,
   concurrency: 3,
   running: [],
+  last_update: null,
   ...overrides,
 });
 

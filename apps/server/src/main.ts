@@ -15,6 +15,12 @@ import closeWithGrace from 'close-with-grace';
 import { REMOTE_WORKER_ROLE } from './remote-worker/config.js';
 import { startRemoteWorker } from './remote-worker/runtime.js';
 import { startRuntime } from './runtime.js';
+import {
+  runApplyProcess,
+  startUpdaterProcess,
+  UPDATE_APPLY_ROLE,
+  UPDATER_ROLE,
+} from './updater/main.js';
 
 /**
  * `ROLE=remote-worker` (WP-283) is not one of the core's roles: it composes no database, no secret
@@ -34,9 +40,32 @@ const mainRemoteWorker = async (): Promise<void> => {
   worker.logger.info({ address, role: REMOTE_WORKER_ROLE }, 'listening');
 };
 
+/**
+ * `ROLE=updater` (WP-287): the worker's updater, which follows the core's digests. No database, no
+ * secret key, no listener: a signal stops its loop, and an apply it started finishes on its own.
+ */
+const mainUpdater = (): void => {
+  const { logger, updater } = startUpdaterProcess();
+  closeWithGrace({ delay: 10_000 }, async ({ err, signal }: { err?: Error; signal?: string }) => {
+    if (err !== undefined) logger.error({ err }, 'uncaught error, stopping');
+    else logger.info({ signal }, 'signal received, stopping');
+    updater.stop();
+  });
+};
+
 const main = async (): Promise<void> => {
-  if (process.env.ROLE?.trim() === REMOTE_WORKER_ROLE) {
+  const role = process.env.ROLE?.trim();
+  if (role === REMOTE_WORKER_ROLE) {
     await mainRemoteWorker();
+    return;
+  }
+  if (role === UPDATER_ROLE) {
+    mainUpdater();
+    return;
+  }
+  // `ROLE=update-apply` (WP-287): one update, then exit — the updater started it from the new image.
+  if (role === UPDATE_APPLY_ROLE) {
+    process.exitCode = await runApplyProcess();
     return;
   }
   const runtime = await startRuntime();

@@ -115,11 +115,20 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
    * The second expectation is a **census, not an allow-list**: it fails when the set changes in either
    * direction, so a new script that reads the daemon's address is a visible diff rather than a
    * suppressed one (standing rule 7's corollary — an allow-list drifts silently).
+   *
+   * **The second shipped reader is decided, not drifted** (TD-032 decision 4, WP-287): the worker's
+   * `ROLE=updater` hands its own socket proxy's address to the apply container it starts. It drives
+   * the `docker` CLI (it constructs no `DockerEngine` — the claim above still has no exception), runs
+   * only on a worker, which composes no pipeline and serves no `/webhooks/*`, and talks to its own
+   * proxy on a network the launcher's is not — TD-021's amendment is about the core's processes.
    */
   // WP-249: slowest of 10 green CI runs 2370 ms (median 2228 ms); 2× it, 15 s floor.
-  it('reads DOCKER_HOST in one shipped file, and names every script that reads it', () => {
+  it('reads DOCKER_HOST in two shipped files — the launcher’s and the worker updater’s — and names every script that reads it', () => {
     const readers = filesMatching(READS_DOCKER_HOST);
-    expect(readers.filter(isShippedRing)).toEqual(['apps/launcher/src/config.ts']);
+    expect(readers.filter(isShippedRing)).toEqual([
+      'apps/launcher/src/config.ts',
+      'apps/server/src/updater/main.ts',
+    ]);
     expect(readers.filter((file) => !isShippedRing(file))).toEqual([
       // WP-53's two, beside WP-15g's two. Both start a launcher container; neither is a process a
       // compose file starts. WP-146's deploy-key check starts one the same way.

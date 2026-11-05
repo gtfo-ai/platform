@@ -117,6 +117,40 @@ RUN set -eu; \
       exit 1; \
     fi
 
+# ── The Docker CLI and its Compose plugin, for `ROLE=updater` (WP-287, TD-032 decision 4) ───────────
+# The worker's updater and its apply container drive the worker's compose project through their own
+# socket proxy. Both binaries are pinned by **version and SHA-256** per architecture — a version bump
+# without its checksums fails here — and only the CLI is taken from Docker's static bundle (the
+# daemon, containerd and runc beside it never reach an image). Declared in `THIRD_PARTY_NOTICES.md`
+# (`scripts/notices.mjs`). What it costs is measured and stated in `scripts/build-images.mjs`.
+# The checksums were computed from the downloads on 2026-11-05; Compose's agree with the `.sha256`
+# files its release publishes.
+FROM ${BASE_IMAGE} AS docker-cli
+# A build stage (see `web` above).
+# hadolint ignore=DL3002
+USER root
+ARG TARGETARCH
+ARG DOCKER_CLI_VERSION=29.9.3
+ARG DOCKER_COMPOSE_VERSION=5.7.0
+WORKDIR /out
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) arch=x86_64; \
+        cli_sha=3fb5d1f13014c18cc54945bc177c58a9056a482dada031e17d12cf2e6922c973; \
+        compose_sha=7758048ad38e580f22559603312874fec8bb638d021a9e64182385fc17cc12a2 ;; \
+      arm64) arch=aarch64; \
+        cli_sha=1b27fd739378ef938401e81ce5afb73b7ad7432d4f598814a9ff5f826bb464d2; \
+        compose_sha=15861535d14e26555736b49376c95e14bfd94285366c8446bfac7156a972e76f ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o docker.tgz "https://download.docker.com/linux/static/stable/${arch}/docker-${DOCKER_CLI_VERSION}.tgz"; \
+    curl -fsSL -o docker-compose "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${arch}"; \
+    printf '%s  docker.tgz\n%s  docker-compose\n' "${cli_sha}" "${compose_sha}" > SHA256SUMS; \
+    sha256sum -c SHA256SUMS; \
+    tar -xzf docker.tgz --no-same-owner --strip-components=1 docker/docker; \
+    rm -f docker.tgz SHA256SUMS; \
+    chmod 0755 docker docker-compose
+
 # ── The image ────────────────────────────────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE} AS app
 USER root
@@ -132,6 +166,10 @@ COPY --chown=agentic:agentic packages ./packages
 COPY --chown=agentic:agentic apps/server ./apps/server
 COPY --chown=agentic:agentic schemas ./schemas
 COPY --from=web --chown=agentic:agentic /src/apps/web/dist ./apps/web/dist
+# The updater's Docker CLI and Compose plugin (WP-287): root-owned, executable by everyone, used only
+# by `ROLE=updater` and `ROLE=update-apply` — no other role has a `DOCKER_HOST` to reach.
+COPY --from=docker-cli /out/docker /usr/local/bin/docker
+COPY --from=docker-cli /out/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 
 # Where the launcher writes take-over export tarballs (`APP_WORKSPACE_EXPORT_DIR`) and where the
 # knowledge indexer keeps its per-project bare mirrors (`APP_KNOWLEDGE_MIRROR_ROOT`, TD-026). Both
@@ -142,10 +180,11 @@ COPY --from=web --chown=agentic:agentic /src/apps/web/dist ./apps/web/dist
 # image, never from the core. Root-owned and read-only: nothing at run time writes it.
 COPY compose.worker.yml /opt/platform/compose.worker.yml
 
-# `/var/lib/platform/*` are a remote worker's two volumes (`compose.worker.yml`): a named volume
+# `/var/lib/platform/*` are a remote worker's volumes (`compose.worker.yml`): a named volume
 # takes the ownership of the directory it is first mounted over, so the image's `agentic` owns them.
+# `updates` is the updater's (WP-287), which runs as root and writes it anyway.
 RUN mkdir -p /var/lib/app/exports /var/lib/app/knowledge \
-      /var/lib/platform/worker-state /var/lib/platform/launcher-token \
+      /var/lib/platform/worker-state /var/lib/platform/launcher-token /var/lib/platform/updates \
  && chown -R agentic:agentic /var/lib/app /var/lib/platform
 
 # Build metadata, reported by `GET /api/version` (`runtime.ts` § buildInfo). Empty in a checkout.

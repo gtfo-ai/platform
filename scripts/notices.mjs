@@ -158,6 +158,20 @@ const PINNED_ARTEFACTS = {
     url: 'https://github.com/alpinelinux/docker-alpine/blob/master/LICENSE',
     retrieved: '2026-09-13',
   },
+  DOCKER_CLI_VERSION: {
+    artefact: 'docker (the Docker CLI, from Docker’s static Linux bundle; the CLI binary only)',
+    licence: 'Apache-2.0',
+    url: 'https://github.com/docker/cli/blob/master/LICENSE',
+    retrieved: '2026-11-05',
+    note: 'In the platform image for the worker’s updater (WP-287), pinned by version and SHA-256 per architecture in docker/app.Dockerfile. Only `docker/docker` is extracted; the daemon, containerd and runc in the same bundle never reach an image.',
+  },
+  DOCKER_COMPOSE_VERSION: {
+    artefact: 'docker-compose (the Docker Compose CLI plugin)',
+    licence: 'Apache-2.0',
+    url: 'https://github.com/docker/compose/blob/main/LICENSE',
+    retrieved: '2026-11-05',
+    note: 'In the platform image for the worker’s updater (WP-287), pinned by version and SHA-256 per architecture in docker/app.Dockerfile.',
+  },
   TINYPROXY_VERSION: {
     artefact: 'tinyproxy (the per-run egress proxy)',
     licence: 'GPL-2.0',

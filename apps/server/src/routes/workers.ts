@@ -46,6 +46,7 @@ import {
   workerDeviceDecisionResponseSchema,
   workerDeviceLookupRequestSchema,
   workerDeviceLookupResponseSchema,
+  workerLastUpdateSchema,
   workerParamsSchema,
   workerPauseReasonSchema,
   workerStateSchema,
@@ -92,6 +93,16 @@ export const toWireWorker = (row: WorkerListRow): WorkerSummary => ({
     task_id: run.taskId,
     project_id: run.projectId,
   })),
+  last_update:
+    row.lastUpdate === undefined || row.lastUpdate === null
+      ? null
+      : workerLastUpdateSchema.parse({
+          result: row.lastUpdate.result,
+          from: row.lastUpdate.from,
+          to: row.lastUpdate.to,
+          detail: row.lastUpdate.detail,
+          reported_at: iso(row.lastUpdate.reportedAt),
+        }),
 });
 
 const deviceCodeNotFound = (): HttpError =>

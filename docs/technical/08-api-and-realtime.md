@@ -614,7 +614,7 @@ carries the value; the Integrations screen shows the residual beside the switch.
 token travels in the package and a deploy key never does (the package carries the SSH route and the public
 key; the worker signs through `ssh-sign`).
 
-**The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls, WP-284 `release` and `compose.yml`, WP-285 `pause`; `update-report` is WP-287's):
+**The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls, WP-284 `release` and `compose.yml`, WP-285 `pause`, WP-287 `update-report` — one `human_actions` row `worker.update` under the worker's user, the newest shown as the Workers screen's `last_update`):
 `packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (2 since WP-292), `ACCEPTED_WORKER_PROTOCOLS`
 (`[N-1, N]`, today `[1, 2]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
 paths, the bounds, and a strict zod schema for every request and response body of TD-031 §9. Two

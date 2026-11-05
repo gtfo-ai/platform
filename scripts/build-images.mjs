@@ -83,7 +83,12 @@ const IMAGES = [
   // package only when `pathToClaudeCodeExecutable` is unset, and a containerised run always sets it
   // (`docker/app.Dockerfile` has the reasoning, `launcher-control-plane-check.mjs --runner-image
   // platform:dev` the measurement). It measured 1.1 GB before, and now fits technical/11's 1 GB.
-  // **Measured on `linux/arm64` only** (Docker Desktop): the 1.0 GB budget is a 25 % margin over
+  // **WP-287 adds the updater's Docker CLI (41.6 MB) and Compose plugin (32.0 MB), pinned by
+  // checksum, and sigstore-js (~3 MB of `node_modules`): ~77 MB**, measured by `docker history` on
+  // `linux/arm64` — **932 MB** there, a 7 % margin under the 1.0 GB budget (TD-018, TD-032 §4's
+  // ≈ 78 MB estimate). The amd64 CLI bundle is larger (86 vs 78 MB compressed), so the amd64 leg of
+  // `image.yml` is again the first measurement.
+  // **Measured on `linux/arm64` only** (Docker Desktop): the 1.0 GB budget was a 25 % margin over
   // 801 MB there. `amd64` is **unmeasured** — CI's `image.yml` amd64 leg is the first measurement,
   // and a red size check there means the margin is wrong, not the image.
   {

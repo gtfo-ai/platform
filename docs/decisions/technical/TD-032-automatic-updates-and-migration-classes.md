@@ -354,3 +354,43 @@ ruling — admitted and refused — each with a canary that is killed (B's `no a
 C's existing-column `not valid` admitted; C's `is not null` check admitted; D's trigger on an existing
 table admitted). The scanner's docblock table is replaced by a pointer to this amendment plus the table
 as amended. Applied files are not re-scanned (they are never edited, TD-011).
+
+## As built (2026-11-05, WP-287, S-22.10) — V-WM6 measured, and what decision 6 left to the row
+
+Recorded by the implementer; nothing here changes a decision above. Each point is the shape the code
+took where decisions 3, 4 and 6 left a choice, so a reviewer can refuse it by name.
+
+1. **V-WM6, measured** against `ghcr.io/gtfo-ai/platform:sha-640ca6a` (anonymous):
+   `attest-build-provenance` stores a Sigstore bundle v0.3 (DSSE, SLSA provenance v1) as an OCI
+   referrer of the manifest-list digest; GHCR answers the referrers API `404` and serves the OCI 1.1 tag
+   fallback `sha256-<hex>`. `gh attestation verify` refuses to run without a GitHub token; `cosign`
+   3.1.4 is 136–146 MB per architecture. **The verifier is sigstore-js** (`@sigstore/verify`,
+   `@sigstore/bundle`, `@sigstore/tuf`, ~11 MB of `node_modules`), in-process; it verified the real
+   bundle and refused it with a wrong workflow in the identity. **The offline trust root** is the
+   Sigstore public-good TUF root `@sigstore/tuf` embeds; the verifier refreshes `trusted_root.json`
+   through TUF at `tuf-repo-cdn.sigstore.dev` (BACKLOG 899), and `attestation.test.ts` verifies the
+   recorded bundle offline against the seed. Checked for each digest: the certificate identity equal to
+   `https://github.com/<APP_TRUSTED_BUILDER>` with GitHub's OIDC issuer, Rekor inclusion and an SCT, the
+   statement's subject (repository **and** digest) and the provenance's workflow (repository, path,
+   ref). `APP_TRUSTED_ATTESTATION_KEY` (an SPKI key, configured on the worker like the identity) is a
+   second, keyed path with the same subject and workflow checks — what the Docker check signs with.
+2. **The four repositories** are `APP_TRUSTED_IMAGE_REPOSITORY` and its `-launcher`, `-runtime`,
+   `-egress` siblings; the core still names digests only.
+3. **The downgrade bound** orders builds by the `platform` image's `APP_BUILT_AT` (its config, covered
+   by the verified digest) against the running build's; a time either side cannot read is refused the
+   same way (BACKLOG 898 for the re-run residual).
+4. **A refusal is reported** as `update-report` `failed` with the reason in `detail` — an unverified
+   digest, a downgrade, no verifier — once per advertised set; the contract's three results are kept.
+   The core records each report as a `human_actions` row `worker.update` under the worker's user (the
+   shape `worker.pause` with `via: worker_internal_drain` already has), so WP-287 needs no migration;
+   `GET /api/workers` answers the newest as `last_update` (BACKLOG 895).
+5. **The env file** is the one compose recorded on the project's containers
+   (`com.docker.compose.project.environment_file`), else `<project dir>/.env`, and must be inside the
+   project directory, which the apply container mounts **at its host path**. Values the first `up` took
+   from the shell (the Claude token) are carried from the running containers' environment into
+   `docker compose`'s process environment — never a file or an argument.
+6. **Order**: verify all four → downgrade bound → pull the four (a failure drains nothing) → drain →
+   wait for idle with no deadline → the apply. The updater writes its own template to the `updates`
+   volume as the rollback's. The apply brings up every long-running service except `updater` and
+   `updater-docker-proxy` (it talks through the latter; BACKLOG 897), checks `core_handshake` **and**
+   that `remote-worker` runs the new reference, reports, then recreates the updater.

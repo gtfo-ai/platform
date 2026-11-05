@@ -26,6 +26,7 @@ import {
   WORKER_CONNECTED_SECONDS,
   type WorkerListRow,
   type WorkerStore,
+  type WorkerUpdateRecord,
 } from './worker-queries.js';
 
 interface CodeRow extends Omit<NewDeviceCode, 'intervalSeconds'> {
@@ -129,6 +130,8 @@ export const createMemoryWorkerStore = (
     );
   const runs = new Map<string, MemoryRun>();
   const audit: MemoryAudit[] = [];
+  /** When each `worker.update` row was written — `human_actions.created_at`, kept beside its params. */
+  const recordedAt = new Map<MemoryAudit, Date>();
 
   const expire = (workerIds: ReadonlySet<string>): number => {
     let count = 0;
@@ -164,6 +167,23 @@ export const createMemoryWorkerStore = (
         .filter((run) => run.workerId === worker.id && LIVE.has(run.status))
         .map((run) => ({ runId: run.id, taskId: run.taskId, projectId: run.projectId })),
     };
+  };
+
+  /** The newest `worker.update` audit row per worker (WP-287 (4)), as the SQL store reads it. */
+  const lastUpdateOf = (workerId: string): WorkerUpdateRecord | null => {
+    for (let index = audit.length - 1; index >= 0; index -= 1) {
+      const row = audit[index];
+      if (row?.action === 'worker.update' && row.params.worker_id === workerId) {
+        return {
+          result: row.params.result as WorkerUpdateRecord['result'],
+          from: row.params.from as unknown as WorkerUpdateRecord['from'],
+          to: row.params.to as unknown as WorkerUpdateRecord['to'],
+          detail: typeof row.params.detail === 'string' ? row.params.detail : null,
+          reportedAt: recordedAt.get(row) ?? new Date(0),
+        };
+      }
+    }
+    return null;
   };
 
   return {
@@ -332,7 +352,26 @@ export const createMemoryWorkerStore = (
       return [...workers.values()]
         .filter((worker) => userId === null || worker.userId === userId)
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .map(listRowOf);
+        .map((worker) => ({ ...listRowOf(worker), lastUpdate: lastUpdateOf(worker.id) }));
+    },
+
+    async recordUpdateReport({ workerId, report, now }) {
+      const worker = workers.get(workerId);
+      if (worker === undefined) return 'not_found';
+      const row: MemoryAudit = {
+        userId: worker.userId,
+        action: 'worker.update',
+        params: {
+          worker_id: workerId,
+          result: report.result,
+          from: { ...report.from },
+          to: { ...report.to },
+          detail: report.detail,
+        },
+      };
+      audit.push(row);
+      recordedAt.set(row, now);
+      return 'recorded';
     },
 
     async revokeWorker({ workerId, ownerUserId, actorUserId, now }) {

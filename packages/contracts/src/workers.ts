@@ -13,7 +13,13 @@
  */
 import * as z from 'zod';
 import { idSchema, isoDateTimeSchema, nonEmptyStringSchema } from './common.js';
-import { imageDigestSchema, workerPauseReasonSchema, workerUserCodeSchema } from './worker.js';
+import {
+  coreImageDigestsSchema,
+  imageDigestSchema,
+  workerPauseReasonSchema,
+  workerUpdateResultSchema,
+  workerUserCodeSchema,
+} from './worker.js';
 
 /** What a person typed: normalised by the server (case, spaces, hyphen), so only bounded here. */
 export const typedUserCodeSchema = z.string().min(1).max(32);
@@ -76,6 +82,20 @@ export const workerDeviceDecisionResponseSchema = z.strictObject({
 /** `active` until revoked; a revoked worker's credential answers `401` to every call (TD-031 §7). */
 export const workerStateSchema = z.enum(['active', 'revoked']);
 
+/**
+ * The last update a worker reported (`POST /api/worker/v1/update-report`, WP-287 (4)): how it ended,
+ * from which four digests to which, the updater's words (machine text, rendered as text) and when
+ * the core recorded it. `null` for a worker that never reported one.
+ */
+export const workerLastUpdateSchema = z.strictObject({
+  result: workerUpdateResultSchema,
+  from: coreImageDigestsSchema,
+  to: coreImageDigestsSchema,
+  detail: z.string().max(4_096).nullable(),
+  reported_at: isoDateTimeSchema,
+});
+export type WorkerLastUpdate = z.infer<typeof workerLastUpdateSchema>;
+
 /** One row of the Workers screen. */
 export const workerSummarySchema = z.strictObject({
   id: idSchema,
@@ -102,6 +122,8 @@ export const workerSummarySchema = z.strictObject({
    * run's offer, or `runs.worker_id`. Ids only — the run itself is `GET /api/runs/:id`.
    */
   running: z.array(z.strictObject({ run_id: idSchema, task_id: idSchema, project_id: idSchema })),
+  /** The last update its updater reported (WP-287 (4)), or `null`. */
+  last_update: workerLastUpdateSchema.nullable(),
 });
 export type WorkerSummary = z.infer<typeof workerSummarySchema>;
 

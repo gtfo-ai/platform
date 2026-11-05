@@ -44,7 +44,13 @@
 # image): 32 random bytes on a volume only the launcher and the worker mount, kept across restarts.
 #
 # **Its volumes and run network have their own names**, so a worker and a core can share one daemon
-# (the Docker check does) without one's `ctl` volume or run network being the other's.
+# (the Docker check does) without one's `ctl` volume or run network being the other's. A second
+# worker on the same machine sets `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`,
+# `APP_WORKER_RUN_EGRESS_NETWORK` and `APP_WORKER_UI_PORT` (and its own project name).
+#
+# **It updates itself** (`updater`, WP-287): it follows the core's digests, verifying each build's
+# attestation first, and keeps them in a marked block of the env file beside this one (`.env`, or the
+# `--env-file` you passed). See the `updater` service below for what it does and how to turn it off.
 
 name: agentic-worker
 
@@ -193,20 +199,97 @@ services:
     stop_grace_period: 60s
     restart: unless-stopped
 
-  # Inert until WP-287 (TD-032 decision 6): the worker's updater. Under a profile nobody enables, so
-  # `up` never starts it; WP-287 gives it its own socket proxy and `ROLE=updater`.
+  # **The updater** (WP-287, TD-032 decisions 3, 4 and 6): follows the core's digests by itself. Every
+  # 5 minutes (and on a 426 the worker reports) it asks the core's `release`, **verifies every advertised
+  # digest's build attestation** against the identity below — configured here, never served by the core
+  # — refuses a downgrade, pulls, drains the worker, waits until it is idle, and starts a one-shot
+  # `update-apply` container from the **new** image, which re-pins the four `PLATFORM_*_IMAGE` lines in a
+  # managed block of this project's env file (the previous file kept as `.env.previous`), brings the
+  # worker up with the template **that image carries**, checks `core_handshake`, rolls back if it does
+  # not come up, reports to the core, and recreates this container last. A fork sets the two trusted
+  # variables to its own repository and workflow; unset, this worker refuses to self-update by name.
+  #
+  # **It is root-equivalent on this machine** (TD-032 §4): it reaches Docker through its own socket
+  # proxy, which filters by API path and not by project. Keeping to this project is its code's
+  # property — every Compose call passes `--project-name`. It runs as root to read the worker's
+  # credential; its apply container runs as root to write the env file in the directory you ran
+  # `docker compose` from (mounted at the same path), and hands the file back to that directory's
+  # owner. Remove this service (and `updater-docker-proxy`) to update by hand: re-download
+  # the compose file from the core and `docker compose up -d`.
   updater:
     image: ${PLATFORM_IMAGE:-platform:dev}
+    user: '0:0'
     environment:
       ROLE: updater
-    profiles: ['updater']
-    network_mode: none
-    restart: 'no'
+      APP_CORE_URL: ${APP_CORE_URL:?set APP_CORE_URL to the core's https URL}
+      APP_TRUSTED_IMAGE_REPOSITORY: ${APP_TRUSTED_IMAGE_REPOSITORY:-ghcr.io/gtfo-ai/platform}
+      APP_TRUSTED_BUILDER: ${APP_TRUSTED_BUILDER:-gtfo-ai/platform/.github/workflows/image.yml@refs/heads/main}
+      # A public key that signs instead of the keyless identity (the Docker check's); empty: keyless.
+      APP_TRUSTED_ATTESTATION_KEY: ${APP_TRUSTED_ATTESTATION_KEY:-}
+      # Where a registry is read from (a mirror); every read is by digest, so not a trust decision.
+      APP_UPDATE_REGISTRY_ENDPOINTS: ${APP_UPDATE_REGISTRY_ENDPOINTS:-}
+      APP_UPDATE_POLL_SECONDS: ${APP_UPDATE_POLL_SECONDS:-300}
+      APP_UPDATE_CHECK_SECONDS: ${APP_UPDATE_CHECK_SECONDS:-120}
+      APP_WORKER_LOCAL_URL: http://remote-worker:8080
+      APP_WORKER_STATE_DIR: /var/lib/platform/worker-state
+      APP_UPDATE_STATE_DIR: /var/lib/platform/updates
+      DOCKER_HOST: tcp://updater-docker-proxy:2375
+      # The four references this worker runs: what an advertised update is compared with.
+      PLATFORM_IMAGE: ${PLATFORM_IMAGE:-platform:dev}
+      PLATFORM_LAUNCHER_IMAGE: ${PLATFORM_LAUNCHER_IMAGE:-platform-launcher:dev}
+      PLATFORM_RUNTIME_IMAGE: ${PLATFORM_RUNTIME_IMAGE:-platform-runtime:dev}
+      PLATFORM_EGRESS_IMAGE: ${PLATFORM_EGRESS_IMAGE:-platform-egress:dev}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # The worker credential `release` and `update-report` carry; read-only.
+      - worker-state:/var/lib/platform/worker-state:ro
+      - updates:/var/lib/platform/updates
+    networks:
+      - default
+      - updater-docker
+    depends_on:
+      updater-docker-proxy:
+        condition: service_started
+      remote-worker:
+        condition: service_started
+    restart: unless-stopped
+
+  # The updater's own Docker access (TD-032 §4): a second proxy, on a network only the updater and its
+  # apply container join — never the launcher's. `CONTAINERS NETWORKS VOLUMES IMAGES INFO POST`, the
+  # set research/17 § 5 names for Compose (TODO V-WM2, measured by `scripts/worker-update-check.mjs`).
+  updater-docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0@sha256:9e4b9e7517a6b660f2cc903a19b257b1852d5b3344794e3ea334ff00ae677ac2
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      IMAGES: 1
+      INFO: 1
+      POST: 1
+      EXEC: 0
+      BUILD: 0
+      SECRETS: 0
+      CONFIGS: 0
+      SWARM: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      PLUGINS: 0
+      SYSTEM: 0
+      AUTH: 0
+      DISTRIBUTION: 0
+      SESSION: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - updater-docker
+    restart: unless-stopped
 
 volumes:
   worker-state:
   launcher-token:
   exports:
+  updates:
   ctl:
     name: ${APP_WORKER_CONTROL_VOLUME:-agentic-worker-ctl}
 
@@ -218,4 +301,6 @@ networks:
   docker-proxy:
     internal: true
   launcher-api:
+    internal: true
+  updater-docker:
     internal: true

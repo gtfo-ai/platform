@@ -11,6 +11,7 @@
  *   POST /api/worker/v1/runs/:id/late-cost      run token
  *   GET  /api/worker/v1/release                 worker credential (WP-284)
  *   GET  /api/worker/v1/compose.yml             none — a person's first-install download (WP-284 (6))
+ *   POST /api/worker/v1/update-report           worker credential (WP-287 (4))
  *   POST /api/worker/v1/manual-pause            worker credential, protocol ≥ 2 (WP-292, `owner-verbs.ts`)
  *   POST /api/worker/v1/runs/:id/cancel         run token, protocol ≥ 2 (WP-292, `owner-verbs.ts`)
  *
@@ -89,6 +90,7 @@ import {
   workerRunReleaseRequestSchema,
   workerSpawnRequestSchema,
   workerSpawnResponseSchema,
+  workerUpdateReportRequestSchema,
   workerUpgradeRequiredBodySchema,
 } from '@platform/contracts';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -868,6 +870,38 @@ export const registerWorkerProtocolRoutes = async (
         protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [...ACCEPTED_WORKER_PROTOCOLS] },
         digests: release.digests,
       };
+    },
+  );
+
+  typed.post(
+    path(WORKER_PATHS.updateReport),
+    {
+      preValidation: authenticateWorker,
+      schema: {
+        summary: 'How this worker’s update ended (TD-032 decision 6, WP-287 (4))',
+        description:
+          'Worker credential. The updater reports each update it applied (`succeeded`), put back (`rolled_back`) or did not apply (`failed` — an attestation that does not verify, a downgrade, no verifier, or a rollback that did not come back), from which four digests to which, in its own words. Recorded as one `human_actions` row (`worker.update`) under the worker’s user; the Workers screen shows the newest. Answers `204`.',
+        tags: ['worker'],
+        body: workerUpdateReportRequestSchema,
+        response: {
+          204: z.null(),
+          401: apiErrorSchema,
+          426: workerUpgradeRequiredBodySchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await workerContact(request);
+      const subject = workers.get(request) as { readonly workerId: Id };
+      const recorded = await options.store.recordUpdateReport({
+        workerId: subject.workerId,
+        report: request.body,
+        now: now(),
+      });
+      if (recorded === 'not_found') {
+        throw unauthenticated('the worker credential names no worker');
+      }
+      return reply.code(204).send(null);
     },
   );
 

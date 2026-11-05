@@ -7,7 +7,7 @@
 # Third-party notices
 
 The platform itself is [Apache-2.0](LICENSE). This file accounts for everything else it ships:
-the **350 npm packages** its images and its browser bundle carry (plus 48
+the **362 npm packages** its images and its browser bundle carry (plus 48
 per-platform builds of those packages), and the **pinned binaries and container images** the
 Dockerfiles and `compose.yml` name. Bundled CLIs are *executed*, never linked.
 
@@ -34,14 +34,14 @@ sources disagree, so it cannot go stale quietly.
 
 | Licence | Packages |
 | --- | ---: |
-| MIT | 304 |
+| MIT | 310 |
 | ISC | 23 |
+| Apache-2.0 | 11 |
 | BSD-3-Clause | 8 |
-| Apache-2.0 | 6 |
 | BSD-2-Clause | 2 |
+| BlueOak-1.0.0 | 2 |
 | Unlicense | 2 |
 | (MIT OR CC0-1.0) | 1 |
-| BlueOak-1.0.0 | 1 |
 | MPL-2.0 | 1 |
 | OFL-1.1 | 1 |
 | [unverified] proprietary — © Anthropic PBC, all rights reserved | 1 |
@@ -55,6 +55,8 @@ was read from the source named beside it on the date given.
 | --- | --- | --- | --- |
 | acli (Atlassian CLI) | `https://acli.atlassian.com/linux/latest/acli_linux_${TARGETARCH}/acli` | [unverified] — Atlassian publishes no licence with the binary | [developer.atlassian.com](https://developer.atlassian.com/cloud/acli/) (2026-09-13) |
 | alpine:3.21 (base of platform-egress) | `alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d` | MIT (the image recipe); the distribution aggregates many licences, musl MIT and busybox GPL-2.0-only among them | [github.com](https://github.com/alpinelinux/docker-alpine/blob/master/LICENSE) (2026-09-13) |
+| docker (the Docker CLI, from Docker’s static Linux bundle; the CLI binary only) | `29.9.3` | Apache-2.0 | [github.com](https://github.com/docker/cli/blob/master/LICENSE) (2026-11-05) |
+| docker-compose (the Docker Compose CLI plugin) | `5.7.0` | Apache-2.0 | [github.com](https://github.com/docker/compose/blob/main/LICENSE) (2026-11-05) |
 | gh (GitHub CLI) | `2.100.0` | MIT | [github.com](https://github.com/cli/cli/blob/trunk/LICENSE) (2026-09-13) |
 | glab (GitLab CLI) | `1.117.0` | MIT | [gitlab.com](https://gitlab.com/gitlab-org/cli/-/blob/main/LICENSE) (2026-09-13) |
 | jira (ankitpokhrel/jira-cli) | `1.7.0` | MIT | [github.com](https://github.com/ankitpokhrel/jira-cli/blob/main/LICENSE) (2026-09-13) |
@@ -69,6 +71,10 @@ was read from the source named beside it on the date given.
 | tecnativa/docker-socket-proxy (TD-021, the filter in front of the daemon) | `tecnativa/docker-socket-proxy:0.3.0@sha256:9e4b9e7517a6b660f2cc903a19b257b1852d5b3344794e3ea334ff00ae677ac2` | Apache-2.0 | [github.com](https://github.com/Tecnativa/docker-socket-proxy/blob/master/LICENSE.txt) (2026-09-13) |
 
 **acli (Atlassian CLI)** — TD-018's open item, unresolved. The download is a bare binary from a single “latest” path with no licence file, no checksum and no terms on the product page; Atlassian's general Developer Terms are linked from the page footer and say nothing about redistributing the binary inside a third-party image. Recorded as unverified rather than assumed permissive. An operator who must avoid the question builds `platform-runtime` with `--build-arg ACLI_URL=<their own copy>`.
+
+**docker (the Docker CLI, from Docker’s static Linux bundle; the CLI binary only)** — In the platform image for the worker’s updater (WP-287), pinned by version and SHA-256 per architecture in docker/app.Dockerfile. Only `docker/docker` is extracted; the daemon, containerd and runc in the same bundle never reach an image.
+
+**docker-compose (the Docker Compose CLI plugin)** — In the platform image for the worker’s updater (WP-287), pinned by version and SHA-256 per architecture in docker/app.Dockerfile.
 
 **logcli (Grafana Loki)** — Executed as a separate process inside a run container and never linked; the AGPL obligation attaches to Loki, which this project neither modifies nor serves over a network.
 
@@ -89,7 +95,7 @@ complete: `APP_VERSION` (build metadata stamped into the image label; empty by d
 
 ## npm packages
 
-350 packages, with the licence each one declares in its own `package.json`. Packages
+362 packages, with the licence each one declares in its own `package.json`. Packages
 that are built per platform are in the section after this one.
 
 | Package | Version | Licence |
@@ -131,6 +137,7 @@ that are built per platform are in the section after this one.
 | `@floating-ui/react-dom` | 2.1.9 | MIT |
 | `@floating-ui/utils` | 0.2.12 | MIT |
 | `@fontsource-variable/inter` | 5.3.0 | OFL-1.1 (text shipped as `inter-OFL.txt` at the root of the web bundle) |
+| `@gar/promise-retry` | 1.0.3 | MIT |
 | `@hono/node-server` | 2.1.1 | MIT |
 | `@jridgewell/resolve-uri` | 3.1.2 | MIT |
 | `@jridgewell/sourcemap-codec` | 1.6.0 | MIT |
@@ -149,6 +156,11 @@ that are built per platform are in the section after this one.
 | `@primer/octicons-react` | 19.42.0 | MIT |
 | `@prometheus-io/client` | 0.16.1 | Apache-2.0 |
 | `@rolldown/pluginutils` | 1.0.1 | MIT |
+| `@sigstore/bundle` | 5.0.0 | Apache-2.0 |
+| `@sigstore/core` | 4.0.1 | Apache-2.0 |
+| `@sigstore/protobuf-specs` | 0.5.2 | Apache-2.0 |
+| `@sigstore/tuf` | 5.0.0 | Apache-2.0 |
+| `@sigstore/verify` | 4.1.2 | Apache-2.0 |
 | `@stablelib/base64` | 1.0.1 | MIT |
 | `@standard-schema/spec` | 1.1.0 | MIT |
 | `@tanstack/history` | 1.162.3 | MIT |
@@ -158,6 +170,8 @@ that are built per platform are in the section after this one.
 | `@tanstack/react-store` | 0.9.3 | MIT |
 | `@tanstack/router-core` | 1.171.29 | MIT |
 | `@tanstack/store` | 0.9.3 | MIT |
+| `@tufjs/canonical-json` | 2.0.0 | MIT |
+| `@tufjs/models` | 5.0.1 | MIT |
 | `@types/chai` | 5.2.3 | MIT |
 | `@types/d3-color` | 3.1.3 | MIT |
 | `@types/d3-drag` | 3.0.7 | MIT |
@@ -191,11 +205,13 @@ that are built per platform are in the section after this one.
 | `avvio` | 9.3.0 | MIT |
 | `awilix-manager` | 7.0.1 | MIT |
 | `awilix` | 13.0.5 | MIT |
+| `balanced-match` | 4.0.4 | MIT |
 | `base64-js` | 1.5.1 | MIT |
 | `better-auth` | 1.7.3 | MIT |
 | `better-call` | 1.4.0 | MIT |
 | `bintrees` | 1.0.2 | MIT |
 | `body-parser` | 2.3.0 | MIT |
+| `brace-expansion` | 5.0.12 | MIT |
 | `braces` | 3.0.3 | MIT |
 | `buffer-image-size` | 0.6.4 | MIT |
 | `buffer` | 6.0.3 | MIT |
@@ -320,6 +336,7 @@ that are built per platform are in the section after this one.
 | `micromatch` | 4.0.8 | MIT |
 | `mime-db` | 1.54.0 | MIT |
 | `mime-types` | 3.0.2 | MIT |
+| `minimatch` | 10.2.6 | BlueOak-1.0.0 |
 | `minimist` | 1.2.8 | MIT |
 | `minipass` | 7.1.3 | BlueOak-1.0.0 |
 | `ms` | 2.1.3 | MIT |
@@ -425,6 +442,7 @@ that are built per platform are in the section after this one.
 | `toad-cache` | 3.7.4 | MIT |
 | `toidentifier` | 1.0.1 | MIT |
 | `ts-algebra` | 2.0.0 | MIT |
+| `tuf-js` | 6.0.1 | MIT |
 | `type-fest` | 5.9.0 | (MIT OR CC0-1.0) |
 | `type-is` | 2.1.0 | MIT |
 | `undici-types` | 7.18.2 | MIT |

@@ -233,6 +233,46 @@ describe('compose.worker.yml rendered for a first install (WP-284 (3), backlog 7
     expect(imageOf(service('pull-git-image'))).toMatch(/@sha256:[0-9a-f]{64}\}$/);
   });
 
+  it('enables the updater on its own socket proxy and trusts the shipped builder by default (WP-287)', () => {
+    const source = template as string;
+    const service = (name: string): string => {
+      const start = source.indexOf(`\n  ${name}:\n`);
+      expect(start, name).toBeGreaterThan(-1);
+      const rest = source.slice(start + 1);
+      const end = rest.slice(1).search(/\n {2}[a-z][a-z-]*:\n/);
+      return end < 0 ? rest : rest.slice(0, end + 1);
+    };
+    const updater = service('updater');
+    // A prod install follows its core: no profile (S-22.16 adds one in its dev override only).
+    expect(updater).not.toMatch(/\n\s+profiles:/);
+    expect(updater).toContain('ROLE: updater');
+    expect(updater).toContain('DOCKER_HOST: tcp://updater-docker-proxy:2375');
+    expect(updater).toContain(
+      'APP_TRUSTED_IMAGE_REPOSITORY: ${APP_TRUSTED_IMAGE_REPOSITORY:-ghcr.io/gtfo-ai/platform}',
+    );
+    expect(updater).toContain(
+      'APP_TRUSTED_BUILDER: ${APP_TRUSTED_BUILDER:-gtfo-ai/platform/.github/workflows/image.yml@refs/heads/main}',
+    );
+    expect(updater).toContain('worker-state:/var/lib/platform/worker-state:ro');
+    expect(updater).not.toContain('docker.sock');
+    // Its proxy is the only other service on its internal network; the launcher's is not shared.
+    const proxy = service('updater-docker-proxy');
+    expect(proxy).toContain('/var/run/docker.sock:/var/run/docker.sock:ro');
+    expect(proxy).toMatch(/networks:\n\s+- updater-docker\n/);
+    /** A block's declarations, its comments aside (the next service's comment ends the block above). */
+    const declared = (block: string): string =>
+      block
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('#'))
+        .join('\n');
+    for (const other of ['remote-worker', 'launcher', 'docker-socket-proxy']) {
+      expect(declared(service(other)), other).not.toContain('updater-docker');
+    }
+    expect(source).toMatch(/\n {2}updater-docker:\n {4}internal: true/);
+    // A second worker on one daemon can move the run network too (the Docker checks do).
+    expect(source).toContain('name: ${APP_WORKER_RUN_EGRESS_NETWORK:-agentic-worker-run-egress}');
+  });
+
   it('changes nothing but the image defaults and the APP_CORE_URL line (TD-031’s 2026-11-05 amendment §3)', () => {
     const source = template as string;
     const rendered = renderWorkerCompose(source, {

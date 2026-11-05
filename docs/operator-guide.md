@@ -323,7 +323,7 @@ curl -fsS localhost:8080/readyz         # {"status":"ok","checks":{...}}
 Then open <http://localhost:8080/> and sign in with the bootstrap administrator. The
 [user guide](user-guide.md) starts there.
 
-### A remote worker on a developer's machine (WP-283, WP-284)
+### A remote worker on a developer's machine (WP-283, WP-284, WP-287)
 
 A worker runs agent runs on a developer's machine with the developer's own Claude subscription
 (BD-032). It is one file, `compose.worker.yml`, which the core serves **publicly**, pinned to its own
@@ -374,6 +374,41 @@ docker compose -f compose.worker.yml logs remote-worker | grep token=
   Stopping the container is not a cancel: the core treats it as a lost worker.
 - What the page shows is what the worker uploads (redacted the same way); it is not a confidentiality
   boundary against the machine's owner, who controls the Docker daemon (TD-031's worker-UI amendment).
+
+**The worker updates itself** (WP-287, TD-032 decisions 3, 4 and 6). The `updater` service follows the
+core: every 5 minutes, and at once when the worker meets a `426`, it reads the core's
+`GET /api/worker/v1/release` and, when the four digests there differ from the ones it runs:
+
+1. **verifies each digest's build attestation** — the provenance `image.yml` attests every published
+   image with — against an identity configured **on the worker**, never served by the core:
+   `APP_TRUSTED_IMAGE_REPOSITORY` (default `ghcr.io/gtfo-ai/platform`; the other three images are its
+   `-launcher`, `-runtime` and `-egress`) and `APP_TRUSTED_BUILDER` (default
+   `gtfo-ai/platform/.github/workflows/image.yml@refs/heads/main`). A digest that does not verify is
+   refused, reported to the core and **never pulled**; a fork sets both to its own. With either unset
+   the worker refuses to update itself and says which;
+2. **refuses a downgrade** to a build older than the one it runs, unless the core no longer serves its
+   protocol;
+3. pulls the four images, **drains** the worker (`via: worker_internal_drain`) and waits until it holds
+   no run — however long the run in flight takes;
+4. starts a one-shot `update-apply` container **from the new image**, which re-pins the four
+   `PLATFORM_*_IMAGE` lines in a marked block of the env file beside your compose file (`.env`, or the
+   `--env-file` you passed; the previous file is kept as `.env.previous`), brings the worker up with the
+   compose template **the new image carries**, and checks that `/readyz` reads `core_handshake: ok`
+   within 120 s. If it does not, it puts the previous env file and template back and brings the old
+   build up again. It then reports the result and recreates the updater last.
+
+The Workers screen shows each worker's last update — *Updated*, *Update rolled back* or *Update not
+applied* — with the updater's own words in the row's details; `updates/state.json` in the worker's
+`updates` volume names the step a crashed apply reached, and the next updater start rolls it back.
+Values your first `up` took from the shell (the Claude token among them) are carried over from the
+running containers through the apply's process environment, never written to a file. The updater is
+**root-equivalent on the machine**, as the launcher is: it reaches Docker through its own socket proxy
+(`updater-docker-proxy`), which filters by API path and not by project, so keeping to the worker's own
+compose project is its code's property — every Compose call names the project. To update by hand
+instead, remove the `updater` and `updater-docker-proxy` services, download the compose file again and
+`docker compose up -d`. A second worker on one machine sets its own project name,
+`APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_EGRESS_NETWORK` and
+`APP_WORKER_UI_PORT`.
 
 ### If `/readyz` is 503
 

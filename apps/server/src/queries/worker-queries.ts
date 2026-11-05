@@ -27,7 +27,12 @@
  * reads the user's state on every call.
  */
 import { resolveBudgetTimezone } from '@platform/application';
-import type { JsonObject, WorkerManualPauseVia } from '@platform/contracts';
+import type {
+  CoreImageDigests,
+  JsonObject,
+  WorkerManualPauseVia,
+  WorkerUpdateResult,
+} from '@platform/contracts';
 import {
   checkDeviceDecision,
   type DeviceCodeState,
@@ -123,6 +128,20 @@ export interface WorkerListRow {
    * a worker's seat there exactly when it is in that worker's `running` here.
    */
   readonly running: readonly WorkerRunRef[];
+  /**
+   * The last update its updater reported (WP-287 (4)) — read by {@link WorkerStore.listWorkers}
+   * only; absent on the row a worker call's contact answers, which is asked on every heartbeat.
+   */
+  readonly lastUpdate?: WorkerUpdateRecord | null;
+}
+
+/** A worker's update report as recorded (`human_actions`, action `worker.update`). */
+export interface WorkerUpdateRecord {
+  readonly result: WorkerUpdateResult;
+  readonly from: CoreImageDigests;
+  readonly to: CoreImageDigests;
+  readonly detail: string | null;
+  readonly reportedAt: Date;
 }
 
 /** One live run a worker holds, as `GET /api/workers` lists it (S-23.15). */
@@ -205,6 +224,18 @@ export interface WorkerStore {
     readonly until: Date;
     readonly estimated: boolean;
   }): Promise<boolean>;
+  /**
+   * A worker's update report (`POST update-report`, WP-287 (4)): one `human_actions` row,
+   * `worker.update`, under the worker's user — the shape the worker's pause and drain are audited in
+   * (`worker.pause` with `via: worker_internal_drain` is the updater's too) — with `params: {worker_id,
+   * result, from, to, detail}`. Append-only, so every report is kept; the Workers screen reads the
+   * newest. `not_found` for no such worker.
+   */
+  recordUpdateReport(input: {
+    readonly workerId: string;
+    readonly report: Omit<WorkerUpdateRecord, 'reportedAt'>;
+    readonly now: Date;
+  }): Promise<'recorded' | 'not_found'>;
   /** The deactivation write: the live runs of every worker of the user get `lease_expires_at = now()`. */
   expireUserWorkerLeases(userId: string): Promise<number>;
   findCredentialSubject(workerId: string): Promise<CredentialSubject | null>;
@@ -323,6 +354,31 @@ const RUNNING_OF_WORKER = sql`coalesce((
        and (r.worker_id is not null
             or (o.state = 'claimed' and o.claimant_kind = 'worker' and o.worker_id is not null))
   ), '[]'::json) as running`;
+
+/**
+ * The newest `worker.update` row per worker, for the listed workers: one pass over `human_actions`
+ * filtered on the action (it has no index on it — the Workers screen is read by a person, rarely;
+ * BACKLOG notes the index a larger installation would want).
+ */
+const LAST_UPDATES_SQL = (workerIds: readonly string[]) => sql`
+  select distinct on (params->>'worker_id')
+         params->>'worker_id' as worker_id, params, created_at
+    from human_actions
+   where action = 'worker.update'
+     and params->>'worker_id' = any(${`{${workerIds.join(',')}}`}::text[])
+   order by params->>'worker_id', created_at desc, id desc`;
+
+const toUpdateRecord = (params: unknown, createdAt: Date | string): WorkerUpdateRecord | null => {
+  const value = params as Record<string, unknown> | null;
+  if (value === null || typeof value !== 'object') return null;
+  return {
+    result: value.result as WorkerUpdateResult,
+    from: value.from as CoreImageDigests,
+    to: value.to as CoreImageDigests,
+    detail: typeof value.detail === 'string' ? value.detail : null,
+    reportedAt: at(createdAt) as Date,
+  };
+};
 
 const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
   id: row.id,
@@ -492,7 +548,38 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
         from workers w join users u on u.id = w.user_id
        where ${userId === null ? sql`true` : sql`w.user_id = ${userId}`}
        order by w.created_at desc, w.id desc`);
-    return rows.map(toWorkerListRow);
+    const listed = rows.map(toWorkerListRow);
+    if (listed.length === 0) return listed;
+    const updates = await database.execute<{
+      worker_id: string;
+      params: unknown;
+      created_at: Date;
+    }>(LAST_UPDATES_SQL(listed.map((row) => row.id)));
+    const byWorker = new Map(
+      updates.rows.map((update) => [
+        update.worker_id,
+        toUpdateRecord(update.params, update.created_at),
+      ]),
+    );
+    return listed.map((row) => ({ ...row, lastUpdate: byWorker.get(row.id) ?? null }));
+  },
+
+  async recordUpdateReport({ workerId, report, now }) {
+    const { rows } = await database.execute<{ user_id: string }>(sql`
+      select user_id from workers where id = ${workerId}`);
+    const row = rows[0];
+    if (row === undefined) return 'not_found';
+    const params: JsonObject = {
+      worker_id: workerId,
+      result: report.result,
+      from: { ...report.from },
+      to: { ...report.to },
+      detail: report.detail,
+    };
+    await database.execute(sql`
+      insert into human_actions (user_id, action, params, created_at)
+      values (${row.user_id}, 'worker.update', ${JSON.stringify(params)}::jsonb, ${now})`);
+    return 'recorded';
   },
 
   async revokeWorker({ workerId, ownerUserId, actorUserId, now }) {

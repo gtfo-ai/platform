@@ -514,6 +514,12 @@ const bodies = (epoch: number) => ({
     reason: 'usage_limited',
     estimated: false,
   },
+  [WORKER_PATHS.updateReport]: {
+    from: DIGESTS,
+    to: { ...DIGESTS, platform: `sha256:${'9'.repeat(64)}` },
+    result: 'succeeded',
+    detail: null,
+  },
   [WORKER_PATHS.heartbeat]: { epoch, acks: [] },
   [WORKER_PATHS.runRelease]: { epoch, reason: 'image_missing' },
   [WORKER_PATHS.spawn]: { epoch },
@@ -602,7 +608,13 @@ function userauth(user = 'git'): Buffer {
 }
 
 /** The verbs WP-281 serves: two authenticated by the worker credential, five by a run token. */
-const WORKER_VERBS = [WORKER_PATHS.handshake, WORKER_PATHS.claims, WORKER_PATHS.pause] as const;
+const WORKER_VERBS = [
+  WORKER_PATHS.handshake,
+  WORKER_PATHS.claims,
+  WORKER_PATHS.pause,
+  // WP-287 (4): the updater's report.
+  WORKER_PATHS.updateReport,
+] as const;
 /** WP-292's owner verbs: the same authentication as their neighbours, at protocol 2 only. */
 const OWNER_WORKER_VERBS = [WORKER_PATHS.manualPause] as const;
 const OWNER_RUN_VERBS = [WORKER_PATHS.runCancel] as const;
@@ -845,13 +857,22 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
 
   it('handshake and claims answer 503 digests_unresolved while the core cannot name its images', async () => {
     const w = await world({ release: false });
-    // `pause` names no image, so it is not refused for want of one.
+    // `pause` and `update-report` name no core image, so neither is refused for want of one.
     for (const verb of [WORKER_PATHS.handshake, WORKER_PATHS.claims] as const) {
       const response = await post(w, verb, '', w.alice.credential, bodies(1)[verb]);
       expect(`${verb} ${response.statusCode} ${response.json().error?.code}`).toBe(
         `${verb} 503 digests_unresolved`,
       );
     }
+    // An update report names its own digests: it is recorded whatever the core can name.
+    const report = await post(
+      w,
+      WORKER_PATHS.updateReport,
+      '',
+      w.alice.credential,
+      bodies(1)[WORKER_PATHS.updateReport],
+    );
+    expect(report.statusCode).toBe(204);
   });
 
   it('release: the digests and the protocol range, no compose file; 401 without a credential (WP-284)', async () => {
@@ -1544,6 +1565,66 @@ describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the 
       const body = workerUpgradeRequiredBodySchema.parse(response.json());
       expect(body.error.message).toContain('protocol 2');
     }
+  });
+
+  it('update-report: 204 and one worker.update row under the worker’s user per report; the newest is the worker’s last update; a bad body is 400 (WP-287 (4))', async () => {
+    const w = await world();
+    const report = (body: object) =>
+      post(w, WORKER_PATHS.updateReport, '', w.alice.credential, body);
+    const newer = { ...DIGESTS, platform: `sha256:${'9'.repeat(64)}` };
+    expect((await w.store.listWorkers(null)).every((row) => row.lastUpdate === null)).toBe(true);
+    const succeeded = await report({ from: DIGESTS, to: newer, result: 'succeeded', detail: null });
+    expect(succeeded.statusCode).toBe(204);
+    expect(succeeded.headers['cache-control']).toBe('no-store');
+    const refused = await report({
+      from: newer,
+      to: DIGESTS,
+      result: 'failed',
+      detail: 'a downgrade is refused',
+    });
+    expect(refused.statusCode).toBe(204);
+    expect(w.store.audit.filter((row) => row.action === 'worker.update')).toEqual([
+      {
+        userId: ALICE,
+        action: 'worker.update',
+        params: {
+          worker_id: w.alice.workerId,
+          result: 'succeeded',
+          from: DIGESTS,
+          to: newer,
+          detail: null,
+        },
+      },
+      {
+        userId: ALICE,
+        action: 'worker.update',
+        params: {
+          worker_id: w.alice.workerId,
+          result: 'failed',
+          from: newer,
+          to: DIGESTS,
+          detail: 'a downgrade is refused',
+        },
+      },
+    ]);
+    const alice = (await w.store.listWorkers(null)).find((row) => row.id === w.alice.workerId);
+    expect(alice?.lastUpdate).toMatchObject({
+      result: 'failed',
+      from: newer,
+      to: DIGESTS,
+      detail: 'a downgrade is refused',
+    });
+    const bob = (await w.store.listWorkers(null)).find((row) => row.id === w.bob.workerId);
+    expect(bob?.lastUpdate).toBeNull();
+    for (const bad of [
+      { from: DIGESTS, to: newer, result: 'applied', detail: null },
+      { from: DIGESTS, to: { ...newer, platform: 'latest' }, result: 'succeeded', detail: null },
+      { from: DIGESTS, to: newer, result: 'succeeded', detail: 'x'.repeat(4_097) },
+      { from: DIGESTS, to: newer, result: 'succeeded', detail: null, extra: true },
+    ]) {
+      expect((await report(bad)).statusCode).toBe(400);
+    }
+    expect(w.store.audit.filter((row) => row.action === 'worker.update')).toHaveLength(2);
   });
 
   it('manual-pause: a state assertion — one audit row per change, the claim answered 204 while held', async () => {
