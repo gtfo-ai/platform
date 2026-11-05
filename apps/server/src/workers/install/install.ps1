@@ -36,8 +36,10 @@ param(
 )
 
 # Everything runs inside one script block, so `irm | iex` leaves no function, variable or
-# preference behind in the caller's session; the exit status is its last output.
+# preference behind in the caller's session; the options are handed to it as its own parameters,
+# and the exit status is its last output.
 $installerExitCode = & {
+  param([string]$Dir, [string]$Core, [bool]$NoOpen, [bool]$Uninstall, [bool]$Purge)
   $ErrorActionPreference = 'Stop'
 
   $CoreUrl = '@@AGENTIC_CORE_URL@@'
@@ -337,7 +339,7 @@ $installerExitCode = & {
     Write-Line ''
     Write-Line 'The worker is running.'
     $opened = $false
-    if (-not $NoOpen) {
+    if ($OpenPage) {
       try { Start-Process $page; $opened = $true } catch { $opened = $false }
     }
     if ($opened) { Write-Line "  Its page:   $page (opened in your browser)" } else { Write-Line "  Its page:   $page (open it in a browser)" }
@@ -381,6 +383,7 @@ $installerExitCode = & {
 
   try {
     if ($Purge -and -not $Uninstall) { Exit-Installer 2 '-Purge goes with -Uninstall' }
+    $OpenPage = -not $NoOpen
     $CoreAddress = $CoreUrl
     if ($Core -ne '') { $CoreAddress = $Core }
     if ($CoreAddress.StartsWith('@@')) { Exit-Installer 2 'this copy of the script was not served by a core; pass -Core https://<your core>' }
@@ -411,6 +414,6 @@ $installerExitCode = & {
     Write-Host "agentic-worker: $($_.Exception.Message)" -ForegroundColor Red
     $code
   }
-} | Select-Object -Last 1
+} -Dir $Dir -Core $Core -NoOpen ([bool]$NoOpen) -Uninstall ([bool]$Uninstall) -Purge ([bool]$Purge) | Select-Object -Last 1
 
 if ($PSCommandPath) { exit $installerExitCode }
