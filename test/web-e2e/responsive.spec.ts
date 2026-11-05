@@ -204,6 +204,11 @@ test.describe('on a 390 px phone', () => {
       expect(actionsBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height - 1);
       expect(titleBox.width).toBeGreaterThan(PHONE.width / 2);
     }
+    // The inline answer box shrinks beside its button rather than holding its intrinsic width: CI's
+    // Linux measured that width 1 px past a 390 px viewport, and macOS did not (S-23.13a review).
+    const answer = page.getByRole('textbox', { name: /^Answer question / }).first();
+    await expect(answer).toBeVisible();
+    expect(await answer.evaluate((element) => getComputedStyle(element).minWidth)).toBe('0px');
     expect(await overflowReport(page)).toEqual([]);
     expect(await axe(page)).toEqual([]);
   });

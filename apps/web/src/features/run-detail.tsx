@@ -783,7 +783,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                       setSteer(event.target.value);
                     }}
                     placeholder="Send a message to the running agent…"
-                    className="flex-1 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
+                    className="min-w-0 flex-1 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
                   />
                   <Button
                     type="submit"

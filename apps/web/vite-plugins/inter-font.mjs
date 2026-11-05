@@ -18,7 +18,8 @@
  *   a font preload even then (fonts are fetched in CORS mode, and a preload without it is a second
  *   request).
  *
- * **It lives in `apps/web/`**, beside the config that loads it, because the image's `web` stage
+ * **It lives in `apps/web/vite-plugins/`**, beside the config that loads it (not `build/`, which
+ * `.gitignore` ignores at any depth), because the image's `web` stage
  * (`docker/app.Dockerfile`) copies `apps/web` and `packages/contracts` and nothing else — a config
  * importing from `scripts/` does not load there (review of PR #31). Plain JavaScript because
  * `scripts/notices.mjs` imports its file name and runs as `node scripts/notices.mjs` with no

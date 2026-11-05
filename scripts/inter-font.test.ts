@@ -1,9 +1,9 @@
 /**
- * `apps/web/build/inter-font.mjs` (S-23.13a, BACKLOG 801 and 803): the Vite plugin that ships
- * Inter's OFL-1.1 text beside the bundle and preloads the hashed woff2. Driven through its hooks
+ * `apps/web/vite-plugins/inter-font.mjs` (S-23.13a, BACKLOG 801 and 803): the Vite plugin that
+ * ships Inter's OFL-1.1 text beside the bundle and preloads the hashed woff2. Driven through its hooks
  * with a stand-in bundle; the built bundle itself is the browser tier's (`test/web-e2e/csp.spec.ts`
  * fetches the licence and reads the preload under the production policy). The test lives here
- * because no vitest project collects `apps/web/build/`.
+ * because no vitest project collects `apps/web/vite-plugins/`.
  */
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -14,7 +14,7 @@ import {
   interFontPlugin,
   interPreloadTag,
   interWoff2Of,
-} from '../apps/web/build/inter-font.mjs';
+} from '../apps/web/vite-plugins/inter-font.mjs';
 
 const WOFF2 = 'assets/inter-latin-wght-normal-Dx4kXJAl.woff2';
 const licenceText = readFileSync(
