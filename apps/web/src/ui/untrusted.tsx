@@ -253,6 +253,54 @@ export const TerminalText = ({ value, className }: UntrustedProps): ReactElement
   </pre>
 );
 
+/** One line of a run's log: a platform-written `prefix` and the run's own `text`. */
+export interface TerminalLine {
+  readonly key: string;
+  readonly tone: 'command' | 'output' | 'error' | 'text' | 'note';
+  /** Platform text (`$ `, `› Read `); rendered as it is. */
+  readonly prefix: string;
+  /** The run's text — a command, a path, a tool's output, the model's words. Untrusted. */
+  readonly text: string;
+}
+
+const TERMINAL_TONE: Readonly<Record<TerminalLine['tone'], string>> = {
+  command: 'text-[oklch(0.86_0.09_80)]',
+  output: 'text-[oklch(0.80_0.01_260)]',
+  error: 'text-[oklch(0.78_0.13_25)]',
+  text: 'text-[oklch(0.92_0.01_150)]',
+  note: 'text-[oklch(0.72_0.03_280)] italic',
+};
+
+/**
+ * A run's log as terminal lines (the flow canvas's stage dialog, S-23.5): one `<span>` per line, the
+ * text with ANSI sequences stripped and then the character filter applied, exactly as
+ * `TerminalText` does — never interpreted, never linkified. The same dark palette as
+ * `TerminalText`, so a log reads as a terminal in both themes.
+ */
+export const TerminalLines = ({
+  lines,
+  className,
+}: {
+  readonly lines: readonly TerminalLine[];
+  readonly className?: string;
+}): ReactElement => (
+  <pre
+    data-testid="terminal-lines"
+    className={`m-0 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words ${className ?? ''}`}
+  >
+    {lines.map((line) => (
+      <span
+        key={line.key}
+        data-log-tone={line.tone}
+        className={`block ${TERMINAL_TONE[line.tone]}`}
+      >
+        {line.prefix}
+        {sanitiseUntrusted(stripAnsi(line.text))}
+      </span>
+    ))}
+  </pre>
+);
+
 /** File content with line numbers (`Read`, `Grep`, `Glob`). */
 export const NumberedCode = ({ value, className }: UntrustedProps): ReactElement => {
   const lines = sanitiseUntrusted(value).split('\n');

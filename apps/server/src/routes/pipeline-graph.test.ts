@@ -34,6 +34,7 @@ const GRAPH: PipelineGraph = {
       advisory: false,
       model: null,
       effort: null,
+      produces: null,
     },
     {
       id: 'done',
@@ -43,6 +44,7 @@ const GRAPH: PipelineGraph = {
       advisory: false,
       model: null,
       effort: null,
+      produces: null,
     },
   ],
   edges: [

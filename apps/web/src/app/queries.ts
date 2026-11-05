@@ -112,6 +112,23 @@ export const useProjectConfig = (projectId: string | null) => {
   });
 };
 
+/**
+ * `GET /api/projects/:id/pipeline` (S-23.15): every enabled template's graph, as a task started now
+ * would run it — the Pipeline tab's template picker and canvas (S-23.5). One read for all of them:
+ * the picker switches between answers the page already has.
+ */
+export const useProjectPipelines = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.projectPipelines(projectId ?? ''),
+    queryFn: () => endpoints.projectPipelines(projectId ?? ''),
+    enabled: projectId !== null,
+    // `409 project_config_refused` is an answer; see `useTaskPipeline`.
+    retry: (failures, error) => !(error instanceof ApiError) && failures < 3,
+    ...FOREVER,
+  });
+};
+
 /** `GET /api/projects/:id/readiness` — 409 until a discovery run has evaluated the project. */
 export const useProjectReadiness = (projectId: string | null) => {
   const { endpoints } = useServices();
@@ -415,6 +432,24 @@ export const useTask = (taskId: string, enabled = true) => {
     queryFn: () => endpoints.task(taskId),
     // `false` while a caller does not know the id yet — the run screen learns its task from the run.
     enabled,
+    ...FOREVER,
+  });
+};
+
+/**
+ * `GET /api/tasks/:id/pipeline` (S-23.15): the task's frozen stage graph, for its flow canvas.
+ *
+ * An answer from the server (`404`, `409 pipeline_not_compilable`) is not retried. The key is under
+ * the task's prefix, and every task command awaits the invalidation of that prefix: a refusal
+ * retried three times held each Pause, Retry and Take over for seconds behind a graph that had
+ * already said no (measured in `take-over.test.tsx`). A transport failure still is.
+ */
+export const useTaskPipeline = (taskId: string) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.taskPipeline(taskId),
+    queryFn: () => endpoints.taskPipeline(taskId),
+    retry: (failures, error) => !(error instanceof ApiError) && failures < 3,
     ...FOREVER,
   });
 };

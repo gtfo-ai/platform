@@ -7,6 +7,7 @@ import {
   ExternalLink,
   JsonView,
   NumberedCode,
+  TerminalLines,
   TerminalText,
   UntrustedProse,
   UntrustedText,
@@ -195,6 +196,12 @@ describe('the verbatim renderers', () => {
   it.each([
     ['CodeText', (value: string) => <CodeText value={value} />],
     ['TerminalText', (value: string) => <TerminalText value={value} />],
+    [
+      'TerminalLines',
+      (value: string) => (
+        <TerminalLines lines={[{ key: 'a', tone: 'output', prefix: '  ', text: value }]} />
+      ),
+    ],
     ['NumberedCode', (value: string) => <NumberedCode value={value} />],
     ['UntrustedText', (value: string) => <UntrustedText value={value} />],
     ['UntrustedProse', (value: string) => <UntrustedProse value={value} />],
@@ -205,6 +212,31 @@ describe('the verbatim renderers', () => {
     expect(text).toContain('if (admin) {');
     expect(text).not.toContain('\u202E');
     expect(text).toContain('\uFFFD');
+  });
+
+  it('TerminalLines strips ANSI, keeps markup as characters and the platform prefix as written', () => {
+    const { container } = render(
+      <TerminalLines
+        lines={[
+          {
+            key: 'c',
+            tone: 'command',
+            prefix: '$ ',
+            text: 'pnpm test <img src=x onerror=alert(1)>',
+          },
+          { key: 'o', tone: 'error', prefix: '  ', text: '\u001B[31mfailed\u001B[0m 2 tests' },
+        ]}
+      />,
+    );
+    const lines = [...container.querySelectorAll('[data-log-tone]')].map((line) => [
+      line.getAttribute('data-log-tone'),
+      line.textContent,
+    ]);
+    expect(lines).toEqual([
+      ['command', '$ pnpm test <img src=x onerror=alert(1)>'],
+      ['error', '  failed 2 tests'],
+    ]);
+    expect(container.querySelector('img')).toBeNull();
   });
 
   it('JsonView survives a value JSON.stringify cannot serialise', () => {

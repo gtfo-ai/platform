@@ -530,6 +530,7 @@ describe('the live views’ reads (S-23.15)', () => {
           advisory: false,
           model: null,
           effort: null,
+          produces: null,
         },
       ],
       edges: [

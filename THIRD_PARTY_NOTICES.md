@@ -7,7 +7,7 @@
 # Third-party notices
 
 The platform itself is [Apache-2.0](LICENSE). This file accounts for everything else it ships:
-the **330 npm packages** its images and its browser bundle carry (plus 48
+the **350 npm packages** its images and its browser bundle carry (plus 48
 per-platform builds of those packages), and the **pinned binaries and container images** the
 Dockerfiles and `compose.yml` name. Bundled CLIs are *executed*, never linked.
 
@@ -34,9 +34,9 @@ sources disagree, so it cannot go stale quietly.
 
 | Licence | Packages |
 | --- | ---: |
-| MIT | 293 |
-| ISC | 15 |
-| BSD-3-Clause | 7 |
+| MIT | 304 |
+| ISC | 23 |
+| BSD-3-Clause | 8 |
 | Apache-2.0 | 6 |
 | BSD-2-Clause | 2 |
 | Unlicense | 2 |
@@ -89,7 +89,7 @@ complete: `APP_VERSION` (build metadata stamped into the image label; empty by d
 
 ## npm packages
 
-330 packages, with the licence each one declares in its own `package.json`. Packages
+350 packages, with the licence each one declares in its own `package.json`. Packages
 that are built per platform are in the section after this one.
 
 | Package | Version | Licence |
@@ -159,10 +159,17 @@ that are built per platform are in the section after this one.
 | `@tanstack/router-core` | 1.171.29 | MIT |
 | `@tanstack/store` | 0.9.3 | MIT |
 | `@types/chai` | 5.2.3 | MIT |
+| `@types/d3-color` | 3.1.3 | MIT |
+| `@types/d3-drag` | 3.0.7 | MIT |
+| `@types/d3-interpolate` | 3.0.4 | MIT |
+| `@types/d3-selection` | 3.0.12 | MIT |
+| `@types/d3-transition` | 3.0.9 | MIT |
+| `@types/d3-zoom` | 3.0.9 | MIT |
 | `@types/deep-eql` | 4.0.2 | MIT |
 | `@types/estree` | 1.0.9 | MIT |
 | `@types/node` | 24.13.3 | MIT |
 | `@types/pg` | 8.23.1 | MIT |
+| `@types/react-dom` | 19.3.0 | MIT |
 | `@types/react` | 19.3.0 | MIT |
 | `@types/whatwg-mimetype` | 3.0.2 | MIT |
 | `@types/ws` | 8.18.1 | MIT |
@@ -171,6 +178,8 @@ that are built per platform are in the section after this one.
 | `@vitest/istanbul-lib-report` | 1.0.1 | MIT |
 | `@vitest/mocker` | 5.0.0 | MIT |
 | `@vitest/spy` | 5.0.0 | MIT |
+| `@xyflow/react` | 12.12.1 | MIT |
+| `@xyflow/system` | 0.0.84 | MIT |
 | `abort-controller` | 3.0.0 | MIT |
 | `abstract-logging` | 2.0.1 | MIT |
 | `accepts` | 2.0.0 | MIT |
@@ -194,6 +203,7 @@ that are built per platform are in the section after this one.
 | `call-bind-apply-helpers` | 1.0.2 | MIT |
 | `call-bound` | 1.0.4 | MIT |
 | `chai` | 6.2.2 | MIT |
+| `classcat` | 5.0.5 | MIT |
 | `close-with-grace` | 2.5.0 | MIT |
 | `colorette` | 2.0.20 | MIT |
 | `content-disposition` | 1.1.0 | MIT |
@@ -207,6 +217,15 @@ that are built per platform are in the section after this one.
 | `cron-parser` | 5.10.0 | MIT |
 | `cross-spawn` | 7.0.6 | MIT |
 | `csstype` | 3.2.3 | MIT |
+| `d3-color` | 3.1.1 | ISC |
+| `d3-dispatch` | 3.0.2 | ISC |
+| `d3-drag` | 3.0.1 | ISC |
+| `d3-ease` | 3.0.2 | BSD-3-Clause |
+| `d3-interpolate` | 3.0.2 | ISC |
+| `d3-selection` | 3.0.1 | ISC |
+| `d3-timer` | 3.0.2 | ISC |
+| `d3-transition` | 3.0.2 | ISC |
+| `d3-zoom` | 3.0.1 | ISC |
 | `dateformat` | 4.6.3 | MIT |
 | `debug` | 4.4.3 | MIT |
 | `defu` | 6.1.7 | MIT |
@@ -424,6 +443,7 @@ that are built per platform are in the section after this one.
 | `yaml` | 2.9.0 | ISC |
 | `zod-to-json-schema` | 3.25.2 | ISC |
 | `zod` | 4.5.4 | MIT |
+| `zustand` | 4.5.7 | MIT |
 
 **`@anthropic-ai/claude-agent-sdk`** — declared `SEE LICENSE IN README.md`. The README it points at has no licence section; the package ships `LICENSE.md`, which reads in full: “© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.” Its platform-specific packages, listed in the section below, carry the `claude` executable itself — 217 MB of the product image. **Whether that binary may be redistributed inside a public image is TD-018's open item and is still unverified**; the fallback TD-018 records — install it at image build from the official source, or at first start — is unchanged by this file.
 

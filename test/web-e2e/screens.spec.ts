@@ -117,7 +117,12 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
   // Scoped to the timeline: `refinement` is also an option of the stage-command select. The
   // timeline names the stage in words (TD-033).
-  await expect(page.locator('ol').getByText('Refinement', { exact: true })).toBeVisible();
+  // S-23.5: the flow's list of stages is an `<ol>` too, so the timeline is named.
+  await expect(
+    page
+      .getByRole('list', { name: 'Timeline, newest first' })
+      .getByText('Refinement', { exact: true }),
+  ).toBeVisible();
   // The stage's outcome word, through the word→sentence table (WP-73, backlog 213).
   await expect(page.getByText('Verdict: approve.')).toBeVisible();
   await expect(
@@ -502,6 +507,9 @@ test('the project panels render the vault, the proposals and the budget meter', 
   await expect(page.getByText('$100.00')).toBeVisible();
 
   await page.goto(`/projects/${PROJECT_KEY}/pipeline`);
+  // S-23.5: the canvas leads the tab; the configuration is folded below it.
+  await expect(page.locator('[data-flow-canvas="template"]')).toBeVisible();
+  await page.getByText('Effective configuration', { exact: true }).click();
   await expect(page.getByText('fakehash1')).toBeVisible();
 });
 

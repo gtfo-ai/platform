@@ -31,10 +31,17 @@
  * `Metric` tooltip are opened in the built bundle and must appear, positioned, with no violation —
  * and **Inter is served by `'self'`**, so `font-src 'self'` stayed unchanged and the sign-in
  * headline is Inter Black.
+ *
+ * Since S-23.5, the **flow canvas** (`@xyflow/react`, a lazy chunk with its own stylesheet) and the
+ * first screen **Dialog** (Base UI, the stage dialog): the Pipeline tab's canvas is drawn, laid out
+ * and opened in the built bundle, the task page's live canvas follows a `run:<id>` frame into its
+ * stage dialog's log, both with no violation — and the live edge's dash animation stops under
+ * reduced motion, which React Flow's own stylesheet does not do.
  */
+import type { SseFrame } from '@platform/contracts';
 import { expect, type Page, test } from '@playwright/test';
-import { IDS } from './support/fixtures.js';
-import { resetBackend, signIn } from './support/harness.js';
+import { IDS, liveTranscriptEvent, PROJECT_KEY } from './support/fixtures.js';
+import { publishFrame, resetBackend, signIn, waitForStreamCarrying } from './support/harness.js';
 
 interface CollectedViolation {
   readonly directive: string;
@@ -226,5 +233,105 @@ test('Inter is served from this origin and the sign-in headline is Inter Black (
   for (const file of font.files) {
     expect(new URL(file).origin).toBe(new URL(page.url()).origin);
   }
+  expect(await violations(page)).toEqual([]);
+});
+
+test('the flow canvas and its stage dialog open under the policy without a violation (S-23.5)', async ({
+  page,
+  request,
+}) => {
+  await signIn(page);
+  await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+
+  // The Pipeline tab: a template, drawn by the lazy chunk, laid out left to right.
+  await page.goto(`/projects/${PROJECT_KEY}/pipeline`);
+  const template = page.locator('[data-flow-canvas="template"]');
+  await expect(template).toBeVisible();
+  const refinement = template.locator('[data-stage-card="refinement"]');
+  const implementation = template.locator('[data-stage-card="implementation"]');
+  await expect(implementation).toBeVisible();
+  const [left, right] = await Promise.all([refinement.boundingBox(), implementation.boundingBox()]);
+  expect(left).not.toBeNull();
+  expect(right).not.toBeNull();
+  if (left !== null && right !== null) {
+    // Positioned by CSSOM writes, which the policy does not govern: one row, in pipeline order.
+    expect(right.x).toBeGreaterThan(left.x + left.width);
+    expect(Math.abs(right.y + right.height / 2 - (left.y + left.height / 2))).toBeLessThan(2);
+  }
+  await expect(template.locator('[data-loop-pill="code_review"]')).toHaveText('Review ≤3');
+  const lazyChunks = await page.evaluate(
+    () =>
+      performance
+        .getEntriesByType('resource')
+        .filter((entry) => /\/assets\/flow-canvas-[^/]+\.(js|css)$/.test(entry.name)).length,
+  );
+  expect(lazyChunks).toBe(2);
+
+  // The stage dialog: a Base UI Dialog, opened from the card, closed by Escape, focus returned.
+  await implementation.click();
+  const configuration = page.getByRole('dialog', { name: 'Implementation' });
+  await expect(configuration).toBeVisible();
+  await expect(configuration).toContainText('Implementation notes');
+  const box = await configuration.boundingBox();
+  const viewport = page.viewportSize();
+  if (box !== null && viewport !== null) {
+    // Centred by its own classes: the stylesheet applied, the popup is not at the document's top.
+    expect(Math.abs(box.x + box.width / 2 - viewport.width / 2)).toBeLessThan(4);
+    expect(box.y).toBeGreaterThan(0);
+  }
+  await page.keyboard.press('Escape');
+  await expect(configuration).toBeHidden();
+  await expect(implementation).toBeFocused();
+
+  // The task page: the live graph, its live edge, and a run's dialog following the stream.
+  await page.goto(`/tasks/${IDS.taskFeature}`);
+  const live = page.locator('[data-flow-canvas="task"]');
+  const current = live.locator('[data-stage-card="implementation"]');
+  await expect(current).toHaveAttribute('data-stage-state', 'current');
+  // DEMO-1 has an open question and a pending approval: what needs a person comes first.
+  await expect(current).toContainText('Needs you');
+  await expect(live.locator('.react-flow__edge.animated')).toHaveCount(1);
+  await current.click();
+  const dialog = page.getByRole('dialog', { name: 'Implementation' });
+  await expect(dialog.getByRole('heading', { name: 'Live activity' })).toBeVisible();
+  await expect(dialog.getByText('Running a command')).toBeVisible();
+  const log = dialog.getByTestId('stage-log');
+  await expect(log).toContainText('$ pnpm test');
+  await expect(log).toContainText('12 passed');
+
+  const runTopic = `run:${IDS.run}`;
+  const probe: SseFrame = { frame: 'control', topic: runTopic, type: 'ping', detail: null };
+  // The page retains `run:<id>` while it loads, and a subscription answered by the stream a resync
+  // is replacing can lose it (BACKLOG 815); a reconnect carries every retained topic, so the
+  // frame below proves the dialog follows the stream rather than that race's outcome.
+  expect((await request.post('/__test__/drop-streams')).ok()).toBe(true);
+  await waitForStreamCarrying(request, runTopic, probe, 'ping');
+  const frame: SseFrame = {
+    frame: 'transcript',
+    topic: runTopic,
+    seq: 6,
+    data: liveTranscriptEvent,
+  };
+  expect(await publishFrame(request, runTopic, 'assistant', frame)).toBeGreaterThan(0);
+  await expect(log).toContainText('Streamed after the page was fetched.');
+
+  expect(await violations(page)).toEqual([]);
+});
+
+test('a live edge stops its dash animation under reduced motion (S-23.5)', async ({ page }) => {
+  await signIn(page);
+  await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
+  const animation = async (): Promise<string> =>
+    await page
+      .locator('[data-flow-canvas="task"] .react-flow__edge.animated path')
+      .first()
+      .evaluate((path) => getComputedStyle(path).animationName);
+
+  await page.goto(`/tasks/${IDS.taskFeature}`);
+  await expect(page.locator('[data-flow-canvas="task"] .react-flow__edge.animated')).toHaveCount(1);
+  // Calibrated first: without the preference, React Flow's own animation runs.
+  expect(await animation()).toBe('dashdraw');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect.poll(animation).toBe('none');
   expect(await violations(page)).toEqual([]);
 });

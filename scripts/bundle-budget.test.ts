@@ -109,6 +109,34 @@ describe('the bundle budget guard', () => {
     expect(result.stdout).toContain(`${dist.initialBytes} B gzipped over 3 initial assets`);
   });
 
+  it('refuses React Flow in an initial asset and admits it in a lazy chunk (S-23.5)', () => {
+    // The marker is React Flow's class prefix, which its minified code and its stylesheet carry.
+    const leaked = buildDist({
+      entry: 'a'.repeat(500),
+      styles: 'b'.repeat(200),
+      preload: 'const c = "react-flow__node";',
+    });
+    const refused = run(['--dist', leaked.path, '--budget-bytes', '300000']);
+    expect(refused.status).toBe(1);
+    expect(refused.stdout).toContain('FAIL: bundle:check');
+    expect(refused.stderr).toContain('@xyflow/react is in the initial graph (/assets/preload.js)');
+
+    // The same text in the stylesheet `index.html` links is refused too.
+    const styled = buildDist({ entry: 'a', styles: '.react-flow__edge{stroke:red}' });
+    expect(run(['--dist', styled.path]).stderr).toContain(
+      '@xyflow/react is in the initial graph (/assets/styles.css)',
+    );
+
+    const lazy = buildDist({
+      entry: 'a'.repeat(500),
+      styles: 'b'.repeat(200),
+      lazy: 'const c = "react-flow__node";',
+    });
+    const admitted = run(['--dist', lazy.path, '--budget-bytes', '300000']);
+    expect(admitted.status).toBe(0);
+    expect(admitted.stdout).toContain('PASS: bundle:check');
+  });
+
   it('fails over budget, names the overage and does not suggest raising the number', () => {
     const dist = buildDist({ entry: 'a'.repeat(5000), styles: 'b'.repeat(2000) });
 

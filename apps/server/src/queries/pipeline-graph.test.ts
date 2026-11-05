@@ -171,12 +171,15 @@ describe('the compiled stage graph of every shipped template', () => {
       advisory: false,
       model: null,
       effort: null,
+      produces: null,
     });
     expect(nodes.find((node) => node.id === 'implementation')).toMatchObject({
       kind: 'agent',
       role: 'developer',
       model: 'model-of-implementation',
       effort: 'medium',
+      // S-23.5: the artifact the stage writes, read off the template (the dialog opens it).
+      produces: 'ImplementationNotes',
     });
     // The ready stage leaves backwards by two loops, each on its own edge with its own ceiling.
     expect(
@@ -307,6 +310,7 @@ describe("a task's frozen pipeline", () => {
     expect(graph.nodes.find((node) => node.id === 'code_review')).toMatchObject({
       model: null,
       effort: null,
+      produces: 'ReviewVerdict',
     });
     expect(pipelineGraphSchema.parse(graph)).toEqual(graph);
   });

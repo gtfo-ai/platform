@@ -2621,6 +2621,12 @@ export const pipelineGraphNodeSchema = z.strictObject({
   advisory: z.boolean(),
   model: nonEmptyStringSchema.max(128).nullable(),
   effort: effortSchema.nullable(),
+  /**
+   * The artifact an agent stage writes (`produces` in the template, S-23.5): what the flow canvas's
+   * stage dialog says the stage makes, and which of a task's artifacts it opens. `null` for a stage
+   * that writes none (every gate, human and system stage, and an agent stage declaring none).
+   */
+  produces: artifactTypeSchema.nullable(),
 });
 
 /**

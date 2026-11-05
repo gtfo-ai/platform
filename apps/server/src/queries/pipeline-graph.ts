@@ -183,6 +183,7 @@ export const pipelineGraphOf = (
       advisory: stage.advisory,
       model: agent?.model ?? null,
       effort: agent?.effort ?? null,
+      produces: stage.produces,
     };
   });
   return { template: compiled.templateId, nodes, edges };

@@ -212,3 +212,39 @@ export const READINESS_CRITERION_LABEL: Readonly<Record<string, string>> = {
 /** A readiness criterion's human name, or its id when this build has no word for it. */
 export const readinessCriterionLabel = (id: string): string =>
   Object.hasOwn(READINESS_CRITERION_LABEL, id) ? (READINESS_CRITERION_LABEL[id] ?? id) : id;
+
+/**
+ * The bounded return loops (`tasks.iteration_counters`' keys, the graph edges' `loop`), as the flow
+ * canvas's loop pill says them (S-23.5). A loop the platform does not ship is title-cased, never
+ * printed raw; `humanize.test.ts` holds the table to the domain's `ITERATION_LOOPS`.
+ */
+export const LOOP_LABEL: Readonly<Record<string, string>> = {
+  code_review: 'Review',
+  business_review: 'Acceptance',
+  ci_fix: 'CI fixes',
+  human_rounds: 'Review rounds',
+  refinement_questions: 'Questions',
+  architecture_revisions: 'Plan revisions',
+  rebase: 'Conflict fixes',
+  rebase_rechecks: 'Re-checks',
+  dependency_policy: 'Dependency checks',
+};
+
+export const loopLabel = (slug: string): string =>
+  Object.hasOwn(LOOP_LABEL, slug) ? (LOOP_LABEL[slug] as string) : titleCase(slug);
+
+/** 1 → "1st", 2 → "2nd", 11 → "11th", 23 → "23rd". */
+export const ordinal = (value: number): string => {
+  const tens = value % 100;
+  const suffix =
+    tens >= 11 && tens <= 13
+      ? 'th'
+      : value % 10 === 1
+        ? 'st'
+        : value % 10 === 2
+          ? 'nd'
+          : value % 10 === 3
+            ? 'rd'
+            : 'th';
+  return `${value}${suffix}`;
+};

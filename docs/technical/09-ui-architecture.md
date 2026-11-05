@@ -17,6 +17,8 @@ apps/web/src/
   ui/                # the primitive kit (TD-033): one file per primitive, dependency-light so the
                      # worker's local page can import it — see below
     bot/             # the office mascot: pose and prop grids, <Bot>, <Seat>, bot.css (React only; the worker page imports it)
+  viz/               # the live visualisations (TD-033 decision 8); each draws from data the screens already read
+    flow/            # the flow canvas (S-23.5): model, layout, stage card, list fallback, stage dialog; @xyflow/react only in its lazy chunk
 ```
 
 **The frame and the lazy screens since S-23.4 (TD-033 § 1, research/19 § 5.1).** `app/shell.tsx` is
@@ -61,6 +63,34 @@ has no TanStack Router, can import it. Every primitive has a happy-dom test of i
 | `phase-track.tsx` | `PhaseTrack` (TD-033 decision 7): the stages as an ordered list, a glyph per state (done / current / upcoming / sent back / failed / skipped), `aria-current="step"`, a visually-hidden "Stage 4 of 9: Code review, working: Reading files", and "Code review · Now: Reading files"; `phaseStagesFor` builds it from a task's stage rows or a compiled graph's nodes |
 | `kit.tsx` | the names every screen imported before TD-033, re-implemented on the above: `Button` (`ghost` → `invisible`), `Card` (GitHub's Box, optional subtle `header`), `SectionHeading`, `Badge` (an outlined label), `Field`, `EmptyState` (→ `Blankslate`), `Loading`, `ErrorNotice` (→ danger `Flash`), `Metric` (its definition a `Tooltip`, still `aria-describedby`), the formatters |
 
+**`viz/flow/` since S-23.5 (TD-033 decision 8 (a)).** The pipeline as a clickable graph, on the
+project's **Pipeline** tab (a template, read-only: `PipelineFlow`, over `GET /api/projects/:id/pipeline`)
+and at the top of a **task's page** (its progress, live: `TaskFlow taskId`, self-contained so S-23.9 can
+move it into a tab, over `GET /api/tasks/:id/pipeline`, the task, the agents read and the live run's
+`run:<id>` topic). Pure halves, each with its unit test: `model.ts` (a graph → cards and edges; a
+task's stage states are `PhaseTrack`'s — `phaseStagesFor` — plus *disabled*, the current card's
+activity is `activityOf`'s, a loop pill says "Review ≤3" or "Review · used 1 of 3"), `layout.ts` (no
+layout library: the main path is one row left → right, a stage entered only by a failure or a disabled
+one sits above it, a return between two cards of the row curves below, deeper the further it reaches;
+the first view frames five cards around the current stage, the fit button the whole graph) and
+`activity-rows.ts` (the dialog's "Live activity" rows — one per tool call, thinking burst and text
+burst — and its log lines, from the transcript's blocks). `stage-card.tsx` is the card, a real
+`<button>` with icon + colour + word for its state; `flow-list.tsx` is the same cards as an ordered
+list — rendered `sr-only` beside the canvas (its buttons `tabindex="-1"`, so Tab lands only on the
+visible cards), and shown instead of it below 768 px or when the reader presses **List**;
+`stage-dialog.tsx` is the stage dialog, the first screen use of `ui/dialog.tsx` (`size="lg"`): for a run,
+its header, the live activity list, a terminal-like log (`TerminalLines` in `ui/untrusted.tsx`, following
+the end until the reader scrolls up), a watch-only note naming the seat and *Open run* / *Open artifact*;
+for a template, the stage's configuration, loops and outcomes. **`flow-canvas.tsx` is the only module
+that imports `@xyflow/react`** (MIT, pinned), with its stylesheet and `flow.css` (React Flow's variables
+on our tokens, dashed edges, the reduced-motion stop React Flow's `dashdraw` lacks), and `flow-view.tsx`
+loads it with `import()`: `pnpm bundle:check` refuses React Flow's class prefix in any initial asset
+(`LAZY_ONLY` in `scripts/bundle-budget.mjs`). React Flow is read-only here — nothing drags, connects or
+selects, its own node focus is off so each card is one Tab stop, and the wheel scrolls the page; its
+wrapper carries `role="application"`, which it does not let a caller change. `csp.spec.ts` opens both
+canvases and both dialogs in the built bundle under the production policy, and checks the live edge's
+animation stops under reduced motion.
+
 The account menu in the top bar (`app/shell.tsx`) is the first screen use of Base UI: who is signed
 in, **Theme** as a radio group (Dark / Light / System) and **Sign out**. `app/app.tsx` wraps the tree in
 Base UI's `<CSPProvider disableStyleElements>`, because the production policy has no nonce for the
@@ -82,13 +112,13 @@ Base UI's `<CSPProvider disableStyleElements>`, because the production policy ha
 | Screen | Queries | Live topics | Commands |
 |---|---|---|---|
 | Board | tasks by project (+ counts) | `project:*` | pause/cancel/return/open |
-| Task detail | task, stages, artifacts, questions, runs, checks; **the live stage** (PROGRESS backlogs 455 (1) and 496, 2026-10-06): while a stage run has not ended, a panel above the task header shows a pulsing indicator, the stage and role, how long the run has been going and the **latest progress line** the agent reported through `report_progress` — the run record's `latest_progress`, replaced by any newer `progress` frame on the run's topic, which the panel subscribes to while mounted; the line is untrusted text; **since WP-154** the same panel shows the live run's transcript — the run page's `TranscriptView` over the same store, history from the run's transcript page and live frames from `run:<id>`, bounded to the newest 30 blocks with *Open the full run*, in a lazily loaded chunk so the initial bundle does not carry the renderer — and the **stage timeline lists the newest stage first** (the projection's order is unchanged; the page reverses it), each entry linking to the latest run of its `(stage, attempt)` (`RunRecord.stage` + `attempt`, which `runs.task_stage_id` is resolved from), a run with `start_failure` to the run page's *did not start* panel, and a stage with no run saying so | `task:*`, and `run:<id>` of the live stage run | answer, approve, retry, take over, feedback |
+| Task detail | task, stages, artifacts, questions, runs, checks; **S-23.5**: the task's frozen graph (`GET /api/tasks/:id/pipeline`) as the *Flow* section at the top — the live canvas, its list fallback, a stage's run in the stage dialog; **the live stage** (PROGRESS backlogs 455 (1) and 496, 2026-10-06): while a stage run has not ended, a panel above the task header shows a pulsing indicator, the stage and role, how long the run has been going and the **latest progress line** the agent reported through `report_progress` — the run record's `latest_progress`, replaced by any newer `progress` frame on the run's topic, which the panel subscribes to while mounted; the line is untrusted text; **since WP-154** the same panel shows the live run's transcript — the run page's `TranscriptView` over the same store, history from the run's transcript page and live frames from `run:<id>`, bounded to the newest 30 blocks with *Open the full run*, in a lazily loaded chunk so the initial bundle does not carry the renderer — and the **stage timeline lists the newest stage first** (the projection's order is unchanged; the page reverses it), each entry linking to the latest run of its `(stage, attempt)` (`RunRecord.stage` + `attempt`, which `runs.task_stage_id` is resolved from), a run with `start_failure` to the run page's *did not start* panel, and a stage with no run saying so | `task:*`, and `run:<id>` of the live stage run | answer, approve, retry, take over, feedback |
 | Run detail | run, transcript page (seq range), context pack, prompt, run commands (WP-85: each steer/take-over stop — and since WP-101 each cancel — *pending*, *applied* or *refused* — re-read while one is pending), settings (**WP-112**: the record's `settings_hash` under the header, marked when it differs from the task's previous run and stated in words when either run predates WP-91; the snapshot itself in a *Settings* tab, read only when opened, `transcript.read`); a run that **never started** (PROGRESS backlog 453, `start_failure`) shows a *This run did not start* panel — the diagnosis and the launcher's words as untrusted terminal text, ANSI stripped — in place of the transcript and the steer box, and since WP-154 (b′) for a run **stopped** before its CLI spawn marker too (a cancel, or a hand-back at shutdown: `status` `cancelled` or `terminal_reason` `shutdown`), with the stop's own sentence rather than the workspace's; a run whose unfinished work was saved (PROGRESS backlog 467, `saved_work`) says under the header where it went — the branch (untrusted text) and the commit, and that a retry continues from it — or that the push did not succeed, and the task page's run list marks it *work saved to branch*; the org's model list (**WP-159**, `GET /api/org/models`) for the retry's model select | `run:*` | steer (accepted, then applied or refused), cancel (accepted for the process holding the run when its lease is live, ended in place when not — WP-101), retry with model (**WP-159**: a select over the model list, an unlisted current model kept as its own *not priced* option, *Other…* sending `allow_unlisted_model`; since **WP-167** both the model and the effort select start on *Configured (…)*, naming the run read's `retry_defaults` and sending nothing, and the run's own model and effort are ordinary options that are sent when chosen), feedback |
 | Home (`/`, S-23.7) | org inbox, running runs, projects (+ each project's `needs_human` tasks, and the task read of each row drawn for its ticket key), org budgets (the `month` cap), version; for an admin the setup checklist's facts — integrations, and the **oldest** project's readiness (only below level 1), autonomy and tasks (`features/home-setup.ts`; derived on the client, research/19's O1) | `org` | — (links: answer/approve/open the task, Continue setup) |
 | Agents | running runs | `org` | cancel |
 | Inbox | pending questions/approvals | `org` | answer/approve |
 | Knowledge | documents tree, document, proposals, health | `project:*` | approve/reject/edit proposal, edit doc (creates commit/MR) |
-| Pipeline settings | effective config with sources; templates | — | save (validated), export to repo |
+| Pipeline settings | **S-23.5**: the enabled templates as graphs (`GET /api/projects/:id/pipeline`) on the flow canvas, a template picker, a stage's configuration in its dialog; the effective config with sources folded below (*Effective configuration*) | `project:*` | save (validated), export to repo |
 | Project settings | the wizard's mirror (product/18:55); **WP-113**: the *Project prompt files* card — the last reading's commit, its files under `.agentic/prompts/` (length and cut, never the text) and what each stage is given (`stage_prompts`) | — | re-read now (`POST …/config/refresh`) |
 | Organisation settings | `GET /api/org`; **WP-113**: after a save, the projects it capped (`capped_projects`, before → after) | — | save a section (`PATCH /api/org`) |
 | Statistics | rollups by day/week/month | — | CSV export |

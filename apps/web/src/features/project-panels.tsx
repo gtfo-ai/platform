@@ -1,6 +1,6 @@
 /**
  * The three project panels that read a documented endpoint and show it: knowledge, budgets and the
- * effective pipeline configuration.
+ * pipeline — its templates as a canvas (S-23.5) over the effective configuration.
  *
  * They are **read-only**, and that is the honest state of them. Editing a knowledge document opens
  * a commit or an MR (technical/08 `PUT /api/projects/:id/kb/doc`), editing the pipeline validates
@@ -25,6 +25,7 @@ import {
   useProjectConfig,
 } from '../app/queries.js';
 import { useTopics } from '../realtime/provider.js';
+import { DetailsDisclosure } from '../ui/details.js';
 import {
   Badge,
   Button,
@@ -39,6 +40,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { CodeText, JsonView, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { PipelineFlow } from '../viz/flow/flow-view.js';
 
 /**
  * Where a proposal came from, in a maintainer's words — `knowledge_proposal_source` (WP-35).
@@ -398,13 +400,32 @@ export const BudgetsScreen = ({ projectKey }: { readonly projectKey: string }): 
 const isStatusMappingKey = (key: string): boolean =>
   key === 'status_mapping' || key.startsWith('status_mapping.');
 
+/**
+ * The Pipeline tab (S-23.5, TD-033 decision 8 (a)): the project's enabled templates as a canvas —
+ * pick one, click a stage for its configuration — and, folded below it, the effective
+ * configuration with the source of every key, which is what the tab was before the canvas.
+ */
 export const PipelineScreen = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
   const projectId = useProjectId(projectKey);
+  return (
+    <div className="flex flex-col gap-4">
+      <PipelineFlow projectId={projectId} />
+      <DetailsDisclosure summary="Effective configuration">
+        <EffectiveConfiguration projectId={projectId} />
+      </DetailsDisclosure>
+    </div>
+  );
+};
+
+const EffectiveConfiguration = ({
+  projectId,
+}: {
+  readonly projectId: string | null;
+}): ReactElement => {
   const config = useProjectConfig(projectId);
 
   return (
     <div className="flex flex-col gap-3">
-      <SectionHeading>Effective configuration</SectionHeading>
       {config.isPending ? <Loading label="Loading configuration…" /> : null}
       {config.isError ? (
         <ErrorNotice

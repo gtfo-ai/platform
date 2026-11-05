@@ -25,6 +25,7 @@
     "@primer/octicons-react": "19.42.0",
     "@tanstack/react-query": "5.102.8",
     "@tanstack/react-router": "1.170.34",
+    "@xyflow/react": "12.12.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zod": "4.5.4"

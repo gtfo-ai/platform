@@ -547,6 +547,21 @@ what* lists it: the start, with the person who pressed it. Pressing **Start** tw
 Left: the stage timeline. Centre: artifacts, runs, questions and approvals. Right: checks, cost and
 links. Live on that task's topic.
 
+**The Flow, at the top of the page**, is the task's own pipeline as a graph, the way it was frozen
+when the task started. Each card says where the task is: *Done* with how long the stage took and what
+its run cost, *Sent back*, *Failed*, *Skipped*, *Upcoming*, *Disabled* — and on the current stage
+what the agent is doing, *Working* with *Now: Reading files*, *Needs you* when a question or approval
+is waiting, *Stuck* when it has been silent too long — with the model, and *2nd attempt* when the
+stage is running again. The connector into the stage that is running moves; a curve below the row
+counts how often a loop has been spent (*Review · used 1 of 3*). Click a card to watch that stage's
+run: a **Live activity** list (the time, a dot, what the agent did — one row per tool call or burst
+of thinking or writing) beside a **Log** that follows the end of the run until you scroll up (*Follow
+the end* resumes), both updating as the agent works. It is watch-only and says where the agent runs
+(the platform's server or a named worker); *Open run* goes to the run page, where you can steer or
+stop it, and *Open artifact* opens what the stage wrote on this page. A stage no agent runs (a gate,
+Ready to merge) shows its configuration instead. **List**, **Full screen** and the narrow-screen list
+work as on the Pipeline tab (section 8).
+
 **The stage timeline lists the newest stage first**, and each entry opens the run of that stage
 attempt: *Open the run* (*Open the run (live)* while it is running) goes to its transcript, and when
 the attempt ran more than once — a retry of the same attempt, say — to the latest run. *Why the run
@@ -982,10 +997,22 @@ needs an editor the application does not yet include, so the panel is read-only 
 
 ## 8. Pipeline and budgets
 
-**A project → Pipeline** shows the effective configuration with the source of every key (a default,
-the organisation, the project, or the repository's `.agentic/config.yml`) and when the repository's
-file was last read. Read-only here: the settings are edited on the project's settings page, which
-also proposes them to the repository (section 1, step 5); a YAML editor in the browser is not built.
+**A project → Pipeline** draws each template the project has enabled as a graph: pick one under
+**Template**. Each stage is a card — its name, the agent's role, the model and effort it runs with —
+connected in the order a task goes when everything passes; a stage that only a failure enters (the
+conflict resolution behind the rebase check) or that the pipeline skips (marked *Disabled*) sits above
+the row, and every way a stage can send the task back is a dashed curve below it with its limit
+(*Review ≤3*: the review may send the work back at most three times). Click a card for the stage's
+configuration: its role, model, what it writes, its loops and where each of its outcomes goes. Drag
+to pan; the **+**, **−** and fit buttons zoom (the fit button shows the whole pipeline); **Full
+screen** gives the graph the window, Escape gives it back. On a narrow screen, or with **List**, the
+same stages are an ordered list.
+
+**Effective configuration**, folded below the graph, shows the configuration with the source of every
+key (a default, the organisation, the project, or the repository's `.agentic/config.yml`) and when the
+repository's file was last read. Read-only here: the settings are edited on the project's settings
+page, which also proposes them to the repository (section 1, step 5); a YAML editor in the browser is
+not built.
 
 **A project → Budgets** shows the budget bars. A budget stops a *new* run from starting: the check
 happens when a run is admitted, so a run already under way finishes and is accounted for. There are

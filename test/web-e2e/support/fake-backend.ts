@@ -694,7 +694,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
             : item,
         ),
       };
-      const routes: Readonly<Record<string, unknown>> = {
+      const routes: Record<string, unknown> = {
         '/api/version': fixtures.version,
         '/api/org/users': fixtures.orgUsers,
         '/api/org/audit': fixtures.audit,
@@ -746,6 +746,11 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         [`/api/runs/${fixtures.IDS.run}/context-pack`]: fixtures.runContextPack,
         [`/api/runs/${fixtures.IDS.run}/commands`]: fixtures.runCommandLog,
       };
+      // S-23.5: each task's frozen graph, and the project's enabled templates.
+      for (const [taskId, graph] of Object.entries(fixtures.taskPipelines)) {
+        routes[`/api/tasks/${taskId}/pipeline`] = graph;
+      }
+      routes[`/api/projects/${fixtures.IDS.project}/pipeline`] = fixtures.projectPipelines;
       const body = routes[path];
       if (body !== undefined) {
         json(response, 200, body);

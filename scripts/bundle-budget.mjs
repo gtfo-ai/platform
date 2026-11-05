@@ -43,6 +43,12 @@
  * `index.html`, no assets found in it, or an asset the parser named that is not on disk are all
  * failures with their own message.
  *
+ * ## And what must not be in it at all
+ *
+ * A library TD-033 makes lazy (`LAZY_ONLY`, today `@xyflow/react`) is refused in any initial asset
+ * by a marker string of its own, whatever the total — a budget with room to spare would otherwise
+ * absorb it silently.
+ *
  * Usage:
  *   node scripts/bundle-budget.mjs                     build, then measure apps/web/dist
  *   node scripts/bundle-budget.mjs --no-build          measure whatever is already in dist
@@ -90,6 +96,29 @@ export const initialAssets = (html) => {
     }
   }
   return [...new Set(found)];
+};
+
+/**
+ * Libraries that must never be in the initial graph, however small the total stays (TD-033
+ * decision 10: the flow canvas is a lazy chunk). Each is named by a string its **own** code carries
+ * — React Flow's class prefix is in every component it renders and in its stylesheet — so a static
+ * import that pulled it into a chunk `index.html` requests fails here by name, even while the
+ * budget still holds. A marker that stopped matching would make this check pass vacuously, which
+ * `scripts/bundle-budget.test.ts` covers by planting it.
+ */
+export const LAZY_ONLY = [{ name: '@xyflow/react', marker: 'react-flow__' }];
+
+/** `[library, asset]` for every lazy-only library found in an initial asset. */
+export const lazyOnlyViolations = (contents) => {
+  const found = [];
+  for (const { href, text } of contents) {
+    for (const { name, marker } of LAZY_ONLY) {
+      if (text.includes(marker)) {
+        found.push([name, href]);
+      }
+    }
+  }
+  return found;
 };
 
 /** `/assets/index-abc.js` in a built page is `<dist>/assets/index-abc.js` on disk. */
@@ -144,17 +173,28 @@ if (assets.length === 0) {
 
 let total = 0;
 const rows = [];
+const contents = [];
 for (const href of assets) {
   const path = assetPath(dist, href);
   if (!existsSync(path)) {
     fail(`${indexHtml} references ${href}, which is not in ${dist}`);
   }
-  const bytes = gzipSync(readFileSync(path)).byteLength;
+  const body = readFileSync(path);
+  const bytes = gzipSync(body).byteLength;
   total += bytes;
   rows.push(`  ${href}  ${bytes} B gz`);
+  contents.push({ href, text: body.toString('utf8') });
 }
 
 process.stderr.write(`${rows.join('\n')}\n`);
+
+const leaked = lazyOnlyViolations(contents);
+if (leaked.length > 0) {
+  fail(
+    `${leaked.map(([name, href]) => `${name} is in the initial graph (${href})`).join('; ')}.\n` +
+      'It must stay in a lazy chunk: import it only from a module loaded with import().',
+  );
+}
 
 if (total > budget) {
   fail(

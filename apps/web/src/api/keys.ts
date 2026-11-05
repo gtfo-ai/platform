@@ -81,6 +81,8 @@ export const queryKeys = {
   kbProposals: (id: string) => ['project', id, 'kb', 'proposals'] as const,
   /** WP-95: under the project's prefix, so a `project:<id>` frame refreshes the health panel. */
   kbHealth: (id: string) => ['project', id, 'kb', 'health'] as const,
+  /** S-23.5: the project's enabled templates as graphs (the Pipeline tab's canvas). */
+  projectPipelines: (id: string) => ['project', id, 'pipeline'] as const,
 
   task: (id: string) => ['task', id] as const,
   /**
@@ -95,6 +97,11 @@ export const queryKeys = {
   taskAudit: (id: string) => ['task', id, 'audit'] as const,
   /** The epic split's queue (WP-44): under the task's prefix, so a `task:<id>` frame refreshes it. */
   taskBreakdown: (id: string) => ['task', id, 'breakdown'] as const,
+  /**
+   * S-23.5: the task's compiled stage graph, under the task's prefix — a `task:<id>` frame (a stage
+   * run started, so the model it ran with changed) refreshes the flow canvas.
+   */
+  taskPipeline: (id: string) => ['task', id, 'pipeline'] as const,
   run: (id: string) => ['run', id] as const,
   runMessages: (id: string) => ['run', id, 'messages'] as const,
   runPrompt: (id: string) => ['run', id, 'prompt'] as const,

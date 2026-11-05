@@ -17,13 +17,16 @@ import {
   taskStageStateSchema,
   taskStateSchema,
 } from '@platform/contracts';
-import { READINESS_CRITERION_IDS, SHIPPED_STAGE_IDS } from '@platform/domain';
+import { ITERATION_LOOPS, READINESS_CRITERION_IDS, SHIPPED_STAGE_IDS } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import {
   APPROVAL_KIND_LABEL,
   APPROVAL_STATUS_LABEL,
   ARTIFACT_TYPE_LABEL,
   GATE_LABEL,
+  LOOP_LABEL,
+  loopLabel,
+  ordinal,
   QUESTION_STATUS_LABEL,
   READINESS_CRITERION_LABEL,
   ROLE_LABEL,
@@ -111,5 +114,33 @@ describe('humanize', () => {
     );
     expect(readinessCriterionLabel('R99')).toBe('R99');
     expect(readinessCriterionLabel('constructor')).toBe('constructor');
+  });
+});
+
+describe('the loop words and ordinals (S-23.5)', () => {
+  it('names every loop the domain ships, and nothing else', () => {
+    expect(Object.keys(LOOP_LABEL).sort()).toEqual([...ITERATION_LOOPS].sort());
+    expect(loopLabel('code_review')).toBe('Review');
+    // A loop this build does not ship is title-cased rather than printed raw.
+    expect(loopLabel('custom_loop')).toBe('Custom Loop');
+    // An inherited property name is a slug like any other, not a lookup hit.
+    expect(loopLabel('constructor')).toBe('Constructor');
+  });
+
+  it('spells ordinals, the teens included', () => {
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map(ordinal)).toEqual([
+      '1st',
+      '2nd',
+      '3rd',
+      '4th',
+      '11th',
+      '12th',
+      '13th',
+      '21st',
+      '22nd',
+      '23rd',
+      '101st',
+      '111th',
+    ]);
   });
 });

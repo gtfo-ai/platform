@@ -21,7 +21,7 @@
  * password nobody could mistake for a credential.
  */
 
-import type { TranscriptEvent } from '@platform/contracts';
+import type { PipelineTemplate, TranscriptEvent } from '@platform/contracts';
 import {
   agentsResponseSchema,
   autonomyResponseSchema,
@@ -42,6 +42,7 @@ import {
   orgSettingsResponseSchema,
   orgStatsResponseSchema,
   orgUsersResponseSchema,
+  pipelineGraphSchema,
   projectAuditResponseSchema,
   projectBindingsResponseSchema,
   projectSummarySchema,
@@ -60,7 +61,9 @@ import {
   transcriptEventSchema,
   versionResponseSchema,
 } from '@platform/contracts';
+import { compilePipeline, resolveIterationLimits, SHIPPED_TEMPLATES } from '@platform/domain';
 import { SHIPPED_PROVIDERS, toIntegrationProvider } from '@platform/integrations';
+import { pipelineGraphOf } from '../../../apps/server/src/queries/pipeline-graph.js';
 
 const id = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
@@ -1236,3 +1239,32 @@ export const ticketStatuses = ticketStatusesResponseSchema.parse({
     { id: '10004', name: 'Sent back', category: 'todo', raw_category: 'new' },
   ],
 });
+
+/**
+ * The stage graphs (S-23.5's flow canvas): **the server's own builder** over the shipped templates,
+ * not a hand-drawn copy — a fake kinder than the read would let the canvas pass on a graph the
+ * server never sends (standing rule 1). The task's graph is the feature template as DEMO-1 froze it,
+ * with the implementation stage's model the run ran with.
+ */
+const graphOf = (template: string, models: Readonly<Record<string, string>>) =>
+  pipelineGraphSchema.parse(
+    pipelineGraphOf(
+      compilePipeline(template, SHIPPED_TEMPLATES[template] as PipelineTemplate, null, false),
+      {
+        limits: resolveIterationLimits(),
+        agentOf: (stage) => ({ model: models[stage] ?? 'claude-sonnet-5', effort: 'high' }),
+      },
+    ),
+  );
+
+export const featurePipeline = graphOf('feature', { implementation: 'claude-opus-5' });
+
+/** `GET /api/tasks/:id/pipeline` per task, by the template each task froze. */
+export const taskPipelines: Readonly<Record<string, unknown>> = {
+  [IDS.taskFeature]: featurePipeline,
+  [IDS.taskBug]: graphOf(bugTask.template, {}),
+  [IDS.taskTaken]: featurePipeline,
+  [IDS.taskEpic]: graphOf(epicTaskDetail.task.template, {}),
+};
+
+export const projectPipelines = { items: [featurePipeline, graphOf('bug', {})] };

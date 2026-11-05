@@ -103,6 +103,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { DownloadLink, ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { TaskFlow } from '../viz/flow/flow-view.js';
 import { AskThread } from './ask-thread.js';
 import { BreakdownPanel } from './breakdown-panel.js';
 import { unmeasuredRunsText } from './cost-text.js';
@@ -1434,6 +1435,10 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
 
   return (
     <div className="grid gap-4 lg:grid-cols-[16rem_1fr_18rem]">
+      {/* S-23.5: the task's pipeline as a live graph, across the page above everything else. */}
+      <div className="min-w-0 lg:col-span-3">
+        <TaskFlow taskId={taskId} />
+      </div>
       <aside className="flex flex-col gap-2">
         <SectionHeading>Stage timeline</SectionHeading>
         {stages.length === 0 ? (

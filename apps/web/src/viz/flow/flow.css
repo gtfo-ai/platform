@@ -1,0 +1,81 @@
+/*
+ * The flow canvas in the platform's tokens (TD-033 decision 8 (a)): React Flow's own variables
+ * pointed at the semantic tokens of `styles.css`, so the canvas follows the theme without a second
+ * palette — a dotted ground on the canvas colour, controls like the rest of the kit, dashed
+ * connectors. Imported by `flow-canvas.tsx` only, so it travels in the canvas's lazy chunk beside
+ * `@xyflow/react/dist/style.css`, and it holds no base colour of its own (`ui/contrast.test.ts`
+ * keeps those in `styles.css`'s token blocks).
+ */
+.agentic-flow .react-flow {
+  --xy-background-color: var(--bg-canvas);
+  --xy-background-pattern-color: var(--border-default);
+  --xy-edge-stroke: var(--border-input);
+  --xy-edge-stroke-width: 1.5;
+  --xy-edge-label-background-color: var(--bg-canvas);
+  --xy-edge-label-color: var(--fg-muted);
+  --xy-controls-button-background-color: var(--bg-subtle);
+  --xy-controls-button-background-color-hover: var(--bg-muted);
+  --xy-controls-button-color: var(--fg-default);
+  --xy-controls-button-color-hover: var(--fg-default);
+  --xy-controls-button-border-color: var(--border-default);
+  --xy-controls-box-shadow: var(--shadow-overlay);
+  --xy-attribution-background-color: transparent;
+  --xy-node-background-color: transparent;
+  --xy-node-border: none;
+  --xy-node-boxshadow-hover: none;
+  --xy-node-boxshadow-selected: none;
+  background-color: var(--bg-canvas);
+}
+
+/* A card is the node: React Flow's own box around it draws nothing. */
+.agentic-flow .react-flow__node {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The handles exist for the edges to attach to; nobody connects anything. */
+.agentic-flow .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+  min-width: 1px;
+  min-height: 1px;
+  width: 1px;
+  height: 1px;
+  border: 0;
+}
+
+/* Dashed connectors; the way the task went is drawn brighter, the live one in the beacon. */
+.agentic-flow .react-flow__edge-path {
+  stroke-dasharray: 6 5;
+}
+
+.agentic-flow .flow-edge--traversed .react-flow__edge-path {
+  stroke: var(--fg-muted);
+}
+
+.agentic-flow .react-flow__edge.animated .react-flow__edge-path {
+  stroke: var(--running-fg);
+  stroke-dasharray: 5;
+}
+
+.agentic-flow .react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+.agentic-flow .react-flow__attribution a {
+  color: var(--fg-subtle);
+}
+
+/*
+ * React Flow animates a live edge's dashes with an infinite `dashdraw` and does not ask about
+ * reduced motion (research/19 § 11). product/10 says reduced motion is a rule, so the dashes stand
+ * still: the colour still says which edge is live.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .agentic-flow .react-flow__edge.animated path,
+  .agentic-flow .react-flow__connection .animated {
+    animation: none;
+  }
+}
