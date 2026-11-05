@@ -139,7 +139,6 @@ const proberFor = (hosts: readonly string[]) =>
     executor: createIntegrationActionExecutor({
       auditLog: integrationAdapters.createPostgresIntegrationAuditLog({
         unitOfWork: eventing.unitOfWork,
-        eventStore: eventing.store,
         ids: { next: () => randomUUID() as Id },
       }),
       egress: createIntegrationEgressPolicy(hosts),

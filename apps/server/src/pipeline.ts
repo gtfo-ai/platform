@@ -512,13 +512,12 @@ export const composeIntegrationStack = (
    * BD-003's audit sink, built here and **not** accepted from a caller (standing rule 31/35).
    *
    * It owns the `UnitOfWork` because the row and its `integration.action.performed` / `.failed`
-   * event have to commit together, and the read side because it allocates the integration stream's
-   * sequence before opening that transaction — the envelope a `NormalisedEvent` deliberately stops
-   * short of. `postgres-audit-log.ts` carries the reasoning and the conflict retry.
+   * event have to commit together, and because it allocates the integration stream's sequence
+   * inside that transaction, under the stream's lock — the envelope a `NormalisedEvent`
+   * deliberately stops short of. `postgres-audit-log.ts` carries the reasoning (BACKLOG 970).
    */
   const auditLog = integrationAdapters.createPostgresIntegrationAuditLog({
     unitOfWork: options.eventing.unitOfWork,
-    eventStore: options.eventing.store,
     ids,
     logger: options.logger,
   });

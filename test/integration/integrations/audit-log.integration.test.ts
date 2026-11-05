@@ -9,8 +9,9 @@
  *    transaction, must leave **no** row behind. Nothing else in the repository can produce that
  *    ordering, and it is the one property BD-003 rests on ("the audit and the log can never
  *    disagree").
- *  - **the retry works against the real lock.** Two `record` calls racing on one integration stream
- *    both land, with distinct sequences, because the loser re-reads and retries.
+ *  - **the retry works against the real guard**, for a sequence read stale through the test seam;
+ *    and **two writers of one stream wait for each other** on the stream's advisory lock rather
+ *    than racing for its sequence (BACKLOG 970).
  *  - **`redaction_count` in both directions, through the real executor** — the acceptance criterion
  *    of this work package. One action whose redactor holds the credential the payload carries, one
  *    whose redactor holds nothing, and the stored payloads of both are read back. The second row's
@@ -29,6 +30,7 @@ import {
   noSecretsRedactor,
   type SecretRedactor,
   StreamConflictError,
+  type UnitOfWork,
 } from '@platform/application';
 import type { Id, IsoDateTime, JsonObject } from '@platform/contracts';
 import {
@@ -116,7 +118,6 @@ const truncate = async (): Promise<void> => {
 const auditLog = () =>
   integrationAdapters.createPostgresIntegrationAuditLog({
     unitOfWork: eventing.unitOfWork,
-    eventStore: eventing.store,
     ids: { next: () => randomUUID() as Id },
   });
 
@@ -224,7 +225,7 @@ describe('a minted credential’s shape beside its audit row (WP-80)', () => {
     await auditLog().record(auditEntryFor({ integrationId, projectId, taskId }));
     const stale = integrationAdapters.createPostgresIntegrationAuditLog({
       unitOfWork: eventing.unitOfWork,
-      eventStore: { nextStreamSequence: async () => 1 },
+      readSequence: async () => 1,
       ids: { next: () => randomUUID() as Id },
       maxSequenceAttempts: 1,
     });
@@ -275,7 +276,7 @@ describe('the audit row and its event are one transaction', () => {
 
     const stale = integrationAdapters.createPostgresIntegrationAuditLog({
       unitOfWork: eventing.unitOfWork,
-      eventStore: { nextStreamSequence: async () => 1 },
+      readSequence: async () => 1,
       ids: { next: () => randomUUID() as Id },
       maxSequenceAttempts: 1,
     });
@@ -304,11 +305,9 @@ describe('the audit row and its event are one transaction', () => {
     let reads = 0;
     const racing = integrationAdapters.createPostgresIntegrationAuditLog({
       unitOfWork: eventing.unitOfWork,
-      eventStore: {
-        nextStreamSequence: async (streamType, streamId) => {
-          reads += 1;
-          return reads === 1 ? 1 : eventing.store.nextStreamSequence(streamType, streamId);
-        },
+      readSequence: async (sql, streamId) => {
+        reads += 1;
+        return reads === 1 ? 1 : integrationAdapters.readNextSequence(sql, streamId);
       },
       ids: { next: () => randomUUID() as Id },
     });
@@ -322,6 +321,97 @@ describe('the audit row and its event are one transaction', () => {
     );
     expect(events.map((row) => Number(row.stream_seq))).toEqual([1, 2]);
     expect(events.every((row) => row.stream_type === 'integration')).toBe(true);
+  });
+});
+
+/**
+ * BACKLOG 970: the integration stream is the hottest stream the platform has — every successful
+ * provider call on a binding appends to it — and its sequence used to be read before the
+ * transaction and a lost race retried four times. Under CI's load two processes running one gate
+ * entry's duties lost four in a row, the audit threw, and a diff read that had **succeeded** was
+ * reported failed, forgotten by the coalescer and made again
+ * (`test/e2e/topology/two-processes.e2e.test.ts`: "runner read the diff 2 times").
+ *
+ * Staged rather than raced, for the reason the retry test above gives: between this writer's
+ * sequence read and its append — on **every** attempt — another writer records on the same stream.
+ * With the read outside the transaction the other writer commits each time, every attempt loses,
+ * and the fourth throws. With the stream lock the other writer **waits** for this one (asserted on
+ * `pg_locks`, not on a timer), so this writer lands on its first attempt and the other right after.
+ */
+describe('two writers of one integration stream wait for each other (BACKLOG 970)', () => {
+  beforeEach(truncate);
+
+  /** Resolves once some backend of this test's database waits on an advisory lock. */
+  const waitingOnAdvisoryLock = (stop: { done: boolean }): Promise<'waiting'> =>
+    new Promise((resolve, reject) => {
+      const poll = async (): Promise<void> => {
+        while (!stop.done) {
+          const { rows: waiting } = await pool.query(
+            `select 1 from pg_locks l join pg_database d on d.oid = l.database
+              where l.locktype = 'advisory' and not l.granted and d.datname = current_database()`,
+          );
+          if (waiting.length > 0) {
+            resolve('waiting');
+            return;
+          }
+          await new Promise((wake) => setTimeout(wake, 10));
+        }
+      };
+      poll().catch(reject);
+    });
+
+  it('lands a write on its first attempt while another writer records on its stream mid-write', async () => {
+    const competitors: Promise<void>[] = [];
+    const interposing: UnitOfWork = {
+      transaction: async (fn) =>
+        eventing.unitOfWork.transaction(async (scope) =>
+          fn({
+            ...scope,
+            events: {
+              append: async (events) => {
+                // This writer has read its sequence and inserted its row; another writer of the
+                // same stream records now, through the plain unit of work.
+                const competitor = auditLog().record(
+                  auditEntryFor(
+                    { integrationId, projectId, taskId },
+                    { action: `competitor_${competitors.length + 1}` },
+                  ),
+                );
+                competitors.push(competitor);
+                const stop = { done: false };
+                try {
+                  await Promise.race([competitor, waitingOnAdvisoryLock(stop)]);
+                } finally {
+                  stop.done = true;
+                }
+                return scope.events.append(events);
+              },
+            },
+          }),
+        ),
+    };
+    const writer = integrationAdapters.createPostgresIntegrationAuditLog({
+      unitOfWork: interposing,
+      ids: { next: () => randomUUID() as Id },
+    });
+
+    const outcome = await writer
+      .record(auditEntryFor({ integrationId, projectId, taskId }, { action: 'get_diff' }))
+      .then(
+        () => 'recorded',
+        (error: unknown) => (error instanceof StreamConflictError ? 'conflict' : error),
+      );
+    await Promise.allSettled(competitors);
+
+    expect(outcome).toBe('recorded');
+    // One attempt: the competitor never got between the read and the append.
+    expect(competitors).toHaveLength(1);
+    await expect(competitors[0]).resolves.toBeUndefined();
+    expect((await rows()).map((row) => row.action)).toEqual(['get_diff', 'competitor_1']);
+    const { rows: events } = await pool.query<{ stream_seq: string }>(
+      'select stream_seq from events order by stream_seq',
+    );
+    expect(events.map((row) => Number(row.stream_seq))).toEqual([1, 2]);
   });
 });
 

@@ -53,6 +53,8 @@ interface Harness {
   readonly committed: readonly { text: string; values: readonly unknown[] }[];
   readonly appended: readonly DomainEvent[];
   readonly sequenceReads: readonly { streamType: StreamType; streamId: Id }[];
+  /** Every attempt's stream lock, sequence read and row insert, in the order they ran. */
+  readonly steps: readonly ('lock' | 'read' | 'insert')[];
   /** Broadcasts of *committed* transactions only — `pg_notify` is delivered on commit. */
   readonly published: readonly BroadcastMessage[];
 }
@@ -65,6 +67,7 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
   const appended: DomainEvent[] = [];
   const sequenceReads: { streamType: StreamType; streamId: Id }[] = [];
   const published: BroadcastMessage[] = [];
+  const steps: ('lock' | 'read' | 'insert')[] = [];
   let remaining = conflicts;
   let nextSeq = 7;
 
@@ -75,6 +78,15 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
       const pendingBroadcasts: BroadcastMessage[] = [];
       const sql: SqlExecutor = {
         query: async (text, values = []) => {
+          if (/pg_advisory_xact_lock/.test(text)) {
+            // BACKLOG 970: the stream lock, which is not a write and is released with the
+            // transaction — recorded as a step, never as a committed statement.
+            steps.push('lock');
+            return { rows: [], rowCount: 1 };
+          }
+          if (/insert into integration_actions/.test(text)) {
+            steps.push('insert');
+          }
           pending.push({ text, values });
           return { rows: [], rowCount: 1 };
         },
@@ -114,11 +126,10 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
   return {
     log: createPostgresIntegrationAuditLog({
       unitOfWork,
-      eventStore: {
-        nextStreamSequence: async (streamType, streamId) => {
-          sequenceReads.push({ streamType, streamId });
-          return nextSeq;
-        },
+      readSequence: async (_sql, streamId) => {
+        steps.push('read');
+        sequenceReads.push({ streamType: 'integration', streamId });
+        return nextSeq;
       },
       ids: { next: () => `00000000-0000-4000-8000-00000000e00${sequenceReads.length}` as Id },
       ...(maxSequenceAttempts === undefined ? {} : { maxSequenceAttempts }),
@@ -126,6 +137,7 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
     committed,
     appended,
     sequenceReads,
+    steps,
     published,
   };
 };
@@ -204,7 +216,19 @@ describe('createPostgresIntegrationAuditLog', () => {
       expect(harness.committed).toHaveLength(1);
       expect(harness.appended).toEqual([]);
       expect(harness.sequenceReads).toEqual([]);
+      // Nor does it take the stream lock: it must never queue behind the stream's writers.
+      expect(harness.steps).toEqual(['insert']);
     }
+  });
+
+  it('takes the stream lock before it reads the sequence, inside the transaction, on every attempt', async () => {
+    // BACKLOG 970: a sequence read before the lock is the race this adapter used to lose four
+    // times in a row under load. The lock is per attempt because it is released with each rolled
+    // back transaction.
+    const harness = harnessWith(1);
+    await harness.log.record(entry());
+    expect(harness.steps).toEqual(['lock', 'read', 'insert', 'lock', 'read', 'insert']);
+    expect(harness.committed).toHaveLength(1);
   });
 
   it('drafts integration.action.failed for a failed call, with the redacted error', async () => {

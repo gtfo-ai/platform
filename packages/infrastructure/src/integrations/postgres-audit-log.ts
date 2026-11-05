@@ -31,18 +31,29 @@
  * "Producer: adapters" and matches the `{kind: 'integration'}` actor the drafts already carry;
  * `correlation_id` is the task, which is exactly what technical/03 says that envelope field is for.
  *
- * The sequence comes from `EventStore.nextStreamSequence`, read **before** the transaction opens,
- * the way `knowledge/indexer.ts` does it. Two things make that safe rather than optimistic
- * hand-waving:
+ * **The sequence is read inside the transaction, under a per-stream advisory lock** (BACKLOG 970).
+ * Every successful provider call on a binding — every read included — appends to that one stream,
+ * so it is the hottest stream the platform has: two processes running a gate entry's duties side by
+ * side write to it many times a second. It used to be read **before** the transaction opened and a
+ * lost race retried, up to four times; under CI's load four losses in a row happened, the audit
+ * threw, and a provider call that had **succeeded** reached its caller as a failure — so the job
+ * retried and made the call a second time (a read of the merge request's diff, measured in
+ * `test/e2e/topology/two-processes.e2e.test.ts`; for a mutation without an idempotency key, a
+ * second effect). Now:
  *
- *  1. the `events_enforce_stream_seq` trigger takes the `event_streams` row lock inside its own
- *     upsert (migration 0005), so a stale sequence is a `StreamConflictError` and never a silently
- *     mis-ordered stream — this is the *whole* reason the port documents that error;
- *  2. a conflict is **retried** here, up to {@link DEFAULT_MAX_SEQUENCE_ATTEMPTS} times, with the
- *     sequence re-read each time. Nothing was committed, so the retry re-inserts the row rather
- *     than duplicating it. Two outbound calls on one integration genuinely do race — two stage
- *     workers, two processes — and without the retry the *audit* would be the thing that failed
- *     the action.
+ *  1. the transaction takes `pg_advisory_xact_lock` on `integration_stream/<integration id>` before
+ *     it reads `event_streams.last_seq`, so two writers of one stream **wait** for each other instead
+ *     of racing — the lock is released at commit, and under READ COMMITTED the next holder's read
+ *     sees the previous holder's sequence. The application role holds `SELECT` only on
+ *     `event_streams` and must not lock its row (technical/03), which is why the lock is advisory;
+ *     the transaction is two inserts long, so serialising it costs one round trip per writer;
+ *  2. the read goes through the **transaction's own connection**, never a second one from the pool,
+ *     so the lock adds no connection to the pool floor;
+ *  3. the `events_enforce_stream_seq` trigger still guards the append (migration 0005), and a
+ *     `StreamConflictError` is still **retried**, up to {@link DEFAULT_MAX_SEQUENCE_ATTEMPTS} times:
+ *     every writer of an `integration` stream is this adapter, so a conflict now needs a writer
+ *     that bypasses the lock — the retry is the defence, not the mechanism. Nothing was committed,
+ *     so a retry re-inserts the row rather than duplicating it.
  *
  * When the retries run out the error propagates, and that is deliberate (BD-003, standing rule 20):
  * an action whose row could not be written must not be reported as audited. The executor's own
@@ -53,7 +64,6 @@
  * sequence is read for them at all: the cheap path is also the one that cannot conflict.
  */
 import {
-  type EventStore,
   type IntegrationActionEntry,
   type IntegrationAuditLog,
   integrationActionEventDrafts,
@@ -66,20 +76,25 @@ import {
 import type { DomainEvent, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
+import type { SqlExecutor } from '../events/sql.js';
 
 /**
  * How many times a `StreamConflictError` is re-read and retried before the action fails.
  *
- * Four is a bound, not a tuning: the conflict window is a single trigger-held row lock, so a
- * retry that loses again has lost to a *different* concurrent writer each time. An unbounded loop
- * would turn a genuinely stuck stream into a hang inside a provider call.
+ * A bound, not a tuning, and no longer the thing that keeps two writers apart — the stream lock is
+ * (the module docblock). An unbounded loop would turn a genuinely stuck stream into a hang inside a
+ * provider call.
  */
 export const DEFAULT_MAX_SEQUENCE_ATTEMPTS = 4;
 
 export interface PostgresIntegrationAuditLogOptions {
   readonly unitOfWork: UnitOfWork;
-  /** Read side, for `nextStreamSequence`. Connection-scoped, outside the transaction. */
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
+  /**
+   * The stream's next sequence, read on the transaction's connection after the stream lock is
+   * held. **A test seam**: production passes nothing and gets {@link readNextSequence}; a test
+   * stages a stale answer here to drive the trigger's `StreamConflictError` and the retry.
+   */
+  readonly readSequence?: (sql: SqlExecutor, integrationId: Id) => Promise<number>;
   /** Event ids. The composition root's generator, so a test can make them deterministic. */
   readonly ids: { next(): Id };
   readonly maxSequenceAttempts?: number;
@@ -90,6 +105,22 @@ const INSERT_ACTION = `insert into integration_actions
     (integration_id, project_id, task_id, direction, action, payload, result, status,
      duration_ms, redaction_count, attempts, created_at)
   values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12)`;
+
+/**
+ * Serialises the writers of one integration stream for the rest of the transaction (BACKLOG 970).
+ * The key's prefix is this lock's own, so it shares no key with another advisory lock.
+ */
+const LOCK_STREAM = `select pg_advisory_xact_lock(hashtextextended('integration_stream/' || $1, 0))`;
+
+const NEXT_SEQUENCE = `select coalesce(
+    (select last_seq from event_streams where stream_type = 'integration' and stream_id = $1),
+    0) + 1 as next`;
+
+/** The integration stream's next sequence, on the caller's connection — inside its transaction. */
+export const readNextSequence = async (sql: SqlExecutor, integrationId: Id): Promise<number> => {
+  const { rows } = await sql.query<{ next: string | number }>(NEXT_SEQUENCE, [integrationId]);
+  return Number(rows[0]?.next ?? 1);
+};
 
 /**
  * The minted credential's shape, upserted **in the audit row's transaction** (WP-80, TD-012's M5
@@ -142,17 +173,21 @@ export const createPostgresIntegrationAuditLog = (
     throw new TypeError(`maxSequenceAttempts must be at least 1, got ${maxAttempts}`);
   }
 
+  const readSequence = options.readSequence ?? readNextSequence;
+
   const writeOnce = async (entry: IntegrationActionEntry): Promise<void> => {
     const drafts = integrationActionEventDrafts(entry);
-    // `would_have` and `replayed` write a row and no event, so they never read a sequence and can
-    // never conflict on one.
-    const firstSeq =
-      drafts.length === 0
-        ? 0
-        : await options.eventStore.nextStreamSequence('integration', entry.integrationId);
 
     await options.unitOfWork.transaction(async (scope) => {
-      await postgresTransaction(scope.tx).client.query(INSERT_ACTION, [
+      const sql = postgresTransaction(scope.tx).client;
+      // `would_have` and `replayed` write a row and no event, so they take no lock, read no
+      // sequence and can never conflict on one.
+      let firstSeq = 0;
+      if (drafts.length > 0) {
+        await sql.query(LOCK_STREAM, [entry.integrationId]);
+        firstSeq = await readSequence(sql, entry.integrationId);
+      }
+      await sql.query(INSERT_ACTION, [
         entry.integrationId,
         entry.projectId,
         entry.taskId,
@@ -168,7 +203,7 @@ export const createPostgresIntegrationAuditLog = (
       ]);
       const shape = entry.status === 'ok' ? entry.credentialShape : undefined;
       if (shape !== undefined) {
-        await postgresTransaction(scope.tx).client.query(UPSERT_SHAPE, [
+        await sql.query(UPSERT_SHAPE, [
           entry.integrationId,
           shape.shape.prefix,
           shape.shape.charset,
