@@ -26,8 +26,8 @@
 # one on the same daemon (the owner's case, and the developer's): the project (`agentic-worker-dev`),
 # the control volume, the repository-cache volume, the run network, and the local page's host port
 # (7358, not 7357). They are read from `APP_WORKER_DEV_*` — **never** from the prod variables
-# (`APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_UI_PORT`), which an
-# `.env.worker` shared with a prod worker may set to the prod values. `ports` is `!override`n because
+# (`APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK`,
+# `APP_WORKER_UI_PORT`), which an `.env.worker` shared with a prod worker may set to prod values. `ports` is `!override`n because
 # compose merges port lists rather than replacing them.
 #
 # **`APP_CORE_URL` is not set here**: it comes from `.env.worker` (the example points at the local
@@ -66,8 +66,8 @@ services:
       APP_WORKSPACE_CACHE_VOLUME: ${APP_WORKER_DEV_CACHE_VOLUME:-agentic-worker-dev-repo-cache}
       APP_WORKSPACE_RUNTIME_IMAGE: platform-runtime:dev
       APP_WORKSPACE_EGRESS_IMAGE: platform-egress:dev
-      APP_WORKSPACE_HELPER_NETWORK: agentic-worker-dev-run-egress
-      APP_WORKSPACE_EGRESS_NETWORK: agentic-worker-dev-run-egress
+      APP_WORKSPACE_HELPER_NETWORK: ${APP_WORKER_DEV_RUN_NETWORK:-agentic-worker-dev-run-egress}
+      APP_WORKSPACE_EGRESS_NETWORK: ${APP_WORKER_DEV_RUN_NETWORK:-agentic-worker-dev-run-egress}
 
   updater:
     image: platform:dev
@@ -79,4 +79,4 @@ volumes:
 
 networks:
   run-egress:
-    name: agentic-worker-dev-run-egress
+    name: ${APP_WORKER_DEV_RUN_NETWORK:-agentic-worker-dev-run-egress}
