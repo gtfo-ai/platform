@@ -1055,6 +1055,11 @@ export const projectExecution = projectExecutionResponseSchema.parse({
   stored: false,
   server_claimant: 'running',
   notice: null,
+  workers: [],
+  waiting: {
+    open: 0,
+    closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
+  },
 });
 
 /** The fleet's two other runs have no transcript yet. */

@@ -280,6 +280,11 @@ const fetchFor = (world: World) =>
         stored: false,
         server_claimant: world.serverClaimant,
         notice: null,
+        workers: [],
+        waiting: {
+          open: 0,
+          closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
+        },
       });
     }
     if (path === '/api/org/agents') {

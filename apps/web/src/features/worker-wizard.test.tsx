@@ -53,6 +53,11 @@ const execution = (mode: ProjectExecutionResponse['mode']): ProjectExecutionResp
   stored: true,
   server_claimant: 'none',
   notice: null,
+  workers: [],
+  waiting: {
+    open: 0,
+    closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
+  },
 });
 
 interface World {

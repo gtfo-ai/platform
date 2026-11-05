@@ -27,5 +27,10 @@ export const workerFixture = (over: Partial<WorkerSummary> = {}): WorkerSummary 
   claim_projects: null,
   running: [],
   last_update: null,
+  // N1's fields (S-22.19). The tests here read readiness through `worker-readiness.ts`'s stub,
+  // which derives it from the fields above; a ready worker by default.
+  claim_blockers: [],
+  can_claim: true,
+  last_claimed_at: null,
   ...over,
 });
