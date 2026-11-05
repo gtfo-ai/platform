@@ -159,6 +159,19 @@ const SCREENS: readonly Screen[] = [
     },
   },
   {
+    // S-23.19: sections of metric cards, sparklines and two disclosures, the caveats one opened.
+    name: 'Statistics',
+    path: '/stats',
+    ready: async (page) => {
+      await expect(page.getByRole('heading', { level: 2, name: 'Throughput' })).toBeVisible();
+      await expect(page.locator('[data-sparkline]').first()).toBeAttached();
+    },
+    open: async (page) => {
+      await page.getByText('How these are measured').click();
+      await expect(page.getByText(/Over-counts: a bot/)).toBeVisible();
+    },
+  },
+  {
     name: 'org settings (Users)',
     path: '/settings/users',
     ready: async (page) => {

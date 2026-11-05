@@ -1,6 +1,7 @@
 /**
  * MetricStrip: a row of figures in one bordered box, each cell divided from the next — the summary
- * line of a GitHub Insights page or an Actions run (research/19 § 5.2: Statistics, a shadow batch).
+ * line of a GitHub Insights page or an Actions run (research/19 § 5.2: a shadow batch). Statistics
+ * used it until S-23.19 and has cards in sections now (`features/statistics.tsx`).
  *
  * Each cell is a `Metric` (label with its definition, the value), passed as children so a cell can
  * carry a line under its value (a sample count, a caveat). The strip wraps on a narrow screen.

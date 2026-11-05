@@ -232,10 +232,13 @@ export const Metric = ({
   label,
   value,
   definition,
+  size = 'md',
 }: {
   readonly label: string;
   readonly value: ReactNode;
   readonly definition: string;
+  /** `lg` for a metric card's headline figure (the statistics screen, S-23.19). */
+  readonly size?: 'md' | 'lg';
 }): ReactElement => {
   const id = useId();
   return (
@@ -254,7 +257,9 @@ export const Metric = ({
           {label}
         </span>
       </Tooltip>
-      <span className="text-xl font-semibold tabular-nums">{value}</span>
+      <span className={cx('font-semibold tabular-nums', size === 'lg' ? 'text-2xl' : 'text-xl')}>
+        {value}
+      </span>
       <span id={id} hidden>
         {definition}
       </span>

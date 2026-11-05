@@ -51,7 +51,20 @@ const STATS: OrgStatsResponse = {
       unit: 'count',
       value: 3,
       samples: 3,
-      buckets: [bucket('2026-06-03', '2026-06-04', 3, 3)],
+      // Two buckets with a value: enough for a sparkline.
+      buckets: [bucket('2026-06-02', '2026-06-03', 1, 1), bucket('2026-06-03', '2026-06-04', 2, 2)],
+      absent: null,
+      caveats: [],
+    },
+    {
+      // An average count: eight returns on one delivered task is "8.0", never "800.0%".
+      id: 'returns_per_delivered_task',
+      label: 'Returns per delivered task',
+      definition: 'Average number of stage returns per delivered task.',
+      unit: 'decimal',
+      value: 8,
+      samples: 1,
+      buckets: [bucket('2026-06-03', '2026-06-04', 8, 1)],
       absent: null,
       caveats: [],
     },
@@ -151,8 +164,11 @@ describe('the statistics screen', () => {
     // The count, as a number.
     expect(text).toContain('Tasks delivered');
     expect(text).toContain('3');
-    // The ratio with nothing to divide — **not** "0.0%".
-    expect(text).toContain('no data in this range');
+    // The ratio with nothing to divide — **not** "0.0%": a muted dash and the sentence, small.
+    const mergeRate = container.querySelector('[data-metric-card="merge_rate"]');
+    expect(mergeRate?.textContent).toContain('—');
+    expect(mergeRate?.textContent).toContain('No data in this range');
+    expect(mergeRate?.textContent).not.toMatch(/\d/);
     // The absence, with its reason and its owner, in the section that exists for it.
     const absentSection = text.slice(text.indexOf('Not measured, and why'));
     expect(absentSection).toContain('Queue wait');
@@ -162,9 +178,61 @@ describe('the statistics screen', () => {
     expect(text.slice(0, text.indexOf('Not measured, and why'))).not.toContain('Queue wait');
   });
 
-  it('shows the error directions of a figure that has them', async () => {
+  it('shows the error directions of a figure in one disclosure, never under the value', async () => {
     const container = await renderScreen();
-    expect(container.textContent).toContain('a bot that is not this platform');
+    const disclosure = [...container.querySelectorAll('details')].find((details) =>
+      details.textContent?.startsWith('How these are measured'),
+    );
+    expect(disclosure).toBeDefined();
+    expect(disclosure?.open).toBe(false);
+    expect(disclosure?.textContent).toContain('Reviewer minutes per delivered task');
+    expect(disclosure?.textContent).toContain('a bot that is not this platform');
+    // The card itself carries the value and one muted line, and no caveat.
+    const card = container.querySelector(
+      '[data-metric-card="reviewer_minutes_per_delivered_task"]',
+    );
+    expect(card?.textContent).not.toContain('a bot that is not this platform');
+  });
+
+  it('groups the figures into sections with headings, in the order the owner reads them', async () => {
+    await renderScreen();
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(headings).toEqual(['Throughput', 'Quality', 'Time', 'Returns by stage']);
+    const throughput = screen.getByRole('region', { name: 'Throughput' });
+    expect(throughput.textContent).toContain('Tasks delivered');
+    expect(throughput.textContent).toContain('Merge rate');
+    expect(screen.getByRole('region', { name: 'Quality' }).textContent).toContain(
+      'Returns per delivered task',
+    );
+  });
+
+  it('prints an average count as a plain number and pluralises the observations', async () => {
+    const container = await renderScreen();
+    const returns = container.querySelector('[data-metric-card="returns_per_delivered_task"]');
+    expect(returns?.textContent).toContain('8.0');
+    expect(returns?.textContent).not.toContain('%');
+    expect(returns?.textContent).toContain('1 observation');
+    expect(returns?.textContent).not.toContain('1 observations');
+    const delivered = container.querySelector('[data-metric-card="tasks_delivered"]');
+    expect(delivered?.textContent).toContain('3 observations');
+  });
+
+  it('draws a sparkline only where two buckets carry a value, with the trend in words', async () => {
+    const container = await renderScreen();
+    const delivered = container.querySelector('[data-metric-card="tasks_delivered"]');
+    const svg = delivered?.querySelector('svg');
+    expect(svg?.getAttribute('aria-hidden')).toBe('true');
+    expect(svg?.querySelector('polyline')?.getAttribute('points')).toBe('0,22 100,2');
+    expect(delivered?.querySelector('.sr-only')?.textContent).toBe(
+      'Trend by day: 2 of 2 days with data; lowest 1, highest 2, latest 2.',
+    );
+    // One bucket is not a trend.
+    const returns = container.querySelector('[data-metric-card="returns_per_delivered_task"]');
+    expect(returns?.querySelector('svg')).toBeNull();
+    // The line is drawn with attributes and a colour class, never a `style` (S-23.19's brief).
+    const spark = delivered?.querySelector('[data-sparkline]');
+    expect(spark).not.toBeNull();
+    expect(spark?.matches('[style]') || spark?.querySelector('[style]') !== null).toBe(false);
   });
 
   it('names the zone the days were cut in', async () => {
@@ -178,6 +246,7 @@ describe('the statistics screen', () => {
     const text = container.textContent ?? '';
     const returns = text.slice(text.indexOf('Returns by stage'));
     expect(returns).toContain('25.0%');
+    expect(returns).toContain('1 return in 4 entries');
     expect(returns).toContain('no entries');
   });
 

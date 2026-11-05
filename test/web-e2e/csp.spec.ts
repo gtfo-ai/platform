@@ -209,7 +209,7 @@ test('Base UI opens a menu and a tooltip under the policy without a violation (T
   await expect(tooltip).toBeVisible();
   // The fixture's definition of `tasks_delivered` (`support/fixtures.ts`).
   await expect(tooltip).toHaveText(
-    'Tasks whose merge request merged, counted at merge time (product/19 §10).',
+    'Tasks whose merge request merged in the period, counted at the moment of the merge.',
   );
   const [tipBox, labelBox] = await Promise.all([tooltip.boundingBox(), label.boundingBox()]);
   if (tipBox !== null && labelBox !== null) {

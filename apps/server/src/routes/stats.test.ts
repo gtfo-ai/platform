@@ -47,7 +47,9 @@ const SOURCES: StatsSources = {
     },
   ],
   counters: [{ day: '2026-06-03', metric: 'rebase.resolved', count: 2, total: 0 }],
-  cost: [{ day: '2026-06-03', usd: 4.2, inputTokens: 1000, cacheReadTokens: 400 }],
+  cost: [
+    { day: '2026-06-03', usd: 4.2, inputTokens: 1000, cacheWriteTokens: 0, cacheReadTokens: 400 },
+  ],
   estimatedSpend: [{ day: '2026-06-03', usd: 4.2, estimatedUsd: 0 }],
   questions: [{ answeredDay: '2026-06-03', minutes: 30 }],
   humanMinutes: [{ day: '2026-06-03', kind: 'review', minutes: 45 }],

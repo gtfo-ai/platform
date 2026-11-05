@@ -299,11 +299,13 @@ const costByDay = async (
     day: string;
     usd: string | number;
     input_tokens: string | number;
+    cache_write: string | number;
     cache_read: string | number;
   }>(sql`
     select to_char(day, 'YYYY-MM-DD') as day,
            sum(usd) as usd,
            sum(input_tokens) as input_tokens,
+           sum(cache_write_5m + cache_write_1h) as cache_write,
            sum(cache_read) as cache_read
       from cost_rollup_daily
      where day >= ${bounds.from}::date and day < ${bounds.until}::date
@@ -314,6 +316,7 @@ const costByDay = async (
     day: row.day,
     usd: number(row.usd),
     inputTokens: number(row.input_tokens),
+    cacheWriteTokens: number(row.cache_write),
     cacheReadTokens: number(row.cache_read),
   }));
 };

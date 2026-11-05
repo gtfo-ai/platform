@@ -9,6 +9,7 @@
  */
 import type { IsoDateTime, StatMetric, StatMetricId } from '@platform/contracts';
 import { orgStatsResponseSchema } from '@platform/contracts';
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
   boundTaskRows,
@@ -138,12 +139,13 @@ describe('the catalogue', () => {
     expect(usage.buckets.find((bucket) => bucket.start === '2026-06-02')?.value).toBeCloseTo(2 / 3);
     // A day with no eligible run has no ratio — `null`, never `0` (standing rule 16).
     expect(usage.buckets.find((bucket) => bucket.start === '2026-06-03')?.value).toBeNull();
-    expect(usage.definition).toContain('RefinedSpec');
-    expect(usage.definition).toContain('ResearchReport');
-    expect(usage.definition).toContain('denominator');
+    expect(usage.definition).toContain('refined specification');
+    expect(usage.definition).toContain('research report');
+    expect(usage.definition).toContain('Eligible runs are');
     expect(usage.definition).toContain('tier-1');
-    expect(usage.definition).not.toMatch(/searched|kb_search/);
-    expect(usage.caveats.join(' ')).toContain('kb_search');
+    // "research report" contains the letters; the word is what must not be there.
+    expect(usage.definition).not.toMatch(/\bsearch(?:ed|ing)?\b/);
+    expect(usage.caveats.join(' ')).toContain('found by searching the knowledge base');
 
     // No eligible run anywhere in the range: the metric is computed and has no value, which is a
     // different statement from the absence it used to publish.
@@ -155,21 +157,24 @@ describe('the catalogue', () => {
 
   it('never adds minutes to dollars (Q73)', () => {
     const response = fold({
-      cost: [{ day: '2026-06-03', usd: 10, inputTokens: 100, cacheReadTokens: 50 }],
+      cost: [
+        { day: '2026-06-03', usd: 10, inputTokens: 100, cacheWriteTokens: 0, cacheReadTokens: 50 },
+      ],
       humanMinutes: [{ day: '2026-06-03', kind: 'review', minutes: 120 }],
     });
     expect(metric(response, 'cost_total').value).toBe(10);
     expect(metric(response, 'human_minutes').value).toBe(120);
     // The single number product/09:29 asks for is the one metric that stays absent while no rate
-    // exists, and its owner is the question that would supply one.
-    expect(metric(response, 'total_cost_of_delivery').absent?.owner).toContain('Q73');
+    // exists, and its owner is the decision that would supply one (Q73).
+    expect(metric(response, 'total_cost_of_delivery').absent?.owner).toContain('hourly rate');
   });
 
   it('carries the error directions of the reviewer figures rather than publishing them silently', () => {
+    // The three of PROGRESS backlog 88 (over), 188 (under) and 89 (the cap), by what they say.
     const caveats = metric(fold(), 'reviewer_minutes_per_delivered_task').caveats.join(' ');
-    expect(caveats).toContain('backlog 88');
-    expect(caveats).toContain('backlog 188');
-    expect(caveats).toContain('backlog 89');
+    expect(caveats).toContain('Over-counts: a bot');
+    expect(caveats).toContain('Under-counts: the start of a review');
+    expect(caveats).toContain('not per person');
     expect(caveats).toContain('do not cancel');
   });
 
@@ -181,12 +186,11 @@ describe('the catalogue', () => {
   it('defines the day cap as per task and names the check approval minutes wait on', () => {
     for (const id of ['reviewer_minutes_per_delivered_task', 'human_minutes'] as const) {
       const entry = metric(fold(), id);
-      expect(entry.definition, id).toContain('docs/TODO.md');
-      expect(entry.definition, id).toContain('`approved`');
+      expect(entry.definition, id).toMatch(/windows an approval touched/i);
       expect(entry.definition, id).toContain('machine');
     }
     expect(metric(fold(), 'reviewer_minutes_per_delivered_task').definition).toContain(
-      'per calendar day **per review window**',
+      'capped at 8 h per calendar day per review window',
     );
     expect(metric(fold(), 'reviewer_minutes_per_delivered_task').caveats.join(' ')).toContain(
       'more than 8 h',
@@ -208,12 +212,12 @@ describe('the catalogue', () => {
     // that sends none — and that a past day can move.
     const defect = metric(fold(), 'defect_escape').caveats.join(' ');
     expect(defect).toContain('traces it again');
-    expect(defect).toContain('PROGRESS backlog 187');
+    expect(defect).toContain('a tracker that reports no edits');
     expect(defect).toContain('can change a past day’s figure');
     // Backlog 193: a lost race is retried without a second read; a provider that keeps refusing
     // still leaves a merge in neither count.
     const loc = metric(fold(), 'loc_changed').caveats.join(' ');
-    expect(loc).toContain('never with a second provider read');
+    expect(loc).toContain('keeps refusing the read');
     expect(loc).toContain('in neither the measured nor the unmeasured count');
   });
 
@@ -394,7 +398,15 @@ describe('the arithmetic', () => {
       orgStatsResponseSchema.parse(
         fold({
           deliveredTasks: [delivered({ cycleHours: 1 / 3 })],
-          cost: [{ day: '2026-06-03', usd: 1 / 7, inputTokens: 3, cacheReadTokens: 1 }],
+          cost: [
+            {
+              day: '2026-06-03',
+              usd: 1 / 7,
+              inputTokens: 3,
+              cacheWriteTokens: 2,
+              cacheReadTokens: 1,
+            },
+          ],
         }),
       ),
     ).not.toThrow();
@@ -405,6 +417,174 @@ describe('the arithmetic', () => {
     // writes into a serialisation failure; the honest answer to a −0.0001 h cycle time is zero.
     const response = fold({ deliveredTasks: [delivered({ cycleHours: -0.5 })] });
     expect(metric(response, 'cycle_time_hours').value).toBe(0);
+  });
+});
+
+/**
+ * **The three numbers the owner's live page published wrong** (S-23.19, 2026-11-05): *"Returns per
+ * delivered task 800.0%"*, *"Cache hit ratio 3016250.0%"* and *"Cost per delivered task $123.05"*
+ * beside *"Cost $8.98"* with one delivered task.
+ */
+describe('the units and the definitions behind the published numbers', () => {
+  it('declares every metric’s unit by what it measures, a share of one whole as a ratio only', () => {
+    // The whole table, so a new metric's unit is a decision somebody makes in this file (rule 68).
+    // `decimal` is an average count; `ratio` is printed as a percentage.
+    expect(Object.fromEntries(fold().metrics.map((entry) => [entry.id, entry.unit]))).toEqual({
+      tasks_started: 'count',
+      tasks_delivered: 'count',
+      merge_rate: 'ratio',
+      first_pass_acceptance: 'ratio',
+      clean_first_mr_rate: 'ratio',
+      human_intervention_rate: 'ratio',
+      returns_per_delivered_task: 'decimal',
+      cycle_time_hours: 'hours',
+      agent_time_hours: 'hours',
+      cost_total: 'usd',
+      cost_per_delivered_task: 'usd',
+      estimated_spend_share: 'ratio',
+      estimate_accuracy: 'ratio',
+      cache_hit_ratio: 'ratio',
+      question_response_minutes: 'minutes',
+      reviewer_minutes_per_delivered_task: 'minutes',
+      human_minutes: 'minutes',
+      kb_proposal_acceptance: 'ratio',
+      kb_usage: 'ratio',
+      rebase_conflicts_resolved: 'count',
+      rebase_conflicts_escalated: 'count',
+      concurrent_task_overlaps: 'count',
+      review_findings_accepted: 'count',
+      review_findings_dismissed: 'count',
+      ticket_lint_comments: 'count',
+      tickets_edited_after_lint: 'ratio',
+      shadow_similarity: 'ratio',
+      clean_first_mr_rate_by_author: 'ratio',
+      readiness_attributed_returns: 'ratio',
+      loc_changed: 'decimal',
+      defect_escape: 'ratio',
+      queue_wait_minutes: 'minutes',
+      total_cost_of_delivery: 'usd',
+    });
+  });
+
+  it('publishes returns per delivered task as an average count, not a share', () => {
+    const response = fold({ deliveredTasks: [delivered({ returns: 8 })] });
+    const returns = metric(response, 'returns_per_delivered_task');
+    // The live page's figure: eight returns on the one delivered task is 8, printed "8.0".
+    expect(returns.value).toBe(8);
+    expect(returns.unit).toBe('decimal');
+    expect(
+      metric(
+        fold({ deliveredTasks: [delivered({ returns: 3 }), delivered({ returns: 0 })] }),
+        'returns_per_delivered_task',
+      ).value,
+    ).toBe(1.5);
+  });
+
+  it('divides cache reads by every input token, so a long cached session reads just under 100 %', () => {
+    // A Claude Code session's shape: a handful of new tokens per turn, a large prompt re-read from
+    // the cache every turn. Reads ÷ the provider's `input_tokens` alone was 30 162.5 — the live
+    // page's 3 016 250 %.
+    const response = fold({
+      cost: [
+        {
+          day: '2026-06-03',
+          usd: 8.98,
+          inputTokens: 40,
+          cacheWriteTokens: 10_000,
+          cacheReadTokens: 1_206_500,
+        },
+      ],
+    });
+    const cache = metric(response, 'cache_hit_ratio');
+    expect(cache.value).toBeCloseTo(1_206_500 / (40 + 10_000 + 1_206_500), 6);
+    expect(cache.value).toBeLessThan(1);
+    // A cache write is part of the whole: a first session that only wrote the cache hit nothing.
+    expect(
+      metric(
+        fold({
+          cost: [
+            {
+              day: '2026-06-03',
+              usd: 1,
+              inputTokens: 10,
+              cacheWriteTokens: 990,
+              cacheReadTokens: 0,
+            },
+          ],
+        }),
+        'cache_hit_ratio',
+      ).value,
+    ).toBe(0);
+    expect(cache.definition).toContain('Always between 0% and 100%');
+  });
+
+  it('can never publish a cache hit ratio above 1, for any token counts, in total or per bucket', () => {
+    const day = fc.constantFrom('2026-06-01', '2026-06-03', '2026-06-07');
+    const count = fc.integer({ min: 0, max: 10_000_000_000 });
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.record({
+            day,
+            usd: fc.constant(0),
+            inputTokens: count,
+            cacheWriteTokens: count,
+            cacheReadTokens: count,
+          }),
+          { maxLength: 12 },
+        ),
+        (cost) => {
+          const cache = metric(fold({ cost }), 'cache_hit_ratio');
+          for (const value of [cache.value, ...cache.buckets.map((bucket) => bucket.value)]) {
+            if (value !== null) {
+              expect(value).toBeGreaterThanOrEqual(0);
+              expect(value).toBeLessThanOrEqual(1);
+            }
+          }
+          // No token at all is nothing to divide — null, never a 0 % hit ratio (rule 16).
+          const tokens = cost.reduce(
+            (sum, row) => sum + row.inputTokens + row.cacheWriteTokens + row.cacheReadTokens,
+            0,
+          );
+          expect(cache.value === null).toBe(tokens === 0);
+        },
+      ),
+    );
+  });
+
+  it('charges a delivered task its lifetime spend, which can exceed the spend inside the range', () => {
+    // The live page's numbers: $8.98 spent inside the range across every task, and one delivered
+    // task whose whole spend — most of it from before the range — was $123.05.
+    const response = fold({
+      cost: [
+        { day: '2026-06-02', usd: 5.5, inputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 },
+        { day: '2026-06-05', usd: 3.48, inputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 },
+      ],
+      deliveredTasks: [delivered({ costUsd: 123.05 })],
+    });
+    expect(metric(response, 'cost_total').value).toBe(8.98);
+    expect(metric(response, 'cost_per_delivered_task').value).toBe(123.05);
+    // Two deliveries: the lifetime spends summed over the count — (10 + 30) ÷ 2 — never the range's
+    // spend divided by the deliveries.
+    expect(
+      metric(
+        fold({
+          cost: [
+            { day: '2026-06-02', usd: 7, inputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 },
+          ],
+          deliveredTasks: [delivered({ costUsd: 10 }), delivered({ costUsd: 30 })],
+        }),
+        'cost_per_delivered_task',
+      ).value,
+    ).toBe(20);
+    // …and the two labels say which is which, so they cannot be read as one quantity.
+    expect(metric(response, 'cost_total').label).toBe('Spend in this range');
+    expect(metric(response, 'cost_per_delivered_task').label).toBe(
+      'Lifetime cost per delivered task',
+    );
+    expect(metric(response, 'cost_per_delivered_task').definition).toContain(
+      'including runs before the period began',
+    );
   });
 });
 
@@ -468,7 +648,7 @@ describe('the CSV', () => {
     expect(absentRow).toBeDefined();
     // The value column is empty — never `0` — and the reason is in the row beside it.
     expect(absentRow).toContain(',,');
-    expect(absentRow).toContain('Q87');
+    expect(absentRow).toContain('No bug ticket was traced');
     expect(csv()).toContain('"');
   });
 

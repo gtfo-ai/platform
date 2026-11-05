@@ -641,8 +641,20 @@ test('statistics renders a number, a null ratio and an absence as three differen
   // reader — and makes a loose text match ambiguous by design.
   await expect(page.getByText('Tasks delivered', { exact: true })).toBeVisible();
   await expect(page.getByText('3', { exact: true }).first()).toBeVisible();
-  // The ratio with nothing to divide — not "0.0%".
-  await expect(page.getByText('no data in this range').first()).toBeVisible();
+  // S-23.19: sections with headings, a card per metric, the count pluralised.
+  await expect(page.getByRole('heading', { level: 2, name: 'Throughput' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: 'Quality' })).toBeVisible();
+  const returns = page.locator('[data-metric-card="returns_per_delivered_task"]');
+  await expect(returns.getByText('8.0', { exact: true })).toBeVisible();
+  await expect(returns.getByText('1 observation', { exact: true })).toBeVisible();
+  // A trend where two buckets carry a value, drawn as an SVG with its words beside it.
+  const delivered = page.locator('[data-metric-card="tasks_delivered"]');
+  await expect(delivered.locator('svg polyline')).toHaveCount(1);
+  await expect(delivered.getByText(/^Trend by day: 2 of 2 days with data/)).toBeAttached();
+  // The ratio with nothing to divide — not "0.0%": a dash, and the sentence in small print.
+  await expect(
+    page.locator('[data-metric-card="merge_rate"]').getByText('No data in this range'),
+  ).toBeVisible();
   // The absence, in the disclosure that exists for it — collapsed since S-23.11b — with the owner
   // beside the reason.
   await expect(page.getByText('Queue wait', { exact: true })).toBeHidden();
@@ -651,7 +663,10 @@ test('statistics renders a number, a null ratio and an absence as three differen
   await expect(
     page.getByText('Nobody yet — a row that folds task.queued against task.dequeued owns it.'),
   ).toBeVisible();
-  // The error direction of a figure that has one is on the screen rather than in a docblock.
+  // The error direction of a figure that has one is on the screen rather than in a docblock — in
+  // the one "How these are measured" disclosure since S-23.19, not under the value.
+  await expect(page.getByText(/Over-counts: a bot that is not this platform/)).toBeHidden();
+  await page.getByText('How these are measured').click();
   await expect(page.getByText(/Over-counts: a bot that is not this platform/)).toBeVisible();
   // The CSV export points at the endpoint that serves it.
   await expect(page.getByRole('link', { name: 'Download CSV' })).toHaveAttribute(

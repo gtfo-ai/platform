@@ -1455,13 +1455,37 @@ whose subscription pays is not something a pushed commit may change.
 
 ## 12. Statistics
 
-The organisation's delivery numbers over a range you choose (the last 7, 30, 90 or 365 days) and a
-bucket (by day, week or month), as one strip of figures, with a **Download CSV** of the same figures
-and the returns by stage. Every number carries its definition (hover or focus its name) and its
-caveats are on the screen. A number this build cannot compute is never drawn as a zero — a zero would
-read as "we delivered nothing" instead of "nothing is measured": it is listed under **Not measured,
-and why**, folded at the foot of the page, with its reason. A range with nothing in it says *no data
-in this range*, which is a different sentence from `0`.
+The organisation's delivery numbers over a range you choose — the last 7, 30, 90 or 365 days — and
+a granularity (by day, week or month), both at the top of the page beside **Download CSV**, which
+downloads the same figures with one row per metric and period.
+
+The figures are grouped into sections: **Throughput** (tasks started, tasks delivered, merge rate,
+cycle time), **Quality** (first-pass acceptance, clean first-MR rate, human intervention rate,
+returns per delivered task), **Cost** (spend in this range, lifetime cost per delivered task,
+estimated share of spend, estimate error, cache hit ratio), **Time** (agent time, question response
+time, reviewer minutes per delivered task, human minutes), then **Knowledge** and **Merge requests
+and tickets** for the rest. Each figure is a card: the value, its name, and one line saying how many
+observations it rests on (*1 observation*, *12 observations*). Hover or focus the name to read its
+definition. Where the period holds at least two days (or weeks, or months) with a value, a small line
+under the figure shows its trend.
+
+How to read a few of them:
+
+- **Returns per delivered task** is an average count — *8.0* means the delivered tasks were sent back
+  eight times each on average — not a percentage.
+- **Cache hit ratio** is the share of all input tokens that were read from the prompt cache, so it is
+  always between 0 % and 100 %.
+- **Lifetime cost per delivered task** counts the *whole* spend of each task delivered in the range,
+  including runs from before the range began. **Spend in this range** counts only money spent inside
+  the range, on every task. With few deliveries the first can be much larger than the second; both
+  are correct.
+
+A card with nothing to measure in the range shows a dash and *No data in this range* — which is not
+the same as `0`: a zero is a measurement, the dash means there was nothing to divide. What is known
+to be imprecise about a figure — reviewer minutes, for example, over-count on bots and under-count on
+approvals — is listed under **How these are measured** at the foot of the page, folded. A number this
+build cannot compute is never drawn as a zero either: it is listed under **Not measured, and why**,
+also folded, with its reason and what would give it a value.
 
 ### Workers
 

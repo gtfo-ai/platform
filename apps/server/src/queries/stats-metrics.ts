@@ -263,7 +263,10 @@ export interface CounterRow {
 export interface CostDayRow {
   readonly day: string;
   readonly usd: number;
+  /** The provider's `input_tokens`: only the tokens after the last cache breakpoint. */
   readonly inputTokens: number;
+  /** Tokens written to the cache, both lifetimes (`cache_write_5m + cache_write_1h`). */
+  readonly cacheWriteTokens: number;
   readonly cacheReadTokens: number;
 }
 
@@ -390,26 +393,30 @@ interface MetricDefinition {
 }
 
 /**
- * The `docs/TODO.md` item every approval-derived review minute waits on (PROGRESS backlog 188),
- * named once so the definition and the caveat cannot name two different checks.
- */
-const APPROVAL_CHECK =
-  '`docs/TODO.md`’s “Does a real GitLab send `approval` *and* `approved` for the last required approver, and is the delivery’s `user` the approver?”';
-
-/**
- * product/19 §16's eight-hour cap is applied **per review window (per entry) per calendar day**, by the
- * projector, and by nothing here (WP-61 criterion 3, PROGRESS backlog 89).
+ * The three caveats both reviewer figures carry, in the words a reader of the screen needs.
  *
- * WP-41 had capped a second time at read time, per person per day across tasks. The ruling for
- * WP-61 is the other reading of *"capped at 8 h per calendar day"* — per entry, which is what the
- * projector can do statelessly and replay exactly — and a figure capped both ways answers neither
- * definition, so the read-side cap is gone and the residual is published instead: one person
- * reviewing two tasks on one day can be credited more than eight hours in a sum across tasks.
+ * Every string the catalogue publishes is **UI text** (TD-033 decision 6, S-23.19): it reaches the
+ * statistics screen's tooltips and its "How these are measured" disclosure, and the CSV. So the
+ * reasons behind a sentence are cited here, in comments, and never in the sentence —
+ * `stats-user-text.test.ts` fails on a decision id, a work-package or backlog number, a spec page,
+ * a migration number, a backtick or Markdown emphasis in any of them.
+ *
+ *  1. Over-count: an undeclared bot opens a review window like a person (PROGRESS backlog 88; since
+ *     WP-61 a declared machine, `POST /api/org/identities` with `kind: "machine"`, is refused by
+ *     the projector and its earlier rows are dropped by the read).
+ *  2. Under-count: no review-requested event type exists, so a window opens at the first comment or
+ *     approval; and every window an approval touched is withheld until `docs/TODO.md`'s check —
+ *     "Does a real GitLab send `approval` *and* `approved` for the last required approver, and is
+ *     the delivery's `user` the approver?" — is answered (PROGRESS backlog 188).
+ *  3. The cap: product/19 §16's 8 h per calendar day is applied per review window (per entry) by
+ *     the projector and nowhere else (WP-61 criterion 3, PROGRESS backlog 89). WP-41 had capped a
+ *     second time per person per day at read time; a figure capped both ways answers neither
+ *     definition, so the read-side cap is gone and the residual is published instead.
  */
 const REVIEWER_CAVEATS = [
-  'Over-counts: a bot that is not this platform — CI, a dependency updater — opens and extends a review window like a person unless an operator has declared its account a machine (`POST /api/org/identities` with `kind: "machine"`, PROGRESS backlog 88). A declared machine’s activity is refused by the projector and its earlier rows are left out of this figure; an undeclared one is counted. Nothing is inferred from an account’s name.',
-  `Under-counts: a review’s start is not seen — the event catalogue has no review-requested type, so a window opens at the first comment or approval rather than when the reviewer began reading. And every review window an approval touched is **withheld** from this figure until ${APPROVAL_CHECK} is answered (PROGRESS backlog 188): the approver’s identity is an inference from GitLab’s documentation, and a wrong one would credit the wrong reviewer. Withheld windows are stored, not discarded. The over- and under-counts run in opposite directions and do not cancel.`,
-  'Capped per review window: product/19 §16’s 8 h per calendar day is applied to each review window (one row of the projection) on its own, not per person — so one person can be credited more than 8 h in a day here, by reviewing two tasks, or one task in two windows separated by a gap over 2 h (PROGRESS backlog 89).',
+  'Over-counts: a bot other than this platform (CI, a dependency updater) opens and extends a review window like a person, unless an administrator has declared its account a machine. Nothing is inferred from an account’s name.',
+  'Under-counts: the start of a review is not seen, so a window opens at the first comment or approval rather than when the reviewer began reading. Windows an approval touched are withheld until the platform has confirmed how GitLab identifies the approver; they are stored, not discarded. The over- and under-counts run in opposite directions and do not cancel.',
+  'The 8 h daily cap applies to each review window on its own, not per person, so one person reviewing two tasks on one day can be credited more than 8 h.',
 ] as const;
 
 /** product/18:60's *"edited within 48 h"*, in hours. */
@@ -463,289 +470,381 @@ export const DEFECT_COVERAGE_FLOOR = 0.5;
  *
  * The absent ones are **in this table**, not omitted from it: product/16 and product/18 name them,
  * so a reader has to be told they are not measured and by whom they would be.
+ *
+ * **Every string below is UI text** (S-23.19): labels, definitions, caveats and absences reach the
+ * screen and the CSV verbatim, so the reference behind each is the comment above it — never the
+ * string. `stats-user-text.test.ts` holds that.
  */
 export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> = {
+  // A template that delivers a merge request (`deliversMergeRequest`), `tasks.mode = 'normal'`.
   tasks_started: {
     label: 'Tasks started',
     definition:
-      'Tasks created in the period on a template that delivers a merge request (feature, bug, chore), excluding shadow-mode tasks. A discovery, review-only, ticket-lint, history-bootstrap or epic-split task is not counted: it never opens a merge request, so counting it would make the merge rate below a statement about how much the platform was configured to do.',
+      'Tasks created in the period that deliver a merge request (feature, bug and chore tasks), excluding shadow-mode tasks. Discovery, review-only, ticket-lint, history-bootstrap and epic-split tasks never open a merge request, so they are not counted — counting them would make the merge rate a statement about how much the platform was configured to do.',
     unit: 'count',
     aggregation: 'sum',
   },
+  // product/19 §10; the instant is the platform's own `mr.merged` (`stats_task_delivery`).
   tasks_delivered: {
     label: 'Tasks delivered',
     definition:
-      "Tasks whose merge request merged, counted at merge time (product/19 §10). The instant is the platform's own `mr.merged`, so a task still running its retrospective is already counted.",
+      'Tasks whose merge request merged in the period, counted at the moment of the merge. A task still running its retrospective is already counted.',
     unit: 'count',
     aggregation: 'sum',
   },
   merge_rate: {
     label: 'Merge rate',
     definition:
-      'Tasks delivered in the period ÷ tasks started in the period. The two are counted at different instants — a merge and a creation — so a period that starts mid-flight can exceed 1.',
+      'Tasks delivered in the period ÷ tasks started in the period. The two are counted at different moments — a merge and a creation — so a period that begins with work already in flight can exceed 100%.',
     unit: 'ratio',
     aggregation: 'ratio',
   },
+  // product/16. Caveats: PROGRESS backlog 191 (WP-90 counts only windows with a human comment) and
+  // backlog 88 (declared machines).
   first_pass_acceptance: {
     label: 'First-pass acceptance',
     definition:
-      'Delivered tasks with zero stage returns and zero human merge-request comments ÷ delivered tasks (product/16). A human comment is one the platform did not write, recognised by the marker every platform comment carries.',
+      'Delivered tasks with no stage returns and no human merge-request comments ÷ delivered tasks. A human comment is one the platform did not write, recognised by the marker every platform comment carries.',
     unit: 'ratio',
     aggregation: 'ratio',
     caveats: [
-      'An approval is not a comment: a reviewer who approved without commenting leaves the task first-pass (PROGRESS backlog 191). A comment is matched to the task through its author’s review window, not through the merge request, so a reviewer who approved this task and, inside that window, commented on another merge request of the same project makes the task not first-pass — an under-count.',
-      'A declared machine account’s comment does not count (PROGRESS backlog 88); an undeclared bot’s does, and makes the task not first-pass — an under-count. A human who pastes the platform’s comment marker into a comment is not counted — an over-count.',
+      'An approval is not a comment: a reviewer who approved without commenting leaves the task first-pass. A comment is matched to the task through its author’s review window, so a comment on another merge request of the same project inside that window makes this task not first-pass — an under-count.',
+      'A comment from an account declared a machine does not count; one from an undeclared bot does, and makes the task not first-pass — an under-count. A person who pastes the platform’s comment marker into a comment is not counted — an over-count.',
     ],
   },
+  // product/19 §10. The per-author breakdown product/16 asks for is `clean_first_mr_rate_by_author`.
   clean_first_mr_rate: {
     label: 'Clean first-MR rate',
     definition:
-      'Delivered tasks with zero questions and zero returns ÷ delivered tasks (product/19 §10). The per-author breakdown product/16 asks for is a separate metric below, and it is absent.',
+      'Delivered tasks with no questions and no stage returns ÷ delivered tasks. The breakdown by ticket author is listed under “Not measured, and why”.',
     unit: 'ratio',
     aggregation: 'ratio',
   },
+  // product/19 §10; "escalation to a person" is the `needs_human` state.
   human_intervention_rate: {
     label: 'Human intervention rate',
     definition:
-      'Tasks started in the period with at least one answered question, decided approval, human return or escalation to `needs_human` ÷ tasks started (product/19 §10).',
+      'Tasks started in the period with at least one answered question, decided approval, human return or escalation to a person ÷ tasks started.',
     unit: 'ratio',
     aggregation: 'ratio',
   },
+  /**
+   * **An average count, so `decimal`** (S-23.19). It was declared `ratio` from WP-41 until S-23.19
+   * and the screen multiplied it by 100: eight returns over one delivered task read *800.0 %*. The
+   * per-stage breakdown product/19 §10 defines is `returns_by_stage` beside the metrics.
+   */
   returns_per_delivered_task: {
     label: 'Returns per delivered task',
     definition:
-      'Stage returns on delivered tasks ÷ delivered tasks. The per-stage breakdown product/19 §10 defines is published beside the metrics as `returns_by_stage`.',
-    unit: 'ratio',
+      'Average number of stage returns per delivered task: stage returns on the tasks delivered in the period ÷ those tasks. 0.0 means no delivered task was sent back; the breakdown is under “Returns by stage”.',
+    unit: 'decimal',
     aggregation: 'ratio',
   },
+  // product/19 §10 asks for the median and p90; a distribution needs every task's figure, and the
+  // read folds one row per delivered task inside the range only.
   cycle_time_hours: {
     label: 'Cycle time',
     definition:
-      'Mean wall clock from a task being created to its merge request merging, in hours, over the tasks delivered in the period. It is a **mean**: product/19 §10 asks for the median and p90, which a daily rollup cannot hold — a distribution needs the rows, and this endpoint reads one row per delivered task only within the range it was asked for.',
+      'Average time from a task being created to its merge request merging, in hours, over the tasks delivered in the period. It is the mean; the median and 90th percentile are not computed yet.',
     unit: 'hours',
     aggregation: 'mean',
   },
+  // product/19 §10 "agent time": summed `runs.ended_at - runs.started_at` per delivered task.
   agent_time_hours: {
     label: 'Agent time',
     definition:
-      'Mean summed run wall time per delivered task, in hours (product/19 §10 “agent time”). A run that never started contributes nothing.',
+      'Average total run time per delivered task, in hours: the summed wall-clock time of every agent run on the task. A run that never started adds nothing.',
     unit: 'hours',
     aggregation: 'mean',
   },
+  /**
+   * `cost_rollup_daily.usd` over the range (BD-011's ledger, WP-19), which reconciles with
+   * `sum(cost_entries.usd)` by construction (`rollupDeltasFor`). Labelled *in this range* since
+   * S-23.19, because the per-task figure below is a **lifetime** one and the two sat side by side
+   * with one word between them.
+   */
   cost_total: {
-    label: 'Cost',
+    label: 'Spend in this range',
     definition:
-      'Provider-reported spend over the period, from the cost ledger (BD-011). A run priced from the price list rather than invoiced is included and is also counted in “estimated share of spend”.',
+      'Agent spend recorded in the period, on every task whether or not it was delivered, from the cost ledger. Spend the platform priced itself because the provider reported none is included; its share is “Estimated share of spend”.',
     unit: 'usd',
     aggregation: 'sum',
   },
+  /**
+   * product/19:97 — *"sum(cost_entries) of delivered tasks / delivered"* — and that is what this is:
+   * each delivered task's **whole** ledger spend (`stats-queries.ts`' `deliveredTasks`, no date
+   * filter on `cost_entries`) ÷ the delivered tasks. So it is not bounded by *Spend in this range*:
+   * a task that ran for weeks and merged yesterday brings all of its spend into this range's figure
+   * (the owner's live page, 2026-11-05: one delivered task, $123.05, beside $8.98 of in-range
+   * spend). The label and the definition say *lifetime* so the two cannot be read as one quantity.
+   * Caveat: Q70 (b) — a cancel stops a session its process holds and that process charges it
+   * (WP-101), a session still running after a cancel ended its row records its spend against it
+   * (WP-47), but a dead process has nobody left to report the figure.
+   */
   cost_per_delivered_task: {
-    label: 'Cost per delivered task',
+    label: 'Lifetime cost per delivered task',
     definition:
-      'Ledger spend of the tasks delivered in the period ÷ those tasks (product/19 §10). It charges a task’s whole spend to the period it merged in, including runs from earlier periods — which is what “cost per merged task” means.',
+      'The whole spend of the tasks delivered in the period ÷ the number of those tasks. A task’s spend counts from its first run, including runs before the period began — so with few deliveries this can be larger than “Spend in this range”, which counts only money spent inside the period.',
     unit: 'usd',
     aggregation: 'ratio',
     caveats: [
-      'Understates a task whose cancelled run’s process then died before reporting: a cancel stops a session its process holds and that process charges it (WP-101), and a session still running after a cancel ended its row records its spend against it (WP-47), but a dead process has nobody left to report the figure, so nothing measures it and nothing invents one.',
+      'Understates a task when one of its runs was cancelled and the process running it stopped before reporting what it spent: nothing measured that spend, and no figure is invented for it.',
     ],
   },
+  // `cost_entries.is_estimate` (BD-011, PROGRESS backlog 75).
   estimated_spend_share: {
     label: 'Estimated share of spend',
     definition:
-      'Ledger spend the platform priced itself ÷ total ledger spend (`cost_entries.is_estimate`, BD-011). High means the provider reported no cost for most runs — a `local`-mode deployment, or a producer that stopped reporting — so the cost figures above are prices rather than invoices.',
+      'Spend the platform priced itself from its price list ÷ all spend in the period. High means the provider reported no cost for most runs — a local-mode deployment, or a provider that stopped reporting — so the cost figures are prices rather than invoices.',
     unit: 'ratio',
     aggregation: 'ratio',
   },
+  // product/19:99, from `tasks.estimate_usd` and `tasks.cost_actual` only; product/19 asks for the
+  // median by size, this is the mean over all sizes.
   estimate_accuracy: {
-    label: 'Estimate accuracy',
+    label: 'Estimate error',
     definition:
-      'Mean of |estimate − actual| ÷ actual over the delivered tasks that carry a refinement estimate (product/19:99). 0 is perfect; 1 means the estimate was wrong by the size of the actual. Computed from `tasks.estimate_usd` and `tasks.cost_actual` and from nothing else. product/19 asks for the median by size; this is the mean over all sizes, for the reason cycle time gives.',
+      'Average relative error of the refinement estimate: |estimate − actual| ÷ actual, over the delivered tasks that carry an estimate. 0% is a perfect estimate; 100% means it was off by the size of the actual. The mean over all task sizes; the median by size is not computed yet.',
     unit: 'ratio',
     aggregation: 'mean',
   },
+  /**
+   * **A share of one whole since S-23.19, so it lies in [0, 1].** product/16 words it *"cache-read
+   * tokens / input tokens"*, and WP-41 read `input_tokens` as the provider's field — but the
+   * Messages API's `input_tokens` counts only the tokens **after the last cache breakpoint**, not
+   * the prompt: *"total_input_tokens = cache_read_input_tokens + cache_creation_input_tokens +
+   * input_tokens"* (platform.claude.com, *Prompt caching*, "Tracking cache performance", retrieved
+   * 2026-11-05). A Claude Code session re-reads a large cached prompt every turn and sends a few
+   * new tokens, so the old ratio published *3 016 250 %* on the owner's live page. "Input tokens" is
+   * therefore read as the whole prompt: uncached input + cache writes (5 min and 1 h) + cache reads,
+   * all from `cost_rollup_daily`.
+   */
   cache_hit_ratio: {
     label: 'Cache hit ratio',
     definition:
-      'Cache-read tokens ÷ input tokens over the period (product/16). It can exceed 1: a cached prompt is read without being sent again, so the two counters are not parts of one whole.',
+      'Share of input tokens read from the prompt cache: cache-read tokens ÷ all input tokens (uncached input + tokens written to the cache + tokens read from it), over the period. Always between 0% and 100%; higher means cheaper runs.',
     unit: 'ratio',
     aggregation: 'ratio',
   },
+  // product/19 §10, over `questions.answered_at` in the range.
   question_response_minutes: {
     label: 'Question response time',
     definition:
-      'Mean minutes from a question being asked to being answered, over the questions answered in the period (product/19 §10). Questions still open are not in it — a question nobody has answered has no response time, and counting it as the time so far would make the number fall when somebody finally answers.',
+      'Average minutes from a question being asked to its answer, over the questions answered in the period. Questions still open are not included: an unanswered question has no response time yet, and counting the time so far would make the figure fall when somebody finally answers.',
     unit: 'minutes',
     aggregation: 'mean',
   },
+  // product/16 and product/19 §16; the withholding and the cap are REVIEWER_CAVEATS' references.
   reviewer_minutes_per_delivered_task: {
     label: 'Reviewer minutes per delivered task',
-    definition: `Human review minutes recorded in the period ÷ tasks delivered in the period (product/16). A review window runs from the first human merge-request comment or approval to the merge or last activity, excluding gaps over 2 h, capped at 8 h per calendar day **per review window** (per entry; product/19 §16). Every window an approval touched is left out of the numerator until ${APPROVAL_CHECK} is answered (PROGRESS backlog 188); so are the windows of accounts an operator declared machines.`,
+    definition:
+      'Human review minutes recorded in the period ÷ tasks delivered in the period. A review window runs from the first human comment or approval on a merge request to the merge or the last activity, leaves out gaps over 2 h, and is capped at 8 h per calendar day per review window. Windows an approval touched are withheld until the approver’s identity is confirmed, and accounts declared machines are left out.',
     unit: 'minutes',
     aggregation: 'ratio',
     caveats: REVIEWER_CAVEATS,
   },
+  // product/19 §16; never added to dollars, because no hourly rate exists (Q73).
   human_minutes: {
     label: 'Human minutes',
-    definition: `All human minutes recorded in the period — review, question, approval and steer (product/19 §16). Published beside the cost figures and never added to them: no rate exists to convert one into the other (Q73). Its review part excludes what reviewer minutes excludes: windows an approval touched, until ${APPROVAL_CHECK} is answered, and declared machine accounts.`,
+    definition:
+      'All human minutes recorded in the period — reviewing, answering questions, approving and steering. Shown beside the cost figures and never added to them: there is no hourly rate to convert one into the other. Its review part leaves out what “Reviewer minutes per delivered task” leaves out: windows an approval touched, and accounts declared machines.',
     unit: 'minutes',
     aggregation: 'sum',
     caveats: REVIEWER_CAVEATS,
   },
+  // product/16.
   kb_proposal_acceptance: {
     label: 'Knowledge proposal acceptance',
     definition:
-      'Proposals applied ÷ proposals decided (applied + rejected) in the period (product/16). A proposal nobody has decided is in neither side.',
+      'Knowledge proposals applied ÷ proposals decided (applied + rejected) in the period. A proposal nobody has decided yet is in neither side.',
     unit: 'ratio',
     aggregation: 'ratio',
   },
+  /**
+   * product/16's *"% runs whose context pack included a KB document that the agent cited"*, over a
+   * named subset (WP-57, PROGRESS backlog 112): runs that produced a RefinedSpec or a ResearchReport
+   * — the two artifacts that carry `kb_citations` — whose `run_context_pack` admitted a tier-1
+   * document. A page reached with `kb_search` is not in the pack; a vault path outside `A–Z a–z 0–9
+   * . _ - /` is degraded in the prompt's data-block attribute and cannot match. Runs created before
+   * migration 0041 have no recorded pack.
+   */
   kb_usage: {
     label: 'Knowledge usage',
     definition:
-      'product/16’s “% runs whose context pack included a KB document that the agent cited”, over a **named subset of runs**: the denominator is the runs started in the period that produced a RefinedSpec or a ResearchReport — the only two artifacts that carry `kb_citations`, so refinement and spike runs — and whose recorded context pack admitted at least one tier-1 knowledge document. The numerator is those whose artifact cites, by its exact vault path, at least one of the tier-1 documents the pack admitted. product/16’s ≥ 80 % target is a target about this subset, not about all runs.',
+      'Share of eligible runs whose output cites a knowledge document their context pack included. Eligible runs are those started in the period that produced a refined specification or a research report — refinement and spike runs, the only ones whose output carries knowledge citations — and whose context pack included at least one tier-1 knowledge document. The 80% target applies to these runs, not to all runs.',
     unit: 'ratio',
     aggregation: 'ratio',
     caveats: [
-      'Not every run: implementation, review and the other roles produce no artifact with `kb_citations`, so a pack they were shown can never count as cited and they are left out of both sides rather than counted as misses (PROGRESS backlog 112).',
-      'A cited page the pack did not carry — one the agent reached with `kb_search` — counts as no citation, because product/16’s sentence is about the pack. A page whose vault path the prompt could not carry verbatim (it degrades an attribute outside `A–Z a–z 0–9 . _ - /`) cannot match either; both under-count.',
-      'A citation is the model’s own claim that it used the page; nothing verifies it read what it cites.',
-      'Runs created before migration 0041 have no recorded pack and are in neither side.',
+      'Implementation, review and other runs produce no output that carries citations, so they are left out of both sides rather than counted as misses.',
+      'A cited page the context pack did not include — one the agent found by searching the knowledge base — does not count, and neither does a page whose path could not be quoted exactly in the prompt; both under-count.',
+      'A citation is the agent’s own claim that it used the page; nothing verifies that it read it.',
+      'Runs from before context packs were recorded are in neither side.',
     ],
   },
+  // product/16, BD-030: `rebase.resolved`.
   rebase_conflicts_resolved: {
     label: 'Conflicts resolved automatically',
     definition:
-      'Rebase-gate settlements whose outcome was `resolved` — the branch did not apply and a conflict-resolution run made it apply (product/16, BD-030).',
+      'Rebase-gate checks where the branch did not apply cleanly and a conflict-resolution run made it apply.',
     unit: 'count',
     aggregation: 'sum',
   },
+  // product/16, BD-030: `rebase.exhausted`.
   rebase_conflicts_escalated: {
     label: 'Conflicts escalated',
     definition:
-      'Rebase-gate settlements whose outcome was `exhausted` — the bounded resolution loop was spent and the task went to a human (product/16, BD-030).',
+      'Rebase-gate checks where the conflict-resolution attempts ran out and the task went to a person.',
     unit: 'count',
     aggregation: 'sum',
   },
+  // product/16; distinct overlaps read from the log (PROGRESS backlog 180), repeats collapsed
+  // (backlog 65).
   concurrent_task_overlaps: {
     label: 'Concurrent-task overlaps',
     definition:
-      'Distinct overlaps first warned in the period: one per unordered pair of tasks at one pair of revisions (product/16, PROGRESS backlog 180). The rebase gate warns again at every entry that re-finds an overlap, and for both tasks of the pair at once (PROGRESS backlog 65); those repeats are one overlap here. A push to either task’s branch that still overlaps is a new one. Counted on the day it was first warned.',
+      'Distinct overlaps first warned in the period: one per pair of tasks at one pair of revisions. The rebase gate warns again each time it re-finds an overlap, and for both tasks at once; those repeats are one overlap here. A new push to either branch that still overlaps is a new one.',
     unit: 'count',
     aggregation: 'sum',
   },
+  // product/18:59.
   review_findings_accepted: {
     label: 'Review-only findings accepted',
     definition:
-      'Finding threads a review-only review posted that were resolved on a merge request whose head moved afterwards — this build’s reading of “resolved with a change” (product/18:59).',
+      'Finding threads a review-only review posted that were resolved on a merge request whose code changed afterwards — read as “resolved with a change”.',
     unit: 'count',
     aggregation: 'sum',
   },
+  // product/18:59.
   review_findings_dismissed: {
     label: 'Review-only findings dismissed',
     definition:
-      'Finding threads resolved without the merge request’s head moving (product/18:59). Threads still open are in neither figure.',
+      'Finding threads a review-only review posted that were resolved without the merge request’s code changing. Threads still open are in neither figure.',
     unit: 'count',
     aggregation: 'sum',
   },
+  // product/18:60.
   ticket_lint_comments: {
     label: 'Ticket lint comments',
-    definition:
-      'Readiness-lint comments posted on tickets in the period (product/18:60). One per ticket, at most.',
+    definition: 'Readiness-lint comments posted on tickets in the period, at most one per ticket.',
     unit: 'count',
     aggregation: 'sum',
   },
+  // product/18:60 "tickets improved after lint (edited within 48 h)"; PROGRESS backlog 186 (the
+  // changelog fields), backlog 187 (a binding with no webhook).
   tickets_edited_after_lint: {
     label: 'Tickets improved after lint',
     definition:
-      'product/18:60’s “tickets improved after lint (edited within 48 h)”: lint comments whose ticket’s summary or description was edited within 48 h after the comment ÷ lint comments, counted on the day the comment was posted (PROGRESS backlog 186). An edit counts only if the provider’s changelog names `summary` or `description` and the edit is newer than the ticket the linter read.',
+      'Lint comments whose ticket’s summary or description was edited within 48 h after the comment ÷ lint comments, counted on the day the comment was posted. An edit counts only if the tracker reports a change to the summary or the description that is newer than what the linter read.',
     unit: 'ratio',
     aggregation: 'ratio',
     caveats: [
-      'A status, rank, sprint or watcher change is not an improvement — which is also what keeps the platform’s own status transitions out, since the update event carries no editor to filter on. An edit to the summary or description by anybody, including a bot, counts.',
-      'A lint comment posted less than 48 h ago is in neither side until its window closes, so the last two days of a range carry fewer samples rather than a falling rate.',
-      'A project whose tracker binding has no webhook never reports an edit (PROGRESS backlog 187), so its lint comments count as not improved.',
+      'A status, rank, sprint or watcher change is not an improvement — which is also what keeps the platform’s own status transitions out. An edit of the summary or description by anybody, a bot included, counts.',
+      'A lint comment less than 48 h old is in neither side until its window closes, so the last two days of a range carry fewer samples rather than a falling rate.',
+      'A project whose tracker sends the platform no edits never reports one, so its lint comments count as not improved.',
     ],
   },
+  // product/19 §13; served per batch by `GET /api/shadow-batches/:id` (WP-34).
   shadow_similarity: {
     label: 'Shadow similarity',
     definition:
-      'product/19 §13: how close a shadow run’s diff came to the human merge request it was compared with.',
+      'How close a shadow run’s change came to the human merge request it was compared with.',
     unit: 'ratio',
     aggregation: 'mean',
     absent: {
       reason:
-        'Measured and published per **batch**, which is the unit the comparison is meaningful in: a similarity averaged over batches run against different repositories at different times answers no question anybody asked. The distribution, the cost-by-size table and the launch candidates are already served.',
-      owner: 'Served by `GET /api/shadow-batches/:id` (WP-34) and rendered on the Shadow screen.',
+        'Measured per shadow batch, the unit in which the comparison means something: a similarity averaged over batches run against different repositories at different times answers no useful question.',
+      owner:
+        'Shown per batch on the Shadow screen, with the similarity distribution, the cost by size and the launch candidates.',
     },
   },
+  // product/16 (visible to everyone in the project, Q22). Absent: `ticketRef` carries no author
+  // (Q48), and attributing one to a person needs a `user_identities` row (PROGRESS backlog 79).
   clean_first_mr_rate_by_author: {
     label: 'Clean first-MR rate by ticket author',
     definition:
-      'product/16: “tasks reaching Ready with zero returns and zero human comments, grouped by ticket author”, visible to everyone in the project (Q22).',
+      'Delivered tasks with no returns and no human comments, grouped by the ticket’s author and visible to everyone in the project.',
     unit: 'ratio',
     aggregation: 'ratio',
     absent: {
       reason:
-        'No ticket author exists to group by. `ticketRef` publishes provider, key and url and carries no author (Q48), and even with one, attributing it to a person needs a `user_identities` row an admin has stated. The ungrouped rate is published above.',
-      owner: 'Q48 for the field, PROGRESS backlog 79 for the mapping.',
+        'The platform does not record who wrote a ticket, and attributing a ticket to a person would also need that person’s tracker account linked to a platform user. The rate without the grouping is shown above.',
+      owner: 'Needs the ticket’s author recorded and linked to a platform user; not scheduled yet.',
     },
   },
+  // product/19 §10. `task_stages.return_reason` is agent prose and names no criterion id; readiness
+  // itself is re-evaluated (WP-64, WP-94). The tagging has no producer (product/17).
   readiness_attributed_returns: {
     label: 'Readiness-attributed returns',
-    definition: 'product/19 §10: “returns tagged with a readiness criterion ÷ returns”.',
+    definition:
+      'Stage returns tagged with the readiness criterion that would have prevented them ÷ all returns.',
     unit: 'ratio',
     aggregation: 'ratio',
     absent: {
       reason:
-        'No return carries a readiness criterion. `task_stages.return_reason` is prose written by an agent and names no criterion id, so there is nothing to attribute. Readiness itself is re-evaluated — after every merge for the criteria a file or an event answers (WP-64), and on a maintainer’s re-evaluate for the rest (WP-94) — but no return is tagged with the criterion that would have prevented it.',
-      owner: 'The tagging has no owner and no producer (product/17 § “Where it shows up”).',
+        'No return carries a readiness criterion: a return’s reason is written by an agent as prose and names no criterion, so there is nothing to attribute.',
+      owner: 'Nobody yet: returns would first need to be tagged with a criterion.',
     },
   },
+  /**
+   * product/16's "LOC added/removed/changed per merged MR … (from MR diff stats)", the platform's
+   * own merge requests only (PROGRESS backlog 179): GitLab's `diffStatsSummary`, read once at the
+   * merge, never the merge event. An average, so `decimal` since S-23.19 (it was `count`, which the
+   * screen rounded to a whole line). A lost race for the log is retried with the answer already read
+   * (backlog 193).
+   */
   loc_changed: {
     label: 'Lines changed per merged MR',
     definition:
-      'product/16’s “LOC added/removed/changed per merged MR and aggregated per day (from MR diff stats)”, shown for information rather than as a target: lines added plus lines removed ÷ the merged merge requests they were measured on, for merge requests **the platform** made (PROGRESS backlog 179). The counts are read from the provider once, when the merge request merges (GitLab’s `diffStatsSummary`), and never taken from the merge event, which carries none on GitLab.',
-    unit: 'count',
+      'Lines added plus lines removed ÷ merged merge requests, for merge requests the platform made — shown for information, not as a target. The counts are read from the provider once, when the merge request merges.',
+    unit: 'decimal',
     aggregation: 'ratio',
     caveats: [
-      'A merge request a human merged without a platform task is not measured: product/16’s table is about the platform’s own work, and each measurement is one provider read.',
-      'Counted on the day the measurement was recorded, which follows the merge by one provider read. One measurement per merge — a repeated measurement of the same merge is not counted again — but a merge request reopened and merged twice is two merges.',
-      'A merge whose measurement fails on every retry — a provider that keeps refusing the read — has no measurement and is in neither the measured nor the unmeasured count. Losing a race for the event log is not such a failure: it is retried with the answer already read, never with a second provider read (PROGRESS backlog 193).',
+      'A merge request a person merged without a platform task is not measured.',
+      'Counted on the day the measurement was recorded, shortly after the merge. A merge request reopened and merged twice counts as two merges.',
+      'A merge whose measurement fails on every retry, because the provider keeps refusing the read, has no measurement and is in neither the measured nor the unmeasured count.',
     ],
   },
+  /**
+   * product/16's "bugs filed against agent-merged MRs within 30 days ÷ merged MRs" (PROGRESS backlog
+   * 114, Q87). A bug ticket is one whose issue type the project routes to the `bug` template. The
+   * caveat is backlog 192 (a later link is traced on an edit) and backlog 187 (no webhook, no poll).
+   */
   defect_escape: {
     label: 'Defect escape',
     definition:
-      'product/16’s “bugs filed against agent-merged MRs within 30 days ÷ merged MRs”, tracked with no target: bug tickets filed in the period whose own link names a merge request the platform delivered in the 30 days before the bug was filed ÷ tasks delivered in the period (PROGRESS backlog 114, Q87). A bug ticket is one whose issue type the project routes to the `bug` template. The merge request is found **only** through a link on the bug ticket — never by its title, never by timing: a merge followed by a bug has no join key. The two sides are counted at different instants, the filing and the merge, as the merge rate’s are.',
+      'Bug tickets filed in the period whose own link names a merge request the platform delivered in the 30 days before the filing ÷ tasks delivered in the period; tracked without a target. The merge request is found only through a link on the bug ticket — never by its title, never by timing. The two sides are counted at different moments, the filing and the merge, as the merge rate’s are.',
     unit: 'ratio',
     aggregation: 'ratio',
     caveats: [
-      'A link added to a bug ticket after it was filed is seen when an edit of that ticket reaches the platform, which traces it again (PROGRESS backlog 192); a tracker binding that reports no edits — no webhook and no polling (PROGRESS backlog 187) — keeps the bug as it was first traced. A bug is counted on the day it was filed, so a link added later can change a past day’s figure.',
+      'A link added to a bug ticket after it was filed is seen when the ticket’s edit reaches the platform, which traces it again; a tracker that reports no edits keeps the bug as it was first traced. A bug counts on the day it was filed, so a link added later can change a past day’s figure.',
     ],
   },
+  // product/16 "queue wait time". `task.dequeued` is declared unconsumed (naming WP-20, which
+  // shipped without a projection); a fold of `task.queued`/`task.dequeued` owns this metric.
   queue_wait_minutes: {
     label: 'Queue wait',
-    definition:
-      'product/16: “agent utilisation: parallel runs vs limit; queue wait time” — how long a task waited between being queued and being picked up.',
+    definition: 'How long a task waited between being queued and being picked up.',
     unit: 'minutes',
     aggregation: 'mean',
     absent: {
       reason:
-        '`task.dequeued` is declared unconsumed and nothing projects it, so the closing instant of the wait is in the event log and in no row. A fold of `task.queued` against `task.dequeued` at read time is possible — WP-61 reads the log that way for four metrics — and nobody has built it.',
+        'The moment a task leaves the queue is recorded in the event log, but nothing turns it into a figure yet.',
       owner:
-        'Nobody yet: `task.dequeued` is declared unconsumed naming WP-20, which shipped without a projection of it; a row that folds `task.queued`/`task.dequeued` into a wait per task owns this metric.',
+        'Nobody yet: it needs a projection that pairs each task’s queued and picked-up events.',
     },
   },
+  // product/09:29 and product/18:32 "tokens + people". Owner: Q73 — "convert when set" makes it an
+  // organisation setting `human_hour_rate_usd`; "do not convert" means it is never built.
   total_cost_of_delivery: {
     label: 'Total cost of delivery',
-    definition:
-      'product/09:29 and product/18:32: “total cost of delivery = tokens + people”, one number.',
+    definition: 'Agent spend plus people’s time, as one number.',
     unit: 'usd',
     aggregation: 'sum',
     absent: {
       reason:
-        'Adding dollars to minutes needs an hourly rate, and no product document, decision record or configuration key supplies one. A default would not be neutral — it varies by team, by country and by whether it means salary or loaded cost — and it would be published on every screen as though it had been measured. Cost and human minutes are both published above, unsummed, which is what product/09:29’s own wording (“shown next to”) says.',
+        'Adding dollars to minutes needs an hourly rate, and none is configured. A default would not be neutral — it varies by team, by country and by whether it means salary or loaded cost — and it would be shown as though it had been measured. Spend and human minutes are both shown, side by side and unsummed.',
       owner:
-        'Q73 — answer “convert when set” and the organisation setting `human_hour_rate_usd` is one route field and one control; answer “do not convert” and this metric is never built.',
+        'Needs a decision on whether people’s time is converted to money at a configured hourly rate.',
     },
   },
 };
@@ -916,13 +1015,15 @@ const percent = (share: number): string => `${Math.round(share * 1000) / 10} %`;
 export const defectEscapeFacts = (rows: readonly BugTraceRow[]): DynamicMetricFacts => {
   const bugs = rows.reduce((sum, row) => sum + row.bugs, 0);
   const linked = rows.reduce((sum, row) => sum + row.linked, 0);
+  // Q87 decided the rule; the share of real bug tickets that carry a resolvable link is
+  // `docs/TODO.md`'s open measurement. The strings below are UI text and cite neither (S-23.19).
   const owner =
-    'Q87 decided the rule; the share of real bug tickets that carry a resolvable link is `docs/TODO.md`’s open measurement, and a team that links its bug tickets to the merge request they came from raises it.';
+    'A team that links its bug tickets to the merge request they came from raises the coverage.';
   if (bugs === 0) {
     return {
       absent: {
         reason:
-          'No bug ticket was traced in the period, so the share of bugs that could be attributed to a merge request — which this rate is only ever published with (Q87) — cannot be computed. “No bug was filed” and “no bug reached the platform” look the same from here.',
+          'No bug ticket was traced in the period, so the share of bugs that could be attributed to a merge request — which this rate is only ever shown with — cannot be computed. “No bug was filed” and “no bug reached the platform” look the same from here.',
         owner,
       },
     };
@@ -932,7 +1033,7 @@ export const defectEscapeFacts = (rows: readonly BugTraceRow[]): DynamicMetricFa
   if (share < DEFECT_COVERAGE_FLOOR) {
     return {
       absent: {
-        reason: `Coverage below the floor: ${coverage}, and the rate is published only when at least half did — below that, the bugs it cannot see outnumber the ones it can, and the number would describe what is missing (Q87, WP-61).`,
+        reason: `Coverage below the floor: ${coverage}, and the rate is published only when at least half did — below that, the bugs it cannot see outnumber the ones it can, and the number would describe what is missing.`,
         owner,
       },
     };
@@ -1030,9 +1131,11 @@ export const foldStats = (input: StatsFoldInput): OrgStatsResponse => {
 
   for (const row of sources.cost) {
     fold.add('cost_total', row.day, { numerator: row.usd });
+    // Every prompt token, so the read share is a share of one whole (the catalogue entry has the
+    // provider's definition): it cannot exceed 1 whatever the row says.
     fold.add('cache_hit_ratio', row.day, {
       numerator: row.cacheReadTokens,
-      denominator: row.inputTokens,
+      denominator: row.inputTokens + row.cacheWriteTokens + row.cacheReadTokens,
     });
   }
 
@@ -1079,7 +1182,7 @@ export const foldStats = (input: StatsFoldInput): OrgStatsResponse => {
     withheld.entries === 0
       ? []
       : [
-          `Withheld in this period: ${withheld.entries} review window${withheld.entries === 1 ? '' : 's'} an approval touched, ${publishable(withheld.minutes)} minutes (PROGRESS backlog 188).`,
+          `Withheld in this period: ${withheld.entries} review window${withheld.entries === 1 ? '' : 's'} an approval touched, ${publishable(withheld.minutes)} minutes.`,
         ];
   const facts: Partial<Record<StatMetricId, DynamicMetricFacts>> = {
     reviewer_minutes_per_delivered_task: { caveats: withheldCaveat },
@@ -1207,7 +1310,8 @@ export const statsToCsv = (response: OrgStatsResponse): string => {
         stage.rate,
         stage.entries,
         null,
-        'Stage returns ÷ stage entries over the period (product/19 §10).',
+        // product/19 §10.
+        'Stage returns ÷ stage entries over the period.',
       ]
         .map(csvCell)
         .join(','),

@@ -224,7 +224,7 @@ describe('the statistics endpoint, on numbers this instance really produced', ()
     // than only in the fold's unit test (standing rule 16).
     const queueWait = metricOf(body, 'queue_wait_minutes');
     expect(queueWait.value).toBeNull();
-    expect(queueWait.absent?.owner).toContain('task.dequeued');
+    expect(queueWait.absent?.owner).toContain('Nobody yet');
 
     // `request` rather than `json`: the answer is `text/csv`, and reading it as JSON would be
     // asserting the wrong thing about the one route whose whole point is that it is not.

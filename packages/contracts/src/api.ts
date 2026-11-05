@@ -3336,8 +3336,14 @@ export type ShadowBatchResponse = z.infer<typeof shadowBatchResponseSchema>;
  * express — its **absence**. A metric this build cannot compute publishes `value: null` with an
  * {@link statAbsenceSchema} saying why and who owns it; it is structurally impossible to publish
  * *"nobody counted"* as a zero, which is standing rule 16 moved from a convention into a type.
+ *
+ * **The unit says what the number is, not how big it tends to be** (S-23.19): `count` is a whole
+ * number of things; `decimal` is an average count — *returns per delivered task*, *lines per merged
+ * merge request* — printed as a plain number with one decimal (`8.0`), never as a percentage;
+ * `ratio` is a share of one whole, printed as a percentage. Before `decimal` existed an average of
+ * eight returns was published as `ratio` and read *800.0 %*.
  */
-export const statUnitSchema = z.enum(['count', 'ratio', 'usd', 'minutes', 'hours']);
+export const statUnitSchema = z.enum(['count', 'decimal', 'ratio', 'usd', 'minutes', 'hours']);
 
 /** The metric vocabulary. Platform-chosen, so it is an enum rather than a record's free key. */
 export const statMetricIdSchema = z.enum([
@@ -3385,9 +3391,12 @@ export const statMetricIdSchema = z.enum([
 /**
  * Why a metric has no value, and who would give it one.
  *
- * `owner` is a work package, a PROGRESS backlog entry, an open question or an endpoint that
- * already serves the number — never empty, because *"not measured"* with no address is what turns
- * into a zero on the next screen somebody builds (standing rule 18).
+ * `owner` says, in words a reader of the screen understands, what would give the metric a value
+ * (or where it is already served) — never empty, because *"not measured"* with no address is what
+ * turns into a zero on the next screen somebody builds (standing rule 18). Both strings are UI text:
+ * the work package, backlog entry or open question behind them is cited in a comment beside the
+ * string in `apps/server/src/queries/stats-metrics.ts`, never in the string (TD-033 decision 6,
+ * S-23.19 — `stats-user-text.test.ts` refuses one).
  */
 export const statAbsenceSchema = z.strictObject({
   reason: nonEmptyStringSchema,
@@ -3430,7 +3439,8 @@ export const statMetricSchema = z.strictObject({
   /**
    * What is known to be wrong with this number, in its own words.
    *
-   * Reviewer minutes carry three (PROGRESS backlog **88**, **188**, **89**) and they do not cancel:
+   * Plain UI text, with no internal reference in it (S-23.19). Reviewer minutes carry three
+   * (PROGRESS backlog **88**, **188**, **89**) and they do not cancel:
    * a bot nobody declared a machine inflates a review window, every window an approval touched is
    * withheld until the real-GitLab check of the approver is taken (an approval without a comment
    * has been visible since WP-60, `mr.approved`), and the eight-hour day cap is applied per review

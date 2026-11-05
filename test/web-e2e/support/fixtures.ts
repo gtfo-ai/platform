@@ -337,9 +337,10 @@ export const bugTask = taskRecordSchema.parse({
  * `GET /api/org/stats` (WP-41), parsed by the published schema so this fixture cannot drift from
  * the DTO the real server sends.
  *
- * Four metrics, chosen for the four renderings the screen has to keep apart: a **count** with a
- * value, a **ratio** with nothing to divide (`null`, and *not* 0.0 %), a figure carrying **caveats**,
- * and one that is **absent** with a reason and an owner. The absent one's reason carries a hostile
+ * Five metrics, chosen for the renderings the screen has to keep apart: a **count** with a value
+ * and a trend, an **average count** (`decimal`, *8.0* and not *800.0 %*), a **ratio** with nothing
+ * to divide (`null`, and *not* 0.0 %), a figure carrying **caveats**, and one that is **absent**
+ * with a reason and an owner. The absent one's reason carries a hostile
  * string, because it is prose this screen prints and the browser tier is where "prints" is proved
  * to mean "as text".
  */
@@ -357,11 +358,27 @@ export const orgStats = orgStatsResponseSchema.parse({
     {
       id: 'tasks_delivered',
       label: 'Tasks delivered',
-      definition: 'Tasks whose merge request merged, counted at merge time (product/19 §10).',
+      definition:
+        'Tasks whose merge request merged in the period, counted at the moment of the merge.',
       unit: 'count',
       value: 3,
       samples: 3,
-      buckets: [{ start: '2026-06-03', end: '2026-06-04', value: 3, samples: 3 }],
+      buckets: [
+        { start: '2026-06-02', end: '2026-06-03', value: 1, samples: 1 },
+        { start: '2026-06-03', end: '2026-06-04', value: 2, samples: 2 },
+      ],
+      absent: null,
+      caveats: [],
+    },
+    {
+      // S-23.19: an average count, "8.0" — the live page printed it as "800.0%".
+      id: 'returns_per_delivered_task',
+      label: 'Returns per delivered task',
+      definition: 'Average number of stage returns per delivered task.',
+      unit: 'decimal',
+      value: 8,
+      samples: 1,
+      buckets: [{ start: '2026-06-03', end: '2026-06-04', value: 8, samples: 1 }],
       absent: null,
       caveats: [],
     },
