@@ -53,5 +53,10 @@ pre-push:
   jobs:
     - name: merge-conflict markers
       run: pnpm run -s conflict:check
+    # Only for a push that updates `main` (owner, 2026-11-05): a push to any other branch is a pull
+    # request's head, and CI runs the whole suite there before anything merges; running it here too
+    # on every PR push overloaded a shared machine (load 113-134 on 14 cores). See
+    # scripts/pre-push-tests.mjs.
     - name: unit + contract
-      run: pnpm run -s test
+      run: node scripts/pre-push-tests.mjs
+      use_stdin: true
