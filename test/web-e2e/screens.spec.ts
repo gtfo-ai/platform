@@ -212,7 +212,8 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await expect(page.getByText('2 open · 1 resolved')).toBeVisible();
   await expect(page.getByText('CI status', { exact: true })).toBeVisible();
   await expand('ci');
-  await expect(page.getByText('This task has not entered ci_gate.')).toBeVisible();
+  // S-23.22: the gate by its name (`stageLabel`), never its id.
+  await expect(page.getByText('This task has not entered CI.')).toBeVisible();
   await expect(page.getByText('Business verdict', { exact: true })).toBeVisible();
   await expect(page.getByText('no verdict', { exact: true })).toBeVisible();
   // …and since WP-81 the eleventh, the tamper check, is answered too — off the CI gate's row, so on
@@ -885,10 +886,11 @@ test('a taken-over task that escalated still shows the branch, the downloads and
   // The hand-back is the header's one primary action while the take-over is in force (S-23.9b).
   await page.getByRole('button', { name: 'Hand back…' }).click();
   const picker = page.getByLabel('Resume at');
+  // S-23.22: each option says the stage's name; its value is still the id the route takes.
   await expect(picker.locator('option')).toHaveText([
-    'refinement',
-    'implementation',
-    'code_review',
+    'Refinement',
+    'Implementation',
+    'Code review',
   ]);
   await picker.selectOption('code_review');
   await page.getByLabel('What you did').fill('fixed it by hand');

@@ -48,12 +48,34 @@ const OPT_OUT: Readonly<Record<string, string>> = {
     'the worker operator’s own page, owned elsewhere (BACKLOG 938)',
 };
 
-/** Every administrator-only name in `source` outside a comment, with its line. */
-export const adminNames = (source: string): { line: number; name: string }[] =>
+/**
+ * **Commands, not prose.** A line the person copies and pastes — a shell command or an env-file
+ * line in a `CopyField` — must carry the exact name, so it is excused here **by its exact source
+ * text**, never by file: prose elsewhere in the same file is still read. Each entry must still
+ * match, so one that outlives its line fails.
+ */
+const COMMAND_LINES: Readonly<
+  Record<string, readonly { readonly text: string; readonly why: string }[]>
+> = {
+  'apps/web/src/features/worker-wizard-steps.ts': [
+    {
+      // Split so the linter does not read the literal as a template.
+      text: 'coreUrlLine: `APP_CORE_URL=$' + '{origin}`,',
+      why: 'the `.env.worker` line the Add a worker wizard copies (worker-wizard.tsx, a CopyField)',
+    },
+  ],
+};
+
+/** Every administrator-only name in `source` outside a comment, with its line and its text. */
+export const adminNames = (source: string): { line: number; name: string; text: string }[] =>
   withoutComments(source)
     .split('\n')
     .flatMap((text, index) =>
-      [...text.matchAll(ADMIN_NAME)].map((match) => ({ line: index + 1, name: match[0] })),
+      [...text.matchAll(ADMIN_NAME)].map((match) => ({
+        line: index + 1,
+        name: match[0],
+        text: text.trim(),
+      })),
     );
 
 describe('the administrator-name scanner', () => {
@@ -104,11 +126,19 @@ describe('visible copy names no environment variable or configuration key (S-23.
   it('finds them only in the notes module', () => {
     const offenders: string[] = [];
     const excused = new Set<string>();
+    const commandsUsed = new Set<string>();
     for (const file of files) {
       if (file.path === NOTES_MODULE) {
         continue;
       }
-      const found = adminNames(file.contents);
+      const commands = COMMAND_LINES[file.path] ?? [];
+      const found = adminNames(file.contents).filter((entry) => {
+        const command = commands.find((each) => each.text === entry.text);
+        if (command !== undefined) {
+          commandsUsed.add(`${file.path}\0${command.text}`);
+        }
+        return command === undefined;
+      });
       if (found.length === 0) {
         continue;
       }
@@ -120,5 +150,11 @@ describe('visible copy names no environment variable or configuration key (S-23.
     }
     expect(offenders).toEqual([]);
     expect(Object.keys(OPT_OUT).filter((path) => !excused.has(path))).toEqual([]);
+    const staleCommands = Object.entries(COMMAND_LINES).flatMap(([path, entries]) =>
+      entries
+        .filter((entry) => !commandsUsed.has(`${path}\0${entry.text}`))
+        .map((entry) => `${path}: ${entry.text}`),
+    );
+    expect(staleCommands).toEqual([]);
   });
 });

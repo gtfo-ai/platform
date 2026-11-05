@@ -9,8 +9,9 @@ import { type APIRequestContext, expect, test } from '@playwright/test';
 import { CREDENTIALS } from './support/fixtures.js';
 import { resetBackend, signIn } from './support/harness.js';
 
+// S-23.22: said in words; the variable's name is behind "For administrators", not in the sentence.
 const HINT =
-  'Nobody has signed in here yet. Use the administrator account set by APP_BOOTSTRAP_ADMIN_EMAIL.';
+  'Nobody has signed in here yet. Sign in with the administrator email set when this instance was installed.';
 
 test.describe('the bootstrap hint (WP-291)', () => {
   test.beforeEach(async ({ request }) => {
