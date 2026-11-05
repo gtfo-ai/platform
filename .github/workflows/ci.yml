@@ -143,9 +143,10 @@ jobs:
   # thresholds on the whole and runs the ratchet. The part count is the matrix's length and the
   # `PARTS` beside it, which `scripts/verify.test.ts` holds equal; changing it is changing both.
   #
-  # The merge runs when a part fails (`!cancelled()`), because a required check that is *skipped*
-  # reads as passed; and its last step fails unless every part succeeded, so a part that failed
-  # before writing a blob cannot leave the merge to judge an empty directory.
+  # The merge **always** runs (`always()`), because a required check that is *skipped* reads as
+  # passed — under `!cancelled()` a run cancelled by hand reported both merges skipped, where the
+  # unsplit jobs had read cancelled — and its last step fails unless every part succeeded, so a
+  # failed, cancelled or skipped part, or one that wrote no blob, fails the tier's check.
   unit-part:
     name: unit + contract (part ${{ matrix.part }}/3)
     runs-on: ubuntu-latest
@@ -185,12 +186,15 @@ jobs:
           include-hidden-files: true
           # A part that wrote no report fails here, by name, as well as at the merge.
           if-no-files-found: error
+          # "Re-run failed jobs" re-runs a part whose artifact already exists; without this the
+          # second upload of the same name is refused (409).
+          overwrite: true
           retention-days: 1
 
   unit:
     name: unit + contract
     needs: unit-part
-    if: ${{ !cancelled() }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10 # the merge of the parts above; it runs no test
     steps:
@@ -348,12 +352,15 @@ jobs:
           include-hidden-files: true
           # A part that wrote no report fails here, by name, as well as at the merge.
           if-no-files-found: error
+          # "Re-run failed jobs" re-runs a part whose artifact already exists; without this the
+          # second upload of the same name is refused (409).
+          overwrite: true
           retention-days: 1
 
   e2e:
     name: e2e-fake-claude
     needs: e2e-part
-    if: ${{ !cancelled() }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10 # the merge of the parts above; it runs no test and starts no database
     steps:

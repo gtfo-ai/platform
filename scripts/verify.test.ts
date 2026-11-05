@@ -355,7 +355,7 @@ describe('the process project’s membership', () => {
  * split could lose a part, a part's report, or the merge, and stay equal to them. What is held here,
  * for every job that runs a target with `--shard`: the matrix is exactly the parts `1…n` and agrees
  * with `PARTS` and the job's name; every part uploads its report even when it fails; and exactly
- * one job needs the parts, runs **even when one fails** (a skipped required check reads as a pass),
+ * one job needs the parts, runs **always**, even when one fails or the run is cancelled (a skipped required check reads as a pass),
  * runs the same target with `--merge-reports` over the directory the reports land in, and ends by
  * failing unless every part succeeded.
  */
@@ -410,7 +410,10 @@ describe('the tiers CI splits over several runners', () => {
       );
       expect(merges.map(({ key }) => key)).toHaveLength(1);
       const merge = merges[0]?.body ?? '';
-      expect(merge).toMatch(/^ {4}if: \$\{\{ !cancelled\(\) \}\}$/m);
+      // `always()`, not `!cancelled()`: a run cancelled by hand would report the merge skipped,
+      // which a required check reads as passed (review of PR #5).
+      expect(merge).toMatch(/^ {4}if: \$\{\{ always\(\) \}\}$/m);
+      expect(part.body).toMatch(/^ {10}overwrite: true$/m);
       expect(merge).toContain(`pattern: ${upload?.[1]}-*\n          path: .vitest-reports\n`);
       expect(merge).toContain(`pnpm run -s ${target} --merge-reports .vitest-reports`);
       expect(merge).toContain(`PARTS_RESULT: \${{ needs.${part.key}.result }}`);
