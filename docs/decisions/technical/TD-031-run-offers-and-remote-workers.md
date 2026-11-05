@@ -964,3 +964,48 @@ the `426` and the device flow. The file can be trusted only as far as the TLS co
 the same as before. TD-032 §3 still holds: a person reads it, and no updater applies it.
 
 **Built by S-22.8** (WP-284 item 6), before merge.
+
+## Amendment (2026-11-05, architect, session 22) — the worker-UI amendment §3 and §4: a drain stays up, and the page checks answers without zod (backlogs 771, 770)
+
+**Context.** §4 says a drain finishes the run and *exits*. But `compose.worker.yml:124` restarts the
+worker `unless-stopped`, so an exit is an immediate restart, the restart clears the drain's pause, and
+the worker claims again. The same restart would also break TD-032 §6, which drains, waits for **idle**,
+and only then recreates the container. Separately, with zod the `worker.html` entry measured 127 kB gz
+against §3's 120 kB. As built, the page checks answers with a strict guard
+(`apps/web/src/worker/read-state.ts`), and the worker parses every answer with
+`workerLocalStateSchema` before sending it (`apps/server/src/remote-worker/runtime.ts:619`).
+
+**Decision.**
+
+1. **A drain stops claiming, finishes what runs, and stays up idle. It never exits.** Stopping is the
+   person's `docker compose stop` (Docker does not restart a container stopped by hand under
+   `unless-stopped`) or the updater's recreate. The restart policy is unchanged.
+2. **A drain's pause lasts one process lifetime. A Pause lasts until Resume.** At start, the worker
+   clears the core's pause only if the `drain-pause` marker is present. A drain writes the marker
+   **only if the worker was not already manually paused**, so Pause → Drain → restart stays paused.
+   A later Pause takes the hold over (the marker is removed), and Resume clears both. Any start clears
+   a drain's pause: a crash, a reboot, or the updater's recreate. A person who wants the hold to
+   survive a restart uses Pause.
+3. **The audit can tell the source apart.** `POST manual-pause` becomes `{paused, via}` (strict and
+   required; the verb exists only from protocol 2, which ships unreleased in this slice) with
+   `via ∈ {worker_ui, worker_ui_drain, worker_internal_drain, worker_start}`. That is: the page's
+   Pause/Resume, the page's Drain, `POST /internal/drain` (the updater's or an operator's curl), and
+   the start-time clear. The value is copied into the `human_actions` row's `params.via`. A repeat of
+   the stored state still writes no row.
+4. **The page keeps its guard. The budget stays 120 kB.** The rule from CLAUDE.md ("zod for all
+   boundaries") is met by the side that owns the schema: the worker validates with zod. A separate
+   browser entry with its own budget may check a same-origin answer with a hand-written strict guard
+   on three conditions. (a) The server parses that answer through the zod schema before sending it.
+   (b) A test compares the guard with the schema in both directions, covering keys at every depth,
+   enum members, and nullability. (c) The test runs the same accept and refuse fixtures through both.
+   Only `worker.html` uses this exception. The main SPA keeps zod.
+
+**Rejected.** *Exit with `restart: on-failure`*: a reboot would then leave the worker down until
+someone notices, and the updater's idle wait would race the exit. *Raise the budget to ~130 kB*: it
+would pay 24.5 kB for a second validation of an answer the server already parsed. *`zod/mini`*: it
+measured only 2 kB smaller.
+
+**Residual.** A crash during a drain restarts the worker and it claims again. That is acceptable: a
+drain is a wind-down, not a hold.
+
+**Built by S-22.13** (WP-292 items 2 and 4), before merge.
