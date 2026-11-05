@@ -572,9 +572,10 @@ worker_name}`) so the run page can say who executed a run (WP-283 (5)).
 both `426` below protocol 2 (before the credential is read), and two keys a version-1 worker is never
 sent, because every schema is strict: the handshake's `worker.manually_paused_at` and the package's
 `display` block (`{projectKey, ticketKey, title}`, the title from the redacted ticket snapshot).
-`POST manual-pause {paused}` (worker credential) is a state assertion over `workers.manually_paused_at`
+`POST manual-pause {paused, via}` (worker credential) is a state assertion over `workers.manually_paused_at`
 (migration 0099) — one `human_actions` row `worker.pause`/`worker.resume` per change, `params: {worker_id,
-via: worker_ui}`, the worker's user, none for a repeat (`performed: false`); while it is set `claims`
+via}` with `via` one of `worker_ui`, `worker_ui_drain`, `worker_internal_drain`, `worker_start` (TD-031's
+2026-11-05 amendment), the worker's user, none for a repeat (`performed: false`); while it is set `claims`
 answers `204` at once and the claim's eligibility and the online-assignee rule leave the worker out.
 `POST runs/:id/cancel {reason?}` (run token, `Idempotency-Key` **required**) is `POST
 /api/runs/:run_id/cancel`'s command as the worker's user under the same `run.cancel` permission

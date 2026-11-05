@@ -367,7 +367,10 @@ docker compose -f compose.worker.yml logs remote-worker | grep token=
   and restarting the worker. Every call carries it as a bearer header; there is no cookie and no CORS
   header, and a change must come from the page's own origin (`403` otherwise).
 - *Drain* holds the core's pause as a drain's: the worker finishes what runs, takes nothing new, **stays
-  up idle**, and its next start clears that pause — only a drain's; a *Pause* survives a restart.
+  up idle**, and its next start clears that pause — only a drain's; a *Pause* survives a restart, and
+  a *Drain* pressed while paused leaves the *Pause* as it is (TD-031's 2026-11-05 amendment). The
+  audit row's `via` says who asked: `worker_ui`, `worker_ui_drain`, `worker_internal_drain` (the
+  updater's or an operator's `POST /internal/drain`) or `worker_start`.
   Stopping the container is not a cancel: the core treats it as a lost worker.
 - What the page shows is what the worker uploads (redacted the same way); it is not a confidentiality
   boundary against the machine's owner, who controls the Docker daemon (TD-031's worker-UI amendment).
