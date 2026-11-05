@@ -867,7 +867,7 @@ describe('a usage limit and a lost worker (WP-285, WP-286)', () => {
       [workerId],
     );
 
-  it('re-offers a stage a usage limit stopped once, to a second worker, and the limited worker pauses (WP-285 (6))', async () => {
+  it('re-offers a stage a usage limit stopped once, taken by a second worker while the limited one pauses (WP-285 (6))', async () => {
     const topology = await core('worker-usage-limit');
     const { pipeline } = topology;
     await setExecution(pipeline, { mode: 'workers_only', prefer: 'workers' });
@@ -891,8 +891,9 @@ describe('a usage limit and a lost worker (WP-285, WP-286)', () => {
       ['failed', 'rate_limited', limited.workerId],
       ['completed', 'success', second.workerId],
     ]);
-    // The re-planned offer excluded the limited worker; nobody was asked.
-    expect(runs[1]?.excluded).toEqual([limited.workerId]);
+    // The re-planned offer excludes nobody (TD-031's 2026-11-05 amendment): the limited worker's own
+    // pause kept it off; nobody was asked.
+    expect(runs[1]?.excluded).toEqual([]);
     expect(await pipeline.query("select 1 from events where type = 'task.escalated'")).toEqual([]);
     const [entry] = await pipeline.query<{ usage_limited_runs: number }>(
       "select usage_limited_runs from task_stages where stage = 'refinement' and attempt = 1",
@@ -936,6 +937,13 @@ describe('a usage limit and a lost worker (WP-285, WP-286)', () => {
       name: 'second-laptop',
       coreUrl: secondLink.url,
       scenario: hold,
+    });
+    // Registered last, so it runs first: both machines reach the core again before they are
+    // stopped, so each hand-back meets `lease_lost` at once instead of retrying a dark link until
+    // self-termination (585 s) — what hung this case's teardown in CI.
+    cleanups.push(async () => {
+      firstLink.retarget(topology.api.baseUrl);
+      secondLink.retarget(topology.api.baseUrl);
     });
     await expireLease(pipeline, first.workerId);
     // The sweep ends the run, re-plans the entry with the lost worker excluded; the second takes it.

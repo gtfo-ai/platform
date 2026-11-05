@@ -334,12 +334,32 @@ export const startWorkerUnderTest = async (
     clis,
     stateDir,
     stop: async () => {
-      await runtime.stop();
+      /**
+       * **Bounded** (S-22.9's CI hang): a worker whose core no longer answers hands its run back by
+       * retrying `finish` until self-termination — 585 s, past any hook's timeout. The teardown waits
+       * at most {@link WORKER_STOP_BOUND_MS} and goes on; the runtime's retries end with the process.
+       */
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      const stopped = await Promise.race([
+        runtime.stop().then(() => true),
+        new Promise<false>((resolve) => {
+          bound = setTimeout(() => resolve(false), WORKER_STOP_BOUND_MS);
+        }),
+      ]);
+      clearTimeout(bound);
+      if (!stopped) {
+        process.stderr.write(
+          `worker ${options.name} did not stop within ${String(WORKER_STOP_BOUND_MS)} ms; teardown goes on\n`,
+        );
+      }
       await controlPlane.close();
       rmSync(scratch, { recursive: true, force: true });
     },
   };
 };
+
+/** How long a test's teardown waits for one worker to stop before it goes on. */
+export const WORKER_STOP_BOUND_MS = 30_000;
 
 /**
  * A forwarding proxy in front of a core — what lets a test **restart the core** under a worker
