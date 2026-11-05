@@ -13,9 +13,13 @@ import * as z from 'zod';
  *
  * - `not_set_up` *(local)*: no platform chosen, no Claude sign-in, or the machine not approved yet;
  * - `revoked`: its credential was revoked — it must be approved again;
+ * - `owner_disabled` *(core)*: its owner's account is disabled or banned, so the claim refuses it;
  * - `offline`: the core has not heard from it in a minute *(core)*, or it cannot reach its core
  *   *(local)*;
  * - `protocol_outdated`: it speaks a worker protocol the core no longer accepts;
+ * - `platform_images_unresolved` *(core)*: the core cannot name its own run images (a private
+ *   registry with no `APP_WORKER_IMAGE_DIGESTS`), so it answers every claim `503
+ *   digests_unresolved` — a fault of the platform's, not the worker's;
  * - `claude_rejected` *(local)*: Claude refused the token it holds;
  * - `paused`: its owner paused it on its page;
  * - `draining`: a drain — finish what runs, take nothing new (the page's *Drain*, or its updater);
@@ -24,16 +28,21 @@ import * as z from 'zod';
  * - `images_missing`: it holds none of the run images (its launcher is down, or still pulling);
  * - `images_outdated`: it holds images of another build than the core's current one;
  * - `no_eligible_project` *(core)*: no project would give it work — none it may run in admits
- *   workers, or its claim scope names none of those. *Pick only* is the owner's choice, not a
- *   blocker.
+ *   workers, or its claim scope names none of those;
+ * - `pick_only` *(core)*: its owner chose *pick only*, so it claims nothing **by itself** — a run
+ *   picked on its page still starts. The last, because it is the owner's choice rather than a fault.
+ *
+ * An empty list means the core would admit an **automatic** claim from it now (`can_claim`).
  *
  * The words are `WORKER_CLAIM_BLOCKER_WORDS` in `apps/web/src/ui/humanize.ts`, exhaustive by type.
  */
 export const WORKER_CLAIM_BLOCKERS = [
   'not_set_up',
   'revoked',
+  'owner_disabled',
   'offline',
   'protocol_outdated',
+  'platform_images_unresolved',
   'claude_rejected',
   'paused',
   'draining',
@@ -42,6 +51,7 @@ export const WORKER_CLAIM_BLOCKERS = [
   'images_missing',
   'images_outdated',
   'no_eligible_project',
+  'pick_only',
 ] as const;
 export const workerClaimBlockerSchema = z.enum(WORKER_CLAIM_BLOCKERS);
 export type WorkerClaimBlocker = z.infer<typeof workerClaimBlockerSchema>;

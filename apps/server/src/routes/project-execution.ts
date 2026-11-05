@@ -117,9 +117,11 @@ export const projectWorkerOf = (
     readonly now: Date;
   },
 ): ProjectExecutionWorker => {
+  // `pick_only` is this project's `scope_excludes` here (`picked_only`), not the worker's fault.
   const blockers = coreClaimBlockersOf({
     ...claimFactsOf(row, input.coreDigests, input.now),
     eligibleProjects: null,
+    pickOnly: false,
   });
   const scope = row.claimProjects;
   const reason: ProjectExecutionWorker['project_reason'] =

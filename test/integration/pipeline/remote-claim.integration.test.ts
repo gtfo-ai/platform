@@ -25,6 +25,10 @@
  *     PostgreSQL — the offer open again, no `run.claimed`, the epoch unchanged — and the refusal's own
  *     transaction withdraws it (`budget_at_claim`), ends its run `cancelled` and pauses the task. The
  *     memory store keeps a rolled-back write (its divergence 4), so only this tier shows the withdrawal.
+ *  8. **The claim-blocker vocabulary is the claim's** (S-22.19, the review of PR #54): one worker
+ *     per predicate, and an automatic claim is admitted — through the protocol's `426` check, its
+ *     `503 digests_unresolved` and the claim statement itself — exactly when `GET /api/workers`
+ *     says `can_claim`, naming the blocker it refuses for.
  *  6. **WP-282's statements** (`postgres-remote-run-calls.ts`): one transcript row per `(run_id,
  *     seq)` on a table whose key carries the partition column; a tool call's claim, answer and
  *     take-over; an approval decided once and delivered once; the session mirror once per position;
@@ -47,10 +51,22 @@ import {
   type StoredTask,
   type Transaction,
 } from '@platform/application';
-import type { Id, IsoDateTime, Slug, TranscriptEvent } from '@platform/contracts';
+import {
+  type Id,
+  type IsoDateTime,
+  isAcceptedWorkerProtocol,
+  type Slug,
+  type TranscriptEvent,
+  WORKER_PROTOCOL_VERSION,
+  type WorkerClaimBlocker,
+} from '@platform/contracts';
 import { FEATURE_TEMPLATE, type OfferRouting, SHIPPED_TEMPLATES } from '@platform/domain';
 import { eventing, pipeline, recovery } from '@platform/infrastructure';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
+import { createPostgresWorkerStore } from '../../../apps/server/src/queries/worker-queries.js';
+import { toWireWorker } from '../../../apps/server/src/routes/workers.js';
 import { remoteRunCredentialOf } from '../../../apps/server/src/worker-run-calls.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
@@ -1255,4 +1271,205 @@ describe('backlog 744: a claim the admission re-check refuses (TD-031 §2)', () 
       await pool.end();
     }
   }, 60_000);
+});
+
+describe('GET /api/workers says can_claim exactly when the claim admits one (S-22.19, review of PR #54)', () => {
+  const OLD_DIGEST = `sha256:${'0'.repeat(64)}`;
+  const CORE = { run: RUN_DIGEST, egress: EGRESS_DIGEST };
+
+  interface ParityCase {
+    readonly name: string;
+    readonly blockers: readonly WorkerClaimBlocker[];
+    /** What its last contact reported (`recordContact`, written by every authenticated call). */
+    readonly held?: readonly string[];
+    readonly protocol?: number;
+    /** `null`: the core cannot name its own images, and answers every claim `503`. */
+    readonly digests?: typeof CORE | null;
+    readonly routing?: OfferRouting;
+    readonly arrange?: (
+      w: World,
+      workers: ReturnType<typeof createPostgresWorkerStore>,
+    ) => Promise<void>;
+  }
+
+  /**
+   * One predicate per case. `offline` has no case: a claim is itself an authenticated call, which
+   * records the contact that makes the worker online, so no claim can meet an offline worker. A
+   * launcher that does not answer is the worker's own fact, and reaches the core as no image held.
+   */
+  const CASES: readonly ParityCase[] = [
+    { name: 'an eligible worker', blockers: [] },
+    {
+      name: 'a revoked worker',
+      blockers: ['revoked'],
+      arrange: async (w) => {
+        await sql("update workers set revoked_at = now(), state = 'revoked' where id = $1", [w.w1]);
+      },
+    },
+    {
+      name: 'a disabled owner',
+      blockers: ['owner_disabled'],
+      arrange: async (w) => {
+        await sql("update users set status = 'disabled' where id = $1", [w.alice]);
+      },
+    },
+    {
+      name: 'an owner under a ban in force',
+      blockers: ['owner_disabled'],
+      arrange: async (w) => {
+        await sql('update users set banned = true, ban_expires = null where id = $1', [w.alice]);
+      },
+    },
+    {
+      name: 'its owner’s pause',
+      blockers: ['paused'],
+      arrange: async (w, workers) => {
+        await workers.setManualPause({
+          workerId: w.w1,
+          paused: true,
+          via: 'worker_ui',
+          now: new Date(),
+        });
+      },
+    },
+    {
+      name: 'a drain',
+      blockers: ['draining'],
+      arrange: async (w, workers) => {
+        await workers.setManualPause({
+          workerId: w.w1,
+          paused: true,
+          via: 'worker_ui_drain',
+          now: new Date(),
+        });
+      },
+    },
+    {
+      name: 'a usage limit',
+      blockers: ['usage_limited'],
+      arrange: async (w, workers) => {
+        await workers.setUsagePause({ workerId: w.w1, until: new Date(FUTURE), estimated: false });
+      },
+    },
+    {
+      name: 'no image held (a launcher that did not answer)',
+      blockers: ['images_missing'],
+      held: [],
+    },
+    {
+      name: 'another build’s images',
+      blockers: ['images_outdated'],
+      held: [OLD_DIGEST, EGRESS_DIGEST],
+    },
+    { name: 'a protocol the core no longer accepts', blockers: ['protocol_outdated'], protocol: 1 },
+    {
+      name: 'a core that cannot name its own images',
+      blockers: ['platform_images_unresolved'],
+      digests: null,
+    },
+    {
+      name: 'a scope naming only a project its owner may not run in',
+      blockers: ['no_eligible_project'],
+      arrange: async (w) => {
+        const [other] = await sql<{ id: string }>(
+          `insert into projects (org_id, key, name, repo_url)
+           values ($1, $2, 'Other', 'https://git.example.test/acme/other.git') returning id`,
+          [orgId, `o${counter}x${Date.now() % 100_000}`],
+        );
+        await sql('update workers set claim_project_ids = array[$2::uuid] where id = $1', [
+          w.w1,
+          other?.id,
+        ]);
+      },
+    },
+    {
+      name: 'pick only',
+      blockers: ['pick_only'],
+      arrange: async (w) => {
+        await sql("update workers set claim_project_ids = '{}' where id = $1", [w.w1]);
+      },
+    },
+    {
+      name: 'an effective role below member',
+      blockers: ['no_eligible_project'],
+      arrange: async (w) => {
+        await sql("update project_members set role = 'viewer' where user_id = $1", [w.alice]);
+      },
+    },
+    {
+      name: 'a run credential that may not reach a worker',
+      blockers: ['no_eligible_project'],
+      arrange: async (w) => {
+        const [integration] = await sql<{ id: string }>(
+          `insert into integrations (org_id, type, provider, name, config)
+           values ($1, 'git', 'gitlab', $2, '{"run_credential": "static"}'::jsonb) returning id`,
+          [orgId, `git-${nextId()}`],
+        );
+        await sql('insert into bindings (project_id, integration_id) values ($1, $2)', [
+          w.projectId,
+          integration?.id,
+        ]);
+      },
+    },
+    {
+      name: 'a server-only project',
+      blockers: ['no_eligible_project'],
+      // What routing writes for one: no worker ever (`workers_from` null).
+      routing: workersRouting({ serverFrom: PAST, workersFrom: null }),
+      arrange: async (w) => {
+        await sql(
+          `insert into project_execution_settings (project_id, mode) values ($1, 'server_only')`,
+          [w.projectId],
+        );
+      },
+    },
+  ];
+
+  it.each(CASES.map((c) => [c.name, c] as const))('%s', async (_name, c) => {
+    const pool = createTestPool(database.connectionString, { max: 2 });
+    try {
+      const workers = createPostgresWorkerStore(drizzle(pool) as unknown as Database);
+      const w = await world();
+      const runId = await offered(w, c.routing === undefined ? {} : { routing: c.routing });
+      const held = c.held ?? HELD;
+      const protocol = c.protocol ?? WORKER_PROTOCOL_VERSION;
+      const digests = c.digests === undefined ? CORE : c.digests;
+      // Its last authenticated call, as the protocol records it before answering anything.
+      await workers.recordContact({
+        workerId: w.w1,
+        protocolVersion: protocol,
+        imageDigests: held,
+      });
+      await c.arrange?.(w, workers);
+
+      const listed = (await workers.listWorkers(w.alice)).find((row) => row.id === w.w1);
+      expect(listed).toBeDefined();
+      const wire = toWireWorker(listed as NonNullable<typeof listed>, digests);
+      expect(wire.claim_blockers).toEqual(c.blockers);
+
+      // What an automatic claim meets: the 426 check, the 503 while no digests, the statement.
+      const admitted =
+        isAcceptedWorkerProtocol(protocol) &&
+        digests !== null &&
+        (await claim(w.w1, runId, held)) !== null;
+      expect(admitted).toBe(wire.can_claim);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('a pick ignores the scope: a pick-only worker’s picked run still starts', async () => {
+    const w = await world();
+    const runId = await offered(w);
+    await sql("update workers set claim_project_ids = '{}' where id = $1", [w.w1]);
+    expect(await claim(w.w1, runId)).toBeNull();
+    const automatic = workerClaim(w.w1, runId);
+    const picked = await inTx(async (tx) =>
+      claimRunOffer(store.offers, tx, {
+        ...automatic,
+        worker: { ...(automatic.worker as NonNullable<typeof automatic.worker>), pick: true },
+      }),
+    );
+    expect(picked?.runId).toBe(runId);
+  });
 });

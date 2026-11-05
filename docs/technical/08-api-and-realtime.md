@@ -667,13 +667,17 @@ worker's `claim_projects` (`null`, `[]`, or `[{id, key}]`), which the Workers sc
 **Why a worker takes nothing** (S-22.19, TD-031's 2026-11-05 blocker-vocabulary amendment): one
 vocabulary, `WORKER_CLAIM_BLOCKERS` (`packages/contracts/src/worker-claim-blockers.ts`), most fundamental
 first, worded once (`WORKER_CLAIM_BLOCKER_WORDS`, `apps/web/src/ui/humanize.ts`). `GET /api/workers`
-adds per worker `claim_blockers` — the claim's predicates minus the per-offer ones: `revoked`, `offline`
-(no call in 60 s), `protocol_outdated`, `paused`/`draining` (the hold, told apart by its newest
-`worker.pause` row's `via`), `usage_limited`, `images_missing` (none reported), `images_outdated` (not
-the core's current run and egress digests; nothing is said while the core cannot name them),
-`no_eligible_project` (no project its user may run in, whose mode is not `server_only` and whose run
-credential may reach a worker, inside its scope — *pick only* counts every project) — `can_claim` when
-the list is empty, and `last_claimed_at` (`run_offers.claimed_at`). `GET /api/projects/:id/execution`
+adds per worker `claim_blockers` — the claim's predicates minus the per-offer ones: `revoked`,
+`owner_disabled` (its user is disabled or banned), `offline` (no call in 60 s), `protocol_outdated`,
+`platform_images_unresolved` (this core cannot name its own digests, so every claim is `503
+digests_unresolved`), `paused`/`draining` (the hold, told apart by its newest `worker.pause` row's
+`via`), `usage_limited`, `images_missing` (none reported), `images_outdated` (not the core's current run
+and egress digests), `no_eligible_project` (no project its user may run in, whose mode is not
+`server_only` and whose run credential may reach a worker, inside its scope — *pick only* counts every
+project), `pick_only` (it claims nothing by itself) — `can_claim` (an **automatic** claim would be
+admitted) when the list is empty, and `last_claimed_at` (`run_offers.claimed_at`); the two are held to
+the claim statement by `remote-claim.integration.test.ts`'s parity cases. The project's `workers` list
+holds at most 500. `GET /api/projects/:id/execution`
 adds `workers` — each registered worker the reader may see (every one for an administrator, their own
 otherwise) with `takes` `automatically`/`picked_only`/`no`, its own `blockers` and the project's
 `project_reason` (`server_only`, `credential_refused`, `role`, `scope_excludes`) — and `waiting`: the

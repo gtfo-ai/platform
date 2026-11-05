@@ -10,8 +10,11 @@
  *   window; a protocol outside the accepted range; the owner's hold (a drain's when its newest
  *   `worker.pause` row says so); a usage pause still ahead; no image held, or not the core's
  *   current run and egress images; and no project that would give it work. While the core cannot
- *   name its own digests nothing is said about images — a blocker the core cannot establish is not
- *   invented — and a revoked worker is **only** revoked: whatever else its row says is history.
+ *   name its own digests it answers every claim `503 digests_unresolved`, so that is a blocker of its
+ *   own (`platform_images_unresolved`, the review of PR #54) and the held images are not compared
+ *   with anything. A user who may not act is `owner_disabled`, a *pick only* scope `pick_only` (an
+ *   automatic claim takes nothing), and a revoked worker is **only** revoked: whatever else its row
+ *   says is history. `claim-blocker-parity.integration.test.ts` holds this half to the claim itself.
  * - **The worker's half** ({@link localClaimBlockersOf}) is what only the machine knows: its
  *   connection (set up, revoked, the core's `426`, unreachable), whether Claude refused its token,
  *   its holds, whether its launcher answered and which images it holds against the digests the
@@ -32,6 +35,8 @@ export interface RunImageDigests {
 /** What the core knows about one worker, as `GET /api/workers` reads it. */
 export interface CoreWorkerClaimFacts {
   readonly revoked: boolean;
+  /** Its user is not disabled and under no ban in force (`USER_MAY_ACT_SQL`). */
+  readonly ownerMayAct: boolean;
   /** Seen within the online window, on the database's clock. */
   readonly online: boolean;
   /** The protocol of its last call; `null` before any. */
@@ -50,6 +55,8 @@ export interface CoreWorkerClaimFacts {
    * `null` when not asked (a project-scoped read asks its own question).
    */
   readonly eligibleProjects: number | null;
+  /** Its claim scope is `[]`, *pick only*: an automatic claim takes nothing. */
+  readonly pickOnly: boolean;
 }
 
 /** Whether a worker holding `held` holds both of the core's run images. */
@@ -69,14 +76,17 @@ const imageBlockers = (
 export const coreClaimBlockersOf = (facts: CoreWorkerClaimFacts): WorkerClaimBlocker[] => {
   if (facts.revoked) return ['revoked'];
   const blockers: WorkerClaimBlocker[] = [];
+  if (!facts.ownerMayAct) blockers.push('owner_disabled');
   if (!facts.online) blockers.push('offline');
   if (facts.protocolVersion !== null && !isAcceptedWorkerProtocol(facts.protocolVersion)) {
     blockers.push('protocol_outdated');
   }
+  if (facts.coreDigests === null) blockers.push('platform_images_unresolved');
   if (facts.hold !== null) blockers.push(facts.hold);
   if (facts.usagePaused) blockers.push('usage_limited');
   blockers.push(...imageBlockers(facts.heldDigests, facts.coreDigests));
   if (facts.eligibleProjects === 0) blockers.push('no_eligible_project');
+  if (facts.pickOnly) blockers.push('pick_only');
   return orderClaimBlockers(blockers);
 };
 

@@ -101,6 +101,7 @@ export const claimFactsOf = (
   const facts = row.claimFacts;
   return {
     revoked: row.revokedAt !== null || row.state === 'revoked',
+    ownerMayAct: facts?.ownerMayAct ?? true,
     online:
       facts?.online ??
       (row.lastSeenAt !== null &&
@@ -112,6 +113,7 @@ export const claimFactsOf = (
     heldDigests: z.array(imageDigestSchema).parse(row.imageDigests),
     coreDigests,
     eligibleProjects: facts?.eligibleProjects ?? null,
+    pickOnly: row.claimProjects !== null && row.claimProjects.length === 0,
   };
 };
 
@@ -300,7 +302,7 @@ export const registerWorkerRoutes = async (
       schema: {
         summary: 'Registered workers: your own, or every one for an administrator',
         description:
-          'Machine, user, created and last seen, protocol, image digests, state, paused until (and whether that instant is the default pause of a usage limit that named no reset, `paused_until_estimated`, WP-285), and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280). `timezone` is the organisation’s, which a usage pause’s time is shown in. **Why it takes no work** (S-22.19): `claim_blockers` — the claim’s own predicates minus the per-offer ones, in the vocabulary’s order (`revoked`, `offline`, `protocol_outdated`, `paused`, `draining`, `usage_limited`, `images_missing`, `images_outdated` against this core’s current run and egress digests, `no_eligible_project`) — `can_claim` when it is empty, and `last_claimed_at`.',
+          'Machine, user, created and last seen, protocol, image digests, state, paused until (and whether that instant is the default pause of a usage limit that named no reset, `paused_until_estimated`, WP-285), and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280). `timezone` is the organisation’s, which a usage pause’s time is shown in. **Why it takes no work** (S-22.19): `claim_blockers` — the claim’s own predicates minus the per-offer ones, in the vocabulary’s order (`revoked`, `owner_disabled`, `offline`, `protocol_outdated`, `platform_images_unresolved` while this core cannot name its own digests and so answers every claim 503, `paused`, `draining`, `usage_limited`, `images_missing`, `images_outdated` against this core’s current run and egress digests, `no_eligible_project`, `pick_only`) — `can_claim` (an automatic claim would be admitted) when it is empty, and `last_claimed_at`.',
         tags: ['workers'],
         response: { 200: workersResponseSchema },
       },

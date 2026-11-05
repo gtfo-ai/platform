@@ -44,6 +44,7 @@ import { usagePauseWords } from '../ui/usage-pause.js';
 export type WorkerMode =
   | 'claiming'
   | 'blocked'
+  | 'stopped'
   | 'paused'
   | 'usage_paused'
   | 'draining'
@@ -66,6 +67,8 @@ export const workerModeOf = (state: WorkerLocalState, nowMs: number): WorkerMode
   if (state.usage_paused_until !== null && Date.parse(state.usage_paused_until) > nowMs) {
     return 'usage_paused';
   }
+  // A stopping worker is not "connected, but not taking work" (review of PR #54): it is stopping.
+  if (state.connection === 'stopped') return 'stopped';
   if (claimBlockerOf(state) !== null) return 'blocked';
   return 'claiming';
 };
@@ -73,6 +76,7 @@ export const workerModeOf = (state: WorkerLocalState, nowMs: number): WorkerMode
 export const WORKER_MODE_WORDS: Readonly<Record<WorkerMode, string>> = {
   claiming: 'Taking work',
   blocked: 'Connected, but not taking work',
+  stopped: 'Stopping — it takes no new work',
   paused: 'Paused by you — it takes no new work',
   usage_paused: 'Paused — your Claude usage limit was reached',
   draining: 'Draining — finishing what runs, taking nothing new',
@@ -162,6 +166,12 @@ export const holdLineOf = (state: WorkerLocalState, nowMs: number): HoldLine => 
         action: RETRYABLE.has(blocker) ? 'try_now' : null,
       };
     }
+    case 'stopped':
+      return {
+        status: 'idle',
+        text: 'Stopping: the worker is shutting down and takes no new work.',
+        action: null,
+      };
     case 'claiming':
       return { status: 'success', text: 'Taking work', action: null };
   }
@@ -369,7 +379,7 @@ export const deskOf = (run: WorkerLocalRun, state: WorkerLocalState, nowMs: numb
     latest: activityFromBlocks(blocks),
     role: run.role,
     worker:
-      mode === 'claiming' || mode === 'blocked'
+      mode === 'claiming' || mode === 'blocked' || mode === 'stopped'
         ? 'active'
         : mode === 'paused' || mode === 'usage_paused'
           ? 'paused'
@@ -396,7 +406,14 @@ export const freeDesksOf = (state: WorkerLocalState, nowMs: number): FreeDeskVie
   return Array.from({ length: Math.max(0, state.concurrency - state.runs.length) }, (_, index) => ({
     key: `free-${index}`,
     pose: resting ? 'sipping' : 'sleeping',
-    words: mode === 'blocked' ? 'Not taking work' : resting ? 'Paused' : 'Free desk',
+    words:
+      mode === 'blocked'
+        ? 'Not taking work'
+        : mode === 'stopped'
+          ? 'Stopping'
+          : resting
+            ? 'Paused'
+            : 'Free desk',
     phase: botPhaseOf(`${state.worker_id ?? 'worker'}:${index}`),
   }));
 };

@@ -372,6 +372,10 @@ export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, Cla
     word: 'Removed from the platform',
     fix: 'To use this computer again, approve it again from the worker’s page.',
   },
+  owner_disabled: {
+    word: 'Its owner’s account is disabled',
+    fix: 'An administrator re-enables the owner’s account in Settings, under Users; the worker then takes work again.',
+  },
   offline: {
     word: 'Not connected to the platform',
     fix: 'Start the worker on that computer (“docker compose up -d” in its folder) and check that it reaches the platform.',
@@ -379,6 +383,10 @@ export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, Cla
   protocol_outdated: {
     word: 'Needs an update',
     fix: 'It speaks an older version than this platform accepts. Its updater fixes this within 5 minutes; to do it now, download the compose file again and run “docker compose up -d”.',
+  },
+  platform_images_unresolved: {
+    word: 'The platform can’t name its run images',
+    fix: 'An administrator makes the platform’s images public in their registry, or sets APP_WORKER_IMAGE_DIGESTS on the platform; until then no worker can take work.',
   },
   claude_rejected: {
     word: 'Claude refused its sign-in',
@@ -411,6 +419,10 @@ export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, Cla
   no_eligible_project: {
     word: 'No project gives it work',
     fix: 'An administrator lets workers run a project’s stages in the project’s settings, under Execution; the worker’s page chooses which of those it takes by itself.',
+  },
+  pick_only: {
+    word: 'Takes only runs its owner picks',
+    fix: 'Its owner chooses on the worker’s page which projects it takes by itself; a run picked there still starts.',
   },
 };
 

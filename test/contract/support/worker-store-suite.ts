@@ -316,6 +316,7 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
         (await world.store.listWorkers(owner)).find((row) => row.id === worker)?.claimFacts;
       expect(await facts()).toEqual({
         online: false,
+        ownerMayAct: true,
         usagePaused: false,
         hold: null,
         eligibleProjects: 0,
@@ -360,6 +361,10 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       });
       expect((await facts())?.usagePaused).toBe(false);
 
+      await world.setUserMayAct(owner, false);
+      expect((await facts())?.ownerMayAct).toBe(false);
+      await world.setUserMayAct(owner, true);
+
       await world.recordClaim(worker, at(40_000));
       await world.recordClaim(worker, at(50_000));
       expect((await facts())?.lastClaimedAt).toEqual(at(50_000));
@@ -387,6 +392,8 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
         ]),
       );
       expect(all.every((row) => row.claimFacts !== undefined)).toBe(true);
+      // A project's read asks its own question: no project count.
+      expect(all.every((row) => row.claimFacts?.eligibleProjects === null)).toBe(true);
       expect(
         (await world.store.listWorkersForProject(acme, stranger)).map((row) => row.id),
       ).toEqual([theirs]);

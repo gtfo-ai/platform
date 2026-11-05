@@ -26,6 +26,7 @@ import {
   holdOf,
   type NewDeviceCode,
   normaliseScope,
+  PROJECT_WORKERS_MAX,
   type ProjectWorkerRow,
   type ScopeProject,
   WORKER_CONNECTED_SECONDS,
@@ -177,6 +178,7 @@ export const createMemoryWorkerStore = (
         worker.lastSeenAt !== null &&
         at - worker.lastSeenAt.getTime() < WORKER_CONNECTED_SECONDS * 1000,
       usagePaused: worker.pausedUntil !== null && worker.pausedUntil.getTime() > at,
+      ownerMayAct: mayAct(worker.userId),
       hold: holdOf(worker.manuallyPausedAt !== null, via),
       eligibleProjects: [...projects.keys()].filter(
         (projectId) =>
@@ -435,9 +437,11 @@ export const createMemoryWorkerStore = (
         .filter((worker) => worker.revokedAt === null)
         .filter((worker) => userId === null || worker.userId === userId)
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, PROJECT_WORKERS_MAX)
         .map((worker) => ({
           ...listRowOf(worker),
-          claimFacts: claimFactsOf(worker),
+          // A project's read asks its own question rather than counting projects (as PostgreSQL).
+          claimFacts: { ...claimFactsOf(worker), eligibleProjects: null },
           mayRunInProject: mayRunIn(worker.userId, projectId),
         }));
     },
