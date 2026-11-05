@@ -551,7 +551,8 @@ describe('the owner’s layout and a write that fails (review of PR #57)', () =>
     const w = await world({});
     const folder = path.dirname(w.bundleFile);
     await mkdir(path.join(folder, `.compose.yaml.updater-${process.pid}`));
-    await mkdir(path.join(folder, `.env.restore-${process.pid}`));
+    // `copyFileAtomically`'s temporary name: `.<file name>.restore-<pid>` (`..env.restore-…` for `.env`).
+    await mkdir(path.join(folder, `.${path.basename(w.envFile)}.restore-${process.pid}`));
     const state = await runApply(w.plan, w.deps);
     expect(state.result).toBe('failed');
     expect(state.detail).toContain('could not be put back (the env file:');
