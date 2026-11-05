@@ -115,7 +115,7 @@ const PAIRS: readonly Pair[] = [
   ...text(['--fg-on-emphasis'], ['--fg-link']),
   // Status words (StateLabel, Flash, Badge): on the page, on a card, on a box header, on their tint.
   ...STATUSES.flatMap((status) =>
-    text([`--${status}-fg`], [...PAGE_AND_CARD, '--bg-subtle', `--${status}-bg`]),
+    text([`--${status}-fg`], [...PAGE_AND_CARD, '--bg-subtle', '--bg-muted', `--${status}-bg`]),
   ),
   // A Flash's title and body sit on its tint.
   ...text(

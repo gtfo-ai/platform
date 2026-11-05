@@ -65,7 +65,7 @@ Settings (org)             – auth, Claude provider mode, default models, globa
 - Every agent output is one click away from the prompt that produced it.
 - Never block a human on a modal for agent activity; the pipeline is asynchronous and the UI reflects that.
 - Empty states teach: an empty board explains how tasks get picked up and links to the rule config.
-- Dark/light theme, keyboard navigation, responsive to laptop widths (mobile read-only later).
+- Dark theme (one theme; see the amendment below), keyboard navigation, responsive to laptop widths (mobile read-only later).
   > **Amended 2026-11-05 by the product owner (TD-033 amendment):** one theme only: the brand's dark theme. There is no light
   > theme and no theme switch.
 - Live updates everywhere (no refresh), but with a "paused updates" indicator when scrolling a transcript.
