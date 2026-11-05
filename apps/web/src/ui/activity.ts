@@ -15,12 +15,15 @@
  * 2. `paused` — the task is paused; or there is no live run and the seat's worker is paused or
  *    draining. A draining worker still finishes the run it holds, so a live run on one is read by
  *    the rules below rather than called paused.
- * 3. A run that ended: `completed` → `done`; `shutdown` and `rate_limited` hand the run back to be
- *    offered again, so they are `waiting`; `cancelled` → `idle` (nothing is happening, and nothing
- *    went wrong); every other ending → `failed`.
+ * 3. A run that ended: `completed` → `done`; `shutdown` and `rate_limited` handed the run back, so
+ *    it is `idle` ("Handed back") — whether the stage is offered again is the stage's, not this old
+ *    run's; `cancelled` → `idle` (nothing is happening, and nothing went wrong); every other ending
+ *    → `failed`.
  * 4. A live run: `created`/`starting` → `waiting` (no seat yet). `running` → `stuck` when the lease
- *    is late, when the latest entry is older than {@link STUCK_AFTER_MS}, or when there is no entry
- *    and the run started longer ago than that; otherwise the latest entry decides — a tool call is
+ *    is late, when the latest entry is older than {@link STUCK_AFTER_MS} — or, for a tool call still
+ *    in flight, than {@link STUCK_TOOL_AFTER_MS}, because a test suite or a build is silent for
+ *    minutes by design — or when there is no entry and the run started longer ago than
+ *    `STUCK_AFTER_MS`; otherwise the latest entry decides — a tool call is
  *    `working` (sub-label by tool), thinking or assistant text is `thinking` ("Brainstorming" for
  *    the planning roles), anything else is `working`.
  * 5. No run: a free seat is `idle`; otherwise the task's state — merged or done → `done`, cancelled
@@ -32,7 +35,13 @@
  * The tool name is a bounded identifier the server stored; a sub-label built from it is still
  * rendered as React text, never as markup.
  */
-import type { AgentRole, RunStatus, RunTerminalReason, TaskState } from '@platform/contracts';
+import type {
+  AgentRole,
+  PlatformToolName,
+  RunStatus,
+  RunTerminalReason,
+  TaskState,
+} from '@platform/contracts';
 import type { TranscriptBlock } from '../transcript/blocks.js';
 import type { Status } from './status.js';
 
@@ -87,6 +96,9 @@ export const ACTIVITY_META: Readonly<Record<Activity, ActivityMeta>> = {
 /** A running agent silent this long reads as stuck. */
 export const STUCK_AFTER_MS = 5 * 60 * 1000;
 
+/** …and this long while a tool call it made has not answered yet. */
+export const STUCK_TOOL_AFTER_MS = 10 * 60 * 1000;
+
 export type LatestEntryKind =
   | 'tool'
   | 'thinking'
@@ -101,6 +113,11 @@ export interface LatestEntry {
   readonly tool_name: string | null;
   /** ISO timestamp the entry was written (or last changed). */
   readonly at: string;
+  /**
+   * For `tool`: the call has not answered yet. Absent means `true`, since a tool call that is the
+   * newest entry is one whose result has not arrived.
+   */
+  readonly pending?: boolean;
 }
 
 export interface ActivityInput {
@@ -139,18 +156,38 @@ const TOOL_LABELS: readonly (readonly [readonly string[], string])[] = [
   [['TodoWrite'], 'Planning'],
 ];
 
-/** "Reading files", "Editing code", … or "Using <tool>" with an MCP server's prefix dropped. */
+/** The prefix the runner serves the platform's own MCP tools under (`runner/hooks.ts`). */
+export const PLATFORM_TOOL_PREFIX = 'mcp__platform__';
+
+/** The platform's own tools in words — exhaustive, so a new platform tool needs its phrase. */
+export const PLATFORM_TOOL_LABEL: Readonly<Record<PlatformToolName, string>> = {
+  ask_human: 'Asking you a question',
+  notify_human: 'Sending you a note',
+  report_progress: 'Reporting progress',
+  get_task_context: 'Reading the task',
+  get_conversation: 'Reading the conversation',
+  kb_search: 'Searching the knowledge base',
+  add_ticket_comment: 'Commenting on the ticket',
+  open_mr: 'Opening a merge request',
+  update_mr_description: 'Updating the merge request',
+  create_followup_ticket: 'Filing a follow-up ticket',
+};
+
+/**
+ * "Reading files", "Editing code", a platform tool's own phrase, or "Using <tool>" with an MCP
+ * server's prefix dropped.
+ */
 export const toolActivityLabel = (toolName: string): string => {
   for (const [names, label] of TOOL_LABELS) {
     if (names.includes(toolName)) {
       return label;
     }
   }
-  if (/^mcp__.*kb_search$/.test(toolName)) {
-    return 'Searching the knowledge base';
-  }
-  if (/report_progress$/.test(toolName)) {
-    return 'Reporting progress';
+  if (toolName.startsWith(PLATFORM_TOOL_PREFIX)) {
+    const name = toolName.slice(PLATFORM_TOOL_PREFIX.length);
+    if (Object.hasOwn(PLATFORM_TOOL_LABEL, name)) {
+      return PLATFORM_TOOL_LABEL[name as PlatformToolName];
+    }
   }
   const bare = /^mcp__[^_]+(?:_[^_]+)*__(.+)$/.exec(toolName)?.[1] ?? toolName;
   return `Using ${bare}`;
@@ -223,7 +260,7 @@ export const activityOf = (input: ActivityInput): ActivityResult => {
   if (run !== null && !live) {
     const reason = run.terminal_reason ?? null;
     if (reason === 'shutdown' || reason === 'rate_limited') {
-      return result('waiting', 'Will be offered again');
+      return result('idle', 'Handed back');
     }
     if (run.status === 'completed') {
       return result('done');
@@ -249,7 +286,8 @@ export const activityOf = (input: ActivityInput): ActivityResult => {
         : result('working', 'Starting up');
     }
     const silent = ageOf(latest.at, now);
-    if (silent !== null && silent > STUCK_AFTER_MS) {
+    const inFlight = latest.kind === 'tool' && latest.pending !== false;
+    if (silent !== null && silent > (inFlight ? STUCK_TOOL_AFTER_MS : STUCK_AFTER_MS)) {
       return result('stuck', minutesAgo(silent));
     }
     switch (latest.kind) {
@@ -314,10 +352,12 @@ const latestTime = (left: string, right: string | null): string =>
     : right;
 
 /** What a block says the agent is doing, or `null` for one that says nothing about it. */
-const kindOf = (block: TranscriptBlock): Pick<LatestEntry, 'kind' | 'tool_name'> | null => {
+type EntryKind = Pick<LatestEntry, 'kind' | 'tool_name' | 'pending'>;
+
+const kindOf = (block: TranscriptBlock): EntryKind | null => {
   switch (block.kind) {
     case 'tool':
-      return { kind: 'tool', tool_name: block.toolName };
+      return { kind: 'tool', tool_name: block.toolName, pending: block.result === null };
     case 'thinking':
       return { kind: 'thinking', tool_name: null };
     case 'text':
@@ -328,8 +368,11 @@ const kindOf = (block: TranscriptBlock): Pick<LatestEntry, 'kind' | 'tool_name'>
       if (block.decision === 'ask') {
         return { kind: 'waiting_permission', tool_name: block.toolName };
       }
-      // A tool's own Pre/PostToolUse hook is that tool call still: it keeps its sub-label.
-      return block.toolName === null ? null : { kind: 'tool', tool_name: block.toolName };
+      // A tool's own Pre/PostToolUse hook is that tool call still: it keeps its sub-label, and
+      // only the Post hook says the call has answered.
+      return block.toolName === null
+        ? null
+        : { kind: 'tool', tool_name: block.toolName, pending: block.hook !== 'PostToolUse' };
     default:
       return null;
   }
@@ -352,7 +395,7 @@ export const activityFromBlocks = (blocks: readonly TranscriptBlock[]): LatestEn
   flatten(blocks, all);
   let informative: {
     readonly candidate: Candidate;
-    readonly kind: Pick<LatestEntry, 'kind' | 'tool_name'>;
+    readonly kind: EntryKind;
   } | null = null;
   let at: string | null = null;
   for (const candidate of all) {

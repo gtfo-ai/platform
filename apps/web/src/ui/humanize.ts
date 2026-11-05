@@ -39,7 +39,7 @@ export const TASK_STATE_LABEL: Readonly<Record<TaskState, string>> = {
   waiting_answers: 'Waiting for answers',
   waiting_approval: 'Waiting for approval',
   paused: 'Paused',
-  needs_human: 'Needs a person',
+  needs_human: 'Needs you',
   ready_for_merge: 'Ready to merge',
   merged: 'Merged',
   retro: 'Retrospective',

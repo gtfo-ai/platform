@@ -62,7 +62,8 @@ test('the board puts each task in the column its state belongs to', async ({ pag
   await page.goto(`/projects/${PROJECT_KEY}`);
 
   const active = page.getByRole('region', { name: 'Active' });
-  const waiting = page.getByRole('region', { name: 'Needs human' });
+  // TD-033's word for the waiting column (S-23.2): `needs_human` reads "Needs you".
+  const waiting = page.getByRole('region', { name: 'Needs you' });
   await expect(active.getByRole('link', { name: 'DEMO-1' })).toBeVisible();
   await expect(waiting.getByRole('link', { name: 'DEMO-2' })).toBeVisible();
   // The stage's human name (TD-033), not its id.

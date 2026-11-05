@@ -5,6 +5,7 @@
  */
 import {
   agentRoleSchema,
+  PLATFORM_TOOL_NAMES,
   runStatusSchema,
   runTerminalReasonSchema,
   taskStateSchema,
@@ -19,7 +20,9 @@ import {
   activityFromBlocks,
   activityOf,
   type LatestEntry,
+  PLATFORM_TOOL_LABEL,
   STUCK_AFTER_MS,
+  STUCK_TOOL_AFTER_MS,
   toolActivityLabel,
 } from './activity.js';
 import { STATUS_LOOK } from './status.js';
@@ -109,14 +112,14 @@ const CASES: readonly (readonly [string, ActivityInput, string, string | null])[
   [
     'a run handed back on shutdown',
     { run: { status: 'cancelled', terminal_reason: 'shutdown' }, now: NOW },
-    'waiting',
-    'Will be offered again',
+    'idle',
+    'Handed back',
   ],
   [
     'a run a usage limit ended',
     { run: { status: 'failed', terminal_reason: 'rate_limited' }, now: NOW },
-    'waiting',
-    'Will be offered again',
+    'idle',
+    'Handed back',
   ],
   // 4. live
   ['a created run', { run: { status: 'created' }, now: NOW }, 'waiting', 'Starting'],
@@ -145,16 +148,44 @@ const CASES: readonly (readonly [string, ActivityInput, string, string | null])[
     'Starting up',
   ],
   [
-    'an entry just past the threshold',
-    { run: running, latest: entry('tool', 'Read', STUCK_AFTER_MS + 1), now: NOW },
+    'thinking just past the threshold',
+    { run: running, latest: entry('thinking', null, STUCK_AFTER_MS + 1), now: NOW },
     'stuck',
     'No activity for 5 min',
   ],
   [
-    'an entry exactly at the threshold',
-    { run: running, latest: entry('tool', 'Read', STUCK_AFTER_MS), now: NOW },
+    'thinking exactly at the threshold',
+    { run: running, latest: entry('thinking', null, STUCK_AFTER_MS), now: NOW },
+    'thinking',
+    null,
+  ],
+  [
+    'a tool call in flight past the thinking threshold',
+    { run: running, latest: entry('tool', 'Bash', STUCK_AFTER_MS + 60_000), now: NOW },
     'working',
-    'Reading files',
+    'Running a command',
+  ],
+  [
+    'a tool call in flight exactly at the tool threshold',
+    { run: running, latest: entry('tool', 'Bash', STUCK_TOOL_AFTER_MS), now: NOW },
+    'working',
+    'Running a command',
+  ],
+  [
+    'a tool call in flight just past the tool threshold',
+    { run: running, latest: entry('tool', 'Bash', STUCK_TOOL_AFTER_MS + 1), now: NOW },
+    'stuck',
+    'No activity for 10 min',
+  ],
+  [
+    'a tool call that answered, past the thinking threshold',
+    {
+      run: running,
+      latest: { ...entry('tool', 'Bash', STUCK_AFTER_MS + 1), pending: false },
+      now: NOW,
+    },
+    'stuck',
+    'No activity for 5 min',
   ],
   [
     'a tool call',
@@ -273,16 +304,33 @@ describe('toolActivityLabel', () => {
     ['Task', 'Delegating to a sub-agent'],
     ['Agent', 'Delegating to a sub-agent'],
     ['TodoWrite', 'Planning'],
-    ['mcp__agentic__kb_search', 'Searching the knowledge base'],
-    ['mcp__agentic__report_progress', 'Reporting progress'],
-    ['mcp__agentic__get_task_context', 'Using get_task_context'],
+    ['mcp__platform__open_mr', 'Opening a merge request'],
+    ['mcp__platform__update_mr_description', 'Updating the merge request'],
+    ['mcp__platform__get_task_context', 'Reading the task'],
+    ['mcp__platform__get_conversation', 'Reading the conversation'],
+    ['mcp__platform__kb_search', 'Searching the knowledge base'],
+    ['mcp__platform__report_progress', 'Reporting progress'],
+    ['mcp__platform__ask_human', 'Asking you a question'],
+    // Another server's tool of the same name is not the platform's.
     ['mcp__my_server__open_mr', 'Using open_mr'],
+    ['mcp__platform__not_a_tool', 'Using not_a_tool'],
+    ['mcp__platform__constructor', 'Using constructor'],
     ['SlashCommand', 'Using SlashCommand'],
     // Exact names only: a prefix or a different case is some other tool.
     ['read', 'Using read'],
     ['Reader', 'Using Reader'],
   ])('%s → %s', (name, label) => {
     expect(toolActivityLabel(name)).toBe(label);
+  });
+});
+
+describe('PLATFORM_TOOL_LABEL', () => {
+  it('names every platform tool, each in its own words', () => {
+    expect(Object.keys(PLATFORM_TOOL_LABEL).sort()).toEqual([...PLATFORM_TOOL_NAMES].sort());
+    expect(new Set(Object.values(PLATFORM_TOOL_LABEL)).size).toBe(PLATFORM_TOOL_NAMES.length);
+    for (const name of PLATFORM_TOOL_NAMES) {
+      expect(toolActivityLabel(`mcp__platform__${name}`)).toBe(PLATFORM_TOOL_LABEL[name]);
+    }
   });
 });
 
@@ -345,6 +393,7 @@ describe('activityFromBlocks', () => {
       kind: 'tool',
       tool_name: 'Read',
       at: AT(1),
+      pending: true,
     });
     expect(activityFromBlocks([tool(1, 0, 'Read'), thinking(2, 1)])).toEqual({
       kind: 'thinking',
@@ -360,7 +409,12 @@ describe('activityFromBlocks', () => {
 
   it('reads a sub-agent’s latest call inside the tool that started it', () => {
     const blocks = [tool(1, 0, 'Task', [tool(2, 1, 'Grep'), tool(4, 3, 'Bash')]), thinking(3, 2)];
-    expect(activityFromBlocks(blocks)).toEqual({ kind: 'tool', tool_name: 'Bash', at: AT(3) });
+    expect(activityFromBlocks(blocks)).toEqual({
+      kind: 'tool',
+      tool_name: 'Bash',
+      at: AT(3),
+      pending: true,
+    });
   });
 
   it('turns a permission ask into waiting_permission, and keeps a tool’s own hook that tool', () => {
@@ -373,6 +427,7 @@ describe('activityFromBlocks', () => {
       kind: 'tool',
       tool_name: 'Read',
       at: AT(1),
+      pending: true,
     });
   });
 
@@ -381,6 +436,7 @@ describe('activityFromBlocks', () => {
       kind: 'tool',
       tool_name: 'Read',
       at: AT(7),
+      pending: true,
     });
     expect(activityFromBlocks([system(1, 2)])).toEqual({
       kind: 'other',
@@ -397,6 +453,21 @@ describe('activityFromBlocks', () => {
       activity: 'working',
       detail: 'Reading files',
     });
-    expect(activityOf({ run: running, latest, now: at(7) }).activity).toBe('stuck');
+    // A call still in flight gets the tool threshold: 6 minutes in it is working, 12 stuck.
+    expect(activityOf({ run: running, latest, now: at(7) }).activity).toBe('working');
+    expect(activityOf({ run: running, latest, now: at(12) }).activity).toBe('stuck');
+  });
+
+  it('says a tool call answered once its result or its Post hook arrived', () => {
+    const answered = {
+      ...(tool(1, 0, 'Bash') as object),
+      result: { isError: false, content: 'ok' },
+    };
+    expect(activityFromBlocks([answered as TranscriptBlock])?.pending).toBe(false);
+    const post = { ...(hook(2, 1, 'Bash', 'allow') as object), hook: 'PostToolUse' };
+    expect(activityFromBlocks([tool(1, 0, 'Bash'), post as TranscriptBlock])?.pending).toBe(false);
+    expect(activityFromBlocks([tool(1, 0, 'Bash'), hook(2, 1, 'Bash', 'allow')])?.pending).toBe(
+      true,
+    );
   });
 });

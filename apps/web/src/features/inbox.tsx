@@ -69,13 +69,13 @@ export const InboxScreen = (): ReactElement => {
         is what a person can still act on **here** — product/10's card per *pending* question, with
         an answer box — and an expired question or approval can no longer be answered or decided
         (`escalated: []`, `expired: []`). Listing it would be a card whose only control is refused,
-        which is the defect 163 was filed about. Its task is `needs_human`, under **Needs human** on
+        which is the defect 163 was filed about. Its task is `needs_human`, under **Needs you** on
         the board, and the task page lists the expired item beside the retry control the escalation
         brief names (WP-56). What was missing was that anybody said so, and this line is that.
       */}
       <p className="text-xs text-fg-muted" data-inbox-expiry-note="true">
         A question or approval that expires leaves this list: it can no longer be answered or
-        decided. Its task waits under Needs human on its project’s board, and the task page is where
+        decided. Its task waits under Needs you on its project’s board, and the task page is where
         it is retried or cancelled.
       </p>
       {inbox.isPending ? <Loading label="Loading inbox…" /> : null}

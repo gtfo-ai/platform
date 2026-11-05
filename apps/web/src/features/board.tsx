@@ -42,7 +42,7 @@ export const BOARD_COLUMNS = [
   { id: 'active', title: 'Active', states: ['active', 'returned'] },
   {
     id: 'waiting',
-    title: 'Needs human',
+    title: 'Needs you',
     states: ['waiting_answers', 'waiting_approval', 'needs_human', 'paused'],
   },
   { id: 'review', title: 'Ready to merge', states: ['ready_for_merge', 'merged', 'retro'] },

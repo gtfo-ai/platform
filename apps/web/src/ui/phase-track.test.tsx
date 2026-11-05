@@ -49,7 +49,9 @@ describe('PhaseTrack', () => {
     const { container } = render(
       <PhaseTrack stages={STAGES} activity="working" detail="Reading files" />,
     );
-    expect(screen.getByText('Stage 4 of 5: Code review, working').className).toContain('sr-only');
+    expect(
+      screen.getByText('Stage 4 of 5: Code review, working: Reading files').className,
+    ).toContain('sr-only');
     expect(container.querySelector('p')?.textContent).toBe('Code review · Now: Reading files');
   });
 
@@ -93,6 +95,15 @@ describe('phaseSummary', () => {
     expect(phaseSummary([])).toBe('No stages yet');
     expect(phaseSummary([{ id: 'intake', state: 'upcoming' }])).toBe('Not started');
     expect(phaseSummary([{ id: 'intake', state: 'done' }], 'done')).toBe('No stage in progress');
+  });
+
+  it('names the activity, and its detail when there is one', () => {
+    const current: PhaseStage[] = [{ id: 'code_review', state: 'current' }];
+    expect(phaseSummary(current)).toBe('Stage 1 of 1: Code review');
+    expect(phaseSummary(current, 'stuck')).toBe('Stage 1 of 1: Code review, stuck');
+    expect(phaseSummary(current, 'working', 'Editing code')).toBe(
+      'Stage 1 of 1: Code review, working: Editing code',
+    );
   });
 });
 

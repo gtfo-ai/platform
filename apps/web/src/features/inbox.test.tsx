@@ -94,7 +94,8 @@ describe('what the inbox says about an item that expired', () => {
     const container = await renderInbox();
     const note = container.querySelector('[data-inbox-expiry-note]');
     expect(note?.textContent).toContain('expires leaves this list');
-    expect(note?.textContent).toContain('Needs human');
+    // The board column's name since S-23.2: TD-033's word for `needs_human`.
+    expect(note?.textContent).toContain('Needs you');
     expect(note?.textContent).toContain('task page');
   });
 

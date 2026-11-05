@@ -6,7 +6,7 @@
  * beneath it the current stage's human name with the activity's sub-label: "Code review · Now:
  * Reading files". For assistive tech it is an ordered list whose current item carries
  * `aria-current="step"`, preceded by a visually-hidden summary ("Stage 4 of 9: Code review,
- * working").
+ * working: Reading files").
  *
  * No dependency beyond the per-icon Octicons `ui/` already uses, so the worker's local page can
  * import it inside its 120 kB budget. `phaseStagesFor` builds the strip from what the task page has
@@ -62,8 +62,12 @@ export const PHASE_LOOK: Readonly<Record<PhaseState, PhaseLook>> = {
 
 const nameOf = (stage: PhaseStage): string => stage.label ?? stageLabel(stage.id);
 
-/** The sentence a screen reader hears first: "Stage 4 of 9: Code review, working". */
-export const phaseSummary = (stages: readonly PhaseStage[], activity?: Activity | null): string => {
+/** The sentence a screen reader hears first: "Stage 4 of 9: Code review, working: Reading files". */
+export const phaseSummary = (
+  stages: readonly PhaseStage[],
+  activity?: Activity | null,
+  detail?: string | null,
+): string => {
   if (stages.length === 0) {
     return 'No stages yet';
   }
@@ -74,10 +78,11 @@ export const phaseSummary = (stages: readonly PhaseStage[], activity?: Activity 
       : 'No stage in progress';
   }
   const stage = stages[index] as PhaseStage;
+  const how = detail === null || detail === undefined ? '' : `: ${detail}`;
   const doing =
     activity === null || activity === undefined
       ? ''
-      : `, ${ACTIVITY_META[activity].label.toLowerCase()}`;
+      : `, ${ACTIVITY_META[activity].label.toLowerCase()}${how}`;
   return `Stage ${index + 1} of ${stages.length}: ${nameOf(stage)}${doing}`;
 };
 
@@ -100,7 +105,7 @@ export const PhaseTrack = ({
     detail ?? (activity === null || activity === undefined ? null : ACTIVITY_META[activity].label);
   return (
     <div data-phase-track className={cx('flex min-w-0 flex-col gap-1', className)}>
-      <span className="sr-only">{phaseSummary(stages, activity)}</span>
+      <span className="sr-only">{phaseSummary(stages, activity, detail)}</span>
       <ol aria-label="Pipeline stages" className="flex flex-wrap items-center gap-0.5">
         {stages.map((stage) => {
           const look = PHASE_LOOK[stage.state];

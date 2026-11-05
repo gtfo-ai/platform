@@ -145,7 +145,7 @@ moved at that point, and the stage still runs.
 Two switches sit under the slots. **Claim the ticket before the first run** (on unless you switch it
 off): before a task's first run the platform assigns the ticket to the tracker integration's own
 account, moves it to *In progress* if that slot is mapped, and reads the ticket again. If somebody
-else holds the ticket, the task stops in **Needs human** with the reason *assigned elsewhere*, no run
+else holds the ticket, the task stops in **Needs you** with the reason *assigned elsewhere*, no run
 starts, and the platform posts one comment on the ticket — *"The agent did not start work on this
 ticket: it is assigned to somebody else. A maintainer has been asked who should take it."* While
 claiming, a ticket already assigned to a person is not started at all, unless you tick **Also start
@@ -302,7 +302,7 @@ review runs, Assist's stop after architecture, and the number of human review ro
 **read when they are used**, so a move reaches running tasks too: plan approval and probation (at
 the moment a plan is ready), the budget-approval threshold (when refinement finishes), the question
 timeout (when a question is asked) and knowledge auto-apply (when a proposal is curated). **Assist**
-parks a task in *Needs human* after architecture, with a brief that names the dial; hand it back at
+parks a task in *Needs you* after architecture, with a brief that names the dial; hand it back at
 *Implementation* to continue, or cancel it — after a maintainer has approved its plan, because
 Assist asks for plan approval on every task. A ticket whose pipeline has no architecture stage (a
 chore) parks before anything runs, since there is no point at which it could stop before code is
@@ -522,8 +522,8 @@ error naming the transition, not as a silent no-op — and each accepted one lea
 | **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it — if its branch still has the commit the platform's gates judged, through the rebase gate, which checks it against the target branch as it is now (a default branch that moved during the pause is not re-checked while the task is paused) and warns about another task touching the same files, spending no iteration limit (WP-105); if somebody pushed while it was paused, it goes back through the CI gate first (WP-79). It reads *paused* for the moment the platform takes to check; merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge — and so does merging it while the task is paused at **QA**, on a project that has that stage (a pause at an earlier stage is escalated to a human instead). Resuming a task paused at QA takes it back to QA, not to Ready |
 | **Cancel** | maintainer | ends the task; it enters no further stage |
 | **Retry stage** | member | runs the current stage again, optionally with a reason. Costs a run. If the stage's run is still going, it is stopped first and the new attempt starts once it has ended; the screen says which attempt was queued and whether a run was stopped |
-| **Return to stage** | maintainer | sends the task back to an earlier stage it has already run; a reason is required, and that stage is given it. Costs an iteration of the loop. Works on a task in **Needs human** too — the way to send an escalated task to the stage that should run again. When the task stopped at a **gate** that recorded a failure — the CI gate after its fix loop ran out — the form shows a box, ticked, *Attach the gate's last failure* with its length in characters: the stage is then given the failing jobs' log excerpts as well as your reason, as two separate blocks, so you need not paste the logs. Untick it to send your reason alone. A task that was **merged** cannot be sent back to a stage before the merge |
-| **Rework** | maintainer | restarts the work with new instructions, which are required. The task moves to a **new branch** (`agentic/<ticket>-r2`, then a higher number on each later rework — the numbers can skip, because a plain return counts too) and the merge request you rejected is **closed** on the git provider with a comment naming the new branch; a new merge request is opened from the new branch when the work gets there again. Like **Return to stage**, it works on a task in **Needs human**, offers the same *Attach the gate's last failure* box, and refuses a merged task |
+| **Return to stage** | maintainer | sends the task back to an earlier stage it has already run; a reason is required, and that stage is given it. Costs an iteration of the loop. Works on a task in **Needs you** too — the way to send an escalated task to the stage that should run again. When the task stopped at a **gate** that recorded a failure — the CI gate after its fix loop ran out — the form shows a box, ticked, *Attach the gate's last failure* with its length in characters: the stage is then given the failing jobs' log excerpts as well as your reason, as two separate blocks, so you need not paste the logs. Untick it to send your reason alone. A task that was **merged** cannot be sent back to a stage before the merge |
+| **Rework** | maintainer | restarts the work with new instructions, which are required. The task moves to a **new branch** (`agentic/<ticket>-r2`, then a higher number on each later rework — the numbers can skip, because a plain return counts too) and the merge request you rejected is **closed** on the git provider with a comment naming the new branch; a new merge request is opened from the new branch when the work gets there again. Like **Return to stage**, it works on a task in **Needs you**, offers the same *Attach the gate's last failure* box, and refuses a merged task |
 | **Answer a question** | member | answers a question the agent asked; the task continues |
 | **Decide an approval** | maintainer | approves or rejects a plan (and, where configured, a budget) |
 | **Feedback** | member | 👍/👎 plus text, on the task |
@@ -1066,7 +1066,7 @@ does:
   default) to take the run before anybody else, while that worker is online. A ticket's assignee
   does not get it yet: the platform does not keep who a ticket is assigned to.
 - **Offer timeout** — a run nobody takes within this long (a day by default) is withdrawn and its
-  task goes to **Needs human** with the brief *no claimant took this run*; a question is answered
+  task goes to **Needs you** with the brief *no claimant took this run*; a question is answered
   as failed. Check the mode, and whether a worker or the server runner is actually running.
 
 The card shows whether the instance has a server runner right now. With none, a hybrid project's
