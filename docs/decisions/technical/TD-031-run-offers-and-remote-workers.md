@@ -903,3 +903,64 @@ it — bounded, visible, and the same trade Q59(a) made for a launcher that is d
 stage entry is three mint calls over ≥ 60 s (plus whatever retry the call itself makes), not unbounded.
 
 **Built by S-22.6** (WP-281 item 2), before merge.
+
+## Amendment (2026-11-05, architect, session 22) — decision 9: `GET compose.yml` is public, and outside the protocol check (backlog 760)
+
+**Context.** §9's table authenticates `GET compose.yml` with the worker credential. That credential
+comes from the device flow, which the worker runs **at its first start**, and it can only start from the
+compose file. So a first install cannot fetch the pinned file from its core
+(`apps/server/src/routes/worker/protocol.ts:778-810`, `preValidation: authenticateWorker`), and the operator
+guide sends a person to the image's or the repository's unpinned copy instead. There is a second problem:
+the `onRequest` hook (`protocol.ts:140-151`) answers `426` to any `/api/worker/v1/` request without
+`X-Worker-Protocol`. That covers the `426`'s own `compose_url` (`protocol.ts:123`) when a person opens it
+in a browser, and it covers a documented `curl` that hard-codes a version, which stops working once the
+range moves past it (WP-292 bumps it). **No worker calls this route**: TD-032 §3 has the updater read the
+template from the verified image. The route exists only for a person.
+
+**What the file holds** (verified, `apps/server/src/workers/compose.ts:69-109`). The renderer substitutes
+three inputs and nothing else: the four core digests, `APP_IMAGE_REPOSITORY` and `APP_BASE_URL`. The
+template (`compose.worker.yml`) names `CLAUDE_CODE_OAUTH_TOKEN` only as `${…:?…}`, the launcher token is
+generated on the worker, and the socket proxy's digest is the template's own. **No secret.**
+
+**What it discloses to an anonymous caller, at the margin.** Any anonymous request under
+`/api/worker/v1/` already gets the `426` body: the protocol range, `compose_url` (which shows that worker
+mode exists) and the four digests (`protocol.ts:111-128`). The device flow is unauthenticated by §9.
+Making the file public adds only two things: `APP_IMAGE_REPOSITORY`, a registry namespace (for a
+private registry its name, never a pull credential), and `APP_BASE_URL`, the core's canonical URL. The
+template text is in the public repository and the image.
+
+**Decision.**
+
+1. **`GET /api/worker/v1/compose.yml` takes no authentication** (option (c)). A credential, if
+   presented, is ignored, and no worker contact is recorded. The answers are unchanged: `200
+   application/yaml` with the attachment disposition, or `503 digests_unresolved` /
+   `503 compose_template_unavailable`. The bytes come from the memoised release (`release.ts:94`), so an
+   anonymous request causes no rendering. It gets no rate limiter of its own, as with `GET /api/setup-state`.
+2. **It is the one path the `X-Worker-Protocol` check skips**: `GET` (and HEAD, which Fastify answers for a GET route) of exactly
+   `/api/worker/v1/compose.yml`, query ignored. It is a human download, not a protocol message, and its
+   content depends on the core alone. `Cache-Control: no-store` still applies. Every other verb, the device
+   flow included, keeps backlog 712's rule.
+3. **The renderer stays limited to those three inputs**. A test enforces it: the rendered file differs
+   from the template only on the `${PLATFORM_*_IMAGE:-…}` defaults and the `APP_CORE_URL` line. A later
+   substitution therefore becomes a decision, not an accidental leak.
+4. **Install is two copy-paste steps**, and `APP_CORE_URL` is already defaulted in the file:
+   `curl -fsSo compose.worker.yml https://<core>/api/worker/v1/compose.yml`, then
+   `CLAUDE_CODE_OAUTH_TOKEN=… docker compose -f compose.worker.yml up -d`. The person then approves the
+   logged code at `/workers/approve`. The Workers screen shows both lines, built from the page's own
+   origin, for copying. That needs no new endpoint.
+
+**Rejected.** *(a) A signed-in person's download*: a second route serving the same bytes behind a
+session. From a terminal it needs an API key or a browser download that is then moved to the machine,
+which adds steps. It also protects nothing, because the content is not secret and the digests already
+reach anonymous callers through the `426`. *(b) The device flow first* (`docker run … login`): the
+one-shot needs an image reference before any pinned reference exists, so the person types a tag, which
+is exactly what pinning avoids. Its credential would also have to land in a volume of a compose project
+that does not exist yet. And the worker already logs in at first start. *Keeping the worker
+credential*: it guards a route its holder never calls.
+
+**Residuals, stated.** An anonymous caller learns the registry namespace and the canonical base URL. An
+operator who considers worker mode's existence sensitive has no switch, which was already true through
+the `426` and the device flow. The file can be trusted only as far as the TLS connection to the core,
+the same as before. TD-032 §3 still holds: a person reads it, and no updater applies it.
+
+**Built by S-22.8** (WP-284 item 6), before merge.
