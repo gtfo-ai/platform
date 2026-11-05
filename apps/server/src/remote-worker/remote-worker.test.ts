@@ -1087,8 +1087,8 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       webRoot: webRoot(),
       sleep: async () => {},
     });
-    await worker.listen();
-    return { worker, lines };
+    const internal = await worker.listen();
+    return { worker, lines, internal };
   };
 
   const stateDirWithCredential = (): string => {
@@ -1287,7 +1287,10 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
         core.captured
           .filter((call) => call.verb === 'manual-pause')
           .map((call) => JSON.parse(call.body)),
-      ).toEqual([{ paused: true }, { paused: false }]);
+      ).toEqual([
+        { paused: true, via: 'worker_ui' },
+        { paused: false, via: 'worker_ui' },
+      ]);
 
       // Every answer: no CORS header, no cookie, and the security headers.
       for (const answer of answers) {
@@ -1325,6 +1328,11 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       manually_paused_at: '2026-11-05T10:05:00.000Z',
     });
     expect(existsSync(path.join(stateDir, DRAIN_MARKER_FILE))).toBe(true);
+    expect(
+      core.captured
+        .filter((call) => call.verb === 'manual-pause')
+        .map((call) => JSON.parse(call.body)),
+    ).toEqual([{ paused: true, via: 'worker_ui_drain' }]);
     const claimsAtDrain = core.captured.filter((call) => call.verb === 'claims').length;
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(core.captured.filter((call) => call.verb === 'claims').length).toBe(claimsAtDrain);
@@ -1345,7 +1353,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
           .slice(capturedBefore)
           .filter((call) => call.verb === 'manual-pause')
           .map((call) => JSON.parse(call.body)),
-      ).toEqual([{ paused: false }]);
+      ).toEqual([{ paused: false, via: 'worker_start' }]);
       const claimsBefore = core.captured.filter((call) => call.verb === 'claims').length;
       await until(
         'a claim after the restart',
@@ -1353,14 +1361,29 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       );
       // A token survives a restart (rotated only by deleting the file).
       expect(readFileSync(path.join(stateDir, UI_TOKEN_FILE), 'utf8').trim()).toBe(token);
-      // An owner's pause is not a drain's: it survives the next start, untouched.
+      // An owner's pause is not a drain's: it survives the next start, untouched — and a Drain
+      // pressed **after** it is no drain's pause either (review of PR #30: Pause → Drain → restart
+      // once cleared the owner's hold), so it writes no marker and asks the core nothing.
       const port2 = portOf(second.worker.uiAddress());
+      const owner = { authorization: `Bearer ${token}`, origin: `http://127.0.0.1:${PUBLISHED}` };
       await request(port2, {
         method: 'POST',
         path: '/api/local/pause',
-        headers: { authorization: `Bearer ${token}`, origin: `http://127.0.0.1:${PUBLISHED}` },
+        headers: owner,
         body: { paused: true },
       });
+      const pausesAtHold = core.captured.filter((call) => call.verb === 'manual-pause').length;
+      const drainedWhilePaused = await request(port2, {
+        method: 'POST',
+        path: '/api/local/drain',
+        headers: owner,
+        body: {},
+      });
+      expect(drainedWhilePaused.status).toBe(202);
+      expect(workerLocalStateSchema.parse(JSON.parse(drainedWhilePaused.text)).draining).toBe(true);
+      expect(core.captured.filter((call) => call.verb === 'manual-pause')).toHaveLength(
+        pausesAtHold,
+      );
       expect(existsSync(path.join(stateDir, DRAIN_MARKER_FILE))).toBe(false);
     } finally {
       await second.worker.stop();
@@ -1385,6 +1408,25 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       await third.worker.stop();
     }
     expect(pausesBefore).toBeGreaterThan(0);
+  });
+
+  it('audits /internal/drain as worker_internal_drain and the page’s Drain as worker_ui_drain (TD-031 amendment)', async () => {
+    const stateDir = stateDirWithCredential();
+    const core = fakeCore({});
+    const { worker, internal } = await start({ stateDir, core });
+    try {
+      await until('a claim', () => core.captured.some((call) => call.verb === 'claims'));
+      const response = await fetch(`${internal}/internal/drain`, { method: 'POST' });
+      expect(response.status).toBe(202);
+      expect(
+        core.captured
+          .filter((call) => call.verb === 'manual-pause')
+          .map((call) => JSON.parse(call.body)),
+      ).toEqual([{ paused: true, via: 'worker_internal_drain' }]);
+      expect(existsSync(path.join(stateDir, DRAIN_MARKER_FILE))).toBe(true);
+    } finally {
+      await worker.stop();
+    }
   });
 
   it('opens no port and makes no token with APP_WORKER_UI=disabled', async () => {

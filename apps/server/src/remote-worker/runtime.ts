@@ -46,6 +46,7 @@ import type { Logger } from '@platform/application';
 import { exactSecretRedactor } from '@platform/application';
 import {
   type CoreImageDigests,
+  type WorkerManualPauseVia as ManualPauseVia,
   type RunPackage,
   shaSchema,
   WORKER_LOCAL_LOG_LINE_MAX_CHARS,
@@ -103,6 +104,9 @@ export interface StartRemoteWorkerOptions {
 /** The marker a drain leaves in `worker-state`: its pause is cleared at the next start (WP-292). */
 export const DRAIN_MARKER_FILE = 'drain-pause';
 
+/** Who drains: the page's *Drain*, or `POST /internal/drain` (the updater's or an operator's). */
+export type DrainVia = Extract<ManualPauseVia, 'worker_ui_drain' | 'worker_internal_drain'>;
+
 export interface RemoteWorkerState {
   readonly role: typeof REMOTE_WORKER_ROLE;
   readonly connection: WorkerConnection;
@@ -136,7 +140,7 @@ export interface RemoteWorkerRuntime {
    * Stop claiming and let the runs in flight finish (`POST /internal/drain`, the page's *Drain*):
    * the core's manual pause, remembered as a drain's so the next start clears it (WP-292).
    */
-  drain(): Promise<void>;
+  drain(via: DrainVia): Promise<void>;
   /** The owner's *Pause* / *Resume* from the local page — the core's `manual-pause` (WP-292). */
   setPaused(paused: boolean): Promise<void>;
   state(): RemoteWorkerState;
@@ -426,8 +430,11 @@ export const startRemoteWorker = async (
       () => false,
     );
 
-  /** The core's `manual-pause`, stored here once it answered (WP-292). */
-  const assertPause = async (paused: boolean): Promise<void> => {
+  /**
+   * The core's `manual-pause`, stored here once it answered (WP-292). `via` is who asked — the
+   * page, its Drain, `/internal/drain` or this start — and the audit row says which.
+   */
+  const assertPause = async (paused: boolean, via: ManualPauseVia): Promise<void> => {
     if (credential === null) {
       throw new LocalUiError(
         409,
@@ -435,7 +442,7 @@ export const startRemoteWorker = async (
         'this worker is not logged in to its core yet, so it cannot be paused there',
       );
     }
-    const answer = await core.manualPause(credential, { paused });
+    const answer = await core.manualPause(credential, { paused, via });
     manuallyPausedAt = answer.manually_paused_at;
   };
 
@@ -448,7 +455,7 @@ export const startRemoteWorker = async (
     if (!(await exists(drainMarker))) return;
     for (let attempt = 0; !stopping; attempt += 1) {
       try {
-        await assertPause(false);
+        await assertPause(false, 'worker_start');
         await rm(drainMarker, { force: true });
         loggerPort.info({}, 'the last drain’s pause is cleared at this start; claiming again');
         return;
@@ -467,7 +474,7 @@ export const startRemoteWorker = async (
 
   /** The owner's *Pause* / *Resume* (WP-292): the core first, then this worker. */
   const setPaused = async (paused: boolean): Promise<void> => {
-    await assertPause(paused);
+    await assertPause(paused, 'worker_ui');
     // Either way the hold is now the owner's, not a drain's: a later start leaves a *Pause* in place.
     await rm(drainMarker, { force: true });
     if (paused) {
@@ -489,21 +496,31 @@ export const startRemoteWorker = async (
    * what runs, and hold the core's pause as a **drain's** — the marker makes the next start clear
    * it. The core's pause is best-effort here: a drain the updater asks for must happen whether or
    * not the core answers, and the claim loop is already stopped locally.
+   *
+   * **A drain of a worker its owner already paused is no drain's pause** (review of PR #30): the
+   * hold is the owner's, so no marker is written and nothing is asked of the core — otherwise the
+   * next start would clear the owner's *Pause* and the worker would claim again.
    */
-  const drain = async (): Promise<void> => {
+  const drain = async (via: DrainVia): Promise<void> => {
     const first = !draining;
     draining = true;
     claimAbort?.abort();
     wakeClaims();
     if (first) {
-      loggerPort.info({ runs: sessions.size }, 'this worker is draining: it claims nothing more');
+      loggerPort.info(
+        { runs: sessions.size, via },
+        'this worker is draining: it claims nothing more',
+      );
     }
-    await writeFile(drainMarker, `${new Date().toISOString()}\n`, { mode: 0o600 }).catch(
+    if (manuallyPausedAt !== null) {
+      return;
+    }
+    await writeFile(drainMarker, `${new Date().toISOString()} ${via}\n`, { mode: 0o600 }).catch(
       (error: unknown) =>
         loggerPort.warn({ err: error }, 'the drain marker could not be written in worker-state'),
     );
     try {
-      await assertPause(true);
+      await assertPause(true, via);
     } catch (error) {
       loggerPort.warn(
         { err: error },
@@ -669,7 +686,7 @@ export const startRemoteWorker = async (
       return;
     }
     if (request.method === 'POST' && path === '/internal/drain') {
-      void drain().then(
+      void drain('worker_internal_drain').then(
         () => send(response, 202, state()),
         () => send(response, 202, state()),
       );
@@ -728,7 +745,7 @@ export const startRemoteWorker = async (
           return localState();
         },
         drain: async () => {
-          await drain();
+          await drain('worker_ui_drain');
           return localState();
         },
         cancel: cancelRun,

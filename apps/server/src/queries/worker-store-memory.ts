@@ -351,7 +351,7 @@ export const createMemoryWorkerStore = (
       return { status: 'revoked', performed: true, revokedAt: now, expiredRuns };
     },
 
-    async setManualPause({ workerId, paused, now }) {
+    async setManualPause({ workerId, paused, via, now }) {
       const worker = workers.get(workerId);
       if (worker === undefined) {
         return { status: 'not_found' };
@@ -363,7 +363,7 @@ export const createMemoryWorkerStore = (
       audit.push({
         userId: worker.userId,
         action: paused ? 'worker.pause' : 'worker.resume',
-        params: { worker_id: workerId, via: 'worker_ui' },
+        params: { worker_id: workerId, via },
       });
       return { status: 'set', manuallyPausedAt: worker.manuallyPausedAt, performed: true };
     },

@@ -607,10 +607,20 @@ export const workerPauseRequestSchema = z.strictObject({
 });
 
 /**
- * `POST manual-pause` `{ paused }` — a **state assertion** (WP-292): the owner's hold on claiming,
+ * `POST manual-pause` `{ paused, via }` — a **state assertion** (WP-292): the owner's hold on claiming,
  * stored in `workers.manually_paused_at`. Worker credential, protocol ≥ 2. Runs in flight continue.
  */
-export const workerManualPauseRequestSchema = z.strictObject({ paused: z.boolean() });
+export const workerManualPauseRequestSchema = z.strictObject({
+  paused: z.boolean(),
+  /**
+   * Who asked, copied into the audit row's `params.via` (TD-031's 2026-11-05 amendment, decision
+   * 3): the page’s *Pause* and *Resume* (`worker_ui`), the page's *Drain* (`worker_ui_drain`),
+   * `POST /internal/drain` — the updater's or an operator's (`worker_internal_drain`) — and the
+   * start-time clear of a drain's pause (`worker_start`).
+   */
+  via: z.enum(['worker_ui', 'worker_ui_drain', 'worker_internal_drain', 'worker_start']),
+});
+export type WorkerManualPauseVia = z.infer<typeof workerManualPauseRequestSchema>['via'];
 
 /**
  * `POST manual-pause` → the stored state and whether this call changed it: a repeat of the stored

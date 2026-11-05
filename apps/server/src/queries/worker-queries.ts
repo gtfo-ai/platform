@@ -26,7 +26,7 @@
  * credentials stop authenticating at once through {@link WorkerStore.findCredentialSubject}, which
  * reads the user's state on every call.
  */
-import type { JsonObject } from '@platform/contracts';
+import type { JsonObject, WorkerManualPauseVia } from '@platform/contracts';
 import {
   checkDeviceDecision,
   type DeviceCodeState,
@@ -186,6 +186,8 @@ export interface WorkerStore {
   setManualPause(input: {
     readonly workerId: string;
     readonly paused: boolean;
+    /** Who asked — the audit row's `via` (TD-031's 2026-11-05 amendment, decision 3). */
+    readonly via: WorkerManualPauseVia;
     readonly now: Date;
   }): Promise<ManualPauseResult>;
   /** The deactivation write: the live runs of every worker of the user get `lease_expires_at = now()`. */
@@ -507,7 +509,7 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
     });
   },
 
-  async setManualPause({ workerId, paused, now }) {
+  async setManualPause({ workerId, paused, via, now }) {
     return database.transaction(async (tx): Promise<ManualPauseResult> => {
       const { rows } = await tx.execute<{ user_id: string; manually_paused_at: Date | null }>(sql`
         select user_id, manually_paused_at from workers where id = ${workerId} for update`);
@@ -522,7 +524,7 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
       const next = paused ? now : null;
       await tx.execute(sql`
         update workers set manually_paused_at = ${next} where id = ${workerId}`);
-      const params: JsonObject = { worker_id: workerId, via: 'worker_ui' };
+      const params: JsonObject = { worker_id: workerId, via };
       await tx.execute(sql`
         insert into human_actions (user_id, action, params)
         values (${row.user_id}, ${paused ? 'worker.pause' : 'worker.resume'}, ${JSON.stringify(params)}::jsonb)`);

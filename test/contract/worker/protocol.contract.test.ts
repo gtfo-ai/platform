@@ -548,7 +548,7 @@ const bodies = (epoch: number) => ({
   },
   [WORKER_PATHS.session]: { epoch, session_id: 'sess-1', from_line: 0, lines: ['{"a":1}'] },
   // WP-292: the owner verbs (protocol 2).
-  [WORKER_PATHS.manualPause]: { paused: true },
+  [WORKER_PATHS.manualPause]: { paused: true, via: 'worker_ui' },
   [WORKER_PATHS.runCancel]: { reason: 'leaving for the day' },
   [WORKER_PATHS.sshSign]: {
     epoch,
@@ -1404,7 +1404,7 @@ describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the 
   it('manual-pause: a state assertion — one audit row per change, the claim answered 204 while held', async () => {
     const w = await world();
     const pause = (paused: boolean) =>
-      post(w, WORKER_PATHS.manualPause, '', w.alice.credential, { paused });
+      post(w, WORKER_PATHS.manualPause, '', w.alice.credential, { paused, via: 'worker_ui' });
     const first = await pause(true);
     expect(first.statusCode).toBe(200);
     const held = workerManualPauseResponseSchema.parse(first.json());

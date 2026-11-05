@@ -143,6 +143,7 @@ export const registerWorkerOwnerVerbs = (
       const result = await options.store.setManualPause({
         workerId,
         paused: request.body.paused,
+        via: request.body.via,
         now: options.now(),
       });
       if (result.status === 'not_found') {

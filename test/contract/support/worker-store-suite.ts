@@ -397,18 +397,29 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
         );
       // Resuming a worker nobody paused writes nothing.
       expect(
-        await world.store.setManualPause({ workerId: worker, paused: false, now: at(0) }),
+        await world.store.setManualPause({
+          workerId: worker,
+          paused: false,
+          via: 'worker_ui',
+          now: at(0),
+        }),
       ).toEqual({ status: 'set', manuallyPausedAt: null, performed: false });
       expect(await pauseAudit()).toEqual([]);
       const paused = await world.store.setManualPause({
         workerId: worker,
         paused: true,
+        via: 'worker_ui',
         now: at(5_000),
       });
       expect(paused).toEqual({ status: 'set', manuallyPausedAt: at(5_000), performed: true });
       // A repeat keeps the first instant and writes no second row.
       expect(
-        await world.store.setManualPause({ workerId: worker, paused: true, now: at(9_000) }),
+        await world.store.setManualPause({
+          workerId: worker,
+          paused: true,
+          via: 'worker_ui',
+          now: at(9_000),
+        }),
       ).toEqual({ status: 'set', manuallyPausedAt: at(5_000), performed: false });
       const listed = (await world.store.listWorkers(owner)).find((row) => row.id === worker);
       expect(listed?.manuallyPausedAt).toEqual(at(5_000));
@@ -416,17 +427,29 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       await world.store.recordContact({ workerId: worker, protocolVersion: 2, imageDigests: null });
       expect(await world.store.countConnected()).toEqual({ connected: 1, paused: 1 });
       expect(
-        await world.store.setManualPause({ workerId: worker, paused: false, now: at(12_000) }),
+        await world.store.setManualPause({
+          workerId: worker,
+          paused: false,
+          via: 'worker_start',
+          now: at(12_000),
+        }),
       ).toEqual({ status: 'set', manuallyPausedAt: null, performed: true });
       expect(await world.store.countConnected()).toEqual({ connected: 1, paused: 0 });
       expect(await pauseAudit()).toEqual([
         { action: 'worker.pause', userId: owner, params: { worker_id: worker, via: 'worker_ui' } },
-        { action: 'worker.resume', userId: owner, params: { worker_id: worker, via: 'worker_ui' } },
+        // The start-time clear of a drain's pause is audited as the start's (TD-031's 2026-11-05
+        // amendment, decision 3).
+        {
+          action: 'worker.resume',
+          userId: owner,
+          params: { worker_id: worker, via: 'worker_start' },
+        },
       ]);
       expect(
         await world.store.setManualPause({
           workerId: '00000000-0000-4000-8000-00000029ffff',
           paused: true,
+          via: 'worker_ui',
           now: at(0),
         }),
       ).toEqual({ status: 'not_found' });
