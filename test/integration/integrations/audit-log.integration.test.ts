@@ -305,9 +305,9 @@ describe('the audit row and its event are one transaction', () => {
     let reads = 0;
     const racing = integrationAdapters.createPostgresIntegrationAuditLog({
       unitOfWork: eventing.unitOfWork,
-      readSequence: async (sql, streamId) => {
+      readSequence: async (locked) => {
         reads += 1;
-        return reads === 1 ? 1 : integrationAdapters.readNextSequence(sql, streamId);
+        return reads === 1 ? 1 : locked;
       },
       ids: { next: () => randomUUID() as Id },
     });
@@ -368,6 +368,7 @@ describe('two writers of one integration stream wait for each other (BACKLOG 970
           fn({
             ...scope,
             events: {
+              lockStreamSequence: scope.events.lockStreamSequence,
               append: async (events) => {
                 // This writer has read its sequence and inserted its row; another writer of the
                 // same stream records now, through the plain unit of work.

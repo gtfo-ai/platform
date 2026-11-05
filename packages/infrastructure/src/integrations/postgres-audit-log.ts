@@ -41,8 +41,10 @@
  * `test/e2e/topology/two-processes.e2e.test.ts`; for a mutation without an idempotency key, a
  * second effect). Now:
  *
- *  1. the transaction takes `pg_advisory_xact_lock` on `integration_stream/<integration id>` before
- *     it reads `event_streams.last_seq`, so two writers of one stream **wait** for each other instead
+ *  1. the transaction calls `scope.events.lockStreamSequence('integration', id)` — the one helper
+ *     every shared-stream writer uses since BACKLOG 971/972 — which takes `pg_advisory_xact_lock` on
+ *     `integration_stream/<integration id>` before it reads `event_streams.last_seq`, so two
+ *     writers of one stream **wait** for each other instead
  *     of racing — the lock is released at commit, and under READ COMMITTED the next holder's read
  *     sees the previous holder's sequence. The application role holds `SELECT` only on
  *     `event_streams` and must not lock its row (technical/03), which is why the lock is advisory;
@@ -75,9 +77,7 @@ import {
 } from '@platform/application';
 import type { DomainEvent, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
-import { PostgresEventStore } from '../events/postgres-event-store.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
-import type { SqlExecutor } from '../events/sql.js';
 
 /**
  * How many times a `StreamConflictError` is re-read and retried before the action fails.
@@ -91,11 +91,11 @@ export const DEFAULT_MAX_SEQUENCE_ATTEMPTS = 4;
 export interface PostgresIntegrationAuditLogOptions {
   readonly unitOfWork: UnitOfWork;
   /**
-   * The stream's next sequence, read on the transaction's connection after the stream lock is
-   * held. **A test seam**: production passes nothing and gets {@link readNextSequence}; a test
-   * stages a stale answer here to drive the trigger's `StreamConflictError` and the retry.
+   * **A test seam**: given the sequence `lockStreamSequence` read under the stream's lock, the one
+   * to append at. Production passes nothing and appends at the locked read; a test stages a stale
+   * answer here to drive the trigger's `StreamConflictError` and the retry.
    */
-  readonly readSequence?: (sql: SqlExecutor, integrationId: Id) => Promise<number>;
+  readonly readSequence?: (locked: number, integrationId: Id) => Promise<number>;
   /** Event ids. The composition root's generator, so a test can make them deterministic. */
   readonly ids: { next(): Id };
   readonly maxSequenceAttempts?: number;
@@ -106,16 +106,6 @@ const INSERT_ACTION = `insert into integration_actions
     (integration_id, project_id, task_id, direction, action, payload, result, status,
      duration_ms, redaction_count, attempts, created_at)
   values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12)`;
-
-/**
- * Serialises the writers of one integration stream for the rest of the transaction (BACKLOG 970).
- * The key's prefix is this lock's own, so it shares no key with another advisory lock.
- */
-const LOCK_STREAM = `select pg_advisory_xact_lock(hashtextextended('integration_stream/' || $1, 0))`;
-
-/** The integration stream's next sequence, on the caller's connection — inside its transaction. */
-export const readNextSequence = async (sql: SqlExecutor, integrationId: Id): Promise<number> =>
-  new PostgresEventStore(sql).nextStreamSequence('integration', integrationId);
 
 /**
  * The minted credential's shape, upserted **in the audit row's transaction** (WP-80, TD-012's M5
@@ -168,7 +158,7 @@ export const createPostgresIntegrationAuditLog = (
     throw new TypeError(`maxSequenceAttempts must be at least 1, got ${maxAttempts}`);
   }
 
-  const readSequence = options.readSequence ?? readNextSequence;
+  const readSequence = options.readSequence ?? (async (locked: number) => locked);
 
   const writeOnce = async (entry: IntegrationActionEntry): Promise<void> => {
     const drafts = integrationActionEventDrafts(entry);
@@ -179,8 +169,12 @@ export const createPostgresIntegrationAuditLog = (
       // sequence and can never conflict on one.
       let firstSeq = 0;
       if (drafts.length > 0) {
-        await sql.query(LOCK_STREAM, [entry.integrationId]);
-        firstSeq = await readSequence(sql, entry.integrationId);
+        // BACKLOG 970 and 972: the shared helper every shared-stream writer uses — the advisory
+        // lock on `integration_stream/<id>`, then the sequence on this transaction's connection.
+        firstSeq = await readSequence(
+          await scope.events.lockStreamSequence('integration', entry.integrationId),
+          entry.integrationId,
+        );
       }
       await sql.query(INSERT_ACTION, [
         entry.integrationId,
