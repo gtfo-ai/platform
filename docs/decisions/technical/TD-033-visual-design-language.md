@@ -158,3 +158,23 @@ The owner asked for:
   - animated image files for sprites: URL attributes, a binary asset pipeline, no theming;
   - Mona Sans: a display face that would also change the sign-in page;
   - hand-rolled menus and dialogs: APG behaviour done by hand.
+
+## Amendment 2026-11-05 — one dark theme; the page darker than its cards (product owner)
+
+The product owner looked at the deployed screens and decided two things:
+- **"Single theme dark only, no light/system switching."**
+- **The page background should be darker than the content cards, using the top bar's colour.**
+
+Decision 2 changes as follows:
+- **One theme.** There is no light theme, no `system` option, no theme control in the avatar menu or
+  Settings → Appearance, and no `data-theme` switching. The light token block and its contrast pairs are
+  deleted. `color-scheme: dark` is set on the root. product/10's "Dark/light theme" is amended to match.
+- **Layers.**
+  - The page (`--bg-canvas`) is **deep night `#0f0d22`**, the top bar's colour.
+  - Cards, boxes and list boxes (`--bg-default`) sit one step lighter on **night `#15132b`**.
+  - Their header rows and the hover state are `--bg-subtle`, **ink `#1f1c3d`**, and `#29254d`.
+  - The top bar is separated from the page by its bottom border, as on GitHub's dark dimmed theme.
+  - `contrast.test.ts` holds every text pair against **both** the page and the card ground.
+- Decision 2's light-theme bullet and "`system` and `light` remain choosable" are superseded. The office
+  view was always dark, so nothing changes there.
+
