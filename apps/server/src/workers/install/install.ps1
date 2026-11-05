@@ -31,7 +31,6 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
 # hands what it was given (`@args`) to the block, and the block's exit status goes straight to `exit`
 # when this is a file run, and nowhere when it is not.
 & {
-  [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'An interactive installer talks to the person running it.')]
   param(
     [string]$Dir = '',
     [string]$Core = '',
@@ -67,7 +66,8 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
 
   function Write-Line {
     param([string]$Text = '')
-    Write-Host $Text
+    # The host directly, not the pipeline: the block's only pipeline output is its exit status.
+    $Host.UI.WriteLine($Text)
   }
 
   # One native call with the preference relaxed: Windows PowerShell 5.1 turns a native command's
@@ -439,7 +439,7 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
   } catch {
     $code = $_.Exception.Data['code']
     if ($null -eq $code) { $code = 1 }
-    Write-Host "agentic-worker: $($_.Exception.Message)" -ForegroundColor Red
+    $Host.UI.WriteErrorLine("agentic-worker: $($_.Exception.Message)")
     $code
   }
 } @args | Select-Object -Last 1 | ForEach-Object { if ($PSCommandPath) { exit $_ } }
