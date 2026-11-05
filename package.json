@@ -33,6 +33,7 @@
     "test:e2e": "node scripts/vitest-bounded.mjs run --project e2e-fake-claude",
     "test:ui": "node scripts/vitest-bounded.mjs run --project ui",
     "dev": "node scripts/dev.mjs",
+    "worker:dev": "node scripts/worker-dev.mjs",
     "db:migrate": "node --import ./scripts/ts-source-resolver.mjs apps/server/src/migrate.ts",
     "schemas": "node scripts/schemas.mjs",
     "schemas:check": "node scripts/schemas.mjs --check",

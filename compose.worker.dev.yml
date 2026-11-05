@@ -1,0 +1,82 @@
+# The worker's **dev mode** (S-22.16): `compose.worker.yml` run from this checkout, with this file on
+# top of it. `pnpm worker:dev` is the way in (`scripts/worker-dev.mjs`):
+#
+#   pnpm worker:dev          build the images from the working tree (`:dev`), then `up -d`
+#   pnpm worker:dev ui       the local page from Vite, hot-reloading, proxying `/api/local` here
+#   pnpm worker:dev logs|ps|down
+#
+# which runs `docker compose -p agentic-worker-dev --env-file .env.worker -f compose.worker.yml -f
+# compose.worker.dev.yml …`. Settings are `.env.worker` (git-ignored; `.env.worker.example` lists them).
+#
+# **Prod mode is the other one** (S-22.10): no clone, the core's own compose file, pinned by digest
+# and kept current by the updater. Nothing here is for a prod worker.
+#
+# ## What this file decides, and why (`scripts/worker-dev.test.ts` holds each)
+#
+# **Every image is the working tree's `:dev` build, written out, never `${PLATFORM_*_IMAGE}`.** The
+# base file reads those variables, and an `.env.worker` that once ran a prod worker may carry a
+# registry digest in them; a dev worker built from this checkout must never run one. Nothing here is
+# pinned to a registry digest. (`pull-git-image` keeps the base's third-party pin: it is not ours.)
+#
+# **The updater is off** — a dev worker never self-updates (it would replace the images this
+# checkout built). `updater` is moved under a profile nobody enables, with `!override`, so whatever
+# profile list the base gives it is replaced rather than merged.
+#
+# **Every name a prod worker holds has a dev name of its own**, so a dev worker runs beside a prod
+# one on the same daemon (the owner's case, and the developer's): the project (`agentic-worker-dev`),
+# the control volume, the repository-cache volume, the run network, and the local page's host port
+# (7358, not 7357). They are read from `APP_WORKER_DEV_*` — **never** from the prod variables
+# (`APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_UI_PORT`), which an
+# `.env.worker` shared with a prod worker may set to the prod values. `ports` is `!override`n because
+# compose merges port lists rather than replacing them.
+#
+# **`APP_CORE_URL` is not set here**: it comes from `.env.worker` (the example points at the local
+# `pnpm dev` core through `host.docker.internal`; Autix works too). `extra_hosts` makes that name
+# resolve on a Linux daemon as it already does on Docker Desktop.
+
+name: agentic-worker-dev
+
+services:
+  launcher-token:
+    image: platform:dev
+
+  pull-runtime-image:
+    image: platform-runtime:dev
+
+  pull-egress-image:
+    image: platform-egress:dev
+
+  remote-worker:
+    image: platform:dev
+    environment:
+      PLATFORM_IMAGE: platform:dev
+      PLATFORM_LAUNCHER_IMAGE: platform-launcher:dev
+      PLATFORM_RUNTIME_IMAGE: platform-runtime:dev
+      PLATFORM_EGRESS_IMAGE: platform-egress:dev
+      APP_WORKER_UI_PORT: ${APP_WORKER_DEV_UI_PORT:-7358}
+    ports: !override
+      - '127.0.0.1:${APP_WORKER_DEV_UI_PORT:-7358}:7357'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+  launcher:
+    image: platform-launcher:dev
+    environment:
+      APP_WORKSPACE_CONTROL_VOLUME: ${APP_WORKER_DEV_CONTROL_VOLUME:-agentic-worker-dev-ctl}
+      APP_WORKSPACE_CACHE_VOLUME: ${APP_WORKER_DEV_CACHE_VOLUME:-agentic-worker-dev-repo-cache}
+      APP_WORKSPACE_RUNTIME_IMAGE: platform-runtime:dev
+      APP_WORKSPACE_EGRESS_IMAGE: platform-egress:dev
+      APP_WORKSPACE_HELPER_NETWORK: agentic-worker-dev-run-egress
+      APP_WORKSPACE_EGRESS_NETWORK: agentic-worker-dev-run-egress
+
+  updater:
+    image: platform:dev
+    profiles: !override ['worker-dev-never']
+
+volumes:
+  ctl:
+    name: ${APP_WORKER_DEV_CONTROL_VOLUME:-agentic-worker-dev-ctl}
+
+networks:
+  run-egress:
+    name: agentic-worker-dev-run-egress

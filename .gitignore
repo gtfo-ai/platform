@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# The worker's dev settings, documented (S-22.16); `.env.worker` itself stays ignored.
+!/.env.worker.example
 *.pem
 *.key
 *.token
