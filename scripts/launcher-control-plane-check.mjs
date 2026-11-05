@@ -12,8 +12,10 @@
  *
  * ## Who has actually run this, which is the part a reader needs
  *
- * **No CI job runs it**, and criterion (1) of WP-53 — *a run starts, streams and ends through the
- * control plane and the shim's socket* — rests on it alone. As of WP-53 it had been run **four
+ * **Since 2026-11-05 CI runs it** — `.github/workflows/docker-checks.yml`, on a change to a path it
+ * guards and every night (`scripts/docker-checks.mjs` has the table) — on a GitHub-hosted runner's
+ * daemon (`linux/amd64`). Before that no CI job ran it, and criterion (1) of WP-53 — *a run starts,
+ * streams and ends through the control plane and the shim's socket* — rested on it alone. As of WP-53 it had been run **four
  * times in the implementer's shell and once in the orchestrator's**, on Docker Desktop
  * (`linux/arm64`) against `platform-runtime:dev`, 18/18 each time. **No reviewer has reproduced
  * it**: Docker was out of bounds for that review, so the criterion is confirmed by the two people
