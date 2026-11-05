@@ -23,6 +23,7 @@
  * `test/integration/pipeline/remote-claim.integration.test.ts`.
  */
 import { createHash, createPublicKey, verify } from 'node:crypto';
+import http from 'node:http';
 import {
   cancelRunCommand,
   createRemoteRunCalls,
@@ -223,6 +224,8 @@ const world = async (
     /** What the git credential minter does instead of minting (TD-031's 2026-11-05 amendment). */
     readonly mintFails?: () => Error;
     readonly onMint?: (at: number) => void;
+    /** Awaited inside the mint, after the claim committed and before the package is answered. */
+    readonly beforeMint?: () => Promise<void>;
     /** `false`: the process composed no run-scoped calls (WP-282). */
     readonly runCalls?: boolean;
     /** A remote run's transcript bound (backlog 754); absent, the shipped one. */
@@ -280,6 +283,7 @@ const world = async (
       credentials: {
         mint: async ({ scope }) => {
           options.onMint?.(harness.clock.epochMs);
+          await options.beforeMint?.();
           const failure = options.mintFails?.();
           if (failure !== undefined) throw failure;
           return {
@@ -507,6 +511,15 @@ const world = async (
     cancel: { actions, projectRoles },
     takes,
   };
+};
+
+/** Waits (bounded) for `check` — a structural signal, never a fixed margin. */
+const waitUntil = async (check: () => boolean): Promise<void> => {
+  for (let tries = 0; tries < 200; tries += 1) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('timed out waiting');
 };
 
 const url = (verb: string, runId?: string, tool = 'get_task_context'): string =>
@@ -2008,5 +2021,47 @@ describe('the worker protocol (WP-293): protocol 3, the claim scope and take thi
     });
     expect(response.statusCode).toBe(503);
     expect(response.json().error.code).toBe('digests_unresolved');
+  });
+
+  it('releases a package whose worker went away before the answer, rather than sending it nowhere (BACKLOG 960)', async () => {
+    let hangUp: (() => void) | null = null;
+    let armed = true;
+    const w = await world({
+      beforeMint: async () => {
+        if (!armed) return;
+        armed = false;
+        // The claim has committed; the worker calls its request off now (a Pause, a Take).
+        hangUp?.();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      },
+    });
+    await post(w, WORKER_PATHS.handshake, '', w.alice.credential, {
+      image_digests: HELD,
+      commit: null,
+    });
+    const address = await w.app.listen({ port: 0, host: '127.0.0.1' });
+    const outcome = await new Promise<string>((resolve) => {
+      const request = http.request(
+        `${address}${url(WORKER_PATHS.offerClaim, w.runId)}`,
+        {
+          method: 'POST',
+          headers: { ...bearer(w.alice.credential), 'content-type': 'application/json' },
+        },
+        (response) => resolve(`answered ${response.statusCode}`),
+      );
+      request.on('error', () => resolve('gone'));
+      hangUp = () => request.destroy();
+      request.end(JSON.stringify({ image_digests: HELD }));
+    });
+    expect(outcome).toBe('gone');
+    // The claim was undone — the offer open, the run created again, nobody excluded …
+    await waitUntil(() => w.harness.types().includes('run.offer.released'));
+    const offer = w.harness.store.offerRows().find((row) => row.runId === w.runId);
+    expect(offer?.state).toBe('open');
+    // … so the same worker takes it at once, and this time receives it.
+    const again = await pick(w, w.runId);
+    expect(again.statusCode).toBe(200);
+    expect(runPackageSchema.parse(again.json()).runId).toBe(w.runId);
+    expect(w.harness.types().filter((type) => type === 'run.offer.released')).toHaveLength(1);
   });
 });

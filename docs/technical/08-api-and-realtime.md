@@ -628,7 +628,7 @@ last reported — each `{run_id, kind, project_key, ticket_key, title, stage, ro
 cannot be read; an ask never carries its question's text). `POST offers/:id/claim {image_digests}` —
 *take this one* — is the one claim with its run named, not held: `200` with the package exactly as
 `claims` answers it, or `409 offer_not_claimable` for every reason it claimed nothing (taken, withdrawn,
-before `workers_from`, inside another user's head start, excluded, paused), which names none. It ignores
+before `workers_from`, inside another user's head start, excluded, paused), which names none. A package claimed for a worker whose request closed before the answer — a held `claims` it called off, or a pick its page gave up on — is released (`shutdown`, nobody excluded) rather than sent nowhere (BACKLOG 960). It ignores
 the scope and **nothing else** — a pick never jumps a hybrid, server-preferred project's `server_from`
 window (Q127 (a)) — and writes one `human_actions` row `worker.take_offer` `{worker_id, run_id, via:
 worker_ui}` in the claim's transaction. The page proxies them as `GET`/`POST /api/local/claim-scope`,

@@ -43,13 +43,14 @@ import {
   workerOffersResponseSchema,
   workerUpgradeRequiredBodySchema,
 } from '@platform/contracts';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { HttpError } from '../../errors.js';
 import type { WorkerStore } from '../../queries/worker-queries.js';
 import type { WorkerRelease } from '../../workers/release.js';
 import { requireWorkerProtocol } from './owner-verbs.js';
+import type { ClientPresence } from './protocol.js';
 
 /** The display names of a task's runs, by task id — the package's own rule (`runDisplayOf`). */
 export type OfferDisplays = (taskIds: readonly Id[]) => Promise<ReadonlyMap<string, RunDisplay>>;
@@ -69,11 +70,19 @@ export interface WorkerPickVerbOptions {
   readonly unresolved: () => HttpError;
   /** `null`: every offer is listed without its names (`project_key`/`ticket_key`/`title` null). */
   readonly displays: OfferDisplays | null;
-  /** What a claimed package is answered as for the request's protocol (`protocol.ts`). */
-  readonly packageFor: (
+  /** Watches for the client going away (`protocol.ts`'s `presenceOf`), from before the claim. */
+  readonly watch: (reply: FastifyReply) => ClientPresence;
+  /**
+   * Answers a claimed package for the request's protocol — or releases it when the worker went away
+   * before the answer (`protocol.ts`, BACKLOG 960).
+   */
+  readonly deliverClaimed: (
     request: FastifyRequest,
+    reply: FastifyReply,
+    presence: ClientPresence,
+    workerId: Id,
     pkg: z.output<typeof runPackageSchema>,
-  ) => z.output<typeof runPackageSchema>;
+  ) => Promise<FastifyReply>;
   readonly now: () => Date;
 }
 
@@ -256,6 +265,7 @@ export const registerWorkerPickVerbs = (
       if (release === null) {
         throw options.unresolved();
       }
+      const presence = options.watch(reply);
       const answer = await options.remote.claim({
         workerId,
         heldImageDigests: request.body.image_digests,
@@ -275,7 +285,7 @@ export const registerWorkerPickVerbs = (
           'this offer cannot be taken by this worker now; refresh the list',
         );
       }
-      return reply.code(200).send(options.packageFor(request, answer.package));
+      return options.deliverClaimed(request, reply, presence, workerId, answer.package);
     },
   );
 };

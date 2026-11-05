@@ -759,9 +759,8 @@ export const startRemoteWorker = async (
     } catch (error) {
       throw asLocalError(error, 'set the claim scope');
     }
-    // A scope that takes more may admit an offer the held claim is not looking at: ask again.
-    claimAbort?.abort();
-    wakeClaims();
+    // No call-off: the held claim re-reads the scope in its statement at every poll (≤ 5 s), and
+    // calling it off would only log a false failure and back off.
     return readClaimScope();
   };
 
@@ -780,9 +779,9 @@ export const startRemoteWorker = async (
    * *Take this one* (WP-293): the core's pick — the one claim narrowed to the run, its scope
    * ignored and nothing else — then the run starts here exactly as a claimed one does. A free slot
    * is needed; the claim loop's held request is called off first and the loop waits, so the pick
-   * and an automatic claim never fill one slot twice. (A held claim the core answered at the very
-   * instant it was called off is lost to this worker and comes back through the lease sweep — the
-   * same residual a *Pause* has.)
+   * and an automatic claim never fill one slot twice. A held claim the core answered after it was
+   * called off is released by the core, not sent nowhere (BACKLOG 960, `protocol.ts`'s
+   * `deliverClaimed`); only a close landing while the answer is being written is left to the sweep.
    */
   const takeOffer = async (runId: string): Promise<{ readonly run_id: string }> => {
     const held = connectedCredential();
