@@ -132,9 +132,22 @@ const imageInspectSchema = z.looseObject({
       Labels: z.record(z.string(), z.string()).nullish(),
     })
     .nullish(),
+  /**
+   * `repo@sha256:<manifest digest>` per registry the image was pulled from (S-22.14, backlog 704):
+   * under the classic image store a registry digest is **only** here — never the `Id`, which is the
+   * config digest — so a worker that pulled `…@sha256:<index>` finds its image by this list alone.
+   */
+  RepoDigests: z.array(z.string()).nullish(),
+});
+
+/** One row of `GET /images/json`: the id and the registry digests, the rest ignored. */
+const imageSummarySchema = z.looseObject({
+  Id: z.string().min(1),
+  RepoDigests: z.array(z.string()).nullish(),
 });
 
 export type EngineImageInspect = z.infer<typeof imageInspectSchema>;
+export type EngineImageSummary = z.infer<typeof imageSummarySchema>;
 export type EngineVolume = z.infer<typeof volumeSchema>;
 export type EngineContainerSummary = z.infer<typeof containerSummarySchema>;
 export type EngineInspect = z.infer<typeof inspectSchema>;
@@ -433,6 +446,16 @@ export class DockerEngine {
     const path = name.split('/').map(encodeURIComponent).join('/');
     const response = await this.#expect('GET', `/images/${path}/json`, [200]);
     return this.#json(response, imageInspectSchema);
+  }
+
+  /**
+   * Every image on the daemon, by id and registry digests — `GET /images/json`, which the socket
+   * proxy's `IMAGES=1` admits like the inspect. Read where a registry digest is not an image id
+   * (the classic store, S-22.14): the daemon has no lookup by a bare manifest digest there.
+   */
+  async listImages(): Promise<readonly EngineImageSummary[]> {
+    const response = await this.#expect('GET', '/images/json', [200]);
+    return this.#json(response, z.array(imageSummarySchema));
   }
 
   async listContainers(

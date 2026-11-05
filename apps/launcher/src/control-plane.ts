@@ -134,6 +134,12 @@ export interface ControlPlaneOptions {
    * `images` (WP-279). `DockerWorkspaceProvider.configuredImageDigests` in production.
    */
   readonly imageDigests: () => Promise<RunImages>;
+  /**
+   * Every digest the daemon knows those two images by — ids and registry digests (S-22.14) —
+   * `/v1/health`'s `heldImageDigests`. `DockerWorkspaceProvider.configuredImageNames` in production;
+   * absent, the two `images` alone.
+   */
+  readonly imageNames?: () => Promise<readonly string[]>;
   readonly logger: Logger;
 }
 
@@ -345,6 +351,21 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
     }
   };
 
+  /** `[]` when the daemon cannot answer, as `images` is `null` then. */
+  const heldImageDigests = async (images: RunImages | null): Promise<readonly string[]> => {
+    if (images === null) return [];
+    if (options.imageNames === undefined) return [...new Set([images.run, images.egress])];
+    try {
+      return [...new Set([images.run, images.egress, ...(await options.imageNames())])].slice(
+        0,
+        launcherProtocol.MAX_HELD_IMAGE_DIGESTS,
+      );
+    } catch (error) {
+      logger.warn({ err: error }, 'the configured images’ registry digests could not be listed');
+      return [images.run, images.egress];
+    }
+  };
+
   const createRunRequestSchema = createRunRequestSchemaFor(options.deployKeyCarriage);
 
   const createRun = async (body: string, response: ServerResponse): Promise<CreateRunResponse> => {
@@ -456,12 +477,14 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
   ): Promise<unknown> => {
     const path = url.pathname.replace(/\/+$/, '') || '/';
     if (request.method === 'GET' && path === CONTROL_PLANE_PATHS.health) {
+      const images = await resolvedImages();
       return {
         status: 'ok',
         controlRoot: options.controlRoot,
         runtimeImage: options.runtimeImage,
         claudeCodePath: options.claudeCodePath,
-        images: await resolvedImages(),
+        images,
+        heldImageDigests: await heldImageDigests(images),
         deployKeyCarriage: options.deployKeyCarriage,
         runs: creates.size,
       };

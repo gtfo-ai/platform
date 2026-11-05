@@ -106,7 +106,12 @@ import {
 } from '@platform/contracts';
 import { cliEnvironmentVariables, numberGitConfig } from './cli-environment.js';
 import { EGRESS_CONFIG_MOUNT, egressProxyUrl, renderEgressConfig } from './egress.js';
-import type { DockerEngine, EngineContainerSummary, EngineVolume } from './engine.js';
+import type {
+  DockerEngine,
+  EngineContainerSummary,
+  EngineImageInspect,
+  EngineVolume,
+} from './engine.js';
 import {
   DEFAULT_RUNTIME_CLI_PATH,
   type DockerMount,
@@ -1702,10 +1707,14 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    *
    * `null` is the in-process composition's: the configured tags, as before WP-279.
    *
-   * What a digest is here, stated: the daemon resolves `sha256:<hex>` against its **image ids** — what
-   * a launcher's `GET /v1/health` answers for its configured tags, so a server's own run always
-   * finds its images. A registry manifest digest (TD-032's `sha-<7>` resolution) is the image id only
-   * under the containerd image store; WP-284 measures it on a worker bundle.
+   * What a digest is here, stated — measured on Docker 29.8.2 with `docker pull busybox@sha256:a7db…`
+   * (an OCI index) under both image stores (S-22.14, backlog 704): under the **containerd** store the
+   * image id *is* the pulled manifest digest, so `GET /images/sha256:<digest>/json` finds it; under
+   * the **classic** store (`overlay2`, still a Linux engine's default) the id is the config digest,
+   * that inspect answers 404, and the registry digest is only in `RepoDigests`
+   * (`busybox@sha256:a7db…`), found by `repo@digest` for the right repository and by nothing else.
+   * So a digest is asked as an id first and then looked up in every image's `RepoDigests`
+   * ({@link localImageId}) — exact, and blind to which repository or mirror the worker pulled from.
    */
   async #resolveImages(
     spec: WorkspaceSpec,
@@ -1723,18 +1732,15 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
           detail: digest.slice(0, 100),
         });
       }
-      try {
-        return (await this.#engine.inspectImage(parsed.data)).Id;
-      } catch (error) {
-        if (error instanceof WorkspaceError && error.code === 'not_found') {
-          throw new WorkspaceError(
-            'invalid_spec',
-            `the ${role} image ${parsed.data} is not on this launcher's daemon, and a launcher never pulls at create (TD-031 decision 4)`,
-            { runId: spec.runId, reason: 'image_not_local', cause: error },
-          );
-        }
-        throw error;
+      const id = await localImageId(this.#engine, parsed.data);
+      if (id === null) {
+        throw new WorkspaceError(
+          'invalid_spec',
+          `the ${role} image ${parsed.data} is not on this launcher's daemon (neither an image id nor a registry digest it holds), and a launcher never pulls at create (TD-031 decision 4)`,
+          { runId: spec.runId, reason: 'image_not_local' },
+        );
       }
+      return id;
     };
     const resolved = {
       runtime: await local('run', images.run),
@@ -1757,13 +1763,42 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * The digests of the images this launcher is configured with — what `GET /v1/health` answers, and
    * what a server's provisioner sends back on every create (WP-279's "configured tags resolved").
    * Read per call, never memoised: an image rebuilt under a running launcher is the new id at once.
+   *
+   * **A registry digest where there is one** (S-22.14, backlog 704/763): a reference pinned by
+   * digest answers that digest, a tag pulled from a registry answers its repository's
+   * `RepoDigests` entry, and only an image no registry ever named (a local build) answers its id —
+   * so a worker's health speaks the digest its core advertises under either image store, and
+   * {@link #resolveImages} finds every answer again. The reference is inspected first in every
+   * case: a pinned digest the daemon does not hold is a failed inspect, never an answer.
    */
   async configuredImageDigests(): Promise<RunImages> {
     const [run, egress] = await Promise.all([
       this.#engine.inspectImage(this.#images.runtime),
       this.#engine.inspectImage(this.#images.egress),
     ]);
-    return runImagesSchema.parse({ run: run.Id, egress: egress.Id });
+    return runImagesSchema.parse({
+      run: reportedImageDigest(this.#images.runtime, run),
+      egress: reportedImageDigest(this.#images.egress, egress),
+    });
+  }
+
+  /**
+   * Every digest the daemon knows the configured run and egress images by — each one's id and the
+   * digest half of each `RepoDigests` entry (S-22.14). What a worker reports as **held**: the core's
+   * offer names one of these whichever image store the worker's daemon uses.
+   */
+  async configuredImageNames(): Promise<readonly string[]> {
+    const inspected = await Promise.all([
+      this.#engine.inspectImage(this.#images.runtime),
+      this.#engine.inspectImage(this.#images.egress),
+    ]);
+    const names = new Set<string>();
+    for (const image of inspected) {
+      for (const digest of [image.Id, ...registryDigestsOf(image.RepoDigests)]) {
+        if (imageDigestSchema.safeParse(digest).success) names.add(digest);
+      }
+    }
+    return [...names];
   }
 
   /** The egress sidecar, or `null` when the spec allows no host at all. */
@@ -3116,4 +3151,53 @@ export const assertProjectEnv = (env: Readonly<Record<string, string>>): void =>
       });
     }
   }
+};
+
+/** The digest half of each `repo@sha256:<hex>` entry of `RepoDigests`, in order. */
+export const registryDigestsOf = (repoDigests: readonly string[] | null | undefined): string[] =>
+  (repoDigests ?? []).flatMap((entry) => {
+    const at = entry.lastIndexOf('@');
+    return at === -1 ? [] : [entry.slice(at + 1)];
+  });
+
+/** The repository of an image reference, its tag and digest dropped and Docker Hub's prefixes folded. */
+export const imageRepository = (reference: string): string => {
+  const at = reference.indexOf('@');
+  const named = at === -1 ? reference : reference.slice(0, at);
+  const slash = named.lastIndexOf('/');
+  const colon = named.lastIndexOf(':');
+  const repository = colon > slash ? named.slice(0, colon) : named;
+  return repository.replace(/^(?:docker\.io|index\.docker\.io)\//, '').replace(/^library\//, '');
+};
+
+/**
+ * The digest a configured image is reported by (S-22.14): the one its reference pins, else the
+ * `RepoDigests` entry of the reference's own repository, else the image id (a local build).
+ */
+export const reportedImageDigest = (reference: string, inspected: EngineImageInspect): string => {
+  const pinned = /@(sha256:[0-9a-f]{64})$/.exec(reference)?.[1];
+  if (pinned !== undefined) return pinned;
+  const repository = imageRepository(reference);
+  const own = (inspected.RepoDigests ?? []).find(
+    (entry) => entry.includes('@') && imageRepository(entry) === repository,
+  );
+  return own === undefined ? inspected.Id : own.slice(own.lastIndexOf('@') + 1);
+};
+
+/**
+ * The image id the daemon holds under `digest` — as an id (and, under the containerd store, the
+ * pulled manifest's digest), else as a registry digest in some image's `RepoDigests` (the classic
+ * store) — or `null` when it holds none. Never pulls.
+ */
+export const localImageId = async (
+  engine: Pick<DockerEngine, 'inspectImage' | 'listImages'>,
+  digest: string,
+): Promise<string | null> => {
+  try {
+    return (await engine.inspectImage(digest)).Id;
+  } catch (error) {
+    if (!(error instanceof WorkspaceError && error.code === 'not_found')) throw error;
+  }
+  const images = await engine.listImages();
+  return images.find((image) => registryDigestsOf(image.RepoDigests).includes(digest))?.Id ?? null;
 };

@@ -59,6 +59,7 @@ import {
 import {
   type DeployKeyCarriage,
   helperAgentSocketSchema,
+  imageDigestSchema,
   isoDateTimeSchema,
   nonEmptyStringSchema,
   type RunCredentialPayload,
@@ -485,6 +486,9 @@ export type ListRunsResponse = z.infer<typeof listRunsResponseSchema>;
 export const destroyRunResponseSchema = z.strictObject({ found: z.boolean() });
 export type DestroyRunResponse = z.infer<typeof destroyRunResponseSchema>;
 
+/** At most this many held digests in one health answer: two images, an id and a few registries each. */
+export const MAX_HELD_IMAGE_DIGESTS = 16;
+
 export const healthResponseSchema = z.strictObject({
   status: z.literal('ok'),
   controlRoot: nonEmptyStringSchema.max(4_096),
@@ -497,6 +501,13 @@ export const healthResponseSchema = z.strictObject({
    * `engine_unavailable`, which is retryable.
    */
   images: runImagesSchema.nullable(),
+  /**
+   * Every digest the daemon knows those two images by — each id and each registry digest of its
+   * `RepoDigests` (S-22.14, backlog 704/763) — what a worker reports as held, so an offer naming
+   * the core's registry digest matches under either image store. `[]` when `images` is `null`.
+   * Optional on the wire so a worker one release ahead of its launcher still reads its health.
+   */
+  heldImageDigests: z.array(imageDigestSchema).max(MAX_HELD_IMAGE_DIGESTS).optional(),
   /** Which deploy-key carriage this launcher applies (WP-279). */
   deployKeyCarriage: z.enum(['carried', 'relayed']),
   /** How many runs this process holds a create handle for. A gauge, never a record. */

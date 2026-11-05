@@ -46,6 +46,7 @@ import type { Logger } from '@platform/application';
 import { exactSecretRedactor } from '@platform/application';
 import {
   type CoreImageDigests,
+  MAX_REPORTED_IMAGE_DIGESTS,
   type WorkerManualPauseVia as ManualPauseVia,
   type RunPackage,
   shaSchema,
@@ -242,11 +243,13 @@ export const startRemoteWorker = async (
 
   /**
    * The digests this worker **holds** — only what its launcher resolves on the local daemon now
-   * (backlog 704): its health check answers the run and egress images it is configured with, by the
-   * daemon's id, or `null` when either is missing. Resolved, they are held under both names — the
-   * id and the registry digest of the pinned reference the launcher resolved, which is the one a
-   * core advertises. Unresolved, or with no launcher answer, nothing is held and no offer matches —
-   * so a worker whose images are still being pulled claims nothing it could not start.
+   * (backlog 704, 763): its health check answers the run and egress images it is configured with,
+   * by registry digest where the daemon has one, or `null` when either is missing, and every name
+   * the daemon knows them by (`heldImageDigests`: ids and `RepoDigests`, S-22.14) — so the core's
+   * advertised registry digest is held under the containerd store and the classic one alike.
+   * Resolved, the worker's own pinned references are held too (it is running from them).
+   * Unresolved, or with no launcher answer, nothing is held and no offer matches — so a worker whose
+   * images are still being pulled claims nothing it could not start.
    */
   const refreshHeldDigests = async (): Promise<void> => {
     try {
@@ -254,7 +257,14 @@ export const startRemoteWorker = async (
       heldDigests =
         health.images === null
           ? []
-          : [...new Set([...config.imageDigests, health.images.run, health.images.egress])];
+          : [
+              ...new Set([
+                ...config.imageDigests,
+                health.images.run,
+                health.images.egress,
+                ...(health.heldImageDigests ?? []),
+              ]),
+            ].slice(0, MAX_REPORTED_IMAGE_DIGESTS);
     } catch (error) {
       heldDigests = [];
       loggerPort.warn(

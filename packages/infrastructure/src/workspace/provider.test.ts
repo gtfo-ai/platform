@@ -20,6 +20,8 @@ import {
   DockerWorkspaceProvider,
   exportScript,
   HELPER_PASSWD,
+  imageRepository,
+  reportedImageDigest,
   SSH_HELPER_KNOWN_HOSTS_SETUP,
   SSH_HELPER_SETUP,
 } from './provider.js';
@@ -82,13 +84,21 @@ const startDaemon = async (
   {
     seedMirror = true,
     imageIds,
-  }: { readonly seedMirror?: boolean; readonly imageIds?: ReadonlyMap<string, string> } = {},
+    imageRepoDigests,
+    runtimeImage = 'platform-runtime:test',
+  }: {
+    readonly seedMirror?: boolean;
+    readonly imageIds?: ReadonlyMap<string, string>;
+    readonly imageRepoDigests?: ReadonlyMap<string, readonly string[]>;
+    readonly runtimeImage?: string;
+  } = {},
 ): Promise<void> => {
   archives = new Map();
   daemon = new FakeDockerDaemon({
     archives,
     ...(script === undefined ? {} : { script }),
     ...(imageIds === undefined ? {} : { imageIds }),
+    ...(imageRepoDigests === undefined ? {} : { imageRepoDigests }),
   });
   const socketPath = await daemon.start();
   // The fixture project's mirror, as an earlier `updateMirror` left it on the shared volume: the run
@@ -103,7 +113,7 @@ const startDaemon = async (
   provider = new DockerWorkspaceProvider({
     engine: new DockerEngine({ socketPath }),
     images: {
-      runtime: 'platform-runtime:test',
+      runtime: runtimeImage,
       egress: 'tinyproxy:test',
       git: 'git:test',
       runtimeSourceDir: null,
@@ -233,6 +243,105 @@ describe('images by digest (WP-279)', () => {
     }
     expect(daemon.history).toEqual([]);
     expect(daemon.requests.some((request) => request.path.includes('/images/create'))).toBe(false);
+  });
+});
+
+/**
+ * S-22.14 (backlog 704, 763): a worker pulls `…@sha256:<registry digest>`, and under the classic
+ * image store that digest is not the image id — the daemon answers 404 for it bare and names it only
+ * in `RepoDigests` (measured on Docker 29.8.2, `overlay2`; the double models exactly that). Create,
+ * health and the held list must all find and speak it.
+ */
+describe('registry digests under the classic image store (S-22.14)', () => {
+  const RUN_REGISTRY = `sha256:${'a'.repeat(64)}`;
+  const EGRESS_REGISTRY = `sha256:${'b'.repeat(64)}`;
+  const RUN_ID = `sha256:${'c'.repeat(64)}`;
+  const EGRESS_ID = `sha256:${'d'.repeat(64)}`;
+  const PINNED_RUNTIME = `ghcr.io/acme/platform-runtime@${RUN_REGISTRY}`;
+
+  beforeEach(async () => {
+    await daemon.stop();
+    await startDaemon(undefined, {
+      runtimeImage: PINNED_RUNTIME,
+      imageIds: new Map([
+        [PINNED_RUNTIME, RUN_ID],
+        ['tinyproxy:test', EGRESS_ID],
+      ]),
+      imageRepoDigests: new Map([
+        [RUN_ID, [`ghcr.io/acme/platform-runtime@${RUN_REGISTRY}`]],
+        // Another repository's digest first, so "the reference's own repository" is what picks.
+        [
+          EGRESS_ID,
+          [`mirror.example.test/tinyproxy@${RUN_REGISTRY}`, `tinyproxy@${EGRESS_REGISTRY}`],
+        ],
+      ]),
+    });
+  });
+
+  it('health answers the pinned digest and the tag’s own repository digest, never the id', async () => {
+    expect(await provider.configuredImageDigests()).toEqual({
+      run: RUN_REGISTRY,
+      egress: EGRESS_REGISTRY,
+    });
+  });
+
+  it('the held list names every id and registry digest of both images', async () => {
+    expect([...(await provider.configuredImageNames())].sort()).toEqual(
+      [RUN_ID, RUN_REGISTRY, EGRESS_ID, EGRESS_REGISTRY].sort(),
+    );
+  });
+
+  it('a create told the registry digests starts the images they name, by id', async () => {
+    const images = { run: RUN_REGISTRY, egress: EGRESS_REGISTRY };
+    // The double answers the bare registry digest 404, as the classic store does.
+    await expect(
+      new DockerEngine({ socketPath: daemon.socketPath }).inspectImage(RUN_REGISTRY),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    const handle = await provider.create(...provisioned(workspaceSpecFixture(), undefined, images));
+    expect(daemon.containers.get(handle.containerId)?.body.Image).toBe(RUN_ID);
+    expect(daemon.containers.get(handle.sidecarContainerId as string)?.body.Image).toBe(EGRESS_ID);
+    expect(daemon.requests.some((request) => request.path === '/images/json')).toBe(true);
+    expect(daemon.requests.some((request) => request.path.includes('/images/create'))).toBe(false);
+  });
+
+  it('a create told the ids still starts them, and asks for no image list', async () => {
+    await provider.configuredImageDigests(); // the double holds an id once a tag was inspected
+    const handle = await provider.create(
+      ...provisioned(workspaceSpecFixture(), undefined, { run: RUN_ID, egress: EGRESS_ID }),
+    );
+    expect(daemon.containers.get(handle.containerId)?.body.Image).toBe(RUN_ID);
+    expect(daemon.requests.some((request) => request.path === '/images/json')).toBe(false);
+  });
+
+  it('a digest held by no image is refused image_not_local, naming it', async () => {
+    const absent = `sha256:${'e'.repeat(64)}`;
+    const refused = await provider
+      .create(...provisioned(workspaceSpecFixture(), undefined, { run: absent, egress: EGRESS_ID }))
+      .catch((error: unknown) => error as { code: string; reason: string; message: string });
+    expect(refused).toMatchObject({ code: 'invalid_spec', reason: 'image_not_local' });
+    expect((refused as { message: string }).message).toContain(absent);
+  });
+});
+
+describe('reportedImageDigest and imageRepository (S-22.14)', () => {
+  const D = `sha256:${'1'.repeat(64)}`;
+  const ID = `sha256:${'2'.repeat(64)}`;
+  it('folds Docker Hub prefixes and drops tag and digest, keeping a registry port', () => {
+    expect(imageRepository('busybox:1.37.0')).toBe('busybox');
+    expect(imageRepository('docker.io/library/busybox@sha256:x')).toBe('busybox');
+    expect(imageRepository('registry.example.test:5000/acme/runtime:sha-abc1234')).toBe(
+      'registry.example.test:5000/acme/runtime',
+    );
+    expect(imageRepository('ghcr.io/acme/runtime:tag@sha256:x')).toBe('ghcr.io/acme/runtime');
+  });
+  it('answers a local build by its id, and a tag pulled from a registry by its digest', () => {
+    expect(reportedImageDigest('platform-runtime:dev', { Id: ID, RepoDigests: [] })).toBe(ID);
+    expect(
+      reportedImageDigest('ghcr.io/acme/runtime:edge', {
+        Id: ID,
+        RepoDigests: [`ghcr.io/acme/other@${ID}`, `ghcr.io/acme/runtime@${D}`],
+      }),
+    ).toBe(D);
   });
 });
 
