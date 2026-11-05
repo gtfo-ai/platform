@@ -26,7 +26,7 @@
  * environment reaches the bundle.
  *
  * **The font's licence and its preload** (S-23.13a, BACKLOG 801 and 803): `interFontPlugin`
- * (`scripts/inter-font.mjs`) writes Inter's OFL-1.1 text to `dist/inter-OFL.txt` and a
+ * (`build/inter-font.mjs`) writes Inter's OFL-1.1 text to `dist/inter-OFL.txt` and a
  * `<link rel="preload" as="font" crossorigin>` for the hashed woff2 into `index.html`. The
  * licence is read here, from the package itself, so the text shipped is the text of the version
  * installed.
@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
-import { INTER_PACKAGE, interFontPlugin } from '../../scripts/inter-font.mjs';
+import { INTER_PACKAGE, interFontPlugin } from './build/inter-font.mjs';
 import { BUILD_COMMIT_GLOBAL, bundleCommitFrom } from './src/app/build-commit.js';
 
 const apiTarget = process.env.APP_DEV_API_URL ?? 'http://127.0.0.1:8080';

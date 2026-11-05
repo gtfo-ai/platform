@@ -3,8 +3,9 @@
  * runs as `node scripts/notices.mjs` with no TypeScript resolver loaded.
  *
  * The plugin's shape is declared structurally rather than imported from `vite`: `vite` is
- * `apps/web`'s dependency, not the root's, and `scripts/` is type-checked from the root. Vite
- * checks the object it is handed where `apps/web/vite.config.ts` hands it over.
+ * `apps/web`'s dependency, not the root's, and `scripts/inter-font.test.ts` and
+ * `scripts/notices.mjs` are type-checked from the root. Vite checks the object it is handed where
+ * `apps/web/vite.config.ts` hands it over.
  */
 export interface InterPreloadTag {
   readonly tag: 'link';

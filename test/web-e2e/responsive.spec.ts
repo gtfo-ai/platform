@@ -72,10 +72,48 @@ async function visible(locator: ReturnType<Page['locator']>): Promise<void> {
 }
 
 /** How far the page itself scrolls sideways: 0 when nothing is wider than the viewport. */
-const pageOverflow = async (page: Page): Promise<number> =>
-  await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-  );
+/**
+ * Nothing when the page does not scroll sideways; otherwise the overflow and the innermost elements
+ * past the viewport's right edge — so a failure on a host whose fonts measure differently (CI's
+ * Linux against a developer's macOS) names what to fix rather than a number of pixels. An
+ * absolutely positioned element is reported even inside a scroller, because its containing block
+ * may be outside it (the board's `sr-only` counts were).
+ */
+const overflowReport = async (page: Page): Promise<string[]> =>
+  await page.evaluate(() => {
+    const root = document.documentElement;
+    const overflow = root.scrollWidth - root.clientWidth;
+    if (overflow <= 0) {
+      return [];
+    }
+    const edge = root.clientWidth + 0.5;
+    const past = (element: Element): boolean => element.getBoundingClientRect().right > edge;
+    const clipped = (element: Element): boolean => {
+      if (['absolute', 'fixed'].includes(getComputedStyle(element).position)) {
+        return false;
+      }
+      for (let up = element.parentElement; up !== null; up = up.parentElement) {
+        if (getComputedStyle(up).overflowX !== 'visible' && !past(up)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    const offenders = [...document.querySelectorAll('body *')].filter(
+      (element) => past(element) && !clipped(element),
+    );
+    const innermost = offenders.filter(
+      (element) => !offenders.some((other) => other !== element && element.contains(other)),
+    );
+    return [
+      `${overflow} px`,
+      ...innermost.slice(0, 6).map((element) => {
+        const box = element.getBoundingClientRect();
+        const text = (element.textContent ?? '').trim().slice(0, 40);
+        return `<${element.tagName.toLowerCase()} class="${String(element.getAttribute('class') ?? '').slice(0, 80)}"> right ${box.right.toFixed(1)}, ${getComputedStyle(element).position}: ${text}`;
+      }),
+    ];
+  });
 
 const axe = async (page: Page): Promise<string[]> => {
   const results = await new AxeBuilder({ page })
@@ -101,9 +139,9 @@ for (const size of [LAPTOP, PHONE]) {
     for (const screen of SCREENS) {
       await page.goto(screen.path);
       await screen.ready(page);
-      const overflow = await pageOverflow(page);
-      if (overflow > 0) {
-        wide.push(`${screen.path}: ${overflow} px`);
+      const report = await overflowReport(page);
+      if (report.length > 0) {
+        wide.push(`${screen.path}: ${report.join(' | ')}`);
       }
     }
     expect(wide).toEqual([]);
@@ -119,7 +157,7 @@ test('the board’s columns scroll inside their own box on a phone, not the page
   const columns = page.locator('[data-board-columns]');
   // Calibration: the columns *are* wider than the phone — the page stays put only because they scroll.
   expect(await columns.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
-  expect(await pageOverflow(page)).toBe(0);
+  expect(await overflowReport(page)).toEqual([]);
 });
 
 test.describe('on a 390 px phone', () => {
@@ -146,7 +184,7 @@ test.describe('on a 390 px phone', () => {
     expect(await running.evaluate((element) => element.getBoundingClientRect().width)).toBeLessThan(
       48,
     );
-    expect(await pageOverflow(page)).toBe(0);
+    expect(await overflowReport(page)).toEqual([]);
     expect(await axe(page)).toEqual([]);
   });
 
@@ -166,7 +204,7 @@ test.describe('on a 390 px phone', () => {
       expect(actionsBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height - 1);
       expect(titleBox.width).toBeGreaterThan(PHONE.width / 2);
     }
-    expect(await pageOverflow(page)).toBe(0);
+    expect(await overflowReport(page)).toEqual([]);
     expect(await axe(page)).toEqual([]);
   });
 
@@ -186,7 +224,7 @@ test.describe('on a 390 px phone', () => {
     // The back link's ticket key never breaks across lines.
     const key = page.getByRole('link', { name: /^DEMO-1/ }).first();
     expect((await key.boundingBox())?.height ?? 99).toBeLessThan(28);
-    expect(await pageOverflow(page)).toBe(0);
+    expect(await overflowReport(page)).toEqual([]);
     expect(await axe(page)).toEqual([]);
   });
 
@@ -195,7 +233,7 @@ test.describe('on a 390 px phone', () => {
     await expect(page.getByText('The map needs a wider screen; here is the list.')).toBeVisible();
     await expect(page.getByRole('list', { name: 'Runs' })).toBeVisible();
     await expect(page.getByTestId('fleet-canvas-frame')).toHaveCount(0);
-    expect(await pageOverflow(page)).toBe(0);
+    expect(await overflowReport(page)).toEqual([]);
     expect(await axe(page)).toEqual([]);
   });
 });

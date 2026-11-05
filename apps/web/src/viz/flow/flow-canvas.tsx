@@ -14,9 +14,10 @@
  * Positions come from `layout.ts`, never from React Flow: each node is handed its size, so the
  * first paint is already laid out. A task's first view frames the current stage with two cards
  * either side (`focusOf`) at zoom ≥ 0.75; a template's frames the start of its row at zoom ≥ 0.5
- * (`firstViewOf`), and the reader pans along it; the *Fit all* control shows every stage. Every return curve is a custom edge (`FlowEdgePath`) that
- * dips below the row and carries its loop pill (on a task, only once spent, or while pointed at or
- * beside a focused card — `pillShown`); a spacer node at the deepest curve's bottom keeps a fit of
+ * (`firstViewOf`), and the reader pans along it; the *Fit all* control shows every stage. Every
+ * return curve is a custom edge (`FlowEdgePath`) that dips below the row and carries its loop pill
+ * (on a task, only once spent, or while pointed at or beside a focused card — `pillShown`); a
+ * spacer node at the deepest curve's bottom keeps a fit of
  * the whole graph from cutting the curves off (React Flow fits nodes, not edges).
  *
  * Under the production CSP: React Flow positions through React's `style` prop (CSSOM), which

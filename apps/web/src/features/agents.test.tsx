@@ -236,11 +236,13 @@ const deskOf = async (name: RegExp) => {
 };
 
 /**
- * The race this file's first screen lost under parallel load (S-23.13a): the first test to open
- * the Agents page, the map or the office paid the on-demand transform of its lazy chunk inside a `findBy…`/`waitFor`'s 1 s bound —
- * measured alone at 600–740 ms for the first test against 40–90 ms for every later one — so a loaded
- * host pushed it past the bound. The chunks are imported once here, under the hook's own bound, so
- * each wait measures the screen rather than the transform; no wait in a test was widened.
+ * The race this file's first screen lost under parallel load (S-23.13a): the first test to open the
+ * Agents page, the map or the office paid the on-demand transform of its lazy chunk inside a
+ * `findBy…`/`waitFor`'s 1 s bound — measured alone at 600–740 ms for the first test against
+ * 40–90 ms for every later one — so a loaded host pushed it past the bound. The chunks are imported
+ * once here, under the hook's own bound, so each wait measures the screen rather than the
+ * transform; no wait in a test was widened. `stage-commands.test.tsx` and
+ * `app/platform-updated.test.tsx` do the same for the task page.
  */
 beforeAll(async () => {
   await Promise.all([

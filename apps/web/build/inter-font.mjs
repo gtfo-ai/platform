@@ -18,8 +18,11 @@
  *   a font preload even then (fonts are fetched in CORS mode, and a preload without it is a second
  *   request).
  *
- * Plain JavaScript, like every module in `scripts/` that `node scripts/*.mjs` runs: `notices.mjs`
- * imports it with no TypeScript resolver loaded. `apps/web/vite.config.ts` builds the plugin.
+ * **It lives in `apps/web/`**, beside the config that loads it, because the image's `web` stage
+ * (`docker/app.Dockerfile`) copies `apps/web` and `packages/contracts` and nothing else — a config
+ * importing from `scripts/` does not load there (review of PR #31). Plain JavaScript because
+ * `scripts/notices.mjs` imports its file name and runs as `node scripts/notices.mjs` with no
+ * TypeScript resolver loaded; `apps/web/vite.config.ts` builds the plugin.
  */
 
 /** The npm package the font comes from. */

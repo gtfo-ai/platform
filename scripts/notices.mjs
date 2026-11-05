@@ -76,7 +76,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { INTER_LICENCE_ASSET, INTER_PACKAGE } from './inter-font.mjs';
+import { INTER_LICENCE_ASSET, INTER_PACKAGE } from '../apps/web/build/inter-font.mjs';
 import { isProgram } from './is-program.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -229,7 +229,7 @@ const NON_SPDX_DECLARATIONS = {
  *
  * Inter is OFL-1.1, whose condition 2 makes the copyright notice and licence travel with every copy
  * of the font; the web bundle carries the font, so `apps/web`'s build writes the package's own
- * `LICENSE` beside it (`scripts/inter-font.mjs`, which owns the file name).
+ * `LICENSE` beside it (`apps/web/build/inter-font.mjs`, which owns the file name).
  */
 export const LICENCE_TEXTS_SHIPPED = {
   [INTER_PACKAGE]: `text shipped as \`${INTER_LICENCE_ASSET}\` at the root of the web bundle`,

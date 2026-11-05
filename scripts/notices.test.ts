@@ -6,7 +6,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 // The on-disk specifier, because this module is a `.mjs` the CLI also runs directly.
-import { INTER_LICENCE_ASSET, INTER_PACKAGE } from './inter-font.mjs';
+import { INTER_LICENCE_ASSET, INTER_PACKAGE } from '../apps/web/build/inter-font.mjs';
 import {
   assertPinnedArtefactsAgree,
   LICENCE_TEXTS_SHIPPED,
