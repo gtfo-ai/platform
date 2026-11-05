@@ -33,6 +33,7 @@ import type {
   TaskStageState,
   TaskState,
   UserRole,
+  WorkerClaimBlocker,
   WorkerSummary,
 } from '@platform/contracts';
 
@@ -349,6 +350,68 @@ export type WorkerPauseReason = NonNullable<WorkerSummary['paused_reason']>;
 
 export const WORKER_PAUSE_REASON_LABEL: Readonly<Record<WorkerPauseReason, string>> = {
   usage_limited: 'Hit a usage limit',
+};
+
+/** A claim blocker in a person's words: a short `word` for a row, and the `fix` beside it. */
+export interface ClaimBlockerWords {
+  readonly word: string;
+  readonly fix: string;
+}
+
+/**
+ * **Why a worker takes no work**, in one set of words for the Workers screen, a project's execution
+ * panel and the worker's own local page (TD-031's 2026-11-05 blocker-vocabulary amendment, S-22.19).
+ * Each sentence names *the worker* or *it*, so it reads the same on the platform and on the machine.
+ */
+export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, ClaimBlockerWords>> = {
+  not_set_up: {
+    word: 'Not set up yet',
+    fix: 'Finish the steps on the worker’s page: choose this platform, sign in to Claude and approve the machine.',
+  },
+  revoked: {
+    word: 'Removed from the platform',
+    fix: 'To use this computer again, approve it again from the worker’s page.',
+  },
+  offline: {
+    word: 'Not connected to the platform',
+    fix: 'Start the worker on that computer (“docker compose up -d” in its folder) and check that it reaches the platform.',
+  },
+  protocol_outdated: {
+    word: 'Needs an update',
+    fix: 'It speaks an older version than this platform accepts. Its updater fixes this within 5 minutes; to do it now, download the compose file again and run “docker compose up -d”.',
+  },
+  claude_rejected: {
+    word: 'Claude refused its sign-in',
+    fix: 'Sign in to Claude again on the worker’s page.',
+  },
+  paused: {
+    word: 'Paused by its owner',
+    fix: 'Resume it on the worker’s page.',
+  },
+  draining: {
+    word: 'Draining: finishing its runs, taking nothing new',
+    fix: 'Resume it on the worker’s page, or restart the worker.',
+  },
+  usage_limited: {
+    word: 'Paused: Claude usage limit',
+    fix: 'It resumes by itself when the limit resets.',
+  },
+  launcher_unreachable: {
+    word: 'Its launcher isn’t answering',
+    fix: 'The worker checks again before each claim. On that computer, “docker compose ps” must show the launcher running; “docker compose up -d” starts it.',
+  },
+  images_missing: {
+    word: 'It has no run images',
+    fix: 'Its launcher isn’t answering, or the images are still downloading. On that computer, run “docker compose up -d” and let the download finish.',
+  },
+  images_outdated: {
+    word: 'It has an older build than this platform',
+    fix: 'Its updater fixes this within 5 minutes. To do it now, download the compose file again and run “docker compose up -d”.',
+  },
+  no_eligible_project: {
+    word: 'No project gives it work',
+    fix: 'An administrator lets workers run a project’s stages in the project’s settings, under Execution; the worker’s page chooses which of those it takes by itself.',
+  },
 };
 
 // ── Settings, knowledge, budgets and the audit log (S-23.11b) ────────────────

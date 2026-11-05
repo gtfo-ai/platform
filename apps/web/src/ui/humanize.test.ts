@@ -18,6 +18,7 @@ import {
   runTerminalReasonSchema,
   taskStageStateSchema,
   taskStateSchema,
+  WORKER_CLAIM_BLOCKERS,
   workerPauseReasonSchema,
 } from '@platform/contracts';
 import { ITERATION_LOOPS, READINESS_CRITERION_IDS, SHIPPED_STAGE_IDS } from '@platform/domain';
@@ -47,6 +48,7 @@ import {
   TASK_STATE_LABEL,
   TERMINAL_REASON_LABEL,
   titleCase,
+  WORKER_CLAIM_BLOCKER_WORDS,
   WORKER_PAUSE_REASON_LABEL,
 } from './humanize.js';
 
@@ -86,6 +88,20 @@ describe('humanize', () => {
       expect(new Set(Object.values(labels)).size).toBe(values.length);
     },
   );
+
+  it('words every claim blocker in a sentence and a fix, both sides alike (S-22.19)', () => {
+    expect(Object.keys(WORKER_CLAIM_BLOCKER_WORDS)).toEqual([...WORKER_CLAIM_BLOCKERS]);
+    for (const blocker of WORKER_CLAIM_BLOCKERS) {
+      const { word, fix } = WORKER_CLAIM_BLOCKER_WORDS[blocker];
+      expect(word, blocker).toMatch(/^[A-Z]/);
+      expect(word, blocker).not.toMatch(/_/);
+      expect(fix, blocker).toMatch(/^[A-Z].*\.$/);
+      // The same words on the platform and on the machine: never "this worker" or "your".
+      expect(`${word} ${fix}`, blocker).not.toMatch(/\b(this worker|your)\b/i);
+    }
+    const words = Object.values(WORKER_CLAIM_BLOCKER_WORDS).map((entry) => entry.word);
+    expect(new Set(words).size).toBe(WORKER_CLAIM_BLOCKERS.length);
+  });
 
   it('names every stage the shipped templates declare, not only the ticket flow’s', () => {
     for (const id of [...BUILTIN_STAGE_IDS, ...SHIPPED_STAGE_IDS]) {
