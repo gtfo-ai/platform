@@ -600,10 +600,17 @@ export const workerClaimRequestSchema = z.strictObject({
   paused: z.boolean(),
 });
 
-/** `POST pause` → `{ until, reason }` (TD-031 §11). Answers `204`. */
+/**
+ * `POST pause` → `{ until, reason, estimated? }` (TD-031 §11, WP-285): the worker hit its usage limit
+ * and claims nothing before `until`. `estimated: true` when the limit named no reset time and `until`
+ * is the worker's `APP_WORKER_USAGE_PAUSE_DEFAULT` — the UI then says *until about*. Absent is
+ * `false`. Answers `204`; a repeat stores the same pause. A person's *Pause* is a different column
+ * (`manual-pause`) and is never touched by this verb or by the pause running out.
+ */
 export const workerPauseRequestSchema = z.strictObject({
   until: isoDateTimeSchema,
   reason: workerPauseReasonSchema,
+  estimated: z.boolean().optional(),
 });
 
 /**

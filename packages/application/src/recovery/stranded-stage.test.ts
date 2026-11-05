@@ -305,11 +305,12 @@ describe('the stranded-stage row (WP-108, PROGRESS backlog 320)', () => {
 
   it.each([
     [
-      { status: 'cancelled', terminalReason: 'cancelled' },
+      { status: 'cancelled', terminalReason: 'cancelled', replanOwed: false },
       'a person cancelled the run of this attempt',
     ],
     [
-      { status: 'failed', terminalReason: 'lease_expired' },
+      // The entry's **second** loss: its first re-planned it, so this one owes nothing.
+      { status: 'failed', terminalReason: 'lease_expired', replanOwed: false },
       'the run of this attempt ended “failed”',
     ],
   ] as const)(
@@ -608,6 +609,35 @@ describe('stage.execute refuses an attempt whose stage row is closed (WP-108 rev
     await fire(harness, taskId);
     expect(harness.specs.map((spec) => spec.stage)).toEqual(['discovery']);
   });
+
+  /**
+   * WP-285/WP-286: the entry's first lost or usage-limited run owes it a re-plan, which the ending's
+   * own process enqueues after its commit. A process that died in between leaves an ended run, the
+   * counter at 1 and no successor — re-planned once here, marked first, never escalated.
+   */
+  it.each([
+    { status: 'failed', terminalReason: 'lease_expired', replanOwed: true },
+    { status: 'failed', terminalReason: 'rate_limited', replanOwed: true },
+  ] as const)(
+    're-plans an entry whose owed re-plan was never enqueued (%o), once',
+    async (endedRun) => {
+      const { harness } = setup();
+      const taskId = await lostDiscovery(harness);
+      const { store, calls } = harnessStore(harness, { endedRun });
+      harness.clock.advance(GRACE_MS + 1);
+      const asked = harness.jobs.history.length;
+      expect(siteOf(await pass(harness, store))).toEqual({
+        site: 'stranded_stage',
+        found: 1,
+        reEnqueued: 1,
+        ended: 0,
+      });
+      expect(calls).toEqual([`mark:${taskId}`]);
+      expect(stageJobsSince(harness, asked)).toHaveLength(1);
+      expect((await loaded(harness, taskId)).task.state).toBe('active');
+      expect(harness.events().filter((event) => event.type === 'task.escalated')).toHaveLength(0);
+    },
+  );
 
   it('starts no second run for a late wake-up once the attempt’s row is closed', async () => {
     const { harness } = setup();

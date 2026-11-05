@@ -90,6 +90,11 @@ export interface OfferRunInput {
    * theirs is online.
    */
   readonly assigneeUserId: Id | null;
+  /**
+   * The workers the offer is not for — a re-planned stage entry's carried exclusions (WP-285,
+   * WP-286, TD-031 §12; `RunOfferRepository.carriedExclusions`). Absent is none.
+   */
+  readonly excludedWorkerIds?: readonly Id[];
 }
 
 /**
@@ -144,6 +149,9 @@ export const offerRun = async (
     kind: input.kind,
     offeredAt: input.now,
     routing,
+    ...(input.excludedWorkerIds === undefined || input.excludedWorkerIds.length === 0
+      ? {}
+      : { excludedWorkerIds: input.excludedWorkerIds }),
   });
   await scope.broadcast.publish({
     topic: RUN_OFFERS_TOPIC,

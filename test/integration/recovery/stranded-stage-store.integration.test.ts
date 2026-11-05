@@ -199,6 +199,8 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
     expect(found.find((entry) => entry.taskId === ranAndFailed)?.endedRun).toEqual({
       status: 'failed',
       terminalReason: 'lease_expired',
+      // Its entry counted no loss (a row from before WP-286), so no re-plan is owed.
+      replanOwed: false,
     });
     expect(found.find((entry) => entry.taskId === stranded)?.endedRun).toBeNull();
     expect(await foundIds(query({ olderThan: minutesAgo(-1) }))).toContain(justCancelled);
@@ -211,6 +213,42 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
     });
     // The database's own microsecond rendering, so the entry can be named back exactly.
     expect(row.enteredAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
+  });
+
+  /**
+   * WP-285/WP-286: an entry whose first lost or usage-limited run ended — its counter at 1 — owes a
+   * re-plan; the second does not, and neither does an entry whose counter is 0. The mark is written
+   * for the owed one only.
+   */
+  it('reads a re-plan as owed for an entry’s first lost or usage-limited ending, and marks only it', async () => {
+    const lost = await seedTask({});
+    await seedRun(lost, 'failed', { reason: 'lease_expired', minutesAgo: 3 });
+    await client.query('update task_stages set lost_runs = 1 where task_id = $1', [lost]);
+    const limited = await seedTask({});
+    await seedRun(limited, 'failed', { reason: 'rate_limited', minutesAgo: 3 });
+    await client.query('update task_stages set usage_limited_runs = 1 where task_id = $1', [
+      limited,
+    ]);
+    const lostTwice = await seedTask({});
+    await seedRun(lostTwice, 'failed', { reason: 'lease_expired', minutesAgo: 3 });
+    await client.query('update task_stages set lost_runs = 2 where task_id = $1', [lostTwice]);
+    // A counter for the *other* ending owes nothing.
+    const crossed = await seedTask({});
+    await seedRun(crossed, 'failed', { reason: 'rate_limited', minutesAgo: 3 });
+    await client.query('update task_stages set lost_runs = 1 where task_id = $1', [crossed]);
+
+    const found = await store.strandedStages(tx, query());
+    const owed = (taskId: Id) => found.find((row) => row.taskId === taskId)?.endedRun?.replanOwed;
+    expect(owed(lost)).toBe(true);
+    expect(owed(limited)).toBe(true);
+    expect(owed(lostTwice)).toBe(false);
+    expect(owed(crossed)).toBe(false);
+    const rowOf = (taskId: Id) => found.find((row) => row.taskId === taskId) as StrandedStage;
+    const at = new Date().toISOString() as IsoDateTime;
+    expect(await store.markStageAttempt(tx, { row: rowOf(lost), at })).toBe(true);
+    expect(await store.markStageAttempt(tx, { row: rowOf(lostTwice), at })).toBe(false);
+    // Marked once: the next read has the mark, and a second mark writes nothing.
+    expect(await store.markStageAttempt(tx, { row: rowOf(lost), at })).toBe(false);
   });
 
   it('finds a task again once pg-boss has given up on its stage job (backlog 325)', async () => {
@@ -411,7 +449,11 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
       );
     }
     const [row] = (await store.strandedStages(tx, query())).filter((r) => r.taskId === task);
-    expect(row?.endedRun).toEqual({ status: 'failed', terminalReason: 'error_during_execution' });
+    expect(row?.endedRun).toEqual({
+      status: 'failed',
+      terminalReason: 'error_during_execution',
+      replanOwed: false,
+    });
   });
 
   it('finds a retrospective whose run a person cancelled, with the ending, and never marks it (WP-108 review round 1)', async () => {
@@ -419,7 +461,11 @@ describe('the stranded-stage store (WP-108, backlog 320)', () => {
     const task = await seedTask({ state: 'retro', stage: 'retrospective' });
     await seedRun(task, 'cancelled', { reason: 'cancelled', minutesAgo: 5 });
     const [row] = (await store.strandedStages(tx, query())).filter((r) => r.taskId === task);
-    expect(row?.endedRun).toEqual({ status: 'cancelled', terminalReason: 'cancelled' });
+    expect(row?.endedRun).toEqual({
+      status: 'cancelled',
+      terminalReason: 'cancelled',
+      replanOwed: false,
+    });
     expect(await store.markStageAttempt(tx, { row: row as StrandedStage, at: minutesAgo(0) })).toBe(
       false,
     );

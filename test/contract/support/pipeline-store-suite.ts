@@ -3848,6 +3848,57 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           expect(claim).toMatchObject({ runId: next, epoch: 1 });
         });
 
+        /**
+         * WP-285/WP-286 (TD-031 §12): a re-planned entry's offer carries its previous offer's
+         * exclusions — each once, in order — and an entry with no offer carries none. (The lost
+         * worker itself, the previous offer's `worker_id`, needs a `workers` row: that half is
+         * `test/integration/pipeline/remote-claim.integration.test.ts`'s.)
+         */
+        it('carries the stage entry’s previous offer’s exclusions, each once and in order (WP-286)', async () => {
+          const first = await liveRun();
+          const run = await store.runs.load(tx, first);
+          const taskId = run?.taskId as Id;
+          const entry = { taskId, stage: 'refinement' as Slug, attempt: 1 };
+          expect(await store.offers.carriedExclusions(tx, entry)).toEqual([]);
+          const [a, b] = [nextId(), nextId()];
+          await store.offers.insert(tx, {
+            id: nextId(),
+            runId: first,
+            taskId,
+            projectId,
+            stage: 'refinement' as Slug,
+            attempt: 1,
+            kind: 'stage',
+            offeredAt: '2026-06-01T09:00:01.000Z' as IsoDateTime,
+            routing: unroutedOfferForTest('2026-06-01T09:00:01.000Z' as IsoDateTime),
+            excludedWorkerIds: [a, b, a] as Id[],
+          });
+          await store.runs.finish(tx, {
+            ...ENDED,
+            runId: first,
+            status: 'failed',
+            terminalReason: 'lease_expired',
+          });
+          expect(await store.offers.carriedExclusions(tx, entry)).toEqual([a, b]);
+          // Another attempt of the stage is another entry.
+          expect(await store.offers.carriedExclusions(tx, { ...entry, attempt: 2 })).toEqual([]);
+        });
+
+        it('counts an entry’s lost and usage-limited endings apart, one statement each (WP-285/286)', async () => {
+          const first = await liveRun();
+          const run = await store.runs.load(tx, first);
+          const entry = { taskId: run?.taskId as Id, stage: 'refinement' as Slug, attempt: 1 };
+          expect(await store.tasks.countStageRunEnding(tx, { ...entry, kind: 'lost' })).toBe(1);
+          expect(await store.tasks.countStageRunEnding(tx, { ...entry, kind: 'lost' })).toBe(2);
+          expect(
+            await store.tasks.countStageRunEnding(tx, { ...entry, kind: 'usage_limited' }),
+          ).toBe(1);
+          // An entry the task never recorded entering has no row to count on.
+          expect(
+            await store.tasks.countStageRunEnding(tx, { ...entry, attempt: 9, kind: 'lost' }),
+          ).toBeNull();
+        });
+
         const offerOpen = async (
           runId: Id,
           input: { readonly kind?: 'stage' | 'ask'; readonly offeredAt?: string } = {},

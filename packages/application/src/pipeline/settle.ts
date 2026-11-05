@@ -165,6 +165,13 @@ export const MAX_RUN_START_ATTEMPTS = 3;
  */
 export const MAX_SHUTDOWN_HAND_BACKS = 2;
 
+/**
+ * How many times one stage entry is planned again after a usage limit ended its run (WP-285,
+ * TD-031 decision 11): **once** — counted on the entry's row (`task_stages.usage_limited_runs`) — so
+ * the second limit escalates.
+ */
+export const MAX_USAGE_LIMITED_REPLANS = 1;
+
 /** The name WP-12 puts on `run_stopped.data.reason` when the CLI reported no usable cost. */
 export const COST_UNREPORTED = 'cost_unreported';
 
@@ -769,6 +776,9 @@ const recordUnsuccessful = async (
   if (outcome.terminalReason === 'shutdown') {
     return recordHandBack(scope, input, stored, context);
   }
+  if (outcome.terminalReason === 'rate_limited') {
+    return recordUsageLimited(scope, input, stored, context);
+  }
 
   const costUnreported = input.stopReason === COST_UNREPORTED;
   const overspent = outcome.status === 'budget_exceeded' && !costUnreported;
@@ -983,6 +993,90 @@ const recordHandBack = async (
     runId: run.id,
     handBacks,
     reason: `the runner was stopped while the run was in flight; hand-back ${String(handBacks)} of ${String(MAX_SHUTDOWN_HAND_BACKS)}`,
+  };
+};
+
+/**
+ * **A run a usage limit ended** (WP-285, TD-031 decision 11, BD-032 decision 7): not the task's
+ * failure. The run ends `failed` / `rate_limited` with what it measured (its spend is charged as any
+ * run's), its offer is closed by `finish` in this transaction, and the stage entry's
+ * `usage_limited_runs` is counted in the same one: the **first** such ending re-plans the entry —
+ * the task untouched, its stage row open, `stage.execute` enqueued after the commit
+ * (`enqueueFollowOn`), the new offer carrying the limited worker in its exclusions
+ * (`RunOfferRepository.carriedExclusions`) — and the **second** escalates with the brief *usage
+ * limits ended this stage twice*. A task a person moved meanwhile is recorded onto and never re-run.
+ *
+ * **Unfinished work is not saved** for this ending (`SAVED_UNFINISHED_WORK_REASONS`): whether it
+ * should be is open (BACKLOG 694) and not decided here.
+ */
+const recordUsageLimited = async (
+  scope: TransactionScope,
+  input: RecordInput,
+  stored: StoredTask,
+  context: CommandContext,
+): Promise<StageExecutionOutcome> => {
+  const { options, outcome, run, job } = input;
+  const { store } = options;
+  if (revalidate(stored, job).kind === 'skipped') {
+    return recordOntoStoppedTask(scope, input, stored, context);
+  }
+  const failed = failRun(
+    run,
+    {
+      status: 'failed',
+      terminalReason: 'rate_limited',
+      error: outcome.error ?? 'rate_limited',
+      ...failedSpendOf(outcome),
+      ...endingDetailOf(outcome),
+    },
+    context,
+  );
+  const owned = await store.runs.finish(scope.tx, {
+    runId: run.id,
+    status: 'failed',
+    terminalReason: 'rate_limited',
+    sessionId: outcome.sessionId,
+    numTurns: outcome.numTurns,
+    usage: outcome.usage,
+    cost: rowCostOf(outcome),
+    wallMs: outcome.wallMs,
+    costIsFloor: costIsFloorOf(input),
+    ...endingDetailOf(outcome),
+    lease: input.fence,
+  });
+  if (!owned) {
+    return lostTheRun({ ...input, scope });
+  }
+  await store.tasks.addSpend(scope.tx, job.taskId, spendOf(outcome));
+  const limited = await store.tasks.countStageRunEnding(scope.tx, {
+    taskId: job.taskId,
+    stage: job.stage,
+    attempt: job.attempt,
+    kind: 'usage_limited',
+  });
+  if (limited === null || limited > MAX_USAGE_LIMITED_REPLANS) {
+    const reason = 'usage limits ended this stage twice';
+    return escalateOnRun(
+      scope,
+      input,
+      withSavedBranch(stored, outcome),
+      context,
+      reason,
+      failed.events,
+      `The "${job.stage}" stage of ${stored.task.ticket.key} was stopped by a usage limit ` +
+        `${String(limited ?? 1)} times (attempt ${String(job.attempt)}; the last run is ${run.id}). ` +
+        'The first time the stage was offered again to another claimant; this time it is not. ' +
+        'The claimants that hit their limit pause until it resets. Nothing was wrong with the task: ' +
+        'hand it back at this stage once a claimant has usage left, or move the project to a ' +
+        'claimant whose subscription has room.',
+    );
+  }
+  await scope.events.append(failed.events);
+  return {
+    kind: 'replanned',
+    runId: run.id,
+    cause: 'usage_limited',
+    reason: 'a usage limit stopped the run; the stage is offered once more to another claimant',
   };
 };
 
@@ -1319,7 +1413,7 @@ const taskGone = (): SettleRunResult => ({
 /**
  * The wake-up a settle owes its stage entry, **after its commit** (`Jobs.enqueue` joins no
  * transaction): a start failure's retry after `RUN_START_RETRY_MS` (Q59(a)), a hand-back's re-run
- * after `SHUTDOWN_HAND_BACK_DELAY_MS` (WP-144). The attempt's model and effort ride along as the run
+ * after `SHUTDOWN_HAND_BACK_DELAY_MS` (WP-144), a usage limit's re-plan at once (WP-285). The attempt's model and effort ride along as the run
  * row recorded them, so a person's per-attempt override survives a flap as it did on the payload.
  * A process that dies between the commit and this leaves the entry to the stranded-stage recovery.
  */
@@ -1328,7 +1422,10 @@ const enqueueFollowOn = async (
   run: StoredRun,
   outcome: StageExecutionOutcome,
 ): Promise<void> => {
-  if ((outcome.kind !== 'retry' && outcome.kind !== 'handed_back') || run.stage === null) {
+  if (
+    (outcome.kind !== 'retry' && outcome.kind !== 'handed_back' && outcome.kind !== 'replanned') ||
+    run.stage === null
+  ) {
     return;
   }
   const logger = deps.logger ?? silentLogger;
@@ -1340,10 +1437,18 @@ const enqueueFollowOn = async (
     attempt: run.attempt,
     overrides: { model: run.model, effort: effortSchema.parse(run.effort) },
     startAfter: new Date(
-      now + (outcome.kind === 'retry' ? RUN_START_RETRY_MS : SHUTDOWN_HAND_BACK_DELAY_MS),
+      now +
+        (outcome.kind === 'retry'
+          ? RUN_START_RETRY_MS
+          : outcome.kind === 'handed_back'
+            ? SHUTDOWN_HAND_BACK_DELAY_MS
+            : 0),
     ),
   });
-  if (requeued.status === 'coalesced' && outcome.kind === 'handed_back') {
+  if (
+    requeued.status === 'coalesced' &&
+    (outcome.kind === 'handed_back' || outcome.kind === 'replanned')
+  ) {
     /**
      * **A dropped re-enqueue is stated, not silent** (WP-149, PROGRESS backlog 445): the queue is
      * `stately` per task, so when another job for the task is already queued the enqueue is
@@ -1352,7 +1457,7 @@ const enqueueFollowOn = async (
      */
     logger.warn(
       { task_id: run.taskId, stage: run.stage, attempt: run.attempt },
-      'a handed-back stage was not re-enqueued: another job for the task is already queued; the stranded-stage recovery escalates the entry if that job does not run it',
+      'a handed-back or re-planned stage was not re-enqueued: another job for the task is already queued; the stranded-stage recovery re-plans or escalates the entry if that job does not run it',
     );
   }
 };

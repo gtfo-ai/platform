@@ -51,7 +51,22 @@ import * as z from 'zod';
 
 const jsonObject = z.record(z.string(), z.unknown());
 
+/**
+ * Where a fixture's messages come from (WP-285): the same provenance block the HTTP fixtures carry
+ * (`test/contract/support/integrations/fixture-provenance.ts`) — the page it rests on, the day it was
+ * read, and what kind of evidence it is. A script is a recording only when `kind` is `documented`;
+ * the usage-limit scripts are `documented-adapted` until a real limit is recorded (TODO V-WM1).
+ */
+export const fakeCliSourceSchema = z.strictObject({
+  url: z.url(),
+  retrieved: z.iso.date(),
+  kind: z.enum(['documented', 'documented-adapted', 'composed', 'inferred', 'invented']),
+  note: z.string().min(1).optional(),
+});
+
 export const fakeCliStepSchema = z.discriminatedUnion('step', [
+  /** The script's provenance — plays nothing (WP-285). */
+  z.strictObject({ step: z.literal('source'), source: fakeCliSourceSchema }),
   /** Write one line to stdout — an `SDKMessage`, verbatim. */
   z.strictObject({ step: z.literal('emit'), message: jsonObject }),
   /** Wait until the SDK sends a user message (the prompt, or a steer). */
@@ -547,6 +562,8 @@ export const fakeSpawnClaudeCodeProcess = (
   const play = async (): Promise<void> => {
     for (const step of script) {
       switch (step.step) {
+        case 'source':
+          break;
         case 'emit':
           write(step.message);
           break;

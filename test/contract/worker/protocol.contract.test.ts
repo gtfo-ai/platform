@@ -509,6 +509,11 @@ const USAGE = {
 const bodies = (epoch: number) => ({
   [WORKER_PATHS.handshake]: { image_digests: HELD, commit: null },
   [WORKER_PATHS.claims]: { free_slots: 1, image_digests: HELD, paused: false },
+  [WORKER_PATHS.pause]: {
+    until: new Date(Date.now() + 3_600_000).toISOString(),
+    reason: 'usage_limited',
+    estimated: false,
+  },
   [WORKER_PATHS.heartbeat]: { epoch, acks: [] },
   [WORKER_PATHS.runRelease]: { epoch, reason: 'image_missing' },
   [WORKER_PATHS.spawn]: { epoch },
@@ -597,7 +602,7 @@ function userauth(user = 'git'): Buffer {
 }
 
 /** The verbs WP-281 serves: two authenticated by the worker credential, five by a run token. */
-const WORKER_VERBS = [WORKER_PATHS.handshake, WORKER_PATHS.claims] as const;
+const WORKER_VERBS = [WORKER_PATHS.handshake, WORKER_PATHS.claims, WORKER_PATHS.pause] as const;
 /** WP-292's owner verbs: the same authentication as their neighbours, at protocol 2 only. */
 const OWNER_WORKER_VERBS = [WORKER_PATHS.manualPause] as const;
 const OWNER_RUN_VERBS = [WORKER_PATHS.runCancel] as const;
@@ -840,7 +845,8 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
 
   it('handshake and claims answer 503 digests_unresolved while the core cannot name its images', async () => {
     const w = await world({ release: false });
-    for (const verb of WORKER_VERBS) {
+    // `pause` names no image, so it is not refused for want of one.
+    for (const verb of [WORKER_PATHS.handshake, WORKER_PATHS.claims] as const) {
       const response = await post(w, verb, '', w.alice.credential, bodies(1)[verb]);
       expect(`${verb} ${response.statusCode} ${response.json().error?.code}`).toBe(
         `${verb} 503 digests_unresolved`,
@@ -1346,6 +1352,69 @@ describe('the worker protocol (WP-282): the run-scoped calls besides the claim',
         `${verb} 503 worker_protocol_unavailable`,
       );
     }
+  });
+});
+
+/**
+ * WP-285 (TD-031 decision 11): `POST pause` stores a usage limit's pause; the claim refuses the
+ * worker until it ends, and then takes it back by itself. A person's hold is another column.
+ */
+describe('the worker protocol (WP-285): a usage limit’s pause', () => {
+  it('stores the pause, refuses the claim until it ends and then claims, and never touches the owner’s hold', async () => {
+    const w = await world();
+    const now = w.harness.clock.epochMs;
+    const until = new Date(now + 60 * 60_000).toISOString();
+    const paused = await post(w, WORKER_PATHS.pause, '', w.alice.credential, {
+      until,
+      reason: 'usage_limited',
+      estimated: true,
+    });
+    expect(paused.statusCode).toBe(204);
+    expect(w.store.worker(w.alice.workerId)).toMatchObject({
+      pausedReason: 'usage_limited',
+      pausedUntilEstimated: true,
+      manuallyPausedAt: null,
+    });
+    expect(w.store.worker(w.alice.workerId)?.pausedUntil?.toISOString()).toBe(until);
+    // Not a person's act: no audit row.
+    expect(
+      w.store.audit.filter(
+        (row) => row.action === 'worker.pause' || row.action === 'worker.resume',
+      ),
+    ).toEqual([]);
+    // The claim's eligibility leaves the paused worker out until the pause ends …
+    const claim = (at: number) =>
+      w.remote.claim({
+        workerId: w.alice.workerId,
+        heldImageDigests: HELD,
+        images: { run: DIGESTS.platform_runtime, egress: DIGESTS.platform_egress },
+        now: new Date(at).toISOString() as never,
+      });
+    expect((await claim(now + 60 * 60_000 - 1)).kind).not.toBe('claimed');
+    // … and takes it back by itself once it has.
+    expect((await claim(now + 60 * 60_000 + 1)).kind).toBe('claimed');
+    // A repeat stores the same.
+    const again = await post(w, WORKER_PATHS.pause, '', w.alice.credential, {
+      until,
+      reason: 'usage_limited',
+    });
+    expect(again.statusCode).toBe(204);
+    expect(w.store.worker(w.alice.workerId)?.pausedUntilEstimated).toBe(false);
+  });
+
+  it('refuses a pause past eight days, and a reason it does not know', async () => {
+    const w = await world();
+    const far = await post(w, WORKER_PATHS.pause, '', w.alice.credential, {
+      until: new Date(Date.now() + 9 * 86_400_000).toISOString(),
+      reason: 'usage_limited',
+    });
+    expect(`${far.statusCode} ${far.json().error?.code}`).toBe('400 pause_too_long');
+    const unknown = await post(w, WORKER_PATHS.pause, '', w.alice.credential, {
+      until: new Date(Date.now() + 3_600_000).toISOString(),
+      reason: 'tired',
+    });
+    expect(unknown.statusCode).toBe(400);
+    expect(w.store.worker(w.alice.workerId)?.pausedUntil).toBeNull();
   });
 });
 

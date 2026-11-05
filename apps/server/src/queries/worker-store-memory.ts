@@ -51,6 +51,7 @@ interface WorkerRowMemory {
   protocolVersion: number | null;
   imageDigests: readonly string[];
   pausedUntil: Date | null;
+  pausedUntilEstimated?: boolean;
   manuallyPausedAt: Date | null;
 }
 
@@ -86,7 +87,7 @@ export interface MemoryWorkerStore extends WorkerStore {
   readonly audit: readonly MemoryAudit[];
   /** The number of device-code rows, whatever their state. */
   codeCount(): number;
-  /** TD-031 §11's pause, as WP-285's `pause` will write it (`null` resumes). */
+  /** TD-031 §11's pause, as `pause` writes it (`null` resumes) — a test's direct seed. */
   setPausedUntil(workerId: string, until: Date | null): void;
   /** Whether a user may act now — the rule the store applies, for a composition that mirrors it. */
   userMayAct(userId: string): boolean;
@@ -156,6 +157,7 @@ export const createMemoryWorkerStore = (
       revokedAt: worker.revokedAt,
       pausedUntil: worker.pausedUntil,
       pausedReason: worker.pausedUntil === null ? null : 'usage_limited',
+      pausedUntilEstimated: worker.pausedUntil !== null && worker.pausedUntilEstimated === true,
       manuallyPausedAt: worker.manuallyPausedAt,
       concurrency: 1,
       running: [...runs.values()]
@@ -351,6 +353,16 @@ export const createMemoryWorkerStore = (
       return { status: 'revoked', performed: true, revokedAt: now, expiredRuns };
     },
 
+    async organisationTimezone() {
+      return 'UTC';
+    },
+    async setUsagePause({ workerId, until, estimated }) {
+      const worker = workers.get(workerId);
+      if (worker === undefined) return false;
+      worker.pausedUntil = until;
+      worker.pausedUntilEstimated = estimated;
+      return true;
+    },
     async setManualPause({ workerId, paused, via, now }) {
       const worker = workers.get(workerId);
       if (worker === undefined) {

@@ -89,6 +89,11 @@ export const workerSummarySchema = z.strictObject({
   revoked_at: isoDateTimeSchema.nullable(),
   paused_until: isoDateTimeSchema.nullable(),
   paused_reason: workerPauseReasonSchema.nullable(),
+  /**
+   * `true` when the usage limit named no reset time and `paused_until` is the worker's default pause
+   * (TD-031 §11, WP-285): the screen says *until about*. `false` with no pause.
+   */
+  paused_until_estimated: z.boolean(),
   /** The owner's hold from the worker's local page (WP-292): *paused by its owner*. */
   manually_paused_at: isoDateTimeSchema.nullable(),
   concurrency: z.int().positive().max(64),
@@ -105,6 +110,11 @@ export const workersResponseSchema = z.strictObject({
   items: z.array(workerSummarySchema),
   /** Whether the list is every worker (an administrator's) or only the caller's. */
   scope: z.enum(['own', 'all']),
+  /**
+   * The organisation's timezone (an IANA name; `UTC` when none is set or the stored one is not a
+   * zone this server can use) — what a usage pause's *until HH:MM* is shown in (WP-285).
+   */
+  timezone: nonEmptyStringSchema.max(64),
 });
 
 export const workerParamsSchema = z.strictObject({ id: idSchema });

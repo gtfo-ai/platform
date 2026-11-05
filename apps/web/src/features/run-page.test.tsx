@@ -229,6 +229,8 @@ const fetchFor = (task: TaskDetailResponse, shown: RunRecord, messages: Transcri
 
 const LIVE = RUNS[0] as RunRecord;
 const NOW = Date.parse('2026-11-05T10:03:04.000Z');
+/** A usage limit's reset later the same day (WP-285). */
+const USAGE_RESET = '2026-11-05T14:00:00.000Z';
 
 const open = (shown: RunRecord = LIVE, task = detail(), messages = MESSAGES) => {
   window.history.pushState({}, '', `/runs/${shown.id}`);
@@ -353,6 +355,16 @@ describe('the summary strip and what the agent is doing now', () => {
     ],
     [{ kind: 'server', worker_id: null, worker_name: null }, 'Executed bythe platform server'],
     [null, 'Executed bynot claimed yet'],
+    // WP-285: the worker is paused by its usage limit — the Workers screen's own sentence.
+    [
+      {
+        kind: 'worker',
+        worker_id: '00000000-0000-4000-8000-0000000283e1',
+        worker_name: 'alice-laptop',
+        usage_pause: { until: USAGE_RESET, estimated: false, timezone: 'UTC' },
+      },
+      `Executed byalice-laptop (worker)Paused — usage limit until ${USAGE_RESET.slice(11, 16)}`,
+    ],
   ] as const)(
     'says who executed the run from its seat (WP-283 (5)): %j',
     async (seat, expected) => {

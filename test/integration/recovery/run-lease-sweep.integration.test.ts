@@ -22,7 +22,11 @@
  * swept run at its reservation instead: `15` pending before, `15` held after, `0` spent throughout.
  */
 import type { Commitment, ExpiredRunQuery, Transaction } from '@platform/application';
-import { runStrandedRecovery, sweepExpiredRunLeases } from '@platform/application';
+import {
+  declarePipelineQueues,
+  runStrandedRecovery,
+  sweepExpiredRunLeases,
+} from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import {
   addMs,
@@ -156,6 +160,7 @@ const sweep = async () =>
     graceMs: GRACE_MS,
     wallClockMs: WALL_CLOCK_MS,
     limit: 10,
+    replan: { jobs: jobsAdapters.createInMemoryJobs().jobs, revokeCredentials: async () => {} },
   });
 
 beforeAll(async () => {
@@ -289,7 +294,7 @@ describe('the sweep', () => {
     expect(await pendingUsd(reserve)).toEqual({ pendingUsd: 15, heldUsd: 0, heldRuns: 0 });
 
     const first = await sweep();
-    expect(first).toEqual({ found: 1, ended: 1, skipped: 0 });
+    expect(first).toEqual({ found: 1, ended: 1, skipped: 0, replanned: 0 });
 
     const row = await pool.query<{
       status: string;
@@ -322,7 +327,7 @@ describe('the sweep', () => {
 
     // A second pass is a no-op: the run is terminal, so the query cannot see it again. That is the
     // bound this site has instead of the attempt mark the other two rows of the table carry.
-    expect(await sweep()).toEqual({ found: 0, ended: 0, skipped: 0 });
+    expect(await sweep()).toEqual({ found: 0, ended: 0, skipped: 0, replanned: 0 });
     expect(await pendingUsd(reserve)).toEqual({ pendingUsd: 0, heldUsd: 15, heldRuns: 1 });
   });
 
@@ -341,7 +346,7 @@ describe('the sweep', () => {
       [command, runId, taskId],
     );
 
-    expect(await sweep()).toEqual({ found: 1, ended: 1, skipped: 0 });
+    expect(await sweep()).toEqual({ found: 1, ended: 1, skipped: 0, replanned: 0 });
 
     const run = await pool.query<{ status: string; terminal_reason: string }>(
       'select status, terminal_reason from runs where id = $1',
@@ -415,6 +420,7 @@ describe('a question whose run the sweep ended', () => {
           causeEventId: null,
         }),
         wallClockMs: WALL_CLOCK_MS,
+        replan: { jobs: jobsAdapters.createInMemoryJobs().jobs, revokeCredentials: async () => {} },
       },
     });
 
@@ -496,5 +502,262 @@ describe('a question whose run the sweep ended', () => {
       ended: 0,
     });
     expect((await statusOf(stranded))?.status).toBe('failed');
+  });
+});
+
+/**
+ * **WP-286 (TD-031 §12): a lost worker re-plans its stage entry once.** Only this tier can show the
+ * three facts together over real rows: the sweep's transaction closes the run's offer (so the per-task
+ * index admits **exactly one** re-planned offer), counts the entry's `lost_runs`, and leaves the task
+ * at its stage; the re-planned offer carries the lost worker in its exclusions; and a sweep that dies
+ * between its commit and its enqueue leaves an entry the stranded-stage row re-plans — once — rather
+ * than escalates.
+ */
+describe('a lost worker re-plans its stage entry once (WP-286)', () => {
+  let boss: ReturnType<typeof jobsAdapters.createPgBossJobs>;
+  let workerId: string;
+
+  beforeAll(async () => {
+    boss = jobsAdapters.createPgBossJobs({
+      database: jobsAdapters.asJobsDatabase(pool),
+      supervise: false,
+      schedule: false,
+    });
+    await boss.start();
+    const user = await pool.query<{ id: string }>(
+      "insert into users (email, name) values ('laptop-owner@example.test', 'Owner') returning id",
+    );
+    const worker = await pool.query<{ id: string }>(
+      `insert into workers (id, user_id, name, credential_hash)
+       values (gen_random_uuid(), $1, 'closed-laptop', $2) returning id`,
+      [user.rows[0]?.id, 'c'.repeat(64)],
+    );
+    workerId = worker.rows[0]?.id as string;
+  }, 120_000);
+
+  afterAll(async () => {
+    await boss?.stop();
+  });
+
+  /** The task at `implementation` attempt 1, its run held by the worker under a claimed offer. */
+  const seedLostEntry = async (): Promise<string> => {
+    // The task again, at `implementation` attempt 1 — what makes its run the entry's.
+    await pool.query('delete from tasks where id = $1', [taskId]);
+    const task = await pool.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage, template_snapshot, stage_attempts)
+       values ($1, 'fake-jira', 'ACME-1', 'https://jira.example.test/browse/ACME-1', 'feature',
+               'active', 'implementation', $2::jsonb, '{"implementation": 1}'::jsonb) returning id`,
+      [projectId, JSON.stringify(FEATURE_TEMPLATE)],
+    );
+    taskId = task.rows[0]?.id as string;
+    const runId = await seedRun();
+    await pool.query(
+      'update runs set lease_owner = $2, worker_id = $3, lease_epoch = 1 where id = $1',
+      [runId, `worker:${workerId}`, workerId],
+    );
+    await pool.query(
+      `insert into run_offers (id, run_id, task_id, project_id, stage, attempt, kind, state,
+                               lease_epoch, claimant_kind, worker_id, offered_at, claimed_at)
+       values (gen_random_uuid(), $1, $2, $3, 'implementation', 1, 'stage', 'claimed', 1,
+               'worker', $4, now() - interval '40 minutes', now() - interval '35 minutes')`,
+      [runId, taskId, projectId, workerId],
+    );
+    return runId;
+  };
+
+  const sweepWith = async (replan: {
+    readonly enqueue?: () => Promise<never>;
+    readonly order: string[];
+  }) => {
+    const memory = jobsAdapters.createInMemoryJobs().jobs;
+    await declarePipelineQueues(memory);
+    return sweepExpiredRunLeases({
+      store,
+      pipeline,
+      unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
+      eventStore: new eventing.PostgresEventStore(pool),
+      context: (correlationId) => ({
+        ids: { next: () => crypto.randomUUID() as Id },
+        actor: { kind: 'system', component: 'pipeline.run-lease.sweep' },
+        clock: { now: () => NOW },
+        correlationId,
+        causeEventId: null,
+      }),
+      clock: { now: () => NOW },
+      graceMs: GRACE_MS,
+      wallClockMs: WALL_CLOCK_MS,
+      limit: 10,
+      replan: {
+        jobs: {
+          ...memory,
+          enqueue: async (request) => {
+            replan.order.push(`enqueue:${request.queue}`);
+            if (replan.enqueue !== undefined) return replan.enqueue();
+            return memory.enqueue(request);
+          },
+        },
+        revokeCredentials: async (runId) => {
+          replan.order.push(`revoke:${runId}`);
+        },
+      },
+    });
+  };
+
+  /** A new run of the same entry and its offer, as `stage.execute` writes them; answers the offer insert. */
+  const offerAgain = async (): Promise<{ readonly excluded: readonly string[] }> => {
+    const stage = await pool.query<{ id: string }>(
+      `select id from task_stages where task_id = $1 and stage = 'implementation' and attempt = 1`,
+      [taskId],
+    );
+    const run = await pool.query<{ id: string }>(
+      `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
+                         attempt, status)
+       values ($1, $2, $3, 'developer', 'claude-opus-5', 'high', 'feature@1+developer', 1, 'created')
+       returning id`,
+      [taskId, stage.rows[0]?.id, projectId],
+    );
+    const entry = { taskId: taskId as Id, stage: 'implementation' as never, attempt: 1 };
+    const excluded = await withTx(async (tx) => pipeline.offers.carriedExclusions(tx, entry));
+    await withTx(async (tx) =>
+      pipeline.offers.insert(tx, {
+        id: crypto.randomUUID() as Id,
+        runId: run.rows[0]?.id as Id,
+        taskId: taskId as Id,
+        projectId: projectId as Id,
+        stage: 'implementation' as never,
+        attempt: 1,
+        kind: 'stage',
+        offeredAt: NOW,
+        routing: {
+          assigneeUserId: null,
+          assigneeUntil: null,
+          serverFrom: NOW,
+          workersFrom: NOW,
+          expiresAt: at(24 * 60),
+        },
+        excludedWorkerIds: excluded as Id[],
+      }),
+    );
+    return { excluded };
+  };
+
+  it('closes the offer, counts the loss, revokes then re-plans; one re-planned offer, carrying the lost worker', async () => {
+    const runId = await seedLostEntry();
+    const order: string[] = [];
+    expect(await sweepWith({ order })).toEqual({ found: 1, ended: 1, skipped: 0, replanned: 1 });
+    expect(order).toEqual([`revoke:${runId}`, 'enqueue:stage.execute']);
+
+    const offer = await pool.query<{ state: string }>(
+      'select state from run_offers where run_id = $1',
+      [runId],
+    );
+    expect(offer.rows[0]?.state).toBe('settled');
+    const entry = await pool.query<{ lost_runs: number; exited_at: Date | null }>(
+      `select lost_runs, exited_at from task_stages where task_id = $1 and attempt = 1`,
+      [taskId],
+    );
+    expect(entry.rows[0]).toEqual({ lost_runs: 1, exited_at: null });
+    const task = await pool.query<{ state: string }>('select state from tasks where id = $1', [
+      taskId,
+    ]);
+    expect(task.rows[0]?.state).toBe('active');
+
+    // The per-task index admits the re-planned offer — exactly once.
+    const { excluded } = await offerAgain();
+    expect(excluded).toEqual([workerId]);
+    await expect(offerAgain()).rejects.toThrow(/run_offers_one_live_stage_per_task/);
+    const live = await pool.query<{ excluded_worker_ids: string[] }>(
+      `select excluded_worker_ids from run_offers where task_id = $1 and state = 'open'`,
+      [taskId],
+    );
+    expect(live.rows).toEqual([{ excluded_worker_ids: [workerId] }]);
+  });
+
+  it('a sweep killed between its commit and its enqueue is re-planned by the stranded-stage row, once — never escalated', async () => {
+    const runId = await seedLostEntry();
+    const order: string[] = [];
+    await expect(
+      sweepWith({
+        order,
+        enqueue: async () => {
+          throw new Error('the process died here');
+        },
+      }),
+    ).rejects.toThrow('the process died here');
+    // The ending committed: the run ended, its offer closed, the loss counted; nothing enqueued.
+    const run = await pool.query<{ terminal_reason: string }>(
+      'select terminal_reason from runs where id = $1',
+      [runId],
+    );
+    expect(run.rows[0]?.terminal_reason).toBe('lease_expired');
+
+    const queued = jobsAdapters.createInMemoryJobs();
+    await declarePipelineQueues(queued.jobs);
+    const recovered = await runStrandedRecovery({
+      store: recoveryAdapters.createPostgresStrandedWorkStore(),
+      unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
+      jobs: queued.jobs,
+      clock: { now: () => new Date(Date.now() + 2 * GRACE_MS).toISOString() as IsoDateTime },
+      graceMs: GRACE_MS,
+      stages: {
+        store: recoveryAdapters.createPostgresStrandedStageStore({ jobsSchema: 'pgboss' }),
+        pipeline,
+        context: (correlationId) => ({
+          ids: { next: () => crypto.randomUUID() as Id },
+          actor: { kind: 'system', component: 'stranded-stage-recovery' },
+          clock: { now: () => NOW },
+          correlationId,
+          causeEventId: null,
+        }),
+      },
+    });
+    expect(recovered.find((site) => site.site === 'stranded_stage')).toEqual({
+      site: 'stranded_stage',
+      found: 1,
+      reEnqueued: 1,
+      ended: 0,
+    });
+    const task = await pool.query<{ state: string }>('select state from tasks where id = $1', [
+      taskId,
+    ]);
+    expect(task.rows[0]?.state).toBe('active');
+    // The re-planned offer, once.
+    const { excluded } = await offerAgain();
+    expect(excluded).toEqual([workerId]);
+    await expect(offerAgain()).rejects.toThrow(/run_offers_one_live_stage_per_task/);
+  });
+
+  it('escalates the entry’s second loss, naming both runs and both machines', async () => {
+    const first = await seedLostEntry();
+    await sweepWith({ order: [] });
+    // The re-planned run is lost too, under the server's claimant this time.
+    const stage = await pool.query<{ id: string }>(
+      `select id from task_stages where task_id = $1 and attempt = 1`,
+      [taskId],
+    );
+    const second = await pool.query<{ id: string }>(
+      `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
+                         attempt, status, started_at, lease_owner, lease_expires_at)
+       values ($1, $2, $3, 'developer', 'claude-opus-5', 'high', 'feature@1+developer', 1,
+               'running', $4::timestamptz, 'server:core-1', $5::timestamptz) returning id`,
+      [taskId, stage.rows[0]?.id, projectId, at(-20), at(-10)],
+    );
+    const order: string[] = [];
+    expect(await sweepWith({ order })).toMatchObject({ ended: 1, replanned: 0 });
+    expect(order).toEqual([]);
+    const task = await pool.query<{ state: string }>('select state from tasks where id = $1', [
+      taskId,
+    ]);
+    expect(task.rows[0]?.state).toBe('needs_human');
+    const brief = await pool.query<{ brief: string }>(
+      `select payload ->> 'blocker_brief' as brief from events
+        where stream_type = 'task' and stream_id = $1 and type = 'task.escalated'`,
+      [taskId],
+    );
+    expect(brief.rows[0]?.brief).toContain(`run ${first} (held by worker ${workerId})`);
+    expect(brief.rows[0]?.brief).toContain(
+      `run ${second.rows[0]?.id} (held by the server's runner (core-1))`,
+    );
   });
 });

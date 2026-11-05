@@ -549,6 +549,107 @@ describe('failures', () => {
   });
 });
 
+/**
+ * WP-285 (TD-031 decision 11): a subscription's usage limit ends the run `failed` / `rate_limited`,
+ * carrying the limit, whatever the CLI's own `result` said. One golden per signal; each script names
+ * its provenance (`documented-adapted` until a real limit is recorded — TODO V-WM1).
+ */
+describe('a usage limit (WP-285)', () => {
+  const RESETS = '2026-03-01T14:00:00.000Z';
+
+  it.each([
+    ['usage-limit-rejected', 'rate_limit_rejected', RESETS],
+    ['usage-limit-credits-required', 'credits_required', RESETS],
+    ['usage-limit-api-429', 'api_status_429', null],
+  ] as const)('%s ends the run rate_limited with the %s signal', async (name, signal, resetsAt) => {
+    const { result, events } = await run(name);
+    expect(result.status).toBe('failed');
+    expect(result.terminalReason).toBe('rate_limited');
+    expect(result.usageLimit).toEqual({ signal, resetsAt });
+    // Charged as measured: the result's own figure, never a floor.
+    expect(result.costUnmeasured).toBeUndefined();
+    expect(result.cost.usd).toBe(0.18);
+    // The CLI's own words stay in the transcript; the ending is the platform's.
+    expect(events.at(-1)).toMatchObject({
+      kind: 'result',
+      terminal_reason: 'error_during_execution',
+    });
+    expect(result.error).toContain(signal);
+  });
+
+  it('reads the rejected event’s seconds and the credits event’s milliseconds as one instant', async () => {
+    const seconds = await run('usage-limit-rejected');
+    const millis = await run('usage-limit-credits-required');
+    expect(seconds.result.usageLimit?.resetsAt).toBe(millis.result.usageLimit?.resetsAt);
+  });
+
+  it('every usage-limit script states where it comes from, and says it is not a recording', () => {
+    for (const name of [
+      'usage-limit-rejected',
+      'usage-limit-credits-required',
+      'usage-limit-api-429',
+    ]) {
+      const [first] = loadScript(name);
+      expect(first, name).toMatchObject({
+        step: 'source',
+        source: { kind: 'documented-adapted', retrieved: expect.any(String) },
+      });
+      if (first?.step === 'source') expect(first.source.note, name).toContain('Not a recording');
+    }
+  });
+
+  it('goes on past an allowed warning: only a rejection is a limit', async () => {
+    const script = loadScript('happy-path');
+    const at = script.findIndex(
+      (step) => step.step === 'emit' && (step.message as { type?: unknown }).type === 'result',
+    );
+    const warned = [
+      ...script.slice(0, at),
+      {
+        step: 'emit' as const,
+        message: {
+          type: 'rate_limit_event',
+          rate_limit_info: { status: 'allowed_warning', utilization: 0.9, resetsAt: 1772373600 },
+          uuid: '000000aa-0000-4000-8000-000000000000',
+          session_id: 'fake-session-0001',
+        },
+      },
+      ...script.slice(at),
+    ];
+    const result = await startScript(warned).outcome;
+    expect(result.status).toBe('completed');
+    expect(result.terminalReason).toBe('success');
+    expect(result.usageLimit).toBeUndefined();
+  });
+
+  it('keeps a person’s cancel its own name after a rejection', async () => {
+    const script = loadScript('usage-limit-rejected');
+    const at = script.findIndex(
+      (step) => step.step === 'emit' && (step.message as { type?: unknown }).type === 'result',
+    );
+    const harness = startScript([...script.slice(0, at), { step: 'stall' as const }]);
+    // The rejection is read before the person's stop arrives.
+    for (let round = 0; round < 200; round += 1) {
+      if (
+        harness.events.some(
+          (event) => event.kind === 'system' && event.subtype === 'rate_limit_event',
+        )
+      ) {
+        break;
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(
+      harness.events.some(
+        (event) => event.kind === 'system' && event.subtype === 'rate_limit_event',
+      ),
+    ).toBe(true);
+    const result = await settleStop(harness, harness.handle.stop({ reason: 'cancelled' }));
+    expect(result.terminalReason).toBe('cancelled');
+    expect(result.usageLimit).toBeUndefined();
+  });
+});
+
 describe('compaction and subagents', () => {
   it('writes one marker per phase, with the token counts on the `post` one', async () => {
     const { events } = await run('compaction');

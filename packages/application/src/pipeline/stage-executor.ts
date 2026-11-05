@@ -309,6 +309,20 @@ export type StageExecutionOutcome =
       readonly reason: string;
       /** Start attempts spent so far, this failure included. Bounded by {@link MAX_RUN_START_ATTEMPTS}. */
       readonly startAttempts: number;
+    }
+  /**
+   * **The stage entry is planned once more** (WP-285, WP-286, TD-031 §§11–12): its run ended
+   * `rate_limited` (`cause: 'usage_limited'`) or the lease sweep ended it `lease_expired`
+   * (`cause: 'lost'`), and it was the entry's first such ending (`task_stages.usage_limited_runs`,
+   * `lost_runs`). The task is untouched — still at this stage, on this attempt, its stage row open —
+   * and the stage's `stage.execute` is enqueued after the commit; its offer carries the limited or
+   * lost worker in its exclusions. The second such ending escalates instead, never this kind.
+   */
+  | {
+      readonly kind: 'replanned';
+      readonly runId: Id;
+      readonly reason: string;
+      readonly cause: 'usage_limited' | 'lost';
     };
 
 export interface StageExecutorOptions {
@@ -1144,6 +1158,16 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           now: context.clock.now(),
           // WP-278: the ticket's assignee is not stored, so a stage offer has none yet (BACKLOG 730).
           assigneeUserId: null,
+          /**
+           * WP-285/WP-286 (TD-031 §12): a re-planned entry carries its previous offer's exclusions,
+           * plus the worker a usage limit stopped or that lost the run — so the second run of the
+           * entry goes to another claimant. An entry's first offer carries nothing.
+           */
+          excludedWorkerIds: await store.offers.carriedExclusions(scope.tx, {
+            taskId: job.taskId,
+            stage: job.stage,
+            attempt: job.attempt,
+          }),
         },
         context,
       );

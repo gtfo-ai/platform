@@ -45,7 +45,9 @@ import {
   workerHeartbeatRequestSchema,
   workerLocalStateSchema,
   workerManualPauseRequestSchema,
+  workerPauseRequestSchema,
   workerRunCancelRequestSchema,
+  workerRunReleaseRequestSchema,
   workerSpawnRequestSchema,
   workerTranscriptRequestSchema,
 } from '@platform/contracts';
@@ -249,6 +251,51 @@ const script = (awaitSteers = 0, askApproval = false): runnerAdapters.FakeCliScr
   { step: 'exit', code: 0, signal: null },
 ];
 
+/**
+ * A session its usage limit ends (WP-285): the `rate_limit_event` with `status: "rejected"` and a
+ * reset `resetsInMs` from now (in milliseconds, which the magnitude rule reads as such), then the
+ * `429` result the CLI fails with — the shape of `test/fixtures/claude/usage-limit-rejected`.
+ */
+const limitedScript = (resetsInMs: number): runnerAdapters.FakeCliScript => [
+  ...script().slice(0, 2),
+  {
+    step: 'emit',
+    message: {
+      type: 'rate_limit_event',
+      rate_limit_info: { status: 'rejected', resetsAt: Date.now() + resetsInMs },
+      uuid: '00000002-0000-4000-8000-000000000285',
+      session_id: 'fake-session-wp283',
+    },
+  },
+  {
+    step: 'emit',
+    message: {
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      api_error_status: 429,
+      duration_ms: 10,
+      duration_api_ms: 8,
+      num_turns: 1,
+      result: 'Claude usage limit reached.',
+      stop_reason: null,
+      total_cost_usd: 0.05,
+      usage: {
+        input_tokens: 10,
+        output_tokens: 1,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+      },
+      modelUsage: {},
+      permission_denials: [],
+      uuid: '00000003-0000-4000-8000-000000000285',
+      session_id: 'fake-session-wp283',
+    },
+  },
+  { step: 'exit', code: 1, signal: null },
+];
+
 interface Captured {
   readonly verb: string;
   readonly headers: Record<string, string>;
@@ -353,6 +400,14 @@ const fakeCore = (options: {
       }
       case 'runs/:id/late-cost':
         return answer(200, { recorded: false });
+      case 'runs/:id/release':
+        workerRunReleaseRequestSchema.parse(parsed);
+        events.push('core:release');
+        return answer(204, null);
+      case 'pause':
+        workerPauseRequestSchema.parse(parsed);
+        events.push('core:pause');
+        return answer(204, null);
       case 'runs/:id/approvals':
         workerApprovalRequestSchema.parse(parsed);
         opened.push(APPROVAL_ID);
@@ -458,6 +513,11 @@ const run = (options: {
   readonly askApproval?: boolean;
   readonly monotonic?: () => number;
   readonly sleep?: (ms: number) => Promise<void>;
+  /** The scripted CLI; absent is {@link script}'s. */
+  readonly script?: runnerAdapters.FakeCliScript;
+  /** WP-285: the worker's usage pause, asked before the spawn call. */
+  readonly usagePausedUntil?: () => string | null;
+  readonly onUsageLimit?: (limit: { readonly resetsAt: string | null }) => void;
 }) => {
   const lines: string[] = [];
   const logger = asLoggerPort(
@@ -481,6 +541,10 @@ const run = (options: {
     logger,
     ...(options.monotonic === undefined ? {} : { monotonic: options.monotonic }),
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+    ...(options.usagePausedUntil === undefined
+      ? {}
+      : { usagePausedUntil: options.usagePausedUntil }),
+    ...(options.onUsageLimit === undefined ? {} : { onUsageLimit: options.onUsageLimit }),
     selfTerminationCheckMs: 10,
     provisionerFor: ({ sshSign, exportsAllowed }) =>
       packageWorkspaceProvisioner(pkg, {
@@ -492,7 +556,7 @@ const run = (options: {
         repositoryPathOf: () => 'acme/api',
         spawnFor: () => {
           cli = runnerAdapters.fakeSpawnClaudeCodeProcess(
-            script(options.awaitSteers, options.askApproval),
+            options.script ?? script(options.awaitSteers, options.askApproval),
             {
               interruptedResult: {
                 type: 'result',
@@ -558,6 +622,19 @@ describe('ROLE=remote-worker’s configuration (WP-283 (1))', () => {
     expect(() => loadRemoteWorkerConfig({ ...base, [name]: 'postgres://app@db/app' })).toThrow(
       new RegExp(`${name} is set: a remote worker has no database and no instance secret key`),
     );
+  });
+
+  it('reads APP_WORKER_USAGE_PAUSE_DEFAULT in seconds, an hour by default, refusing one outside a minute to eight days (WP-285)', () => {
+    expect(loadRemoteWorkerConfig(base).usagePauseDefaultMs).toBe(3_600_000);
+    expect(
+      loadRemoteWorkerConfig({ ...base, APP_WORKER_USAGE_PAUSE_DEFAULT: '900' })
+        .usagePauseDefaultMs,
+    ).toBe(900_000);
+    for (const bad of ['59', '691201', '1h', '-5']) {
+      expect(() =>
+        loadRemoteWorkerConfig({ ...base, APP_WORKER_USAGE_PAUSE_DEFAULT: bad }),
+      ).toThrow(/APP_WORKER_USAGE_PAUSE_DEFAULT/);
+    }
   });
 
   it('refuses a missing core URL, Claude token and launcher, naming each', () => {
@@ -737,6 +814,64 @@ describe('a remote run, from its package to its finish (WP-283 (1)–(2))', () =
     expect(
       workerFinishRequestSchema.parse(JSON.parse(core.captured[finish]?.body ?? '{}')),
     ).toMatchObject({ outcome: { kind: 'ran', status: 'cancelled' }, stop_reason: 'cancelled' });
+  });
+});
+
+/**
+ * WP-285 (TD-031 decision 11 as amended 2026-11-04): a usage limit is observable only after the
+ * CLI spawned, so a rejection is **always** the mid-run branch — `finish` with `rate_limited`,
+ * never a release. A release with `usage_limited` is only for a worker that already knew it was
+ * paused when it reached the spawn call.
+ */
+describe('a usage limit on a remote run (WP-285)', () => {
+  it('a rejection after the spawn marker never takes the release path: it finishes rate_limited and pauses', async () => {
+    const core = fakeCore({});
+    const limits: { resetsAt: string | null }[] = [];
+    const { session } = run({
+      core,
+      script: limitedScript(30 * 60_000),
+      onUsageLimit: (limit) => limits.push(limit),
+    });
+    expect(await session.done).toBe('settled');
+    expect(core.events).toContain('core:spawn');
+    expect(core.events).not.toContain('core:release');
+    expect(core.captured.some((request) => request.verb === 'runs/:id/release')).toBe(false);
+    const finish = workerFinishRequestSchema.parse(
+      JSON.parse(core.captured.find((request) => request.verb === 'runs/:id/finish')?.body ?? '{}'),
+    );
+    expect(finish.outcome).toMatchObject({
+      kind: 'ran',
+      status: 'failed',
+      terminal_reason: 'rate_limited',
+    });
+    // The worker is told when the limit resets, so it can pause — before its finish.
+    expect(limits).toHaveLength(1);
+    expect(Date.parse(limits[0]?.resetsAt ?? '')).toBeGreaterThan(Date.now());
+  });
+
+  it('a worker already paused at its spawn call hands the run back unspent: release usage_limited, no CLI, no finish', async () => {
+    const core = fakeCore({});
+    const until = new Date(Date.now() + 60 * 60_000).toISOString();
+    const { session, cli } = run({ core, usagePausedUntil: () => until });
+    expect(await session.done).toBe('released');
+    const release = workerRunReleaseRequestSchema.parse(
+      JSON.parse(
+        core.captured.find((request) => request.verb === 'runs/:id/release')?.body ?? '{}',
+      ),
+    );
+    expect(release).toEqual({ epoch: 3, reason: 'usage_limited', resets_at: until });
+    expect(core.events).not.toContain('core:spawn');
+    expect(core.events).not.toContain('cli:spawned');
+    expect(core.events).not.toContain('core:finish');
+    expect(cli()?.spawnOptions ?? null).toBeNull();
+  });
+
+  it('a pause that has already passed is no pause: the run starts', async () => {
+    const core = fakeCore({});
+    const past = new Date(Date.now() - 1_000).toISOString();
+    const { session } = run({ core, usagePausedUntil: () => past });
+    expect(await session.done).toBe('settled');
+    expect(core.events).not.toContain('core:release');
   });
 });
 
@@ -1075,6 +1210,8 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     readonly stateDir: string;
     readonly core: ReturnType<typeof fakeCore>;
     readonly ui?: boolean;
+    /** The scripted CLI of every run; absent waits for a steer (`script(1)`). */
+    readonly script?: () => runnerAdapters.FakeCliScript;
   }) => {
     const lines: string[] = [];
     const launcher = fakeLauncher(options.core.events);
@@ -1106,7 +1243,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
         health: async () => ({ images: { run: DIGEST, egress: DIGEST } }),
       } as unknown as launcherAdapters.LauncherControlClient,
       spawnFor: () => {
-        const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(script(1), {
+        const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(options.script?.() ?? script(1), {
           interruptedResult: {
             type: 'result',
             subtype: 'error_during_execution',
@@ -1354,6 +1491,48 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       }
       // Nothing secret reached the core either (the reason travelled redacted).
       expect(JSON.stringify(core.captured.map((call) => call.body))).not.toContain(CLAUDE_TOKEN);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  /**
+   * WP-285: a run its usage limit ended pauses the worker — `POST pause` with the reset, the local
+   * page's *Paused — usage limit until …*, no claim while it holds — and when the reset passes it
+   * claims again by itself. A person's hold is a different thing and is untouched.
+   */
+  it('pauses on a usage limit, tells the core, claims nothing until the reset, then claims again by itself', async () => {
+    const stateDir = stateDirWithCredential();
+    const pkg = runPackageSchema.parse({ ...runPackage() });
+    const core = fakeCore({ claims: [pkg] });
+    const RESET_IN_MS = 600;
+    const { worker } = await start({ stateDir, core, script: () => limitedScript(RESET_IN_MS) });
+    try {
+      await until('the pause', () => core.events.includes('core:pause'));
+      const pause = workerPauseRequestSchema.parse(
+        JSON.parse(core.captured.find((call) => call.verb === 'pause')?.body ?? '{}'),
+      );
+      expect(pause).toMatchObject({ reason: 'usage_limited', estimated: false });
+      expect(Date.parse(pause.until)).toBeGreaterThan(Date.now());
+      // It paused before its finish, so the core's re-plan is not claimed back by this worker.
+      expect(core.events.indexOf('core:pause')).toBeLessThan(core.events.indexOf('core:finish'));
+      const state = worker.localState();
+      expect(state.usage_paused_until).toBe(pause.until);
+      expect(state.usage_paused_estimated).toBe(false);
+      expect(state.manually_paused_at).toBeNull();
+      // While it holds, no claim leaves this worker.
+      const claimsAtPause = core.captured.filter((call) => call.verb === 'claims').length;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, Date.parse(pause.until) - Date.now() - 100)),
+      );
+      expect(core.captured.filter((call) => call.verb === 'claims').length).toBe(claimsAtPause);
+      // The reset: it claims again by itself, and the page says it takes work.
+      await until(
+        'a claim after the reset',
+        () => core.captured.filter((call) => call.verb === 'claims').length > claimsAtPause,
+      );
+      expect(worker.localState().usage_paused_until).toBeNull();
+      expect(worker.localState().manually_paused_at).toBeNull();
     } finally {
       await worker.stop();
     }

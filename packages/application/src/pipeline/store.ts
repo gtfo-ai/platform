@@ -1019,6 +1019,23 @@ export interface TaskRepository {
    * `returnedTo` is the stage a return sent the task to — non-null exactly when `state` is
    * `returned` — and it is what {@link lastReturnReason} reads by.
    */
+  /**
+   * **Counts one more re-offerable ending on the stage entry** and answers the new count (WP-285,
+   * WP-286, TD-031 §12): `lost` is `task_stages.lost_runs` — a run the lease sweep ended
+   * `lease_expired` — and `usage_limited` is `usage_limited_runs` — a run that ended `rate_limited`.
+   * One `update … returning`, in the terminal writer's own transaction, so two writers cannot both
+   * read a count of zero. The first of each re-plans the entry and the second escalates it. `null`
+   * when the entry has no row (a stage the task never recorded entering): the caller escalates.
+   */
+  countStageRunEnding(
+    tx: Transaction,
+    entry: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      readonly kind: 'lost' | 'usage_limited';
+    },
+  ): Promise<number | null>;
   recordStageExited(
     tx: Transaction,
     entry: {
@@ -1640,6 +1657,13 @@ export interface NewRunOffer {
    * before WP-278, which the server's claim takes at once.
    */
   readonly routing: OfferRouting;
+  /**
+   * The workers this offer is **not** for (`excluded_worker_ids`, TD-031 §12): the stage entry's
+   * previous offer's exclusions, plus the worker that lost or was limited on it —
+   * {@link RunOfferRepository.carriedExclusions}, read by `stage.execute` when it re-plans an entry.
+   * Absent is none.
+   */
+  readonly excludedWorkerIds?: readonly Id[];
 }
 
 /** An offer's routing read back: `expiresAt` is `null` for an offer written before WP-278. */
@@ -1853,6 +1877,17 @@ export interface RunOfferRepository {
   ): Promise<RunOfferRelease>;
   /** The run token's holder (WP-281), or `null` for a run with no offer. */
   runTokenHolder(tx: Transaction, runId: Id): Promise<RunTokenHolder | null>;
+  /**
+   * **The exclusions a re-planned stage entry carries** (WP-285, WP-286, TD-031 §12): the newest
+   * stage offer of `(task, stage, attempt)` — its `excluded_worker_ids`, plus its `worker_id` when
+   * its run ended `rate_limited` or `lease_expired` (the limited or lost worker; a revoked worker's
+   * runs end `lease_expired` too, WP-280). `[]` for an entry with no offer yet, and for one whose
+   * newest offer a server claimant held. Each id once, in the order they were excluded.
+   */
+  carriedExclusions(
+    tx: Transaction,
+    entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
+  ): Promise<readonly Id[]>;
   /**
    * Open offers whose run has **no** stored plan (TD-031's 2026-11-04 amendment §2) — the claimant
    * withdraws each through its kind's executor before it claims. Reachable only for a run offered by a

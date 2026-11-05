@@ -97,6 +97,12 @@ import { retryOnTaskConflict } from './task-conflict.js';
 /** How often the loop asks for an offer when no notification woke it (TD-031: a 5 s poll). */
 export const DEFAULT_CLAIM_POLL_MS = 5_000;
 
+/**
+ * `APP_WORKER_USAGE_PAUSE_DEFAULT`'s default (TD-031 decision 11): how long a claimant whose usage
+ * limit named no reset time claims nothing — one hour, and the UI says *until about*.
+ */
+export const DEFAULT_USAGE_PAUSE_SECONDS = 3_600;
+
 /** `APP_RUNNER_CONCURRENCY`'s default: one run at a time per server claimant. */
 export const DEFAULT_RUNNER_CONCURRENCY = 1;
 
@@ -148,6 +154,15 @@ export interface RunClaimantOptions {
    * task. Absent asks nothing — every production composition passes one.
    */
   readonly admission?: ClaimAdmission;
+  /**
+   * **Pause on a usage limit** (WP-285, TD-031 decision 11): present when this claimant runs on a
+   * subscription (`APP_PROVIDER_MODE=local`). A run whose session reported a limit
+   * (`RunOutcome.usageLimit`) makes the claimant claim nothing until the reset the limit named — or
+   * for `defaultMs` (`APP_WORKER_USAGE_PAUSE_DEFAULT`) when it named none — and it resumes by itself
+   * at the first wake-up after it; the runs in flight go on. Absent (`api` mode): a `429` ends that
+   * run `rate_limited` and the stage is re-offered, but the claimant keeps claiming.
+   */
+  readonly usagePause?: { readonly defaultMs: number };
   /** `APP_RUNNER_CONCURRENCY`. @default DEFAULT_RUNNER_CONCURRENCY */
   readonly concurrency?: number;
   /** @default DEFAULT_CLAIM_POLL_MS */
@@ -169,6 +184,11 @@ export interface RunClaimant {
   stop(): Promise<void>;
   /** Runs in flight now. */
   readonly active: number;
+  /**
+   * Until when a usage limit holds this claimant (WP-285), or `null` while it claims. Read on the
+   * claimant's clock; a past instant is reported as `null`.
+   */
+  readonly usagePausedUntil: IsoDateTime | null;
 }
 
 /** What the claim transaction hands the session. */
@@ -201,6 +221,28 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
   let poll: ReturnType<typeof setInterval> | null = null;
   /** WP-278: the `server_claimants` holder — the lease owner — or `null` with no lease. */
   const holder = options.lease?.owner ?? null;
+  /** WP-285: the reset a usage limit named (or the default pause's end), as epoch ms; `null` claims. */
+  let usagePausedUntilMs: number | null = null;
+  const nowMs = (): number => Date.parse(options.clock.now());
+  const usagePaused = (): boolean => usagePausedUntilMs !== null && nowMs() < usagePausedUntilMs;
+
+  /** A run's session reported a usage limit: claim nothing until it resets (WP-285). */
+  const noteUsageLimit = (outcome: RunOutcome, claimed: Claimed): void => {
+    if (options.usagePause === undefined || outcome.usageLimit === undefined) return;
+    const named = outcome.usageLimit.resetsAt;
+    const until = named === null ? nowMs() + options.usagePause.defaultMs : Date.parse(named);
+    usagePausedUntilMs = Math.max(usagePausedUntilMs ?? 0, until);
+    logger.warn(
+      {
+        run_id: claimed.runId,
+        task_id: claimed.taskId,
+        signal: outcome.usageLimit.signal,
+        paused_until: new Date(usagePausedUntilMs).toISOString(),
+        estimated: named === null,
+      },
+      'this claimant’s usage limit was reached: it claims nothing until the limit resets, then resumes by itself (TD-031 decision 11)',
+    );
+  };
   let renewedAt: number | null = null;
 
   /** Writes or renews this claimant's liveness row when it is due; a failure waits for the next poll. */
@@ -393,6 +435,8 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
     await stopHeartbeat();
     const stopReason = runStoppedReasonOf(stopReasons.reasonFor(runId));
     stopReasons.forget(runId);
+    // Before the settle, so the offer that settle re-plans is not claimed back by this claimant.
+    noteUsageLimit(outcome, claimed);
     if (lost === 'self_terminated') {
       // Pushes nothing more (TD-031 §2): the row is the sweep's, after the skew grace.
       return;
@@ -414,7 +458,7 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
   /** Claims while a slot is free; answers how many it claimed this pass. */
   const fillOnce = async (): Promise<number> => {
     let claimedCount = 0;
-    while (!stopping && inFlight.size < concurrency) {
+    while (!stopping && inFlight.size < concurrency && !usagePaused()) {
       let claimed: Claimed | null;
       try {
         claimed = await claimOne();
@@ -495,6 +539,11 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
   return {
     get active() {
       return inFlight.size;
+    },
+    get usagePausedUntil() {
+      return usagePaused() && usagePausedUntilMs !== null
+        ? (new Date(usagePausedUntilMs).toISOString() as IsoDateTime)
+        : null;
     },
     drain: async () => {
       const before = claimedSoFar;

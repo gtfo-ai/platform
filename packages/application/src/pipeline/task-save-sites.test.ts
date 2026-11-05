@@ -116,7 +116,9 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 4],
   ['packages/application/src/pipeline/dead-letter.ts', 1],
   ['packages/application/src/pipeline/deadlines.ts', 1],
-  ['packages/application/src/recovery/run-lease.ts', 1],
+  // The lease sweep's two escalations: a run not at its task's current entry (WP-47), and an
+  // entry's second lost run (WP-286) — the first re-plans and saves nothing.
+  ['packages/application/src/recovery/run-lease.ts', 2],
   ['packages/application/src/pipeline/dependency-gate.ts', 1],
   // 12 since WP-60 review round 2: the CI handler's streak escalation left the handler for the
   // gate settlement both paths share (`jobs.ts` § `ciConvergence`), which writes through
@@ -199,7 +201,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2775 ms (median 1861 ms); 2× it, 15 s floor.
-  it('counts forty-one, which is the number the change states', () => {
+  it('counts forty-two, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -243,7 +245,10 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
     // **Plus one at WP-276**: an open offer with no stored plan escalates its task (`run_plan_missing`).
     // **Plus one at S-22.14**: a claim refused at admission pauses its task (`claim-admission.ts`).
-    expect(total).toBe(41);
+    // **Plus one at WP-286**: the lease sweep's escalation of an entry's second lost run, in the
+    // sweep's own transaction with its `retryOnTaskConflict` (WP-285's second usage limit escalates
+    // through `settle.ts`'s existing `escalateOnRun`, so it adds none).
+    expect(total).toBe(42);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   }, 15_000);
 

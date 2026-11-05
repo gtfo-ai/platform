@@ -17,12 +17,14 @@
  * | `APP_WORKSPACE_CONTROL_ROOT` | where the `ctl` volume is mounted, required |
  * | `APP_WORKER_STATE_DIR` | the `worker-state` volume: the worker credential lives here (0600) |
  * | `APP_WORKER_CONCURRENCY` | runs at once, default 1 |
+ * | `APP_WORKER_USAGE_PAUSE_DEFAULT` | seconds a usage limit that named no reset time pauses claiming (TD-031 §11), default 3600 |
  * | `PLATFORM_RUNTIME_IMAGE`, `PLATFORM_EGRESS_IMAGE` | the run and egress references `compose.worker.yml` pins; their `@sha256:` digests are what this worker reports it holds — only while its launcher resolves them on the local daemon |
  * | `HOST`, `PORT` | the local listener: `/healthz`, `/readyz`, `/internal/*` (compose network only) |
  * | `APP_WORKER_UI` | `enabled` (default) or `disabled`: the local page on container port 7357 (WP-292); `disabled` opens no port |
  * | `APP_WORKER_UI_PORT` | the **host** port `compose.worker.yml` publishes the page on, `127.0.0.1` only (default 7357) — the `Host` header the page must carry names it |
  * | `LOG_LEVEL` | |
  */
+import { DEFAULT_USAGE_PAUSE_SECONDS } from '@platform/application';
 import { imageDigestSchema, WORKER_UI_CONTAINER_PORT } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
 
@@ -79,6 +81,11 @@ export interface RemoteWorkerConfig {
   readonly ui?: WorkerUiConfig;
   /** The `sha256:` digest `PLATFORM_IMAGE` names — this worker's own build, for *update pending*. */
   readonly platformImageDigest?: string | null;
+  /**
+   * `APP_WORKER_USAGE_PAUSE_DEFAULT`, in ms (WP-285): how long a usage limit that named no reset
+   * time pauses claiming. Absent reads as {@link DEFAULT_USAGE_PAUSE_SECONDS}.
+   */
+  readonly usagePauseDefaultMs?: number;
 }
 
 export class RemoteWorkerConfigError extends Error {
@@ -166,6 +173,13 @@ export const loadRemoteWorkerConfig = (env: Env): RemoteWorkerConfig => {
   if (!/^[0-9]+$/.test(uiPortRaw) || !Number.isInteger(uiPort) || uiPort < 1 || uiPort > 65_535) {
     problems.push('APP_WORKER_UI_PORT must be a TCP port from 1 to 65535');
   }
+  const pauseRaw = read('APP_WORKER_USAGE_PAUSE_DEFAULT') || String(DEFAULT_USAGE_PAUSE_SECONDS);
+  const pauseSeconds = Number(pauseRaw);
+  if (!/^[0-9]+$/.test(pauseRaw) || pauseSeconds < 60 || pauseSeconds > 8 * 24 * 3_600) {
+    problems.push(
+      'APP_WORKER_USAGE_PAUSE_DEFAULT must be whole seconds from 60 to 691200 (8 days)',
+    );
+  }
   const logLevel = (read('LOG_LEVEL') || 'info') as RemoteWorkerConfig['logLevel'];
   if (!(LOG_LEVELS as readonly string[]).includes(logLevel)) {
     problems.push(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')}`);
@@ -195,6 +209,7 @@ export const loadRemoteWorkerConfig = (env: Env): RemoteWorkerConfig => {
     port,
     logLevel,
     commit: read('APP_COMMIT') || null,
+    usagePauseDefaultMs: pauseSeconds * 1_000,
     ui: {
       enabled: uiSwitch === 'enabled',
       host: '0.0.0.0',

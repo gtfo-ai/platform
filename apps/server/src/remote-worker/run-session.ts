@@ -99,7 +99,9 @@ export type RunSessionEnding =
   | 'lease_lost'
   | 'run_gone'
   | 'self_terminated'
-  | 'finish_failed';
+  | 'finish_failed'
+  /** Handed back unspent before its spawn call, the worker paused by a usage limit (WP-285). */
+  | 'released';
 
 /** Why a session stopped pushing — once set, nothing more leaves for this run. */
 type Loss = 'lease_lost' | 'run_gone' | 'self_terminated';
@@ -284,6 +286,15 @@ export interface RunSessionOptions {
   readonly logger: Logger;
   /** How often the self-termination bound is checked between beats. @default 5 000 */
   readonly selfTerminationCheckMs?: number;
+  /**
+   * Until when this worker's usage limit holds it (WP-285), or `null` — asked **before the spawn
+   * call**: a worker that learned of its pause after this run's claim (a sibling run's rejection)
+   * hands the run back unspent, `release` with `usage_limited` (TD-031's 2026-11-04 amendment, the
+   * decision 11 note), instead of spending a session it cannot finish. Absent is never paused.
+   */
+  readonly usagePausedUntil?: () => string | null;
+  /** The run's session reported a usage limit (`RunOutcome.usageLimit`): the worker pauses (WP-285). */
+  readonly onUsageLimit?: (limit: NonNullable<RunOutcome['usageLimit']>) => Promise<void> | void;
 }
 
 export interface RunSession {
@@ -748,6 +759,32 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
 
   // ── the run ───────────────────────────────────────────────────────────────
   const spawn = { asked: false, written: false, withheld: false };
+  /** WP-285: the claim was handed back unspent — nothing else is pushed for this run. */
+  let released = false;
+  /**
+   * The release a paused worker owes a run it has not spawned: `release usage_limited` with the
+   * reset, then nothing. A release the core refuses (`run_started`, `lease_lost`) or that does not
+   * arrive is logged and the session ends as the core decided; the claim is the core's either way.
+   */
+  const releaseForUsageLimit = async (until: string): Promise<boolean> => {
+    try {
+      await call('release', () =>
+        core.release({ epoch, reason: 'usage_limited', resets_at: until }),
+      );
+      released = true;
+      logger.warn(
+        { run_id: runId, lease_epoch: epoch, paused_until: until },
+        'this worker is paused by a usage limit, so the run it had claimed is handed back unspent before its CLI was asked for (TD-031 decision 6)',
+      );
+      return true;
+    } catch (error) {
+      logger.error(
+        { run_id: runId, err: error },
+        'this worker is paused by a usage limit and could not hand the run back; it is not started, and the core ends it',
+      );
+      return false;
+    }
+  };
   const spawnView = {
     hooks: {
       beforeCliSpawn: async () => false,
@@ -857,6 +894,11 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
             if (spawn.asked) return false;
             spawn.asked = true;
             if (loss !== null) return false;
+            const pausedUntil = options.usagePausedUntil?.() ?? null;
+            if (pausedUntil !== null && Date.parse(pausedUntil) > clock.now()) {
+              await releaseForUsageLimit(pausedUntil);
+              return false;
+            }
             try {
               await call('spawn', () => core.spawn({ epoch }));
               spawn.written = true;
@@ -882,6 +924,10 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
           ending = 'self_terminated';
           return ending;
         }
+        if (released) {
+          ending = 'released';
+          return ending;
+        }
         const report = notStartedReportOf(error, { spawnRequested: spawnView.mayHaveReachedCli() });
         logger.error(
           { run_id: runId, err: error, transient: report.transient },
@@ -892,8 +938,23 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
       }
       const stopReason = runStoppedReasonOf(stopReasons.reasonFor(runId));
       stopReasons.forget(runId);
+      // WP-285: the worker pauses before the finish, so the re-planned offer is not claimed back.
+      if (outcome.usageLimit !== undefined) {
+        await Promise.resolve(options.onUsageLimit?.(outcome.usageLimit)).catch(
+          (error: unknown) => {
+            logger.warn(
+              { run_id: runId, err: error },
+              'the worker could not record its usage pause',
+            );
+          },
+        );
+      }
       if (loss === 'self_terminated') {
         ending = 'self_terminated';
+        return ending;
+      }
+      if (released) {
+        ending = 'released';
         return ending;
       }
       if (!spawnView.mayHaveReachedCli()) {

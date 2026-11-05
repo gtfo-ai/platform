@@ -174,7 +174,7 @@ export interface ScenarioSpec {
    * The scripted CLI ends `error_max_turns` instead of succeeding (backlog 467) — `agent-workspace.ts`.
    * Only meaningful in `real-over-fake-cli` mode.
    */
-  readonly endsWith?: 'error_max_turns';
+  readonly endsWith?: 'error_max_turns' | 'usage_limit';
 }
 
 const transcriptFor = (runId: Id, at: string, text: string): TranscriptEvent[] => [

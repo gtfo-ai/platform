@@ -2549,6 +2549,20 @@ export const runSeatSchema = z.strictObject({
    * seat whose user is known. Untrusted text like the machine's name. Absent on a server seat.
    */
   user_name: nonEmptyStringSchema.max(200).optional(),
+  /**
+   * WP-285 (TD-031 §11): the seat's worker is **paused by a usage limit** now — until when, whether
+   * that instant is the default pause rather than a reset the limit named (*until about*), and the
+   * organisation's timezone the page shows it in. Absent or `null` when it is not paused by a limit
+   * (a server seat, a worker taking work, a worker its owner paused).
+   */
+  usage_pause: z
+    .strictObject({
+      until: isoDateTimeSchema,
+      estimated: z.boolean(),
+      timezone: nonEmptyStringSchema.max(64),
+    })
+    .nullable()
+    .optional(),
 });
 export type RunSeat = z.infer<typeof runSeatSchema>;
 

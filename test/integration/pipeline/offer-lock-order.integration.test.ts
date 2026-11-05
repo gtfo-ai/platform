@@ -31,6 +31,7 @@ import {
   createRunStopReasons,
   createTestRunPlanSealer,
   createWorkingCalendar,
+  declarePipelineQueues,
   INITIAL_TASK_VERSION,
   type PipelineStore,
   type RunOutcome,
@@ -43,7 +44,7 @@ import {
 } from '@platform/application';
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
-import { cost, eventing, pipeline, recovery, redaction } from '@platform/infrastructure';
+import { cost, eventing, jobs, pipeline, recovery, redaction } from '@platform/infrastructure';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { recentInstant } from '../../support/recent-instant.js';
@@ -774,6 +775,9 @@ describe('the database unreachable past the TTL (WP-276 criterion 4)', () => {
     expect(started).toBe(0);
     // The sweep may act only at lease_expires_at + grace.
     const expires = new Date(lease.rows[0]?.expires as Date).getTime();
+    // WP-286: the swept run is its entry's first loss, so the sweep re-plans it into this queue.
+    const queue = jobs.createInMemoryJobs().jobs;
+    await declarePipelineQueues(queue);
     const sweepAt = (ms: number) =>
       sweepExpiredRunLeases({
         store: recovery.createPostgresExpiredRunStore(),
@@ -786,6 +790,7 @@ describe('the database unreachable past the TTL (WP-276 criterion 4)', () => {
         skewGraceMs: 120_000,
         wallClockMs: 3_600_000,
         limit: 10,
+        replan: { jobs: queue, revokeCredentials: async () => {} },
       });
     expect((await sweepAt(expires + 119_000)).ended).toBe(0);
     expect((await sweepAt(expires + 121_000)).ended).toBe(1);

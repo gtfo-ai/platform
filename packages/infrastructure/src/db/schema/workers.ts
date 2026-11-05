@@ -29,6 +29,8 @@ export const workers = pgTable('workers', {
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
   pausedUntil: timestamp('paused_until', { withTimezone: true }),
   pausedReason: text('paused_reason').$type<'usage_limited'>(),
+  /** The pause is the default, not a reset the limit named (migration 0100, WP-285): *until about*. */
+  pausedUntilEstimated: boolean('paused_until_estimated').notNull().default(false),
   /** The owner's hold from the worker's local page (migration 0099, WP-292); `null` while not held. */
   manuallyPausedAt: timestamp('manually_paused_at', { withTimezone: true }),
   concurrency: integer('concurrency').notNull().default(1),

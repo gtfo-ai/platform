@@ -29,6 +29,7 @@ import {
 } from '../ui/activity.js';
 import type { BotPhase } from '../ui/bot/bot.js';
 import { ROLE_LABEL, stageLabel } from '../ui/humanize.js';
+import { usagePauseWords } from '../ui/usage-pause.js';
 
 /** The worker's own state, in a person's words. */
 export type WorkerMode = 'claiming' | 'paused' | 'usage_paused' | 'draining' | 'drained';
@@ -45,9 +46,26 @@ export const workerModeOf = (state: WorkerLocalState, nowMs: number): WorkerMode
 export const WORKER_MODE_WORDS: Readonly<Record<WorkerMode, string>> = {
   claiming: 'Taking work',
   paused: 'Paused by you — it takes no new work',
-  usage_paused: 'Paused: your Claude usage limit was reached',
+  usage_paused: 'Paused — your Claude usage limit was reached',
   draining: 'Draining — finishing what runs, taking nothing new',
   drained: 'Drained — nothing runs and it takes nothing new; resume it, or stop the worker',
+};
+
+/**
+ * The worker's state as its badge says it — a usage pause with **when it ends** (WP-285): *Paused —
+ * usage limit until 14:00*, in this machine's own zone (the browser's), *until about* when the limit
+ * named no reset and the instant is the worker's default pause. When the instant passes the mode is
+ * `claiming` again by itself.
+ */
+export const workerModeWords = (state: WorkerLocalState, nowMs: number): string => {
+  const mode = workerModeOf(state, nowMs);
+  if (mode === 'usage_paused' && state.usage_paused_until !== null) {
+    return usagePauseWords(
+      { until: state.usage_paused_until, estimated: state.usage_paused_estimated },
+      nowMs,
+    );
+  }
+  return WORKER_MODE_WORDS[mode];
 };
 
 /** The connection, in a person's words. */

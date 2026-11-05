@@ -579,6 +579,19 @@ worker_name}`) so the run page can say who executed a run (WP-283 (5)).
 both `426` below protocol 2 (before the credential is read), and two keys a version-1 worker is never
 sent, because every schema is strict: the handshake's `worker.manually_paused_at` and the package's
 `display` block (`{projectKey, ticketKey, title}`, the title from the redacted ticket snapshot).
+`POST pause {until, reason: usage_limited, estimated?}` (worker credential, **served since WP-285**, TD-031
+decision 11) stores a usage limit's pause — `workers.paused_until`, `paused_reason` and
+`paused_until_estimated` (migration 0100: `true` when the limit named no reset and `until` is the worker's
+`APP_WORKER_USAGE_PAUSE_DEFAULT`, which the screens show as *until about*) — and answers `204`; the claim
+refuses the worker until then, and nothing clears the pause but its own end. It never touches
+`manually_paused_at`: a person's hold and a limit's timer are two columns. A worker posts it **before** the
+`finish` of the run its limit ended (so the re-planned offer is not offered back to it), and a worker that
+learned of its pause after a claim and before its spawn call hands that run back with `release
+usage_limited` instead of starting it. `GET /api/workers` publishes `paused_until_estimated` per worker
+and the organisation's `timezone` beside the list, and `GET /api/runs/:id`'s `seat` gains `usage_pause`
+(`{until, estimated, timezone}`, absent or `null` unless the seat's worker is paused by a limit now), so
+the Workers screen and the run page both say *Paused — usage limit until HH:MM*.
+
 `POST manual-pause {paused, via}` (worker credential) is a state assertion over `workers.manually_paused_at`
 (migration 0099) — one `human_actions` row `worker.pause`/`worker.resume` per change, `params: {worker_id,
 via}` with `via` one of `worker_ui`, `worker_ui_drain`, `worker_internal_drain`, `worker_start` (TD-031's
@@ -601,7 +614,7 @@ carries the value; the Integrations screen shows the residual beside the switch.
 token travels in the package and a deploy key never does (the package carries the SSH route and the public
 key; the worker signs through `ssh-sign`).
 
-**The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls, WP-284 `release` and `compose.yml`; `pause` and `update-report` are WP-285's and WP-287's):
+**The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls, WP-284 `release` and `compose.yml`, WP-285 `pause`; `update-report` is WP-287's):
 `packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (2 since WP-292), `ACCEPTED_WORKER_PROTOCOLS`
 (`[N-1, N]`, today `[1, 2]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
 paths, the bounds, and a strict zod schema for every request and response body of TD-031 §9. Two

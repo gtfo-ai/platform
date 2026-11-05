@@ -430,7 +430,8 @@ describe('`tasks` column ownership (WP-15e)', () => {
  * `task-save-sites.test.ts` reads them; a call through an alias is invisible, as there.
  */
 const ADD_SPEND_CALLERS: ReadonlyMap<string, number> = new Map([
-  ['packages/application/src/pipeline/settle.ts', 4],
+  // Since WP-285 a fifth: `recordUsageLimited`, after its own conditional `finish` won the row.
+  ['packages/application/src/pipeline/settle.ts', 5],
   // The ask executor's three endings that add a run's spend (WP-31), each after its own `finish` won.
   ['packages/application/src/ask/executor.ts', 3],
   // Q70 (b): the late cost of a run another writer ended, refused once the row carries a figure.

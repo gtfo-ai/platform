@@ -41,11 +41,10 @@ describe('CONTRACTS_AHEAD_OF_STORAGE', () => {
     }
   });
 
-  it('declares rate_limited ahead of run_terminal_reason until WP-285 stores it (TD-031 decision 11)', () => {
-    expect(CONTRACTS_AHEAD_OF_STORAGE.run_terminal_reason).toEqual([
-      { value: 'rate_limited', emptiedBy: 'WP-285' },
-    ]);
+  it('declares nothing since WP-285 stored rate_limited (TD-031 decision 11, migration 0100)', () => {
+    expect(CONTRACTS_AHEAD_OF_STORAGE).toEqual({});
     expect(runTerminalReasonSchema.options.at(-1)).toBe('rate_limited');
+    expect(pgEnumValues('run_terminal_reason')?.at(-1)).toBe('rate_limited');
   });
 
   it('holds every Drizzle pgEnum with a declared entry to the contract minus that entry', () => {
@@ -70,24 +69,32 @@ describe('CONTRACTS_AHEAD_OF_STORAGE', () => {
 });
 
 describe('storedLabelsOf', () => {
+  /** A declaration of the shape WP-273 shipped, for the mechanism itself. */
+  const DECLARED = { run_terminal_reason: [{ value: 'rate_limited', emptiedBy: 'WP-285' }] };
+
   it('answers the published list unchanged for an enum with no declaration', () => {
     expect(storedLabelsOf('task_state', ['a', 'b'])).toEqual(['a', 'b']);
-  });
-
-  it('strips a declared tail', () => {
-    expect(storedLabelsOf('run_terminal_reason', ['success', 'shutdown', 'rate_limited'])).toEqual([
+    expect(storedLabelsOf('run_terminal_reason', ['success', 'rate_limited'])).toEqual([
       'success',
-      'shutdown',
+      'rate_limited',
     ]);
   });
 
+  it('strips a declared tail', () => {
+    expect(
+      storedLabelsOf('run_terminal_reason', ['success', 'shutdown', 'rate_limited'], DECLARED),
+    ).toEqual(['success', 'shutdown']);
+  });
+
   it('refuses a declared value that is not published, or not the tail', () => {
-    expect(() => storedLabelsOf('run_terminal_reason', ['success', 'shutdown'])).toThrow(
+    expect(() => storedLabelsOf('run_terminal_reason', ['success', 'shutdown'], DECLARED)).toThrow(
       ContractsAheadDeclarationError,
     );
     expect(() =>
-      storedLabelsOf('run_terminal_reason', ['success', 'rate_limited', 'shutdown']),
+      storedLabelsOf('run_terminal_reason', ['success', 'rate_limited', 'shutdown'], DECLARED),
     ).toThrow(/must be the last 1 of the contract's list/);
-    expect(() => storedLabelsOf('run_terminal_reason', [])).toThrow(ContractsAheadDeclarationError);
+    expect(() => storedLabelsOf('run_terminal_reason', [], DECLARED)).toThrow(
+      ContractsAheadDeclarationError,
+    );
   });
 });

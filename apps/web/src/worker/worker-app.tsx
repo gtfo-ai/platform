@@ -54,8 +54,8 @@ import {
   slotsWords,
   spendWords,
   tailLinesOf,
-  WORKER_MODE_WORDS,
   workerModeOf,
+  workerModeWords,
 } from './model.js';
 
 /** A message as a sentence: its first letter capitalised (the worker's words start lower-case). */
@@ -379,7 +379,7 @@ export const WorkerApp = ({
           </span>
           <span className="text-xs text-fg-muted tabular-nums">{slotsWords(state)}</span>
           <span data-mode={mode} className="worker-badge text-xs">
-            {WORKER_MODE_WORDS[mode]}
+            {workerModeWords(state, at)}
           </span>
         </div>
         <ul

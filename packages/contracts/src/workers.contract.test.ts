@@ -43,6 +43,7 @@ const summary = {
   state: 'active',
   revoked_at: null,
   paused_until: null,
+  paused_until_estimated: false,
   manually_paused_at: null,
   paused_reason: null,
   concurrency: 1,
@@ -164,8 +165,14 @@ describe('the people’s half', () => {
       workerSummarySchema.safeParse({ ...summary, image_digests: ['platform:latest'] }).success,
     ).toBe(false);
     expect(workerSummarySchema.safeParse({ ...summary, state: 'paused' }).success).toBe(false);
-    expect(workersResponseSchema.safeParse({ items: [summary], scope: 'own' }).success).toBe(true);
-    expect(workersResponseSchema.safeParse({ items: [], scope: 'everyone' }).success).toBe(false);
+    expect(
+      workersResponseSchema.safeParse({ items: [summary], scope: 'own', timezone: 'UTC' }).success,
+    ).toBe(true);
+    expect(
+      workersResponseSchema.safeParse({ items: [], scope: 'everyone', timezone: 'UTC' }).success,
+    ).toBe(false);
+    // WP-285: the zone a usage pause is shown in is part of the list, never left to the browser.
+    expect(workersResponseSchema.safeParse({ items: [summary], scope: 'own' }).success).toBe(false);
   });
 
   it('lists a worker’s live runs by id only, strictly (S-23.15)', () => {

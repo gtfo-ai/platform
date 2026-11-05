@@ -252,7 +252,7 @@ export const fakeCliScriptFor = (
      * no structured output, `is_error`, and {@link MAX_TURNS_SCRIPTED} turns — the ending of the
      * first local test's Developer run.
      */
-    readonly endsWith?: 'error_max_turns';
+    readonly endsWith?: 'error_max_turns' | 'usage_limit';
   },
 ): runnerAdapters.FakeCliScript => {
   const stage = spec.stage ?? 'stage';
@@ -319,6 +319,25 @@ export const fakeCliScriptFor = (
     },
     // Nothing below runs until the platform has pushed this many more user turns (see `awaitSteers`).
     ...Array.from({ length: scenario.awaitSteers ?? 0 }, () => ({ step: 'await_user' as const })),
+    // WP-285: the subscription's limit — a rejected `rate_limit_event` an hour from now (in ms, which
+    // the magnitude rule reads as such), then the `429` result the CLI fails at once with.
+    ...(scenario.endsWith === 'usage_limit'
+      ? [
+          {
+            step: 'emit' as const,
+            message: {
+              type: 'rate_limit_event',
+              rate_limit_info: {
+                status: 'rejected',
+                rateLimitType: 'five_hour',
+                resetsAt: Date.now() + 60 * 60_000,
+              },
+              uuid: '00000002-0000-4000-8000-000000000285',
+              session_id: SESSION,
+            },
+          },
+        ]
+      : []),
     {
       step: 'emit',
       message: {
@@ -330,12 +349,20 @@ export const fakeCliScriptFor = (
               num_turns: MAX_TURNS_SCRIPTED,
               errors: [],
             }
-          : {
-              subtype: 'success',
-              is_error: false,
-              num_turns: 1,
-              result: `${stage} finished`,
-            }),
+          : scenario.endsWith === 'usage_limit'
+            ? {
+                subtype: 'success',
+                is_error: true,
+                api_error_status: 429,
+                num_turns: 1,
+                result: 'Claude usage limit reached.',
+              }
+            : {
+                subtype: 'success',
+                is_error: false,
+                num_turns: 1,
+                result: `${stage} finished`,
+              }),
         duration_ms: 1200,
         duration_api_ms: 1000,
         stop_reason: 'end_turn',
@@ -409,7 +436,7 @@ export const scriptedWorkspaces = (
     readonly awaitSteers?: number;
     readonly bash?: ScenarioBash;
     readonly writes?: ScenarioWrites;
-    readonly endsWith?: 'error_max_turns';
+    readonly endsWith?: 'error_max_turns' | 'usage_limit';
   },
   /**
    * Called — and **awaited** — inside `provision`, before the CLI exists.

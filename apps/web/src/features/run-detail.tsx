@@ -76,6 +76,7 @@ import { PageHeader } from '../ui/page-header.js';
 import { StatusIcon } from '../ui/status.js';
 import { CodeText, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { usagePauseWords } from '../ui/usage-pause.js';
 import { ActivityList } from '../viz/flow/activity-list.js';
 import { activityRows } from '../viz/flow/activity-rows.js';
 import { FeedbackForm } from './feedback.js';
@@ -193,7 +194,13 @@ export const executedByOf = (
       ? { kind: 'server' }
       : { kind: 'worker', name: seat.worker_name, user: seat.user_name ?? null };
 
-const ExecutedBy = ({ seat }: { readonly seat: RunSeat | null | undefined }): ReactElement => {
+const ExecutedBy = ({
+  seat,
+  nowMs,
+}: {
+  readonly seat: RunSeat | null | undefined;
+  readonly nowMs: number;
+}): ReactElement => {
   const executed = executedByOf(seat);
   if (executed === null) {
     return <span className="text-base text-fg-muted">not claimed yet</span>;
@@ -201,16 +208,25 @@ const ExecutedBy = ({ seat }: { readonly seat: RunSeat | null | undefined }): Re
   if (executed.kind === 'server') {
     return <span className="text-base">the platform server</span>;
   }
+  const pause = seat?.usage_pause ?? null;
   return (
-    <span className="text-base break-all">
-      {executed.name === null ? 'a remote worker' : <UntrustedText value={executed.name} />}{' '}
-      {executed.user === null ? (
-        '(worker)'
-      ) : (
-        <>
-          (<UntrustedText value={executed.user} />
-          ’s worker)
-        </>
+    <span className="flex flex-col gap-0.5">
+      <span className="text-base break-all">
+        {executed.name === null ? 'a remote worker' : <UntrustedText value={executed.name} />}{' '}
+        {executed.user === null ? (
+          '(worker)'
+        ) : (
+          <>
+            (<UntrustedText value={executed.user} />
+            ’s worker)
+          </>
+        )}
+      </span>
+      {/* WP-285: the worker's usage limit holds it — the Workers screen's own sentence. */}
+      {pause === null || Date.parse(pause.until) <= nowMs ? null : (
+        <span data-usage-pause="" className="text-sm text-fg-muted">
+          {usagePauseWords(pause, nowMs)}
+        </span>
       )}
     </span>
   );
@@ -238,7 +254,7 @@ const RunSummary = ({
       />
       <Metric
         label="Executed by"
-        value={<ExecutedBy seat={record.seat} />}
+        value={<ExecutedBy seat={record.seat} nowMs={nowMs} />}
         definition="Which claimant ran this run: the platform's own server, or a developer's remote worker named by its owner."
       />
       <Metric

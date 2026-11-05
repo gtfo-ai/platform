@@ -234,9 +234,10 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
     await sqlOf(tx).query(
       `insert into run_offers (id, run_id, task_id, project_id, stage, attempt, kind, offered_at,
                                assignee_user_id, assignee_until, server_from, workers_from,
-                               expires_at)
+                               expires_at, excluded_worker_ids)
        values ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9, $10::timestamptz,
-               $11::timestamptz, $12::timestamptz, $13::timestamptz)`,
+               $11::timestamptz, $12::timestamptz, $13::timestamptz,
+               array(select distinct unnest($14::uuid[])))`,
       [
         offer.id,
         offer.runId,
@@ -251,8 +252,35 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
         offer.routing.serverFrom,
         offer.routing.workersFrom,
         offer.routing.expiresAt,
+        [...(offer.excludedWorkerIds ?? [])],
       ],
     );
+  },
+  carriedExclusions: async (tx, entry): Promise<readonly Id[]> => {
+    // TD-031 §12: the entry's newest stage offer — its exclusions, plus the worker it lost to the
+    // sweep or to a usage limit. `ordinality` keeps the order they were excluded in.
+    const { rows } = await sqlOf(tx).query<{ worker_id: string }>(
+      `with previous as (
+         select o.excluded_worker_ids,
+                case when r.terminal_reason in ('rate_limited', 'lease_expired')
+                     then o.worker_id end as lost_worker_id
+           from run_offers o
+           join runs r on r.id = o.run_id
+          where o.kind = 'stage' and o.task_id = $1 and o.stage = $2 and o.attempt = $3
+          order by o.offered_at desc, o.id desc
+          limit 1)
+       select worker_id from (
+         select w.worker_id, min(w.position) as position
+           from previous p,
+                lateral (select e.worker_id, e.position
+                           from unnest(p.excluded_worker_ids) with ordinality as e(worker_id, position)
+                         union all
+                         select p.lost_worker_id, 2147483647 where p.lost_worker_id is not null) w
+          group by w.worker_id) ordered
+        order by position`,
+      [entry.taskId, entry.stage, entry.attempt],
+    );
+    return rows.map((row) => row.worker_id as Id);
   },
   claim: async (tx, claim): Promise<ClaimedRunOffer | null> => {
     const worker = claim.worker;

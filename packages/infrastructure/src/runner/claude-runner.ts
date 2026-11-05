@@ -103,6 +103,7 @@ import type {
   RunStop,
   RunStoppedReason,
   RunTranscriptSink,
+  RunUsageLimit,
   SecretRedactor,
   SessionMirrorPort,
   SteerMessage,
@@ -149,6 +150,7 @@ import {
   type TranscriptEnvelope,
   terminalReasonOf,
 } from './transcript-normaliser.js';
+import { mergeUsageLimits, usageLimitOf } from './usage-limit.js';
 
 export type QueryFunction = typeof sdkQuery;
 
@@ -591,6 +593,8 @@ const startRun = (
   let stallDetail: string | null = null;
   /** The give-up's error when the CLI's `result` came after retries only, else `null` (WP-127). */
   let gaveUpDetail: string | null = null;
+  /** The usage limit the session reported, merged across its signals (WP-285, `./usage-limit.ts`). */
+  let usageLimit: RunUsageLimit | null = null;
 
   const requestStop = (cause: StopCause): void => {
     if (stopCause !== null) {
@@ -863,6 +867,7 @@ const startRun = (
       await handleStreamEvent(message);
       return;
     }
+    usageLimit = mergeUsageLimits(usageLimit, usageLimitOf(message, deps.clock.now()));
     const progress = progressOf(message);
     if (progress === 'retry') {
       const status = (message as { readonly error_status?: unknown }).error_status;
@@ -1100,7 +1105,37 @@ const startRun = (
     return validated.data;
   };
 
+  /**
+   * **A usage limit names the ending** (WP-285, TD-031 decision 11): a run that did not complete
+   * after its session reported a limit ends `failed` / `rate_limited`, carrying the limit, whatever
+   * the CLI's own ending said (`error_during_execution`, a stall while the CLI kept retrying, a
+   * `429` result with no usable cost). Its measured cost is kept as any ending's. A person's stop and
+   * a runner's shutdown keep their own names — they decided the ending, the limit did not.
+   */
   const outcomeOf = (failure: string | null): RunOutcome => {
+    const outcome = sessionOutcomeOf(failure);
+    if (
+      usageLimit === null ||
+      outcome.status === 'completed' ||
+      stopCause === 'cancelled' ||
+      stopCause === 'taken_over' ||
+      stopCause === 'shutdown'
+    ) {
+      return outcome;
+    }
+    return {
+      ...outcome,
+      status: 'failed',
+      terminalReason: 'rate_limited',
+      usageLimit,
+      error:
+        usageLimit.resetsAt === null
+          ? `the claimant's usage limit was reached (${usageLimit.signal}); the session named no reset time`
+          : `the claimant's usage limit was reached (${usageLimit.signal}); it resets at ${usageLimit.resetsAt}`,
+    };
+  };
+
+  const sessionOutcomeOf = (failure: string | null): RunOutcome => {
     const wallMs = Math.max(0, deps.clock.now() - startedAt);
     const finished = result;
     const usage = finished === null ? ZERO_USAGE : normaliseUsage(finished.usage);

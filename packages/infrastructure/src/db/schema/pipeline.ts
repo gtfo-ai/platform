@@ -274,6 +274,16 @@ export const taskStages = pgTable('task_stages', {
    */
   attachedFeedbackSent: boolean('attached_feedback_sent').notNull().default(false),
   /**
+   * Runs of this entry the lease sweep ended `lease_expired` (migration 0100, WP-286, TD-031 §12):
+   * the first re-plans the entry, the second escalates.
+   */
+  lostRuns: integer('lost_runs').notNull().default(0),
+  /**
+   * Runs of this entry a usage limit ended `rate_limited` (migration 0100, WP-285, TD-031 §11): the
+   * first re-plans the entry, the second escalates.
+   */
+  usageLimitedRuns: integer('usage_limited_runs').notNull().default(0),
+  /**
    * The ticket's status when the human-return window first read it during this entry into a human
    * stage (WP-178 review, migration 0089, TD-029 decision 7's amendment (a)). Null on every other
    * row. Written once (`coalesce`) by `observeHumanStageStatus`.

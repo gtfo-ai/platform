@@ -3,6 +3,7 @@
  *
  *   POST /api/worker/v1/handshake               worker credential
  *   POST /api/worker/v1/claims                  worker credential, held ≤ 25 s
+ *   POST /api/worker/v1/pause                   worker credential — a usage limit's pause (WP-285)
  *   POST /api/worker/v1/runs/:id/heartbeat      run token, held ≤ 20 s
  *   POST /api/worker/v1/runs/:id/release        run token
  *   POST /api/worker/v1/runs/:id/spawn          run token
@@ -83,6 +84,7 @@ import {
   workerLateCostResponseSchema,
   workerLeaseLostBodySchema,
   workerPauseReasonSchema,
+  workerPauseRequestSchema,
   workerReleaseResponseSchema,
   workerRunReleaseRequestSchema,
   workerSpawnRequestSchema,
@@ -543,6 +545,60 @@ export const registerWorkerProtocolRoutes = async (
           return reply.code(204).send(null);
         }
       }
+    },
+  );
+
+  /** The furthest a usage pause may end: a weekly limit plus a day, as `resetsAtOf` reads a reset. */
+  const MAX_USAGE_PAUSE_MS = 8 * 86_400_000;
+
+  /**
+   * **`POST pause`** (WP-285, TD-031 decision 11): the worker hit its usage limit and claims nothing
+   * before `until`; the core stores it so the claim's eligibility (`paused_until`) refuses the
+   * worker meanwhile and the Workers screen says so. A person's *Pause* is `manual-pause`'s column
+   * and is never touched here, and nothing clears it when `until` passes — the limit's pause simply
+   * ends.
+   */
+  typed.post(
+    path(WORKER_PATHS.pause),
+    {
+      preValidation: authenticateWorker,
+      schema: {
+        summary: 'Pause the worker’s claiming until its usage limit resets (TD-031 §11)',
+        description:
+          'Worker credential. `{until, reason: usage_limited, estimated?}` with `until` at most eight days ahead (`400 pause_too_long` past it): stores `paused_until`, `paused_reason` and whether `until` is the worker’s default pause rather than a reset the limit named (`estimated`, the screen’s *until about*). The claim refuses the worker until then; a person’s hold (`manual-pause`) is a separate column this never touches. A repeat stores the same. `204` (WP-285).',
+        tags: ['worker'],
+        body: workerPauseRequestSchema,
+        response: {
+          204: z.null(),
+          400: apiErrorSchema,
+          401: apiErrorSchema,
+          426: workerUpgradeRequiredBodySchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const subject = workers.get(request);
+      if (subject === undefined) {
+        throw unauthenticated('the worker credential is missing');
+      }
+      await workerContact(request);
+      // The runner's own bound on a believable reset (a weekly limit and a day), held here too.
+      if (Date.parse(request.body.until) - now().getTime() > MAX_USAGE_PAUSE_MS) {
+        throw new HttpError(
+          400,
+          'pause_too_long',
+          `a usage pause ends within ${String(MAX_USAGE_PAUSE_MS / 86_400_000)} days; this one does not`,
+        );
+      }
+      const stored = await options.store.setUsagePause({
+        workerId: subject.workerId,
+        until: new Date(request.body.until),
+        estimated: request.body.estimated ?? false,
+      });
+      if (!stored) {
+        throw unauthenticated('the worker credential names no worker');
+      }
+      return reply.code(204).send(null);
     },
   );
 

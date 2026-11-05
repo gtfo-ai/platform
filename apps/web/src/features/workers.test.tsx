@@ -50,6 +50,7 @@ const worker = (overrides: Partial<WorkerSummary> = {}): WorkerSummary => ({
   paused_until: null,
   manually_paused_at: null,
   paused_reason: null,
+  paused_until_estimated: false,
   concurrency: 1,
   running: [],
   ...overrides,
@@ -64,7 +65,11 @@ interface Sent {
   readonly body: unknown;
 }
 
-const fetchFor = (device: WorkerDeviceLookup | 'missing', workers: WorkerSummary[] = []) => {
+const fetchFor = (
+  device: WorkerDeviceLookup | 'missing',
+  workers: WorkerSummary[] = [],
+  timezone = 'UTC',
+) => {
   const sent: Sent[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
@@ -94,7 +99,7 @@ const fetchFor = (device: WorkerDeviceLookup | 'missing', workers: WorkerSummary
         expired_runs: 0,
       });
     }
-    if (url.endsWith('/api/workers')) return json({ items: workers, scope: 'own' });
+    if (url.endsWith('/api/workers')) return json({ items: workers, scope: 'own', timezone });
     if (url.endsWith('/api/version')) {
       return json({ version: '0.0.0-dev', commit: null, built_at: null });
     }
@@ -322,11 +327,59 @@ describe('the Workers screen', () => {
     expect(rowOf(online.id)).toContain('Online');
     expect(rowOf(online.id)).toContain('1 of 2 busy');
     expect(rowOf(online.id)).toContain('seen just now');
-    expect(rowOf(paused.id)).toContain('Paused until');
-    expect(rowOf(paused.id)).toContain('Hit a usage limit');
+    // WP-285: the same sentence the worker's own page says, the time in the organisation's zone.
+    expect(rowOf(paused.id)).toContain('Paused — usage limit until 13:00');
     expect(rowOf(paused.id)).not.toContain('usage_limited');
+    expect(rowOf(paused.id)).not.toContain('Online');
     expect(rowOf(held.id)).toContain('Paused by its owner');
     expect(rowOf(held.id)).not.toContain('Online');
+  });
+
+  it('shows a usage pause in the organisation’s zone, *about* for a default one, and a past one as none (WP-285)', async () => {
+    const NOW = Date.parse('2026-11-04T12:10:00.000Z');
+    const named = worker({
+      id: '00000000-0000-4000-8000-0000000002b1',
+      name: 'dana-laptop',
+      last_seen_at: '2026-11-04T12:09:30.000Z',
+      paused_until: '2026-11-04T13:00:00.000Z',
+      paused_reason: 'usage_limited',
+    });
+    const guessed = worker({
+      id: '00000000-0000-4000-8000-0000000002b2',
+      name: 'eve-laptop',
+      last_seen_at: '2026-11-04T12:09:30.000Z',
+      paused_until: '2026-11-04T13:30:00.000Z',
+      paused_reason: 'usage_limited',
+      paused_until_estimated: true,
+    });
+    const lapsed = worker({
+      id: '00000000-0000-4000-8000-0000000002b3',
+      name: 'finn-laptop',
+      last_seen_at: '2026-11-04T12:09:30.000Z',
+      paused_until: '2026-11-04T11:00:00.000Z',
+      paused_reason: 'usage_limited',
+    });
+    // A person's hold and a limit at once: the person's hold is what the row says.
+    const both = worker({
+      id: '00000000-0000-4000-8000-0000000002b4',
+      name: 'gus-laptop',
+      last_seen_at: '2026-11-04T12:09:30.000Z',
+      paused_until: '2026-11-04T13:00:00.000Z',
+      paused_reason: 'usage_limited',
+      manually_paused_at: '2026-11-04T12:00:00.000Z',
+    });
+    const { fetchImpl } = fetchFor('missing', [named, guessed, lapsed, both], 'Europe/Prague');
+    const { container } = render(createApp({ fetchImpl, realtime: false, now: () => NOW }).element);
+    await waitFor(() => {
+      expect(container.querySelectorAll('[data-worker]')).toHaveLength(4);
+    });
+    const rowOf = (id: string) =>
+      container.querySelector(`[data-worker="${id}"]`)?.closest('li')?.textContent ?? '';
+    expect(rowOf(named.id)).toContain('Paused — usage limit until 14:00');
+    expect(rowOf(guessed.id)).toContain('Paused — usage limit until about 14:30');
+    expect(rowOf(lapsed.id)).toContain('Online');
+    expect(rowOf(lapsed.id)).not.toContain('Paused');
+    expect(rowOf(both.id)).toContain('Paused by its owner');
   });
 
   it('offers no revoke for a revoked worker', async () => {

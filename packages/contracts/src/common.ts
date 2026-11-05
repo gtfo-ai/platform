@@ -365,15 +365,14 @@ export const runTerminalReasonSchema = z.enum([
    */
   'shutdown',
   /**
-   * **Appended at WP-273, ahead of storage** (TD-031 decision 11, TD-032 decision 1's enum rule): a
-   * run a usage limit ended mid-run — not the task's failure, so the stage entry is re-offered once.
-   * It is in the contract **before** anything writes it and before the `run_terminal_reason` enum
-   * has the label: `alter type … add value` is `additive` only when the value is already in
-   * `packages/contracts` at the migration's base commit (`migrations:check`), so the build that runs
-   * beside the migration can parse every value the database may hold. **No writer and no database
-   * value yet** — WP-285 adds both (its migration and its detection), and empties
-   * `CONTRACTS_AHEAD_OF_STORAGE` (`packages/infrastructure/src/db/contracts-ahead.ts`), which is what
-   * the parity tests hold this difference to. Last, because the migration will append.
+   * **Appended at WP-273, ahead of storage; stored since WP-285** (migration 0100, TD-031 decision
+   * 11): a run a usage limit ended mid-run — the runner saw a `rate_limit_event` whose `status` is
+   * `rejected` or whose `errorCode` is `credits_required`, or a `result` with `api_error_status` 429
+   * (`runner/claude-runner.ts`). Not the task's failure: `settleRun` plans the stage entry once more
+   * with the limited worker excluded (`task_stages.usage_limited_runs` counts it) and escalates the
+   * second. A claim about the claimant's **subscription**, never about the model or the task. Last,
+   * because migration 0100 appended it (`test/integration/db/enums.integration.test.ts` compares the
+   * orders).
    */
   'rate_limited',
 ]);

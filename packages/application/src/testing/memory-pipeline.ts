@@ -129,6 +129,9 @@ interface StageRow {
   /** Whether the window saw the ticket at the `qa` slot during this entry (migration 0089). */
   ticketSeenAtQa?: boolean;
   signature: string | null;
+  /** `task_stages.lost_runs` and `usage_limited_runs` (migration 0100, WP-285/WP-286). */
+  lostRuns?: number;
+  usageLimitedRuns?: number;
   enteredAt: number;
   /**
    * The instant the row was entered, on {@link MemoryPipelineStoreOptions.now} — PostgreSQL's
@@ -999,6 +1002,23 @@ export const createMemoryPipelineStore = (
         exitedAt: null,
       });
     },
+    countStageRunEnding: async (_tx, entry) => {
+      const row = [...stages]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate.taskId === entry.taskId &&
+            candidate.stage === entry.stage &&
+            candidate.attempt === entry.attempt,
+        );
+      if (row === undefined) return null;
+      if (entry.kind === 'lost') {
+        row.lostRuns = (row.lostRuns ?? 0) + 1;
+        return row.lostRuns;
+      }
+      row.usageLimitedRuns = (row.usageLimitedRuns ?? 0) + 1;
+      return row.usageLimitedRuns;
+    },
     recordStageExited: async (_tx, entry) => {
       const state = taskStageExitStateSchema.parse(entry.state);
       // Parsed before anything moves, as the SQL store parses before its statement (WP-73).
@@ -1700,8 +1720,15 @@ export const createMemoryPipelineStore = (
           `task ${offer.taskId} already has an open or claimed stage offer (run_offers_one_live_stage_per_task)`,
         );
       }
+      const { excludedWorkerIds, ...stored } = offer;
+      if (excludedWorkerIds !== undefined && excludedWorkerIds.length > 0) {
+        offerRemote.set(offer.runId, {
+          ...remoteOf(offer.runId),
+          excluded: [...new Set(excludedWorkerIds)],
+        });
+      }
       offers.set(offer.runId, {
-        ...clone(offer),
+        ...clone(stored),
         state: 'open',
         leaseEpoch: 0,
         claimantKind: null,
@@ -1821,6 +1848,25 @@ export const createMemoryPipelineStore = (
         taskId: offer.taskId,
         projectId: offer.projectId,
       };
+    },
+    carriedExclusions: async (_tx, entry) => {
+      const previous = [...offers.values()]
+        .filter(
+          (offer) =>
+            offer.kind === 'stage' &&
+            offer.taskId === entry.taskId &&
+            offer.stage === entry.stage &&
+            offer.attempt === entry.attempt,
+        )
+        .at(-1);
+      if (previous === undefined) return [];
+      const remote = remoteOf(previous.runId);
+      const reason = runs.get(previous.runId)?.terminalReason ?? null;
+      const lost =
+        remote.workerId !== null && (reason === 'rate_limited' || reason === 'lease_expired')
+          ? [remote.workerId]
+          : [];
+      return [...new Set([...remote.excluded, ...lost])];
     },
     runTokenHolder: async (_tx, runId) => {
       const offer = offers.get(runId);

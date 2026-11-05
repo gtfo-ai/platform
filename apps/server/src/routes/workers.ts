@@ -84,6 +84,7 @@ export const toWireWorker = (row: WorkerListRow): WorkerSummary => ({
   revoked_at: isoOrNull(row.revokedAt),
   paused_until: isoOrNull(row.pausedUntil),
   paused_reason: row.pausedReason === null ? null : workerPauseReasonSchema.parse(row.pausedReason),
+  paused_until_estimated: row.pausedUntil !== null && row.pausedUntilEstimated,
   manually_paused_at: isoOrNull(row.manuallyPausedAt),
   concurrency: row.concurrency,
   running: row.running.map((run) => ({
@@ -225,7 +226,7 @@ export const registerWorkerRoutes = async (
       schema: {
         summary: 'Registered workers: your own, or every one for an administrator',
         description:
-          'Machine, user, created and last seen, protocol, image digests, state, paused until, and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280).',
+          'Machine, user, created and last seen, protocol, image digests, state, paused until (and whether that instant is the default pause of a usage limit that named no reset, `paused_until_estimated`, WP-285), and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280). `timezone` is the organisation’s, which a usage pause’s time is shown in.',
         tags: ['workers'],
         response: { 200: workersResponseSchema },
       },
@@ -234,7 +235,11 @@ export const registerWorkerRoutes = async (
       const actor = actorOf(request);
       const all = can(actor.role, 'org.workers.manage');
       const rows = await options.store.listWorkers(all ? null : actor.userId);
-      return { items: rows.map(toWireWorker), scope: all ? 'all' : 'own' };
+      return {
+        items: rows.map(toWireWorker),
+        scope: all ? 'all' : 'own',
+        timezone: await options.store.organisationTimezone(),
+      };
     },
   );
 

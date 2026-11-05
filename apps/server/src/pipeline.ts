@@ -94,6 +94,7 @@ import {
   createRunStopReasons,
   createUnreachableRunCredentialReports,
   createWebhookIngress,
+  DEFAULT_USAGE_PAUSE_SECONDS,
   defaultProjectSettings,
   humanTimeHandlers,
   PIPELINE_ACTOR,
@@ -103,6 +104,7 @@ import {
   RUN_CREDENTIAL_TTL_SECONDS,
   registerMaintenanceSchedule,
   repositoryConfigStateOf,
+  revokeRunCredentialsNow,
   runCredentialRecoveryHorizonMs,
   runLimitsDefaults,
   STRANDED_STAGE_COMPONENT,
@@ -360,6 +362,11 @@ export interface ComposePipelineOptions {
   readonly runnerConcurrency?: number;
   /** `APP_LEASE_SKEW_GRACE` in seconds (WP-276): the lease sweep's wait past `lease_expires_at`. */
   readonly leaseSkewGraceSeconds?: number;
+  /**
+   * `APP_WORKER_USAGE_PAUSE_DEFAULT` in seconds (WP-285): in `local` provider mode the server
+   * claimant pauses this long after a usage limit that named no reset time.
+   */
+  readonly usagePauseDefaultSeconds?: number;
   /**
    * How often the intake reconciliation runs, and the age a match must reach before it is
    * re-emitted (`APP_INTAKE_RECONCILE_INTERVAL_MS`). `0` starts no pass at all.
@@ -1298,6 +1305,14 @@ export const composePipeline = async (
     ...(options.runnerConcurrency === undefined
       ? {}
       : { runnerConcurrency: options.runnerConcurrency }),
+    // WP-285 (TD-031 decision 11): a subscription's claimant stops claiming until its limit resets.
+    ...(options.agent.providerMode === 'local'
+      ? {
+          claimantUsagePause: {
+            defaultMs: (options.usagePauseDefaultSeconds ?? DEFAULT_USAGE_PAUSE_SECONDS) * 1_000,
+          },
+        }
+      : {}),
     broadcast: options.eventing.broadcast,
     /** WP-277: whether this process is a claimant — see {@link runsAgents} above. */
     runsAgents,
@@ -1630,6 +1645,26 @@ export const composePipeline = async (
         unitOfWork: options.eventing.unitOfWork,
         eventStore: options.eventing.store,
         wallClockMs: runLimitsDefaults.wallClockMs,
+        /**
+         * WP-286 (TD-031 §12): the first loss of a stage entry re-plans it — the run's minted
+         * credential revoked first, through the integration that minted it, then the entry's
+         * `stage.execute` enqueued with the lost worker in its offer's exclusions.
+         */
+        replan: {
+          jobs,
+          revokeCredentials: async (runId) => {
+            await revokeRunCredentialsNow(
+              {
+                unitOfWork: options.eventing.unitOfWork,
+                integrations,
+                store: runCredentialStore,
+                clock: { now: nowIso },
+                logger: options.logger,
+              },
+              runId,
+            );
+          },
+        },
         // WP-276: the sweep acts only after `lease_expires_at + APP_LEASE_SKEW_GRACE`.
         ...(options.leaseSkewGraceSeconds === undefined
           ? {}

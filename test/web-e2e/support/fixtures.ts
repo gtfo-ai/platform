@@ -986,6 +986,7 @@ export const workers = workersResponseSchema.parse({
       paused_until: null,
       manually_paused_at: null,
       paused_reason: null,
+      paused_until_estimated: false,
       concurrency: 3,
       running: [{ run_id: IDS.runWorker, task_id: IDS.taskFleetWorker, project_id: IDS.project }],
     },
@@ -1003,11 +1004,13 @@ export const workers = workersResponseSchema.parse({
       paused_until: '2099-01-01T00:00:00.000Z',
       manually_paused_at: null,
       paused_reason: 'usage_limited',
+      paused_until_estimated: false,
       concurrency: 2,
       running: [],
     },
   ],
   scope: 'all',
+  timezone: 'UTC',
 });
 
 /** The fleet's two other runs have no transcript yet. */

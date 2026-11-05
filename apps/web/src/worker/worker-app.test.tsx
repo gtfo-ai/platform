@@ -65,6 +65,7 @@ const state = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalState => (
   last_handshake_at: '2026-11-05T10:00:00.000Z',
   manually_paused_at: null,
   usage_paused_until: null,
+  usage_paused_estimated: false,
   draining: false,
   update_pending: false,
   concurrency: 2,

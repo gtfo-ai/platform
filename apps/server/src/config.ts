@@ -73,6 +73,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   launcherUrl: 'APP_LAUNCHER_URL',
   runnerConcurrency: 'APP_RUNNER_CONCURRENCY',
   leaseSkewGraceSeconds: 'APP_LEASE_SKEW_GRACE',
+  usagePauseDefaultSeconds: 'APP_WORKER_USAGE_PAUSE_DEFAULT',
   launcherToken: 'APP_LAUNCHER_TOKEN',
   workspaceControlRoot: 'APP_WORKSPACE_CONTROL_ROOT',
   modelEgressHosts: 'APP_MODEL_EGRESS_HOSTS',
@@ -222,6 +223,15 @@ const serverConfigFields = z.strictObject({
    * so a claimant that self-terminates at `TTL − ½·renew` is gone before the row is.
    */
   leaseSkewGraceSeconds: z.int().min(0).max(3_600),
+  /**
+   * `APP_WORKER_USAGE_PAUSE_DEFAULT`, in **seconds** (WP-285, TD-031 decision 11): how long the
+   * server's claimant in `local` mode claims nothing after a usage limit that named no reset time.
+   * The remote worker reads the same variable for itself (`remote-worker/config.ts`).
+   */
+  usagePauseDefaultSeconds: z
+    .int()
+    .min(60)
+    .max(8 * 24 * 3_600),
   /**
    * `APP_WORKER_IMAGE_DIGESTS` (WP-281): the core's four images by digest — what the worker
    * protocol's handshake and `426` advertise and what a run package names its run and egress images
@@ -610,6 +620,7 @@ export const SERVER_CONFIG_DEFAULTS = {
   intakeReconcileIntervalMs: 60_000,
   runnerConcurrency: 1,
   leaseSkewGraceSeconds: 120,
+  usagePauseDefaultSeconds: 3_600,
   workerImageDigests: null,
   imageRepository: 'ghcr.io/gtfo-ai',
   workerComposeTemplate: null,
@@ -1192,6 +1203,10 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     leaseSkewGraceSeconds: numberFromEnv(
       env.APP_LEASE_SKEW_GRACE,
       SERVER_CONFIG_DEFAULTS.leaseSkewGraceSeconds,
+    ),
+    usagePauseDefaultSeconds: numberFromEnv(
+      env.APP_WORKER_USAGE_PAUSE_DEFAULT,
+      SERVER_CONFIG_DEFAULTS.usagePauseDefaultSeconds,
     ),
     workerImageDigests: imageDigestsFromEnv(env.APP_WORKER_IMAGE_DIGESTS),
     imageRepository:

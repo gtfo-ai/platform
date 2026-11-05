@@ -1215,6 +1215,19 @@ export const createPostgresPipelineStore = (
       );
     },
 
+    countStageRunEnding: async (tx, entry) => {
+      // One statement, so two terminal writers of the entry cannot both read zero (WP-285/WP-286).
+      // The column name is chosen here from a closed pair, never interpolated from the caller.
+      const column = entry.kind === 'lost' ? 'lost_runs' : 'usage_limited_runs';
+      const { rows } = await sqlOf(tx).query<{ count: number }>(
+        `update task_stages set ${column} = ${column} + 1
+          where task_id = $1 and stage = $2 and attempt = $3
+          returning ${column} as count`,
+        [entry.taskId, entry.stage, entry.attempt],
+      );
+      const row = rows[0];
+      return row === undefined ? null : Number(row.count);
+    },
     recordStageExited: async (tx, entry) => {
       const state = taskStageExitStateSchema.parse(entry.state);
       if ((state === 'returned') !== (entry.returnedTo !== null)) {

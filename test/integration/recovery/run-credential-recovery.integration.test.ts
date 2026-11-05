@@ -255,6 +255,7 @@ const pass = async (
         causeEventId: null,
       }),
       wallClockMs: WALL_CLOCK_MS,
+      replan: { jobs, revokeCredentials: async () => {} },
     },
   });
 

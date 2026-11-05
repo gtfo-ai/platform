@@ -86,6 +86,7 @@ const WORKERS = {
     }),
   ],
   scope: 'all' as const,
+  timezone: 'UTC',
 };
 
 /** DEMO-9 has a question and no live run: it stands at the help desk. */

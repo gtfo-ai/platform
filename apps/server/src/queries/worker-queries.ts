@@ -26,6 +26,7 @@
  * credentials stop authenticating at once through {@link WorkerStore.findCredentialSubject}, which
  * reads the user's state on every call.
  */
+import { resolveBudgetTimezone } from '@platform/application';
 import type { JsonObject, WorkerManualPauseVia } from '@platform/contracts';
 import {
   checkDeviceDecision,
@@ -109,6 +110,8 @@ export interface WorkerListRow {
   readonly revokedAt: Date | null;
   readonly pausedUntil: Date | null;
   readonly pausedReason: string | null;
+  /** The pause is the default, the limit named no reset (migration 0100, WP-285): *until about*. */
+  readonly pausedUntilEstimated: boolean;
   /** The owner's hold from the worker's local page (migration 0099, WP-292). */
   readonly manuallyPausedAt: Date | null;
   readonly concurrency: number;
@@ -190,6 +193,18 @@ export interface WorkerStore {
     readonly via: WorkerManualPauseVia;
     readonly now: Date;
   }): Promise<ManualPauseResult>;
+  /**
+   * **A usage limit's pause** (`POST pause`, WP-285, TD-031 decision 11): `paused_until`,
+   * `paused_reason = 'usage_limited'` and whether the instant is the default pause. A repeat stores
+   * the same; nothing else on the row moves — never `manually_paused_at`, a person's hold, which
+   * the limit's end does not clear. No `human_actions` row: no person decided it. `false` for no
+   * such worker.
+   */
+  setUsagePause(input: {
+    readonly workerId: string;
+    readonly until: Date;
+    readonly estimated: boolean;
+  }): Promise<boolean>;
   /** The deactivation write: the live runs of every worker of the user get `lease_expires_at = now()`. */
   expireUserWorkerLeases(userId: string): Promise<number>;
   findCredentialSubject(workerId: string): Promise<CredentialSubject | null>;
@@ -210,6 +225,12 @@ export interface WorkerStore {
    * `workers_connected`/`workers_paused` gauges).
    */
   countConnected(): Promise<{ readonly connected: number; readonly paused: number }>;
+  /**
+   * The organisation's timezone as every read of it resolves it (`resolveBudgetTimezone`: `UTC`
+   * for none, or for one this server cannot use) — what a usage pause's *until HH:MM* is shown in
+   * (WP-285).
+   */
+  organisationTimezone(): Promise<string>;
 }
 
 /**
@@ -280,6 +301,7 @@ type WorkerRowSql = {
   revoked_at: Date | null;
   paused_until: Date | null;
   paused_reason: string | null;
+  paused_until_estimated: boolean;
   manually_paused_at: Date | null;
   concurrency: number;
   running: { run_id: string; task_id: string; project_id: string }[];
@@ -316,6 +338,7 @@ const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
   revokedAt: at(row.revoked_at),
   pausedUntil: at(row.paused_until),
   pausedReason: row.paused_reason,
+  pausedUntilEstimated: row.paused_until_estimated === true,
   manuallyPausedAt: at(row.manually_paused_at),
   concurrency: row.concurrency,
   running: row.running.map((run) => ({
@@ -530,6 +553,21 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
         values (${row.user_id}, ${paused ? 'worker.pause' : 'worker.resume'}, ${JSON.stringify(params)}::jsonb)`);
       return { status: 'set', manuallyPausedAt: next, performed: true };
     });
+  },
+
+  async organisationTimezone() {
+    const { rows } = await database.execute<{ timezone: string | null }>(sql`
+      select timezone from organizations order by created_at limit 1`);
+    return resolveBudgetTimezone(rows[0]?.timezone ?? null).timezone;
+  },
+
+  async setUsagePause({ workerId, until, estimated }) {
+    const result = await database.execute(sql`
+      update workers
+         set paused_until = ${until}, paused_reason = 'usage_limited',
+             paused_until_estimated = ${estimated}
+       where id = ${workerId}`);
+    return (result.rowCount ?? 0) > 0;
   },
 
   async expireUserWorkerLeases(userId) {

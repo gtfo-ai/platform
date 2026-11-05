@@ -32,12 +32,13 @@
  * It is bounded below by the run's own `created_at` (less {@link RUN_CLOCK_SKEW_ALLOWANCE}), so the
  * partitions older than the run are pruned at run time.
  */
-import type { RunActivity, RunSeat } from '@platform/contracts';
+import { resolveBudgetTimezone } from '@platform/application';
+import type { IsoDateTime, RunActivity, RunSeat } from '@platform/contracts';
 import { RUN_ACTIVITY_TOOL_NAME_MAX_CHARS, runActivityToolNameSchema } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { eq, inArray, type SQL, sql } from 'drizzle-orm';
 
-const { runOffers, runs, users, workers } = dbAdapters.schema;
+const { organizations, runOffers, runs, users, workers } = dbAdapters.schema;
 
 type Database = dbAdapters.Database;
 
@@ -51,7 +52,26 @@ export interface SeatFacts {
   readonly workerName: string | null;
   /** That worker's user's display name (WP-283 (5)), when the worker's row exists. */
   readonly userName?: string | null;
+  /**
+   * That worker's usage pause (WP-285): `paused_until` while it is in the future and the reason is
+   * `usage_limited`, with whether it is the default pause, and the organisation's timezone.
+   */
+  readonly usagePause?: {
+    readonly until: Date;
+    readonly estimated: boolean;
+    readonly timezone: string;
+  } | null;
 }
+
+/** The organisation's timezone, resolved as every read resolves it (`UTC` when unusable). */
+const organisationTimezoneOf = async (database: Database): Promise<string> => {
+  const rows = await database
+    .select({ timezone: organizations.timezone })
+    .from(organizations)
+    .orderBy(organizations.createdAt)
+    .limit(1);
+  return resolveBudgetTimezone(rows[0]?.timezone ?? null).timezone;
+};
 
 /** The seat a run's facts license, or `null` (not claimed yet). Pure, for its unit test. */
 export const seatOf = (facts: SeatFacts): RunSeat | null => {
@@ -70,6 +90,15 @@ export const seatOf = (facts: SeatFacts): RunSeat | null => {
       ...(workerId === null || facts.userName === null || facts.userName === undefined
         ? {}
         : { user_name: facts.userName.slice(0, 200) }),
+      ...(workerId === null || facts.usagePause === null || facts.usagePause === undefined
+        ? {}
+        : {
+            usage_pause: {
+              until: facts.usagePause.until.toISOString() as IsoDateTime,
+              estimated: facts.usagePause.estimated,
+              timezone: facts.usagePause.timezone,
+            },
+          }),
     };
   }
   return null;
@@ -93,12 +122,22 @@ export const seatsFor = async (
       offerWorkerId: runOffers.workerId,
       workerName: workers.name,
       userName: users.name,
+      pausedUntil: workers.pausedUntil,
+      pausedReason: workers.pausedReason,
+      pausedUntilEstimated: workers.pausedUntilEstimated,
     })
     .from(runs)
     .leftJoin(runOffers, eq(runOffers.runId, runs.id))
     .leftJoin(workers, eq(workers.id, sql`coalesce(${runOffers.workerId}, ${runs.workerId})`))
     .leftJoin(users, eq(users.id, workers.userId))
     .where(inArray(runs.id, [...runIds]));
+  const now = Date.now();
+  const limited = (row: (typeof rows)[number]): boolean =>
+    row.pausedReason === 'usage_limited' &&
+    row.pausedUntil !== null &&
+    row.pausedUntil.getTime() > now;
+  // WP-285: the organisation's zone, asked only when a seat's worker is paused by a usage limit.
+  const timezone = rows.some(limited) ? await organisationTimezoneOf(database) : 'UTC';
   for (const row of rows) {
     const seat = seatOf({
       offerState: row.offerState,
@@ -107,6 +146,14 @@ export const seatsFor = async (
       runWorkerId: row.runWorkerId,
       workerName: row.workerName,
       userName: row.userName,
+      usagePause:
+        limited(row) && row.pausedUntil !== null
+          ? {
+              until: row.pausedUntil,
+              estimated: row.pausedUntilEstimated === true,
+              timezone,
+            }
+          : null,
     });
     if (seat !== null) {
       byRun.set(row.runId, seat);

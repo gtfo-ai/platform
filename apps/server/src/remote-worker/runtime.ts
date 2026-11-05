@@ -43,7 +43,7 @@ import { rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import type { Logger } from '@platform/application';
-import { exactSecretRedactor } from '@platform/application';
+import { DEFAULT_USAGE_PAUSE_SECONDS, exactSecretRedactor } from '@platform/application';
 import {
   type CoreImageDigests,
   MAX_REPORTED_IMAGE_DIGESTS,
@@ -101,6 +101,9 @@ export interface StartRemoteWorkerOptions {
   /** Test seam: where the local page's bundle is (default the image's `apps/web/dist`). */
   readonly webRoot?: string;
 }
+
+/** How often a usage-paused claim loop looks again before the reset (WP-285): a minute at most. */
+export const USAGE_PAUSE_RECHECK_MS = 60_000;
 
 /** The marker a drain leaves in `worker-state`: its pause is cleared at the next start (WP-292). */
 export const DRAIN_MARKER_FILE = 'drain-pause';
@@ -233,7 +236,18 @@ export const startRemoteWorker = async (
   let lastHandshakeAt: string | null = null;
   /** The owner's (or a drain's) hold, as the core stored it (WP-292). */
   let manuallyPausedAt: string | null = null;
+  /**
+   * A usage limit's pause (TD-031 §11, WP-285): set from the handshake (the core's record) and by
+   * this worker when a run's session reports a limit. **A separate hold from the owner's** — when it
+   * passes, claiming resumes by itself; it never clears `manuallyPausedAt`.
+   */
   let usagePausedUntil: string | null = null;
+  /** The pause is this worker's default, the limit named no reset — the page says *until about*. */
+  let usagePausedEstimated = false;
+  const usagePauseDefaultMs = config.usagePauseDefaultMs ?? DEFAULT_USAGE_PAUSE_SECONDS * 1_000;
+  /** ms until the usage pause ends, `0` when none holds. */
+  const usagePauseRemainingMs = (): number =>
+    usagePausedUntil === null ? 0 : Math.max(0, Date.parse(usagePausedUntil) - Date.now());
   let heldDigests: string[] = [];
   const sessions = new Map<string, RunSession>();
   const history: RunSession[] = [];
@@ -289,7 +303,15 @@ export const startRemoteWorker = async (
         workerId = answer.worker.id;
         workerName = answer.worker.name;
         manuallyPausedAt = answer.worker.manually_paused_at ?? null;
-        usagePausedUntil = answer.worker.paused_until;
+        // The core's record wins only when it is later than a pause this worker already holds.
+        if (
+          answer.worker.paused_until !== null &&
+          (usagePausedUntil === null ||
+            Date.parse(answer.worker.paused_until) > Date.parse(usagePausedUntil))
+        ) {
+          usagePausedUntil = answer.worker.paused_until;
+          usagePausedEstimated = false;
+        }
         lastHandshakeAt = new Date().toISOString();
         connection = 'connected';
         loggerPort.info(
@@ -324,6 +346,51 @@ export const startRemoteWorker = async (
     return false;
   };
 
+  /**
+   * **A run's session reported a usage limit** (WP-285, TD-031 decision 11): this worker claims
+   * nothing until the limit resets — the reset it named, or `APP_WORKER_USAGE_PAUSE_DEFAULT` from
+   * now when it named none — and tells the core (`POST pause`), so the claim refuses it there too
+   * and the Workers screen says so. The core's refusal is the backstop; the local hold is what
+   * stops the claim loop at once. When the instant passes, claiming resumes by itself.
+   */
+  const noteUsageLimit = async (limit: {
+    readonly resetsAt: string | null;
+    readonly signal: string;
+  }): Promise<void> => {
+    const estimated = limit.resetsAt === null;
+    const until = estimated
+      ? new Date(Date.now() + usagePauseDefaultMs).toISOString()
+      : (limit.resetsAt as string);
+    if (usagePausedUntil !== null && Date.parse(usagePausedUntil) >= Date.parse(until)) return;
+    usagePausedUntil = until;
+    usagePausedEstimated = estimated;
+    claimAbort?.abort();
+    loggerPort.warn(
+      { paused_until: until, estimated, signal: limit.signal },
+      'this worker’s Claude usage limit was reached: it claims nothing until the limit resets, then resumes by itself',
+    );
+    // The first attempt is awaited — the run's `finish` follows it, so the core's re-plan is not
+    // offered back to this worker — and a failed one is retried in the background, bounded.
+    const tell = async (): Promise<boolean> => {
+      if (credential === null) return true;
+      try {
+        await core.pause(credential, { until, reason: 'usage_limited', estimated });
+        return true;
+      } catch (error) {
+        if (error instanceof CoreCallError && error.kind === 'unauthenticated') return true;
+        loggerPort.warn({ err: error }, 'the core did not take this worker’s usage pause yet');
+        return false;
+      }
+    };
+    if (await tell()) return;
+    void (async () => {
+      for (let attempt = 1; attempt < 5 && !stopping; attempt += 1) {
+        await sleep(backoffMs(attempt));
+        if (await tell()) return;
+      }
+    })();
+  };
+
   const startSession = (pkg: RunPackage): void => {
     const runKeys = [`run_token:${pkg.runId}`, `run_credential:${pkg.runId}`];
     logSecrets.set(runKeys[0] as string, {
@@ -342,6 +409,8 @@ export const startRemoteWorker = async (
       claudeToken: config.claudeToken,
       logger: loggerPort,
       sleep,
+      usagePausedUntil: () => (usagePauseRemainingMs() > 0 ? usagePausedUntil : null),
+      onUsageLimit: noteUsageLimit,
       provisionerFor: ({ sshSign, exportsAllowed }) =>
         packageWorkspaceProvisioner(pkg, {
           launcher,
@@ -385,6 +454,18 @@ export const startRemoteWorker = async (
         slotFreed = null;
         continue;
       }
+      // A usage limit holds it (WP-285): wait for the reset — or a wake-up — then claim again by
+      // itself. A person's *Pause* is the branch above and is never cleared by this.
+      const usageWait = usagePauseRemainingMs();
+      if (usageWait > 0) {
+        await new Promise<void>((resolve) => {
+          slotFreed = resolve;
+          const timer = setTimeout(resolve, Math.min(usageWait, USAGE_PAUSE_RECHECK_MS));
+          (timer as { unref?: () => void }).unref?.();
+        });
+        slotFreed = null;
+        continue;
+      }
       claimAbort = new AbortController();
       try {
         // Asked before every claim: an image pulled (or removed) since the last one counts now.
@@ -402,7 +483,7 @@ export const startRemoteWorker = async (
         if (pkg !== null) startSession(pkg);
       } catch (error) {
         if (stopping) break;
-        if (draining || manuallyPausedAt !== null) continue;
+        if (draining || manuallyPausedAt !== null || usagePauseRemainingMs() > 0) continue;
         if (error instanceof CoreCallError && error.kind === 'unauthenticated') {
           connection = 'revoked';
           loggerPort.error({}, 'the core refused this worker’s credential; it stops claiming');
@@ -601,7 +682,9 @@ export const startRemoteWorker = async (
       core_url: config.coreUrl,
       last_handshake_at: lastHandshakeAt,
       manually_paused_at: manuallyPausedAt,
-      usage_paused_until: usagePausedUntil,
+      // A pause that has passed is no pause: the page says *taking work* again by itself.
+      usage_paused_until: usagePauseRemainingMs() > 0 ? usagePausedUntil : null,
+      usage_paused_estimated: usagePauseRemainingMs() > 0 && usagePausedEstimated,
       draining,
       update_pending:
         coreDigests === null || (config.platformImageDigest ?? null) === null

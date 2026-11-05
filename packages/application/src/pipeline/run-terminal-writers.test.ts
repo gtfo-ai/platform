@@ -60,8 +60,9 @@ const EXPECTED_FINISH_CALLERS: ReadonlyMap<string, number> = new Map([
   // `settleRun` (WP-275, transaction 2 moved out of the job): `record`, `recordOntoStoppedTask` (the
   // take-over's stop), `recordUnsuccessful` (failure and the holder's applied cancel),
   // `recordHandBack` (WP-144's shutdown) and — since WP-275a — `recordNotStarted`, the start failure
-  // (TD-031's 2026-11-04 amendment §3). `stage-executor.ts` writes no ending of its own any more.
-  ['packages/application/src/pipeline/settle.ts', 5],
+  // (TD-031's 2026-11-04 amendment §3) — and, since WP-285, `recordUsageLimited` (`rate_limited`).
+  // `stage-executor.ts` writes no ending of its own any more.
+  ['packages/application/src/pipeline/settle.ts', 6],
   // The ask's endings: the hand-back, the failure, the answer, and the start failure.
   ['packages/application/src/ask/executor.ts', 4],
   // The lease sweep (`lease_expired`).

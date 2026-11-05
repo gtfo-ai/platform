@@ -268,6 +268,12 @@ describe('pool sizing', () => {
     expect(() => load({ APP_RUNNER_CONCURRENCY: '0' })).toThrow(/APP_RUNNER_CONCURRENCY/);
     expect(load({}).leaseSkewGraceSeconds).toBe(120);
     expect(load({ APP_LEASE_SKEW_GRACE: '300' }).leaseSkewGraceSeconds).toBe(300);
+    // WP-285: the default usage pause, an hour, within a minute and eight days.
+    expect(load({}).usagePauseDefaultSeconds).toBe(3_600);
+    expect(load({ APP_WORKER_USAGE_PAUSE_DEFAULT: '600' }).usagePauseDefaultSeconds).toBe(600);
+    expect(() => load({ APP_WORKER_USAGE_PAUSE_DEFAULT: '30' })).toThrow(
+      /APP_WORKER_USAGE_PAUSE_DEFAULT/,
+    );
   });
 
   it('costs two connections per added dispatch, not three, because no handler calls a provider', () => {

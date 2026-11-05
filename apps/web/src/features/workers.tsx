@@ -48,6 +48,7 @@ import { Skeleton } from '../ui/skeleton.js';
 import { type Status, StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { usagePauseWords } from '../ui/usage-pause.js';
 
 /** TD-031 §10c's warning, word for word where it is quoted. */
 export const PHISHING_WARNING = 'Approve only a code your own machine is showing you now.';
@@ -77,10 +78,14 @@ export const formatCodeAge = (seconds: number): string => {
  */
 export const ONLINE_WITHIN_MS = 60_000;
 
-/** The row's state: revoked, paused (until when, and why), online, or offline. */
+/**
+ * The row's state: revoked, paused (by its owner, or by a usage limit until when — in the
+ * organisation's `timezone`, WP-285), online, or offline.
+ */
 export const workerState = (
   worker: WorkerSummary,
   nowMs: number,
+  timezone = 'UTC',
 ): { readonly status: Status; readonly word: string } => {
   if (worker.state === 'revoked') {
     return { status: 'cancelled', word: 'Revoked' };
@@ -89,7 +94,20 @@ export const workerState = (
     return { status: 'paused', word: 'Paused by its owner' };
   }
   if (worker.paused_until !== null && Date.parse(worker.paused_until) > nowMs) {
-    return { status: 'paused', word: `Paused until ${formatDateTime(worker.paused_until)}` };
+    return {
+      status: 'paused',
+      word:
+        worker.paused_reason === 'usage_limited'
+          ? usagePauseWords(
+              {
+                until: worker.paused_until,
+                estimated: worker.paused_until_estimated,
+                timezone,
+              },
+              nowMs,
+            )
+          : `Paused until ${formatDateTime(worker.paused_until)}`,
+    };
   }
   const seen = worker.last_seen_at === null ? Number.NaN : Date.parse(worker.last_seen_at);
   return nowMs - seen <= ONLINE_WITHIN_MS
@@ -105,18 +123,21 @@ const WorkerRow = ({
   worker,
   showUser,
   nowMs,
+  timezone,
   pending,
   onRevoke,
 }: {
   readonly worker: WorkerSummary;
   readonly showUser: boolean;
   readonly nowMs: number;
+  /** The organisation's timezone a usage pause is shown in (WP-285). */
+  readonly timezone: string;
   /** A revoke is in flight: the trigger waits for it rather than opening a second confirmation. */
   readonly pending: boolean;
   readonly onRevoke: () => void;
 }): ReactElement => {
   const [confirming, setConfirming] = useState(false);
-  const { status, word } = workerState(worker, nowMs);
+  const { status, word } = workerState(worker, nowMs, timezone);
   const seen = worker.last_seen_at === null ? null : formatAgo(worker.last_seen_at, nowMs);
   return (
     <ListRow
@@ -126,7 +147,9 @@ const WorkerRow = ({
         <span className="flex flex-col gap-1" data-worker={worker.id}>
           <span className="inline-flex flex-wrap items-center gap-1.5">
             <span>{word}</span>
-            {worker.paused_reason === null || status !== 'paused' ? null : (
+            {worker.paused_reason === null ||
+            worker.paused_reason === 'usage_limited' ||
+            status !== 'paused' ? null : (
               <span>{`· ${WORKER_PAUSE_REASON_LABEL[worker.paused_reason]}`}</span>
             )}
             {showUser ? (
@@ -285,6 +308,7 @@ export const WorkersScreen = (): ReactElement => {
               worker={worker}
               showUser={workers.data?.scope === 'all'}
               nowMs={nowMs}
+              timezone={workers.data?.timezone ?? 'UTC'}
               pending={commands.revokeWorker.isPending}
               onRevoke={() => {
                 commands.revokeWorker.mutate(worker.id);

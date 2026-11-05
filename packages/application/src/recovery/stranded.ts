@@ -1101,9 +1101,9 @@ export const runStrandedRecovery = async (
   }
 
   if (options.runs !== undefined) {
-    // The run site ends rows rather than re-enqueuing wake-ups, so `reEnqueued` is 0 by
-    // construction and `ended` is the whole of what it did — which is why its own report has a
-    // `skipped` count this shape has nowhere to put, and why that count is in its log line.
+    // The run site ends rows; since WP-286 the first loss of a stage entry also re-plans it, and
+    // that wake-up is its `reEnqueued`. Its own report has a `skipped` count this shape has
+    // nowhere to put, which is why that count is in its log line.
     const runs = await sweepExpiredRunLeases({
       ...options.runs,
       clock: options.clock,
@@ -1111,7 +1111,12 @@ export const runStrandedRecovery = async (
       limit,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     });
-    sites.push({ site: 'run_lease', found: runs.found, reEnqueued: 0, ended: runs.ended });
+    sites.push({
+      site: 'run_lease',
+      found: runs.found,
+      reEnqueued: runs.replanned,
+      ended: runs.ended,
+    });
   }
 
   return sites;
@@ -1175,8 +1180,10 @@ const recoverStrandedStages = async (
       entered_at: row.enteredAt,
     };
     // An attempt whose run already ended is never woken again (WP-108 review round 1): that would
-    // be a fresh paid run of a stage a person cancelled, or one whose run failed. It is escalated.
-    if (row.recoveryAttemptedAt === null && row.endedRun === null) {
+    // be a fresh paid run of a stage a person cancelled, or one whose run failed. It is escalated —
+    // unless its ending was the entry's first lost or usage-limited run, whose re-plan the ending's
+    // process owed and never enqueued (WP-285, WP-286): that one is woken once, like a lost wake-up.
+    if (row.recoveryAttemptedAt === null && (row.endedRun === null || row.endedRun.replanOwed)) {
       const marked = await options.unitOfWork.transaction(async (scope) =>
         site.store.markStageAttempt(scope.tx, { row, at: now }),
       );

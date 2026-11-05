@@ -613,6 +613,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           stageConcurrency: 1,
           runnerConcurrency: config.runnerConcurrency,
           leaseSkewGraceSeconds: config.leaseSkewGraceSeconds,
+          usagePauseDefaultSeconds: config.usagePauseDefaultSeconds,
           intakeReconcileIntervalMs: config.intakeReconcileIntervalMs,
           jobsSchema: config.jobs.schema,
           pollSweepIntervalMs: config.pollSweepIntervalMs,

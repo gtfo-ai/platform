@@ -43,8 +43,13 @@ export const SCHEMA_GUARD_VERSION = 2;
  * holds `created` runs with **open** offers that only a claimant runs. A build before it claims an
  * offer only in the job that wrote it, so it would leave every such offer open for ever — and its
  * per-task index would refuse the task's next stage.
+ *
+ * **4 since WP-285/WP-286** (migration 0100, `raises-rollback-floor`): a `rate_limited` run and the
+ * first `lease_expired` of a stage entry now **re-plan** the entry (`task_stages.usage_limited_runs`,
+ * `lost_runs`). A build before it escalates both, and its stranded-stage recovery would escalate an
+ * entry this build left re-planning.
  */
-export const ROLLBACK_FLOOR = 3;
+export const ROLLBACK_FLOOR = 4;
 
 const pgBossManifestSchema = z.object({
   pgboss: z.object({ schema: z.number().int().positive() }),

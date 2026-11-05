@@ -66,10 +66,7 @@
  *    default 120 s, never less than the pass interval): *a row past its deadline by more than any
  *    claimant's give-up margin.* A claimant self-terminates `TTL − ½·renew` after its last successful
  *    renewal (`../pipeline/lease.ts`), so it has stopped at least `½·renew + grace` before this ends
- *    the row. **The sweep still re-plans nothing** — it escalates, as before; when WP-286 makes the
- *    first `lease_expired` of an entry re-plan, the run's minted credential is revoked first
- *    (`./run-credential.ts` revokes it once the row is terminal) and only then is the stage offered
- *    again.
+ *    the row.
  * 2. **The wall clock** (backstop). `lease_expires_at is null and coalesce(started_at, created_at)
  *    < now - (wallClockMs + grace)` — `created_at` since WP-275b, because `started_at` is written
  *    only at the CLI spawn marker and a run that never reached it must still reach the backstop. It is for rows written **before this column had a writer** — every `runs` row in
@@ -84,7 +81,28 @@
  * The wall clock cannot be the primary signal: its default is an **hour**, so a process that dies a
  * minute into a run would hold the reservation for the rest of it.
  *
- * ## Why there is no attempt mark, unlike the re-enqueuing rows of the table
+ * ## The first loss of a stage entry re-plans it; the second escalates (WP-286, TD-031 §12)
+
+A lost worker — a laptop closed mid-run, a revoked worker (WP-280 sets its live runs'
+`lease_expires_at = now()` and nothing else, so they come here), a server claimant that died — is
+not the task's fault (BD-032 decision 6). So for a run still at its task's current stage and
+attempt, the ending counts the entry's `task_stages.lost_runs` in its own transaction, which has
+already closed the run's offer (`finish`, so the per-task index admits the next one):
+
+- **the first** leaves the task untouched — `active` at the stage, its row open — and after the
+  commit the sweep **revokes the run's minted credential first** (`RunLeaseReplan.revokeCredentials`,
+  the same revocation a remote release uses; a revoke that fails or answers `not_found` is logged as
+  what it is and the stage is re-planned anyway, TD-031 §2's residual) and only then enqueues the
+  entry's `stage.execute`, whose offer carries the lost worker in its exclusions
+  (`RunOfferRepository.carriedExclusions`) — any other claimant may take it, the server's included;
+- **the second** escalates, with a brief naming both runs and the machines that held them.
+
+A pass that dies between the commit and the enqueue leaves an entry with an ended `lease_expired`
+run, `lost_runs = 1` and no successor offer: the stranded-stage row re-plans it once
+(`./stranded-stage.ts`'s `replanOwed`), never escalates it. A run that is not at its task's current
+entry (a person moved the task, an ask's run) ends as before this change.
+
+## Why there is no attempt mark, unlike the re-enqueuing rows of the table
  *
  * `./stranded.ts`'s four re-enqueuing sites wake a job again and therefore need
  * `recovery_attempted_at` to bound how many times they may (backlog 105). This site does not re-enqueue anything: one pass
@@ -102,14 +120,24 @@
  * asserted (standing rule 42).
  */
 import type { Id, IsoDateTime, RunStartFailure, Slug } from '@platform/contracts';
+import { effortSchema } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
-import { canTransitionTask, escalateTask, failRun, type Task } from '@platform/domain';
+import {
+  canTransitionTask,
+  escalateTask,
+  failRun,
+  isCurrentStageAttempt,
+  isRunnableTaskState,
+  type Task,
+} from '@platform/domain';
 import { MEASURED_ZERO_COST, NO_RUN_USAGE } from '../pipeline/cli-spawn.js';
 import { DEFAULT_LEASE_SKEW_GRACE_MS } from '../pipeline/lease.js';
 import { toRunAggregate } from '../pipeline/run-aggregate.js';
+import { enqueueStage } from '../pipeline/stage-enqueue.js';
 import type { PipelineStore } from '../pipeline/store.js';
 import { retryOnTaskConflict } from '../pipeline/task-conflict.js';
 import type { EventStore } from '../ports/event-store.js';
+import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import { describeStartFailure, RunStartError } from '../ports/runner.js';
@@ -158,7 +186,39 @@ export interface ExpiredRunStore {
     tx: Transaction,
     input: { readonly runId: Id; readonly query: ExpiredRunQuery },
   ): Promise<boolean>;
+  /**
+   * The stage entry's runs the sweep **already** ended `lease_expired`, oldest first, with the lease
+   * owner that held each (`worker:<id>`, `server:<process>`) — what the second loss's brief names
+   * (WP-286). `runId` itself is excluded.
+   */
+  earlierLostRuns(
+    tx: Transaction,
+    entry: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      readonly runId: Id;
+    },
+  ): Promise<readonly { readonly runId: Id; readonly leaseOwner: string | null }[]>;
 }
+
+/**
+ * What the sweep needs to **re-plan** a stage entry whose first run it ended (WP-286, TD-031 §12):
+ * the queue `stage.execute` is enqueued on, and the revocation that comes first.
+ */
+export interface RunLeaseReplan {
+  readonly jobs: Jobs;
+  /**
+   * Revokes the run's minted git credentials **now**, outside any transaction — before the stage is
+   * offered again (TD-031 §2). Expected never to throw (`revokeRunCredentialsNow` logs a failure as
+   * a live token); a throw is logged here and the re-plan goes ahead, the WP-77 pass reaching the
+   * address again.
+   */
+  readonly revokeCredentials: (runId: Id) => Promise<void>;
+}
+
+/** How many times one stage entry is re-planned after the sweep ended its run: once (TD-031 §12). */
+export const MAX_LOST_RUN_REPLANS = 1;
 
 export interface RunLeaseSweepOptions {
   readonly store: ExpiredRunStore;
@@ -179,6 +239,8 @@ export interface RunLeaseSweepOptions {
   readonly skewGraceMs?: number;
   /** The backstop's ceiling — a run's hard wall clock. @default runLimitsDefaults.wallClockMs */
   readonly wallClockMs: number;
+  /** The first loss of a stage entry re-plans it (WP-286): the queue and the revocation. */
+  readonly replan: RunLeaseReplan;
   readonly limit: number;
   readonly logger?: Logger;
 }
@@ -189,6 +251,8 @@ export interface RunLeaseSweepReport {
   readonly ended: number;
   /** Runs whose lease was renewed, or which ended by themselves, between the read and the write. */
   readonly skipped: number;
+  /** Of {@link ended}, the runs whose stage entry was planned again (WP-286). */
+  readonly replanned: number;
 }
 
 /** Wall time for a run ended from outside the process that started it; `0` when it never started. */
@@ -213,6 +277,44 @@ const blockerBrief = (run: ExpiredRunLease, ticketKey: string, unspawned: boolea
       'sight of it. Nothing was retried automatically and no cost was recorded for the attempt, ' +
       "because nobody measured it. Open the run's transcript, decide what should change, and hand the " +
       'task back at the stage you want it to resume from.';
+
+/** A lease owner in a brief: the machine that held the run. Platform text — an id, never a name. */
+const machineOf = (leaseOwner: string | null): string => {
+  if (leaseOwner === null) return 'a process that left no lease owner';
+  if (leaseOwner.startsWith('worker:')) return `worker ${leaseOwner.slice('worker:'.length)}`;
+  if (leaseOwner.startsWith('server:')) {
+    return `the server's runner (${leaseOwner.slice('server:'.length)})`;
+  }
+  return leaseOwner;
+};
+
+/** Why the task was parked after its entry's second lost run (WP-286). */
+const secondLossReason = (run: ExpiredRunLease): string =>
+  `the "${run.stage ?? 'no stage'}" stage lost its run to a missing lease twice`;
+
+/** The brief of the second loss: both runs and both machines (WP-286 (1)). */
+const secondLossBrief = (
+  run: ExpiredRunLease,
+  ticketKey: string,
+  earlier: readonly { readonly runId: Id; readonly leaseOwner: string | null }[],
+  unspawned: boolean,
+): string => {
+  const runs = [...earlier, { runId: run.runId, leaseOwner: run.leaseOwner }]
+    .map((lost) => `run ${lost.runId} (held by ${machineOf(lost.leaseOwner)})`)
+    .join(' and ');
+  return (
+    `The "${run.stage ?? 'no stage'}" stage of ${ticketKey} (attempt ${String(run.attempt)}) lost ` +
+    `its run twice: ${runs} stopped renewing their lease, so the platform ended each. The first ` +
+    'loss was offered again to another claimant; this one is not. A lost lease means only that ' +
+    'nothing was driving the run — a closed laptop, a revoked worker, a process that died — not ' +
+    'that the agent failed.' +
+    (unspawned
+      ? ` Run ${run.runId} ended before it had asked for its CLI, so nothing was spent on it.`
+      : '') +
+    " Open the runs' transcripts, check the machines that held them, then hand the task back at " +
+    'this stage.'
+  );
+};
 
 /**
  * What a sweep of a run that **never asked for its CLI** records about it (WP-150, ruling (d)): the
@@ -266,6 +368,7 @@ export const sweepExpiredRunLeases = async (
 
   let ended = 0;
   let skipped = 0;
+  let replanned = 0;
   for (const run of found) {
     const acted = await retryOnTaskConflict(
       {
@@ -275,6 +378,12 @@ export const sweepExpiredRunLeases = async (
       },
       async () => endOneRun(options, run, query),
     );
+    if (acted !== null && acted.replan !== null) {
+      ended += 1;
+      await replanEntry(options, run, acted.replan);
+      replanned += 1;
+      continue;
+    }
     if (acted !== null) {
       ended += 1;
       logger.warn(
@@ -295,7 +404,59 @@ export const sweepExpiredRunLeases = async (
     }
     skipped += 1;
   }
-  return { found: found.length, ended, skipped };
+  return { found: found.length, ended, skipped, replanned };
+};
+
+/** The entry a lost run re-plans, and the attempt's own model and effort to carry. */
+interface LostRunReplan {
+  readonly taskId: Id;
+  readonly projectId: Id;
+  readonly stage: Slug;
+  readonly attempt: number;
+  readonly model: string;
+  readonly effort: string;
+}
+
+/**
+ * After the ending's commit: **revoke first, then re-plan** (TD-031 §2, WP-286). The enqueue is
+ * the entry's own `stage.execute`, which re-validates on fire and carries the lost worker in its
+ * offer's exclusions. A pass that dies before the enqueue leaves the entry to the stranded-stage
+ * row, which re-plans it once.
+ */
+const replanEntry = async (
+  options: RunLeaseSweepOptions,
+  run: ExpiredRunLease,
+  entry: LostRunReplan,
+): Promise<void> => {
+  const logger = options.logger ?? silentLogger;
+  try {
+    await options.replan.revokeCredentials(run.runId);
+  } catch (error) {
+    logger.error(
+      { err: error, run_id: run.runId, task_id: run.taskId },
+      'the lost run’s minted credential could not be revoked before its stage was offered again; the recovery pass revokes it once more, and the stage is re-planned anyway (TD-031 §2)',
+    );
+  }
+  const effort = effortSchema.safeParse(entry.effort);
+  await enqueueStage(options.replan.jobs, {
+    taskId: entry.taskId,
+    projectId: entry.projectId,
+    stage: entry.stage,
+    attempt: entry.attempt,
+    overrides: { model: entry.model, ...(effort.success ? { effort: effort.data } : {}) },
+  });
+  logger.warn(
+    {
+      project_id: run.projectId,
+      task_id: run.taskId,
+      run_id: run.runId,
+      stage: run.stage,
+      attempt: run.attempt,
+      lease_owner: run.leaseOwner,
+      lease_expires_at: run.leaseExpiresAt,
+    },
+    'no process was renewing this run’s lease, so the run was failed and — the first loss of its stage entry — the stage is offered again with the machine that lost it excluded (WP-286, TD-031 §12)',
+  );
 };
 
 /**
@@ -320,7 +481,7 @@ const endOneRun = async (
   options: RunLeaseSweepOptions,
   run: ExpiredRunLease,
   query: ExpiredRunQuery,
-): Promise<{ readonly unspawned: boolean } | null> =>
+): Promise<{ readonly unspawned: boolean; readonly replan: LostRunReplan | null } | null> =>
   options.unitOfWork.transaction(async (scope) => {
     const claimed = await options.store.claimExpiredRun(scope.tx, { runId: run.runId, query });
     if (!claimed) {
@@ -379,6 +540,59 @@ const endOneRun = async (
     const events = [...failed.events];
 
     const task = await options.pipeline.tasks.load(scope.tx, run.taskId);
+    /**
+     * WP-286: a run still at its task's current entry is a **lost run** of that entry — counted on
+     * its row; the first re-plans (the task untouched), the second escalates naming both.
+     */
+    if (
+      task !== null &&
+      run.stage !== null &&
+      isRunnableTaskState(task.task.state) &&
+      isCurrentStageAttempt(task.task, run.stage, run.attempt)
+    ) {
+      const entry = { taskId: run.taskId, stage: run.stage, attempt: run.attempt };
+      const lost = await options.pipeline.tasks.countStageRunEnding(scope.tx, {
+        ...entry,
+        kind: 'lost',
+      });
+      if (lost !== null && lost <= MAX_LOST_RUN_REPLANS) {
+        await scope.events.append(events);
+        return {
+          unspawned,
+          replan: {
+            ...entry,
+            projectId: run.projectId,
+            model: stored.model,
+            effort: stored.effort,
+          },
+        };
+      }
+      if (canTransitionTask(task.task.state, 'needs_human')) {
+        const earlier = await options.store.earlierLostRuns(scope.tx, {
+          ...entry,
+          runId: run.runId,
+        });
+        const escalated = escalateTask(
+          task.task,
+          {
+            reason: `run ${run.runId}: ${secondLossReason(run)}`,
+            blockerBrief: secondLossBrief(run, task.task.ticket.key, earlier, unspawned),
+          },
+          context,
+        );
+        await options.pipeline.tasks.save(scope.tx, { ...task, task: escalated.aggregate });
+        await options.pipeline.tasks.recordStageExited(scope.tx, {
+          ...entry,
+          state: 'failed',
+          outcome: 'failed',
+          returnReason: secondLossReason(run),
+          returnedTo: null,
+        });
+        events.push(...escalated.events);
+      }
+      await scope.events.append(events);
+      return { unspawned, replan: null };
+    }
     if (
       task !== null &&
       canTransitionTask(task.task.state, 'needs_human') &&
@@ -407,5 +621,5 @@ const endOneRun = async (
       events.push(...escalated.events);
     }
     await scope.events.append(events);
-    return { unspawned };
+    return { unspawned, replan: null };
   });

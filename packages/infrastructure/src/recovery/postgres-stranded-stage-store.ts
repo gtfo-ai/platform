@@ -48,6 +48,8 @@ interface Row extends Record<string, unknown> {
   readonly attempted_at: Date | string | null;
   readonly ended_status: string | null;
   readonly ended_reason: string | null;
+  /** The ended run was the entry's first lost or usage-limited ending (WP-285, WP-286). */
+  readonly replan_owed: boolean | null;
   readonly failed_at: Date | string | null;
   readonly failed_tries: number | null;
   readonly failed_name: string | null;
@@ -90,7 +92,11 @@ const toStranded = (row: Row): StrandedStage => ({
   endedRun:
     row.ended_status === null
       ? null
-      : { status: row.ended_status, terminalReason: row.ended_reason },
+      : {
+          status: row.ended_status,
+          terminalReason: row.ended_reason,
+          replanOwed: row.replan_owed === true,
+        },
   failedJob:
     row.failed_at === null
       ? null
@@ -127,6 +133,11 @@ const strandedSql = (schema: string): string => `
               then t.stage_recovery_attempted_at end as attempted_at,
          er.status as ended_status, er.terminal_reason as ended_reason,
          er.ended_at as ended_instant,
+         -- WP-285/WP-286: the entry's first lost or usage-limited ending owes it a re-plan; being
+         -- the entry's newest run, it has no successor offer.
+         coalesce((er.terminal_reason = 'lease_expired' and s.lost_runs = 1)
+                  or (er.terminal_reason = 'rate_limited' and s.usage_limited_runs = 1), false)
+           as replan_owed,
          fj.completed_on as failed_at, fj.tries as failed_tries,
          fj.failed_name, fj.failed_code, fj.failed_cause_name, fj.failed_cause_code,
          fj.failed_value_message, fj.failed_message
@@ -207,10 +218,12 @@ export const createPostgresStrandedStageStore = (
     strandedStages: async (tx, query: StrandedStageQuery) => {
       const { rows } = await sqlOf(tx).query<Row>(
         `select * from (${stranded}) x
-          where (x.ended_status is not null
+          where (x.ended_status is not null and not x.replan_owed
                  and coalesce(x.ended_instant, x.entered_instant) < $2)
-             or (x.ended_status is null and x.attempted_at is null and x.entered_instant < $2)
-             or (x.ended_status is null and x.attempted_at is not null and x.attempted_at < $3)
+             or ((x.ended_status is null or x.replan_owed) and x.attempted_at is null
+                 and coalesce(x.ended_instant, x.entered_instant) < $2)
+             or ((x.ended_status is null or x.replan_owed) and x.attempted_at is not null
+                 and x.attempted_at < $3)
           order by x.entered_instant, x.task_id
           limit $4`,
         [JOB_QUEUES.stageExecute, query.olderThan, query.endingBefore, query.limit],
@@ -226,7 +239,7 @@ export const createPostgresStrandedStageStore = (
         `update tasks set stage_recovery_attempted_at = $6
           where id in (select x.task_id from (${stranded}) x
                         where ${sameEntry} and x.attempted_at is null
-                          and x.ended_status is null)`,
+                          and (x.ended_status is null or x.replan_owed))`,
         [...entryOf(input.row), input.at],
       );
       return (result.rowCount ?? 0) > 0;

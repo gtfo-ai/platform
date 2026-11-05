@@ -107,8 +107,14 @@ export const workerLocalStateSchema = z.strictObject({
   last_handshake_at: isoDateTimeSchema.nullable(),
   /** The owner's hold from this page (or a drain's), as the core stored it. */
   manually_paused_at: isoDateTimeSchema.nullable(),
-  /** A usage limit's pause (TD-031 §11), as the core last said. */
+  /** A usage limit's pause (TD-031 §11), as the core last said — or as this worker set it (WP-285). */
   usage_paused_until: isoDateTimeSchema.nullable(),
+  /**
+   * `true` when this worker set the pause from a limit that named no reset time, so the instant is
+   * its default pause (`APP_WORKER_USAGE_PAUSE_DEFAULT`) and the page says *until about* (WP-285).
+   * `false` for a pause the core reported at a handshake: the protocol does not carry it.
+   */
+  usage_paused_estimated: z.boolean(),
   draining: z.boolean(),
   /** The core runs another build than this worker's image; `null` when either is unknown. */
   update_pending: z.boolean().nullable(),

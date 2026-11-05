@@ -99,6 +99,8 @@ export const runTerminalReasonEnum = pgEnum('run_terminal_reason', [
   'lease_expired',
   /** Appended by migration 0080 (WP-144): the runner's own stop handed the run back. */
   'shutdown',
+  /** Appended by migration 0100 (WP-285): a usage limit ended the run mid-run. */
+  'rate_limited',
 ]);
 export const effortEnum = pgEnum('effort', ['low', 'medium', 'high']);
 export const contextPackReasonEnum = pgEnum('context_pack_reason', [

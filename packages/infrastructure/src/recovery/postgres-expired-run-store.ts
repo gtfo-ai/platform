@@ -119,4 +119,18 @@ export const createPostgresExpiredRunStore = (): ExpiredRunStore => ({
     );
     return rows.length === 1;
   },
+
+  earlierLostRuns: async (tx, entry) => {
+    // WP-286: the entry's runs this sweep already ended, oldest first, for the second loss's brief.
+    const { rows } = await sqlOf(tx).query<{ id: string; lease_owner: string | null }>(
+      `select r.id, r.lease_owner
+         from runs r
+         join task_stages s on s.id = r.task_stage_id
+        where s.task_id = $1 and s.stage = $2 and s.attempt = $3
+          and r.terminal_reason = 'lease_expired' and r.id <> $4
+        order by r.created_at, r.id`,
+      [entry.taskId, entry.stage, entry.attempt, entry.runId],
+    );
+    return rows.map((row) => ({ runId: row.id as Id, leaseOwner: row.lease_owner }));
+  },
 });

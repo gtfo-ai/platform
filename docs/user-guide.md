@@ -1449,7 +1449,16 @@ work until it is resumed there. That page — on the developer's machine only, a
 worker prints — shows what the worker is doing and has **Cancel run**, which does exactly what the
 task page's *Cancel* does: the run stops and **its task is paused** until somebody resumes it.
 Stopping the worker's container is not a cancel; the platform treats it as a lost worker and plans
-the stage again.
+the stage again — once: a second lost run of the same stage goes to *Needs human*, naming both runs
+and the machines that held them.
+
+When a worker reaches its Claude **usage limit** the run it was doing ends — not as the task's failure
+— and the stage is offered once more to another claimant; the worker takes no work until the limit
+resets, then carries on by itself. Its own page and the Workers screen both say **Paused — usage limit
+until 14:00** (in the organisation's timezone on the platform's screens; *until about* when the limit
+did not say when it resets, and the worker waits an hour), and the run's page says the same beside
+*Executed by*. A second usage limit on the same stage goes to *Needs human*. A person's *Pause* is a
+different hold: the end of a usage limit never lifts it.
 
 ## 13. The whole list of what is not there yet
 

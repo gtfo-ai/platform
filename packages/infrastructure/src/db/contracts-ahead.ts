@@ -33,9 +33,8 @@ export interface ValueAheadOfStorage {
 /** PostgreSQL enum type name → the values declared ahead of it, in contract order. */
 export const CONTRACTS_AHEAD_OF_STORAGE: Readonly<Record<string, readonly ValueAheadOfStorage[]>> =
   {
-    // TD-031 decision 11: a run a usage limit ended mid-run. In contracts since WP-273, written and
-    // stored by WP-285 (its migration appends the label).
-    run_terminal_reason: [{ value: 'rate_limited', emptiedBy: 'WP-285' }],
+    // Empty since WP-285: migration 0100 appended `rate_limited` to `run_terminal_reason`, the one
+    // value WP-273 declared ahead (TD-031 decision 11).
   };
 
 /** A declaration this module cannot honour: the value is missing, or not a tail. */
@@ -48,8 +47,13 @@ export class ContractsAheadDeclarationError extends Error {
  * minus the declared tail. Throws {@link ContractsAheadDeclarationError} when a declared value is not
  * published, or is not at the end of the list in the declared order.
  */
-export const storedLabelsOf = (enumName: string, published: readonly string[]): string[] => {
-  const ahead = (CONTRACTS_AHEAD_OF_STORAGE[enumName] ?? []).map((entry) => entry.value);
+export const storedLabelsOf = (
+  enumName: string,
+  published: readonly string[],
+  /** The declarations to apply — this module's own, or a test's. */
+  declared: Readonly<Record<string, readonly ValueAheadOfStorage[]>> = CONTRACTS_AHEAD_OF_STORAGE,
+): string[] => {
+  const ahead = (declared[enumName] ?? []).map((entry) => entry.value);
   if (ahead.length === 0) return [...published];
   const tail = published.slice(published.length - ahead.length);
   if (tail.length !== ahead.length || tail.some((value, index) => value !== ahead[index])) {

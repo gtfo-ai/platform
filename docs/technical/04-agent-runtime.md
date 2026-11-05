@@ -975,7 +975,28 @@ platform-tool port — on a remote worker the tool port is an HTTP adapter to `P
 **content** now comes from the core in the launcher's create request, not from the launcher's own copy.
 A usage-limit rejection (`rate_limit_event` `rejected`, research/17 § 1) ends a started run with the new
 terminal reason `rate_limited`, which is not the task's failure (TD-031 decision 11); a lost lease is
-re-offered once per stage entry (decision 12). Steer, cancel and take-over reach a remote holder on its
+re-offered once per stage entry (decision 12).
+
+> **As built (WP-285, WP-286).** `runner/usage-limit.ts` reads three signals off the stream — a
+> `rate_limit_event` with `status: "rejected"` or `errorCode: "credits_required"`, and a `result` with
+> `api_error_status: 429` — and `claude-runner.ts` ends a run that did not complete after one as `failed` /
+> `rate_limited` with `RunOutcome.usageLimit` (`{signal, resetsAt}`), its measured cost kept; a person's
+> stop or a shutdown keeps its own name. `resetsAt` is read as seconds or milliseconds **by magnitude**
+> (≥ 10¹¹ is milliseconds) and refused as `null` when it is not in the next eight days — TODO V-WM1
+> still owns the unit. One golden SDK-stream fixture per signal (`test/fixtures/claude/usage-limit-*`),
+> each with a `source` step marking it `documented-adapted`, not a recording. `settleRun` then counts the
+> entry's `usage_limited_runs`: the first re-plans it at once (the task untouched, `stage.execute`
+> enqueued after the commit, the new offer carrying the limited worker in its exclusions), the second
+> escalates with *usage limits ended this stage twice*. The claimant that ran the session pauses: a
+> remote worker posts `pause` before its `finish` and claims nothing until the reset (it hands a run it
+> claimed meanwhile back with `release usage_limited` before its spawn call), and the server's claimant
+> does the same in `local` provider mode only (`RunClaimantOptions.usagePause`); either resumes by itself.
+> A limit that named no reset pauses for `APP_WORKER_USAGE_PAUSE_DEFAULT` (3600 s) and the UI says *until
+> about*. The lease sweep counts `lost_runs` in its ending's transaction and, for an entry's first loss,
+> revokes the run's minted credential after the commit and then enqueues `stage.execute` (the lost worker
+> excluded, any claimant may take it); the second loss escalates naming both runs and the machines that
+> held them. **Unfinished work of a `rate_limited` run is not saved** — the default of
+> `SAVED_UNFINISHED_WORK_REASONS`, left open by BACKLOG 694, not decided here. Steer, cancel and take-over reach a remote holder on its
 heartbeat response (decision 14).
 
 > **The claimant's spec is the stored plan (WP-275a, TD-031's 2026-11-04 amendment §2).** Transaction

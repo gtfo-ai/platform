@@ -19,12 +19,15 @@ import type { StoredTask } from '../pipeline/store.js';
 import { INITIAL_TASK_VERSION } from '../pipeline/store.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { createMemoryPipelineStore } from '../testing/memory-pipeline.js';
+import { recordingJobs } from '../testing/pipeline-harness.js';
 import type { ExpiredRunLease, ExpiredRunQuery } from './run-lease.js';
 import { sweepExpiredRunLeases } from './run-lease.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1' as Id;
 const TASK = '00000000-0000-4000-8000-0000000000d1' as Id;
 const RUN = '00000000-0000-4000-8000-0000000000e1' as Id;
+/** The entry's first lost run, for the second loss's brief (WP-286). */
+const EARLIER_RUN = '00000000-0000-4000-8000-0000000000e0' as Id;
 const NOW = '2026-09-15T10:00:00.000Z' as IsoDateTime;
 const STARTED = '2026-09-15T09:00:00.000Z' as IsoDateTime;
 const LEASE_GONE = '2026-09-15T09:50:00.000Z' as IsoDateTime;
@@ -107,10 +110,17 @@ const sweep = async (options: {
   readonly reachedCli?: boolean;
   /** `APP_LEASE_SKEW_GRACE` (WP-276); absent is the default. */
   readonly skewGraceMs?: number;
+  /** Runs of this entry the sweep already ended (WP-286): `lost_runs` before this pass. */
+  readonly earlierLosses?: number;
+  /** The revocation throws (WP-286): the re-plan still goes ahead. */
+  readonly revokeThrows?: boolean;
 }) => {
   const store = createMemoryPipelineStore();
   const eventing = new MemoryEventing();
   const asked: ExpiredRunQuery[] = [];
+  const jobs = recordingJobs();
+  /** The order the sweep's after-commit steps ran in (WP-286: revoke, then re-plan). */
+  const order: string[] = [];
 
   await eventing.transaction(async (scope) => {
     await store.tasks.insert(scope.tx, task(options.taskState ?? 'active', options.taskAttempt));
@@ -152,6 +162,14 @@ const sweep = async (options: {
     if (options.reachedCli !== false) {
       await store.runs.markCliSpawnRequested(scope.tx, { runId: RUN, at: STARTED });
     }
+    for (let lost = 0; lost < (options.earlierLosses ?? 0); lost += 1) {
+      await store.tasks.countStageRunEnding(scope.tx, {
+        taskId: TASK,
+        stage: 'implementation',
+        attempt: 1,
+        kind: 'lost',
+      });
+    }
   });
 
   const report = await sweepExpiredRunLeases({
@@ -161,6 +179,10 @@ const sweep = async (options: {
         return [expired];
       },
       claimExpiredRun: async () => options.claim,
+      earlierLostRuns: async () =>
+        (options.earlierLosses ?? 0) > 0
+          ? [{ runId: EARLIER_RUN, leaseOwner: 'worker:00000000-0000-4000-8000-0000000000b7' }]
+          : [],
     },
     pipeline: store,
     unitOfWork: eventing,
@@ -177,13 +199,26 @@ const sweep = async (options: {
     ...(options.skewGraceMs === undefined ? {} : { skewGraceMs: options.skewGraceMs }),
     wallClockMs: WALL_CLOCK_MS,
     limit: 50,
+    replan: {
+      jobs: {
+        ...jobs,
+        enqueue: async (request) => {
+          order.push(`enqueue:${request.queue}`);
+          return jobs.enqueue(request);
+        },
+      },
+      revokeCredentials: async (runId) => {
+        order.push(`revoke:${runId}`);
+        if (options.revokeThrows === true) throw new Error('the provider did not answer');
+      },
+    },
   });
 
   const [run, stored] = await eventing.transaction(async (scope) => [
     await store.runs.load(scope.tx, RUN),
     await store.tasks.load(scope.tx, TASK),
   ]);
-  return { asked, report, run, stored, eventing, store };
+  return { asked, report, run, stored, eventing, store, jobs, order };
 };
 
 describe('the run-lease sweep', () => {
@@ -205,15 +240,60 @@ describe('the run-lease sweep', () => {
     expect(longer.asked[0]?.leaseExpiredBefore).toBe('2026-09-15T09:50:00.000Z');
   });
 
-  it('ends the run as failed with the named reason, and escalates its task', async () => {
-    const { report, run, stored } = await sweep({ claim: true });
+  it('ends the run as failed with the named reason and, the entry’s first loss, re-plans it (WP-286)', async () => {
+    const { report, run, stored, jobs, order, eventing, store } = await sweep({ claim: true });
 
-    expect(report).toEqual({ found: 1, ended: 1, skipped: 0 });
+    expect(report).toEqual({ found: 1, ended: 1, skipped: 0, replanned: 1 });
     expect(run?.status).toBe('failed');
     // Never `cancelled` and never `crash`: a missing heartbeat is a fact about the platform, not
     // about the session or about a human.
     expect(run?.terminalReason).toBe('lease_expired');
+    // The task is untouched — at its stage, on its attempt, its row open — and the entry's own
+    // `stage.execute` is enqueued, with the attempt's model and effort.
+    expect(stored?.task.state).toBe('active');
+    expect(eventing.log.filter((row) => row.event.type === 'task.escalated')).toHaveLength(0);
+    expect(jobs.take('stage.execute').map((job) => job.data)).toEqual([
+      {
+        task_id: TASK,
+        project_id: PROJECT,
+        stage: 'implementation',
+        attempt: 1,
+        model: 'claude-opus-5',
+        effort: 'high',
+      },
+    ]);
+    expect(store.stageRows.find((row) => row.stage === 'implementation')).toMatchObject({
+      lostRuns: 1,
+      exitedAt: null,
+    });
+    // TD-031 §2: the minted credential is revoked before the stage is offered again.
+    expect(order).toEqual([`revoke:${RUN}`, 'enqueue:stage.execute']);
+  });
+
+  it('re-plans even when the revocation throws, the residual logged (TD-031 §2)', async () => {
+    const { report, jobs } = await sweep({ claim: true, revokeThrows: true });
+    expect(report.replanned).toBe(1);
+    expect(jobs.take('stage.execute')).toHaveLength(1);
+  });
+
+  it('escalates the entry’s second loss, naming both runs and both machines (WP-286)', async () => {
+    const { report, run, stored, jobs, order, eventing } = await sweep({
+      claim: true,
+      earlierLosses: 1,
+    });
+
+    expect(report).toEqual({ found: 1, ended: 1, skipped: 0, replanned: 0 });
+    expect(run?.terminalReason).toBe('lease_expired');
     expect(stored?.task.state).toBe('needs_human');
+    expect(jobs.take('stage.execute')).toHaveLength(0);
+    expect(order).toEqual([]);
+    const escalated = eventing.log.find((row) => row.event.type === 'task.escalated')?.event;
+    const brief = (escalated?.payload as { blocker_brief?: string } | undefined)?.blocker_brief;
+    expect(brief).toContain(
+      `run ${EARLIER_RUN} (held by worker 00000000-0000-4000-8000-0000000000b7)`,
+    );
+    expect(brief).toContain(`run ${RUN} (held by server-1:0f0f0f0f)`);
+    expect(brief).toContain('lost its run twice');
   });
 
   it('records no cost at all, because nobody measured this run (standing rule 16)', async () => {
@@ -239,7 +319,12 @@ describe('the run-lease sweep', () => {
    * case above is the same sweep after the marker.
    */
   it('records a measured zero and a start failure for a run that never asked for its CLI (WP-150)', async () => {
-    const { run, eventing, store, stored } = await sweep({ claim: true, reachedCli: false });
+    // The entry's second loss, so the brief is the escalation's (its first would re-plan, WP-286).
+    const { run, eventing, store, stored } = await sweep({
+      claim: true,
+      reachedCli: false,
+      earlierLosses: 1,
+    });
 
     expect(run?.status).toBe('failed');
     expect(run?.terminalReason).toBe('lease_expired');
@@ -268,14 +353,14 @@ describe('the run-lease sweep', () => {
     // The brief says what happened and does not claim an unmeasured spend.
     const escalated = eventing.log.find((row) => row.event.type === 'task.escalated')?.event;
     const brief = (escalated?.payload as { blocker_brief?: string } | undefined)?.blocker_brief;
-    expect(brief).toContain('before the run had asked for its CLI');
+    expect(brief).toContain('before it had asked for its CLI, so nothing was spent on it');
     expect(brief).not.toContain('nobody measured it');
   });
 
   it('writes nothing when the lease was renewed between the read and the write (rule 42)', async () => {
     const { report, run, stored, eventing } = await sweep({ claim: false });
 
-    expect(report).toEqual({ found: 1, ended: 0, skipped: 1 });
+    expect(report).toEqual({ found: 1, ended: 0, skipped: 1, replanned: 0 });
     // All three, because "the row moved" and "the task moved" and "the log grew" are three
     // different ways this could have written something it must not have.
     expect(run?.status).toBe('running');

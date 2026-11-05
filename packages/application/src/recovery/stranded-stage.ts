@@ -47,7 +47,13 @@
  * nothing, and nothing is enqueued. The re-enqueued job is the entry's own (`enqueueStage` with the
  * task's stage and attempt), and `stage.execute` re-validates it on fire like any other.
  *
- * **An attempt whose run already ended is never re-enqueued** (WP-108 review round 1). A run
+ * **An attempt whose run already ended is never re-enqueued** (WP-108 review round 1) — **except
+ * one owed a re-plan** (WP-285, WP-286): the first `lease_expired` or `rate_limited` ending of an
+ * entry re-plans it in its terminal writer's own process, after the commit, and a process that died
+ * in between leaves exactly this row; {@link StrandedStage.endedRun}'s `replanOwed` names it, and it
+ * takes the one re-enqueue an entry nothing ran takes. The stage's minted credential is the WP-77
+ * pass's to revoke then (a pass interval after the run ended); the sweep's own revoke-then-re-plan
+ * order is not repeated here, a residual of the crash it recovers. A run
  * cancelled with no live lease pauses its task — except from `merged` and `retro`, which have no
  * edge to `paused`, so such a task stayed at its stage with a `cancelled` run and an open row, and
  * the first version of this row re-enqueued it a minute later: a fresh **paid** run of a stage a
@@ -115,6 +121,15 @@ export interface StrandedStage {
     readonly status: string;
     /** `run_terminal_reason`, a platform enum value, or `null`. */
     readonly terminalReason: string | null;
+    /**
+     * **The entry was owed a re-plan that never happened** (WP-285, WP-286, TD-031 §12): the run
+     * ended `lease_expired` with the entry's `lost_runs = 1`, or `rate_limited` with its
+     * `usage_limited_runs = 1` — the first such ending, which re-plans the entry — and, being the
+     * entry's newest run, it has no successor offer. The process that ended it died between its
+     * commit and the enqueue. Such an attempt is **re-enqueued once**, like an entry nothing ran,
+     * and escalated only if that does not take.
+     */
+    readonly replanOwed: boolean;
   } | null;
   /**
    * The newest `stage.execute` job of **this entry** that pg-boss moved to `failed` — every retry

@@ -163,6 +163,8 @@ export interface CoreClient {
     credential: string,
     body: unknown,
   ): Promise<z.output<typeof workerManualPauseResponseSchema>>;
+  /** A usage limit's pause (WP-285, TD-031 §11): `{ until, reason, estimated? }`, `204`. */
+  pause(credential: string, body: unknown): Promise<void>;
   forRun(runId: string, runToken: string): RunScopedClient;
 }
 
@@ -329,6 +331,15 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
         { verb: WORKER_PATHS.manualPause, bearer: credential, body, runScoped: false },
         workerManualPauseResponseSchema,
       ),
+    pause: async (credential, body) => {
+      const answer = await call({
+        verb: WORKER_PATHS.pause,
+        bearer: credential,
+        body,
+        runScoped: false,
+      });
+      if (answer.status !== 204) throw refusal(WORKER_PATHS.pause, answer, false);
+    },
     forRun: (runId, runToken) => {
       const verb = (path: string, name?: string): string =>
         path.replace(':id', runId).replace(':name', name ?? '');

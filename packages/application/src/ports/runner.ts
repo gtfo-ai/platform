@@ -19,6 +19,7 @@
  */
 import type {
   Id,
+  IsoDateTime,
   JsonObject,
   JsonValue,
   ModelUsage,
@@ -184,6 +185,32 @@ export interface RunOutcome {
    * `runs.exit_detail` and the terminal event's `start_failure`; absent for every other ending.
    */
   readonly startFailure?: RunStartFailure;
+  /**
+   * **The claimant's usage limit stopped this run** (WP-285, TD-031 decision 11) — set by the
+   * runner, with `terminalReason: 'rate_limited'`, when the session reported a limit: a
+   * `rate_limit_event` whose `status` is `rejected` or whose `errorCode` is `credits_required`, or a
+   * `result` with `api_error_status` 429. Absent for every other ending.
+   *
+   * It never crosses the worker protocol: the core reads `rate_limited` off the terminal reason, and
+   * only the process that ran the session acts on the reset — a remote worker posts `pause`, the
+   * server's claimant in `local` mode stops claiming (`./claimant.ts`).
+   */
+  readonly usageLimit?: RunUsageLimit;
+}
+
+/** Which of the SDK's signals reported the limit (research/17 § 1). */
+export type RunUsageLimitSignal = 'rate_limit_rejected' | 'credits_required' | 'api_status_429';
+
+/** What a session told the runner about the usage limit that ended it. */
+export interface RunUsageLimit {
+  readonly signal: RunUsageLimitSignal;
+  /**
+   * When the limit resets, as the `rate_limit_event` said (`resetsAt`, read as seconds or
+   * milliseconds by magnitude until V-WM1 pins the unit), or `null` when nothing said — a `429`
+   * result carries no reset time. The claimant then pauses for its default
+   * (`APP_WORKER_USAGE_PAUSE_DEFAULT`) and says *until about*.
+   */
+  readonly resetsAt: IsoDateTime | null;
 }
 
 // ── Collaborators ────────────────────────────────────────────────────────────

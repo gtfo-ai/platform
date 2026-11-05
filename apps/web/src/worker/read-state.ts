@@ -209,6 +209,7 @@ export const STATE: Spec = object({
   last_handshake_at: nullable(datetime),
   manually_paused_at: nullable(datetime),
   usage_paused_until: nullable(datetime),
+  usage_paused_estimated: { t: 'boolean' },
   draining: { t: 'boolean' },
   update_pending: nullable({ t: 'boolean' }),
   concurrency: { t: 'int', min: 1, max: 64 },

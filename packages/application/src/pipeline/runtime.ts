@@ -141,6 +141,13 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    */
   readonly runnerConcurrency?: number;
   /**
+   * The server claimant's **usage pause** (WP-285, TD-031 decision 11): present in `local` provider
+   * mode, where the claimant runs on a subscription — a run a usage limit ended makes it claim
+   * nothing until the reset, or for `defaultMs` (`APP_WORKER_USAGE_PAUSE_DEFAULT`) when the limit
+   * named none. Absent (`api` mode) it never pauses.
+   */
+  readonly claimantUsagePause?: { readonly defaultMs: number };
+  /**
    * The transport the claimant listens on for `run_offers` (WP-276). Absent, it polls only — which a
    * test harness that drives {@link PipelineRuntime.claimant} by hand never needs anyway.
    */
@@ -422,6 +429,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
           ...(options.runnerConcurrency === undefined
             ? {}
             : { concurrency: options.runnerConcurrency }),
+          ...(options.claimantUsagePause === undefined
+            ? {}
+            : { usagePause: options.claimantUsagePause }),
           ...(logger === undefined ? {} : { logger }),
         })
       : null;

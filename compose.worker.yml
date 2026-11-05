@@ -87,6 +87,8 @@ services:
       APP_CORE_URL: ${APP_CORE_URL:?set APP_CORE_URL to the core's https URL}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token)}
       APP_WORKER_CONCURRENCY: ${APP_WORKER_CONCURRENCY:-1}
+      # Seconds a usage limit that named no reset time pauses claiming (TD-031 decision 11).
+      APP_WORKER_USAGE_PAUSE_DEFAULT: ${APP_WORKER_USAGE_PAUSE_DEFAULT:-3600}
       APP_WORKER_STATE_DIR: /var/lib/platform/worker-state
       APP_LAUNCHER_URL: http://launcher:7780
       APP_LAUNCHER_TOKEN_FILE: /var/lib/platform/launcher-token/token

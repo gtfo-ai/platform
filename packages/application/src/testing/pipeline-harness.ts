@@ -323,6 +323,8 @@ export interface ScriptedRun {
    * export (`unfinishedWorkExportFor`), because the real runner never attaches one then.
    */
   readonly savedWork?: RunSavedWork;
+  /** `RunOutcome.usageLimit` (WP-285): the session reported a usage limit. */
+  readonly usageLimit?: RunOutcome['usageLimit'];
   /** `RunOutcome.numTurns`; @default 1. */
   readonly numTurns?: number;
   /**
@@ -658,6 +660,7 @@ const outcomeFor = (runId: Id, scripted: ScriptedRun, structuredOutput: unknown)
   error: scripted.error ?? null,
   redactionCount: 0,
   ...(scripted.savedWork === undefined ? {} : { savedWork: scripted.savedWork }),
+  ...(scripted.usageLimit === undefined ? {} : { usageLimit: scripted.usageLimit }),
 });
 
 export interface HarnessOptions {

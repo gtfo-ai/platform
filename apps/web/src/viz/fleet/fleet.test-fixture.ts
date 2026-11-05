@@ -91,6 +91,7 @@ export const worker = (n: number, overrides: Partial<WorkerSummary> = {}): Worke
   state: 'active',
   revoked_at: null,
   paused_until: null,
+  paused_until_estimated: false,
   manually_paused_at: null,
   paused_reason: null,
   concurrency: 3,

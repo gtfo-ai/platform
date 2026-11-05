@@ -106,6 +106,8 @@ const world = async (options: {
   readonly budgetAtClaim?: () => BlockingBudget | null;
   /** Backlog 744: the task cap the re-check reads (the offer was admitted under the default). */
   readonly taskBudgetAtClaim?: () => number | undefined;
+  /** WP-285: the claimant pauses on a usage limit (`local` mode). */
+  readonly usagePause?: { readonly defaultMs: number };
 }) => {
   const harness: PipelineHarness = createPipelineHarness({
     projectId: PROJECT,
@@ -161,6 +163,7 @@ const world = async (options: {
             context: harness.commands.context,
           }),
         }),
+    ...(options.usagePause === undefined ? {} : { usagePause: options.usagePause }),
   });
   return {
     harness,
@@ -280,6 +283,75 @@ describe('the server claimant (WP-276)', () => {
  * The lease loss itself, through the heartbeat the claimant composes: a fake monotonic clock and
  * timer, and a store whose renewal the case decides.
  */
+/**
+ * WP-285 (TD-031 decision 11): the server's claimant in `local` mode stops claiming when a run's
+ * session reports its usage limit, and resumes by itself once the limit resets. In `api` mode it
+ * does not pause.
+ */
+describe('a usage limit on the server claimant (WP-285)', () => {
+  const limited = (runId: Id, resetsAt: string | null): RunOutcome => ({
+    ...outcomeOf(runId, 'failed'),
+    terminalReason: 'rate_limited',
+    usageLimit: { signal: 'rate_limit_rejected', resetsAt: resetsAt as never },
+  });
+
+  it('claims nothing until the reset the limit named, then claims again by itself', async () => {
+    const { harness, claimant, sessions } = await world({
+      tickets: 2,
+      concurrency: 1,
+      usagePause: { defaultMs: 3_600_000 },
+    });
+    const resetsAt = new Date(harness.clock.epochMs + 5 * 60_000).toISOString();
+    const drained = claimant.drain();
+    await tick();
+    await tick();
+    const [first] = [...sessions.keys()];
+    sessions.get(first as Id)?.finish(limited(first as Id, resetsAt));
+    expect(await drained).toBe(1);
+    // Paused: the second ticket's offer stays open, however often it is woken.
+    expect(claimant.usagePausedUntil).toBe(resetsAt);
+    expect(await claimant.drain()).toBe(0);
+    expect(harness.store.offerRows().filter((row) => row.state === 'open')).toHaveLength(1);
+    harness.clock.advance(5 * 60_000 - 1);
+    expect(await claimant.drain()).toBe(0);
+    // The reset: it claims again, nobody resumed it.
+    harness.clock.advance(1);
+    expect(claimant.usagePausedUntil).toBeNull();
+    const again = claimant.drain();
+    await tick();
+    await tick();
+    for (const [runId, session] of sessions) session.finish(outcomeOf(runId, 'completed'));
+    expect(await again).toBe(1);
+  });
+
+  it('pauses for its default when the limit named no reset', async () => {
+    const { harness, claimant, sessions } = await world({
+      tickets: 1,
+      usagePause: { defaultMs: 60 * 60_000 },
+    });
+    const drained = claimant.drain();
+    await tick();
+    await tick();
+    const [first] = [...sessions.keys()];
+    sessions.get(first as Id)?.finish(limited(first as Id, null));
+    await drained;
+    expect(claimant.usagePausedUntil).toBe(
+      new Date(harness.clock.epochMs + 60 * 60_000).toISOString(),
+    );
+  });
+
+  it('never pauses without the option (api mode): the limit ends the run, and claiming goes on', async () => {
+    const { claimant, sessions } = await world({ tickets: 1 });
+    const drained = claimant.drain();
+    await tick();
+    await tick();
+    const [first] = [...sessions.keys()];
+    sessions.get(first as Id)?.finish(limited(first as Id, null));
+    await drained;
+    expect(claimant.usagePausedUntil).toBeNull();
+  });
+});
+
 describe('a claimant that loses its lease (TD-031 §2)', () => {
   const lossWorld = async (renewal: 'lost' | 'throws') => {
     const harness = createPipelineHarness({ projectId: PROJECT, runsAgents: false });
