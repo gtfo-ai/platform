@@ -247,6 +247,8 @@ describe('GET /api/org/agents — seat and activity (S-23.15)', () => {
       kind: 'worker',
       worker_id: workerId,
       worker_name: 'alice-laptop',
+      // WP-283 (5): the worker's user, by name, beside the machine.
+      user_name: 'Live',
     });
     expect(seat('queued')).toBeNull();
     expect(seat('silent')).toBeNull();
