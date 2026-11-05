@@ -538,8 +538,10 @@ integration — Home is a **setup checklist** instead of the boxes: *Connect you
 host*, *Create a project*, *Run technical discovery*, *Choose how autonomous agents are*, *Start
 your first ticket* — and, on a platform whose server runs no agent work (the project's *Execution*
 settings say so), **Connect a worker** before the ticket, because nothing runs until a developer's
-computer does. That step is ticked once a worker can take work; a worker that exists but cannot is
-named with the reason (*jan-mbp can't take work yet: not connected*), and *Continue setup* opens the
+computer does. That step is ticked once a worker takes work — by itself, or only the runs its owner
+picks; a worker that exists but cannot is named with the platform's reason and what to do (*jan-mbp
+can't take work yet: it has an older build than this platform. Its updater fixes this within 5
+minutes…*), and *Continue setup* opens the
 **Add a worker** wizard at *Ready to work* for it. On a platform whose server runs agent work the
 step is not there at all. Each step is ticked from what the platform already knows (an integration of
 each kind exists, a project exists, its readiness was evaluated, its operating mode was applied, it
@@ -610,8 +612,12 @@ every 15 seconds, and the *Now: …* of up to twelve runs on screen follows thei
 (at most one refresh a second).
 With nothing running, the map and the list say *No agent is working* with a way to a board, and the
 office shows everyone asleep under the same words. On a platform whose server runs no agent work and
-with no worker of yours connected, they say **Waiting for a worker** instead, with **Add a worker**,
-and the queue and the office's bench say their runs wait *for a worker* rather than *for a seat*.
+with no worker registered, they say **Waiting for a worker** instead, with **Add a worker**, and the
+queue and the office's bench say their runs wait *for a worker* rather than *for a seat*. With workers
+that can't take work, they say **No worker can take work** and why — the first worker and its first
+reason, *jan-mbp: not connected to the platform* — with **See why** to the Workers page; while runs
+wait, a line above the views says *1 run is waiting and no worker can take them: …*, and the queue
+and the bench say *waiting, and no worker can take them*.
 
 What it cannot show yet: how many runs the platform server takes at once (no reading reports it, so
 its seat says *2 running* rather than a slot count, and the free-seat count is the workers' alone);
@@ -1526,8 +1532,14 @@ project that prefers the server has its runs offered to workers at once rather t
 fallback, and a *platform server only* project's runs wait — the card says which. When the project's
 git connection gives runs a long-lived token or a deploy key, the card says that workers can't take
 its runs (sending that credential to a developer's computer is off) and links **Open the git
-connection**, where an administrator can allow it. A change applies to runs offered after you save
-it. This is never a key of `.agentic/config.yml` (*Why isn't this in the repository's
+connection**, where an administrator can allow it. **Would take this project's work** lists each
+worker you can see — every one for an administrator — with ✓ *Takes its runs by itself*, *Only runs
+its owner picks*, or ✗ and the first reason in the same words as the Workers page (the worker's own,
+such as *It has an older build than this platform*, before the project's, such as *The project runs on
+the platform server only*), and under it what waits: *3 runs are waiting for a worker*, and for each
+reason some can't go to one, *2 waiting runs can't go to workers: they were offered to the platform
+server only* (pausing and resuming a task offers its run again). A change applies to runs offered
+after you save it. This is never a key of `.agentic/config.yml` (*Why isn't this in the repository's
 configuration?* says so): where code runs and whose subscription pays is not something a pushed
 commit may change.
 
@@ -1568,13 +1580,23 @@ also folded, with its reason and what would give it a value.
 
 ### Workers
 
-**Workers** lists the machines registered to run agent stages for this instance — yours, or every
-one if you are an administrator. Each row starts with its state — **Online** (seen in the last
-minute), **Offline**, **Paused** (until when, and why) or **Revoked** — then the machine's name, its
-owner, when it was last seen, the protocol it speaks, and how many of its run slots are busy (*1 of 2
-busy*); **Details** holds the image digests it reported and when it was registered. **Revoke** opens a
-dialog that says what it does before anything happens: the machine's credential stops at its next
-call, and any run it holds is ended by the lease sweep and planned again.
+**Workers** lists the machines registered to run agent stages for this platform — yours, or every
+one if you are an administrator. **Add a worker** at the top opens the wizard below, and **Approve a
+machine** the approval page. Each row says first **whether the machine can take work**, as the
+platform itself decides it: **Ready**, or **Can't take work** with the first reason — *Not connected
+to the platform — last seen 3 h ago*, *Paused by its owner*, *Paused — usage limit until 14:00*, *It
+has an older build than this platform*, *It has no run images*, *Needs an update*, *No project gives it
+work* — and **Why?** lists every reason with what to do about it, the most fundamental first. A machine
+whose owner chose *only the runs I pick* says *Takes only runs its owner picks*: it claims nothing by
+itself, and a run picked on its page still starts. Then its owner, *Last took work 5 m ago* (or *Has
+not taken work yet*), what it takes by itself (*Takes runs of every project*, *Takes only runs its
+owner picks* or the projects' keys), and how many of its run slots are busy (*1 of 2 busy*);
+**Details** holds when it was registered and last seen, its worker version and the image digests it
+reported. The header counts *2 ready · 1 can't take work · 1 revoked*. The page refreshes by itself
+every 15 seconds while it is open. **Revoke** opens a dialog that says what it does before anything
+happens: the machine's credential stops at its next call, any run it holds is ended by the lease
+sweep and planned again, and to use the machine again you approve it again from the machine. With
+no worker yet, the page says what a worker is, with **Add a worker**.
 
 #### Add a worker
 
@@ -1584,14 +1606,14 @@ the top right. The step is in the address, so a link (or Home's checklist) opens
 off.
 
 1. **Install.** What a worker is, what you need (Docker on that computer and a Claude
-   subscription), and three lines to copy, built from this platform's own address: the `curl` that
-   downloads `compose.worker.yml`, the `APP_CORE_URL=…` line for a `.env.worker` file beside it, and
+   subscription), and one line to copy for macOS or Linux, built from this platform's own address:
+   `curl -fsSL '<platform>/api/worker/v1/install.sh' | sh`, with **Read the script first**. The
+   script checks Docker, puts the worker in `~/agentic-worker`, starts it for this platform and
+   opens http://127.0.0.1:7357, the worker's own page. Windows is *coming next*. **Set it up by
+   hand** holds the three lines instead: the `curl` that downloads `compose.worker.yml`, the
+   `APP_CORE_URL=…` line for a `.env.worker` file beside it, and
    `docker compose --env-file .env.worker -f compose.worker.yml up -d`; then open
-   http://127.0.0.1:7357 on that computer. (Once the platform serves its one-line installer —
-   `curl -fsSL '<platform>/api/worker/v1/install.sh' | sh`, or `irm … install.ps1 | iex` in Windows
-   PowerShell, which checks Docker, puts the worker in `~/agentic-worker`, starts it and opens that
-   page — the installer is shown first, for the system your browser reports, with **Read the script
-   first**, and these lines move under *Set it up by hand*. It is being built beside this wizard.)
+   http://127.0.0.1:7357 on that computer.
    The platform cannot see an install, so this step is done when you tick **I've done this**.
 2. **Start it and sign in.** The worker's page opens at http://127.0.0.1:7357 and walks you through
    signing in to Claude, then shows the code to approve. **If you set it up by hand** holds the
@@ -1607,21 +1629,28 @@ off.
    read what starting it prints). *Continue* is never held here: you may already have the code.
 3. **Approve.** **Approve the code** opens the approval page (below) in a new tab. The step is done
    once a new worker of yours appears — this page asks every 5 seconds while you wait.
-4. **Ready to work.** Whether that worker can take work now, line by line: connected, not paused by
-   its owner, not held by a Claude usage limit — each one it fails says what to do. Its images, its
-   version and which projects give it work are not checked here yet; the worker's own page shows
-   them.
+4. **Ready to work.** Whether that worker can take work now, line by line, as the platform decides
+   it: connected, speaks this platform's version, not paused, not draining, not held by a Claude
+   usage limit, has its run images, has this platform's current images, a project gives it work —
+   each one it fails says what to do, and any other reason the platform names (its owner's account
+   disabled, the platform unable to name its own images) is listed too. A last line says whether it
+   has taken its first run; that is not needed to continue. A worker that takes only the runs its
+   owner picks may continue.
 5. **Choose projects** (optional). Each of your projects, and whether workers run its stages; for
    one that does not, an administrator gets **Use workers for …** (its *Execution* settings) and
    anyone else is told to ask one. The wizard ends on **Open the board** of the first project
    workers run, or **Go to Workers** when there is none.
 
 **The approval page**, `/workers/approve`: the worker's page shows a code like `BCDF-GHJK`, and you
-type it here while signed in. Before you decide, the page shows where the request came from, which
-client sent it and how old the code is. **Approve only a code your own machine is showing you now**
-— somebody who sends you a code is asking you to give their machine your access — and a code older
-than five minutes asks you to confirm that a second time. Name the machine and approve, or deny; the
-machine collects its credential the next time it asks, within seconds.
+type it here while signed in, in the large code field (a link from the worker's page fills it in).
+Before you decide, the page shows where the request came from, which client sent it and how old the
+code is. **Approve only a code your own machine is showing you now** — somebody who sends you a code
+is asking you to give their machine your access — and a code older than five minutes asks you to
+confirm that a second time. Name the machine and approve, or deny. After **Approve** the page waits
+for the machine, asking every 5 seconds: once it connects it says *jan-mbp is connected*, with
+**Continue: check it's ready** (the wizard's *Ready to work*). If it has not connected within two
+minutes, it says what to check — is the worker still running on that computer, and was it set up with
+this platform's address — with **Keep waiting**.
 
 A machine its owner paused from the worker's own page reads **Paused by its owner**: it takes no new
 work until it is resumed there. That page — on the developer's machine only, at
@@ -1634,9 +1663,9 @@ platform, Claude refused its sign-in — or the hold: *Paused by you*, *Draining
 usage limit. While it is held, **Resume** is the one button; otherwise **Pause** is beside the header
 and **Drain** is under **More**, with what each does written under it. The list of runs waiting for a
 worker says why it is empty, and an update is said to come by itself (the worker updates after its
-current run). The platform's `GET /api/workers` answers the same reasons for each worker
-(`claim_blockers`, in the same words), and a project's execution settings say which workers would take
-its runs and how many waiting runs no worker may take now.
+current run). The platform's Workers page says the same reasons for each worker, in the same words,
+and a project's execution settings say which workers would take its runs and how many waiting runs no
+worker may take now.
 Stopping the worker's container is not a cancel; the platform gives the stage to another computer
 — once: a second lost run of the same stage goes to *Needs you*, naming both runs
 and the machines that held them.

@@ -28,6 +28,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import type { EventStream } from '../realtime/client.js';
+import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 import { firstNameOf, greetingFor } from './dashboard.js';
 import { workerFixture } from './worker.test-fixture.js';
 
@@ -738,12 +739,21 @@ describe('Home on a new instance: the setup checklist', () => {
       tasks: [],
       serverClaimant: 'none',
       workers: [
-        workerFixture({ name: 'jan-mbp', created_at: created, last_seen_at: minutesAgo(20) }),
+        workerFixture({
+          name: 'jan-mbp',
+          created_at: created,
+          last_seen_at: minutesAgo(20),
+          // The server's answer, in the words both sides use (S-22.19, S-23.24).
+          claim_blockers: ['offline', 'images_outdated'],
+          can_claim: false,
+        }),
       ],
     });
     const { container } = start(world);
     await screen.findByRole('region', { name: 'Set up' });
-    await screen.findByText('jan-mbp can’t take work yet: not connected.');
+    await screen.findByText(
+      `jan-mbp can’t take work yet: not connected to the platform. ${WORKER_CLAIM_BLOCKER_WORDS.offline.fix}`,
+    );
     expect(primaries(container)[0]?.getAttribute('href')).toBe(
       `/workers/new?step=ready&since=${encodeURIComponent(created)}`,
     );

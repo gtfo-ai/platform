@@ -4,15 +4,28 @@
  * **calls** `POST /api/workers/device/lookup` (the code in the body, never the URL) before any decision and shows the requesting address,
  * user agent and the code's age as text with the phishing warning; a code older than five minutes
  * cannot be approved without the second confirmation, and the approval it then sends carries
- * `confirm_stale: true`; the Workers screen lists and revokes through `DELETE /api/workers/:id`.
+ * `confirm_stale: true`; after an approval it watches for the machine to connect (S-23.24) and,
+ * after two minutes, says what to check. The Workers screen says whether each machine can take work
+ * from the server's `claim_blockers` (S-23.24), refreshes on a clock, and revokes through
+ * `DELETE /api/workers/:id`.
  */
 import type { WorkerDeviceLookup, WorkerSummary } from '@platform/contracts';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { formatCodeAge, PHISHING_WARNING, typedUserCode, workerInstallLines } from './workers.js';
+import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import {
+  APPROVE_WATCH_INTERVAL_MS,
+  APPROVE_WATCH_LIMIT_MS,
+  approvedWorkerOf,
+  formatCodeAge,
+  PHISHING_WARNING,
+  typedUserCode,
+  WORKERS_REFRESH_MS,
+  workersCountText,
+} from './workers.js';
 
 const SESSION: SessionResponse = {
   user: {
@@ -76,6 +89,8 @@ const fetchFor = (
   timezone = 'UTC',
 ) => {
   const sent: Sent[] = [];
+  /** How many times `GET /api/workers` was asked (it is not a command, so not in `sent`). */
+  const reads = { workers: 0 };
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -104,18 +119,22 @@ const fetchFor = (
         expired_runs: 0,
       });
     }
-    if (url.endsWith('/api/workers')) return json({ items: workers, scope: 'own', timezone });
+    if (url.endsWith('/api/workers')) {
+      reads.workers += 1;
+      return json({ items: workers, scope: 'own', timezone });
+    }
     if (url.endsWith('/api/version')) {
       return json({ version: '0.0.0-dev', commit: null, built_at: null });
     }
     if (url.endsWith('/api/projects')) return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
-  return { sent, fetchImpl };
+  return { sent, reads, fetchImpl };
 };
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -236,27 +255,144 @@ describe('the approval page', () => {
   });
 });
 
+describe('the approval page, after Approve (S-23.24)', () => {
+  beforeEach(() => {
+    window.history.pushState({}, '', '/workers/approve');
+  });
+
+  /** Types the code and the name with `fireEvent` (fake timers), and presses Approve. */
+  const approveAs = async (name: string) => {
+    fireEvent.change(await screen.findByLabelText('Code shown by the machine'), {
+      target: { value: 'BCDF-GHJK' },
+    });
+    fireEvent.change(await screen.findByLabelText('Name this machine'), {
+      target: { value: name },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+  };
+
+  it('watches for the machine every 5 s, says it is connected and continues to Ready', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const workers: WorkerSummary[] = [];
+    const { fetchImpl, reads } = fetchFor(lookup(), workers);
+    render(createApp({ fetchImpl, realtime: false }).element);
+    await approveAs('alice-laptop');
+    await screen.findByText(/^Approved\. Waiting for/);
+    await waitFor(() => expect(reads.workers).toBeGreaterThan(0));
+    const before = reads.workers;
+
+    // The machine collects its credential and connects.
+    const created = new Date(Date.now()).toISOString();
+    workers.push(
+      worker({ created_at: created, last_seen_at: created }),
+      // Somebody else's machine of the same name is not this approval's.
+      worker({
+        id: '00000000-0000-4000-8000-0000000002f0',
+        user: {
+          id: '00000000-0000-4000-8000-0000000000ff',
+          email: 'x@example.invalid',
+          name: null,
+        },
+        created_at: created,
+        last_seen_at: created,
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(APPROVE_WATCH_INTERVAL_MS);
+    });
+    expect(reads.workers).toBeGreaterThan(before);
+    expect(await screen.findByText(/is connected\./)).toBeTruthy();
+    const next = screen.getByRole('link', { name: 'Continue: check it’s ready' });
+    expect(next.getAttribute('href')).toBe(
+      `/workers/new?step=ready&since=${encodeURIComponent(created)}`,
+    );
+    // It stops asking once the machine is there.
+    const settled = reads.workers;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(APPROVE_WATCH_INTERVAL_MS * 3);
+    });
+    expect(reads.workers).toBe(settled);
+  });
+
+  it('says what to check when the machine has not connected in two minutes, and stops asking', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fetchImpl, reads } = fetchFor(lookup(), []);
+    render(createApp({ fetchImpl, realtime: false }).element);
+    await approveAs('alice-laptop');
+    await screen.findByText(/^Approved\. Waiting for/);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(APPROVE_WATCH_LIMIT_MS);
+    });
+    expect(await screen.findByText('alice-laptop hasn’t connected yet')).toBeTruthy();
+    expect(screen.getByText(/Is the worker still running on that computer\?/)).toBeTruthy();
+    expect(screen.getByText(/Was it set up with this platform’s address/)).toBeTruthy();
+    expect(screen.getByText(window.location.origin)).toBeTruthy();
+    const after = reads.workers;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(APPROVE_WATCH_INTERVAL_MS * 3);
+    });
+    expect(reads.workers).toBe(after);
+    // *Keep waiting* starts another round.
+    fireEvent.click(screen.getByRole('button', { name: 'Keep waiting' }));
+    expect(await screen.findByText(/^Approved\. Waiting for/)).toBeTruthy();
+  });
+
+  it('says a denial in words, with nothing to watch', async () => {
+    const { fetchImpl, reads } = fetchFor(lookup(), []);
+    render(createApp({ fetchImpl, realtime: false }).element);
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Code shown by the machine'), 'BCDFGHJK');
+    await user.click(await screen.findByRole('button', { name: 'Deny' }));
+    expect(
+      await screen.findByText(/^Denied\. The machine’s page says it was refused/),
+    ).toBeTruthy();
+    expect(reads.workers).toBe(0);
+  });
+
+  it('matches the approval’s own worker: its person, its name, made since the approval', () => {
+    const at = Date.parse('2026-11-04T12:00:00.000Z');
+    const mine = worker({ created_at: '2026-11-04T12:00:05.000Z' });
+    const approval = { userId: SESSION.user.id, name: 'alice-laptop', atMs: at };
+    expect(approvedWorkerOf([mine], approval)).toBe(mine);
+    expect(approvedWorkerOf([worker({ name: 'bob-desktop' })], approval)).toBeNull();
+    expect(
+      approvedWorkerOf([worker({ created_at: '2026-11-04T11:00:00.000Z' })], approval),
+    ).toBeNull();
+    expect(
+      approvedWorkerOf(
+        [worker({ state: 'revoked', created_at: '2026-11-04T12:00:05.000Z' })],
+        approval,
+      ),
+    ).toBeNull();
+  });
+});
+
 describe('the Workers screen', () => {
   beforeEach(() => {
     window.history.pushState({}, '', '/workers');
   });
 
-  it('shows the two install lines, built from the page’s own origin (TD-031’s 2026-11-05 amendment §4)', async () => {
+  it('leads with Add a worker, links the approval page, and teaches when empty (S-23.24)', async () => {
     const { fetchImpl } = fetchFor('missing', []);
     render(createApp({ fetchImpl, realtime: false }).element);
-    const download = await screen.findByLabelText('1. Download the worker’s compose file');
-    expect((download as HTMLInputElement).value).toBe(
-      `mkdir agentic-worker && cd agentic-worker && curl -fsSo compose.yaml ${window.location.origin}/api/worker/v1/compose.yml`,
+    expect(await screen.findByRole('heading', { name: 'No worker yet' })).toBeTruthy();
+    const main = within(document.querySelector('main') as HTMLElement);
+    const adds = main.getAllByRole('link', { name: 'Add a worker' });
+    expect(adds.map((link) => link.getAttribute('href'))).toEqual(['/workers/new', '/workers/new']);
+    // One primary action on the page: the header's.
+    expect(adds.filter((link) => link.className.includes('border-primary-line'))).toHaveLength(1);
+    expect(main.getByRole('link', { name: 'Approve a machine' }).getAttribute('href')).toBe(
+      '/workers/approve',
     );
-    // No Claude token on the command line any more: the worker's page asks for it (WP-294).
-    const start = screen.getByLabelText(
-      '2. Start it, then open http://127.0.0.1:7357 on that machine',
-    );
-    expect((start as HTMLInputElement).value).toBe('docker compose up -d');
+    // The install commands live in the wizard now, not on this page.
+    expect(document.querySelector('[data-worker-install]')).toBeNull();
+    expect(screen.queryByText(/compose\.yml/)).toBeNull();
   });
 
-  it('lists a worker with its state, protocol and digests, and revokes it through a dialog and DELETE', async () => {
-    const { fetchImpl, sent } = fetchFor('missing', [worker()]);
+  it('lists a worker with its state, version and digests, and revokes it through a dialog and DELETE', async () => {
+    const { fetchImpl, sent } = fetchFor('missing', [
+      worker({ claim_blockers: ['offline'], can_claim: false }),
+    ]);
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
     await waitFor(() => {
       expect(container.querySelector(`[data-worker="${worker().id}"]`)).not.toBeNull();
@@ -264,15 +400,15 @@ describe('the Workers screen', () => {
     const row = container.querySelector(`[data-worker="${worker().id}"]`)?.closest('li');
     const text = row?.textContent ?? '';
     expect(text).toContain('alice-laptop');
-    // Never seen: not online, and said in words rather than as `active` (S-23.11a).
-    expect(text).toContain('Offline');
+    // The server's blocker, in words rather than as `offline` or `active` (S-23.11a, S-23.24).
+    expect(text).toContain('Can’t take work: Not connected to the platform — not seen yet');
     expect(text).not.toContain('active');
-    expect(text).toContain('never seen');
-    expect(text).toContain('protocol 1');
+    expect(text).toContain('Has not taken work yet');
     expect(text).toContain('0 of 1 busy');
-    // The digests are behind Details, still in the row.
+    // The version and the digests are behind Details, still in the row.
+    expect(text).toContain('protocol 1');
     expect(text).toContain(`sha256:${'a'.repeat(64)}`);
-    expect(row?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Offline');
+    expect(row?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Can’t take work');
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Revoke' }));
@@ -328,10 +464,11 @@ describe('the Workers screen', () => {
     expect(sent.some((entry) => entry.method === 'DELETE')).toBe(false);
   });
 
-  it('says online, paused and how many slots are busy', async () => {
+  it('says Ready from the server’s answer, a hold as the blocker, and how many slots are busy', async () => {
     const NOW = Date.parse('2026-11-04T12:10:00.000Z');
-    const online = worker({
+    const ready = worker({
       last_seen_at: '2026-11-04T12:09:30.000Z',
+      last_claimed_at: '2026-11-04T12:05:00.000Z',
       concurrency: 2,
       running: [
         {
@@ -341,13 +478,14 @@ describe('the Workers screen', () => {
         },
       ],
     });
-    const paused = worker({
+    const limited = worker({
       id: '00000000-0000-4000-8000-0000000002a1',
       name: 'bob-desktop',
       last_seen_at: '2026-11-04T12:09:30.000Z',
       paused_until: '2026-11-04T13:00:00.000Z',
-      manually_paused_at: null,
       paused_reason: 'usage_limited',
+      claim_blockers: ['usage_limited'],
+      can_claim: false,
     });
     // WP-292: the owner's hold from the worker's local page.
     const held = worker({
@@ -355,23 +493,102 @@ describe('the Workers screen', () => {
       name: 'carol-laptop',
       last_seen_at: '2026-11-04T12:09:30.000Z',
       manually_paused_at: '2026-11-04T12:05:00.000Z',
+      claim_blockers: ['paused'],
+      can_claim: false,
     });
-    const { fetchImpl } = fetchFor('missing', [online, paused, held]);
+    // Seen just now, yet the core says it cannot take work: the row says so, not "Online".
+    const outdated = worker({
+      id: '00000000-0000-4000-8000-0000000002a3',
+      name: 'dave-mbp',
+      last_seen_at: '2026-11-04T12:09:55.000Z',
+      claim_blockers: ['images_outdated'],
+      can_claim: false,
+    });
+    const { fetchImpl } = fetchFor('missing', [ready, limited, held, outdated]);
     const { container } = render(createApp({ fetchImpl, realtime: false, now: () => NOW }).element);
     await waitFor(() => {
-      expect(container.querySelectorAll('[data-worker]')).toHaveLength(3);
+      expect(container.querySelectorAll('[data-worker]')).toHaveLength(4);
     });
     const rowOf = (id: string) =>
       container.querySelector(`[data-worker="${id}"]`)?.closest('li')?.textContent ?? '';
-    expect(rowOf(online.id)).toContain('Online');
-    expect(rowOf(online.id)).toContain('1 of 2 busy');
-    expect(rowOf(online.id)).toContain('seen just now');
+    const stateOf = (id: string) =>
+      container.querySelector(`[data-worker="${id}"] [data-worker-state]`);
+    expect(stateOf(ready.id)?.textContent).toBe('Ready');
+    expect(stateOf(ready.id)?.getAttribute('data-worker-state')).toBe('success');
+    expect(rowOf(ready.id)).toContain('1 of 2 busy');
+    expect(rowOf(ready.id)).toContain('Last took work 5 m ago');
     // WP-285: the same sentence the worker's own page says, the time in the organisation's zone.
-    expect(rowOf(paused.id)).toContain('Paused — usage limit until 13:00');
-    expect(rowOf(paused.id)).not.toContain('usage_limited');
-    expect(rowOf(paused.id)).not.toContain('Online');
-    expect(rowOf(held.id)).toContain('Paused by its owner');
-    expect(rowOf(held.id)).not.toContain('Online');
+    expect(stateOf(limited.id)?.textContent).toBe(
+      'Can’t take work: Paused — usage limit until 13:00',
+    );
+    expect(rowOf(limited.id)).not.toContain('usage_limited');
+    expect(stateOf(held.id)?.textContent).toBe('Can’t take work: Paused by its owner');
+    expect(stateOf(outdated.id)?.textContent).toBe(
+      'Can’t take work: It has an older build than this platform',
+    );
+    expect(stateOf(outdated.id)?.getAttribute('data-worker-state')).toBe('needs_you');
+    expect(rowOf(outdated.id)).not.toContain('Online');
+    expect(screen.getByText('1 ready · 3 can’t take work')).toBeTruthy();
+  });
+
+  it('lists every blocker with its fix under Why?, in the vocabulary’s order', async () => {
+    const blocked = worker({
+      last_seen_at: null,
+      claim_blockers: ['offline', 'images_missing', 'no_eligible_project'],
+      can_claim: false,
+    });
+    const { fetchImpl } = fetchFor('missing', [
+      blocked,
+      worker({ id: '00000000-0000-4000-8000-0000000002e1', name: 'ready-one' }),
+    ]);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelector(`[data-worker="${blocked.id}"] [data-why]`)).not.toBeNull();
+    });
+    const why = container.querySelector(`[data-worker="${blocked.id}"] [data-why]`) as HTMLElement;
+    expect(why.closest('details')?.querySelector('summary')?.textContent).toBe('Why?');
+    expect(
+      [...why.querySelectorAll('[data-blocker]')].map((li) => li.getAttribute('data-blocker')),
+    ).toEqual(['offline', 'images_missing', 'no_eligible_project']);
+    for (const blocker of ['offline', 'images_missing', 'no_eligible_project'] as const) {
+      expect(why.textContent).toContain(WORKER_CLAIM_BLOCKER_WORDS[blocker].word);
+      expect(why.textContent).toContain(WORKER_CLAIM_BLOCKER_WORDS[blocker].fix);
+    }
+    // A ready worker has nothing to explain.
+    expect(
+      container.querySelector('[data-worker="00000000-0000-4000-8000-0000000002e1"] [data-why]'),
+    ).toBeNull();
+  });
+
+  it('says a pick-only worker takes only what its owner picks, not that it is broken', async () => {
+    const pickOnly = worker({
+      claim_projects: [],
+      claim_blockers: ['pick_only'],
+      can_claim: false,
+    });
+    const { fetchImpl } = fetchFor('missing', [pickOnly]);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelector('[data-worker-state]')).not.toBeNull();
+    });
+    const state = container.querySelector('[data-worker-state]');
+    expect(state?.textContent).toBe('Takes only runs its owner picks');
+    expect(state?.getAttribute('data-worker-state')).toBe('idle');
+    expect(screen.getByText('1 ready')).toBeTruthy();
+  });
+
+  it('asks for the list again every 15 s while the page is open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fetchImpl, reads } = fetchFor('missing', [worker()]);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelector('[data-worker]')).not.toBeNull();
+    });
+    const first = reads.workers;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKERS_REFRESH_MS);
+    });
+    expect(reads.workers).toBeGreaterThan(first);
   });
 
   it('shows each worker’s claim scope, read only: every project, pick only, named projects (WP-293)', async () => {
@@ -396,9 +613,9 @@ describe('the Workers screen', () => {
     });
     const scopeOf = (id: string) =>
       container.querySelector(`[data-worker="${id}"] [data-claim-scope]`)?.textContent;
-    expect(scopeOf(every.id)).toBe('takes every project');
-    expect(scopeOf(pickOnly.id)).toBe('pick only');
-    expect(scopeOf(named.id)).toBe('takes ACME, a removed project');
+    expect(scopeOf(every.id)).toBe('Takes runs of every project');
+    expect(scopeOf(pickOnly.id)).toBe('Takes only runs its owner picks');
+    expect(scopeOf(named.id)).toBe('Takes runs of ACME, a removed project');
     // Read only: the screen offers no way to change it.
     expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
     expect(screen.queryByRole('button', { name: /scope/i })).toBeNull();
@@ -412,6 +629,8 @@ describe('the Workers screen', () => {
       last_seen_at: '2026-11-04T12:09:30.000Z',
       paused_until: '2026-11-04T13:00:00.000Z',
       paused_reason: 'usage_limited',
+      claim_blockers: ['usage_limited'],
+      can_claim: false,
     });
     const guessed = worker({
       id: '00000000-0000-4000-8000-0000000002b2',
@@ -420,6 +639,8 @@ describe('the Workers screen', () => {
       paused_until: '2026-11-04T13:30:00.000Z',
       paused_reason: 'usage_limited',
       paused_until_estimated: true,
+      claim_blockers: ['usage_limited'],
+      can_claim: false,
     });
     const lapsed = worker({
       id: '00000000-0000-4000-8000-0000000002b3',
@@ -436,6 +657,8 @@ describe('the Workers screen', () => {
       paused_until: '2026-11-04T13:00:00.000Z',
       paused_reason: 'usage_limited',
       manually_paused_at: '2026-11-04T12:00:00.000Z',
+      claim_blockers: ['paused', 'usage_limited'],
+      can_claim: false,
     });
     const { fetchImpl } = fetchFor('missing', [named, guessed, lapsed, both], 'Europe/Prague');
     const { container } = render(createApp({ fetchImpl, realtime: false, now: () => NOW }).element);
@@ -446,7 +669,8 @@ describe('the Workers screen', () => {
       container.querySelector(`[data-worker="${id}"]`)?.closest('li')?.textContent ?? '';
     expect(rowOf(named.id)).toContain('Paused — usage limit until 14:00');
     expect(rowOf(guessed.id)).toContain('Paused — usage limit until about 14:30');
-    expect(rowOf(lapsed.id)).toContain('Online');
+    // The server names no blocker for a lapsed pause: it is ready.
+    expect(rowOf(lapsed.id)).toContain('Ready');
     expect(rowOf(lapsed.id)).not.toContain('Paused');
     expect(rowOf(both.id)).toContain('Paused by its owner');
   });
@@ -500,7 +724,12 @@ describe('the Workers screen', () => {
 
   it('offers no revoke for a revoked worker', async () => {
     const { fetchImpl } = fetchFor('missing', [
-      worker({ state: 'revoked', revoked_at: '2026-11-04T12:05:00.000Z' }),
+      worker({
+        state: 'revoked',
+        revoked_at: '2026-11-04T12:05:00.000Z',
+        claim_blockers: ['revoked'],
+        can_claim: false,
+      }),
     ]);
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
     await waitFor(() => {
@@ -512,10 +741,15 @@ describe('the Workers screen', () => {
 });
 
 describe('the page’s pure helpers', () => {
-  it('builds the download line from an origin with or without a trailing slash', () => {
-    expect(workerInstallLines('https://core.example.test/')[0]).toBe(
-      'mkdir agentic-worker && cd agentic-worker && curl -fsSo compose.yaml https://core.example.test/api/worker/v1/compose.yml',
-    );
+  it('counts the rows in the rows’ own words', () => {
+    expect(
+      workersCountText([
+        worker(),
+        worker({ claim_blockers: ['offline'], can_claim: false }),
+        worker({ state: 'revoked', claim_blockers: ['revoked'], can_claim: false }),
+      ]),
+    ).toBe('1 ready · 1 can’t take work · 1 revoked');
+    expect(workersCountText([worker()])).toBe('1 ready');
   });
 
   it('normalises a typed code and refuses a partial or foreign one', () => {

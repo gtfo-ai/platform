@@ -27,8 +27,8 @@ export const workerFixture = (over: Partial<WorkerSummary> = {}): WorkerSummary 
   claim_projects: null,
   running: [],
   last_update: null,
-  // N1's fields (S-22.19). The tests here read readiness through `worker-readiness.ts`'s stub,
-  // which derives it from the fields above; a ready worker by default.
+  // N1's fields (S-22.19), the server's answer that `worker-readiness.ts` reads: a ready worker by
+  // default. A test of a blocked worker sets `claim_blockers` and `can_claim: false` itself.
   claim_blockers: [],
   can_claim: true,
   last_claimed_at: null,

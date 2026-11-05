@@ -1,8 +1,8 @@
 /**
- * The *Add a worker* wizard's Install step **once the core serves the installer** (S-23.20, S-22.20):
- * `INSTALLER_AVAILABLE` mocked to `true`, so the one-line installer is the default — the browser's
- * platform first, the other behind a disclosure, each with its script to read — and the by-hand
- * setup moves into *Set it up by hand*. The `false` state (today's) is `worker-wizard.test.tsx`.
+ * The *Add a worker* wizard's Install step **on a core that does not serve the installer**
+ * (S-23.20): `INSTALLER_AVAILABLE` mocked to `false`, so no installer line is shown and the by-hand
+ * setup is the step itself, not a disclosure. The `true` state (today's, S-23.24) is
+ * `worker-wizard.test.tsx`.
  */
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,7 +12,7 @@ import { NOW, USER_ID } from './worker.test-fixture.js';
 
 vi.mock('./worker-wizard-steps.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./worker-wizard-steps.js')>()),
-  INSTALLER_AVAILABLE: true,
+  INSTALLER_AVAILABLE: false,
 }));
 
 const SESSION: SessionResponse = {
@@ -47,33 +47,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('Add a worker: Install, once the installer is served', () => {
-  it('shows the one-line installer first and moves the by-hand setup into a disclosure', async () => {
+describe('Add a worker: Install, where the installer is not served', () => {
+  it('shows no installer line and makes the by-hand setup the step', async () => {
     const since = new Date(NOW - 60_000).toISOString();
     window.history.pushState({}, '', `/workers/new?step=install&since=${since}`);
     render(createApp({ fetchImpl, now: () => NOW, realtime: false }).element);
     await screen.findByRole('heading', { level: 2, name: 'Install' });
     const origin = window.location.origin;
 
-    // happy-dom reports no Windows: the shell installer leads, PowerShell is behind a click.
-    const first = document.querySelector('[data-installer="unix"]') as HTMLElement;
-    expect(first.closest('details')).toBeNull();
-    expect(
-      (within(first).getByLabelText('macOS or Linux (Terminal)') as HTMLInputElement).value,
-    ).toBe(`curl -fsSL '${origin}/api/worker/v1/install.sh' | sh`);
-    expect(
-      within(first).getByRole('link', { name: 'Read the script first' }).getAttribute('href'),
-    ).toBe(`${origin}/api/worker/v1/install.sh`);
-    const windows = document.querySelector('[data-installer="windows"]') as HTMLElement;
-    expect(windows.closest('details')?.textContent).toContain('On Windows (PowerShell) instead');
-    expect((within(windows).getByLabelText('Windows (PowerShell)') as HTMLInputElement).value).toBe(
-      `irm '${origin}/api/worker/v1/install.ps1' | iex`,
-    );
-
+    expect(document.querySelector('[data-installer]')).toBeNull();
+    expect(screen.queryByText(/install\.(sh|ps1)/)).toBeNull();
     const byHand = document.querySelector('[data-by-hand]') as HTMLElement;
-    expect(byHand.closest('details')?.querySelector('summary')?.textContent).toBe(
-      'Set it up by hand',
-    );
+    expect(byHand.closest('details')).toBeNull();
+    expect(
+      (within(byHand).getByLabelText('Download the worker’s compose file') as HTMLInputElement)
+        .value,
+    ).toBe(`curl -fsSo compose.worker.yml ${origin}/api/worker/v1/compose.yml`);
     expect((within(byHand).getByLabelText('Start the worker') as HTMLInputElement).value).toBe(
       'docker compose --env-file .env.worker -f compose.worker.yml up -d',
     );

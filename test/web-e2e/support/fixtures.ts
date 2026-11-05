@@ -1027,8 +1027,10 @@ export const workers = workersResponseSchema.parse({
       concurrency: 3,
       running: [{ run_id: IDS.runWorker, task_id: IDS.taskFleetWorker, project_id: IDS.project }],
       last_update: null,
-      claim_blockers: [],
-      can_claim: true,
+      // Last seen at the fixture's `now`, two months before any browser's clock: the server says
+      // it is not connected (S-22.19), which the wizard's Ready step reads (S-23.24).
+      claim_blockers: ['offline'],
+      can_claim: false,
       last_claimed_at: null,
     },
     {

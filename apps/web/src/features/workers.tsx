@@ -1,15 +1,23 @@
 /**
  * Workers — the machines registered against this core, and the page a person approves a new one on
- * (WP-280, TD-031 decisions 7 and 10c).
+ * (WP-280, TD-031 decisions 7 and 10c; the worker UX review §§ 1.1–1.2, S-23.24).
  *
  * ## `/workers`
  *
  * Your workers, or every worker for an administrator (`scope: all`), as a list box (S-23.11a, TD-033
- * § 1): a state icon first — online (seen in the last minute), offline, paused or revoked — then the
- * machine's name, its owner, when it was last seen, its protocol and how many of its slots are busy
- * (`running` of `concurrency`); the image digests and the dates are behind *Details*. *Revoke* opens a
- * dialog that says what it does before the press: the credential stops at its next call and the
- * leases of the worker's live runs expire, so the lease sweep ends them.
+ * § 1). The header's one primary action is **Add a worker** (the wizard, `/workers/new`), beside a
+ * link to the approval page. Each row says **whether the machine can take work** — the server's
+ * answer (`claim_blockers`, `can_claim`, S-22.19), never a guess from its heartbeat: **Ready**, or
+ * **Can't take work** with the first blocker's words and a *Why?* disclosure listing every blocker
+ * with its fix, in the vocabulary's order (`WORKER_CLAIM_BLOCKER_WORDS`, the worker's own page's
+ * words too). A *pick only* worker — whose only blocker is its owner's choice — says so instead,
+ * because a run picked on its page still starts. Then its owner, when it last took work, how many of
+ * its slots are busy; its version, image digests and dates are behind *Details*. *Revoke* opens a
+ * dialog that says what it does before the press.
+ *
+ * **It refreshes by itself**: no event announces a heartbeat, a handshake or a new worker, so the
+ * list is asked again every {@link WORKERS_REFRESH_MS} while the page is open (and in the
+ * foreground), and the `org` topic's events that carry a `worker_id` refresh it at once.
  *
  * ## `/workers/approve`
  *
@@ -25,19 +33,27 @@
  * and the parameter is **stripped from the address** at once. Nothing else changes — the warning,
  * the origin details, the five-minute confirmation and the explicit *Approve* press all stay, and
  * nothing is approved by arriving. A phisher's prefilled link equals a phisher's typed code (§5.4).
+ *
+ * **After an approval the page watches for the machine** (the review's A1): `GET /api/workers` every
+ * {@link APPROVE_WATCH_INTERVAL_MS}, for at most {@link APPROVE_WATCH_LIMIT_MS}, for a worker of the
+ * signed-in person with the approved name created since the approval. Once it has been seen the page
+ * says *… is connected* and its one primary action continues to the wizard's *Ready to work*; if it
+ * has not connected in time, the page says what to check rather than waiting on.
  */
-import type { WorkerSummary } from '@platform/contracts';
-import { WORKER_API_PREFIX, WORKER_PATHS, WORKER_USER_CODE_ALPHABET } from '@platform/contracts';
+import type { WorkerClaimBlocker, WorkerSummary } from '@platform/contracts';
+import { WORKER_USER_CODE_ALPHABET } from '@platform/contracts';
 import { ServerIcon } from '@primer/octicons-react/ServerIcon';
+import { Link } from '@tanstack/react-router';
 import { type ReactElement, useEffect, useState } from 'react';
-import { useSettingsCommands, useWorkerDevice, useWorkers } from '../app/queries.js';
+import { useSession, useSettingsCommands, useWorkerDevice, useWorkers } from '../app/queries.js';
 import { useServices } from '../app/services.js';
+import { useTopics } from '../realtime/provider.js';
 import { Blankslate } from '../ui/blankslate.js';
-import { CopyField } from '../ui/copy-field.js';
+import { buttonClassName } from '../ui/button.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { Dialog } from '../ui/dialog.js';
 import { Flash } from '../ui/flash.js';
-import { WORKER_PAUSE_REASON_LABEL } from '../ui/humanize.js';
+import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 import {
   Button,
   Card,
@@ -55,6 +71,8 @@ import { type Status, StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { usagePauseWords } from '../ui/usage-pause.js';
+import { workerReadinessOf } from './worker-readiness.js';
+import { SINCE_SKEW_MS, WORKER_LOCAL_PAGE } from './worker-wizard-steps.js';
 
 /** TD-031 §10c's warning, word for word where it is quoted. */
 export const PHISHING_WARNING = 'Approve only a code your own machine is showing you now.';
@@ -78,47 +96,77 @@ export const formatCodeAge = (seconds: number): string => {
   return minutes === 0 ? `${rest} s` : `${minutes} min ${rest} s`;
 };
 
-/**
- * A worker is **online** when it was seen in the last minute — TD-031's own definition of an online
- * worker (a heartbeat in the last 60 s), the one the offer uses to prefer it.
- */
-export const ONLINE_WITHIN_MS = 60_000;
+/** How often the Workers screen asks for the list again while it is open (see the module note). */
+export const WORKERS_REFRESH_MS = 15_000;
+
+/** What a row says first: the state's icon and word, and the blocker it names (if any). */
+export interface WorkerRowState {
+  readonly status: Status;
+  /** *Ready*, *Can't take work*, *Takes only runs its owner picks* or *Revoked*. */
+  readonly word: string;
+  /** The first blocker, in a person's words — with when, for a usage limit or an absence. */
+  readonly reason: string | null;
+}
 
 /**
- * The row's state: revoked, paused (by its owner, or by a usage limit until when — in the
- * organisation's `timezone`, WP-285), online, or offline.
+ * The row's state, from the server's answer (S-22.19): revoked; **Ready** when an automatic claim
+ * would be admitted (`can_claim`); *Takes only runs its owner picks* when that is all that stops
+ * it; otherwise **Can't take work**, with the first blocker's words — a usage limit says until when
+ * (in the organisation's `timezone`, WP-285), an absent machine when it was last seen.
  */
-export const workerState = (
+export const workerRowState = (
   worker: WorkerSummary,
   nowMs: number,
   timezone = 'UTC',
-): { readonly status: Status; readonly word: string } => {
+): WorkerRowState => {
   if (worker.state === 'revoked') {
-    return { status: 'cancelled', word: 'Revoked' };
+    return { status: 'cancelled', word: 'Revoked', reason: null };
   }
-  if (worker.manually_paused_at !== null) {
-    return { status: 'paused', word: 'Paused by its owner' };
+  const readiness = workerReadinessOf(worker);
+  if (readiness.takes === 'automatically') {
+    return { status: 'success', word: 'Ready', reason: null };
   }
-  if (worker.paused_until !== null && Date.parse(worker.paused_until) > nowMs) {
-    return {
-      status: 'paused',
-      word:
-        worker.paused_reason === 'usage_limited'
-          ? usagePauseWords(
-              {
-                until: worker.paused_until,
-                estimated: worker.paused_until_estimated,
-                timezone,
-              },
-              nowMs,
-            )
-          : `Paused until ${formatDateTime(worker.paused_until)}`,
-    };
+  if (readiness.takes === 'picked_only') {
+    return { status: 'idle', word: WORKER_CLAIM_BLOCKER_WORDS.pick_only.word, reason: null };
   }
-  const seen = worker.last_seen_at === null ? Number.NaN : Date.parse(worker.last_seen_at);
-  return nowMs - seen <= ONLINE_WITHIN_MS
-    ? { status: 'success', word: 'Online' }
-    : { status: 'idle', word: 'Offline' };
+  const first = readiness.claim_blockers[0];
+  return {
+    status: 'needs_you',
+    word: 'Can’t take work',
+    reason: first === undefined ? null : blockerReason(worker, first, nowMs, timezone),
+  };
+};
+
+/** One blocker's row words, with the time that makes it concrete where there is one. */
+const blockerReason = (
+  worker: WorkerSummary,
+  blocker: WorkerClaimBlocker,
+  nowMs: number,
+  timezone: string,
+): string => {
+  if (
+    blocker === 'usage_limited' &&
+    worker.paused_until !== null &&
+    Date.parse(worker.paused_until) > nowMs
+  ) {
+    return usagePauseWords(
+      { until: worker.paused_until, estimated: worker.paused_until_estimated, timezone },
+      nowMs,
+    );
+  }
+  const word = WORKER_CLAIM_BLOCKER_WORDS[blocker].word;
+  if (blocker === 'offline') {
+    const seen = worker.last_seen_at === null ? null : formatAgo(worker.last_seen_at, nowMs);
+    return seen === null ? `${word} — not seen yet` : `${word} — last seen ${seen}`;
+  }
+  return word;
+};
+
+/** "Last took work 5 m ago", or "Has not taken work yet" — its first run is a milestone. */
+export const lastClaimedText = (worker: WorkerSummary, nowMs: number): string => {
+  if (worker.last_claimed_at === null) return 'Has not taken work yet';
+  const ago = formatAgo(worker.last_claimed_at, nowMs) ?? formatDateTime(worker.last_claimed_at);
+  return `Last took work ${ago}`;
 };
 
 const UPDATE_RESULT_WORD: Readonly<
@@ -154,10 +202,24 @@ export const slotsText = (worker: WorkerSummary): string =>
  */
 export const claimScopeWords = (worker: WorkerSummary): string => {
   const projects = worker.claim_projects;
-  if (projects === null) return 'takes every project';
-  if (projects.length === 0) return 'pick only';
-  return `takes ${projects.map((project) => project.key ?? 'a removed project').join(', ')}`;
+  if (projects === null) return 'Takes runs of every project';
+  if (projects.length === 0) return 'Takes only runs its owner picks';
+  return `Takes runs of ${projects.map((project) => project.key ?? 'a removed project').join(', ')}`;
 };
+
+/** Every blocker the server named, each with what to do about it, in the vocabulary's order. */
+const WhyList = ({ worker }: { readonly worker: WorkerSummary }): ReactElement => (
+  <DetailsDisclosure summary="Why?" className="text-xs">
+    <ul aria-label="Why it can’t take work" className="flex flex-col gap-2" data-why="">
+      {workerReadinessOf(worker).claim_blockers.map((blocker) => (
+        <li key={blocker} data-blocker={blocker} className="flex flex-col gap-0.5">
+          <span className="font-medium text-fg">{WORKER_CLAIM_BLOCKER_WORDS[blocker].word}</span>
+          <span className="text-fg-muted">{WORKER_CLAIM_BLOCKER_WORDS[blocker].fix}</span>
+        </li>
+      ))}
+    </ul>
+  </DetailsDisclosure>
+);
 
 const WorkerRow = ({
   worker,
@@ -177,44 +239,36 @@ const WorkerRow = ({
   readonly onRevoke: () => void;
 }): ReactElement => {
   const [confirming, setConfirming] = useState(false);
-  const { status, word } = workerState(worker, nowMs, timezone);
-  const seen = worker.last_seen_at === null ? null : formatAgo(worker.last_seen_at, nowMs);
+  const state = workerRowState(worker, nowMs, timezone);
   const update = lastUpdateText(worker, nowMs);
+  const active = worker.state === 'active';
+  const blocked = active && worker.claim_blockers.length > 0;
   return (
     <ListRow
-      leading={<StatusIcon status={status} label={word} />}
+      leading={<StatusIcon status={state.status} label={state.word} />}
       title={<UntrustedText value={worker.name} />}
       meta={
         <span className="flex flex-col gap-1" data-worker={worker.id}>
           <span className="inline-flex flex-wrap items-center gap-1.5">
-            <span>{word}</span>
-            {worker.paused_reason === null ||
-            worker.paused_reason === 'usage_limited' ||
-            status !== 'paused' ? null : (
-              <span>{`· ${WORKER_PAUSE_REASON_LABEL[worker.paused_reason]}`}</span>
-            )}
+            <span data-worker-state={state.status}>
+              {state.reason === null ? state.word : `${state.word}: ${state.reason}`}
+            </span>
             {showUser ? (
               <>
                 <span aria-hidden="true">·</span>
                 <UntrustedText value={worker.user.name ?? worker.user.email} />
               </>
             ) : null}
-            <span aria-hidden="true">·</span>
-            <span>
-              {worker.last_seen_at === null
-                ? 'never seen'
-                : `seen ${seen ?? formatDateTime(worker.last_seen_at)}`}
-            </span>
-            <span aria-hidden="true">·</span>
-            <span>
-              {worker.protocol_version === null
-                ? 'protocol not reported'
-                : `protocol ${worker.protocol_version}`}
-            </span>
-            <span aria-hidden="true">·</span>
-            <span data-claim-scope="">
-              <UntrustedText value={claimScopeWords(worker)} />
-            </span>
+            {active ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span data-last-claimed="">{lastClaimedText(worker, nowMs)}</span>
+                <span aria-hidden="true">·</span>
+                <span data-claim-scope="">
+                  <UntrustedText value={claimScopeWords(worker)} />
+                </span>
+              </>
+            ) : null}
             {update === null ? null : (
               <>
                 <span aria-hidden="true">·</span>
@@ -222,16 +276,29 @@ const WorkerRow = ({
               </>
             )}
           </span>
+          {blocked ? <WhyList worker={worker} /> : null}
           <DetailsDisclosure summary="Details" className="text-xs">
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
               <dt className="text-fg-muted">Registered</dt>
               <dd>{formatDateTime(worker.created_at)}</dd>
+              <dt className="text-fg-muted">Last seen</dt>
+              <dd>
+                {worker.last_seen_at === null
+                  ? 'Not seen yet'
+                  : (formatAgo(worker.last_seen_at, nowMs) ?? formatDateTime(worker.last_seen_at))}
+              </dd>
               {worker.revoked_at === null ? null : (
                 <>
                   <dt className="text-fg-muted">Revoked</dt>
                   <dd>{formatDateTime(worker.revoked_at)}</dd>
                 </>
               )}
+              <dt className="text-fg-muted">Worker version</dt>
+              <dd>
+                {worker.protocol_version === null
+                  ? 'Not reported yet'
+                  : `protocol ${worker.protocol_version}`}
+              </dd>
               <dt className="text-fg-muted">Images</dt>
               <dd className="font-mono break-all">
                 {worker.image_digests.length === 0
@@ -258,15 +325,15 @@ const WorkerRow = ({
           </DetailsDisclosure>
         </span>
       }
-      {...(worker.state === 'active' ? { trailing: <span>{slotsText(worker)}</span> } : {})}
-      {...(worker.state === 'active'
+      {...(active ? { trailing: <span>{slotsText(worker)}</span> } : {})}
+      {...(active
         ? {
             actions: (
               <Dialog
                 open={confirming}
                 onOpenChange={setConfirming}
                 title={`Revoke ${sanitiseUntrusted(worker.name)}?`}
-                description="Its credential stops working at its next call, and any run it holds is ended and planned again. The machine has to be approved anew to come back."
+                description="Its credential stops working at its next call, and any run it holds is ended and planned again. To use this machine again, approve it again from the machine."
                 trigger={
                   <Button tone="danger" size="sm" disabled={pending}>
                     Revoke
@@ -294,29 +361,26 @@ const WorkerRow = ({
   );
 };
 
-/**
- * The two lines that install a worker (TD-031's 2026-11-05 amendment §4, as the first-run
- * amendment shrank them, WP-294): the public, pinned compose file from this instance saved as
- * `compose.yaml` in a folder of its own (so no `-f` is needed), then `up -d` — the Claude sign-in
- * and the approval happen on the worker's own page at `http://127.0.0.1:7357`. Built from the
- * page's own origin — the core the browser is talking to — so no endpoint is needed.
- */
-export const workerInstallLines = (origin: string): readonly [string, string] => [
-  `mkdir agentic-worker && cd agentic-worker && curl -fsSo compose.yaml ${origin.replace(/\/+$/, '')}${WORKER_API_PREFIX}/${WORKER_PATHS.composeFile}`,
-  'docker compose up -d',
-];
-
-/** Where the worker's own page opens (`APP_WORKER_UI_PORT`'s default). */
-export const WORKER_PAGE_ADDRESS = 'http://127.0.0.1:7357';
+/** "2 ready · 1 can't take work · 1 revoked", in the rows' own words (the review's W9). */
+export const workersCountText = (items: readonly WorkerSummary[]): string => {
+  const active = items.filter((worker) => worker.state === 'active');
+  const ready = active.filter((worker) => workerReadinessOf(worker).takes !== 'no').length;
+  const parts = [`${formatInteger(ready)} ready`];
+  if (active.length > ready) parts.push(`${formatInteger(active.length - ready)} can’t take work`);
+  if (items.length > active.length) {
+    parts.push(`${formatInteger(items.length - active.length)} revoked`);
+  }
+  return parts.join(' · ');
+};
 
 export const WorkersScreen = (): ReactElement => {
-  const workers = useWorkers();
+  const workers = useWorkers({ refetchInterval: WORKERS_REFRESH_MS });
+  // An event that carries a `worker_id` refreshes the list at once (`realtime/query-bridge.ts`).
+  useTopics(['org']);
   const commands = useSettingsCommands();
   const { now } = useServices();
   const nowMs = now();
   const items = workers.data?.items ?? [];
-  const active = items.filter((worker) => worker.state === 'active').length;
-  const install = workerInstallLines(window.location.origin);
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
@@ -324,19 +388,21 @@ export const WorkersScreen = (): ReactElement => {
         divider={false}
         meta={
           <span>
-            Machines that run agent stages for this instance. A machine is added from its own page:
-            it walks you through signing in to Claude and shows a code, which you approve at{' '}
-            <span className="font-mono">/workers/approve</span>.
+            Developers’ own computers that run this platform’s agent work with their own Claude
+            subscription.
           </span>
         }
+        actions={
+          <>
+            <Link to="/workers/approve" className={buttonClassName('invisible')}>
+              Approve a machine
+            </Link>
+            <Link to="/workers/new" className={buttonClassName('primary')}>
+              Add a worker
+            </Link>
+          </>
+        }
       />
-      <div data-worker-install="" className="flex flex-col gap-2">
-        <CopyField label="1. Download the worker’s compose file" value={install[0]} />
-        <CopyField
-          label={`2. Start it, then open ${WORKER_PAGE_ADDRESS} on that machine`}
-          value={install[1]}
-        />
-      </div>
       {workers.isPending ? <Skeleton label="Loading workers…" /> : null}
       {workers.isError ? (
         <ErrorNotice title="The workers could not be loaded." error={workers.error} />
@@ -355,11 +421,15 @@ export const WorkersScreen = (): ReactElement => {
       ) : null}
       {workers.isSuccess && items.length === 0 ? (
         <Blankslate
-          informational
           size="spacious"
           icon={<ServerIcon size={24} />}
-          title="No worker is registered"
-          hint="Start a worker on your machine and approve the code it shows."
+          title="No worker yet"
+          hint="A worker is your own computer running this platform’s agent work with your Claude subscription. Add one, and it shows here with whether it can take work."
+          action={
+            <Link to="/workers/new" className={buttonClassName('default')}>
+              Add a worker
+            </Link>
+          }
         />
       ) : null}
       {items.length === 0 ? null : (
@@ -367,10 +437,9 @@ export const WorkersScreen = (): ReactElement => {
           label="Workers"
           header={
             <ListBoxHeader>
-              <span className="font-semibold text-fg">{`${formatInteger(active)} active`}</span>
-              {items.length === active ? null : (
-                <span className="text-fg-muted">{`${formatInteger(items.length - active)} revoked`}</span>
-              )}
+              <span className="font-semibold text-fg" data-workers-count="">
+                {workersCountText(items)}
+              </span>
             </ListBoxHeader>
           }
         >
@@ -399,7 +468,136 @@ export const codeFromAddress = (search: string): string => {
   return typedUserCode(code) ?? '';
 };
 
+/** How often the approval page asks for the workers while it waits for the machine (A1). */
+export const APPROVE_WATCH_INTERVAL_MS = 5_000;
+
+/** How long it waits before it says what to check instead. */
+export const APPROVE_WATCH_LIMIT_MS = 2 * 60_000;
+
+/**
+ * The worker an approval made: the newest of `userId`'s active workers named `name` and created at
+ * or after the approval (less {@link SINCE_SKEW_MS}: `created_at` is the server's clock), or `null`
+ * while the machine has not collected its credential yet.
+ */
+export const approvedWorkerOf = (
+  items: readonly WorkerSummary[],
+  approval: { readonly userId: string; readonly name: string; readonly atMs: number },
+): WorkerSummary | null =>
+  items
+    .filter(
+      (worker) =>
+        worker.user.id === approval.userId &&
+        worker.state === 'active' &&
+        worker.name === approval.name &&
+        Date.parse(worker.created_at) >= approval.atMs - SINCE_SKEW_MS,
+    )
+    .reduce<WorkerSummary | null>(
+      (newest, worker) =>
+        newest === null || Date.parse(worker.created_at) > Date.parse(newest.created_at)
+          ? worker
+          : newest,
+      null,
+    );
+
+interface Approval {
+  readonly name: string;
+  readonly atMs: number;
+}
+
+/** After *Approve*: waiting for the machine, connected, or what to check after two minutes. */
+const AfterApproval = ({ approval }: { readonly approval: Approval }): ReactElement => {
+  const session = useSession();
+  const userId = session.data?.user.id ?? null;
+  const [timedOut, setTimedOut] = useState(false);
+  const [round, setRound] = useState(0);
+  // A new round of waiting each time *Keep waiting* is pressed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `round` restarts the timer by design.
+  useEffect(() => {
+    setTimedOut(false);
+    const timer = setTimeout(() => setTimedOut(true), APPROVE_WATCH_LIMIT_MS);
+    return () => clearTimeout(timer);
+  }, [round]);
+  const connectedIn = (items: readonly WorkerSummary[] | undefined): WorkerSummary | null => {
+    const worker =
+      userId === null || items === undefined
+        ? null
+        : approvedWorkerOf(items, { userId, ...approval });
+    return worker !== null && worker.last_seen_at !== null ? worker : null;
+  };
+  // Asked again on a clock only while the page waits (see the module note).
+  const workers = useWorkers({
+    refetchInterval: (query) =>
+      timedOut || connectedIn(query.state.data?.items) !== null ? false : APPROVE_WATCH_INTERVAL_MS,
+  });
+  const found = connectedIn(workers.data?.items);
+  const connected = found !== null;
+
+  if (connected) {
+    return (
+      <div className="flex flex-col gap-3" data-approval="connected">
+        <Flash tone="success" live="status">
+          <p>
+            <UntrustedText value={found.name} /> is connected.
+          </p>
+        </Flash>
+        <div>
+          <Link
+            to="/workers/new"
+            search={{ step: 'ready', since: found.created_at }}
+            className={buttonClassName('primary')}
+          >
+            Continue: check it’s ready
+          </Link>
+        </div>
+      </div>
+    );
+  }
+  if (timedOut) {
+    return (
+      <div className="flex flex-col gap-3" data-approval="not-connected">
+        <Flash
+          tone="warning"
+          live="status"
+          title={`${sanitiseUntrusted(approval.name)} hasn’t connected yet`}
+        >
+          <ul className="list-disc pl-5">
+            <li>
+              Is the worker still running on that computer? Its page,{' '}
+              <span className="font-mono">{WORKER_LOCAL_PAGE}</span> there, says what it is doing.
+            </li>
+            <li>
+              Was it set up with this platform’s address,{' '}
+              <span className="font-mono">{window.location.origin}</span>? A worker set up for
+              another address never collects this approval.
+            </li>
+          </ul>
+        </Flash>
+        <div className="flex flex-wrap gap-2">
+          <Button tone="primary" onClick={() => setRound((n) => n + 1)}>
+            Keep waiting
+          </Button>
+          <Link to="/workers" className={buttonClassName('default')}>
+            Go to Workers
+          </Link>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div data-approval="waiting">
+      <Flash tone="success" live="status">
+        <p>
+          Approved. Waiting for <UntrustedText value={approval.name} /> to connect — it checks every
+          few seconds.
+        </p>
+      </Flash>
+      <Loading label="Waiting for the machine to connect…" />
+    </div>
+  );
+};
+
 export const WorkerApproveScreen = (): ReactElement => {
+  const { now } = useServices();
   const [typed, setTyped] = useState(() => codeFromAddress(window.location.search));
   // The code leaves the address bar (and the history entry) at once: it is filled in the field.
   useEffect(() => {
@@ -414,6 +612,7 @@ export const WorkerApproveScreen = (): ReactElement => {
   }, []);
   const [name, setName] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const [approval, setApproval] = useState<Approval | null>(null);
   const code = typedUserCode(typed);
   const device = useWorkerDevice(code);
   const commands = useSettingsCommands();
@@ -440,10 +639,13 @@ export const WorkerApproveScreen = (): ReactElement => {
         label="Code shown by the machine"
         placeholder="XXXX-XXXX"
         autoComplete="off"
+        spellCheck={false}
+        className="h-14 max-w-xs rounded-md border border-line-input bg-inset px-4 font-mono text-3xl tracking-[0.2em] text-fg uppercase placeholder:text-fg-subtle"
         value={typed}
         onChange={(event) => {
           setTyped(event.target.value);
           setConfirmed(false);
+          setApproval(null);
           decision.reset();
         }}
       />
@@ -506,12 +708,22 @@ export const WorkerApproveScreen = (): ReactElement => {
                 disabled={!canApprove}
                 onClick={() => {
                   if (code === null) return;
-                  commands.decideWorkerDevice.mutate({
-                    decision: 'approve',
-                    user_code: code,
-                    name: name.trim(),
-                    confirm_stale: needsConfirmation && confirmed,
-                  });
+                  const approvedName = name.trim();
+                  commands.decideWorkerDevice.mutate(
+                    {
+                      decision: 'approve',
+                      user_code: code,
+                      name: approvedName,
+                      confirm_stale: needsConfirmation && confirmed,
+                    },
+                    {
+                      onSuccess: (answer) => {
+                        if (answer.decision === 'approve') {
+                          setApproval({ name: approvedName, atMs: now() });
+                        }
+                      },
+                    },
+                  );
                 }}
               >
                 Approve
@@ -532,14 +744,13 @@ export const WorkerApproveScreen = (): ReactElement => {
       {decision.isError ? (
         <ErrorNotice title="The code was not decided." error={decision.error} />
       ) : null}
-      {decision.isSuccess ? (
-        <Flash tone={decision.data.decision === 'approve' ? 'success' : 'info'} live="status">
-          <p>
-            {decision.data.decision === 'approve'
-              ? 'Approved. The machine picks up its credential at its next poll.'
-              : 'Denied. The machine is told so at its next poll.'}
-          </p>
+      {decision.isSuccess && decision.data.decision === 'deny' ? (
+        <Flash tone="info" live="status">
+          <p>Denied. The machine’s page says it was refused; you can close this page.</p>
         </Flash>
+      ) : null}
+      {decision.isSuccess && decision.data.decision === 'approve' && approval !== null ? (
+        <AfterApproval approval={approval} />
       ) : null}
     </div>
   );

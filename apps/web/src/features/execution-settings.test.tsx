@@ -4,16 +4,20 @@
  * server's state as a sentence, and the git connection's credential rule as a sentence with a link —
  * no configuration key in the visible text but the one hint that names it.
  *
+ * Since S-23.24 it also says who would take the project's work — each worker the read lists, ✓ by
+ * itself, only when its owner picks, or ✗ and why in the blocker words — and what waits.
+ *
  * Driven through `createApp` with a fake server, so the real router, query client and endpoint
  * parsers are in the path; asserted on what the card shows and on the request it sends.
  */
 import type { ProjectSummary } from '@platform/contracts';
 import { REMOTE_RUN_CREDENTIAL_REFUSED_NOTICE } from '@platform/contracts';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { formatSeconds } from './execution-settings.js';
+import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import { formatSeconds, waitingLines } from './execution-settings.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000027c1';
 
@@ -266,6 +270,118 @@ describe('the Execution card (WP-278, in plain words since S-23.20)', () => {
     expect((save as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(seconds, { target: { value: '45' } });
     expect((save as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+const owner = {
+  id: '00000000-0000-4000-8000-0000000027d0',
+  name: 'Jan',
+  email: 'jan@example.invalid',
+};
+
+describe('who would take this project’s work (S-23.24)', () => {
+  it('lists each worker: by itself, only when picked, or not — with the reason in the blocker words', async () => {
+    await open(
+      server([], {
+        ...DEFAULTS,
+        workers: [
+          {
+            worker_id: '00000000-0000-4000-8000-0000000027d1',
+            name: 'jan-mbp',
+            owner,
+            takes: 'automatically',
+            blockers: [],
+            project_reason: null,
+          },
+          {
+            worker_id: '00000000-0000-4000-8000-0000000027d2',
+            name: 'night-owl <img src=x>',
+            owner: { ...owner, name: null },
+            takes: 'no',
+            blockers: ['images_outdated'],
+            project_reason: null,
+          },
+          {
+            worker_id: '00000000-0000-4000-8000-0000000027d3',
+            name: 'gil-laptop',
+            owner,
+            takes: 'picked_only',
+            blockers: [],
+            project_reason: 'scope_excludes',
+          },
+          {
+            worker_id: '00000000-0000-4000-8000-0000000027d4',
+            name: 'hana-pc',
+            owner,
+            takes: 'no',
+            blockers: [],
+            project_reason: 'credential_refused',
+          },
+        ],
+      }),
+    );
+    const panel = within(screen.getByTestId('execution-workers'));
+    const lineOf = (takes: string, n: number) =>
+      screen
+        .getByTestId('execution-workers')
+        .querySelectorAll(`[data-execution-worker="${takes}"]`)[n]?.textContent ?? '';
+    expect(panel.getByRole('heading', { name: 'Would take this project’s work' })).toBeTruthy();
+    expect(lineOf('automatically', 0)).toContain('jan-mbp');
+    expect(lineOf('automatically', 0)).toContain('Takes its runs by itself');
+    // A worker's own blocker, in the Workers screen's words; its name is text.
+    expect(lineOf('no', 0)).toContain('night-owl <img src=x>');
+    expect(lineOf('no', 0)).toContain(WORKER_CLAIM_BLOCKER_WORDS.images_outdated.word);
+    expect(lineOf('no', 0)).toContain('jan@example.invalid');
+    expect(screen.getByTestId('execution-workers').querySelector('img')).toBeNull();
+    expect(lineOf('picked_only', 0)).toContain('Only runs its owner picks');
+    // The project's own reason when the worker has none.
+    expect(lineOf('no', 1)).toContain(
+      'Its git connection’s token may not go to a developer’s computer',
+    );
+    expect(panel.getByText('No run is waiting for anybody to start it.')).toBeTruthy();
+  });
+
+  it('says how many runs wait and why some can’t go to workers', async () => {
+    await open(
+      server([], {
+        ...DEFAULTS,
+        waiting: {
+          open: 6,
+          closed_to_workers: { credential_refused: 0, server_only: 2, server_first: 1 },
+        },
+      }),
+    );
+    const waiting = screen.getByTestId('execution-waiting');
+    expect(waiting.textContent).toContain('3 runs are waiting for a worker.');
+    expect(waiting.textContent).toContain(
+      '2 waiting runs can’t go to workers: they were offered to the platform server only',
+    );
+    expect(waiting.textContent).toContain(
+      '1 waiting run can’t go to workers: the platform server goes first',
+    );
+    // No workers: the way to add one.
+    expect(
+      within(screen.getByTestId('execution-workers'))
+        .getByRole('link', { name: 'Add a worker' })
+        .getAttribute('href'),
+    ).toBe('/workers/new');
+  });
+
+  it('words the waiting runs exactly', () => {
+    expect(
+      waitingLines({
+        open: 1,
+        closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
+      }),
+    ).toEqual(['1 run is waiting for a worker.']);
+    expect(
+      waitingLines({
+        open: 2,
+        closed_to_workers: { credential_refused: 2, server_only: 0, server_first: 0 },
+      }),
+    ).toEqual([
+      '2 waiting runs can’t go to workers: the git connection’s token may not go to a developer’s computer.',
+    ]);
   });
 });
 

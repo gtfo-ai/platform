@@ -13,7 +13,7 @@
  * | install | the person says so (*I've done this*, kept in the URL as `?installed=true`), or a worker of theirs from this wizard exists | done |
  * | start | a worker of theirs from this wizard exists | always — a person may already hold the code |
  * | approve | a worker of theirs from this wizard exists (`GET /api/workers`) | done |
- * | ready | that worker can take work (`worker-readiness.ts`, a stub of the server's N1) | done |
+ * | ready | that worker takes work — by itself, or when its owner picks a run (`worker-readiness.ts`, over the server's `claim_blockers`) | done |
  * | projects *(optional)* | some project of theirs lets workers run it | — (the last step) |
  *
  * **Install is the one step whose done-ness is the person's word**: running the installer is
@@ -27,11 +27,11 @@
  *
  * ## The commands
  *
- * Install is **one command per OS** — the core's installer script ({@link WORKER_INSTALL_PATHS},
- * S-22.20), which checks Docker, puts the bundle in {@link WORKER_INSTALL_DIR}, starts it and opens
- * the worker's own page — with the compose file and `.env.worker` lines behind *Set it up by hand*,
- * **once {@link INSTALLER_AVAILABLE} says the core serves it**; until then the by-hand setup is the
- * step.
+ * Install is **one command** — the core's shell installer ({@link WORKER_INSTALL_PATHS}, S-22.20),
+ * which checks Docker, puts the bundle in {@link WORKER_INSTALL_DIR}, starts it and opens the
+ * worker's own page — with the compose file and `.env.worker` lines behind *Set it up by hand*
+ * while {@link INSTALLER_AVAILABLE} says the core serves it. Windows' PowerShell line comes with
+ * S-22.21 (BACKLOG 984).
  * Start is then the worker's own page, which signs in to Claude; the hand-made sign-in
  * (`claude setup-token`) stays as that step's fallback.
  */
@@ -66,7 +66,7 @@ export interface WorkerWizardFacts {
   readonly installed: boolean;
   /** The worker from this wizard; `null` while the workers read is in flight, `false` for none. */
   readonly worker: WorkerSummary | false | null;
-  /** That worker can take work now; `null` while unknown. */
+  /** That worker takes work now (`isReadyToWork`); `null` while unknown. */
   readonly canClaim: boolean | null;
   /** Some project of the person's lets workers run it; `null` while unknown. */
   readonly projectTakesWorkers: boolean | null;
@@ -187,38 +187,28 @@ export const projectTakesWorkers = (execution: ProjectExecutionResponse): boolea
   execution.mode !== 'server_only' && !credentialKeepsWorkersOff(execution);
 
 /**
- * The one-command installer's paths on the core (S-22.20): **intended, not live yet** — the other
- * session is building them (BACKLOG 927). One constant, so a changed path is one edit.
+ * Whether the core serves the installer at {@link WORKER_INSTALL_PATHS} (S-22.20). `true` since
+ * S-23.24 — `GET /api/worker/v1/install.sh` answers 200 on a released core — so the one-line
+ * installer is Install's default and the by-hand setup is behind *Set it up by hand*. Kept as a
+ * flag so a core that stops serving it is one edit away from the by-hand step again.
  */
-/**
- * Whether the core serves the installer at {@link WORKER_INSTALL_PATHS} yet. **Flip it to `true`
- * when S-22.20 lands** (BACKLOG 927): until then the paths answer 404, and since every push to
- * `main` is a release the wizard must not show them — Install shows the by-hand setup instead. When
- * `true`, the one-line installer is the default and the by-hand setup moves into a disclosure.
- */
-export const INSTALLER_AVAILABLE: boolean = false;
+export const INSTALLER_AVAILABLE: boolean = true;
 
+/**
+ * The one-command installer's paths on the core (S-22.20), one constant so a changed path is one
+ * edit. Only the shell installer is shown for now: the PowerShell one (`windows`) is kept here for
+ * when S-22.21 serves it (BACKLOG 984).
+ */
 export const WORKER_INSTALL_PATHS = {
   unix: `${WORKER_API_PREFIX}/install.sh`,
   windows: `${WORKER_API_PREFIX}/install.ps1`,
 } as const;
 
-/** Which installer a computer runs: a POSIX shell's, or PowerShell's. */
-export type InstallOs = keyof typeof WORKER_INSTALL_PATHS;
-
-/**
- * The installer to show first, from what the browser says it runs on — a guess about the computer
- * the person is reading on, which is usually the one they install on; the other one is a click away.
- */
-export const preferredInstallOs = (platform: string): InstallOs =>
-  // `Windows`/`Win32`/`Win64` — never a bare `win`, which `Darwin` contains.
-  /\bWin(?:dows|32|64)\b/.test(platform) ? 'windows' : 'unix';
-
 /** The commands the wizard shows, built from this platform's own origin. */
 export interface WorkerInstallCommands {
   readonly origin: string;
-  /** The installer's URL and the line that runs it, per OS. */
-  readonly installer: Readonly<Record<InstallOs, { readonly url: string; readonly run: string }>>;
+  /** The shell installer's URL and the line that runs it (macOS and Linux). */
+  readonly installer: { readonly url: string; readonly run: string };
   readonly download: string;
   readonly coreUrlLine: string;
   readonly signIn: string;
@@ -240,14 +230,8 @@ export const workerInstallCommands = (pageOrigin: string): WorkerInstallCommands
   return {
     origin,
     installer: {
-      unix: {
-        url: `${origin}${WORKER_INSTALL_PATHS.unix}`,
-        run: `curl -fsSL '${origin}${WORKER_INSTALL_PATHS.unix}' | sh`,
-      },
-      windows: {
-        url: `${origin}${WORKER_INSTALL_PATHS.windows}`,
-        run: `irm '${origin}${WORKER_INSTALL_PATHS.windows}' | iex`,
-      },
+      url: `${origin}${WORKER_INSTALL_PATHS.unix}`,
+      run: `curl -fsSL '${origin}${WORKER_INSTALL_PATHS.unix}' | sh`,
     },
     download: `curl -fsSo compose.worker.yml ${origin}${WORKER_API_PREFIX}/${WORKER_PATHS.composeFile}`,
     coreUrlLine: `APP_CORE_URL=${origin}`,

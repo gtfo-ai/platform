@@ -46,10 +46,29 @@ import { type Fleet, type FleetNeed, type FleetSeat, seatTitle, slotsWords } fro
 import { FleetRunCard } from './run-card.js';
 
 /**
- * What a run in the queue waits for: any seat, or — on a platform where nothing on the server runs
- * agent work and no worker is connected — a worker (S-23.20).
+ * What a run in the queue waits for: any seat; or — on a platform where nothing on the server runs
+ * agent work — a worker, when there is none (S-23.20), or **nobody**, when there are workers and
+ * none of them can take work by itself (S-23.24: the Agents page says why, above the views).
  */
-export type QueueWait = 'seat' | 'worker';
+export type QueueWait = 'seat' | 'worker' | 'nobody';
+
+/** The queue node's line for `waiting` runs (exported for the unit tier). */
+export const queueWords = (waitingFor: QueueWait, waiting: number): string => {
+  switch (waitingFor) {
+    case 'worker':
+      return waiting === 0
+        ? 'Waiting for a worker — add one to run agent work.'
+        : `${waiting} waiting for a worker — add one to run them.`;
+    case 'nobody':
+      return waiting === 0
+        ? 'No worker can take work now.'
+        : `${waiting} waiting, and no worker can take them now.`;
+    case 'seat':
+      return waiting === 0
+        ? 'No run is waiting for a seat.'
+        : `${waiting} waiting for a seat — the server or a worker picks each up.`;
+  }
+};
 
 interface MapData extends Record<string, unknown> {
   readonly node: MapNode;
@@ -210,15 +229,7 @@ const QueueNode = ({ data }: NodeProps<MapFlowNode>): ReactElement => {
         </span>
         Queue
       </span>
-      <span className="text-xs text-fg-muted">
-        {data.waitingFor === 'worker'
-          ? waiting === 0
-            ? 'Waiting for a worker — add one to run agent work.'
-            : `${waiting} waiting for a worker — add one to run them.`
-          : waiting === 0
-            ? 'No run is waiting for a seat.'
-            : `${waiting} waiting for a seat — the server or a worker picks each up.`}
-      </span>
+      <span className="text-xs text-fg-muted">{queueWords(data.waitingFor, waiting)}</span>
     </div>
   );
 };

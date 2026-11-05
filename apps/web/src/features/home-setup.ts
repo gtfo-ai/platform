@@ -18,7 +18,8 @@
  * - **autonomy** — `GET /api/projects/:id/autonomy` says the dial was `materialised` (applied);
  * - **worker** (S-23.20) — **only on a platform that needs one**: the setup project's execution
  *   read says nothing on the server would run it (`worker-need.ts`). Then it is done when an active
- *   worker can take work (`worker-readiness.ts`, a stub of the server's answer); on a platform whose
+ *   worker takes work (`worker-readiness.ts`, over the server's `claim_blockers`), and while one
+ *   exists that does not, the step names it with its first blocker's words and fix; on a platform whose
  *   server runs agent work the step is **absent**, not optional — an optional step on a checklist
  *   that disappears when complete would hold it open forever;
  * - **ticket** — the setup project's task list holds a task whose ticket is a provider's, not one
@@ -28,6 +29,7 @@
  * was set up with, so the reads stay at three however many projects there are; a later project's
  * own steps are the wizard's to show (`/onboarding?project=<key>`), not Home's.
  */
+import { wordInSentence } from '../ui/humanize.js';
 
 /** One fact: answered yes, answered no, not answered yet, or the read failed. */
 export type SetupFact = 'done' | 'todo' | 'pending' | 'unknown';
@@ -56,7 +58,10 @@ export type SetupFacts = Readonly<Record<Exclude<SetupStepId, 'worker'>, SetupFa
 export interface BlockedWorker {
   /** Its name, already sanitised (`ui/untrusted-text.ts`): the hint is a plain string. */
   readonly name: string;
+  /** The first blocker's row word (`WORKER_CLAIM_BLOCKER_WORDS`), as the server named it. */
   readonly reason: string;
+  /** What to do about it, in the same table's words. */
+  readonly fix: string;
   readonly createdAt: string;
 }
 
@@ -156,7 +161,7 @@ export const setupChecklist = (
     const fact = needsProject && setupProjectKey === null ? 'todo' : given;
     const hint =
       id === 'worker' && fact !== 'done' && blockedWorker !== null
-        ? `${blockedWorker.name} can’t take work yet: ${blockedWorker.reason}.`
+        ? `${blockedWorker.name} can’t take work yet: ${wordInSentence(blockedWorker.reason)}. ${blockedWorker.fix}`
         : LABELS[id].hint;
     return [{ id, label: LABELS[id].label, hint, fact, destination: destination(id) }];
   });

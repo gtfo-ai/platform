@@ -165,13 +165,26 @@ describe('setupChecklist’s worker step (S-23.20)', () => {
     expect(checklist.next?.destination).toEqual({ to: '/workers/new' });
   });
 
-  it('names a worker that exists but cannot take work, and resumes the wizard at Ready for it', () => {
+  it('names a worker that exists but cannot take work, with the fix, and resumes the wizard at Ready for it', () => {
     const checklist = setupChecklist({ ...upToWorker, worker: 'todo' }, 'acme', {
       name: 'jan-mbp',
-      reason: 'not connected',
+      reason: 'It has an older build than this platform',
+      fix: 'Its updater fixes this within 5 minutes.',
       createdAt: '2026-11-05T09:00:00.000Z',
     });
-    expect(checklist.next?.hint).toBe('jan-mbp can’t take work yet: not connected.');
+    expect(checklist.next?.hint).toBe(
+      'jan-mbp can’t take work yet: it has an older build than this platform. Its updater fixes this within 5 minutes.',
+    );
+    // A name stays as it is in the middle of the sentence.
+    const claude = setupChecklist({ ...upToWorker, worker: 'todo' }, 'acme', {
+      name: 'jan-mbp',
+      reason: 'Claude refused its sign-in',
+      fix: 'Sign in to Claude again on the worker’s page.',
+      createdAt: '2026-11-05T09:00:00.000Z',
+    });
+    expect(claude.next?.hint).toBe(
+      'jan-mbp can’t take work yet: Claude refused its sign-in. Sign in to Claude again on the worker’s page.',
+    );
     expect(checklist.next?.destination).toEqual({
       to: '/workers/new',
       step: 'ready',

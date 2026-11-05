@@ -35,6 +35,7 @@ import { SPRITE_INKS, spriteRuns } from '../../ui/bot/sprite.js';
 import { cx, FOCUS_RING } from '../../ui/cx.js';
 import { formatDateTime } from '../../ui/kit.js';
 import { sanitiseUntrusted } from '../../ui/untrusted-text.js';
+import type { QueueWait } from './fleet-canvas.js';
 import {
   botPhaseOf,
   type Fleet,
@@ -457,6 +458,20 @@ const Lamp = ({ lit }: { readonly lit: boolean }): ReactElement => (
   </svg>
 );
 
+/** The bench's label for `waiting` runs. */
+const benchWords = (waitingFor: QueueWait, waiting: number): string => {
+  if (waiting === 0) {
+    return waitingFor === 'worker'
+      ? 'Bench · waiting for a worker'
+      : waitingFor === 'nobody'
+        ? 'Bench · no worker can take work'
+        : 'Bench · nobody is waiting for a seat';
+  }
+  return waitingFor === 'nobody'
+    ? `Bench · ${waiting} waiting, and no worker can take them`
+    : `Bench · ${waiting} waiting for a ${waitingFor}`;
+};
+
 const Lobby = ({
   fleet,
   animated,
@@ -466,7 +481,7 @@ const Lobby = ({
   readonly fleet: Fleet;
   readonly animated: boolean;
   readonly onOpen: (runId: string) => void;
-  readonly waitingFor: 'seat' | 'worker';
+  readonly waitingFor: QueueWait;
 }): ReactElement => {
   const bench = fleet.queue.slice(0, OFFICE_LOBBY_SHOWN);
   const help = fleet.needs.slice(0, OFFICE_LOBBY_SHOWN);
@@ -477,13 +492,7 @@ const Lobby = ({
       </Wall>
       <div className="office-floor flex flex-col gap-5 p-4">
         <div className="flex flex-col gap-2">
-          <h3 className="office-label">
-            {fleet.queue.length === 0
-              ? waitingFor === 'worker'
-                ? 'Bench · waiting for a worker'
-                : 'Bench · nobody is waiting for a seat'
-              : `Bench · ${fleet.queue.length} waiting for a ${waitingFor}`}
-          </h3>
+          <h3 className="office-label">{benchWords(waitingFor, fleet.queue.length)}</h3>
           {bench.length === 0 ? (
             <EmptyBench />
           ) : (
@@ -538,8 +547,8 @@ export const Office = ({
   readonly onOpen: (runId: string) => void;
   /** Drawn over the rooms when nothing runs: everyone is asleep, and this says what to do. */
   readonly empty?: ReactNode;
-  /** What the bench waits for: any seat, or a worker on a platform with no server runner. */
-  readonly waitingFor?: 'seat' | 'worker';
+  /** What the bench waits for: any seat, a worker, or nobody (`QueueWait`). */
+  readonly waitingFor?: QueueWait;
 }): ReactElement => {
   const reduced = useReducedMotion();
   const animated = !reduced;

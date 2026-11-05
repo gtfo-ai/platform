@@ -15,6 +15,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 import { NOW, USER_ID, workerFixture } from './worker.test-fixture.js';
 import { WATCH_INTERVAL_MS } from './worker-wizard.js';
 
@@ -152,21 +153,34 @@ describe('Add a worker: Install', () => {
     ]);
 
     const origin = window.location.origin;
-    // INSTALLER_AVAILABLE is false until the core serves the installer (S-22.20): no one-line
-    // installer is shown, and the by-hand setup is the step, not a disclosure.
-    expect(document.querySelector('[data-installer]')).toBeNull();
-    expect(screen.queryByText(/install\.(sh|ps1)/)).toBeNull();
-    expect(document.querySelector('[data-by-hand]')?.closest('details')).toBeNull();
-    expect((screen.getByLabelText('Start the worker') as HTMLInputElement).value).toBe(
+    // INSTALLER_AVAILABLE (S-23.24): the macOS/Linux one-liner leads, with its script to read; no
+    // Windows line yet (BACKLOG 984), and the by-hand setup is behind *Set it up by hand*.
+    const installer = document.querySelector('[data-installer="unix"]') as HTMLElement;
+    expect(installer.closest('details')).toBeNull();
+    expect(
+      (within(installer).getByLabelText('macOS or Linux (Terminal)') as HTMLInputElement).value,
+    ).toBe(`curl -fsSL '${origin}/api/worker/v1/install.sh' | sh`);
+    expect(
+      within(installer).getByRole('link', { name: 'Read the script first' }).getAttribute('href'),
+    ).toBe(`${origin}/api/worker/v1/install.sh`);
+    expect(screen.getByText('Windows: coming next.')).toBeTruthy();
+    expect(document.querySelector('[data-installer="windows"]')).toBeNull();
+    expect(screen.queryByText(/install\.ps1|iex/)).toBeNull();
+
+    const byHand = document.querySelector('[data-by-hand]') as HTMLElement;
+    expect(byHand.closest('details')?.querySelector('summary')?.textContent).toBe(
+      'Set it up by hand',
+    );
+    expect((within(byHand).getByLabelText('Start the worker') as HTMLInputElement).value).toBe(
       `docker compose --env-file .env.worker -f compose.worker.yml up -d`,
     );
-    const download = screen.getByLabelText(
+    const download = within(byHand).getByLabelText(
       'Download the worker’s compose file',
     ) as HTMLInputElement;
     expect(download.value).toBe(
       `curl -fsSo compose.worker.yml ${origin}/api/worker/v1/compose.yml`,
     );
-    const env = screen.getByLabelText(
+    const env = within(byHand).getByLabelText(
       'Then create a file named .env.worker beside it, with this line',
     ) as HTMLInputElement;
     expect(env.value).toBe(`APP_CORE_URL=${origin}`);
@@ -301,46 +315,99 @@ describe('Add a worker: Approve', () => {
     // The name is its owner's text, rendered as text.
     expect(screen.getByText(/is approved and connected/).textContent).toContain('<b>jan</b>-mbp');
     expect(document.querySelector('main b')).toBeNull();
-    // It is online and not paused, so Ready to work is already done by the server's facts.
+    // The server names no blocker for it, so Ready to work is already done by the server's facts.
     expect(stepStates()).toEqual(['done', 'done', 'current', 'done', 'upcoming']);
   });
 });
 
 describe('Add a worker: Ready to work', () => {
-  it('lists what stops the worker in plain words, with what to do, and holds Continue', async () => {
+  it('lists the server’s blockers in plain words, with what to do, and holds Continue', async () => {
     const world = newWorld({
       workers: [
         workerFixture({
           created_at: new Date(NOW - 30_000).toISOString(),
           last_seen_at: new Date(NOW - 10 * 60_000).toISOString(),
-          manually_paused_at: new Date(NOW - 60_000).toISOString(),
+          // The server's answer (S-22.19): what the core knows and the old stub could not.
+          claim_blockers: ['offline', 'paused', 'images_outdated', 'no_eligible_project'],
+          can_claim: false,
         }),
       ],
     });
     start(world, wizardUrl('ready'));
     await screen.findByRole('heading', { level: 2, name: 'Ready to work' });
     const list = within(screen.getByRole('list', { name: 'What the worker needs' }));
-    expect(list.getByText(/^Not connected — last seen 10 m ago$/)).toBeTruthy();
-    expect(list.getByText(/^Start the worker on that computer/)).toBeTruthy();
+    expect(list.getByText(/^Not connected to the platform — last seen 10 m ago$/)).toBeTruthy();
+    expect(list.getByText(WORKER_CLAIM_BLOCKER_WORDS.offline.fix)).toBeTruthy();
     expect(list.getByText('Paused by its owner')).toBeTruthy();
-    expect(list.getByText(/^Resume it on the worker’s page/)).toBeTruthy();
+    expect(list.getByText(WORKER_CLAIM_BLOCKER_WORDS.paused.fix)).toBeTruthy();
+    expect(list.getByText('It has an older build than this platform')).toBeTruthy();
+    expect(list.getByText(WORKER_CLAIM_BLOCKER_WORDS.images_outdated.fix)).toBeTruthy();
+    expect(list.getByText('No project gives it work')).toBeTruthy();
+    // The lines it passes say so.
     expect(list.getByText('Not held by a Claude usage limit')).toBeTruthy();
+    expect(list.getByText('Speaks this platform’s version')).toBeTruthy();
+    expect(list.getByText('Has its run images')).toBeTruthy();
+    // The stub's disclaimer is gone: the server checks the images, the version and the projects.
+    expect(screen.queryByText(/can’t check the worker’s images/)).toBeNull();
     expect(screen.getByText(/can’t take work yet/)).toBeTruthy();
     expect(continueButton(/Continue to Choose projects/).disabled).toBe(true);
     expect(primaries()).toHaveLength(1);
   });
 
-  it('opens Choose projects once the worker can take work', async () => {
+  it('lists a blocker outside the checked lines too, such as the platform’s own images', async () => {
     const world = newWorld({
-      workers: [workerFixture({ created_at: new Date(NOW - 30_000).toISOString() })],
+      workers: [
+        workerFixture({
+          created_at: new Date(NOW - 30_000).toISOString(),
+          claim_blockers: ['platform_images_unresolved'],
+          can_claim: false,
+        }),
+      ],
+    });
+    start(world, wizardUrl('ready'));
+    const list = within(await screen.findByRole('list', { name: 'What the worker needs' }));
+    expect(list.getByText(WORKER_CLAIM_BLOCKER_WORDS.platform_images_unresolved.word)).toBeTruthy();
+    expect(list.getByText('Connected')).toBeTruthy();
+    expect(continueButton(/Continue to Choose projects/).disabled).toBe(true);
+  });
+
+  it('opens Choose projects once the worker can take work, and says when it last did', async () => {
+    const world = newWorld({
+      workers: [
+        workerFixture({
+          created_at: new Date(NOW - 30_000).toISOString(),
+          last_claimed_at: new Date(NOW - 5 * 60_000).toISOString(),
+        }),
+      ],
     });
     start(world, wizardUrl('ready'));
     await screen.findByText(/can take work\./);
     const list = within(screen.getByRole('list', { name: 'What the worker needs' }));
     expect(list.getByText('Connected')).toBeTruthy();
     expect(list.getByText('Not paused')).toBeTruthy();
+    expect(list.getByText('Has this platform’s current images')).toBeTruthy();
+    expect(list.getByText('Took its first run — last took work 5 m ago')).toBeTruthy();
     fireEvent.click(continueButton(/Continue to Choose projects/));
     expect(await screen.findByRole('heading', { level: 2, name: 'Choose projects' })).toBeTruthy();
+  });
+
+  it('lets a pick-only worker continue: a run its owner picks still starts', async () => {
+    const world = newWorld({
+      workers: [
+        workerFixture({
+          created_at: new Date(NOW - 30_000).toISOString(),
+          claim_projects: [],
+          claim_blockers: ['pick_only'],
+          can_claim: false,
+        }),
+      ],
+    });
+    start(world, wizardUrl('ready'));
+    await screen.findByText(/takes only the runs its owner picks/);
+    const list = within(screen.getByRole('list', { name: 'What the worker needs' }));
+    expect(list.getByText(WORKER_CLAIM_BLOCKER_WORDS.pick_only.word)).toBeTruthy();
+    expect(list.getByText('Hasn’t taken a run yet')).toBeTruthy();
+    await waitFor(() => expect(continueButton(/Continue to Choose projects/).disabled).toBe(false));
   });
 });
 

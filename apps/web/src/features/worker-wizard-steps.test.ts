@@ -9,9 +9,9 @@ import { NOW, USER_ID, workerFixture } from './worker.test-fixture.js';
 import {
   blockingWorkerStepOf,
   INSTALLER_AVAILABLE,
-  preferredInstallOs,
   projectTakesWorkers,
   resumeWorkerStepOf,
+  WORKER_INSTALL_PATHS,
   WORKER_WIZARD_STEP_IDS,
   type WorkerWizardFacts,
   wizardWorkerOf,
@@ -147,28 +147,20 @@ describe('workerInstallCommands', () => {
       'APP_CORE_URL=https://agentic.example.test:8443',
     );
   });
-  it('runs the core’s installer in one line per OS, from the paths in one constant', () => {
+  it('runs the core’s shell installer in one line, from the paths in one constant', () => {
     const { installer } = workerInstallCommands('https://agentic.example.test/');
-    expect(installer.unix).toEqual({
+    expect(installer).toEqual({
       url: 'https://agentic.example.test/api/worker/v1/install.sh',
       run: "curl -fsSL 'https://agentic.example.test/api/worker/v1/install.sh' | sh",
     });
-    expect(installer.windows).toEqual({
-      url: 'https://agentic.example.test/api/worker/v1/install.ps1',
-      run: "irm 'https://agentic.example.test/api/worker/v1/install.ps1' | iex",
-    });
+    // The PowerShell path is kept for S-22.21 (BACKLOG 984); no line runs it yet.
+    expect(WORKER_INSTALL_PATHS.windows).toBe('/api/worker/v1/install.ps1');
+    expect(JSON.stringify(workerInstallCommands('https://agentic.example.test/'))).not.toContain(
+      'install.ps1',
+    );
   });
-  it('keeps the installer hidden until the core serves it (flip with S-22.20, BACKLOG 927)', () => {
-    expect(INSTALLER_AVAILABLE).toBe(false);
-  });
-  it('shows the installer of the platform the browser reports first', () => {
-    expect(preferredInstallOs('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).toBe('windows');
-    expect(preferredInstallOs('Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0)')).toBe('unix');
-    expect(preferredInstallOs('Mozilla/5.0 (X11; Linux x86_64)')).toBe('unix');
-    expect(preferredInstallOs('')).toBe('unix');
-    // `Darwin` holds the letters `win`; it is not Windows.
-    expect(preferredInstallOs('Mozilla/5.0 (Darwin arm64) AppleWebKit/537.36')).toBe('unix');
-    expect(preferredInstallOs('Win32')).toBe('windows');
+  it('shows the installer, since the core serves it (S-22.20; BACKLOG 927 closed)', () => {
+    expect(INSTALLER_AVAILABLE).toBe(true);
   });
   it('writes the token through a silent prompt, never printed', () => {
     expect(workerInstallCommands('https://agentic.example.test').writeToken).toBe(

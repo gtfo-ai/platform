@@ -24,6 +24,8 @@
  * product/10's "tokens/min" is still absent: a rate computed from two samples the page happened to
  * see would be a number with no definition.
  */
+
+import type { WorkerSummary } from '@platform/contracts';
 import { DependabotIcon } from '@primer/octicons-react/DependabotIcon';
 import { ListUnorderedIcon } from '@primer/octicons-react/ListUnorderedIcon';
 import { WorkflowIcon } from '@primer/octicons-react/WorkflowIcon';
@@ -32,11 +34,15 @@ import { lazy, type ReactElement, Suspense, useCallback, useState } from 'react'
 import { useProjects } from '../app/queries.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
+import { Flash } from '../ui/flash.js';
+import { WORKER_CLAIM_BLOCKER_WORDS, wordInSentence } from '../ui/humanize.js';
 import { ErrorNotice } from '../ui/kit.js';
 import type { NavItem } from '../ui/nav-item.js';
 import { PageHeader } from '../ui/page-header.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import type { QueueWait } from '../viz/fleet/fleet-canvas.js';
 import { FleetList } from '../viz/fleet/fleet-list.js';
 import type { Fleet, FleetCounts, FleetRun } from '../viz/fleet/model.js';
 import { FleetRunDialog } from '../viz/fleet/run-dialog.js';
@@ -45,7 +51,7 @@ import { useWideViewport } from '../viz/flow/flow-view.js';
 import { chosenView, type FleetView, readStoredView, storeView } from './agents-view.js';
 import { setupProjectOf } from './home-setup.js';
 import { useWorkerNeed } from './worker-need.js';
-import { isWorkerOnline } from './worker-readiness.js';
+import { workerReadinessOf } from './worker-readiness.js';
 
 /** The map's own chunk: `@xyflow/react` is fetched only when the map is shown. */
 const FleetCanvas = lazy(() => import('../viz/fleet/fleet-canvas.js'));
@@ -93,15 +99,68 @@ const runById = (fleet: Fleet, id: string | null): FleetRun | null => {
   return fleet.queue.find((run) => run.id === id) ?? null;
 };
 
+/**
+ * What the queue waits for (S-23.20, S-23.24), and — when it waits for nobody — why, in the blocker
+ * words: on a platform where nothing on the server runs agent work (`need`), a worker when none is
+ * registered, **nobody** when workers are and none would take a run by itself (`can_claim`, the
+ * server's answer), and otherwise a seat. The reason names the first worker (by name) and its first
+ * blocker; with several, how many more there are. A name is its owner's text, sanitised here
+ * because the sentence is a plain string.
+ */
+export const queueWaitOf = (
+  need: boolean | 'pending' | null,
+  workers: readonly WorkerSummary[] | null,
+): { readonly wait: QueueWait; readonly reason: string | null } => {
+  if (need !== true || workers === null) {
+    return { wait: 'seat', reason: null };
+  }
+  const active = workers
+    .filter((worker) => worker.state === 'active')
+    .sort((a, b) => a.name.localeCompare(b.name));
+  if (active.length === 0) {
+    return { wait: 'worker', reason: null };
+  }
+  if (active.some((worker) => workerReadinessOf(worker).takes === 'automatically')) {
+    return { wait: 'seat', reason: null };
+  }
+  const [first] = active;
+  const blocker = first === undefined ? undefined : workerReadinessOf(first).claim_blockers[0];
+  if (first === undefined || blocker === undefined) {
+    return { wait: 'nobody', reason: null };
+  }
+  const more = active.length - 1;
+  return {
+    wait: 'nobody',
+    reason: `${sanitiseUntrusted(first.name)}: ${wordInSentence(WORKER_CLAIM_BLOCKER_WORDS[blocker].word)}${
+      more === 0 ? '' : more === 1 ? ', and 1 more worker' : `, and ${more} more workers`
+    }`,
+  };
+};
+
 const NothingRuns = ({
   inOffice = false,
-  waitingForWorker,
+  wait,
+  reason,
 }: {
   readonly inOffice?: boolean;
-  /** Nothing on the server runs agent work here and no worker is connected (S-23.20). */
-  readonly waitingForWorker: boolean;
+  /** What the queue waits for (`queueWaitOf`). */
+  readonly wait: QueueWait;
+  readonly reason: string | null;
 }): ReactElement =>
-  waitingForWorker ? (
+  wait === 'nobody' ? (
+    <Blankslate
+      title="No worker can take work"
+      hint={`Nothing on the platform server runs this project’s agents, and no worker you can see can take work now${
+        reason === null ? '' : `: ${reason}`
+      }.`}
+      action={
+        <Link to="/workers" className={buttonClassName('default')}>
+          See why
+        </Link>
+      }
+      {...(inOffice ? { className: 'border-0' } : {})}
+    />
+  ) : wait === 'worker' ? (
     <Blankslate
       title="Waiting for a worker"
       hint="Nothing on the platform server runs this project’s agents, so they run on developers’ own computers — and none you can see is connected. Add yours and its runs start here."
@@ -142,13 +201,11 @@ export const AgentsScreen = (): ReactElement => {
 
   const { fleet, now, agents, workers } = useFleet();
   // S-23.20: on a platform where nothing on the server runs agent work, an empty page or a queue
-  // waits for a worker — and says so, with the way to add one.
+  // waits for a worker — and says so, with the way to add one; S-23.24: or for nobody, when the
+  // workers there are cannot take work, and then it says why.
   const projects = useProjects();
   const need = useWorkerNeed(setupProjectOf(projects.data?.items ?? [])?.id ?? null);
-  const waitingForWorker =
-    need === true &&
-    workers.isSuccess &&
-    !workers.data.items.some((item) => item.state === 'active' && isWorkerOnline(item, now));
+  const { wait, reason } = queueWaitOf(need, workers.isSuccess ? workers.data.items : null);
   const wide = useWideViewport();
   const [openId, setOpenId] = useState<string | null>(null);
   const [last, setLast] = useState<FleetRun | null>(null);
@@ -212,21 +269,29 @@ export const AgentsScreen = (): ReactElement => {
         </p>
       ) : null}
 
+      {wait === 'nobody' && !nothing && fleet.queue.length > 0 ? (
+        <Flash tone="warning" live="status">
+          <p data-nobody-takes="">
+            {`${fleet.queue.length === 1 ? '1 run is' : `${fleet.queue.length} runs are`} waiting and no worker can take them${
+              reason === null ? '' : `: ${reason}`
+            }. `}
+            <Link to="/workers" className="text-link underline">
+              See why
+            </Link>
+          </p>
+        </Flash>
+      ) : null}
+
       {agents.isSuccess && view === 'map' ? (
         nothing ? (
-          <NothingRuns waitingForWorker={waitingForWorker} />
+          <NothingRuns wait={wait} reason={reason} />
         ) : wide ? (
           <div
             data-testid="fleet-canvas-frame"
             className="h-[min(calc(100dvh-var(--app-sticky-height)-4rem),680px)] min-h-[420px] overflow-hidden rounded-lg border border-line"
           >
             <Suspense fallback={<Skeleton label="Drawing the map…" className="h-full w-full" />}>
-              <FleetCanvas
-                fleet={fleet}
-                now={now}
-                onOpen={onOpen}
-                waitingFor={waitingForWorker ? 'worker' : 'seat'}
-              />
+              <FleetCanvas fleet={fleet} now={now} onOpen={onOpen} waitingFor={wait} />
             </Suspense>
           </div>
         ) : (
@@ -242,17 +307,15 @@ export const AgentsScreen = (): ReactElement => {
           <Office
             fleet={fleet}
             onOpen={onOpen}
-            waitingFor={waitingForWorker ? 'worker' : 'seat'}
-            {...(nothing
-              ? { empty: <NothingRuns inOffice waitingForWorker={waitingForWorker} /> }
-              : {})}
+            waitingFor={wait}
+            {...(nothing ? { empty: <NothingRuns inOffice wait={wait} reason={reason} /> } : {})}
           />
         </Suspense>
       ) : null}
 
       {agents.isSuccess && view === 'list' ? (
         nothing ? (
-          <NothingRuns waitingForWorker={waitingForWorker} />
+          <NothingRuns wait={wait} reason={reason} />
         ) : (
           <FleetList fleet={fleet} now={now} onOpen={onOpen} />
         )

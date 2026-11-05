@@ -43,7 +43,12 @@ import { buttonClassName } from '../ui/button.js';
 import { Counter } from '../ui/counter.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { Flash } from '../ui/flash.js';
-import { APPROVAL_KIND_LABEL, runSubject, stageLabel } from '../ui/humanize.js';
+import {
+  APPROVAL_KIND_LABEL,
+  runSubject,
+  stageLabel,
+  WORKER_CLAIM_BLOCKER_WORDS,
+} from '../ui/humanize.js';
 import {
   Badge,
   ErrorNotice,
@@ -70,7 +75,7 @@ import {
 } from './home-setup.js';
 import { ReadinessLabel } from './readiness-label.js';
 import { useWorkerNeed, useWorkersWhen } from './worker-need.js';
-import { WORKER_BLOCKER_WORDS, workerReadinessOf } from './worker-readiness.js';
+import { isReadyToWork, workerReadinessOf } from './worker-readiness.js';
 
 type ProjectItem = NonNullable<ReturnType<typeof useProjects>['data']>['items'][number];
 
@@ -816,7 +821,6 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
   // S-23.20: the worker step exists only where nothing on the server would run the project.
   const need = useWorkerNeed(setupId);
   const workers = useWorkersWhen(need === true);
-  const { now } = useServices();
 
   const connect: SetupFact = integrations.isPending
     ? 'pending'
@@ -851,7 +855,6 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
       ? 'unknown'
       : 'pending';
 
-  const nowMs = now();
   const active = (workers.data?.items ?? []).filter((item) => item.state === 'active');
   const worker: SetupFact | undefined =
     need === 'pending'
@@ -859,7 +862,7 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
       : need !== true
         ? undefined
         : workers.isSuccess
-          ? active.some((item) => workerReadinessOf(item, nowMs).can_claim)
+          ? active.some((item) => isReadyToWork(workerReadinessOf(item)))
             ? 'done'
             : 'todo'
           : workers.isError
@@ -873,13 +876,14 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
         : latest,
     null,
   );
-  const blocker = newest === null ? undefined : workerReadinessOf(newest, nowMs).claim_blockers[0];
+  const blocker = newest === null ? undefined : workerReadinessOf(newest).claim_blockers[0];
   const blockedWorker: BlockedWorker | null =
     worker !== 'todo' || newest === null || blocker === undefined
       ? null
       : {
           name: sanitiseUntrusted(newest.name),
-          reason: WORKER_BLOCKER_WORDS[blocker].word.toLowerCase(),
+          reason: WORKER_CLAIM_BLOCKER_WORDS[blocker].word,
+          fix: WORKER_CLAIM_BLOCKER_WORDS[blocker].fix,
           createdAt: newest.created_at,
         };
 

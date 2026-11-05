@@ -1,126 +1,58 @@
 /**
- * Whether a worker can take work now, and what stops it — a **stub** of the server read that is
- * coming (N1 of the worker UX review), derived from what `GET /api/workers` already says.
+ * Whether a worker can take work now, and what stops it — read off the server's answer (S-22.19,
+ * the worker UX review's N1): each `GET /api/workers` item carries `claim_blockers` (the claim's own
+ * predicates minus the per-offer ones, in the vocabulary's order), `can_claim` (that list is empty)
+ * and `last_claimed_at`. S-23.20 shipped a stub here that guessed three blockers from the heartbeat
+ * and the pause columns; S-23.24 replaced it with these fields, so **nothing here derives a
+ * blocker** — the core is the one place that knows the images, the protocol and the projects.
  *
- * ## The contract to come
+ * The words for each blocker are `WORKER_CLAIM_BLOCKER_WORDS` in `ui/humanize.ts`, the same table
+ * the worker's own page reads, so both sides say a blocker in the same words.
  *
- * The server will add three fields to each `GET /api/workers` item, computed with the claim's own
- * predicates (`WORKER_ELIGIBLE` in `postgres-run-offers.ts`) minus the per-offer clauses:
+ * ## `takes`: the one judgement this module adds
  *
- * ```ts
- * can_claim: boolean
- * claim_blockers: ('offline' | 'paused' | 'draining' | 'usage_limited' | 'images_missing'
- *                  | 'images_outdated' | 'protocol_outdated' | 'no_eligible_project')[]
- * last_claimed_at: string | null   // max(run_offers.claimed_at) for this worker
- * ```
- *
- * When it lands, {@link workerReadinessOf} reads those fields instead and
- * {@link WORKER_BLOCKER_WORDS} is replaced by the contracts' shared words table — both sides of the
- * worker (this SPA and the worker's own page) say a blocker in the same words.
- *
- * ## What the stub can say today
- *
- * - **offline** — not seen in the last minute (TD-031's online worker: a heartbeat in the last 60 s);
- * - **paused** — its owner paused it on its own page (`manually_paused_at`). The core stores a
- *   *drain* the same way, so the stub cannot tell `draining` apart: N1 reads the pause's
- *   `human_actions` row for that;
- * - **usage_limited** — paused until a Claude usage limit resets (`paused_until` in the future);
- * - a **revoked** worker can never claim; it has no blocker word because the wizard never follows one.
- *
- * Everything else — the images it holds against this platform's, its protocol, whether any project
- * would give it work — is the server's to answer, so the stub **never claims a worker is ready on
- * those grounds**: it says nothing about them, and `can_claim` is true only for what it can see. That
- * is the residual of the stub, stated: a worker with the previous build's images reads *ready* here
- * until N1 lands.
+ * `can_claim` is `false` for a *pick only* worker (`pick_only`): it claims nothing **by itself**,
+ * yet a run its owner picks on its page still starts. A screen that asks "can this worker work?" —
+ * the wizard's *Ready to work*, Home's worker step — must not hold such a worker forever, so
+ * {@link WorkerReadiness.takes} names three answers in the words a project's execution read uses
+ * (`automatically`, `picked_only`, `no`): `picked_only` is exactly "its only blocker is its owner's
+ * choice".
  */
-import type { WorkerSummary } from '@platform/contracts';
+import {
+  orderClaimBlockers,
+  type WorkerClaimBlocker,
+  type WorkerSummary,
+} from '@platform/contracts';
 
-/** N1's blocker vocabulary, exactly as the server will publish it. */
-export const WORKER_CLAIM_BLOCKERS = [
-  'offline',
-  'paused',
-  'draining',
-  'usage_limited',
-  'images_missing',
-  'images_outdated',
-  'protocol_outdated',
-  'no_eligible_project',
-] as const;
-
-export type WorkerClaimBlocker = (typeof WORKER_CLAIM_BLOCKERS)[number];
-
-/** A worker is online when it was seen in the last minute (TD-031; the Workers screen's rule). */
-export const WORKER_ONLINE_WITHIN_MS = 60_000;
-
-/**
- * Each blocker in plain words — what it means, and what to do — shared by every screen that says
- * why a worker takes nothing. A placeholder for the contracts' table (see the module note); the
- * `Record` is exhaustive, so a blocker added to the vocabulary does not typecheck without its words.
- */
-export const WORKER_BLOCKER_WORDS: Readonly<
-  Record<WorkerClaimBlocker, { readonly word: string; readonly fix: string }>
-> = {
-  offline: {
-    word: 'Not connected',
-    fix: 'Start the worker on that computer: run the start command again in its folder, and check its page at http://127.0.0.1:7357.',
-  },
-  paused: {
-    word: 'Paused by its owner',
-    fix: 'Resume it on the worker’s page (http://127.0.0.1:7357 on that computer).',
-  },
-  draining: {
-    word: 'Draining: finishing its runs, taking nothing new',
-    fix: 'Resume it on the worker’s page, or restart the worker.',
-  },
-  usage_limited: {
-    word: 'Paused by a Claude usage limit',
-    fix: 'It resumes by itself when the limit resets.',
-  },
-  images_missing: {
-    word: 'It has no run images yet',
-    fix: 'Its images may still be downloading. On that computer run docker compose ps: the launcher must be running.',
-  },
-  images_outdated: {
-    word: 'It has an older build than this platform',
-    fix: 'Its updater fixes this within a few minutes. To do it now, download the compose file again and start the worker again.',
-  },
-  protocol_outdated: {
-    word: 'It needs an update',
-    fix: 'Download the compose file again and start the worker again.',
-  },
-  no_eligible_project: {
-    word: 'No project gives it work',
-    fix: 'An administrator lets workers run a project in that project’s settings, under Execution.',
-  },
-};
+export type { WorkerClaimBlocker } from '@platform/contracts';
 
 export interface WorkerReadiness {
+  /** The server's verdict: an automatic claim would be admitted now. */
   readonly can_claim: boolean;
+  /** Why not, in the vocabulary's order — the first is the one a row shows. */
   readonly claim_blockers: readonly WorkerClaimBlocker[];
-  /** When it last took a run; `null` until N1 lands (no read reports it today). */
+  /** By itself, only when its owner picks a run, or not at all (see the module note). */
+  readonly takes: 'automatically' | 'picked_only' | 'no';
+  /** When it last claimed a run, or `null` — its first run is a milestone. */
   readonly last_claimed_at: string | null;
 }
 
-/** Seen in the last minute. */
-export const isWorkerOnline = (worker: WorkerSummary, nowMs: number): boolean =>
-  worker.last_seen_at !== null &&
-  nowMs - Date.parse(worker.last_seen_at) <= WORKER_ONLINE_WITHIN_MS;
-
-/** The stub's answer for one worker of today's `GET /api/workers` (see the module note). */
-export const workerReadinessOf = (worker: WorkerSummary, nowMs: number): WorkerReadiness => {
-  const blockers: WorkerClaimBlocker[] = [];
-  if (!isWorkerOnline(worker, nowMs)) {
-    blockers.push('offline');
-  }
-  if (worker.manually_paused_at !== null) {
-    blockers.push('paused');
-  }
-  if (worker.paused_until !== null && Date.parse(worker.paused_until) > nowMs) {
-    blockers.push('usage_limited');
-  }
+/** The server's answer for one worker of `GET /api/workers`, with {@link WorkerReadiness.takes}. */
+export const workerReadinessOf = (worker: WorkerSummary): WorkerReadiness => {
+  const blockers = orderClaimBlockers(worker.claim_blockers);
+  const takes =
+    worker.can_claim && blockers.length === 0
+      ? 'automatically'
+      : blockers.length > 0 && blockers.every((blocker) => blocker === 'pick_only')
+        ? 'picked_only'
+        : 'no';
   return {
-    can_claim: worker.state === 'active' && blockers.length === 0,
+    can_claim: takes === 'automatically',
     claim_blockers: blockers,
-    last_claimed_at: null,
+    takes,
+    last_claimed_at: worker.last_claimed_at,
   };
 };
+
+/** It takes work — by itself, or when its owner picks a run: what *Ready to work* waits for. */
+export const isReadyToWork = (readiness: WorkerReadiness): boolean => readiness.takes !== 'no';

@@ -19,12 +19,30 @@
  * `.agentic/config.yml`, and a disclosure says so, because a reader who knows the file will look
  * there first. Every value shown is the platform's own, apart from the git connection's name
  * (an operator's text, rendered as text).
+ *
+ * **Who would take this project's work** (S-23.24, the review's E1 and E5; the read's `workers` and
+ * `waiting`, S-22.19's N2): each worker the reader may see, ✓ when it would take the runs by itself,
+ * *only when its owner picks one*, or ✗ with the first reason in the blocker words the Workers
+ * screen uses — its own blocker before the project's — and how many runs wait, how many of them a
+ * worker may take now and why the others may not. A worker's name and owner are text (BD-022).
  */
-import { REMOTE_RUN_CREDENTIAL_REFUSED_NOTICE } from '@platform/contracts';
+import {
+  type ProjectExecutionResponse,
+  type ProjectExecutionWorker,
+  REMOTE_RUN_CREDENTIAL_REFUSED_NOTICE,
+} from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, useId, useState } from 'react';
 import { useProjectBindings, useProjectExecution, useSettingsCommands } from '../app/queries.js';
+import { buttonClassName } from '../ui/button.js';
 import { DetailsDisclosure } from '../ui/details.js';
+import {
+  PROJECT_WORKER_REASON_WORDS,
+  WAITING_CLOSED_REASON_WORDS,
+  type WaitingClosedReason,
+  WORKER_CLAIM_BLOCKER_WORDS,
+  wordInSentence,
+} from '../ui/humanize.js';
 import { Button, ErrorNotice, Field } from '../ui/kit.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
@@ -214,6 +232,122 @@ const CredentialNotice = ({ projectId }: { readonly projectId: string }): ReactE
   );
 };
 
+/** One worker's line: ✓ by itself, *picked only*, or ✗ and why — its own blocker first. */
+export const executionWorkerWords = (
+  worker: ProjectExecutionWorker,
+): { readonly status: 'success' | 'idle' | 'failure'; readonly words: string } => {
+  const first = worker.blockers[0];
+  const reason =
+    first !== undefined
+      ? WORKER_CLAIM_BLOCKER_WORDS[first].word
+      : worker.project_reason === null
+        ? null
+        : PROJECT_WORKER_REASON_WORDS[worker.project_reason].word;
+  switch (worker.takes) {
+    case 'automatically':
+      return { status: 'success', words: 'Takes its runs by itself' };
+    case 'picked_only':
+      return {
+        status: 'idle',
+        words: `Only runs its owner picks${reason === null ? '' : ` — ${wordInSentence(reason)}`}`,
+      };
+    case 'no':
+      return { status: 'failure', words: reason ?? 'Can’t take its runs' };
+  }
+};
+
+const CLOSED_REASONS: readonly WaitingClosedReason[] = [
+  'credential_refused',
+  'server_only',
+  'server_first',
+];
+
+const runs = (n: number): string => (n === 1 ? '1 run' : `${n} runs`);
+
+/** "3 runs are waiting for a worker", then one line per reason a waiting run can't go to one. */
+export const waitingLines = (waiting: ProjectExecutionResponse['waiting']): string[] => {
+  const closed = CLOSED_REASONS.reduce((sum, why) => sum + waiting.closed_to_workers[why], 0);
+  const open = Math.max(0, waiting.open - closed);
+  if (waiting.open === 0) {
+    return ['No run is waiting for anybody to start it.'];
+  }
+  return [
+    ...(open === 0 ? [] : [`${runs(open)} ${open === 1 ? 'is' : 'are'} waiting for a worker.`]),
+    ...CLOSED_REASONS.flatMap((why) => {
+      const n = waiting.closed_to_workers[why];
+      return n === 0
+        ? []
+        : [
+            `${n} waiting ${n === 1 ? 'run' : 'runs'} can’t go to workers: ${WAITING_CLOSED_REASON_WORDS[why]}.`,
+          ];
+    }),
+  ];
+};
+
+/** Who would take this project's work now, and what waits (see the module note). */
+const WhoWouldTake = ({ data }: { readonly data: ProjectExecutionResponse }): ReactElement => (
+  <section
+    aria-label="Who would take this project’s work"
+    data-testid="execution-workers"
+    className="flex flex-col gap-2 rounded-md border border-line p-3 text-sm"
+  >
+    <h3 className="font-semibold">Would take this project’s work</h3>
+    {data.workers.length === 0 ? (
+      <div className="flex flex-col gap-2">
+        <p className="text-fg-muted">No worker you can see is registered.</p>
+        <div>
+          <Link to="/workers/new" className={buttonClassName('default', 'sm')}>
+            Add a worker
+          </Link>
+        </div>
+      </div>
+    ) : (
+      <ul aria-label="Workers" className="flex flex-col gap-1.5">
+        {data.workers.map((worker) => {
+          const line = executionWorkerWords(worker);
+          return (
+            <li
+              key={worker.worker_id}
+              data-execution-worker={worker.takes}
+              className="flex items-start gap-2"
+            >
+              <span className="pt-0.5">
+                <StatusIcon
+                  status={line.status}
+                  label={
+                    worker.takes === 'automatically'
+                      ? 'Takes it'
+                      : worker.takes === 'picked_only'
+                        ? 'Only when picked'
+                        : 'Doesn’t take it'
+                  }
+                />
+              </span>
+              <span className="flex min-w-0 flex-col">
+                <span>
+                  <UntrustedText value={worker.name} />
+                  <span className="text-fg-muted">
+                    {' · '}
+                    <UntrustedText value={worker.owner.name ?? worker.owner.email} />
+                  </span>
+                </span>
+                <span className="text-xs text-fg-muted">{line.words}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    )}
+    <div className="flex flex-col gap-0.5" data-testid="execution-waiting">
+      {waitingLines(data.waiting).map((line) => (
+        <p key={line} className="text-xs">
+          {line}
+        </p>
+      ))}
+    </div>
+  </section>
+);
+
 export const ExecutionSettings = ({ projectId }: { readonly projectId: string }): ReactElement => {
   const execution = useProjectExecution(projectId);
   const commands = useSettingsCommands();
@@ -272,6 +406,7 @@ export const ExecutionSettings = ({ projectId }: { readonly projectId: string })
         </p>
       )}
       {credentialRefused ? <CredentialNotice projectId={projectId} /> : null}
+      <WhoWouldTake data={data} />
       <form
         className="flex flex-col gap-3"
         onSubmit={(event) => {

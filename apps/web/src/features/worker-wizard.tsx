@@ -16,12 +16,13 @@
  * the requesting machine's details and the five-minute confirmation stay exactly there (TD-031 §10c)
  * — opened in a new tab, so this page keeps watching for the new worker.
  *
- * ## The one place this app polls
+ * ## Where this app polls
  *
  * The app otherwise refreshes on the stream (`app/queries.ts`), but no event announces a worker
  * being created, connecting or pausing — a worker row is written when the machine collects its
  * credential, and its heartbeat is a column. So while the person waits on *Start*, *Approve* or
- * *Ready* the workers read is asked again every {@link WATCH_INTERVAL_MS}, and nowhere else.
+ * *Ready* the workers read is asked again every {@link WATCH_INTERVAL_MS}, as the Workers screen and
+ * the approval page (`workers.tsx`, S-23.24) ask it on their own clocks.
  *
  * ## Every string from the server is data
  *
@@ -40,6 +41,7 @@ import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
 import { CopyField } from '../ui/copy-field.js';
 import { DetailsDisclosure } from '../ui/details.js';
+import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 import { ErrorNotice } from '../ui/kit.js';
 import { PageHeader } from '../ui/page-header.js';
 import { formatAgo } from '../ui/relative-time.js';
@@ -47,18 +49,12 @@ import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { type Step, Stepper } from '../ui/stepper.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
-import {
-  WORKER_BLOCKER_WORDS,
-  type WorkerClaimBlocker,
-  workerReadinessOf,
-} from './worker-readiness.js';
+import { isReadyToWork, type WorkerClaimBlocker, workerReadinessOf } from './worker-readiness.js';
 import {
   blockingWorkerStepOf,
   credentialKeepsWorkersOff,
   INSTALLER_AVAILABLE,
-  type InstallOs,
   nextWorkerStep,
-  preferredInstallOs,
   previousWorkerStep,
   projectTakesWorkers,
   resumeWorkerStepOf,
@@ -136,12 +132,19 @@ const CheckLine = ({
   ok,
   children,
 }: {
-  readonly ok: boolean;
+  /** `'info'`: not done, and not needed — said, never blocking. */
+  readonly ok: boolean | 'info';
   readonly children: ReactNode;
 }): ReactElement => (
-  <li className="flex items-start gap-2 text-sm" data-check={ok ? 'ok' : 'blocked'}>
+  <li
+    className="flex items-start gap-2 text-sm"
+    data-check={ok === 'info' ? 'info' : ok ? 'ok' : 'blocked'}
+  >
     <span className="pt-0.5">
-      <StatusIcon status={ok ? 'success' : 'failure'} label={ok ? 'Done' : 'Not yet'} />
+      <StatusIcon
+        status={ok === 'info' ? 'idle' : ok ? 'success' : 'failure'}
+        label={ok === 'info' ? 'Not needed' : ok ? 'Done' : 'Not yet'}
+      />
     </span>
     <div className="flex min-w-0 flex-col gap-0.5">{children}</div>
   </li>
@@ -149,28 +152,19 @@ const CheckLine = ({
 
 // ── The steps ────────────────────────────────────────────────────────────────
 
-/** What each installer is called on screen. */
-const INSTALL_OS_LABEL: Readonly<Record<InstallOs, string>> = {
-  unix: 'macOS or Linux (Terminal)',
-  windows: 'Windows (PowerShell)',
-};
-
-/** One OS's installer: the line to paste and the script itself, to read before running it. */
-const Installer = ({
-  os,
-  commands,
-}: {
-  readonly os: InstallOs;
-  readonly commands: WorkerInstallCommands;
-}): ReactElement => (
-  <div className="flex flex-col gap-1" data-installer={os}>
-    <CopyField label={INSTALL_OS_LABEL[os]} value={commands.installer[os].run} />
+/** The shell installer: the line to paste and the script itself, to read before running it. */
+const Installer = ({ commands }: { readonly commands: WorkerInstallCommands }): ReactElement => (
+  <div className="flex flex-col gap-1" data-installer="unix">
+    <CopyField label="macOS or Linux (Terminal)" value={commands.installer.run} />
     <p className="text-xs">
       <ExternalLink
-        url={commands.installer[os].url}
+        url={commands.installer.url}
         label="Read the script first"
         className="text-link underline"
       />
+    </p>
+    <p className="text-xs text-fg-muted" data-windows-installer="">
+      Windows: coming next.
     </p>
   </div>
 );
@@ -199,19 +193,15 @@ const ByHand = ({ commands }: { readonly commands: WorkerInstallCommands }): Rea
 const InstallStep = ({
   commands,
   installerAvailable,
-  firstOs,
   installed,
   onInstalled,
 }: {
   readonly commands: WorkerInstallCommands;
   /** {@link INSTALLER_AVAILABLE}: the one-line installer is served, so it is the way shown first. */
   readonly installerAvailable: boolean;
-  /** The installer the browser's platform suggests; the other is behind a disclosure. */
-  readonly firstOs: InstallOs;
   readonly installed: boolean;
   readonly onInstalled: (value: boolean) => void;
 }): ReactElement => {
-  const otherOs: InstallOs = firstOs === 'unix' ? 'windows' : 'unix';
   return (
     <div className="flex flex-col gap-4">
       <p className="max-w-prose text-sm">
@@ -230,10 +220,7 @@ const InstallStep = ({
         <>
           <div className="flex flex-col gap-3">
             <p className="text-sm">On the computer that will run agent work, run this one line:</p>
-            <Installer os={firstOs} commands={commands} />
-            <DetailsDisclosure summary={`On ${INSTALL_OS_LABEL[otherOs]} instead`}>
-              <Installer os={otherOs} commands={commands} />
-            </DetailsDisclosure>
+            <Installer commands={commands} />
             <p className="max-w-prose text-xs text-fg-muted">
               The script checks that Docker runs, puts the worker in{' '}
               <code>{WORKER_INSTALL_DIR}</code>, starts it for <code>{commands.origin}</code> and
@@ -379,8 +366,33 @@ const ApproveStep = ({
   </div>
 );
 
-/** The blockers the stub can see, in the order a person fixes them. */
-const SEEN_BLOCKERS: readonly WorkerClaimBlocker[] = ['offline', 'paused', 'usage_limited'];
+/**
+ * The lines *Ready to work* always shows, in the vocabulary's order: what the core checks for every
+ * worker. Any other blocker the server names (revoked, its owner's account, the platform's own
+ * images) is listed after them, failed, with its fix.
+ */
+const CHECKED_BLOCKERS: readonly WorkerClaimBlocker[] = [
+  'offline',
+  'protocol_outdated',
+  'paused',
+  'draining',
+  'usage_limited',
+  'images_missing',
+  'images_outdated',
+  'no_eligible_project',
+];
+
+/** What each checked line says when the blocker is absent. */
+const OK_WORDS: Readonly<Partial<Record<WorkerClaimBlocker, string>>> = {
+  offline: 'Connected',
+  protocol_outdated: 'Speaks this platform’s version',
+  paused: 'Not paused',
+  draining: 'Not draining',
+  usage_limited: 'Not held by a Claude usage limit',
+  images_missing: 'Has its run images',
+  images_outdated: 'Has this platform’s current images',
+  no_eligible_project: 'A project gives it work',
+};
 
 const ReadyStep = ({
   worker,
@@ -389,61 +401,60 @@ const ReadyStep = ({
   readonly worker: WorkerSummary;
   readonly nowMs: number;
 }): ReactElement => {
-  const readiness = workerReadinessOf(worker, nowMs);
+  const readiness = workerReadinessOf(worker);
+  const others = readiness.claim_blockers.filter((blocker) => !CHECKED_BLOCKERS.includes(blocker));
+  const firstRun =
+    readiness.last_claimed_at === null ? null : formatAgo(readiness.last_claimed_at, nowMs);
   return (
     <div className="flex flex-col gap-4">
       <p
         className="text-sm"
         role="status"
         aria-live="polite"
-        data-worker-ready={readiness.can_claim}
+        data-worker-ready={isReadyToWork(readiness)}
       >
-        {readiness.can_claim ? (
-          <>
-            <UntrustedText value={worker.name} /> can take work.
-          </>
-        ) : (
-          <>
-            <UntrustedText value={worker.name} /> can’t take work yet.
-          </>
-        )}
+        <UntrustedText value={worker.name} />
+        {readiness.takes === 'automatically'
+          ? ' can take work.'
+          : readiness.takes === 'picked_only'
+            ? ' can take work: it takes only the runs its owner picks on its page.'
+            : ' can’t take work yet.'}
       </p>
       <ul aria-label="What the worker needs" className="flex flex-col gap-2">
-        {SEEN_BLOCKERS.map((blocker) => {
+        {[...CHECKED_BLOCKERS, ...others].map((blocker) => {
           const blocked = readiness.claim_blockers.includes(blocker);
+          const words = WORKER_CLAIM_BLOCKER_WORDS[blocker];
           return (
-            <CheckLine key={blocker} ok={!blocked}>
+            <CheckLine
+              key={blocker}
+              ok={!blocked ? true : blocker === 'pick_only' ? 'info' : false}
+            >
               <span data-blocker={blocker}>
-                {blocked ? WORKER_BLOCKER_WORDS[blocker].word : OK_WORDS[blocker]}
+                {blocked ? words.word : (OK_WORDS[blocker] ?? words.word)}
                 {blocker === 'offline' && blocked && worker.last_seen_at !== null
                   ? ` — last seen ${formatAgo(worker.last_seen_at, nowMs)}`
                   : ''}
               </span>
-              {blocked ? (
-                <span className="text-xs text-fg-muted">{WORKER_BLOCKER_WORDS[blocker].fix}</span>
-              ) : null}
+              {blocked ? <span className="text-xs text-fg-muted">{words.fix}</span> : null}
             </CheckLine>
           );
         })}
+        <CheckLine ok={firstRun === null ? 'info' : true}>
+          <span data-first-run="">
+            {firstRun === null
+              ? 'Hasn’t taken a run yet'
+              : `Took its first run — last took work ${firstRun}`}
+          </span>
+          {firstRun === null ? (
+            <span className="text-xs text-fg-muted">
+              Not needed to continue: on a project where the platform server goes first, a worker’s
+              first run may take a while.
+            </span>
+          ) : null}
+        </CheckLine>
       </ul>
-      <p className="text-xs text-fg-muted">
-        This page can’t check the worker’s images, its version or which projects give it work yet;
-        the worker’s own page shows them.
-      </p>
     </div>
   );
-};
-
-/** What each line says when the blocker is absent. */
-const OK_WORDS: Readonly<Record<WorkerClaimBlocker, string>> = {
-  offline: 'Connected',
-  paused: 'Not paused',
-  draining: 'Not draining',
-  usage_limited: 'Not held by a Claude usage limit',
-  images_missing: 'Has its run images',
-  images_outdated: 'Has this platform’s current images',
-  protocol_outdated: 'Speaks this platform’s version',
-  no_eligible_project: 'A project gives it work',
 };
 
 interface ProjectRow {
@@ -683,8 +694,7 @@ const Wizard = ({ place }: { readonly place: WizardPlace }): ReactElement => {
   const done = workerWizardDonenessOf({
     installed: place.installed,
     worker,
-    canClaim:
-      worker === null || worker === false ? null : workerReadinessOf(worker, nowMs).can_claim,
+    canClaim: worker === null || worker === false ? null : isReadyToWork(workerReadinessOf(worker)),
     projectTakesWorkers: projectTakes,
   });
 
@@ -735,7 +745,6 @@ const Wizard = ({ place }: { readonly place: WizardPlace }): ReactElement => {
       <InstallStep
         commands={commands}
         installerAvailable={INSTALLER_AVAILABLE}
-        firstOs={preferredInstallOs(globalThis.navigator?.userAgent ?? '')}
         installed={place.installed}
         onInstalled={(installed) => {
           void navigate({

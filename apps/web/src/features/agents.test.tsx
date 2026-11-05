@@ -663,19 +663,26 @@ describe('the list', () => {
   });
 });
 
-describe('on a platform with no server runner (S-23.20)', () => {
-  const offline = {
+describe('on a platform with no server runner (S-23.20, S-23.24)', () => {
+  const none = { ...WORKERS, items: [] };
+  // The server's answer for machines it has not heard from (S-22.19).
+  const blocked = {
     ...WORKERS,
-    items: WORKERS.items.map((item) => ({ ...item, last_seen_at: at(10 * 60_000) })),
+    items: WORKERS.items.map((item) => ({
+      ...item,
+      last_seen_at: at(10 * 60_000),
+      claim_blockers: ['offline' as const],
+      can_claim: false,
+    })),
   };
 
-  it('waits for a worker, with the way to add one, when no worker is connected', async () => {
+  it('waits for a worker, with the way to add one, when no worker is registered', async () => {
     media(1280);
     const nobody = { questions: [], approvals: [] };
     const state = {
       ...backend({ items: [] }, nobody),
       serverClaimant: 'none' as const,
-      workers: offline,
+      workers: none,
     };
     start('/agents', state);
     expect(await screen.findByRole('heading', { name: 'Waiting for a worker' })).toBeDefined();
@@ -694,11 +701,43 @@ describe('on a platform with no server runner (S-23.20)', () => {
 
   it('says the queue waits for a worker on the office’s bench', async () => {
     media(1280);
-    start('/agents?view=office', { ...backend(), serverClaimant: 'none', workers: offline });
+    start('/agents?view=office', { ...backend(), serverClaimant: 'none', workers: none });
     const room = await office();
     await waitFor(() => {
       expect(within(room).getByText(/^Bench · \d+ waiting for a worker$/)).toBeDefined();
     });
+  });
+
+  it('says nobody can take the work, and why, when the workers there are can’t take it', async () => {
+    media(1280);
+    const nobody = { questions: [], approvals: [] };
+    start('/agents', {
+      ...backend({ items: [] }, nobody),
+      serverClaimant: 'none',
+      workers: blocked,
+    });
+    expect(await screen.findByRole('heading', { name: 'No worker can take work' })).toBeDefined();
+    // The first worker by name and its first blocker, in the words the Workers screen uses.
+    expect(
+      screen.getByText(
+        /no worker you can see can take work now: jan-mbp: not connected to the platform, and 1 more worker\./,
+      ),
+    ).toBeDefined();
+    expect(screen.getByRole('link', { name: 'See why' }).getAttribute('href')).toBe('/workers');
+    expect(screen.queryByText(/the server or a worker picks each up/)).toBeNull();
+  });
+
+  it('says so above the views while runs wait, and on the bench', async () => {
+    media(1280);
+    start('/agents?view=office', { ...backend(), serverClaimant: 'none', workers: blocked });
+    const notice = await screen.findByText(
+      /^\d+ runs? (is|are) waiting and no worker can take them: jan-mbp: not connected to the platform/,
+    );
+    expect(notice.querySelector('a')?.getAttribute('href')).toBe('/workers');
+    const room = await office();
+    expect(
+      within(room).getByText(/^Bench · \d+ waiting, and no worker can take them$/),
+    ).toBeDefined();
   });
 
   it('says nothing of the kind once a worker is connected, or where the server runs agent work', async () => {
@@ -708,7 +747,7 @@ describe('on a platform with no server runner (S-23.20)', () => {
       // A worker is connected (seen a minute ago)…
       { ...backend({ items: [] }, nobody), serverClaimant: 'none' as const },
       // …or the server runs agent work.
-      { ...backend({ items: [] }, nobody), serverClaimant: 'running' as const, workers: offline },
+      { ...backend({ items: [] }, nobody), serverClaimant: 'running' as const, workers: blocked },
     ]) {
       start('/agents', state);
       // Asserted only once the read that decides it has answered.

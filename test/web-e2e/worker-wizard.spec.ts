@@ -1,14 +1,13 @@
 /**
  * The *Add a worker* wizard (S-23.20) in the built bundle, against the fake backend: entered from the
- * top bar's `+` menu, its by-hand commands carry this page's origin (no installer line until the
- * core serves one), Install
- * continues on the person's word, Start points at the worker's page and keeps the hand-made Claude
+ * top bar's `+` menu, its one-line installer and its by-hand commands carry this page's origin,
+ * Install continues on the person's word, Start points at the worker's page and keeps the hand-made Claude
  * sign-in and its troubleshooting as fallbacks, Approve is done by a worker of this
  * person created since the wizard opened, and Ready lists what stops that worker in words.
  *
  * The fixture's workers were created on 2026-09-10 and last seen then too, so a wizard opened
  * "now" sees none of them as its own, and one opened with `since` before that sees `jan-mbp` —
- * which, last seen two months before any browser's clock, is not connected.
+ * which the server answers as not connected (`claim_blockers: ['offline']`).
  */
 import { expect, test } from '@playwright/test';
 import { resetBackend, signIn } from './support/harness.js';
@@ -32,9 +31,13 @@ test('Add a worker: from the + menu through Install and Start, with this platfor
   await expect(page).toHaveURL(/[?&]since=/);
 
   const origin = new URL(baseURL ?? '').origin;
-  // Until the core serves the one-line installer (S-22.20, `INSTALLER_AVAILABLE`), the by-hand
-  // setup is the step itself and no installer line is shown.
-  await expect(page.locator('[data-installer]')).toHaveCount(0);
+  // The core serves the one-line installer (S-22.20, `INSTALLER_AVAILABLE`): macOS/Linux only for
+  // now, with the by-hand setup behind a disclosure.
+  await expect(page.getByLabel('macOS or Linux (Terminal)', { exact: true })).toHaveValue(
+    `curl -fsSL '${origin}/api/worker/v1/install.sh' | sh`,
+  );
+  await expect(page.getByText('Windows: coming next.')).toBeVisible();
+  await page.getByText('Set it up by hand', { exact: true }).click();
   await expect(page.getByLabel('Download the worker’s compose file', { exact: true })).toHaveValue(
     `curl -fsSo compose.worker.yml ${origin}/api/worker/v1/compose.yml`,
   );
@@ -81,7 +84,7 @@ test('Add a worker: a worker of this person since the wizard opened is approved,
 
   await expect(page.getByRole('heading', { level: 2, name: 'Ready to work' })).toBeVisible();
   const needs = page.getByRole('list', { name: 'What the worker needs' });
-  await expect(needs.getByText(/^Not connected — last seen/)).toBeVisible();
+  await expect(needs.getByText(/^Not connected to the platform — last seen/)).toBeVisible();
   await expect(needs.getByText(/^Start the worker on that computer/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Continue to Choose projects' })).toBeDisabled();
 });

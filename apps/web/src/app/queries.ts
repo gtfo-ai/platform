@@ -721,10 +721,27 @@ export const useDeadLetters = () => {
   });
 };
 
-/** `GET /api/workers` (WP-280): your workers, or every one for an administrator (`scope`). */
-export const useWorkers = () => {
+type WorkersData = Awaited<ReturnType<ReturnType<typeof useServices>['endpoints']['workers']>>;
+
+/**
+ * `GET /api/workers` (WP-280): your workers, or every one for an administrator (`scope`).
+ * `refetchInterval` (S-23.24): no event announces a heartbeat, a handshake or a new worker, so the
+ * screens that watch a worker's state ask again on a clock while they are open.
+ */
+export const useWorkers = (
+  options: {
+    readonly refetchInterval?:
+      | number
+      | false
+      | ((query: { readonly state: { readonly data: WorkersData | undefined } }) => number | false);
+  } = {},
+) => {
   const { endpoints } = useServices();
-  return useQuery({ queryKey: [...queryKeys.workers], queryFn: () => endpoints.workers() });
+  return useQuery({
+    queryKey: [...queryKeys.workers],
+    queryFn: () => endpoints.workers(),
+    refetchInterval: options.refetchInterval ?? false,
+  });
 };
 
 /**
