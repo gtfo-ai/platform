@@ -21,7 +21,8 @@ export const ListBox = ({
 }): ReactElement => (
   <div className={cx('overflow-hidden rounded-md border border-line bg-default', className)}>
     {header}
-    <ul aria-label={label} className="divide-y divide-line">
+    {/* `data-list-box`: the lists `j`/`k` move in (`app/shortcuts.ts`). */}
+    <ul aria-label={label} data-list-box="" className="divide-y divide-line">
       {children}
     </ul>
   </div>

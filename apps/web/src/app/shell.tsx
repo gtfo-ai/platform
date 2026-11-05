@@ -4,8 +4,9 @@
  * **The top bar** is deep night (TD-033 § 2, the brand anchor the wordmark lives on), the page's own
  * colour since TD-033's 2026-11-05 amendment, so its bottom border is what separates the two. Left
  * to right: the wordmark (Home); inside a project, `/ <name> ▾`, the
- * breadcrumb that is also the project switcher; then the running indicator with the connection dot,
- * the `+` menu, the inbox with its count, and the avatar menu. Menus are Base UI's
+ * breadcrumb that is also the project switcher; then **Search or jump to…** (the command palette,
+ * and the keyboard shortcuts behind it — `app/keyboard.tsx`), the running indicator with the
+ * connection dot, the `+` menu, the inbox with its count, and the avatar menu. Menus are Base UI's
  * (`ui/action-menu.tsx`) and portalled to `<body>`, drawn on the card ground (`bg-default`).
  *
  * **The second row** is the organisation's UnderlineNav (`NAV`) outside a project; inside one, the
@@ -20,20 +21,12 @@
  */
 
 import type { ProjectSummary } from '@platform/contracts';
-import { DependabotIcon } from '@primer/octicons-react/DependabotIcon';
-import { GearIcon } from '@primer/octicons-react/GearIcon';
-import { GraphIcon } from '@primer/octicons-react/GraphIcon';
-import { HomeIcon } from '@primer/octicons-react/HomeIcon';
 import { InboxIcon } from '@primer/octicons-react/InboxIcon';
-import { LogIcon } from '@primer/octicons-react/LogIcon';
 import { PlayIcon } from '@primer/octicons-react/PlayIcon';
-import { PlugIcon } from '@primer/octicons-react/PlugIcon';
 import { PlusIcon } from '@primer/octicons-react/PlusIcon';
 import { RepoIcon } from '@primer/octicons-react/RepoIcon';
-import { ServerIcon } from '@primer/octicons-react/ServerIcon';
 import { SignOutIcon } from '@primer/octicons-react/SignOutIcon';
 import { TriangleDownIcon } from '@primer/octicons-react/TriangleDownIcon';
-import type { Icon } from '@primer/octicons-react/types';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Link,
@@ -61,57 +54,18 @@ import { FOCUS_RING } from '../ui/cx.js';
 import { Flash } from '../ui/flash.js';
 import { type BadgeTone, Button, cx, formatInteger } from '../ui/kit.js';
 import { Logo } from '../ui/logo.js';
-import type { NavBreakpoint, NavItem, NavLinkProps } from '../ui/nav-item.js';
+import type { NavItem, NavLinkProps } from '../ui/nav-item.js';
 import { StatusIcon } from '../ui/status.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { CommandLayer } from './keyboard.js';
+import { isCurrentSection, NAV } from './nav.js';
 import { pageWidth, requestStartTicket, START_TICKET_ANCHOR } from './project-frame.js';
 import { useAgents, useInbox, useProjects, useProjectTasks, useSession } from './queries.js';
 import { useServices } from './services.js';
 
-/** Which of the shell's three reads a navigation entry's counter comes from. */
-type NavCount = 'projects' | 'inbox' | 'running';
-
-interface NavEntry {
-  readonly to:
-    | '/'
-    | '/projects'
-    | '/inbox'
-    | '/agents'
-    | '/workers'
-    | '/integrations'
-    | '/stats'
-    | '/audit'
-    | '/settings';
-  readonly label: string;
-  readonly icon: Icon;
-  readonly count?: NavCount;
-  readonly collapseBelow?: NavBreakpoint;
-}
-
-/**
- * The organisation's navigation, in order — the UnderlineNav under the top bar outside a project
- * (TD-033 § 1; inside one, the project's tabs take its place). `docs/user-guide.md` § "The top
- * navigation" lists the same labels; `features/user-guide-census.test.ts` holds the two together
- * (WP-129). *Onboarding* is not here: it is done once per project, so it is **New project** — in
- * the `+` menu and on the Projects page (research/19 § 5.1).
- */
-export const NAV: readonly NavEntry[] = [
-  { to: '/', label: 'Home', icon: HomeIcon },
-  { to: '/projects', label: 'Projects', icon: RepoIcon, count: 'projects' },
-  { to: '/inbox', label: 'Inbox', icon: InboxIcon, count: 'inbox' },
-  { to: '/agents', label: 'Agents', icon: DependabotIcon, count: 'running', collapseBelow: 'sm' },
-  { to: '/workers', label: 'Workers', icon: ServerIcon, collapseBelow: 'md' },
-  { to: '/integrations', label: 'Integrations', icon: PlugIcon, collapseBelow: 'md' },
-  { to: '/stats', label: 'Statistics', icon: GraphIcon, collapseBelow: 'lg' },
-  { to: '/audit', label: 'Audit log', icon: LogIcon, collapseBelow: 'lg' },
-  { to: '/settings', label: 'Settings', icon: GearIcon, collapseBelow: 'lg' },
-];
-
-/** Whether `pathname` is inside a navigation entry's section (`/workers/approve` is Workers'). */
-export const isCurrentSection = (to: NavEntry['to'], pathname: string): boolean =>
-  to === '/' ? pathname === '/' : pathname === to || pathname.startsWith(`${to}/`);
+export { isCurrentSection, NAV } from './nav.js';
 
 /**
  * The counts the frame shows: projects, what waits for a person (open questions plus pending
@@ -569,6 +523,7 @@ export const AppShell = (): ReactElement => {
             </nav>
           )}
           <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <CommandLayer project={project} canCreateProject={user?.role === 'admin'} />
             <RunningIndicator running={counts.running} status={status} />
             <CreateMenu project={project} canCreateProject={user?.role === 'admin'} />
             <InboxButton count={counts.inbox} />

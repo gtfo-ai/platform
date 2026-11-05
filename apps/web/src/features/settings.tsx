@@ -3,8 +3,9 @@
  * of sections (`features/settings-sections.ts`) and one section per page at `/settings/<section>`,
  * each with one Save where it writes anything (research/19 § 5.2):
  *
- *  - **Personal** — *Session* (who is signed in, with which role); there is no *Appearance*, since
- *    the application has one dark theme (TD-033's 2026-11-05 amendment);
+ *  - **Personal** — *Session* (who is signed in, with which role) and *Keyboard shortcuts* (whether
+ *    single-key shortcuts are on — this browser's own choice, `app/shortcuts.ts`); there is no
+ *    *Appearance*, since the application has one dark theme (TD-033's 2026-11-05 amendment);
  *  - **Organisation** — *Policies* (the command, autonomy and WIP maximums) and *Notifications*
  *    (quiet hours, digest, the default chat account), the two halves of the organisation settings
  *    document (`features/org-settings.tsx`, `GET/PATCH /api/org`, WP-93), and *Budgets* — BD-010's
@@ -34,6 +35,7 @@ import {
   useSettingsCommands,
   useVersion,
 } from '../app/queries.js';
+import { setShortcutsEnabled, useShortcutsEnabled } from '../app/shortcuts.js';
 import { displayName } from '../auth/session.js';
 import { Avatar } from '../ui/avatar.js';
 import { Blankslate } from '../ui/blankslate.js';
@@ -50,6 +52,35 @@ import { Budgets } from './operating-mode.js';
 import { OrganisationNotifications, OrganisationPolicies } from './org-settings.js';
 import { SettingsFrame, SettingsSectionHeader } from './settings-frame.js';
 import { type OrgSettingsSectionId, orgSettingsGroupsFor } from './settings-sections.js';
+
+const KeyboardShortcuts = (): ReactElement => {
+  const enabled = useShortcutsEnabled();
+  return (
+    <>
+      <SettingsSectionHeader
+        title="Keyboard shortcuts"
+        description="Single keys that jump around the application. The choice applies as you make it, and is kept in this browser only."
+      />
+      <label className="flex w-fit items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => {
+            setShortcutsEnabled(event.target.checked);
+          }}
+          className="mt-0.5"
+        />
+        <span className="flex flex-col gap-0.5">
+          Use single-key shortcuts
+          <span className="text-xs text-fg-muted">
+            Such as g h for Home, j and k in a list, and ? for the whole list. They never fire while
+            you type in a field, and ⌘ K or Ctrl K opens the search either way.
+          </span>
+        </span>
+      </label>
+    </>
+  );
+};
 
 const Session = (): ReactElement => {
   const session = useSession();
@@ -214,6 +245,7 @@ const Instance = (): ReactElement => {
 };
 
 const SECTION: Readonly<Record<OrgSettingsSectionId, () => ReactElement>> = {
+  keyboard: KeyboardShortcuts,
   session: Session,
   policies: () => (
     <>

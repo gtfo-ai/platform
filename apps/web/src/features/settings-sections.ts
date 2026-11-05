@@ -34,8 +34,12 @@ export const ORG_SETTINGS_GROUPS = [
   {
     label: 'Personal',
     // No Appearance: one dark theme (TD-033's 2026-11-05 amendment), so `/settings/appearance`
-    // is an unknown section and redirects to Session like any other.
-    sections: [{ id: 'session', label: 'Session' }],
+    // is an unknown section and redirects to Session like any other. Session stays first: it is
+    // what `/settings` opens.
+    sections: [
+      { id: 'session', label: 'Session' },
+      { id: 'keyboard', label: 'Keyboard shortcuts' },
+    ],
   },
   {
     label: 'Organisation',

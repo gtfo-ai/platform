@@ -15,7 +15,9 @@
  *  - *The top navigation*'s first bold run (*"Home · Projects · …"*) must be `NAV`'s labels, in
  *    order;
  *  - § 11 *Settings*' two dotted bold runs must be the org settings' and a project's settings'
- *    sections (`features/settings-sections.ts`, S-23.11b), in order.
+ *    sections (`features/settings-sections.ts`, S-23.11b), in order;
+ *  - *Search and keyboard shortcuts*' table must be the shortcuts sheet's rows (`SHORTCUT_GROUPS`,
+ *    `app/shortcuts.ts`, S-23.13b), keys and words, in order.
  *
  * So an added tab, a renamed one, a removed navigation entry and a guide edit that drops one all
  * fail here.
@@ -37,6 +39,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { NAV } from '../app/shell.js';
+import { SHORTCUT_GROUPS } from '../app/shortcuts.js';
 import { TABS } from './run-detail.js';
 import { ORG_SETTINGS_GROUPS, PROJECT_SETTINGS_GROUPS } from './settings-sections.js';
 
@@ -271,5 +274,41 @@ describe('docs/user-guide.md § 11 names the settings sections the app renders (
       sectionLabels(ORG_SETTINGS_GROUPS),
     );
     expect(sectionLabels(ORG_SETTINGS_GROUPS)).toContain('Failed jobs');
+  });
+});
+
+/**
+ * The rows of the guide's shortcut table (`| \`g\` \`h\` | Home |`): each row's backticked keys and
+ * its second cell, the header and the separator skipped.
+ */
+export const shortcutRowsIn = (section: readonly string[]): { keys: string[]; does: string }[] =>
+  section
+    .filter((line) => line.startsWith('| `'))
+    .map((line) => {
+      const [, keys = '', does = ''] = line.split('|');
+      return {
+        keys: [...keys.matchAll(/`([^`]+)`/g)].map((match) => match[1] ?? ''),
+        does: does.trim(),
+      };
+    });
+
+const shortcutRows = () =>
+  SHORTCUT_GROUPS.flatMap((group) =>
+    group.rows.map((row) => ({ keys: [...row.keys], does: row.does })),
+  );
+
+describe('docs/user-guide.md lists the keyboard shortcuts the sheet shows (S-23.13b)', () => {
+  it('names every shortcut, in the sheet’s order, with the sheet’s words', () => {
+    expect(shortcutRowsIn(sectionOf(guide(), '### Search and keyboard shortcuts'))).toEqual(
+      shortcutRows(),
+    );
+    expect(shortcutRows().length).toBeGreaterThan(5);
+  });
+
+  it('fails on a row the guide drops (canary)', () => {
+    const dropped = guide().replace(/^\| `g` `a` \| Agents \|\n/m, '');
+    expect(shortcutRowsIn(sectionOf(dropped, '### Search and keyboard shortcuts'))).not.toEqual(
+      shortcutRows(),
+    );
   });
 });

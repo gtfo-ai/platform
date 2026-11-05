@@ -181,6 +181,7 @@ describe('a comment stripper is recognised by its shape', () => {
       "a **SQL** tokenizer (`--`, nested block comments, `'…'`/`E'…'` literals, `\"…\"`, `$tag$` bodies) for `migrations:check`'s additive allow-list — another language than the scanner reads (WP-271)",
     'packages/infrastructure/src/db/migration-scanner.ts probe':
       "the same SQL tokenizer testing `sql.startsWith('/*', index)` for a nested block comment (WP-271)",
+    'apps/web/src/app/nav.ts chars': "a route comparison, `to === '/'` (`isCurrentSection`)",
     'apps/web/src/app/shell.tsx chars': "a route comparison, `item.to === '/'`",
     'apps/server/src/remote-worker/local-ui.ts chars':
       "the worker's local page's root path, `pathname === '/'` (WP-292)",

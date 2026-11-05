@@ -43,6 +43,10 @@
  * pixel office (a lazy chunk of SVG text grids, always the dark room) and the list, each over the
  * fixtures' three runs, two workers and hostile titles — drawn, opened and switched under the
  * policy, the tracker's text as text, and the office's bots still under reduced motion.
+ *
+ * Since S-23.13b, the **command palette** (a lazy chunk on a Base UI Dialog) and the **shortcuts
+ * sheet**: opened with Ctrl+K, `/` and `?`, a ticket found by its key and taken with Enter, its
+ * hostile title drawn as text, and a `g p` jump — with no violation.
  */
 import type { SseFrame } from '@platform/contracts';
 import { expect, type Page, test } from '@playwright/test';
@@ -517,5 +521,57 @@ test('the Agents page draws its map, office and list under the policy, titles as
   // No hostile string became an element.
   expect(await page.evaluate(() => (window as { __pwned?: boolean }).__pwned)).toBeUndefined();
   await expect(page.locator('img')).toHaveCount(0);
+  expect(await violations(page)).toEqual([]);
+});
+
+test('the command palette and the shortcuts sheet open under the policy, names as text (S-23.13b)', async ({
+  page,
+}) => {
+  await signIn(page);
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
+  // The board's tasks read is what the palette finds a ticket key in.
+  await page.goto(`/projects/${PROJECT_KEY}`);
+  await expect(page.getByText('DEMO-1').first()).toBeVisible();
+
+  // Ctrl+K from the page: the palette's own lazy chunk, a Base UI Dialog, the field focused.
+  await page.keyboard.press('Control+k');
+  const palette = page.getByRole('dialog', { name: 'Search or jump to' });
+  await expect(palette).toBeVisible();
+  const field = palette.getByRole('combobox', { name: 'Search or jump to' });
+  await expect(field).toBeFocused();
+  await field.fill('demo-1');
+  const option = palette.getByRole('option').filter({ hasText: 'DEMO-1' });
+  await expect(option).toHaveCount(1);
+  // The ticket's title is the fixtures' hostile script, drawn as its characters.
+  await expect(option).toContainText(`Checkout ${HOSTILE.script}`);
+  await expect(palette.locator('script, img')).toHaveCount(0);
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}$`));
+  await expect(palette).toBeHidden();
+
+  // `/` opens it too, and `g p` jumps once it is closed; `?` opens the sheet.
+  await page.locator('body').click({ position: { x: 1, y: 1 } });
+  await page.keyboard.press('/');
+  await expect(palette).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(palette).toBeHidden();
+  await page.keyboard.press('g');
+  await page.keyboard.press('p');
+  await expect(page).toHaveURL(/\/projects$/);
+  await page.keyboard.press('Shift+?');
+  const sheet = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByText('The board, inside a project')).toBeVisible();
+
+  const chunks = await page.evaluate(
+    () =>
+      performance
+        .getEntriesByType('resource')
+        .filter((entry) => /\/assets\/command-palette-[^/]+\.js$/.test(entry.name)).length,
+  );
+  expect(chunks).toBe(1);
+  expect(await page.evaluate(() => (window as { __pwned?: boolean }).__pwned)).toBeUndefined();
   expect(await violations(page)).toEqual([]);
 });

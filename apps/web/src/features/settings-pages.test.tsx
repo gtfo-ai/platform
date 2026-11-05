@@ -192,6 +192,7 @@ describe('the org settings sub-routes', () => {
         .map((link) => link.textContent),
     ).toEqual([
       'Session',
+      'Keyboard shortcuts',
       'Policies',
       'Notifications',
       'Budgets',
@@ -361,7 +362,7 @@ describe('the section tables', () => {
           group.sections.map((section) => section.id),
         ]),
       ).toEqual([
-        ['Personal', ['session']],
+        ['Personal', ['session', 'keyboard']],
         ['Organisation', ['policies', 'notifications', 'budgets']],
         ['People', ['users']],
         ['Operations', ['instance']],

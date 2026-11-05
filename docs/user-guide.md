@@ -60,6 +60,7 @@ board; from the inbox or Agents it does not yet. Every address is the one it alw
 - the **agentic.** wordmark, which goes Home;
 - inside a project, **/ *project name* ▾** — the project switcher: every project by key and name,
   the current one checked, then **All projects** and **New project**;
+- **Search or jump to…** — the command palette (below); on a narrow screen just its magnifier;
 - **● *N* running** — the runs in flight, pulsing amber while any is (still, if your system asks for
   reduced motion), and a link to **Agents**. The small dot beside it is the live connection: green
   while the page is receiving updates, with its word — *Connecting*, *Reconnecting*, *Server
@@ -84,6 +85,37 @@ page checks the server's version each time its live connection comes back (a res
 whenever an answer does not match. If the server is the **same** version as the page, a mismatch is
 a real fault and is shown as the error it is; an instance built from a checkout has no version to
 compare and always shows the error.
+
+### Search and keyboard shortcuts
+
+**Search or jump to…** in the top bar — or ⌘ K (Ctrl K on Windows and Linux), or `/` — opens the
+command palette: type part of a screen's name, a project's name or key, or a ticket key, move with
+↑ and ↓, and press Enter to go there; Esc closes it. Besides the places it offers a few actions:
+**New project** (for an admin), **Start a ticket in this project** (inside a project you may start
+tickets in), **Open inbox** and **Keyboard shortcuts**. It searches what the page has already read,
+so a task is found by its ticket key once its project's board (or Home) has been opened in this
+tab; it asks the server for nothing new.
+
+The shortcuts — `?` lists them all:
+
+| Keys | Does |
+|---|---|
+| `⌘ K` | Search or jump to (Ctrl K on Windows and Linux) |
+| `/` | Search or jump to |
+| `?` | Show these shortcuts |
+| `g` `h` | Home |
+| `g` `p` | Projects |
+| `g` `i` | Inbox |
+| `g` `a` | Agents |
+| `g` `b` | The board, inside a project |
+| `j` | Next row |
+| `k` | Previous row |
+
+`g` then a letter means the two keys one after the other, within about a second and a half. `j` and
+`k` move between the rows of the list that has the focus — the project list, the inbox, the
+integrations, the board's list view, the Agents list and the other lists drawn as a bordered box. None of them does anything while you type in a field, and **Settings → Keyboard
+shortcuts** turns them all off for this browser — ⌘ K and Ctrl K still open the search, because a
+key chord with ⌘ or Ctrl cannot be typed by accident.
 
 ## 1. Setting up a project — New project
 
@@ -1326,16 +1358,21 @@ parameters. A *refused* command records nothing.
 ## 11. Settings
 
 **Settings** is one page per section, picked from the list on the left (on a phone, a one-line
-menu above the section that names the one you are on) — **Session ·
-Policies · Notifications · Budgets · Users · Provider identities · Dead letters · Failed jobs ·
-Instance** — grouped as *Personal*, *Organisation*, *People* and *Operations*; opening **Settings**
-opens the first. A section that changes something has **one Save** at its foot: it stays disabled
-(*Nothing has changed.*) until you change something, and it saves only what you changed. *Provider
+menu above the section that names the one you are on) — **Session · Keyboard shortcuts ·
+Policies · Notifications · Budgets · Users · Provider identities ·
+Dead letters · Failed jobs · Instance** — grouped as *Personal*, *Organisation*, *People* and
+*Operations*; opening **Settings** opens the first. A section that changes something has **one
+Save** at its foot: it stays disabled (*Nothing has changed.*) until you change something, and it
+saves only what you changed. *Keyboard shortcuts* is the exception — it applies as you pick it,
+and is kept in this browser only. *Provider
 identities*, *Dead letters* and *Failed jobs* are an administrator's and are shown to an
 administrator only; anybody else who opens one of their addresses lands on *Session*. *Instance*
 is everybody's.
 
 - **Session** — who is signed in, and with which role.
+- **Keyboard shortcuts** — **Use single-key shortcuts**, on until you turn it off: whether `g h`,
+  `j`, `k`, `/`, `?` and the rest do anything (see *Search and keyboard shortcuts*,
+  near the top of this guide). ⌘ K or Ctrl K opens the search either way.
 - **Budgets** — the **organisation budgets**, the caps that stop a new run anywhere in the
   organisation: one field per window (*Per day*, *Per week*, *Per month*, *In total*), each with what
   has been spent of it; empty is no cap. **Save budgets** writes each changed window in turn, and a
