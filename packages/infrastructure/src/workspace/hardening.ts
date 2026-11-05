@@ -111,7 +111,8 @@ export interface DockerMount {
   readonly Source: string;
   readonly Target: string;
   readonly ReadOnly: boolean;
-  readonly VolumeOptions?: { readonly Subpath: string };
+  /** `NoCopy` skips the engine's volume-population step (the export's `/etc/passwd`, provider.ts). */
+  readonly VolumeOptions?: { readonly Subpath: string; readonly NoCopy?: boolean };
   readonly BindOptions?: { readonly Propagation: 'rprivate' };
 }
 

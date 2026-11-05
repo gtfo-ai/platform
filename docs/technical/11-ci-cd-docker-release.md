@@ -372,3 +372,10 @@ what a check depends on; the **nightly run of every check** is what catches a ch
 - **The census.** `scripts/docker-checks.test.ts` fails when a `scripts/*-check.mjs` git knows about is
   in neither the table nor its list of checks another workflow runs (each looked for in that workflow),
   and when a path list names a path that does not exist.
+- **What the first run found** (PR #45, a GitHub-hosted `ubuntu-latest` runner). `deploy-key-check`
+  failed its relayed export: the export helper mounts `<ctl>/helper-etc/passwd` over the git image's
+  own `/etc/passwd`, and an engine before 29.5 refuses a file sub-path over an existing file at the
+  volume-population step (`readdirent …: not a directory`, moby#52584). Docker Desktop 29.7, where
+  the check had passed, has the fix. The mount now sets `NoCopy`. `worker-update-check` could not
+  start: its worker reached the core and the registry as `host.docker.internal`, which a Linux engine
+  does not resolve; on Linux it now uses the default bridge's gateway (`--host-address` overrides).

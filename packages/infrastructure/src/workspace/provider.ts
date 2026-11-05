@@ -2645,7 +2645,12 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
                 Source: this.#controlVolume,
                 Target: '/etc/passwd',
                 ReadOnly: true,
-                VolumeOptions: { Subpath: `${HELPER_ETC_DIRECTORY}/passwd` },
+                // `NoCopy`: a file sub-path mounted over a file the image has (`/etc/passwd`) is
+                // refused by an engine before 29.5 (moby#52584) at the volume-population step —
+                // `readdirent /var/lib/docker/tmp/safe-mount…: not a directory`, measured on a
+                // GitHub-hosted runner by `deploy-key-check.mjs`. Nothing is to be copied into
+                // the volume here, so skipping the step loses nothing.
+                VolumeOptions: { Subpath: `${HELPER_ETC_DIRECTORY}/passwd`, NoCopy: true },
               },
             ]
           : []),

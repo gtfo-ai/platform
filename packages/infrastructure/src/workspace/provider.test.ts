@@ -2051,7 +2051,8 @@ describe('a deploy-key run (WP-146)', () => {
       Source: 'ctl',
       Target: '/etc/passwd',
       ReadOnly: true,
-      VolumeOptions: { Subpath: 'helper-etc/passwd' },
+      // NoCopy, or an engine before 29.5 refuses a file sub-path over the image's own file.
+      VolumeOptions: { Subpath: 'helper-etc/passwd', NoCopy: true },
     });
     const etc = daemon.byName(`etc-${FIXTURE_RUN_ID}`);
     expect(etc?.body.Env).toContain(`HELPER_PASSWD=${HELPER_PASSWD}`);

@@ -91,7 +91,40 @@ const CORE_PORT = Number(optionValue('--core-port', '38787'));
 const UI_PORT = 37358;
 const REGISTRY = `localhost:${REGISTRY_PORT}`;
 const NAMESPACE = `${REGISTRY}/acme`;
-const CORE_URL = `http://host.docker.internal:${CORE_PORT}`;
+/**
+ * How a container reaches this host: the core's published port and the registry. Docker Desktop
+ * answers `host.docker.internal`; a Linux engine (a CI runner, `.github/workflows/docker-checks.yml`)
+ * resolves no such name unless a container declares `host-gateway`, which the shipped bundle does not
+ * and which an update's own `compose up` would not carry — so there it is the default bridge's
+ * gateway, an address of the host that every bridge network routes to. `--host-address` overrides.
+ * Set by {@link resolveHostAddress} before anything uses it.
+ */
+let HOST_ADDRESS = optionValue('--host-address', '');
+let CORE_URL = '';
+
+const resolveHostAddress = async () => {
+  if (HOST_ADDRESS === '') {
+    const { stdout: system } = await docker(['info', '--format', '{{.OperatingSystem}}']);
+    HOST_ADDRESS = /docker desktop/i.test(system)
+      ? 'host.docker.internal'
+      : (
+          await docker([
+            'network',
+            'inspect',
+            'bridge',
+            '--format',
+            '{{(index .IPAM.Config 0).Gateway}}',
+          ])
+        ).stdout.trim();
+  }
+  if (!/^[\w.-]+$/.test(HOST_ADDRESS)) {
+    throw new Error(
+      `the host address for containers is not a host name or address: '${HOST_ADDRESS}'`,
+    );
+  }
+  CORE_URL = `http://${HOST_ADDRESS}:${CORE_PORT}`;
+  console.log(`containers reach this host as ${HOST_ADDRESS}`);
+};
 
 /** Obviously fake (BD-002), past every floor, and in no shape a pattern rule knows. */
 const SECRET_KEY = 'wp287-worker-update-check-not-a-real-secret-0000';
@@ -505,6 +538,7 @@ const main = async () => {
     console.error(`FAIL: worker-update-check — no Docker daemon: ${String(error)}`);
     process.exit(1);
   }
+  await resolveHostAddress();
   for (const image of ['platform', 'platform-launcher', 'platform-runtime', 'platform-egress']) {
     try {
       await docker(['image', 'inspect', `${image}:${TAG}`, '--format', '{{.Id}}']);
@@ -543,6 +577,11 @@ const main = async () => {
       REGISTRY_CONTAINER,
       '-p',
       `127.0.0.1:${REGISTRY_PORT}:5000`,
+      // The updater reads the registry from inside a container, at the host address above; on
+      // Docker Desktop `host.docker.internal` reaches the loopback publish, on Linux it does not.
+      ...(HOST_ADDRESS === 'host.docker.internal'
+        ? []
+        : ['-p', `${HOST_ADDRESS}:${REGISTRY_PORT}:5000`]),
       'registry:2',
     ]);
     await waitForOk(stages, `http://127.0.0.1:${REGISTRY_PORT}/v2/`);
@@ -633,7 +672,7 @@ const main = async () => {
         `APP_WORKER_UI_PORT=${UI_PORT}`,
         `APP_TRUSTED_IMAGE_REPOSITORY=${NAMESPACE}/platform`,
         `APP_TRUSTED_BUILDER=${BUILDER.repository}/${BUILDER.path}@${BUILDER.ref}`,
-        `APP_UPDATE_REGISTRY_ENDPOINTS=${REGISTRY}=http://host.docker.internal:${REGISTRY_PORT}`,
+        `APP_UPDATE_REGISTRY_ENDPOINTS=${REGISTRY}=http://${HOST_ADDRESS}:${REGISTRY_PORT}`,
         'APP_UPDATE_POLL_SECONDS=10',
         'APP_UPDATE_CHECK_SECONDS=60',
         '',
