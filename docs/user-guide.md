@@ -1498,6 +1498,22 @@ did not say when it resets, and the worker waits an hour), and the run's page sa
 *Executed by*. A second usage limit on the same stage goes to *Needs human*. A person's *Pause* is a
 different hold: the end of a usage limit never lifts it.
 
+**What a worker picks up.** On the worker's own page, **What this worker takes by itself** chooses
+what it claims without being asked: *every project you work on* (the default), *only these
+projects*, or *nothing — only the runs I pick*. It is set per machine — your desktop may take
+everything while your laptop takes only what you pick — and it only narrows what the platform already
+lets that machine take; it never adds a project you do not work on. Below it, **Runs waiting for a
+worker** lists what the machine could take right now, refreshed every 10 seconds while the page is
+open, with **Take this one**: the machine claims that run at once and starts it, if it has a free slot.
+A pick is a choice of order inside what the machine may already take, not a priority: it never jumps
+the platform's own turn on a project whose administrator prefers the server, nor another developer's
+head start on their own run — so on such a project the list is usually empty, and a run that is not
+listed is not yours to take yet. A question asked on a task is listed as a question, never with its
+text. If another worker or the platform takes a run first, *Take* says so and the list refreshes. A
+machine set to *only what I pick* takes nothing by itself, and is not given a head start on runs it
+would not take. The Workers screen shows each machine's choice (*takes every project*, *pick only*,
+or the projects' keys); only the machine's owner changes it, from the machine's page.
+
 ## 13. The whole list of what is not there yet
 
 In one place, so it is not spread across thirteen sections:

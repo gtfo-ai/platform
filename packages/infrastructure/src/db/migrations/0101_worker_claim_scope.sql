@@ -1,0 +1,23 @@
+-- migration-class: additive
+-- 0101 — what a remote worker's automatic claims take: its claim scope (WP-293, TD-031's
+-- 2026-11-05 claim-scope amendment, decision 8).
+--
+-- `claim_project_ids` is set by the worker's owner from the worker's local page (`PUT
+-- /api/worker/v1/claim-scope`). Three meanings, one column:
+--
+--   null      every project the worker's eligibility admits — the default, and the behaviour before
+--             this column;
+--   '{}'      none: *pick only* — the worker claims a run only when its owner picks it (`POST
+--             offers/:run_id/claim`);
+--   {a, b}    those projects only.
+--
+-- It is a conjunct of the claim's eligibility for an **automatic** claim and of the online-assignee
+-- rule, and it **only narrows**: no value admits an offer the eligibility refuses, so a stale id
+-- (a project the user left, or one since deleted) matches nothing and needs no foreign key. A pick
+-- ignores it. Per worker, not per user: a developer's desktop may take everything while their laptop
+-- takes only what is picked.
+--
+-- **An array, not a join table**: one write per change, and *pick only* (`'{}'`) is distinguishable
+-- from *every project* (`null`) without a second flag. Additive by TD-032's list: a nullable column
+-- the previous build never names.
+alter table workers add column claim_project_ids uuid[];

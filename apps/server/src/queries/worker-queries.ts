@@ -27,11 +27,12 @@
  * reads the user's state on every call.
  */
 import { resolveBudgetTimezone } from '@platform/application';
-import type {
-  CoreImageDigests,
-  JsonObject,
-  WorkerManualPauseVia,
-  WorkerUpdateResult,
+import {
+  type CoreImageDigests,
+  type JsonObject,
+  WORKER_SCOPE_PROJECTS_MAX,
+  type WorkerManualPauseVia,
+  type WorkerUpdateResult,
 } from '@platform/contracts';
 import {
   checkDeviceDecision,
@@ -119,6 +120,11 @@ export interface WorkerListRow {
   readonly pausedUntilEstimated: boolean;
   /** The owner's hold from the worker's local page (migration 0099, WP-292). */
   readonly manuallyPausedAt: Date | null;
+  /**
+   * The claim scope (migration 0101, WP-293): `null` every project, `[]` pick only, otherwise those
+   * projects with their keys — `null` for a project that no longer exists.
+   */
+  readonly claimProjects: readonly { readonly id: string; readonly key: string | null }[] | null;
   readonly concurrency: number;
   /**
    * The live runs (`created`/`starting`/`running`) this worker **holds**, oldest first (S-23.15):
@@ -158,6 +164,35 @@ export type ManualPauseResult =
       readonly status: 'set';
       readonly manuallyPausedAt: Date | null;
       /** `false`: the row already said so — nothing written, no audit row. */
+      readonly performed: boolean;
+    };
+
+/** A project a worker's scope may name: one where its user's effective role is `member`+ now. */
+export interface ScopeProject {
+  readonly id: string;
+  readonly key: string;
+  readonly name: string;
+}
+
+/** What {@link WorkerStore.claimScope} answers. */
+export type ClaimScopeRead =
+  | { readonly status: 'not_found' }
+  | {
+      readonly status: 'found';
+      readonly claimProjectIds: readonly string[] | null;
+      readonly projects: readonly ScopeProject[];
+    };
+
+/** What {@link WorkerStore.setClaimScope} answers. */
+export type ClaimScopeResult =
+  | { readonly status: 'not_found' }
+  /** Ids that are not a project where the user is `member`+ now (`422`); nothing written. */
+  | { readonly status: 'invalid'; readonly projectIds: readonly string[] }
+  | {
+      readonly status: 'set';
+      /** Distinct and sorted, as stored. */
+      readonly claimProjectIds: readonly string[] | null;
+      /** `false`: the row already held this scope (as a set) — nothing written, no audit row. */
       readonly performed: boolean;
     };
 
@@ -212,6 +247,23 @@ export interface WorkerStore {
     readonly via: WorkerManualPauseVia;
     readonly now: Date;
   }): Promise<ManualPauseResult>;
+  /**
+   * The worker's claim scope and the projects it may name — those where its user's **effective**
+   * role is `member` or above now (`running-role.ts`, the claim's own predicate), by key, at most
+   * {@link WORKER_SCOPE_PROJECTS_MAX} (WP-293).
+   */
+  claimScope(workerId: string): Promise<ClaimScopeRead>;
+  /**
+   * The owner's claim scope (WP-293, TD-031's claim-scope amendment §2) — a **state assertion**:
+   * `null` every project, `[]` pick only, otherwise those projects (stored distinct and sorted). An
+   * id that is not a project where the user is `member`+ now is `invalid` and nothing is written.
+   * **One** `human_actions` row `worker.claim_scope` `{worker_id, project_ids, via: 'worker_ui'}` per
+   * change, the worker's user; a repeat of the stored value, as a set, writes nothing.
+   */
+  setClaimScope(input: {
+    readonly workerId: string;
+    readonly projectIds: readonly string[] | null;
+  }): Promise<ClaimScopeResult>;
   /**
    * **A usage limit's pause** (`POST pause`, WP-285, TD-031 decision 11): `paused_until`,
    * `paused_reason = 'usage_limited'` and whether the instant is the default pause. A repeat stores
@@ -310,6 +362,23 @@ const stateOf = (row: DeviceCodeRowSql): DeviceCodeState => ({
  */
 const USER_MAY_ACT = sql.raw(pipelineAdapters.USER_MAY_ACT_SQL);
 
+/**
+ * The user `q.uid` may take a run of the project `p` — the claim's own predicate (`running-role.ts`,
+ * the effective role at `member` or above), so the chooser offers exactly what the claim can admit.
+ * The statement binds the user as `(select $1::uuid as uid) q`; the predicate inlines only a closed
+ * set of role literals and the two column names given here.
+ */
+const MAY_RUN_IN_P = sql.raw(pipelineAdapters.userMayRunInProjectSql('q.uid', 'p.id'));
+
+/** A scope as stored: distinct and sorted, so a repeat is recognised as a set (WP-293). */
+export const normaliseScope = (ids: readonly string[] | null): string[] | null =>
+  ids === null ? null : [...new Set(ids.map((id) => id.toLowerCase()))].sort();
+
+const sameScope = (a: readonly string[] | null, b: readonly string[] | null): boolean =>
+  a === null || b === null
+    ? a === b
+    : a.length === b.length && a.every((id, index) => id === b[index]);
+
 /** The revocation's one write to `runs` (TD-031 §7): the live runs' lease expires now, nothing else. */
 const expireLeasesSql = (workerFilter: ReturnType<typeof sql>) => sql`
   update runs set lease_expires_at = now()
@@ -319,6 +388,7 @@ const expireLeasesSql = (workerFilter: ReturnType<typeof sql>) => sql`
 
 /** A `workers` row joined with its user, as {@link WorkerStore.listWorkers} reads it. */
 type WorkerRowSql = {
+  claim_projects: { id: string; key: string | null }[] | null;
   id: string;
   name: string;
   user_id: string;
@@ -353,7 +423,13 @@ const RUNNING_OF_WORKER = sql`coalesce((
        and coalesce(o.worker_id, r.worker_id) = w.id
        and (r.worker_id is not null
             or (o.state = 'claimed' and o.claimant_kind = 'worker' and o.worker_id is not null))
-  ), '[]'::json) as running`;
+  ), '[]'::json) as running,
+  case when w.claim_project_ids is null then null
+       else coalesce((
+         select json_agg(json_build_object('id', x.id, 'key', p.key) order by x.ord)
+           from unnest(w.claim_project_ids) with ordinality as x(id, ord)
+           left join projects p on p.id = x.id
+       ), '[]'::json) end as claim_projects`;
 
 /**
  * The newest `worker.update` row per worker, for the listed workers: one pass over `human_actions`
@@ -396,6 +472,10 @@ const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
   pausedReason: row.paused_reason,
   pausedUntilEstimated: row.paused_until_estimated === true,
   manuallyPausedAt: at(row.manually_paused_at),
+  claimProjects:
+    row.claim_projects === null
+      ? null
+      : row.claim_projects.map((project) => ({ id: project.id, key: project.key })),
   concurrency: row.concurrency,
   running: row.running.map((run) => ({
     runId: run.run_id,
@@ -639,6 +719,69 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
         insert into human_actions (user_id, action, params)
         values (${row.user_id}, ${paused ? 'worker.pause' : 'worker.resume'}, ${JSON.stringify(params)}::jsonb)`);
       return { status: 'set', manuallyPausedAt: next, performed: true };
+    });
+  },
+
+  async claimScope(workerId) {
+    const { rows } = await database.execute<{
+      user_id: string;
+      claim_project_ids: string[] | null;
+    }>(sql`select user_id, claim_project_ids from workers where id = ${workerId}`);
+    const row = rows[0];
+    if (row === undefined) {
+      return { status: 'not_found' };
+    }
+    const projects = await database.execute<{ id: string; key: string; name: string }>(sql`
+      select p.id, p.key, left(p.name, 200) as name
+        from projects p cross join (select ${row.user_id}::uuid as uid) q
+       where ${MAY_RUN_IN_P}
+       order by p.key, p.id
+       limit ${WORKER_SCOPE_PROJECTS_MAX}`);
+    return {
+      status: 'found',
+      claimProjectIds: row.claim_project_ids === null ? null : [...row.claim_project_ids],
+      projects: projects.rows.map((project) => ({
+        id: project.id,
+        key: project.key,
+        name: project.name,
+      })),
+    };
+  },
+
+  async setClaimScope({ workerId, projectIds }) {
+    return database.transaction(async (tx): Promise<ClaimScopeResult> => {
+      const { rows } = await tx.execute<{
+        user_id: string;
+        claim_project_ids: string[] | null;
+      }>(sql`select user_id, claim_project_ids from workers where id = ${workerId} for update`);
+      const row = rows[0];
+      if (row === undefined) {
+        return { status: 'not_found' };
+      }
+      const next = normaliseScope(projectIds);
+      if (next !== null && next.length > 0) {
+        const admitted = await tx.execute<{ id: string }>(sql`
+          select p.id from projects p cross join (select ${row.user_id}::uuid as uid) q
+           where p.id = any(${`{${next.join(',')}}`}::uuid[])
+             and ${MAY_RUN_IN_P}`);
+        const known = new Set(admitted.rows.map((project) => project.id));
+        const invalid = next.filter((id) => !known.has(id));
+        if (invalid.length > 0) {
+          return { status: 'invalid', projectIds: invalid };
+        }
+      }
+      if (sameScope(normaliseScope(row.claim_project_ids), next)) {
+        return { status: 'set', claimProjectIds: next, performed: false };
+      }
+      await tx.execute(sql`
+        update workers
+           set claim_project_ids = ${next === null ? null : `{${next.join(',')}}`}::uuid[]
+         where id = ${workerId}`);
+      const params: JsonObject = { worker_id: workerId, project_ids: next, via: 'worker_ui' };
+      await tx.execute(sql`
+        insert into human_actions (user_id, action, params)
+        values (${row.user_id}, 'worker.claim_scope', ${JSON.stringify(params)}::jsonb)`);
+      return { status: 'set', claimProjectIds: next, performed: true };
     });
   },
 

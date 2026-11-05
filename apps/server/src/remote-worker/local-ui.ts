@@ -27,7 +27,9 @@ import {
   WORKER_LOCAL_API_PREFIX,
   WORKER_LOCAL_PATHS,
   workerLocalCancelRequestSchema,
+  workerLocalClaimScopeRequestSchema,
   workerLocalPauseRequestSchema,
+  workerLocalTakeRequestSchema,
 } from '@platform/contracts';
 import { ASSET_DIRECTORY, decodeRequestPath, resolveBundleFile } from '../web/bundle.js';
 import { CONTENT_SECURITY_POLICY } from '../web/csp.js';
@@ -51,7 +53,10 @@ export class LocalUiError extends Error {
   }
 }
 
-/** What the listener asks of the worker: the page's state, and the three controls. */
+/**
+ * What the listener asks of the worker: the page's state, the three controls — and, since WP-293,
+ * the claim scope and *take this one*.
+ */
 export interface LocalUiApi {
   /** The page's whole state, already redacted (`runtime.ts`). */
   state(): unknown;
@@ -62,6 +67,14 @@ export interface LocalUiApi {
     readonly reason: string | undefined;
     readonly idempotencyKey: string;
   }): Promise<unknown>;
+  /** The claim scope and the projects it may name — the core's `GET claim-scope` (WP-293). */
+  claimScope(): Promise<unknown>;
+  /** Set the claim scope — the core's `PUT claim-scope` — and answer it read back (WP-293). */
+  setClaimScope(projectIds: readonly string[] | null): Promise<unknown>;
+  /** The offers this worker could take now — the core's `GET offers` (WP-293). */
+  offers(): Promise<unknown>;
+  /** *Take this one* — the core's pick, then the run starts here (WP-293). */
+  take(runId: string): Promise<unknown>;
 }
 
 export interface LocalUiOptions {
@@ -180,6 +193,14 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
       send(response, 200, options.api.state());
       return;
     }
+    if (request.method === 'GET' && verb === WORKER_LOCAL_PATHS.claimScope) {
+      send(response, 200, await options.api.claimScope());
+      return;
+    }
+    if (request.method === 'GET' && verb === WORKER_LOCAL_PATHS.offers) {
+      send(response, 200, await options.api.offers());
+      return;
+    }
     if (request.method !== 'POST') {
       throw new LocalUiError(405, 'method_not_allowed', `${request.method} is not served here`);
     }
@@ -200,6 +221,22 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
     }
     if (verb === WORKER_LOCAL_PATHS.drain) {
       send(response, 202, await options.api.drain());
+      return;
+    }
+    if (verb === WORKER_LOCAL_PATHS.claimScope) {
+      const parsed = workerLocalClaimScopeRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        throw new LocalUiError(400, 'invalid_body', 'expected { claim_project_ids: null | [ids] }');
+      }
+      send(response, 200, await options.api.setClaimScope(parsed.data.claim_project_ids));
+      return;
+    }
+    const take = /^offers\/([0-9a-f-]{36})\/take$/.exec(verb);
+    if (take !== null) {
+      if (!workerLocalTakeRequestSchema.safeParse(body).success) {
+        throw new LocalUiError(400, 'invalid_body', 'a take carries no field');
+      }
+      send(response, 200, await options.api.take(take[1] as string));
       return;
     }
     const cancel = /^runs\/([0-9a-f-]{36})\/cancel$/.exec(verb);

@@ -23,6 +23,11 @@
 import * as z from 'zod';
 import { agentRoleSchema, idSchema, isoDateTimeSchema } from './common.js';
 import { transcriptEventSchema } from './transcript.js';
+import {
+  workerClaimScopeResponseSchema,
+  workerClaimScopeSchema,
+  workerOffersResponseSchema,
+} from './worker.js';
 
 /** The local verbs' prefix on the worker's UI listener. */
 export const WORKER_LOCAL_API_PREFIX = '/api/local';
@@ -36,6 +41,12 @@ export const WORKER_LOCAL_PATHS = {
   pause: 'pause',
   drain: 'drain',
   cancel: 'runs/:id/cancel',
+  /** The claim scope: `GET` reads it with the projects it may name, `POST` sets it (WP-293). */
+  claimScope: 'claim-scope',
+  /** The open offers this worker could take now (WP-293); the page polls it while visible. */
+  offers: 'offers',
+  /** *Take this one* (WP-293): the core's `POST offers/:id/claim`, then the run starts here. */
+  take: 'offers/:id/take',
 } as const;
 
 /** How many transcript entries per run, and how many log lines, the worker keeps for the page. */
@@ -147,6 +158,29 @@ export const workerLocalCancelResponseSchema = z.strictObject({
 });
 
 export type WorkerLocalCancelResponse = z.infer<typeof workerLocalCancelResponseSchema>;
+
+/**
+ * `GET /api/local/claim-scope` and `POST /api/local/claim-scope`'s answer (WP-293): the core's
+ * `GET claim-scope` as it answered — the stored scope and the projects it may name.
+ */
+export const workerLocalClaimScopeSchema = workerClaimScopeResponseSchema;
+export type WorkerLocalClaimScope = z.infer<typeof workerLocalClaimScopeSchema>;
+
+/** `POST /api/local/claim-scope` `{ claim_project_ids }`: `null` every project, `[]` pick only. */
+export const workerLocalClaimScopeRequestSchema = z.strictObject({
+  claim_project_ids: workerClaimScopeSchema,
+});
+
+/** `GET /api/local/offers` — the core's `GET offers`, after this worker's exact-value redactor. */
+export const workerLocalOffersSchema = workerOffersResponseSchema;
+export type WorkerLocalOffers = z.infer<typeof workerLocalOffersSchema>;
+
+/** `POST /api/local/offers/:id/take` takes no field. */
+export const workerLocalTakeRequestSchema = z.strictObject({});
+
+/** `POST /api/local/offers/:id/take` → the run this worker claimed and now runs. */
+export const workerLocalTakeResponseSchema = z.strictObject({ run_id: idSchema });
+export type WorkerLocalTakeResponse = z.infer<typeof workerLocalTakeResponseSchema>;
 
 /** Every local answer that is not 2xx: `{ error: { code, message } }`, the API's envelope. */
 export const workerLocalErrorSchema = z.strictObject({

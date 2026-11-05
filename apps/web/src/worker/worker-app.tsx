@@ -24,6 +24,9 @@
  * served on the developer's own machine, to the person whose subscription the run spends, about a
  * run that machine is executing — the same words the worker uploads, nothing more.
  *
+ * **What the worker picks up** (WP-293) is `pick-work.tsx`: the claim scope and the list of runs
+ * waiting for a worker, each with *Take this one*.
+ *
  * A run's stage is a `PhaseTrack` only when the page knows **more than one** stage; the worker's
  * package names one, so today it is the stage's name as text — a strip of one dot says nothing.
  */
@@ -57,10 +60,29 @@ import {
   workerModeOf,
   workerModeWords,
 } from './model.js';
+import { PickWork } from './pick-work.js';
 
 /** A message as a sentence: its first letter capitalised (the worker's words start lower-case). */
 export const sentence = (text: string): string =>
   text === '' ? text : `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+
+/**
+ * Why this worker cannot take a run from the list now, in the page's words — or `null` when it can
+ * (WP-293). The core refuses each of these too; the page says so before the press.
+ */
+export const takeBlockedOf = (state: WorkerLocalState, now: number): string | null => {
+  if (state.connection !== 'connected') return 'This worker is not connected to the platform.';
+  if (state.manually_paused_at !== null || state.draining) {
+    return 'This worker is paused: resume it to take a run.';
+  }
+  if (state.usage_paused_until !== null && Date.parse(state.usage_paused_until) > now) {
+    return 'This worker’s Claude usage limit has not reset yet.';
+  }
+  if (state.runs.length >= state.concurrency) {
+    return 'Every slot of this worker is busy: take one when a run ends.';
+  }
+  return null;
+};
 
 /** How often the page asks the worker for its state. */
 export const POLL_MS = 2_000;
@@ -446,6 +468,12 @@ export const WorkerApp = ({
           worker and gives the stage to another one. Use <em>Cancel run</em> or <em>Drain</em>.
         </p>
       </section>
+
+      <PickWork
+        client={client}
+        takeBlocked={takeBlockedOf(state, at)}
+        onTaken={() => void refresh()}
+      />
 
       <section aria-label="Worker log" className="flex flex-col gap-2">
         <h2 className="text-base font-semibold text-fg">Worker log</h2>

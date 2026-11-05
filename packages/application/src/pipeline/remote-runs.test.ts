@@ -110,6 +110,8 @@ const world = async (
     readonly budgetAtClaim?: () => BlockingBudget | null;
     /** Backlog 744: the refusal's own transaction fails (a task write that lost every race). */
     readonly refusalFails?: boolean;
+    /** WP-293: where a pick's audit goes; `null` composes none. */
+    readonly takes?: { workerId: Id; runId: Id; taskId: Id }[] | null;
   } = {},
 ): Promise<World> => {
   const workers: World['workers'] = new Map();
@@ -166,6 +168,15 @@ const world = async (
       },
     },
     tokens,
+    ...(options.takes === null
+      ? {}
+      : {
+          takeAudit: {
+            record: async (_tx, entry) => {
+              options.takes?.push({ ...entry });
+            },
+          },
+        }),
     settle: options.settle ?? (async (request) => harness.runtime.executor.settle(request)),
     lateCost: {
       record: async (_scope, spend) => {
@@ -1068,5 +1079,69 @@ describe('settleOutcomeOfFinish', () => {
       },
     });
     expect(unmeasured).toMatchObject({ costUnmeasured: true, runId });
+  });
+});
+
+describe('take this one, and what a worker could claim (WP-293)', () => {
+  it('lists the offer with the scope ignored, picks it past a pick-only scope, and audits the pick once', async () => {
+    const takes: { workerId: Id; runId: Id; taskId: Id }[] = [];
+    const w = await world({ takes });
+    const alice = w.workers.get(W1);
+    if (alice === undefined) throw new Error('no W1');
+    w.workers.set(W1, { ...alice, claimProjectIds: [] });
+    const now = w.harness.clock.now();
+    expect(await claimAs(w, W1)).toEqual({ kind: 'none' });
+    const listed = await w.remote.offers({
+      workerId: W1,
+      heldImageDigests: HELD,
+      images: IMAGES,
+      now,
+      limit: 50,
+    });
+    expect(listed.map((offer) => [offer.runId, offer.automatic])).toEqual([[w.runId, false]]);
+    const picked = await w.remote.claim({
+      workerId: W1,
+      heldImageDigests: HELD,
+      images: IMAGES,
+      now,
+      pick: w.runId,
+    });
+    expect(picked).toMatchObject({ kind: 'claimed', runId: w.runId });
+    expect(takes).toEqual([{ workerId: W1, runId: w.runId, taskId: expect.any(String) }]);
+    // Taken: neither listed nor picked again, and no second audit row.
+    expect(
+      await w.remote.offers({
+        workerId: W2,
+        heldImageDigests: HELD,
+        images: IMAGES,
+        now,
+        limit: 50,
+      }),
+    ).toEqual([]);
+    expect(
+      await w.remote.claim({
+        workerId: W2,
+        heldImageDigests: HELD,
+        images: IMAGES,
+        now,
+        pick: w.runId,
+      }),
+    ).toEqual({ kind: 'none' });
+    expect(takes).toHaveLength(1);
+  });
+
+  it('refuses a pick by name in a composition with no audit — a person’s act is never unrecorded', async () => {
+    const w = await world({ takes: null });
+    await expect(
+      w.remote.claim({
+        workerId: W1,
+        heldImageDigests: HELD,
+        images: IMAGES,
+        now: w.harness.clock.now(),
+        pick: w.runId,
+      }),
+    ).rejects.toThrow(/takeAudit/);
+    // The automatic claim needs none.
+    expect(await claimAs(w, W1)).toMatchObject({ kind: 'claimed' });
   });
 });

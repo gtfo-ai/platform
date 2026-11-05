@@ -141,6 +141,18 @@ const shortDigest = (digest: string): string => digest.replace(/^sha256:/, '').s
 export const slotsText = (worker: WorkerSummary): string =>
   `${formatInteger(worker.running.length)} of ${formatInteger(worker.concurrency)} busy`;
 
+/**
+ * The worker's claim scope, read only (WP-293): what its owner set on the worker's local page for
+ * its **automatic** claims. A pick from that page ignores it; an administrator's levers are the
+ * project's execution mode and *Revoke*.
+ */
+export const claimScopeWords = (worker: WorkerSummary): string => {
+  const projects = worker.claim_projects;
+  if (projects === null) return 'takes every project';
+  if (projects.length === 0) return 'pick only';
+  return `takes ${projects.map((project) => project.key ?? 'a removed project').join(', ')}`;
+};
+
 const WorkerRow = ({
   worker,
   showUser,
@@ -192,6 +204,10 @@ const WorkerRow = ({
               {worker.protocol_version === null
                 ? 'protocol not reported'
                 : `protocol ${worker.protocol_version}`}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span data-claim-scope="">
+              <UntrustedText value={claimScopeWords(worker)} />
             </span>
             {update === null ? null : (
               <>

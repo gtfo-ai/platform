@@ -6,4 +6,6 @@ export * from './postgres-pipeline-store.js';
 export * from './postgres-remote-run-calls.js';
 export * from './postgres-run-commands.js';
 export * from './postgres-ticket-poll.js';
+export * from './postgres-worker-take-audit.js';
+export * from './running-role.js';
 export * from './worker-holder.js';

@@ -62,6 +62,10 @@ beforeAll(async () => {
       },
       drain: async () => ({ drained: true }),
       cancel: async () => ({}),
+      claimScope: async () => ({}),
+      setClaimScope: async () => ({}),
+      offers: async () => ({}),
+      take: async () => ({}),
     },
   });
   await new Promise<void>((resolve) => worker.listen(workerPort, '127.0.0.1', resolve));

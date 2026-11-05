@@ -16,6 +16,7 @@ import { idSchema, isoDateTimeSchema, nonEmptyStringSchema } from './common.js';
 import {
   coreImageDigestsSchema,
   imageDigestSchema,
+  WORKER_CLAIM_SCOPE_MAX_PROJECTS,
   workerPauseReasonSchema,
   workerUpdateResultSchema,
   workerUserCodeSchema,
@@ -117,6 +118,15 @@ export const workerSummarySchema = z.strictObject({
   /** The owner's hold from the worker's local page (WP-292): *paused by its owner*. */
   manually_paused_at: isoDateTimeSchema.nullable(),
   concurrency: z.int().positive().max(64),
+  /**
+   * The worker's claim scope, set by its owner from the worker's local page (WP-293), read only
+   * here: `null` — every project; `[]` — *pick only*; otherwise those projects, each with its key
+   * (`null` for a project that no longer exists, which matches nothing).
+   */
+  claim_projects: z
+    .array(z.strictObject({ id: idSchema, key: z.string().max(64).nullable() }))
+    .max(WORKER_CLAIM_SCOPE_MAX_PROJECTS)
+    .nullable(),
   /**
    * The live runs (`created`, `starting`, `running`) this worker holds (S-23.15): its claim of the
    * run's offer, or `runs.worker_id`. Ids only — the run itself is `GET /api/runs/:id`.

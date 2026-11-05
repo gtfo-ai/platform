@@ -10,26 +10,35 @@ import {
   transcriptEventSchema,
   WORKER_LOCAL_API_PREFIX,
   workerLocalCancelResponseSchema,
+  workerLocalClaimScopeSchema,
   workerLocalErrorSchema,
+  workerLocalOffersSchema,
   workerLocalRunSchema,
   workerLocalStateSchema,
+  workerLocalTakeResponseSchema,
 } from '@platform/contracts';
 import { describe, expect, it, vi } from 'vitest';
 import { createLocalClient, LocalCallError, takeToken } from './client.js';
 import {
   CANCEL,
+  CLAIM_SCOPE,
   CONNECTIONS,
   conforms,
   ERROR,
   HOOKS,
   LOCAL_API_PREFIX,
+  OFFERS,
   PHASES,
   ROLES,
   RUN as RUN_SPEC,
   readCancel,
+  readClaimScope,
+  readOffers,
   readState,
+  readTake,
   type Spec,
   STATE as STATE_SPEC,
+  TAKE,
   TERMINAL_REASONS,
   TRANSCRIPT_ENTRY,
 } from './read-state.js';
@@ -225,6 +234,14 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
       normal(specOf(workerLocalCancelResponseSchema as unknown as ZodNode)),
     );
     expect(normal(ERROR)).toEqual(normal(specOf(workerLocalErrorSchema as unknown as ZodNode)));
+    // WP-293: the claim scope, the offers and a take's answer.
+    expect(normal(CLAIM_SCOPE)).toEqual(
+      normal(specOf(workerLocalClaimScopeSchema as unknown as ZodNode)),
+    );
+    expect(normal(OFFERS)).toEqual(normal(specOf(workerLocalOffersSchema as unknown as ZodNode)));
+    expect(normal(TAKE)).toEqual(
+      normal(specOf(workerLocalTakeResponseSchema as unknown as ZodNode)),
+    );
     expect(LOCAL_API_PREFIX).toBe(WORKER_LOCAL_API_PREFIX);
   });
 
@@ -325,6 +342,104 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     const answer = { run_id: RUN.run_id, accepted: true, task_state: 'paused' };
     expect(readCancel(answer)).toEqual(answer);
     expect(readCancel({ ...answer, more: 1 })).toBeNull();
+  });
+});
+
+describe('the claim scope, the offers and a take through both checks (WP-293)', () => {
+  const PROJECT = '00000000-0000-4000-8000-0000000293b1';
+  const SCOPE = {
+    claim_project_ids: [PROJECT],
+    projects: [{ id: PROJECT, key: 'ACME', name: 'Acme' }],
+  };
+  const OFFER = {
+    run_id: RUN.run_id,
+    kind: 'ask',
+    project_key: 'ACME',
+    ticket_key: 'ACME-7',
+    title: null,
+    stage: null,
+    role: 'architect',
+    offered_at: '2026-11-05T10:00:00.000Z',
+    automatic: false,
+  };
+  const cases: readonly [
+    string,
+    (value: unknown) => unknown,
+    { safeParse(v: unknown): { success: boolean } },
+    unknown,
+    boolean,
+  ][] = [
+    ['a scope', readClaimScope, workerLocalClaimScopeSchema, SCOPE, true],
+    [
+      'every project',
+      readClaimScope,
+      workerLocalClaimScopeSchema,
+      { ...SCOPE, claim_project_ids: null },
+      true,
+    ],
+    [
+      'pick only',
+      readClaimScope,
+      workerLocalClaimScopeSchema,
+      { ...SCOPE, claim_project_ids: [] },
+      true,
+    ],
+    [
+      'a scope id that is not a uuid',
+      readClaimScope,
+      workerLocalClaimScopeSchema,
+      { ...SCOPE, claim_project_ids: ['p1'] },
+      false,
+    ],
+    [
+      'a project with an empty key',
+      readClaimScope,
+      workerLocalClaimScopeSchema,
+      { ...SCOPE, projects: [{ id: PROJECT, key: '', name: 'x' }] },
+      false,
+    ],
+    [
+      'a project with an unknown key',
+      readClaimScope,
+      workerLocalClaimScopeSchema,
+      { ...SCOPE, projects: [{ id: PROJECT, key: 'A', name: 'x', extra: 1 }] },
+      false,
+    ],
+    ['an offer', readOffers, workerLocalOffersSchema, { offers: [OFFER] }, true],
+    [
+      'an offer carrying question text',
+      readOffers,
+      workerLocalOffersSchema,
+      { offers: [{ ...OFFER, question: 'why?' }] },
+      false,
+    ],
+    [
+      'an offer of an unknown kind',
+      readOffers,
+      workerLocalOffersSchema,
+      { offers: [{ ...OFFER, kind: 'job' }] },
+      false,
+    ],
+    [
+      '51 offers',
+      readOffers,
+      workerLocalOffersSchema,
+      { offers: Array.from({ length: 51 }, () => OFFER) },
+      false,
+    ],
+    ['a take', readTake, workerLocalTakeResponseSchema, { run_id: RUN.run_id }, true],
+    [
+      'a take with more',
+      readTake,
+      workerLocalTakeResponseSchema,
+      { run_id: RUN.run_id, more: 1 },
+      false,
+    ],
+  ];
+
+  it.each(cases)('%s: the guard and the schema agree', (_name, read, schema, value, accepted) => {
+    expect(schema.safeParse(value).success).toBe(accepted);
+    expect(read(value) !== null).toBe(accepted);
   });
 });
 

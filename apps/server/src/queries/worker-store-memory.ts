@@ -23,6 +23,8 @@ import { userMayAct } from './identity-queries.js';
 import {
   type CredentialSubject,
   type NewDeviceCode,
+  normaliseScope,
+  type ScopeProject,
   WORKER_CONNECTED_SECONDS,
   type WorkerListRow,
   type WorkerStore,
@@ -54,6 +56,7 @@ interface WorkerRowMemory {
   pausedUntil: Date | null;
   pausedUntilEstimated?: boolean;
   manuallyPausedAt: Date | null;
+  claimProjectIds?: readonly string[] | null;
 }
 
 export interface MemoryUser {
@@ -94,6 +97,11 @@ export interface MemoryWorkerStore extends WorkerStore {
   userMayAct(userId: string): boolean;
   /** The worker's row as the store holds it, for a harness that mirrors it elsewhere. */
   worker(workerId: string): WorkerListRow | null;
+  /**
+   * A project, and the users who may take its runs — `project_members`/`users.role` at `member`+
+   * in PostgreSQL (the effective role), a set here (WP-293).
+   */
+  addProject(project: ScopeProject, runners: readonly string[]): void;
 }
 
 const stateOf = (row: CodeRow): DeviceCodeState => ({
@@ -132,6 +140,12 @@ export const createMemoryWorkerStore = (
   const audit: MemoryAudit[] = [];
   /** When each `worker.update` row was written — `human_actions.created_at`, kept beside its params. */
   const recordedAt = new Map<MemoryAudit, Date>();
+  const projects = new Map<
+    string,
+    { readonly project: ScopeProject; readonly runners: Set<string> }
+  >();
+  const mayRunIn = (userId: string, projectId: string): boolean =>
+    projects.get(projectId)?.runners.has(userId) === true;
 
   const expire = (workerIds: ReadonlySet<string>): number => {
     let count = 0;
@@ -162,6 +176,13 @@ export const createMemoryWorkerStore = (
       pausedReason: worker.pausedUntil === null ? null : 'usage_limited',
       pausedUntilEstimated: worker.pausedUntil !== null && worker.pausedUntilEstimated === true,
       manuallyPausedAt: worker.manuallyPausedAt,
+      claimProjects:
+        worker.claimProjectIds === undefined || worker.claimProjectIds === null
+          ? null
+          : worker.claimProjectIds.map((id) => ({
+              id,
+              key: projects.get(id)?.project.key ?? null,
+            })),
       concurrency: 1,
       running: [...runs.values()]
         .filter((run) => run.workerId === worker.id && LIVE.has(run.status))
@@ -200,6 +221,8 @@ export const createMemoryWorkerStore = (
       return worker === undefined ? null : listRowOf(worker);
     },
     addUser: (user) => users.set(user.id, user),
+    addProject: (project, runners) =>
+      projects.set(project.id, { project, runners: new Set(runners) }),
     setUserMayAct: (userId, mayAct) => {
       if (mayAct) disabled.delete(userId);
       else disabled.add(userId);
@@ -417,6 +440,43 @@ export const createMemoryWorkerStore = (
         params: { worker_id: workerId, via },
       });
       return { status: 'set', manuallyPausedAt: worker.manuallyPausedAt, performed: true };
+    },
+
+    async claimScope(workerId) {
+      const worker = workers.get(workerId);
+      if (worker === undefined) {
+        return { status: 'not_found' };
+      }
+      return {
+        status: 'found',
+        claimProjectIds: worker.claimProjectIds ?? null,
+        projects: [...projects.values()]
+          .filter((entry) => mayRunIn(worker.userId, entry.project.id))
+          .map((entry) => entry.project)
+          .sort((a, b) => a.key.localeCompare(b.key) || a.id.localeCompare(b.id)),
+      };
+    },
+    async setClaimScope({ workerId, projectIds }) {
+      const worker = workers.get(workerId);
+      if (worker === undefined) {
+        return { status: 'not_found' };
+      }
+      const next = normaliseScope(projectIds);
+      const invalid = (next ?? []).filter((id) => !mayRunIn(worker.userId, id));
+      if (invalid.length > 0) {
+        return { status: 'invalid', projectIds: invalid };
+      }
+      const stored = normaliseScope(worker.claimProjectIds ?? null);
+      if (JSON.stringify(stored) === JSON.stringify(next)) {
+        return { status: 'set', claimProjectIds: next, performed: false };
+      }
+      worker.claimProjectIds = next;
+      audit.push({
+        userId: worker.userId,
+        action: 'worker.claim_scope',
+        params: { worker_id: workerId, project_ids: next, via: 'worker_ui' },
+      });
+      return { status: 'set', claimProjectIds: next, performed: true };
     },
 
     async expireUserWorkerLeases(userId) {

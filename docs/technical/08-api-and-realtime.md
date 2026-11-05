@@ -388,7 +388,7 @@ Per-user rate limits on mutating endpoints; webhook endpoints limited per integr
 A second authenticated surface, `/api/worker/v1/*`, for remote workers: device flow (`device`,
 `device/token`, unauthenticated and rate-limited), `handshake`, `claims` (held ≤ 25 s), `runs/:id/
 {heartbeat (held ≤ 20 s), transcript, tools/:name, approvals, session, ssh-sign, release, finish,
-late-cost, cancel}`, `pause`, `manual-pause`, `release` (digests + protocol range; the updater verifies attestations itself), `compose.yml` (first install only), `update-report`. Device-flow rate limits key on `APP_TRUSTED_CLIENT_IP_HEADER` only from a peer the widened `APP_TRUST_PROXY` (an address/CIDR list) trusts. Auth: a per-machine worker credential (`wkr_…`,
+late-cost, cancel}`, `pause`, `manual-pause`, `claim-scope` (`GET`/`PUT`), `offers`, `offers/:id/claim`, `release` (digests + protocol range; the updater verifies attestations itself), `compose.yml` (first install only), `update-report`. Device-flow rate limits key on `APP_TRUSTED_CLIENT_IP_HEADER` only from a peer the widened `APP_TRUST_PROXY` (an address/CIDR list) trusts. Auth: a per-machine worker credential (`wkr_…`,
 stored SHA-256) or a per-run token; header `X-Worker-Protocol`; `426 upgrade_required` outside `[N-1,
 N]`; `409 lease_lost` on a stale epoch; `Cache-Control: no-store`. No request is held longer than 25 s, so
 the surface works through a CDN proxy (research/17 § 8). For people: `GET/DELETE /api/workers[/:id]`
@@ -608,6 +608,35 @@ from the URL fragment, a `Host` allow-list (`421`), an `Origin` check on every `
 header and no cookie (`apps/server/src/remote-worker/local-ui.ts`); `APP_WORKER_UI=disabled` opens no
 port. The page polls `state` every 2 s.
 
+**Protocol 3 — what a worker picks up (WP-293, TD-031's 2026-11-05 claim-scope amendment, Q127 (a)).**
+`WORKER_PROTOCOL_VERSION = 3`, accepted `[2, 3]` (so a version-1 worker is `426` at the protocol check).
+Four verbs, all worker credential and all `426` below protocol 3 before the credential is read, and one
+key a version-2 worker is never sent: the handshake's `worker.claim_project_ids`.
+`GET claim-scope` answers `{claim_project_ids, projects}` — the stored scope (`null` every project, `[]`
+*pick only*, otherwise those projects) and the projects where the worker's user's **effective** role is
+`member` or above now (`running-role.ts`, the claim's own predicate), by key, at most 500.
+`PUT claim-scope {claim_project_ids}` is a state assertion over `workers.claim_project_ids` (migration
+0101), stored distinct and sorted: an id that is not such a project is `422 project_not_eligible` naming
+it, nothing written; one `human_actions` row `worker.claim_scope` `{worker_id, project_ids, via:
+worker_ui}` per change, the worker's user, none for a repeat as a set (`performed: false`). The scope is a
+conjunct of an **automatic** claim and of the online-assignee rule (an assignee whose worker is pick-only,
+or whose scope leaves the project out, gets no head start), and it only narrows: no value admits an offer
+the eligibility refuses. `GET offers` lists at most 50 open offers, oldest first, that this worker could
+claim **now** — the claim's own eligibility text with the scope ignored, against the digests the worker
+last reported — each `{run_id, kind, project_key, ticket_key, title, stage, role, offered_at, automatic}`
+(`automatic`: the scope takes it by itself; the names from the redacted ticket snapshot, `null` when they
+cannot be read; an ask never carries its question's text). `POST offers/:id/claim {image_digests}` —
+*take this one* — is the one claim with its run named, not held: `200` with the package exactly as
+`claims` answers it, or `409 offer_not_claimable` for every reason it claimed nothing (taken, withdrawn,
+before `workers_from`, inside another user's head start, excluded, paused), which names none. It ignores
+the scope and **nothing else** — a pick never jumps a hybrid, server-preferred project's `server_from`
+window (Q127 (a)) — and writes one `human_actions` row `worker.take_offer` `{worker_id, run_id, via:
+worker_ui}` in the claim's transaction. The page proxies them as `GET`/`POST /api/local/claim-scope`,
+`GET /api/local/offers` (polled every 10 s while the page is visible) and `POST
+/api/local/offers/:id/take` under the same `Host`, bearer and `Origin` rules; a take needs a free slot
+on the worker (`409 no_free_slot` there, before the core is asked). `GET /api/workers` publishes each
+worker's `claim_projects` (`null`, `[]`, or `[{id, key}]`), which the Workers screen shows read only.
+
 The opt-in itself is the GitLab configuration key `remote_run_credential: allow | deny` (default `deny`),
 written through `PATCH /api/integrations/:id` (`integration.write`, admin), whose `human_actions` row
 carries the value; the Integrations screen shows the residual beside the switch. With `allow`, a static
@@ -615,8 +644,8 @@ token travels in the package and a deploy key never does (the package carries th
 key; the worker signs through `ssh-sign`).
 
 **The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls, WP-284 `release` and `compose.yml`, WP-285 `pause`, WP-287 `update-report` — one `human_actions` row `worker.update` under the worker's user, the newest shown as the Workers screen's `last_update`):
-`packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (2 since WP-292), `ACCEPTED_WORKER_PROTOCOLS`
-(`[N-1, N]`, today `[1, 2]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
+`packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (3 since WP-293), `ACCEPTED_WORKER_PROTOCOLS`
+(`[N-1, N]`, today `[2, 3]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
 paths, the bounds, and a strict zod schema for every request and response body of TD-031 §9. Two
 spellings, each stated there: the **HTTP DTOs are snake_case**, the house rule; the **run package**
 (`runPackageSchema`, the `200` of `claims`, published as `schemas/worker-run-package.schema.json`) is

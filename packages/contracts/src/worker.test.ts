@@ -7,8 +7,11 @@ import {
   isAcceptedWorkerProtocol,
   parseWorkerProtocolHeader,
   runPackageSchema,
+  WORKER_CLAIM_SCOPE_MAX_PROJECTS,
+  WORKER_OFFERS_LIST_MAX,
   WORKER_PACKAGE_MAX_BYTES,
   WORKER_PATHS,
+  WORKER_PROTOCOL_CLAIM_SCOPE,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_LOCAL_UI,
   WORKER_PROTOCOL_VERSION,
@@ -16,6 +19,10 @@ import {
   workerApprovalRequestSchema,
   workerApprovalResponseSchema,
   workerClaimRequestSchema,
+  workerClaimScopeRequestSchema,
+  workerClaimScopeResponseSchema,
+  workerClaimScopeSchema,
+  workerClaimScopeSetResponseSchema,
   workerDeviceRequestSchema,
   workerDeviceResponseSchema,
   workerDeviceTokenErrorSchema,
@@ -30,10 +37,13 @@ import {
   workerLateCostRequestSchema,
   workerLateCostResponseSchema,
   workerLeaseLostBodySchema,
+  workerOfferClaimRequestSchema,
+  workerOffersResponseSchema,
   workerPauseRequestSchema,
   workerReleaseResponseSchema,
   workerRunReleaseRequestSchema,
   workerSessionRequestSchema,
+  workerSettingsSchema,
   workerSpawnRequestSchema,
   workerSpawnResponseSchema,
   workerSshSignRequestSchema,
@@ -180,12 +190,15 @@ const refusals = (value: unknown): string[] => {
   return parsed.success ? [] : parsed.error.issues.map((issue) => issue.message);
 };
 
+const SCOPE_PROJECT = '00000000-0000-4000-8000-000000029301';
+
 describe('protocol versions (TD-032 decision 7)', () => {
-  it('ships N = 2, accepting [N-1, N] without a 0 (WP-292 bumped it)', () => {
-    expect(WORKER_PROTOCOL_VERSION).toBe(2);
-    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([1, 2]);
-    // The local UI's verbs and keys are protocol 2's: the version that introduced them is N.
+  it('ships N = 3, accepting [N-1, N] without a 0 (WP-293 bumped it)', () => {
+    expect(WORKER_PROTOCOL_VERSION).toBe(3);
+    expect(ACCEPTED_WORKER_PROTOCOLS).toEqual([2, 3]);
+    // The local UI's verbs and keys are protocol 2's; the claim scope's are 3's, the version N.
     expect(WORKER_PROTOCOL_LOCAL_UI).toBe(2);
+    expect(WORKER_PROTOCOL_CLAIM_SCOPE).toBe(3);
     expect(ACCEPTED_WORKER_PROTOCOLS).toContain(WORKER_PROTOCOL_VERSION);
     for (const version of ACCEPTED_WORKER_PROTOCOLS) {
       expect([WORKER_PROTOCOL_VERSION - 1, WORKER_PROTOCOL_VERSION]).toContain(version);
@@ -194,10 +207,11 @@ describe('protocol versions (TD-032 decision 7)', () => {
   });
 
   it('accepts exactly the listed versions', () => {
-    expect(isAcceptedWorkerProtocol(1)).toBe(true);
     expect(isAcceptedWorkerProtocol(2)).toBe(true);
+    expect(isAcceptedWorkerProtocol(3)).toBe(true);
     expect(isAcceptedWorkerProtocol(0)).toBe(false);
-    expect(isAcceptedWorkerProtocol(3)).toBe(false);
+    expect(isAcceptedWorkerProtocol(1)).toBe(false);
+    expect(isAcceptedWorkerProtocol(4)).toBe(false);
   });
 
   it('reads the X-Worker-Protocol header strictly; anything else is no protocol (426)', () => {
@@ -216,7 +230,11 @@ describe('protocol versions (TD-032 decision 7)', () => {
     expect(new Set(paths).size).toBe(paths.length);
     // WP-281: the spawn marker joined TD-031 §9's seventeen (its 2026-11-04 amendment §4).
     // WP-292: the local UI's two verbs (TD-031's worker-UI amendment §4).
-    expect(paths).toHaveLength(20);
+    // WP-293: the claim scope, the offers and a pick (TD-031's claim-scope amendment §6).
+    expect(paths).toHaveLength(23);
+    expect(paths).toContain('claim-scope');
+    expect(paths).toContain('offers');
+    expect(paths).toContain('offers/:id/claim');
     expect(paths).toContain('runs/:id/spawn');
     expect(paths).toContain('manual-pause');
     expect(paths).toContain('runs/:id/cancel');
@@ -750,7 +768,91 @@ const DTO_SAMPLES: ReadonlyArray<readonly [string, z.ZodType, Record<string, unk
     workerLeaseLostBodySchema,
     { error: { code: 'lease_lost', message: 'the run’s epoch moved on' } },
   ],
+  // WP-293 (protocol 3).
+  [
+    'claim-scope response',
+    workerClaimScopeResponseSchema,
+    {
+      claim_project_ids: [SCOPE_PROJECT],
+      projects: [{ id: SCOPE_PROJECT, key: 'ACME', name: 'Acme' }],
+    },
+  ],
+  ['claim-scope request', workerClaimScopeRequestSchema, { claim_project_ids: null }],
+  [
+    'claim-scope set response',
+    workerClaimScopeSetResponseSchema,
+    { claim_project_ids: [], performed: true },
+  ],
+  [
+    'offers response',
+    workerOffersResponseSchema,
+    {
+      offers: [
+        {
+          run_id: SCOPE_PROJECT,
+          kind: 'ask',
+          project_key: null,
+          ticket_key: null,
+          title: null,
+          stage: null,
+          role: 'architect',
+          offered_at: '2026-11-05T10:00:00.000Z',
+          automatic: true,
+        },
+      ],
+    },
+  ],
+  ['offer claim request', workerOfferClaimRequestSchema, { image_digests: [] }],
 ];
+
+describe('the claim scope and the offers (WP-293)', () => {
+  it('bounds the scope and the list, and carries an ask with no question text', () => {
+    const ids = (n: number) =>
+      Array.from(
+        { length: n },
+        (_, index) => `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`,
+      );
+    expect(workerClaimScopeSchema.safeParse(ids(WORKER_CLAIM_SCOPE_MAX_PROJECTS)).success).toBe(
+      true,
+    );
+    expect(workerClaimScopeSchema.safeParse(ids(WORKER_CLAIM_SCOPE_MAX_PROJECTS + 1)).success).toBe(
+      false,
+    );
+    expect(workerClaimScopeSchema.safeParse(['ACME']).success).toBe(false);
+    const offer = {
+      run_id: SCOPE_PROJECT,
+      kind: 'stage',
+      project_key: 'ACME',
+      ticket_key: 'ACME-1',
+      title: 'Fix the login',
+      stage: 'implementation',
+      role: 'developer',
+      offered_at: '2026-11-05T10:00:00.000Z',
+      automatic: false,
+    };
+    expect(workerOffersResponseSchema.safeParse({ offers: [offer] }).success).toBe(true);
+    expect(
+      workerOffersResponseSchema.safeParse({
+        offers: Array.from({ length: WORKER_OFFERS_LIST_MAX + 1 }, () => offer),
+      }).success,
+    ).toBe(false);
+    expect(
+      workerOffersResponseSchema.safeParse({ offers: [{ ...offer, question: 'why?' }] }).success,
+    ).toBe(false);
+    // The handshake's key is optional: a version-2 answer carries none, a version-3 one may.
+    const settings = {
+      id: SCOPE_PROJECT,
+      name: 'laptop',
+      concurrency: 1,
+      paused_until: null,
+      paused_reason: null,
+    };
+    expect(workerSettingsSchema.safeParse(settings).success).toBe(true);
+    expect(workerSettingsSchema.safeParse({ ...settings, claim_project_ids: [] }).success).toBe(
+      true,
+    );
+  });
+});
 
 describe('the worker DTOs (TD-031 decision 9)', () => {
   it.each(DTO_SAMPLES)('%s: admits its body and refuses an unknown key', (_name, schema, body) => {

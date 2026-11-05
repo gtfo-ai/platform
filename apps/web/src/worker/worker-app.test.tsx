@@ -92,6 +92,14 @@ const fakeClient = (initial: WorkerLocalState) => {
       accepted: true,
       task_state: 'paused',
     })),
+    // WP-293's two sections: nothing waiting, every project (`pick-work.test.tsx` drives them).
+    claimScope: vi.fn(async () => ({ claim_project_ids: null, projects: [] })),
+    setClaimScope: vi.fn(async (ids: readonly string[] | null) => ({
+      claim_project_ids: ids === null ? null : [...ids],
+      projects: [],
+    })),
+    offers: vi.fn(async () => ({ offers: [] })),
+    take: vi.fn(async (runId: string) => ({ run_id: runId })),
   } satisfies LocalClient;
   return client;
 };

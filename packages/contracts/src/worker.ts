@@ -29,7 +29,7 @@
  * ## Protocol versions (TD-032 decision 7)
  *
  * {@link WORKER_PROTOCOL_VERSION} is an integer independent of the build. The core accepts
- * {@link ACCEPTED_WORKER_PROTOCOLS} — `[N-1, N]`, which at `N = 1` is `[1]` — and answers anything
+ * {@link ACCEPTED_WORKER_PROTOCOLS} — `[N-1, N]`, which at `N = 3` is `[2, 3]` (WP-293) — and answers anything
  * else `426`. A change ships expand → contract: the release that adds a field or a verb accepts both
  * shapes, and the release that removes the old one bumps `N`. `pnpm protocol:check`
  * (`scripts/check-protocol.ts`, a `verify:static` step) refuses a bump that is not `base + 1`, one
@@ -40,6 +40,7 @@
 import * as z from 'zod';
 import { apiErrorSchema, cancelRunRequestSchema, cancelRunResponseSchema } from './api.js';
 import {
+  agentRoleSchema,
   httpUrlSchema,
   idSchema,
   isoDateTimeSchema,
@@ -67,13 +68,13 @@ import {
 // ── Versions ─────────────────────────────────────────────────────────────────
 
 /** The protocol this build speaks (TD-032 decision 7). A literal: `protocol:check` reads it as text. */
-export const WORKER_PROTOCOL_VERSION = 2;
+export const WORKER_PROTOCOL_VERSION = 3;
 
 /**
  * The protocols this build's core serves: `[N-1, N]`, without a `0`. A literal for the same reason as
  * {@link WORKER_PROTOCOL_VERSION}; `worker.test.ts` holds it to the shape.
  */
-export const ACCEPTED_WORKER_PROTOCOLS = [1, 2] as const;
+export const ACCEPTED_WORKER_PROTOCOLS = [2, 3] as const;
 
 /**
  * The first protocol that carries the worker's local UI (TD-031's 2026-11-04 worker-UI amendment §5,
@@ -83,6 +84,14 @@ export const ACCEPTED_WORKER_PROTOCOLS = [1, 2] as const;
  * an unknown key — and is refused the two verbs with `426`.
  */
 export const WORKER_PROTOCOL_LOCAL_UI = 2;
+
+/**
+ * The first protocol that carries the claim scope and *take this one* (TD-031's 2026-11-05
+ * claim-scope amendment, decision 6; WP-293): the verbs `GET`/`PUT claim-scope`, `GET offers` and
+ * `POST offers/:id/claim`, and the handshake's `worker.claim_project_ids`. A request at a lower
+ * version is refused the four verbs with `426` and is sent a handshake without the key.
+ */
+export const WORKER_PROTOCOL_CLAIM_SCOPE = 3;
 
 /** Whether a worker announcing `version` is served by this build (else `426 upgrade_required`). */
 export const isAcceptedWorkerProtocol = (version: number): boolean =>
@@ -141,10 +150,23 @@ export const WORKER_PATHS = {
   manualPause: 'manual-pause',
   /** A person's cancel from the worker's local page — the core's `run.cancel` (WP-292, protocol 2). */
   runCancel: 'runs/:id/cancel',
+  /** The worker's claim scope, read and set by its owner (WP-293, protocol 3). */
+  claimScope: 'claim-scope',
+  /** The open offers this worker could claim now, scope ignored (WP-293, protocol 3). */
+  offers: 'offers',
+  /** *Take this one*: the one claim narrowed to one run, scope ignored (WP-293, protocol 3). */
+  offerClaim: 'offers/:id/claim',
   release: 'release',
   composeFile: 'compose.yml',
   updateReport: 'update-report',
 } as const;
+
+/** A claim scope names at most this many projects (WP-293). */
+export const WORKER_CLAIM_SCOPE_MAX_PROJECTS = 100;
+/** `GET claim-scope` lists at most this many projects to choose from (WP-293). */
+export const WORKER_SCOPE_PROJECTS_MAX = 500;
+/** `GET offers` lists at most this many open offers (TD-031's claim-scope amendment, decision 4). */
+export const WORKER_OFFERS_LIST_MAX = 50;
 
 /** A run package past this many bytes of JSON is refused, never truncated (TD-031 §4). */
 export const WORKER_PACKAGE_MAX_BYTES = 4 * 1024 * 1024;
@@ -575,6 +597,12 @@ export const workerSettingsSchema = z.strictObject({
    * worker-UI amendment §5).
    */
   manually_paused_at: isoDateTimeSchema.nullable().optional(),
+  /**
+   * The worker's claim scope (WP-293): `null` every project, `[]` pick only, otherwise those
+   * projects. **Absent** below protocol 3: the core sends it only when `X-Worker-Protocol ≥ 3`
+   * (TD-031's 2026-11-05 claim-scope amendment, decision 6).
+   */
+  claim_project_ids: z.array(idSchema).max(WORKER_CLAIM_SCOPE_MAX_PROJECTS).nullable().optional(),
 });
 
 /**
@@ -638,6 +666,91 @@ export const workerManualPauseResponseSchema = z.strictObject({
   performed: z.boolean(),
 });
 export type WorkerManualPauseResponse = z.infer<typeof workerManualPauseResponseSchema>;
+
+// ── Claim scope and *take this one* (WP-293, protocol 3) ─────────────────────
+
+/**
+ * A worker's claim scope (TD-031's 2026-11-05 claim-scope amendment, decision 2): `null` — every
+ * project its eligibility admits (the default); `[]` — *pick only*, no automatic claim; otherwise
+ * those projects. A conjunct of an **automatic** claim only, and it only narrows.
+ */
+export const workerClaimScopeSchema = z
+  .array(idSchema)
+  .max(WORKER_CLAIM_SCOPE_MAX_PROJECTS)
+  .nullable();
+export type WorkerClaimScope = z.infer<typeof workerClaimScopeSchema>;
+
+/** A project the worker's user may take a run of (`member`+, effective role) — the chooser's entry. */
+export const workerScopeProjectSchema = z.strictObject({
+  id: idSchema,
+  key: nonEmptyStringSchema.max(64),
+  name: z.string().max(200),
+});
+export type WorkerScopeProject = z.infer<typeof workerScopeProjectSchema>;
+
+/**
+ * `GET claim-scope` → the stored scope and the projects it may name: those where the worker's user's
+ * effective role is `member` or above now, by key. Worker credential, protocol ≥ 3.
+ */
+export const workerClaimScopeResponseSchema = z.strictObject({
+  claim_project_ids: workerClaimScopeSchema,
+  projects: z.array(workerScopeProjectSchema).max(WORKER_SCOPE_PROJECTS_MAX),
+});
+export type WorkerClaimScopeResponse = z.infer<typeof workerClaimScopeResponseSchema>;
+
+/**
+ * `PUT claim-scope` `{ claim_project_ids }` — a **state assertion** by the worker's owner. An id that
+ * is not a project where the user is `member`+ at the write is `422` (decision 2: it keeps the value
+ * meaningful; it is not a security check — the claim re-asks the role).
+ */
+export const workerClaimScopeRequestSchema = z.strictObject({
+  claim_project_ids: workerClaimScopeSchema,
+});
+
+/**
+ * `PUT claim-scope` → the stored scope (ids distinct and sorted) and whether this call changed it: a repeat of the
+ * stored value — as a set — is `performed: false` and writes no `human_actions` row.
+ */
+export const workerClaimScopeSetResponseSchema = z.strictObject({
+  claim_project_ids: workerClaimScopeSchema,
+  performed: z.boolean(),
+});
+export type WorkerClaimScopeSetResponse = z.infer<typeof workerClaimScopeSetResponseSchema>;
+
+/**
+ * One open offer this worker could claim **now** (decision 4) — the claim's own eligibility, its
+ * scope ignored. `automatic` says whether the scope takes it by itself. The ticket key and the title
+ * are untrusted text from the core's **redacted** ticket snapshot, bounded as the package's display
+ * block is (BD-022); an `ask` carries its task and stage, **never the question's text**.
+ */
+export const workerOfferSchema = z.strictObject({
+  run_id: idSchema,
+  kind: z.enum(['stage', 'ask']),
+  /** `null` when the core could not read the run's display names (the package's rule). */
+  project_key: z.string().max(64).nullable(),
+  ticket_key: z.string().max(256).nullable(),
+  title: z.string().max(500).nullable(),
+  stage: z.string().max(128).nullable(),
+  role: agentRoleSchema,
+  offered_at: isoDateTimeSchema,
+  automatic: z.boolean(),
+});
+export type WorkerOffer = z.infer<typeof workerOfferSchema>;
+
+/** `GET offers` → at most {@link WORKER_OFFERS_LIST_MAX}, oldest first. */
+export const workerOffersResponseSchema = z.strictObject({
+  offers: z.array(workerOfferSchema).max(WORKER_OFFERS_LIST_MAX),
+});
+export type WorkerOffersResponse = z.infer<typeof workerOffersResponseSchema>;
+
+/**
+ * `POST offers/:id/claim` `{ image_digests }` — *take this one*: the one claim with its run named,
+ * not held. `200` with the run package exactly as `claims` answers it, or `409 offer_not_claimable`
+ * for every reason it claimed nothing (taken, withdrawn, not yet this worker's, ineligible).
+ */
+export const workerOfferClaimRequestSchema = z.strictObject({
+  image_digests: heldDigestsSchema,
+});
 
 // ── Run-scoped calls (authenticated by the run token) ────────────────────────
 

@@ -14,6 +14,10 @@
  *   POST /api/worker/v1/update-report           worker credential (WP-287 (4))
  *   POST /api/worker/v1/manual-pause            worker credential, protocol ≥ 2 (WP-292, `owner-verbs.ts`)
  *   POST /api/worker/v1/runs/:id/cancel         run token, protocol ≥ 2 (WP-292, `owner-verbs.ts`)
+ *   GET  /api/worker/v1/claim-scope             worker credential, protocol ≥ 3 (WP-293, `pick-verbs.ts`)
+ *   PUT  /api/worker/v1/claim-scope             worker credential, protocol ≥ 3 (WP-293)
+ *   GET  /api/worker/v1/offers                  worker credential, protocol ≥ 3 (WP-293)
+ *   POST /api/worker/v1/offers/:id/claim        worker credential, protocol ≥ 3 (WP-293)
  *
  * and, registered from here with the same authentication (WP-282, `run-calls.ts`): `transcript`,
  * `tools/:name`, `approvals`, `session` and `ssh-sign`. The heartbeat delivers the run's decided
@@ -70,6 +74,7 @@ import {
   WORKER_CLAIM_HOLD_MS,
   WORKER_HEARTBEAT_HOLD_MS,
   WORKER_PATHS,
+  WORKER_PROTOCOL_CLAIM_SCOPE,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_LOCAL_UI,
   WORKER_PROTOCOL_VERSION,
@@ -101,6 +106,7 @@ import type { WorkerStore } from '../../queries/worker-queries.js';
 import type { WorkerRelease } from '../../workers/release.js';
 import { authenticateWorkerCredential } from '../../workers/secrets.js';
 import { registerWorkerOwnerVerbs, type WorkerRunCancelPort } from './owner-verbs.js';
+import { type OfferDisplays, registerWorkerPickVerbs, storedDigestsOf } from './pick-verbs.js';
 import { registerWorkerRunCallRoutes } from './run-calls.js';
 
 /** How often a held claim asks again with no notification: an offer's `workers_from` passing. */
@@ -193,6 +199,11 @@ export interface WorkerProtocolRoutesOptions {
    * answers an authenticated caller `503 commands_unavailable` by name.
    */
   readonly runCancel?: WorkerRunCancelPort | null;
+  /**
+   * The display names of the listed offers' tasks (WP-293) — the package's own rule over the redacted
+   * ticket snapshot. `null`/absent: `GET offers` lists every offer without its names.
+   */
+  readonly offerDisplays?: OfferDisplays | null;
   /** `APP_BASE_URL`, for the owner verbs' `426` (`compose_url`). @default `http://localhost` */
   readonly baseUrl?: string;
   readonly release: () => WorkerRelease | null;
@@ -316,6 +327,7 @@ const unavailable = (): never => {
 /** {@link WorkerProtocolRoutesOptions.remoteRuns}' `null`: every command refuses by name. */
 const unavailableRemoteRuns: RemoteRuns = {
   claim: async () => unavailable(),
+  offers: async () => unavailable(),
   authenticate: async () => unavailable(),
   heartbeat: async () => unavailable(),
   pending: async () => unavailable(),
@@ -425,6 +437,20 @@ export const registerWorkerProtocolRoutes = async (
     return subject;
   };
 
+  /**
+   * A claimed package as the request's protocol reads it: a version-1 worker's strict package schema
+   * refuses the display block (the worker-UI amendment §5). Version 1 is no longer accepted since
+   * protocol 3 (WP-293), so this holds only while a build accepting it could reach here.
+   */
+  const packageFor = <P extends { readonly display?: unknown }>(
+    request: FastifyRequest,
+    pkg: P,
+  ): P => {
+    if (protocolOf(request) >= WORKER_PROTOCOL_LOCAL_UI) return pkg;
+    const { display: _display, ...v1Package } = pkg;
+    return v1Package as P;
+  };
+
   const runErrors = {
     401: apiErrorSchema,
     409: z.union([workerLeaseLostBodySchema, apiErrorSchema]),
@@ -479,6 +505,15 @@ export const registerWorkerProtocolRoutes = async (
                     : (row.manuallyPausedAt.toISOString() as IsoDateTime),
               }
             : {}),
+          // TD-031's claim-scope amendment §6: a version-2 worker's strict schema refuses the key.
+          ...(protocolOf(request) >= WORKER_PROTOCOL_CLAIM_SCOPE
+            ? {
+                claim_project_ids:
+                  row.claimProjects === null
+                    ? null
+                    : row.claimProjects.map((project) => project.id),
+              }
+            : {}),
         },
         server_time: isoNow(now),
       };
@@ -515,7 +550,6 @@ export const registerWorkerProtocolRoutes = async (
       if (request.body.paused || row.manuallyPausedAt !== null) {
         return reply.code(204).send(null);
       }
-      const v1 = protocolOf(request) < WORKER_PROTOCOL_LOCAL_UI;
       const presence = presenceOf(reply);
       const deadline = Date.now() + claimHoldMs;
       for (;;) {
@@ -529,9 +563,7 @@ export const registerWorkerProtocolRoutes = async (
           now: isoNow(now),
         });
         if (answer.kind === 'claimed') {
-          // A version-1 worker's strict package schema refuses the display block (amendment §5).
-          const { display: _display, ...v1Package } = answer.package;
-          return reply.code(200).send(v1 ? v1Package : answer.package);
+          return reply.code(200).send(packageFor(request, answer.package));
         }
         const remaining = deadline - Date.now();
         if (answer.kind === 'not_packaged' || remaining <= 0 || presence.gone()) {
@@ -954,6 +986,44 @@ export const registerWorkerProtocolRoutes = async (
       return workers.get(request) as { readonly workerId: Id };
     },
     runHolder,
+    now,
+  });
+
+  registerWorkerPickVerbs(app, {
+    store: options.store,
+    remote,
+    path,
+    upgradeBody: (presented) =>
+      upgradeRequiredBody(
+        { release: options.release, baseUrl: options.baseUrl ?? 'http://localhost' },
+        presented,
+      ),
+    authenticateWorker,
+    workerOf: async (request, digests) => {
+      const { workerId, row } =
+        digests === null
+          ? await (async () => {
+              const subject = workers.get(request);
+              if (subject === undefined) {
+                throw unauthenticated('the worker credential is missing');
+              }
+              const contact = await options.store.recordContact({
+                workerId: subject.workerId,
+                protocolVersion: protocolOf(request),
+                imageDigests: null,
+              });
+              if (contact === null) {
+                throw unauthenticated('the worker credential names no worker');
+              }
+              return { workerId: subject.workerId, row: contact };
+            })()
+          : await worker(request, digests);
+      return { workerId, imageDigests: storedDigestsOf(row.imageDigests) };
+    },
+    release: options.release,
+    unresolved,
+    displays: options.offerDisplays ?? null,
+    packageFor,
     now,
   });
 

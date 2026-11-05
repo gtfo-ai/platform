@@ -7,6 +7,7 @@ import { describeWorkerStoreContract } from './support/worker-store-suite.js';
 
 let users = 0;
 let runs = 0;
+let projects = 0;
 
 describeWorkerStoreContract({
   name: 'in-memory double',
@@ -37,6 +38,18 @@ describeWorkerStoreContract({
       },
       leaseExpired: async (runId) => store.runs.get(runId)?.leaseExpiresAt != null,
       audit: async () => store.audit.map((entry) => ({ ...entry })),
+      addViewer: async (email) => {
+        users += 1;
+        const id = `00000000-0000-4000-8000-${users.toString(16).padStart(12, '0')}`;
+        store.addUser({ id, email, name: null });
+        return id;
+      },
+      addProject: async (key, members) => {
+        projects += 1;
+        const id = `00000000-0000-4000-8000-${(0x293000 + projects).toString(16).padStart(12, '0')}`;
+        store.addProject({ id, key, name: `Project ${key}` }, members);
+        return id;
+      },
     };
   },
 });

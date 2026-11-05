@@ -17,7 +17,13 @@
  *
  * Every value is still rendered as text: this decides only whether the page reads the answer.
  */
-import type { WorkerLocalCancelResponse, WorkerLocalState } from '@platform/contracts';
+import type {
+  WorkerLocalCancelResponse,
+  WorkerLocalClaimScope,
+  WorkerLocalOffers,
+  WorkerLocalState,
+  WorkerLocalTakeResponse,
+} from '@platform/contracts';
 import { ROLE_LABEL, TERMINAL_REASON_LABEL } from '../ui/humanize.js';
 
 /** The local verbs' prefix — `WORKER_LOCAL_API_PREFIX`, held equal by the test. */
@@ -224,6 +230,38 @@ export const CANCEL: Spec = object({
   task_state: str({ max: 64 }),
 });
 
+/** A claim scope: `null` every project, `[]` pick only, otherwise those projects (WP-293). */
+const SCOPE: Spec = nullable({ t: 'array', of: uuid, max: 100 });
+
+/** `GET`/`POST /api/local/claim-scope` — `workerLocalClaimScopeSchema` (WP-293). */
+export const CLAIM_SCOPE: Spec = object({
+  claim_project_ids: SCOPE,
+  projects: {
+    t: 'array',
+    of: object({ id: uuid, key: str({ min: 1, max: 64 }), name: str({ max: 200 }) }),
+    max: 500,
+  },
+});
+
+/** One offer of `GET /api/local/offers` — `workerOfferSchema` (WP-293). */
+export const OFFER: Spec = object({
+  run_id: uuid,
+  kind: { t: 'enum', values: ['stage', 'ask'] },
+  project_key: nullable(str({ max: 64 })),
+  ticket_key: nullable(str({ max: 256 })),
+  title: nullable(str({ max: 500 })),
+  stage: nullable(str({ max: 128 })),
+  role: { t: 'enum', values: ROLES },
+  offered_at: datetime,
+  automatic: { t: 'boolean' },
+});
+
+/** `GET /api/local/offers` — `workerLocalOffersSchema` (WP-293). */
+export const OFFERS: Spec = object({ offers: { t: 'array', of: OFFER, max: 50 } });
+
+/** `POST /api/local/offers/:id/take` — `workerLocalTakeResponseSchema` (WP-293). */
+export const TAKE: Spec = object({ run_id: uuid });
+
 export const ERROR: Spec = object({
   error: object({ code: str({ max: 64 }), message: str({ max: 2_000 }) }),
 });
@@ -309,6 +347,18 @@ export const readState = (value: unknown): WorkerLocalState | null =>
 /** A cancel's answer, or `null`. */
 export const readCancel = (value: unknown): WorkerLocalCancelResponse | null =>
   conforms(CANCEL, value) ? (value as WorkerLocalCancelResponse) : null;
+
+/** The claim scope's answer, or `null` (WP-293). */
+export const readClaimScope = (value: unknown): WorkerLocalClaimScope | null =>
+  conforms(CLAIM_SCOPE, value) ? (value as WorkerLocalClaimScope) : null;
+
+/** The offers' answer, or `null` (WP-293). */
+export const readOffers = (value: unknown): WorkerLocalOffers | null =>
+  conforms(OFFERS, value) ? (value as WorkerLocalOffers) : null;
+
+/** A take's answer, or `null` (WP-293). */
+export const readTake = (value: unknown): WorkerLocalTakeResponse | null =>
+  conforms(TAKE, value) ? (value as WorkerLocalTakeResponse) : null;
 
 /** An error envelope's code and message, or `null`. */
 export const readError = (value: unknown): { code: string; message: string } | null =>

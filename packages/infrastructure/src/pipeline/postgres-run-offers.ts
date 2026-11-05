@@ -24,6 +24,7 @@
  * the run's `finish`). `tasks.save` is optimistic and last everywhere.
  */
 import type {
+  ClaimableRunOffer,
   ClaimedRunOffer,
   RunOfferRelease,
   RunOfferRepository,
@@ -33,6 +34,7 @@ import type {
 } from '@platform/application';
 import { decideRelease } from '@platform/application';
 import type {
+  AgentRole,
   Id,
   IsoDateTime,
   RunClaimantKind,
@@ -124,22 +126,28 @@ const toStoredOffer = (row: RunOfferRow): StoredRunOffer => ({
  *   integration declares `run_credential: static` or `deploy_key` **and** `remote_run_credential:
  *   allow` (absent is `deny`, the default: such a project is excluded).
  */
-const WORKER_ELIGIBLE = `(
-         not ($7::uuid = any(o.excluded_worker_ids))
-     and coalesce(o.image_digests ->> 'run', $9::text) = any($8::text[])
-     and coalesce(o.image_digests ->> 'egress', $10::text) = any($8::text[])
+const workerEligibleSql = (p: {
+  readonly now: string;
+  readonly worker: string;
+  readonly held: string;
+  readonly run: string;
+  readonly egress: string;
+}): string => `(
+         not (${p.worker}::uuid = any(o.excluded_worker_ids))
+     and coalesce(o.image_digests ->> 'run', ${p.run}::text) = any(${p.held}::text[])
+     and coalesce(o.image_digests ->> 'egress', ${p.egress}::text) = any(${p.held}::text[])
      and exists (
            select 1
              from workers w
              join users u on u.id = w.user_id
-            where w.id = $7::uuid
+            where w.id = ${p.worker}::uuid
               and w.revoked_at is null
               and ${USER_MAY_ACT_SQL}
-              and (w.paused_until is null or w.paused_until <= $4::timestamptz)
+              and (w.paused_until is null or w.paused_until <= ${p.now}::timestamptz)
               and w.manually_paused_at is null
               and ${userMayRunInProjectSql('w.user_id', 'o.project_id')}
-              and (o.workers_from <= $4::timestamptz
-                   or (o.assignee_user_id = w.user_id and $4::timestamptz < o.assignee_until)))
+              and (o.workers_from <= ${p.now}::timestamptz
+                   or (o.assignee_user_id = w.user_id and ${p.now}::timestamptz < o.assignee_until)))
      and not exists (
            select 1
              from bindings b
@@ -151,14 +159,36 @@ const WORKER_ELIGIBLE = `(
               and coalesce(i.config ->> 'remote_run_credential', 'deny') <> 'allow'))`;
 
 /**
+ * **A worker's claim scope takes offer `o`** (WP-293, TD-031's 2026-11-05 claim-scope amendment,
+ * decision 2): `workers.claim_project_ids` is `null` (every project) or names `o`'s project. A
+ * conjunct of an **automatic** claim only — a pick ignores it — and it only narrows: it is asked
+ * beside {@link workerEligibleSql}, never instead of any part of it, so no value admits an offer the
+ * eligibility refuses. `'{}'` (*pick only*) matches nothing.
+ */
+const workerScopeTakesSql = (worker: string): string => `exists (
+           select 1 from workers ws
+            where ws.id = ${worker}::uuid
+              and (ws.claim_project_ids is null or o.project_id = any(ws.claim_project_ids)))`;
+
+/** The claim's parameters, as {@link CLAIM_SQL} numbers them. */
+const WORKER_ELIGIBLE_CLAIM = workerEligibleSql({
+  now: '$4',
+  worker: '$7',
+  held: '$8',
+  run: '$9',
+  egress: '$10',
+});
+
+/**
  * TD-031 §2's claim. `$1` narrows it to one run's offer, or is null for the oldest eligible open
  * offer (the server claimant's loop, WP-276); `$2` the live statuses, `$3` the claimant kind, `$4`
  * the claim instant, `$5` the owner, `$6` the lease's expiry — both null in a composition with no
  * lease. **The server's eligibility** (WP-278, TD-031 decision 8): `server_from` reached — a
  * `null` `server_from` is *never* (`workers_only`) — or an offer written before WP-278, which has
- * neither `*_from` and is the server's at once. **A remote worker's** (WP-281, {@link WORKER_ELIGIBLE}):
+ * neither `*_from` and is the server's at once. **A remote worker's** (WP-281, {@link workerEligibleSql}):
  * `$7` the worker, `$8` the digests it holds, `$9`/`$10` the core's run and egress digests, `$11` the
- * run token's hash. The outer update is the run's `created → starting` (WP-275b); a row a previous
+ * run token's hash — and `$12`, **a pick** (WP-293): `true` skips the worker's claim scope
+ * ({@link workerScopeTakesSql}) and nothing else, `false` (an automatic claim) asks it. The outer update is the run's `created → starting` (WP-275b); a row a previous
  * build inserted live in another status keeps it. `for update of o, r skip locked` takes the offer and
  * then its run (the one lock order, WP-276) and skips a run a terminal writer holds.
  */
@@ -172,7 +202,8 @@ const CLAIM_SQL = `with candidate as (
        and ($3 <> 'server'
             or o.server_from <= $4::timestamptz
             or (o.server_from is null and o.workers_from is null))
-       and ($3 <> 'worker' or ${WORKER_ELIGIBLE})
+       and ($3 <> 'worker' or ${WORKER_ELIGIBLE_CLAIM})
+       and ($3 <> 'worker' or $12::boolean or ${workerScopeTakesSql('$7')})
      order by o.offered_at, o.id
      for update of o, r skip locked
      limit 1
@@ -289,6 +320,9 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
         'a worker claim names its worker, and only a worker claim does (RunOfferClaim.worker, WP-281)',
       );
     }
+    if (worker?.pick === true && claim.eligibility.runId === undefined) {
+      throw new Error('a pick names its run (RemoteClaimant.pick, WP-293)');
+    }
     const { rows } = await sqlOf(tx).query<{
       id: string;
       run_id: string;
@@ -308,6 +342,7 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       worker?.images.run ?? null,
       worker?.images.egress ?? null,
       worker?.runTokenHash ?? null,
+      worker?.pick === true,
     ]);
     const row = rows[0];
     if (row === undefined) {
@@ -326,6 +361,53 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
           ? { run: digests.run, egress: digests.egress }
           : null,
     };
+  },
+  /**
+   * WP-293's list: the claim's own candidate predicate and {@link workerEligibleSql} — the same text,
+   * numbered for this statement — with the claim scope **read** (`automatic`) rather than asked. No
+   * lock: a row another claim holds is listed and then refused at the pick, which is the claim's own
+   * answer to a race.
+   */
+  claimable: async (tx, input): Promise<readonly ClaimableRunOffer[]> => {
+    const { rows } = await sqlOf(tx).query<{
+      run_id: string;
+      task_id: string;
+      project_id: string;
+      kind: RunOfferKind;
+      stage: string | null;
+      role: AgentRole;
+      offered_at: Date | string;
+      automatic: boolean;
+    }>(
+      `select o.run_id, o.task_id, o.project_id, o.kind, o.stage, r.role, o.offered_at,
+              ${workerScopeTakesSql('$2')} as automatic
+         from run_offers o
+         join runs r on r.id = o.run_id
+        where o.state = 'open'
+          and r.status = any($1::run_status[])
+          and ${workerEligibleSql({ now: '$3', worker: '$2', held: '$4', run: '$5', egress: '$6' })}
+        order by o.offered_at, o.id
+        limit $7`,
+      [
+        [...ACTIVE_RUN_STATUSES],
+        input.worker.workerId,
+        input.now,
+        [...input.worker.heldImageDigests],
+        input.worker.images.run,
+        input.worker.images.egress,
+        input.limit,
+      ],
+    );
+    return rows.map((row) => ({
+      runId: row.run_id as Id,
+      taskId: row.task_id as Id,
+      projectId: row.project_id as Id,
+      kind: row.kind,
+      stage: row.stage,
+      role: row.role,
+      offeredAt: iso(row.offered_at) as IsoDateTime,
+      automatic: row.automatic,
+    }));
   },
   /**
    * WP-281's release — the port's docblock has the rule. The offer, then the run, locked (§5's

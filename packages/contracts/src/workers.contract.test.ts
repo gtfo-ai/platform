@@ -45,6 +45,7 @@ const summary = {
   paused_until: null,
   paused_until_estimated: false,
   manually_paused_at: null,
+  claim_projects: null,
   paused_reason: null,
   concurrency: 1,
   running: [],
@@ -103,6 +104,19 @@ describe('the device flow’s machine half (TD-031 §10c)', () => {
 });
 
 describe('the people’s half', () => {
+  it('lists each worker’s claim scope: every project, pick only, or projects by key (WP-293)', () => {
+    for (const claim_projects of [null, [], [{ id: ID, key: 'ACME' }], [{ id: ID, key: null }]]) {
+      expect(workerSummarySchema.safeParse({ ...summary, claim_projects }).success).toBe(true);
+    }
+    for (const refused of [[{ id: 'p1', key: 'ACME' }], [{ id: ID, key: 'ACME', name: 'x' }]]) {
+      expect(workerSummarySchema.safeParse({ ...summary, claim_projects: refused }).success).toBe(
+        false,
+      );
+    }
+    const { claim_projects: _absent, ...missing } = summary;
+    expect(workerSummarySchema.safeParse(missing).success).toBe(false);
+  });
+
   it('reads a pending code by what was typed, and answers what the machine sent', () => {
     expect(workerDeviceLookupRequestSchema.safeParse({ user_code: 'bcdf ghjk' }).success).toBe(
       true,
