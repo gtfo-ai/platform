@@ -46,8 +46,8 @@ import { queryKeys } from '../api/keys.js';
 import { ProjectFrame, type ProjectTab } from '../app/project-frame.js';
 import type { Services } from '../app/services.js';
 import { AppShell } from '../app/shell.js';
-import { FLEET_VIEWS } from '../features/agents-view.js';
 import type { SessionResponse } from '../auth/session.js';
+import { FLEET_VIEWS } from '../features/agents-view.js';
 import { DashboardScreen } from '../features/dashboard.js';
 import { WIZARD_STEP_IDS } from '../features/onboarding-steps.js';
 import {
