@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 775, so the next is **776**), its grade
+line with the next free number (the highest is 888, so the next is **889**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -80,6 +80,8 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 880 | minor | — | `config_audit` has no production writer (only the migration, the read and the fixtures name it), so the Audit log lists nothing on a real instance; its filter's known types (`AUDIT_ENTITY_LABEL` in `ui/humanize.ts`) are the platform's configurable entities, not a list any writer guarantees (found in S-23.11b) |
 | 881 | minor | — | A project's *Policies & WIP* settings page renders the wizard's step 4 whole (`OperatingMode`): the dial, features, risk classes, each budget window and the channel keep their own saves, and the dial's is a primary — one Save per page there needs step 4 split into sections the wizard renders the same way (S-23.11b) |
 | 883 | minor | — | The org *Policies* and *Notifications* forms remount on the document's `updated_at`, so a background refetch after another administrator's save discards unsaved edits (main behaves the same; found in review of PR #25) |
+| 887 | minor | — | Offers written before WP-278 have null `server_from` and `workers_from`; a worker reads a null `workers_from` as *never* and such an offer has no `expires_at`, so on a core with no server runner it waits forever (measured on Autix). The upgrade should have back-filled open offers' routing from the project's effective setting, or the sweep should re-route them; workaround: pause, then resume the task |
+| 888 | minor | — | `assigneeOnline` (`postgres-execution-routing.ts`) does not apply `USER_MAY_ACT_SQL`: a disabled or banned user's live worker still earns an assignee head start it can never claim (pre-existing; found in review of PR #35) |
 | 713 | nit | — | worker_device_codes rows are never deleted; bounded by the 200-pending limit per ten minutes, but grow with use; add a sweep of consumed/expired rows |
 | 874 | nit | — | A run that leaves the agents list is read once (`GET /api/runs/:id`) to cheer or slump at its desk for 20 s; a run that started and ended between two agents reads, or ended while the page was closed, never shows — a `run.finished`/`run.failed` frame carrying its ending would make it exact |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
@@ -121,6 +123,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 
 | # | Grade | Closed by | Item |
 |---|---|---|---|
+| 886 | blocker | PR #35 (TD-031 2026-11-05 hotfix amendment) | No remote worker could ever claim on a real installation: the claim (`WORKER_ELIGIBLE`) and the online-assignee read joined `project_members`, which nothing outside the tests writes, so an org admin's connected worker claimed nothing (Autix). Both now read the effective role, `rbac.ts`'s rule (`running-role.ts`); the e2e no longer seeds a membership |
 | 770 | minor | S-22.13 (architect, TD-031 2026-11-05 amendment) | The worker page keeps its strict guard instead of zod and stays within the 120 kB budget. Ruled a permitted exception for that entry only: the worker zod-parses each answer before sending it, and the guard's test compares keys at every depth, enum members and nullability in both directions |
 | 771 | minor | S-22.13 (architect, TD-031 2026-11-05 amendment) | A drain stays up idle and never exits. It marks its pause only when the worker was not already paused, and the next start clears only a marked pause. `manual-pause` carries `via` (`worker_ui`, `worker_ui_drain`, `worker_internal_drain`, `worker_start`) into `human_actions` |
 | 852 | nit | S-23.9b (review) | `ui/task-status.ts` holds the task state → status map and `needsYou`, read by the task page's header and the board's card |

@@ -190,8 +190,8 @@ export const PERMISSION_REQUIREMENTS = {
   'discovery.run': 'maintainer',
 
   // Viewer: TD-031 §10c asks only that the approver be an active user, and the worker is theirs.
-  // What a worker may then run is decided at the claim, by project membership at `member` or above
-  // (TD-031 §8) — so registering a machine grants nothing by itself.
+  // What a worker may then run is decided at the claim, by the effective project role (the higher of
+  // the organisation role and a membership) at `member` or above (TD-031 §8, backlog 886) — so registering a machine grants nothing by itself.
   'worker.register': 'viewer',
 } as const satisfies Record<PermissionAction, UserRole>;
 

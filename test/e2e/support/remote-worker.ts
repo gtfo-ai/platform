@@ -194,11 +194,8 @@ export const startWorkerUnderTest = async (
       )
     )[0]?.id;
   if (userId === undefined) throw new Error('the worker’s user could not be created');
-  await pipeline.query(
-    `insert into project_members (project_id, user_id, role) values ($1, $2, 'member')
-     on conflict do nothing`,
-    [pipeline.projectId, userId],
-  );
+  // No `project_members` row: nothing in production writes one, so the worker may run on its user's
+  // organisation role alone, as on a real installation (backlog 886).
   const minted = mintWorkerCredential();
   await pipeline.query(
     `insert into workers (id, user_id, name, credential_hash, last_seen_at, concurrency)

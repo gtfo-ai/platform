@@ -517,8 +517,9 @@ describe('the execution routing repository (WP-278, migration 0097)', () => {
   });
 
   it('answers an assignee online only for a member’s active, unpaused (usage or owner) worker seen in the last minute', async () => {
+    // An organisation viewer, so the membership below is what promotes it (backlog 886).
     const [user] = await read<{ id: string }>(
-      "insert into users (email, name) values ('dev@example.test', 'Dev') returning id",
+      "insert into users (email, name, role) values ('dev@example.test', 'Dev', 'viewer') returning id",
       [],
     );
     const userId = user?.id as Id;
@@ -564,6 +565,42 @@ describe('the execution routing repository (WP-278, migration 0097)', () => {
     expect(await online()).toBe(false);
     await read('update workers set manually_paused_at = null where user_id = $1', [userId]);
     expect(await online()).toBe(true);
+  });
+
+  it('reads the effective role: an organisation role at member or above needs no membership (backlog 886)', async () => {
+    const online = (userId: Id) =>
+      within((tx) =>
+        routingStore.assigneeOnline(tx, {
+          projectId,
+          userId,
+          now: new Date().toISOString() as IsoDateTime,
+        }),
+      );
+    const withWorker = async (orgRole: string): Promise<Id> => {
+      const [user] = await read<{ id: string }>(
+        'insert into users (email, name, role) values ($1, $2, $3) returning id',
+        [`${nextId()}@example.test`, 'Someone', orgRole],
+      );
+      const userId = user?.id as Id;
+      const workerId = nextId();
+      await read(
+        `insert into workers (id, user_id, name, credential_hash, last_seen_at)
+         values ($1, $2, 'laptop', $3, now())`,
+        [workerId, userId, workerId.replaceAll('-', '').padEnd(64, '0').slice(0, 64)],
+      );
+      return userId;
+    };
+    for (const orgRole of ['member', 'maintainer', 'admin']) {
+      expect(await online(await withWorker(orgRole)), orgRole).toBe(true);
+    }
+    const viewer = await withWorker('viewer');
+    expect(await online(viewer)).toBe(false);
+    const member = await withWorker('member');
+    await read(
+      "insert into project_members (project_id, user_id, role) values ($1, $2, 'viewer')",
+      [projectId, member],
+    );
+    expect(await online(member)).toBe(true); // a membership never demotes
   });
 
   it('says a server claimant is running from its renewal until its release', async () => {

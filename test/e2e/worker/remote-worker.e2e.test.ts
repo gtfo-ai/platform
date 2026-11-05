@@ -766,12 +766,8 @@ describe('the first usable worker (WP-283)', () => {
         request.end(JSON.stringify({ reason: 'leaving for the day' }));
       });
 
-    // Below run.cancel — a viewer, in the organisation and in the project: 403, and nothing moves.
+    // Below run.cancel — an organisation viewer with no project membership: 403, and nothing moves.
     await pipeline.query("update users set role = 'viewer' where id = $1", [laptop.userId]);
-    await pipeline.query(
-      "update project_members set role = 'viewer' where project_id = $1 and user_id = $2",
-      [pipeline.projectId, laptop.userId],
-    );
     const refused = await cancel('local-cancel-viewer');
     expect(refused.status, refused.body).toBe(403);
     expect(
@@ -793,10 +789,6 @@ describe('the first usable worker (WP-283)', () => {
 
     // At member: accepted, delivered on the heartbeat, the run cancelled and the task paused.
     await pipeline.query("update users set role = 'member' where id = $1", [laptop.userId]);
-    await pipeline.query(
-      "update project_members set role = 'member' where project_id = $1 and user_id = $2",
-      [pipeline.projectId, laptop.userId],
-    );
     const accepted = await cancel('local-cancel-member');
     expect(accepted.status, accepted.body).toBe(200);
     expect(JSON.parse(accepted.body)).toMatchObject({ run_id: runId, accepted: true });

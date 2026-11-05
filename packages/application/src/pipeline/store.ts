@@ -1673,8 +1673,8 @@ export interface RunOfferEligibility {
  * **A remote worker's claim** (WP-281, TD-031 decisions 2, 7 and 8). The repository's one claim
  * statement checks TD-031 §8's eligibility **in the statement** against these: the worker is not
  * revoked and its user may act (backlog 714: re-checked where the claim commits, not only at the
- * request's authentication), not paused, not excluded from the offer, its user a project member at
- * `member` or above, the offer's images held, the project's run credential `minted`
+ * request's authentication), not paused, not excluded from the offer, its user's effective project
+ * role (the higher of its organisation role and a membership, backlog 886) `member` or above, the offer's images held, the project's run credential `minted`
  * (`remote_run_credential` is WP-282's), the offer a **stage** offer (an ask's ending is not served
  * to a worker before WP-283), and `now ≥ workers_from` or the assignee's head start.
  */
@@ -1882,8 +1882,8 @@ export interface ExecutionRoutingRepository {
   settings(tx: Transaction, projectId: Id): Promise<ExecutionSettings | null>;
   /**
    * Whether `userId` has a worker **online** for this project at `now` (TD-031 §8): a worker of
-   * theirs that is not revoked, not paused, seen in the last 60 s, and they are a member of the
-   * project at `member` or above. `workers.last_seen_at` is written by every authenticated worker
+   * theirs that is not revoked, not paused, seen in the last 60 s, and their effective project role
+   * (the higher of the organisation role and a membership, backlog 886) is `member` or above. `workers.last_seen_at` is written by every authenticated worker
    * protocol call (WP-281), the heartbeat's every 20 s among them.
    */
   assigneeOnline(

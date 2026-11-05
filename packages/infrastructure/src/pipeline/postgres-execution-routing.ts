@@ -9,7 +9,8 @@
  *   TD-031 §8's defaults.
  * - **An online assignee** (TD-031 §8): a worker of the user that is `active`, not paused (or paused
  *   until a past instant), seen in the last {@link ASSIGNEE_ONLINE_SECONDS} on the database's clock,
- *   and the user a member of the project at `member` or above. `last_seen_at` is written by every
+ *   and the user's **effective** project role — the higher of the organisation role and a project
+ *   membership, `rbac.ts`'s rule (backlog 886) — `member` or above. `last_seen_at` is written by every
  *   authenticated worker protocol call (WP-281, `WorkerStore.recordContact`).
  * - **Server claimant liveness**, both halves on the database's clock (`held_connection_liveness`'s
  *   shape, migration 0054): the writer sets `expires_at = now() + ttl`, the reader compares with
@@ -21,14 +22,12 @@ import type { ExecutionRoutingRepository, Transaction } from '@platform/applicat
 import type { ExecutionMode, ExecutionPreference } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import { userMayRunInProjectSql } from './running-role.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
 /** TD-031 §8: a worker is online when its last heartbeat is younger than this. */
 export const ASSIGNEE_ONLINE_SECONDS = 60;
-
-/** The project roles that may take a run (TD-031 §8: `member` or above). */
-const RUNNING_ROLES = ['member', 'maintainer', 'admin'] as const;
 
 export const createPostgresExecutionRoutingRepository = (): ExecutionRoutingRepository => ({
   settings: async (tx, projectId) => {
@@ -59,15 +58,14 @@ export const createPostgresExecutionRoutingRepository = (): ExecutionRoutingRepo
       `select exists (
          select 1
            from workers w
-           join project_members m on m.user_id = w.user_id and m.project_id = $1
           where w.user_id = $2
             and w.state = 'active'
             and (w.paused_until is null or w.paused_until <= $3::timestamptz)
             and w.manually_paused_at is null
             and w.last_seen_at > now() - make_interval(secs => $4::float8)
-            and m.role::text = any($5::text[])
+            and ${userMayRunInProjectSql('w.user_id', '$1::uuid')}
        ) as online`,
-      [input.projectId, input.userId, input.now, ASSIGNEE_ONLINE_SECONDS, [...RUNNING_ROLES]],
+      [input.projectId, input.userId, input.now, ASSIGNEE_ONLINE_SECONDS],
     );
     return rows[0]?.online === true;
   },

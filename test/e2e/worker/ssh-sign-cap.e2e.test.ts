@@ -133,10 +133,6 @@ describe('ssh-sign through two ROLE=api processes (WP-282, backlog 693)', () => 
       const { id: userId } = await one<{ id: string }>(
         "insert into users (email, name) values ('dev@example.test', 'Dev') returning id",
       );
-      await pool.query(
-        "insert into project_members (project_id, user_id, role) values ($1, $2, 'member')",
-        [projectId, userId],
-      );
       const workerId = crypto.randomUUID();
       await pool.query(
         `insert into workers (id, user_id, name, credential_hash, last_seen_at)

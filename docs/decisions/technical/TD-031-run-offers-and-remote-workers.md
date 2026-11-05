@@ -236,14 +236,14 @@ refuses an `execution` key. Defaults: `hybrid`, `prefer: server`, `fallback_afte
 preferred and `5m` when workers are, `assignee_window: 120s`, `offer_timeout: 24h`.
 
 At offer creation the core computes the timestamps: with an **online** assignee worker (heartbeat in the
-last 60 s, member, not paused, not excluded) `assignee_until = now + assignee_window`; then the preferred
+last 60 s, effective role `member`+, not paused, not excluded) `assignee_until = now + assignee_window`; then the preferred
 side's `*_from` = `assignee_until or now`, the other side's = that `+ fallback_after`; `server_only` sets
 `workers_from = null`, `workers_only` sets `server_from = null`. **A core with no claimant composed for
 the server** treats every project as `workers_only` at offer time and says so on the settings screen.
-Eligibility in the claim SQL: the worker's user is a project member at `member` or above, the worker is
+Eligibility in the claim SQL: the worker's user's effective project role is `member` or above (the 2026-11-05 hotfix amendment), the worker is
 not revoked, not paused, not excluded, holds the image digests, the project's credential source is `minted`, or is
 `static`/`deploy_key` with `remote_run_credential: allow` (decision 5), and `now() >= workers_from` or (`assignee_user_id = worker.user_id` and `now() <
-assignee_until`). Membership is checked at the claim; losing it later does not stop a run in flight.
+assignee_until`). The effective role is checked at the claim; losing it later does not stop a run in flight.
 
 The server's runner claims while it has a free slot (`APP_RUNNER_CONCURRENCY`) with `now() >= server_from`.
 **Waking**: `pg_notify('run_offers', project_id)` on offer and release; the server's runner `LISTEN`s and
@@ -1225,3 +1225,16 @@ history (backlog 775).
 - *A one-shot bootstrap exchange* (the fragment traded for a session token): it still needs the
   logged address.
 - *Opening the browser from the container*: it is impossible from inside a container.
+
+## Amendment (2026-11-05, orchestrator-authorised hotfix) — decision 8: "a project member at `member` or above" is the effective role (backlog 886)
+
+§8's eligibility, *"the worker's user is a project member at `member` or above"*, and the online
+assignee's *"member"* are read as the **effective project role** that every project-scoped request is
+already authorised by (`apps/server/src/auth/rbac.ts`'s `effectiveRole`): the higher of the
+organisation role (`users.role`) and a `project_members` row for that project — a membership promotes,
+it never demotes. Read literally as a membership row, the claim admitted nobody on a real installation,
+because nothing outside the tests writes `project_members`: an organisation admin's connected worker,
+holding the right images, claimed nothing (Autix). Both statements now ask one predicate,
+`userMayRunInProjectSql` (`packages/infrastructure/src/pipeline/running-role.ts`), whose role list is
+derived from the domain's `ROLE_LEVELS`. An organisation `viewer` still runs nothing without a
+membership at `member` or above, so `worker.register: viewer` still grants nothing by itself.

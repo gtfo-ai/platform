@@ -139,7 +139,12 @@ interface World {
   readonly w2: Id;
 }
 
-/** A fresh project with two users, their workers, Alice a `member` and Bob a `viewer`. */
+/**
+ * A fresh project with two users, their workers, Alice a `member` and Bob a `viewer` **of the
+ * project**. Both are organisation `viewer`s — not the column's default `member` — so the membership
+ * is what decides, and a refusal below `member` is the membership's (backlog 886: the effective role
+ * is the higher of the two, and an organisation `member` would claim with any membership or none).
+ */
 const world = async (): Promise<World> => {
   const [project] = await sql<{ id: string }>(
     `insert into projects (org_id, key, name, repo_url)
@@ -149,7 +154,7 @@ const world = async (): Promise<World> => {
   const projectId = project?.id as Id;
   const user = async (role: string): Promise<Id> => {
     const [row] = await sql<{ id: string }>(
-      'insert into users (email, name) values ($1, $2) returning id',
+      "insert into users (email, name, role) values ($1, $2, 'viewer') returning id",
       [`${nextId()}@example.test`, 'Someone'],
     );
     await sql('insert into project_members (project_id, user_id, role) values ($1, $2, $3)', [
@@ -599,6 +604,84 @@ describe('the worker claim’s eligibility is its own statement (TD-031 §8)', (
     });
     expect(await claim(w.w2, runId)).toBeNull();
     expect((await claim(w.w1, runId))?.runId).toBe(runId);
+  });
+});
+
+describe('backlog 886: the claim reads the effective role, as rbac.ts does', () => {
+  /** A user of organisation role `orgRole`, with `membership` in the project or none, and a worker. */
+  const someone = async (w: World, orgRole: string, membership: string | null): Promise<Id> => {
+    const [row] = await sql<{ id: string }>(
+      'insert into users (email, name, role) values ($1, $2, $3) returning id',
+      [`${nextId()}@example.test`, 'Someone', orgRole],
+    );
+    const userId = row?.id as Id;
+    if (membership !== null) {
+      await sql('insert into project_members (project_id, user_id, role) values ($1, $2, $3)', [
+        w.projectId,
+        userId,
+        membership,
+      ]);
+    }
+    const workerId = nextId();
+    await sql(
+      `insert into workers (id, user_id, name, credential_hash, last_seen_at)
+       values ($1, $2, 'laptop', $3, now())`,
+      [workerId, userId, workerId.replaceAll('-', '').padEnd(64, '0').slice(0, 64)],
+    );
+    return workerId;
+  };
+
+  it.each(['member', 'maintainer', 'admin'])(
+    'claims for an organisation %s with no project membership at all',
+    async (orgRole) => {
+      const w = await world();
+      const workerId = await someone(w, orgRole, null);
+      const runId = await offered(w);
+      expect((await claim(workerId, runId))?.runId).toBe(runId);
+    },
+  );
+
+  it('refuses an organisation viewer with no project membership', async () => {
+    const w = await world();
+    const workerId = await someone(w, 'viewer', null);
+    const runId = await offered(w);
+    expect(await claim(workerId, runId)).toBeNull();
+    expect(await offerState(runId)).toBe('open');
+  });
+
+  it('claims for an organisation viewer whom a project membership promotes to member', async () => {
+    const w = await world();
+    const workerId = await someone(w, 'viewer', 'member');
+    const runId = await offered(w);
+    expect((await claim(workerId, runId))?.runId).toBe(runId);
+  });
+
+  it('a viewer membership never demotes an organisation member', async () => {
+    const w = await world();
+    const workerId = await someone(w, 'member', 'viewer');
+    const runId = await offered(w);
+    expect((await claim(workerId, runId))?.runId).toBe(runId);
+  });
+
+  it('another project’s membership promotes nothing here', async () => {
+    const w = await world();
+    const elsewhere = await world();
+    const [row] = await sql<{ id: string }>(
+      "insert into users (email, name, role) values ($1, 'Someone', 'viewer') returning id",
+      [`${nextId()}@example.test`],
+    );
+    await sql("insert into project_members (project_id, user_id, role) values ($1, $2, 'admin')", [
+      elsewhere.projectId,
+      row?.id,
+    ]);
+    const workerId = nextId();
+    await sql(
+      `insert into workers (id, user_id, name, credential_hash, last_seen_at)
+       values ($1, $2, 'laptop', $3, now())`,
+      [workerId, row?.id, workerId.replaceAll('-', '').padEnd(64, '0').slice(0, 64)],
+    );
+    const runId = await offered(w);
+    expect(await claim(workerId, runId)).toBeNull();
   });
 });
 

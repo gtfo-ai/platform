@@ -335,7 +335,10 @@ export interface MemoryRemoteWorker {
   readonly pausedUntil: IsoDateTime | null;
   /** The owner's hold from the worker's local page (WP-292); absent reads as not held. */
   readonly manuallyPaused?: boolean;
-  /** Whether the user is a member of the project at `member` or above. */
+  /**
+   * Whether the user's effective project role — the higher of the organisation role and a
+   * membership (backlog 886) — is `member` or above.
+   */
   readonly memberOf: (projectId: Id) => boolean;
 }
 
