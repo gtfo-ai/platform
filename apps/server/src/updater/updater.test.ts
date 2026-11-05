@@ -6,9 +6,10 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { silentLogger } from '@platform/application';
 import { WORKER_PROTOCOL_VERSION } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { asLoggerPort, createLogger } from '../logging.js';
+import { createCoreClient } from '../remote-worker/core-client.js';
 import { AttestationRefusedError, type AttestationVerifier } from './attestation.js';
 import type { UpdaterConfig } from './config.js';
 import type { DockerRun } from './docker.js';
@@ -71,16 +72,35 @@ const world = async (options: {
   readonly verifier?: boolean;
   readonly idleAfter?: number;
   readonly coreUrl?: string | null;
+  /** The credential file's text (default: the bare credential, as written before WP-294). */
+  readonly credentialFile?: string;
+  /** `core-url` in `worker-state`: a platform chosen on the worker's page (WP-294). */
+  readonly storedCoreUrl?: string;
 }) => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'updater-state-'));
   const workerStateDir = await mkdtemp(path.join(tmpdir(), 'updater-worker-'));
-  await writeFile(path.join(workerStateDir, 'credential'), CREDENTIAL);
+  await writeFile(path.join(workerStateDir, 'credential'), options.credentialFile ?? CREDENTIAL);
+  if (options.storedCoreUrl !== undefined) {
+    await writeFile(path.join(workerStateDir, 'core-url'), `${options.storedCoreUrl}\n`);
+  }
+  const logLines: string[] = [];
+  const logger = asLoggerPort(
+    createLogger({
+      level: 'debug',
+      format: 'json',
+      role: 'updater',
+      destination: { write: (line: string) => logLines.push(line) },
+    }),
+  );
+  const authorizations: string[] = [];
   const templatePath = path.join(stateDir, '..', `template-${path.basename(stateDir)}.yml`);
   await writeFile(templatePath, '# this image’s template\n');
   const events: string[] = [];
   const reports: unknown[] = [];
   let stateReads = 0;
   const fetch = async (url: string, init?: RequestInit): Promise<Response> => {
+    const authorization = (init?.headers as Record<string, string> | undefined)?.authorization;
+    if (authorization !== undefined) authorizations.push(authorization);
     if (url.endsWith('/api/worker/v1/release')) {
       events.push('release');
       return Response.json({
@@ -179,7 +199,7 @@ const world = async (options: {
     config,
     docker,
     fetch,
-    logger: silentLogger,
+    logger,
     verifier: options.verifier === false ? null : verifier,
     containerId: 'self',
     templatePath,
@@ -187,7 +207,17 @@ const world = async (options: {
     now: () => new Date('2026-11-05T12:00:00Z'),
     sleep: async () => undefined,
   });
-  return { updater, events, reports, calls, verified, stateDir, templatePath };
+  return {
+    updater,
+    events,
+    reports,
+    calls,
+    verified,
+    stateDir,
+    templatePath,
+    logLines,
+    authorizations,
+  };
 };
 
 describe('the updater’s poll', () => {
@@ -280,6 +310,62 @@ describe('the updater’s poll', () => {
     await w.updater.tick();
     expect(w.events).toEqual([]);
     expect(w.reports).toEqual([]);
+  });
+
+  it('reads a two-line credential (WP-294: its core on line 2) by its first line: the update runs, the report goes, the credential is in no log (review of PR #42)', async () => {
+    const w = await world({
+      advertised: digests('b'),
+      idleAfter: 2,
+      credentialFile: `${CREDENTIAL}\nhttps://core.example.test\n`,
+    });
+    await w.updater.tick();
+    expect(w.events).toContain('create apply');
+    expect(w.authorizations[0]).toBe(`Bearer ${CREDENTIAL}`);
+    // A refusal is reported with the same first line (`apply.ts`'s `reportResult`).
+    const refused = await world({
+      advertised: digests('b'),
+      verifier: false,
+      credentialFile: `${CREDENTIAL}\nhttps://core.example.test\n`,
+    });
+    await refused.updater.tick();
+    expect(refused.reports).toHaveLength(1);
+    expect(refused.authorizations.every((value) => value === `Bearer ${CREDENTIAL}`)).toBe(true);
+    for (const line of [...w.logLines, ...refused.logLines]) expect(line).not.toContain(CREDENTIAL);
+    // A credential recorded for another core is not this core's: nothing is asked with it.
+    const other = await world({
+      advertised: digests('b'),
+      credentialFile: `${CREDENTIAL}\nhttps://other.example.test\n`,
+    });
+    await other.updater.tick();
+    expect(other.events).toEqual([]);
+  });
+
+  it('follows the platform chosen on the worker’s page when APP_CORE_URL is empty (review of PR #42)', async () => {
+    const w = await world({
+      advertised: digests('a'),
+      coreUrl: null,
+      storedCoreUrl: 'https://core.example.test',
+    });
+    await w.updater.tick();
+    expect(w.events).toEqual(['release']);
+  });
+
+  it('a transport failure never carries the bearer into the error a log line serialises (review of PR #42)', async () => {
+    const bearer = `${CREDENTIAL}\nhttps://core.example.test`;
+    const core = createCoreClient({
+      baseUrl: 'https://core.example.test',
+      fetch: async () => {
+        // Node's own words for a refused header value name the value.
+        throw new TypeError(`Headers.append: "Bearer ${bearer}" is an invalid header value.`);
+      },
+    });
+    const error = await core.release(bearer).then(
+      () => null,
+      (caught: unknown) => caught as Error,
+    );
+    expect(error?.message).toContain('[REDACTED:bearer]');
+    expect(error?.message).not.toContain(CREDENTIAL);
+    expect(error?.stack ?? '').not.toContain(CREDENTIAL);
   });
 
   it('refuses by name without a verifier, verifying and pulling nothing', async () => {

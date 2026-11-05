@@ -33,11 +33,13 @@
  * and directory are read from this container's own compose labels, never from the core.
  */
 import { randomUUID } from 'node:crypto';
-import { copyFile, readFile } from 'node:fs/promises';
+import { copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Logger } from '@platform/application';
 import { type CoreImageDigests, WORKER_PROTOCOL_VERSION } from '@platform/contracts';
 import { CoreCallError, createCoreClient } from '../remote-worker/core-client.js';
+import { readStoredCredential } from '../remote-worker/credential.js';
+import { readStoredCoreUrl } from '../remote-worker/setup-files.js';
 import { reportResult } from './apply.js';
 import {
   AttestationRefusedError,
@@ -207,11 +209,13 @@ export interface Updater {
 
 export const createUpdater = (deps: UpdaterDeps): Updater => {
   const { config, docker, logger } = deps;
-  /** `null` while no core is configured: the updater idles (S-22.17's first-run page). */
-  const core =
-    config.coreUrl === null
-      ? null
-      : createCoreClient({ baseUrl: config.coreUrl, fetch: (url, init) => deps.fetch(url, init) });
+  /**
+   * The core this worker follows: `APP_CORE_URL`, else the platform chosen on the worker's page
+   * (`core-url` in `worker-state`, WP-294) — read at every use, so a platform chosen or changed on
+   * the page is followed without a restart. `null` while there is none: the updater idles.
+   */
+  const effectiveCoreUrl = async (): Promise<string | null> =>
+    config.coreUrl ?? (await readStoredCoreUrl(config.workerStateDir).catch(() => null));
   /** The running set's verified build — its commit and time — once read (it does not change). */
   let runningBuild: { readonly commit: string | null; readonly at: Date | null } | null = null;
   /** Advertised sets this updater will not try again: refused, rolled back or failed. */
@@ -227,11 +231,12 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     return self;
   };
 
-  const credential = async (): Promise<string | null> =>
-    readFile(path.join(config.workerStateDir, 'credential'), 'utf8').then(
-      (text) => text.trim() || null,
-      () => null,
-    );
+  /**
+   * The worker credential — its first line only, and only when it was recorded for `coreUrl`'s
+   * origin (WP-294: the file's second line names the core it belongs to).
+   */
+  const credential = async (coreUrl: string): Promise<string | null> =>
+    readStoredCredential(config.workerStateDir, new URL(coreUrl).origin).catch(() => null);
 
   const workerState = async (): Promise<{
     readonly connection?: string;
@@ -258,12 +263,16 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     if (settled.has(key)) return;
     settled.add(key);
     logger.error({ advertised, why }, `this worker refuses the update its core advertises: ${why}`);
-    await reportResult({ ...deps, workerStateDir: config.workerStateDir }, config.coreUrl ?? '', {
-      from: running,
-      to: advertised,
-      result: 'failed',
-      detail: why,
-    });
+    await reportResult(
+      { ...deps, workerStateDir: config.workerStateDir },
+      (await effectiveCoreUrl()) ?? '',
+      {
+        from: running,
+        to: advertised,
+        result: 'failed',
+        detail: why,
+      },
+    );
   };
 
   const launchApply = async (plan: UpdatePlan, image: string): Promise<void> => {
@@ -351,11 +360,19 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
   };
 
   const tick = async (): Promise<void> => {
-    if (core === null) {
-      logger.info({}, 'no core is configured yet (APP_CORE_URL); the updater waits');
+    const coreUrl = await effectiveCoreUrl();
+    if (coreUrl === null) {
+      logger.info(
+        {},
+        'no core is configured yet (APP_CORE_URL or the worker’s page); the updater waits',
+      );
       return;
     }
-    const token = await credential();
+    const core = createCoreClient({
+      baseUrl: coreUrl,
+      fetch: (url, init) => deps.fetch(url, init),
+    });
+    const token = await credential(coreUrl);
     if (token === null) {
       logger.debug({}, 'this worker is not logged in yet; there is nothing to follow');
       return;
@@ -459,7 +476,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       to,
       from_digests: running,
       to_digests: advertised,
-      core_url: config.coreUrl ?? '',
+      core_url: (await effectiveCoreUrl()) ?? '',
       worker_url: config.workerUrl,
       check_seconds: config.checkSeconds,
     };
@@ -481,7 +498,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
   };
 
   const recover = async (): Promise<void> => {
-    const coreUrl = config.coreUrl;
+    const coreUrl = await effectiveCoreUrl();
     // Nothing to report to, and nothing applied without a core: there is nothing to recover.
     if (coreUrl === null) return;
     const state = await readState(config.stateDir);
