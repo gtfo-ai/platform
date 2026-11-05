@@ -1017,6 +1017,33 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     },
   );
 
+  it('install.sh and install.ps1 name the configured core whatever Host or X-Forwarded-* the request carries (S-22.20)', async () => {
+    const w = await world();
+    for (const verb of [WORKER_PATHS.installSh, WORKER_PATHS.installPs1]) {
+      const plain = await w.app.inject({ method: 'GET', url: url(verb) });
+      const hostile = await w.app.inject({
+        method: 'GET',
+        url: url(verb),
+        headers: {
+          host: 'evil.example.org',
+          'x-forwarded-host': 'evil.example.org',
+          'x-forwarded-proto': 'http',
+          forwarded: 'host=evil.example.org;proto=http',
+        },
+      });
+      expect(`${verb} ${hostile.statusCode}`).toBe(`${verb} 200`);
+      expect(hostile.body).toBe(plain.body);
+      expect(hostile.body).not.toContain('evil.example.org');
+      const hosts = new Set(
+        [...hostile.body.matchAll(/https?:\/\/([A-Za-z0-9.-]+)/g)].map((match) => match[1]),
+      );
+      hosts.delete('core.example.test');
+      hosts.delete('docs.docker.com');
+      hosts.delete('127.0.0.1');
+      expect([...hosts], verb).toEqual([]);
+    }
+  });
+
   it('install.sh and install.ps1 answer 503 install_script_unavailable for an APP_BASE_URL they cannot quote (S-22.20)', async () => {
     const w = await world({ baseUrl: "https://core.example.test/it's" });
     for (const verb of [WORKER_PATHS.installSh, WORKER_PATHS.installPs1]) {

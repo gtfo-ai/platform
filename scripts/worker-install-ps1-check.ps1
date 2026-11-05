@@ -90,16 +90,29 @@ try {
   & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
   Test-That ($LASTEXITCODE -eq 0) "a re-run exits 0 (it exited $LASTEXITCODE)"
   $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
-  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker start') "a re-run starts and recreates nothing (last: $($calls[-1]))"
+  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker up -d --no-recreate') "a re-run adds what is missing and recreates nothing (last: $($calls[-1]))"
 
-  # As `irm | iex` would: in this session, which must survive with nothing of the installer left.
-  $alive = & $shell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([IO.File]::ReadAllText('$script'))) -Dir '$workerDir' -NoOpen | Out-Null; if (Get-Command Install-Worker -ErrorAction SilentlyContinue) { 'leaked' } else { 'session-alive' }"
-  Test-That ((@($alive) -join ' ') -match 'session-alive') "an in-session run leaves the session alive and clean (said: $(@($alive) -join ' '))"
+  # As `irm | iex` runs it: in the caller's own scope, which must survive with nothing of the
+  # installer left. With no options it targets $HOME\agentic-worker, which the stub's running
+  # project (brought up from $workerDir) makes it refuse (exit 3) before it writes anything.
+  $probe = "Invoke-Expression ([IO.File]::ReadAllText('$script')); " +
+    "`$left = @(Get-Variable -Name Dir, Core, NoOpen, Uninstall, Purge, installerExitCode, CoreAddress, WorkerDir -Scope Global -ErrorAction SilentlyContinue).Count + " +
+    "@(Get-Command -Name Install-Worker, Exit-Installer -ErrorAction SilentlyContinue).Count; " +
+    "if (`$left -eq 0 -and `$ErrorActionPreference -eq 'Continue') { 'session-clean' } else { `"leaked `$left`" }"
+  $alive = & $shell -NoProfile -ExecutionPolicy Bypass -Command $probe
+  Test-That ((@($alive) -join ' ') -match 'session-clean') "an irm | iex run leaves the caller's session alive and clean (said: $(@($alive) -join ' '))"
+  # And with options, as the script's header says to pass them.
+  $alive = & $shell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([IO.File]::ReadAllText('$script'))) -Dir '$workerDir' -NoOpen | Out-Null; 'session-alive'"
+  Test-That ((@($alive) -join ' ') -match 'session-alive') "a script block run with options leaves the session alive (said: $(@($alive) -join ' '))"
+  $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
+  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker up -d --no-recreate') "it took its options (last: $($calls[-1]))"
 
   & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -Uninstall -Purge
   Test-That ($LASTEXITCODE -eq 0) "-Uninstall -Purge exits 0 (it exited $LASTEXITCODE)"
   $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
-  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker down --volumes') "-Purge removes the volumes (last: $($calls[-1]))"
+  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker down --volumes --remove-orphans') "-Purge removes the volumes (last: $($calls[-1]))"
+  $volumeCalls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker volume *' })
+  Test-That (($volumeCalls -join '|') -eq 'docker volume inspect agentic-worker-repo-cache|docker volume rm agentic-worker-repo-cache') "-Purge removes the launcher's repository cache (asked: $($volumeCalls -join ' | '))"
   Test-That (-not (Test-Path -LiteralPath $workerDir)) '-Purge removes the folder it made'
 
   & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -Purge

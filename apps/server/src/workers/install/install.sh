@@ -270,7 +270,12 @@ pins_of_block() {
 download_bundle() {
   url=$core/api/worker/v1/compose.yml
   rm -f "$dir/$DOWNLOAD"
-  if ! curl -fsSL --proto '=https,http' --max-time 120 -o "$dir/$DOWNLOAD" "$url"; then
+  # An https core is fetched over https only, redirects included; an http one (a local core) as given.
+  case $core in
+    https://*) protocols='=https' ;;
+    *) protocols='=https,http' ;;
+  esac
+  if ! curl -fsSL --proto "$protocols" --max-time 120 -o "$dir/$DOWNLOAD" "$url"; then
     rm -f "$dir/$DOWNLOAD"
     die 1 "could not download the worker bundle from $url. Is the core reachable from this machine? Open that address in a browser to see its answer: a 503 means the core cannot name its images yet, so try again in a minute."
   fi
@@ -383,16 +388,18 @@ install_worker() {
     mv -f "$dir/$DOWNLOAD" "$dir/$BUNDLE"
     say "Starting the worker in $dir ..."
     compose up -d || die 1 "docker compose up failed (see above). Fix what it names and run this again."
+  elif [ -n "$existing" ] && [ "$current" = "$served" ]; then
+    # The same build: create what is missing (a removed updater too), start what is stopped, and
+    # recreate nothing.
+    mv -f "$dir/$DOWNLOAD" "$dir/$BUNDLE"
+    say "The worker is already installed in $dir; starting what is stopped and adding what is missing (nothing is recreated) ..."
+    compose up -d --no-recreate || die 1 "docker compose up failed (see above)."
   elif [ -n "$existing" ]; then
-    if [ "$current" = "$served" ]; then
-      mv -f "$dir/$DOWNLOAD" "$dir/$BUNDLE"
-    else
-      rm -f "$dir/$DOWNLOAD"
-      say 'This worker runs another build than the core serves now. Its updater moves it there after verifying the build;'
-      say 'this installer never changes the images a worker runs.'
-      [ -f "$dir/$BUNDLE" ] || die 3 "$dir/$BUNDLE is missing, so this installer cannot restart the worker; see: docker ps --all --filter label=com.docker.compose.project=$PROJECT"
-    fi
-    say "The worker is already installed in $dir; starting whatever of it is stopped (nothing is recreated) ..."
+    rm -f "$dir/$DOWNLOAD"
+    say 'This worker runs another build than the core serves now. Its updater moves it there after verifying the build;'
+    say 'this installer never changes the images a worker runs.'
+    [ -f "$dir/$BUNDLE" ] || die 3 "$dir/$BUNDLE is missing, so this installer cannot restart the worker; see: docker ps --all --filter label=com.docker.compose.project=$PROJECT"
+    say "Starting whatever of it is stopped (nothing is recreated) ..."
     compose start || die 1 "docker compose start failed (see above)."
   else
     rm -f "$dir/$DOWNLOAD"
@@ -417,6 +424,19 @@ install_worker() {
 
 # --- Uninstall ---
 
+# The launcher's repository cache volume: APP_WORKER_CACHE_VOLUME (this shell, else .env), or the
+# bundle's default.
+cache_volume() {
+  volume=${APP_WORKER_CACHE_VOLUME:-}
+  if [ -z "$volume" ] && [ -f "$dir/.env" ]; then
+    volume=$(sed -n 's/^APP_WORKER_CACHE_VOLUME=//p' "$dir/.env" | tail -n 1)
+  fi
+  case $volume in
+    '' | *[!A-Za-z0-9_.-]*) volume=agentic-worker-repo-cache ;;
+  esac
+  say "$volume"
+}
+
 uninstall_worker() {
   need_docker
   [ -d "$dir" ] || die 3 "nothing to remove: $dir does not exist"
@@ -424,17 +444,24 @@ uninstall_worker() {
   refuse_foreign_and_busy
   [ -f "$dir/$BUNDLE" ] || die 3 "$dir/$BUNDLE is missing, so this installer cannot tell Compose what to remove."
   if [ "$purge" -eq 1 ]; then
-    compose down --volumes || die 1 'docker compose down failed (see above).'
+    cache=$(cache_volume)
+    compose down --volumes --remove-orphans || die 1 'docker compose down failed (see above).'
+    # The launcher's repository cache (cloned source) is the launcher's volume, not Compose's.
+    if docker volume inspect "$cache" >/dev/null 2>&1; then
+      docker volume rm "$cache" >/dev/null ||
+        warn "kept the volume $cache (still in use?); remove it with: docker volume rm $cache"
+    fi
     rm -f "$dir/$BUNDLE" "$dir/$DOWNLOAD" "$dir/.env" "$dir/.env.previous" "$dir/$MARK"
     if rmdir "$dir" 2>/dev/null; then
-      say "Removed the worker, its volumes and $dir."
+      say "Removed the worker, its volumes, its repository cache and $dir."
     else
-      say "Removed the worker and its volumes. Kept $dir: it holds files this installer did not write."
+      say "Removed the worker, its volumes and its repository cache. Kept $dir: it holds files this installer did not write."
     fi
   else
-    compose down || die 1 'docker compose down failed (see above).'
-    say "Removed the worker's containers. Kept its volumes (its approval, its Claude sign-in) and $dir:"
-    say 'run this script again to start it as it was, or with --uninstall --purge to remove them.'
+    compose down --remove-orphans || die 1 'docker compose down failed (see above).'
+    say "Removed the worker's containers. Kept its volumes (its approval, its Claude sign-in) and $dir."
+    say "To start it again as it was: cd '$dir' && docker compose up -d (its updater then follows the core)."
+    say 'To remove the rest: run this script again with --uninstall --purge.'
   fi
   say 'Its images stay in Docker; docker image prune -a removes the ones nothing uses.'
 }

@@ -26,20 +26,19 @@ never writes the .env file the updater manages, and never touches a volume (exce
 Options: -Dir DIR, -Core URL, -NoOpen, -Uninstall, -Purge (with -Uninstall). With irm | iex, pass
 them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Uninstall
 #>
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'An interactive installer talks to the person running it.')]
-param(
-  [string]$Dir = '',
-  [string]$Core = '',
-  [switch]$NoOpen,
-  [switch]$Uninstall,
-  [switch]$Purge
-)
-
-# Everything runs inside one script block, so `irm | iex` leaves no function, variable or
-# preference behind in the caller's session; the options are handed to it as its own parameters,
-# and the exit status is its last output.
-$installerExitCode = & {
-  param([string]$Dir, [string]$Core, [bool]$NoOpen, [bool]$Uninstall, [bool]$Purge)
+# Everything runs inside one script block, its options included, so `irm | iex` leaves no function,
+# variable or preference behind in the caller's session: the script has no parameters of its own and
+# hands what it was given (`@args`) to the block, and the block's exit status goes straight to `exit`
+# when this is a file run, and nowhere when it is not.
+& {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'An interactive installer talks to the person running it.')]
+  param(
+    [string]$Dir = '',
+    [string]$Core = '',
+    [switch]$NoOpen,
+    [switch]$Uninstall,
+    [switch]$Purge
+  )
   $ErrorActionPreference = 'Stop'
 
   $CoreUrl = '@@AGENTIC_CORE_URL@@'
@@ -91,8 +90,9 @@ $installerExitCode = & {
 
   function Invoke-Compose {
     param([string[]]$Arguments)
-    # Removed, not emptied: PowerShell hands a .NET string parameter '' for $null, and an empty
-    # APP_TRUSTED_BUILDER would still reach Compose and switch the updater's verification off.
+    # Removed with Remove-Item Env:, not through SetEnvironmentVariable: on the Windows runner that
+    # left each one defined and empty (measured, S-22.20), and an APP_TRUSTED_BUILDER that is set but
+    # empty would reach Compose and switch the updater's verification off.
     $saved = @{}
     foreach ($name in $Scrubbed) {
       $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -262,6 +262,21 @@ $installerExitCode = & {
     return $port
   }
 
+  # The launcher's repository cache volume: APP_WORKER_CACHE_VOLUME (this session, else .env), or
+  # the bundle's default.
+  function Get-CacheVolume {
+    $volume = [Environment]::GetEnvironmentVariable('APP_WORKER_CACHE_VOLUME', 'Process')
+    if ([string]::IsNullOrEmpty($volume)) {
+      $envText = Read-Text (Join-Path $WorkerDir '.env')
+      if ($null -ne $envText) {
+        $found = [regex]::Matches($envText, '(?m)^APP_WORKER_CACHE_VOLUME=(.*?)\r?$')
+        if ($found.Count -gt 0) { $volume = $found[$found.Count - 1].Groups[1].Value }
+      }
+    }
+    if ($volume -notmatch '^[A-Za-z0-9_.-]+$') { $volume = 'agentic-worker-repo-cache' }
+    return $volume
+  }
+
   function Test-Page {
     param([string]$Page)
     try {
@@ -322,16 +337,18 @@ $installerExitCode = & {
       Move-Item -LiteralPath $downloaded -Destination $bundlePath -Force
       Write-Line "Starting the worker in $WorkerDir ..."
       if ((Invoke-Compose @('up', '-d')).Code -ne 0) { Exit-Installer 1 'docker compose up failed (see above). Fix what it names and run this again.' }
+    } elseif ($existing -and $current -eq $served) {
+      # The same build: create what is missing (a removed updater too), start what is stopped, and
+      # recreate nothing.
+      Move-Item -LiteralPath $downloaded -Destination $bundlePath -Force
+      Write-Line "The worker is already installed in $WorkerDir; starting what is stopped and adding what is missing (nothing is recreated) ..."
+      if ((Invoke-Compose @('up', '-d', '--no-recreate')).Code -ne 0) { Exit-Installer 1 'docker compose up failed (see above).' }
     } elseif ($existing) {
-      if ($current -eq $served) {
-        Move-Item -LiteralPath $downloaded -Destination $bundlePath -Force
-      } else {
-        Remove-Item -LiteralPath $downloaded -Force
-        Write-Line 'This worker runs another build than the core serves now. Its updater moves it there after verifying the build;'
-        Write-Line 'this installer never changes the images a worker runs.'
-        if (-not (Test-Path -LiteralPath $bundlePath)) { Exit-Installer 3 "$bundlePath is missing, so this installer cannot restart the worker." }
-      }
-      Write-Line "The worker is already installed in $WorkerDir; starting whatever of it is stopped (nothing is recreated) ..."
+      Remove-Item -LiteralPath $downloaded -Force
+      Write-Line 'This worker runs another build than the core serves now. Its updater moves it there after verifying the build;'
+      Write-Line 'this installer never changes the images a worker runs.'
+      if (-not (Test-Path -LiteralPath $bundlePath)) { Exit-Installer 3 "$bundlePath is missing, so this installer cannot restart the worker." }
+      Write-Line 'Starting whatever of it is stopped (nothing is recreated) ...'
       if ((Invoke-Compose @('start')).Code -ne 0) { Exit-Installer 1 'docker compose start failed (see above).' }
     } else {
       Remove-Item -LiteralPath $downloaded -Force
@@ -350,11 +367,10 @@ $installerExitCode = & {
     Write-Line '              Sign in to Claude and approve this machine there. If the page asks for a token:'
     Write-Line "              cd '$WorkerDir'; docker compose logs remote-worker | Select-String token="
     Write-Line "  Its folder: $WorkerDir"
-    Write-Line "  Updates:    its updater follows $CoreAddress; you never run this again to update."
+    Write-Line "  Updates:    not yet on Windows. Its updater follows $CoreAddress but cannot apply an update"
+    Write-Line '              from a Windows folder (backlog 990): it reports each one to the core instead, and'
+    Write-Line '              the worker keeps running as it is.'
     Write-Line '  Remove it:  run this script again with -Uninstall (add -Purge to remove its data too)'
-    Write-Line ''
-    Write-Line 'On Windows, the updater cannot apply an update from a Windows folder yet (backlog 990): it'
-    Write-Line 'reports each one it cannot apply to the core, and keeps the worker running as it is.'
   }
 
   function Uninstall-Worker {
@@ -366,21 +382,29 @@ $installerExitCode = & {
     Assert-NothingForeignOrBusy
     if (-not (Test-Path -LiteralPath (Join-Path $WorkerDir $Bundle))) { Exit-Installer 3 "$WorkerDir\$Bundle is missing, so this installer cannot tell Compose what to remove." }
     if ($Purge) {
-      if ((Invoke-Compose @('down', '--volumes')).Code -ne 0) { Exit-Installer 1 'docker compose down failed (see above).' }
+      $cache = Get-CacheVolume
+      if ((Invoke-Compose @('down', '--volumes', '--remove-orphans')).Code -ne 0) { Exit-Installer 1 'docker compose down failed (see above).' }
+      # The launcher's repository cache (cloned source) is the launcher's volume, not Compose's.
+      if ((Invoke-Native -File 'docker' -Arguments @('volume', 'inspect', $cache) -Capture).Code -eq 0) {
+        if ((Invoke-Native -File 'docker' -Arguments @('volume', 'rm', $cache) -Capture).Code -ne 0) {
+          Write-Line "Kept the volume $cache (still in use?); remove it with: docker volume rm $cache"
+        }
+      }
       foreach ($name in @($Bundle, $Download, '.env', '.env.previous', $Mark)) {
         $path = Join-Path $WorkerDir $name
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
       }
       if (@(Get-ChildItem -LiteralPath $WorkerDir -Force).Count -eq 0) {
         Remove-Item -LiteralPath $WorkerDir -Force
-        Write-Line "Removed the worker, its volumes and $WorkerDir."
+        Write-Line "Removed the worker, its volumes, its repository cache and $WorkerDir."
       } else {
-        Write-Line "Removed the worker and its volumes. Kept ${WorkerDir}: it holds files this installer did not write."
+        Write-Line "Removed the worker, its volumes and its repository cache. Kept ${WorkerDir}: it holds files this installer did not write."
       }
     } else {
-      if ((Invoke-Compose @('down')).Code -ne 0) { Exit-Installer 1 'docker compose down failed (see above).' }
-      Write-Line "Removed the worker's containers. Kept its volumes (its approval, its Claude sign-in) and ${WorkerDir}:"
-      Write-Line 'run this script again to start it as it was, or with -Uninstall -Purge to remove them.'
+      if ((Invoke-Compose @('down', '--remove-orphans')).Code -ne 0) { Exit-Installer 1 'docker compose down failed (see above).' }
+      Write-Line "Removed the worker's containers. Kept its volumes (its approval, its Claude sign-in) and $WorkerDir."
+      Write-Line "To start it again as it was: cd '$WorkerDir'; docker compose up -d (its updater then follows the core)."
+      Write-Line 'To remove the rest: run this script again with -Uninstall -Purge.'
     }
     Write-Line 'Its images stay in Docker; docker image prune -a removes the ones nothing uses.'
   }
@@ -418,6 +442,4 @@ $installerExitCode = & {
     Write-Host "agentic-worker: $($_.Exception.Message)" -ForegroundColor Red
     $code
   }
-} -Dir $Dir -Core $Core -NoOpen ([bool]$NoOpen) -Uninstall ([bool]$Uninstall) -Purge ([bool]$Purge) | Select-Object -Last 1
-
-if ($PSCommandPath) { exit $installerExitCode }
+} @args | Select-Object -Last 1 | ForEach-Object { if ($PSCommandPath) { exit $_ } }
