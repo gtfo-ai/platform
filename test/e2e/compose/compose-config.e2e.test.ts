@@ -899,3 +899,95 @@ describe('compose.yml mounts every VOLUME its pinned images declare', () => {
     expect(withVolume).toEqual([]);
   });
 });
+
+/**
+ * **The worker's dev mode** (S-22.16): `compose.worker.dev.yml` over `compose.worker.yml`, merged
+ * by compose itself — the unit tier (`scripts/worker-dev.test.ts`) reads the two files but cannot
+ * say what compose makes of `!override` and of the base's interpolated defaults. The settings file
+ * carries **prod** values on purpose (the prod port, volume names and a registry digest), because
+ * the dev worker runs beside a prod worker whose `.env.worker` it may share.
+ */
+describe('compose.worker.yml + compose.worker.dev.yml (S-22.16)', () => {
+  interface WorkerConfig {
+    readonly name: string;
+    readonly services: Record<
+      string,
+      {
+        readonly image: string;
+        readonly environment?: Record<string, string>;
+        readonly ports?: { host_ip?: string; published?: string; target?: number }[];
+      }
+    >;
+    readonly volumes: Record<string, { readonly name: string }>;
+    readonly networks: Record<string, { readonly name: string }>;
+  }
+  const digest = `ghcr.io/example/platform@sha256:${'0'.repeat(64)}`;
+  const prodValues = [
+    'APP_CORE_URL=http://host.docker.internal:8080',
+    'CLAUDE_CODE_OAUTH_TOKEN=compose-config-test-not-a-real-token',
+    `PLATFORM_IMAGE=${digest}`,
+    `PLATFORM_LAUNCHER_IMAGE=${digest.replace('platform@', 'platform-launcher@')}`,
+    `PLATFORM_RUNTIME_IMAGE=${digest.replace('platform@', 'platform-runtime@')}`,
+    `PLATFORM_EGRESS_IMAGE=${digest.replace('platform@', 'platform-egress@')}`,
+    'APP_WORKER_UI_PORT=7357',
+    'APP_WORKER_CONTROL_VOLUME=agentic-worker-ctl',
+    'APP_WORKER_CACHE_VOLUME=agentic-worker-repo-cache',
+    '',
+  ].join('\n');
+  const merged = (profiles = ''): WorkerConfig =>
+    config(
+      ['compose.worker.yml', 'compose.worker.dev.yml'],
+      { COMPOSE_PROFILES: profiles },
+      projectWith(prodValues),
+    ) as unknown as WorkerConfig;
+
+  it('is its own project, with dev volume and network names', () => {
+    const result = merged();
+    expect(result.name).toBe('agentic-worker-dev');
+    expect(result.volumes.ctl?.name).toBe('agentic-worker-dev-ctl');
+    expect(result.networks['run-egress']?.name).toBe('agentic-worker-dev-run-egress');
+    const launcher = result.services.launcher?.environment ?? {};
+    expect(launcher.APP_WORKSPACE_CONTROL_VOLUME).toBe('agentic-worker-dev-ctl');
+    expect(launcher.APP_WORKSPACE_CACHE_VOLUME).toBe('agentic-worker-dev-repo-cache');
+    expect(launcher.APP_WORKSPACE_HELPER_NETWORK).toBe('agentic-worker-dev-run-egress');
+    expect(launcher.APP_WORKSPACE_EGRESS_NETWORK).toBe('agentic-worker-dev-run-egress');
+  });
+
+  it('publishes one port, 7358 on loopback, and tells the worker so (`!override`)', () => {
+    const result = merged();
+    const published = Object.entries(result.services).flatMap(([name, service]) =>
+      (service.ports ?? []).map(
+        (port) => `${name} ${port.host_ip}:${port.published}:${port.target}`,
+      ),
+    );
+    expect(published).toEqual(['remote-worker 127.0.0.1:7358:7357']);
+    expect(result.services['remote-worker']?.environment?.APP_WORKER_UI_PORT).toBe('7358');
+  });
+
+  it('runs the :dev images and no registry digest of ours', () => {
+    const result = merged();
+    for (const [name, service] of Object.entries(result.services)) {
+      if (name === 'pull-git-image' || name === 'docker-socket-proxy') continue; // third-party pins
+      expect(service.image, name).toMatch(/^platform(-launcher|-runtime|-egress)?:dev$/);
+    }
+    for (const [name, service] of Object.entries(result.services)) {
+      for (const [key, value] of Object.entries(service.environment ?? {})) {
+        if (/IMAGE$/.test(key) && /platform/.test(value)) {
+          expect(value, `${name}.${key}`).toMatch(/^platform(-launcher|-runtime|-egress)?:dev$/);
+        }
+      }
+    }
+  });
+
+  it('starts no updater, even with the base file’s own profile enabled', () => {
+    expect(Object.keys(merged().services)).not.toContain('updater');
+    expect(Object.keys(merged('updater').services)).not.toContain('updater');
+    // The same profile does start it from the base file alone — the case is not vacuous.
+    const baseOnly = config(
+      ['compose.worker.yml'],
+      { COMPOSE_PROFILES: 'updater' },
+      projectWith(prodValues),
+    );
+    expect(Object.keys(baseOnly.services)).toContain('updater');
+  });
+});
