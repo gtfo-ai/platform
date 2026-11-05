@@ -12,7 +12,7 @@
  * | `event: shutdown` before the stream ends | `#onControl` → close, reconnect on the ordinary backoff |
  * | reconnect replays from `Last-Event-ID` / `?last_event_id=` | `#url` sends the **complete** cursor set |
  * | `: ping` every 20 s | ignored by construction: a comment is not a message |
- * | `POST /events/subscriptions` addresses a stream by `connection_id` | `setTopics` |
+ * | `POST /events/subscriptions` addresses a stream by `connection_id` | `setTopics`, and only once the stream is open — below |
  * | a topic removal is asynchronous, so its frames keep arriving | `#onMessage` ignores them, keeping the cursor map a subset of `topics` |
  *
  * ### Why the reconnect is ours and not `EventSource`'s
@@ -23,6 +23,19 @@
  * and opens a fresh one whose query string carries every cursor it holds. That is also why the
  * `retry:` field the server sends is not honoured: `EventSource` applies it to a reconnect this
  * client does not use, and the backoff below is the one that runs.
+ *
+ * ### Why a topic change waits for `open`
+ * **Invariant: `carried` is the topic set the current stream carries, and a subscription POST is
+ * sent only for a stream that has fired `open`.** Every stream this client opens shares one
+ * `connection_id`, so a POST names a connection, not a stream. Before the new stream's `open`, the
+ * server may not have registered it yet (404) — or, worse, may still hold the stream it is about to
+ * displace, which answers 200 for a topic the new stream's URL never carried; the topic is then
+ * lost until the next reconnect, which on a healthy stream is hours. `open` fires when the response
+ * headers arrive, and the hub writes them only after it has registered the stream, so from then on
+ * the connection id names this stream alone. Until then `setTopics` changes the desired set only;
+ * the `open` listener sends **one** POST with the difference between `topics` and `carried` (adds
+ * and removes), and every later change POSTs at once. A failed POST reopens, and the new URL
+ * carries the whole desired set, so `carried` starts again from it.
  *
  * ### Why a `reset` drops the cursor
  * `reset` means "I cannot prove what you missed". Reconnecting with the same unplaceable cursor
@@ -145,6 +158,10 @@ export const createRealtimeClient = (
   const cursors = new Map<string, number>();
   let topics: SseTopic[] = [];
   let source: EventStream | null = null;
+  /** The topics `source`'s URL carried at open, plus every POST since its `open`. See the module note. */
+  let carried: readonly SseTopic[] = [];
+  /** Whether `source` has fired `open`; until it has, a topic change is not POSTed. */
+  let streamOpen = false;
   let status: RealtimeStatus = 'idle';
   let attempt = 0;
   let retryHandle: number | null = null;
@@ -177,6 +194,7 @@ export const createRealtimeClient = (
     // module note. A source left open would reconnect to a URL whose cursors are stale.
     source?.close();
     source = null;
+    streamOpen = false;
   };
 
   /**
@@ -302,6 +320,7 @@ export const createRealtimeClient = (
     setStatus(status === 'idle' ? 'connecting' : 'reconnecting');
     const stream = options.openStream(url());
     source = stream;
+    carried = [...topics];
     // An open socket is open, whether or not anything has been said on it. Deriving the status
     // from the first *frame* instead left the badge reading "Reconnecting" on a healthy but quiet
     // stream — which is exactly the lie the badge exists to prevent, since this app never polls.
@@ -310,7 +329,10 @@ export const createRealtimeClient = (
         return;
       }
       attempt = 0;
+      streamOpen = true;
       setStatus('open');
+      // Topics changed while the stream was being opened: now the connection id names this stream.
+      syncSubscriptions();
     });
     for (const name of eventNames) {
       stream.addEventListener(name, onMessage);
@@ -322,6 +344,39 @@ export const createRealtimeClient = (
       setStatus('reconnecting');
       detach();
       scheduleReconnect();
+    });
+  };
+
+  /**
+   * Tells the server the difference between the desired set and what the open stream carries.
+   * Called only once `source` has fired `open` — the invariant in the module note.
+   */
+  const syncSubscriptions = (): void => {
+    const update = options.updateSubscriptions;
+    const stream = source;
+    if (update === undefined || stream === null || !streamOpen) {
+      return;
+    }
+    const added = topics.filter((topic) => !carried.includes(topic));
+    const removed = carried.filter((topic) => !topics.includes(topic));
+    carried = [...topics];
+    if (added.length === 0 && removed.length === 0) {
+      return;
+    }
+    void update({
+      connection_id: connectionId,
+      ...(added.length === 0 ? {} : { add: added }),
+      ...(removed.length === 0 ? {} : { remove: removed }),
+    }).catch(() => {
+      // The stream is still open and still carrying its old topics; reopening resynchronises
+      // it. `hub.updateSubscriptions` replays nothing for an added topic anyway, so the owner
+      // refetches either way. A stream already replaced needs nothing: its successor's URL was
+      // built from the desired set, which already held this change.
+      if (disposed || source !== stream) {
+        return;
+      }
+      reconnects += 1;
+      open();
     });
   };
 
@@ -361,19 +416,8 @@ export const createRealtimeClient = (
         open();
         return;
       }
-      void options
-        .updateSubscriptions({
-          connection_id: connectionId,
-          ...(added.length === 0 ? {} : { add: added }),
-          ...(removed.length === 0 ? {} : { remove: removed }),
-        })
-        .catch(() => {
-          // The stream is still open and still carrying its old topics; reopening resynchronises
-          // it. `hub.updateSubscriptions` replays nothing for an added topic anyway, so the owner
-          // refetches either way.
-          reconnects += 1;
-          open();
-        });
+      // Before `open` this only changes the desired set; the `open` listener sends the difference.
+      syncSubscriptions();
     },
     status: () => status,
     topics: () => topics,

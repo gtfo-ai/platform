@@ -22,6 +22,19 @@ interface FakeStream extends EventStream {
 }
 
 const RUN_TOPIC = 'run:11111111-1111-4111-8111-111111111111' as SseTopic;
+const ORG_TOPIC = 'org' as SseTopic;
+const PROJECT_TOPIC = 'project:33333333-3333-4333-8333-333333333333' as SseTopic;
+const RUN_TOPIC_2 = 'run:44444444-4444-4444-8444-444444444444' as SseTopic;
+
+/** Lets a rejected `updateSubscriptions` reach the client's `.catch()`. */
+const settle = async (): Promise<void> => {
+  for (let tick = 0; tick < 5; tick += 1) {
+    await Promise.resolve();
+  }
+};
+
+const topicsOf = (stream: FakeStream | undefined): string | null =>
+  new URL(stream?.url ?? '', 'http://test.invalid').searchParams.get('topics');
 const TASK_TOPIC = 'task:22222222-2222-4222-8222-222222222222' as SseTopic;
 
 const transcriptFrame = (topic: SseTopic, seq: number): SseFrame => ({
@@ -57,7 +70,13 @@ interface Harness {
   readonly client: ReturnType<typeof createRealtimeClient>;
 }
 
-const harness = (options: { withSubscriptions?: boolean } = {}): Harness => {
+interface HarnessOptions {
+  readonly withSubscriptions?: boolean;
+  /** Answers each POST after it is recorded; the default resolves. A rejection is the 404 path. */
+  readonly answerSubscription?: (body: unknown) => Promise<void>;
+}
+
+const harness = (options: HarnessOptions = {}): Harness => {
   const streams: FakeStream[] = [];
   const frames: SseFrame[] = [];
   const resets: (SseTopic | null)[] = [];
@@ -114,6 +133,7 @@ const harness = (options: { withSubscriptions?: boolean } = {}): Harness => {
       ? {
           updateSubscriptions: async (body) => {
             subscriptions.push(body);
+            await options.answerSubscription?.(body);
           },
         }
       : {}),
@@ -360,6 +380,7 @@ describe('the realtime client', () => {
     it('updates the subscription over HTTP rather than reopening, when the endpoint is wired', async () => {
       const h = harness({ withSubscriptions: true });
       h.client.setTopics([RUN_TOPIC]);
+      h.streams[0]?.opened();
       h.client.setTopics([RUN_TOPIC, TASK_TOPIC]);
       await Promise.resolve();
 
@@ -440,6 +461,163 @@ describe('the realtime client', () => {
       const url = new URL(h.streams.at(-1)?.url ?? '', 'http://test.invalid');
       expect(url.searchParams.get('topics')).toBe(TASK_TOPIC);
       expect(url.searchParams.get('last_event_id') ?? '').not.toContain(RUN_TOPIC);
+    });
+  });
+
+  /**
+   * Every stream shares one `connection_id`, so a POST sent before the new stream's `open` is
+   * answered by whichever stream the server holds under that id — none (404), or the one being
+   * displaced, whose 200 is for a topic the new stream's URL never carried. The client therefore
+   * POSTs only for an open stream, and sends the difference once it opens (S-23.16).
+   */
+  describe('a topic change while the stream is opening', () => {
+    it('sends nothing before open and one POST with every added topic after it (cold load)', async () => {
+      const h = harness({ withSubscriptions: true });
+      h.client.setTopics([ORG_TOPIC]);
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC, TASK_TOPIC]);
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC, TASK_TOPIC, PROJECT_TOPIC]);
+      await settle();
+
+      expect(h.subscriptions, 'a POST went out before the stream opened').toEqual([]);
+      expect(h.streams).toHaveLength(1);
+      expect(topicsOf(h.streams[0])).toBe(ORG_TOPIC);
+
+      h.streams[0]?.opened();
+      await settle();
+
+      expect(h.subscriptions).toEqual([
+        { connection_id: 'connection-1', add: [RUN_TOPIC, TASK_TOPIC, PROJECT_TOPIC] },
+      ]);
+      expect(h.streams, 'the client reopened instead').toHaveLength(1);
+    });
+
+    it('carries a topic added between a reopen and its open', async () => {
+      // The first add is refused (the server holds no stream under the id yet), so the client
+      // reopens; the next add must reach the *new* stream, not the one it is displacing.
+      let refuse = true;
+      const h = harness({
+        withSubscriptions: true,
+        answerSubscription: async () => {
+          if (refuse) {
+            refuse = false;
+            throw new Error('404 no open stream with this id');
+          }
+        },
+      });
+      h.client.setTopics([ORG_TOPIC]);
+      h.streams[0]?.opened();
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      await settle();
+
+      expect(h.streams, 'a refused POST did not reopen').toHaveLength(2);
+      expect(h.streams[0]?.closed).toBe(true);
+      expect(topicsOf(h.streams[1])).toBe(`${ORG_TOPIC},${RUN_TOPIC}`);
+
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC, RUN_TOPIC_2]);
+      await settle();
+      expect(h.subscriptions, 'the add went to a stream that has not opened').toHaveLength(1);
+
+      h.streams[1]?.opened();
+      await settle();
+
+      expect(h.subscriptions).toEqual([
+        { connection_id: 'connection-1', add: [RUN_TOPIC] },
+        { connection_id: 'connection-1', add: [RUN_TOPIC_2] },
+      ]);
+      expect(h.streams).toHaveLength(2);
+    });
+
+    it('does not re-add a topic removed before open, and removes one the URL carried', async () => {
+      const h = harness({ withSubscriptions: true });
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      // Added and dropped again before open: the server never needs to hear of it.
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC, TASK_TOPIC]);
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      // Carried by the URL, dropped before open: the server must be told.
+      h.client.setTopics([ORG_TOPIC]);
+      await settle();
+      expect(h.subscriptions).toEqual([]);
+
+      h.streams[0]?.opened();
+      await settle();
+
+      expect(h.subscriptions).toEqual([{ connection_id: 'connection-1', remove: [RUN_TOPIC] }]);
+      expect(h.client.topics()).toEqual([ORG_TOPIC]);
+    });
+
+    it('sends nothing on open when the desired set ended where the URL started', async () => {
+      const h = harness({ withSubscriptions: true });
+      h.client.setTopics([ORG_TOPIC]);
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      h.client.setTopics([ORG_TOPIC]);
+
+      h.streams[0]?.opened();
+      await settle();
+
+      expect(h.subscriptions).toEqual([]);
+    });
+
+    it('POSTs every add and remove at once after open, as before', async () => {
+      const h = harness({ withSubscriptions: true });
+      h.client.setTopics([ORG_TOPIC]);
+      h.streams[0]?.opened();
+
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      expect(h.subscriptions).toEqual([{ connection_id: 'connection-1', add: [RUN_TOPIC] }]);
+
+      h.client.setTopics([ORG_TOPIC, TASK_TOPIC]);
+      expect(h.subscriptions).toEqual([
+        { connection_id: 'connection-1', add: [RUN_TOPIC] },
+        { connection_id: 'connection-1', add: [TASK_TOPIC], remove: [RUN_TOPIC] },
+      ]);
+      await settle();
+      expect(h.streams).toHaveLength(1);
+    });
+
+    it('holds topic changes again once a reconnect has replaced the open stream', async () => {
+      const h = harness({ withSubscriptions: true });
+      h.client.setTopics([ORG_TOPIC]);
+      h.streams[0]?.opened();
+      h.streams[0]?.fail();
+      h.runTimers();
+      expect(h.streams).toHaveLength(2);
+
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      await settle();
+      expect(h.subscriptions, 'the add went out before the new stream opened').toEqual([]);
+
+      h.streams[1]?.opened();
+      await settle();
+      expect(h.subscriptions).toEqual([{ connection_id: 'connection-1', add: [RUN_TOPIC] }]);
+    });
+
+    it('does not reopen for a refused POST whose stream was already replaced', async () => {
+      // The successor's URL was built from the desired set, which already held the change.
+      const pending: { refuse?: () => void } = {};
+      const h = harness({
+        withSubscriptions: true,
+        answerSubscription: async () =>
+          await new Promise<void>((_resolve, reject) => {
+            pending.refuse = () => {
+              reject(new Error('404 no open stream with this id'));
+            };
+          }),
+      });
+      h.client.setTopics([ORG_TOPIC]);
+      h.streams[0]?.opened();
+      h.client.setTopics([ORG_TOPIC, RUN_TOPIC]);
+      h.streams[0]?.fail();
+      h.runTimers();
+      expect(h.streams).toHaveLength(2);
+      expect(topicsOf(h.streams[1])).toBe(`${ORG_TOPIC},${RUN_TOPIC}`);
+
+      expect(pending.refuse).toBeDefined();
+      pending.refuse?.();
+      await settle();
+
+      expect(h.streams, 'a stale refusal reopened the successor').toHaveLength(2);
+      expect(h.client.reconnects()).toBe(1);
     });
   });
 });
