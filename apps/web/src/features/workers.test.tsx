@@ -187,6 +187,39 @@ describe('the approval page', () => {
     });
   });
 
+  it('prefills the code from ?code=, strips it from the address, keeps every warning, and approves only on the press (WP-294 (5))', async () => {
+    window.history.pushState({}, '', '/workers/approve?code=bcdf-ghjk');
+    const { fetchImpl, sent } = fetchFor(lookup());
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    const field = (await screen.findByLabelText('Code shown by the machine')) as HTMLInputElement;
+    expect(field.value).toBe('BCDF-GHJK');
+    await waitFor(() => {
+      expect(window.location.search).not.toContain('code=');
+    });
+    expect(window.location.pathname).toBe('/workers/approve');
+    // The origin details and the warning, exactly as for a typed code.
+    expect(screen.getByText(PHISHING_WARNING)).toBeTruthy();
+    await waitFor(() => {
+      expect(container.querySelector('[data-device-ip]')?.textContent).toBe('198.51.100.7');
+    });
+    expect(sent.map((call) => call.url).some((url) => url.includes('/approve'))).toBe(false);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('Name this machine'), 'alice-laptop');
+    await user.click(screen.getByRole('button', { name: 'Approve' }));
+    await waitFor(() => {
+      expect(sent.at(-1)?.body).toMatchObject({ decision: 'approve', user_code: 'BCDF-GHJK' });
+    });
+  });
+
+  it('ignores a ?code= that is not a code', async () => {
+    window.history.pushState({}, '', '/workers/approve?code=%3Cscript%3E');
+    const { fetchImpl, sent } = fetchFor(lookup());
+    render(createApp({ fetchImpl, realtime: false }).element);
+    const field = (await screen.findByLabelText('Code shown by the machine')) as HTMLInputElement;
+    expect(field.value).toBe('');
+    expect(sent).toEqual([]);
+  });
+
   it('looks nothing up until a whole code is typed, and names an unknown one', async () => {
     const { fetchImpl, sent } = fetchFor('missing');
     render(createApp({ fetchImpl, realtime: false }).element);
@@ -210,12 +243,13 @@ describe('the Workers screen', () => {
     render(createApp({ fetchImpl, realtime: false }).element);
     const download = await screen.findByLabelText('1. Download the worker’s compose file');
     expect((download as HTMLInputElement).value).toBe(
-      `curl -fsSo compose.worker.yml ${window.location.origin}/api/worker/v1/compose.yml`,
+      `mkdir agentic-worker && cd agentic-worker && curl -fsSo compose.yaml ${window.location.origin}/api/worker/v1/compose.yml`,
     );
-    const start = screen.getByLabelText('2. Start it with your Claude token (claude setup-token)');
-    expect((start as HTMLInputElement).value).toBe(
-      'CLAUDE_CODE_OAUTH_TOKEN=… docker compose -f compose.worker.yml up -d',
+    // No Claude token on the command line any more: the worker's page asks for it (WP-294).
+    const start = screen.getByLabelText(
+      '2. Start it, then open http://127.0.0.1:7357 on that machine',
     );
+    expect((start as HTMLInputElement).value).toBe('docker compose up -d');
   });
 
   it('lists a worker with its state, protocol and digests, and revokes it through a dialog and DELETE', async () => {
@@ -477,7 +511,7 @@ describe('the Workers screen', () => {
 describe('the page’s pure helpers', () => {
   it('builds the download line from an origin with or without a trailing slash', () => {
     expect(workerInstallLines('https://core.example.test/')[0]).toBe(
-      'curl -fsSo compose.worker.yml https://core.example.test/api/worker/v1/compose.yml',
+      'mkdir agentic-worker && cd agentic-worker && curl -fsSo compose.yaml https://core.example.test/api/worker/v1/compose.yml',
     );
   });
 

@@ -127,3 +127,42 @@ first relies on them (docs/TODO.md § Verification). Nothing here was run agains
 - DNS rebinding: a page on an attacker's name that re-resolves to `127.0.0.1` reaches a loopback port
   with **its own name in the `Host` header**, so an exact `Host` allow-list refuses it.
   `[unverified]` here (general web-security knowledge, no page fetched in this pass; TODO V-WM9).
+
+## 11. `claude setup-token` under a pty inside the worker container (V-WM10, measured 2026-11-05)
+
+Measured for WP-294 with the pinned CLI (`claude --version` → `2.1.267 (Claude Code)`) in
+`platform-runtime:dev`, `HOME` and `CLAUDE_CONFIG_DIR` fresh, no token variable, on Docker Desktop
+(arm64). No real sign-in was made and no token was ever obtained or recorded.
+
+- **`script(1)` is in the `platform` image** (`/usr/bin/script`, util-linux 2.41.5, Debian trixie),
+  so `platform-base` needs nothing installed; the runtime image's `claude` is a native glibc binary
+  that runs there.
+- **It needs a TTY.** With stdin a pipe and no terminal it printed nothing for 10 s (timed out). Under
+  `script -q -f -E never -c "stty cols 500 rows 50; claude setup-token" /dev/null`, with stdin held open,
+  it draws its welcome screen and then:
+  *"Browser didn't open? Use the url below to sign in"*, the address as an OSC 8 hyperlink **and** as
+  its visible text, and the prompt *"Paste code here if prompted >"*. Words are spaced with cursor
+  moves (`ESC[<n>G`), not spaces, so the screen is read after turning those into spaces.
+- **The address**: `https://claude.com/cai/oauth/authorize?code=true&client_id=…&response_type=code&
+  redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&
+  code_challenge=…&code_challenge_method=S256&state=…` — host `claude.com`, the redirect on
+  `platform.claude.com`, i.e. the manual-code flow (`code=true`): the localhost callback is not
+  offered from a container, and pasting the code is the route. The worker offers an address only on
+  `claude.com`, `claude.ai`, `platform.claude.com`, `console.anthropic.com`.
+- **A pasted value** is echoed masked except its last six characters; a bogus `code#state` answered
+  *"OAuth error: Request failed with status code 400 … Press Enter to retry."* — so the pasted value is
+  the `code#state` string Claude's callback page shows (the owner's run, 2026-11-05).
+- **The token line**: not observed here (it needs a real account). The owner's run printed it as
+  `sk-ant-oat01-…`, 108 characters, wrapped at their terminal's width; with 500 columns it fits one
+  line, and the reader joins a wrapped one up to that length. `[unverified]` beyond the owner's report:
+  the exact surrounding words — the fixture's success screen is **composed**
+  (`test/fixtures/claude-cli/setup-token.transcript.json`).
+- **The cheapest check**: `claude auth status` with `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-fake…` answers
+  `{"loggedIn": true, "authMethod": "oauth_token", …}` — it reads the variable and proves nothing.
+  One no-tool, one-turn `claude -p "…" --max-turns 1 --tools "" --output-format json` answers
+  `is_error: true`, `api_error_status: 401`, *"Failed to authenticate. API Error: 401 OAuth access token
+  is invalid."* for a refused token — that is the check. Its `stream-json` form carries an `assistant`
+  message with `error: "authentication_failed"` (after two `api_retry` system messages with
+  `error_status: 401`), recorded as `test/fixtures/claude/authentication-failed.script.jsonl`; that is
+  what a run's stream says when Claude refuses the token.
+- Re-measure at every CLI pin bump: the screen text is not a contract.

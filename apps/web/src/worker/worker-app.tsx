@@ -29,6 +29,10 @@
  *
  * A run's stage is a `PhaseTrack` only when the page knows **more than one** stage; the worker's
  * package names one, so today it is the stage's name as text — a strip of one dot says nothing.
+ *
+ * **Until the worker is connected the page is the first-run wizard** (`wizard.tsx`, WP-294) and
+ * not the room: no mode chip, no *Pause*, *Drain* or *Cancel*. Once connected, the room's *This
+ * machine* section offers *Change platform* and *Sign out of Claude* — only while nothing runs.
  */
 import type { WorkerLocalRun, WorkerLocalState } from '@platform/contracts';
 import {
@@ -53,14 +57,17 @@ import {
   deskOf,
   elapsedWords,
   freeDesksOf,
+  hostOf,
   logLineWords,
   slotsWords,
   spendWords,
   tailLinesOf,
+  wizardOf,
   workerModeOf,
   workerModeWords,
 } from './model.js';
 import { PickWork } from './pick-work.js';
+import { ChangePlatform, Wizard } from './wizard.js';
 
 /** A message as a sentence: its first letter capitalised (the worker's words start lower-case). */
 export const sentence = (text: string): string =>
@@ -111,10 +118,11 @@ export const NoToken = (): ReactElement => (
     <h1 className="text-xl font-semibold text-fg">This worker</h1>
     <Flash tone="warning" title="Open this page from the address the worker printed">
       <p>
-        The address carries a token after <code>#token=</code>. Find it again with{' '}
-        <code>docker compose -f compose.worker.yml logs remote-worker | grep token=</code>. To
-        change the token, delete <code>ui-token</code> in the worker’s <code>worker-state</code>{' '}
-        volume and restart the worker.
+        This worker asks for a token (APP_WORKER_UI_AUTH=token): the address carries it after{' '}
+        <code>#token=</code>. Find it again with{' '}
+        <code>docker compose logs remote-worker | grep token=</code>. To change the token, delete{' '}
+        <code>ui-token</code> in the worker’s <code>worker-state</code> volume and restart the
+        worker.
       </p>
     </Flash>
   </main>
@@ -343,11 +351,14 @@ export const WorkerApp = ({
       setState(await action());
       setError(null);
     } catch (caught) {
-      setError((caught as Error).message);
+      setError(sentence((caught as Error).message));
     } finally {
       setBusy(false);
     }
   };
+  if (wizardOf(state) !== null) {
+    return <Wizard state={state} client={client} act={control} busy={busy} error={error} />;
+  }
   const name = state.worker_name ?? 'This worker';
 
   return (
@@ -474,6 +485,42 @@ export const WorkerApp = ({
         takeBlocked={takeBlockedOf(state, at)}
         onTaken={() => void refresh()}
       />
+      <section aria-label="This machine" className="flex flex-col gap-2" data-machine="">
+        <h2 className="text-base font-semibold text-fg">This machine</h2>
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
+          <dt className="text-fg-muted">Platform</dt>
+          <dd className="flex flex-wrap items-center gap-2 text-fg">
+            <UntrustedText value={state.core_url === null ? '—' : hostOf(state.core_url)} />
+            {state.setup.core_source === 'environment' ? (
+              <span className="text-xs text-fg-muted">set in the worker’s environment</span>
+            ) : null}
+            <ChangePlatform state={state} client={client} act={control} busy={busy} />
+          </dd>
+          <dt className="text-fg-muted">Claude</dt>
+          <dd className="flex flex-wrap items-center gap-2 text-fg">
+            <span>
+              {state.setup.claude_source === 'environment'
+                ? 'Signed in — set in the worker’s environment'
+                : 'Signed in on this page'}
+            </span>
+            {state.setup.claude_source === 'file' && state.setup.idle ? (
+              <Button
+                size="sm"
+                tone="invisible"
+                disabled={busy}
+                onClick={() => void control(() => client.signOut())}
+              >
+                Sign out of Claude
+              </Button>
+            ) : null}
+          </dd>
+        </dl>
+        <p className="text-xs text-fg-muted">
+          Signing out removes the sign-in from this worker only; Claude still lists it until you
+          revoke it in your Claude account. Both are offered only while nothing runs — drain the
+          worker first.
+        </p>
+      </section>
 
       <section aria-label="Worker log" className="flex flex-col gap-2">
         <h2 className="text-base font-semibold text-fg">Worker log</h2>

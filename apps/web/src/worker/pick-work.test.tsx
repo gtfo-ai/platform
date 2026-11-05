@@ -17,6 +17,11 @@ import { LocalCallError, type LocalClient } from './client.js';
 import { OFFERS_POLL_MS, PickWork, scopeModeOf, scopeWords } from './pick-work.js';
 import { takeBlockedOf } from './worker-app.js';
 
+/** A verb a test here never asks. */
+const notAsked = async (): Promise<never> => {
+  throw new Error('not asked here');
+};
+
 const ACME = '00000000-0000-4000-8000-000000029301';
 const OPS = '00000000-0000-4000-8000-000000029302';
 const RUN_A = '00000000-0000-4000-8000-0000000293a1';
@@ -73,6 +78,15 @@ const fakeClient = (initial: {
       offers = offers.filter((entry) => entry.run_id !== runId);
       return { run_id: runId };
     }),
+    // The first-run wizard's verbs (WP-294): never asked here.
+    checkCore: vi.fn(notAsked),
+    setCore: vi.fn(notAsked),
+    signIn: vi.fn(notAsked),
+    claudeCode: vi.fn(notAsked),
+    claudeToken: vi.fn(notAsked),
+    signOut: vi.fn(notAsked),
+    connectAgain: vi.fn(notAsked),
+    retry: vi.fn(notAsked),
   } satisfies LocalClient;
 };
 
@@ -266,6 +280,17 @@ describe('takeBlockedOf (WP-293)', () => {
     concurrency: 1,
     runs: [],
     logs: [],
+    setup: {
+      core_source: 'environment',
+      candidates: [],
+      claude_source: 'environment',
+      claude_rejected: false,
+      sign_in: { phase: 'idle', url: null, failure: null },
+      device: null,
+      unreachable: null,
+      idle: true,
+      auth: 'none',
+    },
     server_time: '2026-11-05T10:00:00.000Z',
   };
   const now = Date.parse('2026-11-05T10:00:00.000Z');

@@ -18,6 +18,8 @@
  *  - self-termination: a session whose renewals fail for `TTL − ½·renew` stops and pushes nothing;
  *  - a steer and a cancel delivered on the heartbeat are applied and acked before `finish`.
  */
+
+import { spawn } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -61,6 +63,7 @@ import {
 } from '@platform/infrastructure';
 import { afterAll, describe, expect, it } from 'vitest';
 import { asLoggerPort, createLogger } from '../logging.js';
+import { type ClaudeCliLauncher, runBounded } from './claude-sign-in.js';
 import { loadRemoteWorkerConfig, REFUSED_WORKER_VARIABLES } from './config.js';
 import {
   CoreCallError,
@@ -320,6 +323,10 @@ const fakeCore = (options: {
   readonly takes?: readonly (RunPackage | 'refused')[];
   /** The projects `GET claim-scope` lists (WP-293). */
   readonly scopeProjects?: readonly { id: string; key: string; name: string }[];
+  /** The handshake's answer by number (from 1); absent is the worker's settings (WP-294 (6)). */
+  readonly handshake?: (n: number) => { readonly status: number; readonly body: unknown } | null;
+  /** `device/token`'s answer by poll number (from 1); absent is `authorization_pending`. */
+  readonly deviceToken?: (n: number) => { readonly status: number; readonly body: unknown } | null;
 }) => {
   const captured: Captured[] = [];
   const events: string[] = [];
@@ -333,6 +340,9 @@ const fakeCore = (options: {
   const opened: string[] = [];
   let beats = 0;
   let uploads = 0;
+  let handshakes = 0;
+  let devices = 0;
+  let polls = 0;
   const fetch: CoreFetch = async (url, init) => {
     const verb = new URL(url).pathname.replace('/api/worker/v1/', '').replace(RUN_ID, ':id');
     const headers = init.headers as Record<string, string>;
@@ -426,8 +436,31 @@ const fakeCore = (options: {
         workerApprovalRequestSchema.parse(parsed);
         opened.push(APPROVAL_ID);
         return answer(200, { approval_id: APPROVAL_ID });
+      case 'device': {
+        devices += 1;
+        // A new code each time: `BCDF-GHJ<n>` over the alphabet.
+        const letter = 'BCDFGHJKLM'.charAt(devices % 10);
+        return answer(200, {
+          device_code: `${'d'.repeat(42)}${letter}`,
+          user_code: `BCDF-GHJ${letter}`,
+          verification_uri: 'https://core.example.test/workers/approve',
+          interval: 5,
+          expires_in: 600,
+        });
+      }
+      case 'device/token': {
+        polls += 1;
+        const scripted = options.deviceToken?.(polls) ?? null;
+        if (scripted !== null) return answer(scripted.status, scripted.body);
+        return answer(400, { error: 'authorization_pending' });
+      }
       case 'handshake':
-        workerHandshakeRequestSchema.parse(parsed);
+        {
+          workerHandshakeRequestSchema.parse(parsed);
+          handshakes += 1;
+          const scripted = options.handshake?.(handshakes) ?? null;
+          if (scripted !== null) return answer(scripted.status, scripted.body);
+        }
         return answer(200, {
           protocol: {
             current: WORKER_PROTOCOL_VERSION,
@@ -679,10 +712,31 @@ describe('ROLE=remote-worker’s configuration (WP-283 (1))', () => {
     }
   });
 
-  it('refuses a missing core URL, Claude token and launcher, naming each', () => {
-    expect(() => loadRemoteWorkerConfig({})).toThrow(
-      /APP_CORE_URL is required[\s\S]*CLAUDE_CODE_OAUTH_TOKEN is required[\s\S]*APP_LAUNCHER_URL is required/,
-    );
+  it('refuses a missing launcher by name, and starts with no core URL and no Claude token — the wizard asks (WP-294 (1))', () => {
+    expect(() => loadRemoteWorkerConfig({})).toThrow(/APP_LAUNCHER_URL is required/);
+    expect(() => loadRemoteWorkerConfig({})).not.toThrow(/APP_CORE_URL|CLAUDE_CODE_OAUTH_TOKEN/);
+    const config = loadRemoteWorkerConfig({
+      ...base,
+      APP_CORE_URL: '',
+      CLAUDE_CODE_OAUTH_TOKEN: '',
+    });
+    // An empty value counts as absent (TD-031's first-run amendment §1).
+    expect(config.coreUrl).toBeNull();
+    expect(config.claudeToken).toBeNull();
+    expect(config.coreCandidates).toEqual([]);
+    expect(config.claudeCliPath).toBe('/opt/claude-cli/claude');
+    expect(
+      loadRemoteWorkerConfig({
+        ...base,
+        APP_WORKER_CORE_CANDIDATES: 'https://core.example.test/x, http://localhost:3000',
+      }).coreCandidates,
+    ).toEqual(['https://core.example.test', 'http://localhost:3000']);
+    // `http:` only to this machine, and no userinfo — named, never silently dropped.
+    for (const refused of ['http://core.example.test', 'https://u:p@core.example.test']) {
+      expect(() =>
+        loadRemoteWorkerConfig({ ...base, APP_WORKER_CORE_CANDIDATES: refused }),
+      ).toThrow(/APP_WORKER_CORE_CANDIDATES has/);
+    }
   });
 });
 
@@ -1254,13 +1308,24 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     readonly ui?: boolean;
     /** The scripted CLI of every run; absent waits for a steer (`script(1)`). */
     readonly script?: () => runnerAdapters.FakeCliScript;
+    readonly auth?: 'none' | 'token';
+    /** `null`: the wizard's platform step (WP-294); absent is the core. */
+    readonly coreUrl?: string | null;
+    /** `null`: the wizard's Claude step (WP-294); absent is the planted token. */
+    readonly claudeToken?: string | null;
+    readonly claudeCli?: ClaudeCliLauncher;
+    readonly probeFetch?: CoreFetch;
+    readonly sleep?: (ms: number) => Promise<void>;
   }) => {
     const lines: string[] = [];
     const launcher = fakeLauncher(options.core.events);
     const worker = await startRemoteWorker({
+      ...(options.claudeCli === undefined ? {} : { claudeCli: options.claudeCli }),
+      ...(options.probeFetch === undefined ? {} : { probeFetch: options.probeFetch }),
       config: {
-        coreUrl: 'https://core.example.test',
-        claudeToken: CLAUDE_TOKEN,
+        coreUrl: options.coreUrl === undefined ? 'https://core.example.test' : options.coreUrl,
+        claudeToken: options.claudeToken === undefined ? CLAUDE_TOKEN : options.claudeToken,
+        coreCandidates: [],
         launcherUrl: 'http://launcher:7780',
         launcherToken: 'FAKE-launcher-token-000000000000000000',
         controlRoot: scratch,
@@ -1276,6 +1341,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
           host: '127.0.0.1',
           listenPort: 0,
           publishedPort: PUBLISHED,
+          auth: options.auth ?? 'token',
         },
         platformImageDigest: DIGEST,
       },
@@ -1313,7 +1379,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       },
       logDestination: { write: (line: string) => lines.push(line) },
       webRoot: webRoot(),
-      sleep: async () => {},
+      sleep: options.sleep ?? (async () => {}),
     });
     const internal = await worker.listen();
     return { worker, lines, internal };
@@ -1899,7 +1965,13 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       host: '0.0.0.0',
       listenPort: 7357,
       publishedPort: 7357,
+      // TD-031's no-bearer amendment: no token unless asked for.
+      auth: 'none',
     });
+    expect(loadRemoteWorkerConfig({ ...base, APP_WORKER_UI_AUTH: 'token' }).ui?.auth).toBe('token');
+    expect(() => loadRemoteWorkerConfig({ ...base, APP_WORKER_UI_AUTH: 'cookie' })).toThrow(
+      /APP_WORKER_UI_AUTH must be none or token/,
+    );
     expect(
       loadRemoteWorkerConfig({ ...base, APP_WORKER_UI: 'disabled', APP_WORKER_UI_PORT: '8123' }).ui,
     ).toMatchObject({ enabled: false, publishedPort: 8123, listenPort: 7357 });
@@ -1910,4 +1982,521 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       /APP_WORKER_UI_PORT must be a TCP port/,
     );
   });
+
+  // ── The first-run wizard (WP-294) ─────────────────────────────────────────────────────────────
+
+  const SIGN_IN_FIXTURE = JSON.parse(
+    readFileSync(
+      path.join(process.cwd(), 'test/fixtures/claude-cli/setup-token.transcript.json'),
+      'utf8',
+    ),
+  ) as { readonly good_code: string; readonly token: string };
+  const FAKE_CLAUDE = path.join(process.cwd(), 'test/fixtures/claude-cli/fake-claude.mjs');
+  /** The fake `claude` replaying V-WM10's transcript, as a real child process (`claude-sign-in.test.ts`). */
+  const fakeClaude: ClaudeCliLauncher = {
+    setupToken: (env) => {
+      const child = spawn(process.execPath, [FAKE_CLAUDE, 'setup-token'], {
+        env: { ...env },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true,
+      });
+      return {
+        child,
+        kill: () => {
+          try {
+            process.kill(-(child.pid as number), 'SIGKILL');
+          } catch {
+            child.kill('SIGKILL');
+          }
+        },
+      };
+    },
+    run: (args, env, timeoutMs) =>
+      runBounded(process.execPath, [FAKE_CLAUDE, ...args], env, timeoutMs),
+  };
+  /** A wait that yields to timers, so a polling loop never starves the test's own. */
+  const yielding = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, Math.min(ms, 5)));
+  const RELEASE_BODY = {
+    protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [1, WORKER_PROTOCOL_VERSION] },
+    digests: {
+      platform: DIGEST,
+      platform_launcher: DIGEST,
+      platform_runtime: DIGEST,
+      platform_egress: DIGEST,
+    },
+  };
+  /** The platforms on this "machine": each origin answers version and release; anything else, nothing. */
+  const probe = (origins: readonly string[]) => {
+    const asked: { url: string; headers: Record<string, string> }[] = [];
+    const fetch: CoreFetch = async (url, init) => {
+      asked.push({ url, headers: (init.headers ?? {}) as Record<string, string> });
+      const at = new URL(url);
+      if (!origins.includes(at.origin)) throw new TypeError('fetch failed');
+      const body =
+        at.pathname === '/api/version'
+          ? { version: '0.4.0', commit: null, built_at: null }
+          : RELEASE_BODY;
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    return { fetch, asked };
+  };
+  const ORIGIN = { origin: `http://127.0.0.1:${PUBLISHED}` };
+  const post = (port: number, verb: string, body: unknown, headers: Record<string, string> = {}) =>
+    request(port, {
+      method: 'POST',
+      path: `/api/local/${verb}`,
+      headers: { ...ORIGIN, ...headers },
+      body,
+    });
+  const localState = async (port: number, headers: Record<string, string> = {}) =>
+    workerLocalStateSchema.parse(
+      JSON.parse((await request(port, { path: '/api/local/state', headers })).text),
+    );
+
+  it('starts with no platform, no Claude token and no credential: serves the page, calls no core, claims nothing (WP-294 (1))', async () => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    const core = fakeCore({});
+    const probed = probe([]);
+    const { worker, lines } = await start({
+      stateDir,
+      core,
+      auth: 'none',
+      coreUrl: null,
+      claudeToken: null,
+      probeFetch: probed.fetch,
+      sleep: yielding,
+    });
+    try {
+      const port = portOf(worker.uiAddress());
+      // The default auth mode: no token file, the plain address logged, no Authorization needed.
+      expect(existsSync(path.join(stateDir, UI_TOKEN_FILE))).toBe(false);
+      expect(
+        lines.some((line) => line.includes(`this worker's page: http://127.0.0.1:${PUBLISHED}`)),
+      ).toBe(true);
+      const page = await localState(port);
+      expect(page).toMatchObject({ connection: 'needs_platform', core_url: null, worker_id: null });
+      expect(page.setup).toMatchObject({
+        core_source: null,
+        claude_source: null,
+        device: null,
+        auth: 'none',
+      });
+      await until('the candidates were probed', () => probed.asked.length >= 2);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // No core call and no claim at all; the probes went only to this machine, with no credential.
+      expect(core.captured).toEqual([]);
+      for (const asked of probed.asked) {
+        expect(new URL(asked.url).hostname).toBe('host.docker.internal');
+        expect(asked.headers.authorization).toBeUndefined();
+      }
+      // The Claude step's actions refuse nothing here, but no platform is set: a code is refused.
+      expect((await post(port, 'claude/code', { code: 'x' })).status).toBe(409);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('answers 409 for a value that comes from the environment, and shows it as such (WP-294 (1))', async () => {
+    const stateDir = stateDirWithCredential();
+    const core = fakeCore({});
+    const { worker } = await start({ stateDir, core, auth: 'none', sleep: yielding });
+    try {
+      const port = portOf(worker.uiAddress());
+      await until('connected', () => worker.state().connection === 'connected');
+      const page = await localState(port);
+      expect(page.setup).toMatchObject({
+        core_source: 'environment',
+        claude_source: 'environment',
+      });
+      for (const [verb, body] of [
+        ['core', { url: null }],
+        ['core', { url: 'https://other.example.test' }],
+        ['claude/sign-in', { action: 'start' }],
+        ['claude/token', { token: SIGN_IN_FIXTURE.token }],
+        ['claude/sign-out', {}],
+      ] as const) {
+        const answer = await post(port, verb, body);
+        expect(`${verb} ${answer.status} ${JSON.parse(answer.text).error?.code}`).toBe(
+          `${verb} 409 set_in_environment`,
+        );
+      }
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('walks platform → Claude → approval → the room by itself, with no restart, and no secret anywhere (WP-294 (3)–(5))', async () => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    let approval: 'pending' | 'expire' | 'approve' = 'pending';
+    const core = fakeCore({
+      deviceToken: () => {
+        if (approval === 'expire') {
+          approval = 'pending';
+          return { status: 400, body: { error: 'expired_token' } };
+        }
+        if (approval === 'approve') {
+          return { status: 200, body: { worker_id: WORKER_ID, credential: WORKER_CREDENTIAL } };
+        }
+        return null;
+      },
+    });
+    const probed = probe(['http://host.docker.internal:8080', 'https://core.example.test']);
+    const { worker, lines } = await start({
+      stateDir,
+      core,
+      auth: 'none',
+      coreUrl: null,
+      claudeToken: null,
+      claudeCli: fakeClaude,
+      probeFetch: probed.fetch,
+      sleep: yielding,
+    });
+    const answers: string[] = [];
+    const ask = async (verb: string, body: unknown) => {
+      const answer = await post(port, verb, body);
+      answers.push(answer.text);
+      return answer;
+    };
+    const port = portOf(worker.uiAddress());
+    const read = async () => {
+      const text = (await request(port, { path: '/api/local/state' })).text;
+      answers.push(text);
+      return workerLocalStateSchema.parse(JSON.parse(text));
+    };
+    try {
+      // (a) The platform running on this machine is offered; a typed one is checked by the worker.
+      await until('a candidate', () => worker.localState().setup.candidates.length === 1);
+      expect(worker.localState().setup.candidates[0]).toEqual({
+        url: 'http://host.docker.internal:8080',
+        version: '0.4.0',
+      });
+      const checked = await ask('core/check', { url: 'https://core.example.test/whatever' });
+      expect(JSON.parse(checked.text)).toEqual({
+        url: 'https://core.example.test',
+        host: 'core.example.test',
+        version: '0.4.0',
+        protocol_fit: 'fits',
+      });
+      const refused = await ask('core/check', { url: 'http://core.example.test' });
+      expect(`${refused.status} ${JSON.parse(refused.text).error.code}`).toBe(
+        '422 address_refused',
+      );
+      const chosen = await ask('core', { url: 'https://core.example.test' });
+      expect(chosen.status).toBe(200);
+      expect(readFileSync(path.join(stateDir, 'core-url'), 'utf8')).toBe(
+        'https://core.example.test\n',
+      );
+      await until('the Claude step', () => worker.localState().connection === 'needs_claude');
+      // A second platform is refused while one is set: change platform first.
+      expect((await ask('core', { url: 'https://core.example.test' })).status).toBe(409);
+      expect(core.captured).toEqual([]);
+
+      // (b) Claude's own sign-in, through the fake CLI; a malformed token is refused without echo.
+      const malformed = await ask('claude/token', { token: 'sk-ant-WRONG-planted-value' });
+      expect(malformed.status).toBe(400);
+      expect(malformed.text).not.toContain('planted-value');
+      expect((await ask('claude/sign-in', { action: 'start' })).status).toBe(200);
+      await until(
+        'the paste prompt',
+        () => worker.localState().setup.sign_in.phase === 'waiting_for_code',
+      );
+      expect(new URL((await read()).setup.sign_in.url as string).hostname).toBe('claude.com');
+      expect((await ask('claude/code', { code: SIGN_IN_FIXTURE.good_code })).status).toBe(200);
+      await until('the approval step', () => worker.localState().connection === 'logging_in');
+      const tokenFile = path.join(stateDir, 'claude-token');
+      expect(statSync(tokenFile).mode & 0o777).toBe(0o600);
+      expect(readFileSync(tokenFile, 'utf8')).toBe(`${SIGN_IN_FIXTURE.token}\n`);
+      expect(worker.localState().setup.claude_source).toBe('file');
+
+      // (c) The code, prefilled on the core's own origin, with its expiry; a new one on expiry.
+      await until('a code', () => worker.localState().setup.device !== null);
+      const first = (await read()).setup.device;
+      expect(first?.approve_url).toBe(
+        `https://core.example.test/workers/approve?code=${first?.user_code}`,
+      );
+      expect(Date.parse(first?.expires_at ?? '')).toBeGreaterThan(Date.now() + 500_000);
+      approval = 'expire';
+      await until('a new code', () => {
+        const device = worker.localState().setup.device;
+        return device !== null && device.user_code !== first?.user_code;
+      });
+      approval = 'approve';
+      await until('the room', () => worker.localState().connection === 'connected');
+      expect(readFileSync(path.join(stateDir, 'credential'), 'utf8')).toBe(
+        `${WORKER_CREDENTIAL}\nhttps://core.example.test\n`,
+      );
+      const room = await read();
+      expect(room.setup.device).toBeNull();
+      expect(room.worker_name).toBe('alice-laptop');
+
+      // Planted values: the Claude token, the pasted code and the credential appear in no log
+      // line, no log tail and no /api/local answer; the token and the code in no request to the
+      // core (the credential rides its `Authorization`, as it must).
+      const local = [...lines, ...answers, ...room.logs].join('\n');
+      for (const planted of [SIGN_IN_FIXTURE.token, SIGN_IN_FIXTURE.good_code, WORKER_CREDENTIAL]) {
+        expect(local).not.toContain(planted);
+      }
+      const toCore = core.captured
+        .map((call) => `${JSON.stringify(call.headers)} ${call.body}`)
+        .join('\n');
+      for (const planted of [SIGN_IN_FIXTURE.token, SIGN_IN_FIXTURE.good_code]) {
+        expect(toCore).not.toContain(planted);
+      }
+      // The run's Claude token is the one the wizard stored: no core request carries it either way.
+      expect(core.captured.some((call) => call.verb === 'handshake')).toBe(true);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('Change platform: idle only; deletes the credential and, under none, the Claude sign-in; 409 with an environment token (WP-294 (3), (6))', async () => {
+    for (const auth of ['none', 'token'] as const) {
+      const stateDir = stateDirWithCredential();
+      writeFileSync(path.join(stateDir, 'core-url'), 'https://core.example.test\n', {
+        mode: 0o600,
+      });
+      writeFileSync(path.join(stateDir, 'claude-token'), `${SIGN_IN_FIXTURE.token}\n`, {
+        mode: 0o600,
+      });
+      const core = fakeCore({});
+      const { worker } = await start({
+        stateDir,
+        core,
+        auth,
+        coreUrl: null,
+        claudeToken: null,
+        probeFetch: probe([]).fetch,
+        sleep: yielding,
+      });
+      try {
+        const port = portOf(worker.uiAddress());
+        const token =
+          auth === 'token' ? readFileSync(path.join(stateDir, UI_TOKEN_FILE), 'utf8').trim() : null;
+        const bearer: Record<string, string> =
+          token === null ? {} : { authorization: `Bearer ${token}` };
+        await until('connected', () => worker.state().connection === 'connected');
+        expect((await localState(port, bearer)).setup).toMatchObject({
+          core_source: 'file',
+          claude_source: 'file',
+        });
+        const changed = await post(port, 'core', { url: null }, bearer);
+        expect(changed.status).toBe(200);
+        expect(existsSync(path.join(stateDir, 'credential'))).toBe(false);
+        expect(existsSync(path.join(stateDir, 'core-url'))).toBe(false);
+        // Repointing never carries the developer's Claude sign-in under none (no-bearer §3).
+        expect(existsSync(path.join(stateDir, 'claude-token')), auth).toBe(auth === 'token');
+        await until('the platform step', () => worker.state().connection === 'needs_platform');
+        expect(worker.localState().setup.claude_source).toBe(auth === 'token' ? 'file' : null);
+      } finally {
+        await worker.stop();
+      }
+    }
+    // Under none, an environment token cannot be dropped by a repoint: refused.
+    const stateDir = stateDirWithCredential();
+    writeFileSync(path.join(stateDir, 'core-url'), 'https://core.example.test\n');
+    const { worker } = await start({
+      stateDir,
+      core: fakeCore({}),
+      auth: 'none',
+      coreUrl: null,
+      sleep: yielding,
+    });
+    try {
+      const port = portOf(worker.uiAddress());
+      const refused = await post(port, 'core', { url: null });
+      expect(`${refused.status} ${JSON.parse(refused.text).error.code}`).toBe(
+        '409 set_in_environment',
+      );
+      expect(existsSync(path.join(stateDir, 'credential'))).toBe(true);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('ignores a credential recorded for another core’s origin: it asks this core for a code (WP-294 (3))', async () => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    writeFileSync(
+      path.join(stateDir, 'credential'),
+      `${WORKER_CREDENTIAL}\nhttps://other.example.test\n`,
+    );
+    const core = fakeCore({});
+    const { worker } = await start({ stateDir, core, sleep: yielding });
+    try {
+      await until('a code', () => worker.localState().setup.device !== null);
+      expect(core.captured.map((call) => call.verb)).not.toContain('handshake');
+      expect(core.captured[0]?.verb).toBe('device');
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('a run Claude refuses returns the page to the sign-in step and stops claiming (WP-294 (6))', async () => {
+    const stateDir = stateDirWithCredential();
+    const refusing = readFileSync(
+      path.join(process.cwd(), 'test/fixtures/claude/authentication-failed.script.jsonl'),
+      'utf8',
+    )
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as runnerAdapters.FakeCliScript[number]);
+    const core = fakeCore({ claims: [runPackage(), runPackage()] });
+    const { worker } = await start({ stateDir, core, script: () => refusing, sleep: yielding });
+    try {
+      await until('the sign-in step', () => worker.state().connection === 'needs_claude');
+      expect(worker.localState().setup.claude_rejected).toBe(true);
+      await until('the run ended', () => worker.sessions.size === 0);
+      const claims = core.captured.filter((call) => call.verb === 'claims').length;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(core.captured.filter((call) => call.verb === 'claims').length).toBe(claims);
+      expect(worker.history).toHaveLength(1);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('core unreachable: the class, the address and Retrying in N s; Try now asks again at once (WP-294 (6))', async () => {
+    const stateDir = stateDirWithCredential();
+    const core = fakeCore({
+      handshake: (n) =>
+        n === 1 ? { status: 503, body: { error: { code: 'down', message: 'x' } } } : null,
+    });
+    // A long wait between tries: only Try now ends it.
+    const { worker } = await start({
+      stateDir,
+      core,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(ms, 60_000))),
+      auth: 'none',
+    });
+    try {
+      const port = portOf(worker.uiAddress());
+      await until('unreachable', () => worker.state().connection === 'core_unreachable');
+      const page = await localState(port);
+      expect(page.core_url).toBe('https://core.example.test');
+      expect(page.setup.unreachable?.failure).toBe('no_answer');
+      expect(Date.parse(page.setup.unreachable?.retry_at ?? '')).toBeGreaterThan(
+        Date.now() - 1_000,
+      );
+      expect((await post(port, 'retry', {})).status).toBe(200);
+      await until('connected', () => worker.state().connection === 'connected');
+      expect((await post(port, 'retry', {})).status).toBe(409);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('revoked: Connect again deletes the credential and starts a new device flow without a restart (WP-294 (6))', async () => {
+    const stateDir = stateDirWithCredential();
+    const core = fakeCore({
+      handshake: (n) =>
+        n === 1
+          ? { status: 401, body: { error: { code: 'unauthenticated', message: 'x' } } }
+          : null,
+    });
+    const { worker } = await start({ stateDir, core, auth: 'none', sleep: yielding });
+    try {
+      const port = portOf(worker.uiAddress());
+      await until('revoked', () => worker.state().connection === 'revoked');
+      expect((await post(port, 'connect-again', {})).status).toBe(200);
+      expect(existsSync(path.join(stateDir, 'credential'))).toBe(false);
+      await until('a code', () => worker.localState().setup.device !== null);
+      expect(worker.state().connection).toBe('logging_in');
+      expect((await post(port, 'connect-again', {})).status).toBe(409);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it.each(['none', 'token'] as const)(
+    'holds the boundary under APP_WORKER_UI_AUTH=%s: Host 421, Origin, JSON and Sec-Fetch-Site 403, no CORS, no cookie, no secret (WP-294 (6))',
+    async (auth) => {
+      const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+      const core = fakeCore({});
+      const { worker } = await start({
+        stateDir,
+        core,
+        auth,
+        coreUrl: null,
+        claudeToken: null,
+        probeFetch: probe(['https://core.example.test']).fetch,
+        sleep: yielding,
+      });
+      try {
+        const port = portOf(worker.uiAddress());
+        const token =
+          auth === 'token' ? readFileSync(path.join(stateDir, UI_TOKEN_FILE), 'utf8').trim() : null;
+        expect(token === null).toBe(auth === 'none');
+        const bearer: Record<string, string> =
+          token === null ? {} : { authorization: `Bearer ${token}` };
+        const answers: { status: number; headers: http.IncomingHttpHeaders; text: string }[] = [];
+        const ask = async (input: Parameters<typeof request>[1]) => {
+          const answer = await request(port, input);
+          answers.push(answer);
+          return answer;
+        };
+        // Without the bearer: 401 under token only.
+        expect((await ask({ path: '/api/local/state' })).status).toBe(auth === 'token' ? 401 : 200);
+        expect(
+          (
+            await ask({
+              path: '/api/local/state',
+              host: `evil.example.test:${PUBLISHED}`,
+              headers: bearer,
+            })
+          ).status,
+        ).toBe(421);
+        const writes: readonly [string, unknown][] = [
+          ['core/check', { url: 'https://core.example.test' }],
+          ['core', { url: 'https://core.example.test' }],
+          ['claude/token', { token: SIGN_IN_FIXTURE.token }],
+          ['claude/code', { code: SIGN_IN_FIXTURE.good_code }],
+        ];
+        for (const [verb, body] of writes) {
+          const path_ = `/api/local/${verb}`;
+          for (const headers of [
+            {} as Record<string, string>,
+            { origin: 'https://evil.example.test' },
+            { ...ORIGIN, 'content-type': 'text/plain' },
+            { ...ORIGIN, 'sec-fetch-site': 'cross-site' },
+            { ...ORIGIN, 'sec-fetch-site': 'same-site' },
+          ]) {
+            const refused = await ask({
+              method: 'POST',
+              path: path_,
+              headers: { ...bearer, ...headers },
+              body,
+            });
+            expect(refused.status, `${verb} ${JSON.stringify(headers)}`).toBe(403);
+          }
+        }
+        expect(existsSync(path.join(stateDir, 'core-url'))).toBe(false);
+        // Accepted from the page itself: same-origin, JSON, the exact Origin.
+        const accepted = await ask({
+          method: 'POST',
+          path: '/api/local/core',
+          headers: { ...bearer, ...ORIGIN, 'sec-fetch-site': 'same-origin' },
+          body: { url: 'https://core.example.test' },
+        });
+        expect(accepted.status).toBe(200);
+        await until('the Claude step', () => worker.state().connection === 'needs_claude');
+        // The token write is accepted (and checked in the background); nothing answers it back.
+        const pasted = await ask({
+          method: 'POST',
+          path: '/api/local/claude/token',
+          headers: { ...bearer, ...ORIGIN },
+          body: { token: SIGN_IN_FIXTURE.token },
+        });
+        expect(pasted.status).toBe(200);
+        for (const answer of answers) {
+          expect(answer.headers['access-control-allow-origin']).toBeUndefined();
+          expect(answer.headers['set-cookie']).toBeUndefined();
+          expect(answer.text).not.toContain(SIGN_IN_FIXTURE.token);
+          expect(answer.text).not.toContain(SIGN_IN_FIXTURE.good_code);
+          if (token !== null) expect(answer.text).not.toContain(token);
+        }
+      } finally {
+        await worker.stop();
+      }
+    },
+  );
 });

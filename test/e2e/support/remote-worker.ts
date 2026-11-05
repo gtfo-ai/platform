@@ -281,6 +281,7 @@ export const startWorkerUnderTest = async (
         host: '127.0.0.1',
         listenPort: 0,
         publishedPort: E2E_UI_PUBLISHED_PORT,
+        auth: 'token',
       },
     },
     coreFetch,

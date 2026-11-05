@@ -48,3 +48,7 @@ export const isUiToken = (token: string, presented: string | null): boolean => {
 /** The page's address for a person, the token in the fragment (amendment §2). */
 export const uiAddressOf = (publishedPort: number, token: string): string =>
   `http://127.0.0.1:${publishedPort}/#token=${token}`;
+
+/** The page's address under `APP_WORKER_UI_AUTH=none` (TD-031's no-bearer amendment §1). */
+export const plainUiAddressOf = (publishedPort: number): string =>
+  `http://127.0.0.1:${publishedPort}`;

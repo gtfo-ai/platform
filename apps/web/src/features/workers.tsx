@@ -19,11 +19,17 @@
  * code your own machine is showing you now*. A code older than five minutes takes a second
  * confirmation (the server refuses the approval without it too). The address and user agent are the
  * requesting machine's own text and are rendered as text (BD-022).
+ *
+ * **`?code=` prefills the code** (WP-294, TD-031's first-run amendment §5 — RFC 8628 §3.3.1's
+ * `verification_uri_complete`): the worker's page links here with its code, the field starts filled
+ * and the parameter is **stripped from the address** at once. Nothing else changes — the warning,
+ * the origin details, the five-minute confirmation and the explicit *Approve* press all stay, and
+ * nothing is approved by arriving. A phisher's prefilled link equals a phisher's typed code (§5.4).
  */
 import type { WorkerSummary } from '@platform/contracts';
 import { WORKER_API_PREFIX, WORKER_PATHS, WORKER_USER_CODE_ALPHABET } from '@platform/contracts';
 import { ServerIcon } from '@primer/octicons-react/ServerIcon';
-import { type ReactElement, useState } from 'react';
+import { type ReactElement, useEffect, useState } from 'react';
 import { useSettingsCommands, useWorkerDevice, useWorkers } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { Blankslate } from '../ui/blankslate.js';
@@ -289,14 +295,19 @@ const WorkerRow = ({
 };
 
 /**
- * The two lines that install a worker (TD-031's 2026-11-05 amendment §4): the public, pinned
- * compose file from this instance, then the bundle with the developer's own Claude token. Built from
- * the page's own origin — the core the browser is talking to — so no endpoint is needed.
+ * The two lines that install a worker (TD-031's 2026-11-05 amendment §4, as the first-run
+ * amendment shrank them, WP-294): the public, pinned compose file from this instance saved as
+ * `compose.yaml` in a folder of its own (so no `-f` is needed), then `up -d` — the Claude sign-in
+ * and the approval happen on the worker's own page at `http://127.0.0.1:7357`. Built from the
+ * page's own origin — the core the browser is talking to — so no endpoint is needed.
  */
 export const workerInstallLines = (origin: string): readonly [string, string] => [
-  `curl -fsSo compose.worker.yml ${origin.replace(/\/+$/, '')}${WORKER_API_PREFIX}/${WORKER_PATHS.composeFile}`,
-  'CLAUDE_CODE_OAUTH_TOKEN=… docker compose -f compose.worker.yml up -d',
+  `mkdir agentic-worker && cd agentic-worker && curl -fsSo compose.yaml ${origin.replace(/\/+$/, '')}${WORKER_API_PREFIX}/${WORKER_PATHS.composeFile}`,
+  'docker compose up -d',
 ];
+
+/** Where the worker's own page opens (`APP_WORKER_UI_PORT`'s default). */
+export const WORKER_PAGE_ADDRESS = 'http://127.0.0.1:7357';
 
 export const WorkersScreen = (): ReactElement => {
   const workers = useWorkers();
@@ -313,8 +324,8 @@ export const WorkersScreen = (): ReactElement => {
         divider={false}
         meta={
           <span>
-            Machines that run agent stages for this instance. A machine is added from its own
-            terminal: it shows a code, and you approve it at{' '}
+            Machines that run agent stages for this instance. A machine is added from its own page:
+            it walks you through signing in to Claude and shows a code, which you approve at{' '}
             <span className="font-mono">/workers/approve</span>.
           </span>
         }
@@ -322,7 +333,7 @@ export const WorkersScreen = (): ReactElement => {
       <div data-worker-install="" className="flex flex-col gap-2">
         <CopyField label="1. Download the worker’s compose file" value={install[0]} />
         <CopyField
-          label="2. Start it with your Claude token (claude setup-token)"
+          label={`2. Start it, then open ${WORKER_PAGE_ADDRESS} on that machine`}
           value={install[1]}
         />
       </div>
@@ -382,8 +393,25 @@ export const WorkersScreen = (): ReactElement => {
   );
 };
 
+/** The `?code=` the worker's page linked with, or `''` (WP-294). */
+export const codeFromAddress = (search: string): string => {
+  const code = new URLSearchParams(search).get('code') ?? '';
+  return typedUserCode(code) ?? '';
+};
+
 export const WorkerApproveScreen = (): ReactElement => {
-  const [typed, setTyped] = useState('');
+  const [typed, setTyped] = useState(() => codeFromAddress(window.location.search));
+  // The code leaves the address bar (and the history entry) at once: it is filled in the field.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('code')) return;
+    url.searchParams.delete('code');
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }, []);
   const [name, setName] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const code = typedUserCode(typed);

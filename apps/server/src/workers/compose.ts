@@ -13,8 +13,8 @@
  *    `<APP_IMAGE_REPOSITORY>/<image>@sha256:…`, the core's own digest — **pinned**, so a worker runs
  *    what its core advertises and never `latest`; the variable stays, so the updater's managed `.env`
  *    block re-pins it (TD-032 decision 4);
- *  - `${APP_CORE_URL:?…}` (and the updater's `${APP_CORE_URL:-}`) → `${APP_CORE_URL:-<APP_BASE_URL>}`,
- *    the core that served the file.
+ *  - `${APP_CORE_URL:-}` (or an older template's `${APP_CORE_URL:?…}`) → `${APP_CORE_URL:-<APP_BASE_URL>}`,
+ *    the core that served the file — so a core-served file skips the wizard's platform step (WP-294).
  *
  * A template whose platform images are not all of that shape is refused rather than served half
  * pinned: the unit test holds the shipped file to it (every `image:` by digest, no `latest`).

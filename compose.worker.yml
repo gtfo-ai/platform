@@ -1,12 +1,18 @@
 # A remote worker (BD-032): one compose file and nothing else (BD-032 decision 9, TD-032 decision 3).
 #
-#   curl -fsSo compose.worker.yml https://<core>/api/worker/v1/compose.yml
-#   CLAUDE_CODE_OAUTH_TOKEN=<claude setup-token> docker compose -f compose.worker.yml up -d
-#   docker compose -f compose.worker.yml logs remote-worker   # the device code to approve
-#   docker compose -f compose.worker.yml logs remote-worker | grep token=   # this machine's page
+#   mkdir agentic-worker && cd agentic-worker
+#   curl -fsSo compose.yaml https://<core>/api/worker/v1/compose.yml
+#   docker compose up -d
+#   open http://127.0.0.1:7357   # this machine's page: sign in to Claude, approve the machine
 #
 # The download is public and needs no header (TD-031's 2026-11-05 amendment): it holds no secret,
-# and the file the core serves already names `APP_CORE_URL`.
+# and the file the core serves already names `APP_CORE_URL`. Saved as `compose.yaml` in a folder of
+# its own, no `-f` is needed. **Nothing else is required** (WP-294, TD-031's 2026-11-05 first-run
+# amendment): with no `APP_CORE_URL` the page asks for the platform, with no
+# `CLAUDE_CODE_OAUTH_TOKEN` it runs Claude's own sign-in (`claude setup-token`, from the
+# `claude-cli` volume below), and it shows the device code to approve — large, with a link that
+# opens the platform's approval page with the code filled in. Each value set here wins over the
+# page, which then says so.
 #
 # **This file is a template baked into the `platform` image** at `/opt/platform/compose.worker.yml`
 # (`docker/app.Dockerfile`). The core renders it for a first install (`GET /api/worker/v1/compose.yml`,
@@ -20,8 +26,9 @@
 # **The worker holds no database, no instance secret key and no integration secret** (BD-032
 # decision 1): `remote-worker` is refused at start if `DATABASE_URL` or `APP_SECRET_KEY` reaches it,
 # so nothing here passes an `env_file`. Its one secret of its own is the developer's
-# `CLAUDE_CODE_OAUTH_TOKEN`, which goes into the CLI's environment of each run and nowhere else
-# (BD-032 decision 2) — `${CLAUDE_CODE_OAUTH_TOKEN:?…}` refuses to start without it.
+# Claude token, which goes into the CLI's environment of each run and nowhere else (BD-032 decision
+# 2): `CLAUDE_CODE_OAUTH_TOKEN` here, or — when that is empty — the one the page's sign-in stores as
+# `claude-token` (0600) in the `worker-state` volume.
 #
 # **The networks are the core's (TD-028).** `docker-socket-proxy` is the only service with the
 # Docker socket, on an `internal: true` network only the launcher joins; the launcher's control plane
@@ -32,9 +39,17 @@
 #
 # **The worker's local page is published on loopback only** (WP-292, TD-031's worker-UI amendment §1):
 # `127.0.0.1:${APP_WORKER_UI_PORT:-7357}:7357` — never a bare port, which Docker publishes on every host
-# address (research/17 § 10). The page carries a token in its address (`#token=…`), printed at every
-# start; delete `ui-token` in the `worker-state` volume to change it. `APP_WORKER_UI=disabled` opens no
-# port. A run container joins only its per-run networks, so no run can reach it.
+# address (research/17 § 10). It opens at `http://127.0.0.1:7357` with **no token** by default
+# (`APP_WORKER_UI_AUTH=none`, TD-031's 2026-11-05 no-bearer amendment); on a machine with more than one
+# OS account set `APP_WORKER_UI_AUTH=token`, and the address carries a token (`#token=…`) printed at
+# every start — delete `ui-token` in the `worker-state` volume to change it. `APP_WORKER_UI=disabled`
+# opens no port. A run container joins only its per-run networks, so no run can reach it.
+#
+# **The Claude CLI the page's sign-in runs is the run image's own** (TD-031's first-run amendment §4):
+# the `pull-runtime-image` one-shot copies `/usr/local/bin/claude` into the `claude-cli` volume, which
+# `remote-worker` mounts read-only — the exact CLI runs execute, with no Docker client in the worker.
+# `extra_hosts` maps `host.docker.internal` on Linux too, so the page can offer a platform running on
+# this machine (`:8080`, `:5173`, and `APP_WORKER_CORE_CANDIDATES`).
 #
 # **The launcher applies the `relayed` carriage** (TD-031's 2026-11-04 amendment, backlog 693): a
 # deploy key never reaches this machine; the mirror and export helpers sign through a helper agent
@@ -68,9 +83,14 @@ services:
   # compose up` pulls the run, egress and git-helper images on a clean machine before the launcher
   # starts — the first install works with nothing pre-pulled, and an updater that re-pins a digest
   # gets it pulled by its own `up` (TD-032 decision 6). `true` is in all three images.
+  # It also copies the run image's `claude` into the `claude-cli` volume (WP-294): as root, because a
+  # fresh volume is root's, and the copy keeps the binary's 0755 so the worker's user can run it.
   pull-runtime-image:
     image: ${PLATFORM_RUNTIME_IMAGE:-platform-runtime:dev}
-    entrypoint: ['true']
+    entrypoint: ['cp', '/usr/local/bin/claude', '/opt/claude-cli/claude']
+    user: '0'
+    volumes:
+      - claude-cli:/opt/claude-cli
     network_mode: none
     restart: 'no'
 
@@ -90,8 +110,11 @@ services:
     image: ${PLATFORM_IMAGE:-platform:dev}
     environment:
       ROLE: remote-worker
-      APP_CORE_URL: ${APP_CORE_URL:?set APP_CORE_URL to the core's https URL}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token)}
+      # Both optional (WP-294): empty, the worker's page asks for each and keeps it in worker-state.
+      APP_CORE_URL: ${APP_CORE_URL:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      APP_WORKER_CORE_CANDIDATES: ${APP_WORKER_CORE_CANDIDATES:-}
+      APP_WORKER_CLAUDE_CLI: /opt/claude-cli/claude
       APP_WORKER_CONCURRENCY: ${APP_WORKER_CONCURRENCY:-1}
       # Seconds a usage limit that named no reset time pauses claiming (TD-031 decision 11).
       APP_WORKER_USAGE_PAUSE_DEFAULT: ${APP_WORKER_USAGE_PAUSE_DEFAULT:-3600}
@@ -109,6 +132,8 @@ services:
       # The local page (WP-292): on, and the host port its address names (the `Host` it checks).
       APP_WORKER_UI: ${APP_WORKER_UI:-enabled}
       APP_WORKER_UI_PORT: ${APP_WORKER_UI_PORT:-7357}
+      # `none`: no token, the page at http://127.0.0.1:7357; `token` for a shared machine.
+      APP_WORKER_UI_AUTH: ${APP_WORKER_UI_AUTH:-none}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - '127.0.0.1:${APP_WORKER_UI_PORT:-7357}:7357'
@@ -116,6 +141,9 @@ services:
       - worker-state:/var/lib/platform/worker-state
       - launcher-token:/var/lib/platform/launcher-token:ro
       - ctl:/run/agentic/ctl
+      - claude-cli:/opt/claude-cli:ro
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     # Group 0, so the run's helper agent socket can be `<uid>:0` `0660` — what the mirror helper (root,
     # no capabilities) reaches, as WP-279 measured (backlog 705).
     group_add: ['0']
@@ -124,6 +152,8 @@ services:
       - launcher-api
     depends_on:
       launcher-token:
+        condition: service_completed_successfully
+      pull-runtime-image:
         condition: service_completed_successfully
       launcher:
         condition: service_started
@@ -288,6 +318,7 @@ services:
 volumes:
   worker-state:
   launcher-token:
+  claude-cli:
   exports:
   updates:
   ctl:

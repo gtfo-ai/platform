@@ -15,10 +15,24 @@
  *    `GET /readyz` (`core_handshake`), `POST /internal/drain` (stop claiming, finish what runs —
  *    what the updater asks before it applies, TD-032 decision 6) and `GET /internal/state`;
  *  - **the local page** (WP-292, `local-ui.ts`): a second listener on container port 7357, published
- *    on `127.0.0.1` only, behind a token kept in `worker-state` (`ui-token.ts`) — state, slots, each
- *    run with its transcript tail, the log tail, and *Pause/Resume*, *Drain* and *Cancel run* — and,
- *    since WP-293, the claim scope and *Take this one* (the core's `claim-scope`, `offers` and
- *    `offers/:id/claim`, protocol 3).
+ *    on `127.0.0.1` only — with no token by default (`APP_WORKER_UI_AUTH=none`), or behind one kept
+ *    in `worker-state` (`ui-token.ts`) under `token` — state, slots, each run with its transcript
+ *    tail, the log tail, and *Pause/Resume*, *Drain* and *Cancel run* — and, since WP-293, the claim
+ *    scope and *Take this one* (the core's `claim-scope`, `offers` and `offers/:id/claim`, protocol 3);
+ *  - **the first-run wizard** (WP-294, TD-031's 2026-11-05 first-run amendment): the worker starts
+ *    with no core URL, no Claude token and no credential, calls no core and claims nothing, and the
+ *    page walks *Connect to a platform* (`core-probe.ts`, stored `core-url`) → *Sign in to Claude*
+ *    (`claude-sign-in.ts`, stored `claude-token`) → *Approve this machine* (the device code on the
+ *    page, `credential.ts`). Each step is skipped when its value is there — environment first, then
+ *    the `worker-state` file — and each advances by itself.
+ *
+ * ## The cycle
+ *
+ * What the worker does is one **cycle** — platform? Claude? credential, handshake, claim loop — and
+ * a page action that changes one of its inputs (a platform chosen or forgotten, a sign-in stored or
+ * removed, *Connect again*, *Try now*) or Claude refusing the token on a run's stream **restarts**
+ * it: the claim loop stops, the runs in flight finish on their own leases, and the next cycle starts
+ * from the first step that is not satisfied. No restart of the process is ever needed.
  *
  * ## Pause, drain and cancel — the core decides each (TD-031's worker-UI amendment §4)
  *
@@ -56,6 +70,7 @@ import {
   WORKER_LOCAL_LOG_TAIL,
   WORKER_PROTOCOL_VERSION,
   type WorkerLocalClaimScope,
+  type WorkerLocalCoreFailure,
   type WorkerLocalOffers,
   type WorkerLocalState,
   type WorkerProtocolRange,
@@ -68,9 +83,28 @@ import type { DestinationStream } from 'pino';
 import { asLoggerPort, createLogger, type PinoLogger } from '../logging.js';
 import { repositoryPathOf } from '../pipeline.js';
 import { BUNDLED_WEB_ROOT, resolveBundleRoot } from '../web/bundle.js';
-import { loadRemoteWorkerConfig, REMOTE_WORKER_ROLE, type RemoteWorkerConfig } from './config.js';
-import { CoreCallError, type CoreFetch, createCoreClient, isTransient } from './core-client.js';
-import { ensureCredential } from './credential.js';
+import {
+  type ClaudeCliLauncher,
+  createClaudeSignIn,
+  SignInBusyError,
+  scriptCliLauncher,
+} from './claude-sign-in.js';
+import {
+  DEFAULT_CLAUDE_CLI_PATH,
+  DEFAULT_CORE_CANDIDATES,
+  loadRemoteWorkerConfig,
+  REMOTE_WORKER_ROLE,
+  type RemoteWorkerConfig,
+} from './config.js';
+import {
+  CoreCallError,
+  type CoreClient,
+  type CoreFetch,
+  createCoreClient,
+  isTransient,
+} from './core-client.js';
+import { CoreCheckError, checkCoreAddress, probeCoreCandidates } from './core-probe.js';
+import { CREDENTIAL_FILE, ensureCredential } from './credential.js';
 import { createLocalUiServer, LocalUiError } from './local-ui.js';
 import { backoffMs, sleepMs } from './retry.js';
 import {
@@ -79,16 +113,28 @@ import {
   startRunSession,
   WORKER_SECRET_NAMES,
 } from './run-session.js';
-import { ensureUiToken, uiAddressOf } from './ui-token.js';
+import {
+  CLAUDE_TOKEN_FILE,
+  CLAUDE_TOKEN_SHAPE,
+  CORE_URL_FILE,
+  readStoredClaudeToken,
+  readStoredCoreUrl,
+  removeFile,
+  writePrivateFile,
+} from './setup-files.js';
+import { ensureUiToken, plainUiAddressOf, uiAddressOf } from './ui-token.js';
 import { type PackageWorkspaceOptions, packageWorkspaceProvisioner } from './workspaces.js';
 
 /** What `/readyz` and `/internal/state` say about this worker's connection to its core. */
 export type WorkerConnection =
+  | 'needs_platform'
+  | 'needs_claude'
   | 'logging_in'
   | 'handshaking'
   | 'connected'
   | 'revoked'
   | 'upgrade_required'
+  | 'core_unreachable'
   | 'stopped';
 
 export interface StartRemoteWorkerOptions {
@@ -106,10 +152,30 @@ export interface StartRemoteWorkerOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   /** Test seam: where the local page's bundle is (default the image's `apps/web/dist`). */
   readonly webRoot?: string;
+  /** Test seam: how the sign-in starts `claude` (default `script(1)` around the configured CLI). */
+  readonly claudeCli?: ClaudeCliLauncher;
+  /** Test seam: how the wizard checks a platform address (default the global `fetch`). */
+  readonly probeFetch?: CoreFetch;
 }
 
 /** How often a usage-paused claim loop looks again before the reset (WP-285): a minute at most. */
 export const USAGE_PAUSE_RECHECK_MS = 60_000;
+
+/**
+ * A core call's failure as the page names it (WP-294 (6)): a certificate the worker could not
+ * trust, an answer that is not a platform's, or no answer. Never the body.
+ */
+export const coreFailureOf = (error: unknown): WorkerLocalCoreFailure => {
+  if (!(error instanceof CoreCallError)) return 'no_answer';
+  if (error.kind === 'upgrade_required') return 'needs_other_version';
+  if (error.status === null) {
+    return /CERT|SSL|TLS|SELF_SIGNED|UNABLE_TO_VERIFY|ALTNAME|certificate/i.test(error.message)
+      ? 'certificate'
+      : 'no_answer';
+  }
+  if (error.status === 429 || error.status >= 500) return 'no_answer';
+  return 'not_a_platform';
+};
 
 /** The marker a drain leaves in `worker-state`: its pause is cleared at the next start (WP-292). */
 export const DRAIN_MARKER_FILE = 'drain-pause';
@@ -186,13 +252,18 @@ export const startRemoteWorker = async (
 ): Promise<RemoteWorkerRuntime> => {
   const config = options.config ?? loadRemoteWorkerConfig(options.env ?? process.env);
   const sleep = options.sleep ?? sleepMs;
-  /** The exact values the log redacts: the Claude token, the credential, each live run's two. */
-  const logSecrets = new Map<string, { readonly name: string; readonly value: string }>([
-    [
-      WORKER_SECRET_NAMES.claudeToken,
-      { name: WORKER_SECRET_NAMES.claudeToken, value: config.claudeToken },
-    ],
-  ]);
+  const uiAuth = config.ui?.auth ?? 'token';
+  /**
+   * The exact values the log redacts: the Claude token (every one this process has known), the
+   * credential, each live run's two, the page's token and the wizard's code — by unique names.
+   */
+  const logSecrets = new Map<string, { readonly name: string; readonly value: string }>();
+  let secretCount = 0;
+  const rememberSecret = (name: string, value: string): void => {
+    if (value === '' || [...logSecrets.values()].some((known) => known.value === value)) return;
+    secretCount += 1;
+    logSecrets.set(`known:${secretCount}`, { name: `${name}_${secretCount}`, value });
+  };
   const rawDestination = options.logDestination ?? {
     write: (line: string) => process.stdout.write(line),
   };
@@ -219,10 +290,6 @@ export const startRemoteWorker = async (
     destination,
   });
   const loggerPort: Logger = asLoggerPort(logger);
-  const core = createCoreClient({
-    baseUrl: config.coreUrl,
-    ...(options.coreFetch === undefined ? {} : { fetch: options.coreFetch }),
-  });
   const launcher =
     options.launcher ??
     launcherAdapters.createLauncherControlClient({
@@ -230,6 +297,27 @@ export const startRemoteWorker = async (
       token: config.launcherToken,
       logger: loggerPort,
     });
+
+  // ── The wizard's inputs (WP-294): environment → `worker-state` file → the page ──────────────
+  const coreFromEnvironment = config.coreUrl !== null;
+  const claudeFromEnvironment = config.claudeToken !== null;
+  let coreUrl: string | null = config.coreUrl ?? (await readStoredCoreUrl(config.stateDir));
+  let claudeToken: string | null =
+    config.claudeToken ?? (await readStoredClaudeToken(config.stateDir));
+  if (claudeToken !== null) rememberSecret(WORKER_SECRET_NAMES.claudeToken, claudeToken);
+  /** Claude refused the token this worker holds (WP-294 (6)): no claim until a new sign-in. */
+  let claudeRejected = false;
+  let candidates: { readonly url: string; readonly version: string }[] = [];
+  let device: {
+    readonly userCode: string;
+    readonly verificationUri: string;
+    readonly expiresAt: Date;
+  } | null = null;
+  let unreachable: {
+    readonly failure: WorkerLocalCoreFailure;
+    readonly retryAt: Date | null;
+  } | null = null;
+  let core: CoreClient | null = null;
 
   let connection: WorkerConnection = 'logging_in';
   let stopping = false;
@@ -267,6 +355,43 @@ export const startRemoteWorker = async (
   let slotFreed: (() => void) | null = null;
   const drainMarker = path.join(config.stateDir, DRAIN_MARKER_FILE);
 
+  /** The current cycle; a page action that changes one of its inputs aborts it (see the docblock). */
+  let cycle = new AbortController();
+  /** Wakes the claim loop: a slot freed, a resume, a drain, a restart or a stop. */
+  const wakeClaims = (): void => {
+    slotFreed?.();
+  };
+  const restartCycle = (why: string): void => {
+    cycle.abort();
+    cycle = new AbortController();
+    claimAbort?.abort();
+    wakeClaims();
+    loggerPort.info({ why }, 'this worker starts its connection again');
+  };
+  /** A wait that a restart (or a stop) ends early. */
+  const pause = (ms: number, signal: AbortSignal): Promise<void> =>
+    new Promise<void>((resolve) => {
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      const done = (): void => {
+        signal.removeEventListener('abort', done);
+        resolve();
+      };
+      signal.addEventListener('abort', done, { once: true });
+      void sleep(ms).then(done);
+    });
+  /** Waits until the cycle is restarted (or the worker stops). */
+  const untilRestart = (signal: AbortSignal): Promise<void> =>
+    new Promise<void>((resolve) => {
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+
   /**
    * The digests this worker **holds** — only what its launcher resolves on the local daemon now
    * (backlog 704, 763): its health check answers the run and egress images it is configured with,
@@ -300,13 +425,13 @@ export const startRemoteWorker = async (
     }
   };
 
-  const handshake = async (): Promise<boolean> => {
+  const handshake = async (client: CoreClient, signal: AbortSignal): Promise<boolean> => {
     connection = 'handshaking';
-    for (let attempt = 0; !stopping; attempt += 1) {
+    for (let attempt = 0; !stopping && !signal.aborted; attempt += 1) {
       try {
         await refreshHeldDigests();
         const commit = shaSchema.safeParse(config.commit ?? '');
-        const answer = await core.handshake(credential as string, {
+        const answer = await client.handshake(credential as string, {
           image_digests: heldDigests,
           commit: commit.success ? commit.data : null,
         });
@@ -326,6 +451,7 @@ export const startRemoteWorker = async (
           usagePausedEstimated = false;
         }
         lastHandshakeAt = new Date().toISOString();
+        unreachable = null;
         connection = 'connected';
         loggerPort.info(
           {
@@ -350,7 +476,7 @@ export const startRemoteWorker = async (
           connection = 'revoked';
           loggerPort.error(
             {},
-            'the core does not accept this worker’s credential (revoked, or its user may not act); delete the credential file in the worker-state volume to log in again',
+            'the core does not accept this worker’s credential (revoked, or its user may not act); connect again from the worker’s page',
           );
           return false;
         }
@@ -360,8 +486,10 @@ export const startRemoteWorker = async (
           return false;
         }
         const wait = backoffMs(attempt);
+        connection = 'core_unreachable';
+        unreachable = { failure: coreFailureOf(error), retryAt: new Date(Date.now() + wait) };
         loggerPort.warn({ err: error, wait_ms: wait }, 'the handshake failed; it is retried');
-        await sleep(wait);
+        await pause(wait, signal);
       }
     }
     return false;
@@ -393,7 +521,7 @@ export const startRemoteWorker = async (
     // The first attempt is awaited — the run's `finish` follows it, so the core's re-plan is not
     // offered back to this worker — and a failed one is retried in the background, bounded.
     const tell = async (): Promise<boolean> => {
-      if (credential === null) return true;
+      if (credential === null || core === null) return true;
       try {
         await core.pause(credential, { until, reason: 'usage_limited', estimated });
         return true;
@@ -412,7 +540,18 @@ export const startRemoteWorker = async (
     })();
   };
 
-  const startSession = (pkg: RunPackage): void => {
+  /** Claude refused the token on a run's stream (WP-294 (6)): no claim until a new sign-in. */
+  const claudeWasRejected = (): void => {
+    if (claudeRejected) return;
+    claudeRejected = true;
+    loggerPort.error(
+      {},
+      'Claude no longer accepts this worker’s sign-in: it claims nothing until you sign in again on the worker’s page',
+    );
+    restartCycle('claude_rejected');
+  };
+
+  const startSession = (client: CoreClient, pkg: RunPackage): void => {
     const runKeys = [`run_token:${pkg.runId}`, `run_credential:${pkg.runId}`];
     logSecrets.set(runKeys[0] as string, {
       name: `${WORKER_SECRET_NAMES.runToken}_${pkg.epoch}_${pkg.runId.slice(0, 8)}`,
@@ -426,8 +565,9 @@ export const startRemoteWorker = async (
     }
     const session = startRunSession({
       pkg,
-      core: core.forRun(pkg.runId, pkg.runToken),
-      claudeToken: config.claudeToken,
+      core: client.forRun(pkg.runId, pkg.runToken),
+      claudeToken: claudeToken as string,
+      onClaudeRejected: claudeWasRejected,
       logger: loggerPort,
       sleep,
       usagePausedUntil: () => (usagePauseRemainingMs() > 0 ? usagePausedUntil : null),
@@ -457,9 +597,9 @@ export const startRemoteWorker = async (
     });
   };
 
-  const claimLoop = async (): Promise<void> => {
+  const claimLoop = async (client: CoreClient, signal: AbortSignal): Promise<void> => {
     let failures = 0;
-    while (!stopping && connection === 'connected') {
+    while (!stopping && !signal.aborted && connection === 'connected') {
       // Drained or held by its owner: wait for *Resume* (WP-292) — never claim. A *take this one*
       // under way (WP-293) holds the loop the same way until it has started its run or failed.
       if (draining || manuallyPausedAt !== null || taking) {
@@ -492,7 +632,7 @@ export const startRemoteWorker = async (
       try {
         // Asked before every claim: an image pulled (or removed) since the last one counts now.
         await refreshHeldDigests();
-        const claiming = core.claim(
+        const claiming = client.claim(
           credential as string,
           {
             free_slots: config.concurrency - sessions.size,
@@ -507,9 +647,9 @@ export const startRemoteWorker = async (
         );
         const pkg = await claiming;
         failures = 0;
-        if (pkg !== null) startSession(pkg);
+        if (pkg !== null) startSession(client, pkg);
       } catch (error) {
-        if (stopping) break;
+        if (stopping || signal.aborted) break;
         if (draining || manuallyPausedAt !== null || taking || usagePauseRemainingMs() > 0) {
           continue;
         }
@@ -532,17 +672,12 @@ export const startRemoteWorker = async (
           { err: error, wait_ms: wait, transient: isTransient(error) },
           'a claim failed; claiming again',
         );
-        await sleep(wait);
+        await pause(wait, signal);
       } finally {
         claimAbort = null;
         claimInFlight = null;
       }
     }
-  };
-
-  /** Wakes the claim loop: a slot freed, a resume, a drain or a stop. */
-  const wakeClaims = (): void => {
-    slotFreed?.();
   };
 
   const exists = async (file: string): Promise<boolean> =>
@@ -556,11 +691,11 @@ export const startRemoteWorker = async (
    * page, its Drain, `/internal/drain` or this start — and the audit row says which.
    */
   const assertPause = async (paused: boolean, via: ManualPauseVia): Promise<void> => {
-    if (credential === null) {
+    if (credential === null || core === null || connection !== 'connected') {
       throw new LocalUiError(
         409,
         'not_connected',
-        'this worker is not logged in to its core yet, so it cannot be paused there',
+        'this worker is not connected to its platform yet, so it cannot be paused there',
       );
     }
     const answer = await core.manualPause(credential, { paused, via });
@@ -572,9 +707,9 @@ export const startRemoteWorker = async (
    * says so); an owner's *Pause* survives a restart. Retried until the core answers or the worker
    * stops; until then this worker claims nothing, which is what the pause said anyway.
    */
-  const clearDrainPause = async (): Promise<void> => {
+  const clearDrainPause = async (signal: AbortSignal): Promise<void> => {
     if (!(await exists(drainMarker))) return;
-    for (let attempt = 0; !stopping; attempt += 1) {
+    for (let attempt = 0; !stopping && !signal.aborted; attempt += 1) {
       try {
         await assertPause(false, 'worker_start');
         await rm(drainMarker, { force: true });
@@ -588,7 +723,7 @@ export const startRemoteWorker = async (
           loggerPort.error({ err: error }, 'the last drain’s pause could not be cleared');
           return;
         }
-        await sleep(backoffMs(attempt));
+        await pause(backoffMs(attempt), signal);
       }
     }
   };
@@ -692,7 +827,7 @@ export const startRemoteWorker = async (
 
   /** The worker's credential, or a `409` naming why the page cannot ask the core yet (WP-293). */
   const connectedCredential = (): string => {
-    if (credential === null || connection !== 'connected') {
+    if (credential === null || core === null || connection !== 'connected') {
       throw new LocalUiError(
         409,
         'not_connected',
@@ -701,6 +836,8 @@ export const startRemoteWorker = async (
     }
     return credential;
   };
+  /** The core client of a connected worker (checked by {@link connectedCredential} first). */
+  const connectedCore = (): CoreClient => core as CoreClient;
 
   /** A core refusal in the page's words: its own status for a `4xx`, `502` when it did not answer. */
   const asLocalError = (error: unknown, what: string): LocalUiError => {
@@ -730,7 +867,7 @@ export const startRemoteWorker = async (
   const readClaimScope = async (): Promise<WorkerLocalClaimScope> => {
     const held = connectedCredential();
     try {
-      const answer = await core.claimScope(held);
+      const answer = await connectedCore().claimScope(held);
       claimScope = answer.claim_project_ids;
       return workerLocalClaimScopeSchema.parse(redactKeysAndValues(pageRedactor(), answer));
     } catch (error) {
@@ -744,7 +881,7 @@ export const startRemoteWorker = async (
   ): Promise<WorkerLocalClaimScope> => {
     const held = connectedCredential();
     try {
-      const answer = await core.setClaimScope(held, {
+      const answer = await connectedCore().setClaimScope(held, {
         claim_project_ids: projectIds === null ? null : [...projectIds],
       });
       claimScope = answer.claim_project_ids;
@@ -768,7 +905,7 @@ export const startRemoteWorker = async (
   const listOffers = async (): Promise<WorkerLocalOffers> => {
     const held = connectedCredential();
     try {
-      const answer = await core.offers(held);
+      const answer = await connectedCore().offers(held);
       return workerLocalOffersSchema.parse(redactKeysAndValues(pageRedactor(), answer));
     } catch (error) {
       throw asLocalError(error, 'list the offers');
@@ -823,11 +960,11 @@ export const startRemoteWorker = async (
       await refreshHeldDigests();
       let pkg: RunPackage;
       try {
-        pkg = await core.takeOffer(held, runId, { image_digests: heldDigests });
+        pkg = await connectedCore().takeOffer(held, runId, { image_digests: heldDigests });
       } catch (error) {
         throw asLocalError(error, 'hand over that run');
       }
-      startSession(pkg);
+      startSession(connectedCore(), pkg);
       loggerPort.info({ run_id: pkg.runId }, 'this worker’s owner took a run from the list');
       return { run_id: pkg.runId };
     } finally {
@@ -836,12 +973,206 @@ export const startRemoteWorker = async (
     }
   };
 
+  // ── The wizard's actions (WP-294, TD-031's first-run amendment §8) ────────────────────────────
+
+  /** The sign-in: the CLI's own, under a pty; what it reads is never logged (`claude-sign-in.ts`). */
+  const signIn = createClaudeSignIn({
+    launcher:
+      options.claudeCli ?? scriptCliLauncher(config.claudeCliPath ?? DEFAULT_CLAUDE_CLI_PATH),
+    logger: loggerPort,
+    onSecret: (name, value) => rememberSecret(name, value),
+    onToken: async (token) => {
+      await writePrivateFile(config.stateDir, CLAUDE_TOKEN_FILE, token);
+      rememberSecret(WORKER_SECRET_NAMES.claudeToken, token);
+      claudeToken = token;
+      claudeRejected = false;
+      restartCycle('claude_signed_in');
+    },
+  });
+
+  const refuseFromEnvironment = (what: 'platform' | 'claude'): void => {
+    if (what === 'platform' && coreFromEnvironment) {
+      throw new LocalUiError(
+        409,
+        'set_in_environment',
+        'this worker’s platform comes from APP_CORE_URL in its environment: change it there',
+      );
+    }
+    if (what === 'claude' && claudeFromEnvironment) {
+      throw new LocalUiError(
+        409,
+        'set_in_environment',
+        'this worker’s Claude sign-in comes from CLAUDE_CODE_OAUTH_TOKEN in its environment: change it there',
+      );
+    }
+  };
+  const refuseUnlessIdle = (): void => {
+    if (sessions.size > 0) {
+      throw new LocalUiError(
+        409,
+        'not_idle',
+        'a run is in flight on this worker: drain it first, and change this once it is idle',
+      );
+    }
+  };
+
+  const refreshCandidates = async (): Promise<void> => {
+    const list = [...DEFAULT_CORE_CANDIDATES, ...(config.coreCandidates ?? [])];
+    candidates = await probeCoreCandidates(list, options.probeFetch);
+  };
+
+  const checkCore = async (address: string) => {
+    try {
+      return await checkCoreAddress(address, options.probeFetch);
+    } catch (error) {
+      if (error instanceof CoreCheckError) {
+        throw new LocalUiError(422, error.failure, error.message);
+      }
+      throw error;
+    }
+  };
+
+  /** *Connect to a platform* (`{ url }`) and *Change platform* (`{ url: null }`). */
+  const setCore = async (address: string | null): Promise<void> => {
+    refuseFromEnvironment('platform');
+    if (address !== null) {
+      if (coreUrl !== null) {
+        throw new LocalUiError(
+          409,
+          'platform_set',
+          'this worker already has a platform: change platform first',
+        );
+      }
+      const found = await checkCore(address);
+      await writePrivateFile(config.stateDir, CORE_URL_FILE, found.url);
+      coreUrl = found.url;
+      candidates = [];
+      loggerPort.info({ core_url: found.url }, 'this worker’s platform is chosen on its page');
+      restartCycle('platform_chosen');
+      return;
+    }
+    refuseUnlessIdle();
+    // Repointing never carries the developer's Claude sign-in (TD-031's no-bearer amendment §3).
+    if (uiAuth === 'none') refuseFromEnvironment('claude');
+    await removeFile(config.stateDir, CORE_URL_FILE);
+    await removeFile(config.stateDir, CREDENTIAL_FILE);
+    if (uiAuth === 'none') {
+      signIn.cancel();
+      await removeFile(config.stateDir, CLAUDE_TOKEN_FILE);
+      claudeToken = null;
+      claudeRejected = false;
+    }
+    coreUrl = null;
+    credential = null;
+    workerId = null;
+    workerName = null;
+    coreProtocol = null;
+    coreDigests = null;
+    lastHandshakeAt = null;
+    manuallyPausedAt = null;
+    usagePausedUntil = null;
+    loggerPort.info(
+      {},
+      'this worker’s platform was forgotten on its page; its credential is deleted',
+    );
+    restartCycle('platform_forgotten');
+  };
+
+  const startSignIn = async (action: 'start' | 'cancel'): Promise<void> => {
+    refuseFromEnvironment('claude');
+    if (action === 'cancel') {
+      signIn.cancel();
+      return;
+    }
+    try {
+      await signIn.start();
+    } catch (error) {
+      if (error instanceof SignInBusyError)
+        throw new LocalUiError(409, 'sign_in_busy', error.message);
+      throw error;
+    }
+  };
+
+  const submitCode = (code: string): void => {
+    refuseFromEnvironment('claude');
+    try {
+      signIn.submitCode(code);
+    } catch (error) {
+      if (error instanceof SignInBusyError) {
+        throw new LocalUiError(409, 'not_waiting_for_code', error.message);
+      }
+      throw error;
+    }
+  };
+
+  const acceptToken = (token: string): void => {
+    refuseFromEnvironment('claude');
+    const trimmed = token.trim();
+    if (!CLAUDE_TOKEN_SHAPE.test(trimmed)) {
+      // Never echoed: a malformed paste may still be most of a secret.
+      throw new LocalUiError(
+        400,
+        'invalid_token',
+        'that is not a token from claude setup-token (it starts sk-ant-oat01-)',
+      );
+    }
+    try {
+      signIn.acceptToken(trimmed);
+    } catch (error) {
+      if (error instanceof SignInBusyError)
+        throw new LocalUiError(409, 'sign_in_busy', error.message);
+      throw error;
+    }
+  };
+
+  /** *Sign out / change Claude account*: deletes the stored token; Anthropic still holds it. */
+  const signOut = async (): Promise<void> => {
+    refuseFromEnvironment('claude');
+    refuseUnlessIdle();
+    signIn.cancel();
+    await removeFile(config.stateDir, CLAUDE_TOKEN_FILE);
+    claudeToken = null;
+    claudeRejected = false;
+    loggerPort.info({}, 'the Claude sign-in was removed from this worker on its page');
+    restartCycle('claude_signed_out');
+  };
+
+  /** *Connect again* after a revocation: a new device flow, no restart. */
+  const connectAgain = async (): Promise<void> => {
+    if (connection !== 'revoked') {
+      throw new LocalUiError(409, 'not_revoked', 'this worker’s credential was not refused');
+    }
+    await removeFile(config.stateDir, CREDENTIAL_FILE);
+    credential = null;
+    restartCycle('connect_again');
+  };
+
+  /** *Try now*: the core is asked again at once. */
+  const retry = async (): Promise<void> => {
+    if (connection === 'connected') {
+      throw new LocalUiError(409, 'connected', 'this worker is connected');
+    }
+    restartCycle('retry');
+  };
+
   /**
-   * Every secret this worker knows (WP-292): the log's — the Claude token, the credential, each
-   * live run's token and run credential — and, once the page listens, the page's own token.
+   * Every secret this worker knows (WP-292): the log's — the Claude tokens, the credential, each
+   * live run's token and run credential, the wizard's code — and the page's own token.
    */
-  let uiToken: string | null = null;
   const pageRedactor = () => exactSecretRedactor([...logSecrets.values()]);
+
+  /** The approval link, only on the core's own origin (TD-031's first-run amendment §5). */
+  const approveUrlOf = (code: NonNullable<typeof device>): string | null => {
+    if (coreUrl === null) return null;
+    try {
+      const link = new URL(code.verificationUri);
+      if (link.origin !== new URL(coreUrl).origin) return null;
+      link.searchParams.set('code', code.userCode);
+      return link.toString();
+    } catch {
+      return null;
+    }
+  };
 
   /**
    * The local page's state (WP-292): read from this worker's memory only — no core read — and
@@ -855,7 +1186,7 @@ export const startRemoteWorker = async (
       connection,
       protocol: WORKER_PROTOCOL_VERSION,
       core_protocol: coreProtocol,
-      core_url: config.coreUrl,
+      core_url: coreUrl,
       last_handshake_at: lastHandshakeAt,
       manually_paused_at: manuallyPausedAt,
       // A pause that has passed is no pause: the page says *taking work* again by itself.
@@ -886,27 +1217,97 @@ export const startRemoteWorker = async (
         transcript: [...session.state.tail],
       })),
       logs: [...logTail],
+      setup: {
+        core_source: coreUrl === null ? null : coreFromEnvironment ? 'environment' : 'file',
+        candidates: candidates.slice(0, 8),
+        claude_source: claudeToken === null ? null : claudeFromEnvironment ? 'environment' : 'file',
+        claude_rejected: claudeRejected,
+        sign_in: signIn.status(),
+        device:
+          device === null || connection !== 'logging_in'
+            ? null
+            : {
+                user_code: device.userCode,
+                approve_url: approveUrlOf(device),
+                expires_at: device.expiresAt.toISOString(),
+              },
+        unreachable:
+          unreachable === null || connection !== 'core_unreachable'
+            ? null
+            : {
+                failure: unreachable.failure,
+                retry_at: unreachable.retryAt === null ? null : unreachable.retryAt.toISOString(),
+              },
+        idle: sessions.size === 0,
+        auth: uiAuth,
+      },
       server_time: new Date(now).toISOString(),
     };
     return workerLocalStateSchema.parse(redactKeysAndValues(pageRedactor(), value));
   };
 
+  /** One cycle: the first unsatisfied step waits for the page; then login, handshake, claims. */
+  const runCycle = async (signal: AbortSignal): Promise<void> => {
+    device = null;
+    unreachable = null;
+    if (coreUrl === null) {
+      connection = 'needs_platform';
+      // Nothing is asked of any core until the person chose one (WP-294 (1)).
+      void refreshCandidates();
+      await untilRestart(signal);
+      return;
+    }
+    if (claudeToken === null || claudeRejected) {
+      connection = 'needs_claude';
+      await untilRestart(signal);
+      return;
+    }
+    const origin = new URL(coreUrl).origin;
+    const client = createCoreClient({
+      baseUrl: coreUrl,
+      ...(options.coreFetch === undefined ? {} : { fetch: options.coreFetch }),
+    });
+    core = client;
+    connection = 'logging_in';
+    credential = await ensureCredential({
+      core: client,
+      stateDir: config.stateDir,
+      origin,
+      logger: loggerPort,
+      stopped: () => stopping || signal.aborted,
+      sleep: (ms) => pause(ms, signal),
+      onCode: (code) => {
+        device = code;
+        unreachable = null;
+        connection = 'logging_in';
+      },
+      onUnreachable: (error, wait) => {
+        connection = 'core_unreachable';
+        unreachable = { failure: coreFailureOf(error), retryAt: new Date(Date.now() + wait) };
+      },
+    });
+    device = null;
+    if (credential === null || signal.aborted) return;
+    rememberSecret('worker_credential', credential);
+    if (!(await handshake(client, signal))) return;
+    await clearDrainPause(signal);
+    await claimLoop(client, signal);
+  };
+
   const main = (async () => {
-    try {
-      credential = await ensureCredential({
-        core,
-        stateDir: config.stateDir,
-        logger: loggerPort,
-        stopped: () => stopping,
-        sleep,
-      });
-      if (credential === null) return;
-      logSecrets.set('credential', { name: 'worker_credential', value: credential });
-      if (!(await handshake())) return;
-      await clearDrainPause();
-      await claimLoop();
-    } catch (error) {
-      loggerPort.error({ err: error }, 'the remote worker stopped claiming after an error');
+    while (!stopping) {
+      const signal = cycle.signal;
+      try {
+        await runCycle(signal);
+      } catch (error) {
+        if (error instanceof CoreCallError && error.kind === 'upgrade_required') {
+          connection = 'upgrade_required';
+        }
+        loggerPort.error({ err: error }, 'the remote worker stopped claiming after an error');
+      }
+      if (stopping) break;
+      // Ended by itself (revoked, upgrade required, an error): wait for the page or a stop.
+      await untilRestart(signal);
     }
   })();
 
@@ -977,11 +1378,20 @@ export const startRemoteWorker = async (
     return `http://${host}:${bound}`;
   };
 
+  /** The page's answer to a wizard action: its state after it, or the refusal it raised. */
+  const acting =
+    <A extends unknown[]>(action: (...args: A) => Promise<void> | void) =>
+    async (...args: A): Promise<WorkerLocalState> => {
+      await action(...args);
+      return localState();
+    };
+
   /**
-   * The local page's listener (WP-292): only when `APP_WORKER_UI=enabled`. The token is created
-   * once in `worker-state` and the page's address is logged **once per start**, written straight to
-   * the process's output — the one line that carries the token, which every other line, the log
-   * tail and every local answer redact.
+   * The local page's listener (WP-292): only when `APP_WORKER_UI=enabled`. Under
+   * `APP_WORKER_UI_AUTH=token` the token is created once in `worker-state` and the page's address is
+   * logged **once per start**, written straight to the process's output — the one line that carries
+   * the token, which every other line, the log tail and every local answer redact. Under `none`
+   * (the default) no token exists and the plain address is logged (TD-031's no-bearer amendment).
    */
   const listenUi = async (): Promise<void> => {
     const ui = config.ui;
@@ -989,9 +1399,11 @@ export const startRemoteWorker = async (
       loggerPort.info({}, 'the local page is disabled (APP_WORKER_UI=disabled): no port is open');
       return;
     }
-    uiToken = await ensureUiToken(config.stateDir);
-    const token = uiToken;
-    logSecrets.set('ui_token', { name: 'worker_ui_token', value: token });
+    let token: string | null = null;
+    if (uiAuth === 'token') {
+      token = await ensureUiToken(config.stateDir);
+      rememberSecret('worker_ui_token', token);
+    }
     const webRoot = await resolveBundleRoot(options.webRoot ?? BUNDLED_WEB_ROOT);
     const listening = createLocalUiServer({
       token,
@@ -1022,16 +1434,29 @@ export const startRemoteWorker = async (
         setClaimScope: writeClaimScope,
         offers: listOffers,
         take: takeOffer,
+        checkCore,
+        setCore: acting(setCore),
+        signIn: acting(startSignIn),
+        claudeCode: acting(submitCode),
+        claudeToken: acting(acceptToken),
+        signOut: acting(signOut),
+        connectAgain: acting(connectAgain),
+        retry: acting(retry),
       },
     });
     uiServer = listening;
     uiAddress = await bind(listening, ui.listenPort, ui.host);
+    const address =
+      token === null ? plainUiAddressOf(ui.publishedPort) : uiAddressOf(ui.publishedPort, token);
     rawDestination.write(
       `${JSON.stringify({
         level: 30,
         time: Date.now(),
         role: REMOTE_WORKER_ROLE,
-        msg: `this worker's page: ${uiAddressOf(ui.publishedPort, token)} (open it on this machine; the address is printed at every start — delete ui-token in the worker-state volume to change it)`,
+        msg:
+          token === null
+            ? `this worker's page: ${address} (open it on this machine)`
+            : `this worker's page: ${address} (open it on this machine; the address is printed at every start — delete ui-token in the worker-state volume to change it)`,
       })}\n`,
     );
   };
@@ -1055,8 +1480,10 @@ export const startRemoteWorker = async (
     localState,
     stop: async () => {
       stopping = true;
+      cycle.abort();
       claimAbort?.abort();
       slotFreed?.();
+      await signIn.close();
       for (const session of sessions.values()) session.shutdown();
       await Promise.all([...sessions.values()].map((session) => session.done));
       await main;

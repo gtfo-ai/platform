@@ -32,6 +32,7 @@ import { describe, expect, it } from 'vitest';
 import { createRunletSpawn } from '../runlet/spawn-adapter.js';
 import { createControlVolume, createRawServer } from '../runlet/testing.js';
 import {
+  assistantErrorOf,
   type ClaudeRunnerDependencies,
   createClaudeRunner,
   INTERRUPT_GRACE_MS,
@@ -250,6 +251,35 @@ describe('each model turn’s usage, told as it arrives (backlog 772)', () => {
     ).toBeNull();
     expect(turnUsageOf(assistant({ id: 'm1' }))).toBeNull();
     expect(turnUsageOf({ type: 'result' } as never)).toBeNull();
+  });
+});
+
+/**
+ * WP-294 (6): a token Claude refused, as the pinned CLI streams it — **recorded** (V-WM10, CLI
+ * 2.1.267, `claude -p --output-format stream-json` with an obviously fake token, 2026-11-05) and
+ * **adapted** (`documented-adapted`): the session id, uuids, message id and request id replaced, the
+ * init line the other fixtures' — so the `assistant` message's `error: 'authentication_failed'` and
+ * the result's `api_error_status: 401` are the CLI's own bytes.
+ */
+describe('a token Claude refused (WP-294 (6), V-WM10)', () => {
+  it('tells authentication_failed once per refusing message, and fails the run', async () => {
+    const errors: string[] = [];
+    const { result } = await run('authentication-failed', {
+      deps: { onAssistantError: (error) => errors.push(error) },
+    });
+    expect(errors).toEqual(['authentication_failed']);
+    expect(result.status).toBe('failed');
+  });
+
+  it('reads no error from a message without one, or one that is not the CLI’s short vocabulary', () => {
+    const assistant = (extra: Record<string, unknown>) =>
+      ({ type: 'assistant', message: { content: [] }, ...extra }) as never;
+    expect(assistantErrorOf(assistant({}))).toBeNull();
+    expect(assistantErrorOf(assistant({ error: 'Failed to authenticate. 401' }))).toBeNull();
+    expect(assistantErrorOf(assistant({ error: 'rate_limit' }))).toBe('rate_limit');
+    expect(
+      assistantErrorOf({ type: 'result', error: 'authentication_failed' } as never),
+    ).toBeNull();
   });
 });
 

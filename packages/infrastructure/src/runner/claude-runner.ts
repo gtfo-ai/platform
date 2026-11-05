@@ -205,6 +205,13 @@ export interface ClaudeRunnerDependencies {
     readonly outputTokens: number;
   }) => void;
   /**
+   * Told the `error` an `assistant` message carries — the CLI's own classification of an API
+   * failure (`authentication_failed`, `rate_limit`, `billing_error`, …). V-WM10 recorded the first
+   * when Claude refused the sign-in (the `authentication-failed` script in `test/fixtures/claude/`).
+   * A remote worker stops claiming on the first (WP-294 (6)).
+   */
+  readonly onAssistantError?: (error: string) => void;
+  /**
    * WP-13's run shim goes here; `fakeSpawnClaudeCodeProcess` goes here in tests (TD-025). When it
    * exposes `setStderrSink` (the runlet transport does, WP-127), the runner sets its own redacting
    * sink on it: the SDK reads stderr only from a process it spawned itself.
@@ -406,6 +413,16 @@ export const turnUsageOf = (
     return null;
   }
   return { messageId: inner.id, inputTokens: input, outputTokens: output };
+};
+
+/**
+ * The `error` an `assistant` message carries (the SDK's `SDKAssistantMessage.error`), bounded to a
+ * short token of the CLI's own vocabulary, or `null` — never the message text.
+ */
+export const assistantErrorOf = (message: SDKMessage): string | null => {
+  if (message.type !== 'assistant') return null;
+  const error = (message as unknown as { error?: unknown }).error;
+  return typeof error === 'string' && /^[a-z_]{1,64}$/.test(error) ? error : null;
 };
 
 /**
@@ -888,6 +905,10 @@ const startRun = (
     if (message.type === 'assistant' && deps.onTurnUsage !== undefined) {
       const turn = turnUsageOf(message);
       if (turn !== null) deps.onTurnUsage(turn);
+    }
+    if (message.type === 'assistant' && deps.onAssistantError !== undefined) {
+      const error = assistantErrorOf(message);
+      if (error !== null) deps.onAssistantError(error);
     }
     if (message.type === 'result') {
       result = message;

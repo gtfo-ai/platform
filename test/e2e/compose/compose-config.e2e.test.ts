@@ -492,6 +492,14 @@ const RESIDUAL: readonly { group: string; reason: string; matches: (name: string
       name === 'APP_PORT',
   },
   {
+    group: 'a remote worker’s',
+    // WP-294: `.env.example` names every variable technical/12 lists, and these two are read only by
+    // `ROLE=remote-worker` (`loadRemoteWorkerConfig`), whose `.env` is a developer's, beside the
+    // worker's compose file — inert in the core's containers.
+    reason: 'read by `loadRemoteWorkerConfig` on a developer’s machine, never by the core',
+    matches: (name) => name === 'APP_WORKER_UI_AUTH' || name === 'APP_WORKER_CORE_CANDIDATES',
+  },
+  {
     group: 'development and CI',
     reason:
       '`pnpm dev`’s and `pnpm worker:dev`’s shell variables and the eval budgets; nothing in the image reads them',

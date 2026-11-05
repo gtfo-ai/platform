@@ -9,7 +9,7 @@
  *   POST /api/worker/v1/runs/:id/spawn          run token
  *   POST /api/worker/v1/runs/:id/finish         run token
  *   POST /api/worker/v1/runs/:id/late-cost      run token
- *   GET  /api/worker/v1/release                 worker credential (WP-284)
+ *   GET  /api/worker/v1/release                 none — public since WP-294; the protocol check stays
  *   GET  /api/worker/v1/compose.yml             none — a person's first-install download (WP-284 (6))
  *   POST /api/worker/v1/update-report           worker credential (WP-287 (4))
  *   POST /api/worker/v1/manual-pause            worker credential, protocol ≥ 2 (WP-292, `owner-verbs.ts`)
@@ -918,22 +918,19 @@ export const registerWorkerProtocolRoutes = async (
   typed.get(
     path(WORKER_PATHS.release),
     {
-      preValidation: authenticateWorker,
       schema: {
         summary: 'This core’s image digests and protocol range (TD-032 decision 3)',
         description:
-          'Worker credential. The core’s four images by digest — its own `sha-<7>` tags resolved with the anonymous OCI `HEAD`, or `APP_WORKER_IMAGE_DIGESTS` — and the protocol range it serves. No compose file: an updater applies digests only and reads the template from the verified new image (TD-032 §3). `503 digests_unresolved` naming the image while they cannot be resolved (WP-284).',
+          'Public since WP-294 (TD-031’s first-run amendment §6): the range and the digests already reach an anonymous caller through the `426`, and the wizard of a worker that has no credential yet checks a typed address with it. The `X-Worker-Protocol` check stays; a credential, if presented, is ignored and no contact is recorded. The core’s four images by digest — its own `sha-<7>` tags resolved with the anonymous OCI `HEAD`, or `APP_WORKER_IMAGE_DIGESTS` — and the protocol range it serves. No compose file: an updater applies digests only and reads the template from the verified new image (TD-032 §3). `503 digests_unresolved` naming the image while they cannot be resolved (WP-284).',
         tags: ['worker'],
         response: {
           200: workerReleaseResponseSchema,
-          401: apiErrorSchema,
           426: workerUpgradeRequiredBodySchema,
           503: apiErrorSchema,
         },
       },
     },
-    async (request): Promise<z.output<typeof workerReleaseResponseSchema>> => {
-      await workerContact(request);
+    async (): Promise<z.output<typeof workerReleaseResponseSchema>> => {
       const release = options.release();
       if (release === null) {
         throw unresolved();
