@@ -199,6 +199,9 @@ const fetchFor = (
     if (url.endsWith(`/api/tasks/${TASK}/audit`)) return json({ items: [] });
     if (url.endsWith(`/api/tasks/${TASK}`)) return json(task);
     if (url.endsWith('/api/projects')) return json({ items: [] });
+    // A command refreshes the inbox: answered, so the refresh — which the dialog's close follows —
+    // is not held behind a retried 404.
+    if (url.endsWith('/api/org/inbox')) return json({ questions: [], approvals: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
 
@@ -243,7 +246,10 @@ describe('the take-over control on the task screen', () => {
     await waitFor(() => {
       expect(container.textContent).toContain('git fetch && git checkout agentic/acme-1');
     });
-    expect(screen.queryByRole('dialog')).toBeNull();
+    // Base UI unmounts a closed dialog after its exit transition, so the close is waited for.
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
     const takeOver = sent.find((entry) => entry.path.endsWith('/take-over'));
     expect(takeOver?.body).toEqual({ tarball: true, reason: 'the agent is looping' });
     // The SPA's per-intent key (`app/idempotency.ts`), never a request without one.
