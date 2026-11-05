@@ -14,7 +14,7 @@
  * ## What it seeds (after `startRuntime`, so the bootstrap administrator exists)
  *
  *  - one organisation (if none), and two projects, each with its own `fake-git` integration:
- *    - `wcc-token` — `http://wcc-git/acme/api.git`, a **static run token** (`run_credential: static`,
+ *    - `wcc-token` — `https://wcc-git/acme/api.git`, a **static run token** (`run_credential: static`,
  *      `remote_run_credential: allow`), the token the HTTP stand-in grants push to (`WCC_RUN_TOKEN`);
  *    - `wcc-deploy` — `https://git.example.test/acme/dk.git`, a **deploy key** (`run_credential:
  *      deploy_key`, `allow`), whose SSH route this registration points at the SSH stand-in
@@ -75,7 +75,7 @@ const PROJECTS = {
   'API-1': {
     key: 'wcc-token',
     path: 'acme/api',
-    repoUrl: 'http://wcc-git/acme/api.git',
+    repoUrl: 'https://wcc-git/acme/api.git',
     gitIntegrationId: randomUUID(),
   },
   'DK-1': {

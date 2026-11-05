@@ -27,7 +27,7 @@
  *    daemon (`agentic-worker`, `agentic-worker-run-egress`, 7357) is never joined, stopped or taken
  *    down — its `.env` naming the images and `APP_CORE_URL=http://app:8080`; the `remote-worker`
  *    joined to the core's network after `up`;
- *  - **two git stand-ins** on the worker's run network: `wcc-git` (`git http-backend` behind Basic auth,
+ *  - **two git stand-ins** on the worker's run network: `wcc-git` (`git http-backend` over HTTPS with the check's own CA, behind Basic auth,
  *    granting the static run token push) and `wcc-ssh` (`sshd` on 443, the throwaway deploy key's only
  *    `authorized_keys` line, its host key pinned in the core's SSH route).
  *
@@ -50,7 +50,7 @@
  *     digests** the bundle pulled and `heldImageDigests` names them, and the core's Workers row holds
  *     them (backlog 704/763);
  *  6. **two tasks to Ready**, every run on the worker under its first claim: `API-1` on the static
- *     HTTPS-token project (the HTTP stand-in saw the token push `agentic/API-1`) and `DK-1` on the
+ *     HTTPS-token project (the HTTPS stand-in saw the token push `agentic/API-1`) and `DK-1` on the
  *     deploy-key project (the SSH stand-in holds `agentic/DK-1`, and the offers counted signatures);
  *  7. **canaries**: the Claude token is in no container's configured environment but the
  *     `remote-worker`'s and in no log line of the bundle; the run token, the worker credential and a
@@ -122,7 +122,7 @@ const SECRET_KEY = 'wp284-worker-compose-check-not-a-real-secret-0000';
 const ADMIN_EMAIL = 'operator@example.test';
 const ADMIN_PASSWORD = 'wp284-not-a-real-password';
 const CLAUDE_TOKEN = 'FAKE-wp284-claude-oauth-token-not-a-credential-0001';
-/** The static run token the HTTP stand-in grants push with (S-22.14). */
+/** The static run token the HTTPS stand-in grants push with (S-22.14). */
 const RUN_TOKEN = 'FAKE-wcc-static-run-token-not-a-credential-0001';
 const ORIGIN = 'http://worker-compose-check.example.test';
 /** The host port the bundle publishes the worker's page on (`APP_WORKER_UI_PORT`), off the default. */
@@ -292,9 +292,77 @@ const deployKey = async () => {
  * The run image with the stage-aware CLI, then the run and egress images pushed to the loopback
  * registry: answers their **registry** digests and the references the bundle pulls them by.
  */
-const publishRunImages = async (checkDirectory) => {
+/** The pinned git helper image `compose.worker.yml` names (`APP_WORKSPACE_GIT_IMAGE`'s default). */
+const GIT_HELPER_IMAGE =
+  'alpine/git:v2.49.1@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26';
+/** The git helper image with the check's CA, built here and removed at the end. */
+const GIT_IMAGE = `agentic-wcc-git-helper:${SUFFIX}`;
+
+/**
+ * A throwaway CA and the HTTPS stand-in's certificate for `wcc-git`, made with the run image's own
+ * `openssl`. The token project's remote is `https://` as a real one is: a run container reaches it
+ * only through the egress sidecar's `CONNECT`, and git there reads `HTTPS_PROXY` (an `http://`
+ * remote is not pushed through the proxy at all — measured, backlog 793).
+ */
+const makeTls = async (checkDirectory) => {
+  const directory = path.join(checkDirectory, 'tls');
+  await run('mkdir', ['-p', directory]);
+  await chmod(directory, 0o777);
+  await docker(
+    [
+      'run',
+      '--rm',
+      '--user',
+      '0:0',
+      '-v',
+      `${directory}:/out`,
+      '--entrypoint',
+      'sh',
+      `platform-runtime:${TAG}`,
+      '-c',
+      [
+        'set -e',
+        'cd /out',
+        'openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=wcc-check-ca -keyout ca.key -out ca.crt -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign 2>/dev/null',
+        'openssl req -newkey rsa:2048 -nodes -subj /CN=wcc-git -keyout server.key -out server.csr 2>/dev/null',
+        "printf 'subjectAltName=DNS:wcc-git\\nbasicConstraints=CA:FALSE\\nextendedKeyUsage=serverAuth\\n' > ext",
+        'openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 1 -extfile ext -out server.crt 2>/dev/null',
+        'chmod 644 ca.crt server.crt server.key',
+      ].join('\n'),
+    ],
+    { timeout: TIMEOUT_MS },
+  );
+  const read = (name) => readFile(path.join(directory, name), 'utf8');
+  return {
+    ca: await read('ca.crt'),
+    key: await read('server.key'),
+    cert: await read('server.crt'),
+  };
+};
+
+/** The git helper image with the check's CA appended to its bundle — what the mirror helper trusts. */
+const buildGitHelperImage = async (checkDirectory, tls) => {
+  const context = path.join(checkDirectory, 'git-image');
+  await run('mkdir', ['-p', context]);
+  await writeFile(path.join(context, 'wcc-ca.crt'), tls.ca);
+  await writeFile(
+    path.join(context, 'Dockerfile'),
+    [
+      `FROM ${GIT_HELPER_IMAGE}`,
+      'COPY wcc-ca.crt /tmp/wcc-ca.crt',
+      'RUN cat /tmp/wcc-ca.crt >> /etc/ssl/certs/ca-certificates.crt && rm /tmp/wcc-ca.crt',
+      '',
+    ].join('\n'),
+  );
+  stages.set('the derived git helper image');
+  await docker(['build', '-q', '-t', GIT_IMAGE, context], { timeout: TIMEOUT_MS });
+  madeImages.push(GIT_IMAGE);
+};
+
+const publishRunImages = async (checkDirectory, tls) => {
   const context = path.join(checkDirectory, 'run-image');
   await run('mkdir', ['-p', context]);
+  await writeFile(path.join(context, 'wcc-ca.crt'), tls.ca);
   await copyFile(
     path.join(REPO, 'scripts', 'worker-check', 'fake-claude-stage.mjs'),
     path.join(context, 'claude'),
@@ -305,6 +373,8 @@ const publishRunImages = async (checkDirectory) => {
       `FROM platform-runtime:${TAG}`,
       'USER root',
       'COPY --chmod=0755 claude /usr/local/bin/claude',
+      'COPY wcc-ca.crt /tmp/wcc-ca.crt',
+      'RUN cat /tmp/wcc-ca.crt >> /etc/ssl/certs/ca-certificates.crt && rm /tmp/wcc-ca.crt',
       'USER 1000:1000',
       '',
     ].join('\n'),
@@ -370,10 +440,10 @@ const publishRunImages = async (checkDirectory) => {
 
 /** `git http-backend` behind Basic auth: `docker-workspace.ts`'s credentialled server, one token. */
 const GIT_SERVER_PROGRAM = String.raw`
-const http = require('node:http');
+const https = require('node:https');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
-http.createServer((req, res) => {
+https.createServer({ key: process.env.TLS_KEY, cert: process.env.TLS_CERT }, (req, res) => {
   const url = new URL(req.url, 'http://standin');
   const service = url.searchParams.get('service') ??
     (url.pathname.endsWith('/git-receive-pack') ? 'git-receive-pack'
@@ -425,11 +495,11 @@ http.createServer((req, res) => {
   });
   child.stdout.on('end', () => res.end());
   child.stderr.on('data', (chunk) => process.stderr.write(chunk));
-}).listen(80);
+}).listen(443);
 `;
 
-const startStandins = async (checkDirectory, key, probeTargets) => {
-  stages.set('the HTTP git stand-in');
+const startStandins = async (checkDirectory, key, probeTargets, tls) => {
+  stages.set('the HTTPS git stand-in');
   await docker([
     'run',
     '-d',
@@ -445,6 +515,10 @@ const startStandins = async (checkDirectory, key, probeTargets) => {
     `RUN_TOKEN=${RUN_TOKEN}`,
     '-e',
     `PROBE=${JSON.stringify(probeTargets)}`,
+    '-e',
+    `TLS_KEY=${tls.key}`,
+    '-e',
+    `TLS_CERT=${tls.cert}`,
     '-e',
     `SERVER=${GIT_SERVER_PROGRAM}`,
     '--entrypoint',
@@ -570,7 +644,10 @@ const main = async () => {
   );
   const key = await deployKey();
   try {
-    const images = await publishRunImages(checkDirectory);
+    stages.set('the stand-in’s TLS');
+    const tls = await makeTls(checkDirectory);
+    await buildGitHelperImage(checkDirectory, tls);
+    const images = await publishRunImages(checkDirectory, tls);
     console.log(
       `run image ${images.run.reference}\negress image ${images.egress.reference} (both pulled by digest)`,
     );
@@ -637,6 +714,7 @@ const main = async () => {
         `PLATFORM_EGRESS_IMAGE=${images.egress.reference}`,
         `APP_WORKER_CONTROL_VOLUME=${BUNDLE}-ctl`,
         `APP_WORKER_RUN_NETWORK=${RUN_NETWORK}`,
+        `APP_WORKSPACE_GIT_IMAGE=${GIT_IMAGE}`,
         `APP_WORKER_CACHE_VOLUME=${BUNDLE}-repo-cache`,
         `APP_WORKER_UI_PORT=${UI_PORT}`,
         '',
@@ -840,7 +918,7 @@ const main = async () => {
       .trim()
       .split(/\s+/)
       .filter(Boolean);
-    await startStandins(checkDirectory, key, ['remote-worker', ...workerAddress]);
+    await startStandins(checkDirectory, key, ['remote-worker', ...workerAddress], tls);
     stages.set('two tasks to Ready');
     await control('POST', '/start/API-1');
     await control('POST', '/start/DK-1');
@@ -908,7 +986,7 @@ const main = async () => {
     }
     const access = (await docker(['exec', GIT_STANDIN, 'cat', '/tmp/access.log'])).stdout;
     check(
-      'API-1: the HTTP stand-in took a push authenticated by the static run token',
+      'API-1: the HTTPS stand-in took a push authenticated by the static run token',
       access
         .split('\n')
         .filter(Boolean)
@@ -921,7 +999,7 @@ const main = async () => {
       await docker(['exec', GIT_STANDIN, 'git', '--git-dir=/tmp/srv/acme/api.git', 'branch'])
     ).stdout;
     check(
-      'API-1: agentic/API-1 is on the HTTP stand-in',
+      'API-1: agentic/API-1 is on the HTTPS stand-in',
       apiRefs.includes('agentic/API-1'),
       apiRefs.trim(),
     );
