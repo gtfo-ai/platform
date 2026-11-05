@@ -116,7 +116,6 @@ const portOver = (git: FakeGitProvider): PipelineIntegrationsPort => {
     egress: allowAnyIntegrationHost(),
     auditLog: integrationAdapters.createPostgresIntegrationAuditLog({
       unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
-      eventStore: new eventing.PostgresEventStore(pool),
       ids: { next: () => randomUUID() as Id },
     }),
     redactor: noSecretsRedactor(),

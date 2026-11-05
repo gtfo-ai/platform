@@ -125,7 +125,6 @@ const compose = async (): Promise<Composed> => {
   const executor = createIntegrationActionExecutor({
     auditLog: integrationAdapters.createPostgresIntegrationAuditLog({
       unitOfWork: eventing.unitOfWork,
-      eventStore: eventing.store,
       ids: { next: () => randomUUID() as Id },
     }),
     idempotencyStore: integrationAdapters.createPostgresIdempotencyStore({ sql: pool }),

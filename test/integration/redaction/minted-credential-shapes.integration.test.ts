@@ -202,7 +202,6 @@ describe('a recorded shape reaches another process on commit (WP-107)', () => {
       await integrationAdapters
         .createPostgresIntegrationAuditLog({
           unitOfWork: minting.unitOfWork,
-          eventStore: minting.store,
           ids: { next: () => randomUUID() as Id },
         })
         .record(entry);
