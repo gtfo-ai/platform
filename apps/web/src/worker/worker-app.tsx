@@ -51,6 +51,7 @@ import { type PhaseStage, PhaseTrack } from '../ui/phase-track.js';
 import { StatusIcon } from '../ui/status.js';
 import { ExternalLink, TerminalText, UntrustedText } from '../ui/untrusted.js';
 import { LocalCallError, type LocalClient } from './client.js';
+import { LauncherNotice } from './launcher-notice.js';
 import {
   CONNECTION_WORDS,
   CONTROL_HINTS,
@@ -411,6 +412,7 @@ export const WorkerApp = ({
           <UntrustedText value={sentence(error)} />
         </Flash>
       )}
+      <LauncherNotice state={state} />
       {state.update_pending === true ? (
         <Flash tone="info" title="An update is waiting">
           The platform runs a newer build than this worker. Drain it, then update it with the

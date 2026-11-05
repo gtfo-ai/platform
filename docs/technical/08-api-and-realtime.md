@@ -577,7 +577,7 @@ and the run credential — values **and object keys** (the emitting site's duty 
 it); the logs are redacted the same way. A take-over of a remote run exports the
 branch and **no tarball** — the core records it so (`tarball: false` on the `run_commands` row) and the
 worker asks its launcher for none (TD-031 §14, backlog 688). Its local listener — `GET /healthz`,
-`GET /readyz` (`core_handshake`), `POST /internal/drain`, `GET /internal/state` — is on the worker's
+`GET /readyz` (`core_handshake` and `launcher`, ready only with both — backlog 980), `POST /internal/drain`, `GET /internal/state` — is on the worker's
 compose network only. `GET /api/runs/:run_id` gains `seat` (the agents list's `{kind, worker_id,
 worker_name}`) so the run page can say who executed a run (WP-283 (5)).
 

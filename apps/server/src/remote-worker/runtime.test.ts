@@ -54,7 +54,13 @@ const launcher = {
 } as unknown as launcherAdapters.LauncherControlClient;
 
 /** A core that approves the device code on the second poll and then answers 204 to every claim. */
-const fakeCore = (options: { readonly handshake?: number } = {}) => {
+const fakeCore = (
+  options: {
+    readonly handshake?: number;
+    /** `true`: a claim holds until the worker calls it off, as the core's 25 s hold does. */
+    readonly holdClaims?: boolean;
+  } = {},
+) => {
   const verbs: string[] = [];
   const bodies: string[] = [];
   let polls = 0;
@@ -98,6 +104,13 @@ const fakeCore = (options: { readonly handshake?: number } = {}) => {
         });
       case 'claims':
         workerClaimRequestSchema.parse(JSON.parse(String(init.body)));
+        if (options.holdClaims === true) {
+          await new Promise<never>((_, reject) => {
+            init.signal?.addEventListener('abort', () =>
+              reject(new DOMException('The operation was aborted.', 'AbortError')),
+            );
+          });
+        }
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, 20);
           init.signal?.addEventListener('abort', () => {
@@ -165,7 +178,10 @@ describe('the remote worker process (WP-283 (1), (3))', () => {
 
     const ready = await fetch(`${address}/readyz`);
     expect(ready.status).toBe(200);
-    expect(await ready.json()).toEqual({ status: 'ok', checks: { core_handshake: 'ok' } });
+    expect(await ready.json()).toEqual({
+      status: 'ok',
+      checks: { core_handshake: 'ok', launcher: 'ok' },
+    });
 
     const drained = await fetch(`${address}/internal/drain`, { method: 'POST' });
     expect(drained.status).toBe(202);
@@ -242,6 +258,80 @@ describe('the remote worker process (WP-283 (1), (3))', () => {
     expect(claims()[0]).toEqual([DIGEST, REGISTRY, ID]);
   });
 
+  describe('a launcher that does not answer at start is asked again (backlog 980)', () => {
+    const claimedDigests = (core: ReturnType<typeof fakeCore>) =>
+      core.verbs
+        .map((verb, index) => (verb === 'claims' ? core.bodies[index] : null))
+        .filter((body): body is string => body !== null)
+        .map((body) => workerClaimRequestSchema.parse(JSON.parse(body)).image_digests);
+
+    it.each([
+      ['refuses the connection', 'refused'],
+      ['accepts it and never answers', 'hangs'],
+    ] as const)(
+      'holds its images and claims once a launcher that %s at start answers',
+      async (_, failure) => {
+        const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+        writeFileSync(path.join(stateDir, CREDENTIAL_FILE), `${CREDENTIAL}\n`, { mode: 0o600 });
+        // Every claim is held until the worker calls it off — the core's 25 s hold — so a claim
+        // holding images can only follow from the launcher being asked again, not from the next cycle.
+        const core = fakeCore({ holdClaims: true });
+        const lines: string[] = [];
+        let up = false;
+        let probes = 0;
+        const RUN = `sha256:${'d'.repeat(64)}`;
+        worker = await startRemoteWorker({
+          config: { ...config(stateDir), logLevel: 'info' },
+          coreFetch: core.fetch,
+          launcher: {
+            health: async () => {
+              probes += 1;
+              if (!up) {
+                if (failure === 'hangs') return new Promise<never>(() => {});
+                throw new Error(
+                  'the launcher control plane could not be reached at http://launcher:7780/v1/health',
+                );
+              }
+              return { images: { run: RUN, egress: RUN } };
+            },
+          } as unknown as launcherAdapters.LauncherControlClient,
+          logDestination: { write: (line: string) => lines.push(line) },
+          launcherProbeTimeoutMs: 20,
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
+        });
+        const address = await worker.listen();
+        await until('a claim holding nothing', () => claimedDigests(core).length > 0);
+        expect(claimedDigests(core)).toEqual([[]]);
+        const ready = await fetch(`${address}/readyz`);
+        expect(ready.status).toBe(503);
+        expect(await ready.json()).toEqual({
+          status: 'down',
+          checks: { core_handshake: 'ok', launcher: 'unreachable' },
+        });
+        // Asked again with backoff while it does not answer, not once at start.
+        await until('a re-probe', () => probes >= 3);
+
+        up = true;
+        await until('a claim holding the images', () =>
+          claimedDigests(core).some((held) => held.length > 0),
+        );
+        expect(claimedDigests(core).at(-1)).toEqual([DIGEST, RUN]);
+        const readyAgain = await fetch(`${address}/readyz`);
+        expect(readyAgain.status).toBe(200);
+        expect(await readyAgain.json()).toEqual({
+          status: 'ok',
+          checks: { core_handshake: 'ok', launcher: 'ok' },
+        });
+        // The outage is logged once when it starts and once when it ends — not once per probe.
+        const said = (text: string) => lines.filter((line) => line.includes(text)).length;
+        expect(said('did not answer its health check')).toBe(1);
+        expect(said('answers its health check again')).toBe(1);
+        // The called-off claim is not a failure: no backoff line for it.
+        expect(said('a claim failed')).toBe(0);
+      },
+    );
+  });
+
   it('reuses a stored credential, and stops claiming when the core refuses it (revoked)', async () => {
     const stateDir = mkdtempSync(path.join(scratch, 'state-'));
     const core = fakeCore({ handshake: 401 });
@@ -258,6 +348,9 @@ describe('the remote worker process (WP-283 (1), (3))', () => {
     expect(core.verbs).not.toContain('claims');
     const ready = await fetch(`${address}/readyz`);
     expect(ready.status).toBe(503);
-    expect(await ready.json()).toEqual({ status: 'down', checks: { core_handshake: 'revoked' } });
+    expect(await ready.json()).toEqual({
+      status: 'down',
+      checks: { core_handshake: 'revoked', launcher: 'ok' },
+    });
   });
 });

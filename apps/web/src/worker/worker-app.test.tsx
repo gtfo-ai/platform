@@ -71,6 +71,7 @@ const state = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalState => (
   usage_paused_until: null,
   usage_paused_estimated: false,
   draining: false,
+  launcher: 'ok',
   update_pending: false,
   concurrency: 2,
   runs: [run()],
@@ -364,6 +365,29 @@ const DEVICE = {
   approve_url: `https://core.example.test/workers/approve?code=${CODE}`,
   expires_at: '2026-11-05T10:14:30.000Z',
 };
+
+describe('a launcher that does not answer (backlog 980)', () => {
+  it.each([
+    [
+      'the wizard',
+      { ...unconnected('needs_platform', {}, null), launcher: 'unreachable' as const },
+    ],
+    ['the room', state({ launcher: 'unreachable' })],
+  ])('says so on %s — the page comes up without it', async (_, value) => {
+    const { container } = renderPage(fakeClient(value));
+    await screen.findByText('This worker’s launcher does not answer');
+    expect(container.textContent).toContain('docker compose logs launcher');
+  });
+
+  it('says nothing while it answers, or before the first probe', async () => {
+    for (const launcher of ['ok', 'unknown'] as const) {
+      const { container, unmount } = renderPage(fakeClient(state({ launcher })));
+      await waitFor(() => expect(container.querySelector('[data-room]')).not.toBeNull());
+      expect(container.textContent).not.toContain('launcher does not answer');
+      unmount();
+    }
+  });
+});
 
 describe('the first-run wizard (WP-294)', () => {
   const OPEN: readonly [string, WorkerLocalState, string][] = [

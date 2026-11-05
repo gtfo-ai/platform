@@ -14,6 +14,7 @@ import {
   workerLocalCoreCheckResponseSchema,
   workerLocalCoreFailureSchema,
   workerLocalErrorSchema,
+  workerLocalLauncherSchema,
   workerLocalOffersSchema,
   workerLocalRunSchema,
   workerLocalSignInFailureSchema,
@@ -34,6 +35,7 @@ import {
   conforms,
   ERROR,
   HOOKS,
+  LAUNCHERS,
   LOCAL_API_PREFIX,
   OFFERS,
   PHASES,
@@ -203,6 +205,7 @@ const STATE = {
   usage_paused_until: null,
   usage_paused_estimated: false,
   draining: false,
+  launcher: 'ok',
   update_pending: null,
   concurrency: 2,
   runs: [RUN],
@@ -279,6 +282,7 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
   it('names the enums’ members as zod does, both ways', () => {
     const sorted = (values: readonly string[]) => [...values].sort();
     expect(sorted(CONNECTIONS)).toEqual(sorted(workerLocalStateSchema.shape.connection.options));
+    expect(sorted(LAUNCHERS)).toEqual(sorted(workerLocalLauncherSchema.options));
     expect(sorted(PHASES)).toEqual(sorted(workerLocalRunSchema.shape.phase.options));
     expect(sorted(ROLES)).toEqual(sorted(agentRoleSchema.options));
     expect(sorted(TERMINAL_REASONS)).toEqual(sorted(runTerminalReasonSchema.options));

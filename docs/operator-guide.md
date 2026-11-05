@@ -374,7 +374,9 @@ the worker was revoked, *Connect again* starts a new device flow without a resta
 The worker holds no database, no `APP_SECRET_KEY` and no integration secret, and refuses to start
 with either of the first two. Its launcher token is generated at first start. The Claude token
 reaches each run's CLI and nothing else. `docker compose exec remote-worker curl -fsS
-localhost:8080/readyz` reads `core_handshake: ok` once the core accepted it, and
+localhost:8080/readyz` reads `core_handshake: ok` once the core accepted it and `launcher: ok` once
+its launcher answers (it is 503 until both; a launcher that does not answer is asked again with
+backoff, and the worker's page says so — the page comes up whether or not the launcher does), and
 `docker compose exec remote-worker curl -fsS -X POST localhost:8080/internal/drain` stops it
 claiming. To log the machine out, revoke it on the Workers screen (or delete `credential` in
 `worker-state`). A project whose git integration gives runs a static token or a deploy key runs on a
@@ -445,7 +447,7 @@ core: every 5 minutes, and at once when the worker meets a `426`, it reads the c
    `PLATFORM_*_IMAGE` lines in a marked block of the env file beside your compose file (`.env`, or the
    `--env-file` you passed; the previous file is kept as `.env.previous`), brings the worker up with the
    compose template **the new image carries**, and checks that `/readyz` reads `core_handshake: ok`
-   within 120 s. If it does not, it puts the previous env file and template back, brings the old
+   and `launcher: ok` within 120 s. If it does not, it puts the previous env file and template back, brings the old
    build up again and restarts the worker (a drain's hold ends with the process; your own *Pause*
    does not). It then reports the result and recreates the updater last.
 

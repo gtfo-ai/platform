@@ -159,6 +159,10 @@ services:
         condition: service_completed_successfully
       pull-runtime-image:
         condition: service_completed_successfully
+      # Started, not healthy (backlog 980): the worker's local page — the first-run wizard included —
+      # must come up even when the launcher never gets healthy, and say so (`launcher` on the page and
+      # on `/readyz`). A worker that starts before its launcher listens asks it again with backoff
+      # and claims as soon as it answers; the updater's apply checks `/readyz`'s `launcher: ok`.
       launcher:
         condition: service_started
     # A stop hands every run back (`shutdown`), which settles each through the core.
@@ -230,6 +234,22 @@ services:
         condition: service_completed_successfully
       docker-socket-proxy:
         condition: service_started
+    # Its control plane answers `GET /v1/health` (backlog 980) — authenticated, so the token is read
+    # from its file into the header on stdin (`-H @-`; `printf` is the shell's own), never into a
+    # process's arguments. `docker compose ps` shows it and the updater's `up --wait` waits on it;
+    # `remote-worker` does not (its page must come up without a launcher, and says so).
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          printf 'Authorization: Bearer %s\n' "$$(cat /var/lib/platform/launcher-token/token)"
+          | curl -fsS -o /dev/null -H @- http://127.0.0.1:7780/v1/health
+      # Short, so `docker compose ps` and an update's `up --wait` see it soon (no `start_interval`:
+      # it needs Docker Engine 25).
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     stop_grace_period: 60s
     restart: unless-stopped
 
@@ -286,6 +306,17 @@ services:
         condition: service_started
       remote-worker:
         condition: service_started
+    # It serves no HTTP, so the image's `curl …/healthz` check failed for ever (backlog 981). It writes
+    # `heartbeat` in its state directory every 30 s — the epoch second by which the next beat is due —
+    # and this reads it (`apps/server/src/updater/heartbeat.ts`).
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test "$$(cat /var/lib/platform/updates/heartbeat 2>/dev/null || echo 0)" -gt "$$(date +%s)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   # The updater's own Docker access (TD-032 §4): a second proxy, on a network only the updater and its

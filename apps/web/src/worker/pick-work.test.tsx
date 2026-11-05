@@ -276,6 +276,7 @@ describe('takeBlockedOf (WP-293)', () => {
     usage_paused_until: null,
     usage_paused_estimated: false,
     draining: false,
+    launcher: 'ok',
     update_pending: null,
     concurrency: 1,
     runs: [],

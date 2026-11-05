@@ -13,6 +13,7 @@ import { createCoreClient } from '../remote-worker/core-client.js';
 import { AttestationRefusedError, type AttestationVerifier } from './attestation.js';
 import type { UpdaterConfig } from './config.js';
 import type { DockerRun } from './docker.js';
+import { HEARTBEAT_EVERY_MS, HEARTBEAT_FILE, HEARTBEAT_STALE_AFTER_MS } from './heartbeat.js';
 import { PREVIOUS_TEMPLATE_FILE, readState } from './plan.js';
 import { RegistryError } from './registry.js';
 import { applyContainerArgs, createUpdater, discoverSelf } from './updater.js';
@@ -462,5 +463,19 @@ describe('where the updater runs', () => {
     expect(args).toContain(
       'type=volume,source=p_worker-state,target=/var/lib/platform/worker-state,readonly',
     );
+  });
+});
+
+describe('the updater’s liveness (backlog 981)', () => {
+  it('writes its heartbeat before its first poll — the second by which the next is due — and stops on stop', async () => {
+    const w = await world({ advertised: digests('a') });
+    const done = w.updater.run();
+    w.updater.stop();
+    await done;
+    // `now` is 12:00:00Z; the beat is good for three 30 s intervals.
+    expect(await readFile(path.join(w.stateDir, HEARTBEAT_FILE), 'utf8')).toBe(
+      `${Date.parse('2026-11-05T12:01:30Z') / 1000}\n`,
+    );
+    expect(HEARTBEAT_STALE_AFTER_MS).toBe(3 * HEARTBEAT_EVERY_MS);
   });
 });

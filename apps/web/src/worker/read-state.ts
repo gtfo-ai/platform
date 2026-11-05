@@ -81,6 +81,8 @@ export const CONNECTIONS = [
   'core_unreachable',
   'stopped',
 ] as const;
+/** Whether the launcher answered (backlog 980) — held to its zod enum by the test. */
+export const LAUNCHERS = ['unknown', 'ok', 'unreachable'] as const;
 /** The first-run wizard's enums (WP-294) — each held to its zod enum by the test. */
 export const SOURCES = ['environment', 'file'] as const;
 export const CORE_FAILURES = [
@@ -246,6 +248,7 @@ export const STATE: Spec = object({
   usage_paused_until: nullable(datetime),
   usage_paused_estimated: { t: 'boolean' },
   draining: { t: 'boolean' },
+  launcher: { t: 'enum', values: LAUNCHERS },
   update_pending: nullable({ t: 'boolean' }),
   concurrency: { t: 'int', min: 1, max: 64 },
   runs: { t: 'array', of: RUN, max: 64 },

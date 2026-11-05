@@ -209,6 +209,13 @@ export const workerLocalRunSchema = z.strictObject({
 });
 export type WorkerLocalRun = z.infer<typeof workerLocalRunSchema>;
 
+/**
+ * Whether the worker's launcher answered its last health probe (`runtime.ts`'s `LauncherReach`,
+ * backlog 980): `unknown` before the first, which the worker makes at start — the wizard included.
+ */
+export const workerLocalLauncherSchema = z.enum(['unknown', 'ok', 'unreachable']);
+export type WorkerLocalLauncher = z.infer<typeof workerLocalLauncherSchema>;
+
 /** `GET /api/local/state` — the whole page in one answer, polled. */
 export const workerLocalStateSchema = z.strictObject({
   worker_id: idSchema.nullable(),
@@ -239,6 +246,8 @@ export const workerLocalStateSchema = z.strictObject({
    */
   usage_paused_estimated: z.boolean(),
   draining: z.boolean(),
+  /** The launcher this worker starts runs through — a page that came up without it says so. */
+  launcher: workerLocalLauncherSchema,
   /** The core runs another build than this worker's image; `null` when either is unknown. */
   update_pending: z.boolean().nullable(),
   concurrency: z.int().positive().max(64),

@@ -84,7 +84,7 @@ cancel (the core treats it as a lost worker and plans the stage again).
 
 ```bash
 docker compose exec remote-worker curl -fsS localhost:8080/readyz
-# {"status":"ok","checks":{"core_handshake":"ok"}}
+# {"status":"ok","checks":{"core_handshake":"ok","launcher":"ok"}}
 ```
 
 The machine is then listed on the core's **Workers** screen with its last-seen time.

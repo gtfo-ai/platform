@@ -56,6 +56,7 @@ import {
   sameDigests,
 } from './decide.js';
 import { type ComposeProject, type DockerRun, inspectContainers } from './docker.js';
+import { HEARTBEAT_EVERY_MS, writeHeartbeat } from './heartbeat.js';
 import {
   isTerminal,
   PREVIOUS_TEMPLATE_FILE,
@@ -585,21 +586,41 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     tick,
     recover,
     async run() {
-      if (config.verifier === null) {
-        logger.error({}, config.verifierMissing ?? 'no verifier is configured');
-      }
+      // The container's healthcheck reads this (backlog 981): written first, then on its own timer.
+      let heartbeatFailed = false;
+      const beat = (): Promise<void> =>
+        writeHeartbeat(config.stateDir, deps.now()).then(
+          () => {
+            heartbeatFailed = false;
+          },
+          (error: unknown) => {
+            if (!heartbeatFailed) {
+              logger.warn({ err: error }, 'the updater’s heartbeat file could not be written');
+            }
+            heartbeatFailed = true;
+          },
+        );
+      await beat();
+      const heartbeat = setInterval(() => void beat(), HEARTBEAT_EVERY_MS);
       try {
-        await recover();
-      } catch (error) {
-        logger.error({ err: error }, 'the start-up recovery failed');
-      }
-      while (!stopped) {
-        try {
-          await tick();
-        } catch (error) {
-          logger.error({ err: error }, 'an update poll failed');
+        if (config.verifier === null) {
+          logger.error({}, config.verifierMissing ?? 'no verifier is configured');
         }
-        await pause();
+        try {
+          await recover();
+        } catch (error) {
+          logger.error({ err: error }, 'the start-up recovery failed');
+        }
+        while (!stopped) {
+          try {
+            await tick();
+          } catch (error) {
+            logger.error({ err: error }, 'an update poll failed');
+          }
+          await pause();
+        }
+      } finally {
+        clearInterval(heartbeat);
       }
     },
     stop() {

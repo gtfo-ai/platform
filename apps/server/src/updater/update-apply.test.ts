@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { silentLogger } from '@platform/application';
 import { describe, expect, it } from 'vitest';
-import { carriedEnvironment, runApply, servicesToUp } from './apply.js';
+import { carriedEnvironment, runApply, servicesToUp, waitForHandshake } from './apply.js';
 import type { DockerRun } from './docker.js';
 import { managedReferencesOf, previousOf } from './env-file.js';
 import { PREVIOUS_TEMPLATE_FILE, readState, type UpdatePlan } from './plan.js';
@@ -297,6 +297,55 @@ describe('an update that does not come up', () => {
     expect(up?.args).toContain(w.templatePath);
     expect(up?.env.PLATFORM_IMAGE).toBe(refs('a').platform);
     expect(composeCalls(w.calls).map(verb)).toContain('restart remote-worker');
+  });
+});
+
+describe('the apply’s check waits for the worker’s launcher too (backlog 980)', () => {
+  /** A worker whose `/readyz` answers each body of `answers` in turn, the last one for ever. */
+  const readyz = (answers: readonly { status: number; checks: Record<string, string> }[]) => {
+    let calls = 0;
+    let clock = 0;
+    return {
+      calls: () => calls,
+      deps: {
+        fetch: async () => {
+          const answer = answers[Math.min(calls, answers.length - 1)] as (typeof answers)[number];
+          calls += 1;
+          return new Response(JSON.stringify({ checks: answer.checks }), {
+            status: answer.status,
+          });
+        },
+        sleep: async () => {
+          clock += 2_000;
+        },
+        now: () => new Date(clock),
+      },
+    };
+  };
+
+  it('is not done while the worker is connected but its launcher does not answer, and is once it does', async () => {
+    const worker = readyz([
+      { status: 503, checks: { core_handshake: 'ok', launcher: 'unreachable' } },
+      { status: 503, checks: { core_handshake: 'ok', launcher: 'unreachable' } },
+      { status: 200, checks: { core_handshake: 'ok', launcher: 'ok' } },
+    ]);
+    const result = await waitForHandshake(worker.deps, 'http://remote-worker:8080', 60);
+    expect(result).toEqual({ ok: true, last: '200 core_handshake=ok launcher=ok' });
+    expect(worker.calls()).toBe(3);
+  });
+
+  it('fails the check — so the update rolls back — when the launcher never answers', async () => {
+    const worker = readyz([
+      { status: 200, checks: { core_handshake: 'ok', launcher: 'unreachable' } },
+    ]);
+    const result = await waitForHandshake(worker.deps, 'http://remote-worker:8080', 10);
+    expect(result).toEqual({ ok: false, last: '200 core_handshake=ok launcher=unreachable' });
+  });
+
+  it('accepts a worker build that reports no launcher check (a rollback to one before it)', async () => {
+    const worker = readyz([{ status: 200, checks: { core_handshake: 'ok' } }]);
+    const result = await waitForHandshake(worker.deps, 'http://remote-worker:8080', 10);
+    expect(result).toEqual({ ok: true, last: '200 core_handshake=ok launcher=absent' });
   });
 });
 
