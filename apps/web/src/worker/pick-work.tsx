@@ -22,6 +22,7 @@ import { type ReactElement, useCallback, useEffect, useState } from 'react';
 import { Button } from '../ui/button.js';
 import { Flash } from '../ui/flash.js';
 import { ROLE_LABEL, stageLabel } from '../ui/humanize.js';
+import { Skeleton } from '../ui/skeleton.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { LocalCallError, type LocalClient } from './client.js';
 
@@ -88,7 +89,12 @@ export const PickWork = ({
   const adopt = useCallback((answer: WorkerLocalClaimScope): void => {
     setScope(answer);
     setMode(scopeModeOf(answer.claim_project_ids));
-    setChosen(answer.claim_project_ids ?? []);
+    // A stale id — a project the user has left — is not offered back: saving it would be a 422.
+    setChosen(
+      (answer.claim_project_ids ?? []).filter((id) =>
+        answer.projects.some((project) => project.id === id),
+      ),
+    );
   }, []);
 
   useEffect(() => {
@@ -205,7 +211,7 @@ export const PickWork = ({
       <section aria-label="What this worker takes" className="flex flex-col gap-3">
         <h2 className="text-base font-semibold text-fg">What this worker takes by itself</h2>
         {scope === null ? (
-          <p className="text-sm text-fg-muted">Asking the platform…</p>
+          <Skeleton label="Asking the platform what this worker takes…" lines={2} />
         ) : (
           <>
             <p data-scope-words="" className="text-sm text-fg">
@@ -304,7 +310,7 @@ export const PickWork = ({
           </p>
         )}
         {offers === null ? (
-          <p className="text-sm text-fg-muted">Asking the platform…</p>
+          <Skeleton label="Asking the platform which runs are waiting…" lines={2} />
         ) : offers.length === 0 ? (
           <p className="text-sm text-fg-muted">Nothing is waiting for this worker right now.</p>
         ) : (

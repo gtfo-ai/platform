@@ -255,13 +255,13 @@ const protocolOf = (request: FastifyRequest): number =>
   parseWorkerProtocolHeader(request.headers[WORKER_PROTOCOL_HEADER]) ?? WORKER_PROTOCOL_VERSION;
 
 /** Whether the client went away before the answer — the response closed unfinished. */
-interface ClientPresence {
+export interface ClientPresence {
   readonly gone: () => boolean;
   /** Calls `listener` once if the client goes away; answers the unsubscribe. */
   readonly onGone: (listener: () => void) => () => void;
 }
 
-const presenceOf = (reply: FastifyReply): ClientPresence => {
+export const presenceOf = (reply: FastifyReply): ClientPresence => {
   let gone = false;
   const listeners = new Set<() => void>();
   reply.raw.once('close', () => {
@@ -451,6 +451,46 @@ export const registerWorkerProtocolRoutes = async (
     return v1Package as P;
   };
 
+  /**
+   * Answers a claimed package — **or releases it** when the worker already went away (BACKLOG 960):
+   * a held `claims` the worker called off (a *Pause*, a *Take this one*), or a pick whose page gave
+   * up, would otherwise send the package nowhere and leave the run to the lease sweep with this
+   * worker excluded. Before `run.started` a release is the claim undone (TD-031 §6): the offer open
+   * again, the epoch kept, the minted credential revoked, nobody excluded (`shutdown`, the worker's
+   * own going away). A release that fails is logged; the sweep remains the backstop. The residual is
+   * a close that lands after this check, while the answer is being written.
+   */
+  const deliverClaimed = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    presence: ClientPresence,
+    workerId: Id,
+    pkg: z.output<typeof runPackageSchema>,
+  ) => {
+    if (!presence.gone()) {
+      return reply.code(200).send(packageFor(request, pkg));
+    }
+    try {
+      const released = await remote.release({
+        runId: pkg.runId as Id,
+        workerId,
+        epoch: pkg.epoch,
+        reason: 'shutdown',
+        now: isoNow(now),
+      });
+      request.log.info(
+        { run_id: pkg.runId, worker_id: workerId, released },
+        'the worker went away before its claimed package was answered; the claim is released',
+      );
+    } catch (error) {
+      request.log.error(
+        { err: error, run_id: pkg.runId, worker_id: workerId },
+        'a claim the worker never received could not be released; the lease sweep ends it',
+      );
+    }
+    return reply.code(204).send(null);
+  };
+
   const runErrors = {
     401: apiErrorSchema,
     409: z.union([workerLeaseLostBodySchema, apiErrorSchema]),
@@ -563,7 +603,7 @@ export const registerWorkerProtocolRoutes = async (
           now: isoNow(now),
         });
         if (answer.kind === 'claimed') {
-          return reply.code(200).send(packageFor(request, answer.package));
+          return deliverClaimed(request, reply, presence, workerId, answer.package);
         }
         const remaining = deadline - Date.now();
         if (answer.kind === 'not_packaged' || remaining <= 0 || presence.gone()) {
@@ -1023,7 +1063,8 @@ export const registerWorkerProtocolRoutes = async (
     release: options.release,
     unresolved,
     displays: options.offerDisplays ?? null,
-    packageFor,
+    watch: presenceOf,
+    deliverClaimed,
     now,
   });
 

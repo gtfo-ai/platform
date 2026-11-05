@@ -126,6 +126,28 @@ describe('the claim scope on the worker’s page (WP-293)', () => {
     expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('drops a stale id (a project the user left) so Save cannot wedge on a 422', async () => {
+    const STALE = '00000000-0000-4000-8000-0000000293ee';
+    const client = fakeClient({ scope: { ...SCOPE, claim_project_ids: [OPS, STALE] } });
+    renderPick(client);
+    const ops = (await screen.findByRole('checkbox', { name: /OPS/ })) as HTMLInputElement;
+    expect(ops.checked).toBe(true);
+    // The stored scope still names the stale id, so the chosen one differs and may be saved.
+    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    await userEvent.click(save);
+    await waitFor(() => expect(client.setClaimScope).toHaveBeenCalledWith([OPS]));
+  });
+
+  it('shows a skeleton, not text, while the platform answers', async () => {
+    const client = fakeClient({});
+    client.claimScope.mockImplementationOnce(() => new Promise(() => undefined));
+    client.offers.mockImplementationOnce(() => new Promise(() => undefined));
+    const { container } = renderPick(client);
+    expect(container.querySelectorAll('[role="status"] [data-skeleton-bar]').length).toBe(4);
+    expect(container.textContent).not.toContain('Asking the platform…');
+  });
+
   it('says a refused scope in the worker’s words', async () => {
     const client = fakeClient({});
     client.setClaimScope.mockRejectedValueOnce(
