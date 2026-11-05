@@ -169,6 +169,7 @@ export const startLauncher = async (options: BuildLauncherOptions): Promise<Star
           claudeCodePath: runtime.config.images.runtimeCliPath,
           deployKeyCarriage: runtime.config.deployKeyCarriage,
           imageDigests: () => runtime.provider.configuredImageDigests(),
+          imageNames: () => runtime.provider.configuredImageNames(),
           logger: runtime.logger,
         });
   if (controlPlane === null) {

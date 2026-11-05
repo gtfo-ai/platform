@@ -215,6 +215,32 @@ describe('the remote worker process (WP-283 (1), (3))', () => {
     expect(claims().find((held) => held.length > 0)).toEqual([DIGEST, RUN_ID_DIGEST]);
   });
 
+  it('also holds every name its launcher reports the images by — ids and registry digests (S-22.14)', async () => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    writeFileSync(path.join(stateDir, CREDENTIAL_FILE), `${CREDENTIAL}\n`, { mode: 0o600 });
+    const core = fakeCore();
+    const REGISTRY = `sha256:${'e'.repeat(64)}`;
+    const ID = `sha256:${'f'.repeat(64)}`;
+    worker = await startRemoteWorker({
+      config: config(stateDir),
+      coreFetch: core.fetch,
+      launcher: {
+        health: async () => ({
+          images: { run: REGISTRY, egress: REGISTRY },
+          heldImageDigests: [REGISTRY, ID],
+        }),
+      } as unknown as launcherAdapters.LauncherControlClient,
+      sleep: async () => {},
+    });
+    const claims = () =>
+      core.verbs
+        .map((verb, index) => (verb === 'claims' ? core.bodies[index] : null))
+        .filter((body): body is string => body !== null)
+        .map((body) => workerClaimRequestSchema.parse(JSON.parse(body)).image_digests);
+    await until('a claim', () => claims().length > 0);
+    expect(claims()[0]).toEqual([DIGEST, REGISTRY, ID]);
+  });
+
   it('reuses a stored credential, and stops claiming when the core refuses it (revoked)', async () => {
     const stateDir = mkdtempSync(path.join(scratch, 'state-'));
     const core = fakeCore({ handshake: 401 });

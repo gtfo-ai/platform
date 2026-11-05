@@ -640,8 +640,41 @@ describe('skills and images from the request (WP-279)', () => {
   it('answers its configured images by digest and its carriage on health', async () => {
     expect(await clientFor().health()).toMatchObject({
       images: IMAGES,
+      // No `imageNames`: the two digests alone are held.
+      heldImageDigests: [IMAGES.run, IMAGES.egress],
       deployKeyCarriage: 'carried',
     });
+  });
+
+  it('answers every name its daemon holds the images by as heldImageDigests (S-22.14)', async () => {
+    await plane.close();
+    const registry = `sha256:${'a'.repeat(64)}`;
+    const startWith = (imageNames: () => Promise<readonly string[]>) =>
+      startControlPlane({
+        service,
+        token: TOKEN,
+        host: '127.0.0.1',
+        port: 0,
+        controlRoot: path.join(dir, 'ctl'),
+        runtimeImage: 'platform-runtime:test',
+        claudeCodePath: '/usr/local/bin/claude',
+        deployKeyCarriage: 'carried',
+        imageDigests: async () => IMAGES,
+        imageNames,
+        logger: silentLogger,
+      });
+    plane = await startWith(async () => [IMAGES.run, registry]);
+    expect((await clientFor().health()).heldImageDigests).toEqual([
+      IMAGES.run,
+      IMAGES.egress,
+      registry,
+    ]);
+    await plane.close();
+    // A listing that fails still holds what `images` answered.
+    plane = await startWith(async () => {
+      throw new WorkspaceError('engine_unavailable', 'the daemon is down');
+    });
+    expect((await clientFor().health()).heldImageDigests).toEqual([IMAGES.run, IMAGES.egress]);
   });
 
   it('answers images: null when the daemon cannot resolve them, and stays a liveness answer', async () => {
@@ -660,7 +693,11 @@ describe('skills and images from the request (WP-279)', () => {
       },
       logger: silentLogger,
     });
-    expect(await clientFor().health()).toMatchObject({ status: 'ok', images: null });
+    expect(await clientFor().health()).toMatchObject({
+      status: 'ok',
+      images: null,
+      heldImageDigests: [],
+    });
   });
 
   it('refuses skills whose digest is not their bytes’, invalid_spec, creating nothing', async () => {

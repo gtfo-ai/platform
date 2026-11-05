@@ -126,6 +126,12 @@ export interface FakeDaemonOptions {
    * under a running launcher.
    */
   readonly imageIds?: ReadonlyMap<string, string>;
+  /**
+   * `RepoDigests` per image **id** (S-22.14) — the classic image store's shape, where a registry
+   * digest is not an id: `GET /images/sha256:<registry digest>/json` answers 404 and only this list
+   * (on the inspect and on `GET /images/json`) names it. An id not named here has none.
+   */
+  readonly imageRepoDigests?: ReadonlyMap<string, readonly string[]>;
 }
 
 /** The labels a fake image declares unless a test says otherwise: this build's shim protocol. */
@@ -291,7 +297,11 @@ export class FakeDockerDaemon {
       const held = this.imagesById.get(name);
       if (held !== undefined) {
         // By id, as Docker answers it: what that image declared, whatever a tag points at now.
-        send(200, { Id: name, Config: { Env: held.env, Labels: held.labels } });
+        send(200, {
+          Id: name,
+          Config: { Env: held.env, Labels: held.labels },
+          RepoDigests: this.#options.imageRepoDigests?.get(name) ?? [],
+        });
         return;
       }
       if (name.startsWith('sha256:')) {
@@ -305,7 +315,27 @@ export class FakeDockerDaemon {
       const labels = declared === undefined ? FAKE_IMAGE_LABELS : declared;
       const imageId = this.#options.imageIds?.get(name) ?? `sha256:${name}`;
       this.imagesById.set(imageId, { env, labels });
-      send(200, { Id: imageId, Config: { Env: env, Labels: labels } });
+      send(200, {
+        Id: imageId,
+        Config: { Env: env, Labels: labels },
+        RepoDigests: this.#options.imageRepoDigests?.get(imageId) ?? [],
+      });
+      return;
+    }
+    if (method === 'GET' && pathname === '/images/json') {
+      // Every image this double knows of: inspected, named by a tag, or carrying registry digests.
+      const ids = new Set([
+        ...this.imagesById.keys(),
+        ...(this.#options.imageIds?.values() ?? []),
+        ...(this.#options.imageRepoDigests?.keys() ?? []),
+      ]);
+      send(
+        200,
+        [...ids].map((id) => ({
+          Id: id,
+          RepoDigests: this.#options.imageRepoDigests?.get(id) ?? [],
+        })),
+      );
       return;
     }
     if (method === 'POST' && pathname === '/volumes/create') {
