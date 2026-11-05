@@ -121,10 +121,37 @@ const fetchFor = (options: WorldOptions = {}) =>
         max_merge_requests: 1000,
       });
     }
-    if (url.includes('/api/projects/') && url.includes('/readiness')) {
-      return json({ error: { code: 'readiness_not_evaluated', message: 'none' } }, 409);
+    // S-23.8: the wizard's history step opens once Connect and discovery are done.
+    if (url.includes('/readiness')) {
+      return json({
+        level: 1,
+        evaluated_at: '2026-09-13T04:00:00.000Z',
+        source: 'discovery',
+        criteria: [],
+        next_improvements: [],
+        notices: [],
+      });
     }
-    if (url.includes('/api/projects/') && url.includes('/bindings')) return json({ items: [] });
+    if (url.includes('/api/projects/') && url.includes('/bindings')) {
+      return json({
+        items: [
+          {
+            integration_id: '00000000-0000-4000-8000-0000000000c1',
+            type: 'task_management',
+            provider: 'jira-cloud',
+            name: 'Acme Jira',
+            config: {},
+          },
+          {
+            integration_id: '00000000-0000-4000-8000-0000000000c3',
+            type: 'git',
+            provider: 'gitlab',
+            name: 'Acme GitLab',
+            config: {},
+          },
+        ],
+      });
+    }
     if (url.endsWith('/api/projects')) return json({ items: [PROJECT_ROW] });
     if (url.endsWith('/api/integrations')) return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
@@ -139,7 +166,7 @@ beforeEach(() => {
   asked = [];
   started = [];
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  window.history.pushState({}, '', '/onboarding');
+  window.history.pushState({}, '', '/onboarding?project=acme_api&step=history');
 });
 
 describe('the history bootstrap panel', () => {

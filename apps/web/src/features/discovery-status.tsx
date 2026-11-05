@@ -12,8 +12,8 @@
  * - **its state** — the task itself (`useTask`), kept current by retaining its `task:<id>` topic:
  *   the realtime bridge invalidates the task, and — because every task event carries its
  *   `project_id` — the gate and the readiness read under the project's prefix as well;
- * - **what the state means** — queued (no run has started), running (with a link to the run's live
- *   transcript), needs a person (the escalation's reason and brief, from the gate's
+ * - **what the state means** — queued (no run has started), running (the agent's latest progress
+ *   line and *Watch live*, the run's page — S-23.8), needs a person (the escalation's reason and brief, from the gate's
  *   `last_discovery.escalation`), paused (why), done (the readiness level it recorded), or cancelled.
  *
  * The phase is the task's and the sentences are the gate's, and the two are separate reads: a task
@@ -32,12 +32,13 @@
  */
 import type { RunRecord, TaskState } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
-import type { ReactElement } from 'react';
+import { type ReactElement, useSyncExternalStore } from 'react';
 import { useProjectReadiness, useRediscoveryGate, useTask } from '../app/queries.js';
+import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
-import { Badge, type BadgeTone, formatDateTime } from '../ui/kit.js';
+import { Badge, type BadgeTone, formatDateTime, formatInteger } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
-import { liveStageRun } from './live-stage.js';
+import { latestProgressOf, liveStageRun } from './live-stage.js';
 
 /** The step's six answers — the task's state, read for what a person on the wizard needs. */
 export type DiscoveryPhase = 'queued' | 'running' | 'needs_human' | 'paused' | 'done' | 'cancelled';
@@ -63,6 +64,39 @@ export const discoveryPhaseOf = (state: TaskState, runs: readonly RunRecord[]): 
     default:
       return liveStageRun(runs) === null ? 'queued' : 'running';
   }
+};
+
+/**
+ * The running discovery, compactly: one sentence, the agent's latest progress line and *Watch live*
+ * (S-23.8). The line is the newer of the run record's `latest_progress` and the newest `progress`
+ * frame of the run's own stream — `latestProgressOf`, the task page's live panel's rule — so it moves
+ * while the step is open. The summary is the model's words (BD-022): a text node, never markup.
+ */
+const RunningLine = ({ run }: { readonly run: RunRecord }): ReactElement => {
+  useTopics([`run:${run.id}`]);
+  const { transcripts } = useServices();
+  const snapshot = useSyncExternalStore(
+    (listener) => transcripts.subscribe(run.id, listener),
+    () => transcripts.snapshot(run.id),
+    () => transcripts.snapshot(run.id),
+  );
+  const progress = latestProgressOf(run.latest_progress, snapshot.events);
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span>The Discovery agent is working.</span>
+      {progress === null ? null : (
+        <span data-testid="discovery-progress">
+          {progress.percent_complete === null ? null : (
+            <Badge tone="accent">{`${formatInteger(progress.percent_complete)}%`}</Badge>
+          )}{' '}
+          <UntrustedText value={progress.summary} />
+        </span>
+      )}
+      <Link to="/runs/$runId" params={{ runId: run.id }} className="text-accent underline">
+        Watch live
+      </Link>
+    </p>
+  );
 };
 
 const PHASE: Record<DiscoveryPhase, { readonly label: string; readonly tone: BadgeTone }> = {
@@ -130,14 +164,7 @@ export const DiscoveryStatus = ({
         </Link>
       </p>
       {phase === 'queued' ? <p className="text-fg-muted">Waiting for its run to start.</p> : null}
-      {phase === 'running' && live !== null ? (
-        <p>
-          The Discovery agent is working.{' '}
-          <Link to="/runs/$runId" params={{ runId: live.id }} className="text-accent underline">
-            Watch its live transcript
-          </Link>
-        </p>
-      ) : null}
+      {phase === 'running' && live !== null ? <RunningLine run={live} /> : null}
       {phase === 'needs_human' ? (
         escalation === null || escalation === undefined ? (
           <p>

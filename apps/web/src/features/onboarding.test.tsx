@@ -1,24 +1,35 @@
 /**
- * The onboarding wizard screen — product/06 (WP-21).
+ * The New project wizard — product/06 (WP-21), a real wizard since S-23.8 (TD-033 decision 9).
  *
  * Driven through `createApp` with a fake server, so what is asserted is the composition: the real
- * router, the real query client, the real endpoint parsers. Three things are worth a test here and
- * the rest is layout:
+ * router (and its validated `?project=&step=`), the real query client, the real endpoint parsers.
  *
- *  - a readiness evaluation **renders**, with the level, the criteria and product/17's three
- *    cheapest improvements;
- *  - the **evidence** is the Discovery agent's own words about somebody else's repository (BD-022),
- *    so it is rendered as text — a hostile string appears verbatim and creates no element;
- *  - the 409 a project with no evaluation gets is an **answer**, not a crash: the step says how to
- *    get one instead of showing an error.
+ *  - **the wizard's own rules**: every step is listed, a new project opens at Connect, done-ness is
+ *    read off the server (bindings, readiness, the knowledge queue, the saved operating mode), the
+ *    wizard resumes at the first step not done, *Continue* is refused past a required step that is
+ *    not done (and says why), a deep link past one is refused too, a done step is revisitable, an
+ *    optional step's *Skip for now* sends nothing, and the last step opens the board;
+ *  - **the commands it sends**: the project create with its `Idempotency-Key`, discovery with its
+ *    key, and step 4's writes (the step-4 block below);
+ *  - **the readiness panel**: the level as a meter, the criteria by name with the ids behind
+ *    *Details*, product/17's cheapest improvements, the CI-rules notices — and the **evidence**, the
+ *    Discovery agent's words about somebody else's repository (BD-022), rendered as text;
+ *  - the 409 a project with no evaluation gets is an **answer**, not a crash.
  */
-import type { AutonomyResponse, ProjectSummary, ReadinessResponse } from '@platform/contracts';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type {
+  AutonomyResponse,
+  KnowledgeProposalRecord,
+  ProjectBindingSummary,
+  ProjectSummary,
+  ReadinessResponse,
+} from '@platform/contracts';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
+const TASK = '00000000-0000-4000-8000-0000000000d1';
 
 /** Annotated rather than bare — PROGRESS backlog 93, closed by WP-38. */
 const SESSION: SessionResponse = {
@@ -178,12 +189,77 @@ const HISTORY_BOOTSTRAPS = {
   max_merge_requests: 1000,
 };
 
+const TRACKER_BINDING: ProjectBindingSummary = {
+  integration_id: '00000000-0000-4000-8000-0000000000c1',
+  type: 'task_management',
+  provider: 'jira-cloud',
+  name: 'Acme Jira',
+  config: {},
+};
+const GIT_BINDING: ProjectBindingSummary = {
+  integration_id: '00000000-0000-4000-8000-0000000000c2',
+  type: 'git',
+  provider: 'gitlab',
+  name: 'Acme GitLab',
+  config: {},
+};
+
+const proposal = (over: Partial<KnowledgeProposalRecord> = {}): KnowledgeProposalRecord => ({
+  id: '00000000-0000-4000-8000-0000000000e1',
+  project_id: PROJECT,
+  source: 'bootstrap',
+  kind: 'technical',
+  type: 'doc-update',
+  target_path: 'technical/architecture.md',
+  delta: '# Architecture',
+  evidence: ['drafted from the repository'],
+  significance: 0.5,
+  status: 'queued',
+  created_at: '2026-09-13T04:00:00.000Z',
+  ...over,
+});
+
+/** What the fake server holds; every case states the part it is about. */
+interface World {
+  readonly readiness: 'recorded' | 'absent';
+  readonly bindings: readonly ProjectBindingSummary[];
+  readonly proposals: readonly KnowledgeProposalRecord[];
+  readonly materialised: boolean;
+  /** Whether a history bootstrap batch exists (`HISTORY_BOOTSTRAPS` has one). */
+  readonly historyStarted: boolean;
+  readonly sent: { url: string; method: string; body: unknown; key: string | null }[];
+}
+
+const world = (over: Partial<World> = {}): World => ({
+  readiness: 'absent',
+  bindings: [TRACKER_BINDING, GIT_BINDING],
+  proposals: [],
+  materialised: true,
+  historyStarted: true,
+  sent: [],
+  ...over,
+});
+
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-const fetchFor = (readiness: 'recorded' | 'absent') =>
-  (async (input: RequestInfo | URL): Promise<Response> => {
+const fetchFor = (readiness: 'recorded' | 'absent', over: Partial<World> = {}) => {
+  const state = world({ ...over, readiness });
+  return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
+    const method = init?.method ?? 'GET';
+    if (method !== 'GET') {
+      state.sent.push({
+        url,
+        method,
+        body: JSON.parse(String(init?.body ?? '{}')),
+        key: new Headers(init?.headers).get('idempotency-key'),
+      });
+      if (url.endsWith('/discovery')) {
+        return json({ task_id: TASK, started: true, detail: 'the Discovery agent is queued' }, 201);
+      }
+      return json({ error: { code: 'not_found', message: 'no such command' } }, 404);
+    }
     if (url.includes('/api/auth/get-session')) return json(SESSION);
     if (url.includes('/api/projects/') && url.includes('/readiness')) {
       return readiness === 'recorded'
@@ -198,7 +274,13 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
             409,
           );
     }
-    if (url.includes('/api/projects/') && url.includes('/bindings')) return json({ items: [] });
+    if (url.includes('/api/projects/') && url.includes('/bindings')) {
+      return json({ items: state.bindings });
+    }
+    // S-23.8: the wizard reads the knowledge queue for the business step and the finish.
+    if (url.includes('/api/projects/') && url.includes('/kb/proposals')) {
+      return json({ items: state.proposals, next_cursor: null });
+    }
     // WP-155 (c): step 2 reads the discovery gate. No discovery has run in this world.
     if (url.includes('/api/projects/') && url.includes('/rediscovery')) {
       return json({
@@ -222,7 +304,9 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
         live_tasks: 0,
       });
     }
-    if (url.includes('/api/projects/') && url.includes('/autonomy')) return json(AUTONOMY);
+    if (url.includes('/api/projects/') && url.includes('/autonomy')) {
+      return json({ ...AUTONOMY, materialised: state.materialised });
+    }
     if (url.includes('/api/projects/') && url.includes('/budgets')) return json({ items: [] });
     if (url.includes('/api/projects/') && url.includes('/audit')) return json({ items: [] });
     if (url.includes('/api/projects/') && url.includes('/config')) {
@@ -277,12 +361,19 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
       });
     }
     if (url.includes('/api/projects/') && url.includes('/history-bootstraps')) {
-      return json(HISTORY_BOOTSTRAPS);
+      return json(state.historyStarted ? HISTORY_BOOTSTRAPS : { ...HISTORY_BOOTSTRAPS, items: [] });
     }
     if (url.endsWith('/api/projects')) return json({ items: [PROJECT_ROW] });
     if (url.endsWith('/api/integrations')) return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
+};
+
+/** The fake and the world it answers from, for a case that reads what was sent. */
+const serverFor = (readiness: 'recorded' | 'absent', over: Partial<World> = {}) => {
+  const state = world({ ...over, readiness });
+  return { state, fetchImpl: fetchFor(readiness, state) };
+};
 
 /**
  * WP-122 (PROGRESS backlog 388): a live and a retired integration, for the picker case. The retired
@@ -330,59 +421,397 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  window.history.pushState({}, '', '/onboarding');
 });
 
-describe('the onboarding wizard', () => {
-  it('leaves a retired integration out of the binding picker (WP-122)', async () => {
-    render(
-      createApp({ fetchImpl: withPickerIntegrations(fetchFor('absent')), realtime: false }).element,
+/** The wizard at `path`, over `fetchImpl`. */
+const openAt = (path: string, fetchImpl: typeof fetch) => {
+  window.history.pushState({}, '', path);
+  return render(createApp({ fetchImpl, realtime: false }).element);
+};
+
+/** `/onboarding?project=acme_api[&step=…]` — the fixture project's wizard. */
+const wizardOf = (step?: string): string =>
+  `/onboarding?project=${PROJECT_ROW.key}${step === undefined ? '' : `&step=${step}`}`;
+
+/** The step the wizard is showing, once it shows one. */
+const shownStep = async (): Promise<string | null> =>
+  waitFor(() => {
+    const step = document.querySelector('[data-wizard-step]');
+    expect(step).not.toBeNull();
+    return step?.getAttribute('data-wizard-step') ?? null;
+  });
+
+const stepList = (): HTMLElement => screen.getByRole('list', { name: 'Setup steps' });
+
+/** Each step of the list as `label:state`, with `→` when it is a link. */
+const stepStates = (): string[] =>
+  within(stepList())
+    .getAllByRole('listitem')
+    .map(
+      (item) =>
+        `${item.querySelector('a, span.text-sm')?.textContent ?? ''}:${item.getAttribute('data-step-state')}${item.querySelector('a') === null ? '' : '→'}`,
     );
-    expect(await screen.findByText('Live workspace')).toBeTruthy();
-    expect(screen.queryByText('Retired workspace')).toBeNull();
+
+const continueButton = (): HTMLButtonElement =>
+  screen.getByRole('button', { name: /^Continue to / }) as HTMLButtonElement;
+
+describe('the New project wizard', () => {
+  it('opens a new project at Connect, lists every step, and opens none past it', async () => {
+    openAt('/onboarding', fetchFor('absent'));
+    expect(await screen.findByRole('heading', { level: 1, name: 'New project' })).toBeTruthy();
+    expect(await shownStep()).toBe('connect');
+    expect(stepStates()).toEqual([
+      'Connect:current',
+      'Technical discovery:upcoming',
+      'Business context:upcoming',
+      'History:upcoming',
+      'How autonomous:upcoming',
+      'Review and finish:upcoming',
+    ]);
+    // The two optional steps say so; the four required ones do not.
+    const optional = within(stepList())
+      .getAllByRole('listitem')
+      .filter((item) => item.textContent?.includes('Optional'))
+      .map((item) => item.getAttribute('data-step-state') ?? '');
+    expect(optional).toHaveLength(2);
+    expect(screen.getByLabelText('Key')).toBeTruthy();
+    // Continue says where it goes, and is refused with the reason until the project exists.
+    expect(continueButton().textContent).toBe('Continue to Technical discovery');
+    expect(continueButton().disabled).toBe(true);
+    expect(screen.getByText('Create the project first.')).toBeTruthy();
+    // A new project is a new project: the one that exists is offered, never resumed unasked.
+    expect(screen.getByText('Continue an existing project')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'ACME API' }).getAttribute('href')).toBe(
+      '/onboarding?project=acme_api',
+    );
   });
 
   it('shows every step, the business interview included', async () => {
-    render(createApp({ fetchImpl: fetchFor('absent'), realtime: false }).element);
-    for (const title of [
+    openAt(wizardOf('business'), fetchFor('recorded'));
+    expect(await shownStep()).toBe('business');
+    expect(stepStates().map((state) => state.split(':')[0])).toEqual([
       'Connect',
       'Technical discovery',
-      // WP-155 (a): optional, like 3b.
-      'Business interview (optional)',
+      // WP-155 (a): optional, like the history step.
+      'Business context',
       // WP-35: product/06's own step 3b, the one step the wizard did not have.
-      'History bootstrap (optional)',
-      'Operating mode and features',
-      'Commit',
-    ]) {
-      expect(await screen.findByText(title), title).toBeTruthy();
-    }
+      'History',
+      'How autonomous',
+      'Review and finish',
+    ]);
     // product/06 § "Step 3" exists since WP-64: the question bank's eight sections, as a form whose
     // answers become proposals (`business-interview.test.tsx` drives it).
     expect(await screen.findByLabelText('Glossary')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: 'Business context' })).toBeTruthy();
     expect(screen.queryByText('Not built in this release')).toBeNull();
   });
 
+  it('says nothing the page shows is called onboarding, and Save and exit goes Home', async () => {
+    const { container } = openAt(wizardOf('connect'), fetchFor('absent'));
+    await shownStep();
+    expect(screen.getByRole('link', { name: 'Save and exit' }).getAttribute('href')).toBe('/');
+    expect(container.textContent).not.toMatch(/onboarding/i);
+  });
+
+  it('creates the project with an Idempotency-Key, then stays on Connect for it', async () => {
+    const created = { ...PROJECT_ROW, id: '00000000-0000-4000-8000-0000000000a2', key: 'autix' };
+    const sent: { url: string; body: unknown; key: string | null }[] = [];
+    let projects: ProjectSummary[] = [PROJECT_ROW];
+    const base = fetchFor('absent');
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/projects') && init?.method === 'POST') {
+        sent.push({
+          url,
+          body: JSON.parse(String(init.body)),
+          key: new Headers(init.headers).get('idempotency-key'),
+        });
+        projects = [PROJECT_ROW, created];
+        const { open_tasks: _open, spent_usd_30d: _spent, ...record } = created;
+        return json(record, 201);
+      }
+      if (url.endsWith('/api/projects')) return json({ items: projects });
+      return base(input, init);
+    }) as typeof fetch;
+    openAt('/onboarding', fetchImpl);
+    fireEvent.change(await screen.findByLabelText('Key'), { target: { value: 'autix' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Autix' } });
+    fireEvent.change(screen.getByLabelText('Repository URL'), {
+      target: { value: 'https://git.example.test/acme/autix.git' },
+    });
+    fireEvent.change(screen.getByLabelText('Default branch'), { target: { value: 'develop' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    await waitFor(() => {
+      expect(window.location.search).toBe('?project=autix&step=connect');
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.key).toMatch(/\S/);
+    // The step now holds the created project: its integrations section replaces the hint.
+    expect(await screen.findByText('Setting up')).toBeTruthy();
+    expect(screen.queryByLabelText('Key')).toBeNull();
+    expect(screen.queryByText('Available once the project is created.')).toBeNull();
+  });
+
+  it.each([
+    ['nothing bound', { bindings: [] }, 'absent', 'connect'],
+    ['bound, never evaluated', {}, 'absent', 'discovery'],
+    [
+      'evaluated, nothing else',
+      { materialised: false, historyStarted: false },
+      'recorded',
+      'business',
+    ],
+    [
+      'business proposed, no history yet',
+      {
+        materialised: false,
+        historyStarted: false,
+        proposals: [proposal({ kind: 'business', source: 'human' })],
+      },
+      'recorded',
+      'history',
+    ],
+    // An optional step passed over counts as passed once a later step is done.
+    ['business skipped, history started', { materialised: false }, 'recorded', 'autonomy'],
+    ['operating mode saved, a page to review', { proposals: [proposal()] }, 'recorded', 'finish'],
+  ] as const)(
+    'resumes at the first step not done: %s',
+    async (_name, over, readiness, expected) => {
+      openAt(wizardOf(), fetchFor(readiness, over as Partial<World>));
+      expect(await shownStep()).toBe(expected);
+      // The step list agrees with the step shown, and marks it for assistive tech.
+      const current = within(stepList())
+        .getAllByRole('listitem')
+        .filter((item) => item.getAttribute('aria-current') === 'step');
+      expect(current).toHaveLength(1);
+      expect(stepStates().filter((state) => state.endsWith(':current'))).toEqual([
+        `${
+          {
+            connect: 'Connect',
+            discovery: 'Technical discovery',
+            business: 'Business context',
+            history: 'History',
+            autonomy: 'How autonomous',
+            finish: 'Review and finish',
+          }[expected]
+        }:current`,
+      ]);
+    },
+  );
+
+  it('reads done-ness off the server: every step done shows a check, and an unknown step is ignored', async () => {
+    // `step=nonsense` is dropped by the route's schema, so the wizard resumes rather than erring.
+    openAt(`${wizardOf()}&step=nonsense`, fetchFor('recorded', { proposals: [] }));
+    expect(await shownStep()).toBe('finish');
+    await waitFor(() => {
+      expect(stepStates()).toEqual([
+        'Connect:done→',
+        'Technical discovery:done→',
+        'Business context:upcoming→',
+        'History:done→',
+        'How autonomous:done→',
+        'Review and finish:current',
+      ]);
+    });
+    expect(screen.queryByTestId('error-fallback')).toBeNull();
+  });
+
+  it('refuses Continue past Connect until a tracker and a git host are bound, and says which', async () => {
+    openAt(wizardOf('connect'), fetchFor('absent', { bindings: [GIT_BINDING] }));
+    await shownStep();
+    await waitFor(() => {
+      expect(screen.getByText('Bind a ticket tracker to continue.')).toBeTruthy();
+    });
+    expect(continueButton().disabled).toBe(true);
+    expect(continueButton().getAttribute('aria-describedby')).toBe('wizard-continue-reason');
+    // …and the step list does not let anybody jump past it either.
+    expect(stepStates()[1]).toBe('Technical discovery:upcoming');
+    cleanup();
+
+    openAt(wizardOf('connect'), fetchFor('absent'));
+    await shownStep();
+    await waitFor(() => {
+      expect(continueButton().disabled).toBe(false);
+    });
+    fireEvent.click(continueButton());
+    expect(await screen.findByRole('heading', { name: 'Technical discovery' })).toBeTruthy();
+    expect(window.location.search).toBe('?project=acme_api&step=discovery');
+  });
+
+  it('refuses Continue past discovery until a readiness evaluation exists', async () => {
+    openAt(wizardOf('discovery'), fetchFor('absent'));
+    expect(await shownStep()).toBe('discovery');
+    await waitFor(() => {
+      expect(
+        screen.getByText('Continue opens once discovery has recorded a readiness evaluation.'),
+      ).toBeTruthy();
+    });
+    expect(continueButton().textContent).toBe('Continue to Business context');
+    expect(continueButton().disabled).toBe(true);
+  });
+
+  it('refuses a deep link past a required step that is not done, and points at it', async () => {
+    openAt(wizardOf('autonomy'), fetchFor('absent'));
+    expect(await screen.findByText('How autonomous is not open yet')).toBeTruthy();
+    const go = screen.getByRole('link', { name: 'Go to Technical discovery' });
+    expect(go.getAttribute('href')).toBe('/onboarding?project=acme_api&step=discovery');
+    // The step's controls are not rendered, and there is no Continue to press.
+    expect(screen.queryByText('Autonomy dial')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Continue to / })).toBeNull();
+  });
+
+  it('lets a done step be revisited from the step list and from Back', async () => {
+    openAt(wizardOf('discovery'), fetchFor('recorded'));
+    expect(await shownStep()).toBe('discovery');
+    await waitFor(() => {
+      expect(stepStates()[0]).toBe('Connect:done→');
+    });
+    const back = screen.getByRole('link', { name: 'Back to Connect' });
+    expect(back.getAttribute('href')).toBe('/onboarding?project=acme_api&step=connect');
+    fireEvent.click(within(stepList()).getByRole('link', { name: 'Connect' }));
+    expect(await screen.findByRole('heading', { name: 'Connect' })).toBeTruthy();
+    expect(await shownStep()).toBe('connect');
+  });
+
+  it('skips an optional step without sending anything', async () => {
+    const { state, fetchImpl } = serverFor('recorded', { materialised: false });
+    openAt(wizardOf('business'), fetchImpl);
+    expect(await screen.findByLabelText('Glossary')).toBeTruthy();
+    const step = document.querySelector('[data-wizard-step]') as HTMLElement;
+    expect(step.textContent).toContain('the whole step can be skipped and answered later');
+    expect(within(step).getByRole('link', { name: 'settings' }).getAttribute('href')).toBe(
+      '/projects/acme_api/settings',
+    );
+    // An optional step never holds Continue.
+    expect(continueButton().textContent).toBe('Continue to History');
+    expect(continueButton().disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
+    expect(await screen.findByRole('heading', { name: 'History' })).toBeTruthy();
+    expect(window.location.search).toBe('?project=acme_api&step=history');
+    // Records nothing (rule 79), checked after a known command so the log is complete (rule 87).
+    expect(await screen.findByText(/At most \$20\.00/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
+    expect(await screen.findByRole('heading', { name: 'How autonomous' })).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save operating mode' }));
+    await waitFor(() => {
+      expect(state.sent.length).toBeGreaterThan(0);
+    });
+    expect(state.sent.map((entry) => entry.url)).toEqual([
+      expect.stringContaining(`/api/projects/${PROJECT}/autonomy`),
+    ]);
+  });
+
+  it('holds Continue on How autonomous until the operating mode is saved', async () => {
+    openAt(wizardOf('autonomy'), fetchFor('recorded', { materialised: false }));
+    expect(await screen.findByText('Autonomy dial')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText('Save the operating mode to continue.')).toBeTruthy();
+    });
+    expect(continueButton().textContent).toBe('Continue to Review and finish');
+    expect(continueButton().disabled).toBe(true);
+    cleanup();
+    openAt(wizardOf('autonomy'), fetchFor('recorded'));
+    await screen.findByText('Autonomy dial');
+    await waitFor(() => {
+      expect(continueButton().disabled).toBe(false);
+    });
+  });
+
+  it('finishes with what was set, the two links, and Open the board', async () => {
+    openAt(wizardOf('finish'), fetchFor('recorded', { proposals: [proposal()] }));
+    expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeTruthy();
+    const set = screen.getByLabelText('What was set');
+    await waitFor(() => {
+      expect(set.textContent).toContain('Acme Jira, Acme GitLab');
+    });
+    expect(set.textContent).toContain('Level 1 — L1 Basic');
+    expect(set.textContent).toContain('Supervised');
+    expect(set.textContent).toContain('1 drafted page');
+    expect(set.textContent).toContain('Skipped — it can be answered later from the settings');
+    expect(
+      screen.getByRole('link', { name: 'Review the drafted pages' }).getAttribute('href'),
+    ).toBe('/projects/acme_api/knowledge');
+    expect(
+      screen
+        .getByRole('link', { name: 'Propose the settings to the repository' })
+        .getAttribute('href'),
+    ).toBe('/projects/acme_api/settings');
+    // A page waits for review, so the step is not done — and the ending is still the next action.
+    expect(stepStates()[5]).toBe('Review and finish:current');
+    const board = screen.getByRole('link', { name: 'Open the board' });
+    expect(board.getAttribute('href')).toBe('/projects/acme_api');
+    expect(screen.queryByRole('button', { name: /^Continue to / })).toBeNull();
+    fireEvent.click(board);
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/projects/acme_api');
+    });
+  });
+
+  it('says so for a project key the deployment does not have', async () => {
+    openAt('/onboarding?project=nope', fetchFor('absent'));
+    expect(await screen.findByText('No such project')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'New project' }).getAttribute('href')).toBe(
+      '/onboarding',
+    );
+  });
+
+  it('leaves a retired integration out of the binding picker (WP-122)', async () => {
+    openAt(wizardOf('connect'), withPickerIntegrations(fetchFor('absent')));
+    expect(await screen.findByText('Live workspace')).toBeTruthy();
+    expect(screen.queryByText('Retired workspace')).toBeNull();
+  });
+});
+
+describe('the wizard’s technical discovery', () => {
+  it('starts discovery with its ceiling on the button and an Idempotency-Key', async () => {
+    const { state, fetchImpl } = serverFor('absent');
+    openAt(wizardOf('discovery'), fetchImpl);
+    const run = await screen.findByRole('button', { name: 'Run discovery — up to $2.00' });
+    fireEvent.click(run);
+    expect(await screen.findByText('the Discovery agent is queued')).toBeTruthy();
+    expect(state.sent.map((entry) => entry.url)).toEqual([
+      expect.stringContaining(`/api/projects/${PROJECT}/discovery`),
+    ]);
+    expect(state.sent[0]?.key).toMatch(/\S/);
+    // The purpose line names the same ceiling.
+    expect(document.querySelector('[data-step-purpose]')?.textContent).toContain('at most $2.00');
+  });
+
   it('tells an operator a project with no evaluation needs a discovery run', async () => {
-    render(createApp({ fetchImpl: fetchFor('absent'), realtime: false }).element);
+    openAt(wizardOf('discovery'), fetchFor('absent'));
     // The 409 is an answer. Nothing here is an error notice, and nothing crashed.
     expect(await screen.findByText(/No readiness evaluation yet/)).toBeTruthy();
     expect(screen.queryByTestId('error-fallback')).toBeNull();
   });
 
-  it('renders the level, the criteria and the cheapest improvements when one exists', async () => {
-    // The deployment has one project, so the wizard resumes it without being told — which is what
-    // makes the readiness query fire at all (product/06: "resumable").
-    render(createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element);
+  it('renders the level as a meter, the criteria by name and the cheapest improvements', async () => {
+    openAt(wizardOf('discovery'), fetchFor('recorded'));
     expect(await screen.findByText('Readiness level 1')).toBeTruthy();
+    const meter = screen.getByRole('meter', { name: 'Readiness level' });
+    expect(meter.getAttribute('value')).toBe('1');
+    expect(meter.getAttribute('min')).toBe('0');
+    expect(meter.getAttribute('max')).toBe('4');
     // product/17 § "Onboarding wizard": the level *and* the three cheapest criteria to improve.
     expect(await screen.findByText(/Lint and formatter enforced in CI/)).toBeTruthy();
-    // Both criteria, with the platform's `unlocks` beside the agent's evidence.
-    expect(screen.getByText(/Implementation self-check/)).toBeTruthy();
-    expect(screen.getByText(/Human merge guarantee/)).toBeTruthy();
+    // Each criterion by its human name, with the platform's `unlocks` beside it…
+    const criteria = screen.getByRole('list', { name: 'Readiness criteria' });
+    const r1 = criteria.querySelector('[data-criterion="R1"]') as HTMLElement;
+    expect(within(r1).getByText('Tests run green')).toBeTruthy();
+    expect(r1.textContent).toContain('Implementation self-check');
+    expect(within(r1).getByRole('img', { name: 'Passed' })).toBeTruthy();
+    const r9 = criteria.querySelector('[data-criterion="R9"]') as HTMLElement;
+    expect(within(r9).getByText('Protected default branch')).toBeTruthy();
+    expect(within(r9).getByRole('img', { name: 'Not met' })).toBeTruthy();
+    expect(r9.textContent).toContain('Human merge guarantee');
+    // …and the id only behind Details, never beside the name.
+    const details = r1.querySelector('details') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain('Criterion R1');
+    expect(r1.firstElementChild?.textContent).not.toContain('R1');
   });
 
   it('shows the CI-rules warning on the readiness panel, with the rule that kept agentic/ out (WP-143)', async () => {
-    render(createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element);
+    openAt(wizardOf('discovery'), fetchFor('recorded'));
     await screen.findByText('Readiness level 1');
     const notices = screen.getByRole('list', { name: 'Readiness notices' });
     expect(notices.textContent).toContain('Warning');
@@ -395,10 +824,11 @@ describe('the onboarding wizard', () => {
   });
 
   it('marks a criterion the workspace could not run as not checked, and suggests verifying on CI (BD-026)', async () => {
-    render(createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element);
+    openAt(wizardOf('discovery'), fetchFor('recorded'));
     await screen.findByText('Readiness level 1');
     const r2 = screen.getByText(/Fast inner loop/).closest('li');
     expect(r2?.textContent).toContain('not checked');
+    expect(within(r2 as HTMLElement).getByRole('img', { name: 'Not checked' })).toBeTruthy();
     // Only R2 carries the badge: R1 passed and R9 failed, and neither says "not checked".
     expect(screen.getAllByText('not checked')).toHaveLength(1);
     const notices = screen.getByRole('list', { name: 'Readiness notices' });
@@ -410,9 +840,7 @@ describe('the onboarding wizard', () => {
     // The screen builds no markup from a string (CLAUDE.md: the web app never turns a string into
     // markup), so a page-wide check is enough and is the one that would fail if a later change
     // introduced a sanitiser-and-innerHTML pair.
-    const { container } = render(
-      createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element,
-    );
+    const { container } = openAt(wizardOf('discovery'), fetchFor('recorded'));
     await screen.findByText('Readiness level 1');
     // No element was created from the string, and the serialised document carries the `<` escaped.
     // The escaped form still *contains* the characters `onerror=`, which is the point: they are
@@ -427,7 +855,11 @@ describe('the onboarding wizard', () => {
   });
 });
 
-describe('the wizard’s step 4', () => {
+describe('the wizard’s step 4, How autonomous', () => {
+  beforeEach(() => {
+    window.history.pushState({}, '', wizardOf('autonomy'));
+  });
+
   it('sends the stored document and its hash when a feature is toggled, not a fresh one', async () => {
     /**
      * `PUT …/config` **replaces** the whole `.agentic/config.yml`, so a screen that posted
@@ -511,7 +943,7 @@ describe('the wizard’s step 4', () => {
 
   it('enables Save operating mode again as soon as the save resolves while the gate answers 503 (WP-168, backlog 527)', async () => {
     // The save awaits an invalidation of the project's prefix, which re-reads the discovery gate
-    // mounted on step 2. A gate read that retried held the button about a second past the PUT.
+    // the wizard keeps mounted on every step. A gate read that retried held the button about a second past the PUT.
     let gateReads = 0;
     let release: () => void = () => undefined;
     const held = new Promise<void>((settle) => {
@@ -533,13 +965,23 @@ describe('the wizard’s step 4', () => {
       return fetchFor('recorded')(input, init);
     }) as typeof fetch;
 
-    render(createApp({ fetchImpl: failingGate, realtime: false }).element);
-    // The gate's first read has failed and says so (generous: the canary's retry takes ~1 s).
-    await screen.findByText(/Where the last discovery is could not be read/, undefined, {
-      timeout: 4_000,
-    });
+    const app = createApp({ fetchImpl: failingGate, realtime: false });
+    render(app.element);
+    // The wizard reads the gate on every step (the step list says when a discovery runs). Its first
+    // read has failed (generous: the canary's retry takes ~1 s) — read off the query itself, since
+    // this step does not print the gate's notice.
+    await waitFor(
+      () => {
+        expect(app.queryClient.getQueryState(['project', PROJECT, 'rediscovery'])?.status).toBe(
+          'error',
+        );
+      },
+      { timeout: 4_000 },
+    );
     const readsBefore = gateReads;
-    const save = screen.getByRole('button', { name: 'Save operating mode' }) as HTMLButtonElement;
+    const save = (await screen.findByRole('button', {
+      name: 'Save operating mode',
+    })) as HTMLButtonElement;
     fireEvent.click(save);
     await waitFor(() => {
       expect(save.disabled).toBe(true);
@@ -658,7 +1100,7 @@ describe('the wizard’s step 4', () => {
     expect(body.base_hash).toBe('deadbeef');
   });
 
-  it('says why the command policy is not editable here', async () => {
+  it('says why the command policy is not editable here, behind Learn more', async () => {
     // A project may only narrow each role's shipped baseline (BD-025, WP-54), so a `commands.allow`
     // editor would be an affordance that can only take commands away.
     const { container } = render(
@@ -670,6 +1112,12 @@ describe('the wizard’s step 4', () => {
     // The sentence spans an `<em>`, so it is read off the rendered text rather than matched against
     // one element.
     expect(container.textContent).toContain('may only narrow that baseline');
+    // The jargon (the file name, the commands) is behind the disclosure, not in the step's text.
+    const learnMore = screen
+      .getByText('Learn more: the commands agents may run')
+      .closest('details');
+    expect(learnMore?.textContent).toContain('may only narrow that baseline');
+    expect(learnMore?.open).toBe(false);
     // The sentence it replaced said a project's test command needed a widening nothing exposed —
     // false since WP-54, and asserted gone so it cannot come back with a copy-paste.
     expect(container.textContent).not.toContain('nothing in this build exposes');

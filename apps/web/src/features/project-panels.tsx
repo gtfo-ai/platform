@@ -57,7 +57,7 @@ const SOURCE_LABEL: Readonly<Record<KnowledgeProposalSource, string>> = {
   task: 'from a task',
   run: 'from a run',
   feedback: 'from feedback',
-  bootstrap: 'drafted at onboarding',
+  bootstrap: 'drafted at project setup',
   human: 'written by a person',
   history: 'mined from merged history',
 };
@@ -186,7 +186,7 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
         {tree.isSuccess && files.length === 0 ? (
           <EmptyState
             title="The vault is empty"
-            hint="Knowledge lives in the repository under the project's knowledge_dir. The onboarding wizard bootstraps it; the Librarian keeps it current."
+            hint="Knowledge lives in the repository under the project's knowledge_dir. Setting up a project drafts it; the Librarian keeps it current."
           />
         ) : null}
         <ul className="flex flex-col gap-0.5">

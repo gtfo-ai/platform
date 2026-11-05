@@ -140,7 +140,7 @@ export const ProjectSettingsScreen = ({
       </SectionHeading>
       <p className="text-xs text-fg-muted">
         Everything the setup wizard asks, reachable at any time. Nothing here is only available
-        during onboarding.
+        while a project is being set up.
       </p>
 
       <Card className="flex flex-col gap-2">

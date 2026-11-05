@@ -85,17 +85,44 @@ whenever an answer does not match. If the server is the **same** version as the 
 a real fault and is shown as the error it is; an instance built from a checkout has no version to
 compare and always shows the error.
 
-## 1. Onboarding a project — the wizard
+## 1. Setting up a project — New project
 
-**New project** — in the top bar's **+** menu, or the button on **Projects**. Five steps, each of which is also reachable on its own, so
-"finish later" leaves a checklist rather than a dead end. The wizard is **resumable because its state
-is the server's**: which project exists, which integrations are bound, whether discovery has run.
-Close the tab at step 3 and come back to the same place.
+**New project** — in the top bar's **+** menu, the button on **Projects**, or Home when there is no
+project yet — opens the setup wizard at its first step. The page is headed *New project*; on the
+left is the list of six steps, on the right the step you are on, with its title, one sentence saying
+what it does (and, where it is known, how long it takes and what it costs) and, at the bottom,
+**← Back to …** and **Continue to …** — the button names the step it goes to.
+
+| Step | Done when |
+|---|---|
+| 1 **Connect** | the project exists and has a ticket tracker **and** a git integration bound |
+| 2 **Technical discovery** | discovery has recorded a readiness evaluation |
+| 3 **Business context** *(optional)* | a business page has been proposed |
+| 4 **History** *(optional)* | a history bootstrap has been started |
+| 5 **How autonomous** | the operating mode has been saved |
+| 6 **Review and finish** | nothing drafted waits for your review |
+
+A done step shows a check (✓), the step you are on a filled dot, the others an empty one; the two
+optional steps are tagged *Optional*. **You cannot jump past a required step that is not done**:
+*Continue* is off, with the reason beside it (*"Bind a git integration to continue."*), and the
+later steps in the list are plain text rather than links — an address that names a later step says
+*… is not open yet* and links the step that comes first. Done steps are links, so you can go back to
+any of them. The optional steps have **Skip for now** beside *Continue*: it moves on and records
+nothing.
+
+**Everything is saved as you go, because every step's state is the server's** — which project
+exists, what is bound, whether discovery has run, what is in the knowledge queue. **Save and exit**
+(top right) goes Home. The address is `/onboarding?project=<key>&step=<step>`; open
+`/onboarding?project=<key>` and the wizard continues at the first step that is not done (an optional
+step you passed over counts as passed once a later step is done). `/onboarding` alone is always a
+**new** project; *Continue an existing project*, under the step list, lists the ones that exist.
+Every step is also on the project's **Settings** page, so nothing is reachable only here.
 
 ### Step 1 — Connect
 
-Give the project a **key**, a name, a repository URL and its **default branch**, then attach the
-integrations it uses.
+Three sections on one page. **Project details**: give the project a **key**, a name, a repository
+URL and its **default branch** — *Create project* creates it and keeps you on this step. Then
+**Integrations**: the ones it uses. Then **Ticket lifecycle** (below).
 
 The default branch is required (WP-139): it is the branch every run checks out, every merge request
 targets and the knowledge base is read from, and the platform's fallback — `main` — is the wrong one
@@ -116,7 +143,8 @@ button that did nothing.
 
 Then: the integrations the project uses. This step **binds and tests** them; it does not create them.
 An integration has to exist first: an admin creates it on the **Integrations** screen (section 9) or
-with the request in the operator guide's §4. Once one exists it appears here as a checkbox, "Test connection" makes one real call to the provider and records the
+with the request in the operator guide's §4 — **Add an integration** in this section opens that
+screen. *Continue* opens once a ticket tracker and a git integration are bound. Once one exists it appears here as a checkbox, "Test connection" makes one real call to the provider and records the
 result, and "Bind" attaches it to this project. The result is shown beside the integration you
 tested, as on the Integrations screen: *testing…* while the call runs, then **Last test: passed** or
 **Last test: failed** with each check the provider answered, or a notice that the test could not be
@@ -127,7 +155,7 @@ variable* the server should read, and the server seals the value itself.
 
 #### The ticket lifecycle
 
-Once a ticket tracker is bound, step 1 shows **Ticket lifecycle**: the moments at which the platform
+Once a ticket tracker is bound, step 1's **Ticket lifecycle** section shows the moments at which the platform
 moves a ticket, each a pick list of **your tracker's own statuses**, loaded from the tracker with each
 status's category beside its name. The platform assumes no status name; it offers only what the
 tracker lists. **Every slot may be left empty** (*Not mapped*): an empty slot means the ticket is not
@@ -174,9 +202,11 @@ Reading the tracker's statuses needs a maintainer; saving the bindings needs an 
 
 Starts the **Discovery agent** on the repository. It is a normal agent run in every respect — it has
 a budget, a transcript you can watch, a cost entry, and it escalates to a human if it fails — and it
-produces two things (below). The step shows where the discovery is **now**, read back from its task
+produces two things (below). **Run discovery** carries its budget cap on the button (*up to $2.00*,
+a ceiling, not a prediction). The step shows where the discovery is **now**, read back from its task
 whenever the page loads — a refresh included — and followed live while the page is open: *queued*
-(its run has not started), *running* with a **Watch its live transcript** link to the run page,
+(its run has not started), *running* with the agent's latest progress line and **Watch live**, a
+link to the run page (the step list says *Running now* too),
 *needs a person* with the escalation's reason and brief, *paused*, or *done* with the project's current readiness level
 (which a later re-check or re-evaluation may have moved since the discovery recorded it) — and **Open its task** leads to the task page. The sentence the button answers with
 (*"the Discovery agent is queued"*) is only the click's immediate feedback.
@@ -184,7 +214,9 @@ whenever the page loads — a refresh included — and followed live while the p
 What discovery produces:
 
 - a **readiness evaluation**: fourteen criteria and a level from 0 to 4
-  ([product/17](product/17-repository-readiness.md)), with the three cheapest improvements named —
+  ([product/17](product/17-repository-readiness.md)), shown as a meter, each criterion by a short
+  name (*Tests run green*, *Protected default branch*…) with what it unlocks, its id (R1…R14) and
+  the agent's evidence under **Details**, and the three cheapest improvements named —
   and, since WP-143, a **CI-rules notice** when there is one: a *warning* that the default branch's
   CI rules give an `agentic/` branch no test job in a push or a merge-request pipeline (naming the
   rule and the fix), or a *note* naming what the platform could not read (`include:`, `extends`,
@@ -242,14 +274,17 @@ button's panel says so with the reason, and the discovery task is escalated (or,
 its people are told in chat): the run was paid for and the project kept its previous evaluation, and
 re-evaluating runs it again.
 
-### Step 3 — Business interview
+*Continue* opens once a readiness evaluation exists; until then **Save and exit** and come back —
+the step list shows the discovery as running.
+
+### Step 3 — Business context (optional)
 
 [product/19](product/19-operating-definitions.md) §8's eight sections — product, users, business
 rules, glossary, direction, quality bar, review expectations, communication — as a form. Each is
 optional: leave it empty to skip it, or tick **Not applicable** (with an optional reason). The whole
-step is optional too: it is headed *(optional)*, and **Skip for now** folds the form away and records
-nothing (**Answer it now** brings it back). The same form is on the project settings page under
-*Business context*, so a skipped interview can be answered there later.
+step is optional too: it is tagged *Optional*, and **Skip for now** moves on to the next step and
+records nothing — the step stays in the list to come back to. The same form is on the project
+settings page under *Business context*, so a skipped interview can be answered there later.
 
 Submitting writes **proposals, not pages**: each answered or not-applicable section becomes one page
 under `business/` in the knowledge proposal queue, where a maintainer edits and approves it, and
@@ -266,7 +301,7 @@ drafts — that is above R12's 70 %, and the re-check after the merge records it
 the step as a *conversation* with the Product Manager role in your language; this build ships the
 question bank as a form instead (Q102 in the open questions).
 
-### Step 3b — History bootstrap (optional)
+### Step 4 — History (optional)
 
 Mines the project's merged history into knowledge proposals ([product/19](product/19-operating-definitions.md)
 §18): the last N merged merge requests (default 200, at most 1 000) of the last six months, with
@@ -284,7 +319,7 @@ mining run has reported how many merge requests it read yet"* means exactly that
 ticket half is small by design: a batch reads five closed tickets per twenty merge requests — 50 at
 the default N — and which ones is the ticket tracker's order, not the platform's.
 
-### Step 4 — Operating mode
+### Step 5 — How autonomous
 
 The autonomy dial ([product/19](product/19-operating-definitions.md) §11), four positions:
 
@@ -295,7 +330,9 @@ The autonomy dial ([product/19](product/19-operating-definitions.md) §11), four
 | **Supervised** *(default)* | plan approval above size L, probation on |
 | **Autonomous** | no plan approval except for risk classes; still never merges |
 
-Choosing one writes the project's configuration.
+Choosing one and pressing **Save operating mode** writes the project's configuration; *Continue*
+opens once it has been saved once. Which commands the agents may run is not edited here — *Learn
+more* under the panels says why.
 
 **What a position does to a task.** Moving the dial affects a running task only in part. Three
 policies are **fixed when a task starts** and do not move with the dial afterwards: whether business
@@ -313,7 +350,7 @@ allow three, and auto-applies knowledge proposals in the middle significance ban
 **settings** override the dial wherever they set one of `pipeline.limits.human_rounds`,
 `pipeline.limits.question_timeout`, `policies.knowledge_apply.auto_apply` or
 `policies.probation_tasks`; nothing else overrides it. The repository's own `.agentic/config.yml`
-overrides **none** of the four: from the file they are *not applied* (step 5 below says why). The policy list under the dial
+overrides **none** of the four: from the file they are *not applied* (step 6 below says why). The policy list under the dial
 marks the two that set nothing by themselves: `review_only` (the Review-only card is the switch) and
 `suggested_readiness_min`.
 
@@ -341,7 +378,13 @@ posts nothing on the merge request — every comment it would have written is re
 log as *would have* — and its findings, with a comparison of which of the agent's own acceptance
 criteria each side met, appear on the ticket's shadow report once it ends.
 
-### Step 5 — Commit the knowledge
+### Step 6 — Review and finish
+
+A summary of what was set — the project, the integrations bound, the readiness level, the business
+pages and the history (or that they were skipped), the operating mode and how many drafted pages
+wait for your review — then **Review the drafted pages** (the knowledge queue), **Propose the
+settings to the repository** (the project's settings page, below) and **Open the board**, which is
+where the wizard ends.
 
 The proposal queue. The discovery agent's drafts are proposals with source `bootstrap`; approving one
 commits it on an `agentic/knowledge/*` branch and opens a merge request — **never onto the default
@@ -1140,13 +1183,13 @@ In one place, so it is not spread across thirteen sections:
 
 | Not built | Where you meet it |
 |---|---|
-| The business interview as a *conversation* with the Product Manager role (the form is built; Q102) | onboarding step 3 |
-| Committing `.agentic/` configuration from the wizard itself (the project settings page does it) | onboarding step 5 |
-| Re-answering the nine run-dependent readiness criteria after a merge (five are re-checked) | onboarding step 2 |
+| The business interview as a *conversation* with the Product Manager role (the form is built; Q102) | New project step 3 |
+| Committing `.agentic/` configuration from the wizard itself (the project settings page does it) | New project step 6 |
+| Re-answering the nine run-dependent readiness criteria after a merge (five are re-checked) | New project step 2 |
 | Editing a knowledge document or the pipeline in the browser | knowledge, pipeline |
 | Instance-wide feature flags and the provider mode as organisation settings (the provider mode is an environment setting; a project's features are its own) | settings |
 | The statistics the screen lists under *Not measured, and why* | statistics |
-| Moving a ticket to a *deployed* status once a deploy is seen (the *Done* slot moves it at the merge) | ticket lifecycle, onboarding step 1 |
+| Moving a ticket to a *deployed* status once a deploy is seen (the *Done* slot moves it at the merge) | ticket lifecycle, New project step 1 |
 | A ticket lifecycle for a project with two ticket trackers bound (the form says the pipeline applies one only with exactly one) | ticket lifecycle, project settings |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance

@@ -380,13 +380,43 @@ test('the integrations screen carries the create and test controls', async ({ pa
   await expect(page.getByLabel('Environment variable for api_token')).toBeVisible();
 });
 
+test('New project opens the wizard at Connect, and a project resumes where it stands (S-23.8)', async ({
+  page,
+}) => {
+  // TD-033 decision 9: the step list, the step, and Continue that says where it goes — refused,
+  // with the reason, past a required step that is not done. Against the built bundle, so this is
+  // the tier that shows the lazy chunk and the validated search parameters work in a browser.
+  await page.goto('/projects');
+  await page.getByRole('main').getByRole('link', { name: 'New project' }).click();
+  await expect(page).toHaveURL('/onboarding');
+  await expect(page.getByRole('heading', { level: 1, name: 'New project' })).toBeVisible();
+  const steps = page.getByRole('list', { name: 'Setup steps' }).getByRole('listitem');
+  await expect(steps).toHaveCount(6);
+  await expect(steps.first()).toHaveAttribute('aria-current', 'step');
+  await expect(page.getByLabel('Key')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Continue to Technical discovery' }),
+  ).toBeDisabled();
+
+  // The fake project has a tracker and no git binding: it resumes at Connect, and says what is
+  // missing rather than letting anybody past it.
+  await page.goto(`/onboarding?project=${PROJECT_KEY}`);
+  await expect(page.getByRole('heading', { level: 2, name: 'Connect' })).toBeVisible();
+  await expect(page.getByText('Bind a git integration to continue.')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Continue to Technical discovery' }),
+  ).toBeDisabled();
+  await page.getByRole('link', { name: 'Save and exit' }).click();
+  await expect(page).toHaveURL('/');
+});
+
 test('the wizard’s Test connection shows a failed result beside the integration (WP-155)', async ({
   page,
   request,
 }) => {
   // PROGRESS backlog 451: the press sent the probe and the step rendered nothing. The answer is
   // the Integrations card's own component, beside the integration that was tested.
-  await page.goto('/onboarding');
+  await page.goto(`/onboarding?project=${PROJECT_KEY}&step=connect`);
   const row = page.locator(`[data-integration-row="${IDS.integration}"]`);
   await expect(row.getByText('Jira (fake)', { exact: true })).toBeVisible();
   await row.getByRole('button', { name: 'Test connection' }).click();
@@ -408,7 +438,7 @@ test('the wizard’s step 1 maps the ticket lifecycle from the tracker’s own s
 }) => {
   // BD-031 ruling 7: the slots are pick lists loaded from the tracker. Against the built bundle, so
   // this is the tier that shows the selects, the multi-select and the save work in a browser.
-  await page.goto('/onboarding');
+  await page.goto(`/onboarding?project=${PROJECT_KEY}&step=connect`);
   const card = page.locator(`[data-ticket-lifecycle="${IDS.integration}"]`);
   const qa = card.getByLabel('QA', { exact: true });
   await expect(qa).toBeVisible();

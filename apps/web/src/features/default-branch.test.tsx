@@ -141,7 +141,7 @@ describe('the default branch (WP-139)', () => {
   });
 
   it('prefills the change from the git provider’s answer, and sends it only when pressed', async () => {
-    window.history.pushState({}, '', '/onboarding');
+    window.history.pushState({}, '', '/onboarding?project=autix&step=connect');
     const sent: Sent[] = [];
     render(
       createApp({
@@ -162,7 +162,7 @@ describe('the default branch (WP-139)', () => {
         realtime: false,
       }).element,
     );
-    // The create form's field shows until the project list arrives; the change control replaces it.
+    // The project's Connect step: the change control, never the create form's field.
     await screen.findByRole('button', { name: 'Save default branch' });
     const field = screen.getByLabelText('Default branch') as HTMLInputElement;
     expect(field.value).toBe('develop');
@@ -181,7 +181,7 @@ describe('the default branch (WP-139)', () => {
   });
 
   it('says why it cannot change the branch while a task is live, rather than offering a 409', async () => {
-    window.history.pushState({}, '', '/onboarding');
+    window.history.pushState({}, '', '/onboarding?project=autix&step=connect');
     const sent: Sent[] = [];
     render(
       createApp({

@@ -149,14 +149,14 @@ const renderScreen = async (): Promise<HTMLElement> => {
 };
 
 describe('the proposal queue', () => {
-  it('says which proposal was mined from history and which was drafted at onboarding', async () => {
+  it('says which proposal was mined from history and which was drafted at project setup', async () => {
     const container = await renderScreen();
     await waitFor(() => {
       expect(container.textContent).toContain('mined from merged history');
     });
     // The other direction, in the same queue: without it a screen that printed one label for
     // everything would pass (standing rule 42).
-    expect(container.textContent).toContain('drafted at onboarding');
+    expect(container.textContent).toContain('drafted at project setup');
     // …and the fields the card already carried are still there.
     expect(container.textContent).toContain('conventions.md');
     expect(container.textContent).toContain('significance 0.50');

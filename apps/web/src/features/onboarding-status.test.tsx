@@ -1,16 +1,16 @@
 /**
- * The onboarding wizard says what it is doing (WP-155, PROGRESS backlog 450, 451 and 452).
+ * The New project wizard says what it is doing (WP-155, PROGRESS backlog 450, 451 and 452).
  *
- * Driven through `createApp` at `/onboarding` with a fake server, so the real router, query client,
+ * Driven through `createApp` at `/onboarding?project=…&step=…` (S-23.8) with a fake server, so the real router, query client,
  * endpoint parsers and — for the live case — the real realtime provider and query bridge are in the
  * path. One case per ruling item:
  *
- *  - (a) step 3 is *(optional)*, says it can be answered later from the settings page, and its
- *    *Skip for now* sends **no request**;
+ *  - (a) the business step is *Optional*, says it can be answered later from the settings page,
+ *    and its *Skip for now* sends **no request**;
  *  - (b) the wizard's *Test connection* shows the Integrations card's answer — pending, failed with
  *    its checks, and the error notice — beside the integration that was tested;
  *  - (c) step 2 reads the discovery task back on load (a fresh app is a refresh), shows queued,
- *    running with the link to the run's live transcript, needs a person with the escalation's reason,
+ *    running with the agent's latest progress line and *Watch live* (the run's page), needs a person with the escalation's reason,
  *    and done with the readiness level — and follows the task when a frame for it arrives.
  */
 import type {
@@ -75,6 +75,22 @@ const integration = (id: string, name: string) => ({
   credentials_readable: null,
   credentials_consequence: null,
 });
+
+const BOUND = [
+  { integration_id: INTEGRATION, type: 'git', provider: 'gitlab', name: 'Acme GitLab', config: {} },
+  {
+    integration_id: '00000000-0000-4000-8000-0000000000f4',
+    type: 'task_management',
+    provider: 'jira-cloud',
+    name: 'Acme Jira',
+    config: {},
+  },
+];
+
+/** The wizard at one step of the fixture project (S-23.8). */
+const openStep = (step: 'connect' | 'discovery' | 'business'): void => {
+  window.history.pushState({}, '', `/onboarding?project=acme_api&step=${step}`);
+};
 
 const READINESS = {
   level: 2,
@@ -262,7 +278,9 @@ const fetchFor = (world: World) =>
         : json({ error: { code: 'readiness_not_evaluated', message: 'none' } }, 409);
     }
     if (url.endsWith(`/api/tasks/${TASK}`) && world.task !== null) return json(world.task);
-    if (url.includes('/bindings') || url.includes('/budgets') || url.includes('/audit')) {
+    // S-23.8: a tracker and a git host are bound, so the wizard's later steps are open.
+    if (url.includes('/bindings')) return json({ items: BOUND });
+    if (url.includes('/budgets') || url.includes('/audit')) {
       return json({ items: [] });
     }
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
@@ -278,13 +296,13 @@ const newWorld = (over: Partial<World> = {}): World => ({
   ...over,
 });
 
-const stepOf = (title: string): HTMLElement => {
-  const heading = screen.getByText(title);
-  const card = heading.closest('.rounded-lg');
-  if (!(card instanceof HTMLElement)) {
-    throw new Error(`no step card around "${title}"`);
+/** The step the wizard shows. */
+const shownStep = (): HTMLElement => {
+  const step = document.querySelector('[data-wizard-step]');
+  if (!(step instanceof HTMLElement)) {
+    throw new Error('no wizard step on the page');
   }
-  return card;
+  return step;
 };
 
 afterEach(() => {
@@ -294,16 +312,22 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  window.history.pushState({}, '', '/onboarding');
+  openStep('discovery');
 });
 
-describe('step 3 says it is optional (WP-155 (a), backlog 450)', () => {
+describe('the business step says it is optional (WP-155 (a), backlog 450)', () => {
   it('is headed optional, names the settings page, and skipping records nothing', async () => {
-    const world = newWorld();
+    const world = newWorld({ readiness: 'recorded' });
+    openStep('business');
     render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
     // The project is resumed once the list arrives; the form is what says it has.
     await screen.findByLabelText('Glossary');
-    const step = stepOf('Business interview (optional)');
+    const step = shownStep();
+    expect(step.getAttribute('data-wizard-step')).toBe('business');
+    // Headed optional: the line above the step's title says so.
+    expect(step.querySelector('h2')?.previousElementSibling?.textContent).toBe(
+      'Step 3 of 6 · Optional',
+    );
     expect(step.textContent).toContain('the whole step can be skipped and answered later');
     expect(within(step).getByRole('link', { name: 'settings' }).getAttribute('href')).toBe(
       '/projects/acme_api/settings',
@@ -311,15 +335,19 @@ describe('step 3 says it is optional (WP-155 (a), backlog 450)', () => {
     expect(within(step).getByLabelText('Glossary')).toBeTruthy();
 
     fireEvent.click(within(step).getByRole('button', { name: 'Skip for now' }));
-    expect(step.textContent).toContain('Skipped for now — nothing was recorded.');
-    expect(within(step).queryByLabelText('Glossary')).toBeNull();
-    fireEvent.click(within(step).getByRole('button', { name: 'Answer it now' }));
-    expect(within(step).getByLabelText('Glossary')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'History' })).toBeTruthy();
+    expect(screen.queryByLabelText('Glossary')).toBeNull();
+    // …and the step is still there to come back to, from the step list.
+    fireEvent.click(
+      within(screen.getByRole('list', { name: 'Setup steps' })).getByRole('link', {
+        name: 'Connect',
+      }),
+    );
 
     // Records nothing (rule 79 — the effect is countable). An assertion taken right after the click
     // would pass before a request had been sent (rule 87), so a known command is sent **after** the
     // skip and waited for: requests leave in order, so anything the skip sent is in the log by then.
-    const probe = screen.getAllByRole('button', { name: 'Test connection' })[0];
+    const probe = (await screen.findAllByRole('button', { name: 'Test connection' }))[0];
     if (probe === undefined) throw new Error('no Test connection button');
     fireEvent.click(probe);
     await waitFor(() => {
@@ -339,6 +367,7 @@ describe('step 1 shows what Test connection answered (WP-155 (b), backlog 451)',
         resolve = settle;
       }),
     });
+    openStep('connect');
     render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
     const row = (await screen.findByText('Acme GitLab')).closest('[data-integration-row]');
     const other = screen.getByText('Other GitLab').closest('[data-integration-row]');
@@ -372,6 +401,7 @@ describe('step 1 shows what Test connection answered (WP-155 (b), backlog 451)',
 
   it('shows the error notice when the test could not be run', async () => {
     const world = newWorld({ probe: null });
+    openStep('connect');
     render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
     const row = (await screen.findByText('Acme GitLab')).closest('[data-integration-row]');
     if (!(row instanceof HTMLElement)) throw new Error('no integration row');
@@ -381,7 +411,7 @@ describe('step 1 shows what Test connection answered (WP-155 (b), backlog 451)',
   });
 });
 
-describe('step 2 reads the discovery task back (WP-155 (c), backlog 452)', () => {
+describe('the discovery step reads the discovery task back (WP-155 (c), backlog 452)', () => {
   it('reads each phase from the task’s state and its runs', () => {
     expect(discoveryPhaseOf('queued', [])).toBe('queued');
     expect(discoveryPhaseOf('active', [])).toBe('queued');
@@ -393,17 +423,35 @@ describe('step 2 reads the discovery task back (WP-155 (c), backlog 452)', () =>
     expect(discoveryPhaseOf('cancelled', [])).toBe('cancelled');
   });
 
-  it('shows a running discovery after a refresh, with the link to its live transcript', async () => {
+  it('shows a running discovery after a refresh, compactly: its latest progress and Watch live', async () => {
     // Nobody pressed anything in this app: a fresh app over a world with a live task is a refresh.
-    const world = newWorld({ gate: gateFor('active'), task: taskDetail('active', [run()]) });
+    const world = newWorld({
+      gate: gateFor('active'),
+      task: taskDetail('active', [
+        run({
+          latest_progress: {
+            seq: 4,
+            at: '2026-10-07T05:02:00.000Z',
+            summary: 'Ran the <b>test</b> suite',
+            percent_complete: 40,
+          },
+        }),
+      ]),
+    });
     render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
     const status = await screen.findByTestId('discovery-status');
     await waitFor(() => {
       expect(status.getAttribute('data-discovery-phase')).toBe('running');
     });
-    expect(
-      within(status).getByRole('link', { name: 'Watch its live transcript' }).getAttribute('href'),
-    ).toBe(`/runs/${RUN}`);
+    expect(within(status).getByRole('link', { name: 'Watch live' }).getAttribute('href')).toBe(
+      `/runs/${RUN}`,
+    );
+    // The agent's own line, as text (BD-022), with its percentage.
+    const progress = within(status).getByTestId('discovery-progress');
+    expect(progress.textContent).toBe('40% Ran the <b>test</b> suite');
+    expect(progress.querySelector('b')).toBeNull();
+    // The step list says it too, beside the step it belongs to.
+    expect(screen.getByRole('list', { name: 'Setup steps' }).textContent).toContain('Running now');
     expect(within(status).getByRole('link', { name: 'Open its task' }).getAttribute('href')).toBe(
       `/projects/acme_api/tasks/${TASK}`,
     );
@@ -524,7 +572,7 @@ describe('step 2 reads the discovery task back (WP-155 (c), backlog 452)', () =>
       return counting(input, init);
     }) as typeof fetch;
     render(createApp({ fetchImpl, realtime: false }).element);
-    await screen.findByText('Technical discovery');
+    await screen.findByRole('heading', { name: 'Technical discovery' });
     await waitFor(() => {
       expect(gateReads).toBeGreaterThan(0);
     });

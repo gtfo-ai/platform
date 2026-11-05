@@ -17,7 +17,7 @@ import {
   taskStageStateSchema,
   taskStateSchema,
 } from '@platform/contracts';
-import { SHIPPED_STAGE_IDS } from '@platform/domain';
+import { READINESS_CRITERION_IDS, SHIPPED_STAGE_IDS } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import {
   APPROVAL_KIND_LABEL,
@@ -25,8 +25,10 @@ import {
   ARTIFACT_TYPE_LABEL,
   GATE_LABEL,
   QUESTION_STATUS_LABEL,
+  READINESS_CRITERION_LABEL,
   ROLE_LABEL,
   RUN_STATUS_LABEL,
+  readinessCriterionLabel,
   runSubject,
   STAGE_LABEL,
   STAGE_STATE_LABEL,
@@ -94,5 +96,20 @@ describe('humanize', () => {
       'Implementation · Developer',
     );
     expect(runSubject({ stage: null, role: 'ask' })).toBe('Ask');
+  });
+
+  it('names every readiness criterion the domain declares, and shows an unknown id as itself', () => {
+    expect(Object.keys(READINESS_CRITERION_LABEL)).toEqual([...READINESS_CRITERION_IDS]);
+    for (const id of READINESS_CRITERION_IDS) {
+      const word = readinessCriterionLabel(id);
+      expect(word, id).toMatch(/^[A-Z]/);
+      // A name, not the id back.
+      expect(word, id).not.toBe(id);
+    }
+    expect(new Set(Object.values(READINESS_CRITERION_LABEL)).size).toBe(
+      READINESS_CRITERION_IDS.length,
+    );
+    expect(readinessCriterionLabel('R99')).toBe('R99');
+    expect(readinessCriterionLabel('constructor')).toBe('constructor');
   });
 });

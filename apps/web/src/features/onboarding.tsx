@@ -1,547 +1,725 @@
 /**
- * The onboarding wizard — product/06 § "Flow (UI wizard, resumable, each step skippable)" (WP-21).
+ * **New project** — the setup wizard (product/06 § "Flow (UI wizard, resumable, each step
+ * skippable)", WP-21; a real wizard since S-23.8, TD-033 decision 9, research/19 § 6).
  *
- * Six steps — product/06's five plus **3b** — on one screen, and the whole of product/06's own
- * claim about it: *"'Finish later' leaves
- * a checklist on the project page; nothing is reachable only through the wizard."* Every step here
- * is a command that exists on its own endpoint, so an operator who closes the tab at step 3 can
- * finish from the settings screens later — and the wizard is resumable because its state is the
- * **server's**, not this component's: which project exists, which integrations are bound, whether
- * discovery has run and what the readiness evaluation says are all reads.
+ * `/onboarding?project=<key>&step=<id>`: a Stepper on the left (done ✓ / current ● / upcoming ○,
+ * *Optional* on the two optional steps), the step on the right — its title, one sentence saying
+ * what it does, the step's controls and a footer with *Back to …* and *Continue to …*. The step
+ * ids, their order and what *done* means are `onboarding-steps.ts`, and the rules there are the
+ * whole of the navigation: forward is refused past a required step that is not done, done steps
+ * are free to revisit, and with no `?step=` the wizard resumes at the first step not done.
  *
- * ## What is here and what is honestly not
+ * ## The state is the server's
  *
- * - **Step 1 (connect)** creates the project, tests the integrations that exist and binds them to it.
- *   **It does not create an integration**, and the sentence that said it did was false from WP-21
- *   until WP-30 (PROGRESS backlog 55): the create control is on the Integrations screen, where
- *   product/10 puts it and where this step links. The two screens used to attribute it to each
- *   other, which is how a served endpoint ended up with no caller anywhere. Since WP-155 (backlog
- *   451) a *Test connection* shows its answer beside the integration it tested, through the
- *   Integrations screen's own component (`connection-test-result.tsx`); before it the wizard sent
- *   the probe and rendered nothing. Since WP-182 it also maps the tracker binding's **ticket
- *   lifecycle** — each slot a pick list of the tracker's own statuses — through
- *   `features/ticket-lifecycle.tsx`, the same component the project settings page renders.
- * - **Step 2 (technical discovery)** starts the Discovery agent and shows the readiness evaluation
- *   it produces, with product/17's three cheapest improvements — and, since WP-155 (backlog 452),
- *   where the discovery task is now (`discovery-status.tsx`), read back on load and followed live.
- * - **Step 3 (business interview)** is `features/business-interview.tsx` since WP-64, rendered here
- *   and on the project settings page: product/19 §8's question bank as a form, whose answers become
- *   `business/*` pages **in the proposal queue** — never a commit. It is the form without the
- *   Product Manager's conversation (Q102), and it says so. Since WP-155 (backlog 450) it is headed
- *   *(optional)*, says it can be answered later from the settings page, and has a *Skip for now*
- *   that records nothing.
- * - **Step 3b (history bootstrap)** is `features/history-bootstrap.tsx`, rendered here and on the
- *   project settings page — the *same component*, for step 4's reason. It is optional and
- *   budget-capped, it shows the estimate before it starts anything (product/06's own requirement),
- *   and everything it produces lands in the proposal queue with the merge requests it was observed
- *   in. It was the one step of product/06 the wizard did not have until WP-35.
- * - **Step 4 (operating mode and features)** is `features/operating-mode.tsx`, rendered here and on
- *   the project settings page — the *same component*, which is how product/18's "settings pages
- *   mirror the wizard one-to-one" stays true without anybody remembering. It carries all five of
- *   product/18's step-4 items: the dial (materialised, with *Custom* and "re-apply preset"), the
- *   feature cards, the risk classes, the budgets and the notifications, with the two items this
- *   build cannot honestly carry named as gaps **on the screen**.
- * - **Step 5 (commit)** is the proposal queue: the Discovery agent's drafted pages are `kb_proposals`
- *   with source `bootstrap`, and approving one commits it on an `agentic/knowledge/*` branch with a
- *   merge request — never onto the default branch. This step links there rather than duplicating it,
- *   and to the project settings page, whose export proposes the step-4 configuration as
- *   `.agentic/config.yml` the same way (WP-63, Q94).
+ * Every step is a command on its own endpoint, and whether a step is done is a read — which
+ * project exists, what is bound, whether a readiness evaluation exists, what the knowledge queue
+ * holds, whether the operating mode was saved. So *Save and exit* saves nothing (there is nothing
+ * unsaved) and resuming is pointing at the project again. *Skip for now* records nothing either.
+ * `/onboarding` with no project is a **new** project: the wizard never guesses which existing one
+ * was meant.
+ *
+ * ## The steps
+ *
+ * - **Connect** (`onboarding-connect.tsx`): project details, integrations, ticket lifecycle.
+ * - **Technical discovery** starts the Discovery agent and shows the readiness evaluation it
+ *   records as a meter, the criteria by their human names (the ids behind *Details*), product/17's
+ *   cheapest improvements and the CI-rules notices; where the discovery is now is
+ *   `discovery-status.tsx`, read back on load and followed live (WP-155, backlog 452).
+ * - **Business context** (optional) is `business-interview.tsx` (WP-64); its answers become
+ *   proposals, never commits.
+ * - **History** (optional) is `history-bootstrap.tsx` (WP-35), which shows its estimate before it
+ *   starts anything.
+ * - **How autonomous** is `operating-mode.tsx`: the dial, the features, the risk classes, the
+ *   budgets and the notifications.
+ * - **Review and finish** sums up what was set, links the knowledge queue and the settings page's
+ *   export of the configuration (WP-63, Q94), and ends on *Open the board*.
+ *
+ * Every component a step renders is the one the project settings page renders, which is how
+ * product/18:55's "settings mirror the wizard" stays true without two copies;
+ * `apps/server/src/routes/settings-mirror.test.ts` follows this file's relative imports to check it,
+ * so the steps are imported statically.
  *
  * ## Every string from the server is data
  *
  * The readiness evidence is the Discovery agent's own words about a repository the platform does
- * not control (BD-022), and so is an integration probe's detail. Both go through
- * `ui/untrusted.tsx`; nothing here builds markup from a string and nothing writes a URL attribute
- * outside that module.
+ * not control (BD-022), and so is everything a provider or a person typed. All of it goes through
+ * `ui/untrusted.tsx`; nothing here builds markup from a string or writes a URL attribute.
  */
-
-import { Link } from '@tanstack/react-router';
-import { type ReactElement, useState } from 'react';
+import type { ProjectSummary, ReadinessResponse } from '@platform/contracts';
+import { Link, useNavigate } from '@tanstack/react-router';
+import { type ReactElement, type ReactNode, useRef } from 'react';
 import {
-  useBindableIntegrations,
+  useHistoryBootstraps,
+  useKbProposals,
   useOnboardingCommands,
+  useProjectAutonomy,
   useProjectBindings,
   useProjectReadiness,
   useProjects,
+  useRediscoveryGate,
 } from '../app/queries.js';
-import {
-  Badge,
-  type BadgeTone,
-  Button,
-  Card,
-  EmptyState,
-  ErrorNotice,
-  Field,
-  formatDateTime,
-  Loading,
-  SectionHeading,
-} from '../ui/kit.js';
+import { Blankslate } from '../ui/blankslate.js';
+import { buttonClassName } from '../ui/button.js';
+import { DetailsDisclosure } from '../ui/details.js';
+import { readinessCriterionLabel } from '../ui/humanize.js';
+import { Badge, Button, ErrorNotice, formatDateTime, formatUsd } from '../ui/kit.js';
+import { PageHeader } from '../ui/page-header.js';
+import { Skeleton } from '../ui/skeleton.js';
+import { StatusIcon } from '../ui/status.js';
+import { type Step, Stepper } from '../ui/stepper.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { BusinessInterview } from './business-interview.js';
-import { ConnectionTestResult } from './connection-test-result.js';
-import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';
+import { DefaultBranchMismatch } from './default-branch.js';
 import { DiscoveryStatus } from './discovery-status.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
-import { OperatingMode } from './operating-mode.js';
-import { ReadinessNotices } from './readiness-notices.js';
+import { ConnectStep } from './onboarding-connect.js';
 import {
-  TicketLifecycle,
-  wizardBindingConfig,
-  wizardWritesDefaultBlock,
-} from './ticket-lifecycle.js';
+  blockingStepOf,
+  continueBlockerOf,
+  donenessOf,
+  nextStep,
+  previousStep,
+  resumeStepOf,
+  WIZARD_STEP_IDS,
+  WIZARD_STEPS,
+  type WizardDoneness,
+  type WizardFacts,
+  type WizardStepId,
+} from './onboarding-steps.js';
+import { AUTONOMY_CHOICES, OperatingMode } from './operating-mode.js';
+import { readinessWord } from './readiness-label.js';
+import { ReadinessNotices } from './readiness-notices.js';
 
-const LEVEL_TONE: readonly BadgeTone[] = ['danger', 'warning', 'accent', 'success', 'success'];
+/** A knowledge proposal still waiting for a maintainer (the knowledge screen's Approve/Reject). */
+const AWAITING_REVIEW = new Set(['scored', 'queued', 'apply_failed']);
 
-const Step = ({
-  number,
-  title,
-  children,
-}: {
-  /** product/06's own label. A string because step **3b** is one of them (WP-35). */
-  readonly number: number | string;
-  readonly title: string;
-  readonly children: React.ReactNode;
-}): ReactElement => (
-  <Card className="flex flex-col gap-3">
-    <div className="flex items-center gap-2">
-      <Badge tone="accent">Step {number}</Badge>
-      <SectionHeading>{title}</SectionHeading>
-    </div>
-    {children}
-  </Card>
-);
-
-export const OnboardingScreen = (): ReactElement => {
-  const projects = useProjects();
-  const integrations = useBindableIntegrations();
-  const commands = useOnboardingCommands();
-
-  const [chosen, setChosen] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ key: '', name: '', repoUrl: '', defaultBranch: '' });
-  const [selected, setSelected] = useState<readonly string[]>([]);
-  /** Step 3's *Skip for now* (WP-155 ruling (a)): this tab's view only — it records nothing. */
-  const [interviewSkipped, setInterviewSkipped] = useState(false);
-
-  /**
-   * **The wizard is resumable, and this is the whole of it** (product/06: *"UI wizard, resumable,
-   * each step skippable"*).
-   *
-   * Its state is the **server's** — which project exists, which integrations are bound, whether
-   * discovery has run — so resuming is a matter of pointing at a project again rather than of
-   * restoring anything. A wizard that only knew the project it had just created in this browser tab
-   * would send an operator who closed the tab back to step 1 with a key that is already taken.
-   *
-   * A deployment with exactly one project resumes it without asking; with several, the operator
-   * picks, because guessing which one they meant is the kind of default that quietly onboards the
-   * wrong repository.
-   */
-  const items = projects.data?.items ?? [];
-  const projectId = chosen ?? (items.length === 1 ? (items[0]?.id ?? null) : null);
+/**
+ * The wizard's reads, and the facts `onboarding-steps.ts` decides with. A read that **failed** is
+ * a step not done — never a step done — so a failure can hold *Continue* but never skips anybody
+ * past anything; a read still in flight is `null`.
+ */
+const useWizardReads = (projectId: string | null) => {
   const bindings = useProjectBindings(projectId);
   const readiness = useProjectReadiness(projectId);
-  const project = items.find((item) => item.id === projectId) ?? null;
+  const proposals = useKbProposals(projectId);
+  const history = useHistoryBootstraps(projectId, null);
+  const autonomy = useProjectAutonomy(projectId);
+  // Read here as well as in the discovery step, so the step list can say a discovery is running.
+  const gate = useRediscoveryGate(projectId);
 
+  /**
+   * The last answer each fact had, kept while its read is fetched again. A read that failed goes
+   * back to *pending* when a component mounts another observer of it (react-query's retry on mount
+   * — the discovery step's own readiness read does exactly that), and a fact that flickered to
+   * "unknown" would swap the step for the skeleton, unmount that component and start again: a loop
+   * measured at ~1 800 renders before this was added.
+   */
+  const settled = useRef<Partial<Record<keyof WizardFacts, boolean>>>({});
+  const fact = <T,>(
+    name: keyof WizardFacts,
+    query: { readonly isSuccess: boolean; readonly isError: boolean; readonly data?: T },
+    answer: (data: T) => boolean,
+  ): boolean | null => {
+    const now =
+      query.isSuccess && query.data !== undefined
+        ? answer(query.data)
+        : query.isError
+          ? false
+          : null;
+    if (now !== null) {
+      settled.current[name] = now;
+    }
+    return now ?? settled.current[name] ?? null;
+  };
+
+  const items = proposals.data?.items ?? [];
+  const facts: WizardFacts = {
+    projectExists: projectId !== null,
+    trackerBound: fact('trackerBound', bindings, (data) =>
+      data.items.some((item) => item.type === 'task_management'),
+    ),
+    gitBound: fact('gitBound', bindings, (data) => data.items.some((item) => item.type === 'git')),
+    // The 409 a project with no evaluation gets is the answer "not yet".
+    readinessEvaluated: fact('readinessEvaluated', readiness, () => true),
+    businessProposed: fact('businessProposed', proposals, (data) =>
+      data.items.some((item) => item.kind === 'business'),
+    ),
+    historyStarted: fact('historyStarted', history, (data) => data.items.length > 0),
+    operatingModeSaved: fact('operatingModeSaved', autonomy, (data) => data.materialised),
+    proposalsReviewed: fact('proposalsReviewed', proposals, (data) =>
+      data.items.every((item) => !AWAITING_REVIEW.has(item.status)),
+    ),
+  };
+  return {
+    facts,
+    bindings,
+    readiness,
+    autonomy,
+    history,
+    discoveryRunning: gate.data?.blocker?.code === 'discovery_in_flight',
+    ceilingUsd: gate.data?.ceiling_usd ?? null,
+    awaitingReview: items.filter((item) => AWAITING_REVIEW.has(item.status)).length,
+    businessPages: items.filter((item) => item.kind === 'business').length,
+  };
+};
+
+type WizardReads = ReturnType<typeof useWizardReads>;
+
+/** A link to one step of the wizard, for one project. */
+const StepLink = ({
+  projectKey,
+  step,
+  className,
+  children,
+}: {
+  readonly projectKey: string;
+  readonly step: WizardStepId;
+  readonly className?: string;
+  readonly children: ReactNode;
+}): ReactElement => (
+  <Link to="/onboarding" search={{ project: projectKey, step }} className={className}>
+    {children}
+  </Link>
+);
+
+// ── Technical discovery ──────────────────────────────────────────────────────
+
+const CRITERION_STATUS = (criterion: ReadinessResponse['criteria'][number]) =>
+  criterion.passed
+    ? ({ status: 'success', word: 'Passed' } as const)
+    : criterion.not_checked
+      ? ({ status: 'skipped', word: 'Not checked' } as const)
+      : ({ status: 'failure', word: 'Not met' } as const);
+
+/** The readiness evaluation: a meter, the improvements, the notices and the criteria. */
+const ReadinessPanel = ({ readiness }: { readonly readiness: ReadinessResponse }): ReactElement => (
+  <div className="flex flex-col gap-3" data-testid="readiness-panel">
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="text-base font-semibold">Readiness level {readiness.level}</span>
+        <span className="text-sm text-fg-muted">
+          {readinessWord(readiness.level)} · evaluated {formatDateTime(readiness.evaluated_at)}
+        </span>
+      </div>
+      {/* A native <meter>, as the budgets screen's: the element carries the value and the range. */}
+      <meter
+        aria-label="Readiness level"
+        className="w-full max-w-md"
+        min={0}
+        max={Math.max(4, readiness.level)}
+        value={readiness.level}
+      >
+        {`${readiness.level} of 4`}
+      </meter>
+    </div>
+    {/* WP-143: the CI-rules warning or note, beside the level it does not change. */}
+    <ReadinessNotices notices={readiness.notices} />
+    {readiness.next_improvements.length > 0 ? (
+      <div className="flex flex-col gap-1">
+        <p className="text-sm font-semibold">Cheapest improvements next</p>
+        <ul className="flex flex-col gap-0.5">
+          {readiness.next_improvements.map((item) => (
+            <li key={item.id} className="text-sm">
+              {item.title} — <span className="text-fg-muted">{item.unlocks}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    ) : null}
+    <ul aria-label="Readiness criteria" className="flex flex-col gap-2">
+      {readiness.criteria.map((criterion) => {
+        const look = CRITERION_STATUS(criterion);
+        return (
+          <li key={criterion.id} data-criterion={criterion.id} className="flex flex-col gap-0.5">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <StatusIcon status={look.status} label={look.word} />
+              <span className="font-medium">{readinessCriterionLabel(criterion.id)}</span>
+              {/* BD-026's 2026-10-06 amendment: the workspace could not run it — not a fail. */}
+              {criterion.not_checked ? <Badge tone="warning">not checked</Badge> : null}
+              <span className="text-xs text-fg-muted">{criterion.unlocks}</span>
+            </div>
+            <DetailsDisclosure summary="Details" className="pl-6">
+              <p className="text-xs text-fg-muted">
+                Criterion {criterion.id} · {look.word} · answered by{' '}
+                {criterion.detected_by === 'platform' ? 'the platform' : 'the Discovery agent'}
+              </p>
+              {/* The agent's own words about someone else's repository (BD-022). */}
+              <p className="text-xs">
+                <UntrustedText value={criterion.evidence} />
+              </p>
+            </DetailsDisclosure>
+          </li>
+        );
+      })}
+    </ul>
+  </div>
+);
+
+const DiscoveryStep = ({
+  project,
+  reads,
+}: {
+  readonly project: ProjectSummary;
+  readonly reads: WizardReads;
+}): ReactElement => {
+  const commands = useOnboardingCommands();
+  const { readiness } = reads;
   return (
     <div className="flex flex-col gap-3">
-      <SectionHeading>Onboarding</SectionHeading>
-      <p className="text-xs text-fg-muted">
-        Every step is optional and every one of them is reachable from the project’s own settings
-        later. Nothing here is the only way to do anything.
-      </p>
-
-      {items.length > 1 ? (
-        <label className="flex items-center gap-2 text-sm">
-          Resume onboarding for
-          <select
-            className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
-            value={projectId ?? ''}
-            onChange={(event) => setChosen(event.target.value === '' ? null : event.target.value)}
-          >
-            <option value="">a new project</option>
-            {items.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.key}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div>
+        <Button
+          disabled={commands.startDiscovery.isPending}
+          onClick={() => {
+            commands.startDiscovery.mutate(project.id);
+          }}
+        >
+          {reads.ceilingUsd === null
+            ? 'Run discovery'
+            : `Run discovery — up to ${formatUsd(reads.ceilingUsd)}`}
+        </Button>
+      </div>
+      {commands.startDiscovery.isSuccess ? (
+        <p className="text-sm">
+          <UntrustedText value={commands.startDiscovery.data.detail} />
+        </p>
       ) : null}
-
-      <Step number={1} title="Connect">
-        <p className="text-xs text-fg-muted">
-          A project is a repository plus the integrations that feed it. Credentials are read from
-          this server’s environment by name — they never travel through the browser.
+      {commands.startDiscovery.isError ? (
+        <ErrorNotice title="Discovery was not started." error={commands.startDiscovery.error} />
+      ) : null}
+      {/* WP-155 (backlog 452): the discovery task read back — on load, after a refresh, and live. */}
+      <DiscoveryStatus projectId={project.id} projectKey={project.key} />
+      {/* WP-142: beside the readiness panel, the provider's default when it is not the stored one. */}
+      <DefaultBranchMismatch projectId={project.id} />
+      {readiness.isSuccess ? <ReadinessPanel readiness={readiness.data} /> : null}
+      {readiness.isError ? (
+        <p className="text-sm text-fg-muted">
+          No readiness evaluation yet — running discovery is what records one.
         </p>
-        {project === null ? (
-          <form
-            className="flex flex-col gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              commands.createProject.mutate(
-                {
-                  key: draft.key,
-                  name: draft.name,
-                  repo_url: draft.repoUrl,
-                  // WP-139: always sent. The column's default is `main`, which is the wrong branch
-                  // for a repository whose default is `develop` or `dev`.
-                  default_branch: draft.defaultBranch.trim(),
-                },
-                { onSuccess: (created) => setChosen(created.id) },
-              );
-            }}
-          >
-            <Field
-              label="Key"
-              hint="Lower-case slug; it ends up in URLs and branch names."
-              value={draft.key}
-              onChange={(event) => setDraft({ ...draft, key: event.target.value })}
-            />
-            <Field
-              label="Name"
-              value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-            />
-            <Field
-              label="Repository URL"
-              hint="https:// or file:// — an SSH remote is refused."
-              value={draft.repoUrl}
-              onChange={(event) => setDraft({ ...draft, repoUrl: event.target.value })}
-            />
-            <Field
-              label="Default branch"
-              hint="Required: the branch every run checks out and every merge request targets — the repository’s own (develop, dev, main…). Once a git integration is bound, the provider’s answer is shown below and the branch can be changed."
-              required
-              value={draft.defaultBranch}
-              onChange={(event) => setDraft({ ...draft, defaultBranch: event.target.value })}
-            />
-            <div>
-              <Button
-                type="submit"
-                tone="primary"
-                disabled={commands.createProject.isPending || draft.defaultBranch.trim() === ''}
-              >
-                Create project
-              </Button>
-            </div>
-            {commands.createProject.isError ? (
-              <ErrorNotice
-                title="The project was not created."
-                error={commands.createProject.error}
-              />
-            ) : null}
-          </form>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <p className="text-sm">
-              <UntrustedText value={project.name} /> — <UntrustedText value={project.repo_url} />
-            </p>
-            <div className="flex flex-col gap-1">
-              {/* A retired integration (WP-114) cannot be bound: the selector leaves it out (WP-122). */}
-              {integrations.items.map((integration) => (
-                <div
-                  key={integration.id}
-                  className="flex flex-col gap-1"
-                  data-integration-row={integration.id}
-                >
-                  <div className="flex items-center gap-2 text-sm">
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={selected.includes(integration.id)}
-                        onChange={(event) =>
-                          setSelected(
-                            event.target.checked
-                              ? [...selected, integration.id]
-                              : selected.filter((id) => id !== integration.id),
-                          )
-                        }
-                      />
-                      <UntrustedText value={integration.name} />
-                    </label>
-                    <Badge>{integration.type}</Badge>
-                    <Button
-                      type="button"
-                      tone="ghost"
-                      disabled={commands.testIntegration.isPending}
-                      onClick={() => commands.testIntegration.mutate(integration.id)}
-                    >
-                      Test connection
-                    </Button>
-                  </div>
-                  {/* WP-155 (backlog 451): the answer the Integrations card shows — the same
-                      component — beside the integration that was tested, and only that one. */}
-                  {commands.testIntegration.variables === integration.id ? (
-                    <ConnectionTestResult test={commands.testIntegration} />
-                  ) : null}
-                </div>
-              ))}
-            </div>
-            {integrations.isSuccess && integrations.items.length === 0 ? (
-              <EmptyState
-                title="No integrations yet"
-                hint="Add one from the Integrations screen, then come back — the wizard binds what exists rather than creating credentials here."
-              />
-            ) : null}
-            <div>
-              <Button
-                tone="primary"
-                disabled={commands.putBindings.isPending}
-                onClick={() =>
-                  commands.putBindings.mutate({
-                    projectId: project.id,
-                    // Each binding keeps the configuration it already has — the notification
-                    // channel lives there (WP-32), and re-sending the set without it would erase it.
-                    // A tracker bound here for the first time also gets the default lifecycle
-                    // block, claim on (backlog 552, TD-029 decision 1); a stored one is untouched.
-                    items: selected.map((id) => ({
-                      integration_id: id,
-                      config: wizardBindingConfig({
-                        integration: integrations.items.find((item) => item.id === id) ?? null,
-                        stored: bindings.data?.items ?? [],
-                        integrationId: id,
-                      }),
-                    })),
-                  })
-                }
-              >
-                Bind {selected.length} integration{selected.length === 1 ? '' : 's'}
-              </Button>
-            </div>
-            {/* Backlog 552: said before the save, as the lifecycle card says its own default. */}
-            {selected.some((id) =>
-              wizardWritesDefaultBlock({
-                integration: integrations.items.find((item) => item.id === id) ?? null,
-                stored: bindings.data?.items ?? [],
-                integrationId: id,
-              }),
-            ) ? (
-              <p className="text-xs text-fg-muted" data-lifecycle="wizard-default">
-                Binding a ticket tracker here also saves its ticket lifecycle with every slot empty
-                and the claim on: before a task’s first run the platform assigns the ticket to the
-                tracker integration’s own account. Map the slots, or switch the claim off, in the
-                ticket lifecycle form below.
-              </p>
-            ) : null}
-            {bindings.isSuccess && bindings.data.items.length > 0 ? (
-              <p className="text-xs text-fg-muted">
-                Bound: {bindings.data.items.map((item) => item.provider).join(', ')}
-              </p>
-            ) : null}
-            {/* WP-139: the provider's default branch, once a git binding is known — the same
-                component as the settings page's (product/18:55). */}
-            <DefaultBranch projectId={project.id} />
-            {/* WP-182 ruling (a): the ticket lifecycle's slots, picked from the tracker's own
-                statuses — the same component as the settings page's (product/18:55). */}
-            <div className="flex flex-col gap-2">
-              <p className="text-xs font-semibold">Ticket lifecycle</p>
-              <TicketLifecycle projectId={project.id} />
-            </div>
-          </div>
-        )}
-      </Step>
-
-      <Step number={2} title="Technical discovery">
-        <p className="text-xs text-fg-muted">
-          A read-only agent inspects the repository and drafts the technical pages, the commands it
-          verified, and the questions it could not answer. It is one run, budgeted like any other.
-        </p>
-        <div>
-          <Button
-            tone="primary"
-            disabled={project === null || commands.startDiscovery.isPending}
-            onClick={() => {
-              if (project !== null) {
-                commands.startDiscovery.mutate(project.id);
-              }
-            }}
-          >
-            Run discovery
-          </Button>
-        </div>
-        {commands.startDiscovery.isSuccess ? (
-          <p className="text-xs">
-            <UntrustedText value={commands.startDiscovery.data.detail} />
-          </p>
-        ) : null}
-        {commands.startDiscovery.isError ? (
-          <ErrorNotice title="Discovery was not started." error={commands.startDiscovery.error} />
-        ) : null}
-        {/* WP-155 (backlog 452): the discovery task read back — on load, after a refresh, and live. */}
-        {project === null ? null : (
-          <DiscoveryStatus projectId={project.id} projectKey={project.key} />
-        )}
-        {/* WP-142: beside the readiness panel, the provider's default when it is not the stored one. */}
-        {project === null ? null : <DefaultBranchMismatch projectId={project.id} />}
-        {readiness.isSuccess ? (
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <Badge tone={LEVEL_TONE[readiness.data.level] ?? 'neutral'}>
-                Readiness level {readiness.data.level}
-              </Badge>
-              <span className="text-xs text-fg-muted">
-                evaluated {formatDateTime(readiness.data.evaluated_at)}
-              </span>
-            </div>
-            {/* WP-143: the CI-rules warning or note, beside the level it does not change. */}
-            <ReadinessNotices notices={readiness.data.notices} />
-            {readiness.data.next_improvements.length > 0 ? (
-              <div className="flex flex-col gap-1">
-                <p className="text-xs font-semibold">Cheapest improvements next</p>
-                {readiness.data.next_improvements.map((item) => (
-                  <p key={item.id} className="text-xs">
-                    <Badge>{item.id}</Badge> {item.title} — {item.unlocks}
-                  </p>
-                ))}
-              </div>
-            ) : null}
-            <ul className="flex flex-col gap-1">
-              {readiness.data.criteria.map((criterion) => (
-                <li key={criterion.id} className="text-xs">
-                  <Badge tone={criterion.passed ? 'success' : 'neutral'}>{criterion.id}</Badge>{' '}
-                  {/* BD-026's 2026-10-06 amendment: the workspace could not run it — not a fail. */}
-                  {criterion.not_checked ? <Badge tone="warning">not checked</Badge> : null}
-                  {criterion.not_checked ? ' ' : null}
-                  {criterion.unlocks} —{' '}
-                  {/* The agent's own words about someone else's repository (BD-022). */}
-                  <UntrustedText value={criterion.evidence} />
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {readiness.isError ? (
-          <p className="text-xs text-fg-muted">
-            No readiness evaluation yet — running discovery is what records one.
-          </p>
-        ) : null}
-      </Step>
-
-      <Step number={3} title="Business interview (optional)">
-        {project === null ? (
-          <EmptyState
-            title="Create the project first"
-            hint="Step 1 is what a business context belongs to."
-          />
-        ) : (
-          <>
-            {/* WP-155 ruling (a), backlog 450: the step says it can be left, and how to come back. */}
-            <p className="text-xs text-fg-muted">
-              Every section can be left empty, and the whole step can be skipped and answered later
-              from the project&rsquo;s{' '}
-              <Link to="/projects/$key/settings" params={{ key: project.key }}>
-                settings
-              </Link>
-              , which render this same form under <em>Business context</em>.
-            </p>
-            {interviewSkipped ? (
-              <p className="flex flex-wrap items-center gap-2 text-xs" data-interview="skipped">
-                Skipped for now — nothing was recorded.
-                <Button type="button" tone="ghost" onClick={() => setInterviewSkipped(false)}>
-                  Answer it now
-                </Button>
-              </p>
-            ) : (
-              <>
-                <div>
-                  {/* Records nothing: a client-side collapse, no request (ruling (a)). */}
-                  <Button type="button" tone="ghost" onClick={() => setInterviewSkipped(true)}>
-                    Skip for now
-                  </Button>
-                </div>
-                <BusinessInterview projectId={project.id} projectKey={project.key} />
-              </>
-            )}
-          </>
-        )}
-      </Step>
-
-      {/**
-       * **Step 3b** — product/06's own numbering, and the one step the wizard did not have until
-       * WP-35. It is optional like every other: a project that skips it starts with an empty
-       * knowledge base and fills it from delivered tasks instead.
-       */}
-      <Step number="3b" title="History bootstrap (optional)">
-        {project === null ? (
-          <EmptyState
-            title="Create the project first"
-            hint="Step 1 is what a repository's history belongs to."
-          />
-        ) : (
-          <>
-            <p className="text-xs text-fg-muted">
-              The knowledge base can start at &ldquo;week six&rdquo; rather than empty: the platform
-              reads the last N merged merge requests with their review comments, the closed tickets
-              of the same window and the commit messages, and proposes the conventions, pitfalls and
-              recurring reviewer requests it can cite. This is the <em>same component</em> the
-              project settings page renders: nothing is reachable only during onboarding.
-            </p>
-            <HistoryBootstrap projectId={project.id} projectKey={project.key} />
-          </>
-        )}
-      </Step>
-
-      <Step number={4} title="Operating mode and features">
-        {project === null ? (
-          <EmptyState
-            title="Create the project first"
-            hint="Step 1 is what an operating mode belongs to."
-          />
-        ) : (
-          <>
-            <p className="text-xs text-fg-muted">
-              {/* product/18's five step-4 items; nothing is reachable only during onboarding. */}
-              The operating mode and every feature switch. This is the <em>same component</em> the
-              project settings page renders — a mirror kept true by not having two of it — so
-              nothing here is reachable only during onboarding.
-            </p>
-            <OperatingMode projectId={project.id} />
-            <p className="text-xs text-fg-muted">
-              The command policy is <strong>not</strong> editable here. Each role&rsquo;s runs start
-              from a shipped baseline that already carries the project&rsquo;s own test, lint and
-              build commands (<code>npm test</code>, <code>npm run &hellip;</code>,{' '}
-              <code>make &hellip;</code> and the like) for the roles that run them, and a project
-              may only <em>narrow</em> that baseline through <code>commands</code> in{' '}
-              <code>.agentic/config.yml</code>. An entry no role is granted is ignored and listed on
-              the project&rsquo;s configuration rather than dropped in silence.
-            </p>
-          </>
-        )}
-      </Step>
-
-      <Step number={5} title="Commit">
-        <p className="text-xs text-fg-muted">
-          The Discovery agent’s drafted pages are proposals, not commits. Approving one puts it on
-          an `agentic/knowledge/*` branch with a merge request — the platform never writes to the
-          default branch.
-        </p>
-        {project === null ? (
-          <EmptyState
-            title="Create the project first"
-            hint="Step 1 is what the queue belongs to."
-          />
-        ) : (
-          <>
-            <p className="text-sm">
-              <Link to="/projects/$key/knowledge" params={{ key: project.key }}>
-                Review the drafted pages
-              </Link>
-            </p>
-            {/* WP-63, Q94 (c): the configuration's merge request is a button that stays. */}
-            <p className="text-sm">
-              <Link to="/projects/$key/settings" params={{ key: project.key }}>
-                Propose the step-4 settings to the repository
-              </Link>{' '}
-              <span className="text-xs text-fg-muted">
-                — as <code>.agentic/config.yml</code> and a <code>CLAUDE.md</code> pointer, in a
-                merge request; once merged, the file wins over these settings.
-              </span>
-            </p>
-          </>
-        )}
-      </Step>
-
-      {projects.isError ? <ErrorNotice title="Projects could not be loaded." /> : null}
-      {projects.isPending ? <Loading label="Loading projects…" /> : null}
+      ) : null}
     </div>
   );
+};
+
+// ── Review and finish ────────────────────────────────────────────────────────
+
+const Fact = ({
+  label,
+  children,
+}: {
+  readonly label: string;
+  readonly children: ReactNode;
+}): ReactElement => (
+  <div className="grid gap-1 sm:grid-cols-[12rem_minmax(0,1fr)]">
+    <dt className="text-sm text-fg-muted">{label}</dt>
+    <dd className="text-sm">{children}</dd>
+  </div>
+);
+
+const FinishStep = ({
+  project,
+  reads,
+}: {
+  readonly project: ProjectSummary;
+  readonly reads: WizardReads;
+}): ReactElement => {
+  const bound = reads.bindings.data?.items ?? [];
+  const level = reads.autonomy.data?.level ?? null;
+  const batches = reads.history.data?.items.length ?? 0;
+  return (
+    <div className="flex flex-col gap-4">
+      <dl aria-label="What was set" className="flex flex-col gap-2">
+        <Fact label="Project">
+          <UntrustedText value={project.name} /> · <UntrustedText value={project.key} />
+        </Fact>
+        <Fact label="Integrations">
+          {bound.length === 0 ? (
+            'None bound'
+          ) : (
+            <UntrustedText value={bound.map((item) => item.name).join(', ')} />
+          )}
+        </Fact>
+        <Fact label="Readiness">
+          {reads.readiness.isSuccess
+            ? `Level ${reads.readiness.data.level} — ${readinessWord(reads.readiness.data.level)}`
+            : 'Not evaluated yet'}
+        </Fact>
+        <Fact label="Business context">
+          {reads.businessPages === 0
+            ? 'Skipped — it can be answered later from the settings'
+            : `${reads.businessPages} page${reads.businessPages === 1 ? '' : 's'} proposed`}
+        </Fact>
+        <Fact label="History">
+          {batches === 0
+            ? 'Skipped — it can be started later from the settings'
+            : `${batches} batch${batches === 1 ? '' : 'es'} started`}
+        </Fact>
+        <Fact label="Operating mode">
+          {level === null || reads.autonomy.data?.materialised !== true
+            ? 'Not saved yet'
+            : (AUTONOMY_CHOICES.find((choice) => choice.level === level)?.label ?? level)}
+        </Fact>
+        <Fact label="Waiting for your review">
+          {reads.awaitingReview === 0
+            ? 'Nothing — every drafted page has been decided'
+            : `${reads.awaitingReview} drafted page${reads.awaitingReview === 1 ? '' : 's'}`}
+        </Fact>
+      </dl>
+      <ul className="flex flex-col gap-1 text-sm">
+        <li>
+          <Link
+            to="/projects/$key/knowledge"
+            params={{ key: project.key }}
+            className="text-link underline"
+          >
+            Review the drafted pages
+          </Link>{' '}
+          <span className="text-fg-muted">
+            — nothing an agent drafted is in your repository until you approve it.
+          </span>
+        </li>
+        <li>
+          {/* WP-63, Q94 (c): the configuration's merge request is a button on the settings page. */}
+          <Link
+            to="/projects/$key/settings"
+            params={{ key: project.key }}
+            className="text-link underline"
+          >
+            Propose the settings to the repository
+          </Link>{' '}
+          <span className="text-fg-muted">— as a merge request, from the project’s settings.</span>
+        </li>
+      </ul>
+      <DetailsDisclosure summary="Learn more">
+        <p className="text-xs text-fg-muted">
+          Approving a drafted page commits it on an <code>agentic/knowledge/*</code> branch with a
+          merge request — never onto the default branch. The settings are proposed as{' '}
+          <code>.agentic/config.yml</code> and a <code>CLAUDE.md</code> pointer in a merge request;
+          once merged, the file wins over these settings.
+        </p>
+      </DetailsDisclosure>
+    </div>
+  );
+};
+
+// ── The frame ────────────────────────────────────────────────────────────────
+
+/** Each step's one sentence: what it does, how long, what it costs where that is known. */
+const purposeOf = (step: WizardStepId, reads: WizardReads | null): string => {
+  switch (step) {
+    case 'connect':
+      return 'Name the project, point it at its repository and bind the integrations it uses. A few minutes; nothing is charged.';
+    case 'discovery':
+      return `An agent reads your repository and reports how ready it is for agents. It is one agent run, usually some minutes long, and costs ${
+        reads?.ceilingUsd === null || reads === null
+          ? 'what one run costs'
+          : `at most ${formatUsd(reads.ceilingUsd)}`
+      }.`;
+    case 'business':
+      return 'Tell the agents what the product is for, in your own words. Fifteen to thirty minutes; no agent runs, so nothing is charged.';
+    case 'history':
+      return 'Start the knowledge base from the project’s merged history. The estimated cost is shown before anything starts.';
+    case 'autonomy':
+      return 'Choose how much the agents may do before a person approves, and which features are on. Change it any time in the project’s settings.';
+    case 'finish':
+      return 'What was set, what waits for your review, and where to go next.';
+  }
+};
+
+const WizardFooter = ({
+  projectKey,
+  step,
+  blocker,
+}: {
+  readonly projectKey: string | null;
+  readonly step: WizardStepId;
+  readonly blocker: string | null;
+}): ReactElement => {
+  const navigate = useNavigate();
+  const previous = previousStep(step);
+  const next = nextStep(step);
+  const go = (target: WizardStepId) => {
+    if (projectKey !== null) {
+      void navigate({ to: '/onboarding', search: { project: projectKey, step: target } });
+    }
+  };
+  return (
+    <div
+      data-wizard-footer=""
+      className="flex flex-wrap items-center gap-3 border-t border-line pt-4"
+    >
+      {previous === null || projectKey === null ? null : (
+        <StepLink projectKey={projectKey} step={previous} className="text-sm text-link">
+          <span aria-hidden="true">← </span>Back to {WIZARD_STEPS[previous].label}
+        </StepLink>
+      )}
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+        {blocker === null ? null : (
+          <p id="wizard-continue-reason" className="text-sm text-fg-muted">
+            {blocker}
+          </p>
+        )}
+        {WIZARD_STEPS[step].optional && next !== null ? (
+          // Records nothing: the step is not done, it just does not hold anybody back.
+          <Button onClick={() => go(next)} disabled={projectKey === null}>
+            Skip for now
+          </Button>
+        ) : null}
+        {next === null ? (
+          projectKey === null ? null : (
+            <Link
+              to="/projects/$key"
+              params={{ key: projectKey }}
+              className={buttonClassName('primary')}
+            >
+              Open the board
+            </Link>
+          )
+        ) : (
+          <Button
+            tone="primary"
+            disabled={blocker !== null || projectKey === null}
+            {...(blocker === null ? {} : { 'aria-describedby': 'wizard-continue-reason' })}
+            onClick={() => go(next)}
+          >
+            Continue to {WIZARD_STEPS[next].label}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const stepStates = (
+  current: WizardStepId,
+  done: WizardDoneness,
+  projectKey: string | null,
+  discoveryRunning: boolean,
+): Step[] =>
+  WIZARD_STEP_IDS.map((id) => {
+    const open = projectKey !== null && blockingStepOf(id, done) === null;
+    const hint =
+      id === 'discovery' && discoveryRunning && done.discovery !== true ? 'Running now' : undefined;
+    return {
+      id,
+      label: WIZARD_STEPS[id].label,
+      state: id === current ? 'current' : done[id] === true ? 'done' : 'upcoming',
+      optional: WIZARD_STEPS[id].optional,
+      ...(hint === undefined ? {} : { hint }),
+      // A step past a required one that is not done is plain text: no jumping ahead.
+      ...(open && id !== current && projectKey !== null
+        ? {
+            render: ({ className, children }) => (
+              <StepLink projectKey={projectKey} step={id} className={className}>
+                {children}
+              </StepLink>
+            ),
+          }
+        : {}),
+    } satisfies Step;
+  });
+
+const Wizard = ({
+  project,
+  requested,
+  existing,
+}: {
+  readonly project: ProjectSummary | null;
+  readonly requested: WizardStepId | null;
+  /** The deployment's projects, offered to resume when this is a new one. */
+  readonly existing: readonly ProjectSummary[];
+}): ReactElement => {
+  const navigate = useNavigate();
+  const reads = useWizardReads(project?.id ?? null);
+  const done = donenessOf(reads.facts);
+  const projectKey = project?.key ?? null;
+
+  // Which step is shown: always Connect for a new project; the requested one; or the resume point.
+  const current: WizardStepId | null =
+    project === null ? 'connect' : (requested ?? resumeStepOf(done));
+  const blocking = current === null ? undefined : blockingStepOf(current, done);
+
+  const header = (
+    <PageHeader
+      title="New project"
+      meta={
+        project === null ? undefined : (
+          <span>
+            Setting up <UntrustedText value={project.name} />
+          </span>
+        )
+      }
+      actions={
+        <Link to="/" className={buttonClassName('default')}>
+          Save and exit
+        </Link>
+      }
+    />
+  );
+
+  if (current === null || blocking === undefined) {
+    return (
+      <div className="flex flex-col gap-4">
+        {header}
+        <Skeleton label="Checking what is already set up…" lines={5} />
+      </div>
+    );
+  }
+
+  const index = WIZARD_STEP_IDS.indexOf(current);
+  const body: ReactNode =
+    project !== null && blocking !== null ? (
+      // A deep link past a required step that is not done: no jumping ahead (NN/g).
+      <Blankslate
+        title={`${WIZARD_STEPS[current].label} is not open yet`}
+        hint={`${WIZARD_STEPS[blocking].label} comes first: the steps go in order, and only the optional ones can be skipped.`}
+        action={
+          <StepLink projectKey={project.key} step={blocking} className={buttonClassName('default')}>
+            Go to {WIZARD_STEPS[blocking].label}
+          </StepLink>
+        }
+      />
+    ) : current === 'connect' || project === null ? (
+      <ConnectStep
+        project={project}
+        onCreated={(key) => {
+          void navigate({ to: '/onboarding', search: { project: key, step: 'connect' } });
+        }}
+      />
+    ) : current === 'discovery' ? (
+      <DiscoveryStep project={project} reads={reads} />
+    ) : current === 'business' ? (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-fg-muted">
+          Every section can be left empty, and the whole step can be skipped and answered later from
+          the project&rsquo;s{' '}
+          <Link
+            to="/projects/$key/settings"
+            params={{ key: project.key }}
+            className="text-link underline"
+          >
+            settings
+          </Link>
+          , under <em>Business context</em>.
+        </p>
+        <BusinessInterview projectId={project.id} projectKey={project.key} />
+      </div>
+    ) : current === 'history' ? (
+      <HistoryBootstrap projectId={project.id} projectKey={project.key} />
+    ) : current === 'autonomy' ? (
+      <div className="flex flex-col gap-3">
+        <OperatingMode projectId={project.id} />
+        <DetailsDisclosure summary="Learn more: the commands agents may run">
+          <p className="text-xs text-fg-muted">
+            The command policy is <strong>not</strong> editable here. Each role&rsquo;s runs start
+            from a shipped baseline that already carries the project&rsquo;s own test, lint and
+            build commands (<code>npm test</code>, <code>npm run &hellip;</code>,{' '}
+            <code>make &hellip;</code> and the like) for the roles that run them, and a project may
+            only <em>narrow</em> that baseline through <code>commands</code> in{' '}
+            <code>.agentic/config.yml</code>. An entry no role is granted is ignored and listed on
+            the project&rsquo;s configuration rather than dropped in silence.
+          </p>
+        </DetailsDisclosure>
+      </div>
+    ) : (
+      <FinishStep project={project} reads={reads} />
+    );
+
+  return (
+    <div className="flex flex-col gap-4">
+      {header}
+      <div className="grid gap-6 md:grid-cols-[15rem_minmax(0,1fr)]">
+        <nav aria-label="Setup steps" className="flex flex-col gap-4">
+          <Stepper
+            label="Setup steps"
+            steps={stepStates(current, done, projectKey, reads.discoveryRunning)}
+          />
+          {project === null && existing.length > 0 ? (
+            <DetailsDisclosure summary="Continue an existing project">
+              <ul className="flex flex-col gap-1">
+                {existing.map((item) => (
+                  <li key={item.id}>
+                    <Link
+                      to="/onboarding"
+                      search={{ project: item.key }}
+                      className="text-sm text-link underline"
+                    >
+                      <UntrustedText value={item.name} />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </DetailsDisclosure>
+          ) : null}
+        </nav>
+        <section
+          aria-labelledby="wizard-step-title"
+          data-wizard-step={current}
+          className="flex min-w-0 flex-col gap-4"
+        >
+          <div className="flex flex-col gap-1">
+            <p className="text-xs text-fg-muted">
+              Step {index + 1} of {WIZARD_STEP_IDS.length}
+              {WIZARD_STEPS[current].optional ? ' · Optional' : ''}
+            </p>
+            <h2
+              id="wizard-step-title"
+              className="text-2xl font-black tracking-[-0.02em] text-balance text-fg"
+            >
+              {WIZARD_STEPS[current].label}
+            </h2>
+            <p className="text-sm text-fg-muted" data-step-purpose="">
+              {purposeOf(current, project === null ? null : reads)}
+            </p>
+          </div>
+          {body}
+          {blocking !== null ? null : (
+            <WizardFooter
+              projectKey={projectKey}
+              step={current}
+              blocker={continueBlockerOf(current, reads.facts)}
+            />
+          )}
+        </section>
+      </div>
+    </div>
+  );
+};
+
+export const OnboardingScreen = ({
+  projectKey,
+  step,
+}: {
+  /** `?project=` — the key of the project being set up; absent, a new project. */
+  readonly projectKey: string | null;
+  /** `?step=` — absent, the wizard resumes at the first step not done. */
+  readonly step: WizardStepId | null;
+}): ReactElement => {
+  const projects = useProjects();
+  const items = projects.data?.items ?? [];
+
+  if (projectKey === null) {
+    return <Wizard project={null} requested={null} existing={items} />;
+  }
+  if (projects.isPending) {
+    return <Skeleton label="Loading the project…" lines={5} />;
+  }
+  if (projects.isError) {
+    return <ErrorNotice title="Projects could not be loaded." error={projects.error} />;
+  }
+  const project = items.find((item) => item.key === projectKey) ?? null;
+  if (project === null) {
+    return (
+      <Blankslate
+        title="No such project"
+        hint="The address names a project this deployment does not have. Start a new one instead."
+        action={
+          <Link to="/onboarding" className={buttonClassName('default')}>
+            New project
+          </Link>
+        }
+      />
+    );
+  }
+  // Keyed by the project, so nothing a step held for one project survives into another's.
+  return <Wizard key={project.id} project={project} requested={step} existing={items} />;
 };

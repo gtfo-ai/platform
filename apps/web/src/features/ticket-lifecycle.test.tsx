@@ -409,7 +409,7 @@ describe('the ticket lifecycle pick lists (WP-182 criterion (1))', () => {
 
   it('is the wizard’s step 1 too — the same component', async () => {
     const state = world();
-    window.history.pushState({}, '', '/onboarding');
+    window.history.pushState({}, '', `/onboarding?project=${PROJECT_ROW.key}&step=connect`);
     render(createApp({ fetchImpl: server(state), realtime: false }).element);
     const card = await lifecycleCard();
     expect(slotSelect(card, 'QA')).toBeTruthy();
@@ -513,7 +513,7 @@ describe('the lifecycle form, review round 1', () => {
 
 describe('the wizard writes the default block for a tracker it binds (backlog 552)', () => {
   const openWizard = (state: World) => {
-    window.history.pushState({}, '', '/onboarding');
+    window.history.pushState({}, '', `/onboarding?project=${PROJECT_ROW.key}&step=connect`);
     render(createApp({ fetchImpl: server(state), realtime: false }).element);
   };
 

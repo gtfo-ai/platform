@@ -47,6 +47,7 @@ import { ProjectFrame, type ProjectTab } from '../app/project-frame.js';
 import type { Services } from '../app/services.js';
 import { AppShell } from '../app/shell.js';
 import { DashboardScreen } from '../features/dashboard.js';
+import { WIZARD_STEP_IDS } from '../features/onboarding-steps.js';
 import { SignInScreen } from '../features/sign-in.js';
 import { ErrorFallback } from '../ui/error-boundary.js';
 import { Skeleton } from '../ui/skeleton.js';
@@ -129,10 +130,6 @@ const settingsRoute = route(
   '/settings',
   lazyRouteComponent(() => import('../features/settings.js'), 'SettingsScreen'),
 );
-const onboardingRoute = route(
-  '/onboarding',
-  lazyRouteComponent(() => import('../features/onboarding.js'), 'OnboardingScreen'),
-);
 // WP-280: the registered machines, and the device flow's `verification_uri`.
 const workersRoute = route(
   '/workers',
@@ -165,6 +162,35 @@ const ProjectSettingsScreen = lazyRouteComponent(
   () => import('../features/project-settings.js'),
   'ProjectSettingsScreen',
 );
+
+const OnboardingScreen = lazyRouteComponent(
+  () => import('../features/onboarding.js'),
+  'OnboardingScreen',
+);
+
+/**
+ * `?project=<key>&step=<id>` — the New project wizard's project and step (S-23.8, TD-033 decision 9).
+ *
+ * Search parameters, not component state, for `?artifact=`'s reason: they make a step
+ * **addressable**, which is what lets *Save and exit* and Home's setup checklist resume exactly where
+ * somebody left off. A `step` that is not one of the wizard's is dropped rather than refused (the
+ * wizard then resumes at the first step not done), so a stale link is a no-op, not a router error;
+ * `project` is compared with the keys the projects list returned and an unknown one says so.
+ */
+const onboardingSearchSchema = z.object({
+  project: z.string().optional(),
+  step: z.enum(WIZARD_STEP_IDS).optional().catch(undefined),
+});
+
+const onboardingRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/onboarding',
+  validateSearch: onboardingSearchSchema,
+  component: withPreload(function Onboarding() {
+    const search = onboardingRoute.useSearch();
+    return <OnboardingScreen projectKey={search.project ?? null} step={search.step ?? null} />;
+  }, OnboardingScreen),
+});
 
 /** The project's layout: its header and tabs around every page below (`app/project-frame.tsx`). */
 const projectRoute = createRoute({
