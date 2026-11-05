@@ -8,13 +8,13 @@
  * realtime client and provider, which is the path a live frame takes in the browser — not a write
  * into the transcript store the provider would have made.
  */
-import type { RunRecord, SseFrame, TaskDetailResponse, TranscriptEvent } from '@platform/contracts';
+import type { RunRecord, TaskDetailResponse, TranscriptEvent } from '@platform/contracts';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import type { EventStream } from '../realtime/client.js';
+import { fakeEventStreams } from '../realtime/event-stream.test-fixture.js';
 import { TASK_PAGE_TRANSCRIPT_BLOCKS } from './live-transcript.js';
 import { latestRunOf, timelineEntries } from './stage-timeline.js';
 
@@ -217,40 +217,6 @@ const assistant = (seq: number, text: string): TranscriptEvent => ({
   content: [{ type: 'text', text }],
 });
 
-/** A fake `EventSource` the test can speak SSE frames into. */
-const fakeStreams = () => {
-  const streams: {
-    readonly url: string;
-    readonly emit: (frame: SseFrame, id: string) => void;
-    readonly open: () => void;
-  }[] = [];
-  const openStream = (url: string): EventStream => {
-    const listeners = new Map<string, ((event: MessageEvent<string>) => void)[]>();
-    streams.push({
-      url,
-      emit: (frame, id) => {
-        const message = new MessageEvent<string>('message', {
-          data: JSON.stringify(frame),
-          lastEventId: id,
-        });
-        for (const listener of listeners.get('message') ?? []) listener(message);
-      },
-      open: () => {
-        for (const listener of listeners.get('open') ?? []) {
-          listener(new MessageEvent<string>('open', { data: '' }));
-        }
-      },
-    });
-    return {
-      addEventListener: (type, listener) => {
-        listeners.set(type, [...(listeners.get(type) ?? []), listener]);
-      },
-      close: () => undefined,
-    };
-  };
-  return { streams, openStream };
-};
-
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -313,7 +279,7 @@ describe('the stage timeline on the task page (WP-154 (a), (b))', () => {
 
 describe('the running stage’s transcript on the task page (WP-154 (c))', () => {
   it('grows as SSE frames for the run arrive, and leads to the full run', async () => {
-    const { streams, openStream } = fakeStreams();
+    const { streams, openStream } = fakeEventStreams();
     const subscriptions: string[] = [];
     const app = createApp({
       fetchImpl: fetchFor(detail(RUNS), subscriptions),
@@ -328,7 +294,8 @@ describe('the running stage’s transcript on the task page (WP-154 (c))', () =>
     ).toBe(`/runs/${LIVE}`);
 
     // The panel retained `run:<id>`: the open stream was asked to carry it, so it is the one to
-    // speak into (the client adds a topic to a live connection rather than reopening it).
+    // speak into (the client adds a topic to a live connection rather than reopening it, and asks
+    // only once the stream has fired `open`, which the fake does by itself as a browser's would).
     const topic = `run:${LIVE}` as const;
     await waitFor(() => {
       expect(subscriptions.some((body) => body.includes(topic))).toBe(true);
@@ -336,7 +303,6 @@ describe('the running stage’s transcript on the task page (WP-154 (c))', () =>
     expect(streams).toHaveLength(1);
     const stream = streams[0];
     act(() => {
-      stream?.open();
       stream?.emit(
         { frame: 'transcript', topic, seq: 1, data: assistant(1, 'reading the ticket') },
         `${topic}:1`,

@@ -27,7 +27,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import type { EventStream } from '../realtime/client.js';
+import { fakeEventStreams } from '../realtime/event-stream.test-fixture.js';
 import { discoveryPhaseOf } from './discovery-status.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
@@ -603,7 +603,7 @@ describe('the discovery step reads the discovery task back (WP-155 (c), backlog 
 
   it('follows the task live: a frame for it moves the step from running to parked', async () => {
     const world = newWorld({ gate: gateFor('active'), task: taskDetail('active', [run()]) });
-    const { streams, openStream } = fakeStreams();
+    const { streams, openStream } = fakeEventStreams();
     render(createApp({ fetchImpl: fetchFor(world), openStream }).element);
     const status = await screen.findByTestId('discovery-status');
     await waitFor(() => {
@@ -629,7 +629,6 @@ describe('the discovery step reads the discovery task back (WP-155 (c), backlog 
     world.task = taskDetail('needs_human', [run({ status: 'failed' })]);
     world.gate = gateFor('needs_human', escalation);
     act(() => {
-      stream?.open();
       stream?.emit(escalatedFrame(topic), `${topic}:1`);
     });
     await waitFor(() => {
@@ -660,38 +659,4 @@ const escalatedFrame = (topic: SseTopic): SseFrame => {
     },
   });
   return frame;
-};
-
-/** A fake `EventSource` the test can speak SSE frames into (`task-timeline.test.tsx`'s shape). */
-const fakeStreams = () => {
-  const streams: {
-    readonly url: string;
-    readonly emit: (frame: SseFrame, id: string) => void;
-    readonly open: () => void;
-  }[] = [];
-  const openStream = (url: string): EventStream => {
-    const listeners = new Map<string, ((event: MessageEvent<string>) => void)[]>();
-    streams.push({
-      url,
-      emit: (frame, id) => {
-        const message = new MessageEvent<string>('message', {
-          data: JSON.stringify(frame),
-          lastEventId: id,
-        });
-        for (const listener of listeners.get('message') ?? []) listener(message);
-      },
-      open: () => {
-        for (const listener of listeners.get('open') ?? []) {
-          listener(new MessageEvent<string>('open', { data: '' }));
-        }
-      },
-    });
-    return {
-      addEventListener: (type, listener) => {
-        listeners.set(type, [...(listeners.get(type) ?? []), listener]);
-      },
-      close: () => undefined,
-    };
-  };
-  return { streams, openStream };
 };

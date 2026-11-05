@@ -16,6 +16,7 @@ import { queryKeys } from '../api/keys.js';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import type { EventStream } from '../realtime/client.js';
+import { fakeEventStreams } from '../realtime/event-stream.test-fixture.js';
 import { STUCK_AFTER_MS } from '../ui/activity.js';
 import {
   agentItem,
@@ -198,17 +199,22 @@ const media = (width: number, reduced = false): void => {
   );
 };
 
-/** A stream that never opens or delivers: it only records which topics it was asked for. */
-const recordingStream =
-  (state: Backend) =>
-  (url: string): EventStream => {
+/**
+ * A stream that opens as a browser's does and delivers nothing: it records which topics its URL
+ * carried, and the subscription POSTs the client sends once it is open do the rest.
+ */
+const recordingStream = (state: Backend) => {
+  const { openStream } = fakeEventStreams();
+  return (url: string): EventStream => {
+    const stream = openStream(url);
     state.topics = new Set(
       (new URL(url, 'http://localhost').searchParams.get('topics') ?? '')
         .split(',')
         .filter(Boolean),
     );
-    return { addEventListener: () => undefined, close: () => undefined };
+    return stream;
   };
+};
 
 const start = (path: string, state: Backend = backend(), live = false) => {
   window.history.pushState({}, '', path);
