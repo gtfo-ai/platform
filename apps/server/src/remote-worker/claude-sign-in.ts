@@ -109,7 +109,12 @@ const TOKEN_BODY = /^[A-Za-z0-9_-]+/;
 /**
  * The token on the screen, by shape — joined across a line break **only** while it is shorter than
  * {@link CLAUDE_TOKEN_LENGTH} and its line ended at the token, which is what a terminal's wrap
- * looks like (the owner's 80-column run). `null` until one is there.
+ * looks like (the owner's 80-column run printed 79 + 29 characters, measured 2026-11-05).
+ *
+ * **Complete, or `null`** (review of PR #42): the screen arrives in chunks and this is read after
+ * each, so a token is taken only once it is {@link CLAUDE_TOKEN_LENGTH} characters long, or once
+ * more output has followed it (the CLI's next words) — never at a chunk boundary inside it, and
+ * never at a line break that may still be a wrap whose next line has not arrived.
  */
 export const tokenOf = (text: string): string | null => {
   const start = text.lastIndexOf(CLAUDE_TOKEN_PREFIX);
@@ -117,15 +122,28 @@ export const tokenOf = (text: string): string | null => {
   const lines = text.slice(start).split('\n');
   let token = (TOKEN_BODY.exec(lines[0] ?? '') ?? [''])[0];
   let endedAtToken = (lines[0] ?? '').trimEnd() === token;
+  /** The line the token's last piece is on, and how much of it the piece took. */
+  let lastLine = 0;
+  let lastLineConsumed = (lines[0] ?? '').indexOf(token) + token.length;
   for (let index = 1; index < lines.length && endedAtToken; index += 1) {
     if (token.length >= CLAUDE_TOKEN_LENGTH) break;
-    const line = (lines[index] ?? '').trim();
+    const raw = lines[index] ?? '';
+    const line = raw.trim();
     const piece = (TOKEN_BODY.exec(line) ?? [''])[0];
     if (piece === '') break;
-    token += piece.slice(0, CLAUDE_TOKEN_LENGTH - token.length);
+    const taken = piece.slice(0, CLAUDE_TOKEN_LENGTH - token.length);
+    token += taken;
     endedAtToken = line === piece;
+    lastLine = index;
+    lastLineConsumed = raw.indexOf(piece) + taken.length;
   }
-  return /^sk-ant-oat01-[A-Za-z0-9_-]{40,400}$/.test(token) ? token : null;
+  if (!/^sk-ant-oat01-[A-Za-z0-9_-]{40,400}$/.test(token)) return null;
+  if (token.length >= CLAUDE_TOKEN_LENGTH) return token;
+  // Shorter than measured: only once something that is not the token has followed it.
+  const rest = [(lines[lastLine] ?? '').slice(lastLineConsumed), ...lines.slice(lastLine + 1)].join(
+    '\n',
+  );
+  return /\S/.test(rest) && !/^[A-Za-z0-9_-]/.test(rest) ? token : null;
 };
 
 /** The check's verdict (V-WM10): Claude accepted it, refused it, or could not be asked. */
@@ -188,6 +206,8 @@ export const runBounded = (
   new Promise((resolve) => {
     const child = spawn(command, [...args], {
       env: { ...env },
+      // Its temporary home, never the worker's working directory (review of PR #42).
+      ...(env.HOME === undefined ? {} : { cwd: env.HOME }),
       stdio: ['ignore', 'pipe', 'ignore'],
       detached: true,
     });
@@ -225,7 +245,12 @@ export const scriptCliLauncher = (cliPath: string): ClaudeCliLauncher => ({
         `stty cols 500 rows 50 2>/dev/null; exec '${cliPath}' setup-token`,
         '/dev/null',
       ],
-      { env: { ...env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true },
+      {
+        env: { ...env },
+        ...(env.HOME === undefined ? {} : { cwd: env.HOME }),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true,
+      },
     );
     return { child, kill: () => killGroup(child) };
   },

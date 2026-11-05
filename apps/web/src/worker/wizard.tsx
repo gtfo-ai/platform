@@ -501,6 +501,9 @@ const ChangePlatform = ({
   if (state.core_url === null || state.setup.core_source !== 'file' || !state.setup.idle) {
     return null;
   }
+  // Under `none` a repoint drops the Claude sign-in, which the worker refuses (409) when the token
+  // comes from its environment — so it is not offered (review of PR #42).
+  if (state.setup.auth === 'none' && state.setup.claude_source === 'environment') return null;
   return confirming ? (
     <fieldset
       aria-label="Confirm the change of platform"

@@ -289,6 +289,48 @@ describe('the worker’s local page (WP-292)', () => {
     expect(screen.getByText(/grep token=/)).toBeTruthy();
   });
 
+  it('says under Pause and Drain what each does, and under Resume once paused (owner, PR #42)', async () => {
+    const client = fakeClient(state());
+    const { container } = renderPage(client);
+    const pause = await screen.findByRole('button', { name: 'Pause' });
+    expect(pause.getAttribute('aria-describedby')).toBe('worker-pause-hint');
+    expect(container.querySelector('[data-hint="pause"]')?.textContent).toBe(
+      'Stops taking new runs. A run already going keeps going. Resume to take work again.',
+    );
+    expect(container.querySelector('[data-hint="drain"]')?.textContent).toBe(
+      'Finishes the current run, then takes nothing new, until the worker restarts or you resume. Use it before updating or switching off.',
+    );
+    await userEvent.click(pause);
+    await screen.findByRole('button', { name: 'Resume' });
+    expect(container.querySelector('[data-hint="pause"]')?.textContent).toBe(
+      'Takes new runs again.',
+    );
+  });
+
+  it('does not offer Change platform under auth none when the Claude token comes from the environment (PR #42)', async () => {
+    renderPage(
+      fakeClient(
+        state({
+          runs: [],
+          setup: setup({ idle: true, claude_source: 'environment', auth: 'none' }),
+        }),
+      ),
+    );
+    await screen.findByText('Runs on this machine');
+    expect(screen.queryByRole('button', { name: 'Change platform' })).toBeNull();
+    cleanup();
+    renderPage(
+      fakeClient(
+        state({
+          runs: [],
+          setup: setup({ idle: true, claude_source: 'environment', auth: 'token' }),
+        }),
+      ),
+    );
+    await screen.findByText('Runs on this machine');
+    expect(screen.getByRole('button', { name: 'Change platform' })).toBeTruthy();
+  });
+
   it('offers Sign out of Claude and Change platform in the room only while nothing runs', async () => {
     const client = fakeClient(state({ runs: [], setup: setup({ idle: true }) }));
     renderPage(client);

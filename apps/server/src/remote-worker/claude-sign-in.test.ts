@@ -79,15 +79,32 @@ describe('reading the CLI’s screen (V-WM10)', () => {
     expect(fixture.token).toHaveLength(108);
   });
 
-  it('joins a token a terminal wrapped, and nothing after it', () => {
+  it('joins a token a terminal wrapped (79 + 29, measured), and nothing after it', () => {
     const token = fixture.token;
-    const wrapped = `Your OAuth token:\n\n ${token.slice(0, 78)}\n ${token.slice(78)}\n\nStore this token securely.`;
+    const wrapped = `Your OAuth token:\n\n${token.slice(0, 79)}\n${token.slice(79)}\n\nStore this token securely.`;
     expect(tokenOf(wrapped)).toBe(token);
-    // A line that did not end at the token is not a wrap: the next line is not joined.
-    expect(tokenOf(`${token.slice(0, 60)} (copied)\n${token.slice(60)}`)).toBe(token.slice(0, 60));
+    // Indented continuation lines are a wrap too.
+    expect(tokenOf(` ${token.slice(0, 79)}\n ${token.slice(79)}\n`)).toBe(token);
     // Joined only up to the measured length: words that follow are never part of it.
     expect(tokenOf(`${token}\nStore this token`)).toBe(token);
-    expect(tokenOf('sk-ant-oat01-short')).toBeNull();
+    expect(tokenOf('sk-ant-oat01-short and more')).toBeNull();
+  });
+
+  it('never takes a token cut by a chunk boundary, or a wrap whose next line has not arrived (review of PR #42)', () => {
+    const token = fixture.token;
+    // Mid-token, on one line: nothing has followed it yet.
+    expect(tokenOf(`Your OAuth token:\n\n ${token.slice(0, 60)}`)).toBeNull();
+    // The wrap's first line and its break, the second line not here yet.
+    expect(tokenOf(`Your OAuth token:\n\n${token.slice(0, 79)}\n`)).toBeNull();
+    expect(
+      tokenOf(`Your OAuth token:\n\n${token.slice(0, 79)}\n${token.slice(79, 90)}`),
+    ).toBeNull();
+    // The measured length is complete as soon as it is all there.
+    expect(tokenOf(`${token.slice(0, 79)}\n${token.slice(79)}`)).toBe(token);
+    // A shorter token is taken once the CLI's next words followed it.
+    const short = `sk-ant-oat01-${'Q'.repeat(60)}`;
+    expect(tokenOf(`${short}`)).toBeNull();
+    expect(tokenOf(`${short}\n\nStore this token securely.`)).toBe(short);
   });
 
   it('reads the check’s verdict as the CLI states it', () => {
@@ -129,6 +146,7 @@ const fakeLauncher = () => {
       environments.push({ ...env });
       const child = spawn(process.execPath, [FAKE_CLAUDE, 'setup-token'], {
         env: { ...env },
+        cwd: env.HOME,
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: true,
       });

@@ -5,6 +5,8 @@
  * (`claude -p … --output-format json`) as the pinned CLI does — `is_error: false` for the fixture's
  * token, `api_error_status: 401` for any other.
  *
+ * The success screen is written in two parts split inside the token, 150 ms apart.
+ *
  * Like the real CLI it never exits on its own after the token: it waits until it is killed, and it
  * exits when its stdin closes. It reads nothing from the environment but `CLAUDE_CODE_OAUTH_TOKEN`.
  */
@@ -28,9 +30,16 @@ if (args[0] === 'setup-token') {
     if (end < 0) return;
     answered = true;
     const code = typed.slice(0, end);
-    process.stdout.write(
-      code === fixture.good_code ? fixture.after_good_code : fixture.after_refused_code,
-    );
+    if (code !== fixture.good_code) {
+      process.stdout.write(fixture.after_refused_code);
+      return;
+    }
+    // The success screen in two writes split **inside** the token, as a pty may deliver it: the
+    // reader must not take the half it has seen (review of PR #42).
+    const screen = fixture.after_good_code;
+    const cut = screen.indexOf(fixture.token) + 40;
+    process.stdout.write(screen.slice(0, cut));
+    setTimeout(() => process.stdout.write(screen.slice(cut)), 150);
   });
   process.stdin.on('end', () => process.exit(0));
   setInterval(() => undefined, 60_000);

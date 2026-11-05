@@ -319,9 +319,17 @@ export const workerLocalSignInRequestSchema = z.strictObject({
   action: z.enum(['start', 'cancel']),
 });
 
-/** `POST /api/local/claude/code` `{ code }`: what Claude's page shows, written to the CLI. */
+/**
+ * `POST /api/local/claude/code` `{ code }`: what Claude's page shows (`code#state`, V-WM10), written
+ * to the CLI's stdin — so only its characters, never a control character or a line break that would
+ * answer a prompt the CLI shows next (review of PR #42).
+ */
 export const workerLocalClaudeCodeRequestSchema = z.strictObject({
-  code: z.string().min(1).max(1_024),
+  code: z
+    .string()
+    .min(1)
+    .max(1_024)
+    .regex(/^[A-Za-z0-9#_-]+$/, 'expected the code Claude shows'),
 });
 
 /** `POST /api/local/claude/token` `{ token }`: a token from `claude setup-token`, pasted. */

@@ -71,6 +71,18 @@ export const workerModeWords = (state: WorkerLocalState, nowMs: number): string 
   return WORKER_MODE_WORDS[mode];
 };
 
+/**
+ * What *Pause*, *Resume* and *Drain* do, under each button (the owner's request on PR #42). Held to
+ * TD-031's 2026-11-05 drain rules: a pause is the owner's and survives a restart; a drain finishes
+ * what runs, takes nothing new and stays up, and its hold is cleared by the next start or a resume.
+ */
+export const CONTROL_HINTS: Readonly<Record<'pause' | 'resume' | 'drain', string>> = {
+  pause: 'Stops taking new runs. A run already going keeps going. Resume to take work again.',
+  resume: 'Takes new runs again.',
+  drain:
+    'Finishes the current run, then takes nothing new, until the worker restarts or you resume. Use it before updating or switching off.',
+};
+
 /** The connection, in a person's words. */
 export const CONNECTION_WORDS: Readonly<Record<WorkerLocalState['connection'], string>> = {
   needs_platform: 'Not connected to a platform yet',
