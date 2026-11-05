@@ -130,7 +130,6 @@ const world = async (options: {
     context: harness.commands.context,
     clock: { now: () => harness.clock.now() },
     runPlans: createTestRunPlanSealer(),
-    eventStore: harness.memory.store,
     lease: {
       owner: 'server:claimant-test',
       schedule: () => () => {},
@@ -159,7 +158,6 @@ const world = async (options: {
                 : { ...harness.settings, taskBudgetUsd: cap };
             },
             budgets: { blockingFor: async () => options.budgetAtClaim?.() ?? null },
-            eventStore: harness.memory.store,
             context: harness.commands.context,
           }),
         }),
@@ -234,7 +232,6 @@ describe('the server claimant (WP-276)', () => {
       context: harness.commands.context,
       clock: { now: () => harness.clock.now() },
       runPlans: createTestRunPlanSealer('another-key'),
-      eventStore: harness.memory.store,
       settle: {
         stage: async (request) => {
           settled.push(request);
@@ -378,7 +375,6 @@ describe('a claimant that loses its lease (TD-031 §2)', () => {
       context: harness.commands.context,
       clock: { now: () => harness.clock.now() },
       runPlans: createTestRunPlanSealer(),
-      eventStore: harness.memory.store,
       lease: {
         owner: 'server:claimant-test',
         schedule: (_ms, beat) => {

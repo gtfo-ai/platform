@@ -140,7 +140,6 @@ export type SettleOptions = Pick<
   | 'lateCost'
   | 'redactor'
   | 'settings'
-  | 'eventStore'
   | 'jobs'
   | 'runEnvironment'
 >;
@@ -1249,7 +1248,7 @@ export const settlementInputs = async (
   if (row.stage === null) throw new NotAStageRunError(runId);
   const stored = await deps.store.tasks.load(scope.tx, row.taskId);
   if (stored === null) return TASK_GONE;
-  const aggregate = toRunAggregate(row, await deps.eventStore.nextStreamSequence('run', runId));
+  const aggregate = toRunAggregate(row, await scope.events.lockStreamSequence('run', runId));
   /**
    * A row another writer already ended is read as the live run it was, `running`: every branch
    * computes its terminal decision and then loses the conditional `finish`, so the decision is

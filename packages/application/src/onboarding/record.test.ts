@@ -110,7 +110,7 @@ const harness = (
     eventing,
     signalReads: () => signalReads,
     options: {
-      unitOfWork: eventing,
+      unitOfWork: race.unitOfWork,
       eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
       readiness,
       proposals,

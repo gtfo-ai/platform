@@ -97,7 +97,7 @@ const harness = (
     jobs,
     eventing,
     options: {
-      unitOfWork: eventing,
+      unitOfWork: race.unitOfWork,
       eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
       proposals: proposalsStore,
       knowledge: {

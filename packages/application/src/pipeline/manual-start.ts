@@ -71,7 +71,6 @@
 import type { Id, IsoDateTime, JsonObject, TicketRef } from '@platform/contracts';
 import { ticketMatchedEvent } from '@platform/contracts';
 import { markTransactions, TransactionOpenError } from '../events/open-transaction.js';
-import type { EventStore } from '../ports/event-store.js';
 import { IntegrationError } from '../ports/integrations/common.js';
 import type { Ticket, TicketRefInput } from '../ports/integrations/task-management.js';
 import type { Logger } from '../ports/logger.js';
@@ -117,7 +116,6 @@ export class ManualStartRefusedError extends Error {
 
 export interface ManualStartOptions {
   readonly unitOfWork: UnitOfWork;
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly store: Pick<PipelineStore, 'tasks'>;
   readonly settings: ProjectSettingsPort;
   readonly integrations: PipelineIntegrationsPort;
@@ -309,7 +307,7 @@ export const startTicketManually = async (
   const payload = matchedPayload(projectId, ticket, (value) => binding.redactor.redactJson(value));
   const occurredAt = options.clock.now() as IsoDateTime;
   return appendOnProjectWithRetry(
-    { unitOfWork, eventStore: options.eventStore, logger },
+    { unitOfWork, logger },
     { projectId, writer: 'manual_start' },
     async (scope, streamSeq) => {
       const taskId = await existingTask(options, scope, {

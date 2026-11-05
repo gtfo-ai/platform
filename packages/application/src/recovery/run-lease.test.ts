@@ -190,7 +190,6 @@ const sweep = async (options: {
     },
     pipeline: store,
     unitOfWork: eventing,
-    eventStore: eventing.store,
     context: (correlationId) => ({
       ids: { next: () => '00000000-0000-4000-8000-0000000000f1' as Id },
       actor: { kind: 'system', component: 'pipeline.run-lease.sweep' },

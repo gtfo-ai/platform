@@ -45,7 +45,7 @@ const harness = (
   const race = racingProjectStream(eventing, options.losses ?? 0);
   const knowledge = memoryKnowledgeStore();
   const interview: BusinessInterviewOptions = {
-    unitOfWork: eventing,
+    unitOfWork: race.unitOfWork,
     eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
     proposals,
     knowledge: {

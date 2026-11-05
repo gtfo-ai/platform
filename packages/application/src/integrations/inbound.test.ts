@@ -312,6 +312,11 @@ const build = (options: {
             }
             return [];
           },
+          // BACKLOG 971: the project stream's sequence, read under its lock in the transaction.
+          lockStreamSequence: async () => {
+            options.sequenceReads.push(options.sequenceReads.length + 1);
+            return 7;
+          },
         },
       } as unknown as TransactionScope;
       try {

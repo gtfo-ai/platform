@@ -9,24 +9,20 @@
  * sequence **through** `appendOnProjectWithRetry` (`project-stream.ts`), and a new direct call fails
  * this test until somebody decides which of the shapes below it is.
  *
- * ## The shapes, and the sites of each
+ * ## Since BACKLOG 971: one shape, and one read that is not an append's
  *
- * - **retries in place** — `project-stream.ts` (the shared helper: ten writers since WP-109, the
- *   knowledge passes, the onboarding recorders, the history recorder and the delivery measures, and
- *   the intake reconciler since WP-124) and
- *   `integrations/inbound.ts` (WP-15c's own loop, bounded by `DEFAULT_INBOUND_SEQUENCE_ATTEMPTS`,
- *   which predates the helper and retries a whole ingress transaction, not one append).
- * - **run stream, serialised by the row** — `pipeline/commands.ts` (a cancel from another process)
- *   and `recovery/run-lease.ts` (the lease sweep) — and, since WP-275a, `pipeline/settle.ts`
- *   (`settlementInputs`, under the settle's `for update` on the run row). All read the **run** stream's sequence inside a
- *   transaction whose first write is a compare-and-set on the `runs` row (`runs.finish` answering
- *   `won`), so the only other writer of that run's stream — the process that ran it — is refused at
- *   the same row before it appends. Not a project-stream race, and out of WP-109's scope.
+ * Every writer of a shared stream — a project's or a run's — now takes the stream's lock and reads
+ * its sequence **inside** its transaction through `scope.events.lockStreamSequence`, so none reads
+ * `nextStreamSequence` to append at. The project-stream writers go through `appendOnProjectWithRetry`
+ * (`project-stream.ts`), whose in-place retry is the defence against a writer that bypassed the lock;
+ * the run-stream writers (`commands.ts`, `run-lease.ts`, `settle.ts`, `claimant.ts`,
+ * `ask/executor.ts`, `offer-withdrawal.ts`, `remote-runs.ts`) were already serialised by the `runs`
+ * row's compare-and-set and now read on the transaction's own connection rather than borrowing a
+ * second one from the pool.
  *
- * `pipeline/intake-reconcile.ts` was a fifth shape until WP-124 — *pass-retried*: it read the
- * project stream's sequence outside its transaction and a lost race threw out of the whole pass
- * (PROGRESS backlog 368). It now appends through the helper, so it is one of the helper's callers
- * and no longer a site of its own.
+ * The one `nextStreamSequence` left is `integrations/inbound.ts`'s: the stream position a
+ * merge-request lifecycle answer was read at, outside the transaction, compared under the lock with
+ * the position the transaction holds (WP-110). It is not a sequence anything is appended at.
  *
  * ## Scope
  *
@@ -44,25 +40,8 @@ import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
-  // retries in place
-  ['packages/application/src/pipeline/project-stream.ts', 1],
+  // the lifecycle answer's stream position, never an append's sequence (module docblock)
   ['packages/application/src/integrations/inbound.ts', 1],
-  // run stream, serialised by the `runs` row's compare-and-set
-  ['packages/application/src/pipeline/commands.ts', 1],
-  ['packages/application/src/recovery/run-lease.ts', 1],
-  // WP-275a: `settlementInputs` rebuilds the run's aggregate at its stream's sequence, read under
-  // the settle's `for update` on the `runs` row, before the conditional `finish`.
-  ['packages/application/src/pipeline/settle.ts', 1],
-  // WP-276: the claimant appends `run.claimed` at the sequence it reads in the claim's transaction,
-  // whose `for update of o, r` holds the run row; the ask's settle rebuilds its aggregate under
-  // `lockSettlement`; a withdrawal reads it after its conditional update, before `finish`.
-  ['packages/application/src/pipeline/claimant.ts', 1],
-  ['packages/application/src/ask/executor.ts', 1],
-  ['packages/application/src/pipeline/offer-withdrawal.ts', 1],
-  // WP-281: the remote claim appends `run.claimed` under the claim's `for update of o, r`, as the
-  // server claimant does; a release appends `run.offer.released` under `release`'s `for update of r`;
-  // the spawn marker appends `run.started` after its compare-and-set `update runs` took the row.
-  ['packages/application/src/pipeline/remote-runs.ts', 3],
 ]);
 
 const SEQUENCE_READ = /\.\s*nextStreamSequence\s*\(/g;
@@ -80,7 +59,7 @@ const census = (): Map<string, number> => {
   return found;
 };
 
-describe('the stream-sequence read census (WP-109)', () => {
+describe('the stream-sequence read census (WP-109, BACKLOG 971)', () => {
   // WP-249: slowest of 10 green CI runs 787 ms (median 737 ms); 2× it, 15 s floor.
   it('has exactly the classified sites, and no knowledge or onboarding writer among them', () => {
     const found = census();

@@ -66,7 +66,6 @@ export const createTaskStartCommands = (options: TaskStartCommandOptions): TaskS
     startTicketManually(
       {
         unitOfWork: options.eventing.unitOfWork,
-        eventStore: options.eventing.store,
         store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
         settings: createProjectSettingsPort(options.pool),
         integrations: options.integrations,

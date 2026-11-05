@@ -245,7 +245,6 @@ const pass = async (
       store: recoveryAdapters.createPostgresExpiredRunStore(),
       pipeline,
       unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
-      eventStore: new eventing.PostgresEventStore(pool),
       context: (correlationId) => ({
         ids: { next: () => randomUUID() as Id },
         actor: { kind: 'system', component: 'pipeline.run-lease.sweep' },

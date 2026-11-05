@@ -63,7 +63,7 @@ const harness = (
   const race = racingProjectStream(eventing, options.losses ?? 0);
   const jobs = recordingJobs();
   const decideOptions: DecideProposalOptions = {
-    unitOfWork: eventing,
+    unitOfWork: race.unitOfWork,
     eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
     proposals,
     clock: fixedClock(AT),

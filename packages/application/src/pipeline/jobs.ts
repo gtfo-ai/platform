@@ -1326,7 +1326,7 @@ const settle = async (
           ? undefined
           : settledWord;
       const applied = await applyDecision({
-        offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
+        offerClosing: { events: scope.events, broadcast: scope.broadcast },
         store: options.store,
         pipeline,
         tx: scope.tx,
@@ -1836,7 +1836,7 @@ const returnForHumanWords = async (
         },
       }) as DomainEvent;
       const applied = await applyDecision({
-        offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
+        offerClosing: { events: scope.events, broadcast: scope.broadcast },
         store: options.store,
         pipeline,
         tx: scope.tx,
@@ -1902,7 +1902,7 @@ const passQa = async (
       detail: 'the ticket left the qa status',
     });
     const applied = await applyDecision({
-      offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
+      offerClosing: { events: scope.events, broadcast: scope.broadcast },
       store: options.store,
       pipeline,
       tx: scope.tx,

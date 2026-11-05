@@ -153,7 +153,7 @@ const harness = (
     communication: null,
   };
   const applyOptions: KnowledgeApplyOptions = {
-    unitOfWork: eventing,
+    unitOfWork: race.unitOfWork,
     eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
     proposals,
     knowledge: {

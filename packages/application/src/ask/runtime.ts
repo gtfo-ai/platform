@@ -97,7 +97,6 @@ export const composeAsk = (options: AskCompositionOptions): AskComposition => {
     askedByLabel: options.askedByLabel,
     ...(options.lease === undefined ? {} : { lease: options.lease }),
     runPlans: options.runPlans,
-    eventStore: options.eventStore,
     ...(options.runEnvironment === undefined ? {} : { runEnvironment: options.runEnvironment }),
     ...(options.budgets === undefined ? {} : { budgets: options.budgets }),
     ...(options.logger === undefined ? {} : { logger: options.logger }),

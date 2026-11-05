@@ -65,7 +65,6 @@ import {
 } from '@platform/domain';
 import type * as z from 'zod';
 import type { LateCostRecorder } from '../cost/late.js';
-import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { RunPlanSealer } from '../ports/run-plan-sealer.js';
@@ -151,7 +150,6 @@ export interface RemoteRunCredentials {
 export interface RemoteRunsOptions {
   readonly unitOfWork: UnitOfWork;
   readonly store: PipelineStore;
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly context: (correlationId: Id) => CommandContext;
   readonly runPlans: RunPlanSealer;
   readonly packager: RemoteRunPackager;
@@ -489,7 +487,7 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
       // The row as it was claimed: the release's own statement already moved it to `created`.
       const claimed = toRunAggregate(
         { ...row, status: 'starting' },
-        await options.eventStore.nextStreamSequence('run', row.id),
+        await scope.events.lockStreamSequence('run', row.id),
       );
       const recorded = releaseRunClaim(
         claimed,
@@ -563,7 +561,7 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
           // The row as it was offered: the claim's own statement already moved it to `starting`.
           const offered = toRunAggregate(
             { ...row, status: 'created' },
-            await options.eventStore.nextStreamSequence('run', row.id),
+            await scope.events.lockStreamSequence('run', row.id),
           );
           const forAdmission = {
             runId: row.id,
@@ -785,7 +783,7 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
         }
         const claimed = toRunAggregate(
           { ...before, status: 'starting' },
-          await options.eventStore.nextStreamSequence('run', input.runId),
+          await scope.events.lockStreamSequence('run', input.runId),
         );
         const running = markRunning(
           claimed,

@@ -136,7 +136,6 @@ import { toRunAggregate } from '../pipeline/run-aggregate.js';
 import { enqueueStage } from '../pipeline/stage-enqueue.js';
 import type { PipelineStore } from '../pipeline/store.js';
 import { retryOnTaskConflict } from '../pipeline/task-conflict.js';
-import type { EventStore } from '../ports/event-store.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -224,7 +223,6 @@ export interface RunLeaseSweepOptions {
   readonly store: ExpiredRunStore;
   readonly pipeline: PipelineStore;
   readonly unitOfWork: UnitOfWork;
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   /** The system actor every ending this sweep writes carries. */
   readonly context: (correlationId: Id) => CommandContext;
   readonly clock: { now(): IsoDateTime };
@@ -519,7 +517,7 @@ const endOneRun = async (
     }
     const aggregate = toRunAggregate(
       stored,
-      await options.eventStore.nextStreamSequence('run', run.runId),
+      await scope.events.lockStreamSequence('run', run.runId),
     );
     const failed = failRun(
       aggregate,

@@ -2,26 +2,31 @@
  * A project stream that another writer keeps winning — the injection WP-109's cases share (PROGRESS
  * backlog 333 and 357).
  *
- * `nextStreamSequence` answers the sequence it read and, for the first `losses` reads, has a rival
- * append a `knowledge.index.rebuilt` at that very sequence before the caller's transaction opens:
- * exactly the interleaving the backlog entries describe (a read over the pool, another writer's
- * commit, then the append), so the caller's append meets the sequence guard as it would in
- * PostgreSQL. The rival's events carry the actor component {@link RIVAL_COMPONENT}, so a case can
- * tell them from the writer's own.
+ * Since BACKLOG 971 every project-stream writer takes the stream's lock and reads its sequence in
+ * its own transaction (`scope.events.lockStreamSequence`), so a writer that keeps to the rule
+ * cannot be overtaken. What the retry still defends against is a writer that **bypassed** the lock,
+ * and that is what this models: for the first `losses` sequence reads, a rival commits a
+ * `knowledge.index.rebuilt` at the sequence the writer was about to get, and the writer is handed
+ * that stale sequence — so its append meets migration 0005's guard exactly as the old
+ * read-over-the-pool race did. The rival's events carry the actor component
+ * {@link RIVAL_COMPONENT}, so a case can tell them from the writer's own.
  *
- * It started as `racingOptions` in `pipeline/delivery-measures.test.ts` (WP-90) and is shared now
- * because five writers needed the same twenty lines.
+ * Hand {@link RacingProjectStream.unitOfWork} to the writer under test in place of the
+ * `MemoryEventing`. It started as `racingOptions` in `pipeline/delivery-measures.test.ts` (WP-90).
  */
 import type { DomainEvent, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import type { EventStore } from '../ports/event-store.js';
+import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import type { MemoryEventing } from './memory-eventing.js';
 
 /** The actor component every rival append carries. */
 export const RIVAL_COMPONENT = 'rival-project-writer';
 
 export interface RacingProjectStream {
-  /** Hand this to the writer under test in place of `eventing.store`. */
+  /** Hand this to the writer under test in place of the `MemoryEventing` as its unit of work. */
+  readonly unitOfWork: UnitOfWork;
+  /** The plain read side, for a writer whose options still carry one. */
   readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   /** How many races the rival has won so far. */
   readonly lost: () => number;
@@ -53,28 +58,50 @@ const rivalEvent = (projectId: string, streamSeq: number): DomainEvent => {
   }) as DomainEvent;
 };
 
+/** What the rival commits at the sequence it takes; the default appends one rival event. */
+export type ProjectStreamRival = (
+  scope: TransactionScope,
+  projectId: Id,
+  streamSeq: number,
+) => Promise<void>;
+
 /** A stream on which a rival takes the next `losses` sequences the writer reads, one per read. */
 export const racingProjectStream = (
   eventing: MemoryEventing,
   losses: number,
+  rival: ProjectStreamRival = async (scope, projectId, streamSeq) => {
+    await scope.events.append([rivalEvent(projectId, streamSeq)]);
+  },
 ): RacingProjectStream => {
   let lost = 0;
   let reads = 0;
   return {
     lost: () => lost,
     reads: () => reads,
-    eventStore: {
-      nextStreamSequence: async (streamType, streamId) => {
-        reads += 1;
-        const seq = await eventing.store.nextStreamSequence(streamType, streamId);
-        if (streamType === 'project' && lost < losses) {
-          lost += 1;
-          await eventing.transaction(async (scope) => {
-            await scope.events.append([rivalEvent(streamId as Id, seq)]);
-          });
-        }
-        return seq;
-      },
+    eventStore: { nextStreamSequence: eventing.store.nextStreamSequence },
+    unitOfWork: {
+      transaction: (fn) =>
+        eventing.transaction((scope) =>
+          fn({
+            ...scope,
+            events: {
+              append: scope.events.append,
+              lockStreamSequence: async (streamType, streamId) => {
+                reads += 1;
+                if (streamType !== 'project' || lost >= losses) {
+                  return scope.events.lockStreamSequence(streamType, streamId);
+                }
+                lost += 1;
+                const stale = await eventing.store.nextStreamSequence(streamType, streamId);
+                await eventing.transaction(async (rivalScope) =>
+                  rival(rivalScope, streamId as Id, stale),
+                );
+                await scope.events.lockStreamSequence(streamType, streamId);
+                return stale;
+              },
+            },
+          }),
+        ),
     },
   };
 };

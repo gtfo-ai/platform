@@ -283,6 +283,7 @@ const harnessFor = (
             events.push(...appended);
             return [];
           },
+          lockStreamSequence: async () => events.length + 1,
         },
       } as unknown as TransactionScope),
   };

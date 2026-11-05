@@ -55,7 +55,6 @@
 import type { ContextPackRecord, Id, IsoDateTime, RunOfferKind } from '@platform/contracts';
 import type { CommandContext, Run } from '@platform/domain';
 import type { Broadcast, BroadcastSubscription } from '../ports/broadcast.js';
-import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { RunPlanSealer } from '../ports/run-plan-sealer.js';
@@ -128,8 +127,6 @@ export interface RunClaimantOptions {
   readonly runPlans: RunPlanSealer;
   /** This process's `agentRunEnvironment` — the secret values re-attached to the read-back spec. */
   readonly runEnvironment?: RunSecretEnvironment;
-  /** The run stream's next sequence — what `run.claimed` is appended at. */
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   /**
    * The lease this claimant writes at the claim and renews (`server:<process>`). Absent is a
    * composition that runs no heartbeat — the claim still increments the epoch.
@@ -284,7 +281,7 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
       // The row as it was offered: the claim's own statement already moved it to `starting`.
       const offered = toRunAggregate(
         { ...row, status: 'created' },
-        await options.eventStore.nextStreamSequence('run', row.id),
+        await scope.events.lockStreamSequence('run', row.id),
       );
       const forAdmission = {
         runId: row.id,

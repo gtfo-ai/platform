@@ -120,7 +120,6 @@ describe('every escalation site closes the stage offer first (WP-276 criterion 3
       {
         unitOfWork: harness.memory,
         store: harness.store,
-        eventStore: harness.memory.store,
         context: context(harness),
       },
       new TaskConflictExhaustedError(taskId, 3, 'recording something'),
@@ -134,7 +133,6 @@ describe('every escalation site closes the stage offer first (WP-276 criterion 3
       {
         unitOfWork: harness.memory,
         store: harness.store,
-        eventStore: harness.memory.store,
         context: context(harness),
       },
       { taskId, refusal: 'the stored settings do not parse', what: 'the next stage' },

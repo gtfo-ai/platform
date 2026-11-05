@@ -336,6 +336,7 @@ const deliverThrough = async (testCase: InboundCase): Promise<Delivered> => {
             events.push(...appended);
             return [];
           },
+          lockStreamSequence: async () => 1,
         },
       } as unknown as TransactionScope),
   };

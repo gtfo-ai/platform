@@ -45,7 +45,7 @@ const indexerOver = (
     indexer: createKnowledgeIndexer({
       vault,
       store,
-      unitOfWork: eventing,
+      unitOfWork: race.unitOfWork,
       eventStore: race.eventStore,
       clock: fixedClock('2026-09-11T09:00:00.000Z'),
       ids: sequentialIds(500),

@@ -324,7 +324,7 @@ export const runReadyHeadCheck = async (
         causeEventId: (data.cause_event_id ?? null) as Id | null,
       };
       const applied = await applyDecision({
-        offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
+        offerClosing: { events: scope.events, broadcast: scope.broadcast },
         store: options.store,
         pipeline,
         tx: scope.tx,

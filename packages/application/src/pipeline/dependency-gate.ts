@@ -702,7 +702,6 @@ const inTaskTransaction = async <T>(
       {
         unitOfWork: options.unitOfWork,
         store: options.store,
-        eventStore: options.eventStore,
         context: (id) => commandContextFor(options, id),
         ...(options.logger === undefined ? {} : { logger: options.logger }),
       },
@@ -873,7 +872,7 @@ const returnNow = async (
     current.qaStage,
   );
   const applied = await applyDecision({
-    offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
+    offerClosing: { events: scope.events, broadcast: scope.broadcast },
     store: options.store,
     pipeline,
     tx: scope.tx,

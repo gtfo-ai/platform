@@ -29,7 +29,6 @@
 import type { Id, Slug } from '@platform/contracts';
 import { type CommandContext, IllegalTransitionError, pauseTask } from '@platform/domain';
 import { type BudgetGuard, blockingBudgetDetail } from '../cost/guard.js';
-import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
@@ -90,7 +89,6 @@ export interface ClaimAdmissionOptions {
   readonly store: Pick<PipelineStore, 'tasks' | 'runs' | 'offers' | 'runCommands'>;
   readonly settings: (projectId: Id, tx?: Transaction) => Promise<ProjectSettings>;
   readonly budgets: BudgetGuard;
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly context: (taskId: Id) => CommandContext;
   readonly logger?: Logger;
 }
@@ -148,16 +146,12 @@ export const createClaimAdmission = (options: ClaimAdmissionOptions): ClaimAdmis
         throw error;
       }
       // `run_offers` → `runs` → `tasks` (TD-031's lock order): the offer is closed before the save.
-      const closing = await closeStageOffer(
-        { store: options.store, eventStore: options.eventStore },
-        scope,
-        {
-          taskId: claimed.taskId,
-          code: 'budget_at_claim',
-          reason: `the task was paused at the claim: ${refusal.reason}`,
-          context,
-        },
-      );
+      const closing = await closeStageOffer({ store: options.store }, scope, {
+        taskId: claimed.taskId,
+        code: 'budget_at_claim',
+        reason: `the task was paused at the claim: ${refusal.reason}`,
+        context,
+      });
       await options.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
       await scope.events.append([...closing.events, ...decision.events]);
       logger.info(

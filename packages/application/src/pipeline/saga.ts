@@ -219,7 +219,7 @@ const step = async (
     interpret(pipeline, signal),
   );
   const applied = await applyDecision({
-    offerClosing: { eventStore: options.eventStore, broadcast: context.scope.broadcast },
+    offerClosing: { events: context.scope.events, broadcast: context.scope.broadcast },
     store: options.store,
     pipeline,
     tx: context.scope.tx,
@@ -866,7 +866,6 @@ const stageCompletedHandler = (options: PipelineSagaOptions): EventHandler => ({
         {
           store: options.store,
           scope: context.scope,
-          eventStore: options.eventStore,
           emit: async (events) => {
             await context.emit(events);
           },

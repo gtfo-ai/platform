@@ -11,6 +11,7 @@
  * from the read — and the reverse, a filled event field (what the fake sends) with a read that
  * answers nothing, so a duty that trusted the delivery would be caught recording it.
  */
+
 import type { DiffStats, DomainEvent, Id, MergeRequestRef } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
@@ -24,6 +25,7 @@ import {
   createPipelineHarness,
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
+import { racingProjectStream } from '../testing/project-stream-race.js';
 import {
   DELIVERY_MEASURE_APPEND_ATTEMPTS,
   type DeliveryMeasuresOptions,
@@ -595,39 +597,12 @@ describe('a link added after filing — the re-trace (WP-90, backlog 192)', () =
  * log itself (`MemoryEventing`, as migration 0005's trigger refuses it).
  */
 describe('a lost race on the project stream (WP-90, backlog 193)', () => {
-  const racingOptions = (world: World, losses: number): DeliveryMeasuresOptions => {
-    const base = optionsOf(world.harness);
-    let lost = 0;
-    return {
-      ...base,
-      eventStore: {
-        nextStreamSequence: async (streamType, streamId) => {
-          const seq = await base.eventStore.nextStreamSequence(streamType, streamId);
-          if (lost < losses) {
-            lost += 1;
-            // Another writer takes `seq` first.
-            await world.harness.memory.transaction(async (scope) => {
-              await scope.events.append([
-                domainEventSchemasByType['task.mr.measured'].parse({
-                  id: nextEventId(),
-                  stream_type: 'project',
-                  stream_id: streamId,
-                  stream_seq: seq,
-                  correlation_id: null,
-                  cause_event_id: null,
-                  actor: { kind: 'system', component: 'test' },
-                  occurred_at: '2026-06-01T09:00:00.000Z',
-                  type: 'task.mr.measured',
-                  payload: { project_id: PROJECT, task_id: PROJECT, mr: MR_REF, diff_stats: null },
-                }) as DomainEvent,
-              ]);
-            });
-          }
-          return seq;
-        },
-      },
-    };
-  };
+  // Another writer takes the sequence first, `losses` times — since BACKLOG 971 a writer that
+  // bypassed the stream lock, which is what the in-place retry still defends against.
+  const racingOptions = (world: World, losses: number): DeliveryMeasuresOptions => ({
+    ...optionsOf(world.harness),
+    unitOfWork: racingProjectStream(world.harness.memory, losses).unitOfWork,
+  });
 
   const measureData = (world: World): PipelineOutboundData => ({
     duty: 'merge_measure',

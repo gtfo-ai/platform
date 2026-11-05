@@ -125,7 +125,7 @@ const setup = async (
   const record = () =>
     recordHistoryFindings(
       {
-        unitOfWork: eventing,
+        unitOfWork: race.unitOfWork,
         bootstrap,
         proposals,
         knowledge,

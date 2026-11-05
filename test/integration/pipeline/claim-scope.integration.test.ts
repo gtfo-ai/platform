@@ -604,7 +604,6 @@ describe('the audit of a pick (WP-293)', () => {
       const remote = createRemoteRuns({
         unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
         store,
-        eventStore: new eventing.PostgresEventStore(pool),
         context,
         runPlans: createTestRunPlanSealer(),
         packager: {

@@ -1654,7 +1654,6 @@ export const composePipeline = async (
         store: recoveryAdapters.createPostgresExpiredRunStore(),
         pipeline: store,
         unitOfWork: options.eventing.unitOfWork,
-        eventStore: options.eventing.store,
         wallClockMs: runLimitsDefaults.wallClockMs,
         /**
          * WP-286 (TD-031 §12): the first loss of a stage entry re-plans it — the run's minted

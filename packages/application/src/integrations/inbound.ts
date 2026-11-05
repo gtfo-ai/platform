@@ -111,7 +111,10 @@ import { createRateLimiter, type RateLimiter, type RateLimitPolicy } from './rat
  */
 export const MAX_INBOX_ERROR_CHARS = 2_000;
 
-/** Retries of a `stream_seq` that another writer took first — the audit log's bound, and why. */
+/**
+ * Retries of a delivery whose project stream moved after its merge-request lifecycle was read — or
+ * whose sequence a writer that bypassed the stream lock took (BACKLOG 971).
+ */
 export const DEFAULT_INBOUND_SEQUENCE_ATTEMPTS = 4;
 
 /** Why a delivery performed nothing. Each one is audited; none of them writes an inbox row. */
@@ -220,8 +223,9 @@ export interface WebhookIngressOptions {
   readonly decisions: InboundDecisionApplier;
   readonly unitOfWork: UnitOfWork;
   /**
-   * Read side, for `nextStreamSequence`; called outside the transaction. (The audit log no longer
-   * does this: since BACKLOG 970 it locks the integration stream and reads inside its transaction.)
+   * Read side, for the stream position a merge-request lifecycle answer was read at (outside the
+   * transaction). The sequence the events are appended at is read under the stream's lock, inside
+   * it (BACKLOG 971).
    */
   readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly ids: { next(): Id };
@@ -456,24 +460,45 @@ export const recordNormalisedDelivery = async (
 
   for (let attempt = 1; ; attempt += 1) {
     const at = options.clock.now();
-    // Read before the transaction opens — which the audit log no longer does (it locks its stream
-    // and reads inside its transaction, BACKLOG 970). The `events_enforce_stream_seq` trigger
-    // takes the row lock, so a stale sequence is a `StreamConflictError` and never a silently
-    // mis-ordered stream.
-    const sequences = new Map<Id, number>();
+    /**
+     * **The lifecycle answer is only as fresh as the stream it was read from** (WP-110). It is read
+     * over the pool, before the transaction — a reader on the transaction's connection is not a port
+     * this ring has — so the stream position it was read at is noted for each project whose drafts
+     * carry a merge-request transition, and the transaction compares it with the position it holds
+     * under the stream's lock: moved means a competitor appended in between, and the attempt is
+     * retried with a fresh read (`merge-request-lifecycle.ts` has the argument). A project with no
+     * such draft reads nothing here.
+     */
+    const lifecycleAt = new Map<Id, number>();
     for (const group of record.byProject) {
-      sequences.set(
-        group.projectId,
-        await options.eventStore.nextStreamSequence('project', group.projectId),
-      );
+      if (group.drafts.some((draft) => isMergeRequestLifecycleEvent(draft.type))) {
+        lifecycleAt.set(
+          group.projectId,
+          await options.eventStore.nextStreamSequence('project', group.projectId),
+        );
+      }
     }
-    // **After** the sequences (WP-110): a competitor that appends the same transition later moves
-    // the stream past them, so this attempt is refused and its retry reads the competitor's event
-    // (`merge-request-lifecycle.ts` has the argument).
     const lifecycle = await latestLifecycles(options.mergeRequests, record.byProject);
 
     try {
       return await options.unitOfWork.transaction(async (scope) => {
+        /**
+         * The project streams' locks, **first** and in project-id order (BACKLOG 971): every writer
+         * of a project stream takes the lock before reading the sequence, on this transaction's
+         * connection, so two deliveries for one project wait for each other instead of racing for
+         * the sequence — and the decisions below lock their rows only after it.
+         */
+        const sequences = new Map<Id, number>();
+        for (const projectId of [
+          ...new Set(record.byProject.map((group) => group.projectId)),
+        ].sort()) {
+          const locked = await scope.events.lockStreamSequence('project', projectId);
+          const readAt = lifecycleAt.get(projectId);
+          if (readAt !== undefined && readAt !== locked) {
+            throw new StreamConflictError('project', projectId, readAt);
+          }
+          sequences.set(projectId, locked);
+        }
         const events: DomainEvent[] = [];
         const refusals: DecisionRefusalLine[] = [];
         let repeated = 0;
@@ -561,7 +586,7 @@ export const recordNormalisedDelivery = async (
       }
       logger.warn(
         { integration_id: record.integrationId, attempt, max_attempts: maxAttempts },
-        'another writer took the project stream sequence; re-reading it and retrying the delivery',
+        'the project stream moved after its merge-request lifecycle was read; reading it again and retrying the delivery',
       );
     }
   }
