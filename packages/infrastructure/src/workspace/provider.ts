@@ -130,6 +130,7 @@ import {
   controlDirectory,
   controlSocketPath,
   egressContainerName,
+  mirrorHelperName,
   mirrorPath,
   retentionHoldVolumeName,
   WORKSPACE_WORKDIR,
@@ -1096,6 +1097,8 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     readonly credential: WorkspaceGitAccess | null;
   }): Promise<{ readonly cachePath: string; readonly updated: boolean }> {
     const cachePath = mirrorPath(this.#cacheMount, input.repo.cacheKey);
+    // Per launcher instance, never per daemon: see `mirrorHelperName`.
+    const helperName = mirrorHelperName(this.#controlVolume, input.repo.cacheKey);
     // Before the lock: a relayed socket path that does not parse is refused without a helper.
     const { mounts: helperGitMounts, ...helperGitEnv } = this.#gitCredentialEnv(input.credential, {
       REPO_URL: input.repo.url,
@@ -1106,7 +1109,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       .then(async () => {
         await this.#ensureVolume(this.#cacheVolume);
         await this.#helper({
-          name: `mirror-${input.repo.cacheKey}`,
+          name: helperName,
           image: this.#images.git,
           // `gc.auto 0` because workspaces clone with the mirror as their object source
           // (technical/05 §1: "gc disabled while workspaces reference it"); a gc here would

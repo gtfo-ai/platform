@@ -1276,6 +1276,66 @@ describe('mirror', () => {
       daemon.requests.filter((recorded) => recorded.path === '/containers/create'),
     ).toHaveLength(2);
   });
+
+  /** A running mirror fetch of this project, as the launcher whose control volume is `instance` left it. */
+  const plantFetch = (instance: string): string => {
+    const name = `mirror-${instance}-acme`;
+    daemon.containers.set(`fetch-${instance}`, {
+      id: `fetch-${instance}`,
+      name,
+      body: {
+        Labels: { [WORKSPACE_LABELS.role]: 'mirror', [WORKSPACE_LABELS.instance]: instance },
+      },
+      state: 'running',
+      exitCode: 0,
+      logs: '',
+      networks: [],
+      created: Math.floor(Date.UTC(2026, 8, 10, 11) / 1000),
+    });
+    return name;
+  };
+
+  it("names the helper per launcher, so a second launcher on the daemon leaves the first's fetch running", async () => {
+    // S-22.16 review: a dev worker beside a prod worker, both serving one project of one core.
+    // Named `mirror-<cache-key>`, the second launcher's create met the first's running fetch and
+    // removed it as a leftover.
+    const prodFetch = plantFetch('ctl');
+    const dev = new DockerWorkspaceProvider({
+      engine: new DockerEngine({ socketPath: daemon.socketPath }),
+      images: {
+        runtime: 'platform-runtime:test',
+        egress: 'tinyproxy:test',
+        git: 'git:test',
+        runtimeSourceDir: null,
+      },
+      controlVolume: 'ctl-dev',
+      controlRoot,
+      cacheVolume: 'repo-cache-dev',
+      helperNetwork: 'platform',
+      egressNetwork: 'platform',
+      runnerUid: 1000,
+      mintToken: () => TOKEN,
+      now: () => new Date('2026-09-10T12:00:00.000Z'),
+    });
+    const spec = workspaceSpecFixture();
+    await dev.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
+    expect(daemon.containers.get('fetch-ctl')?.name).toBe(prodFetch);
+    expect(daemon.history.map((container) => container.name)).toContain('mirror-ctl-dev-acme');
+    expect(
+      daemon.requests.filter(
+        (recorded) => recorded.method === 'DELETE' && recorded.path.includes(prodFetch),
+      ),
+    ).toEqual([]);
+  });
+
+  it("still clears its own instance's leftover of the same name", async () => {
+    // The other direction (rule 42): the per-instance name is still the same on every attempt.
+    plantFetch('ctl');
+    const spec = workspaceSpecFixture();
+    await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
+    expect(daemon.containers.has('fetch-ctl')).toBe(false);
+    expect(daemon.history.map((container) => container.name)).toContain('mirror-ctl-acme');
+  });
 });
 
 /**
@@ -1505,7 +1565,7 @@ describe('one mirror, not the volume (WP-75)', () => {
     await startDaemon(undefined, { seedMirror: false });
     const spec = workspaceSpecFixture();
     await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
-    const mirror = daemon.byName(`mirror-${spec.repo.cacheKey}`);
+    const mirror = daemon.byName(`mirror-ctl-${spec.repo.cacheKey}`);
     expect(mirror?.body.HostConfig).toMatchObject({
       Memory: DEFAULT_MIRROR_MEMORY_MB * 1024 * 1024,
       MemorySwap: DEFAULT_MIRROR_MEMORY_MB * 1024 * 1024,
@@ -1970,7 +2030,7 @@ describe('a deploy-key run (WP-146)', () => {
       repo: spec.repo,
       credential: relayed,
     });
-    const mirror = daemon.history.find((container) => container.name === 'mirror-acme');
+    const mirror = daemon.history.find((container) => container.name === 'mirror-ctl-acme');
     assertRelayedHelper(mirror?.body ?? {});
     expect(mirror?.body.HostConfig?.NetworkMode).toBe('platform');
   });

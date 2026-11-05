@@ -132,6 +132,28 @@ export const mirrorSubpath = (cacheKey: string): string => {
 };
 
 /**
+ * `mirror-<instance>-<cache-key>`: the helper that fetches one project's mirror (S-22.16 review).
+ *
+ * A container name is **daemon-global**, and the provider removes a container already holding the
+ * name it wants (`#createHelperContainer`, for a crashed launcher's leftover). Named by the cache
+ * key alone, two launchers on one daemon — a dev worker beside a prod worker, both serving one
+ * project of one core — killed each other's mirror fetch. So the name carries the **instance**: the
+ * control volume's name, the same value `WORKSPACE_LABELS.instance` labels every object with, which
+ * is distinct per launcher on a daemon because the control volume is. Still the same on every
+ * attempt of one instance, which is what keeps the leftover findable. The instance must already be
+ * a Docker object name (it names a volume), and is refused otherwise.
+ */
+export const mirrorHelperName = (instance: string, cacheKey: string): string => {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(instance)) {
+    throw new WorkspaceError('invalid_spec', 'the control volume is not a Docker object name', {
+      detail: `length ${instance.length}`,
+    });
+  }
+  mirrorSubpath(cacheKey);
+  return `mirror-${instance}-${cacheKey}`;
+};
+
+/**
  * The bare mirror of one project on the shared `repo-cache` volume, as a container sees it.
  *
  * A container that mounts only this project's mirror mounts {@link mirrorSubpath} **at this path**,

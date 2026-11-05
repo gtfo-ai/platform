@@ -10,6 +10,7 @@ import {
   controlSocketPath,
   egressContainerName,
   MAX_UNIX_SOCKET_PATH,
+  mirrorHelperName,
   mirrorPath,
   runContainerName,
   runNetworkName,
@@ -163,5 +164,26 @@ describe('mirror path', () => {
     ['a leading dot', '.hidden'],
   ])('refuses %s', (_label, key) => {
     expect(() => mirrorPath('/cache', key)).toThrow(/not a safe path component/);
+  });
+});
+
+describe('mirrorHelperName (S-22.16 review)', () => {
+  it('scopes the mirror helper to its launcher instance, the same on every attempt', () => {
+    expect(mirrorHelperName('agentic-worker-ctl', 'acme')).toBe('mirror-agentic-worker-ctl-acme');
+    expect(mirrorHelperName('agentic-worker-dev-ctl', 'acme')).toBe(
+      'mirror-agentic-worker-dev-ctl-acme',
+    );
+    expect(mirrorHelperName('agentic-worker-ctl', 'acme')).toBe(
+      mirrorHelperName('agentic-worker-ctl', 'acme'),
+    );
+  });
+
+  it.each([
+    ['an empty instance', '', 'acme'],
+    ['a separator in the instance', 'a/b', 'acme'],
+    ['a leading dash', '-ctl', 'acme'],
+    ['an unsafe cache key', 'ctl', '../x'],
+  ])('refuses %s', (_label, instance, key) => {
+    expect(() => mirrorHelperName(instance, key)).toThrow(WorkspaceError);
   });
 });
