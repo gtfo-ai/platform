@@ -162,10 +162,11 @@ describe('the install scripts the core renders', () => {
     const code = PS1.slice(PS1.indexOf('#>'))
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('#'));
-    expect(code.filter((line) => /\bexit\b/.test(line))).toEqual([
-      'if ($PSCommandPath) { exit $installerExitCode }',
-    ]);
-    expect(PS1).toContain('if ($PSCommandPath) { exit $installerExitCode }');
+    const exitLine =
+      '} @args | Select-Object -Last 1 | ForEach-Object { if ($PSCommandPath) { exit $_ } }';
+    expect(code.filter((line) => /\bexit\b/.test(line))).toEqual([exitLine]);
+    // No parameter or variable of the script's own, which `iex` would leave in the caller's session.
+    expect(PS1.slice(0, PS1.indexOf('& {'))).not.toMatch(/^\s*(param\(|\$)/m);
     // Operators PowerShell 5.1 does not parse.
     expect(PS1).not.toMatch(/\?\?|\?\.|&&|\|\|/);
   });
@@ -219,6 +220,11 @@ case "$1" in
       *' start'*) : > "$STUB_STATE/up"; exit 0 ;;
       *' down'*) rm -f "$STUB_STATE/up"; exit 0 ;;
     esac
+    ;;
+  volume)
+    # The launcher's repository cache: present unless STUB_NO_CACHE is set; removal is recorded.
+    [ "$2" = inspect ] && { [ -z "${'${STUB_NO_CACHE:-}'}" ]; exit $?; }
+    exit 0
     ;;
 esac
 echo "stub docker: unexpected: $*" >&2
@@ -356,7 +362,7 @@ describe.each(SHELLS)(
       // None of the hostile values reached Compose (requirement 1).
       expect(read(path.join(s.state, 'up-env'))).toBe('');
       expect(r.calls).toContain(
-        'curl -fsSL --proto =https,http --max-time 120 -o ' +
+        'curl -fsSL --proto =https --max-time 120 -o ' +
           `${s.dir}/.compose.yaml.download ${CORE}/api/worker/v1/compose.yml`,
       );
       expect(r.calls).toContain('open http://127.0.0.1:7357');
@@ -377,15 +383,16 @@ describe.each(SHELLS)(
       expect(r.out).toContain('http://127.0.0.1:7357 (open it in a browser)');
     });
 
-    it('re-runs as a repair: same build, so it starts what is stopped and recreates nothing', () => {
+    it('re-runs as a repair: same build, so it adds what is missing (a removed updater too) and recreates nothing', () => {
       const s = stage();
       expect(run(shell, s).status).toBe(0);
       writeFileSync(path.join(s.dir, '.env'), updaterEnvFile('a'));
       const r = run(shell, s);
       expect(r.status).toBe(0);
+      // `up --no-recreate`, not `start`: a `start` cannot bring back a container someone removed.
       expect(r.composeCalls).toEqual([
         'docker compose --project-name agentic-worker up -d',
-        'docker compose --project-name agentic-worker start',
+        'docker compose --project-name agentic-worker up -d --no-recreate',
       ]);
       expect(read(path.join(s.dir, '.env'))).toBe(updaterEnvFile('a'));
     });
@@ -543,11 +550,18 @@ describe.each(SHELLS)(
         'core=https://second.example.test\n',
       );
       expect(r.calls).toContain(
-        `curl -fsSL --proto =https,http --max-time 120 -o ${other}/.compose.yaml.download https://second.example.test/api/worker/v1/compose.yml`,
+        `curl -fsSL --proto =https --max-time 120 -o ${other}/.compose.yaml.download https://second.example.test/api/worker/v1/compose.yml`,
       );
       const moved = run(shell, s, [`--dir=${other}`]);
       expect(moved.status).toBe(3);
       expect(moved.out).toContain('was installed from https://second.example.test');
+      // An https core is fetched over https only; an http one (a core on this machine) may be http.
+      const local = stage();
+      const plain = run(shell, local, ['--core', 'http://localhost:8080']);
+      expect(plain.status).toBe(0);
+      expect(plain.calls).toContain(
+        `curl -fsSL --proto =https,http --max-time 120 -o ${local.dir}/.compose.yaml.download http://localhost:8080/api/worker/v1/compose.yml`,
+      );
     });
 
     it.each([
@@ -580,13 +594,24 @@ describe.each(SHELLS)(
       writeFileSync(path.join(s.dir, '.env'), updaterEnvFile('a'));
       const kept = run(shell, s, ['--uninstall']);
       expect(kept.status).toBe(0);
-      expect(kept.composeCalls.at(-1)).toBe('docker compose --project-name agentic-worker down');
+      expect(kept.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker down --remove-orphans',
+      );
       expect(read(path.join(s.dir, '.env'))).toBe(updaterEnvFile('a'));
+      // The advice agrees with the refusal a moved core gets: start it with Compose, as it was.
+      expect(kept.out).toContain(`cd '${s.dir}' && docker compose up -d`);
+      expect(kept.calls.some((call) => call.startsWith('docker volume'))).toBe(false);
       const purged = run(shell, s, ['--uninstall', '--purge']);
       expect(purged.status).toBe(0);
       expect(purged.composeCalls.at(-1)).toBe(
-        'docker compose --project-name agentic-worker down --volumes',
+        'docker compose --project-name agentic-worker down --volumes --remove-orphans',
       );
+      // The launcher's repository cache (cloned source) goes too; Compose does not own it.
+      expect(purged.calls.filter((call) => call.startsWith('docker volume'))).toEqual([
+        'docker volume inspect agentic-worker-repo-cache',
+        'docker volume rm agentic-worker-repo-cache',
+      ]);
+      expect(purged.out).toContain('its repository cache');
       expect(existsSync(s.dir)).toBe(false);
       // A folder it did not make is never removed.
       const foreign = stage();

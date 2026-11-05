@@ -466,50 +466,42 @@ instead, remove the `updater` and `updater-docker-proxy` services, download the 
 
 #### One-command install (S-22.20)
 
-The core also serves two installers, public like the compose file and rendered with this core's
-`APP_BASE_URL` (TD-031's 2026-11-05 install-scripts amendment; `503 install_script_unavailable` when
-that URL has a credential, a query or a character a shell cannot take inside single quotes):
+On macOS and Linux the core also serves an installer, public like the compose file and rendered
+with this core's `APP_BASE_URL` (TD-031's 2026-11-05 install-scripts amendment; `503
+install_script_unavailable` when that URL has a credential, a query or a character a shell cannot
+take inside single quotes):
 
 ```bash
-curl -fsSL https://agentic.example.com/api/worker/v1/install.sh | sh                                   # macOS, Linux
-powershell -ExecutionPolicy ByPass -c "irm https://agentic.example.com/api/worker/v1/install.ps1 | iex"  # Windows
+curl -fsSL https://agentic.example.com/api/worker/v1/install.sh | sh
 ```
 
-To read one first: `curl -fsSLo install.sh https://agentic.example.com/api/worker/v1/install.sh && less
-install.sh && sh install.sh`. Each checks `docker`, `docker info` and `docker compose version` and names
+To read it first: `curl -fsSLo install.sh https://agentic.example.com/api/worker/v1/install.sh && less
+install.sh && sh install.sh`. It checks `docker`, `docker info` and `docker compose version` and names
 what to install (Docker Desktop, or Docker Engine on Linux) when one fails; creates `~/agentic-worker`
-(`--dir`/`-Dir`), refusing a folder it did not make and a project `agentic-worker` brought up from
+(`--dir`), refusing a folder it did not make and a project `agentic-worker` brought up from
 another folder; downloads `compose.yml` as `compose.yaml` and writes `.agentic-worker-install` (the
 core it came from); runs `docker compose up -d`; waits until `remote-worker` and `updater` run
 (and are `healthy` if they declare a healthcheck) and `http://127.0.0.1:7357` answers; and opens it.
 **What it changes**: that folder and the compose project's containers, volumes and networks — no
 sudo, no service, no PATH or profile edit. Options: `--core` (another core), `--no-open`,
-`--uninstall` (containers only) and `--uninstall --purge` (volumes and folder too).
+`--uninstall` (containers only) and `--uninstall --purge` (its volumes, the launcher's repository
+cache volume and the folder too).
 
 **It never fights the updater.** It installs only a bundle that has the `updater` service, under no
 profile, and runs Compose with the variables that would re-pin images or change what the updater
 trusts (`PLATFORM_*_IMAGE`, `APP_TRUSTED_*`, `APP_CORE_URL`, `COMPOSE_*`) removed from its
-environment. A re-run is a repair: when the worker's containers exist it runs `docker compose start`
-(nothing is recreated) and replaces `compose.yaml` only when the core still serves the very images
-the worker runs — read from the updater's managed block of `.env` (TD-032 decision 4), else from the
-file already there. When they differ, the move is the updater's, after it verifies the build; with
-no containers at all it refuses (exit 3) rather than install the core's images unverified. It never
+environment. A re-run is a repair. When the core still serves the very images the worker runs —
+read from the updater's managed block of `.env` (TD-032 decision 4), else from the file already
+there — it replaces `compose.yaml` and runs `docker compose up -d --no-recreate`, which starts what
+is stopped and creates what is missing (a removed `updater` included) and recreates nothing. When
+they differ, the move is the updater's, after it verifies the build: with containers it only runs
+`docker compose start`, and with none it refuses (exit 3) rather than install the core's images
+unverified. It never
 writes `.env` or touches a volume (except `--purge`), and it refuses while an update is being
 applied.
 
-**Windows, as built.** The bundle itself is Linux containers on Docker Desktop: every path in
-`compose.worker.yml` is a named volume or `/var/run/docker.sock` (Docker Desktop provides it to Linux
-containers), and the launcher's helper sockets live on the `ctl` volume inside the Linux VM, so a
-worker should run there — but that has not been measured on a Windows machine. **Its updater cannot
-apply an update yet** (backlog 990, V-DA1): it reads the project's folder from Compose's
-`working_dir` label, which a project brought up from `C:\Users\…` records as a Windows path, and its
-apply container mounts that folder at the same path inside Linux. Since S-22.20 it refuses such an
-update by name **before** pulling or draining, reports it to the core (the Workers screen shows it),
-and the worker keeps taking work; until 990 is fixed, update a Windows worker by hand — download
-`compose.yml` over `compose.yaml` in its folder and `docker compose up -d`. `install.ps1` says so when
-it finishes.
-
-**The worker's local page** (WP-292). The worker serves a page on the developer's machine: its
+**Windows: coming next.** `GET /api/worker/v1/install.ps1` is served, but it is not offered until the
+updater can apply an update from a Windows folder (backlog 990), because a worker always updates itself.
 
 ### If `/readyz` is 503
 

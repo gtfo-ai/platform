@@ -8,6 +8,7 @@ beside it on PATH. It records each call in $env:STUB_LOG and answers from $env:S
   docker inspect --format {{json .}} ... remote-worker and updater, running, labelled with the folder
   docker compose ... up -d               the project is up; the folder and Compose's environment kept
   docker compose ... start / down        up / not up
+  docker volume inspect / rm ...         recorded, answered 0
 #>
 $ErrorActionPreference = 'Stop'
 $line = $args -join ' '
@@ -37,6 +38,7 @@ if ($args[0] -eq 'inspect') {
   }
   exit 0
 }
+if ($args[0] -eq 'volume') { exit 0 }
 if ($args[0] -eq 'compose') {
   if ($args -contains 'up') {
     Set-Content -LiteralPath (Join-Path $env:STUB_STATE 'wd') -Value (Get-Location).ProviderPath
