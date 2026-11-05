@@ -91,7 +91,7 @@ export const registerWorkerRunCallRoutes = (
       schema: {
         summary: 'Upload transcript entries — re-redacted, stored once per seq (TD-031 §10a)',
         description:
-          'Run token. A batch of `{ seq, event }` of at most 256 KiB, for a run held under this epoch (live, or ended within the token’s fifteen minutes). Each entry is validated against `transcriptEventSchema`, **re-redacted** by the run’s full TD-012 redactor (the project’s binding secrets, the platform’s pattern rules and recorded minted-credential shapes, this process’s run-scoped credentials) and stored once per `(run_id, seq)` — a repeat is skipped. An undecodable entry, one naming another run or `seq`, or one dated outside the store’s window is stored at its `seq` as a `system` entry with subtype `ingest_refused` naming paths and messages only, and listed in `refused_seqs`. The `run:<id>` stream is announced as for any run. `409 lease_lost` for another claim; `410 run_gone` (WP-282).',
+          'Run token. A batch of `{ seq, event }` of at most 256 KiB, for a run held under this epoch (live, or ended within the token’s fifteen minutes). Each entry is validated against `transcriptEventSchema`, **re-redacted** by the run’s full TD-012 redactor (the project’s binding secrets, the platform’s pattern rules and recorded minted-credential shapes, this process’s run-scoped credentials) and stored once per `(run_id, seq)` — a repeat is skipped. An undecodable entry, one naming another run or `seq`, or one dated outside the store’s window is stored at its `seq` as a `system` entry with subtype `ingest_refused` naming paths and messages only, and listed in `refused_seqs`. The `run:<id>` stream is announced as for any run. A run holds at most 100 000 entries: a batch that would pass it is `409 transcript_full` and stores nothing (backlog 754). `409 lease_lost` for another claim; `410 run_gone` (WP-282).',
         tags: ['worker'],
         params: runParamsSchema,
         body: workerTranscriptRequestSchema,
@@ -120,6 +120,13 @@ export const registerWorkerRunCallRoutes = (
         epoch: request.body.epoch,
         entries: request.body.entries,
       });
+      if (answer.kind === 'full') {
+        throw new HttpError(
+          409,
+          'transcript_full',
+          `run ${runId}'s transcript holds at most ${answer.limit} entries; the batch was not stored`,
+        );
+      }
       if (answer.kind !== 'stored') return refused(runId, answer);
       return { stored: answer.stored, refused_seqs: [...answer.refusedSeqs] };
     },

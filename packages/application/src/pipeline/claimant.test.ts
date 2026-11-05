@@ -12,9 +12,11 @@ import type { DomainEvent, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { DEFAULT_WIP_LIMITS } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import type { BlockingBudget } from '../cost/guard.js';
 import type { ClaudeRunner, RunHandle, RunOutcome, RunStartHooks } from '../ports/runner.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import { createTestRunPlanSealer } from '../testing/run-plans.js';
+import { createClaimAdmission } from './claim-admission.js';
 import { createRunClaimant } from './claimant.js';
 import type { RunLeaseLoss } from './lease.js';
 import type { SettleRunRequest } from './settle.js';
@@ -100,6 +102,10 @@ const world = async (options: {
   readonly tickets?: number;
   /** WP-278: what to set on the store before the first ticket is offered. */
   readonly before?: (harness: PipelineHarness) => void;
+  /** Backlog 744: the budget the claim's admission re-check asks; absent, no re-check. */
+  readonly budgetAtClaim?: () => BlockingBudget | null;
+  /** Backlog 744: the task cap the re-check reads (the offer was admitted under the default). */
+  readonly taskBudgetAtClaim?: () => number | undefined;
 }) => {
   const harness: PipelineHarness = createPipelineHarness({
     projectId: PROJECT,
@@ -139,6 +145,22 @@ const world = async (options: {
       },
     },
     ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
+    ...(options.budgetAtClaim === undefined && options.taskBudgetAtClaim === undefined
+      ? {}
+      : {
+          admission: createClaimAdmission({
+            store: harness.store,
+            settings: async () => {
+              const cap = options.taskBudgetAtClaim?.();
+              return cap === undefined
+                ? harness.settings
+                : { ...harness.settings, taskBudgetUsd: cap };
+            },
+            budgets: { blockingFor: async () => options.budgetAtClaim?.() ?? null },
+            eventStore: harness.memory.store,
+            context: harness.commands.context,
+          }),
+        }),
   });
   return {
     harness,
@@ -407,5 +429,62 @@ describe('the server claimant and execution routing (WP-278, TD-031 decision 8)'
     expect(harness.store.serverClaimantHolders()).toEqual(['server:claimant-test']);
     await claimant.stop();
     expect(harness.store.serverClaimantHolders()).toEqual([]);
+  });
+});
+
+/**
+ * TD-031 §2 (backlog 744): the admission is asked again at the claim. An offer admitted at the offer
+ * can wait while the scope spends; the claim that finds a budget spent takes nothing, withdraws the
+ * offer and pauses the task — exactly as the offer-time admission pauses it.
+ */
+describe('the admission re-check at the claim (backlog 744)', () => {
+  const PROJECT_BLOCKER: BlockingBudget = {
+    id: '00000000-0000-4000-8000-0000000007a4',
+    scope: 'project',
+    window: 'month',
+    limitUsd: 10,
+    spentUsd: 10,
+    pendingUsd: 0,
+    heldUsd: 0,
+    heldRuns: 0,
+    reserveUsd: 0,
+    windowStart: '2026-06-01T00:00:00.000Z',
+  } as BlockingBudget;
+
+  it('claims as before while nothing refuses it', async () => {
+    const { harness, claimant, sessions } = await world({ budgetAtClaim: () => null });
+    const runId = harness.store.offerRows()[0]?.runId as Id;
+    const drained = claimant.drain();
+    await tick();
+    await tick();
+    expect(harness.store.offerRows()[0]?.state).toBe('claimed');
+    sessions.get(runId)?.finish(outcomeOf(runId, 'completed'));
+    expect(await drained).toBe(1);
+  });
+
+  it('a project budget spent since the offer: no claim, the offer withdrawn, the task paused', async () => {
+    let blocked = false;
+    const { harness, claimant, sessions } = await world({
+      budgetAtClaim: () => (blocked ? PROJECT_BLOCKER : null),
+    });
+    blocked = true;
+    expect(await claimant.drain()).toBe(0);
+    expect(sessions.size).toBe(0);
+    // The claim's transaction threw before `run.claimed` was appended. PostgreSQL rolls the claim
+    // statement back with it, so `refuse` finds the offer open and withdraws it; this store keeps a
+    // rolled-back write (its divergence 4), so the offer's own state is not asserted here.
+    expect(harness.types()).not.toContain('run.claimed');
+    const paused = harness.events().find((event) => event.type === 'task.paused');
+    expect(paused?.payload).toMatchObject({ reason: 'budget', budget_scope: 'project' });
+  });
+
+  it('a task cap the task has reached since the offer: paused with the task scope', async () => {
+    let cap: number | undefined;
+    const { harness, claimant } = await world({ taskBudgetAtClaim: () => cap });
+    cap = 0.01; // below one run's reservation: the task cannot take this run any more
+    expect(await claimant.drain()).toBe(0);
+    expect(harness.types()).not.toContain('run.claimed');
+    const paused = harness.events().find((event) => event.type === 'task.paused');
+    expect(paused?.payload).toMatchObject({ reason: 'budget', budget_scope: 'task' });
   });
 });

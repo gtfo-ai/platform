@@ -61,6 +61,9 @@ export const createMemoryRemoteRunCallStore = (
   const key = (runId: Id, digest: string): string => `${runId}\0${digest}`;
 
   return {
+    // One thread: there is nothing to serialise (PostgreSQL takes an advisory lock).
+    lockTranscript: async () => {},
+    transcriptCount: async (_tx, runId) => transcripts.get(runId)?.size ?? 0,
     appendTranscript: async (_tx, runId, entries) => {
       const rows = transcripts.get(runId) ?? new Map<number, TranscriptEvent>();
       transcripts.set(runId, rows);

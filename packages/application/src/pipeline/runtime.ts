@@ -40,6 +40,7 @@
 
 import type { Id, IsoDateTime, RunOfferKind } from '@platform/contracts';
 import { type AskRuntimeOptions, composeAsk } from '../ask/runtime.js';
+import { noBudgetGuard } from '../cost/guard.js';
 import type { EventHandler } from '../events/handler.js';
 import { markTransactions } from '../events/open-transaction.js';
 import type { MaintenanceSpendReader } from '../maintenance/ports.js';
@@ -58,6 +59,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { UnrevokedRunCredentialStore } from '../recovery/run-credential.js';
 import type { ShadowStore } from '../shadow/ports.js';
 import { type ShadowReportOptions, shadowHandlers } from '../shadow/report.js';
+import { createClaimAdmission } from './claim-admission.js';
 import { createRunClaimant, type RunClaimant } from './claimant.js';
 import { conflictWarningHandlers } from './conflict-warning.js';
 import { coverageHandlers } from './coverage.js';
@@ -397,6 +399,15 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
             stage: async (request) => executor.settle(request),
             ask: async (request) => ask.executor.settle(request),
           },
+          // TD-031 §2 (backlog 744): the executor's own budget questions, asked again at the claim.
+          admission: createClaimAdmission({
+            store: options.store,
+            settings: async (projectId, tx) => options.settings.forProject(projectId, tx),
+            budgets: options.execution.budgets ?? noBudgetGuard,
+            eventStore: options.eventStore,
+            context: options.execution.context,
+            ...(logger === undefined ? {} : { logger }),
+          }),
           unplanned: async () => {
             const found = await unitOfWork.transaction(async (scope) =>
               options.store.offers.openWithoutPlan(scope.tx, 10),

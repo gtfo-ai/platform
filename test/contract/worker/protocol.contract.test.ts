@@ -220,6 +220,8 @@ const world = async (
     readonly onMint?: (at: number) => void;
     /** `false`: the process composed no run-scoped calls (WP-282). */
     readonly runCalls?: boolean;
+    /** A remote run's transcript bound (backlog 754); absent, the shipped one. */
+    readonly maxTranscriptEntries?: number;
   } = {},
 ): Promise<World> => {
   const store = createMemoryWorkerStore();
@@ -357,8 +359,12 @@ const world = async (
           },
           deployKeys: {
             forRun: async () => launcherAdapters.createDeployKeyOracle(FAKE_DEPLOY_KEY),
+            remoteRunCredential: async () => 'allow',
           },
           maxSignatures: 2,
+          ...(options.maxTranscriptEntries === undefined
+            ? {}
+            : { maxTranscriptEntries: options.maxTranscriptEntries }),
         });
   // WP-284: the shipped template, rendered for this core — the compose bundle digest is its own.
   const release = workerReleaseOf(options.release === false ? null : DIGESTS, {
@@ -1132,6 +1138,20 @@ describe('the worker protocol (WP-282): the run-scoped calls besides the claim',
       ...bodies(2)[WORKER_PATHS.transcript],
     });
     expect(workerLeaseLostBodySchema.parse(stale.json()).error.code).toBe('lease_lost');
+  });
+
+  it('transcript: 409 transcript_full for a batch past the run’s bound, storing nothing of it (backlog 754)', async () => {
+    const w = await world({ maxTranscriptEntries: 1 });
+    const pkg = await claimAsAlice(w);
+    const full = await post(w, WORKER_PATHS.transcript, w.runId, pkg.runToken, {
+      epoch: 1,
+      entries: [
+        { seq: 0, event: transcriptEntry(0, 'one', w.runId) },
+        { seq: 1, event: transcriptEntry(1, 'two', w.runId) },
+      ],
+    });
+    expect(`${full.statusCode} ${full.json().error?.code}`).toBe('409 transcript_full');
+    expect(w.runCallStore.transcriptRows(w.runId)).toHaveLength(0);
   });
 
   it('tools/:name: a granted tool answered and redacted; a tool the role was not given is 403; an unknown name is 400; lease_lost for a stale epoch', async () => {

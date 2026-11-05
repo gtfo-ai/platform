@@ -261,6 +261,8 @@ const fakeCore = (options: {
   readonly beat?: (n: number) => { readonly status: number; readonly body: unknown } | null;
   /** The worker verbs too (WP-292): handshake, one claimed package, then `204`s. */
   readonly claims?: readonly RunPackage[];
+  /** The transcript upload's answer by upload number (from 1); absent stores the batch. */
+  readonly transcript?: (n: number) => { readonly status: number; readonly body: unknown } | null;
 }) => {
   const captured: Captured[] = [];
   const events: string[] = [];
@@ -271,6 +273,7 @@ const fakeCore = (options: {
   /** Approvals opened and not yet delivered: the next beat answers each `deny`, once. */
   const opened: string[] = [];
   let beats = 0;
+  let uploads = 0;
   const fetch: CoreFetch = async (url, init) => {
     const verb = new URL(url).pathname.replace('/api/worker/v1/', '').replace(RUN_ID, ':id');
     const headers = init.headers as Record<string, string>;
@@ -321,12 +324,16 @@ const fakeCore = (options: {
           approvals: [],
         });
       }
-      case 'runs/:id/transcript':
+      case 'runs/:id/transcript': {
         workerTranscriptRequestSchema.parse(parsed);
+        uploads += 1;
+        const scripted = options.transcript?.(uploads) ?? null;
+        if (scripted !== null) return answer(scripted.status, scripted.body);
         return answer(200, {
           stored: (parsed.entries as unknown[]).length,
           refused_seqs: [],
         });
+      }
       case 'runs/:id/spawn':
         workerSpawnRequestSchema.parse(parsed);
         events.push('core:spawn');
@@ -624,6 +631,33 @@ describe('a remote run, from its package to its finish (WP-283 (1)–(2))', () =
     expect(await session.done).toBe('lease_lost');
     expect(core.events).not.toContain('core:finish');
     expect(launcher.ends).toHaveLength(1);
+  });
+
+  it('stops the run when the core holds no more of its transcript (transcript_full, backlog 754)', async () => {
+    const core = fakeCore({
+      transcript: () => ({
+        status: 409,
+        body: { error: { code: 'transcript_full', message: 'at most 100000 entries' } },
+      }),
+    });
+    // The CLI waits for a steer that never comes: only the refusal can end the run.
+    const { session } = run({ core, awaitSteers: 1 });
+    const bounded = await Promise.race([
+      session.done,
+      new Promise<'still running'>((resolve) => setTimeout(() => resolve('still running'), 5_000)),
+    ]);
+    expect(bounded).toBe('settled');
+    // Settled through `finish`, as a cancel, after one refused upload and no second one.
+    const finish = core.captured.find((request) => request.verb === 'runs/:id/finish');
+    expect(workerFinishRequestSchema.parse(JSON.parse(finish?.body ?? '{}')).outcome).toMatchObject(
+      {
+        kind: 'ran',
+        status: 'cancelled',
+      },
+    );
+    expect(core.captured.filter((request) => request.verb === 'runs/:id/transcript')).toHaveLength(
+      1,
+    );
   });
 
   it('self-terminates at exactly TTL − ½·renew (585 s) without a renewal — not a millisecond before — and pushes nothing more', async () => {
@@ -956,7 +990,22 @@ describe('a run’s tail for the local page (WP-292 (2))', () => {
     expect(tail).not.toContain(RUN_CREDENTIAL);
     expect(tail).toContain('[REDACTED:integration:');
     expect(session.state.tokens).toBe(15);
+    expect(session.state.tokensFinal).toBe(true);
     expect(session.state.costUsd).toBe(0.25);
+  });
+
+  it('counts tokens so far from each model turn before the result arrives (backlog 772)', async () => {
+    const core = fakeCore({});
+    // The CLI waits for a user turn after its assistant message, so the result has not arrived.
+    const { session } = run({ core, awaitSteers: 1 });
+    for (let tries = 0; tries < 200 && session.state.tokens === null; tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(session.state.tokens).toBe(15);
+    expect(session.state.tokensFinal).toBe(false);
+    expect(session.state.costUsd).toBeNull();
+    session.shutdown();
+    await session.done;
   });
 });
 
@@ -1203,7 +1252,8 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
         title: 'Fix the login page',
         role: pkg.run.role,
         phase: 'running',
-        tokens: null,
+        // The model's one turn so far (backlog 772); no result yet, so no cost.
+        tokens: 15,
         cost_usd: null,
       });
       expect(parsed.runs[0]?.transcript.length).toBeGreaterThan(0);

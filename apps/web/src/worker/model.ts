@@ -154,9 +154,19 @@ export const elapsedWords = (ms: number): string => {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 };
 
-/** Reported tokens and cost, or the words that say nothing was reported yet (BD-011). */
+/** Whether the run's figures are still moving: before its `result`, `tokens` counts turns so far. */
+const live = (run: WorkerLocalRun): boolean =>
+  run.phase === 'provisioning' || run.phase === 'running';
+
+/**
+ * Reported tokens and cost, or the words that say nothing was reported yet (BD-011). A live run's
+ * tokens are the turns the CLI has reported **so far** (backlog 772), and say so.
+ */
 export const spendWords = (run: WorkerLocalRun): { tokens: string; cost: string } => ({
-  tokens: run.tokens === null ? 'not reported yet' : new Intl.NumberFormat('en').format(run.tokens),
+  tokens:
+    run.tokens === null
+      ? 'not reported yet'
+      : `${new Intl.NumberFormat('en').format(run.tokens)}${live(run) ? ' so far' : ''}`,
   cost: run.cost_usd === null ? 'not reported yet' : `$${run.cost_usd.toFixed(2)}`,
 });
 

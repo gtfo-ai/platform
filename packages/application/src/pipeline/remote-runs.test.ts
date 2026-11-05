@@ -10,6 +10,7 @@
  * committing statement**, a revoke that commits between authentication and the write — is asserted
  * against PostgreSQL in `test/integration/pipeline/remote-claim.integration.test.ts` (divergence 13).
  */
+
 import type {
   DomainEvent,
   Id,
@@ -19,12 +20,14 @@ import type {
 import { domainEventSchemasByType } from '@platform/contracts';
 import { DEFAULT_WIP_LIMITS } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import type { BlockingBudget } from '../cost/guard.js';
 import type { LateRunSpend } from '../cost/late.js';
 import { RUN_CREDENTIAL_UNAVAILABLE_DIAGNOSIS, RunStartError } from '../ports/runner.js';
 import { WorkspaceError } from '../ports/workspace.js';
 import type { MemoryRemoteWorker } from '../testing/memory-pipeline.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import { createTestRunPlanSealer } from '../testing/run-plans.js';
+import { createClaimAdmission } from './claim-admission.js';
 import { RUN_START_RETRY_MS } from './jobs.js';
 import {
   createRemoteRuns,
@@ -103,6 +106,8 @@ const world = async (
     readonly settle?: (request: SettleRunRequest) => Promise<SettleRunResult>;
     readonly before?: (harness: PipelineHarness) => void;
     readonly tickets?: number;
+    /** Backlog 744: the budget the claim's admission re-check asks; absent, no re-check. */
+    readonly budgetAtClaim?: () => BlockingBudget | null;
   } = {},
 ): Promise<World> => {
   const workers: World['workers'] = new Map();
@@ -166,6 +171,17 @@ const world = async (
         return { recorded: true, charge: null };
       },
     },
+    ...(options.budgetAtClaim === undefined
+      ? {}
+      : {
+          admission: createClaimAdmission({
+            store: harness.store,
+            settings: async () => harness.settings,
+            budgets: { blockingFor: async () => options.budgetAtClaim?.() ?? null },
+            eventStore: harness.memory.store,
+            context: harness.commands.context,
+          }),
+        }),
   });
   const runId = harness.store.offerRows()[0]?.runId as Id;
   return {
@@ -209,6 +225,40 @@ const ranOutcome = (runId: Id) =>
       redaction_count: 0,
     },
   });
+
+describe('the admission re-check at a worker’s claim (backlog 744)', () => {
+  it('an organisation budget spent since the offer: no package, the task paused, the worker answered none', async () => {
+    let blocked = false;
+    const w = await world({
+      budgetAtClaim: () =>
+        blocked
+          ? ({
+              id: '00000000-0000-4000-8000-0000000007a5',
+              scope: 'org',
+              window: 'month',
+              limitUsd: 10,
+              spentUsd: 10,
+              pendingUsd: 0,
+              heldUsd: 0,
+              heldRuns: 0,
+              reserveUsd: 0,
+              windowStart: '2026-06-01T00:00:00.000Z',
+            } as BlockingBudget)
+          : null,
+    });
+    blocked = true;
+    expect(await claimAs(w, W1)).toEqual({ kind: 'none' });
+    expect(w.built).toHaveLength(0);
+    expect(w.harness.types()).not.toContain('run.claimed');
+    const paused = w.harness.events().find((event) => event.type === 'task.paused');
+    expect(paused?.payload).toMatchObject({ reason: 'budget', budget_scope: 'organization' });
+  });
+
+  it('claims as before while nothing refuses it', async () => {
+    const w = await world({ budgetAtClaim: () => null });
+    expect((await claimAs(w, W1)).kind).toBe('claimed');
+  });
+});
 
 describe('the remote claim (WP-281, TD-031 decisions 2, 7, 8)', () => {
   it('claims the open offer for a worker: worker on the offer and the run, run.claimed names it, the token stored hashed, the package built after the claim', async () => {

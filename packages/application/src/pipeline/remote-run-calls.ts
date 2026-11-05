@@ -126,6 +126,14 @@ export const TOOL_CALL_CLAIM_STALE_MS = 5 * 60_000;
 /** The session mirror's bound per run, in lines: past it a batch is refused `full`. */
 export const MAX_SESSION_LINES_PER_RUN = 200_000;
 
+/**
+ * A remote run's transcript bound, in `run_messages` rows (backlog 754): a batch that would take the
+ * run past it is refused `full` and stores nothing. The batch (256 KiB) and the `seq` (2³¹−1) were
+ * the only bounds before, so a tampered worker could store 2³¹ rows for one run. Counted on the
+ * rows the run holds — a retried batch's repeats included, which errs towards refusing.
+ */
+export const MAX_TRANSCRIPT_ENTRIES_PER_RUN = 100_000;
+
 /** What the port is told a remote approval may wait: the worker's own timeout decides first. */
 export const REMOTE_APPROVAL_TIMEOUT_MS = 10 * 60_000;
 
@@ -160,6 +168,10 @@ export interface RemoteRunCallStore {
     runId: Id,
     entries: readonly TranscriptEvent[],
   ): Promise<number>;
+  /** Serialises the transcript ingests of one run until the transaction ends (backlog 754). */
+  lockTranscript(tx: Transaction, runId: Id): Promise<void>;
+  /** How many transcript rows the run holds. */
+  transcriptCount(tx: Transaction, runId: Id): Promise<number>;
   /** The call under `(runId, toolUseDigest)`, or `null`. */
   findToolCall(tx: Transaction, runId: Id, toolUseDigest: string): Promise<StoredToolCall | null>;
   /**
@@ -282,6 +294,12 @@ export interface RemoteRunDeployKeys {
    * (`runs.credential_source`). Called outside any transaction.
    */
   forRun(run: { readonly runId: Id; readonly projectId: Id }): Promise<RunDeployKeySigner | null>;
+  /**
+   * The project's `remote_run_credential` **now** (backlog 753), read as the claim reads it: asked
+   * per signature, so an integration switched to `deny` mid-run stops signing for the runs already
+   * claimed rather than at their end (TD-031 decision 5). Called outside any transaction.
+   */
+  remoteRunCredential(projectId: Id): Promise<'allow' | 'deny'>;
 }
 
 export interface RemoteRunCallsOptions {
@@ -299,6 +317,8 @@ export interface RemoteRunCallsOptions {
   readonly maxSignatures: number;
   /** @default MAX_SESSION_LINES_PER_RUN — the session mirror's lines per run, every session id. */
   readonly maxSessionLines?: number;
+  /** @default MAX_TRANSCRIPT_ENTRIES_PER_RUN — a remote run's `run_messages` rows (backlog 754). */
+  readonly maxTranscriptEntries?: number;
   readonly now?: () => Date;
   readonly newId?: () => Id;
   readonly logger?: Logger;
@@ -313,6 +333,8 @@ export type RemoteTranscriptAnswer =
       readonly stored: number;
       readonly refusedSeqs: readonly number[];
     }
+  /** The batch would take the run past its bound: nothing of it is stored (backlog 754). */
+  | { readonly kind: 'full'; readonly limit: number }
   | RemoteRunCallRefusal;
 
 export type RemoteToolAnswer =
@@ -336,7 +358,10 @@ export type RemoteSessionAnswer =
 
 export type RemoteSshSignAnswer =
   | { readonly kind: 'signed'; readonly signature: Buffer }
-  | { readonly kind: 'refused'; readonly reason: 'not_admitted' | 'no_deploy_key' | 'cap' }
+  | {
+      readonly kind: 'refused';
+      readonly reason: 'not_admitted' | 'no_deploy_key' | 'cap' | 'remote_credential_denied';
+    }
   | RemoteRunCallRefusal;
 
 export interface RemoteRunCalls {
@@ -479,6 +504,7 @@ export const createRemoteRunCalls = (options: RemoteRunCallsOptions): RemoteRunC
   const now = options.now ?? (() => new Date());
   const newId = options.newId ?? ((): Id => randomUUID() as Id);
   const maxSessionLines = options.maxSessionLines ?? MAX_SESSION_LINES_PER_RUN;
+  const maxTranscriptEntries = options.maxTranscriptEntries ?? MAX_TRANSCRIPT_ENTRIES_PER_RUN;
   const iso = (): IsoDateTime => now().toISOString() as IsoDateTime;
 
   const fenceIn = async (
@@ -610,6 +636,17 @@ export const createRemoteRunCalls = (options: RemoteRunCallsOptions): RemoteRunC
         const held = await fenceIn(scope.tx, input.runId, input.epoch, input.workerId);
         if (held.fence === 'lost' || held.fence === 'gone') {
           return refusalOf(held.fence);
+        }
+        await store.lockTranscript(scope.tx, input.runId);
+        if (
+          (await store.transcriptCount(scope.tx, input.runId)) + rows.length >
+          maxTranscriptEntries
+        ) {
+          logger.warn(
+            { run_id: input.runId, limit: maxTranscriptEntries, batch: rows.length },
+            'a remote run’s transcript reached its bound; the batch is refused and nothing of it stored',
+          );
+          return { kind: 'full', limit: maxTranscriptEntries };
         }
         const stored = await store.appendTranscript(scope.tx, input.runId, rows);
         const last = Math.max(...rows.map((row) => row.seq));
@@ -851,6 +888,14 @@ export const createRemoteRunCalls = (options: RemoteRunCallsOptions): RemoteRunC
       // WP-146's narrow check first: a request it refuses is answered `null` and counts nothing.
       if (!signer.admits(input.request)) {
         return { kind: 'refused', reason: 'not_admitted' };
+      }
+      // Backlog 753: the opt-in is the project's **now**, not the claim's — re-read per signature.
+      if ((await options.deployKeys.remoteRunCredential(before.projectId)) !== 'allow') {
+        logger.warn(
+          { run_id: input.runId, project_id: before.projectId },
+          'the project no longer allows its run credential on a remote worker (remote_run_credential); ssh-sign refuses',
+        );
+        return { kind: 'refused', reason: 'remote_credential_denied' };
       }
       const counted = await unitOfWork.transaction(async (scope) =>
         store.countSignature(scope.tx, {

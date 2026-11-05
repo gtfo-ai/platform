@@ -129,6 +129,7 @@ export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
 export * from './pipeline/binding-lifecycle.js';
 export * from './pipeline/ci-config-location.js';
+export * from './pipeline/claim-admission.js';
 export * from './pipeline/claimant.js';
 export * from './pipeline/cli-spawn.js';
 export * from './pipeline/commands.js';

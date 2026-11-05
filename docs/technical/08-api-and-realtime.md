@@ -447,7 +447,10 @@ API by `apps/server/src/worker-protocol.ts`): `handshake` and `claims` (worker c
   held, the worker not revoked, its user may act (backlog 714), not paused, an effective project role
   (the higher of the organisation role and a membership, backlog 886) at `member`+, `workers_from` reached or the assignee's head start, and the project's run credential
   `minted` — or `static`/`deploy_key` behind the git integration's `remote_run_credential: allow`
-  (WP-282, default `deny`). The claim writes
+  (WP-282, default `deny`). In the same transaction the stage executor's budget questions are asked
+  again (TD-031 §2, S-22.14 `claim-admission.ts`, both claimants): a task cap or an organisation or
+  project budget spent since the offer rolls the claim back, withdraws the offer (`budget_at_claim`),
+  pauses the task `budget` and answers the worker `204`. The claim writes
   `run_offers.worker_id`, `runs.worker_id`, the run token's SHA-256 and its epoch, and the offer's
   `image_digests`; the git credential is minted **after** it commits. A run that cannot be packaged
   settles `not_started` under the worker's claim — **a mint failure included, never a release**
@@ -497,8 +500,10 @@ authenticated worker, else `409 lease_lost` (`410 run_gone` for a run that no lo
   `(run_id, seq)`** whatever `created_at` a repeat names. An undecodable entry, one naming another run
   or `seq`, or one dated outside seven days back / ten minutes ahead is stored at its `seq` as a
   `system` entry with subtype `ingest_refused` (paths and messages, redacted, never the entry) and
-  listed in `refused_seqs`; a `seq` past 2³¹−1 is `400 seq_out_of_range`. The `run:<id>` stream is
-  announced as for a server run. `200 {stored, refused_seqs}`.
+  listed in `refused_seqs`; a `seq` past 2³¹−1 is `400 seq_out_of_range`. A run holds at most
+  100 000 entries (`MAX_TRANSCRIPT_ENTRIES_PER_RUN`, S-22.14): a batch that would pass it is `409
+  transcript_full` and stores nothing, and the worker stops the run (it settles `cancelled` through
+  `finish`). The `run:<id>` stream is announced as for a server run. `200 {stored, refused_seqs}`.
 - **`tools/:name`** — a live run only. The production `PlatformToolPort` (the server runner's own
   composition) with a context rebuilt from the run's stored plan: project, task, mode, `promptHolds`,
   the run's redactor. A tool the run's role was not given (`RunSpec.platformTools`) is `403
@@ -521,7 +526,9 @@ authenticated worker, else `409 lease_lost` (`410 run_gone` for a run that no lo
   and counts nothing), and every signature counted against `MAX_DEPLOY_KEY_SIGNATURES` (128) in
   `run_offers.ssh_signatures`, **in the statement that checks the offer's state, epoch and worker** —
   one cap per run whichever replica or caller (runlet relay, helpers' relayed socket) asks. A run given
-  no deploy key (`runs.credential_source`) is answered `null`. `200 {signature}`.
+  no deploy key (`runs.credential_source`) is answered `null`, and so is every signature once the
+  project's git integration no longer says `remote_run_credential: allow` — the opt-in is re-read per
+  signature, not only at the claim (S-22.14, backlog 753). `200 {signature}`.
 
 **`release` and `compose.yml` are served since WP-284** (TD-032 decision 3): `GET release` with the
 worker credential, `GET compose.yml` **public** — no credential, and the one path the `X-Worker-Protocol`
