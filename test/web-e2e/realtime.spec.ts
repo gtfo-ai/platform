@@ -109,20 +109,20 @@ test('a reset makes the client refetch rather than sit on a stale cache', async 
   request,
 }) => {
   await page.goto(`/projects/${PROJECT_KEY}`);
-  await expect(page.getByRole('link', { name: 'DEMO-1' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'DEMO-3' })).toHaveCount(0);
+  await expect(page.getByRole('article', { name: 'DEMO-1' })).toBeVisible();
+  await expect(page.getByRole('article', { name: 'DEMO-3' })).toHaveCount(0);
 
   await waitForStreamCarrying(request, projectTopic, pingProbe(projectTopic), 'ping');
 
   // The server now answers differently. Nothing has told the client, so the board is stale.
   await addTask(request);
-  await expect(page.getByRole('link', { name: 'DEMO-3' })).toHaveCount(0);
+  await expect(page.getByRole('article', { name: 'DEMO-3' })).toHaveCount(0);
 
   const delivered = await sendControl(request, 'reset', projectTopic);
   expect(delivered, 'the reset reached no stream').toBeGreaterThan(0);
 
   // Only a refetch can produce this card, so its appearance *is* the refetch.
-  await expect(page.getByRole('link', { name: 'DEMO-3' })).toBeVisible();
+  await expect(page.getByRole('article', { name: 'DEMO-3' })).toBeVisible();
 });
 
 test('a shutdown is surfaced and the client reconnects carrying its cursors', async ({

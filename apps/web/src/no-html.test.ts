@@ -360,8 +360,22 @@ describe('the web application', () => {
       .filter((path) => stripBlockComments(readFileSync(path, 'utf8')).includes('<ExternalLink'))
       .map((path) => relative(SOURCE_ROOT, path));
 
-    expect(users).toContain(join('features', 'board.tsx'));
     expect(users).toContain(join('features', 'task-detail.tsx'));
+  });
+
+  it('links the board card’s provider URLs through the menu’s safe link item', () => {
+    // S-23.9a moved *Open ticket* and *Open MR* into the card's `···` menu: the card renders
+    // `ActionMenuLinkItem`, which renders `untrusted.tsx`'s `ExternalAnchor` — so the URL still
+    // reaches an `href` only through `safeHref`.
+    const card = stripBlockComments(
+      readFileSync(join(SOURCE_ROOT, 'features', 'board-card.tsx'), 'utf8'),
+    );
+    expect(card).toContain('<ActionMenuLinkItem url={task.ticket.url}');
+    expect(card).toContain('<ActionMenuLinkItem url={task.mr_ref.url}');
+    const menu = stripBlockComments(
+      readFileSync(join(SOURCE_ROOT, 'ui', 'action-menu.tsx'), 'utf8'),
+    );
+    expect(menu).toContain('<ExternalAnchor url={url}');
   });
 
   it('renders untrusted text through the one module that is allowed to', () => {

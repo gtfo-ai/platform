@@ -71,6 +71,7 @@ import type {
   RunStatus,
   TaskConflict,
   TaskDetailResponse,
+  TaskListItem,
   TaskRecord,
   TaskStageOutcome,
   TaskStageState,
@@ -121,6 +122,7 @@ import { HttpError } from '../errors.js';
 import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
 import { latestActivityFor, newestEntryPerRun, seatsFor } from './live-view-queries.js';
+import { frozenLimits } from './pipeline-graph.js';
 
 const {
   approvals,
@@ -1159,6 +1161,75 @@ const pausedReasonsFor = async (
   );
 };
 
+/**
+ * The page's `task_stages` rows (S-23.9a), oldest first as the task page orders them — the board
+ * card's phase strip and its time in stage. A row whose state is outside the published vocabulary
+ * is refused by name, as the task page refuses it ({@link stageStateOf}).
+ */
+const stageRowsFor = async (
+  database: Database,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, TaskListItem['stages']>> => {
+  if (taskIds.length === 0) {
+    return new Map();
+  }
+  const rows = await database
+    .select({
+      taskId: taskStages.taskId,
+      stage: taskStages.stage,
+      attempt: taskStages.attempt,
+      state: taskStages.state,
+      enteredAt: taskStages.enteredAt,
+    })
+    .from(taskStages)
+    .where(inArray(taskStages.taskId, [...taskIds]))
+    .orderBy(asc(taskStages.taskId), asc(taskStages.enteredAt), asc(taskStages.attempt));
+  const byTask = new Map<string, TaskListItem['stages'][number][]>();
+  for (const row of rows) {
+    const list = byTask.get(row.taskId) ?? [];
+    list.push({
+      stage: row.stage,
+      attempt: row.attempt,
+      state: stageStateOf(row),
+      entered_at: isoRequired(row.enteredAt),
+    });
+    byTask.set(row.taskId, list);
+  }
+  return byTask;
+};
+
+/**
+ * How many of each page task's questions are `open` and approvals `pending` (S-23.9a) — the same
+ * predicates the inbox lists by, so a card's count and the inbox never disagree.
+ */
+const openAsksFor = async (
+  database: Database,
+  taskIds: readonly string[],
+): Promise<{
+  readonly questions: ReadonlyMap<string, number>;
+  readonly approvals: ReadonlyMap<string, number>;
+}> => {
+  if (taskIds.length === 0) {
+    return { questions: new Map(), approvals: new Map() };
+  }
+  const [open, pending] = await Promise.all([
+    database
+      .select({ taskId: questions.taskId, count: sql<number>`count(*)::int` })
+      .from(questions)
+      .where(and(inArray(questions.taskId, [...taskIds]), eq(questions.status, 'open')))
+      .groupBy(questions.taskId),
+    database
+      .select({ taskId: approvals.taskId, count: sql<number>`count(*)::int` })
+      .from(approvals)
+      .where(and(inArray(approvals.taskId, [...taskIds]), eq(approvals.status, 'pending')))
+      .groupBy(approvals.taskId),
+  ]);
+  return {
+    questions: new Map(open.map((row) => [row.taskId, Number(row.count)])),
+    approvals: new Map(pending.map((row) => [row.taskId, Number(row.count)])),
+  };
+};
+
 /** Why a paused task is paused, and — for a budget pause — which cap (WP-131 review round 2). */
 interface PausedWhy {
   readonly reason: NonNullable<TaskRecord['paused_reason']>;
@@ -1891,7 +1962,7 @@ export interface ProjectTasksQuery {
 }
 
 export interface ProjectTaskPage {
-  readonly items: readonly TaskRecord[];
+  readonly items: readonly TaskListItem[];
   /** The keyset of the last row, or `null` on the last page. */
   readonly next?: TaskCursor;
 }
@@ -1952,7 +2023,8 @@ export const listProjectTasks = async (
   // One extra read per page for the board's conflict badge (backlog 63), over the ids of the page
   // and never over the project: a warning for a task the caller is not being shown is not a row
   // this answer has anywhere to put.
-  const [conflicts, estimated, unmeasured, pausedReasons] = await Promise.all([
+  // S-23.9a: the card's glance — its stage rows and what waits on a person — over the same ids.
+  const [conflicts, estimated, unmeasured, pausedReasons, stageRows, asks] = await Promise.all([
     conflictsFor(
       database,
       page.map((row) => row.task.id),
@@ -1969,17 +2041,29 @@ export const listProjectTasks = async (
       database,
       page.filter((row) => row.task.state === 'paused').map((row) => row.task.id),
     ),
+    stageRowsFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
+    openAsksFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
   ]);
   return {
-    items: page.map((row) =>
-      toTaskRecord(
+    items: page.map((row) => ({
+      ...toTaskRecord(
         row.task,
         conflicts.get(row.task.id) ?? null,
         estimated.get(row.task.id) ?? 0,
         unmeasured.get(row.task.id) ?? 0,
         pausedReasons.get(row.task.id),
       ),
-    ),
+      stages: stageRows.get(row.task.id) ?? [],
+      open_questions: asks.questions.get(row.task.id) ?? 0,
+      pending_approvals: asks.approvals.get(row.task.id) ?? 0,
+      loop_limits: frozenLimits(row.task.iterationLimits),
+    })),
     ...(rows.length > query.limit && last !== undefined
       ? { next: { createdAt: last.cursorAt, id: last.task.id } }
       : {}),

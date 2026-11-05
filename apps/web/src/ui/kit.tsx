@@ -13,7 +13,7 @@
  * Everything that displays text a human did not write goes through `untrusted.tsx`, never through
  * these.
  */
-import type { InputHTMLAttributes, ReactElement, ReactNode } from 'react';
+import type { InputHTMLAttributes, ReactElement, ReactNode, Ref } from 'react';
 import { useId } from 'react';
 import { PlatformUpdatedError } from '../api/http.js';
 import { Blankslate } from './blankslate.js';
@@ -115,6 +115,8 @@ export const Badge = ({
 export interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
   readonly label: string;
   readonly hint?: string;
+  /** The input's ref (React 19 passes it as a prop; it reaches the `<input>` with the rest). */
+  readonly ref?: Ref<HTMLInputElement>;
 }
 
 export const Field = ({ label, hint, id, ...rest }: FieldProps): ReactElement => {

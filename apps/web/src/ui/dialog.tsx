@@ -10,7 +10,7 @@
  */
 import { Dialog as BaseDialog } from '@base-ui/react/dialog';
 import { XIcon } from '@primer/octicons-react/XIcon';
-import type { ReactElement, ReactNode } from 'react';
+import type { ReactElement, ReactNode, RefObject } from 'react';
 import { IconButton } from './button.js';
 
 export const Dialog = ({
@@ -22,6 +22,7 @@ export const Dialog = ({
   children,
   footer,
   size = 'md',
+  initialFocus,
 }: {
   readonly open?: boolean;
   readonly onOpenChange?: (open: boolean) => void;
@@ -33,6 +34,8 @@ export const Dialog = ({
   /** The buttons, right-aligned; the primary one last. */
   readonly footer?: ReactNode;
   readonly size?: 'md' | 'lg';
+  /** What takes the focus on open — a form's first field; Base UI's first tabbable otherwise. */
+  readonly initialFocus?: RefObject<HTMLElement | null>;
 }): ReactElement => (
   <BaseDialog.Root
     {...(open === undefined ? {} : { open })}
@@ -49,6 +52,7 @@ export const Dialog = ({
       <BaseDialog.Backdrop className="fixed inset-0 z-40 bg-header/70 transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0" />
       <BaseDialog.Popup
         data-dialog-size={size}
+        {...(initialFocus === undefined ? {} : { initialFocus })}
         className={`fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-4rem)] ${size === 'lg' ? 'w-[min(60rem,calc(100vw-2rem))]' : 'w-[min(34rem,calc(100vw-2rem))]'} -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-line bg-canvas text-fg shadow-overlay outline-none`}
       >
         <div className="flex items-start gap-3 border-b border-line px-4 py-3">

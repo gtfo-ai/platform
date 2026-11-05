@@ -682,6 +682,11 @@ describe('the list envelopes and the KB health report', () => {
       // Required since WP-181 (criterion (6)).
       ticket_claim: null,
       qa_stage: false,
+      // The board card's glance (S-23.9a).
+      stages: [{ stage: 'refinement', attempt: 1, state: 'running' as const, entered_at: AT }],
+      open_questions: 0,
+      pending_approvals: 0,
+      loop_limits: { code_review: 3 },
     };
     expect(
       tasksResponseSchema.parse({ items: [task], next_cursor: null, can_start_task: true }),
@@ -701,6 +706,22 @@ describe('the list envelopes and the KB health report', () => {
     // So is the caller's capability (WP-122): a board that cannot tell "may not start" from "the
     // server did not say" would offer or hide the form by accident.
     expect(tasksResponseSchema.safeParse({ items: [task], next_cursor: null }).success).toBe(false);
+
+    // S-23.9a: the card's glance is required and strict. A page whose item forgot the stage rows or
+    // a count would draw "no stage" and "nothing waits on you" — a claim, not a missing value.
+    const page = (item: unknown) =>
+      tasksResponseSchema.safeParse({ items: [item], next_cursor: null, can_start_task: true });
+    for (const key of ['stages', 'open_questions', 'pending_approvals', 'loop_limits'] as const) {
+      const { [key]: _dropped, ...without } = task;
+      expect(page(without).success, key).toBe(false);
+    }
+    expect(page({ ...task, loop_limits: null }).success).toBe(true);
+    expect(page({ ...task, open_questions: -1 }).success).toBe(false);
+    expect(page({ ...task, stages: [{ ...task.stages[0], state: 'sideways' }] }).success).toBe(
+      false,
+    );
+    expect(page({ ...task, stages: [{ ...task.stages[0], exited_at: null }] }).success).toBe(false);
+    expect(page({ ...task, extra: true }).success).toBe(false);
   });
 
   it('publishes one health report, with its findings bounded to the kinds the domain computes', () => {

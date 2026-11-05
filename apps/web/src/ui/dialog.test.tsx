@@ -4,6 +4,7 @@
  */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Button } from './button.js';
 import { Dialog } from './dialog.js';
@@ -64,6 +65,23 @@ describe('Dialog', () => {
     await user.click(screen.getByRole('button', { name: 'Close' }));
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  it('gives the focus to the caller’s `initialFocus` rather than the first tabbable', async () => {
+    const WithField = () => {
+      const field = useRef<HTMLInputElement>(null);
+      return (
+        <Dialog open title="Start a ticket" initialFocus={field}>
+          <button type="button">Help</button>
+          <input ref={field} aria-label="Ticket key" />
+        </Dialog>
+      );
+    };
+    render(<WithField />);
+    await screen.findByRole('dialog', { name: 'Start a ticket' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByLabelText('Ticket key'));
     });
   });
 

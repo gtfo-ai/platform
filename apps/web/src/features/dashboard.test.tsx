@@ -305,9 +305,16 @@ const fetchFor = (world: World) =>
       if (what === 'tasks') {
         const state = url.searchParams.get('state');
         return json({
-          items: world.tasks.filter(
-            (item) => item.project_id === id && (state === null || item.state === state),
-          ),
+          // The board's page item: the record plus the card's glance (S-23.9a).
+          items: world.tasks
+            .filter((item) => item.project_id === id && (state === null || item.state === state))
+            .map((item) => ({
+              ...item,
+              stages: [],
+              open_questions: 0,
+              pending_approvals: 0,
+              loop_limits: null,
+            })),
           next_cursor: null,
           can_start_task: true,
         });

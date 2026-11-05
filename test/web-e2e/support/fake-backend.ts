@@ -359,7 +359,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       // Changes what the next fetch of the board returns, so a `reset` that causes a refetch is
       // provable by a positive assertion (a third card appears) rather than by "nothing broke".
       extraTasks.push({
-        ...fixtures.bugTask,
+        ...fixtures.bugListItem,
         id: '00000000-0000-4000-8000-000000000022',
         ticket: {
           provider: 'jira',

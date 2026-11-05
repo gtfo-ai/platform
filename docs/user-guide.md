@@ -65,7 +65,7 @@ board; from the inbox or Agents it does not yet. Every address is the one it alw
   restarting*, *Disconnected* — shown beside it whenever it is not live, because a page that has
   stopped receiving updates has also stopped changing;
 - **+** — **New project** (for an admin: creating a project is an admin's), and inside a project you
-  may start tickets in, **Start a ticket…**, which opens the board's start form (below); with
+  may start tickets in, **Start a ticket…**, which opens the board's *Start a ticket* dialog (below); with
   neither, there is no **+**;
 - the **inbox** button, with the number of things waiting for you;
 - your avatar (below).
@@ -482,7 +482,7 @@ each kind exists, a project exists, its readiness was evaluated, its operating m
 has a ticket's task), never from what this browser remembers, so a step done in another tab or
 through the API is ticked too. **Continue setup** opens the first step that is not done — the
 Integrations screen, the wizard (on the project, when it exists) or the board's *Start a ticket*
-form — and every step's name is a link to its own screen. Once a project exists, the checklist moves
+dialog — and every step's name is a link to its own screen. Once a project exists, the checklist moves
 to the right-hand column as *Finish setting up*, and when every step is done it disappears. It
 follows the oldest project; a later project's steps are the wizard's to show. Every other role, on
 an instance with no project, is told that an admin sets it up.
@@ -502,27 +502,63 @@ yet — the inbox's count in the top bar is the total.
 
 ## 3. The board
 
-**A project → Board**, the project's first tab. One column per task state. Each card carries the ticket key and the ticket's
-**title** — its own words as the platform read them, or *Ticket not read yet* before it has — with
-the state and the pipeline stage beneath, and the task's measured cost so far: reported by the
-provider, or priced from the price list in `local` provider mode. A run that ended with nobody
-measuring it is left out of that figure, and the card then says so beside it — *excl. 2 unmeasured*.
+**A project → Board**, the project's first tab. Five columns — **Queued**, **Active**, **Needs you**,
+**Ready to merge** and **Done** — each headed by its name and how many tasks it holds; *Needs you*
+is lit amber, because that is where your work is. On a narrow screen the columns scroll sideways,
+one column at a time, rather than wrapping, so the pipeline still reads left to right.
+
+**Each card says which phase the ticket is in and whether it needs you:**
+
+- the ticket's **title** first — its own words as the platform read them — which opens the task;
+  beside it, muted, the ticket key and the template's icon (feature, bug, chore, spike). Before the
+  platform has read the ticket, the card names it by its key and says *Ticket not read yet*;
+- a strip of the stages the task has **entered**, one mark each — done ✓, the current one ●, sent
+  back ↺, failed, skipped — with the current stage's name under it. While an agent is working on the
+  task, the card pulses amber and says what it is doing: *Code review · Now: Reading files*.
+  Otherwise it says the task's state in words (*Waiting for answers*, *Paused*, …). Stages the task
+  has not reached yet are not drawn;
+- how long it has been in its current stage, and the measured cost so far: reported by the
+  provider, or priced from the price list in `local` provider mode. A run that ended with nobody
+  measuring it is left out of that figure, and the card then says so beside it — *excl. 2
+  unmeasured*;
+- a **◆** when the task waits on a person — a question, an approval, or a task that needs a human —
+  with the number of open questions and pending approvals beside it;
+- a badge per loop the task has gone round, against its limit: *Code review 2/3*;
+- *touches ACME-12 · 3 files* when the rebase gate found that another active task changes the same
+  files (the comparison runs at the rebase gate, so no badge means *not compared yet*).
+
+**The `···` menu on a card** offers **Pause** or **Resume**, **Return to stage…**, **Cancel…**,
+**Open ticket** and **Open MR** — the task page's own commands. *Cancel…* asks first and says what
+cancelling does (it ends the task for good); *Return to stage…* asks which stage the task has
+entered to send it back to, and why — the stage is given your reason; a task that stopped at a gate
+which recorded a failure carries it too, as the task page's ticked *Attach the gate's last failure*
+box does (open the task to send your reason alone). Who may do what is the table in section 4 —
+cancelling and returning are a maintainer's, and the board says so if the server refuses. A
+finished task offers only the links. A link the provider sent that is not a web address is shown struck through rather than
+followed.
+
+**List** (the toggle above the columns, or `?view=list`) shows the same tasks as a list, newest
+first, with filters for the **state**, the **template** and **Needs you**.
+
+**An empty board** says how tickets arrive — a ticket that matches the project's **pickup rule** (a
+label, a status, an epic or a query) — with **Open pickup rules**, which goes to the project's
+settings, and, if you may start one, **Start a ticket by hand**.
 
 The columns are task **states**, not pipeline stages, and that is deliberate for now: the column list
 in the product spec is "the stages of the project's pipeline template, plus Queued / Needs human /
-Done", and the template is not published to the client yet — a board built on it today would have one
-column called "unknown".
+Done"; each card's strip carries its stage instead.
 
 **There is no drag-and-drop, by design.** The pipeline owns task state; you move a task with a
 command that the domain can refuse, not by dropping a card.
 
 ### Starting a ticket by hand
 
-A ticket reaches the board when it matches the project's **intake rule** — the label, status, epic or
+A ticket reaches the board when it matches the project's **pickup rule** — the label, status, epic or
 query its task-management integration picks up. For a ticket no rule matches, a **member** (or above)
-types its key into **Start a ticket** above the columns and presses **Start**; the form is not shown
-to a viewer. The project header's **Start a ticket** button and the top bar's **+ → Start a
-ticket…** both bring you to that form with the cursor in it. The key is letters, digits, `.`, `_` and `-` (for example `ACME-123`).
+presses the project header's **Start a ticket** (or the top bar's **+ → Start a ticket…**, or an
+empty board's **Start a ticket by hand**): a small dialog opens with the cursor in its **Ticket key**
+field; type the key and press **Start**. None of these is shown to a viewer. The key is letters,
+digits, `.`, `_` and `-` (for example `ACME-123`).
 
 The start reads the ticket from the tracker and records it as matched **by hand** — and that is the
 only thing it skips. The task is then created exactly as for a rule match: it gets the template its

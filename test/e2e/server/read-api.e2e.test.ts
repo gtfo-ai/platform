@@ -190,6 +190,18 @@ describe('the project, agent and integration reads, over a pipeline that ran', (
     expect(page.items.map((task) => task.ticket.key)).toEqual(['ACME-1']);
     expect(page.items[0]?.state).toBe('ready_for_merge');
     expect(page.next_cursor).toBeNull();
+    // S-23.9a: the board card's glance is read off the real tables — the stages the walk entered,
+    // oldest first and refinement completed, nothing waiting on a person, and the frozen limits.
+    const card = page.items[0];
+    const refinement = card?.stages.find((row) => row.stage === 'refinement');
+    expect(refinement?.state).toBe('completed');
+    expect(card?.stages.map((row) => row.stage)).toContain('implementation');
+    expect(card?.stages.map((row) => row.entered_at)).toEqual(
+      [...(card?.stages ?? [])].map((row) => row.entered_at).sort(),
+    );
+    expect(card?.open_questions).toBe(0);
+    expect(card?.pending_approvals).toBe(0);
+    expect(card?.loop_limits?.code_review).toBe(3);
 
     // A filter that matches, and one that does not — so "the filter is ignored" fails here.
     const filtered = tasksResponseSchema.parse(
@@ -392,5 +404,8 @@ describe('the inbox, over a question the pipeline asked', () => {
       (await client.json<TasksResponse>(`/api/projects/${pipeline.projectId}/tasks`)).body,
     );
     expect(page.items[0]?.state).toBe('waiting_answers');
+    // …and the card counts the question the inbox lists (S-23.9a).
+    expect(page.items[0]?.open_questions).toBe(1);
+    expect(page.items[0]?.stages.map((row) => row.stage)).toContain('refinement');
   }, 180_000);
 });

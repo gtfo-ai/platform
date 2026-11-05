@@ -245,10 +245,18 @@ const projectPage = <TPath extends string>(
   component: RouteComponent,
 ) => createRoute({ getParentRoute: () => projectRoute, path, staticData: { tab }, component });
 
+/**
+ * `?view=list` — the board's Issues-style list (S-23.9a); anything else, or nothing, is the board.
+ * A value outside the two is caught to `undefined` rather than a router error: it reaches no
+ * attribute, and the screen reads it as the board.
+ */
+const boardSearchSchema = z.object({ view: z.enum(['board', 'list']).optional().catch(undefined) });
+
 /** The board is the project's index: `/projects/$key` itself. Full width, as GitHub's project board. */
 const boardRoute = createRoute({
   getParentRoute: () => projectRoute,
   path: '/',
+  validateSearch: boardSearchSchema,
   staticData: { tab: 'board', fullWidth: true },
   component: withPreload(function Board() {
     const { key } = boardRoute.useParams();

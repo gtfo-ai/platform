@@ -1395,7 +1395,37 @@ export const listTasksQuerySchema = paginationQuerySchema.extend({
  * already sends `limit` and `cursor`. `next_cursor` is opaque: it is the keyset the server issued,
  * and a client that parses it is reading a shape no contract fixes.
  */
-export const tasksResponseSchema = page(taskRecordSchema).extend({
+/**
+ * One task of the board's page (S-23.9a): the {@link taskRecordSchema} record plus what a card says
+ * at a glance — which phase, for how long, and whether it waits on a person. Read over the page's
+ * ids and never over the project, as the conflict badge's read is.
+ *
+ * - `stages`: the task's entered `task_stages` rows, oldest first (`entered_at`, then `attempt`) —
+ *   the strip `phaseStagesFor` draws from, and the current row's `entered_at` is the card's time
+ *   in stage. Nothing upcoming is invented: a stage the task has not entered is not here.
+ * - `open_questions` / `pending_approvals`: the task's `questions` with status `open` and its
+ *   `approvals` with status `pending` — the counts the inbox lists for it.
+ * - `loop_limits`: the task's **frozen** iteration limits over the defaults (the `/pipeline`
+ *   read's `frozenLimits`), keyed as `iteration_counters` is, so a card can say *code review 2/3*.
+ *   `null` when the stored limits do not parse: the card then says the count alone rather than a
+ *   ceiling it does not know.
+ */
+export const taskListItemSchema = taskRecordSchema.extend({
+  stages: z.array(
+    z.strictObject({
+      stage: stageIdSchema,
+      attempt: z.int().positive(),
+      state: taskStageStateSchema,
+      entered_at: isoDateTimeSchema,
+    }),
+  ),
+  open_questions: z.int().nonnegative(),
+  pending_approvals: z.int().nonnegative(),
+  loop_limits: z.record(slugSchema, z.int().nonnegative()).nullable(),
+});
+export type TaskListItem = z.infer<typeof taskListItemSchema>;
+
+export const tasksResponseSchema = page(taskListItemSchema).extend({
   /**
    * Whether the **caller** may start a task by hand in this project — `task.create` over their
    * effective role there (WP-122). The board offers the ticket-key form only then; the route refuses

@@ -2539,3 +2539,86 @@ describe('the run settings and the task export’s events against PostgreSQL (WP
     expect(two.map((row) => row.type)).toEqual(['task.created', 'run.created']);
   });
 });
+
+/**
+ * **The board card's glance** (S-23.9a): `GET /api/projects/:id/tasks` carries each task's entered
+ * stage rows, its open questions and pending approvals, and its frozen loop limits — read over the
+ * page's ids. A project of its own, so the list tests above keep their counts.
+ *
+ * Both directions (standing rule 42): the answered question and the decided approval are not
+ * counted, a task with nothing open says 0 rather than inheriting a neighbour's count, a task that
+ * entered no stage has no rows, and a malformed frozen limit is `null` rather than the defaults.
+ */
+describe('the board card’s glance on the task page', () => {
+  it('carries the stage rows, the open asks and the frozen limits of each task', async () => {
+    const owner = await pool.query<{ org_id: string }>(
+      'select org_id from projects where id = $1',
+      [projectId],
+    );
+    const board = await pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'board', 'Board', 'https://git.example.test/acme/board.git') returning id`,
+      [owner.rows[0]?.org_id],
+    );
+    const boardId = board.rows[0]?.id as string;
+    const inserted = await pool.query<{ id: string; ticket_key: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage, iteration_counters, iteration_limits)
+       values ($1, 'fake-jira', 'BRD-1', 'https://jira.example.test/browse/BRD-1', 'feature',
+               'waiting_answers', 'code_review', '{"code_review": 2}', '{"code_review": 5}'),
+              ($1, 'fake-jira', 'BRD-2', 'https://jira.example.test/browse/BRD-2', 'bug',
+               'queued', null, '{}', '{"code_review": 1.5}')
+       returning id, ticket_key`,
+      [boardId],
+    );
+    const idOf = (key: string): string =>
+      inserted.rows.find((row) => row.ticket_key === key)?.id as string;
+    const [busy, idle] = [idOf('BRD-1'), idOf('BRD-2')];
+
+    await pool.query(
+      `insert into task_stages (task_id, stage, attempt, state, entered_at)
+       values ($1, 'refinement', 1, 'completed', now() - interval '3 hours'),
+              ($1, 'implementation', 1, 'completed', now() - interval '2 hours'),
+              ($1, 'code_review', 1, 'returned', now() - interval '90 minutes'),
+              ($1, 'code_review', 2, 'running', now() - interval '10 minutes')`,
+      [busy],
+    );
+    await pool.query(
+      `insert into questions (task_id, stage, text, blocking, status)
+       values ($1, 'code_review', 'Open one', true, 'open'),
+              ($1, 'code_review', 'Open two', false, 'open'),
+              ($1, 'refinement', 'Answered', true, 'answered')`,
+      [busy],
+    );
+    await pool.query(
+      `insert into approvals (task_id, kind, status)
+       values ($1, 'plan', 'pending'), ($1, 'budget', 'approved')`,
+      [busy],
+    );
+
+    const page = await listProjectTasks(drizzled, boardId, { limit: 50 });
+    const card = page?.items.find((item) => item.id === busy);
+    expect(card?.stages.map((row) => `${row.stage}#${String(row.attempt)}:${row.state}`)).toEqual([
+      'refinement#1:completed',
+      'implementation#1:completed',
+      'code_review#1:returned',
+      'code_review#2:running',
+    ]);
+    expect(card?.stages.every((row) => /^\d{4}-\d{2}-\d{2}T/.test(row.entered_at))).toBe(true);
+    expect(card?.open_questions).toBe(2);
+    expect(card?.pending_approvals).toBe(1);
+    // The frozen limit over the defaults: the task's own 5, and BD-008's default for the rest.
+    expect(card?.loop_limits?.code_review).toBe(5);
+    expect(card?.loop_limits?.ci_fix).toBe(3);
+
+    const quiet = page?.items.find((item) => item.id === idle);
+    expect(quiet?.stages).toEqual([]);
+    expect(quiet?.open_questions).toBe(0);
+    expect(quiet?.pending_approvals).toBe(0);
+    // `1.5` is not a limit: unknown, so the card says the count alone.
+    expect(quiet?.loop_limits).toBeNull();
+
+    await pool.query('delete from tasks where project_id = $1', [boardId]);
+    await pool.query('delete from projects where id = $1', [boardId]);
+  });
+});

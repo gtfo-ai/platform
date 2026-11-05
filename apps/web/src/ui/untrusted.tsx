@@ -11,7 +11,13 @@
  * application renders passes through `safeHref` here (`UntrustedText` for a link found in text,
  * `ExternalLink` for a link a DTO carried).
  */
-import { type ReactElement, useState } from 'react';
+import {
+  type AnchorHTMLAttributes,
+  type HTMLAttributes,
+  type ReactElement,
+  type Ref,
+  useState,
+} from 'react';
 import {
   safeHref,
   sanitiseUntrusted,
@@ -65,6 +71,46 @@ export const ExternalLink = ({
   }
   return (
     <a href={resolved} target="_blank" rel="noopener noreferrer nofollow" className={className}>
+      {label}
+    </a>
+  );
+};
+
+/**
+ * {@link ExternalLink} as **another component's element** — a menu's link item
+ * (`ui/action-menu.tsx`'s `ActionMenuLinkItem`, which hands it `role`, `tabIndex`, the handlers and
+ * the ref) — so the props it is given reach the anchor while the URL still goes through
+ * {@link safeHref} here and nowhere else. `href`, `target` and `rel` are this module's, never the
+ * caller's. A refused URL is the same struck-through label with the reason in its `title` and
+ * `aria-disabled`, keeping the props it was handed so the menu still treats it as an item.
+ */
+export const ExternalAnchor = ({
+  url,
+  label,
+  ref,
+  ...rest
+}: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href' | 'target' | 'rel' | 'children'> & {
+  readonly url: string;
+  readonly label: string;
+  readonly ref?: Ref<HTMLAnchorElement>;
+}): ReactElement => {
+  const resolved = safeHref(url);
+  if (resolved === null) {
+    return (
+      <span
+        {...(rest as HTMLAttributes<HTMLSpanElement>)}
+        ref={ref as Ref<HTMLSpanElement>}
+        aria-disabled="true"
+        className={`text-fg-muted line-through ${rest.className ?? ''}`}
+        title={`Not shown as a link: ${sanitiseUntrusted(url)} is not an http(s) URL.`}
+        data-link-refused="true"
+      >
+        {label}
+      </span>
+    );
+  }
+  return (
+    <a {...rest} ref={ref} href={resolved} target="_blank" rel="noopener noreferrer nofollow">
       {label}
     </a>
   );

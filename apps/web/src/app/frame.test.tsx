@@ -325,19 +325,26 @@ describe('the top bar', () => {
         '/projects/p1#start-ticket',
       );
     });
-    // The board's form takes the focus, so the next keystroke is the key.
-    const field = await screen.findByLabelText('Start a ticket');
+    // The board's start dialog opens and its key field takes the focus, so the next keystroke is
+    // the key (S-23.9a: a Dialog rather than a form above the columns).
+    const dialog = await screen.findByRole('dialog', { name: 'Start a ticket' });
+    const field = within(dialog).getByLabelText('Ticket key');
     await waitFor(() => {
       expect(document.activeElement).toBe(field);
     });
 
-    // A second press, on the board at the same URL: no navigation happens, the focus still moves.
-    const header = await screen.findByRole('link', { name: 'Start a ticket' });
-    field.blur();
-    expect(document.activeElement).not.toBe(field);
-    await user.click(header);
+    // Closing it drops the hash, and the header's button opens it again with the focus in it.
+    await user.keyboard('{Escape}');
     await waitFor(() => {
-      expect(document.activeElement).toBe(field);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    await waitFor(() => {
+      expect(`${window.location.pathname}${window.location.hash}`).toBe('/projects/p1');
+    });
+    await user.click(await screen.findByRole('link', { name: 'Start a ticket' }));
+    const again = await screen.findByRole('dialog', { name: 'Start a ticket' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(within(again).getByLabelText('Ticket key'));
     });
   });
 
@@ -424,8 +431,11 @@ describe('the project layout route', () => {
     const primary = await screen.findByRole('link', { name: 'Start a ticket' });
     expect(primary.hasAttribute('aria-current')).toBe(false);
     expect(primary.getAttribute('href')).toBe('/projects/p1#start-ticket');
-    // The board is the index child, and its old underlined links to the sub-pages are gone.
-    expect(await screen.findByRole('region', { name: 'Queued' })).toBeTruthy();
+    // The board is the index child — empty here, so its blankslate — and its old underlined links
+    // to the sub-pages are gone.
+    expect(
+      await screen.findByRole('heading', { name: 'Tickets you label for agents appear here' }),
+    ).toBeTruthy();
     const main = screen.getByRole('main');
     expect(
       within(main)

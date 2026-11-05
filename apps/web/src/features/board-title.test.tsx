@@ -1,6 +1,6 @@
 /**
  * **The board card carries the ticket's title** — product/10 § "Board (project)": *"ticket key +
- * title"* (Q48, WP-95).
+ * title"* (Q48, WP-95); since S-23.9a the title comes first and is the link into the task.
  *
  * The title is `task.ticket_title`, a projection over `tasks.ticket_snapshot` — the ticket's own
  * words as the platform read them, bounded and redacted at the write — so it is provider text and
@@ -13,7 +13,7 @@
  * says how many — and one with none says nothing — under a title that no longer claims the figure
  * is provider-reported (it is priced in local provider mode).
  */
-import type { TaskRecord } from '@platform/contracts';
+import type { TaskListItem } from '@platform/contracts';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -35,7 +35,7 @@ const SESSION: SessionResponse = {
 /** Markup in a title a ticket author chose: it must be shown, never parsed. */
 const HOSTILE_TITLE = 'Checkout <img src=x onerror="window.__pwned=true"> button';
 
-const task = (overrides: Partial<TaskRecord>): TaskRecord =>
+const task = (overrides: Partial<TaskListItem>): TaskListItem =>
   ({
     id: '00000000-0000-4000-8000-0000000000b1',
     project_id: PROJECT,
@@ -73,8 +73,13 @@ const task = (overrides: Partial<TaskRecord>): TaskRecord =>
     completed_at: null,
     ticket_claim: null,
     qa_stage: false,
+    // The card's glance (S-23.9a).
+    stages: [],
+    open_questions: 0,
+    pending_approvals: 0,
+    loop_limits: null,
     ...overrides,
-  }) as TaskRecord;
+  }) as TaskListItem;
 
 const UNREAD = task({
   id: '00000000-0000-4000-8000-0000000000b2',
@@ -132,25 +137,36 @@ beforeEach(() => {
 describe('the board card’s ticket title (Q48)', () => {
   it('shows the stored title as text, and says so when the ticket has not been read', async () => {
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-    await screen.findByText('ACME-22');
+    await screen.findByRole('article', { name: 'ACME-22' });
 
+    // S-23.9a: the title comes first and is the link into the task.
     const read = container.querySelector('[data-ticket-title="read"]');
     expect(read?.textContent).toBe(HOSTILE_TITLE);
+    expect(read?.tagName).toBe('A');
+    expect(read?.getAttribute('href')).toBe(
+      '/projects/acme/tasks/00000000-0000-4000-8000-0000000000b1',
+    );
     // Text, not markup: the `<img>` a ticket author typed is characters on the card.
     expect(container.querySelector('img')).toBeNull();
 
+    // An unread ticket's link names it by its key, and the card says the ticket was not read.
     const unread = container.querySelectorAll('[data-ticket-title="unread"]');
     expect(unread).toHaveLength(1);
-    expect(unread[0]?.textContent).toBe('Ticket not read yet');
+    expect(unread[0]?.textContent).toBe('ACME-22');
+    const unreadCard = screen.getByRole('article', { name: 'ACME-22' });
+    expect(unreadCard.textContent).toContain('Ticket not read yet');
     // Exactly one of each: the read card does not also claim it is unread.
     expect(container.querySelectorAll('[data-ticket-title="read"]')).toHaveLength(1);
+    expect(screen.getByRole('article', { name: 'ACME-21' }).textContent).not.toContain(
+      'Ticket not read yet',
+    );
   });
 });
 
 describe('the board card’s cost (WP-134, backlog 408)', () => {
   it('counts the runs its total excludes, and says nothing when it excludes none', async () => {
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-    await screen.findByText('ACME-22');
+    await screen.findByRole('article', { name: 'ACME-22' });
 
     const excluded = container.querySelectorAll('[data-unmeasured-runs]');
     // Exactly one card — ACME-22's — leaves runs out; ACME-21's measured everything it ran.
@@ -177,7 +193,7 @@ describe('a project link written with the project’s id (first local test, 2026
     // A platform-issued task's `ticket_url` is `/projects/<uuid>` (discovery, rediscovery, …).
     window.history.pushState({}, '', `/projects/${PROJECT}`);
     render(createApp({ fetchImpl, realtime: false }).element);
-    await screen.findByText('ACME-22');
+    await screen.findByRole('article', { name: 'ACME-22' });
     expect(screen.queryByText('No such project')).toBeNull();
   });
 });

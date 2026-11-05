@@ -13,7 +13,7 @@
  * warning on both tasks of a pair, backlog 65, so a real pair renders two badges; this fixture's
  * second card is a task no gate has compared.)
  */
-import type { TaskRecord } from '@platform/contracts';
+import type { TaskListItem } from '@platform/contracts';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -31,7 +31,7 @@ const SESSION: SessionResponse = {
   session: { id: 'session-1', expiresAt: '2030-01-01T00:00:00.000Z' },
 } as unknown as SessionResponse;
 
-const task = (overrides: Partial<TaskRecord>): TaskRecord =>
+const task = (overrides: Partial<TaskListItem>): TaskListItem =>
   ({
     id: '00000000-0000-4000-8000-0000000000b1',
     project_id: PROJECT,
@@ -73,8 +73,13 @@ const task = (overrides: Partial<TaskRecord>): TaskRecord =>
     completed_at: null,
     ticket_claim: null,
     qa_stage: false,
+    // The card's glance (S-23.9a).
+    stages: [],
+    open_questions: 0,
+    pending_approvals: 0,
+    loop_limits: null,
     ...overrides,
-  }) as TaskRecord;
+  }) as TaskListItem;
 
 const WARNED = task({
   id: '00000000-0000-4000-8000-0000000000b2',
@@ -139,7 +144,7 @@ beforeEach(() => {
 describe('the conflict badge on the board', () => {
   it('names the other ticket and how many paths overlap, on the warned card only', async () => {
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-    await screen.findByText('ACME-13');
+    await screen.findByRole('article', { name: 'ACME-13' });
     await waitFor(() => {
       expect(container.textContent).toContain('touches');
     });
@@ -172,7 +177,7 @@ describe('the conflict badge on the board', () => {
     }) as typeof fetch;
 
     const { container } = render(createApp({ fetchImpl: truncatedFetch, realtime: false }).element);
-    await screen.findByText('ACME-13');
+    await screen.findByRole('article', { name: 'ACME-13' });
     await waitFor(() => {
       expect(container.textContent).toContain('touches');
     });

@@ -55,6 +55,7 @@ import {
   setupGuideResponseSchema,
   taskBreakdownSchema,
   taskDetailResponseSchema,
+  taskListItemSchema,
   taskRecordSchema,
   testIntegrationResponseSchema,
   ticketStatusesResponseSchema,
@@ -1202,7 +1203,35 @@ export const kbHealth = kbHealthResponseSchema.parse({
   created_at: now,
 });
 
-export const tasksPage = { items: [featureTask, bugTask], next_cursor: null, can_start_task: true };
+/**
+ * The board's page items (S-23.9a): the records plus the card's glance, agreeing with the detail
+ * reads above — DEMO-1 entered refinement and is in implementation, with the feature detail's open
+ * question and pending approval; DEMO-2 entered nothing the board has a row for yet.
+ */
+export const featureListItem = taskListItemSchema.parse({
+  ...featureTask,
+  stages: [
+    { stage: 'refinement', attempt: 1, state: 'completed', entered_at: now },
+    { stage: 'implementation', attempt: 1, state: 'running', entered_at: now },
+  ],
+  open_questions: 1,
+  pending_approvals: 1,
+  loop_limits: null,
+});
+
+export const bugListItem = taskListItemSchema.parse({
+  ...bugTask,
+  stages: [],
+  open_questions: 0,
+  pending_approvals: 0,
+  loop_limits: null,
+});
+
+export const tasksPage = {
+  items: [featureListItem, bugListItem],
+  next_cursor: null,
+  can_start_task: true,
+};
 
 export const projectsPage = { items: [project] };
 

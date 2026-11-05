@@ -1,40 +1,41 @@
 /**
- * The project board (product/10 § "Board (project)").
+ * The project board (product/10 § "Board (project)", research/19 § 5.2 "Board"): GitHub Projects'
+ * board look in the brand, and its *List* view (`?view=list`).
  *
- * Columns are task states rather than pipeline stages, and that is a deliberate narrowing of
- * product/10 for this work package: the column list there is "stages from the project's pipeline
- * template plus Queued / Needs human / Done (7d)", and the pipeline template is WP-15's — a board
- * built on it today would have one column, "unknown". `taskStateSchema` is published and stable, so
- * the columns come from it, and the *stage* a task sits in is shown on the card. Follow-up when
- * WP-15 lands the template.
+ * Columns are task states rather than pipeline stages. That is a pre-existing narrowing of
+ * product/10 — "stages from the project's pipeline template plus Queued / Needs human / Done (7d)"
+ * — which research/19 keeps as open item O2 rather than widening here; the *stage* a task is in is
+ * on the card, as its phase strip. Below `xl` the columns scroll sideways (snapping to a column)
+ * instead of wrapping, so the pipeline still reads left to right.
+ *
+ * Both views read the **same** page (`useProjectTasks`): the list's filters — state, template,
+ * needs you — are applied here, over what the board already holds, with no endpoint of their own.
+ * The agents read (`useAgents`, one request for the organisation) says which tasks an agent is
+ * working on, and what it is doing.
  *
  * Drag is not supported by design: the pipeline owns state (product/10).
  */
-import { createTaskRequestSchema, type TaskRecord } from '@platform/contracts';
-import { Link, useLocation } from '@tanstack/react-router';
-import { type ReactElement, useEffect, useRef, useState } from 'react';
+import { createTaskRequestSchema, type TaskListItem, type TaskState } from '@platform/contracts';
+import { ListUnorderedIcon } from '@primer/octicons-react/ListUnorderedIcon';
+import { ProjectIcon } from '@primer/octicons-react/ProjectIcon';
+import { Link, useLocation, useNavigate, useSearch } from '@tanstack/react-router';
+import { type ReactElement, type RefObject, useEffect, useId, useRef, useState } from 'react';
 import { START_TICKET_ANCHOR, useStartTicketRequests } from '../app/project-frame.js';
-import { useProjectByKey, useProjectTasks, useStartTask } from '../app/queries.js';
+import { useAgents, useProjectByKey, useProjectTasks, useStartTask } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
-import { stageLabel, TASK_STATE_LABEL } from '../ui/humanize.js';
-import {
-  Badge,
-  Button,
-  Card,
-  EmptyState,
-  ErrorNotice,
-  Field,
-  formatElapsed,
-  formatUsd,
-  Loading,
-} from '../ui/kit.js';
-import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
-// A tooltip is text the browser renders, not markup — but it is still provider text, and
-// `sanitiseUntrusted` is what strips the bidi overrides and control characters that make a line
-// read backwards (CVE-2021-42574). `ExternalLink`'s own refusal tooltip does the same.
-import { sanitiseUntrusted } from '../ui/untrusted-text.js';
-import { BOARD_COST_TITLE, unmeasuredRunsShortText, unmeasuredRunsText } from './cost-text.js';
+import { Blankslate } from '../ui/blankslate.js';
+import { Bot } from '../ui/bot/bot.js';
+import { buttonClassName } from '../ui/button.js';
+import { Counter } from '../ui/counter.js';
+import { cx, FOCUS_RING } from '../ui/cx.js';
+import { Dialog } from '../ui/dialog.js';
+import { TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
+import { Button, EmptyState, ErrorNotice, Field } from '../ui/kit.js';
+import { ListBox, ListBoxHeader } from '../ui/list-box.js';
+import { Skeleton } from '../ui/skeleton.js';
+import { UntrustedText } from '../ui/untrusted.js';
+import { type AgentEntry, needsYou, TaskCard, TaskRow } from './board-card.js';
 
 /** The columns, in pipeline order. Every state appears exactly once, so no task can be invisible. */
 export const BOARD_COLUMNS = [
@@ -53,145 +54,53 @@ export const columnFor = (state: string): string =>
   BOARD_COLUMNS.find((column) => (column.states as readonly string[]).includes(state))?.id ??
   'active';
 
+/** Every published state, in the columns' order — the list view's state filter. */
+const STATES_IN_ORDER: readonly TaskState[] = BOARD_COLUMNS.flatMap((column) => [...column.states]);
+
+/** The empty board's title and what it teaches (product/10: "empty states teach"). */
+export const EMPTY_BOARD_TITLE = 'Tickets you label for agents appear here';
+
 /**
  * What an empty board says — **only what exists** (WP-122, PROGRESS backlog 379). The pick-up rules
- * a binding has are a label, a status, an epic or a query (`ticketMatchRuleSchema`); the hint used
- * to name *"a component"*, which no rule is, and *"a manual start"*, which no screen offered. The
- * form is named only to a caller it is shown to.
+ * a binding has are a label, a status, an epic or a query (`ticketMatchRuleSchema`); the start by
+ * hand is named only to a caller it is offered to.
  */
 export const emptyBoardHint = (canStart: boolean): string =>
   canStart
-    ? "Tasks appear here when a ticket matches this project's intake rule — a label, a status, an epic or a query — or when you start one by its key above."
-    : "Tasks appear here when a ticket matches this project's intake rule — a label, a status, an epic or a query. A member of the project can also start one by its key.";
+    ? "A task appears when a ticket matches this project's pickup rule — a label, a status, an epic or a query — or when you start one by its key."
+    : "A task appears when a ticket matches this project's pickup rule — a label, a status, an epic or a query. A member of the project can also start one by its key.";
 
-/**
- * One card.
- *
- * The card is **not** wrapped in a link: it carries links of its own (ticket, MR), and an anchor
- * inside an anchor is invalid HTML whose keyboard behaviour browsers disagree about. The ticket key
- * is the link into the task.
- */
-const TaskCard = ({
-  task,
-  projectKey,
-  nowMs,
-}: {
-  readonly task: TaskRecord;
-  readonly projectKey: string;
-  readonly nowMs: number;
-}): ReactElement => {
-  const iterations = Object.entries(task.iteration_counters).filter(([, count]) => count > 0);
-  return (
-    <Card className="flex flex-col gap-2">
-      <div className="flex items-start justify-between gap-2">
-        <Link
-          to="/projects/$key/tasks/$taskId"
-          params={{ key: projectKey, taskId: task.id }}
-          className="font-mono text-xs font-semibold hover:underline"
-        >
-          <UntrustedText value={task.ticket.key} />
-        </Link>
-        <Badge tone="neutral">{task.template}</Badge>
-      </div>
-      {/*
-        product/10's "ticket key + title" (Q48, WP-95). The title is the ticket's own words as the
-        platform stored them — `tasks.ticket_snapshot`, bounded and redacted at the write — so it is
-        provider text and goes through `UntrustedText` (BD-022). `null` means the platform has not
-        read the ticket yet, and the card says so rather than drawing an empty line or guessing one
-        from the branch name.
-      */}
-      {task.ticket_title === null ? (
-        <p className="text-xs text-fg-muted" data-ticket-title="unread">
-          Ticket not read yet
-        </p>
-      ) : (
-        <p className="text-sm font-medium" data-ticket-title="read">
-          <UntrustedText value={task.ticket_title} />
-        </p>
-      )}
-      <p className="text-sm">
-        <Badge tone={task.state === 'needs_human' ? 'warning' : 'neutral'}>
-          {TASK_STATE_LABEL[task.state]}
-        </Badge>
-      </p>
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-fg-muted">
-        <span>
-          {task.current_stage === null || task.current_stage === undefined
-            ? 'no stage'
-            : stageLabel(task.current_stage)}
-        </span>
-        <span>·</span>
-        {/*
-          The measured total, and what it leaves out (WP-134, PROGRESS backlog 408): the card is the
-          third place `cost_actual_usd` appears, after the task page and the notification, and it
-          printed the bare figure as *"Provider-reported cost"* — false in local provider mode and
-          silent about a run nobody measured. The words are `./cost-text.ts`'s, shared with the page.
-        */}
-        <span title={BOARD_COST_TITLE} data-task-cost="measured">
-          {formatUsd(task.cost_actual_usd)}
-        </span>
-        {task.unmeasured_runs > 0 ? (
-          <span
-            title={unmeasuredRunsText(task.unmeasured_runs)}
-            data-unmeasured-runs={task.unmeasured_runs}
-          >
-            {unmeasuredRunsShortText(task.unmeasured_runs)}
-          </span>
-        ) : null}
-        <span>·</span>
-        <span title="Time since the task was last updated.">
-          {formatElapsed(task.updated_at, nowMs)}
-        </span>
-        {iterations.map(([stage, count]) => (
-          <Badge key={stage} tone="warning">{`${stage} ${count}`}</Badge>
-        ))}
-      </div>
-      {/*
-        product/04 S6b's *"the board warns when two active tasks touch the same files"* and
-        product/18's *"touches the same files as PROJ-98"* (WP-26's event, WP-41's field; PROGRESS
-        backlog 63). Two residuals are in the tooltip rather than in a comment only this file's
-        reader sees, because both are visible on the screen:
+// ── The list view's filters ──────────────────────────────────────────────────
 
-         - the warning is appended on **both** tasks of a pair since WP-59 (backlog 65), but only
-           when a rebase gate compares them — so the *absence* of a badge means "not compared yet",
-           not "clear";
-         - `truncated` means the comparison did not read every file (backlog 64), so a count of
-           zero under it is "nothing found in what was compared".
+export interface BoardFilters {
+  readonly state: TaskState | 'all';
+  readonly template: string | 'all';
+  readonly needsYou: boolean;
+}
 
-        The peer's ticket key is provider text (BD-022) and goes through `UntrustedText`.
-      */}
-      {task.conflict === null || task.conflict === undefined ? null : (
-        <p className="text-[11px]">
-          <Badge tone="warning">
-            <span
-              title={`Touches the same files as ${sanitiseUntrusted(task.conflict.other_ticket_key)}: ${task.conflict.path_count} overlapping path(s)${
-                task.conflict.truncated
-                  ? ', and the comparison did not read every file of both merge requests, so there may be more'
-                  : ''
-              }. The comparison runs when either task enters the rebase gate, and both tasks are warned when it finds an overlap; a task with no badge has not been compared yet.`}
-            >
-              {'touches '}
-              <UntrustedText value={task.conflict.other_ticket_key} />
-              {` · ${task.conflict.path_count} file${task.conflict.path_count === 1 ? '' : 's'}`}
-            </span>
-          </Badge>
-        </p>
-      )}
-      <div className="flex flex-wrap gap-2 text-[11px]">
-        {/* Both URLs came from a ticket or git provider: `ExternalLink` is the only renderer
-            allowed to produce an `href`, and it refuses any scheme but http(s). */}
-        <ExternalLink url={task.ticket.url} label="Open ticket" className="text-accent underline" />
-        {task.mr_ref === null || task.mr_ref === undefined ? null : (
-          <ExternalLink url={task.mr_ref.url} label="Open MR" className="text-accent underline" />
-        )}
-      </div>
-    </Card>
+export const NO_FILTERS: BoardFilters = { state: 'all', template: 'all', needsYou: false };
+
+/** The tasks a filter keeps, in the page's order (newest first). Pure, so it is tested alone. */
+export const filterTasks = (
+  items: readonly TaskListItem[],
+  filters: BoardFilters,
+): readonly TaskListItem[] =>
+  items.filter(
+    (task) =>
+      (filters.state === 'all' || task.state === filters.state) &&
+      (filters.template === 'all' || task.template === filters.template) &&
+      (!filters.needsYou || needsYou(task)),
   );
-};
+
+/** `?view=list` — anything else is the board. */
+export const BOARD_VIEWS = ['board', 'list'] as const;
+export type BoardView = (typeof BOARD_VIEWS)[number];
+
+// ── Start a ticket ───────────────────────────────────────────────────────────
 
 /**
  * product/04 S0's manual **Start** (WP-122, PROGRESS backlog 379): a ticket named by its key, for a
- * ticket no intake rule matches.
+ * ticket no pickup rule matches.
  *
  * Rendered only for a caller who holds `task.create` in this project (`can_start_task`, the
  * server's own `can()` over the effective role); the route refuses everyone else regardless. The
@@ -201,29 +110,22 @@ const TaskCard = ({
  * success is a recorded match, not a task: intake creates the task, and the project topic puts it
  * on the board.
  */
-export const StartTicketForm = ({ projectId }: { readonly projectId: string }): ReactElement => {
+export const StartTicketForm = ({
+  projectId,
+  inputRef,
+}: {
+  readonly projectId: string;
+  readonly inputRef?: RefObject<HTMLInputElement | null>;
+}): ReactElement => {
   const start = useStartTask();
   const [key, setKey] = useState('');
   const [invalid, setInvalid] = useState<string | null>(null);
   const [started, setStarted] = useState<string | null>(null);
-  // The header's *Start a ticket* and the `+` menu's both land on `#start-ticket`: the router
-  // scrolls the form into view, and the key field takes the focus so the next keystroke is the key.
-  const form = useRef<HTMLFormElement>(null);
-  const hash = useLocation({ select: (location) => location.hash });
-  // Keyed on the press count as well as the hash: a second press on the board is the same URL, so
-  // the hash does not change, and the form must still take the focus.
-  const requests = useStartTicketRequests();
-  useEffect(() => {
-    if (hash === START_TICKET_ANCHOR && requests >= 0) {
-      form.current?.querySelector('input')?.focus();
-    }
-  }, [hash, requests]);
   return (
     <form
-      ref={form}
       id={START_TICKET_ANCHOR}
       aria-label="Start a ticket by its key"
-      className="flex scroll-mt-4 flex-wrap items-end gap-2"
+      className="flex flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault();
         const parsed = createTaskRequestSchema.safeParse({ ticket_key: key.trim() });
@@ -246,23 +148,27 @@ export const StartTicketForm = ({ projectId }: { readonly projectId: string }): 
         );
       }}
     >
-      <Field
-        label="Start a ticket"
-        hint="For a ticket no intake rule matches. The WIP limits, the dial and one task per ticket still apply."
-        placeholder="ACME-123"
-        value={key}
-        onChange={(event) => setKey(event.target.value)}
-      />
-      {/* `default`, not the beacon: the page's one primary is the header's *Start a ticket*. */}
-      <Button type="submit" disabled={start.isPending || key.trim() === ''}>
-        Start
-      </Button>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-48 flex-1">
+          <Field
+            {...(inputRef === undefined ? {} : { ref: inputRef })}
+            label="Ticket key"
+            hint="For a ticket no pickup rule matches. The WIP limits, the autonomy dial and one task per ticket still apply."
+            placeholder="ACME-123"
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+          />
+        </div>
+        <Button type="submit" tone="primary" disabled={start.isPending || key.trim() === ''}>
+          Start
+        </Button>
+      </div>
       {invalid === null ? null : <ErrorNotice title="That is not a ticket key." detail={invalid} />}
       {start.isError ? (
         <ErrorNotice title="The ticket was not started." error={start.error} />
       ) : null}
       {started === null ? null : (
-        <p role="status" className="basis-full text-xs text-fg-muted">
+        <p role="status" className="text-xs text-fg-muted">
           {'Started '}
           <UntrustedText value={started} />
           {' — its task appears on the board once intake has created it.'}
@@ -272,14 +178,274 @@ export const StartTicketForm = ({ projectId }: { readonly projectId: string }): 
   );
 };
 
+/**
+ * The start form, as a small Dialog. It opens on `#start-ticket` — the project header's *Start a
+ * ticket*, the top bar's `+ → Start a ticket…` and Home's setup checklist all link there — and on
+ * every further press (`useStartTicketRequests`, because a second press on the board is the same
+ * URL); the key field takes the focus, so the next keystroke is the key. Closing it drops the hash.
+ */
+const StartTicketDialog = ({
+  projectId,
+  projectKey,
+  open,
+  onOpenChange,
+}: {
+  readonly projectId: string;
+  readonly projectKey: string;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactElement => {
+  const field = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
+  const hash = useLocation({ select: (location) => location.hash });
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        onOpenChange(next);
+        if (!next && hash === START_TICKET_ANCHOR) {
+          void navigate({
+            to: '/projects/$key',
+            params: { key: projectKey },
+            search: (previous) => previous,
+            replace: true,
+          });
+        }
+      }}
+      title="Start a ticket"
+      description="Start a task for a ticket by its key."
+      initialFocus={field}
+    >
+      <StartTicketForm projectId={projectId} inputRef={field} />
+    </Dialog>
+  );
+};
+
+// ── The screen ───────────────────────────────────────────────────────────────
+
+/** The view toggle: two links, the current one marked, so each view is addressable. */
+const ViewToggle = ({
+  projectKey,
+  view,
+}: {
+  readonly projectKey: string;
+  readonly view: BoardView;
+}): ReactElement => {
+  const item = (current: boolean): string =>
+    cx(
+      'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium',
+      current ? 'bg-canvas text-fg shadow-sm ring-1 ring-line' : 'text-fg-muted hover:text-fg',
+      FOCUS_RING,
+    );
+  return (
+    <nav aria-label="Board view" className="inline-flex gap-0.5 rounded-lg bg-subtle p-0.5">
+      <Link
+        to="/projects/$key"
+        params={{ key: projectKey }}
+        search={{}}
+        activeOptions={{ exact: true, includeSearch: true }}
+        aria-current={view === 'board' ? 'page' : undefined}
+        className={item(view === 'board')}
+      >
+        <ProjectIcon size={16} />
+        Board
+      </Link>
+      <Link
+        to="/projects/$key"
+        params={{ key: projectKey }}
+        search={{ view: 'list' }}
+        activeOptions={{ exact: true, includeSearch: true }}
+        aria-current={view === 'list' ? 'page' : undefined}
+        className={item(view === 'list')}
+      >
+        <ListUnorderedIcon size={16} />
+        List
+      </Link>
+    </nav>
+  );
+};
+
+interface ViewProps {
+  readonly items: readonly TaskListItem[];
+  readonly projectKey: string;
+  readonly projectId: string;
+  readonly agents: ReadonlyMap<string, AgentEntry>;
+  readonly nowMs: number;
+}
+
+const Columns = ({ items, projectKey, projectId, agents, nowMs }: ViewProps): ReactElement => (
+  // It scrolls sideways below `xl`. Not a tab stop of its own: every card holds a link and a menu
+  // button, and focusing one scrolls its column into view.
+  <div
+    data-board-columns=""
+    className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 xl:grid xl:grid-cols-5 xl:overflow-visible"
+  >
+    {BOARD_COLUMNS.map((column) => {
+      const tasks = items.filter((task) => columnFor(task.state) === column.id);
+      const beacon = column.id === 'waiting';
+      return (
+        <section
+          key={column.id}
+          aria-label={column.title}
+          data-column={column.id}
+          className={cx(
+            'flex w-72 shrink-0 snap-start flex-col gap-2 rounded-lg border bg-subtle p-2 xl:w-auto',
+            beacon ? 'border-running/50' : 'border-line',
+          )}
+        >
+          <h3
+            data-column-header={column.id}
+            className="flex items-center gap-2 px-1 pt-0.5 text-sm font-semibold text-fg"
+          >
+            {beacon ? (
+              <span aria-hidden="true" className="h-2 w-2 rounded-full bg-running" />
+            ) : null}
+            <span className={beacon ? 'text-running' : undefined}>{column.title}</span>
+            <Counter
+              count={tasks.length}
+              tone={beacon && tasks.length > 0 ? 'primary' : 'default'}
+              label={`${tasks.length} task${tasks.length === 1 ? '' : 's'}`}
+            />
+          </h3>
+          {tasks.map((task) => (
+            <TaskCard
+              key={task.id}
+              task={task}
+              projectKey={projectKey}
+              projectId={projectId}
+              agent={agents.get(task.id)}
+              nowMs={nowMs}
+            />
+          ))}
+        </section>
+      );
+    })}
+  </div>
+);
+
+const SELECT = cx(
+  'h-7 rounded-md border border-line-input bg-canvas px-2 text-sm text-fg',
+  FOCUS_RING,
+);
+
+const ListView = ({ items, projectKey, projectId, agents, nowMs }: ViewProps): ReactElement => {
+  const [filters, setFilters] = useState<BoardFilters>(NO_FILTERS);
+  const shown = filterTasks(items, filters);
+  const templates = [...new Set(items.map((task) => task.template))].sort();
+  const stateId = useId();
+  const templateId = useId();
+  return (
+    <ListBox
+      label="Tasks"
+      header={
+        <ListBoxHeader
+          actions={
+            filters === NO_FILTERS ? undefined : (
+              <Button size="sm" tone="invisible" onClick={() => setFilters(NO_FILTERS)}>
+                Clear filters
+              </Button>
+            )
+          }
+        >
+          <span className="inline-flex items-center gap-2 font-semibold">
+            Tasks
+            <Counter
+              count={shown.length}
+              label={`${shown.length} of ${items.length} tasks shown`}
+            />
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <label htmlFor={stateId} className="text-fg-muted">
+              State
+            </label>
+            <select
+              id={stateId}
+              value={filters.state}
+              onChange={(event) =>
+                setFilters({ ...filters, state: event.target.value as BoardFilters['state'] })
+              }
+              className={SELECT}
+            >
+              <option value="all">All</option>
+              {STATES_IN_ORDER.map((state) => (
+                <option key={state} value={state}>
+                  {TASK_STATE_LABEL[state]}
+                </option>
+              ))}
+            </select>
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <label htmlFor={templateId} className="text-fg-muted">
+              Template
+            </label>
+            <select
+              id={templateId}
+              value={filters.template}
+              onChange={(event) => setFilters({ ...filters, template: event.target.value })}
+              className={SELECT}
+            >
+              <option value="all">All</option>
+              {templates.map((template) => (
+                <option key={template} value={template}>
+                  {titleCase(template)}
+                </option>
+              ))}
+            </select>
+          </span>
+          <label className="inline-flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={filters.needsYou}
+              onChange={(event) => setFilters({ ...filters, needsYou: event.target.checked })}
+            />
+            Needs you
+          </label>
+        </ListBoxHeader>
+      }
+    >
+      {shown.length === 0 ? (
+        <li data-board-quiet="" className="px-4 py-3 text-sm text-fg-muted">
+          No task matches these filters.
+        </li>
+      ) : (
+        shown.map((task) => (
+          <TaskRow
+            key={task.id}
+            task={task}
+            projectKey={projectKey}
+            projectId={projectId}
+            agent={agents.get(task.id)}
+            nowMs={nowMs}
+          />
+        ))
+      )}
+    </ListBox>
+  );
+};
+
 export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
   const { project, isPending, isError, error } = useProjectByKey(projectKey);
   const tasks = useProjectTasks(project?.id ?? null);
+  const agents = useAgents();
   const { now } = useServices();
+  const search = useSearch({ strict: false }) as { readonly view?: string };
+  const view: BoardView = search.view === 'list' ? 'list' : 'board';
   useTopics(project === null ? [] : [`project:${project.id}`]);
 
+  // The header's *Start a ticket* and the `+` menu's land on `#start-ticket`; keyed on the press
+  // count as well as the hash, because a second press on the board is the same URL.
+  const hash = useLocation({ select: (location) => location.hash });
+  const requests = useStartTicketRequests();
+  const canStart = tasks.data?.can_start_task === true;
+  const [startOpen, setStartOpen] = useState(false);
+  useEffect(() => {
+    if (hash === START_TICKET_ANCHOR && canStart && requests >= 0) {
+      setStartOpen(true);
+    }
+  }, [hash, requests, canStart]);
+
   if (isPending) {
-    return <Loading label="Loading project…" />;
+    return <Skeleton label="Loading project…" lines={3} />;
   }
   if (isError) {
     return <ErrorNotice title="Project could not be loaded." error={error} />;
@@ -295,38 +461,77 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
 
   const nowMs = now();
   const items = tasks.data?.items ?? [];
-  const canStart = tasks.data?.can_start_task === true;
+  // The live run per task; the read is the organisation's, so a run of another project is ignored.
+  const live = new Map<string, AgentEntry>();
+  for (const entry of agents.data?.items ?? []) {
+    if (entry.project_id === project.id && !live.has(entry.task_id)) {
+      live.set(entry.task_id, entry);
+    }
+  }
+  const viewProps: ViewProps = {
+    items,
+    projectKey: project.key,
+    projectId: project.id,
+    agents: live,
+    nowMs,
+  };
 
   return (
     <div className="flex flex-col gap-4">
       {/* The project's name, its sections and *Start a ticket* are the project frame's header and
-          tabs (`app/project-frame.tsx`, S-23.4); the board is the frame's index page. */}
+          tabs (`app/project-frame.tsx`); the board is the frame's index page. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <ViewToggle projectKey={project.key} view={view} />
+      </div>
 
       {tasks.isError ? (
         <ErrorNotice title="Tasks could not be loaded." error={tasks.error} />
       ) : null}
-
-      {canStart ? <StartTicketForm projectId={project.id} /> : null}
+      {tasks.isPending ? <Skeleton label="Loading tasks…" lines={3} /> : null}
 
       {tasks.isSuccess && items.length === 0 ? (
-        <EmptyState title="The board is empty" hint={emptyBoardHint(canStart)} />
+        <Blankslate
+          size="spacious"
+          icon={<Bot pose="sleeping" scale={2} />}
+          title={EMPTY_BOARD_TITLE}
+          hint={emptyBoardHint(canStart)}
+          action={
+            <Link
+              to="/projects/$key/settings"
+              params={{ key: project.key }}
+              className={buttonClassName('default')}
+            >
+              Open pickup rules
+            </Link>
+          }
+          {...(canStart
+            ? {
+                secondary: (
+                  <Button tone="invisible" onClick={() => setStartOpen(true)}>
+                    Start a ticket by hand
+                  </Button>
+                ),
+              }
+            : {})}
+        />
       ) : null}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-        {BOARD_COLUMNS.map((column) => {
-          const columnTasks = items.filter((task) => columnFor(task.state) === column.id);
-          return (
-            <section key={column.id} aria-label={column.title} className="flex flex-col gap-2">
-              <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
-                {column.title} ({columnTasks.length})
-              </h3>
-              {columnTasks.map((task) => (
-                <TaskCard key={task.id} task={task} projectKey={project.key} nowMs={nowMs} />
-              ))}
-            </section>
-          );
-        })}
-      </div>
+      {tasks.isSuccess && items.length > 0 ? (
+        view === 'list' ? (
+          <ListView {...viewProps} />
+        ) : (
+          <Columns {...viewProps} />
+        )
+      ) : null}
+
+      {canStart ? (
+        <StartTicketDialog
+          projectId={project.id}
+          projectKey={project.key}
+          open={startOpen}
+          onOpenChange={setStartOpen}
+        />
+      ) : null}
     </div>
   );
 };

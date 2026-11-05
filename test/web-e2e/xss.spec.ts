@@ -150,9 +150,13 @@ const assertNoHostileHref = async (page: import('@playwright/test').Page): Promi
 test('a hostile scheme in a DTO url never reaches an href on the board', async ({ page }) => {
   await page.goto(`/projects/${PROJECT_KEY}`);
 
+  // S-23.9a moved *Open ticket* and *Open MR* into each card's `···` menu, so each card's menu is
+  // opened in turn and the whole page is searched with it open.
+  await page.getByRole('button', { name: 'Actions for DEMO-1' }).click();
+  const first = page.getByRole('menu');
   // Positive control: the ticket URL that *is* http(s) is a working link with the full rel, so
   // "no hostile href" is not true because the board renders no links at all (standing rule 4).
-  const safe = page.locator(`main a[href="${HOSTILE.safeUrl}"]`).first();
+  const safe = first.locator(`a[href="${HOSTILE.safeUrl}"]`);
   await expect(safe).toBeVisible();
   await expect(safe).toHaveAttribute('rel', 'noopener noreferrer nofollow');
 
@@ -160,10 +164,18 @@ test('a hostile scheme in a DTO url never reaches an href on the board', async (
   // `safeHref` call removed, this is the line that fails.
   await assertNoHostileHref(page);
 
-  // The `javascript:` ticket and the `data:` merge request are on this screen as refused labels,
-  // and they are the only two: a link that quietly disappeared would fail this too (rule 42).
-  await expect(page.getByText('Open MR')).toBeVisible();
-  expect(await page.locator('[data-link-refused]').count()).toBe(2);
+  // DEMO-1's `data:` merge request is in its menu as a refused label, and it is the only one there.
+  await expect(first.getByText('Open MR')).toBeVisible();
+  expect(await first.locator('[data-link-refused]').count()).toBe(1);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+
+  // DEMO-2's `javascript:` ticket: refused in its own menu, and the page holds no hostile href.
+  await page.getByRole('button', { name: 'Actions for DEMO-2' }).click();
+  const second = page.getByRole('menu');
+  await expect(second.getByText('Open ticket')).toBeVisible();
+  expect(await second.locator('[data-link-refused]').count()).toBe(1);
+  await assertNoHostileHref(page);
 });
 
 /**

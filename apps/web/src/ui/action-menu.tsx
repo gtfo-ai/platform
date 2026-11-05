@@ -13,6 +13,7 @@ import { KebabHorizontalIcon } from '@primer/octicons-react/KebabHorizontalIcon'
 import type { ReactElement, ReactNode } from 'react';
 import { IconButton } from './button.js';
 import { cx } from './cx.js';
+import { ExternalAnchor } from './untrusted.js';
 
 /**
  * Either the default `···` trigger, named by `label`, or the caller's own `trigger`, which carries
@@ -89,6 +90,26 @@ export const ActionMenuItem = ({
     )}
     {children}
   </Menu.Item>
+);
+
+/**
+ * An item that is a link to a URL a provider sent (*Open ticket*, *Open MR*): Base UI's link item
+ * rendered as `untrusted.tsx`'s {@link ExternalAnchor}, so the `href` is `safeHref`'s and a refused
+ * URL stays in the menu as its struck-through label. It opens in a new tab and closes the menu.
+ */
+export const ActionMenuLinkItem = ({
+  url,
+  label,
+}: {
+  readonly url: string;
+  readonly label: string;
+}): ReactElement => (
+  <Menu.LinkItem
+    className={ITEM}
+    closeOnClick
+    label={label}
+    render={<ExternalAnchor url={url} label={label} />}
+  />
 );
 
 /** A labelled radio group of items (the theme choice). */

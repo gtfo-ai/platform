@@ -101,12 +101,38 @@ test('the board puts each task in the column its state belongs to', async ({ pag
   const active = page.getByRole('region', { name: 'Active' });
   // TD-033's word for the waiting column (S-23.2): `needs_human` reads "Needs you".
   const waiting = page.getByRole('region', { name: 'Needs you' });
-  await expect(active.getByRole('link', { name: 'DEMO-1' })).toBeVisible();
-  await expect(waiting.getByRole('link', { name: 'DEMO-2' })).toBeVisible();
-  // The stage's human name (TD-033), not its id.
-  await expect(active.getByText('Implementation', { exact: true })).toBeVisible();
-  // The iteration counter product/10 asks for ("review 2/3" in its example).
-  await expect(active.getByText('review 1')).toBeVisible();
+  // A card is an article named by its ticket key (S-23.9a); the title is its link into the task.
+  const demo1 = active.getByRole('article', { name: 'DEMO-1' });
+  await expect(demo1).toBeVisible();
+  await expect(waiting.getByRole('article', { name: 'DEMO-2' })).toBeVisible();
+  // The stage's human name (TD-033), not its id, under the card's phase strip — whose current
+  // stage is the one marked as the step.
+  await expect(demo1.getByText('Implementation', { exact: true })).toBeVisible();
+  await expect(demo1.locator('[data-phase-track] li[aria-current="step"]')).toHaveAttribute(
+    'title',
+    'Implementation: current',
+  );
+  // The iteration counter product/10 asks for ("review 2/3" in its example; this fixture's loop
+  // has no frozen limit, so the count alone).
+  await expect(demo1.getByText('Review 1', { exact: true })).toBeVisible();
+  // DEMO-1 has an open question and a pending approval: the needs-you ◆ and their count.
+  await expect(demo1.locator('[data-needs-you] [data-asks="2"]')).toBeVisible();
+  // The columns scroll sideways below `xl` rather than wrapping.
+  await page.setViewportSize({ width: 900, height: 800 });
+  const columns = page.locator('[data-board-columns]');
+  expect(await columns.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  // The list view: the same tasks as rows, filtered over the same page.
+  await page
+    .getByRole('navigation', { name: 'Board view' })
+    .getByRole('link', { name: 'List' })
+    .click();
+  await expect(page).toHaveURL(`/projects/${PROJECT_KEY}?view=list`);
+  const list = page.getByRole('list', { name: 'Tasks' });
+  await expect(list.locator('[data-board-row]')).toHaveCount(2);
+  await page.getByRole('checkbox', { name: 'Needs you' }).check();
+  await expect(list.locator('[data-board-row]')).toHaveCount(2);
+  await page.getByLabel('Template').selectOption('bug');
+  await expect(list.locator('[data-board-row]')).toHaveCount(1);
 });
 
 test('the task detail shows the stage timeline, the runs and the checks panel', async ({
