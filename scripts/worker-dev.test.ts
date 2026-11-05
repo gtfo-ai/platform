@@ -125,6 +125,7 @@ describe('compose.worker.dev.yml pins nothing to a registry digest', () => {
       'APP_WORKER_UI_PORT',
       'APP_WORKER_CONTROL_VOLUME',
       'APP_WORKER_CACHE_VOLUME',
+      'APP_WORKER_RUN_NETWORK',
     ]) {
       expect(dev.text).not.toContain(`\${${name}`);
     }
@@ -264,6 +265,7 @@ describe('.env.worker.example', () => {
       'APP_WORKER_UI_PORT',
       'APP_WORKER_CONTROL_VOLUME',
       'APP_WORKER_CACHE_VOLUME',
+      'APP_WORKER_RUN_NETWORK',
     ]);
     const read = new Set(
       [...uncommented(`${base.text}\n${dev.text}`).matchAll(/\$\{([A-Z][A-Z0-9_]*)/g)].map(

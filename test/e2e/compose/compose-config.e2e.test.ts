@@ -932,6 +932,7 @@ describe('compose.worker.yml + compose.worker.dev.yml (S-22.16)', () => {
     'APP_WORKER_UI_PORT=7357',
     'APP_WORKER_CONTROL_VOLUME=agentic-worker-ctl',
     'APP_WORKER_CACHE_VOLUME=agentic-worker-repo-cache',
+    'APP_WORKER_RUN_NETWORK=agentic-worker-run-egress',
     '',
   ].join('\n');
   const merged = (profiles = ''): WorkerConfig =>
