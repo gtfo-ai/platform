@@ -11,8 +11,22 @@
  * worker serialises with — and refused, never repaired. (Not with zod: the page's budget, stated
  * there.)
  */
-import type { WorkerLocalCancelResponse, WorkerLocalState } from '@platform/contracts';
-import { LOCAL_API_PREFIX, readCancel, readError, readState } from './read-state.js';
+import type {
+  WorkerLocalCancelResponse,
+  WorkerLocalClaimScope,
+  WorkerLocalOffers,
+  WorkerLocalState,
+  WorkerLocalTakeResponse,
+} from '@platform/contracts';
+import {
+  LOCAL_API_PREFIX,
+  readCancel,
+  readClaimScope,
+  readError,
+  readOffers,
+  readState,
+  readTake,
+} from './read-state.js';
 
 /** Where the token is kept for this tab (cleared with it). */
 export const TOKEN_STORAGE_KEY = 'agentic-worker-ui-token';
@@ -72,6 +86,14 @@ export interface LocalClient {
   pause(paused: boolean): Promise<WorkerLocalState>;
   drain(): Promise<WorkerLocalState>;
   cancel(runId: string, idempotencyKey: string): Promise<WorkerLocalCancelResponse>;
+  /** The claim scope and the projects it may name (WP-293). */
+  claimScope(): Promise<WorkerLocalClaimScope>;
+  /** Set the claim scope: `null` every project, `[]` pick only, otherwise those projects. */
+  setClaimScope(projectIds: readonly string[] | null): Promise<WorkerLocalClaimScope>;
+  /** What this worker could take now (WP-293). */
+  offers(): Promise<WorkerLocalOffers>;
+  /** *Take this one* (WP-293). */
+  take(runId: string): Promise<WorkerLocalTakeResponse>;
 }
 
 export const createLocalClient = (
@@ -132,5 +154,12 @@ export const createLocalClient = (
       call('POST', `runs/${encodeURIComponent(runId)}/cancel`, readCancel, {
         headers: { 'idempotency-key': idempotencyKey },
       }),
+    claimScope: () => call('GET', 'claim-scope', readClaimScope),
+    setClaimScope: (projectIds) =>
+      call('POST', 'claim-scope', readClaimScope, {
+        body: { claim_project_ids: projectIds === null ? null : [...projectIds] },
+      }),
+    offers: () => call('GET', 'offers', readOffers),
+    take: (runId) => call('POST', `offers/${encodeURIComponent(runId)}/take`, readTake),
   };
 };

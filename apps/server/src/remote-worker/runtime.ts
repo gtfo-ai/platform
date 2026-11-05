@@ -16,7 +16,9 @@
  *    what the updater asks before it applies, TD-032 decision 6) and `GET /internal/state`;
  *  - **the local page** (WP-292, `local-ui.ts`): a second listener on container port 7357, published
  *    on `127.0.0.1` only, behind a token kept in `worker-state` (`ui-token.ts`) — state, slots, each
- *    run with its transcript tail, the log tail, and *Pause/Resume*, *Drain* and *Cancel run*.
+ *    run with its transcript tail, the log tail, and *Pause/Resume*, *Drain* and *Cancel run* — and,
+ *    since WP-293, the claim scope and *Take this one* (the core's `claim-scope`, `offers` and
+ *    `offers/:id/claim`, protocol 3).
  *
  * ## Pause, drain and cancel — the core decides each (TD-031's worker-UI amendment §4)
  *
@@ -53,8 +55,12 @@ import {
   WORKER_LOCAL_LOG_LINE_MAX_CHARS,
   WORKER_LOCAL_LOG_TAIL,
   WORKER_PROTOCOL_VERSION,
+  type WorkerLocalClaimScope,
+  type WorkerLocalOffers,
   type WorkerLocalState,
   type WorkerProtocolRange,
+  workerLocalClaimScopeSchema,
+  workerLocalOffersSchema,
   workerLocalStateSchema,
 } from '@platform/contracts';
 import { launcher as launcherAdapters, runner as runnerAdapters } from '@platform/infrastructure';
@@ -252,6 +258,12 @@ export const startRemoteWorker = async (
   const sessions = new Map<string, RunSession>();
   const history: RunSession[] = [];
   let claimAbort: AbortController | null = null;
+  /** The claim loop's held `claims` request while one is out, settled either way (WP-293). */
+  let claimInFlight: Promise<void> | null = null;
+  /** A *take this one* is under way: the claim loop holds off so the two never fill one slot twice. */
+  let taking = false;
+  /** The claim scope as the core last said (handshake ≥ 3, or a write from the page), WP-293. */
+  let claimScope: readonly string[] | null | undefined;
   let slotFreed: (() => void) | null = null;
   const drainMarker = path.join(config.stateDir, DRAIN_MARKER_FILE);
 
@@ -303,6 +315,7 @@ export const startRemoteWorker = async (
         workerId = answer.worker.id;
         workerName = answer.worker.name;
         manuallyPausedAt = answer.worker.manually_paused_at ?? null;
+        claimScope = answer.worker.claim_project_ids;
         // The core's record wins only when it is later than a pause this worker already holds.
         if (
           answer.worker.paused_until !== null &&
@@ -320,6 +333,14 @@ export const startRemoteWorker = async (
             worker_name: workerName,
             core_protocol: coreProtocol,
             paused_until: answer.worker.paused_until,
+            claim_scope:
+              claimScope === undefined
+                ? 'unknown'
+                : claimScope === null
+                  ? 'every project'
+                  : claimScope.length === 0
+                    ? 'pick only'
+                    : `${claimScope.length} project(s)`,
           },
           'this worker is connected to its core',
         );
@@ -439,8 +460,9 @@ export const startRemoteWorker = async (
   const claimLoop = async (): Promise<void> => {
     let failures = 0;
     while (!stopping && connection === 'connected') {
-      // Drained or held by its owner: wait for *Resume* (WP-292) — never claim.
-      if (draining || manuallyPausedAt !== null) {
+      // Drained or held by its owner: wait for *Resume* (WP-292) — never claim. A *take this one*
+      // under way (WP-293) holds the loop the same way until it has started its run or failed.
+      if (draining || manuallyPausedAt !== null || taking) {
         await new Promise<void>((resolve) => {
           slotFreed = resolve;
         });
@@ -470,7 +492,7 @@ export const startRemoteWorker = async (
       try {
         // Asked before every claim: an image pulled (or removed) since the last one counts now.
         await refreshHeldDigests();
-        const pkg = await core.claim(
+        const claiming = core.claim(
           credential as string,
           {
             free_slots: config.concurrency - sessions.size,
@@ -479,11 +501,18 @@ export const startRemoteWorker = async (
           },
           claimAbort.signal,
         );
+        claimInFlight = claiming.then(
+          () => undefined,
+          () => undefined,
+        );
+        const pkg = await claiming;
         failures = 0;
         if (pkg !== null) startSession(pkg);
       } catch (error) {
         if (stopping) break;
-        if (draining || manuallyPausedAt !== null || usagePauseRemainingMs() > 0) continue;
+        if (draining || manuallyPausedAt !== null || taking || usagePauseRemainingMs() > 0) {
+          continue;
+        }
         if (error instanceof CoreCallError && error.kind === 'unauthenticated') {
           connection = 'revoked';
           loggerPort.error({}, 'the core refused this worker’s credential; it stops claiming');
@@ -506,6 +535,7 @@ export const startRemoteWorker = async (
         await sleep(wait);
       } finally {
         claimAbort = null;
+        claimInFlight = null;
       }
     }
   };
@@ -657,6 +687,153 @@ export const startRemoteWorker = async (
         'core_unreachable',
         `the core did not answer the cancel: ${(error as Error).message}`,
       );
+    }
+  };
+
+  /** The worker's credential, or a `409` naming why the page cannot ask the core yet (WP-293). */
+  const connectedCredential = (): string => {
+    if (credential === null || connection !== 'connected') {
+      throw new LocalUiError(
+        409,
+        'not_connected',
+        'this worker is not connected to its core yet, so it cannot ask it',
+      );
+    }
+    return credential;
+  };
+
+  /** A core refusal in the page's words: its own status for a `4xx`, `502` when it did not answer. */
+  const asLocalError = (error: unknown, what: string): LocalUiError => {
+    if (error instanceof LocalUiError) return error;
+    if (error instanceof CoreCallError && error.kind === 'upgrade_required') {
+      return new LocalUiError(
+        409,
+        'upgrade_required',
+        `the core does not serve this worker’s protocol, so it cannot ${what}: ${error.message}`,
+      );
+    }
+    if (error instanceof CoreCallError && error.status !== null && error.status < 500) {
+      return new LocalUiError(
+        error.status === 422 ? 422 : 409,
+        error.code ?? 'refused',
+        `the core refused to ${what}: ${error.message}`,
+      );
+    }
+    return new LocalUiError(
+      502,
+      'core_unreachable',
+      `the core did not answer when asked to ${what}: ${(error as Error).message}`,
+    );
+  };
+
+  /** The claim scope and the projects it may name, as the core holds them (WP-293). */
+  const readClaimScope = async (): Promise<WorkerLocalClaimScope> => {
+    const held = connectedCredential();
+    try {
+      const answer = await core.claimScope(held);
+      claimScope = answer.claim_project_ids;
+      return workerLocalClaimScopeSchema.parse(redactKeysAndValues(pageRedactor(), answer));
+    } catch (error) {
+      throw asLocalError(error, 'read the claim scope');
+    }
+  };
+
+  /** The owner sets what the automatic claims take (WP-293): the core first, then read back. */
+  const writeClaimScope = async (
+    projectIds: readonly string[] | null,
+  ): Promise<WorkerLocalClaimScope> => {
+    const held = connectedCredential();
+    try {
+      const answer = await core.setClaimScope(held, {
+        claim_project_ids: projectIds === null ? null : [...projectIds],
+      });
+      claimScope = answer.claim_project_ids;
+      loggerPort.info(
+        {
+          claim_scope:
+            answer.claim_project_ids === null ? 'every project' : answer.claim_project_ids,
+          performed: answer.performed,
+        },
+        'this worker’s owner set what it takes by itself',
+      );
+    } catch (error) {
+      throw asLocalError(error, 'set the claim scope');
+    }
+    // A scope that takes more may admit an offer the held claim is not looking at: ask again.
+    claimAbort?.abort();
+    wakeClaims();
+    return readClaimScope();
+  };
+
+  /** What this worker could take now (WP-293): the core's list, through every exact secret. */
+  const listOffers = async (): Promise<WorkerLocalOffers> => {
+    const held = connectedCredential();
+    try {
+      const answer = await core.offers(held);
+      return workerLocalOffersSchema.parse(redactKeysAndValues(pageRedactor(), answer));
+    } catch (error) {
+      throw asLocalError(error, 'list the offers');
+    }
+  };
+
+  /**
+   * *Take this one* (WP-293): the core's pick — the one claim narrowed to the run, its scope
+   * ignored and nothing else — then the run starts here exactly as a claimed one does. A free slot
+   * is needed; the claim loop's held request is called off first and the loop waits, so the pick
+   * and an automatic claim never fill one slot twice. (A held claim the core answered at the very
+   * instant it was called off is lost to this worker and comes back through the lease sweep — the
+   * same residual a *Pause* has.)
+   */
+  const takeOffer = async (runId: string): Promise<{ readonly run_id: string }> => {
+    const held = connectedCredential();
+    if (draining || manuallyPausedAt !== null) {
+      throw new LocalUiError(
+        409,
+        'paused',
+        'this worker is paused or draining: resume it before taking a run',
+      );
+    }
+    if (usagePauseRemainingMs() > 0) {
+      throw new LocalUiError(
+        409,
+        'usage_limited',
+        'this worker’s Claude usage limit has not reset yet, so it takes nothing',
+      );
+    }
+    if (taking) {
+      throw new LocalUiError(409, 'take_in_progress', 'another take is under way; wait for it');
+    }
+    if (sessions.size >= config.concurrency) {
+      throw new LocalUiError(
+        409,
+        'no_free_slot',
+        `every slot of this worker is busy (${config.concurrency}); take one when a run ends`,
+      );
+    }
+    taking = true;
+    try {
+      claimAbort?.abort();
+      await claimInFlight;
+      if (sessions.size >= config.concurrency) {
+        throw new LocalUiError(
+          409,
+          'no_free_slot',
+          'this worker claimed a run by itself just now and has no slot left',
+        );
+      }
+      await refreshHeldDigests();
+      let pkg: RunPackage;
+      try {
+        pkg = await core.takeOffer(held, runId, { image_digests: heldDigests });
+      } catch (error) {
+        throw asLocalError(error, 'hand over that run');
+      }
+      startSession(pkg);
+      loggerPort.info({ run_id: pkg.runId }, 'this worker’s owner took a run from the list');
+      return { run_id: pkg.runId };
+    } finally {
+      taking = false;
+      wakeClaims();
     }
   };
 
@@ -842,6 +1019,10 @@ export const startRemoteWorker = async (
           return localState();
         },
         cancel: cancelRun,
+        claimScope: readClaimScope,
+        setClaimScope: writeClaimScope,
+        offers: listOffers,
+        take: takeOffer,
       },
     });
     uiServer = listening;

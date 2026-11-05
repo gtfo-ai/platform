@@ -24,6 +24,8 @@
  *     the run continues; at `member` the run ends `cancelled` through the `run_commands` row the
  *     worker's heartbeat delivers, the task is `paused`, and one `human_actions` row `run.cancel`
  *     carries `via: worker_ui` and the worker's user.
+ * 10. **Pick only and *Take this one*** (WP-293 (5)): the page sets the scope to pick only, lists
+ *     the waiting offer, takes it, and the run settles on that worker; nothing is claimed by itself.
  */
 import { createPublicKey, verify } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -818,6 +820,128 @@ describe('the first usable worker (WP-283)', () => {
     expect(audit).toHaveLength(1);
     expect(audit[0]?.user_id).toBe(laptop.userId);
     expect(audit[0]?.params).toMatchObject({ via: 'worker_ui', worker_id: laptop.workerId });
+  }, 300_000);
+});
+
+/**
+ * **What a worker picks up** (WP-293 (5)): a worker its owner set to *pick only* from its local page
+ * claims nothing by itself; the page lists the waiting offer (not one the scope takes) and *Take this
+ * one* claims it — one `worker.take_offer` row — and the run settles on that worker. The next
+ * stage's offer is left open: pick only still takes nothing by itself.
+ */
+describe('a pick-only worker and take this one (WP-293)', () => {
+  it('lists, takes one offer from the page and settles it; nothing is claimed by itself', async () => {
+    const topology = await core('worker-pick-only');
+    const { pipeline } = topology;
+    const laptop = await worker(topology, { name: 'pick-laptop', ui: true });
+    const token = readFileSync(path.join(laptop.stateDir, 'ui-token'), 'utf8').trim();
+    const port = Number(new URL(laptop.runtime.uiAddress() ?? '').port);
+    const host = `127.0.0.1:${E2E_UI_PUBLISHED_PORT}`;
+    /** The page's own request: its Host, its Origin on a POST, its token. */
+    const page = (method: 'GET' | 'POST', pathname: string, body?: unknown) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const request = http.request(
+          {
+            host: '127.0.0.1',
+            port,
+            method,
+            path: pathname,
+            headers: {
+              host,
+              authorization: `Bearer ${token}`,
+              ...(method === 'POST'
+                ? { origin: `http://${host}`, 'content-type': 'application/json' }
+                : {}),
+            },
+          },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on('data', (chunk: Buffer) => chunks.push(chunk));
+            response.on('end', () =>
+              resolve({
+                status: response.statusCode ?? 0,
+                body: Buffer.concat(chunks).toString('utf8'),
+              }),
+            );
+          },
+        );
+        request.on('error', reject);
+        request.end(body === undefined ? undefined : JSON.stringify(body));
+      });
+
+    await pipeline.waitFor('the worker to be connected', async () => {
+      return laptop.runtime.state().connection === 'connected';
+    });
+    const scope = await page('POST', '/api/local/claim-scope', { claim_project_ids: [] });
+    expect(scope.status, scope.body).toBe(200);
+    expect(JSON.parse(scope.body)).toMatchObject({ claim_project_ids: [] });
+
+    await pipeline.publish([ticketMatched(pipeline)]);
+    const offeredRun = async (): Promise<string | null> => {
+      const [row] = await pipeline.query<{ run_id: string }>(
+        "select run_id from run_offers where state = 'open' order by offered_at limit 1",
+      );
+      return row?.run_id ?? null;
+    };
+    await pipeline.waitFor(
+      'the first stage to be offered',
+      async () => (await offeredRun()) !== null,
+    );
+    const runId = (await offeredRun()) as string;
+    // The page lists it, not as one the scope takes; the worker has not claimed it by itself.
+    let listed: { run_id: string; automatic: boolean }[] = [];
+    await pipeline.waitFor('the page to list the offer', async () => {
+      const answer = await page('GET', '/api/local/offers');
+      if (answer.status !== 200) return false;
+      listed = (JSON.parse(answer.body) as { offers: typeof listed }).offers;
+      return listed.some((offer) => offer.run_id === runId);
+    });
+    expect(listed.find((offer) => offer.run_id === runId)?.automatic).toBe(false);
+    expect(await pipeline.query("select 1 from run_offers where state = 'claimed'")).toEqual([]);
+
+    const taken = await page('POST', `/api/local/offers/${runId}/take`, {});
+    expect(taken.status, taken.body).toBe(200);
+    expect(JSON.parse(taken.body)).toEqual({ run_id: runId });
+    await pipeline.waitFor('the taken run to settle', async () => {
+      const [row] = await pipeline.query<{ status: string }>(
+        'select status::text as status from runs where id = $1',
+        [runId],
+      );
+      return row?.status === 'completed';
+    });
+    const [claimed] = await pipeline.query<{ worker_id: string; claimant_kind: string }>(
+      'select worker_id, claimant_kind::text from run_offers where run_id = $1',
+      [runId],
+    );
+    expect(claimed).toEqual({ worker_id: laptop.workerId, claimant_kind: 'worker' });
+    const audits = await pipeline.query<{ action: string; user_id: string; params: JsonObject }>(
+      `select action, user_id, params from human_actions
+        where action in ('worker.take_offer', 'worker.claim_scope') order by created_at`,
+    );
+    expect(audits).toEqual([
+      {
+        action: 'worker.claim_scope',
+        user_id: laptop.userId,
+        params: { worker_id: laptop.workerId, project_ids: [], via: 'worker_ui' },
+      },
+      {
+        action: 'worker.take_offer',
+        user_id: laptop.userId,
+        params: { worker_id: laptop.workerId, run_id: runId, via: 'worker_ui' },
+      },
+    ]);
+    // The next stage is offered and stays open: pick only takes nothing by itself.
+    await pipeline.waitFor('the next stage to be offered', async () => {
+      const next = await offeredRun();
+      return next !== null && next !== runId;
+    });
+    const next = (await offeredRun()) as string;
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    const [still] = await pipeline.query<{ state: string }>(
+      'select state::text as state from run_offers where run_id = $1',
+      [next],
+    );
+    expect(still?.state).toBe('open');
   }, 300_000);
 });
 

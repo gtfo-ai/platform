@@ -49,12 +49,15 @@ import {
   WORKER_PATHS,
   WORKER_PROTOCOL_VERSION,
   workerApprovalResponseSchema,
+  workerClaimScopeResponseSchema,
+  workerClaimScopeSetResponseSchema,
   workerFinishResponseSchema,
   workerHandshakeResponseSchema,
   workerHeartbeatResponseSchema,
   workerLateCostResponseSchema,
   workerLeaseLostBodySchema,
   workerManualPauseResponseSchema,
+  workerOffersResponseSchema,
   workerReleaseResponseSchema,
   workerRunCancelResponseSchema,
   workerSettingsSchema,
@@ -196,6 +199,8 @@ interface World {
     }[];
     readonly projectRoles: Map<string, UserRole | null>;
   };
+  /** The `worker.take_offer` rows a pick wrote (WP-293). */
+  readonly takes: readonly { workerId: string; runId: string; taskId: string }[];
 }
 
 let opened: App | undefined;
@@ -227,6 +232,9 @@ const world = async (
   const store = createMemoryWorkerStore();
   store.addUser({ id: ALICE, email: 'alice@example.test', name: null });
   store.addUser({ id: BOB, email: 'bob@example.test', name: null });
+  // WP-293: the project both may take runs of — what a claim scope may name.
+  store.addProject({ id: PROJECT, key: 'ACME', name: 'Acme storefront' }, [ALICE, BOB]);
+  const takes: { workerId: string; runId: string; taskId: string }[] = [];
   const harness = createPipelineHarness({
     projectId: PROJECT,
     runsAgents: false,
@@ -243,6 +251,8 @@ const world = async (
           pausedUntil: row.pausedUntil === null ? null : (row.pausedUntil.toISOString() as never),
           manuallyPaused: row.manuallyPausedAt !== null,
           memberOf: (projectId) => projectId === PROJECT,
+          // WP-293: the claim scope, from the same row.
+          claimProjectIds: row.claimProjects === null ? null : row.claimProjects.map((p) => p.id),
         };
       },
     },
@@ -296,6 +306,12 @@ const world = async (
     }),
     credentials: { revoke: async () => {} },
     tokens: runTokens,
+    // WP-293: a pick's `worker.take_offer` row, recorded here.
+    takeAudit: {
+      record: async (_tx, entry) => {
+        takes.push({ ...entry });
+      },
+    },
     settle: async (request) => harness.runtime.executor.settle(request),
     lateCost: {
       record: async (scope, spend) => ({
@@ -473,6 +489,8 @@ const world = async (
           ? 'ghcr.io/acme/platform-runtime:sha-feedc0d could not be resolved to a digest: answered 404'
           : null,
       holds: { claimMs: 30, heartbeatMs: 30, claimPollMs: 10 },
+      // WP-293: the offers' names, the package's display block for every task.
+      offerDisplays: async (taskIds) => new Map(taskIds.map((taskId) => [taskId, DISPLAY])),
     },
   });
   opened = app;
@@ -487,6 +505,7 @@ const world = async (
     bob: await registerWorker(store, BOB),
     runId: harness.store.offerRows()[0]?.runId as Id,
     cancel: { actions, projectRoles },
+    takes,
   };
 };
 
@@ -1499,41 +1518,19 @@ describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the 
   const V1 = { 'x-worker-protocol': '1' };
   const asV1 = (secret: string) => ({ authorization: `Bearer ${secret}`, ...V1 });
   /** The version-1 shapes, strict: what a version-1 worker parses with (TD-031's amendment §5). */
-  const v1Settings = workerSettingsSchema.omit({ manually_paused_at: true });
-  const v1PackageKeys = [
-    'runId',
-    'epoch',
-    'runToken',
-    'run',
-    'workspace',
-    'credential',
-    'skills',
-    'images',
-    'limits',
-  ].sort();
 
-  it('answers a version-1 worker its handshake and its package with no new key', async () => {
+  it('refuses a version-1 worker at the protocol check since protocol 3 (accepted [2, 3], WP-293)', async () => {
     const w = await world();
-    const handshake = await w.app.inject({
-      method: 'POST',
-      url: url(WORKER_PATHS.handshake),
-      headers: asV1(w.alice.credential),
-      payload: bodies(1)[WORKER_PATHS.handshake],
-    });
-    expect(handshake.statusCode).toBe(200);
-    const worker = handshake.json().worker;
-    expect(v1Settings.safeParse(worker).success).toBe(true);
-    expect(Object.hasOwn(worker, 'manually_paused_at')).toBe(false);
-    const claim = await w.app.inject({
-      method: 'POST',
-      url: url(WORKER_PATHS.claims),
-      headers: asV1(w.alice.credential),
-      payload: bodies(1)[WORKER_PATHS.claims],
-    });
-    expect(claim.statusCode).toBe(200);
-    const pkg = claim.json() as Record<string, unknown>;
-    expect(Object.keys(pkg).sort()).toEqual(v1PackageKeys);
-    expect(runPackageSchema.safeParse(pkg).success).toBe(true);
+    for (const verb of [WORKER_PATHS.handshake, WORKER_PATHS.claims] as const) {
+      const response = await w.app.inject({
+        method: 'POST',
+        url: url(verb),
+        headers: asV1(w.alice.credential),
+        payload: bodies(1)[verb],
+      });
+      expect(`${verb} ${response.statusCode}`).toBe(`${verb} 426`);
+      expect(workerUpgradeRequiredBodySchema.parse(response.json()).accepted).toEqual([2, 3]);
+    }
   });
 
   it('answers a version-2 worker the display block and its manual pause', async () => {
@@ -1562,8 +1559,10 @@ describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the 
         payload: bodies(1)[verb],
       });
       expect(`${verb} ${response.statusCode}`).toBe(`${verb} 426`);
+      // Since protocol 3 the generic check refuses version 1 first; the verbs' own gate at 2 is
+      // unreachable while the accepted range is [2, 3], and stays for the range it was written for.
       const body = workerUpgradeRequiredBodySchema.parse(response.json());
-      expect(body.error.message).toContain('protocol 2');
+      expect(body.error.message).toContain('worker protocol 1');
     }
   });
 
@@ -1759,5 +1758,255 @@ describe('the worker protocol (WP-292): protocol 2, the owner’s pause and the 
       payload: {},
     });
     expect(accepted.statusCode).toBe(202);
+  });
+});
+
+describe('the worker protocol (WP-293): protocol 3, the claim scope and take this one', () => {
+  const V2 = { 'x-worker-protocol': '2' };
+  /** A foreign project: nobody here may take its runs. */
+  const ELSEWHERE = '00000000-0000-4000-8000-0000000293e1';
+  /** The four new verbs, each with its method and a valid body. */
+  const PICK_VERBS = (runId: string) =>
+    [
+      { method: 'GET', verb: WORKER_PATHS.claimScope, path: url(WORKER_PATHS.claimScope) },
+      {
+        method: 'PUT',
+        verb: WORKER_PATHS.claimScope,
+        path: url(WORKER_PATHS.claimScope),
+        payload: { claim_project_ids: [] },
+      },
+      { method: 'GET', verb: WORKER_PATHS.offers, path: url(WORKER_PATHS.offers) },
+      {
+        method: 'POST',
+        verb: WORKER_PATHS.offerClaim,
+        path: url(WORKER_PATHS.offerClaim, runId),
+        payload: { image_digests: HELD },
+      },
+    ] as const;
+  const call = (
+    w: World,
+    entry: ReturnType<typeof PICK_VERBS>[number],
+    headers: Record<string, string>,
+  ) =>
+    w.app.inject({
+      method: entry.method,
+      url: entry.path,
+      headers,
+      ...('payload' in entry ? { payload: entry.payload } : {}),
+    });
+  const setScope = (w: World, ids: readonly string[] | null, secret = w.alice.credential) =>
+    w.app.inject({
+      method: 'PUT',
+      url: url(WORKER_PATHS.claimScope),
+      headers: bearer(secret),
+      payload: { claim_project_ids: ids },
+    });
+  /** The list is computed against the digests the worker last reported (its handshake's). */
+  const offersOf = async (w: World, secret = w.alice.credential) => {
+    await post(w, WORKER_PATHS.handshake, '', secret, { image_digests: HELD, commit: null });
+    const response = await w.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.offers),
+      headers: bearer(secret),
+    });
+    expect(response.statusCode).toBe(200);
+    return workerOffersResponseSchema.parse(response.json()).offers;
+  };
+  const pick = (w: World, runId: string, secret = w.alice.credential) =>
+    w.app.inject({
+      method: 'POST',
+      url: url(WORKER_PATHS.offerClaim, runId),
+      headers: bearer(secret),
+      payload: { image_digests: HELD },
+    });
+
+  it('protocol 3 is current and accepts [2, 3]; a version-2 handshake carries no claim_project_ids', async () => {
+    expect(WORKER_PROTOCOL_VERSION).toBe(3);
+    expect([...ACCEPTED_WORKER_PROTOCOLS]).toEqual([2, 3]);
+    const w = await world();
+    // The version-2 shape, strict: what a version-2 worker parses with.
+    const v2Settings = workerSettingsSchema.omit({ claim_project_ids: true });
+    const v2 = await w.app.inject({
+      method: 'POST',
+      url: url(WORKER_PATHS.handshake),
+      headers: { authorization: `Bearer ${w.alice.credential}`, ...V2 },
+      payload: bodies(1)[WORKER_PATHS.handshake],
+    });
+    expect(v2.statusCode).toBe(200);
+    const v2Worker = v2.json().worker;
+    expect(v2Settings.safeParse(v2Worker).success).toBe(true);
+    expect(Object.hasOwn(v2Worker, 'claim_project_ids')).toBe(false);
+    expect(Object.hasOwn(v2Worker, 'manually_paused_at')).toBe(true);
+    const v3 = await post(w, WORKER_PATHS.handshake, '', w.alice.credential, {
+      image_digests: HELD,
+      commit: null,
+    });
+    expect(workerHandshakeResponseSchema.parse(v3.json()).worker.claim_project_ids).toBeNull();
+    await setScope(w, []);
+    const after = await post(w, WORKER_PATHS.handshake, '', w.alice.credential, {
+      image_digests: HELD,
+      commit: null,
+    });
+    expect(workerHandshakeResponseSchema.parse(after.json()).worker.claim_project_ids).toEqual([]);
+  });
+
+  it('refuses all four verbs at protocol 2 with 426, before the credential is read', async () => {
+    const w = await world();
+    for (const entry of PICK_VERBS(w.runId)) {
+      const response = await call(w, entry, { ...V2 });
+      expect(`${entry.method} ${entry.verb} ${response.statusCode}`).toBe(
+        `${entry.method} ${entry.verb} 426`,
+      );
+      expect(response.headers['cache-control']).toBe('no-store');
+      const body = workerUpgradeRequiredBodySchema.parse(response.json());
+      expect(body.error.message).toContain('protocol 3');
+    }
+  });
+
+  it('refuses no credential, a wrong one, a run token, a revoked worker and a disabled user with 401', async () => {
+    const w = await world();
+    const pkg = await claimAsAlice(w);
+    const wrongWorker = `wkr_${'a'.repeat(26)}_${'b'.repeat(43)}`;
+    for (const entry of PICK_VERBS(w.runId)) {
+      for (const headers of [PROTOCOL, bearer(wrongWorker), bearer(pkg.runToken)]) {
+        const response = await call(w, entry, headers);
+        expect(`${entry.method} ${entry.verb} ${response.statusCode}`).toBe(
+          `${entry.method} ${entry.verb} 401`,
+        );
+      }
+    }
+    w.store.setUserMayAct(BOB, false);
+    for (const entry of PICK_VERBS(w.runId)) {
+      expect((await call(w, entry, bearer(w.bob.credential))).statusCode).toBe(401);
+    }
+    await w.store.revokeWorker({
+      workerId: w.alice.workerId,
+      ownerUserId: null,
+      actorUserId: ALICE,
+      now: new Date(),
+    });
+    for (const entry of PICK_VERBS(w.runId)) {
+      expect((await call(w, entry, bearer(w.alice.credential))).statusCode).toBe(401);
+    }
+  });
+
+  it('claim-scope: the projects it may name; a state assertion with one audit row per change, 422 for a project the user may not run', async () => {
+    const w = await world();
+    const read = await w.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.claimScope),
+      headers: bearer(w.alice.credential),
+    });
+    expect(read.statusCode).toBe(200);
+    expect(workerClaimScopeResponseSchema.parse(read.json())).toEqual({
+      claim_project_ids: null,
+      projects: [{ id: PROJECT, key: 'ACME', name: 'Acme storefront' }],
+    });
+    const audits = () => w.store.audit.filter((row) => row.action === 'worker.claim_scope');
+    // The stored value already: nothing written.
+    expect(workerClaimScopeSetResponseSchema.parse((await setScope(w, null)).json())).toEqual({
+      claim_project_ids: null,
+      performed: false,
+    });
+    expect(audits()).toHaveLength(0);
+    const named = workerClaimScopeSetResponseSchema.parse(
+      (await setScope(w, [PROJECT, PROJECT])).json(),
+    );
+    expect(named).toEqual({ claim_project_ids: [PROJECT], performed: true });
+    expect(audits()).toEqual([
+      {
+        userId: ALICE,
+        action: 'worker.claim_scope',
+        params: { worker_id: w.alice.workerId, project_ids: [PROJECT], via: 'worker_ui' },
+      },
+    ]);
+    expect((await setScope(w, [PROJECT])).json()).toMatchObject({ performed: false });
+    expect(audits()).toHaveLength(1);
+    const refused = await setScope(w, [PROJECT, ELSEWHERE]);
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json().error.code).toBe('project_not_eligible');
+    expect(refused.json().error.message).toContain(ELSEWHERE);
+    expect(audits()).toHaveLength(1);
+    expect(w.store.worker(w.alice.workerId)?.claimProjects).toEqual([{ id: PROJECT, key: 'ACME' }]);
+    expect((await setScope(w, [])).json()).toEqual({ claim_project_ids: [], performed: true });
+    expect(audits()).toHaveLength(2);
+    // Bob's worker is his own: Alice's scope is not his.
+    expect(w.store.worker(w.bob.workerId)?.claimProjects).toBeNull();
+  });
+
+  it('a pick-only worker claims nothing by itself, lists the offer, takes it — one audit row — and a second take is 409', async () => {
+    const w = await world();
+    expect((await setScope(w, [])).statusCode).toBe(200);
+    const automatic = await post(w, WORKER_PATHS.claims, '', w.alice.credential, {
+      free_slots: 1,
+      image_digests: HELD,
+      paused: false,
+    });
+    expect(automatic.statusCode).toBe(204);
+    const listed = await offersOf(w);
+    expect(listed).toEqual([
+      expect.objectContaining({
+        run_id: w.runId,
+        kind: 'stage',
+        project_key: DISPLAY.projectKey,
+        ticket_key: DISPLAY.ticketKey,
+        title: DISPLAY.title,
+        automatic: false,
+      }),
+    ]);
+    // Bob's scope is every project: the same offer is his automatic take.
+    expect((await offersOf(w, w.bob.credential))[0]?.automatic).toBe(true);
+    const taken = await pick(w, w.runId);
+    expect(taken.statusCode).toBe(200);
+    expect(taken.headers['cache-control']).toBe('no-store');
+    const pkg = runPackageSchema.parse(taken.json());
+    expect(pkg.runId).toBe(w.runId);
+    expect(pkg.display).toEqual(DISPLAY);
+    expect(w.takes).toEqual([
+      { workerId: w.alice.workerId, runId: w.runId, taskId: pkg.run.taskId },
+    ]);
+    // Taken: neither listed nor claimable again, by anybody — and the one refusal names no reason.
+    expect(await offersOf(w)).toEqual([]);
+    expect(await offersOf(w, w.bob.credential)).toEqual([]);
+    for (const secret of [w.alice.credential, w.bob.credential]) {
+      const again = await pick(w, w.runId, secret);
+      expect(again.statusCode).toBe(409);
+      expect(again.json().error.code).toBe('offer_not_claimable');
+    }
+    expect((await pick(w, '00000000-0000-4000-8000-0000000293ff')).statusCode).toBe(409);
+    expect(w.takes).toHaveLength(1);
+  });
+
+  it('a take is refused while the worker is held by its owner, and admitted again once resumed', async () => {
+    const w = await world();
+    await post(w, WORKER_PATHS.manualPause, '', w.alice.credential, {
+      paused: true,
+      via: 'worker_ui',
+    });
+    expect(await offersOf(w)).toEqual([]);
+    expect((await pick(w, w.runId)).statusCode).toBe(409);
+    expect(w.takes).toHaveLength(0);
+    await post(w, WORKER_PATHS.manualPause, '', w.alice.credential, {
+      paused: false,
+      via: 'worker_ui',
+    });
+    expect((await pick(w, w.runId)).statusCode).toBe(200);
+    expect(w.takes).toHaveLength(1);
+  });
+
+  it('a scope naming the project still claims it automatically; the offers answer 503 while the core cannot name its images', async () => {
+    const w = await world();
+    await setScope(w, [PROJECT]);
+    expect((await offersOf(w))[0]?.automatic).toBe(true);
+    const pkg = await claimAsAlice(w);
+    expect(pkg.runId).toBe(w.runId);
+    const blind = await world({ release: false });
+    const response = await blind.app.inject({
+      method: 'GET',
+      url: url(WORKER_PATHS.offers),
+      headers: bearer(blind.alice.credential),
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe('digests_unresolved');
   });
 });

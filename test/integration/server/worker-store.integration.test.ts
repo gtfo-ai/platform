@@ -17,6 +17,7 @@ let database: MigratedDatabase;
 let pool: pg.Pool;
 let db: Database;
 let projectId: string;
+let orgId: string;
 let users = 0;
 
 beforeAll(async () => {
@@ -26,10 +27,11 @@ beforeAll(async () => {
   const org = await pool.query<{ id: string }>(
     "insert into organizations (name) values ('workers') returning id",
   );
+  orgId = org.rows[0]?.id as string;
   const project = await pool.query<{ id: string }>(
     `insert into projects (org_id, key, name, repo_url)
      values ($1, 'wkr', 'Workers', 'https://git.example.test/acme/api.git') returning id`,
-    [org.rows[0]?.id],
+    [orgId],
   );
   projectId = project.rows[0]?.id as string;
 }, 180_000);
@@ -45,6 +47,9 @@ const reset = async (): Promise<void> => {
   await pool.query('delete from worker_device_codes');
   await pool.query('delete from workers');
   await pool.query('delete from human_actions');
+  // WP-293's projects: every one but the suite's own run project.
+  await pool.query('delete from project_members');
+  await pool.query('delete from projects where id <> $1', [projectId]);
 };
 
 const addUser = async (email: string): Promise<string> => {
@@ -96,6 +101,26 @@ describeWorkerStoreContract({
         ]);
       },
       seedRun,
+      addViewer: async (email) => {
+        const id = await addUser(email);
+        await pool.query("update users set role = 'viewer' where id = $1", [id]);
+        return id;
+      },
+      addProject: async (key, members) => {
+        const project = await pool.query<{ id: string }>(
+          `insert into projects (org_id, key, name, repo_url)
+           values ($1, $2, $3, 'https://git.example.test/acme/api.git') returning id`,
+          [orgId, key, `Project ${key}`],
+        );
+        const id = project.rows[0]?.id as string;
+        for (const member of members) {
+          await pool.query(
+            "insert into project_members (project_id, user_id, role) values ($1, $2, 'member')",
+            [id, member],
+          );
+        }
+        return id;
+      },
       leaseExpired: async (runId) => {
         const row = await pool.query<{ expired: boolean }>(
           'select lease_expires_at <= now() as expired from runs where id = $1',

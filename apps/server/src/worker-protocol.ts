@@ -310,6 +310,8 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
       context: context('pipeline'),
       logger: options.logger,
     }),
+    // WP-293: a pick's `worker.take_offer` row, in the claim's transaction.
+    takeAudit: pipelineAdapters.createPostgresWorkerTakeAudit(),
     logger: options.logger,
   });
 };

@@ -24,6 +24,7 @@
 import type {
   AcceptanceCriterion,
   Actor,
+  AgentRole,
   ArtifactType,
   ContextPackRecord,
   EstimateBasis,
@@ -1720,6 +1721,35 @@ export interface RemoteClaimant {
   readonly images: { readonly run: string; readonly egress: string };
   /** SHA-256 hex of the run token minted for this claim (TD-031 decision 7); never the token. */
   readonly runTokenHash: string;
+  /**
+   * **A pick** — *take this one* from the worker's local page (WP-293, TD-031's 2026-11-05
+   * claim-scope amendment, decision 3): the claim names its run ({@link RunOfferEligibility.runId},
+   * required) and **ignores the worker's claim scope and nothing else** — `workers_from`, another
+   * user's head start, the exclusions and both pauses still hold. Absent or `false`: an automatic
+   * claim, which the scope narrows.
+   */
+  readonly pick?: boolean;
+}
+
+/**
+ * The worker a {@link RunOfferRepository.claimable} list is computed for — a {@link RemoteClaimant}
+ * without the run token, because the list claims nothing.
+ */
+export type RemoteListing = Pick<RemoteClaimant, 'workerId' | 'heldImageDigests' | 'images'>;
+
+/**
+ * One open offer a remote worker could claim now (WP-293): the claim's own eligibility with the
+ * claim scope ignored, and `automatic` — whether the scope takes it by itself.
+ */
+export interface ClaimableRunOffer {
+  readonly runId: Id;
+  readonly taskId: Id;
+  readonly projectId: Id;
+  readonly kind: RunOfferKind;
+  readonly stage: string | null;
+  readonly role: AgentRole;
+  readonly offeredAt: IsoDateTime;
+  readonly automatic: boolean;
 }
 
 /**
@@ -1833,6 +1863,16 @@ export interface RunOfferRepository {
    * open (another claim took it, or it was closed), and never claims an offer whose run has ended.
    */
   claim(tx: Transaction, claim: RunOfferClaim): Promise<ClaimedRunOffer | null>;
+  /**
+   * **What a remote worker could claim now** (WP-293, TD-031's claim-scope amendment, decision 4):
+   * at most `limit` open offers of live runs, oldest first, that the worker's claim would admit with
+   * its scope ignored — **the claim's own eligibility text**, so the list and a pick cannot
+   * disagree — each with whether the scope takes it automatically. Locks nothing.
+   */
+  claimable(
+    tx: Transaction,
+    input: { readonly worker: RemoteListing; readonly now: IsoDateTime; readonly limit: number },
+  ): Promise<readonly ClaimableRunOffer[]>;
   load(tx: Transaction, runId: Id): Promise<StoredRunOffer | null>;
   /**
    * **The withdrawal** (WP-276, TD-031 decision 3): **one conditional statement**, `update run_offers

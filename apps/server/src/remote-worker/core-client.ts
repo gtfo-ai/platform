@@ -37,6 +37,8 @@ import {
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_VERSION,
   workerApprovalResponseSchema,
+  workerClaimScopeResponseSchema,
+  workerClaimScopeSetResponseSchema,
   workerDeviceResponseSchema,
   workerDeviceTokenErrorSchema,
   workerDeviceTokenResponseSchema,
@@ -45,6 +47,7 @@ import {
   workerHeartbeatResponseSchema,
   workerLateCostResponseSchema,
   workerManualPauseResponseSchema,
+  workerOffersResponseSchema,
   workerReleaseResponseSchema,
   workerRunCancelResponseSchema,
   workerSpawnResponseSchema,
@@ -167,6 +170,20 @@ export interface CoreClient {
   ): Promise<z.output<typeof workerManualPauseResponseSchema>>;
   /** A usage limit's pause (WP-285, TD-031 §11): `{ until, reason, estimated? }`, `204`. */
   pause(credential: string, body: unknown): Promise<void>;
+  /** The claim scope and the projects it may name (WP-293, protocol 3). */
+  claimScope(credential: string): Promise<z.output<typeof workerClaimScopeResponseSchema>>;
+  /** Set the claim scope (WP-293): `{ claim_project_ids }`, a state assertion. */
+  setClaimScope(
+    credential: string,
+    body: unknown,
+  ): Promise<z.output<typeof workerClaimScopeSetResponseSchema>>;
+  /** The open offers this worker could claim now, its scope ignored (WP-293). */
+  offers(credential: string): Promise<z.output<typeof workerOffersResponseSchema>>;
+  /**
+   * *Take this one* (WP-293): the package, or a `refused` error with `code: offer_not_claimable`. An
+   * answer that does not parse is `refused` with `package_unreadable`, as `claim`'s is.
+   */
+  takeOffer(credential: string, runId: string, body: unknown): Promise<RunPackage>;
   forRun(runId: string, runToken: string): RunScopedClient;
   /**
    * `GET release` (TD-032 §3): the core's digests and the protocols it accepts. A `426` is not an
@@ -193,13 +210,14 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
 
   /** One call; answers the status and the parsed JSON body (or `null` for none). */
   const call = async (input: {
+    /** @default `POST` — a `GET` sends no body. */
+    readonly method?: 'GET' | 'POST' | 'PUT';
     readonly verb: string;
     readonly bearer: string | null;
     readonly body: unknown;
     readonly runScoped: boolean;
     readonly signal?: AbortSignal;
     readonly idempotencyKey?: string;
-    readonly method?: 'GET' | 'POST';
   }): Promise<{ readonly status: number; readonly body: unknown }> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -207,18 +225,18 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
     input.signal?.addEventListener('abort', forward, { once: true });
     let response: Response;
     try {
-      const get = input.method === 'GET';
+      const method = input.method ?? 'POST';
       response = await fetcher(url(input.verb), {
-        method: get ? 'GET' : 'POST',
+        method,
         headers: {
-          ...(get ? {} : { 'content-type': 'application/json' }),
+          ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
           [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL_VERSION),
           ...(input.bearer === null ? {} : { authorization: `Bearer ${input.bearer}` }),
           ...(input.idempotencyKey === undefined
             ? {}
             : { 'idempotency-key': input.idempotencyKey }),
         },
-        ...(get ? {} : { body: JSON.stringify(input.body ?? {}) }),
+        ...(method === 'GET' ? {} : { body: JSON.stringify(input.body ?? {}) }),
         signal: controller.signal,
         // The request carries a credential: a redirect would hand it to wherever it points.
         redirect: 'error',
@@ -403,6 +421,56 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
         runScoped: false,
       });
       if (answer.status !== 204) throw refusal(WORKER_PATHS.updateReport, answer, false);
+    },
+    claimScope: (credential) =>
+      expect(
+        {
+          method: 'GET',
+          verb: WORKER_PATHS.claimScope,
+          bearer: credential,
+          body: null,
+          runScoped: false,
+        },
+        workerClaimScopeResponseSchema,
+      ),
+    setClaimScope: (credential, body) =>
+      expect(
+        {
+          method: 'PUT',
+          verb: WORKER_PATHS.claimScope,
+          bearer: credential,
+          body,
+          runScoped: false,
+        },
+        workerClaimScopeSetResponseSchema,
+      ),
+    offers: (credential) =>
+      expect(
+        {
+          method: 'GET',
+          verb: WORKER_PATHS.offers,
+          bearer: credential,
+          body: null,
+          runScoped: false,
+        },
+        workerOffersResponseSchema,
+      ),
+    takeOffer: async (credential, runId, body) => {
+      const verb = WORKER_PATHS.offerClaim.replace(':id', runId);
+      const answer = await call({ verb, bearer: credential, body, runScoped: false });
+      if (answer.status === 200) {
+        const parsed = runPackageSchema.safeParse(answer.body);
+        if (!parsed.success) {
+          throw new CoreCallError(
+            'refused',
+            200,
+            'package_unreadable',
+            `offers/claim: the run package does not parse (${parsed.error.issues[0]?.message ?? 'invalid'})`,
+          );
+        }
+        return parsed.data;
+      }
+      throw refusal(WORKER_PATHS.offerClaim, answer, false);
     },
     forRun: (runId, runToken) => {
       const verb = (path: string, name?: string): string =>

@@ -10,7 +10,9 @@
  * - **An online assignee** (TD-031 §8): a worker of the user that is `active`, not paused (or paused
  *   until a past instant), seen in the last {@link ASSIGNEE_ONLINE_SECONDS} on the database's clock,
  *   and the user's **effective** project role — the higher of the organisation role and a project
- *   membership, `rbac.ts`'s rule (backlog 886) — `member` or above. `last_seen_at` is written by every
+ *   membership, `rbac.ts`'s rule (backlog 886) — `member` or above — and whose **claim scope takes
+ *   the project automatically** (`null`, or naming it; WP-293, TD-031's claim-scope amendment §5),
+ *   so a pick-only worker holds no offer for `assignee_window` for nothing. `last_seen_at` is written by every
  *   authenticated worker protocol call (WP-281, `WorkerStore.recordContact`).
  * - **Server claimant liveness**, both halves on the database's clock (`held_connection_liveness`'s
  *   shape, migration 0054): the writer sets `expires_at = now() + ttl`, the reader compares with
@@ -62,6 +64,7 @@ export const createPostgresExecutionRoutingRepository = (): ExecutionRoutingRepo
             and w.state = 'active'
             and (w.paused_until is null or w.paused_until <= $3::timestamptz)
             and w.manually_paused_at is null
+            and (w.claim_project_ids is null or $1::uuid = any(w.claim_project_ids))
             and w.last_seen_at > now() - make_interval(secs => $4::float8)
             and ${userMayRunInProjectSql('w.user_id', '$1::uuid')}
        ) as online`,

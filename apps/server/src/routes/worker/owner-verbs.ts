@@ -18,7 +18,8 @@
  *   `run_commands` row the worker's own heartbeat delivers, and the task is paused (Q126).
  *
  * **A version-1 request is `426`** on both: the verbs do not exist at protocol 1, and a worker that
- * reaches them speaking 1 is a worker that cannot read their answers' context.
+ * reaches them speaking 1 is a worker that cannot read their answers' context. Since protocol 3
+ * (WP-293, accepted `[2, 3]`) protocol 1 is refused at the protocol check before it reaches them.
  */
 import type { RunTokenSubject } from '@platform/application';
 import {
@@ -86,15 +87,16 @@ export interface WorkerOwnerVerbOptions {
 const runParamsSchema = z.strictObject({ id: z.uuid() });
 
 /**
- * `426` for a request below {@link WORKER_PROTOCOL_LOCAL_UI} — `preValidation`, before the
- * credential is read. The generic check (`registerWorkerProtocolCheck`) has already admitted the
- * version as one this core serves; this refusal is the verb's.
+ * `426` for a request below `minimum` — {@link WORKER_PROTOCOL_LOCAL_UI} for the owner verbs, the
+ * claim-scope protocol for the pick verbs (WP-293) — `preValidation`, before the credential is
+ * read. The generic check (`registerWorkerProtocolCheck`) has already admitted the version as one
+ * this core serves; this refusal is the verb's.
  */
-const requireLocalUiProtocol =
-  (upgradeBody: WorkerOwnerVerbOptions['upgradeBody'], verb: string) =>
+export const requireWorkerProtocol =
+  (upgradeBody: WorkerOwnerVerbOptions['upgradeBody'], verb: string, minimum: number) =>
   async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply | undefined> => {
     const version = parseWorkerProtocolHeader(request.headers[WORKER_PROTOCOL_HEADER]);
-    if (version !== null && version >= WORKER_PROTOCOL_LOCAL_UI) {
+    if (version !== null && version >= minimum) {
       return undefined;
     }
     const body = upgradeBody(version);
@@ -103,11 +105,14 @@ const requireLocalUiProtocol =
         ...body,
         error: {
           code: 'upgrade_required',
-          message: `${verb} is a worker protocol ${WORKER_PROTOCOL_LOCAL_UI} verb; this request spoke ${version ?? 'no version'} (this core serves ${ACCEPTED_WORKER_PROTOCOLS.join(', ')}) — update the worker`,
+          message: `${verb} is a worker protocol ${minimum} verb; this request spoke ${version ?? 'no version'} (this core serves ${ACCEPTED_WORKER_PROTOCOLS.join(', ')}) — update the worker`,
         },
       }),
     );
   };
+
+const requireLocalUiProtocol = (upgradeBody: WorkerOwnerVerbOptions['upgradeBody'], verb: string) =>
+  requireWorkerProtocol(upgradeBody, verb, WORKER_PROTOCOL_LOCAL_UI);
 
 const unauthenticated = (what: string): HttpError =>
   new HttpError(401, 'unauthenticated', `${what} (TD-031 §7)`);

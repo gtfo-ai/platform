@@ -257,6 +257,40 @@ export const runDisplayOf =
     return parsed.success ? parsed.data : null;
   };
 
+/**
+ * The names `GET offers` lists each offer by (WP-293, TD-031's claim-scope amendment §4): the
+ * {@link runDisplayOf} rule — the project's key, the ticket's key, the title from the **redacted**
+ * ticket snapshot cut to the block's bound — for many tasks in one statement. A task whose names do
+ * not fit the block is absent from the map, and its offer is listed without names.
+ */
+export const offerDisplaysOf =
+  (pool: Pick<pg.Pool, 'query'>) =>
+  async (taskIds: readonly string[]): Promise<ReadonlyMap<string, RunDisplay>> => {
+    const displays = new Map<string, RunDisplay>();
+    if (taskIds.length === 0) return displays;
+    const { rows } = await pool.query<{
+      id: string;
+      project_key: string;
+      ticket_key: string;
+      ticket_snapshot: unknown;
+    }>(
+      `select t.id, p.key as project_key, t.ticket_key, t.ticket_snapshot
+         from tasks t join projects p on p.id = t.project_id
+        where t.id = any($1::uuid[])`,
+      [[...taskIds]],
+    );
+    for (const row of rows) {
+      const title = ticketTitleOf(row.ticket_snapshot);
+      const parsed = runDisplaySchema.safeParse({
+        projectKey: row.project_key,
+        ticketKey: row.ticket_key,
+        title: title === null ? null : title.slice(0, DISPLAY_TITLE_MAX_CHARS),
+      });
+      if (parsed.success) displays.set(row.id, parsed.data);
+    }
+    return displays;
+  };
+
 export interface ComposeRemoteRunCallsOptions {
   readonly pool: pg.Pool;
   readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;

@@ -9,7 +9,8 @@
  *
  * | command | what it writes | refused as |
  * |---|---|---|
- * | {@link RemoteRuns.claim} | the one claim (`RunOfferRepository.claim`, worker eligibility in the statement), `run.claimed`, the run token's hash; **after the commit** the package — the stored plan opened, the git credential minted | — (`none`) |
+ * | {@link RemoteRuns.claim} | the one claim (`RunOfferRepository.claim`, worker eligibility in the statement), `run.claimed`, the run token's hash — and for a pick (WP-293) one `human_actions` row `worker.take_offer`; **after the commit** the package — the stored plan opened, the git credential minted | — (`none`) |
+ * | {@link RemoteRuns.offers} | nothing: the claim's eligibility read as a list, the scope ignored (WP-293) | — |
  * | {@link RemoteRuns.heartbeat} | the lease renewed (`now + 10 min`), acks stamped; answers pending commands | `lease_lost` |
  * | {@link RemoteRuns.release} | the claim undone (offer `claimed → open`, run `starting → created`), `run.offer.released`; the minted credential revoked after the commit | `run_started`, `lease_lost` |
  * | {@link RemoteRuns.spawn} | the CLI spawn marker and `run.started` (WP-275b's transaction) | `lease_lost` |
@@ -74,6 +75,7 @@ import {
   type RunOutcome,
   type RunStoppedReason,
 } from '../ports/runner.js';
+import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { type ClaimAdmission, ClaimAdmissionRefused } from './claim-admission.js';
 import { leaseExpiryAt } from './lease.js';
@@ -82,6 +84,7 @@ import { toRunAggregate } from './run-aggregate.js';
 import { openRunPlan } from './run-package.js';
 import type { SettleRunRequest, SettleRunResult } from './settle.js';
 import {
+  type ClaimableRunOffer,
   LeaseLostError,
   type PendingRunCommand,
   type PipelineStore,
@@ -174,7 +177,21 @@ export interface RemoteRunsOptions {
    * Absent asks nothing — the production composition passes one.
    */
   readonly admission?: ClaimAdmission;
+  /**
+   * The `human_actions` row a pick leaves (WP-293, `worker.take_offer`), written in the claim's own
+   * transaction so it commits with the claim or not at all. A pick asked of a composition with none
+   * throws by name — a person's act is never left unrecorded.
+   */
+  readonly takeAudit?: WorkerTakeAudit;
   readonly logger?: Logger;
+}
+
+/** The audit of a pick (WP-293): one `human_actions` row `worker.take_offer`, the worker's user. */
+export interface WorkerTakeAudit {
+  record(
+    tx: Transaction,
+    entry: { readonly workerId: Id; readonly runId: Id; readonly taskId: Id },
+  ): Promise<void>;
 }
 
 /** A run-scoped call's authenticated subject. */
@@ -252,12 +269,29 @@ export interface RemoteLateSpend {
 }
 
 export interface RemoteRuns {
+  /**
+   * The one claim (TD-031 §2). With `pick` — *take this one* (WP-293) — it is narrowed to that run,
+   * ignores the worker's claim scope and nothing else, and records `worker.take_offer` in the
+   * claim's transaction; `none` is then every reason it claimed nothing.
+   */
   claim(input: {
     readonly workerId: Id;
     readonly heldImageDigests: readonly string[];
     readonly images: RemoteRunImages;
     readonly now: IsoDateTime;
+    readonly pick?: Id;
   }): Promise<RemoteClaimAnswer>;
+  /**
+   * What the worker could claim now (WP-293, TD-031's claim-scope amendment §4): the claim's own
+   * eligibility, its scope ignored, at most `limit`, oldest first. Claims nothing.
+   */
+  offers(input: {
+    readonly workerId: Id;
+    readonly heldImageDigests: readonly string[];
+    readonly images: RemoteRunImages;
+    readonly now: IsoDateTime;
+    readonly limit: number;
+  }): Promise<readonly ClaimableRunOffer[]>;
   /** The run token's subject, or `null` — a wrong token, a worker that may not act, an old run. */
   authenticate(input: {
     readonly runId: Id;
@@ -495,11 +529,18 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
   return {
     claim: async (input) => {
       const owner = workerLeaseOwner(input.workerId);
+      const pick = input.pick;
+      const takeAudit = options.takeAudit;
+      if (pick !== undefined && takeAudit === undefined) {
+        throw new Error(
+          'a pick (take this one) needs its human_actions row, and this composition wired no takeAudit (WP-293)',
+        );
+      }
       const { token, hash } = options.tokens.mint();
       const claimOnce = () =>
         unitOfWork.transaction(async (scope) => {
           const offer = await claimRunOffer(store.offers, scope.tx, {
-            eligibility: {},
+            eligibility: pick === undefined ? {} : { runId: pick },
             claimantKind: 'worker',
             owner,
             expiresAt: leaseExpiryAt(input.now, leaseTtlMs),
@@ -509,6 +550,7 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
               heldImageDigests: input.heldImageDigests,
               images: input.images,
               runTokenHash: hash,
+              ...(pick === undefined ? {} : { pick: true }),
             },
           });
           if (offer === null) {
@@ -537,6 +579,14 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
           }
           const recorded = recordClaim(offered, offer, options.context(row.taskId), input.workerId);
           await scope.events.append(recorded.events);
+          if (pick !== undefined) {
+            // A person's act: audited with the claim, so a rolled-back claim leaves no row.
+            await takeAudit?.record(scope.tx, {
+              workerId: input.workerId,
+              runId: row.id,
+              taskId: row.taskId,
+            });
+          }
           return {
             runId: row.id,
             epoch: offer.epoch,
@@ -600,6 +650,19 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
       );
       return { kind: 'claimed', runId: claimed.runId, package: answer.package };
     },
+
+    offers: async (input) =>
+      unitOfWork.transaction(async (scope) =>
+        store.offers.claimable(scope.tx, {
+          worker: {
+            workerId: input.workerId,
+            heldImageDigests: input.heldImageDigests,
+            images: input.images,
+          },
+          now: input.now,
+          limit: input.limit,
+        }),
+      ),
 
     authenticate: async (input) => {
       const holder = await unitOfWork.transaction(async (scope) =>

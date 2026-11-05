@@ -374,6 +374,13 @@ docker compose -f compose.worker.yml logs remote-worker | grep token=
   Stopping the container is not a cancel: the core treats it as a lost worker.
 - What the page shows is what the worker uploads (redacted the same way); it is not a confidentiality
   boundary against the machine's owner, who controls the Docker daemon (TD-031's worker-UI amendment).
+- *What this worker takes by itself* and *Take this one* (WP-293, protocol 3 — a core accepts `[2, 3]`,
+  so a worker image older than protocol 2 must be updated first): the owner's **claim scope** (every
+  project, named projects, or pick only) is stored on the core in `workers.claim_project_ids` and only
+  narrows the claim; a pick claims one listed run and never jumps a project's routing — the
+  administrator's levers stay the execution mode and *Revoke*. Each change and each pick is one
+  `human_actions` row (`worker.claim_scope`, `worker.take_offer`, `via: worker_ui`). If every worker of a
+  `workers_only` instance is *pick only*, runs wait for a person to pick them, up to `offer_timeout`.
 
 **The worker updates itself** (WP-287, TD-032 decisions 3, 4 and 6). The `updater` service follows the
 core: every 5 minutes, and at once when the worker meets a `426`, it reads the core's

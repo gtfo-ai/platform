@@ -124,7 +124,7 @@ import { createTaskStartCommands } from './task-start.js';
 import { createTicketStatusReader } from './ticket-statuses.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
 import { composeRemoteRuns } from './worker-protocol.js';
-import { composeRemoteRunCalls } from './worker-run-calls.js';
+import { composeRemoteRunCalls, offerDisplaysOf } from './worker-run-calls.js';
 import { readWorkerComposeTemplate } from './workers/compose.js';
 import { createCoreDigestSource } from './workers/digests.js';
 import { createWorkerReleaseSource } from './workers/release.js';
@@ -1285,6 +1285,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       workerProtocol: {
         remoteRuns,
         runCalls: runCalls?.calls ?? null,
+        // WP-293: `GET offers` names each offer as the package's display block does.
+        offerDisplays: offerDisplaysOf(database.pool),
         broadcast: eventing.broadcast,
         release: workerRelease.current,
         unresolved: workerRelease.unresolved,

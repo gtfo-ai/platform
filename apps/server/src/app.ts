@@ -179,6 +179,7 @@ import { registerTaskStartRoutes } from './routes/task-start.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import type { WorkerRunCancelPort } from './routes/worker/owner-verbs.js';
+import type { OfferDisplays } from './routes/worker/pick-verbs.js';
 import {
   registerWorkerProtocolCheck,
   registerWorkerProtocolRoutes,
@@ -316,6 +317,8 @@ export interface BuildAppOptions {
      * a test passes its own (or `null`, which answers `503` by name).
      */
     readonly runCancel?: WorkerRunCancelPort | null;
+    /** `GET offers`' display names (WP-293); absent, every offer is listed without them. */
+    readonly offerDisplays?: OfferDisplays | null;
     /** The held requests' bounds; absent, TD-031 §9's 25 s and 20 s (a test shortens them). */
     readonly holds?: {
       readonly claimMs?: number;
@@ -684,6 +687,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
               },
       remoteRuns: options.workerProtocol?.remoteRuns ?? null,
       runCalls: options.workerProtocol?.runCalls ?? null,
+      offerDisplays: options.workerProtocol?.offerDisplays ?? null,
       broadcast: options.workerProtocol?.broadcast ?? null,
       release: workerRelease,
       ...(options.workerProtocol?.unresolved === undefined

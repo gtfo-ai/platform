@@ -24,6 +24,7 @@
  * | 13 | A **remote worker's claim** (WP-281) asks {@link MemoryPipelineStoreOptions.remoteWorkers} and {@link MemoryPipelineStoreOptions.runCredentialSource} where the SQL claim joins `workers`, `users`, `project_members`, `bindings` and `integrations` in its one statement; the same callback fences `finish`, `renewLease` and the spawn marker of a run a worker holds (backlog 714's `runHolderUsableSql`). Unwired, no worker is eligible and a worker-held run's fence never holds. | **same** on the predicates, **stricter** unwired | That the predicates are asked **in the committing statement** — a revoke that commits between a request's authentication and its write is seen — is PostgreSQL's isolation, asserted by `test/integration/pipeline/remote-claim.integration.test.ts`; divergence 4 is why it cannot be shown here. |
  */
 import type {
+  AgentRole,
   ArtifactType,
   ContextPackRecord,
   DomainEvent,
@@ -67,10 +68,10 @@ import type {
   ExecutionRoutingRepository,
   PipelineStore,
   QuestionRepository,
+  RemoteListing,
   RunCommandInstruction,
   RunCommandRefusal,
   RunCommandRepository,
-  RunOfferClaim,
   RunOfferRepository,
   RunPlanRepository,
   RunRepository,
@@ -338,6 +339,11 @@ export interface MemoryRemoteWorker {
   readonly pausedUntil: IsoDateTime | null;
   /** The owner's hold from the worker's local page (WP-292); absent reads as not held. */
   readonly manuallyPaused?: boolean;
+  /**
+   * The worker's claim scope (WP-293): `null`/absent every project, `[]` pick only, otherwise those
+   * projects — a conjunct of an automatic claim, ignored by a pick.
+   */
+  readonly claimProjectIds?: readonly Id[] | null;
   /**
    * Whether the user's effective project role — the higher of the organisation role and a
    * membership (backlog 886) — is `member` or above.
@@ -1664,8 +1670,11 @@ export const createMemoryPipelineStore = (
    * per-task partial unique index over open or claimed **stage** offers — so a test that would
    * violate the index fails here as it would there (standing rule 1).
    */
-  /** The SQL's `WORKER_ELIGIBLE` over an open offer (WP-281; divergence 13). */
-  function workerEligible(candidate: StoredRunOffer, claim: RunOfferClaim): boolean {
+  /** The SQL's `workerEligibleSql` over an open offer (WP-281; divergence 13). */
+  function workerEligible(
+    candidate: StoredRunOffer,
+    claim: { readonly worker?: RemoteListing; readonly now: IsoDateTime },
+  ): boolean {
     const worker = claim.worker;
     if (worker === undefined) return false;
     const known = options.remoteWorkers?.(worker.workerId);
@@ -1700,7 +1709,37 @@ export const createMemoryPipelineStore = (
     );
   }
 
+  /** The SQL's `workerScopeTakesSql` (WP-293): `null`/absent every project, else those named. */
+  function scopeTakes(candidate: StoredRunOffer, workerId: Id): boolean {
+    const scope = options.remoteWorkers?.(workerId)?.claimProjectIds ?? null;
+    return scope === null || scope.includes(candidate.projectId);
+  }
+
+  /** An open offer of a live run — the claim's and the list's first two conjuncts. */
+  const openLive = (candidate: StoredRunOffer): boolean =>
+    candidate.state === 'open' &&
+    isActiveRunStatus(runs.get(candidate.runId)?.status ?? 'completed');
+
   const offerRepository: RunOfferRepository = {
+    claimable: async (_tx, input) =>
+      [...offers.values()]
+        .filter(
+          (candidate) =>
+            openLive(candidate) &&
+            workerEligible(candidate, { worker: input.worker, now: input.now }),
+        )
+        .sort((a, b) => Date.parse(a.offeredAt) - Date.parse(b.offeredAt))
+        .slice(0, input.limit)
+        .map((candidate) => ({
+          runId: candidate.runId,
+          taskId: candidate.taskId,
+          projectId: candidate.projectId,
+          kind: candidate.kind,
+          stage: candidate.stage,
+          role: (runs.get(candidate.runId)?.role ?? 'developer') as AgentRole,
+          offeredAt: candidate.offeredAt,
+          automatic: scopeTakes(candidate, input.worker.workerId),
+        })),
     insert: async (_tx, offer) => {
       if (offers.has(offer.runId)) {
         throw new PipelineStoreError(
@@ -1739,20 +1778,26 @@ export const createMemoryPipelineStore = (
       });
     },
     claim: async (_tx, claim) => {
+      if (claim.worker?.pick === true && claim.eligibility.runId === undefined) {
+        throw new PipelineStoreError('a pick names its run (RemoteClaimant.pick, WP-293)');
+      }
       const offer = [...offers.values()]
         .filter(
           (candidate) =>
-            candidate.state === 'open' &&
+            openLive(candidate) &&
             (claim.eligibility.runId === undefined ||
               candidate.runId === claim.eligibility.runId) &&
-            isActiveRunStatus(runs.get(candidate.runId)?.status ?? 'completed') &&
             // WP-278: the server's eligibility, as the SQL claim spells it.
             (claim.claimantKind !== 'server' ||
               (candidate.routing.serverFrom !== null &&
                 Date.parse(candidate.routing.serverFrom) <= Date.parse(claim.now)) ||
               (candidate.routing.serverFrom === null && candidate.routing.workersFrom === null)) &&
             // WP-281: a remote worker's, as the SQL's `WORKER_ELIGIBLE` spells it.
-            (claim.claimantKind !== 'worker' || workerEligible(candidate, claim)),
+            (claim.claimantKind !== 'worker' || workerEligible(candidate, claim)) &&
+            // WP-293: an automatic claim asks the scope; a pick ignores it.
+            (claim.claimantKind !== 'worker' ||
+              claim.worker?.pick === true ||
+              (claim.worker !== undefined && scopeTakes(candidate, claim.worker.workerId))),
         )
         .sort((a, b) => Date.parse(a.offeredAt) - Date.parse(b.offeredAt))[0];
       if (offer === undefined) {

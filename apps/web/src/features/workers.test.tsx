@@ -49,6 +49,7 @@ const worker = (overrides: Partial<WorkerSummary> = {}): WorkerSummary => ({
   revoked_at: null,
   paused_until: null,
   manually_paused_at: null,
+  claim_projects: null,
   paused_reason: null,
   paused_until_estimated: false,
   concurrency: 1,
@@ -334,6 +335,36 @@ describe('the Workers screen', () => {
     expect(rowOf(paused.id)).not.toContain('Online');
     expect(rowOf(held.id)).toContain('Paused by its owner');
     expect(rowOf(held.id)).not.toContain('Online');
+  });
+
+  it('shows each worker’s claim scope, read only: every project, pick only, named projects (WP-293)', async () => {
+    const every = worker();
+    const pickOnly = worker({
+      id: '00000000-0000-4000-8000-0000000002c1',
+      name: 'gil-laptop',
+      claim_projects: [],
+    });
+    const named = worker({
+      id: '00000000-0000-4000-8000-0000000002c2',
+      name: 'hana-desktop',
+      claim_projects: [
+        { id: '00000000-0000-4000-8000-0000000002d1', key: 'ACME' },
+        { id: '00000000-0000-4000-8000-0000000002d2', key: null },
+      ],
+    });
+    const { fetchImpl, sent } = fetchFor('missing', [every, pickOnly, named]);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelectorAll('[data-worker]')).toHaveLength(3);
+    });
+    const scopeOf = (id: string) =>
+      container.querySelector(`[data-worker="${id}"] [data-claim-scope]`)?.textContent;
+    expect(scopeOf(every.id)).toBe('takes every project');
+    expect(scopeOf(pickOnly.id)).toBe('pick only');
+    expect(scopeOf(named.id)).toBe('takes ACME, a removed project');
+    // Read only: the screen offers no way to change it.
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
+    expect(screen.queryByRole('button', { name: /scope/i })).toBeNull();
   });
 
   it('shows a usage pause in the organisation’s zone, *about* for a default one, and a past one as none (WP-285)', async () => {

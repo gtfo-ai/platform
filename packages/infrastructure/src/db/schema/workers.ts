@@ -33,6 +33,11 @@ export const workers = pgTable('workers', {
   pausedUntilEstimated: boolean('paused_until_estimated').notNull().default(false),
   /** The owner's hold from the worker's local page (migration 0099, WP-292); `null` while not held. */
   manuallyPausedAt: timestamp('manually_paused_at', { withTimezone: true }),
+  /**
+   * The worker's claim scope (migration 0101, WP-293): `null` every project, `[]` pick only,
+   * otherwise those projects — a conjunct of an automatic claim only; a pick ignores it.
+   */
+  claimProjectIds: uuid('claim_project_ids').array(),
   concurrency: integer('concurrency').notNull().default(1),
 });
 

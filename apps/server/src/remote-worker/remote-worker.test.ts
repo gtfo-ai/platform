@@ -40,11 +40,15 @@ import {
   WORKER_REMOTE_LEASE_TTL_MS,
   workerApprovalRequestSchema,
   workerClaimRequestSchema,
+  workerClaimScopeRequestSchema,
   workerFinishRequestSchema,
   workerHandshakeRequestSchema,
   workerHeartbeatRequestSchema,
+  workerLocalClaimScopeSchema,
+  workerLocalOffersSchema,
   workerLocalStateSchema,
   workerManualPauseRequestSchema,
+  workerOfferClaimRequestSchema,
   workerPauseRequestSchema,
   workerRunCancelRequestSchema,
   workerRunReleaseRequestSchema,
@@ -310,12 +314,20 @@ const fakeCore = (options: {
   readonly claims?: readonly RunPackage[];
   /** The transcript upload's answer by upload number (from 1); absent stores the batch. */
   readonly transcript?: (n: number) => { readonly status: number; readonly body: unknown } | null;
+  /** `GET offers`' entries (WP-293); absent is none. */
+  readonly offers?: readonly unknown[];
+  /** What `POST offers/:id/claim` answers (WP-293): the package, or `409 offer_not_claimable`. */
+  readonly takes?: readonly (RunPackage | 'refused')[];
+  /** The projects `GET claim-scope` lists (WP-293). */
+  readonly scopeProjects?: readonly { id: string; key: string; name: string }[];
 }) => {
   const captured: Captured[] = [];
   const events: string[] = [];
   /** Commands the next beat delivers — what a recorded `run_commands` row is (WP-292's cancel). */
   const pendingCommands: { id: string; kind: 'cancel'; payload: Record<string, never> }[] = [];
   const claims = [...(options.claims ?? [])];
+  const takes = [...(options.takes ?? [])];
+  let claimProjectIds: string[] | null = null;
   let manuallyPausedAt: string | null = null;
   /** Approvals opened and not yet delivered: the next beat answers each `deny`, once. */
   const opened: string[] = [];
@@ -326,7 +338,9 @@ const fakeCore = (options: {
     const headers = init.headers as Record<string, string>;
     const body = String(init.body ?? '');
     captured.push({ verb, headers, body });
-    const parsed = JSON.parse(body) as Record<string, unknown>;
+    // A `GET` sends no body (WP-293's reads).
+    const parsed = (body === '' ? {} : JSON.parse(body)) as Record<string, unknown>;
+    const method = init.method ?? 'POST';
     const answer = (status: number, json: unknown): Response =>
       new Response(json === null ? null : JSON.stringify(json), {
         status,
@@ -415,7 +429,10 @@ const fakeCore = (options: {
       case 'handshake':
         workerHandshakeRequestSchema.parse(parsed);
         return answer(200, {
-          protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [1, WORKER_PROTOCOL_VERSION] },
+          protocol: {
+            current: WORKER_PROTOCOL_VERSION,
+            accepted: [WORKER_PROTOCOL_VERSION - 1, WORKER_PROTOCOL_VERSION],
+          },
           digests: {
             platform: DIGEST,
             platform_launcher: DIGEST,
@@ -430,9 +447,34 @@ const fakeCore = (options: {
             paused_until: null,
             paused_reason: null,
             manually_paused_at: manuallyPausedAt,
+            claim_project_ids: claimProjectIds,
           },
           server_time: '2026-11-05T10:00:00.000Z',
         });
+      case 'claim-scope': {
+        if (method === 'PUT') {
+          const request = workerClaimScopeRequestSchema.parse(parsed);
+          const next = request.claim_project_ids === null ? null : [...request.claim_project_ids];
+          const performed = JSON.stringify(next) !== JSON.stringify(claimProjectIds);
+          claimProjectIds = next;
+          return answer(200, { claim_project_ids: claimProjectIds, performed });
+        }
+        return answer(200, {
+          claim_project_ids: claimProjectIds,
+          projects: options.scopeProjects ?? [],
+        });
+      }
+      case 'offers':
+        return answer(200, { offers: options.offers ?? [] });
+      case 'offers/:id/claim': {
+        workerOfferClaimRequestSchema.parse(parsed);
+        const next = takes.shift() ?? 'refused';
+        return next === 'refused'
+          ? answer(409, {
+              error: { code: 'offer_not_claimable', message: 'this offer cannot be taken' },
+            })
+          : answer(200, next);
+      }
       case 'claims': {
         workerClaimRequestSchema.parse(parsed);
         const next = claims.shift();
@@ -1491,6 +1533,148 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       }
       // Nothing secret reached the core either (the reason travelled redacted).
       expect(JSON.stringify(core.captured.map((call) => call.body))).not.toContain(CLAUDE_TOKEN);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  /**
+   * WP-293 (5): the scope editor and *Take this one* through `/api/local/claim-scope`,
+   * `/api/local/offers` and `/api/local/offers/:id/take`, under WP-292's bearer, `Host` and `Origin`
+   * rules; a credential planted in an offer's title is not on the page; a take starts the run here
+   * and a second one, with no slot free, is refused before the core is asked.
+   */
+  it('lists, takes and sets the claim scope behind the page’s checks, with no secret on an offer', async () => {
+    const stateDir = stateDirWithCredential();
+    const OFFER = {
+      run_id: RUN_ID,
+      kind: 'stage',
+      project_key: 'ACME',
+      ticket_key: 'ACME-7',
+      title: `Fix the login page ${CLAUDE_TOKEN} ${WORKER_CREDENTIAL}`,
+      stage: 'implementation',
+      role: 'developer',
+      offered_at: '2026-11-05T10:00:00.000Z',
+      automatic: false,
+    };
+    const PROJECT = { id: PROJECT_ID, key: 'ACME', name: 'Acme storefront' };
+    const core = fakeCore({
+      offers: [OFFER],
+      takes: ['refused', runPackage()],
+      scopeProjects: [PROJECT],
+    });
+    const { worker } = await start({ stateDir, core });
+    try {
+      const port = portOf(worker.uiAddress());
+      const token = readFileSync(path.join(stateDir, UI_TOKEN_FILE), 'utf8').trim();
+      const auth = { authorization: `Bearer ${token}` };
+      const origin = { origin: `http://127.0.0.1:${PUBLISHED}` };
+      await until('the worker is connected', () => worker.state().connection === 'connected');
+      const take = `/api/local/offers/${RUN_ID}/take`;
+      // The page's rules hold on the new verbs: 401, 421, 403 — the core is asked nothing.
+      expect((await request(port, { path: '/api/local/offers' })).status).toBe(401);
+      expect((await request(port, { path: '/api/local/claim-scope' })).status).toBe(401);
+      expect(
+        (
+          await request(port, {
+            path: '/api/local/offers',
+            host: 'evil.example.test',
+            headers: auth,
+          })
+        ).status,
+      ).toBe(421);
+      for (const path_ of [take, '/api/local/claim-scope']) {
+        for (const refused of [undefined, 'https://evil.example.test']) {
+          const answer = await request(port, {
+            method: 'POST',
+            path: path_,
+            headers: { ...auth, ...(refused === undefined ? {} : { origin: refused }) },
+            body: path_ === take ? {} : { claim_project_ids: [] },
+          });
+          expect(`${path_} ${answer.status}`).toBe(`${path_} 403`);
+        }
+      }
+      expect(
+        core.captured.some(
+          (call) => call.verb === 'offers/:id/claim' || call.verb === 'claim-scope',
+        ),
+      ).toBe(false);
+
+      // The list, through the worker's exact-value redactor.
+      const listed = await request(port, { path: '/api/local/offers', headers: auth });
+      expect(listed.status).toBe(200);
+      const offers = workerLocalOffersSchema.parse(JSON.parse(listed.text)).offers;
+      expect(offers).toHaveLength(1);
+      expect(offers[0]?.title).toContain('Fix the login page');
+      for (const secret of [CLAUDE_TOKEN, WORKER_CREDENTIAL, token]) {
+        expect(listed.text).not.toContain(secret);
+      }
+      expect(core.captured.find((call) => call.verb === 'offers')?.headers.authorization).toBe(
+        `Bearer ${WORKER_CREDENTIAL}`,
+      );
+
+      // The scope: read, set to pick only through the core's PUT, read back.
+      const read = await request(port, { path: '/api/local/claim-scope', headers: auth });
+      expect(workerLocalClaimScopeSchema.parse(JSON.parse(read.text))).toEqual({
+        claim_project_ids: null,
+        projects: [PROJECT],
+      });
+      expect(
+        (
+          await request(port, {
+            method: 'POST',
+            path: '/api/local/claim-scope',
+            headers: { ...auth, ...origin },
+            body: { claim_project_ids: ['not-a-uuid'] },
+          })
+        ).status,
+      ).toBe(400);
+      const set = await request(port, {
+        method: 'POST',
+        path: '/api/local/claim-scope',
+        headers: { ...auth, ...origin },
+        body: { claim_project_ids: [] },
+      });
+      expect(set.status).toBe(200);
+      expect(workerLocalClaimScopeSchema.parse(JSON.parse(set.text)).claim_project_ids).toEqual([]);
+      const put = core.captured.find((call) => call.verb === 'claim-scope' && call.body !== '');
+      expect(JSON.parse(put?.body ?? '{}')).toEqual({ claim_project_ids: [] });
+
+      // A take the core refuses: its code, nothing started.
+      const lost = await request(port, {
+        method: 'POST',
+        path: take,
+        headers: { ...auth, ...origin },
+        body: {},
+      });
+      expect(lost.status).toBe(409);
+      expect(JSON.parse(lost.text).error.code).toBe('offer_not_claimable');
+      expect(worker.sessions.size).toBe(0);
+      // The take the core admits: the package runs here.
+      const taken = await request(port, {
+        method: 'POST',
+        path: take,
+        headers: { ...auth, ...origin },
+        body: {},
+      });
+      expect(taken.status).toBe(200);
+      expect(JSON.parse(taken.text)).toEqual({ run_id: RUN_ID });
+      expect(worker.sessions.has(RUN_ID)).toBe(true);
+      const picks = core.captured.filter((call) => call.verb === 'offers/:id/claim');
+      expect(picks).toHaveLength(2);
+      expect(workerOfferClaimRequestSchema.parse(JSON.parse(picks[1]?.body ?? '{}'))).toEqual({
+        image_digests: [DIGEST],
+      });
+      // No slot left (concurrency 1): refused here, the core not asked again.
+      const full = await request(port, {
+        method: 'POST',
+        path: take,
+        headers: { ...auth, ...origin },
+        body: {},
+      });
+      expect(full.status).toBe(409);
+      expect(JSON.parse(full.text).error.code).toBe('no_free_slot');
+      expect(core.captured.filter((call) => call.verb === 'offers/:id/claim')).toHaveLength(2);
     } finally {
       await worker.stop();
     }

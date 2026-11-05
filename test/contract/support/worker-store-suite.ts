@@ -18,6 +18,9 @@
  * - **A non-administrator cannot see another person's worker exist** (`not_found`).
  * - **The owner's pause is a state assertion** (WP-292): one `human_actions` row per change, the
  *   worker's user, `via: worker_ui`; a repeat keeps the first instant and writes nothing.
+ * - **The claim scope is a state assertion too** (WP-293): stored distinct and sorted, one
+ *   `worker.claim_scope` row per change and none for a repeat as a set; a project where the user is
+ *   not `member`+ is `invalid` and writes nothing; the chooser lists exactly the user's projects.
  *
  * ## What it does not assert
  *
@@ -44,6 +47,13 @@ export interface WorkerStoreWorld {
   leaseExpired(runId: string): Promise<boolean>;
   /** The `human_actions` rows written, oldest first. */
   audit(): Promise<{ action: string; userId: string; params: JsonObject }[]>;
+  /**
+   * A user whose organisation role is `viewer` (WP-293): they may take a run only where a project
+   * membership at `member`+ says so — the effective role's rule.
+   */
+  addViewer(email: string): Promise<string>;
+  /** A project, with the users who are its members at `member` (WP-293). */
+  addProject(key: string, members: readonly string[]): Promise<string>;
 }
 
 export interface WorkerStoreHarness {
@@ -453,6 +463,79 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
           now: at(0),
         }),
       ).toEqual({ status: 'not_found' });
+    });
+
+    it('holds the claim scope as a state assertion: the user’s projects only, one audit row per change (WP-293)', async () => {
+      const world = await harness.create();
+      const owner = await world.addViewer('claim-scope@example.test');
+      const other = await world.addViewer('claim-scope-other@example.test');
+      const beta = await world.addProject('beta', [owner]);
+      const alpha = await world.addProject('alpha', [owner, other]);
+      const foreign = await world.addProject('gamma', [other]);
+      const worker = await registerWorker(world, owner);
+      const scopeAudit = async () =>
+        (await world.audit()).filter((row) => row.action === 'worker.claim_scope');
+      const read = await world.store.claimScope(worker);
+      expect(read).toEqual({
+        status: 'found',
+        claimProjectIds: null,
+        projects: [
+          { id: alpha, key: 'alpha', name: 'Project alpha' },
+          { id: beta, key: 'beta', name: 'Project beta' },
+        ],
+      });
+      // Every project already: nothing written.
+      expect(await world.store.setClaimScope({ workerId: worker, projectIds: null })).toEqual({
+        status: 'set',
+        claimProjectIds: null,
+        performed: false,
+      });
+      const sorted = [alpha, beta].sort();
+      expect(
+        await world.store.setClaimScope({ workerId: worker, projectIds: [beta, alpha, beta] }),
+      ).toEqual({ status: 'set', claimProjectIds: sorted, performed: true });
+      // The same set in another order is a repeat.
+      expect(
+        await world.store.setClaimScope({ workerId: worker, projectIds: [alpha, beta] }),
+      ).toEqual({ status: 'set', claimProjectIds: sorted, performed: false });
+      // A project the user may not take a run of, or none at all: refused, nothing written.
+      const missing = '00000000-0000-4000-8000-00000029eeee';
+      expect(
+        await world.store.setClaimScope({
+          workerId: worker,
+          projectIds: [alpha, foreign, missing],
+        }),
+      ).toEqual({ status: 'invalid', projectIds: [foreign, missing].sort() });
+      const listed = (await world.store.listWorkers(owner)).find((row) => row.id === worker);
+      expect(listed?.claimProjects).toEqual(
+        sorted.map((id) => ({ id, key: id === alpha ? 'alpha' : 'beta' })),
+      );
+      expect(await world.store.setClaimScope({ workerId: worker, projectIds: [] })).toEqual({
+        status: 'set',
+        claimProjectIds: [],
+        performed: true,
+      });
+      expect(
+        (await world.store.listWorkers(owner)).find((row) => row.id === worker)?.claimProjects,
+      ).toEqual([]);
+      expect(await world.store.claimScope(worker)).toMatchObject({ claimProjectIds: [] });
+      expect(await scopeAudit()).toEqual([
+        {
+          action: 'worker.claim_scope',
+          userId: owner,
+          params: { worker_id: worker, project_ids: sorted, via: 'worker_ui' },
+        },
+        {
+          action: 'worker.claim_scope',
+          userId: owner,
+          params: { worker_id: worker, project_ids: [], via: 'worker_ui' },
+        },
+      ]);
+      const unknown = '00000000-0000-4000-8000-00000029fffe';
+      expect(await world.store.claimScope(unknown)).toEqual({ status: 'not_found' });
+      expect(await world.store.setClaimScope({ workerId: unknown, projectIds: [] })).toEqual({
+        status: 'not_found',
+      });
     });
 
     it('answers a repeated decision with the recorded one, writes nothing, and refuses a different one', async () => {
