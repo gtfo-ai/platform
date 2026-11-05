@@ -47,16 +47,11 @@ commit-msg:
 # `main` for an hour) came in through a merge commit made with `--no-verify` — which is sometimes
 # the right thing to do mid-merge, and skips pre-commit only. CI is the backstop, but this project
 # pushes straight to `main`, so CI's verdict arrives after the broken tree is public. It costs
-# ~0.15s over the 734 tracked files — measured by driving the hook itself — against the minutes
-# the test job below takes, and it runs first so the cheap verdict comes first.
+# ~0.15s over the 734 tracked files — measured by driving the hook itself.
+# No test tier runs here (owner, 2026-11-05: "run no tests locally, only rely on CI"): every
+# change reaches `main` through a pull request whose head CI tested, and `main` is fast-forwarded
+# only to that exact commit.
 pre-push:
   jobs:
     - name: merge-conflict markers
       run: pnpm run -s conflict:check
-    # Only for a push that updates `main` (owner, 2026-11-05): a push to any other branch is a pull
-    # request's head, and CI runs the whole suite there before anything merges; running it here too
-    # on every PR push overloaded a shared machine (load 113-134 on 14 cores). See
-    # scripts/pre-push-tests.mjs.
-    - name: unit + contract
-      run: node scripts/pre-push-tests.mjs
-      use_stdin: true
