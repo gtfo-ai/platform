@@ -30,9 +30,9 @@
  * other census: a path that disappears between the listing and the read is dropped, and a path
  * that exists and cannot be read (a dangling symlink, a gitlink) is **named** on stderr and in the
  * PASS line rather than skipped in silence. This repository stores no archives and no compiled
- * artefacts, and exactly two images — the office mascot's reference sheets under
- * `docs/research/18-sign-in-mascot/office/`, each declared `binary` by its own line in
- * `.gitattributes` — so the rule is simply "no other file may contain a NUL byte".
+ * artefacts, and its only images are declared `binary` line by line in `.gitattributes` (the
+ * office mascot's reference sheets, `docs/research/18-sign-in-mascot/office/`), so the rule is
+ * simply "no other file may contain a NUL byte".
  *
  * The escape hatch for the day one is added is also git's own declaration rather than a second
  * hand-maintained list: a path whose `binary` attribute is set, or whose `text` attribute is

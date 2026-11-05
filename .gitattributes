@@ -1,5 +1,5 @@
 # Binary files kept on purpose. `nul:check` skips a path declared `binary` here and nothing else
 # (scripts/check-nul.mjs), so every line is a reviewed exemption: no globs over a directory.
 # The office mascot's two reference sheets (docs/research/18-sign-in-mascot/office-poses.md).
-docs/research/18-sign-in-mascot/office/contact.png binary
-docs/research/18-sign-in-mascot/office/props-preview.png binary
+/docs/research/18-sign-in-mascot/office/contact.png binary
+/docs/research/18-sign-in-mascot/office/props-preview.png binary
