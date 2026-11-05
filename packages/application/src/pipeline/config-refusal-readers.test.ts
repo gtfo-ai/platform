@@ -50,8 +50,9 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
     reason: 'composition: hands the port to the ask executor, whose admission is the guard',
   },
   'packages/application/src/pipeline/runtime.ts': {
-    count: 1,
-    reason: 'composition: hands the port to the stage executor, whose admission is the guard',
+    count: 2,
+    reason:
+      'composition: hands the port to the stage executor, whose admission is the guard, and to the claim admission (`claim-admission.ts`), which asks `settingsAdmission` first (S-22.14)',
   },
   'packages/application/src/pipeline/stage-executor.ts': {
     count: 1,

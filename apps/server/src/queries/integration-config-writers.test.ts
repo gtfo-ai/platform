@@ -60,6 +60,9 @@ import { repositoryRoot, withoutComments } from '../routes/web-sources.js';
  */
 const CONFIG_WRITERS: ReadonlyMap<string, number> = new Map([
   ['apps/server/src/queries/onboarding-queries.ts', 2],
+  // S-22.14: the Docker check's core seeds its fake-git and tracker integrations (two inserts);
+  // mounted into a check container, never part of an image.
+  ['scripts/worker-check/core-entry.mjs', 2],
 ]);
 
 const SOURCE_FILE = /\.(?:ts|tsx|mts|cts|mjs|cjs|js|jsx)$/;

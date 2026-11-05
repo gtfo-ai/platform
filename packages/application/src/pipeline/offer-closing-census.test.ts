@@ -108,6 +108,8 @@ const SAVE_SITES: ReadonlyMap<string, Closing> = new Map<string, Closing>([
   ['packages/application/src/pipeline/dead-letter.ts', CLOSES],
   ['packages/application/src/pipeline/job-escalation.ts', CLOSES],
   ['packages/application/src/pipeline/config-refusal.ts', CLOSES],
+  // S-22.14 (backlog 744): a claim refused at admission pauses its task after closing its offer.
+  ['packages/application/src/pipeline/claim-admission.ts', CLOSES],
 ]);
 
 const SAVE = /\btasks\.save\s*\(/;
