@@ -513,12 +513,8 @@ describe('the composed get_conversation', () => {
 /** WP-285 (TD-031 decision 11): only a subscription's server claimant pauses on its usage limit. */
 describe('the server claimant’s usage pause, by provider mode (WP-285)', () => {
   it('pauses in local mode, for the configured default, and never in api mode', () => {
-    expect(claimantUsagePauseOf('local', 900)).toEqual({
-      claimantUsagePause: { defaultMs: 900_000 },
-    });
-    expect(claimantUsagePauseOf('local', undefined)).toEqual({
-      claimantUsagePause: { defaultMs: 3_600_000 },
-    });
-    expect(claimantUsagePauseOf('api', 900)).toEqual({});
+    expect(claimantUsagePauseOf('local', 900)).toEqual({ defaultMs: 900_000 });
+    expect(claimantUsagePauseOf('local', undefined)).toEqual({ defaultMs: 3_600_000 });
+    expect(claimantUsagePauseOf('api', 900)).toBeUndefined();
   });
 });

@@ -1033,10 +1033,10 @@ export const createOrganisationIntegrationsPort = (options: {
 export const claimantUsagePauseOf = (
   providerMode: 'api' | 'local',
   defaultSeconds: number | undefined,
-): { readonly claimantUsagePause?: { readonly defaultMs: number } } =>
+): { readonly defaultMs: number } | undefined =>
   providerMode === 'local'
-    ? { claimantUsagePause: { defaultMs: (defaultSeconds ?? DEFAULT_USAGE_PAUSE_SECONDS) * 1_000 } }
-    : {};
+    ? { defaultMs: (defaultSeconds ?? DEFAULT_USAGE_PAUSE_SECONDS) * 1_000 }
+    : undefined;
 
 /**
  * The platform tools a run of this pipeline is given, over the pipeline's **one** integrations port
@@ -1238,6 +1238,10 @@ export const composePipeline = async (
       logger: options.logger,
     })
   ).files;
+  const claimantUsagePause = claimantUsagePauseOf(
+    options.agent.providerMode,
+    options.usagePauseDefaultSeconds,
+  );
   const runtime = createPipelineRuntime({
     store,
     settings,
@@ -1320,7 +1324,7 @@ export const composePipeline = async (
       ? {}
       : { runnerConcurrency: options.runnerConcurrency }),
     // WP-285 (TD-031 decision 11): a subscription's claimant stops claiming until its limit resets.
-    ...claimantUsagePauseOf(options.agent.providerMode, options.usagePauseDefaultSeconds),
+    ...(claimantUsagePause === undefined ? {} : { claimantUsagePause }),
     broadcast: options.eventing.broadcast,
     /** WP-277: whether this process is a claimant — see {@link runsAgents} above. */
     runsAgents,
