@@ -374,7 +374,6 @@ const deliverThrough = async (testCase: InboundCase): Promise<Delivered> => {
       },
     },
     unitOfWork,
-    eventStore: { nextStreamSequence: async () => 1 },
     // One delivery per case, so the log never holds an earlier lifecycle event (WP-110).
     mergeRequests: { latest: async () => null },
     ids: {

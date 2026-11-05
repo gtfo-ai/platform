@@ -239,7 +239,6 @@ const harnessFor = (
     recorder: {
       inbox,
       unitOfWork,
-      eventStore: { nextStreamSequence: async () => events.length + 1 },
       // Ticket deliveries carry no merge-request lifecycle event; the reader is never asked.
       mergeRequests: {
         latest: async () => {

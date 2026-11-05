@@ -36,6 +36,7 @@
  */
 import type { DomainEvent, Id } from '@platform/contracts';
 import type { EventStore } from '../ports/event-store.js';
+import type { Transaction } from '../ports/transaction.js';
 
 /** The three catalogue events that move a merge request's lifecycle. */
 export const MERGE_REQUEST_LIFECYCLE_EVENTS = ['mr.opened', 'mr.merged', 'mr.closed'] as const;
@@ -58,7 +59,15 @@ export interface MergeRequestLifecycleKey {
  * guard makes that safe.
  */
 export interface MergeRequestLifecycleReader {
-  latest(key: MergeRequestLifecycleKey): Promise<MergeRequestLifecycleEvent | null>;
+  /**
+   * The newest lifecycle event of the merge request. Handed a transaction, it reads on that
+   * transaction's connection — the inbound recorder reads it under the project stream's lock, so
+   * the answer is the log as of the lock and no retry is needed to make it fresh (BACKLOG 971).
+   */
+  latest(
+    key: MergeRequestLifecycleKey,
+    tx?: Transaction,
+  ): Promise<MergeRequestLifecycleEvent | null>;
 }
 
 /**

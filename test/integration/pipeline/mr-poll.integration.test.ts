@@ -119,7 +119,6 @@ const pollerOptions = (): MergeRequestPollerOptions => ({
   recorder: {
     inbox: integrationAdapters.createPostgresInboxStore({ sql: pool }),
     unitOfWork: eventing.unitOfWork,
-    eventStore: eventing.store,
     mergeRequests: lifecycle(),
     ids: { next: () => randomUUID() as Id },
     clock: { now },
@@ -151,7 +150,6 @@ const ingress = () =>
       },
     },
     unitOfWork: eventing.unitOfWork,
-    eventStore: eventing.store,
     mergeRequests: lifecycle(),
     ids: { next: () => randomUUID() as Id },
     clock: { now },

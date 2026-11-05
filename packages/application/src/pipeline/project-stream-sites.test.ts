@@ -20,9 +20,10 @@
  * row's compare-and-set and now read on the transaction's own connection rather than borrowing a
  * second one from the pool.
  *
- * The one `nextStreamSequence` left is `integrations/inbound.ts`'s: the stream position a
- * merge-request lifecycle answer was read at, outside the transaction, compared under the lock with
- * the position the transaction holds (WP-110). It is not a sequence anything is appended at.
+ * None is left: `integrations/inbound.ts` read the project stream's position before its
+ * transaction to tell whether its merge-request lifecycle answer had gone stale (WP-110), and now
+ * reads that answer on its transaction's connection under the lock instead, so the census expects
+ * no production `nextStreamSequence` call in this ring at all.
  *
  * ## Scope
  *
@@ -39,10 +40,7 @@ import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 
-const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
-  // the lifecycle answer's stream position, never an append's sequence (module docblock)
-  ['packages/application/src/integrations/inbound.ts', 1],
-]);
+const EXPECTED_SITES: ReadonlyMap<string, number> = new Map();
 
 const SEQUENCE_READ = /\.\s*nextStreamSequence\s*\(/g;
 

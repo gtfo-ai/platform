@@ -234,15 +234,16 @@ export const recheckProjectReadiness = async (
    * likeliest writer to win the race is a discovery record, and what it wrote is a *newer*
    * evaluation; carrying from the one read before the race would record criteria the newer row had
    * already re-answered and move `projects.readiness_level` back with them. So each attempt reads
-   * `latest` again and recomputes — `recheckReadiness` is pure. The read is over the pool, and that
-   * is enough here: a writer that commits after this read and before this append takes the
-   * sequence, so this attempt loses and the next one reads after that commit.
+   * `latest` again and recomputes — `recheckReadiness` is pure. The read is on the transaction's
+   * own connection, under the project stream's lock (BACKLOG 971): it sees every writer that
+   * committed before the lock, no other can commit until this one does, and a read over the pool
+   * here would wait for a second connection while this one holds the lock others queue on.
    */
   const recorded = await appendOnProjectWithRetry(
     options,
     { projectId, writer: 'readiness_recheck' },
     async (scope, streamSeq) => {
-      const current = (await options.readiness.latest(projectId)) ?? previous;
+      const current = (await options.readiness.latest(projectId, scope.tx)) ?? previous;
       const evaluation = recheckReadiness({
         id: evaluationId,
         projectId,

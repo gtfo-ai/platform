@@ -69,7 +69,7 @@ import type {
 } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { StreamConflictError } from '../errors.js';
-import type { EventStore } from '../ports/event-store.js';
+import { assertOutsideTransaction } from '../events/open-transaction.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type {
   InboundThreadHandle,
@@ -89,6 +89,7 @@ import type {
 } from '../ports/integrations/inbox.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import {
   type InboundDecisionApplier,
@@ -111,10 +112,7 @@ import { createRateLimiter, type RateLimiter, type RateLimitPolicy } from './rat
  */
 export const MAX_INBOX_ERROR_CHARS = 2_000;
 
-/**
- * Retries of a delivery whose project stream moved after its merge-request lifecycle was read — or
- * whose sequence a writer that bypassed the stream lock took (BACKLOG 971).
- */
+/** Retries of a delivery whose sequence a writer that bypassed the stream lock took (BACKLOG 971). */
 export const DEFAULT_INBOUND_SEQUENCE_ATTEMPTS = 4;
 
 /** Why a delivery performed nothing. Each one is audited; none of them writes an inbox row. */
@@ -222,12 +220,6 @@ export interface WebhookIngressOptions {
    */
   readonly decisions: InboundDecisionApplier;
   readonly unitOfWork: UnitOfWork;
-  /**
-   * Read side, for the stream position a merge-request lifecycle answer was read at (outside the
-   * transaction). The sequence the events are appended at is read under the stream's lock, inside
-   * it (BACKLOG 971).
-   */
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly ids: { next(): Id };
   readonly clock: { now(): IsoDateTime };
   /** WP-110: the merge-request lifecycle dedup both doors meet. Required (rule 31). */
@@ -383,7 +375,6 @@ export interface InboundRecorderOptions {
   readonly inbox: InboxStore;
   readonly decisions: InboundDecisionApplier;
   readonly unitOfWork: UnitOfWork;
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly ids: { next(): Id };
   readonly clock: { now(): IsoDateTime };
   /**
@@ -437,6 +428,9 @@ export const recordNormalisedDelivery = async (
   options: InboundRecorderOptions,
   record: NormalisedDeliveryRecord,
 ): Promise<NormalisedDeliveryRecordOutcome> => {
+  // It opens its own transaction and waits on project stream locks in it: called inside another,
+  // whose row locks that wait would hold across two connections, it refuses (BACKLOG 971).
+  assertOutsideTransaction('recording a normalised delivery');
   const logger = options.logger ?? silentLogger;
   const maxAttempts = options.maxSequenceAttempts ?? DEFAULT_INBOUND_SEQUENCE_ATTEMPTS;
   const row = (
@@ -460,26 +454,6 @@ export const recordNormalisedDelivery = async (
 
   for (let attempt = 1; ; attempt += 1) {
     const at = options.clock.now();
-    /**
-     * **The lifecycle answer is only as fresh as the stream it was read from** (WP-110). It is read
-     * over the pool, before the transaction — a reader on the transaction's connection is not a port
-     * this ring has — so the stream position it was read at is noted for each project whose drafts
-     * carry a merge-request transition, and the transaction compares it with the position it holds
-     * under the stream's lock: moved means a competitor appended in between, and the attempt is
-     * retried with a fresh read (`merge-request-lifecycle.ts` has the argument). A project with no
-     * such draft reads nothing here.
-     */
-    const lifecycleAt = new Map<Id, number>();
-    for (const group of record.byProject) {
-      if (group.drafts.some((draft) => isMergeRequestLifecycleEvent(draft.type))) {
-        lifecycleAt.set(
-          group.projectId,
-          await options.eventStore.nextStreamSequence('project', group.projectId),
-        );
-      }
-    }
-    const lifecycle = await latestLifecycles(options.mergeRequests, record.byProject);
-
     try {
       return await options.unitOfWork.transaction(async (scope) => {
         /**
@@ -492,13 +466,16 @@ export const recordNormalisedDelivery = async (
         for (const projectId of [
           ...new Set(record.byProject.map((group) => group.projectId)),
         ].sort()) {
-          const locked = await scope.events.lockStreamSequence('project', projectId);
-          const readAt = lifecycleAt.get(projectId);
-          if (readAt !== undefined && readAt !== locked) {
-            throw new StreamConflictError('project', projectId, readAt);
-          }
-          sequences.set(projectId, locked);
+          sequences.set(projectId, await scope.events.lockStreamSequence('project', projectId));
         }
+        /**
+         * **What the log already says about each merge request** (WP-110), read on this
+         * transaction's connection **under** the locks above: every writer that appended a
+         * transition committed before them, and none can commit one until this transaction does,
+         * so the answer cannot go stale before the append and a delivery that waited on the lock
+         * needs no retry (`merge-request-lifecycle.ts` has the argument).
+         */
+        const lifecycle = await latestLifecycles(options.mergeRequests, record.byProject, scope.tx);
         const events: DomainEvent[] = [];
         const refusals: DecisionRefusalLine[] = [];
         let repeated = 0;
@@ -586,7 +563,7 @@ export const recordNormalisedDelivery = async (
       }
       logger.warn(
         { integration_id: record.integrationId, attempt, max_attempts: maxAttempts },
-        'the project stream moved after its merge-request lifecycle was read; reading it again and retrying the delivery',
+        'a writer that bypassed the stream lock took the project stream sequence; retrying the delivery',
       );
     }
   }
@@ -596,6 +573,7 @@ export const recordNormalisedDelivery = async (
 const latestLifecycles = async (
   reader: MergeRequestLifecycleReader,
   groups: readonly InboundProjectEvents[],
+  tx: Transaction,
 ): Promise<Map<string, MergeRequestLifecycleEvent | null>> => {
   const found = new Map<string, MergeRequestLifecycleEvent | null>();
   for (const group of groups) {
@@ -604,7 +582,7 @@ const latestLifecycles = async (
         ? lifecycleKeyOf(group.projectId, draft.payload)
         : null;
       if (key !== null && !found.has(lifecycleKeyText(key))) {
-        found.set(lifecycleKeyText(key), await reader.latest(key));
+        found.set(lifecycleKeyText(key), await reader.latest(key, tx));
       }
     }
   }
@@ -900,7 +878,6 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
           inbox: options.inbox,
           decisions: options.decisions,
           unitOfWork: options.unitOfWork,
-          eventStore: options.eventStore,
           ids: options.ids,
           clock: options.clock,
           mergeRequests: options.mergeRequests,

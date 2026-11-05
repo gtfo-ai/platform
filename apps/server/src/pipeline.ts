@@ -653,7 +653,6 @@ export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): We
       }),
     }),
     unitOfWork: options.eventing.unitOfWork,
-    eventStore: options.eventing.store,
     // WP-110: a merge seen by the webhook and by the merge-request poller is one `mr.merged`.
     mergeRequests: integrationAdapters.createPostgresMergeRequestLifecycle({ sql: options.pool }),
     ids: { next: (): Id => randomUUID() as Id },
@@ -1877,7 +1876,6 @@ export const composePipeline = async (
     recorder: {
       inbox: integrationAdapters.createPostgresInboxStore({ sql: options.pool }),
       unitOfWork: options.eventing.unitOfWork,
-      eventStore: options.eventing.store,
       mergeRequests: integrationAdapters.createPostgresMergeRequestLifecycle({ sql: options.pool }),
       ids,
       clock: { now: nowIso },
@@ -1903,7 +1901,6 @@ export const composePipeline = async (
     recorder: {
       inbox: integrationAdapters.createPostgresInboxStore({ sql: options.pool }),
       unitOfWork: options.eventing.unitOfWork,
-      eventStore: options.eventing.store,
       mergeRequests: integrationAdapters.createPostgresMergeRequestLifecycle({ sql: options.pool }),
       ids,
       clock: { now: nowIso },

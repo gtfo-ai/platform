@@ -167,6 +167,32 @@ describe('recheckProjectReadiness', () => {
     ]);
   });
 
+  it('reads the evaluation it carries from on the transaction holding the project stream lock (BACKLOG 971)', async () => {
+    // A read over the pool here would wait for a second connection while this one holds the lock
+    // other writers queue on; the PostgreSQL half is `onboarding.integration.test.ts`'s one-connection case.
+    const { readiness, recheck } = harness();
+    await seedDiscovery(readiness);
+    const handles: unknown[] = [];
+    const report = await recheckProjectReadiness(
+      {
+        ...recheck,
+        readiness: {
+          ...readiness,
+          latest: async (projectId, tx) => {
+            handles.push(tx);
+            return readiness.latest(projectId, tx);
+          },
+        },
+      },
+      data,
+    );
+    expect(report.status).toBe('recorded');
+    // The first read decides whether there is anything to re-check; the second is the locked one.
+    expect(handles).toHaveLength(2);
+    expect(handles[0]).toBeUndefined();
+    expect(handles[1]).toEqual(expect.objectContaining({ adapter: expect.any(String) }));
+  });
+
   it('appends one readiness.evaluated per recorded row, and none for a skip (backlog 228)', async () => {
     const { readiness, recheck, eventing } = harness({ pipelines: 2 });
     // A skip records nothing, so it says nothing.

@@ -168,8 +168,9 @@ export class PostgresReadinessStore implements ReadinessStore {
     ]);
   }
 
-  async latest(projectId: Id): Promise<ReadinessEvaluation | null> {
-    const { rows } = await this.#sql.query<EvaluationRow>(
+  async latest(projectId: Id, tx?: Transaction): Promise<ReadinessEvaluation | null> {
+    const sql = tx === undefined ? this.#sql : sqlOf(tx);
+    const { rows } = await sql.query<EvaluationRow>(
       `select id, project_id, level, criteria, evaluated_at, source, notices
          from readiness_evaluations
         where project_id = $1
