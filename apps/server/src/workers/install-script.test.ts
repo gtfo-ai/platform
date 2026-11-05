@@ -511,6 +511,33 @@ describe.each(SHELLS)(
       expect(applying.composeCalls).toEqual([]);
     });
 
+    it('accepts its own install after an update: the label names the updater’s mount, the mark says it is ours, the folder holds the new build (S-22.21)', () => {
+      const s = stage();
+      expect(run(shell, s).status).toBe(0);
+      // What the updater leaves (TD-032's 2026-11-05 decision-4 amendment): Compose's label names its
+      // mount path, and the folder holds the build it applied — its compose file and the .env block.
+      writeFileSync(path.join(s.state, 'wd'), '/var/lib/platform/host-bundle\n');
+      writeFileSync(path.join(s.dir, 'compose.yaml'), servedBundle('b'));
+      writeFileSync(path.join(s.dir, '.env'), updaterEnvFile('b'));
+      writeFileSync(s.bundle, servedBundle('b'));
+      const r = run(shell, s);
+      expect(r.out).not.toContain('will not take it over');
+      expect(r.status).toBe(0);
+      expect(r.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker up -d --no-recreate',
+      );
+      expect(read(path.join(s.dir, '.env'))).toBe(updaterEnvFile('b'));
+      // And an unmarked folder meeting that same project refuses: it is someone else's.
+      const other = stage();
+      writeFileSync(path.join(other.state, 'up'), '');
+      writeFileSync(path.join(other.state, 'wd'), '/var/lib/platform/host-bundle\n');
+      const refused = run(shell, other);
+      expect(refused.status).toBe(3);
+      expect(refused.out).toContain("is not this installer's");
+      expect(refused.composeCalls).toEqual([]);
+      expect(existsSync(path.join(other.dir, 'compose.yaml'))).toBe(false);
+    });
+
     it('refuses a bundle with no updater, or one under a profile, and installs nothing', () => {
       const noUpdater = stage();
       const without = servedBundle('a').replace('\n  updater:\n', '\n  not-the-updater:\n');

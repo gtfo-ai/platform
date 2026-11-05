@@ -186,7 +186,11 @@ project_containers() {
   docker ps --all --quiet --filter "label=com.docker.compose.project=$PROJECT"
 }
 
-# The folders other than this one that the project `agentic-worker` was brought up from.
+# Where the updater mounts this folder; after its first update Compose's working_dir label names it.
+UPDATER_FOLDER=/var/lib/platform/host-bundle
+
+# The folders other than this one that the project `agentic-worker` was brought up from, read off
+# Compose's working_dir label only to spot another install: the updater's own mount path is ours.
 foreign_folders() {
   if [ -d "$dir" ]; then
     logical=$(cd "$dir" && pwd -L)
@@ -199,16 +203,27 @@ foreign_folders() {
     --format '{{.Label "com.docker.compose.project.working_dir"}}') ||
     die 1 'docker ps failed'
   printf '%s\n' "$folders" | sort -u | while IFS= read -r folder; do
-    if [ -n "$folder" ] && [ "$folder" != "$logical" ] && [ "$folder" != "$physical" ]; then
+    if [ -n "$folder" ] && [ "$folder" != "$logical" ] && [ "$folder" != "$physical" ] &&
+      [ "$folder" != "$UPDATER_FOLDER" ]; then
       printf '%s\n' "$folder"
     fi
   done
 }
 
+# This installer's install is the folder with its mark (TD-032's 2026-11-05 decision-4 amendment),
+# never what a label says: a folder without the mark is a new install, so any project of the name on
+# this machine is someone else's; a marked folder's project is ours, unless the label names another
+# host folder outright.
 refuse_foreign_and_busy() {
   foreign=$(foreign_folders)
   if [ -n "$foreign" ]; then
     die 3 "a worker bundle named $PROJECT already runs from $foreign. This installer will not take it over: stop it there first (docker compose down, in that folder), or keep using it."
+  fi
+  if [ ! -f "$dir/$MARK" ]; then
+    others=$(project_containers) || die 1 'docker ps failed'
+    if [ -n "$others" ]; then
+      die 3 "a worker bundle named $PROJECT already exists on this machine, and $dir is not this installer's (it has no $MARK). This installer will not take it over: run it with --dir pointing at that bundle's folder, or remove that bundle first."
+    fi
   fi
   applying=$(docker ps --quiet --filter "label=$APPLY_LABEL=$PROJECT") || die 1 'docker ps failed'
   if [ -n "$applying" ]; then

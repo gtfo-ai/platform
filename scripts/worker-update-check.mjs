@@ -37,8 +37,9 @@
  *  2. **unattested**: the core advertises a digest with no attestation → the updater refuses it and
  *     reports `failed` naming it; **nothing is pulled** (the digest is absent from the daemon), the
  *     worker runs the old image and no apply container ran;
- *  3. **a good update**: drained, applied from the new image, the managed block written (the previous
- *     file kept), the worker and the updater recreated on the new digest, `core_handshake: ok`,
+ *  3. **a good update**: drained, applied from the new image, the new build written back into the
+ *     install folder — its compose file and the managed block of its `.env` (the previous file kept,
+ *     S-22.21) — the worker and the updater recreated on the new digest, `core_handshake: ok`,
  *     reported `succeeded` — the Workers screen's `last_update`; the token in no file;
  *  4. **a bad update** (an image whose worker never handshakes): rolled back to the previous digest,
  *     reported `rolled_back`, the worker serving again;
@@ -780,31 +781,49 @@ const main = async () => {
       if (updaterImage !== ref('new')) await sleep(2_000);
     }
     check('the updater is recreated on the new build', updaterImage === ref('new'), updaterImage);
+    // S-22.21 (TD-032's decision-4 amendment): the updater writes the new build back into the
+    // install folder it has mounted, so the folder holds what runs.
     const envText = await readFile(path.join(bundleDirectory, '.env'), 'utf8');
     const previousText = await readFile(path.join(bundleDirectory, '.env.previous'), 'utf8');
     check(
-      'the managed block pins the new build; the previous file is kept',
+      'the managed block in the folder’s .env pins the new build; the person’s lines and the previous file are kept',
       envText.includes(`PLATFORM_IMAGE=${ref('new')}`) &&
+        envText.includes('APP_TRUSTED_BUILDER=') &&
         !previousText.includes('PLATFORM_IMAGE=') &&
         previousText.includes('APP_TRUSTED_BUILDER='),
     );
-    const configFiles = (
-      await docker([
-        'container',
-        'inspect',
-        '--format',
-        '{{index .Config.Labels "com.docker.compose.project.config_files"}}',
-        (await bundle(['ps', '-q', 'remote-worker'])).stdout.trim(),
-      ])
-    ).stdout.trim();
+    const folderFile = await readFile(bundleFile, 'utf8');
     check(
-      'the worker was brought up from the template the new image carries, not a file the core served',
-      configFiles === '/opt/platform/compose.worker.yml',
+      'the folder’s compose file is the new build’s, so a docker compose up there cannot go back',
+      folderFile.includes(ref('new')) && !folderFile.includes(ref('old')),
+    );
+    const labelOf = async (label) =>
+      (
+        await docker([
+          'container',
+          'inspect',
+          '--format',
+          `{{index .Config.Labels "${label}"}}`,
+          (await bundle(['ps', '-q', 'remote-worker'])).stdout.trim(),
+        ])
+      ).stdout.trim();
+    const workingDir = await labelOf('com.docker.compose.project.working_dir');
+    check(
+      'the worker was brought up from the folder at the updater’s fixed mount path',
+      workingDir === '/var/lib/platform/host-bundle',
+      workingDir,
+    );
+    const configFiles = await labelOf('com.docker.compose.project.config_files');
+    check(
+      'the worker was brought up from the folder’s file, rendered from the new image’s template',
+      configFiles === '/var/lib/platform/host-bundle/compose.worker.yml',
       configFiles,
     );
     check(
       'the Claude token is in no file the updater wrote',
-      !envText.includes(CLAUDE_TOKEN) && !previousText.includes(CLAUDE_TOKEN),
+      !envText.includes(CLAUDE_TOKEN) &&
+        !previousText.includes(CLAUDE_TOKEN) &&
+        !folderFile.includes(CLAUDE_TOKEN),
     );
     const workerEnv = (
       await docker([

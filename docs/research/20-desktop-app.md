@@ -127,11 +127,13 @@ Source for all of § 4: https://v2.tauri.app/plugin/updater/
 - Docker Desktop is free for companies with fewer than 250 employees **and** less than USD 10 million in
   annual revenue. Above either threshold it needs a paid per-user subscription. — https://docs.docker.com/subscription/desktop-license/
   (the FAQ wording is from the search snippet; re-read by S-24.7).
-- **Found reading this repository, not the web.** The worker's updater refuses a project directory that
-  does not start with `/`, in `apps/server/src/updater/plan.ts:26-38` (`absolutePath`). The apply
-  container mounts the directory at its host path (TD-032's *As built* §5). On Docker Desktop for
-  Windows the host path is `C:\…`, so **a worker started from a Windows directory cannot self-update
-  today**. This is backlog 990 and the gate slice S-24.0.
+- **Found reading this repository, not the web.** The worker's updater refused a project directory that
+  did not start with `/`, in `apps/server/src/updater/plan.ts:26-38` (`absolutePath`), because the apply
+  container mounted the directory at its host path (TD-032's *As built* §5). On Docker Desktop for
+  Windows the host path is `C:\…`, so a worker started from a Windows directory could not self-update
+  (backlog 990). **S-22.21 closed it**: the folder is a bind mount at a fixed container path whose
+  source Docker resolves, and no host path is read (TD-032's 2026-11-05 decision-4 amendment). One
+  real update on Docker Desktop for Windows is still to be measured (V-DA1, S-24.W).
 
 ## 7. Measurements
 

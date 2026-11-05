@@ -14,9 +14,9 @@ import { AttestationRefusedError, type AttestationVerifier } from './attestation
 import type { UpdaterConfig } from './config.js';
 import type { DockerRun } from './docker.js';
 import { HEARTBEAT_EVERY_MS, HEARTBEAT_FILE, HEARTBEAT_STALE_AFTER_MS } from './heartbeat.js';
-import { PREVIOUS_TEMPLATE_FILE, readState } from './plan.js';
+import { PREVIOUS_TEMPLATE_FILE, readState, updatePlanSchema } from './plan.js';
 import { RegistryError } from './registry.js';
-import { applyContainerArgs, createUpdater, discoverSelf } from './updater.js';
+import { applyContainerArgs, createUpdater, discoverSelf, mountSpec } from './updater.js';
 
 const CREDENTIAL = `wkr_${'a'.repeat(26)}_${'b'.repeat(43)}`;
 /** One build's four images: each set's digests are its own (a release rebuilds all four). */
@@ -53,6 +53,7 @@ const SELF = {
     },
   },
   Mounts: [
+    { Type: 'bind', Source: '/home/dev/worker', Destination: '/var/lib/platform/host-bundle' },
     { Type: 'volume', Name: 'agentic-worker_updates', Destination: '/var/lib/platform/updates' },
     {
       Type: 'volume',
@@ -77,8 +78,15 @@ const world = async (options: {
   readonly credentialFile?: string;
   /** `core-url` in `worker-state`: a platform chosen on the worker's page (WP-294). */
   readonly storedCoreUrl?: string;
-  /** The folder Docker recorded for the project (`com.docker.compose.project.working_dir`). */
-  readonly workingDir?: string;
+  /**
+   * The folder as Docker reports it: Compose's `working_dir` label and the source of the updater's
+   * `host-bundle` mount (default `/home/dev/worker`).
+   */
+  readonly hostDirectory?: string;
+  /** The source Docker reports for the mount, when it differs from the label (Docker Desktop). */
+  readonly folderSource?: string;
+  /** `false`: the updater has no `host-bundle` mount (a compose file from before S-22.21). */
+  readonly folderMount?: boolean;
 }) => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'updater-state-'));
   const workerStateDir = await mkdtemp(path.join(tmpdir(), 'updater-worker-'));
@@ -139,15 +147,24 @@ const world = async (options: {
           ...SELF.Config,
           Labels: {
             ...SELF.Config.Labels,
-            ...(options.workingDir === undefined
+            ...(options.hostDirectory === undefined
               ? {}
               : {
-                  'com.docker.compose.project.working_dir': options.workingDir,
-                  'com.docker.compose.project.environment_file': '',
+                  'com.docker.compose.project.working_dir': options.hostDirectory,
+                  'com.docker.compose.project.environment_file': `${options.hostDirectory}\\.env`,
                 }),
           },
         },
         Mounts: [
+          ...(options.folderMount === false
+            ? []
+            : [
+                {
+                  Type: 'bind',
+                  Source: options.folderSource ?? options.hostDirectory ?? '/home/dev/worker',
+                  Destination: '/var/lib/platform/host-bundle',
+                },
+              ]),
           { Type: 'volume', Name: 'agentic-worker_updates', Destination: stateDir },
           { Type: 'volume', Name: 'agentic-worker_worker-state', Destination: workerStateDir },
         ],
@@ -262,7 +279,19 @@ describe('the updater’s poll', () => {
     expect(create.at(-1)).toBe(refsOf('b').platform);
     expect(create).toContain('--rm');
     expect(create).toContain('org.platform.update-apply=agentic-worker');
-    expect(create).toContain('type=bind,source=/home/dev/worker,target=/home/dev/worker');
+    // The folder is mounted at the fixed path, from the source Docker reported (S-22.21).
+    expect(create.filter((arg) => arg.startsWith('type=bind'))).toEqual([
+      'type=bind,source=/home/dev/worker,target=/var/lib/platform/host-bundle',
+    ]);
+    const plan = updatePlanSchema.parse(
+      JSON.parse(
+        (create.find((arg) => arg.startsWith('APP_UPDATE_PLAN=')) ?? '').slice(
+          'APP_UPDATE_PLAN='.length,
+        ),
+      ),
+    );
+    expect(plan.working_dir).toBe('/var/lib/platform/host-bundle');
+    expect(plan.env_file).toBe('/var/lib/platform/host-bundle/.env');
     expect(create).toContain(`type=volume,source=agentic-worker_updates,target=${w.stateDir}`);
     expect(create.join(' ')).not.toContain('com.docker.compose');
     expect(w.calls).toContainEqual([
@@ -273,6 +302,46 @@ describe('the updater’s poll', () => {
     ]);
     expect((await readState(w.stateDir))?.to_digests).toEqual(digests('b'));
   });
+
+  it.each([
+    [
+      'Docker Desktop for Windows',
+      'C:\\Users\\dev\\agentic-worker',
+      '/run/desktop/mnt/host/c/Users/dev/agentic-worker',
+    ],
+    [
+      'a folder with a space and a comma',
+      '/Users/dev/Library/Application Support/agentic,worker',
+      '/Users/dev/Library/Application Support/agentic,worker',
+    ],
+  ])(
+    'updates a project brought up from %s: the plan names the fixed container path, and the folder is mounted from the source Docker reported (S-22.21, backlog 990)',
+    async (_case, hostDirectory, folderSource) => {
+      const w = await world({ advertised: digests('b'), hostDirectory, folderSource });
+      await w.updater.tick();
+      expect(w.events).toEqual([
+        'release',
+        ...Object.values(refsOf('b')).map((ref) => `pull ${ref}`),
+        'drain',
+        'create apply',
+        'start apply',
+      ]);
+      expect(w.reports).toEqual([]);
+      const create = w.calls.find((args) => args[1] === 'create') ?? [];
+      // The label is never read as a path: only the mount's source, handed back as one CSV field.
+      if (hostDirectory !== folderSource) expect(create.join(' ')).not.toContain(hostDirectory);
+      expect(create.filter((arg) => arg.includes('target=/var/lib/platform/host-bundle'))).toEqual([
+        mountSpec(['type=bind', `source=${folderSource}`, 'target=/var/lib/platform/host-bundle']),
+      ]);
+      const planArg = create.find((arg) => arg.startsWith('APP_UPDATE_PLAN=')) ?? '';
+      const plan = updatePlanSchema.parse(JSON.parse(planArg.slice('APP_UPDATE_PLAN='.length)));
+      expect(plan).toMatchObject({
+        project: 'agentic-worker',
+        working_dir: '/var/lib/platform/host-bundle',
+        env_file: '/var/lib/platform/host-bundle/.env',
+      });
+    },
+  );
 
   it('refuses a digest whose attestation does not verify — reported once, nothing pulled, nothing drained', async () => {
     const w = await world({ advertised: digests('b'), refuse: 'carries no build attestation' });
@@ -289,11 +358,8 @@ describe('the updater’s poll', () => {
     ]);
   });
 
-  it('refuses, before pulling or draining, a project brought up from a Windows folder — reported once, the worker left taking work (S-22.20, backlog 990)', async () => {
-    const w = await world({
-      advertised: digests('b'),
-      workingDir: 'C:\\Users\\dev\\agentic-worker',
-    });
+  it('refuses, before pulling or draining, an update it cannot apply (no host-bundle mount) — reported once, the worker left taking work (S-22.20)', async () => {
+    const w = await world({ advertised: digests('b'), folderMount: false });
     await w.updater.tick();
     await w.updater.tick();
     // No pull and no drain: before S-22.20 the refusal came after the drain, every poll.
@@ -302,8 +368,7 @@ describe('the updater’s poll', () => {
     expect(w.reports).toEqual([
       expect.objectContaining({ result: 'failed', from: digests('a'), to: digests('b') }),
     ]);
-    expect(JSON.stringify(w.reports)).toContain('C:\\\\Users\\\\dev\\\\agentic-worker');
-    expect(JSON.stringify(w.reports)).toContain('not a Linux path');
+    expect(JSON.stringify(w.reports)).toContain('not mounted at /var/lib/platform/host-bundle');
   });
 
   it('refuses a downgrade to an older attested build, reported once', async () => {
@@ -424,11 +489,13 @@ describe('where the updater runs', () => {
       workerStateDir: '/var/lib/platform/worker-state',
     });
     expect(self).toEqual({
+      // The person's project by name, from their folder at the fixed mount path (S-22.21).
       project: {
         name: 'agentic-worker',
-        workingDir: '/home/dev/worker',
-        envFile: '/home/dev/worker/.env.worker',
+        workingDir: '/var/lib/platform/host-bundle',
+        envFile: '/var/lib/platform/host-bundle/.env',
       },
+      hostBundleSource: '/home/dev/worker',
       image: refsOf('a').platform,
       networks: ['agentic-worker_default', 'agentic-worker_updater-docker'],
       updatesVolume: 'agentic-worker_updates',
@@ -436,37 +503,70 @@ describe('where the updater runs', () => {
     });
   });
 
-  it('refuses an env file outside the project directory, and a container no compose project owns', async () => {
-    const outside = {
+  it('reads no host path off a label — a Windows working_dir and any env-file label change nothing — and refuses only what no apply can work from', async () => {
+    const windows = {
       ...SELF,
       Config: {
         ...SELF.Config,
         Labels: {
           ...SELF.Config.Labels,
-          'com.docker.compose.project.environment_file': '/etc/passwd',
+          'com.docker.compose.project.working_dir': 'C:\\Users\\dev\\agentic-worker',
+          'com.docker.compose.project.environment_file':
+            'C:\\Users\\dev\\agentic-worker\\.env,D:\\other.env',
         },
       },
+      Mounts: [
+        {
+          Type: 'bind',
+          Source: '/run/desktop/mnt/host/c/Users/dev/agentic-worker',
+          Destination: '/var/lib/platform/host-bundle',
+        },
+        ...SELF.Mounts.slice(1),
+      ],
     };
     const config = {
       stateDir: '/var/lib/platform/updates',
       workerStateDir: '/var/lib/platform/worker-state',
     };
+    const self = await discoverSelf(
+      async () => ({ stdout: JSON.stringify([windows]), stderr: '' }),
+      'self',
+      config,
+    );
+    expect(self.project).toEqual({
+      name: 'agentic-worker',
+      workingDir: '/var/lib/platform/host-bundle',
+      envFile: '/var/lib/platform/host-bundle/.env',
+    });
+    expect(self.hostBundleSource).toBe('/run/desktop/mnt/host/c/Users/dev/agentic-worker');
+    const inspected = (container: unknown) => async () => ({
+      stdout: JSON.stringify([container]),
+      stderr: '',
+    });
+    // What stays a refusal, each by name: a state no apply can work from.
     await expect(
-      discoverSelf(async () => ({ stdout: JSON.stringify([outside]), stderr: '' }), 'self', config),
-    ).rejects.toThrow(/outside its directory/);
+      discoverSelf(inspected({ ...SELF, Mounts: SELF.Mounts.slice(1) }), 'self', config),
+    ).rejects.toThrow(/not mounted at \/var\/lib\/platform\/host-bundle.*download it again/);
+    await expect(
+      discoverSelf(inspected({ ...SELF, Mounts: SELF.Mounts.slice(0, 1) }), 'self', config),
+    ).rejects.toThrow(/no named volume is mounted at \/var\/lib\/platform\/updates/);
+    await expect(
+      discoverSelf(inspected({ ...SELF, Config: { Labels: {} } }), 'self', config),
+    ).rejects.toThrow(/not a service of a compose project/);
     await expect(
       discoverSelf(
-        async () => ({ stdout: JSON.stringify([{ ...SELF, Config: { Labels: {} } }]), stderr: '' }),
+        inspected({ ...SELF, Config: { Labels: { 'com.docker.compose.project': 'My Worker' } } }),
         'self',
         config,
       ),
-    ).rejects.toThrow(/not a service of a compose project/);
+    ).rejects.toThrow(/"My Worker" is not one Compose accepts/);
   });
 
   it('mounts the worker credential read-only into the apply', () => {
     const args = applyContainerArgs({
       self: {
         project: { name: 'p', workingDir: '/w', envFile: '/w/.env' },
+        hostBundleSource: '/run/desktop/mnt/host/c/Users/dev/worker',
         image: 'x',
         networks: ['p_default'],
         updatesVolume: 'p_updates',
@@ -494,6 +594,15 @@ describe('where the updater runs', () => {
     expect(args).toContain(
       'type=volume,source=p_worker-state,target=/var/lib/platform/worker-state,readonly',
     );
+    // The folder at the fixed path, from the source Docker reported (S-22.21).
+    expect(args.filter((arg) => arg.startsWith('type=bind'))).toEqual([
+      'type=bind,source=/run/desktop/mnt/host/c/Users/dev/worker,target=/var/lib/platform/host-bundle',
+    ]);
+    // A source with a comma or a quote stays one CSV field.
+    expect(mountSpec(['type=bind', 'source=/a,b', 'target=/t'])).toBe(
+      'type=bind,"source=/a,b",target=/t',
+    );
+    expect(mountSpec(['source=/x"y'])).toBe('"source=/x""y"');
   });
 });
 

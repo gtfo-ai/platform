@@ -88,9 +88,9 @@ learnt to click through. A warning trained away on our app is a warning trained 
   Windows 11 Smart App Control may block it entirely. Q131 decides who may receive one.
 - **New owner duties:** approving each app release, holding a backup of the updater key (losing it
   means every installed app must be reinstalled by hand), and renewing the Apple membership.
-- **The worker must work on Windows first.** Today the worker's updater refuses a Windows project
-  directory (research/20 § 6, backlog 990), so a Windows worker cannot self-update. The gate slice
-  S-24.0 measures and fixes this before any app work starts.
+- **The worker must work on Windows first.** The worker's updater refused a Windows project directory
+  (research/20 § 6, backlog 990); S-22.21 fixed it (TD-032's 2026-11-05 decision-4 amendment). The
+  gate slice S-24.0 measures one real update there before any app work starts.
 - **Q123 matters more.** An app makes a personal-subscription worker one download away, so Anthropic's
   terms for that use should be answered before the first public release (S-24.0).
 

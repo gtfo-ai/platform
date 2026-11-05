@@ -13,9 +13,10 @@ The worker's page is served at `127.0.0.1:${APP_WORKER_UI_PORT:-7357}` (`compose
 
 The bundle's project name is fixed (`name: agentic-worker`, `compose.worker.yml:55`).
 
-The updater finds the bundle's directory from the label `com.docker.compose.project.working_dir`
-(`apps/server/src/updater/updater.ts:112`). It requires that directory to start with `/`
-(`plan.ts:26-38`). It labels its apply container `org.platform.update-apply` (`updater.ts:70`). It
+The updater reaches the bundle's folder through a bind mount at a fixed container path
+(`/var/lib/platform/host-bundle`, from `${APP_WORKER_BUNDLE_DIR:-.}`), whose source Docker resolves,
+and writes each applied build back into it; it reads no host path off a label (TD-032's 2026-11-05
+decision-4 amendment, S-22.21). It labels its apply container `org.platform.update-apply` (`updater.ts:70`). It
 rewrites the `.env` block and renders the template from the **verified image**, never from a file the
 core served (TD-032 §3).
 
@@ -152,7 +153,8 @@ repository has no Actions secrets (`image.yml:17-21`).
 - **The secrets are a new trust root.** Whoever holds the updater key can push code to every installed
   app, and the minisign check is only as strong as the environment's approval and branch rule. The
   Sigstore attestation is a second check for a human, not for the updater.
-- **The Windows worker is blocked** by `plan.ts:30` (backlog 990). S-24.0 fixes it or records it.
+- **The Windows worker** was blocked by `plan.ts:30` (backlog 990); S-22.21 closed it (TD-032's
+  2026-11-05 decision-4 amendment). What is left is measuring one real update there (V-DA1, S-24.W).
 - The app is root-equivalent through Docker, as the CLI user already is (TD-021's residual).
 - V-DA1–V-DA7 (docs/TODO.md) are measured by the named slices.
 

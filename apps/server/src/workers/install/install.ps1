@@ -51,6 +51,8 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
   $ImageVariables = @('PLATFORM_IMAGE', 'PLATFORM_LAUNCHER_IMAGE', 'PLATFORM_RUNTIME_IMAGE', 'PLATFORM_EGRESS_IMAGE')
   # The label the updater puts on its one-shot apply container (apps/server/src/updater/updater.ts).
   $ApplyLabel = 'org.platform.update-apply'
+  # Where the updater mounts this folder; after its first update Compose's working_dir label names it.
+  $UpdaterFolder = '/var/lib/platform/host-bundle'
   # Removed from Compose's environment: they would change which images run, where the bundle comes
   # from or what the updater trusts. They are the updater's to set, or the bundle's defaults.
   $Scrubbed = @('COMPOSE_FILE', 'COMPOSE_PROJECT_NAME', 'COMPOSE_PROFILES', 'COMPOSE_ENV_FILES', 'APP_CORE_URL') + $ImageVariables + @('APP_TRUSTED_IMAGE_REPOSITORY', 'APP_TRUSTED_BUILDER')
@@ -145,12 +147,21 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     }
   }
 
+  # This installer's install is the folder with its mark (TD-032's 2026-11-05 decision-4
+  # amendment), never what a label says: a folder without the mark is a new install, so any project of
+  # the name on this machine is someone else's; a marked folder's project is ours, unless the label
+  # names another host folder outright. After the updater's first update the label names its own
+  # mount path, which is ours.
   function Assert-NothingForeignOrBusy {
     $here = $WorkerDir.TrimEnd('\')
-    $foreign = @(Get-ProjectContainer | ForEach-Object { Get-Label $_ 'com.docker.compose.project.working_dir' } |
-        Where-Object { $_ -ne '' -and $_.TrimEnd('\') -ne $here } | Sort-Object -Unique)
+    $containers = @(Get-ProjectContainer)
+    $foreign = @($containers | ForEach-Object { Get-Label $_ 'com.docker.compose.project.working_dir' } |
+        Where-Object { $_ -ne '' -and $_.TrimEnd('\') -ne $here -and $_ -ne $UpdaterFolder } | Sort-Object -Unique)
     if ($foreign.Count -gt 0) {
       Exit-Installer 3 "a worker bundle named $Project already runs from $($foreign -join ', '). This installer will not take it over: stop it there first (docker compose down, in that folder), or keep using it."
+    }
+    if ($containers.Count -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $WorkerDir $Mark))) {
+      Exit-Installer 3 "a worker bundle named $Project already exists on this machine, and $WorkerDir is not this installer's (it has no $Mark). This installer will not take it over: run it with -Dir pointing at that bundle's folder, or remove that bundle first."
     }
     $applying = Invoke-Native -File 'docker' -Arguments @('ps', '--quiet', '--filter', "label=$ApplyLabel=$Project") -Capture
     if ($applying.Code -ne 0) { Exit-Installer 1 'docker ps failed' }
@@ -367,9 +378,8 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     Write-Line '              Sign in to Claude and approve this machine there. If the page asks for a token:'
     Write-Line "              cd '$WorkerDir'; docker compose logs remote-worker | Select-String token="
     Write-Line "  Its folder: $WorkerDir"
-    Write-Line "  Updates:    not yet on Windows. Its updater follows $CoreAddress but cannot apply an update"
-    Write-Line '              from a Windows folder (backlog 990): it reports each one to the core instead, and'
-    Write-Line '              the worker keeps running as it is.'
+    Write-Line "  Updates:    automatic. Its updater follows $CoreAddress; you never run this again to update."
+
     Write-Line '  Remove it:  run this script again with -Uninstall (add -Purge to remove its data too)'
   }
 

@@ -64,8 +64,10 @@
 # `APP_WORKER_RUN_NETWORK` and `APP_WORKER_UI_PORT` (and its own project name).
 #
 # **It updates itself** (`updater`, WP-287): it follows the core's digests, verifying each build's
-# attestation first, and keeps them in a marked block of the env file beside this one (`.env`, or the
-# `--env-file` you passed). See the `updater` service below for what it does and how to turn it off.
+# attestation first, and writes each build it applies back into this folder — this file, re-rendered
+# for the new digests, and a marked block of the env file beside it (`.env`) — so a `docker compose up`
+# here always runs what the updater last applied (S-22.21). See the `updater` service below for what it
+# does and how to turn it off.
 
 name: agentic-worker
 
@@ -259,19 +261,21 @@ services:
   # 5 minutes (and on a 426 the worker reports) it asks the core's `release`, **verifies every advertised
   # digest's build attestation** against the identity below — configured here, never served by the core
   # — refuses a downgrade, pulls, drains the worker, waits until it is idle, and starts a one-shot
-  # `update-apply` container from the **new** image, which re-pins the four `PLATFORM_*_IMAGE` lines in a
-  # managed block of this project's env file (the previous file kept as `.env.previous`), brings the
-  # worker up with the template **that image carries**, checks `core_handshake`, rolls back if it does
-  # not come up, reports to the core, and recreates this container last. A fork sets the two trusted
+  # `update-apply` container from the **new** image, which writes the new build back into this folder
+  # (mounted at `/var/lib/platform/host-bundle`): this file, rendered from the template the new image
+  # carries for the new digests, and the four `PLATFORM_*_IMAGE` lines in a managed block of `.env`
+  # (your own lines kept; the previous files kept as `.env.previous` here and in its `updates`
+  # volume). It then brings the project up from this folder by name, checks `core_handshake`, puts both
+  # files back and rolls back if it does not come up, reports to the core, and recreates this
+  # container last. A fork sets the two trusted
   # variables to its own repository and workflow; unset, this worker refuses to self-update by name.
   #
   # **It is root-equivalent on this machine** (TD-032 §4): it reaches Docker through its own socket
   # proxy, which filters by API path and not by project. Keeping to this project is its code's
   # property — every Compose call passes `--project-name`. It runs as root to read the worker's
-  # credential; its apply container runs as root to write the env file in the directory you ran
-  # `docker compose` from (mounted at the same path), and hands the file back to that directory's
-  # owner. Remove this service (and `updater-docker-proxy`) to update by hand: re-download
-  # the compose file from the core and `docker compose up -d`.
+  # credential and to write this folder's files, which it hands back to the folder's owner. Remove this
+  # service (and `updater-docker-proxy`) to update by hand: re-download the compose file from the core
+  # and `docker compose up -d`.
   updater:
     image: ${PLATFORM_IMAGE:-platform:dev}
     user: '0:0'
@@ -300,6 +304,12 @@ services:
       # The worker credential `release` and `update-report` carry; read-only.
       - worker-state:/var/lib/platform/worker-state:ro
       - updates:/var/lib/platform/updates
+      # This folder (S-22.21, TD-032's decision-4 amendment): the updater writes each new build's
+      # compose file and its managed `.env` block back here, so the folder always holds what runs. A
+      # fixed container path: Docker resolves the source (a `C:\` folder on Docker Desktop for
+      # Windows), and the updater never reads a host path. Set APP_WORKER_BUNDLE_DIR only if you run
+      # Compose from somewhere else than this folder.
+      - ${APP_WORKER_BUNDLE_DIR:-.}:/var/lib/platform/host-bundle
     networks:
       - default
       - updater-docker

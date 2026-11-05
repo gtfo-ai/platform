@@ -455,11 +455,14 @@ core: every 5 minutes, and at once when the worker meets a `426`, it reads the c
    serves its protocol;
 3. pulls the four images, **drains** the worker (`via: worker_internal_drain`) and waits until it holds
    no run — however long the run in flight takes;
-4. starts a one-shot `update-apply` container **from the new image**, which re-pins the four
-   `PLATFORM_*_IMAGE` lines in a marked block of the env file beside your compose file (`.env`, or the
-   `--env-file` you passed; the previous file is kept as `.env.previous`), brings the worker up with the
-   compose template **the new image carries**, and checks that `/readyz` reads `core_handshake: ok`
-   and `launcher: ok` within 120 s. If it does not, it puts the previous env file and template back, brings the old
+4. starts a one-shot `update-apply` container **from the new image**, which writes the new build back
+   into your install folder — mounted into the updater at `/var/lib/platform/host-bundle`, so a
+   Windows folder works too (S-22.21) — your compose file rendered from the template **the new image
+   carries** for the new digests, and the four `PLATFORM_*_IMAGE` lines in a marked block of the
+   folder's `.env` (your own lines kept; the previous file kept as `.env.previous`, the previous
+   compose file in the `updates` volume). It brings the worker up from that folder, so a
+   `docker compose up -d` of your own there always runs what the updater last applied, and checks that `/readyz` reads `core_handshake: ok`
+   and `launcher: ok` within 120 s. If it does not, it puts the previous compose file and env file back, brings the old
    build up again and restarts the worker (a drain's hold ends with the process; your own *Pause*
    does not). It then reports the result and recreates the updater last.
 
@@ -478,19 +481,19 @@ instead, remove the `updater` and `updater-docker-proxy` services, download the 
 
 #### One-command install (S-22.20)
 
-On macOS and Linux the core also serves an installer, public like the compose file and rendered
-with this core's `APP_BASE_URL` (TD-031's 2026-11-05 install-scripts amendment; `503
-install_script_unavailable` when that URL has a credential, a query or a character a shell cannot
-take inside single quotes):
+The core also serves two installers, public like the compose file and rendered with this core's
+`APP_BASE_URL` (TD-031's 2026-11-05 install-scripts amendment; `503 install_script_unavailable` when
+that URL has a credential, a query or a character a shell cannot take inside single quotes):
 
 ```bash
-curl -fsSL https://agentic.example.com/api/worker/v1/install.sh | sh
+curl -fsSL https://agentic.example.com/api/worker/v1/install.sh | sh                                   # macOS, Linux
+powershell -ExecutionPolicy ByPass -c "irm https://agentic.example.com/api/worker/v1/install.ps1 | iex"  # Windows
 ```
 
-To read it first: `curl -fsSLo install.sh https://agentic.example.com/api/worker/v1/install.sh && less
-install.sh && sh install.sh`. It checks `docker`, `docker info` and `docker compose version` and names
+To read one first: `curl -fsSLo install.sh https://agentic.example.com/api/worker/v1/install.sh && less
+install.sh && sh install.sh`. Each checks `docker`, `docker info` and `docker compose version` and names
 what to install (Docker Desktop, or Docker Engine on Linux) when one fails; creates `~/agentic-worker`
-(`--dir`), refusing a folder it did not make and a project `agentic-worker` brought up from
+(`--dir`/`-Dir`), refusing a folder it did not make and a project `agentic-worker` brought up from
 another folder; downloads `compose.yml` as `compose.yaml` and writes `.agentic-worker-install` (the
 core it came from); runs `docker compose up -d`; waits until `remote-worker` and `updater` run
 (and are `healthy` if they declare a healthcheck) and `http://127.0.0.1:7357` answers; and opens it.
@@ -512,8 +515,15 @@ unverified. It never
 writes `.env` or touches a volume (except `--purge`), and it refuses while an update is being
 applied.
 
-**Windows: coming next.** `GET /api/worker/v1/install.ps1` is served, but it is not offered until the
-updater can apply an update from a Windows folder (backlog 990), because a worker always updates itself.
+**Its install is its mark.** An installer knows its own folder by the `.agentic-worker-install` it
+wrote, never by Compose's `working_dir` label, which names the updater's mount path
+(`/var/lib/platform/host-bundle`) after the first update. A folder without the mark is a new install,
+and any `agentic-worker` project already on the machine is refused as someone else's.
+
+**Windows** runs the same bundle as Linux containers on Docker Desktop, and updates itself since
+S-22.21: the updater reaches the folder through its fixed-path mount, whose `C:\` source Docker
+resolves (TD-032's 2026-11-05 decision-4 amendment). One real update on a Windows machine is still to
+be measured (V-DA1).
 
 ### If `/readyz` is 503
 

@@ -38,15 +38,22 @@ It holds no database and no platform secret; your Claude token reaches each run'
 The full description is the operator guide's
 [remote worker section](docs/operator-guide.md#a-remote-worker-on-a-developers-machine-wp-283-wp-284).
 
-**One command** (S-22.20). On macOS or Linux, with Docker running, paste this with your core's
+**One command** (S-22.20). With Docker running, paste the line for your system, with your core's
 address in place of `<core>`:
 
 ```bash
+# macOS and Linux
 curl -fsSL https://<core>/api/worker/v1/install.sh | sh
 ```
 
+```powershell
+# Windows (PowerShell 5.1 or 7, Docker Desktop with Linux containers)
+powershell -ExecutionPolicy ByPass -c "irm https://<core>/api/worker/v1/install.ps1 | iex"
+```
+
 To read the script before it runs: `curl -fsSLo install.sh https://<core>/api/worker/v1/install.sh &&
-less install.sh && sh install.sh`. It checks Docker and Compose and says what to install when either
+less install.sh && sh install.sh` (on Windows, `irm … -OutFile install.ps1`, read it, then
+`powershell -ExecutionPolicy ByPass -File install.ps1`). It checks Docker and Compose and says what to install when either
 is missing, creates `~/agentic-worker` (`--dir` for another folder), downloads the core's
 `compose.yml` there as `compose.yaml`, runs `docker compose up -d`, waits for the worker, its updater
 and its page, and opens `http://127.0.0.1:7357`, where you sign in to Claude and approve the
@@ -54,8 +61,8 @@ machine. That folder and the Docker project `agentic-worker` (its containers, vo
 are all it changes: no sudo, no system service, no PATH or profile edit. **The worker keeps itself up
 to date automatically, and you never re-run the installer for updates.** Running it again only
 repairs: it starts what is stopped and never changes the images the worker runs.
-`… | sh -s -- --uninstall` removes the containers (`--purge` the volumes and folder too).
-Windows: coming next.
+`… | sh -s -- --uninstall` (on Windows `-Uninstall`) removes the containers (`--purge` the volumes and
+folder too).
 
 The steps below do the same by hand.
 

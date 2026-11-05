@@ -92,6 +92,12 @@ try {
   $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
   Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker up -d --no-recreate') "a re-run adds what is missing and recreates nothing (last: $($calls[-1]))"
 
+  # After the updater's first update Compose's label names its mount path (S-22.21): the installer
+  # still knows its own install, by its mark.
+  Set-Content -LiteralPath (Join-Path $state 'wd') -Value '/var/lib/platform/host-bundle'
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
+  Test-That ($LASTEXITCODE -eq 0) "a re-run after an update accepts its own install (it exited $LASTEXITCODE)"
+
   # As `irm | iex` runs it: in the caller's own scope, which must survive with nothing of the
   # installer left. With no options it targets $HOME\agentic-worker, which the stub's running
   # project (brought up from $workerDir) makes it refuse (exit 3) before it writes anything.

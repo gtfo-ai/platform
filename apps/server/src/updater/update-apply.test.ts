@@ -3,15 +3,18 @@
  * order, with which environment — and that the project is named on **every** Compose call.
  */
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { silentLogger } from '@platform/application';
 import { describe, expect, it } from 'vitest';
+import { renderWorkerCompose } from '../workers/compose.js';
 import { carriedEnvironment, runApply, servicesToUp, waitForHandshake } from './apply.js';
 import type { DockerRun } from './docker.js';
 import { managedReferencesOf, previousOf } from './env-file.js';
-import { PREVIOUS_TEMPLATE_FILE, readState, type UpdatePlan } from './plan.js';
+import { HOST_BUNDLE_MOUNT, PREVIOUS_TEMPLATE_FILE, readState, type UpdatePlan } from './plan.js';
 
 const CLAUDE_TOKEN = 'FAKE-wp287-claude-token-not-a-credential';
 const CREDENTIAL = `wkr_${'a'.repeat(26)}_${'b'.repeat(43)}`;
@@ -27,6 +30,21 @@ const refs = (hex: string) => ({
   platform_runtime: `ghcr.io/acme/platform-runtime@sha256:${hex.repeat(64)}`,
   platform_egress: `ghcr.io/acme/platform-egress@sha256:${hex.repeat(64)}`,
 });
+
+/** The shipped template, as the new image carries it. */
+const TEMPLATE = readFileSync(
+  fileURLToPath(new URL('../../../../compose.worker.yml', import.meta.url)),
+  'utf8',
+);
+/** What the core serves for build `hex` — and what the apply writes back into the folder. */
+const rendered = (hex: string): string =>
+  renderWorkerCompose(TEMPLATE, {
+    digests: digests(hex),
+    repository: 'ghcr.io/acme',
+    coreUrl: 'https://core.example.test',
+  });
+/** The install folder as Docker Desktop for Windows reports a `C:\` bind mount's source. */
+const FOLDER_SOURCE = '/run/desktop/mnt/host/c/Users/dev/agentic-worker';
 
 /** A compose interpolation, `${inner}`, spelled so it is not read as a template placeholder. */
 const ref = (inner: string): string => `$${'{'}${inner}}`;
@@ -68,6 +86,8 @@ const world = async (options: {
   readonly readyAfterUp?: (platform: string) => boolean;
   readonly pullFails?: boolean;
   readonly envFile?: string | null;
+  /** The folder's compose file (default: the first install's, the core's render of build `a`). */
+  readonly bundle?: string | null;
 }) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'apply-'));
   const stateDir = await mkdtemp(path.join(tmpdir(), 'apply-state-'));
@@ -77,8 +97,11 @@ const world = async (options: {
   if (options.envFile !== null) {
     await writeFile(envFile, options.envFile ?? 'LOG_LEVEL=debug\n');
   }
-  const templatePath = path.join(directory, 'image-template.yml');
-  await writeFile(templatePath, '# the new image’s template\n');
+  // The image's template: the shipped one, outside the folder (it is in the new image).
+  const templatePath = path.join(stateDir, '..', `image-template-${path.basename(stateDir)}.yml`);
+  await writeFile(templatePath, TEMPLATE);
+  const bundleFile = path.join(directory, 'compose.yaml');
+  if (options.bundle !== null) await writeFile(bundleFile, options.bundle ?? rendered('a'));
   await writeFile(path.join(stateDir, PREVIOUS_TEMPLATE_FILE), '# the old image’s template\n');
   let workerImage = refs('a').platform;
   const calls: Call[] = [];
@@ -86,7 +109,7 @@ const world = async (options: {
     calls.push({ args, env: { ...runOptions.env } });
     if (args.includes('config')) return { stdout: JSON.stringify(MODEL), stderr: '' };
     if (args[0] === 'container' && args[1] === 'ls') {
-      return { stdout: 'c-worker\nc-launcher\n', stderr: '' };
+      return { stdout: 'c-worker\nc-launcher\nc-updater\n', stderr: '' };
     }
     if (args[0] === 'container' && args[1] === 'inspect') {
       return {
@@ -113,6 +136,16 @@ const world = async (options: {
               Labels: { 'com.docker.compose.service': 'launcher' },
             },
             State: { Running: true },
+          },
+          {
+            // The updater, with the install folder mounted as Docker Desktop for Windows reports it.
+            Id: 'c-updater',
+            Config: { Env: [], Labels: { 'com.docker.compose.service': 'updater' } },
+            State: { Running: true },
+            Mounts: [
+              { Type: 'bind', Source: FOLDER_SOURCE, Destination: HOST_BUNDLE_MOUNT },
+              { Type: 'volume', Name: 'agentic-worker-test_updates', Destination: stateDir },
+            ],
           },
         ]),
         stderr: '',
@@ -170,7 +203,7 @@ const world = async (options: {
     },
     sleep: async () => undefined,
   };
-  return { calls, reports, plan, deps, envFile, stateDir, templatePath };
+  return { calls, reports, plan, deps, envFile, stateDir, templatePath, bundleFile };
 };
 
 const composeCalls = (calls: readonly Call[]) => calls.filter((call) => call.args[0] === 'compose');
@@ -206,6 +239,12 @@ describe('an update that comes up healthy', () => {
     const pull = composeCalls(w.calls).find((call) => verb(call) === 'pull --quiet');
     expect(pull?.env.PLATFORM_IMAGE).toBe(refs('b').platform);
     expect(pull?.args).toContain(w.templatePath);
+    // The folder holds what runs (S-22.21): the new build's compose file, rendered from this image's
+    // template, and the managed block — so the up runs that file, and so would the person's own.
+    expect(await readFile(w.bundleFile, 'utf8')).toBe(rendered('b'));
+    const up = composeCalls(w.calls).find((call) => verb(call).startsWith('up -d --wait'));
+    expect(up?.args).toContain(w.bundleFile);
+    expect(up?.args).not.toContain(w.templatePath);
     expect(managedReferencesOf(await readFile(w.envFile, 'utf8'))).toEqual(refs('b'));
     expect(await readFile(previousOf(w.envFile), 'utf8')).toBe('LOG_LEVEL=debug\n');
     expect(w.reports).toEqual([
@@ -245,7 +284,9 @@ describe('an update that does not come up', () => {
       'up -d --wait --wait-timeout 5 docker-socket-proxy launcher remote-worker',
       'up -d --wait --wait-timeout 5 docker-socket-proxy launcher remote-worker',
     ]);
-    expect(ups[1]?.args).toContain(path.join(w.stateDir, PREVIOUS_TEMPLATE_FILE));
+    // The folder's own files back, byte for byte, and the rollback's up runs them.
+    expect(ups[1]?.args).toContain(w.bundleFile);
+    expect(await readFile(w.bundleFile, 'utf8')).toBe(rendered('a'));
     // The worker is restarted after the rollback's up: if that up left it as it was, it is still the
     // drained process (review of PR #38). Its next start clears a drain's pause, and only a drain's.
     expect(
@@ -279,6 +320,7 @@ describe('an update that does not come up', () => {
     expect(state.detail).toContain('nothing changed');
     expect(await readFile(w.envFile, 'utf8')).toBe('LOG_LEVEL=debug\n');
     await expect(stat(previousOf(w.envFile))).rejects.toThrow();
+    expect(await readFile(w.bundleFile, 'utf8')).toBe(rendered('a'));
     expect(
       composeCalls(w.calls)
         .map(verb)
@@ -346,6 +388,71 @@ describe('the apply’s check waits for the worker’s launcher too (backlog 980
     const worker = readyz([{ status: 200, checks: { core_handshake: 'ok' } }]);
     const result = await waitForHandshake(worker.deps, 'http://remote-worker:8080', 10);
     expect(result).toEqual({ ok: true, last: '200 core_handshake=ok launcher=absent' });
+  });
+});
+
+describe('the install folder, kept current (S-22.21, TD-032 decision 4, backlog 990)', () => {
+  it('the shipped template mounts the folder into the updater, and only there, at the fixed path the apply uses', () => {
+    const mount = `- ${ref('APP_WORKER_BUNDLE_DIR:-.')}:${HOST_BUNDLE_MOUNT}`;
+    const services = TEMPLATE.split(/\n {2}(?=[a-z][a-z-]*:\n)/);
+    const mounting = services.filter((block) => block.includes(mount)).map((b) => b.split(':')[0]);
+    expect(mounting).toEqual(['updater']);
+    // Rendering for a first install leaves the mount as it is.
+    expect(rendered('a')).toContain(mount);
+  });
+
+  it('hands Docker back the folder source it reported for the updater’s mount (a Windows folder), on every Compose call', async () => {
+    const w = await world({});
+    await runApply(w.plan, w.deps);
+    const calls = composeCalls(w.calls);
+    expect(calls.length).toBeGreaterThan(3);
+    // From the folder as project directory, `${APP_WORKER_BUNDLE_DIR:-.}` would name the
+    // container's path; the recreated updater must mount the person's folder again.
+    for (const call of calls) expect(call.env.APP_WORKER_BUNDLE_DIR).toBe(FOLDER_SOURCE);
+    // A source Docker reported is passed through as a value, never as an argument.
+    for (const call of calls) expect(call.args.join(' ')).not.toContain(FOLDER_SOURCE);
+  });
+
+  it('leaves the folder so a person’s own `docker compose up` there cannot go back: its file and its .env pin the build that runs', async () => {
+    const w = await world({});
+    await runApply(w.plan, w.deps);
+    const file = await readFile(w.bundleFile, 'utf8');
+    const env = await readFile(w.envFile, 'utf8');
+    for (const [key, variable] of [
+      ['platform', 'PLATFORM_IMAGE'],
+      ['platform_launcher', 'PLATFORM_LAUNCHER_IMAGE'],
+      ['platform_runtime', 'PLATFORM_RUNTIME_IMAGE'],
+      ['platform_egress', 'PLATFORM_EGRESS_IMAGE'],
+    ] as const) {
+      // The file's default and the env file's block both name the new build; neither the old.
+      expect(file).toContain(`${ref(`${variable}:-${refs('b')[key]}`)}`);
+      expect(file).not.toContain(refs('a')[key]);
+      expect(env).toContain(`${variable}=${refs('b')[key]}`);
+    }
+    // The person's own line is kept.
+    expect(env).toContain('LOG_LEVEL=debug');
+  });
+
+  it('writes compose.yaml into a folder that had none, and a rollback removes it again', async () => {
+    const w = await world({
+      bundle: null,
+      readyAfterUp: (platform) => platform === refs('a').platform,
+    });
+    const state = await runApply(w.plan, w.deps);
+    expect(state.result).toBe('rolled_back');
+    await expect(stat(w.bundleFile)).rejects.toThrow();
+    // With no compose file of its own, the rollback runs the previous image's template.
+    const ups = composeCalls(w.calls).filter((call) => verb(call).startsWith('up '));
+    expect(ups[1]?.args).toContain(path.join(w.stateDir, PREVIOUS_TEMPLATE_FILE));
+  });
+
+  it('keeps the person’s own file name (compose.worker.yml, the old README’s)', async () => {
+    const w = await world({ bundle: null });
+    const own = path.join(path.dirname(w.bundleFile), 'compose.worker.yml');
+    await writeFile(own, rendered('a'));
+    await runApply(w.plan, w.deps);
+    expect(await readFile(own, 'utf8')).toBe(rendered('b'));
+    await expect(stat(w.bundleFile)).rejects.toThrow();
   });
 });
 

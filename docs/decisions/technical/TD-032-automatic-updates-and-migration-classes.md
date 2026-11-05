@@ -396,7 +396,7 @@ took where decisions 3, 4 and 6 left a choice, so a reviewer can refuse it by na
    report as a `human_actions` row `worker.update` under the worker's user (the shape `worker.pause`
    with `via: worker_internal_drain` already has), so WP-287 needs no migration; `GET /api/workers`
    answers the newest as `last_update` (BACKLOG 895, 954).
-5. **The env file** is the one compose recorded on the project's containers
+5. *(Superseded by the 2026-11-05 decision-4 amendment below: the folder is mounted at a fixed path.)* **The env file** is the one compose recorded on the project's containers
    (`com.docker.compose.project.environment_file`), else `<project dir>/.env`, and must be inside the
    project directory, which the apply container mounts **at its host path**. Values the first `up` took
    from the shell (the Claude token) are carried from the running containers' environment into
@@ -414,3 +414,38 @@ took where decisions 3, 4 and 6 left a choice, so a reviewer can refuse it by na
 8. **No core URL yet, no updater work.** The updater's `APP_CORE_URL` is optional (the core's rendered
    file defaults it to the core, as the worker's): unset, it idles and says so, for S-22.17's first-run
    page, which may start a worker before a core is known (BACKLOG 955).
+
+## Amendment (2026-11-05, orchestrator-authorised, S-22.21) — decision 4: the updater keeps the install folder current, through a mount at a fixed path
+
+**Decision 4 holds on every OS**: the install folder always holds what runs. The owner's rule is
+"auto-update always", and a person's own `docker compose up` in that folder must never bring back an
+older build.
+
+1. **The folder is mounted, never parsed.** `compose.worker.yml` mounts the install folder into the
+   updater at a fixed container path: `${APP_WORKER_BUNDLE_DIR:-.}:/var/lib/platform/host-bundle`.
+   Docker resolves the source, including a `C:\…` folder on Docker Desktop for Windows. The updater
+   hands the source Docker reports for that mount back to Docker for the apply container's own mount.
+   No apply reads a host path off a label (`com.docker.compose.project.working_dir`), so *As built* §5's
+   same-path mount and its `/`-only rule are gone (BACKLOG 990).
+2. **Applying writes the folder back.** The apply renders the new build's compose file from the
+   template the verified new image carries, for the new digests and the core's URL. It writes that
+   file atomically over the folder's own compose file (`compose.yaml`, or the name already there) and
+   pins the managed block of the folder's `.env`, keeping the person's own lines. It then runs Compose
+   with `--project-directory /var/lib/platform/host-bundle` and the fixed `--project-name`, and hands
+   the mount's source back as `APP_WORKER_BUNDLE_DIR`. So the folder on disk is always what runs, and
+   a setting a newer template reads for the first time is read from the folder's `.env`.
+3. **Rollback source.** Before writing, the previous compose file is kept in the `updates` volume
+   (`previous-bundle/<update id>/`) and the previous `.env` beside it in the folder (`.env.previous`).
+   A rollback puts both back byte for byte and brings the project up from them. The image template the
+   old updater writes to the volume stays only as the last resort, for an apply that crashed before it
+   kept anything.
+4. **Ownership is the installer's marker.** An installer recognises its own install by the file it
+   writes into the folder (`.agentic-worker-install`, holding the core's URL), never by the
+   `working_dir` label, which names `/var/lib/platform/host-bundle` after the first update. A folder
+   without the mark is a new install, so any project of the name already on the machine is someone
+   else's and refused. The label is read for one thing only: a marked folder still refuses a project
+   whose label names a different host folder outright (another install of the same name).
+5. Verification, the downgrade bound, drain-then-idle and the report are unchanged. A plan from an
+   older updater (the folder mounted at its host path) applies as before. The only refusal added is
+   for an updater with no `host-bundle` mount, a compose file that predates this, and it names the
+   fix: download the compose file again.

@@ -15,10 +15,15 @@
  *  3. **pulls** the four verified references (so a pull failure changes nothing and drains nothing);
  *  4. **drains** the worker (`POST /internal/drain`, `via: worker_internal_drain`) and **waits until it
  *     is idle** — a drained worker stays up, it does not exit (TD-031's 2026-11-05 amendment);
- *  5. writes its own template to `updates/compose.previous.yml` (the rollback's) and **starts the
- *     apply container from the new image** (`apply.ts`): labelled, `--rm`, outside the project, on
- *     the same two networks as this container and with the project directory mounted **at its host
- *     path**, so the compose project it drives is the one the person brought up.
+ *  5. writes its own template to `updates/compose.previous.yml` (the rollback's last resort) and
+ *     **starts the apply container from the new image** (`apply.ts`): labelled, `--rm`, outside the
+ *     project, on the same two networks as this container, with the person's install folder mounted
+ *     at the **fixed** path {@link HOST_BUNDLE_MOUNT} — the source exactly as Docker reports it for
+ *     this container's own mount of it (`${APP_WORKER_BUNDLE_DIR:-.}` in `compose.worker.yml`), so a
+ *     `C:\Users\…` folder on Docker Desktop for Windows works and no host path is ever parsed
+ *     (S-22.21, TD-032's 2026-11-05 decision-4 amendment, backlog 990). The apply drives the project
+ *     **by name** from that folder and writes the new build back into it, so the folder always holds
+ *     what runs.
  *
  * The apply recreates this container last on success. On a rollback or a failure this updater stays,
  * remembers the set it could not apply, and does not try it again — until the core advertises
@@ -29,8 +34,9 @@
  * terminal result the core was never told is reported.
  *
  * **Its Docker access is root-equivalent on this machine** (TD-032 §4, TD-021's residual): the proxy
- * filters by API path only. What keeps it to the worker's project is this code: the project's name
- * and directory are read from this container's own compose labels, never from the core.
+ * filters by API path only. What keeps it to the worker's project is this code: the project's name is
+ * read from this container's own compose labels, never from the core, and the folder is the one
+ * Compose mounted into this container.
  */
 import { randomUUID } from 'node:crypto';
 import { copyFile } from 'node:fs/promises';
@@ -58,6 +64,7 @@ import {
 import { type ComposeProject, type DockerRun, inspectContainers } from './docker.js';
 import { HEARTBEAT_EVERY_MS, writeHeartbeat } from './heartbeat.js';
 import {
+  HOST_BUNDLE_MOUNT,
   isTerminal,
   PREVIOUS_TEMPLATE_FILE,
   readState,
@@ -71,6 +78,7 @@ import { parseImageRepositoryName } from './registry.js';
 export const WORKER_STATE_POLL_MS = 15_000;
 /** The label every apply container carries, valued with the project's name. */
 export const APPLY_LABEL = 'org.platform.update-apply';
+export { HOST_BUNDLE_MOUNT };
 
 export interface UpdaterDeps {
   readonly config: UpdaterConfig;
@@ -89,9 +97,22 @@ export interface UpdaterDeps {
   readonly sleep: (ms: number) => Promise<void>;
 }
 
+/** The compose project an apply drives: the person's project by name, from the mounted folder. */
+export const bundleOf = (name: string): ComposeProject => ({
+  name,
+  workingDir: HOST_BUNDLE_MOUNT,
+  envFile: path.posix.join(HOST_BUNDLE_MOUNT, '.env'),
+});
+
 /** Where this updater runs, read off its own container. */
 export interface SelfContainer {
+  /** The person's project by name, run from {@link bundleOf}. */
   readonly project: ComposeProject;
+  /**
+   * The source of this container's {@link HOST_BUNDLE_MOUNT}, exactly as Docker reports it — handed
+   * back to Docker for the apply's own mount, never read as a path.
+   */
+  readonly hostBundleSource: string;
   readonly image: string;
   readonly networks: readonly string[];
   readonly updatesVolume: string;
@@ -102,7 +123,7 @@ export class UpdaterSetupError extends Error {
   override readonly name = 'UpdaterSetupError';
 }
 
-/** The project, its directory and env file, its networks and volumes — from this container's labels. */
+/** The project, its networks and volumes — from this container's labels and mounts. */
 export const discoverSelf = async (
   docker: DockerRun,
   containerId: string,
@@ -112,33 +133,20 @@ export const discoverSelf = async (
   if (self === undefined) throw new UpdaterSetupError(`container ${containerId} is not visible`);
   const labels = self.Config?.Labels ?? {};
   const name = labels['com.docker.compose.project'];
-  const workingDir = labels['com.docker.compose.project.working_dir'];
-  if (name === undefined || workingDir === undefined) {
+  if (name === undefined) {
     throw new UpdaterSetupError(
-      'this updater is not a service of a compose project (no com.docker.compose.project labels); it updates nothing',
+      'this updater is not a service of a compose project (no com.docker.compose.project label); it updates nothing',
     );
   }
-  if (!workingDir.startsWith('/')) {
-    // Docker Desktop for Windows records the folder `docker compose` ran in as a Windows path, which
-    // the apply container cannot mount at the same path (backlog 990, V-DA1).
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(name)) {
     throw new UpdaterSetupError(
-      `the project was brought up from ${workingDir}, which is not a Linux path; the apply container mounts the project's folder at its own path, so this updater cannot apply updates from it (backlog 990)`,
+      `the compose project's name ${JSON.stringify(name.slice(0, 80))} is not one Compose accepts on a command line; it updates nothing`,
     );
   }
-  const envFiles = (labels['com.docker.compose.project.environment_file'] ?? '')
-    .split(',')
-    .map((file) => file.trim())
-    .filter(Boolean);
-  if (envFiles.length > 1) {
+  const folder = self.Mounts?.find((entry) => entry.Destination === HOST_BUNDLE_MOUNT);
+  if (folder?.Type !== 'bind' || folder.Source === undefined || folder.Source === '') {
     throw new UpdaterSetupError(
-      `the project was brought up with ${envFiles.length} env files; the updater manages one (pass a single --env-file)`,
-    );
-  }
-  const envFile = envFiles[0] ?? path.join(workingDir, '.env');
-  const relative = path.relative(workingDir, envFile);
-  if (relative.startsWith('..') || path.isAbsolute(relative) || relative === '') {
-    throw new UpdaterSetupError(
-      `the project's env file ${envFile} is outside its directory ${workingDir}; the updater writes only inside it`,
+      `the install folder is not mounted at ${HOST_BUNDLE_MOUNT}, so this updater cannot keep it current: the compose file predates S-22.21 — download it again from the core and run docker compose up -d`,
     );
   }
   const volumeAt = (destination: string): string => {
@@ -149,13 +157,23 @@ export const discoverSelf = async (
     return mount.Name;
   };
   return {
-    project: { name, workingDir, envFile },
+    project: bundleOf(name),
+    hostBundleSource: folder.Source,
     image: self.Config?.Image ?? '',
     networks: Object.keys(self.NetworkSettings?.Networks ?? {}).sort(),
     updatesVolume: volumeAt(config.stateDir),
     workerStateVolume: volumeAt(config.workerStateDir),
   };
 };
+
+/**
+ * A `--mount` value: its fields as CSV, which is how Docker reads it, so a source holding a comma or a
+ * quote stays one field.
+ */
+export const mountSpec = (fields: readonly string[]): string =>
+  fields
+    .map((field) => (/[",\r\n]/.test(field) ? `"${field.replaceAll('"', '""')}"` : field))
+    .join(',');
 
 /** The `docker container create` arguments of an apply container (`--rm`, labelled, no compose labels). */
 export const applyContainerArgs = (input: {
@@ -191,7 +209,7 @@ export const applyContainerArgs = (input: {
     `APP_WORKER_STATE_DIR=${input.workerStateDir}`,
     ...Object.entries(input.environment).flatMap(([key, value]) => ['--env', `${key}=${value}`]),
     '--mount',
-    `type=bind,source=${self.project.workingDir},target=${self.project.workingDir}`,
+    mountSpec(['type=bind', `source=${self.hostBundleSource}`, `target=${HOST_BUNDLE_MOUNT}`]),
     '--mount',
     `type=volume,source=${self.updatesVolume},target=${input.stateDir}`,
     '--mount',
@@ -440,9 +458,9 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       return;
     }
     // 2b. Where this updater runs, before anything is pulled or drained (S-22.20): a project it
-    // cannot apply to — a Windows folder on Docker Desktop (backlog 990), an env file outside its
-    // directory — is refused and reported once, and the worker keeps taking work. Before this, the
-    // refusal came after the drain, so such a worker stayed drained at every poll.
+    // cannot apply to — no install folder mounted at the fixed path (a compose file from before
+    // S-22.21), no `updates` volume — is refused and reported once, and the worker keeps taking
+    // work. Before S-22.20 the refusal came after the drain, so such a worker stayed drained.
     let me: SelfContainer;
     try {
       me = await selfContainer();

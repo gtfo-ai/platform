@@ -75,6 +75,12 @@ export const updateStateSchema = z.strictObject({
 export type UpdateState = z.infer<typeof updateStateSchema>;
 
 export const STATE_FILE = 'state.json';
+/**
+ * Where the person's install folder is mounted, in the updater and in every apply container
+ * (`compose.worker.yml`: `${APP_WORKER_BUNDLE_DIR:-.}:/var/lib/platform/host-bundle`, S-22.21).
+ */
+export const HOST_BUNDLE_MOUNT = '/var/lib/platform/host-bundle';
+
 /** The template of the build an update leaves, written by the updater before it launches the apply. */
 export const PREVIOUS_TEMPLATE_FILE = 'compose.previous.yml';
 

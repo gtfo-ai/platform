@@ -68,9 +68,12 @@ export const createDockerCli =
 /** Where the worker's compose project lives, as its own containers' labels say. */
 export interface ComposeProject {
   readonly name: string;
-  /** The host directory the project was brought up from (`com.docker.compose.project.working_dir`). */
+  /**
+   * Every Compose call's `--project-directory`: the install folder as the updater's containers see
+   * it (`HOST_BUNDLE_MOUNT`, S-22.21) — never a host path, which may be a Windows one.
+   */
   readonly workingDir: string;
-  /** The env file compose read: the label `…project.environment_file`, else `<workingDir>/.env`. */
+  /** The managed env file: `<workingDir>/.env`. */
   readonly envFile: string;
 }
 
