@@ -67,6 +67,7 @@ Positive, negative, follow-ups (TODO links), what must be verified.
 | [BD-030](business/BD-030-additional-pipeline-gates.md) | Rebase gate, dependency/epic awareness, reviewer routing with risk classes, dependency policy, coverage delta | accepted |
 | [BD-031](business/BD-031-ticket-lifecycle-claim-qa-and-mr-conversation.md) | The tracker lifecycle is the project's mapping: optional status slots, a claimed ticket, a human QA stage, every form of a human return, the review conversation on the MR | accepted |
 | [BD-032](business/BD-032-worker-mode.md) | Worker mode: agent runs may execute on developers' machines with their own Claude subscription, beside or instead of the server's runner | accepted |
+| [BD-033](business/BD-033-desktop-app-for-the-worker.md) | A desktop app for the worker on macOS and Windows: a thin, signed, self-updating shell around the worker bundle, released from this repository (planned; build after the worker is verified) | proposed |
 
 ## Index — technical
 
