@@ -835,6 +835,8 @@ export const agents = agentsResponseSchema.parse({
       task_id: IDS.taskFeature,
       role: 'developer',
       last_output_at: now,
+      seat: { kind: 'server', worker_id: null, worker_name: null },
+      activity: { kind: 'tool', tool_name: 'Read', at: now },
     },
   ],
 });

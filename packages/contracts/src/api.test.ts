@@ -21,12 +21,17 @@ import {
   orgUsersResponseSchema,
   paginationQuerySchema,
   patchIntegrationRequestSchema,
+  pipelineGraphSchema,
   projectBindingsResponseSchema,
+  projectPipelineQuerySchema,
+  projectPipelinesResponseSchema,
   projectsResponseSchema,
   putKbDocRequestSchema,
   putProjectBindingsRequestSchema,
   readinessResponseSchema,
+  runActivitySchema,
   runMessagesQuerySchema,
+  runSeatSchema,
   setDefaultBranchRequestSchema,
   setupStateResponseSchema,
   sseFrameSchema,
@@ -482,6 +487,79 @@ describe('org DTOs', () => {
       limit: 10,
       entity_type: 'project',
     });
+  });
+});
+
+describe('the live views’ reads (S-23.15)', () => {
+  it('publishes an activity line with a bounded tool name and nothing else', () => {
+    const line = { kind: 'tool', tool_name: 'mcp__platform__kb_search', at: AT };
+    expect(runActivitySchema.parse(line)).toEqual(line);
+    expect(runActivitySchema.safeParse({ ...line, tool_name: 'x'.repeat(64) }).success).toBe(true);
+    for (const hostile of ['x'.repeat(65), 'Read /etc/passwd', 'a\nb', '<b>', '']) {
+      expect(runActivitySchema.safeParse({ ...line, tool_name: hostile }).success).toBe(false);
+    }
+    // Strict: the entry's text or a tool's input has no key to arrive under.
+    expect(runActivitySchema.safeParse({ ...line, input: { path: '/x' } }).success).toBe(false);
+    expect(runActivitySchema.safeParse({ ...line, text: 'hello' }).success).toBe(false);
+    expect(runActivitySchema.safeParse({ ...line, kind: 'typing' }).success).toBe(false);
+  });
+
+  it('publishes a seat as the server or a named worker, strictly', () => {
+    expect(
+      runSeatSchema.safeParse({ kind: 'server', worker_id: null, worker_name: null }).success,
+    ).toBe(true);
+    expect(
+      runSeatSchema.safeParse({ kind: 'worker', worker_id: uuid(9), worker_name: 'laptop' })
+        .success,
+    ).toBe(true);
+    expect(
+      runSeatSchema.safeParse({ kind: 'laptop', worker_id: null, worker_name: null }).success,
+    ).toBe(false);
+    expect(runSeatSchema.safeParse({ kind: 'server', worker_id: null }).success).toBe(false);
+  });
+
+  it('holds the stage graph to its edge kinds and to slugs', () => {
+    const graph = {
+      template: 'feature',
+      nodes: [
+        {
+          id: 'ci_gate',
+          kind: 'gate',
+          role: null,
+          enabled: true,
+          advisory: false,
+          model: null,
+          effort: null,
+          loop: 'ci_fix',
+          loop_limit: 3,
+        },
+      ],
+      edges: [
+        { from: 'ci_gate', to: 'implementation', kind: 'fail', on_event: null, loop: 'ci_fix' },
+        {
+          from: 'ready_for_merge',
+          to: 'merged_gate',
+          kind: 'on',
+          on_event: 'mr.merged',
+          loop: null,
+        },
+      ],
+    };
+    expect(pipelineGraphSchema.parse(graph)).toEqual(graph);
+    expect(projectPipelinesResponseSchema.parse({ items: [graph] })).toBeTruthy();
+    const edge = graph.edges[0];
+    expect(
+      pipelineGraphSchema.safeParse({ ...graph, edges: [{ ...edge, kind: 'jump' }] }).success,
+    ).toBe(false);
+    expect(
+      pipelineGraphSchema.safeParse({ ...graph, edges: [{ ...edge, on_event: 'not.an.event' }] })
+        .success,
+    ).toBe(false);
+    expect(pipelineGraphSchema.safeParse({ ...graph, template: 'Feature Flow' }).success).toBe(
+      false,
+    );
+    expect(projectPipelineQuerySchema.safeParse({ template: 'feature' }).success).toBe(true);
+    expect(projectPipelineQuerySchema.safeParse({ stage: 'qa' }).success).toBe(false);
   });
 });
 

@@ -25,7 +25,14 @@ describeWorkerStoreContract({
       seedRun: async (workerId, status) => {
         runs += 1;
         const id = `run-${runs}`;
-        store.seedRun({ id, workerId, status, leaseExpiresAt: null });
+        store.seedRun({
+          id,
+          workerId,
+          taskId: `task-of-${id}`,
+          projectId: 'project-of-every-run',
+          status,
+          leaseExpiresAt: null,
+        });
         return id;
       },
       leaseExpired: async (runId) => store.runs.get(runId)?.leaseExpiresAt != null,

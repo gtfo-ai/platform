@@ -110,6 +110,21 @@ export interface WorkerListRow {
   readonly pausedUntil: Date | null;
   readonly pausedReason: string | null;
   readonly concurrency: number;
+  /**
+   * The live runs (`created`/`starting`/`running`) this worker **holds**, oldest first (S-23.15):
+   * `runs.worker_id` names it — the column revocation expires — or the run's claimed offer does
+   * (`run_offers.worker_id`, which wins when both are set). The agents list's seat
+   * (`live-view-queries.ts`'s `seatOf`) reads the same two columns the same way, so a run sits at
+   * a worker's seat there exactly when it is in that worker's `running` here.
+   */
+  readonly running: readonly WorkerRunRef[];
+}
+
+/** One live run a worker holds, as `GET /api/workers` lists it (S-23.15). */
+export interface WorkerRunRef {
+  readonly runId: string;
+  readonly taskId: string;
+  readonly projectId: string;
 }
 
 export type RevokeWorkerResult =
@@ -241,7 +256,25 @@ type WorkerRowSql = {
   paused_until: Date | null;
   paused_reason: string | null;
   concurrency: number;
+  running: { run_id: string; task_id: string; project_id: string }[];
 };
+
+/**
+ * The live runs a worker holds (S-23.15), as a `running` column of a `workers w` select: its claim
+ * (`runs.worker_id`, which the claim writes and a release clears) or its claimed offer's
+ * `run_offers.worker_id` — the same reading the agents list's seat makes (`seatOf`). A released
+ * run (offer back to `open`, `runs.worker_id` null) is no longer the worker's.
+ */
+const RUNNING_OF_WORKER = sql`coalesce((
+    select json_agg(json_build_object('run_id', r.id, 'task_id', r.task_id,
+                                      'project_id', r.project_id) order by r.created_at, r.id)
+      from runs r
+      left join run_offers o on o.run_id = r.id
+     where r.status in ('created', 'starting', 'running')
+       and coalesce(o.worker_id, r.worker_id) = w.id
+       and (r.worker_id is not null
+            or (o.state = 'claimed' and o.claimant_kind = 'worker' and o.worker_id is not null))
+  ), '[]'::json) as running`;
 
 const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
   id: row.id,
@@ -258,6 +291,11 @@ const toWorkerListRow = (row: WorkerRowSql): WorkerListRow => ({
   pausedUntil: at(row.paused_until),
   pausedReason: row.paused_reason,
   concurrency: row.concurrency,
+  running: row.running.map((run) => ({
+    runId: run.run_id,
+    taskId: run.task_id,
+    projectId: run.project_id,
+  })),
 });
 
 export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
@@ -400,7 +438,7 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
 
   async listWorkers(userId) {
     const { rows } = await database.execute<WorkerRowSql>(sql`
-      select w.*, u.email, u.name as user_name
+      select w.*, u.email, u.name as user_name, ${RUNNING_OF_WORKER}
         from workers w join users u on u.id = w.user_id
        where ${userId === null ? sql`true` : sql`w.user_id = ${userId}`}
        order by w.created_at desc, w.id desc`);
@@ -463,7 +501,7 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
       return null;
     }
     const { rows } = await database.execute<WorkerRowSql>(sql`
-      select w.*, u.email, u.name as user_name
+      select w.*, u.email, u.name as user_name, ${RUNNING_OF_WORKER}
         from workers w join users u on u.id = w.user_id
        where w.id = ${workerId}`);
     const row = rows[0];

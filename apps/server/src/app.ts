@@ -122,6 +122,7 @@ import {
   isCommunicationAccount,
   replaceOrganisationSettings,
 } from './queries/org-settings-queries.js';
+import { databasePipelineGraphReaders } from './queries/pipeline-graph-queries.js';
 import {
   findArtifactBody,
   findArtifactProjectId,
@@ -159,6 +160,7 @@ import { registerKbRoutes } from './routes/kb.js';
 import { registerOnboardingRoutes } from './routes/onboarding.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
+import { registerPipelineGraphRoutes } from './routes/pipeline-graph.js';
 import { registerProjectBindingRoutes } from './routes/project-bindings.js';
 import { registerProjectConfigRoutes } from './routes/project-config.js';
 import { registerProjectExecutionRoutes } from './routes/project-execution.js';
@@ -976,6 +978,15 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       },
       // TD-012 step 2 over the export's event payloads, which no route had published before.
       redactor: redactionAdapters.patternRedactor(),
+    });
+    // S-23.15: the compiled stage graph of a task (its frozen pipeline) and of a project's templates.
+    await registerPipelineGraphRoutes(app, {
+      queries: {
+        taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        ...databasePipelineGraphReaders(options.database, options.projectSettings),
+      },
     });
     await registerAskRoutes(app, {
       queries: {

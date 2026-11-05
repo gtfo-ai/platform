@@ -76,9 +76,11 @@ import {
   patchOrgSettingsRequestSchema,
   patchOrgSettingsResponseSchema,
   pauseTaskRequestSchema,
+  pipelineGraphSchema,
   projectAuditResponseSchema,
   projectBindingsResponseSchema,
   projectExecutionResponseSchema,
+  projectPipelinesResponseSchema,
   projectRecordSchema,
   projectRepositoryResponseSchema,
   projectsResponseSchema,
@@ -297,6 +299,19 @@ export interface Endpoints {
     query?: { readonly state?: string; readonly limit?: number; readonly cursor?: string },
   ) => Promise<z.output<typeof tasksResponseSchema>>;
   readonly task: (taskId: string) => Promise<z.output<typeof taskDetailResponseSchema>>;
+  /**
+   * `GET /api/tasks/:id/pipeline` (S-23.15): the task's compiled stage graph — its frozen pipeline,
+   * the nodes and the transitions the interpreter would take. The flow canvas (S-23.5) draws it.
+   */
+  readonly taskPipeline: (taskId: string) => Promise<z.output<typeof pipelineGraphSchema>>;
+  /**
+   * `GET /api/projects/:id/pipeline[?template=]` (S-23.15): one template's graph, or every enabled
+   * template's, as a task started now would run it.
+   */
+  readonly projectPipelines: (
+    projectId: string,
+    template?: string,
+  ) => Promise<z.output<typeof projectPipelinesResponseSchema>>;
   /**
    * One artifact's body (WP-52). It is model output — rendered as React text nodes, never as
    * markup and never as a link (BD-022, `ui/untrusted.tsx`).
@@ -760,6 +775,13 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       }),
 
     task: (taskId) => client.get(`/api/tasks/${seg(taskId)}`, { schema: taskDetailResponseSchema }),
+    taskPipeline: (taskId) =>
+      client.get(`/api/tasks/${seg(taskId)}/pipeline`, { schema: pipelineGraphSchema }),
+    projectPipelines: (projectId, template) =>
+      client.get(`/api/projects/${seg(projectId)}/pipeline`, {
+        schema: projectPipelinesResponseSchema,
+        query: template === undefined ? {} : { template },
+      }),
     artifact: (artifactId) =>
       client.get(`/api/artifacts/${seg(artifactId)}`, { schema: artifactBodyResponseSchema }),
     taskAsks: (taskId) =>

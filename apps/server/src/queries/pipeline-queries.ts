@@ -120,6 +120,7 @@ import {
 import { HttpError } from '../errors.js';
 import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
+import { latestActivityFor, seatsFor } from './live-view-queries.js';
 
 const {
   approvals,
@@ -1748,6 +1749,10 @@ export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = [
  * `project_id`, `task_id`, `role` and `last_output_at` are on the run row already and the DTO
  * repeats them beside it — that is technical/08's shape and it is kept, because the agents screen
  * groups by project without unpacking the record.
+ *
+ * `seat` and `activity` (S-23.15) are `live-view-queries.ts`'s: who holds the run (`null` while its
+ * offer is open — the queue is these runs) and the kind of its newest transcript entry, never the
+ * entry's text. One query each for the whole list.
  */
 export const listRunningAgents = async (database: Database): Promise<AgentsResponse> => {
   const rows = await database
@@ -1757,9 +1762,11 @@ export const listRunningAgents = async (database: Database): Promise<AgentsRespo
     .where(notInArray(runs.status, [...TERMINAL_RUN_STATUSES]))
     .orderBy(desc(runs.createdAt));
   const ids = rows.map((row) => row.id);
-  const [usage, progress] = await Promise.all([
+  const [usage, progress, seats, activity] = await Promise.all([
     modelUsageFor(database, ids),
     latestProgressFor(database, ids),
+    seatsFor(database, ids),
+    latestActivityFor(database, ids),
   ]);
   return {
     items: rows.map((row) => {
@@ -1770,6 +1777,8 @@ export const listRunningAgents = async (database: Database): Promise<AgentsRespo
         task_id: run.task_id,
         role: run.role,
         last_output_at: run.last_output_at ?? null,
+        seat: seats.get(row.id) ?? null,
+        activity: activity.get(row.id) ?? null,
       };
     }),
   };

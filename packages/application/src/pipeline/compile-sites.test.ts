@@ -128,6 +128,10 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
     sites: 2,
     how: "the lifecycle handler (WP-177), in the handler's own transaction, and the entry move the `stage.execute` job performs before the plan (WP-184), off the row that job's first transaction loaded: `stored.pipelineDial` in both — so the `approved` moment is the last review stage the dial left enabled, and an entry the dial disabled moves nothing",
   },
+  'apps/server/src/queries/pipeline-graph.ts': {
+    sites: 2,
+    how: "the stage-graph read (S-23.15): a task's graph off the row's `tasks.pipeline_dial` and `tasks.qa_stage`, parsed as the read side parses them; and a project's template preview, which has no task and compiles with `pipelineDialFor(settings)` and the binding's `qa` slot — the facts a task started now would freeze (`UNFROZEN_BY_DESIGN`)",
+  },
   'apps/server/src/queries/pipeline-queries.ts': {
     sites: 1,
     how: 'the read side: `tasks.pipeline_dial` off the same row the page reads, parsed through `taskPipelineDialSchema` (a row that fails offers no hand-back stage)',
@@ -159,6 +163,16 @@ const FROZEN_COPY = [/^(?:stored|current)\.pipelineDial$/, /^dial === null \? nu
  * same column off the Drizzle row the page reads (`apps/server/src/queries/pipeline-queries.ts`).
  */
 const FROZEN_QA_STAGE = [/^(?:stored|current)\.qaStage$/, /^task\.qaStage$/];
+
+/**
+ * The calls that are **not** a task's compile and so have no frozen copy to read, each with why.
+ * Exact call text, both directions asserted below: an entry that matches no call fails, so a
+ * listed site cannot change its arguments without a reviewer reading this again.
+ */
+const UNFROZEN_BY_DESIGN: Readonly<Record<string, string>> = {
+  'apps/server/src/queries/pipeline-graph.ts: compilePipeline(id, template, dial, qaStage)':
+    "S-23.15's project template preview (`GET /api/projects/:id/pipeline`): no task exists, so the read compiles the project's template with the dial and `qa_stage` a task started now would freeze, outside any transaction, and moves nothing",
+};
 
 const sources = (): string[] => censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] });
 
@@ -238,9 +252,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2323 ms (median 1927 ms); 2× it, 15 s floor.
-  it('counts thirty-six — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a — and states how each resolves the dial', () => {
+  it('counts thirty-eight — fifteen when WP-28 measured it, twenty-four before WP-79, twenty-five before WP-108, twenty-six before WP-138, twenty-seven before backlog 483, twenty-eight before backlog 486, twenty-nine before WP-152, thirty-one before WP-177, thirty-three before WP-178, thirty-four before WP-184, thirty-five before WP-275a, thirty-six before S-23.15 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(36);
+    expect(total).toBe(38);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }
@@ -248,7 +262,10 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
 
   // WP-249: slowest of 10 green CI runs 2184 ms (median 2008 ms); 2× it, 15 s floor.
   it('passes every site the task’s frozen copy of the dial and of qa_stage, so none asks the settings port', () => {
-    expect(unfrozenCalls(census())).toEqual([]);
+    const unfrozen = unfrozenCalls(census());
+    expect(unfrozen.filter((call) => !Object.hasOwn(UNFROZEN_BY_DESIGN, call))).toEqual([]);
+    // Both directions: every admitted site still exists exactly as written.
+    expect(Object.keys(UNFROZEN_BY_DESIGN).filter((call) => !unfrozen.includes(call))).toEqual([]);
   }, 15_000);
 
   it('sees a call after a `//` inside a string, and drops a trailing comment from its arguments (backlog 269)', () => {

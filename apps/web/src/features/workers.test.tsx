@@ -50,6 +50,7 @@ const worker = (overrides: Partial<WorkerSummary> = {}): WorkerSummary => ({
   paused_until: null,
   paused_reason: null,
   concurrency: 1,
+  running: [],
   ...overrides,
 });
 

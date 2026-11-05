@@ -5,7 +5,8 @@
  * (`test/contract/support/worker-store.ts`, run against it by the contract tier). **Divergences,
  * stated:** no transaction and no row lock — a JavaScript turn is atomic, so two polls cannot
  * interleave inside one call here, which is what the lock buys in PostgreSQL; `runs` is a map the
- * test seeds (`seedRun`) rather than a table, and the users' ability to act is a set the test
+ * test seeds (`seedRun`) rather than a table — a seeded run is held through its `workerId` alone, with no offer, and
+ * `listWorkers`' `running` lists it in seed order (PostgreSQL: by `created_at`) — and the users' ability to act is a set the test
  * flips (`setUserMayAct`, `banUser`) rather than `users.status`/`banned`, judged by the same
  * `userMayAct` the session hook uses.
  */
@@ -61,6 +62,8 @@ export interface MemoryUser {
 export interface MemoryRun {
   readonly id: string;
   readonly workerId: string;
+  readonly taskId: string;
+  readonly projectId: string;
   /** The contract's own vocabulary, so a seed the database would refuse does not type-check. */
   status: RunStatus;
   leaseExpiresAt: Date | null;
@@ -153,6 +156,9 @@ export const createMemoryWorkerStore = (
       pausedUntil: worker.pausedUntil,
       pausedReason: worker.pausedUntil === null ? null : 'usage_limited',
       concurrency: 1,
+      running: [...runs.values()]
+        .filter((run) => run.workerId === worker.id && LIVE.has(run.status))
+        .map((run) => ({ runId: run.id, taskId: run.taskId, projectId: run.projectId })),
     };
   };
 

@@ -161,6 +161,8 @@ export * from './pipeline/remote-runs.js';
 // WP-179: the review conversation's duties and its markers (the contract tier drives them over the fake).
 export * from './pipeline/review-conversation.js';
 export * from './pipeline/review-notes.js';
+// S-23.15: the switch the project pipeline read asks (`apps/server/src/queries/pipeline-graph-queries.ts`).
+export { resolveReviewOnlySettings } from './pipeline/review-only.js';
 export * from './pipeline/run-commands.js';
 export * from './pipeline/run-package.js';
 export * from './pipeline/run-redaction.js';
@@ -182,6 +184,8 @@ export * from './pipeline/store.js';
 export * from './pipeline/task-conflict.js';
 export * from './pipeline/ticket-claim.js';
 export * from './pipeline/ticket-lifecycle.js';
+// S-23.15: the switch the project pipeline read asks, beside review-only's.
+export { resolveTicketLintSettings } from './pipeline/ticket-lint.js';
 export * from './pipeline/ticket-poll.js';
 export * from './pipeline/ticket-snapshot.js';
 export * from './pipeline/transitions.js';

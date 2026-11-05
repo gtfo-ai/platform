@@ -261,6 +261,30 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       expect(await world.store.listWorkers(user)).toEqual([]);
     });
 
+    it('lists the live runs each worker holds, oldest first, and not an ended one or another worker’s (S-23.15)', async () => {
+      const world = await harness.create();
+      const owner = await world.addUser('holds@example.test');
+      const other = await world.addUser('holds-other@example.test');
+      const worker = await registerWorker(world, owner);
+      const otherWorker = await registerWorker(world, other);
+      // Nothing seeded yet: the list is empty, so the assertion below is about the seeds.
+      expect((await world.store.listWorkers(owner))[0]?.running).toEqual([]);
+      const live = await world.seedRun(worker, 'running');
+      await world.seedRun(worker, 'completed');
+      const starting = await world.seedRun(worker, 'starting');
+      const othersRun = await world.seedRun(otherWorker, 'running');
+
+      const [mine] = await world.store.listWorkers(owner);
+      expect(mine?.running.map((run) => run.runId)).toEqual([live, starting]);
+      expect(mine?.running.every((run) => run.taskId.length > 0 && run.projectId.length > 0)).toBe(
+        true,
+      );
+      const all = await world.store.listWorkers(null);
+      expect(all.find((row) => row.id === otherWorker)?.running.map((run) => run.runId)).toEqual([
+        othersRun,
+      ]);
+    });
+
     it('revokes: the live runs’ leases expire and nothing else, once; others’ workers read as absent', async () => {
       const world = await harness.create();
       const owner = await world.addUser('owner@example.test');

@@ -85,6 +85,11 @@ export const toWireWorker = (row: WorkerListRow): WorkerSummary => ({
   paused_until: isoOrNull(row.pausedUntil),
   paused_reason: row.pausedReason === null ? null : workerPauseReasonSchema.parse(row.pausedReason),
   concurrency: row.concurrency,
+  running: row.running.map((run) => ({
+    run_id: run.runId,
+    task_id: run.taskId,
+    project_id: run.projectId,
+  })),
 });
 
 const deviceCodeNotFound = (): HttpError =>
@@ -219,7 +224,7 @@ export const registerWorkerRoutes = async (
       schema: {
         summary: 'Registered workers: your own, or every one for an administrator',
         description:
-          'Machine, user, created and last seen, protocol, image digests, state, paused until. `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280).',
+          'Machine, user, created and last seen, protocol, image digests, state, paused until, and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280).',
         tags: ['workers'],
         response: { 200: workersResponseSchema },
       },

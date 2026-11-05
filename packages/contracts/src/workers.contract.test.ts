@@ -45,6 +45,7 @@ const summary = {
   paused_until: null,
   paused_reason: null,
   concurrency: 1,
+  running: [],
 };
 
 describe('the device flow’s machine half (TD-031 §10c)', () => {
@@ -164,6 +165,22 @@ describe('the people’s half', () => {
     expect(workerSummarySchema.safeParse({ ...summary, state: 'paused' }).success).toBe(false);
     expect(workersResponseSchema.safeParse({ items: [summary], scope: 'own' }).success).toBe(true);
     expect(workersResponseSchema.safeParse({ items: [], scope: 'everyone' }).success).toBe(false);
+  });
+
+  it('lists a worker’s live runs by id only, strictly (S-23.15)', () => {
+    const held = { run_id: ID, task_id: ID, project_id: ID };
+    expect(workerSummarySchema.safeParse({ ...summary, running: [held] }).success).toBe(true);
+    // Strict: a run's status (or anything else) is the run read's, not this list's.
+    expect(
+      workerSummarySchema.safeParse({ ...summary, running: [{ ...held, status: 'running' }] })
+        .success,
+    ).toBe(false);
+    expect(
+      workerSummarySchema.safeParse({ ...summary, running: [{ ...held, run_id: 'run-1' }] })
+        .success,
+    ).toBe(false);
+    const { running: _running, ...withoutRunning } = summary;
+    expect(workerSummarySchema.safeParse(withoutRunning).success).toBe(false);
   });
 
   it('revokes by id and answers what it did', () => {

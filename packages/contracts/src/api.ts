@@ -2543,6 +2543,52 @@ export const orgModelsResponseSchema = z.strictObject({
   models: z.array(z.strictObject({ model_id: nonEmptyStringSchema.max(128) })),
 });
 
+/**
+ * Who holds a run (S-23.15, TD-033 decision 8 (b)): the server's own claimant or a named worker,
+ * read off the run's offer (`run_offers.claimant_kind`, migration 0094) and the worker it names
+ * (`run_offers.worker_id`, else `runs.worker_id`, migration 0096). `null` on the agents item is
+ * *not claimed yet* — an open offer, or a run with no offer row. `worker_name` is the machine's
+ * name its owner chose: untrusted text (BD-022), rendered as text.
+ */
+export const runSeatSchema = z.strictObject({
+  kind: z.enum(['server', 'worker']),
+  worker_id: idSchema.nullable(),
+  worker_name: nonEmptyStringSchema.max(200).nullable(),
+});
+export type RunSeat = z.infer<typeof runSeatSchema>;
+
+/** The longest tool name {@link runActivitySchema} publishes; a longer one is published as `other`. */
+export const RUN_ACTIVITY_TOOL_NAME_MAX_CHARS = 64;
+
+/**
+ * A tool name as the activity line publishes it: an identifier, never free text. A name that does
+ * not match is replaced by the literal `other` at the read (`activityOfEntry`), so this schema is
+ * the second of two refusals, not the only one.
+ */
+export const runActivityToolNameSchema = z
+  .string()
+  .regex(
+    new RegExp(`^[A-Za-z0-9_:.-]{1,${RUN_ACTIVITY_TOOL_NAME_MAX_CHARS}}$`),
+    'expected a bounded tool identifier',
+  );
+
+/**
+ * What a live run is doing now (S-23.15, TD-033 decision 6), from its **newest** transcript entry:
+ * a tool call (`tool`, with the tool's name), a thinking block, assistant text, a `PreToolUse`
+ * hook that asked a person (`waiting_permission`), a progress line, or anything else (`other`).
+ *
+ * **It never carries what the entry said** — no tool input, no text, no arguments, no progress
+ * summary: the agents list is `run.read` (viewer), and the transcript itself is `transcript.read`.
+ * The kind and the bounded tool name are all a seat's pose needs.
+ */
+export const runActivitySchema = z.strictObject({
+  kind: z.enum(['tool', 'thinking', 'text', 'waiting_permission', 'progress', 'other']),
+  tool_name: runActivityToolNameSchema.nullable(),
+  /** The entry's own `created_at`. */
+  at: isoDateTimeSchema,
+});
+export type RunActivity = z.infer<typeof runActivitySchema>;
+
 export const agentsResponseSchema = z.strictObject({
   items: z.array(
     z.strictObject({
@@ -2551,8 +2597,64 @@ export const agentsResponseSchema = z.strictObject({
       task_id: idSchema,
       role: agentRoleSchema,
       last_output_at: isoDateTimeSchema.nullable(),
+      /** `null`: not claimed yet (an open offer, or no offer row). */
+      seat: runSeatSchema.nullable(),
+      /** `null`: the run has written no transcript entry yet. */
+      activity: runActivitySchema.nullable(),
     }),
   ),
+});
+
+// ── The compiled stage graph (S-23.15, TD-033 decision 8 (a)) ────────────────
+
+/**
+ * One stage of a compiled pipeline, as the flow canvas draws it. `model`/`effort` are an agent
+ * stage's (null for every other kind); `loop` is the bounded loop a return *out of* this stage
+ * spends, when the graph has such an edge, and `loop_limit` its ceiling.
+ */
+export const pipelineGraphNodeSchema = z.strictObject({
+  id: stageIdSchema,
+  kind: z.enum(['system', 'agent', 'gate', 'human']),
+  role: agentRoleSchema.nullable(),
+  enabled: z.boolean(),
+  advisory: z.boolean(),
+  model: nonEmptyStringSchema.max(128).nullable(),
+  effort: effortSchema.nullable(),
+  loop: slugSchema.nullable(),
+  loop_limit: z.int().nonnegative().nullable(),
+});
+
+/**
+ * One transition the interpreter would take: `next` (a system stage completing), `approve` and
+ * `return` (an agent's verdicts), `pass`/`fail` (a gate), `on` (a human stage's event, named in
+ * `on_event`). `loop` is set exactly when the edge is a return — it goes backwards and spends that
+ * bounded loop.
+ */
+export const pipelineGraphEdgeSchema = z.strictObject({
+  from: stageIdSchema,
+  to: stageIdSchema,
+  kind: z.enum(['next', 'approve', 'return', 'pass', 'fail', 'on']),
+  on_event: domainEventTypeSchema.nullable(),
+  loop: slugSchema.nullable(),
+});
+
+/** `GET /api/tasks/:task_id/pipeline`, and one entry of the project read. */
+export const pipelineGraphSchema = z.strictObject({
+  template: templateIdSchema,
+  nodes: z.array(pipelineGraphNodeSchema),
+  edges: z.array(pipelineGraphEdgeSchema),
+});
+export type PipelineGraph = z.infer<typeof pipelineGraphSchema>;
+export type PipelineGraphNode = z.infer<typeof pipelineGraphNodeSchema>;
+export type PipelineGraphEdge = z.infer<typeof pipelineGraphEdgeSchema>;
+
+/** `GET /api/projects/:project_id/pipeline[?template=<name>]`: one graph, or every enabled one. */
+export const projectPipelinesResponseSchema = z.strictObject({
+  items: z.array(pipelineGraphSchema),
+});
+
+export const projectPipelineQuerySchema = z.strictObject({
+  template: templateIdSchema.optional(),
 });
 
 // ── Inbox, budgets, knowledge ────────────────────────────────────────────────

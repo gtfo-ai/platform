@@ -243,7 +243,7 @@ export const registerOrgRoutes = async (
       schema: {
         summary: 'Every agent that is still running',
         description:
-          'The runs that have not reached an ending, newest first (technical/08 § "Agents"). Unpaginated: the list is bounded by how many runs a deployment executes at once, not by how long it has been up. `last_output_at` is null until the run has produced something.',
+          'The runs that have not reached an ending, newest first (technical/08 § "Agents"). Unpaginated: the list is bounded by how many runs a deployment executes at once, not by how long it has been up. `last_output_at` is null until the run has produced something. `seat` is who holds the run — the server’s claimant or a named worker — and `null` while its offer is open; `activity` is the kind of its newest transcript entry with a bounded tool name, never the entry’s text (S-23.15).',
         tags: ['org'],
         response: { 200: agentsResponseSchema },
       },

@@ -35,6 +35,10 @@ const ALICE = '00000000-0000-4000-8000-0000000280a1';
 const BOB = '00000000-0000-4000-8000-0000000280b0';
 const ADMIN = '00000000-0000-4000-8000-0000000280ad';
 const T0 = Date.UTC(2026, 10, 4, 12, 0, 0);
+const TASK = '00000000-0000-4000-8000-0000002315a1';
+const PROJECT = '00000000-0000-4000-8000-0000002315b1';
+const RUN_LIVE = '00000000-0000-4000-8000-0000002315c1';
+const RUN_DONE = '00000000-0000-4000-8000-0000002315c2';
 
 interface World {
   actor: { userId: string; role: UserRole } | null;
@@ -374,18 +378,67 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     );
   });
 
-  it('revokes: the credential stops authenticating and the live runs’ leases expire, once', async () => {
+  it('lists the live runs each visible worker holds, by id only (S-23.15)', async () => {
     const { app: instance, store, world } = await build();
     const alice = await register(instance, world, ALICE);
+    const bob = await register(instance, world, BOB);
     store.seedRun({
-      id: 'run-live',
+      id: RUN_LIVE,
       workerId: alice.workerId,
+      taskId: TASK,
+      projectId: PROJECT,
       status: 'running',
       leaseExpiresAt: null,
     });
     store.seedRun({
-      id: 'run-done',
+      id: RUN_DONE,
       workerId: alice.workerId,
+      taskId: TASK,
+      projectId: PROJECT,
+      status: 'completed',
+      leaseExpiresAt: null,
+    });
+    const bobsRun = '00000000-0000-4000-8000-0000002315c3';
+    store.seedRun({
+      id: bobsRun,
+      workerId: bob.workerId,
+      taskId: TASK,
+      projectId: PROJECT,
+      status: 'starting',
+      leaseExpiresAt: null,
+    });
+
+    world.actor = { userId: ALICE, role: 'member' };
+    const own = (await instance.inject({ method: 'GET', url: '/api/workers' })).json();
+    expect(own.items).toHaveLength(1);
+    expect(own.items[0].running).toEqual([
+      { run_id: RUN_LIVE, task_id: TASK, project_id: PROJECT },
+    ]);
+    // Bob's run is not in a member's answer about her own workers (scope `own` unchanged).
+    expect(JSON.stringify(own)).not.toContain(bobsRun);
+
+    world.actor = { userId: ADMIN, role: 'admin' };
+    const all = (await instance.inject({ method: 'GET', url: '/api/workers' })).json();
+    const bobs = all.items.find((item: { id: string }) => item.id === bob.workerId);
+    expect(bobs.running).toEqual([{ run_id: bobsRun, task_id: TASK, project_id: PROJECT }]);
+  });
+
+  it('revokes: the credential stops authenticating and the live runs’ leases expire, once', async () => {
+    const { app: instance, store, world } = await build();
+    const alice = await register(instance, world, ALICE);
+    store.seedRun({
+      id: RUN_LIVE,
+      workerId: alice.workerId,
+      taskId: TASK,
+      projectId: PROJECT,
+      status: 'running',
+      leaseExpiresAt: null,
+    });
+    store.seedRun({
+      id: RUN_DONE,
+      workerId: alice.workerId,
+      taskId: TASK,
+      projectId: PROJECT,
       status: 'completed',
       leaseExpiresAt: null,
     });
@@ -401,8 +454,8 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
       performed: true,
       expired_runs: 1,
     });
-    expect(store.runs.get('run-live')?.leaseExpiresAt).not.toBeNull();
-    expect(store.runs.get('run-done')?.leaseExpiresAt).toBeNull();
+    expect(store.runs.get(RUN_LIVE)?.leaseExpiresAt).not.toBeNull();
+    expect(store.runs.get(RUN_DONE)?.leaseExpiresAt).toBeNull();
     expect(await authenticateWorkerCredential(store, alice.credential)).toBeNull();
     expect(store.audit.filter((entry) => entry.action === 'worker.revoke')).toHaveLength(1);
 
@@ -434,14 +487,16 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     const { app: instance, store, world } = await build();
     const alice = await register(instance, world, ALICE);
     store.seedRun({
-      id: 'run-live',
+      id: RUN_LIVE,
       workerId: alice.workerId,
+      taskId: TASK,
+      projectId: PROJECT,
       status: 'starting',
       leaseExpiresAt: null,
     });
     store.setUserMayAct(ALICE, false);
     expect(await authenticateWorkerCredential(store, alice.credential)).toBeNull();
     expect(await store.expireUserWorkerLeases(ALICE)).toBe(1);
-    expect(store.runs.get('run-live')?.leaseExpiresAt).not.toBeNull();
+    expect(store.runs.get(RUN_LIVE)?.leaseExpiresAt).not.toBeNull();
   });
 });

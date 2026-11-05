@@ -90,6 +90,11 @@ export const workerSummarySchema = z.strictObject({
   paused_until: isoDateTimeSchema.nullable(),
   paused_reason: workerPauseReasonSchema.nullable(),
   concurrency: z.int().positive().max(64),
+  /**
+   * The live runs (`created`, `starting`, `running`) this worker holds (S-23.15): its claim of the
+   * run's offer, or `runs.worker_id`. Ids only — the run itself is `GET /api/runs/:id`.
+   */
+  running: z.array(z.strictObject({ run_id: idSchema, task_id: idSchema, project_id: idSchema })),
 });
 export type WorkerSummary = z.infer<typeof workerSummarySchema>;
 
