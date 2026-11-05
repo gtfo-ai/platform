@@ -16,8 +16,8 @@
  * whichever project task reads are in the query cache (the board's, Home's escalated tasks, the
  * `+` menu's), and the actions — New project (an administrator's, as in the `+` menu), Start a
  * ticket in this project (when the tasks read says the caller may), Open inbox, and the shortcuts
- * sheet. There is no theme action: the application has one theme, dark (TD-033 as amended). A project's name and key, a ticket's key and its title are somebody's
- * text (BD-022): they are matched as strings and rendered as text nodes (`UntrustedText`), and an
+ * sheet. There is no theme action: the application has one theme, dark (TD-033 as amended). A
+ * project's name and key, a ticket's key and its title are somebody's text (BD-022): they are matched as strings and rendered as text nodes (`UntrustedText`), and an
  * option's `id` is its position, never its text.
  */
 import type { ProjectSummary, TaskListItem, TasksResponse } from '@platform/contracts';

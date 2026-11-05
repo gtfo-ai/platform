@@ -220,7 +220,7 @@ export const setShortcutsEnabled = (enabled: boolean): void => {
       globalThis.localStorage?.setItem(SHORTCUTS_STORAGE_KEY, 'off');
     }
   } catch {
-    // The choice holds for this page, as the theme's does when storage is refused.
+    // Storage refused: the choice still holds for this page.
     unstoredChoice = enabled;
   }
   for (const listener of listeners) {

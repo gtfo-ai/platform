@@ -1529,7 +1529,7 @@ screen layouts and sources are in **research/19**. Slices reserve WP-300–WP-32
 
 | Slice | Title | Depends | Risk | Acceptance (one line; TD-033 and research/19 hold the detail) |
 |---|---|---|---|---|
-| **S-23.1** | Design foundations: tokens (dark default), Inter, Octicons, Base UI, the primitive kit | — | low | `contrast.test.ts` holds the 4.5:1 and 3:1 pairs; the avatar menu and a tooltip open under the production CSP; notices regenerated; bundle ≤ 300 kB gz |
+| **S-23.1** | Design foundations: tokens (dark default; one dark theme since S-23.17), Inter, Octicons, Base UI, the primitive kit | — | low | `contrast.test.ts` holds the 4.5:1 and 3:1 pairs; the avatar menu and a tooltip open under the production CSP; notices regenerated; bundle ≤ 300 kB gz |
 | **S-23.2** | Words and phase: `humanize.ts`, `activity.ts`, `PhaseTrack`, no spec references in UI text | S-23.1 | low | exhaustive records fail `typecheck` on a new state; activity derivation table-tested; the spec-reference census is green |
 | **S-23.3** | The mascot's office poses and props as sprite grids; `Bot` and `Seat` | S-23.1 | low | grids parse (inks, sizes); one pose per activity; reduced motion freezes on frame 1 |
 | **S-23.4** | The frame: top bar, org nav, `/projects`, the project layout route; screens lazy-loaded | S-23.1, S-23.2 | low | `NAV` = the user guide (census); no URL changes; `/projects` on the SPA allow-list; every screen but the frame and Home a lazy chunk |
@@ -1548,10 +1548,12 @@ screen layouts and sources are in **research/19**. Slices reserve WP-300–WP-32
 | **S-23.14** | Live domain events on the `org`, `project:<id>` and `task:<id>` topics, read back across instances | — | high (the stream's fan-out and who may see what) | frames carry ids and the type only; a process test shows an event appended by one instance reaching a stream held by another |
 | **S-23.15** | Reads for the live views: a run's seat and activity, a worker's runs, the compiled stage graph | — | low | projections refuse rather than invent; the client census lists the new routes; activity never carries tool input or text |
 | **S-23.16** | The realtime client never loses a topic added while its stream is being replaced | S-23.14 | low | a fake `EventSource` with a delayed `open`: topics added before open are sent once after it; a canary of the old eager POST fails |
+| **S-23.17** | One dark theme, dark only; the page darker than its cards (owner feedback) | S-23.1 | low | no light or system theme, no theme control, no `data-theme`; `contrast.test.ts` holds every pair on both the page and the card ground; `/settings/appearance` redirects to Session |
 
 **What shipped** (2026-11-05): every row above except S-23.12 — one LEDGER line each
 (`docs/technical/LEDGER.md`, from PR #10 on), S-23.9, S-23.11 and S-23.13 each split in two when they
-were cut, and S-23.16 added for a realtime-client race found reviewing S-23.5. The design language
+were cut, S-23.16 added for a realtime-client race found reviewing S-23.5, and S-23.17 for the owner's
+decision that there is one theme, **dark only**. The design language
 as built is technical/09 § "Visual design language (TD-033)"; the user guide was swept screen by
 screen as each row landed and once more at S-23.13b. What is still open is in
 `docs/technical/BACKLOG.md` under the 800-numbered findings.
