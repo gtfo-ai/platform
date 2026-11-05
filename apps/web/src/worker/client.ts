@@ -17,6 +17,7 @@ import type {
   WorkerLocalCancelResponse,
   WorkerLocalClaimScope,
   WorkerLocalCoreCheckResponse,
+  WorkerLocalErrorReportingTestResponse,
   WorkerLocalOffers,
   WorkerLocalState,
   WorkerLocalTakeResponse,
@@ -27,6 +28,7 @@ import {
   readClaimScope,
   readCoreCheck,
   readError,
+  readErrorReportingTest,
   readOffers,
   readState,
   readTake,
@@ -107,6 +109,11 @@ export interface LocalClient {
   signOut(): Promise<WorkerLocalState>;
   connectAgain(): Promise<WorkerLocalState>;
   retry(): Promise<WorkerLocalState>;
+  // The *Error reporting* setting (WP-295).
+  /** *Save* a DSN, or *Remove* it with `null`; answers the state (never the DSN). */
+  setErrorReporting(dsn: string | null): Promise<WorkerLocalState>;
+  /** *Send a test error*. */
+  testErrorReporting(): Promise<WorkerLocalErrorReportingTestResponse>;
 }
 
 export const createLocalClient = (
@@ -183,5 +190,7 @@ export const createLocalClient = (
     signOut: () => call('POST', 'claude/sign-out', readState),
     connectAgain: () => call('POST', 'connect-again', readState),
     retry: () => call('POST', 'retry', readState),
+    setErrorReporting: (dsn) => call('POST', 'error-reporting', readState, { body: { dsn } }),
+    testErrorReporting: () => call('POST', 'error-reporting/test', readErrorReportingTest),
   };
 };

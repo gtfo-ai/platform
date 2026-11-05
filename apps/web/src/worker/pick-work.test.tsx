@@ -87,6 +87,9 @@ const fakeClient = (initial: {
     signOut: vi.fn(notAsked),
     connectAgain: vi.fn(notAsked),
     retry: vi.fn(notAsked),
+    // The *Error reporting* setting (WP-295): never asked here.
+    setErrorReporting: vi.fn(notAsked),
+    testErrorReporting: vi.fn(notAsked),
   } satisfies LocalClient;
 };
 
@@ -293,6 +296,7 @@ describe('takeBlockedOf (WP-293)', () => {
       auth: 'none',
     },
     claim_blockers: [],
+    error_reporting: { source: null, host: null },
     server_time: '2026-11-05T10:00:00.000Z',
   };
   const now = Date.parse('2026-11-05T10:00:00.000Z');

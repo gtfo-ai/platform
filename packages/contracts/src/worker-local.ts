@@ -57,6 +57,9 @@ export const WORKER_LOCAL_PATHS = {
   claudeSignOut: 'claude/sign-out',
   connectAgain: 'connect-again',
   retry: 'retry',
+  // The *Error reporting* setting (WP-295, TD-023's 2026-11-05 amendment §3).
+  errorReporting: 'error-reporting',
+  errorReportingTest: 'error-reporting/test',
 } as const;
 
 /**
@@ -176,6 +179,19 @@ export const workerLocalSetupSchema = z.strictObject({
 });
 export type WorkerLocalSetup = z.infer<typeof workerLocalSetupSchema>;
 
+/**
+ * The *Error reporting* setting (WP-295, TD-023's 2026-11-05 amendment §3): where the DSN came from
+ * — `SENTRY_DSN(_FILE)` in the environment wins, else the page's `sentry-dsn` in `worker-state` —
+ * and the host events go to. **The DSN itself is never answered**: it carries the project's key.
+ */
+export const workerLocalErrorReportingSchema = z.strictObject({
+  /** `null`: off. `environment`: changed there, the page's actions answer `409`. */
+  source: workerLocalSourceSchema.nullable(),
+  /** The DSN's host (`o1.ingest.sentry.io`, `localhost:9000`), `null` while off. */
+  host: z.string().max(253).nullable(),
+});
+export type WorkerLocalErrorReporting = z.infer<typeof workerLocalErrorReportingSchema>;
+
 /** Where a run is on this machine. */
 export const workerLocalRunPhaseSchema = z.enum(['provisioning', 'running', 'finishing', 'ended']);
 
@@ -264,6 +280,8 @@ export const workerLocalStateSchema = z.strictObject({
    * the page's guard checks members and bound only). Empty: *Taking work*.
    */
   claim_blockers: z.array(workerClaimBlockerSchema).max(WORKER_CLAIM_BLOCKERS.length),
+  /** The *Error reporting* setting (WP-295). */
+  error_reporting: workerLocalErrorReportingSchema,
   server_time: isoDateTimeSchema,
 });
 export type WorkerLocalState = z.infer<typeof workerLocalStateSchema>;
@@ -358,3 +376,27 @@ export const workerLocalClaudeTokenRequestSchema = z.strictObject({
 export const workerLocalErrorSchema = z.strictObject({
   error: z.strictObject({ code: z.string().max(64), message: z.string().max(2_000) }),
 });
+
+/**
+ * `POST /api/local/error-reporting` `{ dsn }` (WP-295): *Save* a DSN, or *Remove* it with `null`.
+ * Validated by the worker (`https://<key>@<host>/<project id>`, `http:` only to loopback) — `422`
+ * otherwise, never echoing the value — and answered with the state.
+ */
+export const workerLocalErrorReportingRequestSchema = z.strictObject({
+  dsn: z.string().min(1).max(2_048).nullable(),
+});
+
+/** `POST /api/local/error-reporting/test` takes no field: *Send a test error*. */
+export const workerLocalErrorReportingTestRequestSchema = z.strictObject({});
+
+/**
+ * `POST /api/local/error-reporting/test` → the test event's id (`null` when the SDK made none) and
+ * whether the sending finished within the worker's bound — not whether Sentry stored it.
+ */
+export const workerLocalErrorReportingTestResponseSchema = z.strictObject({
+  event_id: z.string().max(64).nullable(),
+  delivered: z.boolean(),
+});
+export type WorkerLocalErrorReportingTestResponse = z.infer<
+  typeof workerLocalErrorReportingTestResponseSchema
+>;

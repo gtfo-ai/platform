@@ -695,17 +695,31 @@ describe('compose.yml gives the app service the environment the server reads (WP
     expect(loaded.metricsUsername).toBe('metrics');
   });
 
-  it('does not reintroduce the two variables this build does not read', () => {
-    // PROGRESS backlog 54 carried both names as evidence and neither is read by anything here
-    // (rule 39: a wrong clause attached to a true finding). Adding either to `.env.example` would
-    // now put it in the container, which is why the guard is here rather than in prose.
+  it('does not reintroduce the variable this build does not read', () => {
+    // PROGRESS backlog 54 carried two names as evidence and neither was read by anything here
+    // (rule 39: a wrong clause attached to a true finding). Adding the unread one to `.env.example`
+    // would put it in the container, which is why the guard is here rather than in prose.
     const reads = namesServerReads();
     const delivered = Object.keys(appEnvironment(projectWith(STOCK_ENV)));
-    for (const name of ['OTEL_EXPORTER_OTLP_ENDPOINT', 'SENTRY_DSN']) {
+    for (const name of ['OTEL_EXPORTER_OTLP_ENDPOINT']) {
       expect([...reads]).not.toContain(name);
       expect(delivered).not.toContain(name);
       expect(STOCK_ENV).not.toContain(name);
     }
+  });
+
+  it('reads and delivers SENTRY_DSN since WP-295, the other name backlog 54 carried', () => {
+    // TD-023's 2026-11-05 amendment built it: the server reads it (and its `_FILE`), the stock file
+    // declares both empty — reporting off — and the container receives what an operator writes.
+    const reads = namesServerReads();
+    expect([...reads]).toEqual(expect.arrayContaining(['SENTRY_DSN', 'SENTRY_DSN_FILE']));
+    expect(STOCK_ENV).toMatch(/^SENTRY_DSN=$/m);
+    expect(STOCK_ENV).toMatch(/^SENTRY_DSN_FILE=$/m);
+    const dsn = 'https://0123456789abcdef0123456789abcdef@o0.ingest.example.test/42';
+    const app = appEnvironment(
+      projectWith(STOCK_ENV.replace(/^SENTRY_DSN=$/m, `SENTRY_DSN=${dsn}`)),
+    );
+    expect(app['SENTRY_DSN']).toBe(dsn);
   });
 
   it('resolves with no `.env` at all, and then carries no secret', () => {

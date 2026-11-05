@@ -50,6 +50,7 @@ import {
   createLiveRuns,
   createWorkingCalendar,
   DEFAULT_WEBHOOK_RATE_LIMIT_POLICY,
+  exactSecretRedactor,
   SHADOW_BATCH_BLOCKED_DETAIL,
   shadowBatchBlocker,
   sweepReadiness,
@@ -59,6 +60,7 @@ import type { IsoDateTime } from '@platform/contracts';
 import {
   cost as costAdapters,
   db as dbAdapters,
+  errorReporting as errorReportingAdapters,
   eventing as eventingAdapters,
   jobs as jobsAdapters,
   notify as notifyAdapters,
@@ -82,6 +84,12 @@ import { composeBreakdown } from './breakdown.js';
 import { createTaskCommands } from './commands.js';
 import { deprecatedEnvironment, loadServerConfig, type ServerConfig } from './config.js';
 import { enqueueOnlyJobs } from './enqueue-only-jobs.js';
+import {
+  coreReportingSecrets,
+  type ReportingTransport,
+  reportingLogHook,
+  sentryClientFactory,
+} from './error-reporting.js';
 import { composeInboundConnections } from './inbound-connections.js';
 import {
   composeKnowledgeIndexing,
@@ -176,6 +184,11 @@ export interface ServerRuntime {
    * Node process shares, so this is the per-process fact the e2e role table reads.
    */
   readonly claimantComposed: boolean;
+  /**
+   * This process's error reporter (WP-295): off (`dsn()` is `null`) unless `SENTRY_DSN` is set. A
+   * **labelled seam** like `jobs`: a test flushes it before reading what its transport received.
+   */
+  readonly errorReporter: errorReportingAdapters.ErrorReporter;
   /** The address the HTTP server is listening on, once `listen()` has run. */
   listen(): Promise<string>;
   stop(): Promise<void>;
@@ -204,6 +217,8 @@ export interface StartRuntimeOptions {
    * from `EVENT_CONSUMPTION`) is real. `test/e2e/pipeline/uncomposed.e2e.test.ts` is its only user.
    */
   readonly pipeline?: PipelineComposition | null;
+  /** Test seam: how the error reporter sends an envelope (default: the SDK's HTTP transport). */
+  readonly errorReportingTransport?: ReportingTransport;
 }
 
 /** Build metadata; a container image sets these, a checkout has none. */
@@ -218,13 +233,43 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
   const config = options.config ?? loadServerConfig(env);
   const capabilities = roleCapabilities(config.role);
 
+  /**
+   * Optional error reporting (WP-295, TD-023's 2026-11-05 amendment): fed by this process's own
+   * `error`/`fatal` lines, each event rebuilt from an allow-list and redacted by the core's secrets
+   * and TD-012's patterns. Off — and the SDK never loaded — while `SENTRY_DSN` is unset.
+   */
+  const build = buildInfo(env);
+  const reportingSecrets = exactSecretRedactor(coreReportingSecrets(config));
+  const errorReporter = errorReportingAdapters.createErrorReporter({
+    createClient: sentryClientFactory({
+      secrets: () => reportingSecrets,
+      ...(options.errorReportingTransport === undefined
+        ? {}
+        : { transport: options.errorReportingTransport }),
+    }),
+    // Below `error`, so a failure to report is never itself reported.
+    onFailure: (error) => logger.warn({ err: error }, 'error reporting failed'),
+  });
   const logger = createLogger({
     level: config.logLevel,
     format: config.logFormat,
     role: config.role,
     ...(options.logDestination === undefined ? {} : { destination: options.logDestination }),
+    onError: reportingLogHook(errorReporter, () => ({
+      role: config.role,
+      core_url: config.baseUrl,
+      version: build.version,
+      commit: build.commit,
+    })),
   });
   const loggerPort: Logger = asLoggerPort(logger);
+  if (config.sentryDsn !== null) {
+    await errorReporter.configure(config.sentryDsn);
+    logger.info(
+      { host: new URL(config.sentryDsn).host },
+      'error reporting is on: error and fatal lines are reported, redacted',
+    );
+  }
 
   logger.info(
     {
@@ -1387,6 +1432,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       heldConnections,
       mintedCredentialShapes: shapes,
       claimantComposed,
+      errorReporter,
       listen: async () => app.listen({ port: config.port, host: config.host }),
       stop: async () => {
         if (shuttingDown) {
@@ -1408,6 +1454,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         }
         await database.close();
         logger.info({}, 'stopped');
+        // Last: a shutdown step's error line above is still sent.
+        await errorReporter.close();
       },
     };
   } catch (error) {
@@ -1417,6 +1465,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       await callback.stop().catch(() => {});
     }
     await database.close().catch(() => {});
+    await errorReporter.close();
     throw error;
   }
 };

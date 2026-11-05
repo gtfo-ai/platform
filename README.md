@@ -101,6 +101,11 @@ carries a token, printed at every start (`docker compose logs remote-worker | gr
 run** pauses the run's task, exactly as the task page's cancel does; stopping the container is not a
 cancel (the core treats it as a lost worker and plans the stage again).
 
+**Error reporting** is optional, a setting in the page's room: paste a Sentry DSN and *Save*, *Send
+a test error*, or *Remove* — no restart. `SENTRY_DSN` in the `.env` wins over the page. Only the
+worker's own errors are sent — the error's type, its message (secrets removed) and its stack —
+never a transcript, a prompt or ticket text.
+
 **Check that it works**
 
 ```bash

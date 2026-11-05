@@ -139,6 +139,8 @@ services:
       # `none`: no token, the page at http://127.0.0.1:7357; `token` for a shared machine.
       APP_WORKER_UI_AUTH: ${APP_WORKER_UI_AUTH:-none}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Optional error reporting: a Sentry DSN; set here it wins over the page's setting (empty: the page's).
+      SENTRY_DSN: ${SENTRY_DSN:-}
     ports:
       - '127.0.0.1:${APP_WORKER_UI_PORT:-7357}:7357'
     volumes:

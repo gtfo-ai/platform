@@ -26,6 +26,8 @@
  * | `APP_WORKER_UI_PORT` | the **host** port `compose.worker.yml` publishes the page on, `127.0.0.1` only (default 7357) — the `Host` header the page must carry names it |
  * | `APP_WORKER_UI_AUTH` | `none` (default: no bearer, the page at `http://127.0.0.1:<port>`) or `token` (WP-292's `ui-token`, for a machine with more than one OS account) — TD-031's 2026-11-05 no-bearer amendment |
  * | `LOG_LEVEL` | |
+ * | `SENTRY_DSN(_FILE)` | optional error reporting (WP-295): a Sentry DSN, `https://<key>@<host>/<project id>` (`http:` only to loopback) — malformed is a startup refusal. Set here it **wins** over the page's *Error reporting* setting, whose actions then answer `409` |
+ * | `APP_VERSION`, `APP_COMMIT` | the build — the commit is reported at the handshake, both tag an error report |
  *
  * Each of the core URL and the Claude token is read **environment → `worker-state` file → wizard**
  * (TD-031's first-run amendment §1): an empty value counts as absent, and a value from the
@@ -37,7 +39,7 @@ import {
   WORKER_UI_CONTAINER_PORT,
   type WorkerUiAuth,
 } from '@platform/contracts';
-import { db as dbAdapters } from '@platform/infrastructure';
+import { db as dbAdapters, errorReporting } from '@platform/infrastructure';
 
 /** The role name `main.ts` dispatches on. Not one of `ROLES`: it composes none of their workloads. */
 export const REMOTE_WORKER_ROLE = 'remote-worker';
@@ -130,6 +132,13 @@ export interface RemoteWorkerConfig {
   readonly logLevel: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
   /** `APP_COMMIT` — the build, reported at the handshake. */
   readonly commit: string | null;
+  /** `APP_VERSION` — the build's version, a tag of an error report; absent reads as unknown. */
+  readonly version?: string | null;
+  /**
+   * `SENTRY_DSN(_FILE)`, canonical, or `null` (WP-295): **wins** over the page's setting. Absent
+   * reads as unset (a test's literal configuration).
+   */
+  readonly sentryDsn?: string | null;
   /** The local page; absent reads as disabled (a test's literal configuration). */
   readonly ui?: WorkerUiConfig;
   /** The `sha256:` digest `PLATFORM_IMAGE` names — this worker's own build, for *update pending*. */
@@ -257,6 +266,14 @@ export const loadRemoteWorkerConfig = (env: Env): RemoteWorkerConfig => {
   if (!(LOG_LEVELS as readonly string[]).includes(logLevel)) {
     problems.push(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')}`);
   }
+  const sentryRaw = read('SENTRY_DSN') || '';
+  let sentryDsn: string | null = null;
+  if (sentryRaw !== '') {
+    const verdict = errorReporting.parseErrorReportingDsn(sentryRaw);
+    // Never echoed: a DSN carries the project's key.
+    if (verdict.ok) sentryDsn = verdict.dsn;
+    else problems.push(`SENTRY_DSN must be ${errorReporting.DSN_SHAPE_WORDS}`);
+  }
   const imageDigests: string[] = [];
   for (const name of WORKER_IMAGE_VARIABLES) {
     const reference = read(name);
@@ -284,6 +301,8 @@ export const loadRemoteWorkerConfig = (env: Env): RemoteWorkerConfig => {
     port,
     logLevel,
     commit: read('APP_COMMIT') || null,
+    version: read('APP_VERSION') || null,
+    sentryDsn,
     usagePauseDefaultMs: pauseSeconds * 1_000,
     ui: {
       enabled: uiSwitch === 'enabled',
