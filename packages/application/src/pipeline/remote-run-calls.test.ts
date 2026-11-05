@@ -155,7 +155,10 @@ interface WorldOptions {
   readonly maxSignatures?: number;
   readonly approvals?: RemoteRunCallsOptions['approvals'];
   readonly deployKey?: boolean;
+  /** The project's `remote_run_credential`, read per signature (backlog 753); `allow` when absent. */
+  readonly remote?: () => 'allow' | 'deny';
   readonly maxSessionLines?: number;
+  readonly maxTranscriptEntries?: number;
   readonly tools?: Partial<PlatformToolPort>;
 }
 
@@ -284,6 +287,7 @@ const world = (options: WorldOptions = {}) => {
       },
     },
     deployKeys: {
+      remoteRunCredential: async () => options.remote?.() ?? 'allow',
       forRun: async () =>
         options.deployKey === false
           ? null
@@ -297,6 +301,9 @@ const world = (options: WorldOptions = {}) => {
     },
     maxSignatures: options.maxSignatures ?? 128,
     ...(options.maxSessionLines === undefined ? {} : { maxSessionLines: options.maxSessionLines }),
+    ...(options.maxTranscriptEntries === undefined
+      ? {}
+      : { maxTranscriptEntries: options.maxTranscriptEntries }),
     now: () => NOW,
   });
   return { calls, memory, run, store, git, auditLog, kbQueries, asked, signed };
@@ -362,6 +369,35 @@ describe('transcript ingest (TD-031 §10a)', () => {
     }
     expect(JSON.stringify(refused)).not.toContain(PROJECT_SECRET);
     expect(rows.find((row) => row.seq === 2)?.kind).toBe('assistant');
+  });
+
+  it('refuses a batch that would take the run past its bound, storing nothing of it (backlog 754)', async () => {
+    const w = world({ maxTranscriptEntries: 3 });
+    expect(
+      await w.calls.transcript({
+        ...fence,
+        entries: [
+          { seq: 0, event: assistant(0, 'a') },
+          { seq: 1, event: assistant(1, 'b') },
+        ],
+      }),
+    ).toEqual({ kind: 'stored', stored: 2, refusedSeqs: [] });
+    // Two more would make four: the whole batch is refused, the bound named.
+    expect(
+      await w.calls.transcript({
+        ...fence,
+        entries: [
+          { seq: 2, event: assistant(2, 'c') },
+          { seq: 3, event: assistant(3, 'd') },
+        ],
+      }),
+    ).toEqual({ kind: 'full', limit: 3 });
+    expect(w.store.transcriptRows(RUN)).toHaveLength(2);
+    // Up to the bound is stored: exactly three.
+    expect(
+      await w.calls.transcript({ ...fence, entries: [{ seq: 2, event: assistant(2, 'c') }] }),
+    ).toEqual({ kind: 'stored', stored: 1, refusedSeqs: [] });
+    expect(w.store.transcriptRows(RUN)).toHaveLength(3);
   });
 
   it('stores one row per (run_id, seq): a repeat with another instant writes nothing', async () => {
@@ -684,6 +720,19 @@ describe('ssh-sign (TD-031 decision 5, the 2026-11-04 amendment)', () => {
       kind: 'refused',
       reason: 'no_deploy_key',
     });
+  });
+
+  it('re-reads remote_run_credential per signature: deny mid-run stops the next one (backlog 753)', async () => {
+    let remote: 'allow' | 'deny' = 'allow';
+    const w = world({ remote: () => remote });
+    expect((await w.calls.sshSign({ ...fence, request: request() })).kind).toBe('signed');
+    remote = 'deny';
+    expect(await w.calls.sshSign({ ...fence, request: request() })).toEqual({
+      kind: 'refused',
+      reason: 'remote_credential_denied',
+    });
+    expect(w.signed).toHaveLength(1);
+    expect(w.store.signatures(RUN)).toBe(1);
   });
 
   it('refuses a sign after the terminal write and under a stale epoch, signing nothing', async () => {

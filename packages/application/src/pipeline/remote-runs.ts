@@ -75,6 +75,7 @@ import {
   type RunStoppedReason,
 } from '../ports/runner.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { type ClaimAdmission, ClaimAdmissionRefused } from './claim-admission.js';
 import { leaseExpiryAt } from './lease.js';
 import { claimRunOffer, RUN_OFFERS_TOPIC, recordClaim, workerLeaseOwner } from './offers.js';
 import { toRunAggregate } from './run-aggregate.js';
@@ -86,6 +87,7 @@ import {
   type PipelineStore,
   type RunCommandRefusal,
 } from './store.js';
+import { retryOnTaskConflict } from './task-conflict.js';
 
 /** How many pending commands one heartbeat answers (the wire schema's bound). */
 export const REMOTE_COMMANDS_PER_HEARTBEAT = 256;
@@ -166,6 +168,12 @@ export interface RemoteRunsOptions {
   readonly lateCost: LateCostRecorder;
   /** @default WORKER_REMOTE_LEASE_TTL_MS */
   readonly leaseTtlMs?: number;
+  /**
+   * TD-031 §2's admission re-check at the claim (backlog 744, `claim-admission.ts`): a refusal rolls
+   * the claim back, withdraws the offer and pauses the task, and the worker is answered `none`.
+   * Absent asks nothing — the production composition passes one.
+   */
+  readonly admission?: ClaimAdmission;
   readonly logger?: Logger;
 }
 
@@ -488,41 +496,72 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
     claim: async (input) => {
       const owner = workerLeaseOwner(input.workerId);
       const { token, hash } = options.tokens.mint();
-      const claimed = await unitOfWork.transaction(async (scope) => {
-        const offer = await claimRunOffer(store.offers, scope.tx, {
-          eligibility: {},
-          claimantKind: 'worker',
-          owner,
-          expiresAt: leaseExpiryAt(input.now, leaseTtlMs),
-          now: input.now,
-          worker: {
-            workerId: input.workerId,
-            heldImageDigests: input.heldImageDigests,
-            images: input.images,
-            runTokenHash: hash,
-          },
+      const claimOnce = () =>
+        unitOfWork.transaction(async (scope) => {
+          const offer = await claimRunOffer(store.offers, scope.tx, {
+            eligibility: {},
+            claimantKind: 'worker',
+            owner,
+            expiresAt: leaseExpiryAt(input.now, leaseTtlMs),
+            now: input.now,
+            worker: {
+              workerId: input.workerId,
+              heldImageDigests: input.heldImageDigests,
+              images: input.images,
+              runTokenHash: hash,
+            },
+          });
+          if (offer === null) {
+            return null;
+          }
+          const row = await store.runs.load(scope.tx, offer.runId);
+          if (row === null) {
+            throw new Error(`run ${offer.runId} was claimed and then not found in one transaction`);
+          }
+          // The row as it was offered: the claim's own statement already moved it to `starting`.
+          const offered = toRunAggregate(
+            { ...row, status: 'created' },
+            await options.eventStore.nextStreamSequence('run', row.id),
+          );
+          const forAdmission = {
+            runId: row.id,
+            taskId: row.taskId,
+            projectId: row.projectId,
+            kind: offer.kind,
+            stage: row.stage,
+          };
+          const refusal = (await options.admission?.recheck(scope.tx, forAdmission)) ?? null;
+          if (refusal !== null) {
+            // Rolls the claim back: the offer is open again for `refuse` to withdraw.
+            throw new ClaimAdmissionRefused(forAdmission, refusal);
+          }
+          const recorded = recordClaim(offered, offer, options.context(row.taskId), input.workerId);
+          await scope.events.append(recorded.events);
+          return {
+            runId: row.id,
+            epoch: offer.epoch,
+            owner,
+            images: offer.images ?? input.images,
+          };
         });
-        if (offer === null) {
-          return null;
+      let claimed: Awaited<ReturnType<typeof claimOnce>>;
+      try {
+        claimed = await claimOnce();
+      } catch (error) {
+        if (!(error instanceof ClaimAdmissionRefused) || options.admission === undefined) {
+          throw error;
         }
-        const row = await store.runs.load(scope.tx, offer.runId);
-        if (row === null) {
-          throw new Error(`run ${offer.runId} was claimed and then not found in one transaction`);
-        }
-        // The row as it was offered: the claim's own statement already moved it to `starting`.
-        const offered = toRunAggregate(
-          { ...row, status: 'created' },
-          await options.eventStore.nextStreamSequence('run', row.id),
+        const admission = options.admission;
+        await retryOnTaskConflict(
+          { taskId: error.claimed.taskId, what: 'refusing a remote claim', logger },
+          () =>
+            unitOfWork.transaction((scope) =>
+              admission.refuse(scope, error.claimed, error.refusal),
+            ),
         );
-        const recorded = recordClaim(offered, offer, options.context(row.taskId), input.workerId);
-        await scope.events.append(recorded.events);
-        return {
-          runId: row.id,
-          epoch: offer.epoch,
-          owner,
-          images: offer.images ?? input.images,
-        };
-      });
+        // The worker asks again; the next offer, if any, is its next claim's.
+        return { kind: 'none' };
+      }
       if (claimed === null) {
         return { kind: 'none' };
       }

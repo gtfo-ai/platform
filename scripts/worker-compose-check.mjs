@@ -1,23 +1,40 @@
 #!/usr/bin/env node
 /**
  * `node scripts/worker-compose-check.mjs` — **WP-284 (4)'s Docker leg**: a core and a worker bundle
- * on one daemon, the worker logged in with the device flow scripted.
- *
- * **Written in S-22.8 and not yet run**: Docker was paused on the machine that wrote it, so every
- * line below is a design until the first run measures it (the PR says so). Run it with the four
+ * on one daemon, the worker logged in with the device flow scripted, and **one fake-Claude task run to
+ * Ready per credential shape** through the worker (S-22.14, backlog 761, 763, 773). Run it with the four
  * images built (`node scripts/build-images.mjs`):
  *
- *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/worker-compose-check.mjs [--tag dev]
+ *     node scripts/worker-compose-check.mjs [--tag dev] [--project-suffix local]
  *
  * ## What it brings up
  *
- *  - **the core**: `compose.yml` with `ROLE=all`, the `runner` scaled to 0 (a `workers_only` core,
- *    BD-032 decision 3: no claimant composed for the server), `APP_WORKER_IMAGE_DIGESTS` pinned to
- *    the local images' ids — what the launcher on the same daemon resolves (TD-031 decision 4; a
- *    registry digest is an image id only under the containerd store, TODO V-WM8);
- *  - **the worker bundle**: `compose.worker.yml` **as shipped**, its `.env` naming the local images
- *    by their tags and `APP_CORE_URL=http://app:8080`; the `remote-worker` container joined to the
- *    core's network after `up` (two compose projects on one daemon share no network by default).
+ *  - **a local registry** (`registry:2` on a random port): the run and egress images (the run image
+ *    derived below) are pushed to it and the worker bundle names them `localhost:<port>/…@sha256:<registry
+ *    digest>` — so `docker compose up` **pulls them by registry digest**, as a real worker pulls the
+ *    core's `sha-<7>` digests, and the core advertises exactly those digests (`APP_WORKER_IMAGE_DIGESTS`;
+ *    backlog 704/763). The `platform` and `platform-launcher` digests are the local ids (nothing resolves
+ *    them by digest on a worker);
+ *  - **a derived run image** (`platform-runtime:<tag>-wcc`): the run image with
+ *    `scripts/worker-check/fake-claude-stage.mjs` as `/usr/local/bin/claude` — a stage-aware CLI that
+ *    answers each stage's artifact and, as the developer, asks `open_mr` through the SDK's MCP channel;
+ *  - **the core**: `compose.yml` with the runner scaled to 0 (a `workers_only` core) and the `app`
+ *    service's command replaced by `scripts/worker-check/core-entry.mjs` — the product's own
+ *    `startRuntime()` with the fake git and tracker providers registered (the e2e tier's one seam),
+ *    two seeded projects and a control port the check drives with `docker compose exec`;
+ *  - **the worker bundle**: `compose.worker.yml` **as shipped**, under its own project name, control
+ *    and cache volumes, run network (`APP_WORKER_RUN_NETWORK`) and UI port — a real worker on the same
+ *    daemon (`agentic-worker`, `agentic-worker-run-egress`, 7357) is never joined, stopped or taken
+ *    down — its `.env` naming the images and `APP_CORE_URL=http://app:8080`; the `remote-worker`
+ *    joined to the core's network after `up`;
+ *  - **two git stand-ins** on the worker's run network: `wcc-git` (`git http-backend` behind Basic auth,
+ *    granting the static run token push) and `wcc-ssh` (`sshd` on 443, the throwaway deploy key's only
+ *    `authorized_keys` line, its host key pinned in the core's SSH route).
+ *
+ * Every network the two compose projects declare gets an explicit `10.213.x.0/24` subnet from an
+ * override file: a developer daemon with ~30 networks has no default address pool left (measured on
+ * the machine that first ran this: `all predefined address pools have been fully subnetted`), and the
+ * pools that remain are left for the runs' own networks (backlog 790).
  *
  * ## What it asserts
  *
@@ -26,41 +43,38 @@
  *  2. the worker refuses `DATABASE_URL` and `APP_SECRET_KEY` **by name** (a one-off `run` with each);
  *  3. the **device flow**, scripted: the code the worker logs is approved through
  *     `POST /api/workers/device/approve` as the bootstrap administrator; the worker stores its
- *     credential and its `/readyz` reads `core_handshake: ok` (asked from inside its container: the
- *     listener is on the compose network only, never published);
- *  4. `GET /api/worker/v1/compose.yml`, with no credential and no header, pins every image by digest and names
- *     no `latest`, and its SHA-256 is the handshake's `compose_bundle_digest` (backlog 743);
- *  5. the worker's launcher answers `deployKeyCarriage: relayed` on its health;
- *  6. **canaries**: the Claude token is in no container's configured environment but the
- *     `remote-worker`'s, and in no log line of the bundle; no worker container carries a
- *     `DATABASE_URL` or an `APP_SECRET_KEY`;
- *  6b. **the local page** (WP-292 (6), written in S-22.13 and **not yet run** — Docker was paused on
- *     the machine that wrote it): the page's address is in the worker's log once, its token in the
- *     fragment; the publish is `127.0.0.1` only (`docker compose port`); the page and
- *     `/api/local/state` answer on `127.0.0.1` with the token, `401` without it and `421` for a
- *     foreign `Host`; the same port on the host's **other** address answers nothing; and a container
- *     on the worker's run egress network — where a run container lives (TD-025) — reaches neither
- *     the worker's name nor its address on the UI port;
- *  7. nothing is left: both projects are taken down with their volumes.
- *
- * ## What it does not do yet, stated (BACKLOG 761)
- *
- * WP-284 (4)'s **two credential-shape runs to Ready** — a static-token HTTPS project and a
- * deploy-key project whose mirror fetch and push the core signs through the worker — need two
- * stand-ins this repository does not have in Docker form: a provider the core can run a pipeline
- * against (the fake git and tracker live in the test process; a real GitLab binding would call
- * gitlab.com), and a **stage-aware** fake CLI in the run image (`test/fixtures/runlet/fake-claude-cli`
- * answers no stage's artifact). The fake-worker e2e (`test/e2e/worker/remote-worker.e2e.test.ts`)
- * runs both shapes to Ready through the production worker composition and launcher service over the
- * fake provider; the daemon half — V-WM8's helper socket on a mounted volume through the proxy — is
- * `scripts/deploy-key-check.mjs`'s `relayed` phase.
+ *     credential and its `/readyz` reads `core_handshake: ok`;
+ *  4. `GET /api/worker/v1/compose.yml`, with no credential and no header, pins every image by digest
+ *     and names no `latest`, and its SHA-256 is the handshake's `compose_bundle_digest` (backlog 743);
+ *  5. the worker's launcher answers `deployKeyCarriage: relayed`, its `images` are the **registry
+ *     digests** the bundle pulled and `heldImageDigests` names them, and the core's Workers row holds
+ *     them (backlog 704/763);
+ *  6. **two tasks to Ready**, every run on the worker under its first claim: `API-1` on the static
+ *     HTTPS-token project (the HTTP stand-in saw the token push `agentic/API-1`) and `DK-1` on the
+ *     deploy-key project (the SSH stand-in holds `agentic/DK-1`, and the offers counted signatures);
+ *  7. **canaries**: the Claude token is in no container's configured environment but the
+ *     `remote-worker`'s and in no log line of the bundle; the run token, the worker credential and a
+ *     fragment of the deploy key are in no log line of the bundle and the deploy key fragment in no
+ *     bundle container's environment; no worker container carries a `DATABASE_URL` or an
+ *     `APP_SECRET_KEY`;
+ *  8. **the local page** (WP-292 (6)): the page's address is in the worker's log, its token in the
+ *     fragment; the publish is `127.0.0.1` only; the page and `/api/local/state` answer on
+ *     `127.0.0.1` with the token, `401` without it and `421` for a foreign `Host`; the same port on the
+ *     host's **other** address answers nothing; and **a run container** — each task's refinement run,
+ *     through the fake CLI, against the worker's name and every address of it the check seeds into the
+ *     repository (`.wcc-probe-targets`) — connects to none of them on the UI port. What a container on
+ *     the run egress network (the sidecar's and the helpers' network, never a run's) reaches is
+ *     printed as a `note`, not asserted (backlog 792);
+ *  9. nothing is left: both projects are taken down with their volumes, and the stand-ins, the
+ *     registry, the derived images and every object the worker's launcher labelled are removed.
  *
  * Not a `verify` target, for the reason none of the Docker checks are: it needs a daemon. With no
  * daemon or no image it exits 1 naming what is missing; a skip is never a pass.
  */
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
+import { chmod, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -90,17 +104,33 @@ const TAG = optionValue('--tag', process.env.PLATFORM_TAG ?? 'dev');
 const SUFFIX = optionValue('--project-suffix', process.env.GITHUB_RUN_ID ?? 'local');
 const CORE = `agentic-worker-check-core-${SUFFIX}`;
 const BUNDLE = `agentic-worker-check-bundle-${SUFFIX}`;
+/** The run image with the stage-aware fake CLI, built here and removed at the end. */
+const RUN_IMAGE = `platform-runtime:${TAG}-wcc`;
+const REGISTRY = `agentic-wcc-registry-${SUFFIX}`;
+const REGISTRY_IMAGE = 'registry:2';
+const GIT_STANDIN = `agentic-wcc-git-${SUFFIX}`;
+const SSH_STANDIN = `agentic-wcc-ssh-${SUFFIX}`;
+/**
+ * The bundle's run network, its own (`APP_WORKER_RUN_NETWORK`): a real worker on the same daemon owns
+ * `agentic-worker-run-egress`, and this check must never join, take down or share it.
+ */
+const RUN_NETWORK = `${BUNDLE}-run-egress`;
+const ALPINE_IMAGE = 'alpine:3.21';
 
 /** Obviously fake (BD-002), past every floor, and in no shape a pattern rule knows. */
 const SECRET_KEY = 'wp284-worker-compose-check-not-a-real-secret-0000';
 const ADMIN_EMAIL = 'operator@example.test';
 const ADMIN_PASSWORD = 'wp284-not-a-real-password';
 const CLAUDE_TOKEN = 'FAKE-wp284-claude-oauth-token-not-a-credential-0001';
+/** The static run token the HTTP stand-in grants push with (S-22.14). */
+const RUN_TOKEN = 'FAKE-wcc-static-run-token-not-a-credential-0001';
 const ORIGIN = 'http://worker-compose-check.example.test';
 /** The host port the bundle publishes the worker's page on (`APP_WORKER_UI_PORT`), off the default. */
 const UI_PORT = 37357;
 const TIMEOUT_MS = 15 * 60 * 1000;
 const DOCKER_QUERY_MS = 60_000;
+/** How long both tasks may take to reach Ready — eight to ten runs, one at a time. */
+const READY_MS = 12 * 60 * 1000;
 
 const stages = createStages();
 const failures = [];
@@ -108,9 +138,15 @@ const check = (name, ok, detail) => {
   console.log(`${ok ? 'ok  ' : 'FAIL'}  ${name}${detail === undefined ? '' : ` — ${detail}`}`);
   if (!ok) failures.push(name);
 };
+/** Every image reference this check created, removed at the end whatever happened. */
+const madeImages = [];
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const docker = (dockerArgs, options = {}) =>
+  run('docker', dockerArgs, { timeout: DOCKER_QUERY_MS, maxBuffer: 64 * 1024 * 1024, ...options });
+const quietly = (dockerArgs) => docker(dockerArgs).catch(() => undefined);
 
 const compose =
-  (project, file, directory) =>
+  (project, files, directory) =>
   async (composeArgs, extraEnv = {}) =>
     run(
       'docker',
@@ -120,8 +156,7 @@ const compose =
         project,
         '--project-directory',
         directory,
-        '-f',
-        path.join(REPO, file),
+        ...files.flatMap((file) => ['-f', file]),
         ...composeArgs,
       ],
       {
@@ -133,17 +168,40 @@ const compose =
     );
 
 const imageId = async (image) =>
-  (
-    await run('docker', ['image', 'inspect', image, '--format', '{{.Id}}'], {
-      timeout: DOCKER_QUERY_MS,
-    })
-  ).stdout.trim();
+  (await docker(['image', 'inspect', image, '--format', '{{.Id}}'])).stdout.trim();
+
+/**
+ * An override giving every network of a compose file an explicit subnet — `10.213.<first + n>.0/24`
+ * — and, for the core, its run network a check-only name (the stock name is the operator's own
+ * instance's network, which this check must never take down).
+ */
+const networkOverride = (networks, first, renamed = {}) =>
+  [
+    'networks:',
+    ...networks.flatMap((name, index) => [
+      `  ${name}:`,
+      ...(renamed[name] === undefined ? [] : [`    name: ${renamed[name]}`]),
+      '    ipam:',
+      '      config:',
+      `        - subnet: 10.213.${first + index}.0/24`,
+    ]),
+    '',
+  ].join('\n');
+
+/** A TCP port free on this host now, on both address families. */
+const freePort = () =>
+  new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '::', () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
 
 const preflight = async () => {
   try {
-    const { stdout } = await run('docker', ['version', '--format', '{{.Server.Version}}'], {
-      timeout: DOCKER_QUERY_MS,
-    });
+    const { stdout } = await docker(['version', '--format', '{{.Server.Version}}']);
     console.log(`docker daemon ${stdout.trim()}`);
   } catch (error) {
     console.error(`FAIL: worker-compose-check — no Docker daemon: ${String(error)}`);
@@ -159,6 +217,16 @@ const preflight = async () => {
       );
       process.exit(1);
     }
+  }
+  try {
+    await run('ssh-keygen', ['-?'], { timeout: DOCKER_QUERY_MS }).catch((error) => {
+      if (error.code === 'ENOENT') throw error;
+    });
+  } catch {
+    console.error(
+      'FAIL: worker-compose-check — ssh-keygen is not on PATH (the throwaway deploy key)',
+    );
+    process.exit(1);
   }
   return ids;
 };
@@ -200,20 +268,320 @@ class Client {
   }
 }
 
+/** The throwaway deploy key: generated here, never written anywhere but a scratch file removed at once. */
+const deployKey = async () => {
+  const scratch = await mkdtemp(path.join(tmpdir(), 'wcc-key-'));
+  try {
+    const file = path.join(scratch, 'k');
+    await run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'wcc-check', '-f', file]);
+    const privateKey = await readFile(file, 'utf8');
+    const publicKey = (await readFile(`${file}.pub`, 'utf8'))
+      .trim()
+      .split(' ')
+      .slice(0, 2)
+      .join(' ');
+    // 24 characters of the base64 that carries the seed, as `deploy-key-check.mjs` searches for.
+    const fragment = (privateKey.trim().split('\n')[4] ?? '').slice(4, 28);
+    return { privateKey, publicKey, fragment };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+};
+
+/**
+ * The run image with the stage-aware CLI, then the run and egress images pushed to the loopback
+ * registry: answers their **registry** digests and the references the bundle pulls them by.
+ */
+const publishRunImages = async (checkDirectory) => {
+  const context = path.join(checkDirectory, 'run-image');
+  await run('mkdir', ['-p', context]);
+  await copyFile(
+    path.join(REPO, 'scripts', 'worker-check', 'fake-claude-stage.mjs'),
+    path.join(context, 'claude'),
+  );
+  await writeFile(
+    path.join(context, 'Dockerfile'),
+    [
+      `FROM platform-runtime:${TAG}`,
+      'USER root',
+      'COPY --chmod=0755 claude /usr/local/bin/claude',
+      'USER 1000:1000',
+      '',
+    ].join('\n'),
+  );
+  stages.set('the derived run image');
+  await docker(['build', '-q', '-t', RUN_IMAGE, context], { timeout: TIMEOUT_MS });
+
+  stages.set('the loopback registry');
+  // Published on every interface, and pushed to as `localhost`: on Docker Desktop the daemon runs in a
+  // VM whose loopback is not the host's, and a `127.0.0.1`-only publish is unreachable from it
+  // (measured: `localhost` → `dial tcp [::1]:<port>: i/o timeout`, `127.0.0.1` → `connection
+  // refused`); an all-interface publish is reachable as `localhost`, which the daemon treats as an
+  // insecure (plain HTTP) registry by default. Exposed for the check's minutes with test images only,
+  // and every pull is **by digest**, so nothing pushed to it meanwhile can stand in for them.
+  // One port for both address families: a bare `-p 5000` gave IPv4 and IPv6 different host ports on
+  // Docker Desktop, and `localhost` dials `::1` first (measured: `i/o timeout` on the IPv4 port).
+  const port = await freePort();
+  await docker(['run', '-d', '--name', REGISTRY, '-p', `${port}:5000`, REGISTRY_IMAGE], {
+    timeout: TIMEOUT_MS,
+  });
+  const host = `localhost:${port}`;
+  stages.set('the registry answers /v2/');
+  await waitForOk(stages, `http://127.0.0.1:${port}/v2/`);
+  const published = {};
+  for (const [role, local, name] of [
+    ['run', RUN_IMAGE, 'platform-runtime'],
+    ['egress', `platform-egress:${TAG}`, 'platform-egress'],
+  ]) {
+    const pushed = `${host}/${name}:wcc`;
+    await docker(['tag', local, pushed]);
+    madeImages.push(pushed);
+    stages.set(`docker push ${pushed}`);
+    await docker(['push', pushed], { timeout: TIMEOUT_MS });
+    // The registry's own answer, never the push's progress text: under the containerd store a local
+    // multi-platform index is pushed as its one present platform, so the registry's digest is not
+    // the local id (measured: `alpine:3.21` `ee16d92f…` pushed as `70dd3b2d…`).
+    const { response } = await boundedFetch(
+      stages,
+      `http://127.0.0.1:${port}/v2/${name}/manifests/wcc`,
+      {
+        method: 'HEAD',
+        headers: {
+          accept: [
+            'application/vnd.oci.image.index.v1+json',
+            'application/vnd.oci.image.manifest.v1+json',
+            'application/vnd.docker.distribution.manifest.list.v2+json',
+            'application/vnd.docker.distribution.manifest.v2+json',
+          ].join(', '),
+        },
+      },
+    );
+    const digest = response.headers.get('docker-content-digest');
+    if (digest === null || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
+      throw new Error(`the registry names no digest for ${pushed}`);
+    }
+    // Untagged, so `docker compose up` pulls the digest reference rather than finding a tag.
+    await docker(['image', 'rm', pushed]);
+    published[role] = { digest, reference: `${host}/${name}@${digest}` };
+    madeImages.push(published[role].reference);
+  }
+  return published;
+};
+
+/** `git http-backend` behind Basic auth: `docker-workspace.ts`'s credentialled server, one token. */
+const GIT_SERVER_PROGRAM = String.raw`
+const http = require('node:http');
+const fs = require('node:fs');
+const { spawn } = require('node:child_process');
+http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://standin');
+  const service = url.searchParams.get('service') ??
+    (url.pathname.endsWith('/git-receive-pack') ? 'git-receive-pack'
+      : url.pathname.endsWith('/git-upload-pack') ? 'git-upload-pack' : null);
+  const header = req.headers.authorization ?? '';
+  let password = null;
+  if (header.startsWith('Basic ')) {
+    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+    password = decoded.slice(decoded.indexOf(':') + 1);
+  }
+  const granted = password !== null && password === process.env.RUN_TOKEN;
+  fs.appendFileSync('/tmp/access.log', JSON.stringify({
+    method: req.method, path: url.pathname, service, granted,
+  }) + '\n');
+  if (!granted) {
+    res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="wcc"' });
+    res.end('authentication required');
+    return;
+  }
+  const child = spawn('git', ['http-backend'], {
+    env: {
+      PATH: process.env.PATH, GIT_PROJECT_ROOT: '/tmp/srv', GIT_HTTP_EXPORT_ALL: '1',
+      PATH_INFO: url.pathname, QUERY_STRING: url.search.slice(1), REQUEST_METHOD: req.method,
+      CONTENT_TYPE: req.headers['content-type'] ?? '',
+      HTTP_CONTENT_ENCODING: req.headers['content-encoding'] ?? '',
+      GIT_PROTOCOL: req.headers['git-protocol'] ?? '', REMOTE_USER: 'agentic', REMOTE_ADDR: '127.0.0.1',
+    },
+  });
+  req.pipe(child.stdin);
+  let head = Buffer.alloc(0);
+  let sent = false;
+  child.stdout.on('data', (chunk) => {
+    if (sent) { res.write(chunk); return; }
+    head = Buffer.concat([head, chunk]);
+    const end = head.indexOf('\r\n\r\n');
+    if (end === -1) return;
+    let status = 200;
+    const headers = {};
+    for (const line of head.subarray(0, end).toString('utf8').split('\r\n')) {
+      const colon = line.indexOf(':');
+      const key = line.slice(0, colon).trim();
+      const value = line.slice(colon + 1).trim();
+      if (key.toLowerCase() === 'status') status = Number.parseInt(value, 10);
+      else headers[key] = value;
+    }
+    res.writeHead(status, headers);
+    sent = true;
+    res.write(head.subarray(end + 4));
+  });
+  child.stdout.on('end', () => res.end());
+  child.stderr.on('data', (chunk) => process.stderr.write(chunk));
+}).listen(80);
+`;
+
+const startStandins = async (checkDirectory, key, probeTargets) => {
+  stages.set('the HTTP git stand-in');
+  await docker([
+    'run',
+    '-d',
+    '--name',
+    GIT_STANDIN,
+    '--network',
+    RUN_NETWORK,
+    '--network-alias',
+    'wcc-git',
+    '--user',
+    '0:0',
+    '-e',
+    `RUN_TOKEN=${RUN_TOKEN}`,
+    '-e',
+    `PROBE=${JSON.stringify(probeTargets)}`,
+    '-e',
+    `SERVER=${GIT_SERVER_PROGRAM}`,
+    '--entrypoint',
+    'sh',
+    `platform-runtime:${TAG}`,
+    '-c',
+    [
+      'set -e',
+      'export HOME=/tmp',
+      'mkdir -p /tmp/srv/acme /tmp/seed',
+      'git init -q --bare --initial-branch=main /tmp/srv/acme/api.git',
+      'git -C /tmp/srv/acme/api.git config http.receivepack true',
+      'cd /tmp/seed && git init -q --initial-branch=main',
+      'git config user.email standin@example.invalid && git config user.name standin',
+      'printf "# worker check\\n" > README.md && printf %s "$PROBE" > .wcc-probe-targets',
+      'git add -A && git commit -q -m seed',
+      'git push -q /tmp/srv/acme/api.git main',
+      ': > /tmp/access.log',
+      'exec node -e "$SERVER"',
+    ].join('\n'),
+  ]);
+
+  stages.set('the SSH git stand-in');
+  await docker([
+    'run',
+    '-d',
+    '--name',
+    SSH_STANDIN,
+    '--network',
+    RUN_NETWORK,
+    '--network-alias',
+    'wcc-ssh',
+    '-e',
+    `DEPLOY_PUB=${key.publicKey}`,
+    '-e',
+    `PROBE=${JSON.stringify(probeTargets)}`,
+    ALPINE_IMAGE,
+    'sh',
+    '-c',
+    [
+      'set -e',
+      'apk add --no-cache git openssh-server >/dev/null 2>&1',
+      'adduser -D -h /home/git -s /usr/bin/git-shell git',
+      "sed -i 's/^git:!/git:*/' /etc/shadow",
+      'mkdir -p /home/git/.ssh',
+      'printf "%s\\n" "$DEPLOY_PUB" > /home/git/.ssh/authorized_keys',
+      'chown -R git:git /home/git/.ssh && chmod 700 /home/git/.ssh && chmod 600 /home/git/.ssh/authorized_keys',
+      'mkdir -p /acme && git init --bare -q --initial-branch=main /acme/dk.git',
+      'mkdir -p /seed && cd /seed && git init -q --initial-branch=main',
+      'git config user.email standin@example.invalid && git config user.name standin',
+      'printf "# deploy-key stand-in\\n" > README.md && printf %s "$PROBE" > .wcc-probe-targets',
+      'git add -A && git commit -q -m seed',
+      'git push -q /acme/dk.git main && chown -R git:git /acme',
+      'ssh-keygen -A >/dev/null',
+      'exec /usr/sbin/sshd -D -e -p 443',
+    ].join('\n'),
+  ]);
+  let hostKey = null;
+  for (let attempt = 0; attempt < 240 && hostKey === null; attempt += 1) {
+    const logs = await docker(['logs', SSH_STANDIN]).catch(() => ({ stdout: '', stderr: '' }));
+    if (`${logs.stdout}\n${logs.stderr}`.includes('Server listening')) {
+      const read = await docker(['exec', SSH_STANDIN, 'cat', '/etc/ssh/ssh_host_ed25519_key.pub']);
+      hostKey = read.stdout.trim().split(' ').slice(0, 2).join(' ');
+    } else {
+      await sleep(500);
+    }
+  }
+  check('the SSH stand-in listens on 443 with an Ed25519 host key', hostKey !== null);
+  if (hostKey === null) throw new Error('the SSH stand-in never started');
+  // The core's SSH route reads this per call (`core-entry.mjs`).
+  await writeFile(path.join(checkDirectory, 'known_hosts'), `wcc-ssh ${hostKey}\n`);
+  await chmod(path.join(checkDirectory, 'known_hosts'), 0o644);
+};
+
+/** The labelled objects the worker's launcher made: containers, then networks, then volumes. */
+const removeLauncherObjects = async () => {
+  const label = `com.agentic.instance=${BUNDLE}-ctl`;
+  const containers = (await quietly(['ps', '-aq', '--filter', `label=${label}`]))?.stdout ?? '';
+  for (const id of containers.split('\n').filter(Boolean)) await quietly(['rm', '-f', '-v', id]);
+  const networks =
+    (await quietly(['network', 'ls', '-q', '--filter', `label=${label}`]))?.stdout ?? '';
+  for (const id of networks.split('\n').filter(Boolean)) await quietly(['network', 'rm', id]);
+  const volumes =
+    (await quietly(['volume', 'ls', '-q', '--filter', `label=${label}`]))?.stdout ?? '';
+  for (const name of volumes.split('\n').filter(Boolean)) await quietly(['volume', 'rm', name]);
+  await quietly(['volume', 'rm', `${BUNDLE}-repo-cache`]);
+};
+
 const main = async () => {
   const ids = await preflight();
   const coreDirectory = await mkdtemp(path.join(tmpdir(), 'worker-check-core-'));
   const bundleDirectory = await mkdtemp(path.join(tmpdir(), 'worker-check-bundle-'));
-  const core = compose(CORE, 'compose.yml', coreDirectory);
-  const bundle = compose(BUNDLE, 'compose.worker.yml', bundleDirectory);
-  const digests = [
-    `platform=${ids.platform}`,
-    `platform_launcher=${ids['platform-launcher']}`,
-    `platform_runtime=${ids['platform-runtime']}`,
-    `platform_egress=${ids['platform-egress']}`,
-  ].join(',');
+  const checkDirectory = await mkdtemp(path.join(tmpdir(), 'worker-check-shared-'));
+  await chmod(checkDirectory, 0o755);
+  await writeFile(path.join(checkDirectory, 'known_hosts'), '');
+  await chmod(path.join(checkDirectory, 'known_hosts'), 0o644);
+  const coreOverride = path.join(coreDirectory, 'compose.check.yml');
+  const bundleOverride = path.join(bundleDirectory, 'compose.check.yml');
+  const core = compose(CORE, [path.join(REPO, 'compose.yml'), coreOverride], coreDirectory);
+  const bundle = compose(
+    BUNDLE,
+    [path.join(REPO, 'compose.worker.yml'), bundleOverride],
+    bundleDirectory,
+  );
+  // The two overrides first, so a failure's `describeInstance` can read both projects.
+  await writeFile(
+    coreOverride,
+    [
+      'services:',
+      '  app:',
+      "    command: ['apps/server/worker-check/core-entry.mjs']",
+      '    volumes:',
+      `      - ${path.join(REPO, 'scripts', 'worker-check')}:/app/apps/server/worker-check:ro`,
+      `      - ${checkDirectory}:/check:ro`,
+      networkOverride(['default', 'run-egress', 'docker-proxy', 'launcher-api'], 1, {
+        'run-egress': `${CORE}-run-egress`,
+      }),
+    ].join('\n'),
+  );
+  await writeFile(
+    bundleOverride,
+    networkOverride(['default', 'run-egress', 'docker-proxy', 'launcher-api'], 5),
+  );
+  const key = await deployKey();
   try {
-    // ── The core: workers_only, no runner ───────────────────────────────────────────────────
+    const images = await publishRunImages(checkDirectory);
+    console.log(
+      `run image ${images.run.reference}\negress image ${images.egress.reference} (both pulled by digest)`,
+    );
+    const digests = [
+      `platform=${ids.platform}`,
+      `platform_launcher=${ids['platform-launcher']}`,
+      `platform_runtime=${images.run.digest}`,
+      `platform_egress=${images.egress.digest}`,
+    ].join(',');
+
+    // ── The core: workers_only, no runner, the fake providers ───────────────────────────────
     await writeFile(
       path.join(coreDirectory, '.env'),
       [
@@ -222,7 +590,12 @@ const main = async () => {
         `APP_BOOTSTRAP_ADMIN_EMAIL=${ADMIN_EMAIL}`,
         `APP_BOOTSTRAP_ADMIN_PASSWORD=${ADMIN_PASSWORD}`,
         `APP_WORKER_IMAGE_DIGESTS=${digests}`,
+        'APP_JOBS_POLL_INTERVAL_SECONDS=0.5',
+        'APP_DISPATCH_POLL_INTERVAL_MS=50',
         'APP_PORT=0',
+        `WCC_RUN_TOKEN=${RUN_TOKEN}`,
+        `WCC_DEPLOY_PRIVATE_KEY_B64=${Buffer.from(key.privateKey, 'utf8').toString('base64')}`,
+        `WCC_DEPLOY_PUBLIC_KEY=${key.publicKey}`,
         '',
       ].join('\n'),
     );
@@ -236,6 +609,21 @@ const main = async () => {
       body: JSON.stringify({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD }),
     });
     check('the bootstrap administrator signs in', signedIn.status === 200, String(signedIn.status));
+    const control = async (method, route) =>
+      JSON.parse(
+        (
+          await core([
+            'exec',
+            '-T',
+            'app',
+            'curl',
+            '-fsS',
+            '-X',
+            method,
+            `http://127.0.0.1:9099${route}`,
+          ])
+        ).stdout,
+      );
 
     // ── The bundle, as shipped ──────────────────────────────────────────────────────────────
     await writeFile(
@@ -245,9 +633,10 @@ const main = async () => {
         `CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_TOKEN}`,
         `PLATFORM_IMAGE=platform:${TAG}`,
         `PLATFORM_LAUNCHER_IMAGE=platform-launcher:${TAG}`,
-        `PLATFORM_RUNTIME_IMAGE=platform-runtime:${TAG}`,
-        `PLATFORM_EGRESS_IMAGE=platform-egress:${TAG}`,
+        `PLATFORM_RUNTIME_IMAGE=${images.run.reference}`,
+        `PLATFORM_EGRESS_IMAGE=${images.egress.reference}`,
         `APP_WORKER_CONTROL_VOLUME=${BUNDLE}-ctl`,
+        `APP_WORKER_RUN_NETWORK=${RUN_NETWORK}`,
         `APP_WORKER_CACHE_VOLUME=${BUNDLE}-repo-cache`,
         `APP_WORKER_UI_PORT=${UI_PORT}`,
         '',
@@ -256,9 +645,7 @@ const main = async () => {
     stages.set('bundle: docker compose up');
     await bundle(['up', '-d', '--no-build']);
     const workerContainer = (await bundle(['ps', '-q', 'remote-worker'])).stdout.trim();
-    await run('docker', ['network', 'connect', `${CORE}_default`, workerContainer], {
-      timeout: DOCKER_QUERY_MS,
-    });
+    await docker(['network', 'connect', `${CORE}_default`, workerContainer]);
 
     // 1. The launcher token: generated once, kept.
     const readToken = async () =>
@@ -312,7 +699,7 @@ const main = async () => {
     for (let tries = 0; tries < 60 && userCode === null; tries += 1) {
       const { stdout } = await bundle(['logs', 'remote-worker']);
       userCode = /"user_code":"([A-Z]{4}-[A-Z]{4})"/.exec(stdout)?.[1] ?? null;
-      if (userCode === null) await new Promise((resolve) => setTimeout(resolve, 2_000));
+      if (userCode === null) await sleep(2_000);
     }
     check('the worker logs a device code', userCode !== null);
     const approved = await admin.json('/api/workers/device/approve', {
@@ -347,7 +734,7 @@ const main = async () => {
       } catch {
         // not yet
       }
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      await sleep(2_000);
     }
     check(
       'the worker’s /readyz reads core_handshake: ok',
@@ -370,20 +757,20 @@ const main = async () => {
 
     // 4. compose.yml, pinned by digest, its SHA-256 the handshake's bundle digest.
     const worker = new Client(coreUrl);
-    const headers = { 'x-worker-protocol': '1', authorization: `Bearer ${credential}` };
+    const headers = { 'x-worker-protocol': '2', authorization: `Bearer ${credential}` };
     // Public, with no header at all (TD-031's 2026-11-05 amendment): a person's first-install download.
     const file = await worker.json('/api/worker/v1/compose.yml');
-    const images = [...String(file.text).matchAll(/^\s*image:\s*(\S+)\s*$/gm)].map(
+    const pinned = [...String(file.text).matchAll(/^\s*image:\s*(\S+)\s*$/gm)].map(
       (match) => match[1],
     );
     check(
       'compose.yml pins every image by digest and names no latest',
       file.status === 200 &&
-        images.length > 0 &&
-        images.every(
+        pinned.length > 0 &&
+        pinned.every(
           (image) => /@sha256:[0-9a-f]{64}\}?$/.test(image) && !image.includes('latest'),
         ),
-      images.join(' '),
+      pinned.join(' '),
     );
     const handshake = await worker.json('/api/worker/v1/handshake', {
       method: 'POST',
@@ -394,53 +781,196 @@ const main = async () => {
       'the handshake’s compose_bundle_digest is the served file’s SHA-256 (backlog 743)',
       handshake.body?.compose_bundle_digest ===
         createHash('sha256').update(String(file.text), 'utf8').digest('hex'),
+      `${handshake.status} ${JSON.stringify(handshake.body).slice(0, 160)}`,
     );
 
-    // 5. The launcher relays.
-    const health = (
-      await bundle([
-        'exec',
-        '-T',
-        'remote-worker',
-        'sh',
-        '-c',
-        'curl -fsS -H "authorization: Bearer $(cat /var/lib/platform/launcher-token/token)" http://launcher:7780/v1/health',
-      ])
-    ).stdout;
+    // 5. The launcher relays, and speaks the registry digests the bundle pulled (backlog 704/763).
+    const health = JSON.parse(
+      (
+        await bundle([
+          'exec',
+          '-T',
+          'remote-worker',
+          'sh',
+          '-c',
+          'curl -fsS -H "authorization: Bearer $(cat /var/lib/platform/launcher-token/token)" http://launcher:7780/v1/health',
+        ])
+      ).stdout,
+    );
     check(
       'the worker’s launcher applies the relayed carriage',
-      health.includes('"deployKeyCarriage":"relayed"'),
-      health.slice(0, 200),
+      health.deployKeyCarriage === 'relayed',
+    );
+    check(
+      'the launcher’s health answers the registry digests the bundle pulled (backlog 704)',
+      health.images?.run === images.run.digest && health.images?.egress === images.egress.digest,
+      JSON.stringify(health.images),
+    );
+    check(
+      'the launcher holds both registry digests (heldImageDigests)',
+      [images.run.digest, images.egress.digest].every((digest) =>
+        (health.heldImageDigests ?? []).includes(digest),
+      ),
+      JSON.stringify(health.heldImageDigests),
+    );
+    stages.set('the core’s Workers row');
+    let held = [];
+    for (let tries = 0; tries < 30; tries += 1) {
+      const listed = await admin.json('/api/workers');
+      const row = (listed.body?.items ?? []).find((candidate) => candidate.name === 'check-laptop');
+      held = row?.image_digests ?? [];
+      if ([images.run.digest, images.egress.digest].every((digest) => held.includes(digest))) break;
+      await sleep(2_000);
+    }
+    check(
+      'the core’s Workers row holds the registry digests it advertises (backlog 763)',
+      [images.run.digest, images.egress.digest].every((digest) => held.includes(digest)),
+      JSON.stringify(held),
     );
 
-    // 6. Canaries.
-    const containers = (await bundle(['ps', '-q', '--all'])).stdout
+    // 6. One task to Ready per credential shape.
+    const workerAddress = (
+      await docker([
+        'inspect',
+        '--format',
+        '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}',
+        workerContainer,
+      ])
+    ).stdout
       .trim()
-      .split('\n')
+      .split(/\s+/)
       .filter(Boolean);
-    for (const id of containers) {
-      const { stdout } = await run(
-        'docker',
-        ['inspect', '--format', '{{.Name}} {{json .Config.Env}}', id],
-        {
-          timeout: DOCKER_QUERY_MS,
-        },
+    await startStandins(checkDirectory, key, ['remote-worker', ...workerAddress]);
+    stages.set('two tasks to Ready');
+    await control('POST', '/start/API-1');
+    await control('POST', '/start/DK-1');
+    const deadline = Date.now() + READY_MS;
+    let state = await control('GET', '/state');
+    const done = (task) =>
+      task.state === 'ready_for_merge' ||
+      ['needs_human', 'cancelled', 'paused'].includes(task.state);
+    while (Date.now() < deadline && !(state.tasks.length === 2 && state.tasks.every(done))) {
+      await sleep(3_000);
+      state = await control('GET', '/state');
+    }
+    for (const [ticket, shape] of [
+      ['API-1', 'a static HTTPS token (remote_run_credential: allow)'],
+      ['DK-1', 'a deploy key through the helper socket'],
+    ]) {
+      const task = state.tasks.find((candidate) => candidate.ticket_key === ticket);
+      const runs = state.runs.filter((candidate) => candidate.task_id === task?.id);
+      check(
+        `${ticket} reaches Ready on the worker with ${shape}`,
+        task?.state === 'ready_for_merge',
+        `${task?.state ?? 'no task'} at ${task?.current_stage ?? '—'}; runs ${runs
+          .map((r) => `${r.stage}:${r.status}${r.reason === null ? '' : `/${r.reason}`}`)
+          .join(' ')}`,
       );
+      check(
+        `${ticket}: every run completed on the worker under its first claim`,
+        runs.length > 0 &&
+          runs.every(
+            (r) => r.status === 'completed' && r.claimant_kind === 'worker' && r.lease_epoch === 1,
+          ),
+        `${runs.length} runs`,
+      );
+      if (ticket === 'DK-1') {
+        check(
+          'DK-1: the core signed for the worker’s mirror fetches (ssh_signatures)',
+          runs.some((r) => (r.ssh_signatures ?? 0) > 0),
+          runs.map((r) => r.ssh_signatures ?? 0).join(','),
+        );
+      }
+    }
+    // WP-292 (6), asked from inside each task's refinement run container (`fake-claude-stage.mjs`).
+    for (const ticket of ['API-1', 'DK-1']) {
+      const task = state.tasks.find((candidate) => candidate.ticket_key === ticket);
+      const lines = state.said
+        .filter((row) => row.task_id === task?.id)
+        .flatMap((row) => String(row.text).split('\n'))
+        .filter((line) => line.includes('wcc-probe'));
+      check(
+        `${ticket}: a run container connects to no UI port of the worker (WP-292 (6))`,
+        lines.length > 0 && lines.every((line) => line.includes(' unreachable')),
+        lines.join('; ') || 'no probe reported',
+      );
+    }
+    if (failures.length > 0) {
+      console.error(`--- state\n${JSON.stringify(state, null, 1).slice(0, 6000)}`);
+      const { stdout } = await bundle(['logs', '--no-color', 'remote-worker', 'launcher']);
+      console.error(
+        `--- the bundle's warnings and errors\n${stdout
+          .split('\n')
+          .filter((line) => /"level":(40|50|60)/.test(line))
+          .slice(-60)
+          .join('\n')}`,
+      );
+    }
+    const access = (await docker(['exec', GIT_STANDIN, 'cat', '/tmp/access.log'])).stdout;
+    check(
+      'API-1: the HTTP stand-in took a push authenticated by the static run token',
+      access
+        .split('\n')
+        .filter(Boolean)
+        .some((line) => {
+          const entry = JSON.parse(line);
+          return entry.service === 'git-receive-pack' && entry.granted;
+        }),
+    );
+    const apiRefs = (
+      await docker(['exec', GIT_STANDIN, 'git', '--git-dir=/tmp/srv/acme/api.git', 'branch'])
+    ).stdout;
+    check(
+      'API-1: agentic/API-1 is on the HTTP stand-in',
+      apiRefs.includes('agentic/API-1'),
+      apiRefs.trim(),
+    );
+    const dkRefs = (await docker(['exec', SSH_STANDIN, 'git', '--git-dir=/acme/dk.git', 'branch']))
+      .stdout;
+    check(
+      'DK-1: agentic/DK-1 is on the SSH stand-in',
+      dkRefs.includes('agentic/DK-1'),
+      dkRefs.trim(),
+    );
+
+    // 7. Canaries.
+    const containers = [
+      ...(await bundle(['ps', '-q', '--all'])).stdout.trim().split('\n'),
+      ...((
+        await quietly(['ps', '-aq', '--filter', `label=com.agentic.instance=${BUNDLE}-ctl`])
+      )?.stdout
+        .trim()
+        .split('\n') ?? []),
+    ].filter(Boolean);
+    for (const id of containers) {
+      const { stdout } = await docker([
+        'inspect',
+        '--format',
+        '{{.Name}} {{json .Config.Env}}',
+        id,
+      ]);
+      const name = stdout.split(' ')[0];
       const isWorker = stdout.includes('remote-worker');
       check(
-        `${stdout.split(' ')[0]}: the Claude token only where it belongs`,
+        `${name}: the Claude token only where it belongs`,
         isWorker || !stdout.includes(CLAUDE_TOKEN),
       );
       check(
-        `${stdout.split(' ')[0]}: no DATABASE_URL, no APP_SECRET_KEY`,
+        `${name}: no DATABASE_URL, no APP_SECRET_KEY`,
         !/DATABASE_URL=|APP_SECRET_KEY=/.test(stdout),
       );
+      check(`${name}: no fragment of the deploy key`, !stdout.includes(key.fragment));
     }
     const logs = (await bundle(['logs'])).stdout;
     check('the Claude token is in no log line of the bundle', !logs.includes(CLAUDE_TOKEN));
     check('the worker credential is in no log line of the bundle', !logs.includes(credential));
+    check('the static run token is in no log line of the bundle', !logs.includes(RUN_TOKEN));
+    check(
+      'no fragment of the deploy key is in a log line of the bundle',
+      !logs.includes(key.fragment),
+    );
 
-    // 6b. The local page (WP-292 (6)).
+    // 8. The local page (WP-292 (6)).
     stages.set('the worker’s local page');
     const uiToken = /#token=([A-Za-z0-9_-]{43})/.exec(logs)?.[1] ?? null;
     check('the worker logs its page’s address with the token in the fragment', uiToken !== null);
@@ -451,8 +981,10 @@ const main = async () => {
       published,
     );
     const page = `http://127.0.0.1:${UI_PORT}`;
-    const asked = async (route, headers = {}) => {
-      const { response, body } = await boundedFetch(stages, `${page}${route}`, { headers });
+    const asked = async (route, requestHeaders = {}) => {
+      const { response, body } = await boundedFetch(stages, `${page}${route}`, {
+        headers: requestHeaders,
+      });
       return { status: response.status, body, headers: response.headers };
     };
     const html = await asked('/');
@@ -460,21 +992,22 @@ const main = async () => {
       'the page is served on 127.0.0.1',
       html.status === 200 && html.body.includes('id="root"'),
     );
-    const state = await asked('/api/local/state', { authorization: `Bearer ${uiToken}` });
+    const local = await asked('/api/local/state', { authorization: `Bearer ${uiToken}` });
     check(
       'the page’s state answers with the token, naming the worker',
-      state.status === 200 && state.body.includes('"worker_name":"check-laptop"'),
-      `${state.status} ${state.body.slice(0, 120)}`,
+      local.status === 200 && local.body.includes('"worker_name":"check-laptop"'),
+      `${local.status} ${local.body.slice(0, 120)}`,
     );
     check(
       'the page’s state carries no secret',
-      !state.body.includes(CLAUDE_TOKEN) &&
-        !state.body.includes(credential) &&
-        !state.body.includes(String(uiToken)),
+      !local.body.includes(CLAUDE_TOKEN) &&
+        !local.body.includes(credential) &&
+        !local.body.includes(String(uiToken)) &&
+        !local.body.includes(RUN_TOKEN),
     );
     check(
       'the page answers no CORS header and sets no cookie',
-      [...state.headers.keys()].every(
+      [...local.headers.keys()].every(
         (name) => !name.startsWith('access-control-') && name !== 'set-cookie',
       ),
     );
@@ -515,56 +1048,58 @@ const main = async () => {
         reached,
       );
     }
-    const workerAddress = (
-      await run(
-        'docker',
-        [
-          'inspect',
-          '--format',
-          '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}',
-          workerContainer,
-        ],
-        { timeout: DOCKER_QUERY_MS },
-      )
-    ).stdout
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
     const probe = (
-      await run(
-        'docker',
-        [
-          'run',
-          '--rm',
-          '--network',
-          'agentic-worker-run-egress',
-          '--entrypoint',
-          'node',
-          `platform:${TAG}`,
-          '-e',
-          `const targets = ${JSON.stringify(['remote-worker', ...workerAddress])};
+      await docker([
+        'run',
+        '--rm',
+        '--network',
+        RUN_NETWORK,
+        '--entrypoint',
+        'node',
+        `platform:${TAG}`,
+        '-e',
+        `const targets = ${JSON.stringify(['remote-worker', ...workerAddress])};
          Promise.all(targets.map((host) => fetch('http://' + host + ':7357/', { signal: AbortSignal.timeout(5000) })
            .then((r) => host + ' reached ' + r.status, () => host + ' unreachable')))
            .then((lines) => console.log(lines.join('\\n')));`,
-        ],
-        { timeout: DOCKER_QUERY_MS },
-      )
+      ])
     ).stdout;
-    check(
-      'a container on the run egress network reaches no UI port of the worker',
-      !probe.includes(' reached '),
-      probe.trim().replaceAll('\n', '; '),
+    // Measured, not asserted: the run egress network carries the sidecar and the helpers, never a
+    // run container (TD-025) — the assertion is the run container's own probe above. What a
+    // container here reaches is reported so a change in it is seen (backlog 792).
+    console.log(
+      `note  a container on the run egress network: ${probe.trim().replaceAll('\n', '; ')}`,
     );
   } catch (error) {
     failures.push(`${stages.current}: ${String(error)}`);
     await describeInstance(core, 'core').catch(() => undefined);
     await describeInstance(bundle, 'bundle').catch(() => undefined);
+    try {
+      const { stdout } = await bundle([
+        'logs',
+        '--no-color',
+        '--tail',
+        '120',
+        'remote-worker',
+        'launcher',
+      ]);
+      console.error(`--- bundle logs remote-worker launcher\n${stdout}`);
+    } catch {
+      // best effort
+    }
   } finally {
-    // 7. Nothing is left.
+    // 9. Nothing is left.
+    await quietly(['rm', '-f', '-v', GIT_STANDIN]);
+    await quietly(['rm', '-f', '-v', SSH_STANDIN]);
     await bundle(['down', '-v', '--remove-orphans']).catch(() => undefined);
+    await removeLauncherObjects();
     await core(['down', '-v', '--remove-orphans'], composeEnvironment(CORE)).catch(() => undefined);
+    await quietly(['rm', '-f', '-v', REGISTRY]);
+    for (const reference of madeImages) await quietly(['image', 'rm', reference]);
+    await quietly(['image', 'rm', RUN_IMAGE]);
     await rm(coreDirectory, { recursive: true, force: true });
     await rm(bundleDirectory, { recursive: true, force: true });
+    await rm(checkDirectory, { recursive: true, force: true });
   }
 };
 

@@ -968,6 +968,11 @@ describe('a spec with no checkout (WP-74)', () => {
       /^mkdir -p \/ctl\/\S+ \/work 2>\/dev\/null \|\| \{ chown 0:0 \/ctl && mkdir -p /,
     );
     expect(lines).not.toContain('chown 0:0 /ctl');
+    // S-22.14 (backlog 705): a root-owned root is made group-writable on every prepare, so a worker
+    // in group 0 makes its helper directories; one somebody else owns is left alone.
+    expect(lines[lines.indexOf(mkdir) + 1]).toBe(
+      'if [ "$(stat -c %u /ctl)" = 0 ]; then chmod 0775 /ctl; fi',
+    );
   });
 
   it('makes the working directory the runner will spawn in, owned by the shim’s uid', async () => {

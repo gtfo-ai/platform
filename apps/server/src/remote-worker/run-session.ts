@@ -249,8 +249,14 @@ export interface RunSessionState {
    * exact-value redactor — oldest first, at most {@link WORKER_LOCAL_TRANSCRIPT_TAIL} (WP-292).
    */
   readonly tail: TranscriptEvent[];
-  /** Input + output tokens from the run's `result` entry; `null` until it reported them. */
+  /**
+   * Input + output tokens: **so far** while the run is live — the sum of each model turn's usage as
+   * the CLI reported it (backlog 772) — and the `result` entry's own total once it arrives, which
+   * then stands; `null` until the CLI reported any.
+   */
   tokens: number | null;
+  /** Whether {@link tokens} is the `result`'s reported total rather than the turns' sum so far. */
+  tokensFinal: boolean;
   /** The cost the run's `result` entry reported, USD; `null` until reported (BD-011). */
   costUsd: number | null;
   /** A cancel was asked from the local page and the core accepted it. */
@@ -402,6 +408,7 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
     display: pkg.display ?? null,
     tail: [],
     tokens: null,
+    tokensFinal: false,
     costUsd: null,
     cancelRequested: false,
     epoch,
@@ -454,6 +461,8 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
 
   // ── the transcript: batched, serial, in seq order ─────────────────────────
   const queued: { readonly seq: number; readonly event: JsonObject }[] = [];
+  /** The core answered `transcript_full` (backlog 754): nothing more is queued for it. */
+  let transcriptFull = false;
   let flushing: Promise<void> | null = null;
   const flush = (): Promise<void> => {
     flushing ??= (async () => {
@@ -471,6 +480,18 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
         try {
           await call('transcript', () => core.transcript({ epoch, entries: batch }));
         } catch (error) {
+          if (error instanceof CoreCallError && error.code === 'transcript_full') {
+            // Backlog 754: the core stores no more of this run, so the run ends here — stopped as
+            // a cancel, settled through `finish` like any other — rather than running on unseen.
+            transcriptFull = true;
+            queued.length = 0;
+            logger.error(
+              { run_id: runId, err: error },
+              'the core holds no more transcript entries for this run (transcript_full); the run is stopped',
+            );
+            handle?.stop({ reason: 'cancelled' }).catch(() => undefined);
+            break;
+          }
           logger.error(
             { run_id: runId, err: error, entries: batch.length },
             'transcript entries could not be uploaded; they are dropped',
@@ -496,14 +517,29 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
     }
     if (event.kind === 'result') {
       state.tokens = event.usage.input_tokens + event.usage.output_tokens;
+      state.tokensFinal = true;
       // A figure the producer reported, never one somebody priced (`is_estimate`).
       state.costUsd = event.cost.is_estimate ? null : event.cost.usd;
     }
+  };
+  /** Each model turn's input + output tokens by message id: one turn repeats on every block. */
+  const turns = new Map<string, number>();
+  const countTurn = (turn: {
+    readonly messageId: string;
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+  }): void => {
+    if (state.tokensFinal) return;
+    turns.set(turn.messageId, turn.inputTokens + turn.outputTokens);
+    let sum = 0;
+    for (const tokens of turns.values()) sum += tokens;
+    state.tokens = sum;
   };
   const uploader: RunTranscriptSink = {
     append: async (event: TranscriptEvent) => {
       if (loss !== null) return;
       keepForPage(event);
+      if (transcriptFull) return;
       queued.push({ seq: event.seq, event: event as unknown as JsonObject });
       void flush();
     },
@@ -754,6 +790,7 @@ export const startRunSession = (options: RunSessionOptions): RunSession => {
         clock,
         logger,
         injectedSecretRedactorFor: () => exact,
+        onTurnUsage: countTurn,
         spawnClaudeCodeProcess: spawnProcess,
         ...(cliEnvironment === undefined ? {} : { workspaceEnvironment: cliEnvironment }),
       }),

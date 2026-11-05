@@ -165,8 +165,8 @@ services:
       APP_WORKSPACE_EGRESS_IMAGE: ${PLATFORM_EGRESS_IMAGE:-platform-egress:dev}
       APP_WORKSPACE_GIT_IMAGE: ${APP_WORKSPACE_GIT_IMAGE:-alpine/git:v2.49.1@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26}
       APP_WORKSPACE_MIRROR_MEMORY_MB: ${APP_WORKSPACE_MIRROR_MEMORY_MB:-2048}
-      APP_WORKSPACE_HELPER_NETWORK: agentic-worker-run-egress
-      APP_WORKSPACE_EGRESS_NETWORK: agentic-worker-run-egress
+      APP_WORKSPACE_HELPER_NETWORK: ${APP_WORKER_RUN_NETWORK:-agentic-worker-run-egress}
+      APP_WORKSPACE_EGRESS_NETWORK: ${APP_WORKER_RUN_NETWORK:-agentic-worker-run-egress}
       APP_WORKSPACE_EXPORT_DIR: /var/lib/app/exports
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
@@ -210,7 +210,9 @@ volumes:
 
 networks:
   run-egress:
-    name: agentic-worker-run-egress
+    # Named globally (the launcher is handed it by name); `APP_WORKER_RUN_NETWORK` gives a second
+    # bundle on the same daemon its own, as `APP_WORKER_CONTROL_VOLUME` gives it its own volume.
+    name: ${APP_WORKER_RUN_NETWORK:-agentic-worker-run-egress}
   docker-proxy:
     internal: true
   launcher-api:

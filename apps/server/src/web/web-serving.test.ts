@@ -72,6 +72,8 @@ beforeAll(() => {
   mkdirSync(join(root, 'assets'), { recursive: true });
   mkdirSync(join(root, 'api'), { recursive: true });
   writeFileSync(join(root, 'index.html'), SHELL);
+  // The worker's local page, which the same bundle carries (WP-292) and the core refuses (774).
+  writeFileSync(join(root, 'worker.html'), '<!doctype html><div id="root"></div>');
   writeFileSync(join(root, 'assets', 'index-Wp15J000.js'), ASSET);
   // A file the bundle has no business containing, under a segment the router owns: the fallback
   // must not serve it even though it exists and no route answers that exact path.
@@ -386,6 +388,17 @@ describe('a deep link answers the shell', () => {
     const response = await app.inject({ url: '/assets/index-DeletedHash.js' });
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual(notFoundBody);
+  });
+
+  it('refuses the worker’s own page by name with the API’s 404 (backlog 774)', async () => {
+    const { app } = await build();
+    for (const method of ['GET', 'HEAD'] as const) {
+      const response = await app.inject({ method, url: '/worker.html' });
+      expect(response.statusCode, method).toBe(404);
+    }
+    expect((await app.inject({ url: '/worker.html' })).json()).toEqual(notFoundBody);
+    // A deeper path that ends in the same name is not the worker's page, and no client route.
+    expect((await app.inject({ url: '/assets/worker.html' })).statusCode).toBe(404);
   });
 
   it('answers a write to a client path with the API’s 404, not the shell', async () => {

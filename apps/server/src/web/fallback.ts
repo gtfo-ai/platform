@@ -58,6 +58,13 @@ import { type BundleEncoder, createBundleEncoder } from './encoding.js';
 /** The application shell, which every deep link is answered with. */
 const SHELL = 'index.html';
 
+/**
+ * Files of the bundle the core never serves (backlog 774): `worker.html` is the remote worker's
+ * local page (WP-292), served by the worker beside its `/api/local/*`; from the core it would load
+ * and then 404 on every call. Refused by name at the top level, as a missing file is.
+ */
+export const CORE_REFUSED_BUNDLE_FILES: ReadonlySet<string> = new Set(['worker.html']);
+
 /** Returns `true` when it has answered the request; `false` leaves it to the not-found handler. */
 export type ClientFallback = (request: FastifyRequest, reply: FastifyReply) => Promise<boolean>;
 
@@ -216,6 +223,9 @@ export const createClientFallback = async (
     }
     const first = segments[0];
     if (first !== undefined && reserved.has(first)) {
+      return false;
+    }
+    if (segments.length === 1 && first !== undefined && CORE_REFUSED_BUNDLE_FILES.has(first)) {
       return false;
     }
     const file = await resolveBundleFile(realRoot, segments);

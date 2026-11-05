@@ -24,6 +24,8 @@
 import { randomUUID } from 'node:crypto';
 import {
   createAskExecutor,
+  createBudgetGuard,
+  createClaimAdmission,
   createLateCostRecorder,
   createRemoteRuns,
   createRunStopReasons,
@@ -279,6 +281,15 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
       ),
     settleAsk: async (request) => askExecutor.settle(request),
     lateCost,
+    // TD-031 §2 (backlog 744): the stage executor's budget questions, asked again at a worker's claim.
+    admission: createClaimAdmission({
+      store,
+      settings: async (projectId, tx) => settings.forProject(projectId, tx),
+      budgets: createBudgetGuard({ store: costStore }),
+      eventStore: options.eventing.store,
+      context: context('pipeline'),
+      logger: options.logger,
+    }),
     logger: options.logger,
   });
 };

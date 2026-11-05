@@ -174,8 +174,18 @@ describe('the worker’s local page (WP-292)', () => {
     );
     await screen.findByText('Runs on this machine');
     const reportedCard = reported.container.querySelector(`[data-run="${RUN_ID}"]`);
-    expect(reportedCard?.textContent).toContain('1,234');
+    expect(reportedCard?.textContent).toContain('1,234 so far');
     expect(reportedCard?.textContent).toContain('$0.40');
+
+    // Once the run is finishing its figure is the result's total, not "so far" (backlog 772).
+    cleanup();
+    const finished = renderPage(
+      fakeClient(state({ runs: [run({ tokens: 1500, cost_usd: 0.4, phase: 'finishing' })] })),
+    );
+    await screen.findByText('Runs on this machine');
+    const finishedCard = finished.container.querySelector(`[data-run="${RUN_ID}"]`);
+    expect(finishedCard?.textContent).toContain('1,500');
+    expect(finishedCard?.textContent).not.toContain('so far');
   });
 
   it('pauses through the worker, and a paused worker’s free desk sips its coffee', async () => {

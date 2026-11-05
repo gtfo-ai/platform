@@ -37,6 +37,22 @@ const iso = (value: Date | string): IsoDateTime =>
   (value instanceof Date ? value : new Date(value)).toISOString() as IsoDateTime;
 
 export const createPostgresRemoteRunCallStore = (): RemoteRunCallStore => ({
+  // The same lock `appendTranscript` takes: re-taking a transaction-level advisory lock is a no-op.
+  lockTranscript: async (tx, runId) => {
+    await sqlOf(tx).query(
+      `select pg_advisory_xact_lock(hashtextextended('run_messages:' || $1, 0))`,
+      [runId],
+    );
+  },
+
+  transcriptCount: async (tx, runId) => {
+    const { rows } = await sqlOf(tx).query<{ count: string }>(
+      'select count(*)::text as count from run_messages where run_id = $1',
+      [runId],
+    );
+    return Number(rows[0]?.count ?? 0);
+  },
+
   appendTranscript: async (tx, runId, entries) => {
     const sql = sqlOf(tx);
     // One ingest of a run at a time, so the `not exists` below is a decision nobody else is making.

@@ -1444,6 +1444,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         // operator (or a test) owns and made writable must stay theirs: an unconditional `chown`
         // left CI's bind-mounted control root undeletable by the user who made it.
         `mkdir -p ${dir} /work 2>/dev/null || { chown 0:0 /ctl && mkdir -p ${dir} /work; }`,
+        CONTROL_ROOT_GROUP_WRITABLE,
         // Before `/work` is handed to uid 1000: root here has no `DAC_OVERRIDE`, so it can create
         // inside `/work` only while it still owns it (measured — after the chown, `mkdir` answers
         // *Permission denied*).
@@ -2563,6 +2564,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       script: [
         'set -e',
         `mkdir -p ${dir} 2>/dev/null || { chown 0:0 /ctl && mkdir -p ${dir}; }`,
+        CONTROL_ROOT_GROUP_WRITABLE,
         `printf %s "$HELPER_PASSWD" > ${dir}/passwd.new`,
         `chmod 644 ${dir}/passwd.new`,
         `mv -f ${dir}/passwd.new ${dir}/passwd`,
@@ -3130,6 +3132,19 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
  * any helper starts, so the export neither mounts the mirror for a tree that is not there nor
  * reports a `git` error that reads like a network fault.
  */
+/**
+ * The control volume's root, once root's, is **group-writable** — `0775` — since S-22.14. A remote
+ * worker runs as uid 1000 in group 0 (`compose.worker.yml`'s `group_add`) and creates each deploy-key
+ * run's `helper-<run>/` directory here; on the `0755` a helper's reclaim left (`#prepare`), every
+ * deploy-key run after the first run of any kind failed to provision with `EACCES` (measured by
+ * `worker-compose-check.mjs` on a worker bundle, backlog 705). Asked on every prepare, so a volume an
+ * earlier release reclaimed is mended too; a root that is not root's (a host directory its operator
+ * owns) is left as it is. Each run's own directory stays `0700` and its token `0600`, so group 0
+ * reads nothing of another run.
+ */
+export const CONTROL_ROOT_GROUP_WRITABLE =
+  'if [ "$(stat -c %u /ctl)" = 0 ]; then chmod 0775 /ctl; fi';
+
 export const assertHasCheckout = (handle: WorkspaceHandle): string => {
   if (handle.cacheKey === null) {
     throw new WorkspaceError(

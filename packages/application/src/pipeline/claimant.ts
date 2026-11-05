@@ -68,6 +68,7 @@ import {
   runStoppedReasonOf,
 } from '../ports/runner.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { type ClaimAdmission, ClaimAdmissionRefused } from './claim-admission.js';
 import {
   cliSpawnNotRequested,
   isStopEnding,
@@ -91,6 +92,7 @@ import type { RunSecretEnvironment } from './run-redaction.js';
 import type { SettleRunRequest } from './settle.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import { LeaseLostError, type PipelineStore, type RunLeaseFence } from './store.js';
+import { retryOnTaskConflict } from './task-conflict.js';
 
 /** How often the loop asks for an offer when no notification woke it (TD-031: a 5 s poll). */
 export const DEFAULT_CLAIM_POLL_MS = 5_000;
@@ -140,6 +142,12 @@ export interface RunClaimantOptions {
    * every drain; answers how many it found.
    */
   readonly unplanned?: () => Promise<number>;
+  /**
+   * TD-031 §2's admission re-check at the claim (backlog 744, `claim-admission.ts`): asked inside
+   * the claim's transaction; a refusal rolls the claim back, withdraws the offer and pauses the
+   * task. Absent asks nothing — every production composition passes one.
+   */
+  readonly admission?: ClaimAdmission;
   /** `APP_RUNNER_CONCURRENCY`. @default DEFAULT_RUNNER_CONCURRENCY */
   readonly concurrency?: number;
   /** @default DEFAULT_CLAIM_POLL_MS */
@@ -236,6 +244,18 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
         { ...row, status: 'created' },
         await options.eventStore.nextStreamSequence('run', row.id),
       );
+      const forAdmission = {
+        runId: row.id,
+        taskId: row.taskId,
+        projectId: row.projectId,
+        kind: claimed.kind,
+        stage: row.stage,
+      };
+      const refusal = (await options.admission?.recheck(scope.tx, forAdmission)) ?? null;
+      if (refusal !== null) {
+        // Rolls the claim back: the offer is open again for `refuse` to withdraw.
+        throw new ClaimAdmissionRefused(forAdmission, refusal);
+      }
       const recorded = recordClaim(offered, claimed, context);
       await scope.events.append(recorded.events);
       return {
@@ -399,6 +419,12 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
       try {
         claimed = await claimOne();
       } catch (error) {
+        if (error instanceof ClaimAdmissionRefused && options.admission !== undefined) {
+          // A refusal that paused its task closed its offer, so the next claim finds another; one
+          // that did not would find the same offer again, so the loop waits for the next wake-up.
+          if (await refuseAtClaim(options.admission, error)) continue;
+          break;
+        }
         logger.error(
           { err: error },
           'the claimant could not claim an offer; the next wake-up tries again',
@@ -422,6 +448,28 @@ export const createRunClaimant = (options: RunClaimantOptions): RunClaimant => {
       inFlight.add(running);
     }
     return claimedCount;
+  };
+
+  /** The refused claim's ending, in its own transaction: the offer withdrawn, the task paused. */
+  const refuseAtClaim = async (
+    admission: ClaimAdmission,
+    refused: ClaimAdmissionRefused,
+  ): Promise<boolean> => {
+    try {
+      return await retryOnTaskConflict(
+        { taskId: refused.claimed.taskId, what: 'refusing a claim', logger },
+        () =>
+          unitOfWork.transaction((scope) =>
+            admission.refuse(scope, refused.claimed, refused.refusal),
+          ),
+      );
+    } catch (error) {
+      logger.error(
+        { err: error, run_id: refused.claimed.runId, task_id: refused.claimed.taskId },
+        'a claim refused at admission could not pause its task; the offer stays open and the next wake-up asks again',
+      );
+      return false;
+    }
   };
 
   const fill = (): Promise<number> => {

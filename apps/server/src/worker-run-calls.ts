@@ -164,6 +164,8 @@ export const createRemoteRunDeployKeys = (options: {
     options.now ?? Date.now,
   );
   return {
+    // Never cached (backlog 753): the claim's eligibility reads it once; a signature reads it again.
+    remoteRunCredential: (projectId) => remoteRunCredentialOf(options.pool)(projectId),
     forRun: async (run) => {
       const { rows } = await options.pool.query<{ credential_source: string | null }>(
         'select credential_source from runs where id = $1',

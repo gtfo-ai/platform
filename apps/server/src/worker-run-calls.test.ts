@@ -112,7 +112,7 @@ describe('the remote run’s redactor, rebuilt from stored state (backlog 745)',
       redactors: redactors(),
       tools: {} as never,
       approvals: {} as never,
-      deployKeys: { forRun: async () => null },
+      deployKeys: { forRun: async () => null, remoteRunCredential: async () => 'allow' },
       maxSignatures: 128,
     });
     const event: JsonObject = {

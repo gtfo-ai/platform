@@ -36,6 +36,7 @@ import {
   createClaudeRunner,
   INTERRUPT_GRACE_MS,
   retriedWithoutModel,
+  turnUsageOf,
 } from './claude-runner.js';
 import { manualClock } from './clock.js';
 import {
@@ -211,6 +212,44 @@ describe('telling the transport the session’s result was read (WP-151)', () =>
     const harness = noting('crash');
     expect((await harness.outcome).terminalReason).toBe('crash');
     expect(harness.noted()).toBe(0);
+  });
+});
+
+describe('each model turn’s usage, told as it arrives (backlog 772)', () => {
+  it('tells every assistant message’s id and counts, before the outcome', async () => {
+    const turns: { messageId: string; inputTokens: number; outputTokens: number }[] = [];
+    const cli = fakeSpawnClaudeCodeProcess(loadScript('happy-path'));
+    const runner = createClaudeRunner({
+      sink: recordingSink(),
+      approvals: scriptedApprovals(undefined),
+      tools: recordingTools(),
+      clock: manualClock(FIXTURE_CLOCK_START),
+      injectedSecretRedactorFor: () => injectedSecretRedactorFixture(),
+      spawnClaudeCodeProcess: cli.spawn,
+      onTurnUsage: (turn) => turns.push(turn),
+    });
+    const handle = runner.start(runSpecFixture(), countingStartHooks());
+    expect((await handle.outcome).status).toBe('completed');
+    expect(turns.length).toBeGreaterThan(0);
+    for (const turn of turns) {
+      expect(turn.messageId).not.toBe('');
+      expect(Number.isSafeInteger(turn.inputTokens + turn.outputTokens)).toBe(true);
+    }
+  });
+
+  it('reads no turn from a message with no id or no counts — absent is not zero', () => {
+    const assistant = (message: Record<string, unknown>) =>
+      ({ type: 'assistant', message, parent_tool_use_id: null }) as never;
+    expect(
+      turnUsageOf(assistant({ id: 'm1', usage: { input_tokens: 3, output_tokens: 2 } })),
+    ).toEqual({ messageId: 'm1', inputTokens: 3, outputTokens: 2 });
+    expect(turnUsageOf(assistant({ usage: { input_tokens: 3, output_tokens: 2 } }))).toBeNull();
+    expect(turnUsageOf(assistant({ id: 'm1', usage: { input_tokens: 3 } }))).toBeNull();
+    expect(
+      turnUsageOf(assistant({ id: 'm1', usage: { input_tokens: -1, output_tokens: 2 } })),
+    ).toBeNull();
+    expect(turnUsageOf(assistant({ id: 'm1' }))).toBeNull();
+    expect(turnUsageOf({ type: 'result' } as never)).toBeNull();
   });
 });
 

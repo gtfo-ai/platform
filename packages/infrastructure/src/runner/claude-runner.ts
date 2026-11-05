@@ -191,6 +191,18 @@ export interface ClaudeRunnerDependencies {
   injectedSecretRedactorFor(spec: RunSpec): SecretRedactor;
   readonly sessionMirror?: SessionMirrorPort;
   /**
+   * Told the usage of each model turn as the CLI reports it on an `assistant` message (backlog 772)
+   * — the message id and its input and output tokens — so a holder can show **tokens so far** while
+   * the run is live. The SDK repeats one turn's usage on every content block of it, so a caller sums
+   * by message id; the `result` stays the reported total (BD-011). The normalised transcript keeps
+   * no usage on an `assistant` entry, which is why this is a seam rather than a transcript field.
+   */
+  readonly onTurnUsage?: (turn: {
+    readonly messageId: string;
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+  }) => void;
+  /**
    * WP-13's run shim goes here; `fakeSpawnClaudeCodeProcess` goes here in tests (TD-025). When it
    * exposes `setStderrSink` (the runlet transport does, WP-127), the runner sets its own redacting
    * sink on it: the SDK reads stderr only from a process it spawned itself.
@@ -371,6 +383,28 @@ const contentBlocks = (content: unknown): readonly Block[] =>
           typeof block === 'object' && block !== null && !Array.isArray(block),
       )
     : [];
+
+/** A count the producer reported: a non-negative safe integer, or nothing (rule 16: absent is not 0). */
+const turnCount = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+
+/** One `assistant` message's turn usage, or `null` when it carries no id or no counts (backlog 772). */
+export const turnUsageOf = (
+  message: SDKMessage,
+): { messageId: string; inputTokens: number; outputTokens: number } | null => {
+  if (message.type !== 'assistant') return null;
+  const inner = message.message as unknown as {
+    id?: unknown;
+    usage?: Record<string, unknown> | null;
+  };
+  const usage = inner.usage ?? null;
+  const input = turnCount(usage?.['input_tokens']);
+  const output = turnCount(usage?.['output_tokens']);
+  if (typeof inner.id !== 'string' || inner.id === '' || input === null || output === null) {
+    return null;
+  }
+  return { messageId: inner.id, inputTokens: input, outputTokens: output };
+};
 
 /**
  * Follows the `StructuredOutput` calls through the stream. An offer is the assistant's `tool_use`
@@ -846,6 +880,10 @@ const startRun = (
     }
     await append((envelope) => normaliseMessage(message, envelope), progress);
     deliveries.accept(message);
+    if (message.type === 'assistant' && deps.onTurnUsage !== undefined) {
+      const turn = turnUsageOf(message);
+      if (turn !== null) deps.onTurnUsage(turn);
+    }
     if (message.type === 'result') {
       result = message;
       // WP-151 (backlog 463): the session's answer is in, so the transport's control connection may

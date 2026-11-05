@@ -1615,6 +1615,8 @@ export const OFFER_WITHDRAWAL_CODES = [
   'stage_left',
   'run_plan_missing',
   'offer_timeout',
+  // TD-031 §2 (backlog 744): a budget refused the run at the claim (`claim-admission.ts`).
+  'budget_at_claim',
 ] as const;
 export type OfferWithdrawalCode = (typeof OFFER_WITHDRAWAL_CODES)[number];
 

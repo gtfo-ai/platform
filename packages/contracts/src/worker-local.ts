@@ -74,7 +74,11 @@ export const workerLocalRunSchema = z.strictObject({
   phase: workerLocalRunPhaseSchema,
   started_at: isoDateTimeSchema,
   elapsed_ms: z.int().nonnegative(),
-  /** Input + output tokens as the run's `result` reported them; `null` until reported. */
+  /**
+   * Input + output tokens: while the run is `provisioning`/`running`, the sum of each model turn the
+   * CLI has reported **so far** (backlog 772); once its `result` arrives, the total that reported.
+   * `null` until the CLI reported any — never an estimate.
+   */
   tokens: z.int().nonnegative().nullable(),
   /** The cost the run reported, USD; `null` until reported — never an estimate (BD-011). */
   cost_usd: z.number().nonnegative().nullable(),
