@@ -32,9 +32,10 @@
  *    `authorized_keys` line, its host key pinned in the core's SSH route).
  *
  * Every network the two compose projects declare gets an explicit `10.213.x.0/24` subnet from an
- * override file: a developer daemon with ~30 networks has no default address pool left (measured on
- * the machine that first ran this: `all predefined address pools have been fully subnetted`), and the
- * pools that remain are left for the runs' own networks (backlog 790).
+ * override file: Docker's default pools hold 31 networks, and on the machine that first ran this 23
+ * bridge networks of other projects plus the core's four left none for the bundle (`all predefined
+ * address pools have been fully subnetted`); the pools that remain are left for the runs' own
+ * networks (backlog 790).
  *
  * ## What it asserts
  *

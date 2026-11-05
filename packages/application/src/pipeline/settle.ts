@@ -233,6 +233,8 @@ export interface RecordInput {
   readonly run: Run;
   readonly outcome: RunOutcome;
   readonly stopReason: string | null;
+  /** Platform text naming why the run was stopped, appended to an escalation's reason (S-22.14). */
+  readonly endingDetail?: string | null;
   readonly options: SettleOptions;
   /** The run's own redactor — TD-012 at the artifact write (WP-52), from `runRedactorFor`. */
   readonly redactor: SecretRedactor;
@@ -831,7 +833,11 @@ const recordUnsuccessful = async (
 
   const reason = costUnreported
     ? 'the platform could not tell what the run cost, so it stopped it without verifying the budget'
-    : `the run ended as ${outcome.status} (${outcome.terminalReason})`;
+    : `the run ended as ${outcome.status} (${outcome.terminalReason})${
+        input.endingDetail === undefined || input.endingDetail === null
+          ? ''
+          : `: ${input.endingDetail}`
+      }`;
   return escalateOnRun(
     scope,
     input,
@@ -1053,6 +1059,12 @@ export interface SettleRunRequest {
   readonly outcome: RunOutcome | NotStartedReport;
   /** The claimant's stop register, a closed word (`RunStoppedReason`), or `null`. */
   readonly stopReason: RunStoppedReason | null;
+  /**
+   * **Platform** text the settling process knows and the claimant's closed word cannot carry — the
+   * transcript cap a remote run reached (S-22.14, backlog 754) — appended to an escalation's reason.
+   * Never a claimant's words.
+   */
+  readonly endingDetail?: string | null;
 }
 
 /** **The stored result** of a settle — the run row's ending, read under its lock (module docblock). */
@@ -1256,6 +1268,7 @@ export const settleRun = async (
                 ...inputs,
                 outcome: reported,
                 stopReason: request.stopReason,
+                endingDetail: request.endingDetail ?? null,
                 options: deps,
                 fence: request.fence,
               });

@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, statSync } from 'node:fs';
+import { chmod as chmodPath, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import path from 'node:path';
 import { WORKSPACE_LABELS, type WorkspaceHandle } from '@platform/application';
@@ -16,6 +17,7 @@ import {
   assertHasCheckout,
   assertProjectEnv,
   assertRunnerUid,
+  CONTROL_ROOT_GROUP_WRITABLE,
   DEFAULT_MIRROR_MEMORY_MB,
   DockerWorkspaceProvider,
   exportScript,
@@ -973,6 +975,28 @@ describe('a spec with no checkout (WP-74)', () => {
     expect(lines[lines.indexOf(mkdir) + 1]).toBe(
       'if [ "$(stat -c %u /ctl)" = 0 ]; then chmod 0775 /ctl; fi',
     );
+  });
+
+  /**
+   * Backlog 705, executed rather than read (review of PR #36): the line itself, run by `sh` against a
+   * real directory with `stat` answering the owner the helper would see — root's root becomes
+   * `0775`, a root somebody else owns is left exactly as it was.
+   */
+  it('makes a root-owned control root group-writable and leaves anyone else’s alone (705)', async () => {
+    for (const [owner, expected] of [
+      ['0', 0o775],
+      ['1000', 0o755],
+    ] as const) {
+      const root = path.join(workDir, `ctl-705-${owner}`);
+      const bin = path.join(workDir, `bin-705-${owner}`);
+      await mkdir(root, { recursive: true });
+      await mkdir(bin, { recursive: true });
+      await chmodPath(root, 0o755);
+      await writeFile(path.join(bin, 'stat'), `#!/bin/sh\necho ${owner}\n`, { mode: 0o755 });
+      const line = CONTROL_ROOT_GROUP_WRITABLE.replaceAll('/ctl', root);
+      execFileSync('sh', ['-c', line], { env: { PATH: `${bin}:/usr/bin:/bin` } });
+      expect((statSync(root).mode & 0o777).toString(8), owner).toBe(expected.toString(8));
+    }
   });
 
   it('makes the working directory the runner will spawn in, owned by the shim’s uid', async () => {

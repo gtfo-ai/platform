@@ -108,6 +108,8 @@ const world = async (
     readonly tickets?: number;
     /** Backlog 744: the budget the claim's admission re-check asks; absent, no re-check. */
     readonly budgetAtClaim?: () => BlockingBudget | null;
+    /** Backlog 744: the refusal's own transaction fails (a task write that lost every race). */
+    readonly refusalFails?: boolean;
   } = {},
 ): Promise<World> => {
   const workers: World['workers'] = new Map();
@@ -174,13 +176,23 @@ const world = async (
     ...(options.budgetAtClaim === undefined
       ? {}
       : {
-          admission: createClaimAdmission({
-            store: harness.store,
-            settings: async () => harness.settings,
-            budgets: { blockingFor: async () => options.budgetAtClaim?.() ?? null },
-            eventStore: harness.memory.store,
-            context: harness.commands.context,
-          }),
+          admission: ((admission) =>
+            options.refusalFails === true
+              ? {
+                  recheck: admission.recheck,
+                  refuse: async () => {
+                    throw new Error('the task write lost every race');
+                  },
+                }
+              : admission)(
+            createClaimAdmission({
+              store: harness.store,
+              settings: async () => harness.settings,
+              budgets: { blockingFor: async () => options.budgetAtClaim?.() ?? null },
+              eventStore: harness.memory.store,
+              context: harness.commands.context,
+            }),
+          ),
         }),
   });
   const runId = harness.store.offerRows()[0]?.runId as Id;
@@ -252,6 +264,24 @@ describe('the admission re-check at a worker’s claim (backlog 744)', () => {
     expect(w.harness.types()).not.toContain('run.claimed');
     const paused = w.harness.events().find((event) => event.type === 'task.paused');
     expect(paused?.payload).toMatchObject({ reason: 'budget', budget_scope: 'organization' });
+  });
+
+  it('answers none, never an error, when the refusal itself cannot be written', async () => {
+    const blocked = {
+      id: '00000000-0000-4000-8000-0000000007a6',
+      scope: 'project',
+      window: 'month',
+      limitUsd: 10,
+      spentUsd: 10,
+      pendingUsd: 0,
+      heldUsd: 0,
+      heldRuns: 0,
+      reserveUsd: 0,
+      windowStart: '2026-06-01T00:00:00.000Z',
+    } as BlockingBudget;
+    const w = await world({ budgetAtClaim: () => blocked, refusalFails: true });
+    expect(await claimAs(w, W1)).toEqual({ kind: 'none' });
+    expect(w.built).toHaveLength(0);
   });
 
   it('claims as before while nothing refuses it', async () => {
@@ -746,6 +776,32 @@ describe('finish (TD-031 §3, the four-field request)', () => {
     });
     expect(again.kind).toBe('already_settled');
     expect(w.harness.store.offerRows()[0]?.state).toBe('settled');
+  });
+
+  it('names what the settling process passes as endingDetail in the escalation (backlog 754’s bound)', async () => {
+    let harness: PipelineHarness | null = null;
+    const w = await world({
+      settle: async (request) =>
+        (harness as unknown as PipelineHarness).runtime.executor.settle({
+          ...request,
+          endingDetail: 'the core holds at most 100000 transcript entries of a remote run',
+        }),
+    });
+    harness = w.harness;
+    await claimAs(w, W1);
+    await w.remote.spawn({ runId: w.runId, workerId: W1, epoch: 1, now: w.harness.clock.now() });
+    const ran = ranOutcome(w.runId);
+    await w.remote.finish({
+      runId: w.runId,
+      workerId: W1,
+      epoch: 1,
+      outcome: { ...ran, status: 'cancelled', terminalReason: 'cancelled', structuredOutput: null },
+      stopReason: null,
+    });
+    const escalated = w.harness.events().find((event) => event.type === 'task.escalated');
+    expect(JSON.stringify(escalated?.payload)).toContain(
+      'the run ended as cancelled (cancelled): the core holds at most 100000 transcript entries',
+    );
   });
 
   it('answers lease_lost for a stale epoch, another worker and a revoked worker (backlog 714), writing nothing', async () => {

@@ -21,6 +21,10 @@
  *  4. **The release** (backlog 701): the claim undone, the epoch kept, the exclusion appended once, a
  *     repeat recognised, `run_started` after the marker, `lease_lost` under another epoch.
  *  5. **The run token's holder** and **a run's live minted credentials** read from the tables.
+ *  7. **Backlog 744 (S-22.14)**: a claim the admission re-check refuses is **rolled back** by
+ *     PostgreSQL — the offer open again, no `run.claimed`, the epoch unchanged — and the refusal's own
+ *     transaction withdraws it (`budget_at_claim`), ends its run `cancelled` and pauses the task. The
+ *     memory store keeps a rolled-back write (its divergence 4), so only this tier shows the withdrawal.
  *  6. **WP-282's statements** (`postgres-remote-run-calls.ts`): one transcript row per `(run_id,
  *     seq)` on a table whose key carries the partition column; a tool call's claim, answer and
  *     take-over; an approval decided once and delivered once; the session mirror once per position;
@@ -28,8 +32,14 @@
  *     many connections (API replicas) race for it, nothing counted under a stale epoch, another
  *     worker or a settled offer.
  */
+import { createHash } from 'node:crypto';
 import {
+  type BlockingBudget,
   claimRunOffer,
+  createClaimAdmission,
+  createRemoteRuns,
+  createTestRunPlanSealer,
+  defaultProjectSettings,
   INITIAL_TASK_VERSION,
   LeaseLostError,
   type PipelineStore,
@@ -39,7 +49,7 @@ import {
 } from '@platform/application';
 import type { Id, IsoDateTime, Slug, TranscriptEvent } from '@platform/contracts';
 import { FEATURE_TEMPLATE, type OfferRouting, SHIPPED_TEMPLATES } from '@platform/domain';
-import { pipeline, recovery } from '@platform/infrastructure';
+import { eventing, pipeline, recovery } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { remoteRunCredentialOf } from '../../../apps/server/src/worker-run-calls.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -1146,4 +1156,106 @@ describe('WP-282: the run-scoped calls’ statements', () => {
       await Promise.all(replicas.map((replica) => replica.end()));
     }
   });
+});
+
+describe('backlog 744: a claim the admission re-check refuses (TD-031 §2)', () => {
+  it('is rolled back; the offer withdrawn budget_at_claim, its run cancelled, the task paused, the epoch unchanged', async () => {
+    const w = await world();
+    const runId = await offered(w);
+    const pool = createTestPool(database.connectionString, { max: 4 });
+    try {
+      const context = (correlationId: Id) => ({
+        ids: { next: () => crypto.randomUUID() as Id },
+        actor: { kind: 'system' as const, component: 'test' },
+        clock: { now: () => NOW },
+        correlationId,
+        causeEventId: null,
+      });
+      const eventStore = new eventing.PostgresEventStore(pool);
+      const blocker: BlockingBudget = {
+        id: nextId(),
+        scope: 'project',
+        window: 'month',
+        limitUsd: 10,
+        spentUsd: 10,
+        pendingUsd: 0,
+        heldUsd: 0,
+        heldRuns: 0,
+        reserveUsd: 0,
+        windowStart: PAST,
+      } as BlockingBudget;
+      let packaged = 0;
+      const remote = createRemoteRuns({
+        unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
+        store,
+        eventStore,
+        context,
+        runPlans: createTestRunPlanSealer(),
+        packager: {
+          build: async () => {
+            packaged += 1;
+            throw new Error('a refused claim is never packaged');
+          },
+        },
+        credentials: { revoke: async () => {} },
+        tokens: {
+          mint: () => ({ token: 't', hash: createHash('sha256').update('t').digest('hex') }),
+          hashOf: (token) => createHash('sha256').update(token).digest('hex'),
+          same: (a, b) => a === b,
+        },
+        settle: async () => {
+          throw new Error('nothing is settled here');
+        },
+        lateCost: { record: async () => ({ recorded: false, charge: null }) } as never,
+        admission: createClaimAdmission({
+          store,
+          settings: async (projectId) => defaultProjectSettings(projectId),
+          budgets: { blockingFor: async () => blocker },
+          eventStore,
+          context,
+        }),
+      });
+      expect(
+        await remote.claim({
+          workerId: w.w1,
+          heldImageDigests: HELD,
+          images: { run: RUN_DIGEST, egress: EGRESS_DIGEST },
+          now: NOW,
+        }),
+      ).toEqual({ kind: 'none' });
+      expect(packaged).toBe(0);
+      const [offer] = await sql<{
+        state: string;
+        withdrawn_reason: string | null;
+        lease_epoch: number;
+      }>('select state, withdrawn_reason, lease_epoch from run_offers where run_id = $1', [runId]);
+      expect(offer).toEqual({
+        state: 'withdrawn',
+        withdrawn_reason: 'budget_at_claim',
+        lease_epoch: 0,
+      });
+      const [run] = await sql<{ status: string; lease_epoch: number; worker_id: string | null }>(
+        'select status::text as status, lease_epoch, worker_id from runs where id = $1',
+        [runId],
+      );
+      expect(run).toEqual({ status: 'cancelled', lease_epoch: 0, worker_id: null });
+      const [taskRow] = await sql<{ state: string }>(
+        'select t.state::text as state from tasks t join runs r on r.task_id = t.id where r.id = $1',
+        [runId],
+      );
+      expect(taskRow?.state).toBe('paused');
+      const claimed = await sql(
+        "select 1 from events where type = 'run.claimed' and payload->>'run_id' = $1",
+        [runId],
+      );
+      expect(claimed).toEqual([]);
+      const paused = await sql<{ payload: { budget_scope: string } }>(
+        "select payload from events where type = 'task.paused' and payload->>'task_id' = (select task_id::text from runs where id = $1)",
+        [runId],
+      );
+      expect(paused[0]?.payload).toMatchObject({ reason: 'budget', budget_scope: 'project' });
+    } finally {
+      await pool.end();
+    }
+  }, 60_000);
 });

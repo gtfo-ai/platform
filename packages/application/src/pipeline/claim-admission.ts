@@ -99,18 +99,22 @@ export const createClaimAdmission = (options: ClaimAdmissionOptions): ClaimAdmis
   const logger = options.logger ?? silentLogger;
   return {
     recheck: async (tx, claimed) => {
-      if (claimed.kind !== 'stage' || claimed.stage === null) return null;
+      if (claimed.kind !== 'stage') return null;
       const stored = await options.store.tasks.load(tx, claimed.taskId);
       if (stored === null) return null;
+      // The run's stage attempt, else the task's current stage — the one a stage offer serves (a run
+      // row resolves its stage through `task_stages`, which a row written outside the pipeline lacks).
+      const stage = claimed.stage ?? stored.task.currentStage;
+      if (stage === null) return null;
       const readable = settingsAdmission(await options.settings(claimed.projectId, tx));
       if (readable.kind === 'refused') return null;
       const { settings } = readable;
-      const reserve = runBudgetUsd(settings, claimed.stage);
+      const reserve = runBudgetUsd(settings, stage);
       const held = await options.store.runs.heldFor(tx, claimed.taskId, reserve);
       const capped = withTaskCap(settings, await options.store.tasks.budgetCap(tx, claimed.taskId));
-      if (taskBudgetExhausted(stored, capped, claimed.stage, held)) {
+      if (taskBudgetExhausted(stored, capped, stage, held)) {
         return {
-          reason: taskBudgetDetail(stored, capped, claimed.stage, held),
+          reason: taskBudgetDetail(stored, capped, stage, held),
           budgetScope: 'task',
         };
       }

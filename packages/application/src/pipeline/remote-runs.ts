@@ -552,13 +552,22 @@ export const createRemoteRuns = (options: RemoteRunsOptions): RemoteRuns => {
           throw error;
         }
         const admission = options.admission;
-        await retryOnTaskConflict(
-          { taskId: error.claimed.taskId, what: 'refusing a remote claim', logger },
-          () =>
-            unitOfWork.transaction((scope) =>
-              admission.refuse(scope, error.claimed, error.refusal),
-            ),
-        );
+        try {
+          await retryOnTaskConflict(
+            { taskId: error.claimed.taskId, what: 'refusing a remote claim', logger },
+            () =>
+              unitOfWork.transaction((scope) =>
+                admission.refuse(scope, error.claimed, error.refusal),
+              ),
+          );
+        } catch (refusalError) {
+          // The claim is rolled back whatever happens here, so the worker took nothing: it is told
+          // `none`, never a 500, and the offer stays open for the next claim to refuse again.
+          logger.error(
+            { err: refusalError, run_id: error.claimed.runId, task_id: error.claimed.taskId },
+            'a remote claim refused at admission could not pause its task; the offer stays open and the next claim asks again',
+          );
+        }
         // The worker asks again; the next offer, if any, is its next claim's.
         return { kind: 'none' };
       }
