@@ -118,7 +118,7 @@ const main = () => {
     process.stderr.write(plan.error === null ? USAGE : `${plan.error}\n${USAGE}`);
     return plan.error === null ? 0 : 2;
   }
-  const envFile = process.env.APP_WORKER_DEV_ENV_FILE ?? DEFAULT_ENV_FILE;
+  const envFile = process.env.APP_WORKER_DEV_ENV_FILE || DEFAULT_ENV_FILE;
   if (!existsSync(path.resolve(REPO, envFile))) {
     process.stderr.write(
       `${envFile} does not exist: cp .env.worker.example .env.worker, then set your Claude token\n`,
@@ -167,7 +167,7 @@ const main = () => {
     maxBuffer: 64 * 1024 * 1024,
   });
   const token = pageTokenFrom(`${logs.stdout ?? ''}`);
-  const vitePort = process.env.APP_WORKER_DEV_VITE_PORT ?? DEFAULT_VITE_PORT;
+  const vitePort = process.env.APP_WORKER_DEV_VITE_PORT || DEFAULT_VITE_PORT;
   process.stdout.write(
     token === null
       ? `the worker has not logged its page token yet; open http://localhost:${vitePort}/worker.html#token=<the token from \`pnpm worker:dev logs remote-worker | grep token=\`>\n`

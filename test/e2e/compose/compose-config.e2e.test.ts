@@ -493,9 +493,13 @@ const RESIDUAL: readonly { group: string; reason: string; matches: (name: string
   },
   {
     group: 'development and CI',
-    reason: '`pnpm dev`’s Vite proxy and the eval budgets; nothing in the image reads them',
+    reason:
+      '`pnpm dev`’s and `pnpm worker:dev`’s shell variables and the eval budgets; nothing in the image reads them',
     matches: (name) =>
-      name.startsWith('APP_DEV_') || name === 'EVAL_MAX_USD' || name === 'LLM_CI_MAX_USD',
+      name.startsWith('APP_DEV_') ||
+      name.startsWith('APP_WORKER_DEV_') ||
+      name === 'EVAL_MAX_USD' ||
+      name === 'LLM_CI_MAX_USD',
   },
   // The group *"declared with no reader in this build"* is **gone** (WP-73, PROGRESS backlog 127):
   // `APP_DISABLE_TELEMETRY`, `APP_RUNNER_MAX_PARALLEL`, `APP_TRANSCRIPT_STORE`,
