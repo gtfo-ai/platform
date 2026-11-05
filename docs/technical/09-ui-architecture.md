@@ -8,7 +8,8 @@ React 19 + Vite 8 + TypeScript; TanStack Router (SPA, code-based routes — one 
 ## Structure
 ```
 apps/web/src/
-  routes/            # code-based (tree.tsx, Q44): /, /sign-in, /projects/$key (+ /knowledge, /pipeline, /shadow, /budgets, /settings), /projects/$key/tasks/$taskId, /tasks/$taskId, /runs/$runId, /agents, /inbox, /integrations, /stats, /audit, /settings, /onboarding
+  routes/            # code-based (tree.tsx, Q44): /, /sign-in, /projects, /projects/$key (a layout: the board is its index; knowledge, pipeline, shadow, budgets, settings, tasks/$taskId its children), /tasks/$taskId, /runs/$runId, /agents, /inbox, /integrations, /stats, /audit, /settings, /onboarding, /workers (+ /approve)
+  app/               # the composition root, the query hooks, and the frame: shell.tsx (top bar, org UnderlineNav) and project-frame.tsx (the project's header and tabs)
   features/          # board, task-detail, run-transcript, questions, knowledge, pipeline-editor, integrations, budgets, stats, audit, wizard, shadow
   transcript/        # normaliser types (shared with server), reducer applyEvent(blocks, event), renderer registry per tool, virtual list
   realtime/          # one SSE connection per tab (topics), reconnect/replay, Query bridge
@@ -16,6 +17,23 @@ apps/web/src/
   ui/                # the primitive kit (TD-033): one file per primitive, dependency-light so the
                      # worker's local page can import it — see below
 ```
+
+**The frame and the lazy screens since S-23.4 (TD-033 § 1, research/19 § 5.1).** `app/shell.tsx` is
+the frame of every signed-in screen: the top bar (night in both themes — the wordmark, the project
+switcher inside a project, the running indicator that also carries the connection state's dot and
+live region, the `+` menu, the inbox count, the avatar menu) and, outside a project, the
+organisation's UnderlineNav (`NAV`, held to the user guide by `user-guide-census.test.ts`). Inside a
+project, the `/projects/$key` **layout route** (`app/project-frame.tsx`) draws the project's
+PageHeader and tabs above an `<Outlet/>`; no URL changed when it arrived. A route tells the frame
+about itself through `staticData` — its project `tab`, `fullWidth` (the board and the run log;
+everything else is centred at 1280 px) and `ownsHeading` (a task's page, so the project's name above
+it is not a second `<h1>`). **Every screen is a lazy route chunk** except the frame, the sign-in page
+and Home: `lazyRouteComponent` per screen module, so the router preloads the chunk while it resolves
+the match and shows `defaultPendingComponent` (a `Skeleton`) only past its pending delay. The chunks
+are served from `'self'`, so the CSP is unchanged. The initial graph was 293 722 B gzipped before
+the split and 260 557 B after it, frame included (`pnpm bundle:check`; BACKLOG 812 has the levers left
+towards 250 kB). zod and `zod-jitless.ts` share a chunk of their own (`vite.config.ts`),
+so the JIT is off before a shared chunk builds any schema.
 
 **`ui/` since S-23.1 (TD-033).** The primitives are hand-written thin components on Tailwind classes,
 except the three with real APG behaviour, which are Base UI's (`@base-ui/react`, adopted by TD-033;
@@ -29,8 +47,8 @@ has no TanStack Router, can import it. Every primitive has a happy-dom test of i
 |---|---|
 | `button.tsx`, `counter.tsx` | `Button` (`primary` = the beacon, `default`, `danger` = red outline, `invisible`; `sm`/`md`; `leadingIcon`; trailing `count`), `IconButton` (required `aria-label`), `Counter` |
 | `status.tsx` | `StatusIcon`, `StateLabel` — `queued`, `running` (animated beacon), `success`, `failure`, `cancelled`, `skipped`, `needs_you` (beacon), `waiting`, `paused`, `idle`; icon + colour + word, an exhaustive record |
-| `page-header.tsx` | `PageHeader` — back slot, the page's `<h1>`, state, meta, actions |
-| `underline-nav.tsx`, `nav-list.tsx` | `UnderlineNav` (icon, counter, `aria-current`, the selected underline), `NavList` (groups, the selected bar) |
+| `page-header.tsx` | `PageHeader` — back slot, the page's `<h1>` (`titleAs="p"` when the page below has its own), state, meta, actions; `divider={false}` when an UnderlineNav draws the line |
+| `underline-nav.tsx`, `nav-list.tsx` | `UnderlineNav` (icon, counter, `aria-current`, the selected underline; an item's `collapseBelow` moves it into the caller's `more` menu on narrow widths), `NavList` (groups, the selected bar) |
 | `list-box.tsx` | `ListBox`, `ListBoxHeader`, `ListRow` (status first, title, meta, trailing facts, overflow) |
 | `blankslate.tsx`, `flash.tsx` | `Blankslate` (title and hint required; an action unless `informational`, enforced by its type), `Flash` (info / warning / danger / success, optional action; danger is `role="alert"`) |
 | `timeline.tsx`, `stepper.tsx` | `Timeline`, `Stepper` (done / current / upcoming / optional, `aria-current="step"`, states as words) |

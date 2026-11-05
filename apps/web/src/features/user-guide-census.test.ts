@@ -12,7 +12,7 @@
  *    opening with the label in bold, and `<n>` must be the count spelled as a word;
  *  - every later *"<n> tabs …"* list in § 5 (*"Three tabs can refuse…"*) must name only tabs that
  *    exist, and as many as its number says;
- *  - *The top navigation*'s first bold run (*"Dashboard · Agents · …"*) must be `NAV`'s labels, in
+ *  - *The top navigation*'s first bold run (*"Home · Projects · …"*) must be `NAV`'s labels, in
  *    order.
  *
  * So an added tab, a renamed one, a removed navigation entry and a guide edit that drops one all

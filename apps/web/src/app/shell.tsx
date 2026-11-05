@@ -1,29 +1,54 @@
 /**
- * The application shell: navigation, connection status, and the account menu (theme, sign-out).
+ * The application shell — the frame of every signed-in screen (TD-033 § 1; research/19 § 5.1).
  *
- * The top bar is **night in both themes** (TD-033 § 2, the brand anchor the wordmark lives on): it
- * is a `data-theme="dark"` scope, so everything drawn in it — the badge, the links, the focus
- * ring — reads the dark tokens whatever the page's theme is. The account menu is Base UI's
- * (`ui/action-menu.tsx`); it replaced a theme `<select>` and a bare sign-out button, and its popup is
- * portalled to `<body>`, so the menu itself is drawn in the page's theme.
+ * **The top bar** is night in both themes (TD-033 § 2, the brand anchor the wordmark lives on): it
+ * is a `data-theme="dark"` scope, so everything drawn in it reads the dark tokens whatever the
+ * page's theme is. Left to right: the wordmark (Home); inside a project, `/ <name> ▾`, the
+ * breadcrumb that is also the project switcher; then the running indicator with the connection dot,
+ * the `+` menu, the inbox with its count, and the avatar menu. Menus are Base UI's
+ * (`ui/action-menu.tsx`) and portalled to `<body>`, so a menu itself is drawn in the page's theme.
  *
- * The connection badge is not decoration. This app never polls (see `queries.ts`), so a stream
+ * **The second row** is the organisation's UnderlineNav (`NAV`) outside a project; inside one, the
+ * project's own layout (`app/project-frame.tsx`) draws its header and tabs instead, as a GitHub
+ * repository replaces the dashboard's navigation.
+ *
+ * The connection state is not decoration. This app never polls (see `queries.ts`), so a stream
  * that has stopped delivering is a screen that has silently stopped updating — the failure product
- * /10 cares about most ("live updates everywhere, no refresh"). The badge is the one place that
- * says whether the promise is being kept, and it is `aria-live` so it is announced rather than only
- * shown.
+ * /10 cares about most ("live updates everywhere, no refresh"). The dot is the one place that says
+ * whether the promise is being kept, its word is shown whenever the stream is not live, and it is
+ * `aria-live` so it is announced rather than only shown.
  */
 
+import type { ProjectSummary } from '@platform/contracts';
+import { DependabotIcon } from '@primer/octicons-react/DependabotIcon';
 import { DeviceDesktopIcon } from '@primer/octicons-react/DeviceDesktopIcon';
+import { GearIcon } from '@primer/octicons-react/GearIcon';
+import { GraphIcon } from '@primer/octicons-react/GraphIcon';
+import { HomeIcon } from '@primer/octicons-react/HomeIcon';
+import { InboxIcon } from '@primer/octicons-react/InboxIcon';
+import { LogIcon } from '@primer/octicons-react/LogIcon';
 import { MoonIcon } from '@primer/octicons-react/MoonIcon';
+import { PlayIcon } from '@primer/octicons-react/PlayIcon';
+import { PlugIcon } from '@primer/octicons-react/PlugIcon';
+import { PlusIcon } from '@primer/octicons-react/PlusIcon';
+import { RepoIcon } from '@primer/octicons-react/RepoIcon';
+import { ServerIcon } from '@primer/octicons-react/ServerIcon';
 import { SignOutIcon } from '@primer/octicons-react/SignOutIcon';
 import { SunIcon } from '@primer/octicons-react/SunIcon';
 import { TriangleDownIcon } from '@primer/octicons-react/TriangleDownIcon';
+import type { Icon } from '@primer/octicons-react/types';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link, Outlet, useNavigate } from '@tanstack/react-router';
+import {
+  Link,
+  Outlet,
+  useLocation,
+  useMatches,
+  useNavigate,
+  useParams,
+} from '@tanstack/react-router';
 import { type ReactElement, useSyncExternalStore } from 'react';
 import { displayName, type SessionUser } from '../auth/session.js';
-import { useRealtime } from '../realtime/provider.js';
+import { useRealtime, useTopics } from '../realtime/provider.js';
 import {
   ActionMenu,
   ActionMenuHeader,
@@ -33,29 +58,90 @@ import {
   ActionMenuSeparator,
 } from '../ui/action-menu.js';
 import { Avatar } from '../ui/avatar.js';
+import { buttonClassName } from '../ui/button.js';
+import { Counter } from '../ui/counter.js';
 import { FOCUS_RING } from '../ui/cx.js';
 import { Flash } from '../ui/flash.js';
-import { Badge, type BadgeTone, Button, cx } from '../ui/kit.js';
+import { type BadgeTone, Button, cx, formatInteger } from '../ui/kit.js';
 import { Logo } from '../ui/logo.js';
+import type { NavBreakpoint, NavItem, NavLinkProps } from '../ui/nav-item.js';
+import { StatusIcon } from '../ui/status.js';
 import { type ThemePreference, useTheme } from '../ui/theme.js';
-import { useSession } from './queries.js';
+import { UnderlineNav } from '../ui/underline-nav.js';
+import { UntrustedText } from '../ui/untrusted.js';
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { pageWidth, START_TICKET_ANCHOR } from './project-frame.js';
+import { useAgents, useInbox, useProjects, useProjectTasks, useSession } from './queries.js';
 import { useServices } from './services.js';
 
+/** Which of the shell's three reads a navigation entry's counter comes from. */
+type NavCount = 'projects' | 'inbox' | 'running';
+
+interface NavEntry {
+  readonly to:
+    | '/'
+    | '/projects'
+    | '/inbox'
+    | '/agents'
+    | '/workers'
+    | '/integrations'
+    | '/stats'
+    | '/audit'
+    | '/settings';
+  readonly label: string;
+  readonly icon: Icon;
+  readonly count?: NavCount;
+  readonly collapseBelow?: NavBreakpoint;
+}
+
 /**
- * The top navigation, in order. `docs/user-guide.md` § "The top navigation" lists the same labels;
- * `features/user-guide-census.test.ts` holds the two together (WP-129).
+ * The organisation's navigation, in order — the UnderlineNav under the top bar outside a project
+ * (TD-033 § 1; inside one, the project's tabs take its place). `docs/user-guide.md` § "The top
+ * navigation" lists the same labels; `features/user-guide-census.test.ts` holds the two together
+ * (WP-129). *Onboarding* is not here: it is done once per project, so it is **New project** — in
+ * the `+` menu and on the Projects page (research/19 § 5.1).
  */
-export const NAV = [
-  { to: '/', label: 'Dashboard' },
-  { to: '/agents', label: 'Agents' },
-  { to: '/inbox', label: 'Inbox' },
-  { to: '/integrations', label: 'Integrations' },
-  { to: '/onboarding', label: 'Onboarding' },
-  { to: '/stats', label: 'Statistics' },
-  { to: '/audit', label: 'Audit log' },
-  { to: '/workers', label: 'Workers' },
-  { to: '/settings', label: 'Settings' },
-] as const;
+export const NAV: readonly NavEntry[] = [
+  { to: '/', label: 'Home', icon: HomeIcon },
+  { to: '/projects', label: 'Projects', icon: RepoIcon, count: 'projects' },
+  { to: '/inbox', label: 'Inbox', icon: InboxIcon, count: 'inbox' },
+  { to: '/agents', label: 'Agents', icon: DependabotIcon, count: 'running', collapseBelow: 'sm' },
+  { to: '/workers', label: 'Workers', icon: ServerIcon, collapseBelow: 'md' },
+  { to: '/integrations', label: 'Integrations', icon: PlugIcon, collapseBelow: 'md' },
+  { to: '/stats', label: 'Statistics', icon: GraphIcon, collapseBelow: 'lg' },
+  { to: '/audit', label: 'Audit log', icon: LogIcon, collapseBelow: 'lg' },
+  { to: '/settings', label: 'Settings', icon: GearIcon, collapseBelow: 'lg' },
+];
+
+/** Whether `pathname` is inside a navigation entry's section (`/workers/approve` is Workers'). */
+export const isCurrentSection = (to: NavEntry['to'], pathname: string): boolean =>
+  to === '/' ? pathname === '/' : pathname === to || pathname.startsWith(`${to}/`);
+
+/**
+ * The counts the frame shows: projects, what waits for a person (open questions plus pending
+ * approvals, the inbox's two lists) and the runs in flight (the agents read, the Home screen's
+ * "Agents running"). `undefined` while a read has no answer — the frame then draws no number, never
+ * a zero it does not know (rule 16).
+ */
+export interface FrameCounts {
+  readonly projects: number | undefined;
+  readonly inbox: number | undefined;
+  readonly running: number | undefined;
+}
+
+export const useFrameCounts = (): FrameCounts => {
+  const projects = useProjects();
+  const inbox = useInbox();
+  const agents = useAgents();
+  return {
+    projects: projects.data?.items.length,
+    inbox:
+      inbox.data === undefined
+        ? undefined
+        : inbox.data.questions.length + inbox.data.approvals.length,
+    running: agents.data?.items.length,
+  };
+};
 
 /** Status → what a human is told, and in which colour. Pure, so it is asserted directly. */
 export const connectionLabel = (
@@ -184,66 +270,342 @@ export const PlatformUpdatedBanner = (): ReactElement | null => {
   );
 };
 
+/** The connection's dot, by the badge tone the words already had. */
+const CONNECTION_DOT: Readonly<Record<BadgeTone, string>> = {
+  success: 'bg-success',
+  warning: 'bg-attention',
+  danger: 'bg-danger',
+  neutral: 'bg-fg-muted',
+  accent: 'bg-link',
+};
+
+/**
+ * "● 2 running", with the stream's state beside it (research/19 § 5.1). The count is the agents
+ * read and links to Agents; it pulses amber while anything runs, and stands still under reduced
+ * motion (`.status-running`). The connection is a dot inside the same pill, and its word is
+ * visible whenever it is **not** live — a stream that stopped is the failure this app most needs to
+ * say (see the module's docblock) — and screen-reader text when it is. The live region keeps its
+ * `role="status"`, `aria-live` and `data-testid="connection-status"`, and its text is exactly the
+ * word, so the realtime spec reads it unchanged.
+ */
+export const RunningIndicator = ({
+  running,
+  status,
+}: {
+  readonly running: number | undefined;
+  readonly status: string;
+}): ReactElement => {
+  const connection = connectionLabel(status);
+  return (
+    <div className="inline-flex h-8 items-center rounded-full border border-line text-sm">
+      <Link
+        to="/agents"
+        className={cx(
+          'inline-flex h-full items-center gap-1.5 rounded-l-full pr-2 pl-2.5 text-fg hover:bg-subtle',
+          FOCUS_RING,
+        )}
+      >
+        <StatusIcon
+          status={running !== undefined && running > 0 ? 'running' : 'queued'}
+          decorative
+          size={12}
+        />
+        <span className="tabular-nums">
+          {running === undefined ? 'Agents' : `${formatInteger(running)} running`}
+        </span>
+      </Link>
+      <span aria-hidden="true" className="h-4 w-px bg-line" />
+      <span
+        data-testid="connection-status"
+        role="status"
+        aria-live="polite"
+        className="inline-flex items-center gap-1.5 pr-2.5 pl-2 text-xs text-fg-muted"
+      >
+        <span
+          aria-hidden="true"
+          data-connection-dot={connection.tone}
+          className={cx('size-2 rounded-full', CONNECTION_DOT[connection.tone])}
+        />
+        <span className={connection.tone === 'success' ? 'sr-only' : undefined}>
+          {connection.text}
+        </span>
+      </span>
+    </div>
+  );
+};
+
+/**
+ * `/ <Project name> ▾` — the breadcrumb and the project switcher (research/19 § 5.1): every project
+ * by key and name, the current one checked, then *All projects* and *New project*. A project name
+ * is somebody's text (BD-022), so it renders through `UntrustedText`, and the trigger's name is
+ * sanitised before it reaches the attribute.
+ */
+export const ProjectSwitcher = ({
+  current,
+  projects,
+}: {
+  readonly current: ProjectSummary;
+  readonly projects: readonly ProjectSummary[];
+}): ReactElement => {
+  const navigate = useNavigate();
+  return (
+    <ActionMenu
+      align="start"
+      trigger={
+        <button
+          type="button"
+          aria-label={`${sanitiseUntrusted(current.name)}, switch project`}
+          className={cx(
+            'inline-flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-sm font-semibold text-fg hover:bg-subtle',
+            FOCUS_RING,
+          )}
+        >
+          <UntrustedText value={current.name} className="truncate" />
+          <TriangleDownIcon size={16} />
+        </button>
+      }
+    >
+      <ActionMenuRadioGroup
+        label="Switch project"
+        value={current.key}
+        onValueChange={(key: string) => {
+          void navigate({ to: '/projects/$key', params: { key } });
+        }}
+      >
+        {projects.map((project) => (
+          <ActionMenuRadioItem key={project.id} value={project.key} closeOnClick>
+            <span className="font-mono text-xs text-fg-muted">
+              <UntrustedText value={project.key} />
+            </span>
+            <UntrustedText value={project.name} className="truncate" />
+          </ActionMenuRadioItem>
+        ))}
+      </ActionMenuRadioGroup>
+      <ActionMenuSeparator />
+      <ActionMenuItem
+        leadingIcon={<RepoIcon size={16} />}
+        onSelect={() => {
+          void navigate({ to: '/projects' });
+        }}
+      >
+        All projects
+      </ActionMenuItem>
+      <ActionMenuItem
+        leadingIcon={<PlusIcon size={16} />}
+        onSelect={() => {
+          void navigate({ to: '/onboarding' });
+        }}
+      >
+        New project
+      </ActionMenuItem>
+    </ActionMenu>
+  );
+};
+
+/**
+ * `+ ▾`: *New project* everywhere, *Start a ticket…* inside a project whose tasks read says the
+ * caller may start one (`can_start_task`) — it opens the board's start form, the one place a
+ * ticket is started.
+ */
+const CreateMenu = ({ project }: { readonly project: ProjectSummary | null }): ReactElement => {
+  const navigate = useNavigate();
+  const tasks = useProjectTasks(project?.id ?? null);
+  const canStart = project !== null && tasks.data?.can_start_task === true;
+  return (
+    <ActionMenu
+      trigger={
+        <button
+          type="button"
+          aria-label="Create new…"
+          className={cx(
+            'inline-flex h-8 items-center gap-0.5 rounded-md border border-line px-1.5 text-fg-muted hover:bg-subtle hover:text-fg',
+            FOCUS_RING,
+          )}
+        >
+          <PlusIcon size={16} />
+          <TriangleDownIcon size={16} />
+        </button>
+      }
+    >
+      <ActionMenuItem
+        leadingIcon={<RepoIcon size={16} />}
+        onSelect={() => {
+          void navigate({ to: '/onboarding' });
+        }}
+      >
+        New project
+      </ActionMenuItem>
+      {project === null || !canStart ? null : (
+        <ActionMenuItem
+          leadingIcon={<PlayIcon size={16} />}
+          onSelect={() => {
+            void navigate({
+              to: '/projects/$key',
+              params: { key: project.key },
+              hash: START_TICKET_ANCHOR,
+            });
+          }}
+        >
+          Start a ticket…
+        </ActionMenuItem>
+      )}
+    </ActionMenu>
+  );
+};
+
+/** The inbox, as GitHub's notification button: an icon, a beacon count when something waits. */
+export const InboxButton = ({ count }: { readonly count: number | undefined }): ReactElement => (
+  <Link
+    to="/inbox"
+    aria-label={
+      // Never just "Inbox": that is the navigation's link, and the two are different controls.
+      count === undefined
+        ? 'Open the inbox'
+        : count === 0
+          ? 'Open the inbox, nothing waiting for you'
+          : `Open the inbox, ${formatInteger(count)} waiting for you`
+    }
+    data-inbox-count={count ?? ''}
+    className={cx(buttonClassName('invisible'), 'relative size-8 px-0 py-0')}
+  >
+    <InboxIcon size={16} />
+    {count === undefined || count === 0 ? null : (
+      <Counter count={count} tone="primary" className="absolute -top-1.5 -right-1.5" />
+    )}
+  </Link>
+);
+
+/** The org navigation's items, as UnderlineNav takes them: a router link, a menu target, a count. */
+const useOrgNavItems = (counts: FrameCounts): NavItem[] => {
+  const navigate = useNavigate();
+  const pathname = useLocation({ select: (location) => location.pathname });
+  return NAV.map((entry) => {
+    const Glyph = entry.icon;
+    const count = entry.count === undefined ? undefined : counts[entry.count];
+    return {
+      id: entry.to,
+      label: entry.label,
+      icon: <Glyph size={16} />,
+      ...(count === undefined || count === 0 ? {} : { counter: count }),
+      current: isCurrentSection(entry.to, pathname),
+      ...(entry.collapseBelow === undefined ? {} : { collapseBelow: entry.collapseBelow }),
+      // `exact` for Home: the router would otherwise call `/` active everywhere and stamp its own
+      // `aria-current` on it. Every other entry is current on its section, as the router judges too.
+      render: (props: NavLinkProps) => (
+        <Link to={entry.to} activeOptions={{ exact: entry.to === '/' }} {...props} />
+      ),
+      onSelect: () => {
+        void navigate({ to: entry.to });
+      },
+    };
+  });
+};
+
+/** The overflow of the org navigation on a narrow screen (GitHub's `···`). */
+const NavMore = ({ items }: { readonly items: readonly NavItem[] }): ReactElement => (
+  <ActionMenu label="More navigation" align="start">
+    {items.map((item) => (
+      <ActionMenuItem
+        key={item.id}
+        leadingIcon={item.icon}
+        {...(item.onSelect === undefined ? {} : { onSelect: item.onSelect })}
+      >
+        {item.label}
+        {item.counter === undefined ? null : <Counter count={item.counter} className="ml-auto" />}
+      </ActionMenuItem>
+    ))}
+  </ActionMenu>
+);
+
+/** Whether the matched routes ask for the full width (the board, a run's log). */
+const useFullWidth = (): boolean =>
+  useMatches({
+    select: (matches) => matches.some((match) => match.staticData?.fullWidth === true),
+  });
+
 export const AppShell = (): ReactElement => {
   const session = useSession();
   const { auth } = useServices();
   const { status } = useRealtime();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const connection = connectionLabel(status);
   const user = session.data?.user ?? null;
+  // The counts move with the organisation, whichever screen is open (the Home screen also asks).
+  useTopics(['org']);
+  const counts = useFrameCounts();
+  const projects = useProjects();
+  // Inside a project the route has a `$key`; the switcher names the project it resolves to.
+  const key = useParams({ strict: false, select: (params) => params.key });
+  const project =
+    key === undefined
+      ? null
+      : (projects.data?.items.find((item) => item.key === key || item.id === key) ?? null);
+  const orgItems = useOrgNavItems(counts);
+  const fullWidth = useFullWidth();
 
   return (
     <div className="flex min-h-full flex-col">
-      <header
-        data-theme="dark"
-        className="flex flex-wrap items-center gap-3 border-b border-line bg-header px-4 py-2 text-fg"
-      >
-        <Link to="/" className={cx('rounded-sm py-1', FOCUS_RING)}>
-          <Logo label="Agentic" className="w-20" />
-        </Link>
-        <nav aria-label="Primary" className="flex flex-wrap gap-1">
-          {NAV.map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              className={cx(
-                'rounded-md px-2 py-1 text-sm text-fg-muted hover:bg-subtle hover:text-fg',
-                FOCUS_RING,
-              )}
-              activeProps={{ className: 'bg-subtle font-semibold text-fg' }}
-              activeOptions={{ exact: item.to === '/' }}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-        <div className="ml-auto flex items-center gap-3">
-          <span data-testid="connection-status" role="status" aria-live="polite">
-            <Badge tone={connection.tone}>{connection.text}</Badge>
-          </span>
-          <AccountMenu
-            user={user}
-            onSignOut={() => {
-              void auth.signOut().then(async () => {
-                // The whole cache, not just the session: what is in it belongs to the account
-                // that is signing out, and the next person at this browser is not that account.
-                queryClient.clear();
-                await navigate({ to: '/sign-in', search: {} });
-              });
-            }}
-          />
+      <header data-theme="dark" className="border-b border-line bg-header text-fg">
+        <div className="flex h-14 items-center gap-2 px-4 sm:px-6">
+          <Link
+            to="/"
+            activeOptions={{ exact: true }}
+            className={cx('shrink-0 rounded-sm py-1', FOCUS_RING)}
+          >
+            <Logo label="Agentic" className="w-20" />
+          </Link>
+          {project === null ? null : (
+            <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1">
+              <span aria-hidden="true" className="pl-1 text-fg-subtle">
+                /
+              </span>
+              <ProjectSwitcher current={project} projects={projects.data?.items ?? []} />
+            </nav>
+          )}
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <RunningIndicator running={counts.running} status={status} />
+            <CreateMenu project={project} />
+            <InboxButton count={counts.inbox} />
+            <AccountMenu
+              user={user}
+              onSignOut={() => {
+                void auth.signOut().then(async () => {
+                  // The whole cache, not just the session: what is in it belongs to the account
+                  // that is signing out, and the next person at this browser is not that account.
+                  queryClient.clear();
+                  await navigate({ to: '/sign-in', search: {} });
+                });
+              }}
+            />
+          </div>
         </div>
       </header>
+      {key === undefined ? (
+        <UnderlineNav
+          label="Primary"
+          items={orgItems}
+          className="bg-canvas px-4 sm:px-6"
+          more={(collapsed) => <NavMore items={collapsed} />}
+        />
+      ) : null}
       <PlatformUpdatedBanner />
       {/* A screen that throws is contained here rather than taking the header with it: every
           route match carries `defaultErrorComponent` (`routes/tree.tsx`), which is the boundary
           the router puts *inside* this outlet. A second boundary wrapped around the outlet would
           sit behind that one and could never fire (standing rule 22), so the backstop is one ring
           further out instead — `ErrorBoundary` in `app/app.tsx`, which catches what the router
-          cannot see. `ui/error-boundary.tsx` records the measurement behind that split. */}
-      <main className="min-h-0 flex-1 px-4 py-6 sm:px-6">
-        <Outlet />
+          cannot see. `ui/error-boundary.tsx` records the measurement behind that split.
+
+          Inside a project the project's layout (`app/project-frame.tsx`) draws its own header band
+          and widths; everywhere else the shell centres the screen. */}
+      <main className="min-h-0 flex-1">
+        {key === undefined ? (
+          <div className={cx(pageWidth(fullWidth), 'py-6')}>
+            <Outlet />
+          </div>
+        ) : (
+          <Outlet />
+        )}
       </main>
     </div>
   );

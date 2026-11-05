@@ -38,4 +38,11 @@ describe('PageHeader', () => {
     expect(container.querySelector('[data-page-actions]')).toBeNull();
     expect(container.textContent).toBe('Agents');
   });
+
+  it('renders the title as text, not a heading, when the page below owns the h1 (S-23.4)', () => {
+    const { container } = render(<PageHeader title="ACME" titleAs="p" divider={false} />);
+    expect(screen.queryByRole('heading')).toBeNull();
+    expect(container.querySelector('p')?.textContent).toBe('ACME');
+    expect((container.firstChild as HTMLElement).className).not.toContain('border-b');
+  });
 });

@@ -39,8 +39,34 @@ server on every request — the browser only hides what you cannot do.
 
 ### The top navigation
 
-**Dashboard · Agents · Inbox · Integrations · Onboarding · Statistics · Audit log · Workers · Settings**, and
-from the dashboard, into a project: its **board**, **knowledge**, **pipeline** and **budgets**.
+**Home · Projects · Inbox · Agents · Workers · Integrations · Statistics · Audit log · Settings** — the
+row under the top bar, its current entry underlined in amber. **Projects** carries the number of
+projects, **Inbox** what waits for you (open questions plus pending approvals) and **Agents** the
+runs in flight; a count that is zero, or not loaded yet, is not drawn. On a narrow screen the last
+entries move into a **More navigation** (`···`) menu at the end of the row. There is no
+*Onboarding* entry: a project is set up once, so the wizard is **New project** — in the top bar's
+**+** menu and on the **Projects** page.
+
+**Inside a project the row becomes the project's own tabs** — **Board**, **Knowledge**,
+**Pipeline**, **Budgets**, **Shadow** and **Settings** — under a header with the project's name, its
+key, its readiness level and, if you may start a ticket in it, a **Start a ticket** button. A task's
+page sits under its project's header too, on the Board tab. Every address is the one it always was:
+`/projects/ACME` is the board, `/projects/ACME/knowledge` its knowledge, and so on.
+
+**The top bar**, left to right:
+
+- the **agentic.** wordmark, which goes Home;
+- inside a project, **/ *project name* ▾** — the project switcher: every project by key and name,
+  the current one checked, then **All projects** and **New project**;
+- **● *N* running** — the runs in flight, pulsing amber while any is (still, if your system asks for
+  reduced motion), and a link to **Agents**. The small dot beside it is the live connection: green
+  while the page is receiving updates, with its word — *Connecting*, *Reconnecting*, *Server
+  restarting*, *Disconnected* — shown beside it whenever it is not live, because a page that has
+  stopped receiving updates has also stopped changing;
+- **+** — **New project**, and inside a project you may start tickets in, **Start a ticket…**, which
+  opens the board's start form (below);
+- the **inbox** button, with the number of things waiting for you;
+- your avatar (below).
 
 Screens that show live data subscribe to a server-sent event stream, so agent counts, task states
 and transcripts move without a refresh.
@@ -59,7 +85,7 @@ compare and always shows the error.
 
 ## 1. Onboarding a project — the wizard
 
-**Onboarding** in the top navigation. Five steps, each of which is also reachable on its own, so
+**New project** — in the top bar's **+** menu, or the button on **Projects**. Five steps, each of which is also reachable on its own, so
 "finish later" leaves a checklist rather than a dead end. The wizard is **resumable because its state
 is the server's**: which project exists, which integrations are bound, whether discovery has run.
 Close the tab at step 3 and come back to the same place.
@@ -379,16 +405,25 @@ the commit the last reading was taken at, every file it holds with its length an
 applies (never its text — a run's **Prompt** tab shows what that run was given), and which file each
 stage would be given now.
 
-## 2. Dashboard
+## 2. Home
 
-Spend, active agents and open work at a glance, and a way into each project. The agent count moves
-live. A maintainer or admin also sees **one banner** when an organisation chat account's credentials
+**Home** in the top navigation (it was called *Dashboard*). Spend, active agents and open work at a
+glance, and a way into each project. The agent count moves live. A maintainer or admin also sees **one banner** when an organisation chat account's credentials
 cannot be decrypted: every project's prompt files are withheld until the account is re-sealed or
 retired under **Integrations**, whose card for that account says the same (WP-157).
 
+### Projects
+
+**Projects** in the top navigation: every project you can read, one row each — its name (the way
+into its board), its key, its **readiness** level with the level's name (*L0 Unverified* in red;
+*L1 Basic* and *L2 Reliable*; *L3 Agent-ready* and up in green), its open tasks and its spend over
+the last 30 days. **New project** at the top right opens the wizard; with no project yet, the page
+says what a project is and offers the same. How many things wait for you is not shown per project
+yet — the inbox's count in the top bar is the total.
+
 ## 3. The board
 
-**A project → board.** One column per task state. Each card carries the ticket key and the ticket's
+**A project → Board**, the project's first tab. One column per task state. Each card carries the ticket key and the ticket's
 **title** — its own words as the platform read them, or *Ticket not read yet* before it has — with
 the state and the pipeline stage beneath, and the task's measured cost so far: reported by the
 provider, or priced from the price list in `local` provider mode. A run that ended with nobody
@@ -407,7 +442,8 @@ command that the domain can refuse, not by dropping a card.
 A ticket reaches the board when it matches the project's **intake rule** — the label, status, epic or
 query its task-management integration picks up. For a ticket no rule matches, a **member** (or above)
 types its key into **Start a ticket** above the columns and presses **Start**; the form is not shown
-to a viewer. The key is letters, digits, `.`, `_` and `-` (for example `ACME-123`).
+to a viewer. The project header's **Start a ticket** button and the top bar's **+ → Start a
+ticket…** both bring you to that form with the cursor in it. The key is letters, digits, `.`, `_` and `-` (for example `ACME-123`).
 
 The start reads the ticket from the tracker and records it as matched **by hand** — and that is the
 only thing it skips. The task is then created exactly as for a rule match: it gets the template its
@@ -830,7 +866,7 @@ Two messages come from the platform rather than from a task:
 
 ## 7. Knowledge
 
-**A project → knowledge.** Four things:
+**A project → Knowledge.** Four things:
 
 - the **browser**: the knowledge base as it exists in the project's repository, as a tree and a
   document view;
@@ -867,12 +903,12 @@ needs an editor the application does not yet include, so the panel is read-only 
 
 ## 8. Pipeline and budgets
 
-**A project → pipeline** shows the effective configuration with the source of every key (a default,
+**A project → Pipeline** shows the effective configuration with the source of every key (a default,
 the organisation, the project, or the repository's `.agentic/config.yml`) and when the repository's
 file was last read. Read-only here: the settings are edited on the project's settings page, which
 also proposes them to the repository (section 1, step 5); a YAML editor in the browser is not built.
 
-**A project → budgets** shows the budget bars. A budget stops a *new* run from starting: the check
+**A project → Budgets** shows the budget bars. A budget stops a *new* run from starting: the check
 happens when a run is admitted, so a run already under way finishes and is accounted for. There are
 three levels — organisation, project and per-task — and the window rolls over on the organisation's
 own timezone without anything scheduled.

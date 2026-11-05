@@ -12,6 +12,12 @@
  * every module it imports, including the schemas of `@platform/contracts`, has already run by
  * then, and the probe had already happened. A module's imports are evaluated in source order, so
  * the only thing that runs before the schemas is an import placed above them.
+ *
+ * **It shares a chunk with zod, by configuration** (S-23.4, `vite.config.ts`). Once the screens
+ * became lazy chunks, the schemas moved into a chunk the entry shares with them, and a shared chunk
+ * is evaluated before the entry's own body — so this module, left in the entry, ran after the
+ * schemas again, and `test/web-e2e/csp.spec.ts` caught the probe's violation. zod's chunk is
+ * imported by every chunk that builds a schema, so a line at its end runs before any of them.
  */
 import { z } from 'zod';
 

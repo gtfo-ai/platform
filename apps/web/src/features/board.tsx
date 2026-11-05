@@ -11,8 +11,9 @@
  * Drag is not supported by design: the pipeline owns state (product/10).
  */
 import { createTaskRequestSchema, type TaskRecord } from '@platform/contracts';
-import { Link } from '@tanstack/react-router';
-import { type ReactElement, useState } from 'react';
+import { Link, useLocation } from '@tanstack/react-router';
+import { type ReactElement, useEffect, useRef, useState } from 'react';
+import { START_TICKET_ANCHOR } from '../app/project-frame.js';
 import { useProjectByKey, useProjectTasks, useStartTask } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
@@ -26,7 +27,6 @@ import {
   formatElapsed,
   formatUsd,
   Loading,
-  SectionHeading,
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 // A tooltip is text the browser renders, not markup — but it is still provider text, and
@@ -199,10 +199,21 @@ export const StartTicketForm = ({ projectId }: { readonly projectId: string }): 
   const [key, setKey] = useState('');
   const [invalid, setInvalid] = useState<string | null>(null);
   const [started, setStarted] = useState<string | null>(null);
+  // The header's *Start a ticket* and the `+` menu's both land on `#start-ticket`: the router
+  // scrolls the form into view, and the key field takes the focus so the next keystroke is the key.
+  const form = useRef<HTMLFormElement>(null);
+  const hash = useLocation({ select: (location) => location.hash });
+  useEffect(() => {
+    if (hash === START_TICKET_ANCHOR) {
+      form.current?.querySelector('input')?.focus();
+    }
+  }, [hash]);
   return (
     <form
+      ref={form}
+      id={START_TICKET_ANCHOR}
       aria-label="Start a ticket by its key"
-      className="flex flex-wrap items-end gap-2"
+      className="flex scroll-mt-4 flex-wrap items-end gap-2"
       onSubmit={(event) => {
         event.preventDefault();
         const parsed = createTaskRequestSchema.safeParse({ ticket_key: key.trim() });
@@ -232,7 +243,8 @@ export const StartTicketForm = ({ projectId }: { readonly projectId: string }): 
         value={key}
         onChange={(event) => setKey(event.target.value)}
       />
-      <Button type="submit" tone="primary" disabled={start.isPending || key.trim() === ''}>
+      {/* `default`, not the beacon: the page's one primary is the header's *Start a ticket*. */}
+      <Button type="submit" disabled={start.isPending || key.trim() === ''}>
         Start
       </Button>
       {invalid === null ? null : <ErrorNotice title="That is not a ticket key." detail={invalid} />}
@@ -277,49 +289,8 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
 
   return (
     <div className="flex flex-col gap-4">
-      <SectionHeading
-        actions={
-          <div className="flex gap-3 text-xs">
-            <Link
-              to="/projects/$key/knowledge"
-              params={{ key: project.key }}
-              className="text-accent underline"
-            >
-              Knowledge
-            </Link>
-            <Link
-              to="/projects/$key/pipeline"
-              params={{ key: project.key }}
-              className="text-accent underline"
-            >
-              Pipeline
-            </Link>
-            <Link
-              to="/projects/$key/budgets"
-              params={{ key: project.key }}
-              className="text-accent underline"
-            >
-              Budgets
-            </Link>
-            <Link
-              to="/projects/$key/shadow"
-              params={{ key: project.key }}
-              className="text-accent underline"
-            >
-              Shadow
-            </Link>
-            <Link
-              to="/projects/$key/settings"
-              params={{ key: project.key }}
-              className="text-accent underline"
-            >
-              Settings
-            </Link>
-          </div>
-        }
-      >
-        <UntrustedText value={project.name} />
-      </SectionHeading>
+      {/* The project's name, its sections and *Start a ticket* are the project frame's header and
+          tabs (`app/project-frame.tsx`, S-23.4); the board is the frame's index page. */}
 
       {tasks.isError ? (
         <ErrorNotice title="Tasks could not be loaded." error={tasks.error} />

@@ -8,7 +8,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NavItem } from './nav-item.js';
 import { NavList } from './nav-list.js';
-import { UnderlineNav } from './underline-nav.js';
+import { isCollapsed, UnderlineNav } from './underline-nav.js';
 
 afterEach(() => {
   cleanup();
@@ -63,6 +63,73 @@ describe('UnderlineNav', () => {
     expect(document.activeElement?.textContent).toBe('Board');
     await user.tab();
     expect(document.activeElement?.textContent).toBe('Runs4');
+  });
+});
+
+/** A `matchMedia` that answers for a viewport `width` pixels wide (happy-dom applies no CSS). */
+const viewport = (width: number): void => {
+  vi.spyOn(window, 'matchMedia').mockImplementation(
+    (query: string) =>
+      ({
+        matches: Number(/min-width: (\d+)px/.exec(query)?.[1] ?? 0) <= width,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }) as unknown as MediaQueryList,
+  );
+};
+
+describe('UnderlineNav overflow (S-23.4)', () => {
+  const wide = (onSelect: () => void): NavItem[] => [
+    { id: 'home', label: 'Home', current: true, onSelect },
+    { id: 'agents', label: 'Agents', collapseBelow: 'sm', onSelect },
+    { id: 'stats', label: 'Statistics', collapseBelow: 'lg', onSelect },
+  ];
+  const more = (collapsed: readonly NavItem[]) => (
+    <span data-more="">{collapsed.map((item) => item.label).join(',')}</span>
+  );
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('hands the menu only the items collapsed at the current width', () => {
+    viewport(800);
+    const { container } = render(
+      <UnderlineNav label="Primary" items={wide(() => undefined)} more={more} />,
+    );
+    expect(container.querySelector('[data-more]')?.textContent).toBe('Statistics');
+    // The row hides the item with CSS below its breakpoint and the More entry from the widest one.
+    const stats = screen.getByRole('button', { name: 'Statistics' }).closest('li');
+    expect(stats?.className).toContain('hidden lg:flex');
+    expect(container.querySelector('[data-nav-more]')?.className).toContain('lg:hidden');
+    cleanup();
+
+    viewport(400);
+    const narrow = render(
+      <UnderlineNav label="Primary" items={wide(() => undefined)} more={more} />,
+    );
+    expect(narrow.container.querySelector('[data-more]')?.textContent).toBe('Agents,Statistics');
+    cleanup();
+
+    viewport(1440);
+    const all = render(<UnderlineNav label="Primary" items={wide(() => undefined)} more={more} />);
+    expect(all.container.querySelector('[data-nav-more]')).toBeNull();
+  });
+
+  it('decides collapse from the breakpoint order', () => {
+    expect(isCollapsed(undefined, null)).toBe(false);
+    expect(isCollapsed('sm', null)).toBe(true);
+    expect(isCollapsed('sm', 'sm')).toBe(false);
+    expect(isCollapsed('lg', 'md')).toBe(true);
+    expect(isCollapsed('lg', 'xl')).toBe(false);
+  });
+
+  it('draws the line unless the band around it does', () => {
+    const { container } = render(
+      <UnderlineNav label="Project" items={items(() => undefined)} bordered={false} />,
+    );
+    expect(container.querySelector('nav')?.className).not.toContain('border-b');
   });
 });
 

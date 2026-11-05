@@ -24,4 +24,19 @@ export interface NavItem {
   readonly current?: boolean;
   readonly render?: (props: NavLinkProps) => ReactElement;
   readonly onSelect?: () => void;
+  /**
+   * UnderlineNav only: below this breakpoint the item leaves the row for the "More" menu (GitHub's
+   * overflow). An item that collapses needs `onSelect`, which is what the menu calls.
+   */
+  readonly collapseBelow?: NavBreakpoint;
 }
+
+/** Tailwind's default breakpoints, in pixels: the CSS hides the row's item, the menu reads these. */
+export type NavBreakpoint = 'sm' | 'md' | 'lg' | 'xl';
+
+export const NAV_BREAKPOINT_PX: Readonly<Record<NavBreakpoint, number>> = {
+  sm: 640,
+  md: 768,
+  lg: 1024,
+  xl: 1280,
+};

@@ -17,7 +17,7 @@ import type {
   ProjectBindingsResponse,
   ProjectSummary,
 } from '@platform/contracts';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -709,7 +709,10 @@ describe('the project settings page', () => {
       'Knowledge',
       'Who changed what',
     ]) {
-      expect(screen.getByText(heading), heading).toBeTruthy();
+      // Inside the page: since S-23.4 "Knowledge" is also the project's tab above it.
+      const page = document.querySelector<HTMLElement>('[data-project-page]');
+      expect(page, 'the project page').not.toBeNull();
+      expect(within(page as HTMLElement).getByText(heading), heading).toBeTruthy();
     }
     // The audit is *read*, not merely present: the row's actor and action reach the screen. Read
     // off the rendered text because `UntrustedText` may split a string across nodes.

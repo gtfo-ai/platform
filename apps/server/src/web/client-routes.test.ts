@@ -43,7 +43,10 @@ describe('the SPA’s route tree against the server’s allow-list', () => {
     // The scope, asserted before anything is concluded from it (standing rule 4): a parse that
     // found nothing would report a perfectly clean comparison.
     const paths = declaredPaths();
-    expect(paths).toContain('/projects/$key/tasks/$taskId');
+    // Since S-23.4 the project's pages are children of the `/projects/$key` layout, declared with
+    // relative paths (`tasks/$taskId`), so the layout and the bare list are what the parse sees.
+    expect(paths).toContain('/projects/$key');
+    expect(paths).toContain('/projects');
     expect(paths).toContain('/sign-in');
     expect(paths).toContain('/');
     expect(paths.length).toBeGreaterThan(10);

@@ -14,6 +14,8 @@ export const PageHeader = ({
   state,
   meta,
   actions,
+  titleAs = 'h1',
+  divider = true,
   className,
 }: {
   readonly back?: ReactNode;
@@ -21,23 +23,39 @@ export const PageHeader = ({
   readonly state?: ReactNode;
   readonly meta?: ReactNode;
   readonly actions?: ReactNode;
+  /**
+   * `p` when the page below has its own `<h1>` — the project header above a task, which is the
+   * task's page and not the project's — so a page never carries two.
+   */
+  readonly titleAs?: 'h1' | 'p';
+  /** `false` when an UnderlineNav follows and draws the line itself (GitHub's repository header). */
+  readonly divider?: boolean;
   readonly className?: string;
-}): ReactElement => (
-  <div className={cx('flex flex-col gap-2 border-b border-line pb-4', className)}>
-    {back === undefined ? null : <div className="text-sm text-fg-muted">{back}</div>}
-    <div className="flex flex-wrap items-start gap-3">
-      <h1 className="min-w-0 flex-1 text-xl font-semibold break-words text-fg">{title}</h1>
-      {actions === undefined ? null : (
-        <div data-page-actions="" className="flex shrink-0 flex-wrap items-center gap-2">
-          {actions}
+}): ReactElement => {
+  const Title = titleAs;
+  return (
+    <div
+      className={cx(
+        'flex flex-col gap-2',
+        divider ? 'border-b border-line pb-4' : 'pb-1',
+        className,
+      )}
+    >
+      {back === undefined ? null : <div className="text-sm text-fg-muted">{back}</div>}
+      <div className="flex flex-wrap items-start gap-3">
+        <Title className="min-w-0 flex-1 text-xl font-semibold break-words text-fg">{title}</Title>
+        {actions === undefined ? null : (
+          <div data-page-actions="" className="flex shrink-0 flex-wrap items-center gap-2">
+            {actions}
+          </div>
+        )}
+      </div>
+      {state === undefined && meta === undefined ? null : (
+        <div className="flex flex-wrap items-center gap-2 text-sm text-fg-muted">
+          {state}
+          {meta}
         </div>
       )}
     </div>
-    {state === undefined && meta === undefined ? null : (
-      <div className="flex flex-wrap items-center gap-2 text-sm text-fg-muted">
-        {state}
-        {meta}
-      </div>
-    )}
-  </div>
-);
+  );
+};

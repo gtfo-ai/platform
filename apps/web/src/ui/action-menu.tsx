@@ -120,12 +120,18 @@ export const ActionMenuRadioItem = ({
   value,
   children,
   leadingIcon,
+  closeOnClick = false,
 }: {
   readonly value: string;
   readonly children: ReactNode;
   readonly leadingIcon?: ReactNode;
+  /**
+   * `false` (the default) keeps the menu open, so a theme can be tried on; `true` for a choice that
+   * leaves the page, as the project switcher's does.
+   */
+  readonly closeOnClick?: boolean;
 }): ReactElement => (
-  <Menu.RadioItem value={value} closeOnClick={false} className={ITEM}>
+  <Menu.RadioItem value={value} closeOnClick={closeOnClick} className={ITEM}>
     <span aria-hidden="true" className="inline-flex w-4 text-link">
       <Menu.RadioItemIndicator className="inline-flex">
         <CheckIcon size={16} />

@@ -13,7 +13,9 @@
  * measures the *initial* graph — the entry chunk plus everything `index.html` preloads — so a hand
  * written chunk split that moves bytes out of the entry chunk and into a preloaded one would lower
  * no number that matters. What lowers it is a route that is genuinely lazy, and those are declared
- * with `lazyRouteComponent` in `src/routes/`.
+ * with `lazyRouteComponent` in `src/routes/`. The one chunk group below is not a size decision:
+ * it keeps zod and `src/zod-jitless.ts` together so the JIT is off before any schema is built
+ * (S-23.4), and the budget counts the chunk like any other initial asset.
  *
  * **The build's commit is compiled in** (WP-154 (d), PROGRESS backlog 487): `APP_COMMIT`, the value
  * the image build already passes for `GET /api/version` (`docker/app.Dockerfile` declares it in the
@@ -41,6 +43,17 @@ export default defineConfig({
     // The budget is measured over gzipped bytes; a source map is not part of the initial graph and
     // is not shipped, so it neither helps nor hurts the number and is left off.
     sourcemap: false,
+    rolldownOptions: {
+      output: {
+        // zod and the module that turns its JIT off, in one chunk of their own (S-23.4): an
+        // ordering constraint, not a size one — see the docblock and `src/zod-jitless.ts`.
+        codeSplitting: {
+          groups: [
+            { name: 'zod', test: /[\\/]node_modules[\\/]zod[\\/]|[\\/]src[\\/]zod-jitless\.ts$/ },
+          ],
+        },
+      },
+    },
   },
   server: {
     proxy: {

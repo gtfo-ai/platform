@@ -14,10 +14,21 @@
  * It is a *convenience*, not a security control: every endpoint is authorised server-side on every
  * request (`auth/plugin.ts`), and a client-side guard is one `devtools` away from being bypassed.
  *
- * **`/runs/$runId` is lazy.** TD-013 puts the bundle budget on the initial graph and says the run
- * route is lazy; the transcript renderer is the largest thing in the app, and a user on the board
- * has not opened it.
- */
+ * **Every screen is a lazy chunk** (S-23.4) except the frame — the shell, the project layout — the
+ * sign-in page and Home, which are what a first paint needs. TD-013 puts the bundle budget on the
+ * initial graph (`scripts/bundle-budget.mjs` measures exactly it), and a user on Home has opened none
+ * of the others. A screen is `lazyRouteComponent` over its own module, so the router **preloads**
+ * the chunk while it resolves the match (the previous screen stays up meanwhile) and shows
+ * `defaultPendingComponent` — a skeleton — only if that takes longer than the router's pending
+ * delay. A screen that needs a route parameter is a small wrapper here that reads it and renders the
+ * lazy screen; `withPreload` hands the router the inner chunk's `preload`, so the wrapper is
+ * preloaded exactly as a bare lazy screen is. The chunks are served from `'self'` like the entry,
+ * so the CSP is unchanged (`test/web-e2e/csp.spec.ts` loads them under it).
+ *
+ * **`/projects/$key` is a layout** (`app/project-frame.tsx`): the project header and tabs, with the
+ * board as its index child and every project page — the task route included — as a child. No URL
+ * changed. A child says which tab it is, whether it takes the full width and whether it has its own
+ * `<h1>` through `staticData`, which the frame reads off the matches. */
 
 import type { QueryClient } from '@tanstack/react-query';
 import {
@@ -26,29 +37,19 @@ import {
   createRouter,
   lazyRouteComponent,
   Outlet,
+  type RouteComponent,
   redirect,
 } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import * as z from 'zod';
 import { queryKeys } from '../api/keys.js';
+import { ProjectFrame, type ProjectTab } from '../app/project-frame.js';
 import type { Services } from '../app/services.js';
 import { AppShell } from '../app/shell.js';
-import { AgentsScreen } from '../features/agents.js';
-import { AuditScreen } from '../features/audit.js';
-import { BoardScreen } from '../features/board.js';
 import { DashboardScreen } from '../features/dashboard.js';
-import { InboxScreen } from '../features/inbox.js';
-import { IntegrationsScreen } from '../features/integrations.js';
-import { OnboardingScreen } from '../features/onboarding.js';
-import { BudgetsScreen, KnowledgeScreen, PipelineScreen } from '../features/project-panels.js';
-import { ProjectSettingsScreen } from '../features/project-settings.js';
-import { SettingsScreen } from '../features/settings.js';
-import { ShadowScreen } from '../features/shadow.js';
 import { SignInScreen } from '../features/sign-in.js';
-import { StatisticsScreen } from '../features/statistics.js';
-import { TaskDetailScreen } from '../features/task-detail.js';
-import { WorkerApproveScreen, WorkersScreen } from '../features/workers.js';
 import { ErrorFallback } from '../ui/error-boundary.js';
+import { Skeleton } from '../ui/skeleton.js';
 
 export interface RouterContext {
   readonly queryClient: QueryClient;
@@ -85,28 +86,112 @@ const authenticatedRoute = createRoute({
   component: AppShell,
 });
 
-const route = <TPath extends string>(path: TPath, component: () => ReactElement) =>
+/** A wrapper that renders a lazy screen with a parameter, preloaded as the screen itself is. */
+const withPreload = <TComponent extends () => ReactElement>(
+  component: TComponent,
+  screen: { readonly preload?: (() => Promise<void> | undefined) | undefined },
+): TComponent & { preload: () => Promise<void> } =>
+  Object.assign(component, {
+    preload: async (): Promise<void> => {
+      await screen.preload?.();
+    },
+  });
+
+const route = <TPath extends string>(path: TPath, component: RouteComponent) =>
   createRoute({ getParentRoute: () => authenticatedRoute, path, component });
 
 const dashboardRoute = route('/', DashboardScreen);
-const agentsRoute = route('/agents', AgentsScreen);
-const inboxRoute = route('/inbox', InboxScreen);
-const integrationsRoute = route('/integrations', IntegrationsScreen);
-const statsRoute = route('/stats', StatisticsScreen);
-const auditRoute = route('/audit', AuditScreen);
-const settingsRoute = route('/settings', SettingsScreen);
-const onboardingRoute = route('/onboarding', OnboardingScreen);
+const projectsRoute = route(
+  '/projects',
+  lazyRouteComponent(() => import('../features/projects.js'), 'ProjectsScreen'),
+);
+const agentsRoute = route(
+  '/agents',
+  lazyRouteComponent(() => import('../features/agents.js'), 'AgentsScreen'),
+);
+const inboxRoute = route(
+  '/inbox',
+  lazyRouteComponent(() => import('../features/inbox.js'), 'InboxScreen'),
+);
+const integrationsRoute = route(
+  '/integrations',
+  lazyRouteComponent(() => import('../features/integrations.js'), 'IntegrationsScreen'),
+);
+const statsRoute = route(
+  '/stats',
+  lazyRouteComponent(() => import('../features/statistics.js'), 'StatisticsScreen'),
+);
+const auditRoute = route(
+  '/audit',
+  lazyRouteComponent(() => import('../features/audit.js'), 'AuditScreen'),
+);
+const settingsRoute = route(
+  '/settings',
+  lazyRouteComponent(() => import('../features/settings.js'), 'SettingsScreen'),
+);
+const onboardingRoute = route(
+  '/onboarding',
+  lazyRouteComponent(() => import('../features/onboarding.js'), 'OnboardingScreen'),
+);
 // WP-280: the registered machines, and the device flow's `verification_uri`.
-const workersRoute = route('/workers', WorkersScreen);
-const workerApproveRoute = route('/workers/approve', WorkerApproveScreen);
+const workersRoute = route(
+  '/workers',
+  lazyRouteComponent(() => import('../features/workers.js'), 'WorkersScreen'),
+);
+const workerApproveRoute = route(
+  '/workers/approve',
+  lazyRouteComponent(() => import('../features/workers.js'), 'WorkerApproveScreen'),
+);
 
-const boardRoute = createRoute({
+const BoardScreen = lazyRouteComponent(() => import('../features/board.js'), 'BoardScreen');
+const TaskDetailScreen = lazyRouteComponent(
+  () => import('../features/task-detail.js'),
+  'TaskDetailScreen',
+);
+const KnowledgeScreen = lazyRouteComponent(
+  () => import('../features/project-panels.js'),
+  'KnowledgeScreen',
+);
+const PipelineScreen = lazyRouteComponent(
+  () => import('../features/project-panels.js'),
+  'PipelineScreen',
+);
+const BudgetsScreen = lazyRouteComponent(
+  () => import('../features/project-panels.js'),
+  'BudgetsScreen',
+);
+const ShadowScreen = lazyRouteComponent(() => import('../features/shadow.js'), 'ShadowScreen');
+const ProjectSettingsScreen = lazyRouteComponent(
+  () => import('../features/project-settings.js'),
+  'ProjectSettingsScreen',
+);
+
+/** The project's layout: its header and tabs around every page below (`app/project-frame.tsx`). */
+const projectRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/projects/$key',
-  component: function Board() {
+  component: function Project() {
+    const { key } = projectRoute.useParams();
+    return <ProjectFrame projectKey={key} />;
+  },
+});
+
+/** A page of the project: its tab, and whether it takes the full width or has its own `<h1>`. */
+const projectPage = <TPath extends string>(
+  path: TPath,
+  tab: ProjectTab,
+  component: RouteComponent,
+) => createRoute({ getParentRoute: () => projectRoute, path, staticData: { tab }, component });
+
+/** The board is the project's index: `/projects/$key` itself. Full width, as GitHub's project board. */
+const boardRoute = createRoute({
+  getParentRoute: () => projectRoute,
+  path: '/',
+  staticData: { tab: 'board', fullWidth: true },
+  component: withPreload(function Board() {
     const { key } = boardRoute.useParams();
     return <BoardScreen projectKey={key} />;
-  },
+  }, BoardScreen),
 });
 
 /**
@@ -123,14 +208,16 @@ const boardRoute = createRoute({
  */
 const taskSearchSchema = z.object({ artifact: z.string().optional() });
 
+/** A task in its project: the Board's tab, under the project's header, with its own `<h1>`. */
 const projectTaskRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: '/projects/$key/tasks/$taskId',
+  getParentRoute: () => projectRoute,
+  path: 'tasks/$taskId',
   validateSearch: taskSearchSchema,
-  component: function ProjectTask() {
+  staticData: { tab: 'board', ownsHeading: true },
+  component: withPreload(function ProjectTask() {
     const { taskId } = projectTaskRoute.useParams();
     return <TaskDetailScreen taskId={taskId} />;
-  },
+  }, TaskDetailScreen),
 });
 
 /** Entered from the inbox and the agents view, which know a task id and no project key. */
@@ -138,62 +225,64 @@ const taskRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/tasks/$taskId',
   validateSearch: taskSearchSchema,
-  component: function Task() {
+  component: withPreload(function Task() {
     const { taskId } = taskRoute.useParams();
     return <TaskDetailScreen taskId={taskId} />;
-  },
+  }, TaskDetailScreen),
 });
 
-const knowledgeRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: '/projects/$key/knowledge',
-  component: function Knowledge() {
+const knowledgeRoute = projectPage(
+  'knowledge',
+  'knowledge',
+  withPreload(function Knowledge() {
     const { key } = knowledgeRoute.useParams();
     return <KnowledgeScreen projectKey={key} />;
-  },
-});
+  }, KnowledgeScreen),
+);
 
-const pipelineRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: '/projects/$key/pipeline',
-  component: function Pipeline() {
+const pipelineRoute = projectPage(
+  'pipeline',
+  'pipeline',
+  withPreload(function Pipeline() {
     const { key } = pipelineRoute.useParams();
     return <PipelineScreen projectKey={key} />;
-  },
-});
+  }, PipelineScreen),
+);
 
 /** product/10:20's Shadow screen (WP-34). */
-const shadowRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: '/projects/$key/shadow',
-  component: function Shadow() {
+const shadowRoute = projectPage(
+  'shadow',
+  'shadow',
+  withPreload(function Shadow() {
     const { key } = shadowRoute.useParams();
     return <ShadowScreen projectKey={key} />;
-  },
-});
+  }, ShadowScreen),
+);
 
-const budgetsRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: '/projects/$key/budgets',
-  component: function Budgets() {
+const budgetsRoute = projectPage(
+  'budgets',
+  'budgets',
+  withPreload(function Budgets() {
     const { key } = budgetsRoute.useParams();
     return <BudgetsScreen projectKey={key} />;
-  },
-});
+  }, BudgetsScreen),
+);
 
 /** product/10:21's project settings page — the mirror of every wizard step (product/18:55). */
-const projectSettingsRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: '/projects/$key/settings',
-  component: function ProjectSettings() {
+const projectSettingsRoute = projectPage(
+  'settings',
+  'settings',
+  withPreload(function ProjectSettings() {
     const { key } = projectSettingsRoute.useParams();
     return <ProjectSettingsScreen projectKey={key} />;
-  },
-});
+  }, ProjectSettingsScreen),
+);
 
+/** The run's log takes the full width, as an Actions job's does. */
 const runRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/runs/$runId',
+  staticData: { fullWidth: true },
   component: lazyRouteComponent(() => import('./run-route.js'), 'RunRoute'),
 });
 
@@ -201,6 +290,7 @@ export const routeTree = rootRoute.addChildren([
   signInRoute,
   authenticatedRoute.addChildren([
     dashboardRoute,
+    projectsRoute,
     agentsRoute,
     inboxRoute,
     integrationsRoute,
@@ -210,14 +300,16 @@ export const routeTree = rootRoute.addChildren([
     onboardingRoute,
     workersRoute,
     workerApproveRoute,
-    boardRoute,
-    projectTaskRoute,
+    projectRoute.addChildren([
+      boardRoute,
+      projectTaskRoute,
+      knowledgeRoute,
+      pipelineRoute,
+      budgetsRoute,
+      shadowRoute,
+      projectSettingsRoute,
+    ]),
     taskRoute,
-    knowledgeRoute,
-    pipelineRoute,
-    budgetsRoute,
-    shadowRoute,
-    projectSettingsRoute,
     runRoute,
   ]),
 ]);
@@ -241,6 +333,8 @@ const RouteErrorFallback = ({
   readonly reset: () => void;
 }): ReactElement => <ErrorFallback area="screen" error={error} onRetry={reset} />;
 
+const RoutePending = (): ReactElement => <Skeleton label="Loading…" lines={4} />;
+
 export const createAppRouter = (
   context: RouterContext,
   history?: Parameters<typeof createRouter>[0]['history'],
@@ -250,6 +344,8 @@ export const createAppRouter = (
     context,
     defaultPreload: false,
     defaultErrorComponent: RouteErrorFallback,
+    // What a lazy screen shows while its chunk loads, once the router's pending delay has passed.
+    defaultPendingComponent: RoutePending,
     ...(history === undefined ? {} : { history }),
   });
 
@@ -258,5 +354,14 @@ export type AppRouter = ReturnType<typeof createAppRouter>;
 declare module '@tanstack/react-router' {
   interface Register {
     router: AppRouter;
+  }
+  /** What a route tells the frame about itself (`app/shell.tsx`, `app/project-frame.tsx`). */
+  interface StaticDataRouteOption {
+    /** The project tab a page belongs to; a task's page is the Board's. */
+    readonly tab?: ProjectTab;
+    /** The board and a run's log take the page's width; everything else is centred at 1280 px. */
+    readonly fullWidth?: boolean;
+    /** The page has its own `<h1>`, so the project's name above it is not one. */
+    readonly ownsHeading?: boolean;
   }
 }

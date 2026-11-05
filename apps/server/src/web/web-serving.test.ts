@@ -359,6 +359,8 @@ describe('a deep link answers the shell', () => {
     '/inbox',
     '/settings',
     '/onboarding',
+    // S-23.4: the project list is the bare segment, which the allow-list's first-segment rule serves.
+    '/projects',
     '/projects/ACME',
     `/projects/ACME/tasks/${PROBE_ID}`,
     `/tasks/${PROBE_ID}`,

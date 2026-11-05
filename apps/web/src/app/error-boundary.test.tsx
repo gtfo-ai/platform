@@ -23,7 +23,7 @@
  * Both are mutation-checked: deleting `defaultErrorComponent` kills the first, deleting the
  * `ErrorBoundary` from `app/app.tsx` kills the second.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionResponse } from '../auth/session.js';
@@ -264,9 +264,9 @@ describe('the application when a component throws', () => {
     // The navigation the previous test proved is still there is also still *usable*.
     fireEvent.click(screen.getByRole('link', { name: 'Inbox' }));
 
-    await waitFor(() => {
-      expect(screen.getByText('Inbox')).toBeTruthy();
-    });
+    // The Inbox screen's own heading: since S-23.4 the screen is a lazy chunk, and the word
+    // "Inbox" is also the navigation's label, so only the heading proves the screen rendered.
+    expect(await screen.findByRole('heading', { name: 'Inbox' })).toBeTruthy();
     expect(screen.queryByTestId('error-fallback')).toBeNull();
   });
 

@@ -23,6 +23,41 @@ test('the dashboard shows the organisation metrics and the project', async ({ pa
   await expect(page.getByRole('link', { name: /Demo service/ })).toBeVisible();
 });
 
+/**
+ * The frame (S-23.4), in a browser against the built bundle: the organisation's navigation reaches
+ * the new `/projects` page, a row opens the project, and the project's tabs — the board's old text
+ * links, moved into the layout route — reach a sub-page whose chunk is loaded on demand, at the
+ * URL it always had. `Home` is the renamed *Dashboard*.
+ */
+test('the frame: Home, the projects list, and a project’s tabs', async ({ page }) => {
+  const primary = page.getByRole('navigation', { name: 'Primary' });
+  await expect(primary.getByRole('link', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
+  await primary.getByRole('link', { name: /^Projects/ }).click();
+  await expect(page).toHaveURL('/projects');
+  await expect(page.getByRole('heading', { level: 1, name: 'Projects' })).toBeVisible();
+
+  await page
+    .getByRole('list', { name: 'Projects' })
+    .getByRole('link', { name: /Demo service/ })
+    .click();
+  await expect(page).toHaveURL(`/projects/${PROJECT_KEY}`);
+  const tabs = page.getByRole('navigation', { name: 'Project' });
+  await expect(tabs.getByRole('link', { name: 'Board' })).toHaveAttribute('aria-current', 'page');
+  // Inside a project the switcher names it, and the organisation's row gives way to the tabs.
+  await expect(
+    page.getByRole('button', { name: /^Demo service.*, switch project$/ }),
+  ).toBeVisible();
+  await expect(primary).toHaveCount(0);
+
+  await tabs.getByRole('link', { name: 'Knowledge' }).click();
+  await expect(page).toHaveURL(`/projects/${PROJECT_KEY}/knowledge`);
+  await expect(page.getByRole('button', { name: 'technical/architecture.md' })).toBeVisible();
+  await expect(tabs.getByRole('link', { name: 'Knowledge' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+});
+
 test('the board puts each task in the column its state belongs to', async ({ page }) => {
   await page.goto(`/projects/${PROJECT_KEY}`);
 
