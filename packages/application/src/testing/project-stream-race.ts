@@ -85,7 +85,7 @@ export const racingProjectStream = (
           fn({
             ...scope,
             events: {
-              append: scope.events.append,
+              append: (events, appendOptions) => scope.events.append(events, appendOptions),
               lockStreamSequence: async (streamType, streamId) => {
                 reads += 1;
                 if (streamType !== 'project' || lost >= losses) {
