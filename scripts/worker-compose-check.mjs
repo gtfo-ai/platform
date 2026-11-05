@@ -824,7 +824,8 @@ const main = async () => {
       ready.includes('"core_handshake":"ok"'),
       ready.trim(),
     );
-    const credential = (
+    // The first line: since WP-294 the file names its core on a second (`readStoredCredential`).
+    const [credentialLine = ''] = (
       await bundle([
         'exec',
         '-T',
@@ -832,7 +833,8 @@ const main = async () => {
         'cat',
         '/var/lib/platform/worker-state/credential',
       ])
-    ).stdout.trim();
+    ).stdout.split('\n');
+    const credential = credentialLine.trim();
     check(
       'the credential is stored in worker-state',
       /^wkr_[a-z2-7]{26}_[A-Za-z0-9_-]{43}$/.test(credential),

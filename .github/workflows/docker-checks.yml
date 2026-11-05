@@ -40,7 +40,7 @@ jobs:
   plan:
     name: plan docker checks
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # a git diff and one plain Node script
+    timeout-minutes: 10 # the floor: 9 s and 14 s in the first two runs (PR #45)
     outputs:
       checks: ${{ steps.plan.outputs.checks }}
     steps:
@@ -83,7 +83,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.checks != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 20 # first runs; replace with three times the median once there are some
+    timeout-minutes: 10 # the floor: 1.8 and 1.8 min in the first two runs (PR #45)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -119,7 +119,8 @@ jobs:
     needs: [plan, images]
     if: needs.plan.outputs.checks != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 40 # first runs; worker-update-check bounds itself at 15 minutes
+    timeout-minutes: 30 # slowest leg worker-update-check, 6.3 min green (x3 = 19); a red one took 28 min to
+    # end on its own phase bounds and print its FAIL line, so 30. Others 1.0-5.9 min (PR #45)
     strategy:
       fail-fast: false
       matrix:
