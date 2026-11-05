@@ -206,8 +206,6 @@ const seedClaimedRun = async (
   }
 };
 
-const eventStore = () => new eventing.PostgresEventStore(pool);
-
 const deps = (overrides: Partial<SettleRunDeps> = {}): SettleRunDeps => ({
   unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
   store,
@@ -223,7 +221,6 @@ const deps = (overrides: Partial<SettleRunDeps> = {}): SettleRunDeps => ({
   // and (for a run seeded with no plan row, `run_plan_missing`) the project's settings, here a
   // configuration the platform cannot read, so the platform's default question timeout applies.
   redactor: redaction.patternRedactor(),
-  eventStore: eventStore(),
   settings: async () => ({ configRefusal: 'seeded run, no settings' }) as never,
   jobs: { enqueue: async () => ({ status: 'enqueued', jobId: 'job-275' }) } as never,
   ...overrides,

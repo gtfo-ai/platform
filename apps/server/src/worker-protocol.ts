@@ -237,13 +237,11 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
     jobs: options.jobs,
     runPlans,
     runEnvironment,
-    eventStore: options.eventing.store,
     logger: options.logger,
   });
   return createRemoteRuns({
     unitOfWork,
     store,
-    eventStore: options.eventing.store,
     context: context('worker-protocol'),
     runPlans,
     packager: launcherAdapters.createRemoteRunPackager({
@@ -292,7 +290,6 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
           lateCost,
           redactor: await settleRedactorFor(request.runId),
           settings: async (projectId, tx) => settings.forProject(projectId, tx),
-          eventStore: options.eventing.store,
           jobs: options.jobs,
           runEnvironment,
           logger: options.logger,
@@ -306,7 +303,6 @@ export const composeRemoteRuns = (options: ComposeRemoteRunsOptions): RemoteRuns
       store,
       settings: async (projectId, tx) => settings.forProject(projectId, tx),
       budgets: createBudgetGuard({ store: costStore }),
-      eventStore: options.eventing.store,
       context: context('pipeline'),
       logger: options.logger,
     }),

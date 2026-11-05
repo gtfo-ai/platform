@@ -33,7 +33,6 @@ import type { Id } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { escalateTask, IllegalTransitionError } from '@platform/domain';
 import { isConcurrencyConflict, MAX_CONCURRENCY_CONFLICT_ATTEMPTS } from '../events/concurrency.js';
-import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
@@ -117,8 +116,6 @@ export interface ConflictEscalationOptions {
   readonly unitOfWork: UnitOfWork;
   readonly store: PipelineStore;
   readonly context: (taskId: Id) => CommandContext;
-  /** The run stream's next sequence — a withdrawn offer's run ending (WP-276, `./offer-withdrawal.ts`). */
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
 }
 

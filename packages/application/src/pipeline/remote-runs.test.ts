@@ -148,7 +148,6 @@ const world = async (
   const remote = createRemoteRuns({
     unitOfWork: harness.memory,
     store: harness.store,
-    eventStore: harness.memory.store,
     context: harness.commands.context,
     runPlans: createTestRunPlanSealer(),
     packager: {
@@ -200,7 +199,6 @@ const world = async (
               store: harness.store,
               settings: async () => harness.settings,
               budgets: { blockingFor: async () => options.budgetAtClaim?.() ?? null },
-              eventStore: harness.memory.store,
               context: harness.commands.context,
             }),
           ),
@@ -916,7 +914,6 @@ describe('finish of an ask run (WP-283, backlog 741)', () => {
     const remote = createRemoteRuns({
       unitOfWork: w.harness.memory,
       store,
-      eventStore: w.harness.memory.store,
       context: w.harness.commands.context,
       runPlans: createTestRunPlanSealer(),
       packager: { build: async () => ({ kind: 'package', package: {} as WorkerRunPackage }) },

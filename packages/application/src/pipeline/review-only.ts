@@ -846,7 +846,7 @@ export const insertReviewTask = async (
     stored.qaStage,
   );
   const applied = await applyDecision({
-    offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
+    offerClosing: { events: scope.events, broadcast: scope.broadcast },
     store: options.store,
     pipeline,
     tx: scope.tx,

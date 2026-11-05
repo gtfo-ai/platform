@@ -266,7 +266,6 @@ const world = async (
   const remote = createRemoteRuns({
     unitOfWork: harness.memory,
     store: harness.store,
-    eventStore: harness.memory.store,
     context: harness.commands.context,
     runPlans: createTestRunPlanSealer(),
     packager: launcherAdapters.createRemoteRunPackager({

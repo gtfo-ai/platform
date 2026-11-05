@@ -1171,7 +1171,6 @@ describe('backlog 744: a claim the admission re-check refuses (TD-031 §2)', () 
         correlationId,
         causeEventId: null,
       });
-      const eventStore = new eventing.PostgresEventStore(pool);
       const blocker: BlockingBudget = {
         id: nextId(),
         scope: 'project',
@@ -1188,7 +1187,6 @@ describe('backlog 744: a claim the admission re-check refuses (TD-031 §2)', () 
       const remote = createRemoteRuns({
         unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
         store,
-        eventStore,
         context,
         runPlans: createTestRunPlanSealer(),
         packager: {
@@ -1211,7 +1209,6 @@ describe('backlog 744: a claim the admission re-check refuses (TD-031 §2)', () 
           store,
           settings: async (projectId) => defaultProjectSettings(projectId),
           budgets: { blockingFor: async () => blocker },
-          eventStore,
           context,
         }),
       });

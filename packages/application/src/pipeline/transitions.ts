@@ -60,7 +60,7 @@ import {
   startRetrospective,
 } from '@platform/domain';
 import type { TransactionalBroadcast } from '../ports/broadcast.js';
-import type { EventStore } from '../ports/event-store.js';
+import type { EventAppender } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import { closeStageOffer } from './offer-withdrawal.js';
 import type { StageExecutionJob } from './stage-executor.js';
@@ -121,7 +121,8 @@ const enterCommand = (
  */
 export type ApplyOfferClosing =
   | {
-      readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
+      /** The transaction's appender: the withdrawn run's stream is locked and read through it. */
+      readonly events: EventAppender;
       readonly broadcast: TransactionalBroadcast;
     }
   | 'task_has_no_offer';
@@ -237,8 +238,12 @@ export const applyDecision = async (options: ApplyOptions): Promise<AppliedDecis
 const closeOfferFor = async (options: ApplyOptions): Promise<readonly DomainEvent[]> => {
   if (options.decision.kind === 'wait' || options.offerClosing === 'task_has_no_offer') return [];
   const closing = await closeStageOffer(
-    { store: options.store, eventStore: options.offerClosing.eventStore },
-    { tx: options.tx, broadcast: options.offerClosing.broadcast },
+    { store: options.store },
+    {
+      tx: options.tx,
+      broadcast: options.offerClosing.broadcast,
+      events: options.offerClosing.events,
+    },
     {
       taskId: options.stored.task.id,
       code: 'stage_left',

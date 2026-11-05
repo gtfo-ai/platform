@@ -27,7 +27,6 @@
  */
 import type { DomainEvent, Id } from '@platform/contracts';
 import { type CommandContext, isActiveRunStatus, withdrawRunOffer } from '@platform/domain';
-import type { EventStore } from '../ports/event-store.js';
 import type { TransactionScope } from '../ports/unit-of-work.js';
 import { MEASURED_ZERO_COST, NO_RUN_USAGE, stoppedBeforeCliSpawn } from './cli-spawn.js';
 import { toRunAggregate } from './run-aggregate.js';
@@ -49,8 +48,6 @@ export type StageOfferClosing =
 
 export interface StageOfferClosingDeps {
   readonly store: Pick<PipelineStore, 'offers' | 'runs' | 'runCommands'>;
-  /** The run stream's next sequence — what the withdrawn run's ending is appended at. */
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
 }
 
 /**
@@ -60,7 +57,7 @@ export interface StageOfferClosingDeps {
  */
 export const closeStageOffer = async (
   deps: StageOfferClosingDeps,
-  scope: Pick<TransactionScope, 'tx' | 'broadcast'>,
+  scope: Pick<TransactionScope, 'tx' | 'broadcast' | 'events'>,
   input: {
     readonly taskId: Id;
     /** The code `run_offers.withdrawn_reason` stores (WP-278 review, BACKLOG 731). */
@@ -130,7 +127,7 @@ export const closeStageOffer = async (
  */
 export const endWithdrawnRun = async (
   deps: StageOfferClosingDeps,
-  scope: Pick<TransactionScope, 'tx'>,
+  scope: Pick<TransactionScope, 'tx' | 'events'>,
   withdrawn: { readonly offerId: Id; readonly runId: Id },
   input: { readonly reason: string; readonly context: CommandContext },
 ): Promise<readonly DomainEvent[]> => {
@@ -155,7 +152,7 @@ export const endWithdrawnRun = async (
   });
   if (!won) return [];
   const decision = withdrawRunOffer(
-    toRunAggregate(row, await deps.eventStore.nextStreamSequence('run', withdrawn.runId)),
+    toRunAggregate(row, await scope.events.lockStreamSequence('run', withdrawn.runId)),
     {
       offerId: withdrawn.offerId,
       reason: input.reason,

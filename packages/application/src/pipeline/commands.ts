@@ -684,7 +684,7 @@ const applyHumanDecisionRecorded = async (
     );
   }
   const applied = await applyDecision({
-    offerClosing: { eventStore: deps.eventStore, broadcast: scope.broadcast },
+    offerClosing: { events: scope.events, broadcast: scope.broadcast },
     store: deps.store,
     pipeline: compilePipeline(
       stored.task.template,
@@ -1814,10 +1814,7 @@ const endRunRecordInPlace = async (
   if (!won) {
     throw new RunNotLiveError(run.id, run.status, 'cancelled: it has already ended');
   }
-  const aggregate = toStageRunAggregate(
-    run,
-    await deps.eventStore.nextStreamSequence('run', run.id),
-  );
+  const aggregate = toStageRunAggregate(run, await scope.events.lockStreamSequence('run', run.id));
   const decision = finishRun(
     aggregate,
     {

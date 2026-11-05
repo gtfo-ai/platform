@@ -89,7 +89,6 @@ import {
   type RunLeaseFence,
   type StoredTask,
 } from '../pipeline/store.js';
-import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -212,8 +211,6 @@ export interface AskExecutorOptions {
   readonly runPlans: RunPlanSealer;
   /** The secret values the read-back spec is given (WP-275a); absent is none. */
   readonly runEnvironment?: RunSecretEnvironment;
-  /** The run stream's next sequence — what the settle rebuilds the run's aggregate at (WP-276). */
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
 }
 
@@ -1017,7 +1014,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       if (ask === null) return null;
       const aggregate = toRunAggregate(
         row,
-        await options.eventStore.nextStreamSequence('run', request.runId),
+        await scope.events.lockStreamSequence('run', request.runId),
       );
       const plan = await options.store.runPlans.load(scope.tx, request.runId);
       const environment = options.runEnvironment ?? NO_RUN_ENVIRONMENT;
@@ -1139,12 +1136,10 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         now: context.clock.now(),
       });
       if (withdrawn === null) return false;
-      const events = await endWithdrawnRun(
-        { store: options.store, eventStore: options.eventStore },
-        scope,
-        withdrawn,
-        { reason: why.withdrawnReason, context },
-      );
+      const events = await endWithdrawnRun({ store: options.store }, scope, withdrawn, {
+        reason: why.withdrawnReason,
+        context,
+      });
       if (row.askId !== undefined && row.askId !== null) {
         await options.asks.recordRefusal(scope.tx, { askId: row.askId, status: 'failed', reason });
       }

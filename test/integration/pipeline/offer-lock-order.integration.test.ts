@@ -248,7 +248,6 @@ const context = (correlationId: Id) => ({
   causeEventId: null,
 });
 
-const eventStore = () => new eventing.PostgresEventStore(pool);
 const noBroadcast = { publish: async () => {} };
 
 /** `closeStageOffer` on its own connection: the withdrawal of a stage transition (criterion 3). */
@@ -256,8 +255,12 @@ const withdrawal = async (taskId: Id, holder = begin()) => {
   const connection = await holder;
   try {
     const closed = await closeStageOffer(
-      { store, eventStore: eventStore() },
-      { tx: connection.tx, broadcast: noBroadcast },
+      { store },
+      {
+        tx: connection.tx,
+        broadcast: noBroadcast,
+        events: new eventing.PostgresEventAppender(connection.client, noBroadcast),
+      },
       {
         taskId,
         code: 'paused_by_human',
@@ -601,7 +604,6 @@ const settleDeps = (): SettleRunDeps => ({
   context,
   calendar: createWorkingCalendar(),
   redactor: redaction.patternRedactor(),
-  eventStore: eventStore(),
   settings: async () => ({ configRefusal: 'seeded run, no settings' }) as never,
   jobs: { enqueue: async () => ({ status: 'enqueued', jobId: 'job-276' }) } as never,
   lateCost: createLateCostRecorder({
@@ -736,7 +738,6 @@ describe('the database unreachable past the TTL (WP-276 criterion 4)', () => {
       context,
       clock: { now: () => NOW },
       runPlans: createTestRunPlanSealer(),
-      eventStore: eventStore(),
       lease: {
         owner: OWNER,
         schedule: () => () => {},
@@ -783,7 +784,6 @@ describe('the database unreachable past the TTL (WP-276 criterion 4)', () => {
         store: recovery.createPostgresExpiredRunStore(),
         pipeline: store,
         unitOfWork,
-        eventStore: eventStore(),
         context,
         clock: { now: () => new Date(ms).toISOString() as IsoDateTime },
         graceMs: 60_000,

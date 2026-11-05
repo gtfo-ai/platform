@@ -75,7 +75,6 @@ const start = (
   startTicketManually(
     {
       unitOfWork: harness.memory,
-      eventStore: harness.memory.store,
       store: harness.store,
       settings: staticProjectSettings(() => harness.settings),
       integrations: { forProject: async () => harness.integrations } as never,

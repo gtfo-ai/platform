@@ -95,7 +95,6 @@ import {
 } from '../cost/pending.js';
 import { redactTextSearchTerms } from '../knowledge/text-search-record.js';
 import type { MaintenanceSpendReader } from '../maintenance/ports.js';
-import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -446,8 +445,6 @@ export interface StageExecutorOptions {
   readonly runEnvironment?: RunSecretEnvironment;
   /** Where `settleRun` enqueues a start failure's retry and a hand-back's re-run, after its commit. */
   readonly jobs: Jobs;
-  /** The run stream's next sequence — what `settleRun` rebuilds the run's aggregate at (WP-275a). */
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
   /**
    * How many stages this process runs at once. Stated here because it is a **pool** number: each
@@ -1254,7 +1251,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       'a stage write lost every race against another writer; the task is escalated',
     );
     await escalateTaskAfterConflict(
-      { unitOfWork, store, eventStore: options.eventStore, context: options.context, logger },
+      { unitOfWork, store, context: options.context, logger },
       failure,
     );
     return { kind: 'escalated', reason: failure.message };
@@ -1297,12 +1294,10 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         now: context.clock.now(),
       });
       if (withdrawn === null) return false;
-      const ended = await endWithdrawnRun(
-        { store, eventStore: options.eventStore },
-        scope,
-        withdrawn,
-        { reason: why.withdrawnReason, context },
-      );
+      const ended = await endWithdrawnRun({ store }, scope, withdrawn, {
+        reason: why.withdrawnReason,
+        context,
+      });
       const events = [...ended];
       const stored = await store.tasks.load(scope.tx, row.taskId);
       if (

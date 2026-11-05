@@ -22,7 +22,6 @@
 import type { DomainEvent, Id } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { escalateTask, IllegalTransitionError } from '@platform/domain';
-import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
@@ -58,11 +57,9 @@ export const escalateForConfigRefusalInHandler = async (
   input: {
     readonly store: PipelineStore;
     /** The transaction and its broadcast — the stage offer's close records a holder's `cancel`. */
-    readonly scope: Pick<TransactionScope, 'tx' | 'broadcast'>;
+    readonly scope: Pick<TransactionScope, 'tx' | 'broadcast' | 'events'>;
     readonly emit: (events: readonly DomainEvent[]) => Promise<void>;
     readonly context: CommandContext;
-    /** The run stream's next sequence — a withdrawn offer's run ending (WP-276). */
-    readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   },
   stored: StoredTask,
   refusal: string,
@@ -114,7 +111,6 @@ export const escalateForConfigRefusal = async (
           {
             store: options.store,
             scope,
-            eventStore: options.eventStore,
             emit: async (events) => {
               await scope.events.append(events);
             },
@@ -140,8 +136,6 @@ export interface ConfigRefusalJobOptions {
   readonly store: PipelineStore;
   readonly ids: CommandContext['ids'];
   readonly clock: { now(): string };
-  /** The run stream's next sequence — a withdrawn offer's run ending (WP-276). */
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
 }
 
@@ -157,7 +151,6 @@ export const parkForConfigRefusal = async (
     {
       unitOfWork: options.unitOfWork,
       store: options.store,
-      eventStore: options.eventStore,
       context: (taskId) => ({
         ids: options.ids,
         actor: PIPELINE_ACTOR,

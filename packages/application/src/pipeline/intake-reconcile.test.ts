@@ -95,6 +95,7 @@ const harnessFor = (matches: readonly UnstartedMatch[] = [unstarted()]): Harness
               appended.push(...events);
               return [];
             },
+            lockStreamSequence: async () => 12,
           },
         } as unknown as TransactionScope),
     },
@@ -391,7 +392,7 @@ describe('a pass whose project stream another writer keeps winning (backlog 368)
     };
     const handler = intakeReconcileHandler({
       store: { findUnstartedMatches: async () => matches },
-      unitOfWork: eventing,
+      unitOfWork: race.unitOfWork,
       eventStore: race.eventStore,
       ids: {
         next: () => {
@@ -443,7 +444,7 @@ describe('a pass whose project stream another writer keeps winning (backlog 368)
     const pass = passOver(4, [matchOf(1), matchOf(2, OTHER_PROJECT)]);
     const report = await runIntakeReconciliation({
       store: { findUnstartedMatches: async () => [matchOf(1), matchOf(2, OTHER_PROJECT)] },
-      unitOfWork: pass.eventing,
+      unitOfWork: pass.race.unitOfWork,
       eventStore: pass.race.eventStore,
       ids: { next: () => '00000000-0000-4000-a000-000000000777' as Id },
       clock: { now: () => NOW },
@@ -463,7 +464,7 @@ describe('a pass whose project stream another writer keeps winning (backlog 368)
           throw new Error('the intake query failed');
         },
       },
-      unitOfWork: pass.eventing,
+      unitOfWork: pass.race.unitOfWork,
       eventStore: pass.race.eventStore,
       ids: { next: () => '00000000-0000-4000-a000-000000000001' as Id },
       clock: { now: () => NOW },

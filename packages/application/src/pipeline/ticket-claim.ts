@@ -563,7 +563,7 @@ const refuse = async (
         task: { ...current.task, sequence: current.task.sequence + 1 },
       };
       const applied = await applyDecision({
-        offerClosing: { eventStore: options.eventStore, broadcast: scope.broadcast },
+        offerClosing: { events: scope.events, broadcast: scope.broadcast },
         store: options.store,
         pipeline: compilePipeline(
           current.task.template,

@@ -57,7 +57,6 @@ export const inTaskTransaction = async <T>(
       {
         unitOfWork: options.unitOfWork,
         store: options.store,
-        eventStore: options.eventStore,
         context: (id) => ({
           ids: options.ids,
           actor: { kind: 'system', component: 'pipeline' },

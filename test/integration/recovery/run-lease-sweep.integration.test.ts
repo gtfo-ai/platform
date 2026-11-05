@@ -21,7 +21,7 @@
  * typed in. The assertion was `15` before the sweep and `0` after it until WP-131, which holds the
  * swept run at its reservation instead: `15` pending before, `15` held after, `0` spent throughout.
  */
-import type { Commitment, ExpiredRunQuery, Transaction } from '@platform/application';
+import type { Commitment, ExpiredRunQuery, Transaction, UnitOfWork } from '@platform/application';
 import {
   declarePipelineQueues,
   runStrandedRecovery,
@@ -143,12 +143,11 @@ const pendingUsd = (reserveUsd: number): Promise<Commitment> =>
     ),
   );
 
-const sweep = async () =>
+const sweep = async (unitOfWork: UnitOfWork = new eventing.PostgresUnitOfWork({ pool })) =>
   sweepExpiredRunLeases({
     store,
     pipeline,
-    unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
-    eventStore: new eventing.PostgresEventStore(pool),
+    unitOfWork,
     context: (correlationId) => ({
       ids: { next: () => crypto.randomUUID() as Id },
       actor: { kind: 'system', component: 'pipeline.run-lease.sweep' },
@@ -195,6 +194,35 @@ beforeEach(async () => {
     [projectId, JSON.stringify(FEATURE_TEMPLATE)],
   );
   taskId = task.rows[0]?.id as string;
+});
+
+/**
+ * BACKLOG 971: a run-stream writer reads its stream's sequence **on its own transaction's
+ * connection**, under the stream's lock (`scope.events.lockStreamSequence`). Until then the sweep —
+ * like every run-stream writer — read it through an event store over the pool, a second connection
+ * borrowed while the transaction held the first, which the pool floor does not count. On a pool of
+ * one connection that read cannot be served, so the sweep is driven on exactly one: it ends the run
+ * and appends its `run.failed` at the stream's first sequence without ever asking for a second.
+ */
+describe('the sweep holds one connection (BACKLOG 971)', () => {
+  it('ends an expired run on a pool of one connection, its run stream read inside the transaction', async () => {
+    const runId = await seedRun();
+    const onePool = createTestPool(database.connectionString, {
+      max: 1,
+      connectionTimeoutMillis: 2_000,
+    });
+    try {
+      const first = await sweep(new eventing.PostgresUnitOfWork({ pool: onePool }));
+      expect(first).toEqual({ found: 1, ended: 1, skipped: 0, replanned: 0 });
+    } finally {
+      await onePool.end();
+    }
+    const appended = await pool.query<{ type: string; stream_seq: number }>(
+      `select type, stream_seq from events where stream_type = 'run' and stream_id = $1`,
+      [runId],
+    );
+    expect(appended.rows).toEqual([{ type: 'run.failed', stream_seq: 1 }]);
+  });
 });
 
 describe('the expired-run query', () => {
@@ -411,7 +439,6 @@ describe('a question whose run the sweep ended', () => {
         store,
         pipeline,
         unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
-        eventStore: new eventing.PostgresEventStore(pool),
         context: (correlationId) => ({
           ids: { next: () => crypto.randomUUID() as Id },
           actor: { kind: 'system', component: 'pipeline.run-lease.sweep' },
@@ -576,7 +603,6 @@ describe('a lost worker re-plans its stage entry once (WP-286)', () => {
       store,
       pipeline,
       unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
-      eventStore: new eventing.PostgresEventStore(pool),
       context: (correlationId) => ({
         ids: { next: () => crypto.randomUUID() as Id },
         actor: { kind: 'system', component: 'pipeline.run-lease.sweep' },

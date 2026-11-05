@@ -44,7 +44,7 @@ describe('appendOnProjectWithRetry', () => {
     const race = racingProjectStream(eventing, PROJECT_STREAM_APPEND_ATTEMPTS - 1);
     let attempts = 0;
     const answer = await appendOnProjectWithRetry(
-      { unitOfWork: eventing, eventStore: race.eventStore },
+      { unitOfWork: race.unitOfWork },
       { projectId: PROJECT, writer: 'test' },
       async (scope, streamSeq) => {
         attempts += 1;
@@ -63,7 +63,7 @@ describe('appendOnProjectWithRetry', () => {
     let attempts = 0;
     await expect(
       appendOnProjectWithRetry(
-        { unitOfWork: eventing, eventStore: race.eventStore },
+        { unitOfWork: race.unitOfWork },
         { projectId: PROJECT, writer: 'test' },
         async (scope, streamSeq) => {
           attempts += 1;
@@ -80,7 +80,7 @@ describe('appendOnProjectWithRetry', () => {
     let attempts = 0;
     await expect(
       appendOnProjectWithRetry(
-        { unitOfWork: eventing, eventStore: eventing.store },
+        { unitOfWork: eventing },
         { projectId: PROJECT, writer: 'test' },
         async () => {
           attempts += 1;
@@ -96,7 +96,7 @@ describe('appendOnProjectWithRetry', () => {
     let attempts = 0;
     await expect(
       appendOnProjectWithRetry(
-        { unitOfWork: eventing, eventStore: eventing.store },
+        { unitOfWork: eventing },
         { projectId: PROJECT, writer: 'test' },
         async () => {
           attempts += 1;
@@ -111,7 +111,7 @@ describe('appendOnProjectWithRetry', () => {
     const eventing = new MemoryEventing();
     const write = () =>
       appendOnProjectWithRetry(
-        { unitOfWork: eventing, eventStore: eventing.store },
+        { unitOfWork: eventing },
         { projectId: PROJECT, writer: 'test' },
         async (scope, streamSeq) => {
           await scope.events.append([rebuilt(PROJECT, streamSeq)]);

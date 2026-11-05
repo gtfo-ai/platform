@@ -169,6 +169,8 @@ export class MemoryEventing implements UnitOfWork {
   readonly #queueLocks = new Map<number, MemoryTransaction>();
   readonly #executionLocks = new Map<string, MemoryTransaction>();
   readonly #streamLocks = new Map<string, MemoryTransaction>();
+  /** Transactions waiting in `lockStreamSequence` for a stream another one holds (BACKLOG 971). */
+  readonly #streamWaiters = new Map<string, (() => void)[]>();
   /** The live transaction behind each handle, for {@link MemoryEventing.onRollback}. */
   readonly #byHandle = new WeakMap<Transaction, MemoryTransaction>();
   readonly #listeners = new Map<BroadcastListener, ReadonlySet<string>>();
@@ -446,7 +448,33 @@ export class MemoryEventing implements UnitOfWork {
     for (const [key, owner] of this.#streamLocks) {
       if (owner === tx) {
         this.#streamLocks.delete(key);
+        const waiting = this.#streamWaiters.get(key) ?? [];
+        this.#streamWaiters.delete(key);
+        for (const wake of waiting) {
+          wake();
+        }
       }
+    }
+  }
+
+  /**
+   * @internal `lockStreamSequence`'s lock: **waits** while another live transaction holds the
+   * stream, as `pg_advisory_xact_lock` does, then takes it (BACKLOG 971). The append path's
+   * {@link _lockStream} still refuses instead, because an append without the lock is the race.
+   */
+  async _awaitStream(tx: MemoryTransaction, streamType: string, streamId: string): Promise<void> {
+    const key = streamKey(streamType, streamId);
+    for (;;) {
+      const owner = this.#streamLocks.get(key);
+      if (owner === undefined || owner === tx) {
+        this.#streamLocks.set(key, tx);
+        return;
+      }
+      await new Promise<void>((wake) => {
+        const waiting = this.#streamWaiters.get(key) ?? [];
+        waiting.push(wake);
+        this.#streamWaiters.set(key, waiting);
+      });
     }
   }
 
@@ -582,6 +610,19 @@ class MemoryTransaction {
           }
         }
         return appended;
+      },
+      lockStreamSequence: async (streamType, streamId) => {
+        await this.#owner._awaitStream(this, streamType, streamId);
+        return (
+          this.appended
+            .filter(
+              (row) => row.event.stream_type === streamType && row.event.stream_id === streamId,
+            )
+            .reduce(
+              (highest, row) => Math.max(highest, row.event.stream_seq),
+              this.#owner._committedLastSeq(streamType, streamId),
+            ) + 1
+        );
       },
     };
   }

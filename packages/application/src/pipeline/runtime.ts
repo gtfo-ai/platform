@@ -307,7 +307,6 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     // WP-275a: where `settleRun` enqueues a start failure's retry and a hand-back's re-run, and the
     // run stream it rebuilds a run's aggregate from — the runtime's own, as every handler's.
     jobs: options.jobs,
-    eventStore: options.eventStore,
     // WP-56: the calendar a blocking question's deadline is computed on — the saga's own, so the
     // stage executor and the approval gates cannot resolve `1 working day` on two calendars.
     calendar: options.calendar,
@@ -400,7 +399,6 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
           ...(options.execution.runEnvironment === undefined
             ? {}
             : { runEnvironment: options.execution.runEnvironment }),
-          eventStore: options.eventStore,
           ...(options.execution.lease === undefined ? {} : { lease: options.execution.lease }),
           settle: {
             stage: async (request) => executor.settle(request),
@@ -411,7 +409,6 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
             store: options.store,
             settings: async (projectId, tx) => options.settings.forProject(projectId, tx),
             budgets: options.execution.budgets ?? noBudgetGuard,
-            eventStore: options.eventStore,
             context: options.execution.context,
             ...(logger === undefined ? {} : { logger }),
           }),

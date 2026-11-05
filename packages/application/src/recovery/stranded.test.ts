@@ -529,7 +529,6 @@ describe('the stranded-work pass', () => {
           },
           pipeline: undefined as never,
           unitOfWork: new MemoryEventing(),
-          eventStore: { nextStreamSequence: async () => 1 },
           context: () => undefined as never,
           wallClockMs: 60 * 60_000,
           replan: { jobs: recordingJobs(), revokeCredentials: async () => {} },

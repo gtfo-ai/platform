@@ -6,11 +6,13 @@
  * commit together or not at all. `EventStore` is the connection-scoped read side used by
  * aggregate loading and by the dispatcher's sweep.
  *
- * Sequencing is optimistic, not pessimistic. The caller appends with `stream_seq = last + 1`; the
- * `events_stream_seq_guard` trigger takes the `event_streams` row lock inside its own upsert, so
- * concurrent appends to one stream serialise without the caller locking anything — and a caller
- * that *tried* to lock `event_streams` would get `42501`, because the application role holds
- * SELECT only there (migration 0005). A mismatch surfaces as `StreamConflictError`.
+ * The caller appends with `stream_seq = last + 1`; the `events_stream_seq_guard` trigger takes the
+ * `event_streams` row lock inside its own upsert, and a mismatch surfaces as `StreamConflictError`
+ * — a caller that *tried* to lock `event_streams` itself would get `42501`, because the application
+ * role holds SELECT only there (migration 0005). An aggregate's stream is serialised by the
+ * aggregate's own row; a **shared** stream — a project's, a run's — has no row every writer locks,
+ * so its writers take {@link EventAppender.lockStreamSequence} instead (BACKLOG 971): the stream's
+ * transaction-scoped lock and its next sequence, read on the transaction's own connection.
  */
 import type { DomainEvent, DomainEventType, Id, StreamType } from '@platform/contracts';
 
@@ -44,6 +46,17 @@ export interface EventAppender {
     events: readonly DomainEvent[],
     options?: AppendOptions,
   ) => Promise<readonly StoredEvent[]>;
+  /**
+   * **Takes the stream's lock for the rest of this transaction and answers its next sequence**, read
+   * in this transaction (BACKLOG 971). Every appender of a shared stream calls this — the one place
+   * the lock-then-read is spelled — so two writers of one stream wait for each other instead of
+   * racing for the sequence and losing at the trigger. Released at commit or rollback.
+   *
+   * Lock order: call it **before the first append** of the transaction and after the row locks the
+   * transaction takes first (`run_offers` → `runs` → `tasks`); a transaction that locks several
+   * streams locks them in `(stream type, stream id)` order.
+   */
+  readonly lockStreamSequence: (streamType: StreamType, streamId: Id) => Promise<number>;
 }
 
 export interface ReadStreamOptions {

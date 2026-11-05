@@ -1,18 +1,22 @@
 /**
- * One transaction that appends to a **project** stream, retried in place when another writer took
- * the sequence first (WP-109, PROGRESS backlog **333** and **357**).
+ * One transaction that appends to a **project** stream — WP-109 (PROGRESS backlog **333** and
+ * **357**), and since BACKLOG 971 one that **waits** for the stream rather than racing for it.
  *
- * ## The shape it replaces
+ * ## The shape it replaced, twice
  *
- * Every project-stream writer outside the dispatcher reads `nextStreamSequence('project', …)` over
- * the **pool** and then opens the transaction that appends at it. The read sees nothing a transaction
- * holds and locks nothing, so moving it inside the callback does not close the window — it only
- * shortens it (`knowledge/decide.ts` had it inside and raced all the same, backlog 357). Another
- * project-stream append landing between the read and the commit fails the transaction with
- * {@link StreamConflictError} — migration 0005's sequence guard — and before this module the
- * knowledge passes let that fail the **job**: pg-boss ran it again a minute later (measured 79 s,
- * backlog 333), and an operator command (the business interview, a knowledge rejection) answered
- * `500 internal_error`.
+ * Every project-stream writer outside the dispatcher used to read `nextStreamSequence('project', …)`
+ * over the **pool** and then open the transaction that appended at it. Another project-stream append
+ * landing between the read and the commit failed the transaction with {@link StreamConflictError} —
+ * migration 0005's sequence guard — and before WP-109 the knowledge passes let that fail the **job**
+ * (measured 79 s, backlog 333). WP-109 retried it in place, four times; the integration stream's
+ * identical loop lost four in a row under CI's load (BACKLOG 970), and a project stream is shared by
+ * as many writers.
+ *
+ * Now the transaction's first statement is `scope.events.lockStreamSequence`: the project
+ * stream's advisory lock, then its sequence on the transaction's own connection. Two writers of one
+ * project wait for each other, and the read takes no second connection from the pool. The lock comes
+ * before anything `work` locks, so it is the first lock of every project-stream transaction, and
+ * no transaction takes it while holding a row.
  *
  * ## What the retry repeats, and what it never does
  *
@@ -28,19 +32,22 @@
  *
  * ## The bound
  *
- * {@link PROJECT_STREAM_APPEND_ATTEMPTS} tries — the inbound audit log's bound
- * (`DEFAULT_INBOUND_SEQUENCE_ATTEMPTS`) and WP-90's, for the same reason: the race is another writer
- * taking the sequence in the milliseconds between the read and the append, and four consecutive
- * losses on one stream is contention nothing here should retry through. After the last attempt the
- * conflict is thrown to the caller exactly as before, so a job still fails into pg-boss's retry.
+ * {@link PROJECT_STREAM_APPEND_ATTEMPTS} tries, kept as the **defence** rather than the mechanism:
+ * every project-stream writer takes the lock, so a conflict now means a writer that bypassed it.
+ * After the last attempt the conflict is thrown to the caller, so a job still fails into pg-boss's
+ * retry.
  *
  * Only a conflict on **this** project's stream is retried. A conflict on any other stream — a writer
  * that also appended to a task stream in the same transaction — is not a race this function can
  * win by re-reading the project's sequence, and it is rethrown on the first attempt.
+ *
+ * It refuses to run inside an open transaction ({@link assertOutsideTransaction}): it opens its own,
+ * and a caller holding another connection's row locks while it waits on the stream lock is a wait
+ * the database cannot see as a deadlock.
  */
 import type { Id } from '@platform/contracts';
 import { StreamConflictError } from '../errors.js';
-import type { EventStore } from '../ports/event-store.js';
+import { assertOutsideTransaction } from '../events/open-transaction.js';
 import type { Logger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 
@@ -49,8 +56,6 @@ export const PROJECT_STREAM_APPEND_ATTEMPTS = 4;
 
 export interface ProjectStreamAppendDependencies {
   readonly unitOfWork: UnitOfWork;
-  /** The project stream's next sequence, read just before each attempt (the docblock says why). */
-  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly logger?: Logger;
 }
 
@@ -71,13 +76,14 @@ export const appendOnProjectWithRetry = async <T>(
   request: { readonly projectId: Id; readonly writer: string },
   work: (scope: TransactionScope, streamSeq: number) => Promise<T>,
 ): Promise<T> => {
+  assertOutsideTransaction(`a project stream append (${request.writer})`);
   for (let attempt = 1; ; attempt += 1) {
-    const streamSeq = await dependencies.eventStore.nextStreamSequence(
-      'project',
-      request.projectId,
-    );
+    let streamSeq = 0;
     try {
-      return await dependencies.unitOfWork.transaction((scope) => work(scope, streamSeq));
+      return await dependencies.unitOfWork.transaction(async (scope) => {
+        streamSeq = await scope.events.lockStreamSequence('project', request.projectId);
+        return work(scope, streamSeq);
+      });
     } catch (error) {
       if (!isThisProjectsConflict(error, request.projectId)) {
         throw error;
@@ -92,7 +98,7 @@ export const appendOnProjectWithRetry = async <T>(
           attempt,
           stream_seq: streamSeq,
         },
-        'another writer took the project stream’s sequence; running the transaction again at the next one, with nothing read outside it repeated',
+        'a writer that bypassed the stream lock took the project stream’s sequence; running the transaction again at the next one, with nothing read outside it repeated',
       );
     }
   }

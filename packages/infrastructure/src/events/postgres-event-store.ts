@@ -239,6 +239,19 @@ export class PostgresEventAppender implements EventAppender {
     return appended;
   }
 
+  /**
+   * `pg_advisory_xact_lock` on `<type>_stream/<id>`, then the sequence on this transaction's
+   * connection (BACKLOG 971). Advisory because the application role may not lock `event_streams`
+   * (migration 0005); under READ COMMITTED the read after the lock sees the previous holder's commit.
+   */
+  async lockStreamSequence(streamType: StreamType, streamId: Id): Promise<number> {
+    await this.#sql.query(
+      `select pg_advisory_xact_lock(hashtextextended($1 || '_stream/' || $2, 0))`,
+      [streamType, streamId],
+    );
+    return new PostgresEventStore(this.#sql).nextStreamSequence(streamType, streamId);
+  }
+
   async #appendOne(event: DomainEvent, causeEventPosition: number | null): Promise<StoredEvent> {
     try {
       const { rows } = await this.#sql.query<{ position: string | number }>(

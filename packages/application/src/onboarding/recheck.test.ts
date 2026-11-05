@@ -70,7 +70,7 @@ const harness = (
   const reads: RepositoryFileRequest[] = [];
   const windows: IsoDateTime[] = [];
   const recheck: ReadinessRecheckOptions = {
-    unitOfWork: eventing,
+    unitOfWork: race.unitOfWork,
     eventStore: race.eventStore,
     readiness,
     signals: { read: async () => signals },
@@ -384,7 +384,6 @@ describe('a re-check that loses the race to a newer evaluation', () => {
 
   /** The rival records a newer evaluation and its event at the sequence the re-check just read. */
   const losingTo = (built: ReturnType<typeof harness>, disarmReread: boolean) => {
-    let raced = false;
     const recheck: ReadinessRecheckOptions = {
       ...built.recheck,
       readiness: disarmReread
@@ -401,28 +400,21 @@ describe('a re-check that loses the race to a newer evaluation', () => {
             })(),
           }
         : built.readiness,
-      eventStore: {
-        nextStreamSequence: async (streamType, streamId) => {
-          const seq = await built.eventing.store.nextStreamSequence(streamType, streamId);
-          if (!raced) {
-            raced = true;
-            const newer = newerFrom('00000000-0000-4000-8000-0000000000e9');
-            await built.eventing.transaction(async (scope) => {
-              await built.readiness.record(scope.tx, newer);
-              await scope.events.append([
-                readinessEvaluatedEventFor({
-                  id: '00000000-0000-4000-8000-0000000000ea' as Id,
-                  evaluation: newer,
-                  streamSeq: seq,
-                  component: 'discovery',
-                  occurredAt: newer.evaluatedAt,
-                }),
-              ]);
-            });
-          }
-          return seq;
-        },
-      },
+      // The rival commits a newer evaluation and its event at the sequence the re-check is handed:
+      // a writer that bypassed the stream lock (BACKLOG 971), so the re-check's append loses once.
+      unitOfWork: racingProjectStream(built.eventing, 1, async (scope, projectId, streamSeq) => {
+        const newer = newerFrom('00000000-0000-4000-8000-0000000000e9');
+        await built.readiness.record(scope.tx, newer);
+        await scope.events.append([
+          readinessEvaluatedEventFor({
+            id: '00000000-0000-4000-8000-0000000000ea' as Id,
+            evaluation: { ...newer, projectId },
+            streamSeq,
+            component: 'discovery',
+            occurredAt: newer.evaluatedAt,
+          }),
+        ]);
+      }).unitOfWork,
     };
     return recheck;
   };
