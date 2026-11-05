@@ -10,8 +10,9 @@
  * that is not done. Once a project exists the checklist moves into the rail until its last step is
  * done, and then it is gone.
  *
- * **One primary button on the page**: *Continue setup* while the checklist shows, *New project*
- * once it does not. It watches the `org` topic, so a question asked, a run started or a run ended
+ * **At most one primary button on the page**: *Continue setup* while the checklist shows, *New
+ * project* once it does not — and *New project* only for an admin, the one role `project.create`
+ * allows; for anyone else the page has no primary action. It watches the `org` topic, so a question asked, a run started or a run ended
  * refreshes the boxes without a reload. Every string a person or an agent wrote — a question, a
  * progress line, a ticket title, a project name, a model id — renders through `ui/untrusted.tsx`.
  */
@@ -303,6 +304,9 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
     ),
   ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
+  // The count (and the empty line) wait for the escalated-task reads too, so N does not jump once
+  // they answer; a failed read is settled, its rows simply absent.
+  const settled = inbox.isSuccess && escalated.every((read) => !read.isPending);
   const shown = items.slice(0, HOME_ROWS);
   const keys = useTicketKeys(
     shown.filter((item) => item.ticket === null).map((item) => item.taskId),
@@ -323,7 +327,7 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
           >
             <BoxTitle
               title="Needs you"
-              {...(inbox.isSuccess
+              {...(settled
                 ? {
                     count: items.length,
                     countLabel: `${formatInteger(items.length)} waiting for you`,
@@ -343,9 +347,7 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
             <ErrorNotice title="What needs you could not be loaded." error={inbox.error} />
           </li>
         ) : null}
-        {inbox.isSuccess && items.length === 0 ? (
-          <QuietLine>Nothing needs you right now.</QuietLine>
-        ) : null}
+        {settled && items.length === 0 ? <QuietLine>Nothing needs you right now.</QuietLine> : null}
         {shown.map((item) => {
           const known = keys.get(item.taskId);
           const projectKey =
@@ -495,11 +497,14 @@ const RunningBox = ({ projects }: { readonly projects: readonly ProjectItem[] })
 
 const ProjectsBox = ({
   projects,
-  primary,
+  newProject,
 }: {
   readonly projects: readonly ProjectItem[];
-  /** Whether *New project* is the page's one primary action (it is, once setup is finished). */
-  readonly primary: boolean;
+  /**
+   * *New project*: `null` when the caller may not create one (`project.create` is admin), else
+   * whether it is the page's one primary action (it is, once setup is finished).
+   */
+  readonly newProject: 'primary' | 'default' | null;
 }) => {
   const open = projects.reduce((total, project) => total + project.open_tasks, 0);
   return (
@@ -508,11 +513,15 @@ const ProjectsBox = ({
         label="Projects"
         header={
           <ListBoxHeader
-            actions={
-              <Link to="/onboarding" className={buttonClassName(primary ? 'primary' : 'default')}>
-                New project
-              </Link>
-            }
+            {...(newProject === null
+              ? {}
+              : {
+                  actions: (
+                    <Link to="/onboarding" className={buttonClassName(newProject)}>
+                      New project
+                    </Link>
+                  ),
+                })}
           >
             <BoxTitle title="Projects" />
             <span
@@ -824,16 +833,21 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
 const Boxes = ({
   projects,
   setup,
+  canCreateProject,
 }: {
   readonly projects: readonly ProjectItem[];
   /** The checklist while it is unfinished; `null` when it is done, or not this person's to do. */
   readonly setup: SetupChecklist | null;
+  readonly canCreateProject: boolean;
 }): ReactElement => (
   <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
     <div className="flex min-w-0 flex-col gap-6">
       <NeedsYouBox projects={projects} />
       <RunningBox projects={projects} />
-      <ProjectsBox projects={projects} primary={setup === null} />
+      <ProjectsBox
+        projects={projects}
+        newProject={!canCreateProject ? null : setup === null ? 'primary' : 'default'}
+      />
     </div>
     <aside aria-label="At a glance" className="flex flex-col gap-4">
       {setup === null ? null : <SetupBox checklist={setup} size="rail" />}
@@ -858,6 +872,7 @@ const AdminHome = ({ projects }: { readonly projects: readonly ProjectItem[] }) 
     <Boxes
       projects={projects}
       setup={checklist.settling || checklist.complete ? null : checklist}
+      canCreateProject
     />
   );
 };
@@ -896,7 +911,7 @@ export const DashboardScreen = (): ReactElement => {
             hint="An admin connects the tracker and the git host and creates the first project. This page then shows what needs you and what the agents are doing."
           />
         ) : (
-          <Boxes projects={items} setup={null} />
+          <Boxes projects={items} setup={null} canCreateProject={false} />
         )
       ) : null}
     </div>

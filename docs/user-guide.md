@@ -64,8 +64,9 @@ board; from the inbox or Agents it does not yet. Every address is the one it alw
   while the page is receiving updates, with its word — *Connecting*, *Reconnecting*, *Server
   restarting*, *Disconnected* — shown beside it whenever it is not live, because a page that has
   stopped receiving updates has also stopped changing;
-- **+** — **New project**, and inside a project you may start tickets in, **Start a ticket…**, which
-  opens the board's start form (below);
+- **+** — **New project** (for an admin: creating a project is an admin's), and inside a project you
+  may start tickets in, **Start a ticket…**, which opens the board's start form (below); with
+  neither, there is no **+**;
 - the **inbox** button, with the number of things waiting for you;
 - your avatar (below).
 
@@ -421,8 +422,8 @@ answers three questions in this order: what needs you, what is moving, and where
   project, the ticket, the model, how long it has run, what it has cost so far and the latest
   progress line the agent reported. **Agents →** has the whole list.
 - **Projects**: one row per project — its name (the way into its board), its key, its readiness
-  level, its open tasks and its spend over the last 30 days — and **New project**, which opens the
-  wizard.
+  level, its open tasks and its spend over the last 30 days — and, for an admin, **New project**,
+  which opens the wizard.
 - On the right, **Spend this month** — the organisation's monthly cap as *$412 of $1,000* with a
   meter, when one is set, and the 30-day spend across all projects either way — and **Instance**:
   whether the live connection is up, and the version.

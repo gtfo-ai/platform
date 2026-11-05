@@ -10,7 +10,7 @@
  * only when the tasks read says `can_start_task`, and the connection's live region keeps the exact
  * word the realtime spec asserts.
  */
-import type { ProjectSummary, RunRecord } from '@platform/contracts';
+import type { ProjectSummary, RunRecord, UserRole } from '@platform/contracts';
 import { QueryClient } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -119,6 +119,8 @@ interface World {
   readonly questions?: number;
   readonly approvals?: number;
   readonly canStart?: boolean;
+  /** The signed-in role; `member` unless a case needs another. */
+  readonly role?: UserRole;
 }
 
 const json = (body: unknown, status = 200): Response =>
@@ -128,7 +130,9 @@ const fetchFor = (world: World) =>
   (async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
     const path = new URL(url, 'http://app.example.invalid').pathname;
-    if (path === '/api/auth/get-session') return json(SESSION);
+    if (path === '/api/auth/get-session') {
+      return json({ ...SESSION, user: { ...SESSION.user, role: world.role ?? 'member' } });
+    }
     if (path === '/api/setup-state') return json({ first_sign_in: false });
     if (path === '/events/subscriptions') return json({});
     if (path === '/api/projects') return json({ items: world.projects });
@@ -270,9 +274,27 @@ describe('the top bar', () => {
     ).toBeTruthy();
   });
 
-  it('offers New project everywhere and Start a ticket only where the caller may start one', async () => {
+  it('offers New project to an admin only, and to nobody else no menu without a ticket to start', async () => {
     const user = userEvent.setup();
+    // `project.create` is admin-only: a member is not offered a wizard that would answer 403.
     start({ projects: [project(1)], canStart: true }, '/');
+    await within(await banner()).findByRole('button', { name: 'Account menu' });
+    expect(within(await banner()).queryByRole('button', { name: 'Create new…' })).toBeNull();
+    cleanup();
+
+    start({ projects: [project(1)], canStart: true }, '/projects/p1/pipeline');
+    await screen.findByRole('navigation', { name: 'Project' });
+    await waitFor(async () => {
+      await user.click(within(await banner()).getByRole('button', { name: 'Create new…' }));
+      const items = within(await screen.findByRole('menu')).getAllByRole('menuitem');
+      expect(items.map((item) => item.textContent)).toEqual(['Start a ticket…']);
+    });
+    cleanup();
+  });
+
+  it('offers New project everywhere to an admin and Start a ticket only where the caller may start one', async () => {
+    const user = userEvent.setup();
+    start({ projects: [project(1)], canStart: true, role: 'admin' }, '/');
     await user.click(await within(await banner()).findByRole('button', { name: 'Create new…' }));
     let menu = await screen.findByRole('menu');
     expect(
@@ -282,14 +304,14 @@ describe('the top bar', () => {
     ).toEqual(['New project']);
     cleanup();
 
-    start({ projects: [project(1)], canStart: false }, '/projects/p1');
+    start({ projects: [project(1)], canStart: false, role: 'admin' }, '/projects/p1');
     await screen.findByRole('heading', { level: 1, name: /Project 1/ });
     await user.click(within(await banner()).getByRole('button', { name: 'Create new…' }));
     menu = await screen.findByRole('menu');
     expect(within(menu).queryByRole('menuitem', { name: 'Start a ticket…' })).toBeNull();
     cleanup();
 
-    start({ projects: [project(1)], canStart: true }, '/projects/p1/pipeline');
+    start({ projects: [project(1)], canStart: true, role: 'admin' }, '/projects/p1/pipeline');
     await screen.findByRole('navigation', { name: 'Project' });
     // The tasks read is what offers the start; wait for it through the menu itself.
     await waitFor(async () => {

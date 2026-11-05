@@ -403,14 +403,24 @@ export const ProjectSwitcher = ({
 };
 
 /**
- * `+ ▾`: *New project* everywhere, *Start a ticket…* inside a project whose tasks read says the
- * caller may start one (`can_start_task`) — it opens the board's start form, the one place a
- * ticket is started.
+ * `+ ▾`: *New project* for an admin (`project.create` is admin-only, so nobody else is offered a
+ * wizard whose first command answers 403), *Start a ticket…* inside a project whose tasks read says
+ * the caller may start one (`can_start_task`) — it opens the board's start form, the one place a
+ * ticket is started. With neither, there is no menu.
  */
-const CreateMenu = ({ project }: { readonly project: ProjectSummary | null }): ReactElement => {
+const CreateMenu = ({
+  project,
+  canCreateProject,
+}: {
+  readonly project: ProjectSummary | null;
+  readonly canCreateProject: boolean;
+}): ReactElement | null => {
   const navigate = useNavigate();
   const tasks = useProjectTasks(project?.id ?? null);
   const canStart = project !== null && tasks.data?.can_start_task === true;
+  if (!canCreateProject && !canStart) {
+    return null;
+  }
   return (
     <ActionMenu
       trigger={
@@ -427,14 +437,16 @@ const CreateMenu = ({ project }: { readonly project: ProjectSummary | null }): R
         </button>
       }
     >
-      <ActionMenuItem
-        leadingIcon={<RepoIcon size={16} />}
-        onSelect={() => {
-          void navigate({ to: '/onboarding' });
-        }}
-      >
-        New project
-      </ActionMenuItem>
+      {canCreateProject ? (
+        <ActionMenuItem
+          leadingIcon={<RepoIcon size={16} />}
+          onSelect={() => {
+            void navigate({ to: '/onboarding' });
+          }}
+        >
+          New project
+        </ActionMenuItem>
+      ) : null}
       {project === null || !canStart ? null : (
         <ActionMenuItem
           leadingIcon={<PlayIcon size={16} />}
@@ -572,7 +584,7 @@ export const AppShell = (): ReactElement => {
           )}
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <RunningIndicator running={counts.running} status={status} />
-            <CreateMenu project={project} />
+            <CreateMenu project={project} canCreateProject={user?.role === 'admin'} />
             <InboxButton count={counts.inbox} />
             <AccountMenu
               user={user}

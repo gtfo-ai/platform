@@ -269,6 +269,8 @@ const fetchFor = (world: World) =>
           task_id: entry.task_id,
           role: entry.role,
           last_output_at: null,
+          seat: null,
+          activity: null,
         })),
       });
     }
@@ -669,6 +671,17 @@ describe('Home on a new instance: the setup checklist', () => {
   });
 });
 
+describe('Home for a role that cannot create a project', () => {
+  it('offers no New project, so the page has no primary action', async () => {
+    const world = newWorld({ role: 'maintainer', projects: [project(1)] });
+    const { container } = start(world);
+    await screen.findByRole('link', { name: 'Project 1' });
+    expect(within(box('Projects')).queryByRole('link', { name: 'New project' })).toBeNull();
+    expect(primaries(container)).toHaveLength(0);
+    expect(screen.queryByRole('region', { name: 'Set up' })).toBeNull();
+  });
+});
+
 describe('Home, live', () => {
   it('refreshes Needs you when the org topic carries a question’s event', async () => {
     const world = newWorld();
@@ -685,6 +698,26 @@ describe('Home, live', () => {
     });
     const needs = screen.getByRole('list', { name: 'Needs you' });
     expect(await within(needs).findByText('Is the new endpoint public?')).toBeTruthy();
+  });
+
+  it('adds a run to Running now when the org topic carries a run’s event', async () => {
+    const world = newWorld();
+    const { streams, openStream } = fakeStreams();
+    start(world, { openStream });
+    expect(await screen.findByText('No agent is running right now.')).toBeTruthy();
+    await waitFor(() => {
+      expect(streams.length).toBeGreaterThan(0);
+    });
+    world.runs = [run()];
+    act(() => {
+      streams.at(-1)?.open();
+      streams.at(-1)?.emit(runStarted(), 'org:2');
+    });
+    const list = screen.getByRole('list', { name: 'Running now' });
+    expect(
+      await within(list).findByRole('link', { name: 'Implementation · Developer' }),
+    ).toBeTruthy();
+    expect(screen.queryByText('No agent is running right now.')).toBeNull();
   });
 });
 
@@ -743,6 +776,25 @@ describe('the dashboard and a broken organisation account (WP-157 (a), backlog 4
     expect(world.asked).not.toContain('/api/integrations');
   });
 });
+
+/** A `run.started` frame on the `org` topic: ids only, as the server projects it (S-23.14). */
+const runStarted = (): SseFrame =>
+  sseFrameSchema.parse({
+    frame: 'domain_event',
+    topic: 'org',
+    seq: 2,
+    type: 'run.started',
+    data: {
+      id: '00000000-0000-4000-8000-0000000000e2',
+      type: 'run.started',
+      stream_type: 'run',
+      stream_id: RUN,
+      occurred_at: minutesAgo(0),
+      project_id: PROJECT(1),
+      task_id: TASK(7),
+      run_id: RUN,
+    },
+  });
 
 /** A `task.question.asked` frame on the `org` topic, parsed with the published schema (S-23.14). */
 const questionAsked = (): SseFrame =>
