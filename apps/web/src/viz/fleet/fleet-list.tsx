@@ -6,7 +6,8 @@
  * each a link to its task; then the seats with their slots.
  *
  * The rows are in attention order (`fleet.runs`): what needs a person, then what is stuck, then the
- * rest oldest first. Pressing a row's title opens the run's dialog, as a card on the map and a desk
+ * rest oldest first — and after them a run that ended while the page watched, *just finished* or
+ * *just ended*, for as long as the map and the office keep it at its desk. Pressing a row's title opens the run's dialog, as a card on the map and a desk
  * in the office do. Every string a person, a tracker or an agent wrote is a sanitised React text
  * node; inside a button or a link it is plain text, never `UntrustedText`, whose links would nest.
  */
@@ -80,7 +81,13 @@ const RunRow = ({
           <span className="inline-flex flex-wrap items-center gap-1.5">
             <span>{run.stageName}</span>
             <span aria-hidden="true">·</span>
-            <span className="font-medium text-fg">{activityWords(run)}</span>
+            <span className="font-medium text-fg">
+              {run.ended
+                ? run.activity.activity === 'done'
+                  ? 'just finished'
+                  : `just ended: ${activityWords(run)}`
+                : activityWords(run)}
+            </span>
             <span aria-hidden="true">·</span>
             <span>{seatWords(seat)}</span>
             <span aria-hidden="true">·</span>
@@ -107,7 +114,10 @@ const RunRow = ({
       trailing={
         <>
           <span className="tabular-nums" title="How long the run has gone">
-            {formatElapsed(run.run.started_at, now)}
+            {formatElapsed(
+              run.run.started_at,
+              run.ended ? Date.parse(run.run.ended_at ?? '') || now : now,
+            )}
           </span>
           <span className="tabular-nums" title="What the run has cost so far">
             {formatRunCost(run.run.cost, { estimate: true })}
@@ -192,109 +202,125 @@ export const FleetList = ({
   readonly fleet: Fleet;
   readonly now: number;
   readonly onOpen: (runId: string) => void;
-}): ReactElement => (
-  <div className="flex flex-col gap-4">
-    <ListBox
-      label="Runs"
-      header={
-        <ListBoxHeader>
-          <h2 className="inline-flex items-center gap-2 font-semibold text-fg">
-            Runs <Counter count={fleet.runs.length} label={`${fleet.runs.length} live runs`} />
-          </h2>
-        </ListBoxHeader>
-      }
-    >
-      {fleet.runs.length === 0 ? (
-        <li className="px-4 py-3 text-sm text-fg-muted">No run is live right now.</li>
-      ) : null}
-      {fleet.runs.map((run) => (
-        <RunRow key={run.id} run={run} seat={seatOf(fleet, run.seatId)} now={now} onOpen={onOpen} />
-      ))}
-    </ListBox>
-
-    {fleet.needs.length === 0 ? null : (
+}): ReactElement => {
+  // The runs that ended while the page watched: the map and the office keep them at their seat for
+  // a moment, so the list says them too, after the live ones.
+  const ended = fleet.seats.flatMap((seat) => seat.endings);
+  const rows = [...fleet.runs, ...ended];
+  return (
+    <div className="flex flex-col gap-4">
       <ListBox
-        label="Needs you"
+        label="Runs"
         header={
-          <ListBoxHeader
-            actions={
-              <Link
-                to="/inbox"
-                className={cx('rounded-sm text-sm text-link hover:underline', FOCUS_RING)}
-              >
-                View inbox →
-              </Link>
-            }
-          >
+          <ListBoxHeader>
             <h2 className="inline-flex items-center gap-2 font-semibold text-fg">
-              Needs you <Counter count={fleet.needs.length} />
+              Runs{' '}
+              <Counter
+                count={rows.length}
+                label={`${fleet.runs.length} live runs${ended.length === 0 ? '' : `, ${ended.length} just ended`}`}
+              />
             </h2>
           </ListBoxHeader>
         }
       >
-        {fleet.needs.map((need) => (
-          <ListRow
-            key={need.id}
-            leading={<StatusIcon status="needs_you" />}
-            title={need.untrusted ? sanitiseUntrusted(need.text) : need.text}
-            meta={[
-              need.projectKey === null ? null : sanitiseUntrusted(need.projectKey),
-              need.ticketKey === null ? null : sanitiseUntrusted(need.ticketKey),
-              `${formatElapsed(need.at, now)} ago`,
-            ]
-              .filter((part): part is string => part !== null)
-              .join(' · ')}
-            actions={
-              <Link
-                to="/tasks/$taskId"
-                params={{ taskId: need.taskId }}
-                className={buttonClassName('default', 'sm')}
-              >
-                {NEED_ACTION[need.kind]}
-                <span className="sr-only">{` ${need.ticketKey === null ? 'this task' : sanitiseUntrusted(need.ticketKey)}`}</span>
-              </Link>
-            }
+        {rows.length === 0 ? (
+          <li className="px-4 py-3 text-sm text-fg-muted">No run is live right now.</li>
+        ) : null}
+        {rows.map((run) => (
+          <RunRow
+            key={run.id}
+            run={run}
+            seat={seatOf(fleet, run.seatId)}
+            now={now}
+            onOpen={onOpen}
           />
         ))}
       </ListBox>
-    )}
 
-    <ListBox
-      label="Seats"
-      header={
-        <ListBoxHeader>
-          <h2 className="font-semibold text-fg">Seats</h2>
-          <span
-            className="text-fg-muted"
-            title="Free slots on active, unpaused workers. The platform server does not report its capacity."
-          >
-            {`${fleet.counts.freeSeats} free`}
-          </span>
-        </ListBoxHeader>
-      }
-    >
-      {fleet.seats.map((seat) => (
-        <ListRow
-          key={seat.id}
-          leading={
-            seat.kind === 'server' ? undefined : (
-              <Avatar name={seatTitle(seat)} size={20} decorative />
-            )
+      {fleet.needs.length === 0 ? null : (
+        <ListBox
+          label="Needs you"
+          header={
+            <ListBoxHeader
+              actions={
+                <Link
+                  to="/inbox"
+                  className={cx('rounded-sm text-sm text-link hover:underline', FOCUS_RING)}
+                >
+                  View inbox →
+                </Link>
+              }
+            >
+              <h2 className="inline-flex items-center gap-2 font-semibold text-fg">
+                Needs you <Counter count={fleet.needs.length} />
+              </h2>
+            </ListBoxHeader>
           }
-          title={seat.kind === 'server' ? 'Platform server' : seatTitle(seat)}
-          meta={[
-            seat.kind === 'server'
-              ? 'the platform’s own claimant'
-              : seat.owner === null
-                ? 'worker'
-                : `worker · ${sanitiseUntrusted(seat.owner)}`,
-            slotsWords(seat),
-            seat.state === 'active' ? null : seat.state === 'paused' ? 'paused' : 'revoked',
-          ]
-            .filter((part): part is string => part !== null)
-            .join(' · ')}
-        />
-      ))}
-    </ListBox>
-  </div>
-);
+        >
+          {fleet.needs.map((need) => (
+            <ListRow
+              key={need.id}
+              leading={<StatusIcon status="needs_you" />}
+              title={need.untrusted ? sanitiseUntrusted(need.text) : need.text}
+              meta={[
+                need.projectKey === null ? null : sanitiseUntrusted(need.projectKey),
+                need.ticketKey === null ? null : sanitiseUntrusted(need.ticketKey),
+                `${formatElapsed(need.at, now)} ago`,
+              ]
+                .filter((part): part is string => part !== null)
+                .join(' · ')}
+              actions={
+                <Link
+                  to="/tasks/$taskId"
+                  params={{ taskId: need.taskId }}
+                  className={buttonClassName('default', 'sm')}
+                >
+                  {NEED_ACTION[need.kind]}
+                  <span className="sr-only">{` ${need.ticketKey === null ? 'this task' : sanitiseUntrusted(need.ticketKey)}`}</span>
+                </Link>
+              }
+            />
+          ))}
+        </ListBox>
+      )}
+
+      <ListBox
+        label="Seats"
+        header={
+          <ListBoxHeader>
+            <h2 className="font-semibold text-fg">Seats</h2>
+            <span
+              className="text-fg-muted"
+              title="Free slots on active, unpaused workers. The platform server does not report its capacity."
+            >
+              {`${fleet.counts.freeSeats} free`}
+            </span>
+          </ListBoxHeader>
+        }
+      >
+        {fleet.seats.map((seat) => (
+          <ListRow
+            key={seat.id}
+            leading={
+              seat.kind === 'server' ? undefined : (
+                <Avatar name={seatTitle(seat)} size={20} decorative />
+              )
+            }
+            title={seat.kind === 'server' ? 'Platform server' : seatTitle(seat)}
+            meta={[
+              seat.kind === 'server'
+                ? 'the platform’s own claimant'
+                : seat.owner === null
+                  ? 'worker'
+                  : `worker · ${sanitiseUntrusted(seat.owner)}`,
+              slotsWords(seat),
+              seat.state === 'active' ? null : seat.state === 'paused' ? 'paused' : 'revoked',
+            ]
+              .filter((part): part is string => part !== null)
+              .join(' · ')}
+          />
+        ))}
+      </ListBox>
+    </div>
+  );
+};

@@ -532,12 +532,15 @@ export const activityWords = (run: Pick<FleetRun, 'activity' | 'meta'>): string 
   `${run.meta.label.toLowerCase()}${run.activity.detail === null ? '' : `: ${run.activity.detail}`}`;
 
 /**
- * A run's whole state in one line — the desk's and the card's accessible name:
- * "DEMO-1 · Code review · working: Reading files · worker jan-mbp". Untrusted parts sanitised.
+ * A run's whole state in one line — the desk's and the card's accessible name, opening with the
+ * ticket key and title a card shows (WCAG 2.5.3): "DEMO-1 · Checkout flow · Code review · working:
+ * Reading files · worker jan-mbp". The title is left out until the task's read answers, or when the
+ * platform never read the ticket. Untrusted parts sanitised.
  */
 export const runSentence = (run: FleetRun, seat: Pick<FleetSeat, 'kind' | 'name'> | null): string =>
   [
     run.ticketKey === null ? 'A task' : sanitiseUntrusted(run.ticketKey),
+    ...(run.title === null ? [] : [sanitiseUntrusted(run.title)]),
     run.stageName,
     run.ended
       ? run.activity.activity === 'done'

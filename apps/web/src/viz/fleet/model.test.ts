@@ -209,18 +209,25 @@ describe('each run’s activity', () => {
     expect(one({ agents: [agentItem(1)] })?.phases).toEqual([]);
   });
 
-  it('says the whole state in one sentence: key, stage, activity, seat', () => {
-    const fleet = fleetOf(
-      base({
-        agents: [agentItem(1, { seat: workerSeat(30, 'jan-mbp'), run: { stage: 'code_review' } })],
-        workers: [worker(30, { name: 'jan-mbp' })],
-        tasks: new Map([[uuid(1001), facts('DEMO-1')]]),
-      }),
+  it('says the whole state in one sentence: key, title, stage, activity, seat', () => {
+    const sentence = (title: string | null) => {
+      const fleet = fleetOf(
+        base({
+          agents: [
+            agentItem(1, { seat: workerSeat(30, 'jan-mbp'), run: { stage: 'code_review' } }),
+          ],
+          workers: [worker(30, { name: 'jan-mbp' })],
+          tasks: new Map([[uuid(1001), facts('DEMO-1', { title })]]),
+        }),
+      );
+      const run = fleet.runs[0];
+      return run === undefined ? '' : runSentence(run, fleet.seats[1] ?? null);
+    };
+    expect(sentence('Checkout\u202Eflow')).toBe(
+      'DEMO-1 · Checkout\uFFFDflow · Code review · working: Reading files · worker jan-mbp',
     );
-    const run = fleet.runs[0];
-    expect(run === undefined ? '' : runSentence(run, fleet.seats[1] ?? null)).toBe(
-      'DEMO-1 · Code review · working: Reading files · worker jan-mbp',
-    );
+    // A ticket the platform never read has no title, and the sentence does not invent one.
+    expect(sentence(null)).toBe('DEMO-1 · Code review · working: Reading files · worker jan-mbp');
   });
 });
 
@@ -251,6 +258,24 @@ describe('the runs that ended while the page watched', () => {
     expect(seat?.runs).toEqual([]);
     expect(fleet.counts.live).toBe(0);
     expect(fleet.runs).toEqual([]);
+  });
+
+  it('read as how they ended, never as the task’s question or escalation (BACKLOG 814)', () => {
+    const taskId = uuid(1001);
+    const fleet = fleetOf(
+      base({
+        inbox: { questions: [question(70, taskId, 'Three or five?')], approvals: [] },
+        tasks: new Map([[taskId, facts('DEMO-1', { state: 'needs_human' })]]),
+        endings: [
+          {
+            entry: agentItem(1),
+            run: runRecord(1, { status: 'failed', terminal_reason: 'crash' }),
+          },
+        ],
+      }),
+    );
+    const ended = fleet.seats[0]?.endings[0];
+    expect([ended?.activity.activity, ended?.meta.pose]).toEqual(['failed', 'slumped']);
   });
 
   it('are dropped when the run is live again or the read still says it is live', () => {

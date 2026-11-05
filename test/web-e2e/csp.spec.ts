@@ -400,7 +400,9 @@ test('the Agents page draws its map, office and list under the policy, titles as
   await expect(map.locator('.react-flow__edge.animated')).not.toHaveCount(0);
   await expect(map.locator('[data-fleet-node="seat"]')).toHaveCount(3);
   await page
-    .getByRole('button', { name: /^DEMO-5 · Investigation · thinking · worker jan-mbp$/ })
+    .getByRole('button', {
+      name: /^DEMO-5 · Flaky retries .+ · Investigation · thinking · worker jan-mbp$/,
+    })
     .click();
   const dialog = page.getByRole('dialog', { name: 'DEMO-5 · Investigation' });
   await expect(dialog.getByText(/Watch-only — the agent runs on/)).toContainText('jan-mbp');
@@ -417,11 +419,13 @@ test('the Agents page draws its map, office and list under the policy, titles as
   );
   await expect(
     office.getByRole('button', {
-      name: /^DEMO-1 · Implementation · needs you · the platform server$/,
+      name: /^DEMO-1 · Checkout .+ · Implementation · needs you · the platform server$/,
     }),
   ).toBeVisible();
   await expect(
-    office.getByRole('button', { name: /^DEMO-6 · Refinement · waiting: Starting · no seat yet$/ }),
+    office.getByRole('button', {
+      name: /^DEMO-6 · Export the invoice as CSV · Refinement · waiting: Starting · no seat yet$/,
+    }),
   ).toBeVisible();
   await expect(office.locator('[data-door-plate]').filter({ hasText: 'night-owl' })).toHaveText(
     `night-owl ${HOSTILE.image}`,

@@ -8,12 +8,13 @@
  * **The whole card opens the run's dialog**, through one `<button>` whose box is stretched over the
  * card (`after:inset-0`), so `PhaseTrack`'s list — flow content a button may not hold — sits beside
  * the button rather than inside it. The button's name is the run's whole sentence
- * (`runSentence`), opening with the ticket key it shows.
+ * (`runSentence`), opening with the ticket key and title it shows (WCAG 2.5.3), and its description
+ * says the project, the model, how long and how much.
  *
  * The ticket key, the title and the project key are the tracker's and the operator's text (BD-022):
  * React text nodes, sanitised, never markup, never a link (a link would nest in the button).
  */
-import type { ReactElement } from 'react';
+import { type ReactElement, useId } from 'react';
 import { cx, FOCUS_RING } from '../../ui/cx.js';
 import { formatElapsed, formatRunCost } from '../../ui/kit.js';
 import { PhaseTrack } from '../../ui/phase-track.js';
@@ -61,6 +62,12 @@ export const FleetRunCard = ({
   readonly className?: string;
 }): ReactElement => {
   const live = !run.ended;
+  const description = useId();
+  const elapsed = live
+    ? formatElapsed(run.run.started_at, now)
+    : formatElapsed(run.run.started_at, Date.parse(run.run.ended_at ?? '') || now);
+  const cost = formatRunCost(run.run.cost, { estimate: true });
+  const model = sanitiseUntrusted(run.run.model);
   return (
     <article
       data-fleet-run={run.id}
@@ -74,6 +81,7 @@ export const FleetRunCard = ({
       <button
         type="button"
         aria-label={runSentence(run, seat)}
+        aria-describedby={description}
         aria-haspopup="dialog"
         onClick={() => {
           onOpen(run.id);
@@ -118,19 +126,24 @@ export const FleetRunCard = ({
           </span>
         )}
       </button>
+      {/* What the card shows beside the name, for the button's description (WCAG 2.5.3). */}
+      <span id={description} className="sr-only">
+        {[
+          run.projectKey === null ? null : `Project ${sanitiseUntrusted(run.projectKey)}`,
+          `model ${model}`,
+          `${live ? 'running for' : 'ran for'} ${elapsed}`,
+          `cost ${cost}`,
+        ]
+          .filter((part): part is string => part !== null)
+          .join(', ')}
+      </span>
       {run.phases.length === 0 ? null : <PhaseTrack stages={run.phases} size="sm" />}
       <span className="mt-auto flex min-w-0 items-center gap-1.5 text-[11px] text-fg-muted">
         <span className="truncate rounded border border-line bg-canvas px-1 font-mono">
-          {sanitiseUntrusted(run.run.model)}
+          {model}
         </span>
-        <span className="shrink-0 tabular-nums">
-          {live
-            ? formatElapsed(run.run.started_at, now)
-            : formatElapsed(run.run.started_at, Date.parse(run.run.ended_at ?? '') || now)}
-        </span>
-        <span className="ml-auto shrink-0 tabular-nums">
-          {formatRunCost(run.run.cost, { estimate: true })}
-        </span>
+        <span className="shrink-0 tabular-nums">{elapsed}</span>
+        <span className="ml-auto shrink-0 tabular-nums">{cost}</span>
       </span>
     </article>
   );

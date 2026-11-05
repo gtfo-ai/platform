@@ -528,18 +528,21 @@ somebody:
   finished cheers for a moment, one that failed slumps. Runs waiting for a seat sit on the bench in the
   **Lobby**, and what needs you stands at the beacon-lit **help desk**, each a link to its task. If
   your system asks for reduced motion, every robot holds still. Each desk is a button whose name says
-  everything the drawing does, in words — *DEMO-1 · Code review · working: Reading files · worker
-  jan-mbp* — so a screen reader hears what a glance sees.
+  everything the drawing does, in words — *DEMO-1 · Checkout flow · Code review · working: Reading
+  files · worker jan-mbp* — so a screen reader hears what a glance sees.
 - **List**: every live run as a row, what needs you first, then what is stuck, then the rest oldest
   first — project, ticket and title, the stage, what the agent is doing, where it runs, the model, the
   stage strip, how long and how much — with a `···` menu: **Open run**, **Open task** and **Cancel
-  run…**, which asks before it stops the agent. Below it, what needs you and every seat with its slots.
+  run…**, which asks before it stops the agent. A run that has just ended stays at the end of the
+  list as *just finished* or *just ended* for as long as the map and the office keep it at its desk.
+  Below it, what needs you and every seat with its slots.
   This is the view that always tells the whole story; the other two never say anything it does not.
 
 A card, a desk or a row opens the same dialog: the run's **Live activity** beside its **log**, where it
 runs, and **Open task** / **Open run** — steering and stopping stay on the run page. The page updates
 on its own: an event from the platform refreshes the lists, the clock moves *elapsed* and *stuck*
-every 15 seconds, and the *Now: …* of up to twelve runs on screen follows their transcripts live.
+every 15 seconds, and the *Now: …* of up to twelve runs on screen follows their transcripts live
+(at most one refresh a second).
 With nothing running, the map and the list say *No agent is working* with a way to a board, and the
 office shows everyone asleep under the same words.
 

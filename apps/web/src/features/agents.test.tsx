@@ -28,6 +28,7 @@ import {
   worker,
   workerSeat,
 } from '../viz/fleet/fleet.test-fixture.js';
+import { FLEET_LIVE_UPDATE_MS } from '../viz/fleet/use-fleet.js';
 import { FLEET_VIEW_STORAGE_KEY } from './agents-view.js';
 
 /** A string that would be an element if anything here rendered markup (BD-022). */
@@ -122,6 +123,8 @@ interface Backend {
   inbox: typeof INBOX;
   /** The topics the stream carries: the URL's at each open, then every subscription change. */
   topics: Set<string>;
+  /** Every topic a subscription change removed, in order. */
+  removed: string[];
   runs: Map<string, RunRecord>;
   posted: string[];
 }
@@ -130,6 +133,7 @@ const backend = (agents: AgentsResponse = AGENTS, inbox: typeof INBOX = INBOX): 
   agents,
   inbox,
   topics: new Set(),
+  removed: [],
   runs: new Map(),
   posted: [],
 });
@@ -142,7 +146,10 @@ const fetchFor = (state: Backend) =>
     if (init?.method === 'POST' && path === '/events/subscriptions') {
       const body = JSON.parse(String(init.body)) as { add?: string[]; remove?: string[] };
       for (const topic of body.add ?? []) state.topics.add(topic);
-      for (const topic of body.remove ?? []) state.topics.delete(topic);
+      for (const topic of body.remove ?? []) {
+        state.topics.delete(topic);
+        state.removed.push(topic);
+      }
       return json({});
     }
     if (init?.method === 'POST') {
@@ -300,6 +307,39 @@ describe('the Agents page', () => {
     });
   });
 
+  it('keeps every run topic when the same runs change their order', async () => {
+    media(1280);
+    const state = backend(
+      { items: [agentItem(1), agentItem(2), agentItem(3)] },
+      { questions: [], approvals: [] },
+    );
+    const app = start('/agents?view=list', state, true);
+    await waitFor(() => {
+      expect([...state.topics].filter((topic) => topic.startsWith('run:'))).toHaveLength(3);
+    });
+    const before = state.removed.length;
+    // DEMO-3 now asks for a permission: it moves to the top of the attention order.
+    state.agents = {
+      items: [
+        agentItem(1),
+        agentItem(2),
+        agentItem(3, {
+          activity: { kind: 'waiting_permission', tool_name: 'Bash', at: at(1_000) },
+        }),
+      ],
+    };
+    await act(async () => {
+      await app.queryClient.invalidateQueries({ queryKey: [...queryKeys.agents] });
+    });
+    const runs = await screen.findByRole('list', { name: 'Runs' });
+    await waitFor(() => {
+      expect(
+        within(runs).getAllByRole('button', { name: /^demo · DEMO-/ })[0]?.textContent,
+      ).toMatch(/DEMO-3/);
+    });
+    expect(state.removed.slice(before)).toEqual([]);
+  });
+
   it('shows the list instead of the map on a narrow screen', async () => {
     media(600);
     start('/agents');
@@ -316,26 +356,30 @@ describe('the office', () => {
     await office();
     const cases: [RegExp, string, string][] = [
       [
-        /^DEMO-1 · Implementation · working: Reading files · the platform server$/,
+        /^DEMO-1 · Checkout .+ · Implementation · working: Reading files · the platform server$/,
         'typing',
         'working',
       ],
       [
-        /^DEMO-2 · Code review · needs you: Asking to use Bash · worker jan-mbp$/,
+        /^DEMO-2 · Task 2 · Code review · needs you: Asking to use Bash · worker jan-mbp$/,
         'raise_hand',
         'needs_you',
       ],
       [
-        /^DEMO-3 · Architecture · thinking: Brainstorming · worker jan-mbp$/,
+        /^DEMO-3 · Task 3 · Architecture · thinking: Brainstorming · worker jan-mbp$/,
         'thinking',
         'thinking',
       ],
       [
-        /^DEMO-4 · Implementation · stuck: No activity for 6 min · the platform server$/,
+        /^DEMO-4 · Task 4 · Implementation · stuck: No activity for 6 min · the platform server$/,
         'confused',
         'stuck',
       ],
-      [/^DEMO-6 · Implementation · waiting: Starting · worker jan-mbp$/, 'sipping', 'waiting'],
+      [
+        /^DEMO-6 · Task 6 · Implementation · waiting: Starting · worker jan-mbp$/,
+        'sipping',
+        'waiting',
+      ],
     ];
     for (const [name, pose, activity] of cases) {
       const { desk } = await deskOf(name);
@@ -348,7 +392,9 @@ describe('the office', () => {
     expect(within(desk).getByTestId('seat-nameplate').textContent).toBe('DEMO-1 · Implementation');
 
     // The queue sits on the bench in the lobby.
-    const bench = await deskOf(/^DEMO-5 · Implementation · waiting: Starting · no seat yet$/);
+    const bench = await deskOf(
+      /^DEMO-5 · Task 5 · Implementation · waiting: Starting · no seat yet$/,
+    );
     expect(bench.desk.getAttribute('data-bench')).toBe(uuid(5));
     expect(
       within(screen.getByRole('region', { name: 'Lobby' })).getByText(
@@ -431,7 +477,7 @@ describe('the office', () => {
   it('follows a run’s transcript between two agents reads', async () => {
     media(1280);
     const app = start('/agents?view=office');
-    await deskOf(/^DEMO-1 · Implementation · working: Reading files/);
+    await deskOf(/^DEMO-1 · Checkout .+ · Implementation · working: Reading files/);
     act(() => {
       app.services.transcripts.apply({
         run_id: uuid(1),
@@ -451,7 +497,34 @@ describe('the office', () => {
         ],
       });
     });
-    await deskOf(/^DEMO-1 · Implementation · working: Editing code/);
+    await deskOf(/^DEMO-1 · Checkout .+ · Implementation · working: Editing code/);
+    // A second frame inside the update window waits for its trailing update rather than
+    // re-rendering the page at once — and is not lost.
+    act(() => {
+      app.services.transcripts.apply({
+        run_id: uuid(1),
+        seq: 2,
+        created_at: at(500),
+        redaction_count: 0,
+        parent_tool_use_id: null,
+        kind: 'assistant',
+        model: 'claude-test',
+        content: [
+          { type: 'tool_use', tool_use_id: 'bash', tool_name: 'Bash', input: { command: 'ls' } },
+        ],
+      });
+    });
+    expect(
+      screen.getByRole('button', { name: /· Implementation · working: Editing code ·/ }),
+    ).toBeDefined();
+    await waitFor(
+      () => {
+        expect(
+          screen.getByRole('button', { name: /· Implementation · working: Running a command ·/ }),
+        ).toBeDefined();
+      },
+      { timeout: FLEET_LIVE_UPDATE_MS * 3 },
+    );
   });
 
   it('cheers at the desk of a run that just finished, once the run’s read says so', async () => {
@@ -468,12 +541,20 @@ describe('the office', () => {
       await app.queryClient.invalidateQueries({ queryKey: [...queryKeys.agents] });
     });
     const { desk } = await deskOf(
-      /^DEMO-1 · Implementation · just finished · the platform server$/,
+      /^DEMO-1 · Checkout .+ · Implementation · just finished · the platform server$/,
     );
     expect(desk.getAttribute('data-pose')).toBe('cheer');
     expect(within(desk).getByTestId('seat-bubble').textContent).toBe('Done!');
     // It is not counted as working any more.
     expect(document.querySelector('[data-fleet-counts]')?.textContent).toMatch(/^1 working/);
+    // …and the list says it too, after the live runs, while the office keeps it at its desk.
+    await userEvent.setup().click(screen.getByRole('button', { name: 'List' }));
+    const runs = await screen.findByRole('list', { name: 'Runs' });
+    const titles = within(runs)
+      .getAllByRole('button', { name: /^demo · DEMO-/ })
+      .map((button) => button.textContent?.split(' · ')[1]);
+    expect(titles.at(-1)).toBe('DEMO-1');
+    expect(within(runs).getByText('just finished')).toBeDefined();
   });
 });
 

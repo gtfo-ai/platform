@@ -115,25 +115,26 @@ with `ACTIVITY_META` — the task's asks and state read only for its live *stage
 newer live-transcript entry preferred to the agents read's; and `layout.ts` (the organisation, then a
 row per seat with its run cards and at most two free-slot placeholders, then the queue's row;
 *Needs you* under the organisation). `use-fleet.ts` keeps it live: the `org` topic, a 15 s clock for
-*elapsed* and *stuck*, the `run:<id>` topics of at most twelve runs (attention order) released on
-unmount, one task read and one frozen-pipeline read per run (BACKLOG 816's shape) for the ticket key,
+*elapsed* and *stuck*, the `run:<id>` topics of at most twelve runs (attention order, keyed sorted so
+a reorder keeps them) released on unmount, their transcripts' newest entries at most one re-render a
+second (BACKLOG 875), one task read and one frozen-pipeline read per run (BACKLOG 816's shape) for the ticket key,
 title, state and the whole `PhaseTrack`, and a run that leaves the agents list read once
 (`GET /api/runs/:id`) to cheer or slump at its desk for 20 s. `fleet-canvas.tsx` is the **map** on
 the flow canvas (a lazy chunk): seat nodes (avatar initials, name, owner, "2 of 3 slots busy", a
 paused or revoked badge), `run-card.tsx`'s cards (the whole card is one stretched `<button>` named by
-`runSentence`; `PhaseTrack` beside it, not inside), dashed animated connectors while an agent works and
+`runSentence` — key and title first — and described by project, model, time and cost; `PhaseTrack` beside it, not inside), dashed animated connectors while an agent works and
 solid amber ones while it waits for a person (`fleet.css`). `office.tsx` is the **office** (a lazy
 chunk; pure DOM and SVG from text grids, `office-sprites.ts` adds the bench — BACKLOG 806 — the help
 desk's counter, the door and the beacon lamp): always the dark brand room (a `data-theme="dark"` scope
 with `office.css`'s brand tokens), a room per seat with its name on the door plate, a desk per run
 (`<Seat>` posed by `ACTIVITY_META.pose`, the "Now: …" bubble, the ticket · stage nameplate, a stretched
-`<button>` named "DEMO-1 · Code review · working: Reading files · worker jan-mbp"), free desks asleep
+`<button>` named "DEMO-1 · Checkout flow · Code review · working: Reading files · worker jan-mbp"), free desks asleep
 (coffee on a paused worker), a bench in the lobby for the queue and a beacon-lit help desk where what
 needs you stands with a raised hand, each a link to its task; the bot phase is the run id's, and
 `prefers-reduced-motion` stills every pose (`animated={false}` beside `bot.css`'s rule). `fleet-list.tsx`
 is the **list**, the view that always says everything: a row per run in attention order (status icon,
 project · ticket · title, stage, activity, seat, model, `PhaseTrack`, elapsed, cost, `···` with *Open
-run*, *Open task* and *Cancel run…*, which asks first), then *Needs you*, then the seats. A card, a
+run*, *Open task* and *Cancel run…*, which asks first), and after them the runs that just ended, then *Needs you*, then the seats. A card, a
 desk and a row all open `run-dialog.tsx` — the stage dialog over a one-card graph, titled
 "DEMO-1 · Implementation", with *Open task* beside *Open run*. Every ticket key, title, worker and
 owner name and question is a sanitised text node; inside a button or link it is plain text, never

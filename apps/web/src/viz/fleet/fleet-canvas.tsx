@@ -83,7 +83,7 @@ const OrgNode = ({ data }: NodeProps<MapFlowNode>): ReactElement => {
         <span className="text-sm font-semibold text-fg">Organisation</span>
         <span>{`${counts.working} working`}</span>
         <span className={counts.needsYou > 0 ? 'font-medium text-running' : undefined}>
-          {`${counts.needsYou} need you`}
+          {`${counts.needsYou} ${counts.needsYou === 1 ? 'needs' : 'need'} you`}
         </span>
         <span>{`${counts.waiting} waiting`}</span>
       </div>

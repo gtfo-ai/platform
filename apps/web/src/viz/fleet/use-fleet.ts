@@ -106,21 +106,50 @@ const useEndings = (items: readonly AgentItem[] | undefined, nowMs: number): Fle
   });
 };
 
-/** The live transcript's newest entry for each run, re-rendering when any of them moves. */
+/** At most one re-render per this long from the followed transcripts (the first one at once). */
+export const FLEET_LIVE_UPDATE_MS = 1_000;
+
+/**
+ * The live transcript's newest entry for each run, re-rendering when any of them moves — **at most
+ * once per {@link FLEET_LIVE_UPDATE_MS}**: twelve busy runs stream many frames a second, and each
+ * re-render is the whole page (BACKLOG 875). The first frame after a quiet spell shows at once; the
+ * frames inside the window are coalesced into one trailing update, so the newest is never lost. A
+ * timer rather than a clock: a component reads no clock (standing rule 2).
+ */
 const useLatestEntries = (runIds: readonly string[]): ReadonlyMap<string, LatestEntry> => {
   const { transcripts } = useServices();
   const [version, setVersion] = useState(0);
-  const key = runIds.join(',');
+  // Sorted, so a run moving in the attention order is not a change of the set.
+  const key = [...runIds].sort().join(',');
   useEffect(() => {
     if (key === '') {
       return;
     }
-    const release = key.split(',').map((runId) =>
-      transcripts.subscribe(runId, () => {
-        setVersion((value) => value + 1);
-      }),
-    );
+    let cooling: ReturnType<typeof setTimeout> | null = null;
+    let pending = false;
+    const cool = (): void => {
+      cooling = setTimeout(() => {
+        cooling = null;
+        if (pending) {
+          pending = false;
+          setVersion((value) => value + 1);
+          cool();
+        }
+      }, FLEET_LIVE_UPDATE_MS);
+    };
+    const signal = (): void => {
+      if (cooling !== null) {
+        pending = true;
+        return;
+      }
+      setVersion((value) => value + 1);
+      cool();
+    };
+    const release = key.split(',').map((runId) => transcripts.subscribe(runId, signal));
     return () => {
+      if (cooling !== null) {
+        clearTimeout(cooling);
+      }
       for (const done of release) {
         done();
       }
@@ -207,7 +236,9 @@ export const useFleet = (): FleetState => {
     projectKeys,
   });
   const followed = base.runs.slice(0, FLEET_LIVE_RUN_LIMIT).map((run) => run.id);
-  useTopics(['org', ...followed.map((runId): SseTopic => `run:${runId}`)]);
+  // Sorted: `useTopics` keys on the joined list, and a reorder of the same runs (one moving up the
+  // attention order) would otherwise release and retain every run topic, and lose their cursors.
+  useTopics(['org', ...[...followed].sort().map((runId): SseTopic => `run:${runId}`)]);
   const latest = useLatestEntries(followed);
 
   const fleet = fleetOf({
