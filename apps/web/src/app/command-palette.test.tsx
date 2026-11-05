@@ -122,6 +122,8 @@ const fetchFor = (world: World) =>
         can_start_task: world.canStart === true,
         can_cancel_task: true,
         can_return_to_stage: true,
+        can_pause_task: true,
+        can_resume_task: true,
       });
     }
     return json(

@@ -27,6 +27,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { assertOnePrimaryAtMost, primaryLabels } from '../ui/primary-census.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000d1';
@@ -717,6 +718,41 @@ describe('the New project wizard', () => {
     });
   });
 
+  // S-23.23 (the UX audit's § 2): one beacon per step — the step's own action until the step is
+  // done, then Continue. Before this, each of these drew both.
+  it('draws one primary: the step’s own action until it is done, then Continue', async () => {
+    openAt(wizardOf('autonomy'), fetchFor('recorded', { materialised: false }));
+    expect(await screen.findByText('Autonomy dial')).toBeTruthy();
+    await waitFor(() => {
+      expect(primaryLabels()).toEqual(['Save operating mode']);
+    });
+    expect(continueButton().className).not.toContain('border-primary-line');
+    cleanup();
+
+    openAt(wizardOf('autonomy'), fetchFor('recorded'));
+    await screen.findByText('Autonomy dial');
+    await waitFor(() => {
+      expect(primaryLabels()).toEqual(['Continue to Review and finish']);
+    });
+    cleanup();
+
+    openAt(wizardOf('discovery'), fetchFor('absent'));
+    await waitFor(() => {
+      expect(primaryLabels()).toEqual([expect.stringMatching(/^Run discovery/)]);
+    });
+    cleanup();
+
+    for (const step of ['business', 'history']) {
+      openAt(wizardOf(step), fetchFor('recorded'));
+      expect(await shownStep()).toBe(step);
+      await waitFor(() => {
+        expect(primaryLabels().length, step).toBeGreaterThan(0);
+      });
+      assertOnePrimaryAtMost(document, `the ${step} step`);
+      cleanup();
+    }
+  });
+
   it('finishes with what was set, the two links, and Open the board', async () => {
     openAt(wizardOf('finish'), fetchFor('recorded', { proposals: [proposal()] }));
     expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeTruthy();
@@ -1098,6 +1134,47 @@ describe('the wizard’s step 4, How autonomous', () => {
     // feature toggle's own test pins, asserted here because this is a second writer of the document.
     expect(body.config.policies?.protected_paths).toEqual(['tests/**']);
     expect(body.base_hash).toBe('deadbeef');
+  });
+
+  // S-23.23 (the UX audit's item 8): replacing classes already in force asks first, and says what
+  // happens to the ones that are there.
+  it('replaces risk classes already in force only after a confirmation', async () => {
+    const sent: { url: string; body: unknown }[] = [];
+    const recording = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if ((init?.method ?? 'GET') !== 'GET') {
+        sent.push({ url, body: JSON.parse(String(init?.body ?? '{}')) });
+        return json({ hash: 'newhash', autonomy_level: 'supervised' });
+      }
+      const answer = await fetchFor('recorded')(input, init);
+      if (url.includes('/api/projects/') && url.includes('/config')) {
+        const body = (await answer.json()) as {
+          config: { policies: Record<string, unknown> };
+        };
+        body.config.policies.risk_classes = {
+          auth: { paths: ['src/auth/**'], require: ['plan_approval'] },
+        };
+        return json(body);
+      }
+      return answer;
+    }) as typeof fetch;
+
+    render(createApp({ fetchImpl: recording, realtime: false }).element);
+    const replace = await screen.findByRole('button', { name: 'Replace with these classes…' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Items for checklist payments' }), {
+      target: { value: 'Charges are idempotent' },
+    });
+    await waitFor(() => {
+      expect((replace as HTMLButtonElement).disabled).toBe(false);
+    });
+    fireEvent.click(replace);
+    const dialog = await screen.findByRole('dialog', { name: 'Replace the risk classes?' });
+    expect(dialog.textContent).toContain('replaced by the 2 proposed here');
+    expect(sent).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Replace the classes' }));
+    await waitFor(() => {
+      expect(sent.some((entry) => entry.url.includes('/config'))).toBe(true);
+    });
   });
 
   it('says why the command policy is not editable here, behind Learn more', async () => {

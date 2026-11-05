@@ -101,7 +101,8 @@ const DeadLetterCard = ({
       )}
     </p>
     <div>
-      <Button tone="primary" disabled={pending} onClick={onRequeue}>
+      {/* A per-row action: `default sm`, never one beacon per card (S-23.23, the UX audit's § 2). */}
+      <Button size="sm" disabled={pending} onClick={onRequeue}>
         Re-queue
       </Button>
     </div>
@@ -163,7 +164,11 @@ export const DeadLetters = (): ReactElement => {
           <div key={letter.position} data-dead-letter={String(letter.position)}>
             <DeadLetterCard
               letter={letter}
-              pending={commands.requeueDeadLetter.isPending}
+              // This row's own re-queue only: another row's in flight leaves this one usable.
+              pending={
+                commands.requeueDeadLetter.isPending &&
+                commands.requeueDeadLetter.variables === letter.position
+              }
               onRequeue={() => {
                 commands.requeueDeadLetter.mutate(letter.position);
               }}

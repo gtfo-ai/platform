@@ -261,6 +261,8 @@ const open = (
         can_start_task: true,
         can_cancel_task: may.cancel,
         can_return_to_stage: may.returnToStage,
+        can_pause_task: true,
+        can_resume_task: true,
       });
     }
     if (path === '/api/org/agents') {
@@ -508,7 +510,7 @@ describe('the card’s menu', () => {
     const ticket = menu.getByRole('menuitem', { name: 'Open ticket' });
     expect(ticket.getAttribute('href')).toBe('https://tickets.example.invalid/ACME-1');
     expect(ticket.getAttribute('rel')).toBe('noopener noreferrer nofollow');
-    expect(menu.getByRole('menuitem', { name: 'Open MR' }).getAttribute('href')).toBe(
+    expect(menu.getByRole('menuitem', { name: 'Open merge request' }).getAttribute('href')).toBe(
       'https://git.example.invalid/acme/api/-/merge_requests/7',
     );
     await user.keyboard('{Escape}');
@@ -523,7 +525,7 @@ describe('the card’s menu', () => {
     expect(refused.hasAttribute('href')).toBe(false);
     expect(document.querySelector('a[href^="javascript:"]')).toBeNull();
     // No merge request, no *Open MR*.
-    expect(hostile.queryByRole('menuitem', { name: 'Open MR' })).toBeNull();
+    expect(hostile.queryByRole('menuitem', { name: 'Open merge request' })).toBeNull();
   });
 
   it('offers a member neither Cancel nor Return to stage, which are a maintainer’s', async () => {
@@ -533,7 +535,7 @@ describe('the card’s menu', () => {
     expect(menu.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
       'Pause',
       'Open ticket',
-      'Open MR',
+      'Open merge request',
     ]);
   });
 
@@ -634,7 +636,16 @@ describe('what a card says, as functions', () => {
       resume: false,
       cancel: false,
       returnTo: [],
+    }); // S-23.23: and pause and resume — a viewer is offered neither, whatever the state allows.
+    const VIEWER = { cancel: false, returnToStage: false, pause: false, resume: false } as const;
+    expect(menuCommandsFor(BUSY, VIEWER)).toEqual({
+      pause: false,
+      resume: false,
+      cancel: false,
+      returnTo: [],
     });
+    expect(menuCommandsFor(PAUSED, VIEWER).resume).toBe(false);
+    expect(menuCommandsFor(PAUSED, { ...VIEWER, resume: true }).resume).toBe(true);
   });
 });
 

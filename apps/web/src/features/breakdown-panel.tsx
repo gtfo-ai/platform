@@ -6,7 +6,8 @@
  * `createTicket` duty — and touched no screen, so the only way a PM could accept a breakdown was an
  * HTTP client. This is Q85's recommended surface: **the queue as it comes back**, one row per
  * proposed child with its acceptance criteria, its state and a rejected row's reason; **a checkbox
- * per child**; and **one button** per decision, so accepting five of seven is one request.
+ * per child**; and **one button** per decision, so accepting five of seven is one request. A reject
+ * asks first (S-23.23): no ticket is filed for a rejected child and it cannot be accepted later.
  *
  * ## Who sees the control
  *
@@ -29,6 +30,7 @@
 import type { TicketBreakdownItem } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
 import { useBreakdownDecision, useTaskBreakdown } from '../app/queries.js';
+import { ConfirmDialog } from '../ui/confirm-dialog.js';
 import {
   Badge,
   Button,
@@ -126,6 +128,8 @@ export const BreakdownPanel = ({
   const decide = useBreakdownDecision(taskId);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [reason, setReason] = useState('');
+  // S-23.23 (the UX audit's item 8): a reject asks first — it cannot be undone.
+  const [confirmingReject, setConfirmingReject] = useState(false);
 
   if (!enabled) {
     return null;
@@ -149,10 +153,12 @@ export const BreakdownPanel = ({
         onSuccess: () => {
           setSelected(new Set());
           setReason('');
+          setConfirmingReject(false);
         },
       },
     );
   };
+  const children = chosen.length === 1 ? '1 proposed child' : `${chosen.length} proposed children`;
 
   return (
     <div>
@@ -206,16 +212,30 @@ export const BreakdownPanel = ({
                   tone="danger"
                   disabled={decide.isPending || chosen.length === 0}
                   onClick={() => {
-                    submit('reject');
+                    decide.reset();
+                    setConfirmingReject(true);
                   }}
                 >
-                  {`Reject ${chosen.length}`}
+                  {`Reject ${chosen.length}…`}
                 </Button>
                 <span className="text-xs text-fg-muted">{`${queued.length} waiting`}</span>
               </div>
-              {decide.isError ? (
+              {decide.isError && !confirmingReject ? (
                 <ErrorNotice title="That decision was refused." error={decide.error} />
               ) : null}
+              <ConfirmDialog
+                open={confirmingReject}
+                onOpenChange={setConfirmingReject}
+                title={`Reject ${children}?`}
+                consequence={`No ticket is filed for ${chosen.length === 1 ? 'it' : 'them'}, and a rejected child cannot be accepted later${reason.trim() === '' ? '' : '; the reason you gave is kept on each'}.`}
+                confirmLabel={`Reject ${chosen.length}`}
+                pending={decide.isPending}
+                error={decide.error}
+                errorTitle="That decision was refused."
+                onConfirm={() => {
+                  submit('reject');
+                }}
+              />
             </Card>
           ) : null}
           {!canDecide && queued.length > 0 ? (

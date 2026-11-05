@@ -58,8 +58,50 @@ interface Sent {
   readonly body: unknown;
 }
 
-/** `refuseCreates`: answer every create with the server's 400, naming the path. */
-const recorder = (options: { readonly refuseCreates?: boolean } = {}) => {
+/** The created integration as the list publishes it once the create has run. */
+const CREATED_ROW = {
+  id: INTEGRATION,
+  type: 'task_management',
+  provider: 'jira-cloud',
+  name: 'ACME Jira',
+  config: { site_url: 'https://acme.atlassian.example.test', user_email: 'ops@example.test' },
+  health: { status: 'unknown', checked_at: null, detail: null },
+  config_refusal: null,
+  retired_at: null,
+  credentials_readable: null,
+  credentials_consequence: null,
+};
+
+const PROJECT_ROW = {
+  id: '00000000-0000-4000-8000-0000000000a1',
+  key: 'acme',
+  name: 'Acme service',
+  repo_url: 'https://git.example.invalid/acme/service.git',
+  default_branch: 'main',
+  agentic_dir: '.agentic',
+  knowledge_dir: 'knowledge',
+  autonomy_level: 'supervised',
+  readiness_level: 2,
+  status: 'active',
+  created_at: '2026-06-01T09:00:00.000Z',
+  updated_at: '2026-06-01T09:00:00.000Z',
+  open_tasks: 1,
+  spent_usd_30d: 0,
+};
+
+/**
+ * `refuseCreates`: answer every create with the server's 400, naming the path. `listed`: the list
+ * already holds the created integration (a reload after the create). `canWrite`: the list's
+ * `can_write`, an administrator's `true` by default. `projects`: the projects the caller reads.
+ */
+const recorder = (
+  options: {
+    readonly refuseCreates?: boolean;
+    readonly listed?: boolean;
+    readonly canWrite?: boolean;
+    readonly projects?: readonly (typeof PROJECT_ROW)[];
+  } = {},
+) => {
   const sent: Sent[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
@@ -93,9 +135,14 @@ const recorder = (options: { readonly refuseCreates?: boolean } = {}) => {
       return json({ id: INTEGRATION, provider: 'jira-cloud', name: 'ACME Jira' });
     }
     if (url.includes('/api/auth/get-session')) return json(SESSION);
-    if (url.endsWith('/api/integrations')) return json({ items: [] });
+    if (url.endsWith('/api/integrations')) {
+      return json({
+        items: options.listed === true ? [CREATED_ROW] : [],
+        can_write: options.canWrite ?? true,
+      });
+    }
     if (url.endsWith('/api/integrations/providers')) return json(PROVIDERS);
-    if (url.endsWith('/api/projects')) return json({ items: [] });
+    if (url.endsWith('/api/projects')) return json({ items: options.projects ?? [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
   return { sent, fetchImpl };
@@ -111,6 +158,8 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  // The wizard keeps its draft in this tab's storage (S-23.23); every case starts with none.
+  window.sessionStorage.clear();
   window.history.pushState({}, '', '/integrations/new');
 });
 
@@ -352,7 +401,7 @@ describe('the add-integration wizard', () => {
   });
 
   it('tests what it created, then ends on the next screen: binding it to a project', async () => {
-    const { sent, fetchImpl } = recorder();
+    const { sent, fetchImpl } = recorder({ projects: [PROJECT_ROW] });
     render(createApp({ fetchImpl, realtime: false }).element);
     const user = userEvent.setup();
     await walkTo(user, 'jira-cloud', 'ACME Jira');
@@ -374,7 +423,9 @@ describe('the add-integration wizard', () => {
     expect(document.querySelector('main b')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Finish' }));
     expect(await screen.findByText('The integration is added.')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Bind it to a project' }).getAttribute('href')).toBe(
+    // S-23.23: the ending is addressable too, so a reload lands on it again.
+    expect(new URLSearchParams(window.location.search).get('step')).toBe('done');
+    expect(screen.getByRole('link', { name: 'Use in a new project' }).getAttribute('href')).toBe(
       '/onboarding',
     );
     expect(screen.getByRole('link', { name: 'Open the integration' }).getAttribute('href')).toBe(
@@ -386,5 +437,88 @@ describe('the add-integration wizard', () => {
         step.getAttribute('data-step-state'),
       ),
     ).toEqual(['done', 'done', 'done', 'done']);
+
+    // …and the other way on: an existing project's Connections.
+    await user.click(screen.getByRole('button', { name: /Add to an existing project/ }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Acme service' }));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/projects/acme/settings/connections');
+    });
+  });
+});
+
+/**
+ * S-23.23 (the UX audit's item 10, BACKLOG 830): a reload resumes the wizard. Before the create, the
+ * non-secret draft is in this tab's storage; after it, the integration's id is in the URL.
+ */
+describe('the add-integration wizard after a reload', () => {
+  const reload = (fetchImpl: typeof fetch) => {
+    cleanup();
+    return render(createApp({ fetchImpl, realtime: false }).element);
+  };
+
+  it('resumes on the step it was on, with what was typed — but never the credentials’ names', async () => {
+    const { fetchImpl } = recorder();
+    render(createApp({ fetchImpl, realtime: false }).element);
+    const user = userEvent.setup();
+    await walkTo(user, 'jira-cloud', 'ACME Jira');
+    fireEvent.change(screen.getByLabelText('Environment variable for API token'), {
+      target: { value: 'JIRA_API_TOKEN' },
+    });
+
+    reload(fetchImpl);
+    await waitFor(() => {
+      expect(currentStep()).toBe('credentials');
+    });
+    expect(
+      (screen.getByLabelText('Environment variable for API token') as HTMLInputElement).value,
+    ).toBe('');
+    // What the tab keeps: the provider, the name and the configuration — nothing of the credentials.
+    const stored = window.sessionStorage.getItem('agentic.integration-wizard.draft') ?? '';
+    expect(JSON.parse(stored)).toEqual({
+      providerId: 'jira-cloud',
+      name: 'ACME Jira',
+      config: { site_url: 'https://acme.atlassian.example.test', user_email: 'ops@example.test' },
+    });
+    expect(stored).not.toContain('JIRA_API_TOKEN');
+    await user.click(screen.getByRole('link', { name: 'Configure it' }));
+    expect(((await screen.findByLabelText('Name')) as HTMLInputElement).value).toBe('ACME Jira');
+  });
+
+  it('carries the created integration’s id, and a reload resumes at its test — never at the form', async () => {
+    const { sent, fetchImpl } = recorder();
+    render(createApp({ fetchImpl, realtime: false }).element);
+    const user = userEvent.setup();
+    await walkTo(user, 'jira-cloud', 'ACME Jira');
+    await user.click(screen.getByRole('button', { name: 'Create integration' }));
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('id')).toBe(INTEGRATION);
+    });
+    expect(new URLSearchParams(window.location.search).get('step')).toBe('test');
+    // The draft is gone: the URL is what resumes the wizard now.
+    expect(window.sessionStorage.getItem('agentic.integration-wizard.draft')).toBeNull();
+
+    reload(recorder({ listed: true }).fetchImpl);
+    await waitFor(() => {
+      expect(currentStep()).toBe('test');
+    });
+    expect(await screen.findByRole('button', { name: 'Test connection' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Create integration' })).toBeNull();
+    expect(creates(sent)).toHaveLength(1);
+  });
+
+  it('says so for an id the organisation does not have, rather than offering a create', async () => {
+    window.history.pushState({}, '', `/integrations/new?step=test&id=${INTEGRATION}`);
+    const { fetchImpl } = recorder();
+    render(createApp({ fetchImpl, realtime: false }).element);
+    expect(await screen.findByText('That integration is not here')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Create integration' })).toBeNull();
+  });
+
+  it('tells a caller who may not write integrations who adds them, and offers no form', async () => {
+    const { fetchImpl } = recorder({ canWrite: false });
+    render(createApp({ fetchImpl, realtime: false }).element);
+    expect(await screen.findByText('Administrators add integrations')).toBeTruthy();
+    expect(screen.queryByRole('radio')).toBeNull();
   });
 });

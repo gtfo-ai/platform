@@ -262,9 +262,9 @@ const RunSummary = ({
         />
       )}
       <Metric
-        label="Executed by"
+        label="Runs on"
         value={<ExecutedBy seat={record.seat} nowMs={nowMs} />}
-        definition="Which claimant ran this run: the platform's own server, or a developer's remote worker named by its owner."
+        definition="Where this run ran: the platform's own server, or a developer's worker named by its owner."
       />
       <Metric
         label="Model"
@@ -383,7 +383,8 @@ const RetryDialog = ({
               onRetry(model, effort);
             }}
           >
-            Retry run
+            {/* *Re-run* for a run, *Retry* for a stage — one word each (S-23.23, the audit's § 4). */}
+            Re-run
           </Button>
         </>
       }
@@ -602,31 +603,34 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           Cancel run
         </Button>
       ) : null}
-      <ActionMenu
-        trigger={
-          <Button tone={isFailedRun(record.status) ? 'primary' : 'default'}>
-            Re-run
-            <TriangleDownIcon size={16} />
-          </Button>
-        }
-      >
-        <ActionMenuItem
-          disabled={commands.retry.isPending}
-          onSelect={() => {
-            retry(INITIAL_RETRY_MODEL_CHOICE, '');
-          }}
+      {/* Not while the run is live: the server refuses `run.retry` until it has ended (S-23.23). */}
+      {live ? null : (
+        <ActionMenu
+          trigger={
+            <Button tone={isFailedRun(record.status) ? 'primary' : 'default'}>
+              Re-run
+              <TriangleDownIcon size={16} />
+            </Button>
+          }
         >
-          Re-run as configured
-        </ActionMenuItem>
-        <ActionMenuItem
-          onSelect={() => {
-            commands.retry.reset();
-            setDialog('retry');
-          }}
-        >
-          Re-run with another model or effort…
-        </ActionMenuItem>
-      </ActionMenu>
+          <ActionMenuItem
+            disabled={commands.retry.isPending}
+            onSelect={() => {
+              retry(INITIAL_RETRY_MODEL_CHOICE, '');
+            }}
+          >
+            Re-run as configured
+          </ActionMenuItem>
+          <ActionMenuItem
+            onSelect={() => {
+              commands.retry.reset();
+              setDialog('retry');
+            }}
+          >
+            Re-run with another model or effort…
+          </ActionMenuItem>
+        </ActionMenu>
+      )}
       <ActionMenu label="Run actions">
         {takeOverOffered && detail !== undefined ? (
           <>
@@ -808,11 +812,9 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                     placeholder="Send a message to the running agent…"
                     className="min-w-0 flex-1 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
                   />
-                  <Button
-                    type="submit"
-                    tone="primary"
-                    disabled={commands.steer.isPending || steer.trim() === ''}
-                  >
+                  {/* `default`: an inline form, and Cancel run stays the one coloured action while
+                      the run is live (S-23.23, the UX audit's § 2). */}
+                  <Button type="submit" disabled={commands.steer.isPending || steer.trim() === ''}>
                     Steer
                   </Button>
                 </form>
@@ -857,7 +859,10 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                       <PromptsWithheldExplanation withheld={prompt.data.prompts_withheld} />
                     </Flash>
                   )}
+                  {/* Each block named, as the guide promises (the UX audit's § 5). */}
+                  <h3 className="text-sm font-semibold">System prompt</h3>
                   <CodeText value={prompt.data.system_prompt} />
+                  <h3 className="text-sm font-semibold">User prompt</h3>
                   <CodeText value={prompt.data.user_prompt} />
                 </>
               )}
@@ -878,7 +883,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                 <Card>
                   <div className="grid grid-cols-3 gap-4 pb-3">
                     <Metric
-                      label="Budget"
+                      label="Token budget"
                       value={formatInteger(contextPack.data.budget_tokens)}
                       definition="Token budget the context assembler was allowed to spend."
                     />
@@ -903,6 +908,12 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                       <UntrustedText value={textSearchText(contextPack.data) ?? ''} />
                     </p>
                   )}
+                  {contextPack.data.tier0.length === 0 && contextPack.data.tier1.length === 0 ? (
+                    // An empty pack is a fact about the run, said as one (the UX audit's § 5).
+                    <p className="text-xs text-fg-muted" data-empty-pack="">
+                      No knowledge pages were put in front of the model.
+                    </p>
+                  ) : null}
                   <ul className="flex flex-col gap-1 text-xs">
                     {contextPack.data.tier0.map((entry) => (
                       <li key={entry.path} className="flex gap-2 font-mono">

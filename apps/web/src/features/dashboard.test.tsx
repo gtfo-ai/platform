@@ -135,6 +135,12 @@ const detail = (record: TaskRecord): TaskDetailResponse => ({
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  can_pause: true,
+  can_resume: true,
+  can_cancel: true,
+  can_return: true,
+  can_rework: true,
+  can_decide_approval: true,
   gate_feedback: null,
   human_time: {
     total_minutes: 0,
@@ -265,8 +271,13 @@ const fetchFor = (world: World) =>
     world.asked.push(path);
     if (path === '/events/subscriptions') return json({});
     if (path.startsWith('/api/auth/get-session')) return json(session(world.role, world.name));
-    if (path === '/api/integrations') return json({ items: world.integrations });
-    if (path === '/api/projects') return json({ items: world.projects });
+    // S-23.23: the server's own answer — `project.create` and `integration.write` are an admin's.
+    if (path === '/api/integrations') {
+      return json({ items: world.integrations, can_write: world.role === 'admin' });
+    }
+    if (path === '/api/projects') {
+      return json({ items: world.projects, can_create: world.role === 'admin' });
+    }
     if (path === '/api/workers')
       return json({ items: world.workers, scope: 'all', timezone: 'UTC' });
     if (/^\/api\/projects\/[^/]+\/execution$/.test(path) && world.serverClaimant !== undefined) {
@@ -345,6 +356,8 @@ const fetchFor = (world: World) =>
           can_start_task: true,
           can_cancel_task: true,
           can_return_to_stage: true,
+          can_pause_task: true,
+          can_resume_task: true,
         });
       }
       if (what === 'readiness') {
@@ -606,7 +619,7 @@ describe('Home, the projects and the rail', () => {
     expect(meter?.getAttribute('max')).toBe('1000');
     expect(meter?.hasAttribute('style')).toBe(false);
     // The old organisation metric, moved here with its definition.
-    expect(within(spend).getByText('Spend, 30 days')).toBeTruthy();
+    expect(within(spend).getByText('Spend, last 30 days')).toBeTruthy();
     expect(within(spend).getByText('$30.00')).toBeTruthy();
 
     const instance = box('Instance');

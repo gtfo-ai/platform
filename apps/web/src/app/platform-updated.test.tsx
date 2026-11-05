@@ -94,6 +94,11 @@ describe('an invalid response, read against the server’s build (WP-154 (d))', 
     const banner = await screen.findByTestId('platform-updated');
     expect(banner.textContent).toContain('The platform was updated — reload this page.');
     expect(screen.getByRole('button', { name: 'Reload' })).not.toBeNull();
+    // S-23.23 (the UX audit's § 2): the banner sits above every screen, so its Reload is not a
+    // second beacon on each of them.
+    expect(screen.getByRole('button', { name: 'Reload' }).className).not.toContain(
+      'border-primary-line',
+    );
     // No error text: neither the schema sentence nor the screen's own failure notice.
     await waitFor(() => {
       expect(screen.queryByText('Loading task…')).toBeNull();

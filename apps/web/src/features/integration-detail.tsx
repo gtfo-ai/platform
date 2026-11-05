@@ -101,9 +101,12 @@ const Overview = ({
   provider,
   projects,
   onDialog,
+  canWrite,
 }: {
   readonly integration: NonNullable<ReturnType<typeof useIntegrations>['data']>['items'][number];
   readonly provider: IntegrationProvider | undefined;
+  /** The list read's `can_write`: a problem line offers its repair only then (S-23.23). */
+  readonly canWrite: boolean;
   /** Opens one of the header menu's dialogs from a problem line (S-23.22). */
   readonly onDialog: (dialog: IntegrationDialog) => void;
   readonly projects:
@@ -124,7 +127,7 @@ const Overview = ({
     <div className="flex flex-col gap-6">
       <IntegrationProblems
         integration={integration}
-        {...(provider === undefined
+        {...(provider === undefined || !canWrite
           ? {}
           : {
               onEditConfiguration: () => {
@@ -181,11 +184,11 @@ const Overview = ({
           Projects
         </h2>
         {projects === null ? (
-          <p className="text-sm text-fg-muted">Which projects bind it could not be read.</p>
+          <p className="text-sm text-fg-muted">Which projects use it could not be read.</p>
         ) : projects.length === 0 ? (
           <p className="text-sm text-fg-muted">
-            No project binds it yet. A project binds it in its first wizard step, or under its
-            settings, Connections.
+            No project uses it yet. A project picks it in its first wizard step, or in its settings
+            under Connections.
           </p>
         ) : (
           <ul className="flex flex-col gap-1 text-sm">
@@ -255,6 +258,8 @@ export const IntegrationDetailScreen = ({
   const boundLine =
     integration.retired_at === null ? boundText(boundProjects?.length ?? null) : null;
   const retired = integration.retired_at !== null;
+  // S-23.23: the test and every write are an administrator's (`integration.write`).
+  const canWrite = integrations.data.can_write;
 
   const items = INTEGRATION_TABS.map((id) => ({
     id,
@@ -286,7 +291,7 @@ export const IntegrationDetailScreen = ({
               }`}
             </span>
           }
-          {...(retired
+          {...(retired || !canWrite
             ? {}
             : {
                 actions: (
@@ -306,6 +311,7 @@ export const IntegrationDetailScreen = ({
                       boundProjects={boundProjects?.length ?? null}
                       dialog={dialog}
                       onDialogChange={setDialog}
+                      canWrite
                     />
                   </>
                 ),
@@ -313,6 +319,11 @@ export const IntegrationDetailScreen = ({
         />
         <UnderlineNav label="Integration" items={items} />
       </div>
+      {!retired && !canWrite ? (
+        <p className="text-sm text-fg-muted" data-may-not-write="">
+          Administrators test and change integrations.
+        </p>
+      ) : null}
       {retired ? (
         <p className="text-sm text-fg-muted" data-integration-retired={integration.id}>
           Retired: its credentials are deleted and nothing loads or changes it. It stays listed
@@ -327,6 +338,7 @@ export const IntegrationDetailScreen = ({
           provider={provider}
           projects={boundProjects}
           onDialog={setDialog}
+          canWrite={canWrite && !retired}
         />
       ) : null}
       {tab === 'setup-guide' ? <SetupGuide integrationId={integration.id} /> : null}

@@ -377,8 +377,8 @@ export const TranscriptView = ({
           aria-label="Search transcript"
           className="w-56 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
         />
+        {/* A toggle: `default` with `aria-pressed`, never the run page's beacon (S-23.23). */}
         <Button
-          tone={following ? 'primary' : 'default'}
           aria-pressed={following}
           onClick={() => {
             setFollowing((current) => !current);

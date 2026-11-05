@@ -150,16 +150,18 @@ const IntegrationWizardScreen = lazyRouteComponent(
 const integrationSearchSchema = z.object({
   tab: z.enum(['setup-guide', 'refused-deliveries']).optional().catch(undefined),
 });
+/** `id` names the integration the wizard created, so a reload resumes at its test (S-23.23). */
 const integrationWizardSearchSchema = z.object({
-  step: z.enum(['configuration', 'credentials', 'test']).optional().catch(undefined),
+  step: z.enum(['configuration', 'credentials', 'test', 'done']).optional().catch(undefined),
+  id: z.uuid().optional().catch(undefined),
 });
 const integrationWizardRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/integrations/new',
   validateSearch: integrationWizardSearchSchema,
   component: withPreload(function IntegrationWizard() {
-    const { step } = integrationWizardRoute.useSearch();
-    return <IntegrationWizardScreen step={step} />;
+    const { step, id } = integrationWizardRoute.useSearch();
+    return <IntegrationWizardScreen step={step} id={id} />;
   }, IntegrationWizardScreen),
 });
 const integrationRoute = createRoute({

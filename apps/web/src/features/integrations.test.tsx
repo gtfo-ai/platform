@@ -51,7 +51,7 @@ const JIRA: IntegrationSummary = {
   credentials_consequence: null,
 };
 
-const INTEGRATIONS: IntegrationsResponse = { items: [JIRA] };
+const INTEGRATIONS: IntegrationsResponse = { items: [JIRA], can_write: true };
 
 /**
  * `GET /api/integrations/providers` as the server answers it — built from the **real** catalogue
@@ -100,6 +100,8 @@ interface World {
   items?: IntegrationSummary[];
   /** Projects and the integrations each binds; none by default. */
   bound?: readonly string[];
+  /** The list read's `can_write` (S-23.23); an administrator's `true` by default. */
+  canWrite?: boolean;
 }
 
 const recorder = (world: World = {}) => {
@@ -135,7 +137,9 @@ const recorder = (world: World = {}) => {
       return json({ id: INTEGRATION, provider: 'jira-cloud', name: 'ACME Jira' });
     }
     if (url.includes('/api/auth/get-session')) return json(SESSION);
-    if (url.endsWith('/api/integrations')) return json({ items });
+    if (url.endsWith('/api/integrations')) {
+      return json({ items, can_write: world.canWrite ?? true });
+    }
     if (url.endsWith('/api/integrations/providers')) return json(PROVIDERS);
     if (url.endsWith(`/api/integrations/${INTEGRATION}/setup-guide`)) return json(GUIDE);
     if (url.endsWith(`/api/integrations/${INTEGRATION}/refused-deliveries`)) {
@@ -198,6 +202,33 @@ const choose = async (
 // "offers an optional boolean…", "changes an optional boolean…", "retires after a confirmation…",
 // "lists a retired integration…" and "shows the webhook URL on the setup-guide card…".
 describe('the integrations list', () => {
+  // S-23.23 (the UX audit's item 3): every write is an administrator's (`integration.write`), so a
+  // maintainer reads the list with no *New integration*, no write in a row's menu, and a line
+  // saying who adds and changes integrations.
+  it('offers a caller who may not write no create, test, edit, credentials or retire', async () => {
+    const user = userEvent.setup();
+    const { container } = renderApp(recorder({ canWrite: false }).fetchImpl);
+    await screen.findByRole('list', { name: 'Integrations' });
+    expect(screen.queryByRole('link', { name: 'New integration' })).toBeNull();
+    expect(container.querySelector('[data-may-not-write]')?.textContent).toBe(
+      'Administrators add and change integrations.',
+    );
+    await user.click(await screen.findByRole('button', { name: 'Actions for ACME Jira' }));
+    const menu = await screen.findByRole('menu');
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Setup guide']);
+  });
+
+  it('says to a caller who may not write that an administrator adds the first integration', async () => {
+    renderApp(recorder({ canWrite: false, items: [] }).fetchImpl);
+    expect(await screen.findByText('No integrations yet')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'New integration' })).toBeNull();
+    expect(screen.getByText(/Ask an administrator to add one/)).toBeTruthy();
+  });
+
   it('lists a row with its health, provider, kind, last check and bindings, under one primary', async () => {
     const { container } = renderApp(recorder({ bound: [INTEGRATION] }).fetchImpl);
     const list = await screen.findByRole('list', { name: 'Integrations' });
@@ -210,7 +241,7 @@ describe('the integrations list', () => {
     expect(row?.textContent).not.toContain('task_management');
     expect(row?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Not checked');
     await waitFor(() => {
-      expect(row?.textContent).toContain('Bound to 1 project');
+      expect(row?.textContent).toContain('Used by 1 project');
     });
     // The row is the way into its own page.
     expect(within(list).getByRole('link', { name: 'ACME Jira' }).getAttribute('href')).toBe(
@@ -235,7 +266,7 @@ describe('the integrations list', () => {
     expect(list.textContent).toContain('Healthy');
     // No project read answered with a project, so it is bound to none.
     await waitFor(() => {
-      expect(list.textContent).toContain('Not bound');
+      expect(list.textContent).toContain('Not used by a project');
     });
   });
 
@@ -525,7 +556,7 @@ describe('the integrations list', () => {
     renderApp(fetchImpl);
     const list = await screen.findByRole('list', { name: 'Integrations' });
     await waitFor(() => {
-      expect(list.textContent).toContain('Bound to 1 project');
+      expect(list.textContent).toContain('Used by 1 project');
     });
     const user = userEvent.setup();
     await choose(user, 'ACME Jira', 'Retire');

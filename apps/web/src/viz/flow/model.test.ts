@@ -182,9 +182,9 @@ describe('a task (the task page)', () => {
     expect(current.run?.id).toBe('live');
     expect(current.activity).toEqual({ activity: 'working', detail: 'Reading files' });
     expect(statusWord(current)).toBe('Working');
-    expect(attemptLabel(current.attempt)).toBe('2nd attempt');
+    expect(attemptLabel(current.attempt)).toBe('Attempt 2');
     expect(stageCardName(current)).toBe(
-      'Implementation, Developer, Working, Now: Reading files, 2nd attempt, claude-test · high',
+      'Implementation, Developer, Working, Now: Reading files, Attempt 2, claude-test · high',
     );
     // A stage that is not current has no activity of its own.
     expect(nodeOf(graph, 'refinement').activity).toBeNull();

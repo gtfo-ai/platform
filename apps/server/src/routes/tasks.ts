@@ -30,14 +30,19 @@
  * carried since WP-04 with no user. The task route's own comment says the artifacts' *content* is
  * "separately gated", and this is that gate.
  */
-import type { TaskAuditEntry, TaskDetailResponse, UserRole } from '@platform/contracts';
+import type {
+  TaskAuditEntry,
+  TaskCallerFactKey,
+  TaskDetailRecord,
+  UserRole,
+} from '@platform/contracts';
 import {
   apiErrorSchema,
   artifactBodyResponseSchema,
   taskDetailResponseSchema,
   taskExportResponseSchema,
 } from '@platform/contracts';
-import { can } from '@platform/domain';
+import { can, type PermissionAction } from '@platform/domain';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
@@ -65,9 +70,7 @@ import { scopedProject, scopeToProject } from './scope.js';
  * pipeline really produced.
  */
 export interface TaskQueries {
-  readonly taskDetail: (
-    taskId: string,
-  ) => Promise<Omit<TaskDetailResponse, 'can_raise_budget' | 'can_export'> | null>;
+  readonly taskDetail: (taskId: string) => Promise<TaskDetailRecord | null>;
   readonly taskProjectId: (taskId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
   readonly artifactBody: (artifactId: string) => Promise<ArtifactBody>;
@@ -88,6 +91,35 @@ export interface TaskRoutesOptions {
   /** The export's `exported_at`; the wall clock unless a test fixes it. */
   readonly now?: () => Date;
 }
+
+/**
+ * The permission each caller fact mirrors — **the action the command's own route asks**
+ * (`requirePermission(guard, <action>)` in `commands.ts`, and `budget.write` / `task.export` here and
+ * on the export). A fact is that route's `can(role, action)` over the effective role the guard
+ * resolved, so the page offers a control only to someone the route would admit; the route refuses
+ * everyone else regardless (WP-131 review round 2, WP-122, S-23.23). Typed by the contract's keys,
+ * so a fact added there without a permission here does not compile.
+ */
+export const TASK_CALLER_FACT_ACTIONS = {
+  can_raise_budget: 'budget.write',
+  can_export: 'task.export',
+  can_pause: 'task.pause',
+  can_resume: 'task.resume',
+  can_cancel: 'task.cancel',
+  can_return: 'task.return_to_stage',
+  can_rework: 'task.rework',
+  // The decide route's own gate (`task.approve_plan`); the aggregate checks the approval's kind.
+  can_decide_approval: 'task.approve_plan',
+} as const satisfies Record<TaskCallerFactKey, PermissionAction>;
+
+/** Every caller fact for one effective role; an anonymous caller (unreachable here) gets none. */
+export const taskCallerFacts = (role: UserRole | undefined): Record<TaskCallerFactKey, boolean> =>
+  Object.fromEntries(
+    Object.entries(TASK_CALLER_FACT_ACTIONS).map(([key, action]) => [
+      key,
+      role !== undefined && can(role, action),
+    ]),
+  ) as Record<TaskCallerFactKey, boolean>;
 
 const taskParamsSchema = z.strictObject({ task_id: z.uuid() });
 const artifactParamsSchema = z.strictObject({ artifact_id: z.uuid() });
@@ -127,17 +159,7 @@ export const registerTaskRoutes = async (
         // two reads are separate statements and a task deleted between them is a 404, not a 500.
         throw new NotFoundError(`task ${request.params.task_id}`);
       }
-      // WP-131 review round 2: whether **this caller** may raise the task's cap — the guard's own
-      // rule over the effective role the guard resolved (`budget.write`, maintainer), so the page
-      // offers the control only to someone the route would admit. The route refuses the rest.
-      const role = request.effectiveRole;
-      return {
-        ...detail,
-        can_raise_budget: role !== undefined && can(role, 'budget.write'),
-        // WP-122 (backlog 381): the page offers *Download JSON* only to a caller the export route
-        // would admit — `task.export` over the same effective role.
-        can_export: role !== undefined && can(role, 'task.export'),
-      };
+      return { ...detail, ...taskCallerFacts(request.effectiveRole) };
     },
   );
 

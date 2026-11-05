@@ -27,6 +27,11 @@
  * resume admits more than that (`RESUMABLE_TASK_STATES` includes `waiting_approval`), but resuming
  * past an open question or a pending approval would skip it, so the page never offers it (BACKLOG
  * 854 has the server half).
+ *
+ * **And only what the caller's role may do** (S-23.23): the read carries `can_pause`, `can_resume`,
+ * `can_cancel`, `can_return`, `can_rework` and `can_decide_approval` — each the command route's own
+ * permission over the caller's effective role — and a command whose flag is false is not offered
+ * (no menu item, never the primary). The callout says who may decide what the caller cannot.
  */
 import type { TaskDetailResponse, TaskState } from '@platform/contracts';
 import { ArrowLeftIcon } from '@primer/octicons-react/ArrowLeftIcon';
@@ -76,6 +81,13 @@ export const taskPrimaryAction = (input: {
   readonly pendingApprovals: number;
   /** The task's own cap paused it and the caller may raise it. */
   readonly canRaise?: boolean;
+  /**
+   * Whether the caller may decide an approval and resume the task (S-23.23, the read's
+   * `can_decide_approval` and `can_resume`). Left out, they are not consulted — the page always
+   * passes them; a caller who may not is never offered the action as the page's primary.
+   */
+  readonly canDecide?: boolean;
+  readonly canResume?: boolean;
 }): TaskPrimaryAction => {
   if (input.canHandBack) {
     return 'hand_back';
@@ -83,13 +95,15 @@ export const taskPrimaryAction = (input: {
   if (input.openQuestions > 0) {
     return 'answer';
   }
-  if (input.pendingApprovals > 0) {
+  if (input.pendingApprovals > 0 && input.canDecide !== false) {
     return 'approve';
   }
   if (input.canRaise === true) {
     return 'raise_budget';
   }
-  return input.state === 'paused' || input.state === 'needs_human' ? 'resume' : null;
+  return input.canResume !== false && (input.state === 'paused' || input.state === 'needs_human')
+    ? 'resume'
+    : null;
 };
 
 /**
@@ -136,6 +150,8 @@ export const TaskHeader = ({
     openQuestions: openQuestions.length,
     pendingApprovals: pendingApprovals.length,
     canRaise,
+    canDecide: detail.can_decide_approval,
+    canResume: detail.can_resume,
   });
   const liveRun = liveStageRun(runs);
   const doing = activityOf({
@@ -149,8 +165,10 @@ export const TaskHeader = ({
   // A task that has entered no stage has no strip to draw; the Overview says it has none.
   const phase = phaseStagesFor(null, stages, currentStage);
   const queued = task.state === 'queued';
-  const canPause = !merged && !finished && !queued && task.state !== 'paused';
-  const canResume = RESUMABLE.has(task.state);
+  // S-23.23: and only what the caller's role may do — the read's `can_*` flags, each the command
+  // route's own permission. A command the caller may not use is left out of the menu.
+  const canPause = detail.can_pause && !merged && !finished && !queued && task.state !== 'paused';
+  const canResume = detail.can_resume && RESUMABLE.has(task.state);
   const canTakeOver =
     takenOver === null &&
     !finished &&
@@ -158,7 +176,10 @@ export const TaskHeader = ({
     !queued &&
     !(task.state === 'paused' && task.paused_reason === 'manual');
   // Merged or in its retrospective: the change is in the default branch, so no cancel is offered.
-  const canCancel = !finished && task.state !== 'merged' && task.state !== 'retro';
+  const canCancel =
+    detail.can_cancel && !finished && task.state !== 'merged' && task.state !== 'retro';
+  const canReturn = detail.can_return && !merged;
+  const canRework = detail.can_rework && !merged;
 
   const resume = (): void => {
     commands.resume.mutate('resumed from the UI');
@@ -258,24 +279,24 @@ export const TaskHeader = ({
             Retry stage…
           </ActionMenuItem>
           {/* A merged task never goes back before the merge (WP-152): the callout says so too. */}
-          {merged ? null : (
-            <>
-              <ActionMenuItem
-                onSelect={() => {
-                  onOpen('return');
-                }}
-              >
-                Return to stage…
-              </ActionMenuItem>
-              <ActionMenuItem
-                onSelect={() => {
-                  onOpen('rework');
-                }}
-              >
-                Rework…
-              </ActionMenuItem>
-            </>
-          )}
+          {canReturn ? (
+            <ActionMenuItem
+              onSelect={() => {
+                onOpen('return');
+              }}
+            >
+              Return to stage…
+            </ActionMenuItem>
+          ) : null}
+          {canRework ? (
+            <ActionMenuItem
+              onSelect={() => {
+                onOpen('rework');
+              }}
+            >
+              Rework…
+            </ActionMenuItem>
+          ) : null}
         </>
       )}
       {canRaise && primary !== 'raise_budget' ? (

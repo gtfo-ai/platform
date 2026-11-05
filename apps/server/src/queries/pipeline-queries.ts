@@ -70,6 +70,7 @@ import type {
   RunStartFailure,
   RunStatus,
   TaskConflict,
+  TaskDetailRecord,
   TaskDetailResponse,
   TaskListItem,
   TaskRecord,
@@ -1696,7 +1697,7 @@ const gateFeedbackOf = (
 export const findTaskDetail = async (
   database: Database,
   taskId: string,
-): Promise<Omit<TaskDetailResponse, 'can_raise_budget' | 'can_export'> | null> => {
+): Promise<TaskDetailRecord | null> => {
   const taskRows = await database.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
   const task = taskRows[0];
   if (task === undefined) {

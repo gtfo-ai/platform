@@ -534,7 +534,16 @@ export const registerProjectRoutes = async (
     },
     // `new Date()` is the read's own instant: "the last thirty days" is a question about now, and
     // the caller does not get to choose which thirty.
-    async () => listProjectSummaries(options.database, new Date().toISOString() as IsoDateTime),
+    async (request) => {
+      const role = request.effectiveRole;
+      return {
+        ...(await listProjectSummaries(options.database, new Date().toISOString() as IsoDateTime)),
+        // S-23.23: whether this caller may create a project — `POST /api/projects`'s own
+        // capability over the organisation role this guard resolved, so the screens offer *New
+        // project* only to someone the route would admit.
+        can_create: role !== undefined && can(role, 'project.create'),
+      };
+    },
   );
 
   typed.get(
@@ -653,6 +662,9 @@ export const registerProjectRoutes = async (
         // S-23.9a: the card menu's two maintainer commands, over the same role.
         can_cancel_task: role !== undefined && can(role, 'task.cancel'),
         can_return_to_stage: role !== undefined && can(role, 'task.return_to_stage'),
+        // S-23.23: the card menu's pause and resume, over the same role.
+        can_pause_task: role !== undefined && can(role, 'task.pause'),
+        can_resume_task: role !== undefined && can(role, 'task.resume'),
       };
     },
   );

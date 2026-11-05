@@ -97,6 +97,8 @@ const open = (options: {
         can_start_task: options.canStart,
         can_cancel_task: true,
         can_return_to_stage: true,
+        can_pause_task: true,
+        can_resume_task: true,
       });
     }
     if (path === '/api/projects') return json({ items: [PROJECT_ROW] });

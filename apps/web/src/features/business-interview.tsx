@@ -37,6 +37,7 @@ import { type ReactElement, useState } from 'react';
 import { useOnboardingCommands } from '../app/queries.js';
 import { Badge, Button, ErrorNotice } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { useStepActionTone } from './step-action-tone.js';
 
 type SectionId = (typeof BUSINESS_INTERVIEW_SECTION_IDS)[number];
 
@@ -119,6 +120,8 @@ export const BusinessInterview = ({
   /** The project's human key — what the knowledge screen's route is addressed by. */
   readonly projectKey: string;
 }): ReactElement => {
+  // S-23.23: primary until the wizard's step is done, then the footer's Continue is.
+  const actionTone = useStepActionTone();
   const commands = useOnboardingCommands();
   const [drafts, setDrafts] = useState<Partial<Record<SectionId, SectionDraft>>>({});
   const answers = answersOf(drafts);
@@ -177,7 +180,7 @@ export const BusinessInterview = ({
       <div>
         <Button
           type="submit"
-          tone="primary"
+          tone={actionTone}
           disabled={answered === 0 || commands.recordInterview.isPending}
         >
           Propose {answered === 1 ? 'the page' : `${answered} pages`}

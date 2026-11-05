@@ -505,6 +505,12 @@ export const taskDetail = taskDetailResponseSchema.parse({
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  can_pause: true,
+  can_resume: true,
+  can_cancel: true,
+  can_return: true,
+  can_rework: true,
+  can_decide_approval: true,
   gate_feedback: null,
   /**
    * WP-29's minutes, with the per-user breakdown **on** — which is not this project's default and
@@ -573,6 +579,12 @@ export const bugTaskDetail = taskDetailResponseSchema.parse({
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  can_pause: true,
+  can_resume: true,
+  can_cancel: true,
+  can_return: true,
+  can_rework: true,
+  can_decide_approval: true,
   gate_feedback: null,
   // Nothing recorded, and the breakdown off — the shipped default (product/18:32). `by_user: null`
   // and an empty list are different answers, and this is the first.
@@ -608,6 +620,12 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
   },
   can_raise_budget: false,
   can_export: false,
+  can_pause: true,
+  can_resume: true,
+  can_cancel: true,
+  can_return: true,
+  can_rework: true,
+  can_decide_approval: true,
   gate_feedback: null,
   taken_over: {
     at: now,
@@ -1104,6 +1122,8 @@ export const integrations = {
       credentials_consequence: null,
     }),
   ],
+  // S-23.23: the fake signs in an administrator, who may write integrations.
+  can_write: true,
 };
 
 /**
@@ -1453,9 +1473,12 @@ export const tasksPage = {
   can_start_task: true,
   can_cancel_task: true,
   can_return_to_stage: true,
+  can_pause_task: true,
+  can_resume_task: true,
 };
 
-export const projectsPage = { items: [project] };
+// S-23.23: the fake signs in an administrator, who may create a project.
+export const projectsPage = { items: [project], can_create: true };
 
 /**
  * `GET /api/projects/:id/bindings` (WP-182): the project's one tracker binding, the integration

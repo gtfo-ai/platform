@@ -403,7 +403,9 @@ describe('the ticket lifecycle pick lists (WP-182 criterion (1))', () => {
       bindings: bindingsWith({}).filter((item) => item.type !== 'task_management'),
     });
     renderSettings(state);
-    expect(await screen.findByText(/Bind a ticket tracker first/)).toBeTruthy();
+    expect(
+      await screen.findByText(/Add a ticket tracker to this project’s connections first/),
+    ).toBeTruthy();
     expect(state.statusReads).toBe(0);
   });
 

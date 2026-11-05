@@ -173,6 +173,12 @@ const detail = (runs: readonly RunRecord[]): TaskDetailResponse => ({
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  can_pause: true,
+  can_resume: true,
+  can_cancel: true,
+  can_return: true,
+  can_rework: true,
+  can_decide_approval: true,
   gate_feedback: null,
   human_time: {
     total_minutes: 0,
@@ -261,7 +267,7 @@ describe('the stage timeline on the task page (WP-154 (a), (b))', () => {
       expect.stringMatching(/^Plan Approval/),
       expect.stringMatching(/^Refinement/),
     ]);
-    expect(entries[0]?.textContent).toContain('try 2');
+    expect(entries[0]?.textContent).toContain('Attempt 2');
     const hrefOf = (index: number, name: string) =>
       within(entries[index] as HTMLElement)
         .getByRole('link', { name })

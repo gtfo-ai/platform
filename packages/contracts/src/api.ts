@@ -323,6 +323,13 @@ export const patchIntegrationRequestSchema = z
  */
 export const integrationsResponseSchema = z.strictObject({
   items: z.array(integrationSummarySchema),
+  /**
+   * Whether the **caller** may create, change, test, re-credential and retire integrations —
+   * `integration.write` over their organisation role, the write routes' own `can()` (S-23.23). The
+   * screens offer those controls only then; the routes refuse everyone else regardless. A reader
+   * handed a list without it (a fake, an older server) reads `false`: absent never offers a write.
+   */
+  can_write: z.boolean().default(false),
 });
 
 export const createIntegrationRequestSchema = z.strictObject({
@@ -710,6 +717,12 @@ export const projectSummarySchema = projectRecordSchema.extend({
  */
 export const projectsResponseSchema = z.strictObject({
   items: z.array(projectSummarySchema),
+  /**
+   * Whether the **caller** may create a project — `project.create` over their organisation role,
+   * `POST /api/projects`'s own `can()` (S-23.23). The screens offer *New project* only then; the
+   * route refuses everyone else regardless. Absent reads `false`, as `can_write` does.
+   */
+  can_create: z.boolean().default(false),
 });
 
 /**
@@ -1505,6 +1518,12 @@ export const tasksResponseSchema = page(taskListItemSchema).extend({
    */
   can_cancel_task: z.boolean(),
   can_return_to_stage: z.boolean(),
+  /**
+   * Whether the caller may pause, and resume, a task in this project — `task.pause` and
+   * `task.resume` over the same role (S-23.23). The card's menu offers those commands only then.
+   */
+  can_pause_task: z.boolean(),
+  can_resume_task: z.boolean(),
 });
 
 /** The longest ticket key `POST /api/projects/:id/tasks` accepts (WP-122). */
@@ -1662,20 +1681,53 @@ export const humanTimeSummarySchema = z.strictObject({
   }),
 });
 
-export const taskDetailResponseSchema = z.strictObject({
-  task: taskRecordSchema,
+/**
+ * What the task read says about **the caller**: whether their effective role in the task's project
+ * passes the permission each command's route asks — the route's own `can(role, action)`, computed
+ * once on the server (`apps/server/src/routes/tasks.ts`), so the page offers a control only to
+ * someone the route would admit and the route still refuses everyone else regardless. Role only:
+ * the task's **state** is the aggregate's question, and the page answers it from the record.
+ *
+ * Kept as one shape because the export drops all of it ({@link TASK_CALLER_FACT_KEYS}): a document
+ * handed to somebody else must not carry the exporter's permissions.
+ */
+export const taskCallerFactsShape = {
   /**
-   * Whether the **caller** may raise this task's cap — `budget.write` over their effective role in
-   * the task's project (WP-131 review round 2). The page offers *Raise this task's cap* only then;
-   * the route refuses everyone else regardless.
+   * `budget.write` (WP-131 review round 2). The page offers *Raise this task's cap* only then.
    */
   can_raise_budget: z.boolean(),
-  /**
-   * Whether the **caller** may download this task's record — `task.export` over their effective
-   * role in the task's project (WP-122, PROGRESS backlog 381). The page offers *Download JSON* only
-   * then; the export route refuses everyone else regardless.
-   */
+  /** `task.export` (WP-122, PROGRESS backlog 381). The page offers *Download JSON* only then. */
   can_export: z.boolean(),
+  /** `task.pause` (S-23.23). */
+  can_pause: z.boolean(),
+  /** `task.resume` (S-23.23). */
+  can_resume: z.boolean(),
+  /** `task.cancel` (S-23.23): maintainer. */
+  can_cancel: z.boolean(),
+  /** `task.return_to_stage` (S-23.23): maintainer. */
+  can_return: z.boolean(),
+  /** `task.rework` (S-23.23): maintainer. */
+  can_rework: z.boolean(),
+  /**
+   * `task.approve_plan` (S-23.23) — the decide route's own gate; the approval's kind is checked
+   * again by the aggregate, and every kind needs the same role today.
+   */
+  can_decide_approval: z.boolean(),
+} as const;
+
+/** The keys of {@link taskCallerFactsShape}, which the export omits. */
+export const TASK_CALLER_FACT_KEYS = Object.keys(
+  taskCallerFactsShape,
+) as readonly (keyof typeof taskCallerFactsShape)[];
+export type TaskCallerFactKey = keyof typeof taskCallerFactsShape;
+
+const taskCallerFactsMask = Object.fromEntries(
+  TASK_CALLER_FACT_KEYS.map((key) => [key, true] as const),
+) as { readonly [K in TaskCallerFactKey]: true };
+
+export const taskDetailResponseSchema = z.strictObject({
+  task: taskRecordSchema,
+  ...taskCallerFactsShape,
   /** The take-over in force, or `null` — see {@link takenOverSchema}. */
   taken_over: takenOverSchema.nullable(),
   /** Human minutes derived from events by the WP-29 projector; never summed with the USD. */
@@ -2517,10 +2569,10 @@ export const taskExportResponseSchema = z.strictObject({
   /** The document's format; bumped when its shape changes, so a reader can tell. */
   format: z.literal(1),
   exported_at: isoDateTimeSchema,
-  // Not `can_raise_budget` nor `can_export`: those are facts about the **caller** (WP-131 review
-  // round 2, WP-122), and a document handed to someone else must not carry the exporter's
+  // None of `taskCallerFactsShape`: those are facts about the **caller** (WP-131 review round 2,
+  // WP-122, S-23.23), and a document handed to someone else must not carry the exporter's
   // permissions.
-  ...taskDetailResponseSchema.omit({ can_raise_budget: true, can_export: true }).shape,
+  ...taskDetailResponseSchema.omit(taskCallerFactsMask).shape,
   human_actions: z
     .strictObject({
       items: z.array(taskAuditEntrySchema),
@@ -3293,6 +3345,8 @@ export type TasksResponse = z.infer<typeof tasksResponseSchema>;
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
 export type StartTaskResponse = z.infer<typeof startTaskResponseSchema>;
 export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
+/** The task read before the route adds what it says about the caller. */
+export type TaskDetailRecord = Omit<TaskDetailResponse, TaskCallerFactKey>;
 export type TakenOver = z.infer<typeof takenOverSchema>;
 export type IdentityCandidate = z.infer<typeof identityCandidateSchema>;
 export type RefusedDelivery = z.infer<typeof refusedDeliverySchema>;

@@ -496,6 +496,8 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
     may: {
       cancel: tasks.data?.can_cancel_task === true,
       returnToStage: tasks.data?.can_return_to_stage === true,
+      pause: tasks.data?.can_pause_task === true,
+      resume: tasks.data?.can_resume_task === true,
     },
     agents: live,
     nowMs,

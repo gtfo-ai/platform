@@ -52,6 +52,7 @@ import {
   refusedDeliveriesResponseSchema,
   setupGuideResponseSchema,
 } from '@platform/contracts';
+import { can } from '@platform/domain';
 import {
   findShippedProvider,
   readSetupGuide,
@@ -137,10 +138,16 @@ export const registerIntegrationRoutes = async (
                 state.readable,
               ]),
             );
+      const role = request.effectiveRole;
       return {
         items: rows.map((row) =>
           toIntegrationSummary(row, findShippedProvider(row.provider), credentials),
         ),
+        // S-23.23: whether this caller may write integrations — the write routes' own capability
+        // (`integration.write`, `routes/onboarding.ts`) over the organisation role this guard
+        // resolved, so the screens offer New, Edit, Replace credentials and Retire only to someone
+        // those routes would admit.
+        can_write: role !== undefined && can(role, 'integration.write'),
       };
     },
   );

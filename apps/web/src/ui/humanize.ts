@@ -200,7 +200,7 @@ export const QUESTION_STATUS_LABEL: Readonly<Record<QuestionStatus, string>> = {
   open: 'Open',
   answered: 'Answered',
   expired: 'Expired',
-  escalated: 'Escalated',
+  escalated: 'Handed to a person',
 };
 
 /** `foo_bar-baz` → `Foo Bar Baz`: a project's own stage slug, never printed raw. */

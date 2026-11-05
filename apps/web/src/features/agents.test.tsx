@@ -296,7 +296,7 @@ describe('the Agents page', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Agents' })).toBeDefined();
     await waitFor(() => {
       expect(document.querySelector('[data-fleet-counts]')?.textContent).toBe(
-        '2 working · 2 need you · 2 waiting · 1 free seat · 1 stuck',
+        '2 working · 2 need you · 2 waiting · 1 free slot · 1 stuck',
       );
     });
     expect(screen.getByRole('link', { name: 'Open inbox' }).getAttribute('href')).toBe('/inbox');

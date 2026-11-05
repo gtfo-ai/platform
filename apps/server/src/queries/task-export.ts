@@ -29,11 +29,15 @@
 import type {
   JsonObject,
   TaskAuditEntry,
-  TaskDetailResponse,
+  TaskDetailRecord,
   TaskExportEvent,
   TaskExportResponse,
 } from '@platform/contracts';
-import { MAX_TASK_EXPORT_EVENTS, MAX_TASK_EXPORT_HUMAN_ACTIONS } from '@platform/contracts';
+import {
+  MAX_TASK_EXPORT_EVENTS,
+  MAX_TASK_EXPORT_HUMAN_ACTIONS,
+  TASK_CALLER_FACT_KEYS,
+} from '@platform/contracts';
 import type { TaskEventRow } from './pipeline-queries.js';
 
 /** The platform's pattern redaction, as the dead-letter route takes it. */
@@ -45,7 +49,7 @@ export interface PayloadRedactor {
 }
 
 export interface TaskExportParts {
-  readonly detail: Omit<TaskDetailResponse, 'can_raise_budget' | 'can_export'>;
+  readonly detail: TaskDetailRecord;
   /**
    * The audit rows **as read with one row past the cap**, newest first — or `null` when the caller
    * may not read them, in which case nothing was read.
@@ -79,24 +83,17 @@ const toWireEvent = (row: TaskEventRow, payload: JsonObject): TaskExportEvent =>
 
 /** The export document — see the module note for what each part is and why. */
 /**
- * The task read without what it says about **the caller** — `can_raise_budget` (WP-131 review
- * round 2) and `can_export` (WP-122). A document handed to somebody else must not carry the
- * exporter's permissions, and the export's schema has no such field, so a read that carried one
- * would otherwise fail the document.
+ * The task read without what it says about **the caller** — every key of `taskCallerFactsShape`
+ * (`can_raise_budget` since WP-131 review round 2, `can_export` since WP-122, the command flags since
+ * S-23.23). A document handed to somebody else must not carry the exporter's permissions, and the
+ * export's schema has no such field, so a read that carried one would otherwise fail the document.
  */
-const withoutCallerFacts = (
-  detail: TaskExportParts['detail'],
-): Omit<TaskDetailResponse, 'can_raise_budget' | 'can_export'> => {
-  const {
-    can_raise_budget: _caller,
-    can_export: _exporter,
-    ...rest
-  } = detail as TaskExportParts['detail'] & {
-    readonly can_raise_budget?: boolean;
-    readonly can_export?: boolean;
-  };
-  return rest;
-};
+const CALLER_FACT_KEYS: ReadonlySet<string> = new Set<string>(TASK_CALLER_FACT_KEYS);
+
+const withoutCallerFacts = (detail: TaskExportParts['detail']): TaskDetailRecord =>
+  Object.fromEntries(
+    Object.entries(detail).filter(([key]) => !CALLER_FACT_KEYS.has(key)),
+  ) as TaskDetailRecord;
 
 export const assembleTaskExport = (parts: TaskExportParts): TaskExportResponse => {
   const limits = TASK_EXPORT_LIMITS;

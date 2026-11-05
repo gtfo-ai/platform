@@ -16,7 +16,7 @@
  * the same body with the same `Idempotency-Key` semantics: *Pause*, *Resume* and *Cancel* with the
  * page's reasons, *Return to stage…* with the stage and the person's reason. Cancel and Return are
  * Dialogs (a human's destructive or multi-field action, research/19 § 3.9); Pause and Resume are one
- * press. *Open ticket* and *Open MR* are `ActionMenuLinkItem`s, so their `href` is `safeHref`'s.
+ * press. *Open ticket* and *Open merge request* are `ActionMenuLinkItem`s, so their `href` is `safeHref`'s.
  *
  * The card is **not** wrapped in a link: the title is the link into the task, and the menu carries
  * its own items — an anchor inside an anchor is invalid HTML.
@@ -165,12 +165,16 @@ const ENDED: ReadonlySet<TaskState> = new Set(['done', 'cancelled']);
 const MERGED_STATES: ReadonlySet<TaskState> = new Set(['merged', 'retro']);
 
 /**
- * What the caller may do in this project — the tasks page's `can_cancel_task` and
- * `can_return_to_stage`, the routes' own `can()` over the caller's role.
+ * What the caller may do in this project — the tasks page's `can_cancel_task`,
+ * `can_return_to_stage`, `can_pause_task` and `can_resume_task`, the routes' own `can()` over the
+ * caller's role (S-23.9a; pause and resume since S-23.23).
  */
 export interface MenuCapabilities {
   readonly cancel: boolean;
   readonly returnToStage: boolean;
+  /** Left out, not consulted (the board always passes it). */
+  readonly pause?: boolean;
+  readonly resume?: boolean;
 }
 
 export interface MenuCommands {
@@ -186,16 +190,21 @@ export interface MenuCommands {
  * command is refused by the aggregate with a named 409, and by the role with a 403 — so this only
  * keeps the menu from offering what cannot be meant: no pause of a paused task or of one that
  * entered `merged_gate` (as the task page), no resume of a running one, a cancel until the task is
- * done or cancelled, no return for a task that entered no stage or was merged, and neither cancel
- * nor return to a caller whose role the route would refuse.
+ * done or cancelled, no return for a task that entered no stage or was merged, and none of cancel,
+ * return, pause or resume to a caller whose role the route would refuse.
  */
 export const menuCommandsFor = (task: TaskListItem, may: MenuCapabilities): MenuCommands => {
   const ended = ENDED.has(task.state);
   const stages = [...new Set(task.stages.map((row) => row.stage))];
   const merged = MERGED_STATES.has(task.state) || stages.includes('merged_gate');
   return {
-    pause: !ended && !merged && task.state !== 'paused' && task.state !== 'needs_human',
-    resume: task.state === 'paused' || task.state === 'needs_human',
+    pause:
+      may.pause !== false &&
+      !ended &&
+      !merged &&
+      task.state !== 'paused' &&
+      task.state !== 'needs_human',
+    resume: may.resume !== false && (task.state === 'paused' || task.state === 'needs_human'),
     cancel: may.cancel && !ended,
     returnTo: !may.returnToStage || ended || merged || task.state === 'queued' ? [] : stages,
   };
@@ -471,7 +480,7 @@ export const TaskMenu = ({
         {/* Both URLs came from a ticket or git provider: the link item's `href` is `safeHref`'s. */}
         <ActionMenuLinkItem url={task.ticket.url} label="Open ticket" />
         {task.mr_ref === null || task.mr_ref === undefined ? null : (
-          <ActionMenuLinkItem url={task.mr_ref.url} label="Open MR" />
+          <ActionMenuLinkItem url={task.mr_ref.url} label="Open merge request" />
         )}
       </ActionMenu>
       {open === 'cancel' ? (

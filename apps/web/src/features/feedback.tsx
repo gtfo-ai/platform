@@ -51,11 +51,11 @@ export const FeedbackForm = ({
           setRating(null);
         }}
       >
+        {/* Toggles: `default` with `aria-pressed`, never the page's beacon (S-23.23). */}
         <div className="flex gap-2">
           <Button
             type="button"
             aria-pressed={rating === THUMBS_UP_RATING}
-            tone={rating === THUMBS_UP_RATING ? 'primary' : 'default'}
             onClick={() => {
               setRating(rating === THUMBS_UP_RATING ? null : THUMBS_UP_RATING);
             }}
@@ -65,7 +65,6 @@ export const FeedbackForm = ({
           <Button
             type="button"
             aria-pressed={rating === THUMBS_DOWN_RATING}
-            tone={rating === THUMBS_DOWN_RATING ? 'primary' : 'default'}
             onClick={() => {
               setRating(rating === THUMBS_DOWN_RATING ? null : THUMBS_DOWN_RATING);
             }}

@@ -3,7 +3,9 @@
  *
  * One row per project: its name (the way in), its key, its readiness, its open tasks and its
  * 30-day spend, all from `GET /api/projects`. The header's one primary action is **New project**,
- * which is the onboarding wizard; an empty list says what a project is and offers the same.
+ * which is the onboarding wizard; an empty list says what a project is and offers the same — both
+ * only for a caller the create route would admit (`can_create`, S-23.23); anyone else is told an
+ * administrator creates projects.
  *
  * **"Needs you" per project is not drawn**: the inbox's questions and approvals carry a task id and
  * no project id, so a per-project count would need a read this screen does not have. The total is
@@ -27,6 +29,9 @@ export const ProjectsScreen = (): ReactElement => {
   useTopics(['org']);
   const projects = useProjects();
   const items = projects.data?.items ?? [];
+  // S-23.23: `POST /api/projects` is an administrator's (`project.create`); the list says whether
+  // this caller may, so nobody else is offered a wizard whose first command answers 403.
+  const canCreate = projects.data?.can_create === true;
 
   return (
     <div className="flex flex-col gap-4">
@@ -34,9 +39,11 @@ export const ProjectsScreen = (): ReactElement => {
         title="Projects"
         divider={false}
         actions={
-          <Link to="/onboarding" className={buttonClassName('primary')}>
-            New project
-          </Link>
+          canCreate ? (
+            <Link to="/onboarding" className={buttonClassName('primary')}>
+              New project
+            </Link>
+          ) : undefined
         }
       />
       {projects.isPending ? <Skeleton label="Loading projects…" /> : null}
@@ -44,17 +51,27 @@ export const ProjectsScreen = (): ReactElement => {
         <ErrorNotice title="Projects could not be loaded." error={projects.error} />
       ) : null}
       {projects.isSuccess && items.length === 0 ? (
-        <Blankslate
-          size="spacious"
-          icon={<RepoIcon size={24} />}
-          title="No projects yet"
-          hint="A project connects a ticket board and a repository. Once it is set up, the pipeline picks up its tickets and turns them into merge requests."
-          action={
-            <Link to="/onboarding" className={buttonClassName('default')}>
-              New project
-            </Link>
-          }
-        />
+        canCreate ? (
+          <Blankslate
+            size="spacious"
+            icon={<RepoIcon size={24} />}
+            title="No projects yet"
+            hint="A project connects a ticket board and a repository. Once it is set up, the pipeline picks up its tickets and turns them into merge requests."
+            action={
+              <Link to="/onboarding" className={buttonClassName('default')}>
+                New project
+              </Link>
+            }
+          />
+        ) : (
+          <Blankslate
+            informational
+            size="spacious"
+            icon={<RepoIcon size={24} />}
+            title="No projects yet"
+            hint="Ask an administrator to create a project. It connects a ticket board and a repository, and the pipeline then turns its tickets into merge requests."
+          />
+        )
       ) : null}
       {items.length === 0 ? null : (
         <ListBox

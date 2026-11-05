@@ -60,6 +60,8 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
       can_start_task: false,
       can_cancel_task: false,
       can_return_to_stage: false,
+      can_pause_task: true,
+      can_resume_task: true,
     });
   }
   return json({ error: { code: 'not_found', message: 'the fake server has no such route' } }, 404);

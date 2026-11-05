@@ -15,7 +15,7 @@
  * remembered in this browser (`agents-view.ts`). A run — a card, a desk, a row — opens the same
  * dialog: the run's live activity and log, *Open run*, *Open task*.
  *
- * The header says the counts in words — "2 working · 1 needs you · 1 waiting · 3 free seats" — and
+ * The header says the counts in words — "2 working · 1 needs you · 1 waiting · 3 free slots" — and
  * its one primary action is *Open inbox*, only while something needs you. With nothing live, the
  * map and the list are a blankslate that says how to start, and the office shows everyone asleep
  * under the same words. Live through `useFleet` (the `org` topic, a 15 s clock, the `run:<id>`
@@ -64,13 +64,16 @@ const VIEW_ICON: Readonly<Record<FleetView, ReactElement>> = {
   list: <ListUnorderedIcon size={16} />,
 };
 
-/** "2 working · 1 needs you · 1 waiting · 3 free seats", with "· 1 stuck" when any is. */
+/**
+ * "2 working · 1 needs you · 1 waiting · 3 free slots", with "· 1 stuck" when any is — *slot* for
+ * capacity and *machine* for the host it is on (S-23.23, the UX audit's § 4).
+ */
 export const countsSentence = (counts: FleetCounts): string =>
   [
     `${counts.working} working`,
     `${counts.needsYou} ${counts.needsYou === 1 ? 'needs' : 'need'} you`,
     `${counts.waiting} waiting`,
-    `${counts.freeSeats} free seat${counts.freeSeats === 1 ? '' : 's'}`,
+    `${counts.freeSeats} free slot${counts.freeSeats === 1 ? '' : 's'}`,
     counts.stuck === 0 ? null : `${counts.stuck} stuck`,
   ]
     .filter((part): part is string => part !== null)
@@ -205,7 +208,7 @@ export const AgentsScreen = (): ReactElement => {
       ) : null}
       {workers.isError ? (
         <p className="text-xs text-fg-muted">
-          Your workers could not be loaded: each seat shows only what its runs say.
+          Your workers could not be loaded: each machine shows only what its runs say.
         </p>
       ) : null}
 

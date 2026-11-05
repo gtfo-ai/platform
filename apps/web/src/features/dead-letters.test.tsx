@@ -14,6 +14,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { assertOnePrimaryAtMost, primaryLabels } from '../ui/primary-census.js';
 
 const SESSION: SessionResponse = {
   user: {
@@ -120,6 +121,40 @@ describe('dead letters on the settings page', () => {
     expect(container.querySelector('[data-dead-letter-count]')?.textContent).toBe(
       '2 dead-lettered events.',
     );
+    // S-23.23 (the UX audit's § 2): a per-row action is `default sm`, so two cards draw no beacon.
+    expect(primaryLabels()).not.toContain('Re-queue');
+    assertOnePrimaryAtMost(document, 'the dead letters page');
+  });
+
+  it('keeps every other row’s Re-queue usable while one is in flight', async () => {
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { fetchImpl: base } = fetchFor({
+      items: [letter({}), letter({ position: 4099 })],
+      total: 2,
+      next_cursor: null,
+    });
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        await held;
+      }
+      return base(input, init);
+    }) as typeof fetch;
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    const user = userEvent.setup();
+    await waitFor(() => {
+      expect(container.querySelector('[data-dead-letter="4099"]')).not.toBeNull();
+    });
+    const buttonOf = (position: number): HTMLButtonElement =>
+      container.querySelector(`[data-dead-letter="${position}"] button`) as HTMLButtonElement;
+    await user.click(buttonOf(4101));
+    await waitFor(() => {
+      expect(buttonOf(4101).disabled).toBe(true);
+    });
+    expect(buttonOf(4099).disabled).toBe(false);
+    release?.();
   });
 
   it('states a page as the newest N of the total, never as the total', async () => {

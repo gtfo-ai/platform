@@ -452,7 +452,7 @@ test('the Agents page draws its map, office and list under the policy, titles as
   const map = page.locator('[data-fleet-canvas]');
   await expect(map).toBeVisible();
   await expect(page.locator('[data-fleet-counts]')).toHaveText(
-    '1 working · 2 need you · 1 waiting · 2 free seats',
+    '1 working · 2 need you · 1 waiting · 2 free slots',
   );
   const cards = map.locator('[data-fleet-run]');
   await expect(cards).toHaveCount(3);

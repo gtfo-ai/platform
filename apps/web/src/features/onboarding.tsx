@@ -90,6 +90,7 @@ import {
 import { AUTONOMY_CHOICES, OperatingMode } from './operating-mode.js';
 import { readinessWord } from './readiness-label.js';
 import { ReadinessNotices } from './readiness-notices.js';
+import { StepActionToneContext, useStepActionTone } from './step-action-tone.js';
 
 /** A knowledge proposal still waiting for a maintainer (the knowledge screen's Approve/Reject). */
 const AWAITING_REVIEW = new Set(['scored', 'queued', 'apply_failed']);
@@ -265,10 +266,13 @@ const DiscoveryStep = ({
 }): ReactElement => {
   const commands = useOnboardingCommands();
   const { readiness } = reads;
+  // The step's own action: the beacon until discovery has evaluated the project (S-23.23).
+  const actionTone = useStepActionTone();
   return (
     <div className="flex flex-col gap-3">
       <div>
         <Button
+          tone={actionTone}
           disabled={commands.startDiscovery.isPending}
           onClick={() => {
             commands.startDiscovery.mutate(project.id);
@@ -431,10 +435,16 @@ const WizardFooter = ({
   projectKey,
   step,
   blocker,
+  stepDone,
 }: {
   readonly projectKey: string | null;
   readonly step: WizardStepId;
   readonly blocker: string | null;
+  /**
+   * Whether this step is done: *Continue* is the beacon only then, because until then the step's
+   * own action is (S-23.23, `step-action-tone.ts`).
+   */
+  readonly stepDone: boolean;
 }): ReactElement => {
   const navigate = useNavigate();
   const previous = previousStep(step);
@@ -478,7 +488,7 @@ const WizardFooter = ({
           )
         ) : (
           <Button
-            tone="primary"
+            tone={stepDone ? 'primary' : 'default'}
             disabled={blocker !== null || projectKey === null}
             {...(blocker === null ? {} : { 'aria-describedby': 'wizard-continue-reason' })}
             onClick={() => go(next)}
@@ -674,12 +684,16 @@ const Wizard = ({
               {purposeOf(current, project === null ? null : reads)}
             </p>
           </div>
-          {body}
+          {/* One primary per step (S-23.23): the step's own action until it is done, then Continue. */}
+          <StepActionToneContext.Provider value={done[current] === true ? 'default' : 'primary'}>
+            {body}
+          </StepActionToneContext.Provider>
           {blocking !== null ? null : (
             <WizardFooter
               projectKey={projectKey}
               step={current}
               blocker={continueBlockerOf(current, reads.facts)}
+              stepDone={done[current] === true}
             />
           )}
         </section>

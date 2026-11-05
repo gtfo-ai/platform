@@ -190,8 +190,9 @@ export const PlatformUpdatedBanner = (): ReactElement | null => {
       className="rounded-none border-x-0 border-t-0"
       title="The platform was updated — reload this page."
       action={
+        // `default`, not the beacon (S-23.23): the banner sits above every screen, and that screen
+        // keeps its own one primary action.
         <Button
-          tone="primary"
           onClick={() => {
             window.location.reload();
           }}
@@ -287,9 +288,12 @@ export const RunningIndicator = ({
 export const ProjectSwitcher = ({
   current,
   projects,
+  canCreateProject = false,
 }: {
   readonly current: ProjectSummary;
   readonly projects: readonly ProjectSummary[];
+  /** The projects read's `can_create` (S-23.23): *New project* is offered only then. */
+  readonly canCreateProject?: boolean;
 }): ReactElement => {
   const navigate = useNavigate();
   return (
@@ -334,25 +338,27 @@ export const ProjectSwitcher = ({
       >
         All projects
       </ActionMenuItem>
-      <ActionMenuItem
-        leadingIcon={<PlusIcon size={16} />}
-        onSelect={() => {
-          void navigate({ to: '/onboarding' });
-        }}
-      >
-        New project
-      </ActionMenuItem>
+      {canCreateProject ? (
+        <ActionMenuItem
+          leadingIcon={<PlusIcon size={16} />}
+          onSelect={() => {
+            void navigate({ to: '/onboarding' });
+          }}
+        >
+          New project
+        </ActionMenuItem>
+      ) : null}
     </ActionMenu>
   );
 };
 
 /**
- * `+ ▾`: *New project* for an admin (`project.create` is admin-only, so nobody else is offered a
- * wizard whose first command answers 403), *Add a worker* for everybody signed in (`worker.register`
- * is any active user's — TD-031 §10c, the approver is the worker's owner — S-23.20), *Start a
- * ticket…* inside a project whose tasks read says the caller may start one (`can_start_task`) — it
- * opens the board's start form, the one place a ticket is started. With none of them, there is no
- * menu.
+ * `+ ▾`: *New project* for a caller the projects read says may create one (`can_create`, the create
+ * route's own `project.create`, S-23.23 — so nobody else is offered a wizard whose first command
+ * answers 403), *Add a worker* for everybody signed in (`worker.register` is any active user's —
+ * TD-031 §10c, the approver is the worker's owner — S-23.20), *Start a ticket…* inside a project
+ * whose tasks read says the caller may start one (`can_start_task`) — it opens the board's start
+ * form, the one place a ticket is started. With none of them, there is no menu.
  */
 const CreateMenu = ({
   project,
@@ -522,6 +528,8 @@ export const AppShell = (): ReactElement => {
       : (projects.data?.items.find((item) => item.key === key || item.id === key) ?? null);
   const orgItems = useOrgNavItems(counts);
   const fullWidth = useFullWidth();
+  // S-23.23: the server's answer (`project.create` over the caller's role), never a role compared here.
+  const canCreateProject = projects.data?.can_create === true;
 
   return (
     <div className="flex min-h-full flex-col">
@@ -542,15 +550,19 @@ export const AppShell = (): ReactElement => {
               <span aria-hidden="true" className="pl-1 text-fg-subtle">
                 /
               </span>
-              <ProjectSwitcher current={project} projects={projects.data?.items ?? []} />
+              <ProjectSwitcher
+                current={project}
+                projects={projects.data?.items ?? []}
+                canCreateProject={canCreateProject}
+              />
             </nav>
           )}
           <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
-            <CommandLayer project={project} canCreateProject={user?.role === 'admin'} />
+            <CommandLayer project={project} canCreateProject={canCreateProject} />
             <RunningIndicator running={counts.running} status={status} />
             <CreateMenu
               project={project}
-              canCreateProject={user?.role === 'admin'}
+              canCreateProject={canCreateProject}
               canAddWorker={user !== null}
             />
             <InboxButton count={counts.inbox} />

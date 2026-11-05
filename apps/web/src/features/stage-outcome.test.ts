@@ -14,6 +14,8 @@ describe('the stage outcome sentences', () => {
     for (const [index, word] of taskStageOutcomeWordSchema.options.entries()) {
       expect(sentences[index], word).not.toBe(word);
       expect(sentences[index], word).toMatch(/\.$/);
+      // S-23.23 (the UX audit's § 4): *Needs you* for the state, never "escalated" or "human".
+      expect(sentences[index], word).not.toMatch(/escalat|human/i);
     }
   });
 
@@ -30,7 +32,7 @@ describe('the stage outcome sentences', () => {
     expect(stageOutcomeSentence('ticket.status.changed')).not.toContain('.status.');
     expect(stageOutcomeSentence('task.completed')).toBe('Ended because the task completed.');
     expect(stageOutcomeSentence('take_over.expired')).toBe(
-      'Escalated: the take-over saw no activity for five working days.',
+      'Needs you: the take-over saw no activity for five working days.',
     );
   });
 });

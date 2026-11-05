@@ -423,6 +423,10 @@ type OpenDialog = IntegrationDialog;
  * list does; the integration's own page has them as its primary button and its tab), then *Edit
  * configuration* and *Replace credentials* — for a provider this build ships, the only ones whose
  * fields it knows — and *Retire*. A retired integration has no menu at all: it refuses every write.
+ *
+ * **Only an administrator writes integrations** (`integration.write`, S-23.23): for anyone else
+ * (`canWrite: false`, the list read's `can_write`) the menu keeps only the reads — the setup guide —
+ * and draws nothing when there is none.
  */
 export const IntegrationActions = ({
   integration,
@@ -432,11 +436,14 @@ export const IntegrationActions = ({
   onSetupGuide,
   dialog,
   onDialogChange,
+  canWrite,
 }: {
   readonly integration: IntegrationSummary;
   readonly provider: IntegrationProvider | undefined;
   /** How many projects bind it, or `null` when that is not known. */
   readonly boundProjects: number | null;
+  /** The list read's `can_write`: the test, edit, credentials and retire are offered only then. */
+  readonly canWrite: boolean;
   readonly onTest?: () => void;
   readonly onSetupGuide?: () => void;
   /**
@@ -454,10 +461,25 @@ export const IntegrationActions = ({
   const configFormId = useId();
   const credentialsFormId = useId();
   const commands = useOnboardingCommands();
-  if (integration.retired_at !== null) {
+  if (integration.retired_at !== null || (!canWrite && onSetupGuide === undefined)) {
     return null;
   }
   const name = sanitiseUntrusted(integration.name);
+  if (!canWrite) {
+    return (
+      <ActionMenu
+        trigger={
+          <IconButton
+            aria-label={`Actions for ${name}`}
+            icon={<KebabHorizontalIcon size={16} />}
+            tone="invisible"
+          />
+        }
+      >
+        <ActionMenuItem onSelect={onSetupGuide}>Setup guide</ActionMenuItem>
+      </ActionMenu>
+    );
+  }
   const show = (dialog: OpenDialog): void => {
     setGeneration(generation + 1);
     commands.retireIntegration.reset();

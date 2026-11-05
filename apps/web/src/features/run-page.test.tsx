@@ -17,6 +17,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { primaryLabels } from '../ui/primary-census.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -136,6 +137,12 @@ const detail = (over: Partial<TaskDetailResponse> = {}): TaskDetailResponse => (
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  can_pause: true,
+  can_resume: true,
+  can_cancel: true,
+  can_return: true,
+  can_rework: true,
+  can_decide_approval: true,
   gate_feedback: null,
   human_time: {
     total_minutes: 0,
@@ -342,7 +349,7 @@ describe('the summary strip and what the agent is doing now', () => {
         worker_id: '00000000-0000-4000-8000-0000000283e1',
         worker_name: 'alice-laptop',
       },
-      'Executed byalice-laptop (worker)',
+      'Runs onalice-laptop (worker)',
     ],
     [
       {
@@ -351,10 +358,10 @@ describe('the summary strip and what the agent is doing now', () => {
         worker_name: 'alice-laptop',
         user_name: 'Alice',
       },
-      'Executed byalice-laptop (Alice’s worker)',
+      'Runs onalice-laptop (Alice’s worker)',
     ],
-    [{ kind: 'server', worker_id: null, worker_name: null }, 'Executed bythe platform server'],
-    [null, 'Executed bynot claimed yet'],
+    [{ kind: 'server', worker_id: null, worker_name: null }, 'Runs onthe platform server'],
+    [null, 'Runs onnot claimed yet'],
     // WP-285: the worker is paused by its usage limit — the Workers screen's own sentence.
     [
       {
@@ -363,7 +370,7 @@ describe('the summary strip and what the agent is doing now', () => {
         worker_name: 'alice-laptop',
         usage_pause: { until: USAGE_RESET, estimated: false, timezone: 'UTC' },
       },
-      `Executed byalice-laptop (worker)Paused — usage limit until ${USAGE_RESET.slice(11, 16)}`,
+      `Runs onalice-laptop (worker)Paused — usage limit until ${USAGE_RESET.slice(11, 16)}`,
     ],
   ] as const)(
     'says who executed the run from its seat (WP-283 (5)): %j',
@@ -459,6 +466,29 @@ describe('the summary strip and what the agent is doing now', () => {
     expect(view.container.querySelector('[data-run-now]')).toBeNull();
     expect(screen.queryByRole('list', { name: 'Live activity' })).toBeNull();
     expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
+  });
+});
+
+// S-23.23 (the UX audit's § 2): Steer and the transcript's *Following* toggle were both the
+// beacon beside Re-run or Cancel run, so a live run drew two. A toggle is `default` with
+// `aria-pressed`, Steer is an inline form's quiet submit, and Re-run is not offered while the run is
+// live (the server refuses it).
+describe('one primary action at most', () => {
+  it('draws none on a live run — Cancel run is its one coloured action — and no Re-run', async () => {
+    open();
+    await screen.findByRole('textbox', { name: 'Steer the agent' });
+    // The toggle says its state with `aria-pressed`, not with the beacon's colour.
+    expect(screen.getByRole('button', { name: /^Follow/ }).hasAttribute('aria-pressed')).toBe(true);
+    expect(primaryLabels()).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Cancel run' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Re-run' })).toBeNull();
+  });
+
+  it('draws none on a completed run, whose Following toggle is not an action', async () => {
+    open(RUNS[1] as RunRecord, detail(), []);
+    await screen.findByTestId('transcript-scroller');
+    await screen.findByRole('button', { name: 'Re-run' });
+    expect(primaryLabels()).toEqual([]);
   });
 });
 

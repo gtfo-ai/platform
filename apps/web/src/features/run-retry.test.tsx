@@ -150,7 +150,7 @@ const optionLabels = (select: HTMLSelectElement): string[] =>
   [...select.options].map((option) => option.textContent ?? '');
 
 const retry = async (world: World, user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Retry run' }));
+  await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Re-run' }));
   await waitFor(() => {
     expect(world.retries).toHaveLength(1);
   });
@@ -178,7 +178,8 @@ describe('Re-run ▾ (S-23.10)', () => {
     expect(await screen.findByText(/A new run was requested/)).toBeTruthy();
   });
 
-  it('is a quiet button while the run is live', async () => {
+  // S-23.23: the server refuses `run.retry` for a live run, so the page does not offer it.
+  it('is not offered while the run is live', async () => {
     const world: World = {
       run: { ...runOn('claude-fake-b'), status: 'running', terminal_reason: null, ended_at: null },
       defaults: { model: 'claude-fake-b', effort: 'high' },
@@ -186,9 +187,8 @@ describe('Re-run ▾ (S-23.10)', () => {
       retries: [],
     };
     render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
-    const trigger = await screen.findByRole('button', { name: 'Re-run' });
-    expect(trigger.className).not.toContain('bg-primary');
-    expect(screen.getByRole('button', { name: 'Cancel run' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Cancel run' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Re-run' })).toBeNull();
   });
 });
 

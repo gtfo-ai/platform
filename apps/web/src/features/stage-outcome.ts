@@ -27,37 +27,37 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
     case 'failed':
       return 'The run failed, could not start, or its process stopped renewing it.';
     case 'escalated':
-      return 'Escalated to a human.';
+      return 'Handed to a person: it needs you.';
     case 'undecided':
-      return 'Escalated: the gate could not decide in its allotted checks.';
+      return 'Needs you: the gate could not decide in its allotted checks.';
     case 'unsupported':
-      return 'Escalated: the project’s integrations cannot answer this gate.';
+      return 'Needs you: the project’s integrations cannot answer this gate.';
     case 'converged':
-      return 'Escalated: the same failure repeated, so another round would not help.';
+      return 'Needs you: the same failure repeated, so another round would not help.';
     case 'question.expired':
-      return 'Escalated: a question expired unanswered.';
+      return 'Needs you: a question expired unanswered.';
     case 'approval.expired':
-      return 'Escalated: an approval expired undecided.';
+      return 'Needs you: an approval expired undecided.';
     case 'budget.rejected':
-      return 'Escalated: the budget approval was rejected.';
+      return 'Needs you: the budget approval was rejected.';
     case 'plan.rejected':
       return 'Sent back: a maintainer rejected the plan, and the next attempt is given the reason.';
     case 'take_over.expired':
-      return 'Escalated: the take-over saw no activity for five working days.';
+      return 'Needs you: the take-over saw no activity for five working days.';
     case 'write_conflict':
-      return 'Escalated: the platform’s write lost every retry against another writer.';
+      return 'Needs you: the platform’s write lost every retry against another writer.';
     case 'dead_lettered':
-      return 'Escalated: an event about this task could not be processed.';
+      return 'Needs you: an event about this task could not be processed.';
     case 'repository_config_invalid':
-      return 'Escalated: the repository’s settings file does not parse.';
+      return 'Needs you: the repository’s settings file does not parse.';
     case 'ticket_assigned_elsewhere':
-      return 'Escalated: the ticket is assigned to somebody else, so no agent run started.';
+      return 'Needs you: the ticket is assigned to somebody else, so no agent run started.';
     case 'ticket_claim_failed':
-      return 'Escalated: the platform could not claim the ticket, so no agent run started.';
+      return 'Needs you: the platform could not claim the ticket, so no agent run started.';
     case 'settings_config_invalid':
-      return 'Escalated: the project’s stored settings do not parse under this release.';
+      return 'Needs you: the project’s stored settings do not parse under this release.';
     case 'context_budget_above_ceiling':
-      return 'Escalated: the project’s context budget is above this release’s ceiling.';
+      return 'Needs you: the project’s context budget is above this release’s ceiling.';
     case 'protected_paths_changed':
       return 'Sent the task back: the change touches protected paths the plan did not declare or the code review did not confirm.';
     case 'protected_paths_awaiting_review':

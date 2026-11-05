@@ -142,8 +142,8 @@ const Connections = ({ project }: { readonly project: Project }): ReactElement =
       />
       {selection.ready && bound.length === 0 ? (
         <EmptyState
-          title="No integrations bound"
-          hint="A project needs a ticket board and a git host before the pipeline can start anything."
+          title="No integrations in use yet"
+          hint="A project needs a ticket board and a git host before the pipeline can start anything. Tick them below and save."
         />
       ) : (
         <ul className="flex flex-col gap-1 text-sm">
@@ -197,12 +197,12 @@ const Connections = ({ project }: { readonly project: Project }): ReactElement =
       </div>
       {selection.error === null ? null : (
         <ErrorNotice
-          title="The project’s bindings could not be loaded, so none can be changed."
+          title="This project’s connections could not be loaded, so none can be changed."
           error={selection.error}
         />
       )}
       {commands.putBindings.isError ? (
-        <ErrorNotice title="The bindings were not saved." error={commands.putBindings.error} />
+        <ErrorNotice title="The connections were not saved." error={commands.putBindings.error} />
       ) : null}
       {/* WP-182 ruling (a): the wizard's step-1 lifecycle slots, mirrored — the same component. */}
       <div className="flex flex-col gap-2 border-t border-line pt-3">

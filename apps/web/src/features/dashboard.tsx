@@ -623,7 +623,9 @@ const SpendBox = ({ projects }: { readonly projects: readonly ProjectItem[] }) =
   );
   const spend = projects.reduce((total, project) => total + project.spent_usd_30d, 0);
   return (
-    <RailBox title="Spend this month" label="Spend">
+    // One time window per label (S-23.23, the UX audit's § 4): the box holds two — the cap's month
+    // to date and the last 30 days — so its title names neither.
+    <RailBox title="Spend" label="Spend">
       {budgets.isPending ? <Skeleton label="Loading the monthly cap…" lines={1} /> : null}
       {budgets.isError ? (
         <ErrorNotice title="The monthly cap could not be loaded." error={budgets.error} />
@@ -652,7 +654,7 @@ const SpendBox = ({ projects }: { readonly projects: readonly ProjectItem[] }) =
         </div>
       )}
       <Metric
-        label="Spend, 30 days"
+        label="Spend, last 30 days"
         value={formatUsd(spend)}
         definition="Sum of provider-reported cost across all projects over the last 30 days; estimated where the provider reports none."
       />
@@ -928,7 +930,14 @@ const Boxes = ({
 );
 
 /** An admin's Home: the checklist decides whether this is the first run. */
-const AdminHome = ({ projects }: { readonly projects: readonly ProjectItem[] }) => {
+const AdminHome = ({
+  projects,
+  canCreateProject,
+}: {
+  readonly projects: readonly ProjectItem[];
+  /** The projects read's `can_create` (S-23.23), the create route's own answer. */
+  readonly canCreateProject: boolean;
+}) => {
   const { checklist, noIntegration } = useSetupChecklist(projects);
   if (projects.length === 0 || noIntegration) {
     return checklist.settling ? (
@@ -942,7 +951,7 @@ const AdminHome = ({ projects }: { readonly projects: readonly ProjectItem[] }) 
     <Boxes
       projects={projects}
       setup={checklist.settling || checklist.complete ? null : checklist}
-      canCreateProject
+      canCreateProject={canCreateProject}
     />
   );
 };
@@ -971,7 +980,7 @@ export const DashboardScreen = (): ReactElement => {
       {projects.isSuccess && session.isSuccess ? (
         role === 'admin' ? (
           // Every setup step is an admin's to do (`project.create`, `integration.write`).
-          <AdminHome projects={items} />
+          <AdminHome projects={items} canCreateProject={projects.data?.can_create === true} />
         ) : items.length === 0 ? (
           <Blankslate
             informational

@@ -11,7 +11,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import type { IntegrationsResponse } from '@platform/contracts';
+import type { IntegrationsResponse, UserRole } from '@platform/contracts';
 import { integrationsResponseSchema } from '@platform/contracts';
 import { db, secrets as secretAdapters } from '@platform/infrastructure';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -57,6 +57,8 @@ let pool: pg.Pool;
 let app: App;
 let brokenId: string;
 let brokenSecretId: string;
+// The session the hook installs; the can_write case below changes it and puts it back (S-23.23).
+let actorRole: UserRole = 'maintainer';
 const projectIds: string[] = [];
 
 const seal = async (key: typeof KEY, field: string, value: string): Promise<string> => {
@@ -141,7 +143,7 @@ beforeAll(async () => {
       userId: '00000000-0000-4000-8000-0000000000e9',
       email: 'operator@example.test',
       name: 'Operator',
-      role: 'maintainer',
+      role: actorRole,
       sessionId: 'session-1',
     };
   });
@@ -165,6 +167,19 @@ const list = async (): Promise<{ body: string; parsed: IntegrationsResponse }> =
 };
 
 const planted = [BROKEN_TOKEN, READABLE_TOKEN, GIT_TOKEN, CONFIG_PASTED];
+
+describe('GET /api/integrations — can_write (S-23.23)', () => {
+  it('answers false to a maintainer and true to an administrator: the write routes are admin-only', async () => {
+    actorRole = 'maintainer';
+    expect((await list()).parsed.can_write).toBe(false);
+    actorRole = 'admin';
+    try {
+      expect((await list()).parsed.can_write).toBe(true);
+    } finally {
+      actorRole = 'maintainer';
+    }
+  });
+});
 
 describe('GET /api/integrations and an organisation account that will not decrypt (WP-157 (a))', () => {
   it('names the broken account once, whatever the project count, and carries no value', async () => {

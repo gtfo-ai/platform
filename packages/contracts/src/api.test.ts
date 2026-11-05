@@ -39,6 +39,9 @@ import {
   startDiscoveryResponseSchema,
   startShadowRunsRequestSchema,
   steerRunRequestSchema,
+  TASK_CALLER_FACT_KEYS,
+  taskDetailResponseSchema,
+  taskExportResponseSchema,
   tasksResponseSchema,
   ticketStatusesResponseSchema,
   updateProjectConfigRequestSchema,
@@ -605,6 +608,10 @@ describe('the list envelopes and the KB health report', () => {
     expect(
       projectsResponseSchema.safeParse({ items: [{ ...project, open_tasks: -1 }] }).success,
     ).toBe(false);
+    // S-23.23: whether the caller may create one — absent reads `false`, never an offer.
+    expect(projectsResponseSchema.parse({ items: [] }).can_create).toBe(false);
+    expect(projectsResponseSchema.parse({ items: [], can_create: true }).can_create).toBe(true);
+    expect(projectsResponseSchema.safeParse({ items: [], can_create: 'yes' }).success).toBe(false);
   });
 
   it('lists integrations without a cursor and keeps the config opaque', () => {
@@ -648,6 +655,31 @@ describe('the list envelopes and the KB health report', () => {
     expect(
       integrationsResponseSchema.safeParse({ items: [integration], next_cursor: null }).success,
     ).toBe(false);
+    // S-23.23: whether the caller may write integrations — absent reads `false`, never an offer.
+    expect(integrationsResponseSchema.parse({ items: [] }).can_write).toBe(false);
+    expect(integrationsResponseSchema.parse({ items: [], can_write: true }).can_write).toBe(true);
+  });
+
+  it('holds the task read’s caller facts required, and keeps every one out of the export', () => {
+    // S-23.23: each is the command route's own permission over the caller's role; one forgotten
+    // would hide a control or offer it by accident, so none defaults.
+    const shape = taskDetailResponseSchema.shape;
+    for (const key of TASK_CALLER_FACT_KEYS) {
+      expect(Object.hasOwn(shape, key), key).toBe(true);
+      expect(shape[key].safeParse(undefined).success, key).toBe(false);
+      // …and the document handed to somebody else carries none of the exporter's permissions.
+      expect(Object.hasOwn(taskExportResponseSchema.shape, key), key).toBe(false);
+    }
+    expect([...TASK_CALLER_FACT_KEYS].sort()).toEqual([
+      'can_cancel',
+      'can_decide_approval',
+      'can_export',
+      'can_pause',
+      'can_raise_budget',
+      'can_resume',
+      'can_return',
+      'can_rework',
+    ]);
   });
 
   it('pages tasks, because a project accumulates them without bound', () => {
@@ -695,6 +727,8 @@ describe('the list envelopes and the KB health report', () => {
         can_start_task: true,
         can_cancel_task: true,
         can_return_to_stage: true,
+        can_pause_task: true,
+        can_resume_task: true,
       }),
     ).toBeTruthy();
     expect(
@@ -704,6 +738,8 @@ describe('the list envelopes and the KB health report', () => {
         can_start_task: false,
         can_cancel_task: true,
         can_return_to_stage: true,
+        can_pause_task: true,
+        can_resume_task: true,
       }),
     ).toBeTruthy();
     // `next_cursor` is required, not optional: "no more pages" and "the field was forgotten" would
@@ -714,19 +750,28 @@ describe('the list envelopes and the KB health report', () => {
         can_start_task: true,
         can_cancel_task: true,
         can_return_to_stage: true,
+        can_pause_task: true,
+        can_resume_task: true,
       }).success,
     ).toBe(false);
     // So is the caller's capability (WP-122): a board that cannot tell "may not start" from "the
     // server did not say" would offer or hide the form by accident.
     expect(tasksResponseSchema.safeParse({ items: [task], next_cursor: null }).success).toBe(false);
     // …and the menu's two capabilities (S-23.9a), each required.
-    for (const key of ['can_cancel_task', 'can_return_to_stage'] as const) {
+    for (const key of [
+      'can_cancel_task',
+      'can_return_to_stage',
+      'can_pause_task',
+      'can_resume_task',
+    ] as const) {
       const full = {
         items: [task],
         next_cursor: null,
         can_start_task: true,
         can_cancel_task: true,
         can_return_to_stage: true,
+        can_pause_task: true,
+        can_resume_task: true,
       };
       const { [key]: _dropped, ...without } = full;
       expect(tasksResponseSchema.safeParse(without).success, key).toBe(false);
@@ -741,6 +786,8 @@ describe('the list envelopes and the KB health report', () => {
         can_start_task: true,
         can_cancel_task: true,
         can_return_to_stage: true,
+        can_pause_task: true,
+        can_resume_task: true,
       });
     for (const key of ['stages', 'open_questions', 'pending_approvals', 'loop_limits'] as const) {
       const { [key]: _dropped, ...without } = task;

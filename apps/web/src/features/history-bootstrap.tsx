@@ -56,6 +56,7 @@ import {
   Loading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { useStepActionTone } from './step-action-tone.js';
 
 const STATUS_TONE: Readonly<Record<HistoryBootstrapBatch['status'], BadgeTone>> = {
   collecting: 'accent',
@@ -94,6 +95,8 @@ export const HistoryBootstrap = ({
   /** The project's human key — what the knowledge screen's route is addressed by. */
   readonly projectKey: string;
 }): ReactElement => {
+  // S-23.23: primary until the wizard's step is done, then the footer's Continue is.
+  const actionTone = useStepActionTone();
   const [mergeRequests, setMergeRequests] = useState<number | null>(null);
   const bootstraps = useHistoryBootstraps(projectId, mergeRequests);
   const commands = useHistoryBootstrapCommands();
@@ -153,7 +156,7 @@ export const HistoryBootstrap = ({
 
       <div>
         <Button
-          tone="primary"
+          tone={actionTone}
           disabled={!can_start || commands.start.isPending}
           onClick={() => {
             commands.start.mutate({ projectId, merge_requests: mergeRequests });

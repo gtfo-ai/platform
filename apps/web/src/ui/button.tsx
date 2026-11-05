@@ -6,6 +6,8 @@
  * - `default` is a quiet bordered button on the subtle ground.
  * - `danger` is an outline in red, as GitHub's *Cancel workflow*: destructive, never loud.
  * - `invisible` has no border or fill until hovered (toolbars, rows).
+ * - **A toggle is `default` with `aria-pressed`**, never `primary` (S-23.23, the UX audit's § 2):
+ *   a pressed state is not an action, and a page has one beacon.
  *
  * An explicit `type="button"` on every one: the default inside a form is `submit`, which is how a
  * "cancel" button comes to submit the form it sits in. A caller that wants a submit says so.
@@ -20,7 +22,10 @@ export type ButtonSize = 'sm' | 'md';
 const TONES: Record<ButtonTone, string> = {
   primary:
     'border-primary-line bg-primary text-primary-fg hover:not-disabled:bg-primary-hover font-semibold',
-  default: 'border-line bg-subtle text-fg hover:not-disabled:bg-muted',
+  // A toggle is a `default` button with `aria-pressed` (S-23.23): pressed reads as a raised fill and a
+  // link-coloured edge, never as the beacon — a state is not the thing to do.
+  default:
+    'border-line bg-subtle text-fg hover:not-disabled:bg-muted aria-pressed:border-link aria-pressed:bg-muted',
   danger:
     'border-line bg-subtle text-danger hover:not-disabled:border-danger hover:not-disabled:bg-danger-bg',
   invisible:

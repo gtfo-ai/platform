@@ -114,7 +114,7 @@ export const dayMinus = (day: string, days: number): string => {
 export const listProjectSummaries = async (
   database: Database,
   at: IsoDateTime,
-): Promise<ProjectsResponse> => {
+): Promise<Pick<ProjectsResponse, 'items'>> => {
   const rows = await database
     .select({
       id: projects.id,

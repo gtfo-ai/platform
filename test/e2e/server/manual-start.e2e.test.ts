@@ -113,6 +113,16 @@ describe('the manual start (WP-122)', () => {
     const adminPage = await spaEndpoints(admin, []).projectTasks(pipeline.projectId, {});
     expect(adminPage.can_cancel_task).toBe(true);
     expect(adminPage.can_return_to_stage).toBe(true);
+    // S-23.23: pause and resume are a member's, so a viewer is offered neither.
+    expect(memberPage.can_pause_task).toBe(true);
+    expect(memberPage.can_resume_task).toBe(true);
+    const viewerPage = await viewerApi.projectTasks(pipeline.projectId, {});
+    expect(viewerPage.can_pause_task).toBe(false);
+    expect(viewerPage.can_resume_task).toBe(false);
+    // S-23.23: *New project* and the integration writes are an administrator's.
+    expect((await memberApi.projects()).can_create).toBe(false);
+    expect((await spaEndpoints(admin, []).projects()).can_create).toBe(true);
+    expect((await spaEndpoints(admin, []).integrations()).can_write).toBe(true);
     const refused = await viewerApi
       .startTask(pipeline.projectId, { ticket_key: UNMATCHED.key }, 'viewer-1')
       .then(
@@ -148,6 +158,19 @@ describe('the manual start (WP-122)', () => {
     expect(task?.current_stage).toBe('refinement');
     // Classified as a rule match is: a `Story` gets the feature template.
     expect(task?.template).toBe('feature');
+
+    // S-23.23: the task read says which commands this caller may use — a member pauses and resumes,
+    // a maintainer's commands are false for them and true for the administrator.
+    const memberTask = await memberApi.task(task?.id as string);
+    expect(memberTask.can_pause).toBe(true);
+    expect(memberTask.can_resume).toBe(true);
+    expect(memberTask.can_cancel).toBe(false);
+    expect(memberTask.can_return).toBe(false);
+    expect(memberTask.can_rework).toBe(false);
+    expect(memberTask.can_decide_approval).toBe(false);
+    const adminTask = await spaEndpoints(admin, []).task(task?.id as string);
+    expect(adminTask.can_cancel).toBe(true);
+    expect(adminTask.can_decide_approval).toBe(true);
 
     // The match is the one intake consumes, marked manual and attributed to the member.
     const matches = (await pipeline.events()).filter(

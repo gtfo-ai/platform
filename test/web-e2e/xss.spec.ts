@@ -181,7 +181,7 @@ test('a hostile scheme in a DTO url never reaches an href on the board', async (
   await assertNoHostileHref(page);
 
   // DEMO-1's `data:` merge request is in its menu as a refused label, and it is the only one there.
-  await expect(first.getByText('Open MR')).toBeVisible();
+  await expect(first.getByText('Open merge request')).toBeVisible();
   expect(await first.locator('[data-link-refused]').count()).toBe(1);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('menu')).toHaveCount(0);

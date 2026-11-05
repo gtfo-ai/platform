@@ -143,7 +143,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
 
       {takenOver !== null ? (
         <section aria-label="Taken over">
-          <Flash tone="warning" title="Taken over by a human">
+          <Flash tone="warning" title="Taken over by a person">
             <div className="flex flex-col gap-3 pt-1">
               <TakenOverDetails
                 state={task.state}

@@ -285,10 +285,10 @@ export const FleetList = ({
       )}
 
       <ListBox
-        label="Seats"
+        label="Machines"
         header={
           <ListBoxHeader>
-            <h2 className="font-semibold text-fg">Seats</h2>
+            <h2 className="font-semibold text-fg">Machines</h2>
             <span
               className="text-fg-muted"
               title="Free slots on active, unpaused workers. The platform server does not report its capacity."
@@ -309,7 +309,7 @@ export const FleetList = ({
             title={seat.kind === 'server' ? 'Platform server' : seatTitle(seat)}
             meta={[
               seat.kind === 'server'
-                ? 'the platform’s own claimant'
+                ? 'runs agents on the platform’s own server'
                 : seat.owner === null
                   ? 'worker'
                   : `worker · ${sanitiseUntrusted(seat.owner)}`,

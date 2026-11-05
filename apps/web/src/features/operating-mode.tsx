@@ -59,6 +59,7 @@ import {
   useSettingsCommands,
 } from '../app/queries.js';
 import { type AdminNote, ForAdministrators } from '../ui/admin-notes.js';
+import { ConfirmDialog } from '../ui/confirm-dialog.js';
 import { BUDGET_WINDOW_LABEL } from '../ui/humanize.js';
 import {
   Badge,
@@ -74,6 +75,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { useStepActionTone } from './step-action-tone.js';
 
 /**
  * The configuration a binding already carries, by integration id (WP-32).
@@ -210,7 +212,8 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
     defaultState: 'on (digest at 09:00, quiet hours off)',
     cost: 'none',
     touches: 'posts to the chat channel',
-    caveat: 'Needs a chat integration bound to the project; without one there is nowhere to post.',
+    caveat:
+      'Needs a chat integration in the project’s Connections; without one there is nowhere to post.',
   },
   {
     key: 'epic_split',
@@ -359,6 +362,8 @@ const Section = ({
  * "re-apply preset".
  */
 export const AutonomyDial = ({ projectId }: { readonly projectId: string }): ReactElement => {
+  // S-23.23: primary until the wizard's step is done, then the footer's Continue is.
+  const actionTone = useStepActionTone();
   const autonomy = useProjectAutonomy(projectId);
   const commands = useSettingsCommands();
   const [chosen, setChosen] = useState<AutonomyChoice | null>(null);
@@ -431,7 +436,7 @@ export const AutonomyDial = ({ projectId }: { readonly projectId: string }): Rea
 
       <div className="flex flex-wrap gap-2">
         <Button
-          tone="primary"
+          tone={actionTone}
           disabled={commands.setAutonomy.isPending}
           onClick={() => {
             commands.setAutonomy.mutate({
@@ -670,8 +675,10 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
       .map((line) => line.trim())
       .filter((line) => line !== '');
   const unwritten = toWrite.filter((entry) => itemsOf(entry.name).length === 0);
+  // S-23.23 (the UX audit's item 8): replacing classes already in force asks first.
+  const [confirmingReplace, setConfirmingReplace] = useState(false);
 
-  const accept = (): void => {
+  const accept = (onDone?: () => void): void => {
     if (!config.isSuccess || proposal === undefined || unwritten.length > 0) {
       return;
     }
@@ -680,20 +687,23 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
     const written = Object.fromEntries(toWrite.map((entry) => [entry.name, itemsOf(entry.name)]));
     // The **whole** document plus the hash it was read at, like every other write on this screen:
     // a fragment would discard every other key.
-    commands.writeConfig.mutate({
-      projectId,
-      config: {
-        ...document,
-        policies: {
-          ...policies,
-          risk_classes: proposal.classes,
-          ...(toWrite.length === 0
-            ? {}
-            : { review_checklists: { ...configuredLists, ...written } }),
+    commands.writeConfig.mutate(
+      {
+        projectId,
+        config: {
+          ...document,
+          policies: {
+            ...policies,
+            risk_classes: proposal.classes,
+            ...(toWrite.length === 0
+              ? {}
+              : { review_checklists: { ...configuredLists, ...written } }),
+          },
         },
+        base_hash: config.data.hash,
       },
-      base_hash: config.data.hash,
-    });
+      onDone === undefined ? undefined : { onSuccess: onDone },
+    );
   };
 
   return (
@@ -795,11 +805,33 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
           <div>
             <Button
               type="button"
-              onClick={accept}
+              onClick={() => {
+                if (names.length === 0) {
+                  accept();
+                } else {
+                  commands.writeConfig.reset();
+                  setConfirmingReplace(true);
+                }
+              }}
               disabled={!config.isSuccess || commands.writeConfig.isPending || unwritten.length > 0}
             >
-              {names.length === 0 ? 'Accept these classes' : 'Replace with these classes'}
+              {names.length === 0 ? 'Accept these classes' : 'Replace with these classes…'}
             </Button>
+            <ConfirmDialog
+              open={confirmingReplace}
+              onOpenChange={setConfirmingReplace}
+              title="Replace the risk classes?"
+              consequence={`The ${names.length === 1 ? 'class' : `${names.length} classes`} in force now ${names.length === 1 ? 'is' : 'are'} replaced by the ${proposed.length === 1 ? 'one' : proposed.length} proposed here; a class that is not among them stops applying.`}
+              confirmLabel="Replace the classes"
+              pending={commands.writeConfig.isPending}
+              error={commands.writeConfig.error}
+              errorTitle="The risk classes were not saved."
+              onConfirm={() => {
+                accept(() => {
+                  setConfirmingReplace(false);
+                });
+              }}
+            />
           </div>
           {unwritten.length === 0 ? null : (
             <p className="text-xs text-fg-muted">
@@ -820,7 +852,7 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
         </div>
       )}
 
-      {commands.writeConfig.isError ? (
+      {commands.writeConfig.isError && !confirmingReplace ? (
         <ErrorNotice title="The risk classes were not saved." error={commands.writeConfig.error} />
       ) : null}
 
@@ -1122,8 +1154,8 @@ export const Notifications = ({ projectId }: { readonly projectId: string }): Re
       </div>
       {chat === undefined ? (
         <p className="text-xs text-fg-muted">
-          No chat integration is bound to this project, so nothing is posted anywhere. Bind one from
-          the project settings page and the channel appears here.
+          This project uses no chat integration, so nothing is posted anywhere. Add one under the
+          project settings’ Connections and the channel appears here.
         </p>
       ) : (
         <div className="flex flex-wrap items-end gap-2">

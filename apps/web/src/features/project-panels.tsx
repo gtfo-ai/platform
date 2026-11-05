@@ -9,7 +9,7 @@
  * the browser, the proposals queue with its decisions, the budget bars and the effective
  * configuration with the source of every key.
  */
-import type { KbHealthResponse } from '@platform/contracts';
+import { type KbHealthResponse, MAX_PROPOSAL_DECISION_REASON_CHARS } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import { useState } from 'react';
@@ -29,6 +29,7 @@ import { ActionMenu, ActionMenuItem } from '../ui/action-menu.js';
 import { ForAdministrators } from '../ui/admin-notes.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { Button, buttonClassName } from '../ui/button.js';
+import { ConfirmDialog } from '../ui/confirm-dialog.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { Flash } from '../ui/flash.js';
 import {
@@ -251,7 +252,7 @@ const ProposalRow = ({
           </Button>
           <ActionMenu label={`More for ${sanitiseUntrusted(proposal.target_path)}`}>
             <ActionMenuItem tone="danger" disabled={pending} onSelect={() => onDecide('reject')}>
-              Reject
+              Reject…
             </ActionMenuItem>
           </ActionMenu>
         </div>
@@ -275,6 +276,9 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
   const [path, setPath] = useState<string | null>(null);
   const doc = useKbDoc(projectId, path);
   const decide = useKbProposalCommands(projectId ?? '');
+  // S-23.23 (the UX audit's item 8): a reject asks first, with the person's own reason — the
+  // Librarian learns from it, so it is never a canned sentence.
+  const [rejecting, setRejecting] = useState<KbProposal | null>(null);
 
   const files = (tree.data?.entries ?? []).filter((entry) => entry.kind === 'file');
   // The vault as a tree: one NavList group per directory, in the order the index lists them.
@@ -371,23 +375,56 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
                   proposal={proposal}
                   pending={decide.isPending}
                   onDecide={(decision) => {
-                    decide.mutate(
-                      decision === 'approve'
-                        ? { proposalId: proposal.id, decision: 'approve' }
-                        : {
-                            proposalId: proposal.id,
-                            decision: 'reject',
-                            reason: 'rejected from the UI',
-                          },
-                    );
+                    if (decision === 'approve') {
+                      decide.mutate({ proposalId: proposal.id, decision: 'approve' });
+                    } else {
+                      decide.reset();
+                      setRejecting(proposal);
+                    }
                   }}
                 />
               ))}
             </ListBox>
           )}
-          {decide.isError ? (
+          {decide.isError && rejecting === null ? (
             <ErrorNotice title="The decision was not recorded." error={decide.error} />
           ) : null}
+          <ConfirmDialog
+            open={rejecting !== null}
+            onOpenChange={(next) => {
+              if (!next) {
+                setRejecting(null);
+              }
+            }}
+            title="Reject this proposal?"
+            consequence="The page is not changed, and the proposal is closed for good; your reason is what the Librarian learns from."
+            confirmLabel="Reject"
+            reason={{
+              label: 'Why (the Librarian learns from it)',
+              placeholder: 'What is wrong with this change',
+              maxLength: MAX_PROPOSAL_DECISION_REASON_CHARS,
+            }}
+            pending={decide.isPending}
+            error={decide.error}
+            errorTitle="The decision was not recorded."
+            onConfirm={(reason) => {
+              if (rejecting === null) {
+                return;
+              }
+              decide.mutate(
+                {
+                  proposalId: rejecting.id,
+                  decision: 'reject',
+                  ...(reason === '' ? {} : { reason }),
+                },
+                {
+                  onSuccess: () => {
+                    setRejecting(null);
+                  },
+                },
+              );
+            }}
+          />
         </div>
       </section>
     </div>
@@ -424,15 +461,15 @@ export const BudgetsScreen = ({ projectKey }: { readonly projectKey: string }): 
       ) : null}
       {budgets.isSuccess && items.length === 0 ? (
         <Blankslate
-          title="No budget is set"
-          hint="Without a budget the pipeline spends whatever a stage asks for. A maintainer can set a daily, weekly, monthly or total limit per project."
+          title="No cap is set"
+          hint="Without a cap the pipeline spends whatever a stage asks for. A maintainer can set a daily, weekly, monthly or total cap per project."
           action={
             <Link
               to="/projects/$key/settings/$section"
               params={{ key: projectKey, section: 'policies' }}
               className={buttonClassName('default')}
             >
-              Set a budget
+              Set a cap
             </Link>
           }
         />
@@ -453,7 +490,7 @@ export const BudgetsScreen = ({ projectKey }: { readonly projectKey: string }): 
                   </span>
                 </div>
                 <meter
-                  aria-label="Budget used"
+                  aria-label="Cap used"
                   className="w-full"
                   min={0}
                   max={Math.max(budget.limit_usd, budget.spent_usd)}

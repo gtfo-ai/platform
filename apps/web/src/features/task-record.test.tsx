@@ -76,6 +76,12 @@ const detail = (
     taken_over: null,
     can_raise_budget: false,
     can_export: canExport,
+    can_pause: true,
+    can_resume: true,
+    can_cancel: true,
+    can_return: true,
+    can_rework: true,
+    can_decide_approval: true,
     gate_feedback: null,
     human_time: {
       total_minutes: 0,

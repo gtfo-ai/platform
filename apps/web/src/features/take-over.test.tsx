@@ -134,6 +134,12 @@ const detail = (over: Partial<TaskDetailResponse> = {}): TaskDetailResponse => (
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  can_pause: true,
+  can_resume: true,
+  can_cancel: true,
+  can_return: true,
+  can_rework: true,
+  can_decide_approval: true,
   gate_feedback: null,
   human_time: {
     total_minutes: 0,
@@ -292,9 +298,9 @@ describe('a take-over in force', () => {
         realtime: false,
       }).element,
     );
-    await screen.findByText('Taken over by a human');
+    await screen.findByText('Taken over by a person');
     // Backlog 164: the escalation does not end the take-over, and the page says both.
-    expect(container.textContent).toContain('escalated — still held');
+    expect(container.textContent).toContain('needs you — still held');
     expect(container.textContent).toContain('claude --resume sess-1');
 
     // The two downloads name the run the take-over recorded (WP-73, backlog 203), and are
@@ -337,7 +343,7 @@ describe('a take-over in force', () => {
         realtime: false,
       }).element,
     );
-    await screen.findByText('Taken over by a human');
+    await screen.findByText('Taken over by a person');
     expect(container.textContent).toContain('No stage to hand back to');
     expect(container.textContent).toContain('cannot be read on this build');
     expect(screen.queryByRole('button', { name: 'Hand back' })).toBeNull();
@@ -366,7 +372,7 @@ describe('a take-over in force', () => {
         realtime: false,
       }).element,
     );
-    await screen.findByText('Taken over by a human');
+    await screen.findByText('Taken over by a person');
     expect(container.textContent).toContain('No stage to hand back to');
     expect(container.textContent).toContain('This task was merged');
     expect(container.textContent).not.toContain('cannot be read on this build');
@@ -424,7 +430,7 @@ describe('a merged task (WP-194)', () => {
       }).element,
     );
     const user = userEvent.setup();
-    await screen.findByText('Taken over by a human');
+    await screen.findByText('Taken over by a person');
     expect(container.textContent).toContain('This task was merged, so it never goes back');
     const menu = await openTaskMenu(user);
     expect(within(menu).queryByRole('menuitem', { name: 'Pause' })).toBeNull();
@@ -460,7 +466,7 @@ describe('which run the take-over panel offers', () => {
         realtime: false,
       }).element,
     );
-    await screen.findByText('Taken over by a human');
+    await screen.findByText('Taken over by a person');
     return view.container;
   };
 

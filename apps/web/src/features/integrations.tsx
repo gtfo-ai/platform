@@ -6,7 +6,9 @@
  * page, `/integrations/$id`), its provider and kind, when it was last checked, and how many projects
  * bind it. The row's `···` holds *Test connection*, *Setup guide*, *Edit configuration*, *Replace
  * credentials* and *Retire* (`integration-forms.tsx`); the header's one primary action is **New
- * integration**, the four-step wizard (`integration-wizard.tsx`).
+ * integration**, the four-step wizard (`integration-wizard.tsx`). The writes are an administrator's
+ * (`integration.write`): the list read's `can_write` decides whether they are offered at all, and a
+ * maintainer is told who adds and changes integrations (S-23.23).
  *
  * **The create and test controls are reached from here** (WP-30, PROGRESS backlog 55): they were
  * served by WP-21 and called by nothing, so `POST /api/integrations` could only be reached with
@@ -17,7 +19,7 @@
  * (`config_refusal`, WP-100) and an organisation account whose credentials cannot be decrypted
  * (`credentials_readable: false`, WP-157 (a)) are named on the row, in the server's own words; a
  * retired integration (WP-114) is listed as retired with no menu, because it refuses every write.
- * "Bound to N projects" is every project's bindings read (`useProjectsByIntegration`) and is left out
+ * "Used by N projects" is every project's bindings read (`useProjectsByIntegration`) and is left out
  * until all of them have answered — a count from half the reads would be a wrong number.
  */
 import type { IntegrationProvider, IntegrationSummary } from '@platform/contracts';
@@ -52,13 +54,16 @@ import {
   integrationStatus,
 } from './integration-forms.js';
 
-/** "Bound to 2 projects", "Not bound", or nothing while the count is not known. */
+/**
+ * "Used by 2 projects", "Not used by a project", or nothing while the count is not known — the
+ * vocabulary's one word for a project's integrations, *Connections* (S-23.23, the UX audit's § 4).
+ */
 export const boundText = (count: number | null): string | null =>
   count === null
     ? null
     : count === 0
-      ? 'Not bound'
-      : `Bound to ${count === 1 ? '1 project' : `${formatInteger(count)} projects`}`;
+      ? 'Not used by a project'
+      : `Used by ${count === 1 ? '1 project' : `${formatInteger(count)} projects`}`;
 
 /** The provider's display name, or its id for one this build does not ship. */
 export const providerName = (
@@ -171,6 +176,9 @@ export const IntegrationsScreen = (): ReactElement => {
   const providerOf = (integration: IntegrationSummary): IntegrationProvider | undefined =>
     providers.data?.items.find((entry) => entry.id === integration.provider);
   const live = items.filter((integration) => integration.retired_at === null).length;
+  // S-23.23: `integration.write` is an administrator's; the list says whether this caller holds it,
+  // so a maintainer reads the list without a *New integration* the create would refuse.
+  const canWrite = integrations.data?.can_write === true;
 
   const newIntegration = (tone: 'primary' | 'default') => (
     <Link to="/integrations/new" className={buttonClassName(tone)}>
@@ -180,7 +188,16 @@ export const IntegrationsScreen = (): ReactElement => {
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader title="Integrations" divider={false} actions={newIntegration('primary')} />
+      <PageHeader
+        title="Integrations"
+        divider={false}
+        {...(canWrite ? { actions: newIntegration('primary') } : {})}
+      />
+      {integrations.isSuccess && !canWrite ? (
+        <p className="text-sm text-fg-muted" data-may-not-write="">
+          Administrators add and change integrations.
+        </p>
+      ) : null}
       {integrations.isPending ? <Skeleton label="Loading integrations…" /> : null}
       {integrations.isError ? (
         <ErrorNotice
@@ -194,20 +211,30 @@ export const IntegrationsScreen = (): ReactElement => {
         />
       ) : null}
       {integrations.isSuccess && items.length === 0 ? (
-        <Blankslate
-          size="spacious"
-          icon={<PlugIcon size={24} />}
-          title="No integrations yet"
-          hint="An integration connects one external system — a ticket tracker, a git host, a chat workspace, an error tracker, a log store. Its credentials stay in the server's environment; they never come through the browser."
-          action={newIntegration('default')}
-        />
+        canWrite ? (
+          <Blankslate
+            size="spacious"
+            icon={<PlugIcon size={24} />}
+            title="No integrations yet"
+            hint="An integration connects one external system — a ticket tracker, a git host, a chat workspace, an error tracker, a log store. Its credentials stay in the server's environment; they never come through the browser."
+            action={newIntegration('default')}
+          />
+        ) : (
+          <Blankslate
+            informational
+            size="spacious"
+            icon={<PlugIcon size={24} />}
+            title="No integrations yet"
+            hint="An integration connects one external system — a ticket tracker, a git host, a chat workspace. Ask an administrator to add one."
+          />
+        )
       ) : null}
       {items.length === 0 ? null : (
         <ListBox
           label="Integrations"
           header={
             <ListBoxHeader>
-              <span className="font-semibold text-fg">{`${formatInteger(live)} connected`}</span>
+              <span className="font-semibold text-fg">{`${formatInteger(live)} active`}</span>
               {items.length === live ? null : (
                 <span className="text-fg-muted">{`${formatInteger(items.length - live)} retired`}</span>
               )}
@@ -249,7 +276,8 @@ export const IntegrationsScreen = (): ReactElement => {
                       )}
                       <IntegrationProblems
                         integration={integration}
-                        {...(provider === undefined
+                        // The repairs are writes: an administrator's only (S-23.23).
+                        {...(provider === undefined || !canWrite
                           ? {}
                           : {
                               onEditConfiguration: () => {
@@ -272,6 +300,7 @@ export const IntegrationsScreen = (): ReactElement => {
                       onDialogChange={(dialog) => {
                         setDialogFor(dialog === null ? null : { id: integration.id, dialog });
                       }}
+                      canWrite={canWrite}
                       onTest={() => {
                         setTested(integration.id);
                         commands.testIntegration.mutate(integration.id);

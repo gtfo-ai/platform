@@ -217,7 +217,7 @@ export const HandBackForm = ({
         title="No stage to hand back to"
         hint={
           merged
-            ? 'This task was merged, so it never goes back to a stage before the merge, and a hand-back cannot reach its retrospective from here. Cancel the task — or, once it is waiting for a human, resume it into the retrospective.'
+            ? 'This task was merged, so it never goes back to a stage before the merge, and a hand-back cannot reach its retrospective from here. Cancel the task — or, once it is waiting for a person, resume it into the retrospective.'
             : 'This task’s pipeline cannot be read on this build, so there is no stage the hand-back would accept. Cancel the task, or ask an operator.'
         }
       />
@@ -302,7 +302,7 @@ export const TakenOverDetails = ({
       <span>
         from <UntrustedText value={stageLabel(takenOver.stage)} />
       </span>
-      {state === 'needs_human' ? <Badge tone="danger">escalated — still held</Badge> : null}
+      {state === 'needs_human' ? <Badge tone="danger">needs you — still held</Badge> : null}
     </div>
     <ResumeLines
       branch={takenOver.branch}
@@ -319,7 +319,7 @@ export const TakenOverDetails = ({
 
 /** Why a merged task offers no take-over and no pause (WP-194, backlog 563). */
 export const MERGED_NO_TAKE_OVER =
-  'This task was merged, so there is nothing to take over or pause: its branch is already in the default branch. Cancel the task — or, once it is waiting for a human, resume it into the retrospective.';
+  'This task was merged, so there is nothing to take over or pause: its branch is already in the default branch. Cancel the task — or, once it is waiting for a person, resume it into the retrospective.';
 
 /**
  * The take-over form: an optional reason and the optional tarball. Inline on the run screen's panel,
@@ -432,7 +432,7 @@ export const TakeOverPanel = ({
   if (takenOver !== null) {
     return (
       <div>
-        <SectionHeading>Taken over by a human</SectionHeading>
+        <SectionHeading>Taken over by a person</SectionHeading>
         <Card className="flex flex-col gap-3">
           <TakenOverDetails state={state} takenOver={takenOver} runs={runs} answered={answered} />
           <HandBackForm taskId={taskId} takenOver={takenOver} merged={merged} commands={commands} />

@@ -96,6 +96,12 @@ const detail = (over: Partial<TaskDetailResponse> = {}, task: Partial<TaskRecord
     taken_over: null,
     can_raise_budget: false,
     can_export: false,
+    can_pause: true,
+    can_resume: true,
+    can_cancel: true,
+    can_return: true,
+    can_rework: true,
+    can_decide_approval: true,
     gate_feedback: null,
     human_time: {
       total_minutes: 0,
@@ -367,7 +373,7 @@ describe('the needs-you callout', () => {
     const callout = await screen.findByRole('region', { name: 'Needs you' });
     expect(callout.textContent).toContain('This task needs a person');
     expect(callout.querySelector('[data-escalation-reason]')?.textContent).toBe(
-      'Escalated: the gate could not decide in its allotted checks.',
+      'Needs you: the gate could not decide in its allotted checks.',
     );
   });
 
@@ -499,6 +505,115 @@ describe('the ··· menu', () => {
   });
 });
 
+/**
+ * S-23.23 (the UX audit's item 3): the page offers only what the caller's role may do. The flags are
+ * the server's — each the command route's own permission (`apps/server/src/routes/tasks.ts`) — and
+ * a control whose flag is false is not drawn.
+ */
+describe('only what the caller may do', () => {
+  /** A member of the task's project: pause and resume, nothing a maintainer decides. */
+  const MEMBER = {
+    can_pause: true,
+    can_resume: true,
+    can_cancel: false,
+    can_return: false,
+    can_rework: false,
+    can_decide_approval: false,
+  } as const;
+  const VIEWER = { ...MEMBER, can_pause: false, can_resume: false } as const;
+
+  const menuOf = async (task: TaskDetailResponse): Promise<string[]> => {
+    const user = userEvent.setup();
+    start(task);
+    await user.click(await screen.findByRole('button', { name: 'Task actions' }));
+    return within(await screen.findByRole('menu'))
+      .getAllByRole('menuitem')
+      .map((item) => item.textContent ?? '');
+  };
+
+  it('offers a member no cancel, return or rework in the menu', async () => {
+    const items = await menuOf(detail(MEMBER));
+    expect(items).toContain('Pause');
+    expect(items).toContain('Retry stage…');
+    for (const absent of ['Cancel task…', 'Return to stage…', 'Rework…']) {
+      expect(items).not.toContain(absent);
+    }
+  });
+
+  it('offers a viewer no pause, and no Resume as the page’s primary action', async () => {
+    const running = await menuOf(detail(VIEWER));
+    expect(running).not.toContain('Pause');
+    cleanup();
+    start(detail(VIEWER, { state: 'paused', paused_reason: 'manual' }));
+    await screen.findByText('Checks');
+    await waitFor(() => {
+      expect(primaries()).toEqual([]);
+    });
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+  });
+
+  it('tells a member a maintainer decides the approval, with no Approve or Reject to press', async () => {
+    start(detail({ ...MEMBER, approvals: [APPROVAL_ROW] }, { state: 'waiting_approval' }));
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    expect(callout.querySelector('[data-may-not-decide]')?.textContent).toBe(
+      'A maintainer decides this.',
+    );
+    expect(within(callout).queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(within(callout).queryByRole('button', { name: 'Reject…' })).toBeNull();
+    // …and *Approve…* is not the header's primary for them.
+    expect(primaries()).not.toContain('Approve…');
+  });
+
+  it('offers a member who handles an escalation only the retry, and says who sends it back', async () => {
+    start(detail(MEMBER, { state: 'needs_human' }));
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    expect(within(callout).getByRole('button', { name: 'Retry stage…' })).toBeTruthy();
+    expect(within(callout).queryByRole('button', { name: 'Return to stage…' })).toBeNull();
+    expect(within(callout).queryByRole('button', { name: 'Rework…' })).toBeNull();
+    expect(callout.textContent).toContain('is a maintainer’s decision');
+  });
+});
+
+/** S-23.23 (the UX audit's item 8): a reject from the callout asks first, as the header's does. */
+describe('the callout’s reject', () => {
+  it('opens a confirmation that says what rejecting the plan does, and sends the reason typed', async () => {
+    const user = userEvent.setup();
+    const { sent } = start(detail({ approvals: [APPROVAL_ROW] }, { state: 'waiting_approval' }));
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    await user.click(within(callout).getByRole('button', { name: 'Reject…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject the plan approval?' });
+    expect(dialog.textContent).toContain('goes back to Architecture with your reason');
+    expect(sent).toEqual([]);
+    await user.type(
+      within(dialog).getByLabelText('Reason (recorded with the decision)'),
+      'split the migration',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Reject' }));
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(sent[0]).toEqual({
+      path: `/api/tasks/${TASK}/approvals/${APPROVAL}/decide`,
+      body: { decision: 'reject', reason: 'split the migration' },
+    });
+  });
+});
+
+/** S-23.23 (the UX audit's § 2): a pressed *Good* or *Bad* is a toggle's state, not a beacon. */
+describe('the feedback toggles', () => {
+  it('keep the page at its one primary when pressed', async () => {
+    const user = userEvent.setup();
+    start(detail({}, { state: 'paused', paused_reason: 'manual' }));
+    await waitFor(() => {
+      expect(primaries()).toEqual(['Resume']);
+    });
+    const good = (await screen.findAllByRole('button', { name: 'Good' }))[0] as HTMLElement;
+    await user.click(good);
+    expect(good.getAttribute('aria-pressed')).toBe('true');
+    expect(primaries()).toEqual(['Resume']);
+  });
+});
+
 describe('the tabs', () => {
   const tabs = () => screen.getByRole('navigation', { name: 'Task' });
   const current = () =>
@@ -610,7 +725,7 @@ describe('the merge box', () => {
     start(
       detail({ questions: [QUESTION_ROW], stages: [stage('ci_gate', 1, 'returned', 'returned')] }),
     );
-    expect((await screen.findByText(/need attention/)).textContent).toBe('2 checks need attention');
+    expect((await screen.findByText(/need you/)).textContent).toBe('2 checks need you');
   });
 
   it('draws the cost against the cap as a meter, with no inline style', async () => {
@@ -656,7 +771,7 @@ describe('the merge box', () => {
       ]),
     ).toEqual({ status: 'success', text: 'All required checks pass' });
     expect(checksSummary([{ status: 'needs_you', required: false }]).text).toBe(
-      '1 check needs attention',
+      '1 check needs you',
     );
   });
 });

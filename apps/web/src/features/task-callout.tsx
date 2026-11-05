@@ -6,7 +6,9 @@
  *
  * - **open questions** — each answered here, with the same `answer` command the inbox sends; the
  *   agent wrote the question, so it is rendered as text (BD-022);
- * - **pending approvals** — approved or rejected here (`decide`);
+ * - **pending approvals** — approved here, or rejected through a confirmation with a reason
+ *   (`decide`), by a caller who may decide them (`can_decide_approval`); anyone else is told a
+ *   maintainer decides;
  * - **the task waiting for a person** (`needs_human`) — what stopped it, as the stage row's own
  *   outcome sentence, and the three ways out (return, rework, retry), which open the same dialogs as
  *   the header's `···` menu. The sentence is the escalated attempt's recorded word, not the
@@ -26,6 +28,7 @@ import type {
 } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
 import type { useTaskCommands } from '../app/queries.js';
+import { ConfirmDialog } from '../ui/confirm-dialog.js';
 import { Flash } from '../ui/flash.js';
 import { APPROVAL_KIND_LABEL, QUESTION_STATUS_LABEL, stageLabel } from '../ui/humanize.js';
 import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd } from '../ui/kit.js';
@@ -114,39 +117,90 @@ const QuestionCard = ({
   );
 };
 
+/** What rejecting an approval of this kind does, in one sentence (the saga's own branches). */
+export const rejectConsequence = (kind: ApprovalRecord['kind']): string =>
+  kind === 'plan'
+    ? 'The plan goes back to Architecture with your reason, which costs another run of that stage. A rejection cannot be undone.'
+    : kind === 'budget'
+      ? 'The task stops and waits for a person; nothing more is spent on it until someone hands it back. A rejection cannot be undone.'
+      : 'The task does not go on with what was asked; your reason is recorded with the decision. A rejection cannot be undone.';
+
+/**
+ * One pending approval. *Approve* decides at once; *Reject* asks first (S-23.23, the UX audit's item
+ * 8 — the header's *Approve…* already opened a dialog, so the two paths now agree), with a reason
+ * recorded beside the decision. A caller who may not decide approvals (`can_decide_approval`) is
+ * told who may instead of being offered two buttons the route would refuse.
+ */
 const ApprovalCard = ({
   approval,
-  onDecide,
-  pending,
+  mayDecide,
+  commands,
 }: {
   readonly approval: ApprovalRecord;
-  readonly onDecide: (decision: 'approve' | 'reject') => void;
-  readonly pending: boolean;
-}): ReactElement => (
-  <Card className="flex flex-wrap items-center gap-2">
-    <Badge tone="accent">{APPROVAL_KIND_LABEL[approval.kind]}</Badge>
-    <span className="text-xs text-fg-muted">{`requested ${formatDateTime(approval.requested_at)}`}</span>
-    <div className="ml-auto flex gap-2">
-      <Button
-        disabled={pending}
-        onClick={() => {
-          onDecide('approve');
-        }}
-      >
-        Approve
-      </Button>
-      <Button
-        tone="danger"
-        disabled={pending}
-        onClick={() => {
-          onDecide('reject');
-        }}
-      >
-        Reject
-      </Button>
-    </div>
-  </Card>
-);
+  readonly mayDecide: boolean;
+  readonly commands: TaskCommands;
+}): ReactElement => {
+  const [confirming, setConfirming] = useState(false);
+  const pending = commands.decide.isPending;
+  const kind = APPROVAL_KIND_LABEL[approval.kind].toLowerCase();
+  return (
+    <Card className="flex flex-wrap items-center gap-2">
+      <Badge tone="accent">{APPROVAL_KIND_LABEL[approval.kind]}</Badge>
+      <span className="text-xs text-fg-muted">{`requested ${formatDateTime(approval.requested_at)}`}</span>
+      {mayDecide ? (
+        <div className="ml-auto flex gap-2">
+          <Button
+            disabled={pending}
+            onClick={() => {
+              commands.decide.mutate({ approvalId: approval.id, decision: 'approve' });
+            }}
+          >
+            Approve
+          </Button>
+          <Button
+            tone="danger"
+            disabled={pending}
+            onClick={() => {
+              commands.decide.reset();
+              setConfirming(true);
+            }}
+          >
+            Reject…
+          </Button>
+          <ConfirmDialog
+            open={confirming}
+            onOpenChange={setConfirming}
+            title={`Reject the ${kind}?`}
+            consequence={rejectConsequence(approval.kind)}
+            confirmLabel="Reject"
+            reason={{ label: 'Reason (recorded with the decision)', placeholder: 'Why (optional)' }}
+            pending={pending}
+            error={commands.decide.error}
+            errorTitle="That decision was refused."
+            onConfirm={(reason) => {
+              commands.decide.mutate(
+                {
+                  approvalId: approval.id,
+                  decision: 'reject',
+                  ...(reason === '' ? {} : { reason }),
+                },
+                {
+                  onSuccess: () => {
+                    setConfirming(false);
+                  },
+                },
+              );
+            }}
+          />
+        </div>
+      ) : (
+        <p data-may-not-decide="" className="ml-auto text-xs text-fg-muted">
+          A maintainer decides this.
+        </p>
+      )}
+    </Card>
+  );
+};
 
 /**
  * What the person handling an escalation is told (PROGRESS backlog 483): the server accepts a return
@@ -154,17 +208,29 @@ const ApprovalCard = ({
  * one reading this. A merged task never goes back to work (WP-152, backlog 497): its way out is the
  * retrospective, and a return, a rework or a hand-back before the merge is refused.
  */
-const EscalationText = ({ merged }: { readonly merged: boolean }): ReactElement =>
+const EscalationText = ({
+  merged,
+  maySendBack,
+}: {
+  readonly merged: boolean;
+  /** The caller may return or rework (S-23.23); a member is told a maintainer does that. */
+  readonly maySendBack: boolean;
+}): ReactElement =>
   merged ? (
     <p>
       This task was merged and is waiting for a person. Resume it to run its retrospective — a task
       stopped at the merge gate resumes there too — or retry the retrospective or librarian stage it
       stopped at; it cannot be sent back before the merge.
     </p>
-  ) : (
+  ) : maySendBack ? (
     <p>
       This task is waiting for a person. Send it back to a stage it has run, with a note the stage
       is given, rework it from there, or retry the stage it stopped at.
+    </p>
+  ) : (
+    <p>
+      This task is waiting for a person. Retry the stage it stopped at; sending it back to an
+      earlier stage or reworking it is a maintainer’s decision.
     </p>
   );
 
@@ -302,10 +368,8 @@ export const TaskCallout = ({
                 <ApprovalCard
                   key={approval.id}
                   approval={approval}
-                  pending={commands.decide.isPending}
-                  onDecide={(decision) => {
-                    commands.decide.mutate({ approvalId: approval.id, decision });
-                  }}
+                  mayDecide={detail.can_decide_approval}
+                  commands={commands}
                 />
               ))}
               {commands.decide.isError ? (
@@ -315,7 +379,10 @@ export const TaskCallout = ({
           )}
           {reasons.includes('escalation') ? (
             <div className="flex flex-col gap-2">
-              <EscalationText merged={merged} />
+              <EscalationText
+                merged={merged}
+                maySendBack={detail.can_return || detail.can_rework}
+              />
               {reason === null ? null : (
                 <p data-escalation-reason="">
                   {/* The row's word through the platform's own table; still rendered as text. */}
@@ -324,23 +391,23 @@ export const TaskCallout = ({
               )}
               {hasStages ? (
                 <div className="flex flex-wrap gap-2">
-                  {merged ? null : (
-                    <>
-                      <Button
-                        onClick={() => {
-                          onOpen('return');
-                        }}
-                      >
-                        Return to stage…
-                      </Button>
-                      <Button
-                        onClick={() => {
-                          onOpen('rework');
-                        }}
-                      >
-                        Rework…
-                      </Button>
-                    </>
+                  {merged || !detail.can_return ? null : (
+                    <Button
+                      onClick={() => {
+                        onOpen('return');
+                      }}
+                    >
+                      Return to stage…
+                    </Button>
+                  )}
+                  {merged || !detail.can_rework ? null : (
+                    <Button
+                      onClick={() => {
+                        onOpen('rework');
+                      }}
+                    >
+                      Rework…
+                    </Button>
                   )}
                   <Button
                     onClick={() => {

@@ -82,7 +82,8 @@ do, and the project's name scrolls away; on a phone only the top bar stays, so t
 - **+** — **New project** (for an admin: creating a project is an admin's), and inside a project you
   may start tickets in, **Start a ticket…**, which opens the board's *Start a ticket* dialog (below); with
   neither, there is no **+**;
-- the **inbox** button, with the number of things waiting for you;
+- the **inbox** button, with the number of questions and approvals waiting for you (Home's *Needs
+  you* also counts tasks that stopped for a person, so the two numbers can differ);
 - your avatar (below).
 
 Screens that show live data subscribe to a server-sent event stream, so agent counts, task states
@@ -153,7 +154,8 @@ optional steps are tagged *Optional*. **You cannot jump past a required step tha
 later steps in the list are plain text rather than links — an address that names a later step says
 *… is not open yet* and links the step that comes first. Done steps are links, so you can go back to
 any of them. The optional steps have **Skip for now** beside *Continue*: it moves on and records
-nothing.
+nothing. **One button is the coloured one**: while a step is not done, its own action is
+(*Run discovery*, *Save operating mode*, *Propose the pages*…); once it is done, *Continue* is.
 
 **Everything is saved as you go, because every step's state is the server's** — which project
 exists, what is bound, whether discovery has run, what is in the knowledge queue. **Save and exit**
@@ -342,8 +344,9 @@ records nothing — the step stays in the list to come back to. The same form is
 settings page under *Business context*, so a skipped interview can be answered there later.
 
 Submitting writes **proposals, not pages**: each answered or not-applicable section becomes one page
-under `business/` in the knowledge proposal queue, where a maintainer edits and approves it, and
-approving it opens a merge request like any other proposal. Nothing is committed from the form. The
+under `business/` in the knowledge proposals, where a maintainer approves or rejects it (the
+Knowledge screen has no editor: to change a page, reject it with a reason and answer the section
+again), and approving it opens a merge request like any other proposal. Nothing is committed from the form. The
 page is your own words under the platform's headings — no agent rewrites them. Answers are cut at
 12 000 characters (a not-applicable reason at 1 000), credential-shaped strings are redacted before
 anything is stored, and a cut is announced in the page. Submitting again replaces the earlier
@@ -522,8 +525,9 @@ answers three questions in this order: what needs you, what is moving, and where
 - **Projects**: one row per project — its name (the way into its board), its key, its readiness
   level, its open tasks and its spend over the last 30 days — and, for an admin, **New project**,
   which opens the wizard.
-- On the right, **Spend this month** — the organisation's monthly cap as *$412 of $1,000* with a
-  meter, when one is set, and the 30-day spend across all projects either way — and **Instance**:
+- On the right, **Spend** — *Against the monthly cap*, the organisation's monthly cap as
+  *$412 of $1,000* with a meter, when one is set (the month so far), and *Spend, last 30 days*
+  across all projects either way: two windows, each named on its own line — and **Instance**:
   whether the live connection is up, and the version.
 
 Every box refreshes on its own when something happens — a question asked, a run started or
@@ -619,8 +623,11 @@ are still shown, on a seat named from the run); and an escalated task with no qu
 
 **A project → Board**, the project's first tab. Five columns — **Queued**, **Active**, **Needs you**,
 **Ready to merge** and **Done** — each headed by its name and how many tasks it holds; *Needs you*
-is lit amber, because that is where your work is. On a narrow screen the columns scroll sideways,
-one column at a time, rather than wrapping, so the pipeline still reads left to right.
+is lit amber, because that is where your work is. Two placements to know: **a task paused by hand
+sits in Needs you** too (without the ◆, because a pause a person made waits on nobody), and **a
+merged task, and one in its retrospective, stays under Ready to merge** until it is done. On a
+narrow screen the columns scroll sideways, one column at a time, rather than wrapping, so the
+pipeline still reads left to right.
 
 **Each card says which phase the ticket is in and whether it needs you:**
 
@@ -644,7 +651,7 @@ one column at a time, rather than wrapping, so the pipeline still reads left to 
   files (the comparison runs at the rebase gate, so no badge means *not compared yet*).
 
 **The `···` menu on a card** offers **Pause** or **Resume**, **Return to stage…**, **Cancel…**,
-**Open ticket** and **Open MR** — the task page's own commands. *Cancel…* asks first and says what
+**Open ticket** and **Open merge request** — the task page's own commands. *Cancel…* asks first and says what
 cancelling does (it ends the task for good); *Return to stage…* asks which stage the task has
 entered to send it back to, and why — the stage is given your reason; a task that stopped at a gate
 which recorded a failure carries it too, as the task page's ticked *Attach the gate's last failure*
@@ -718,7 +725,7 @@ live on that task's topic.
   is merged or in its retrospective.
 - **The needs-you box**, under the header, appears only when something waits on a person: each open
   question with its answer box, each pending approval with *Approve* and *Reject*, an escalation
-  with the word its stage was closed with (*"Escalated: the gate could not decide in its allotted
+  with the word its stage was closed with (*"Needs you: the gate could not decide in its allotted
   checks."*) and *Return to stage…*, *Rework…* and *Retry stage…*, a budget pause with whose cap is
   spent and where it is raised, and an epic's proposed breakdown
   while a maintainer has something left to decide on it.
@@ -790,7 +797,13 @@ status, so a person tests it before Ready for merge (below).
 ### What you can do from here
 
 The commands in the table below — the header's one button and the `···` menu — plus **take over**,
-**hand back** and **ask the task** (below); a run's own commands — retry, cancel and steer — are on the run screen (section 5).
+**hand back** and **ask the task** (below); a run's own commands — re-run, cancel and steer — are on the run screen (section 5).
+**The page offers only what your role may do**: the *Who* column is checked by the server for each
+of you, so a member sees no *Cancel task…*, *Return to stage…* or *Rework…*, and where an approval
+waits the needs-you box says *A maintainer decides this* instead of offering Approve and Reject; a
+viewer is offered no *Pause* or *Resume* either. **Reject** asks first — in the needs-you box as in
+the header's *Approve…* dialog — saying what rejecting does, with an optional reason recorded with
+the decision.
 Each is an operation the task aggregate either performs or **refuses by name** — a refusal comes back as an
 error naming the transition, not as a silent no-op — and each accepted one leaves a row in the audit.
 
@@ -804,7 +817,7 @@ error naming the transition, not as a silent no-op — and each accepted one lea
 | **Rework** | maintainer | restarts the work with new instructions, which are required. The task moves to a **new branch** (`agentic/<ticket>-r2`, then a higher number on each later rework — the numbers can skip, because a plain return counts too) and the merge request you rejected is **closed** on the git provider with a comment naming the new branch; a new merge request is opened from the new branch when the work gets there again. Like **Return to stage**, it works on a task in **Needs you**, offers the same *Attach the gate's last failure* box, and refuses a merged task |
 | **Answer a question** | member | answers a question the agent asked; the task continues |
 | **Decide an approval** | maintainer | approves or rejects a plan (and, where configured, a budget) |
-| **Feedback** | member | 👍/👎 plus text, on the task |
+| **Feedback** | member | **Good** / **Bad** (a toggle: press it again to clear it) plus text, on the task |
 
 A task that escalates **after its merge** — its retrospective failed, say — finishes rather than
 going back to work: **Resume** runs the retrospective (a task stopped at the merge gate itself
@@ -814,7 +827,7 @@ at the merge gate, because retrying that gate would record the merge again. Retu
 (*task_merged*), because its branch is already in the default branch. **Pause** and **Take over** are
 refused the same way (WP-165), and the task page offers neither (WP-194): there is nothing to stop
 or hand over, and from a pause the task could not reach its retrospective. Cancelling a run on such a task — a question you asked it, say —
-stops the run and leaves the task waiting for a human, where **Resume** still finishes it.
+stops the run and leaves the task waiting for a person, where **Resume** still finishes it.
 
 The stage list offered by *retry*, *return to stage* and *rework* comes from the task's **own**
 history rather than from the pipeline template, for the same reason as the board's columns; a task
@@ -889,13 +902,15 @@ not to obey. A shadow task posts none of this: each write is recorded as what it
 ### The checks panel
 
 The checks are a **merge box**, as on a pull request: one line on top — *All required checks pass*,
-*2 checks need attention* (something failed, or waits on a person), or *3 required checks are not
+*2 checks need you* (something failed, or waits on a person), or *3 required checks are not
 decided yet* — and one row per check with a status icon, its name and its value. Point at (or tab to)
 a name for its definition; open a row for the sentence its value rests on — which attempt of a gate,
 what the estimate was computed from, which base the coverage was measured against, which packages and
 licences, which reviewers and why. A check that has not been made, or whose record cannot say what it
 found (*not reached*, *not recorded*, *unavailable*), is never counted as a pass. Under the box,
-**Cost so far** is drawn against the task's cap, beside the estimate's accuracy and the human time.
+**Cost so far** is drawn against the task's cap, beside the estimate's accuracy and **People's
+time** (*$1.20 · 2 h of people's time* — the agents' cost and the minutes people spent, side by side
+and never added).
 
 The product defines eleven merge-readiness checks, and the box shows **all eleven**:
 
@@ -905,14 +920,15 @@ The product defines eleven merge-readiness checks, and the box shows **all eleve
   *no verdict*; a verdict the server refuses to serve says *unavailable* and why.
 - **CI status** and **Rebase status** — the latest attempt of each gate: green or red, up to date
   or conflicts, *checking* while it decides, *not reached* before the task gets there, and
-  *escalated (…)* with the reason when the gate stopped for a person.
+  and why the gate stopped for a person when it did.
 - **Review threads** — open and resolved human threads on the merge request, as the platform last
   counted them. It counts when somebody comments while the task waits at QA or Ready for merge, and again when the
   merge request reports every thread resolved — which GitLab sends only for a project that requires
   resolved threads before merging. A thread resolved without a comment while others stay open is
   not counted until one of those happens; until the first count it says *not read*, never zero.
 - **Coverage delta**, **Dependencies**, **Risk classes**, **Required reviewers**, the **Estimate**
-  against what the task has spent, and **Questions pending**.
+  against what the task has spent, and **Questions pending** — and beside it, a twelfth row the
+  product's list does not have, **Approvals pending**.
 
 - **Tamper check** — BD-024's check, made by the CI gate: the existing files the change modifies,
   deletes or renames away, against the project's protected paths (tests and CI/lint configuration
@@ -962,7 +978,7 @@ such, and so are the failing jobs past the fifth.
   retrospective, the librarian or done, and **Ready for merge** only when you took the task over at
   Ready (WP-165). A task that was **merged** cannot be taken over at all, and the panel says so instead of offering it; one taken over before that
   rule existed is offered no stage, and the panel says it was merged — cancel it, or resume it into
-  its retrospective once it is waiting for a human. Handing back to **Ready for merge** does not skip the checks: when the branch is not
+  its retrospective once it is waiting for a person. Handing back to **Ready for merge** does not skip the checks: when the branch is not
   the commit the platform's gates judged — you pushed, or the platform cannot read it — the task
   re-enters the CI gate and walks through review and the rebase gate to Ready again, spending none of
   its iteration limits; an unchanged branch goes back through the rebase gate alone — one
@@ -985,9 +1001,10 @@ such, and so are the failing jobs past the fifth.
   pipeline for an older commit never passes it.
 - An **epic split** task carries a **Proposed breakdown** panel — in the needs-you box while a
   maintainer has children left to decide, on the Overview otherwise: one row per child ticket the agent
-  proposed, with its acceptance criteria, a checkbox per child and one button. Accepting **creates
-  those tickets in your tracker** — one per accepted child, never twice — and rejecting keeps the row
-  with your reason. Only a maintainer sees the checkboxes; everybody who can read the task can read
+  proposed, with its acceptance criteria, a checkbox per child and two buttons, **Accept N** and
+  **Reject N…**. Accepting **creates those tickets in your tracker** — one per accepted child, never
+  twice — and rejecting asks first (no ticket is filed for a rejected child, and it cannot be
+  accepted later), then keeps the row with your reason. Only a maintainer sees the checkboxes; everybody who can read the task can read
   the queue. The feature is off until a project turns on **Epic split** in its operating-mode
   features.
 - **Ask the task** (member) is a thread on the Overview, under the stage timeline: ask *"why did you choose X?"* and
@@ -1004,8 +1021,10 @@ is laid out like a GitHub Actions job:
 
 - **The header** leads back to the task, by its ticket key and title, and names the run: its status
   icon, the stage, the role and the attempt (*Implementation · Developer · attempt 3*). The actions
-  are on the right. **Cancel run** is there while the run is live — the only coloured button then,
-  and it asks before it cancels. **Re-run ▾** becomes the primary button once a run has failed. The
+  are on the right. **Cancel run** is there while the run is live — the only coloured button then
+  (the steer box's *Steer* and the transcript's *Following* toggle are plain), and it asks before it
+  cancels. **Re-run ▾** is offered once the run has ended — the server refuses a re-run of a live
+  one — and becomes the primary button once a run has failed. The
   **···** menu holds **Take over…** (**Taken over: resume / hand back…** while the task is taken over), which opens the
   same take-over form and hand-back the task page has, and **Download transcript**, the run's
   transcript as a JSONL file.
@@ -1013,7 +1032,7 @@ is laid out like a GitHub Actions job:
   are reading marked — click another to read it. Under it, **Details** opens the settings line
   (described under *Settings* below), where an unsuccessful run's unfinished work was saved, and the
   version of the role prompt the run was given.
-- **The summary strip** gives the status, who executed the run (*Executed by* the platform server,
+- **The summary strip** gives the status, where it runs (*Runs on* the platform server,
   or a developer's remote worker by the name its owner gave it), once the run has ended **Ended
   because** (*Succeeded*, *Ran out of turns*, *Hit its budget*, *Lost its worker*, …), the model, the
   effort, the cost (marked *est.* when the
@@ -1022,7 +1041,7 @@ is laid out like a GitHub Actions job:
   same words.
 - **While the run is live**, a *Now:* line says what the agent is doing, in the words the board and
   the Agents screen use (*Reading files*, *Running a command*, *No activity for 6 min*), with its
-  last few steps under it as **Live activity**.
+  last few steps listed under it (a list a screen reader names *Live activity*).
 
 Then four tabs:
 
@@ -1042,7 +1061,8 @@ Then four tabs:
   (`deep-research`, `update-config` and others), and it is **not** what this run could use: the run
   was handed only its role's platform skills (`agentic:kb` and the like) — the only skills written
   into its workspace — and the CLI refuses any other.
-- **Prompt** — the exact system and user prompt that produced this run.
+- **Prompt** — the exact system and user prompt that produced this run, each under its own heading
+  (*System prompt*, *User prompt*).
 - **Context pack** — what was retrieved and put in front of the model.
 - **Settings** — the project settings this run was planned with, frozen when the run was created
   and redacted then. The settings line under **Details** says whether they were the same as the
@@ -1056,7 +1076,7 @@ as soon as it starts. A run that ends while still starting never ran an agent an
 You can **cancel** the run (member), **re-run** it (member — this creates a *new* run rather than
 changing this one), and leave **feedback** scoped to the stage at the foot of the page. **Re-run ▾**
 offers *Re-run as configured*, a new run on the stage's configured model and effort, and *Re-run
-with another model or effort…*, a dialog with two lists and **Retry run**. The model is a list, not
+with another model or effort…*, a dialog with two lists and **Re-run**. The model is a list, not
 a box to type into: it offers the models the platform has a price for (the
 operator's `price_list`), and it starts on **Configured (…)**, which names the model the project's
 configuration gives this stage. Leaving it there re-plans the new run from the configuration, so
@@ -1120,7 +1140,8 @@ says the run predates the record:
   would show you a document that run never saw.
 - **Context pack** — recorded with the run since migration 0041, budget included. For an older run
   only the retrieved rows exist, and summing them would publish "budget equals total" as a fact. A
-  pack with nothing in it is shown as an empty pack, not refused.
+  pack with nothing in it is not refused: it says *No knowledge pages were put in front of the
+  model*, beside its token budget.
 - **Settings** — recorded since WP-91. Today's project settings are not shown in an older run's
   place, because they are not the ones it was planned with.
 
@@ -1240,7 +1261,9 @@ The knowledge base lives **in your repository**
 already there, reviewable in the same merge requests as the code.
 
 Editing a document in the browser is **not** built. It would open a commit or a merge request and it
-needs an editor the application does not yet include, so the panel is read-only and says so.
+needs an editor the application does not yet include, so the panel is read-only: a proposal is
+approved or rejected — a reject asks first, and its reason is what the Librarian learns from — never
+edited here.
 
 ## 8. Pipeline and budgets
 
@@ -1258,7 +1281,7 @@ same stages are an ordered list.
 **Effective configuration**, folded below the graph, shows the configuration with the source of every
 key (a default, the organisation, the project, or the repository's `.agentic/config.yml`) and when the
 repository's file was last read. Read-only here: the settings are edited on the project's settings
-page, which also proposes them to the repository (section 1, step 5); a YAML editor in the browser is
+page, which also proposes them to the repository (section 1, step 6); a YAML editor in the browser is
 not built.
 
 **A project → Budgets** shows each budget as a meter: its window (*Per month*), what has been spent
@@ -1351,19 +1374,26 @@ Nothing on these screens is a credential: the server strips every field a provid
 secret before publishing an integration's configuration, and publishes nothing at all for a provider
 this build does not ship — because it then cannot tell configuration from credential.
 
-**New integration** (admin) is a four-step wizard. **1. Choose a provider** — one card per provider,
+**New integration** (admin) is a four-step wizard. A maintainer, who may read integrations but not
+change them, is offered none of *New integration*, *Test connection*, *Edit configuration*,
+*Replace credentials* or *Retire*, and the screen says administrators add and change them. **1. Choose a provider** — one card per provider,
 each saying what connecting it does. **2. Configure it** — a name of your choosing and the fields that
 provider requires (its URL, its organisation or channel), each labelled in words with its key in the
 hint; the provider's optional settings are under **Optional settings**, each a control of its type (a
 yes/no choice, a number, a comma-separated list) — leave one empty and the provider's default
-applies. **3. Name its credentials** — for each credential, the *environment variable* the server
+applies. **3. Say where its credentials are** — for each credential, the *environment variable* the server
 reads it from, which must be on the operator's allow-list (operator guide, §4); the value itself
 never crosses the browser. **Create integration** sends it; the server checks the configuration
 against the provider's own schema before it stores anything, so a create can be refused for a reason
 outside the form, and the screen names the settings it refused (*Some settings are invalid: Base
 URL.*), with the server's own message under *Technical details* (go back a step with the step list to
 correct it). **4. Test the connection** — or skip it — and the wizard ends with
-**Bind it to a project**. **Test connection** shows the same answer here, on the integration's page,
+**Use in a new project** (the New project wizard) or **Add to an existing project…** (pick the
+project, and you land on its settings' *Connections*, where you tick the integration). **A reload
+does not lose your place**: before the create, what you typed is kept for this browser tab (never
+the credentials' variable names, which it asks for again); after it, the address names the new
+integration, so a reload lands on its test or the ending — never on a form that would create a
+second one. **Test connection** shows the same answer here, on the integration's page,
 on its row and in the project wizard beside the binding it is about.
 
 An integration whose stored configuration would not load (one created before the form asked for
@@ -1389,8 +1419,9 @@ not the screen's. The filter menu in the list's header shows the changes to one 
 (*Organisation*, *Project*, *Integration*, *Connections*, *Budget* or *Person*) or to all of them, and
 **Load older entries** pages back.
 
-Every human action taken through the product is recorded with the acting user, the command and its
-parameters. A *refused* command records nothing.
+Every action a person takes through the product is recorded with the acting user, the command and
+its parameters — but **this screen lists only the configuration changes**; a task's own commands are
+on that task's *Activity* tab. A *refused* command records nothing.
 
 ## 11. Settings
 
@@ -1451,7 +1482,10 @@ is only reachable while a project is being set up; opening the tab opens *Connec
 own controls keep their own buttons there (the autonomy dial, the ticket lifecycle, the project
 budgets), because each is one decision with its own save. *Policies & WIP* holds the operating mode —
 the autonomy dial, the features, the risk classes, the project budgets, the notifications and who
-changed what — with the verification mode and the WIP limits in force.
+changed what — with the verification mode and the WIP limits in force. Unlike an organisation
+section it has **no one Save at its foot**: each card saves on its own, some as you change them and
+the rest with their own button. **Replace with these classes…** asks first when risk classes are
+already in force, saying that a class not among the proposed ones stops applying.
 
 **The ticket lifecycle** is a project's own setting too: the project settings' *Connections* section
 carries the same form as the wizard's step 1 (§ 1, *The ticket lifecycle*) — every slot a pick
@@ -1604,7 +1638,7 @@ current run). The platform's `GET /api/workers` answers the same reasons for eac
 (`claim_blockers`, in the same words), and a project's execution settings say which workers would take
 its runs and how many waiting runs no worker may take now.
 Stopping the worker's container is not a cancel; the platform gives the stage to another computer
-— once: a second lost run of the same stage goes to *Needs human*, naming both runs
+— once: a second lost run of the same stage goes to *Needs you*, naming both runs
 and the machines that held them.
 
 When a worker reaches its Claude **usage limit** the run it was doing ends — not as the task's failure
@@ -1613,7 +1647,7 @@ from that work: another worker takes it at once, or the same one once its limit 
 worker takes no work until then, and carries on by itself. Its own page and the Workers screen both say **Paused — usage limit
 until 14:00** (in the organisation's timezone on the platform's screens; *until about* when the limit
 did not say when it resets, and the worker waits an hour), and the run's page says the same beside
-*Executed by*. A second usage limit on the same stage goes to *Needs human*. A person's *Pause* is a
+*Runs on*. A second usage limit on the same stage goes to *Needs you*. A person's *Pause* is a
 different hold: the end of a usage limit never lifts it.
 
 **What a worker picks up.** On the worker's own page, **What this worker takes by itself** chooses

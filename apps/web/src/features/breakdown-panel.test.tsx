@@ -9,7 +9,7 @@
  */
 import type { TaskDetailResponse, TicketBreakdownItem } from '@platform/contracts';
 import { EPIC_SPLIT_TEMPLATE_ID } from '@platform/domain';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -72,6 +72,12 @@ const TASK_DETAIL: TaskDetailResponse = {
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  can_pause: true,
+  can_resume: true,
+  can_cancel: true,
+  can_return: true,
+  can_rework: true,
+  can_decide_approval: true,
   gate_feedback: null,
   human_time: {
     total_minutes: 0,
@@ -196,6 +202,38 @@ describe('the breakdown panel', () => {
     });
     expect(decisions[0]?.body).toEqual({ decision: 'accept', item_ids: [CHILD(1), CHILD(3)] });
     expect(decisions[0]?.key).toMatch(/.+/);
+  });
+
+  // S-23.23 (the UX audit's item 8): a reject cannot be undone, so it asks first and says so.
+  it('rejects only after a confirmation that says no ticket is filed', async () => {
+    const decisions: { body: unknown; key: string | null }[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({
+        fetchImpl: fetchFor({ items: [child(1), child(2)], can_decide: true }, decisions),
+        realtime: false,
+      }).element,
+    );
+    // `child(1)` sits at position 1, so its box is the second one.
+    await user.click(await screen.findByRole('checkbox', { name: 'Select child 2' }));
+    await user.click(screen.getByRole('button', { name: 'Reject 1…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 1 proposed child?' });
+    expect(dialog.textContent).toContain('No ticket is filed for it');
+    expect(decisions).toEqual([]);
+    await user.click(within(dialog).getByRole('button', { name: 'Keep it' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(decisions).toEqual([]);
+
+    await user.click(screen.getByRole('button', { name: 'Reject 1…' }));
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Reject 1' }),
+    );
+    await waitFor(() => {
+      expect(decisions).toHaveLength(1);
+    });
+    expect(decisions[0]?.body).toEqual({ decision: 'reject', item_ids: [CHILD(1)] });
   });
 
   it('leaves the control out for a caller the server says may not decide', async () => {

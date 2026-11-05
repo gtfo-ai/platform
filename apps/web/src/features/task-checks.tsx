@@ -500,11 +500,12 @@ const CostBox = ({ detail }: { readonly detail: TaskDetailResponse }): ReactElem
         definition="What the task has spent, divided by the estimate: 1.00× is on the nose, 2.00× is twice what was predicted. Computed from those two numbers and nothing else."
       />
       <Metric
-        label="Human time"
+        label="People’s time"
         value={
           humanTime.entries === 0
             ? 'none recorded'
-            : `${formatUsd(task.cost_actual_usd)} tokens · ${formatMinutes(humanTime.total_minutes)} human`
+            : // Dollars are the agents' cost, never "tokens" (S-23.23, the UX audit's § 4).
+              `${formatUsd(task.cost_actual_usd)} · ${formatMinutes(humanTime.total_minutes)} of people’s time`
         }
         definition="Human minutes derived from events, never from tracking: review from the first human comment on the merge request to the merge, capped at 8 h per calendar day and excluding gaps over 2 h; 30 min per question; 10 min flat per approval; 5 min flat per steer. The dollars and the minutes are shown side by side and are never added: that would need an hourly rate this platform does not have."
       />

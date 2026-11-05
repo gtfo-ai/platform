@@ -153,7 +153,9 @@ const StageTimeline = ({
                 >
                   {STAGE_STATE_LABEL[stage.state]}
                 </Badge>
-                {stage.attempt > 1 ? <Badge tone="warning">{`try ${stage.attempt}`}</Badge> : null}
+                {stage.attempt > 1 ? (
+                  <Badge tone="warning">{`Attempt ${stage.attempt}`}</Badge>
+                ) : null}
               </div>
               {stage.outcome === null ? null : (
                 <p className="text-xs text-fg-muted">

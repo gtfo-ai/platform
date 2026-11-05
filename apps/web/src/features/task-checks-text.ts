@@ -727,7 +727,7 @@ export const checksSummary = (
   if (attention > 0) {
     return {
       status: 'failure',
-      text: attention === 1 ? '1 check needs attention' : `${attention} checks need attention`,
+      text: attention === 1 ? '1 check needs you' : `${attention} checks need you`,
     };
   }
   const open = rows.filter((row) => row.required && row.status !== 'success').length;

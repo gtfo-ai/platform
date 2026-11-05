@@ -54,6 +54,7 @@ import { Badge, Button, ErrorNotice, Loading } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { bindingConfigOf } from './operating-mode.js';
+import { useStepActionTone } from './step-action-tone.js';
 
 /** Every slot of the lifecycle, in the order a ticket normally passes them. */
 export type LifecycleSlot = 'pick_up_from' | LifecycleSingleSlot | 'returned';
@@ -396,6 +397,8 @@ const statusesFailure = (error: unknown): { title: string; detail?: string } => 
  * two switches and a save. Renders a sentence instead when there is no such binding (or two).
  */
 export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): ReactElement => {
+  // S-23.23: primary until the wizard's step is done, then the footer's Continue is.
+  const actionTone = useStepActionTone();
   const bindings = useProjectBindings(projectId);
   const integrations = useBindableIntegrations('task_management');
   const config = useProjectConfig(projectId);
@@ -446,19 +449,20 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
   ]);
 
   if (bindings.isPending) {
-    return <Loading label="Loading the bindings…" />;
+    return <Loading label="Loading the connections…" />;
   }
   if (trackers.length === 0) {
     return (
       <p className="text-xs text-fg-muted">
-        Bind a ticket tracker first: the lifecycle slots are that tracker’s own statuses.
+        Add a ticket tracker to this project’s connections first: the lifecycle slots are that
+        tracker’s own statuses.
       </p>
     );
   }
   if (tracker === null) {
     return (
       <p className="text-xs text-fg-muted">
-        This project binds {trackers.length} ticket trackers, and the pipeline applies a lifecycle
+        This project uses {trackers.length} ticket trackers, and the pipeline applies a lifecycle
         only to a project with exactly one.
       </p>
     );
@@ -504,7 +508,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
       {hasStoredBlock ? null : (
         <p className="text-xs text-fg-muted" data-lifecycle="not-saved">
           No lifecycle is saved for this tracker, so the platform does not claim its tickets — a
-          tracker bound before the lifecycle existed, or bound outside the wizard. Saving this form,
+          tracker connected before the lifecycle existed, or outside the wizard. Saving this form,
           even with every slot empty, starts the claim unless you switch it off.
         </p>
       )}
@@ -569,7 +573,7 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
       ) : null}
       <div>
         <Button
-          tone="primary"
+          tone={actionTone}
           disabled={
             commands.putBindings.isPending ||
             draft.returned.length > MAX_LIFECYCLE_RETURNED_STATUSES

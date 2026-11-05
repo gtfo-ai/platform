@@ -46,7 +46,7 @@ test('Home: needs you, running now, the projects, the rail and the unfinished se
     page.getByRole('list', { name: 'Projects' }).getByRole('link', { name: /Demo service/ }),
   ).toBeVisible();
   await expect(
-    page.getByRole('region', { name: 'Spend' }).getByText('Spend, 30 days'),
+    page.getByRole('region', { name: 'Spend' }).getByText('Spend, last 30 days'),
   ).toBeVisible();
   await expect(page.getByRole('region', { name: 'Instance' }).getByText('Live')).toBeVisible();
 
@@ -784,7 +784,10 @@ test('the run screen retries with a model and an effort, and sends stage-scoped 
   );
   await page.getByLabel('Retry with model').selectOption('claude-sonnet-5');
   await page.getByLabel('Retry with effort').selectOption('low');
-  await page.getByRole('button', { name: 'Retry run' }).click();
+  await page
+    .getByRole('dialog', { name: 'Re-run with another model or effort' })
+    .getByRole('button', { name: 'Re-run' })
+    .click();
   await expect(page.getByText('A new run was requested')).toBeVisible();
 
   await page.getByLabel('Feedback on the implementation stage').fill('too many retries');
@@ -872,8 +875,8 @@ test('a taken-over task that escalated still shows the branch, the downloads and
 }) => {
   await page.goto(`/tasks/${IDS.taskTaken}`);
   await expect(page.getByRole('heading', { name: 'DEMO-3' })).toBeVisible();
-  await expect(page.getByText('Taken over by a human')).toBeVisible();
-  await expect(page.getByText('escalated — still held')).toBeVisible();
+  await expect(page.getByText('Taken over by a person')).toBeVisible();
+  await expect(page.getByText('needs you — still held')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Download the transcript (JSONL)' })).toHaveAttribute(
     'href',
     `/api/runs/${IDS.run}/transcript.jsonl`,

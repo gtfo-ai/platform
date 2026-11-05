@@ -351,12 +351,44 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
     await user.click(
       within(list).getByRole('button', { name: 'More for technical/architecture.md' }),
     );
-    await user.click(await screen.findByRole('menuitem', { name: 'Reject' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Reject…' }));
+    // S-23.23: a reject asks first, says what it does, and sends the person's own reason — never
+    // the canned "rejected from the UI" it used to.
+    const dialog = await screen.findByRole('dialog', { name: 'Reject this proposal?' });
+    expect(dialog.textContent).toContain('the proposal is closed for good');
+    expect(decisions).toHaveLength(1);
+    await user.type(
+      within(dialog).getByLabelText('Why (the Librarian learns from it)'),
+      'duplicates conventions.md',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Reject' }));
     await waitFor(() => {
       expect(decisions).toHaveLength(2);
     });
     expect(decisions[1]?.url).toContain('00000000-0000-4000-8000-0000000000c2/reject');
-    expect(decisions[1]?.body).toEqual({ decision: 'reject', reason: 'rejected from the UI' });
+    expect(decisions[1]?.body).toEqual({
+      decision: 'reject',
+      reason: 'duplicates conventions.md',
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  it('keeps a proposal when the reject is not confirmed', async () => {
+    await renderScreen();
+    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const user = userEvent.setup();
+    await user.click(
+      within(list).getByRole('button', { name: 'More for technical/architecture.md' }),
+    );
+    await user.click(await screen.findByRole('menuitem', { name: 'Reject…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject this proposal?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Keep it' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(decisions).toHaveLength(0);
   });
 
   it('says a refused decision was not recorded, with the server’s reason', async () => {
@@ -389,7 +421,7 @@ describe('the budgets screen (S-23.11b)', () => {
   it('draws each budget as spent of limit on a native meter, in words, with no inline style', async () => {
     window.history.pushState({}, '', '/projects/api/budgets');
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-    const meter = await screen.findByLabelText('Budget used');
+    const meter = await screen.findByLabelText('Cap used');
     expect(meter.tagName).toBe('METER');
     // The attributes, not the IDL properties: happy-dom's `HTMLMeterElement.value` clamps to 1.
     expect(meter.getAttribute('value')).toBe('3.25');

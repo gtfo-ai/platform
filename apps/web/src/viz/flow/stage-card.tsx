@@ -4,7 +4,7 @@
  *
  * What it shows, top to bottom: the stage's human name and its kind (an agent, a gate, a person,
  * a system step — a human stage is marked, a gate is a smaller card), the attempt when it is not
- * the first ("2nd attempt"), the role; the status dot and word — *done*, *upcoming*, *sent back*,
+ * the first ("Attempt 2"), the role; the status dot and word — *done*, *upcoming*, *sent back*,
  * *failed*, *skipped*, *disabled*, or on the current stage the activity's own ("● Working"); on the
  * current stage the "Now: Reading files" pill; the model and effort; and, for a stage that is done,
  * how long it took and what its latest run cost.
@@ -31,7 +31,7 @@ import { XCircleFillIcon } from '@primer/octicons-react/XCircleFillIcon';
 import type { ReactElement } from 'react';
 import { ACTIVITY_META } from '../../ui/activity.js';
 import { cx, FOCUS_RING } from '../../ui/cx.js';
-import { ARTIFACT_TYPE_LABEL, ordinal, ROLE_LABEL } from '../../ui/humanize.js';
+import { ARTIFACT_TYPE_LABEL, ROLE_LABEL } from '../../ui/humanize.js';
 import { formatElapsed, formatRunCost } from '../../ui/kit.js';
 import { StatusIcon } from '../../ui/status.js';
 import type { FlowNode, FlowState, StageKind } from './model.js';
@@ -83,9 +83,9 @@ export const cardBody = (node: Pick<FlowNode, 'id' | 'kind' | 'role'>): string =
         : 'Waits for an event to settle it'
       : KIND_LOOK[node.kind].word;
 
-/** "2nd attempt", or `null` for a first one. */
+/** "Attempt 2", or `null` for a first one — the one spelling (S-23.23, the UX audit's § 4). */
 export const attemptLabel = (attempt: number | null): string | null =>
-  attempt === null || attempt < 2 ? null : `${ordinal(attempt)} attempt`;
+  attempt === null || attempt < 2 ? null : `Attempt ${attempt}`;
 
 /** The epoch-relative duration as the app prints elapsed time ("12m 3s"). */
 export const formatDuration = (ms: number): string => formatElapsed(new Date(0).toISOString(), ms);

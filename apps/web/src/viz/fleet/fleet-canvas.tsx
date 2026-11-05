@@ -131,7 +131,7 @@ const SeatNode = ({ data }: NodeProps<MapFlowNode>): ReactElement => {
           <span className="truncate text-sm font-semibold text-fg">{title}</span>
           <span className="truncate text-xs text-fg-muted">
             {seat.kind === 'server'
-              ? 'The platform’s own claimant'
+              ? 'Runs agents on the platform’s own server'
               : seat.owner === null
                 ? 'Worker'
                 : `Worker · ${sanitiseUntrusted(seat.owner)}`}

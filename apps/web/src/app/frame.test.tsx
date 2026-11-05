@@ -135,7 +135,10 @@ const fetchFor = (world: World) =>
     }
     if (path === '/api/setup-state') return json({ first_sign_in: false });
     if (path === '/events/subscriptions') return json({});
-    if (path === '/api/projects') return json({ items: world.projects });
+    // S-23.23: the server's own answer — `project.create` is an administrator's.
+    if (path === '/api/projects') {
+      return json({ items: world.projects, can_create: (world.role ?? 'member') === 'admin' });
+    }
     if (path === '/api/org/agents') {
       return json({
         items: Array.from({ length: world.running ?? 0 }, (_, index) => {
@@ -166,6 +169,8 @@ const fetchFor = (world: World) =>
         can_start_task: world.canStart === true,
         can_cancel_task: true,
         can_return_to_stage: true,
+        can_pause_task: true,
+        can_resume_task: true,
       });
     }
     return json(
@@ -531,6 +536,7 @@ describe('the projects list', () => {
           project(1, { readiness_level: 0, open_tasks: 4, spent_usd_30d: 12.5 }),
           project(2, { name: 'Billing', status: 'paused' }),
         ],
+        role: 'admin',
       },
       '/projects',
     );
@@ -559,7 +565,7 @@ describe('the projects list', () => {
   });
 
   it('teaches when there is no project, and offers New project', async () => {
-    start({ projects: [] }, '/projects');
+    start({ projects: [], role: 'admin' }, '/projects');
     expect(await screen.findByText('No projects yet')).toBeTruthy();
     const main = screen.getByRole('main');
     const actions = within(main).getAllByRole('link', { name: 'New project' });
@@ -568,5 +574,25 @@ describe('the projects list', () => {
       '/onboarding',
     ]);
     expect(within(main).queryByRole('list', { name: 'Projects' })).toBeNull();
+  });
+
+  // S-23.23 (the UX audit's item 3): `POST /api/projects` refuses everyone but an administrator, so
+  // nobody else is offered the wizard — not in the header, the empty state or the switcher.
+  it('offers a member no New project anywhere, and says who creates one', async () => {
+    const user = userEvent.setup();
+    start({ projects: [] }, '/projects');
+    expect(await screen.findByText('No projects yet')).toBeTruthy();
+    const main = screen.getByRole('main');
+    expect(within(main).queryByRole('link', { name: 'New project' })).toBeNull();
+    expect(main.textContent).toContain('Ask an administrator to create a project');
+    cleanup();
+
+    start({ projects: [project(1)] }, '/projects/p1/pipeline');
+    await user.click(
+      await within(await banner()).findByRole('button', { name: 'Project 1, switch project' }),
+    );
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: 'All projects' })).toBeTruthy();
+    expect(within(menu).queryByRole('menuitem', { name: 'New project' })).toBeNull();
   });
 });

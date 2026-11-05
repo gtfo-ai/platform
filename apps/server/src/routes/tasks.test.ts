@@ -41,6 +41,8 @@ import type {
 import {
   MAX_TASK_EXPORT_EVENTS,
   MAX_TASK_EXPORT_HUMAN_ACTIONS,
+  TASK_CALLER_FACT_KEYS,
+  type TaskCallerFactKey,
   taskDetailResponseSchema,
   taskExportResponseSchema,
 } from '@platform/contracts';
@@ -50,7 +52,7 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
 import type { ArtifactBody, TaskEventRow } from '../queries/pipeline-queries.js';
-import { registerTaskRoutes, type TaskQueries } from './tasks.js';
+import { registerTaskRoutes, TASK_CALLER_FACT_ACTIONS, type TaskQueries } from './tasks.js';
 
 const ARTIFACT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -347,6 +349,12 @@ const DETAIL: TaskDetailResponse = taskDetailResponseSchema.parse({
   taken_over: null,
   can_raise_budget: false,
   can_export: false,
+  can_pause: false,
+  can_resume: false,
+  can_cancel: false,
+  can_return: false,
+  can_rework: false,
+  can_decide_approval: false,
   gate_feedback: null,
   human_time: {
     total_minutes: 0,
@@ -593,5 +601,105 @@ describe('GET /api/tasks/:task_id — can_export (WP-122)', () => {
     const exported = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}/export` });
     expect(exported.statusCode, exported.body).toBe(200);
     expect(Object.hasOwn(exported.json() as object, 'can_export')).toBe(false);
+  });
+});
+
+/**
+ * S-23.23 (the UX audit's role gating): the task read carries, per command, whether **this caller**
+ * may use it — the command route's own permission over the effective role in the task's project —
+ * and the page hides each control it is false for. The expected table is restated by hand from
+ * technical/08's capability map rather than computed with `can()`, so a fact wired to the wrong
+ * permission (or to none) fails here.
+ */
+describe('GET /api/tasks/:task_id — the command flags (S-23.23)', () => {
+  let app: FastifyInstance;
+  let world: World;
+
+  beforeEach(async () => {
+    ({ app, world } = await build());
+    world.detail = DETAIL;
+  });
+
+  const EXPECTED: Readonly<Record<UserRole, Readonly<Record<TaskCallerFactKey, boolean>>>> = {
+    viewer: {
+      can_raise_budget: false,
+      can_export: false,
+      can_pause: false,
+      can_resume: false,
+      can_cancel: false,
+      can_return: false,
+      can_rework: false,
+      can_decide_approval: false,
+    },
+    member: {
+      can_raise_budget: false,
+      can_export: true,
+      can_pause: true,
+      can_resume: true,
+      can_cancel: false,
+      can_return: false,
+      can_rework: false,
+      can_decide_approval: false,
+    },
+    maintainer: {
+      can_raise_budget: true,
+      can_export: true,
+      can_pause: true,
+      can_resume: true,
+      can_cancel: true,
+      can_return: true,
+      can_rework: true,
+      can_decide_approval: true,
+    },
+    admin: {
+      can_raise_budget: true,
+      can_export: true,
+      can_pause: true,
+      can_resume: true,
+      can_cancel: true,
+      can_return: true,
+      can_rework: true,
+      can_decide_approval: true,
+    },
+  };
+
+  it.each(Object.keys(EXPECTED) as UserRole[])(
+    'answers a %s of the task’s project exactly what the command routes would admit',
+    async (role) => {
+      world.orgRole = 'viewer';
+      world.role = role;
+      const reply = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}` });
+      expect(reply.statusCode, reply.body).toBe(200);
+      const body = reply.json() as Record<string, unknown>;
+      const facts = Object.fromEntries(TASK_CALLER_FACT_KEYS.map((key) => [key, body[key]]));
+      expect(facts).toEqual(EXPECTED[role]);
+    },
+  );
+
+  it('reads the project role, not only the organisation role, and the export carries no flag', async () => {
+    // An organisation viewer who maintains this project: every maintainer flag is true.
+    world.orgRole = 'viewer';
+    world.role = 'maintainer';
+    const reply = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}` });
+    expect((reply.json() as { can_cancel: boolean }).can_cancel).toBe(true);
+    const exported = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}/export` });
+    expect(exported.statusCode, exported.body).toBe(200);
+    for (const key of TASK_CALLER_FACT_KEYS) {
+      expect(Object.hasOwn(exported.json() as object, key), key).toBe(false);
+    }
+  });
+
+  it('names the permission each command route asks', () => {
+    // The decide route's gate is `task.approve_plan`; `commands.ts` names each other action.
+    expect(TASK_CALLER_FACT_ACTIONS).toEqual({
+      can_raise_budget: 'budget.write',
+      can_export: 'task.export',
+      can_pause: 'task.pause',
+      can_resume: 'task.resume',
+      can_cancel: 'task.cancel',
+      can_return: 'task.return_to_stage',
+      can_rework: 'task.rework',
+      can_decide_approval: 'task.approve_plan',
+    });
   });
 });
