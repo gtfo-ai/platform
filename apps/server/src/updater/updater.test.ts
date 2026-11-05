@@ -76,6 +76,8 @@ const world = async (options: {
   readonly credentialFile?: string;
   /** `core-url` in `worker-state`: a platform chosen on the worker's page (WP-294). */
   readonly storedCoreUrl?: string;
+  /** The folder Docker recorded for the project (`com.docker.compose.project.working_dir`). */
+  readonly workingDir?: string;
 }) => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'updater-state-'));
   const workerStateDir = await mkdtemp(path.join(tmpdir(), 'updater-worker-'));
@@ -132,6 +134,18 @@ const world = async (options: {
       // The same container, its volumes mounted where this world's directories are.
       const self = {
         ...SELF,
+        Config: {
+          ...SELF.Config,
+          Labels: {
+            ...SELF.Config.Labels,
+            ...(options.workingDir === undefined
+              ? {}
+              : {
+                  'com.docker.compose.project.working_dir': options.workingDir,
+                  'com.docker.compose.project.environment_file': '',
+                }),
+          },
+        },
         Mounts: [
           { Type: 'volume', Name: 'agentic-worker_updates', Destination: stateDir },
           { Type: 'volume', Name: 'agentic-worker_worker-state', Destination: workerStateDir },
@@ -272,6 +286,23 @@ describe('the updater’s poll', () => {
         detail: 'carries no build attestation',
       },
     ]);
+  });
+
+  it('refuses, before pulling or draining, a project brought up from a Windows folder — reported once, the worker left taking work (S-22.20, backlog 990)', async () => {
+    const w = await world({
+      advertised: digests('b'),
+      workingDir: 'C:\\Users\\dev\\agentic-worker',
+    });
+    await w.updater.tick();
+    await w.updater.tick();
+    // No pull and no drain: before S-22.20 the refusal came after the drain, every poll.
+    expect(w.events).toEqual(['release', 'release']);
+    expect(w.calls.some((args) => args[1] === 'create')).toBe(false);
+    expect(w.reports).toEqual([
+      expect.objectContaining({ result: 'failed', from: digests('a'), to: digests('b') }),
+    ]);
+    expect(JSON.stringify(w.reports)).toContain('C:\\\\Users\\\\dev\\\\agentic-worker');
+    expect(JSON.stringify(w.reports)).toContain('not a Linux path');
   });
 
   it('refuses a downgrade to an older attested build, reported once', async () => {

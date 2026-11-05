@@ -640,6 +640,7 @@ describe("the workflow linters in ci.yml's lint job", () => {
     ['actionlint', 'rhysd/actionlint'],
     ['zizmor', 'ghcr.io/zizmorcore/zizmor'],
     ['hadolint', 'hadolint/hadolint'],
+    ['shellcheck', 'koalaman/shellcheck'],
   ])('runs %s as a digest-pinned step of the lint job', (name, image) => {
     const step = new RegExp(
       `\\n {6}- name: ${name}\\n {8}uses: docker:\\/\\/${image.replace(/[./]/g, (c) => `\\${c}`)}@sha256:[0-9a-f]{64} # \\S+\\n`,
@@ -654,6 +655,15 @@ describe("the workflow linters in ci.yml's lint job", () => {
     const dockerfiles = tracked('docker/*.Dockerfile');
     expect(dockerfiles.length).toBeGreaterThanOrEqual(5);
     expect([...named].sort()).toEqual([...dockerfiles].sort());
+  }, 15_000);
+
+  // S-22.20: shellcheck's list is every shell script git knows, the same way.
+  it('shellchecks every shell script git knows about, and names no other', () => {
+    const args = /name: shellcheck\n[\s\S]*?\n {10}args: (.+)\n/.exec(lint)?.[1] ?? '';
+    const named = args.split(/\s+/).filter((arg) => arg !== '');
+    const scripts = tracked('*.sh');
+    expect(scripts).toContain('apps/server/src/workers/install/install.sh');
+    expect([...named].sort()).toEqual([...scripts].sort());
   }, 15_000);
 
   /**

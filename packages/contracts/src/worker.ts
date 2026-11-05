@@ -158,6 +158,10 @@ export const WORKER_PATHS = {
   offerClaim: 'offers/:id/claim',
   release: 'release',
   composeFile: 'compose.yml',
+  /** The one-command install for macOS and Linux, public like `compose.yml` (S-22.20). */
+  installSh: 'install.sh',
+  /** The one-command install for Windows PowerShell 5.1 and 7, public like `compose.yml` (S-22.20). */
+  installPs1: 'install.ps1',
   updateReport: 'update-report',
 } as const;
 

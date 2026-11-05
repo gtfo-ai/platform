@@ -11,6 +11,8 @@
  *   POST /api/worker/v1/runs/:id/late-cost      run token
  *   GET  /api/worker/v1/release                 none — public since WP-294; the protocol check stays
  *   GET  /api/worker/v1/compose.yml             none — a person's first-install download (WP-284 (6))
+ *   GET  /api/worker/v1/install.sh              none — the one-command install, macOS and Linux (S-22.20)
+ *   GET  /api/worker/v1/install.ps1             none — the one-command install, Windows (S-22.20)
  *   POST /api/worker/v1/update-report           worker credential (WP-287 (4))
  *   POST /api/worker/v1/manual-pause            worker credential, protocol ≥ 2 (WP-292, `owner-verbs.ts`)
  *   POST /api/worker/v1/runs/:id/cancel         run token, protocol ≥ 2 (WP-292, `owner-verbs.ts`)
@@ -103,6 +105,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { HttpError } from '../../errors.js';
 import type { WorkerStore } from '../../queries/worker-queries.js';
+import { renderInstallScripts } from '../../workers/install.js';
 import type { WorkerRelease } from '../../workers/release.js';
 import { authenticateWorkerCredential } from '../../workers/secrets.js';
 import { registerWorkerOwnerVerbs, type WorkerRunCancelPort } from './owner-verbs.js';
@@ -141,22 +144,33 @@ export const upgradeRequiredBody = (
   digests: options.release()?.digests ?? null,
 });
 
-/** The one worker path a person fetches: the first-install compose file (TD-031's 2026-11-05 amendment). */
+/** The first-install compose file, a worker path a person fetches (TD-031's 2026-11-05 amendment). */
 export const WORKER_COMPOSE_FILE_PATH = `${WORKER_API_PREFIX}/${WORKER_PATHS.composeFile}`;
 
 /**
- * Whether a request is the public compose-file download — `GET` (or the `HEAD` Fastify answers for
- * it) of exactly {@link WORKER_COMPOSE_FILE_PATH}, any query — the one path the protocol check skips
- * (TD-031's 2026-11-05 amendment §2). It is a human download, not a protocol message.
+ * The worker paths a person fetches rather than a worker calls: the compose file (TD-031's
+ * 2026-11-05 amendment) and the two install scripts (S-22.20, its install-scripts amendment).
  */
-export const isPublicComposeDownload = (method: string, url: string): boolean =>
-  (method === 'GET' || method === 'HEAD') && url.split('?')[0] === WORKER_COMPOSE_FILE_PATH;
+export const PUBLIC_WORKER_DOWNLOAD_PATHS: readonly string[] = [
+  WORKER_COMPOSE_FILE_PATH,
+  `${WORKER_API_PREFIX}/${WORKER_PATHS.installSh}`,
+  `${WORKER_API_PREFIX}/${WORKER_PATHS.installPs1}`,
+];
+
+/**
+ * Whether a request is a public download — `GET` (or the `HEAD` Fastify answers for it) of exactly
+ * one of {@link PUBLIC_WORKER_DOWNLOAD_PATHS}, any query — the paths the protocol check skips
+ * (TD-031's 2026-11-05 amendments). Each is a human download, not a protocol message.
+ */
+export const isPublicWorkerDownload = (method: string, url: string): boolean =>
+  (method === 'GET' || method === 'HEAD') &&
+  PUBLIC_WORKER_DOWNLOAD_PATHS.includes(url.split('?')[0] ?? '');
 
 /**
  * `Cache-Control: no-store` and the protocol check on every `/api/worker/v1/` request, **first**
  * (`onRequest`, before body parsing and authentication). Registered on the root instance before any
- * worker route. The public compose-file download is the one exception to the check, never to
- * `no-store` (TD-031's 2026-11-05 amendment).
+ * worker route. The public downloads are the exceptions to the check, never to `no-store` (TD-031's
+ * 2026-11-05 amendments).
  */
 export const registerWorkerProtocolCheck = (
   app: FastifyInstance,
@@ -168,7 +182,7 @@ export const registerWorkerProtocolCheck = (
       return;
     }
     reply.header('cache-control', 'no-store');
-    if (isPublicComposeDownload(request.method, request.url)) {
+    if (isPublicWorkerDownload(request.method, request.url)) {
       return;
     }
     const version = parseWorkerProtocolHeader(request.headers[WORKER_PROTOCOL_HEADER]);
@@ -1006,6 +1020,37 @@ export const registerWorkerProtocolRoutes = async (
         .send(release.composeFile);
     },
   );
+
+  // S-22.20: the one-command install, rendered once with this core's URL (`workers/install.ts`).
+  const installScripts = renderInstallScripts(options.baseUrl ?? 'http://localhost');
+  for (const [verb, name, language] of [
+    [WORKER_PATHS.installSh, 'install.sh', 'POSIX sh, for macOS and Linux'],
+    [WORKER_PATHS.installPs1, 'install.ps1', 'PowerShell 5.1 and 7, for Windows'],
+  ] as const) {
+    typed.get(
+      path(verb),
+      {
+        schema: {
+          summary: `\`${name}\`: install a worker on this machine in one command (${language})`,
+          description: `Public, and outside the \`X-Worker-Protocol\` check (TD-031's 2026-11-05 install-scripts amendment): a person's download, which no worker calls and which holds no secret. The script baked into this core's image with this core's \`APP_BASE_URL\` filled in. It checks Docker, creates \`~/agentic-worker\`, downloads \`compose.yml\` from this core, starts the bundle — its updater included — and opens the worker's page; a re-run never changes the images a worker runs. \`503 install_script_unavailable\` when \`APP_BASE_URL\` cannot be quoted safely (S-22.20).`,
+          tags: ['worker'],
+          // No `response` block: the body is a script, not JSON (as `compose.yml`).
+        },
+      },
+      async (_request, reply) => {
+        const script = installScripts[name];
+        if ('error' in script) {
+          throw new HttpError(503, 'install_script_unavailable', script.error);
+        }
+        return reply
+          .code(200)
+          .header('content-type', 'text/plain; charset=utf-8')
+          .header('x-content-type-options', 'nosniff')
+          .header('content-disposition', `inline; filename="${name}"`)
+          .send(script.text);
+      },
+    );
+  }
 
   registerWorkerOwnerVerbs(app, {
     store: options.store,

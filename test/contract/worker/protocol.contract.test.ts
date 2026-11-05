@@ -230,6 +230,8 @@ const world = async (
     readonly runCalls?: boolean;
     /** A remote run's transcript bound (backlog 754); absent, the shipped one. */
     readonly maxTranscriptEntries?: number;
+    /** `APP_BASE_URL`; absent, `https://core.example.test`. */
+    readonly baseUrl?: string;
   } = {},
 ): Promise<World> => {
   const store = createMemoryWorkerStore();
@@ -438,7 +440,7 @@ const world = async (
     config: loadServerConfig({
       DATABASE_URL: 'postgres://app:app@db:5432/app',
       APP_SECRET_KEY: 'x'.repeat(40),
-      APP_BASE_URL: 'https://core.example.test',
+      APP_BASE_URL: options.baseUrl ?? 'https://core.example.test',
     }),
     logger: createLogger({ level: 'silent', format: 'json', role: 'all' }),
     metrics: createMetrics({ defaultMetrics: false }),
@@ -980,6 +982,49 @@ describe('the worker protocol (WP-281): every verb’s answer, its schema and it
     expect(posted.statusCode).toBe(426);
     const release = await w.app.inject({ method: 'GET', url: url(WORKER_PATHS.release) });
     expect(release.statusCode).toBe(426);
+  });
+
+  it.each([
+    [WORKER_PATHS.installSh, "CORE_URL='https://core.example.test'"],
+    [WORKER_PATHS.installPs1, "$CoreUrl = 'https://core.example.test'"],
+  ])(
+    '%s: public and outside the protocol check, plain text naming this core — served while the digests are unresolved (S-22.20)',
+    async (verb, line) => {
+      // No digests: the script does not need them (it downloads compose.yml, which answers 503 itself).
+      const w = await world({ release: false });
+      const response = await w.app.inject({ method: 'GET', url: url(verb) });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toBe('text/plain; charset=utf-8');
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.body).toContain(line);
+      expect(response.body).toContain(`https://core.example.test/api/worker/v1/${verb}`);
+      expect(response.body).not.toContain('@@AGENTIC_CORE_URL@@');
+      const head = await w.app.inject({ method: 'HEAD', url: `${url(verb)}?v=1` });
+      expect(head.statusCode).toBe(200);
+      // A credential, if presented, is ignored: the same bytes, no contact recorded.
+      const before = w.store.worker(w.alice.workerId)?.lastSeenAt ?? null;
+      const credentialed = await w.app.inject({
+        method: 'GET',
+        url: url(verb),
+        headers: bearer(w.alice.credential),
+      });
+      expect(credentialed.body).toBe(response.body);
+      expect(w.store.worker(w.alice.workerId)?.lastSeenAt ?? null).toEqual(before);
+      // Only GET skips the check.
+      const posted = await w.app.inject({ method: 'POST', url: url(verb) });
+      expect(posted.statusCode).toBe(426);
+    },
+  );
+
+  it('install.sh and install.ps1 answer 503 install_script_unavailable for an APP_BASE_URL they cannot quote (S-22.20)', async () => {
+    const w = await world({ baseUrl: "https://core.example.test/it's" });
+    for (const verb of [WORKER_PATHS.installSh, WORKER_PATHS.installPs1]) {
+      const response = await w.app.inject({ method: 'GET', url: url(verb) });
+      expect(`${verb} ${response.statusCode} ${response.json().error?.code}`).toBe(
+        `${verb} 503 install_script_unavailable`,
+      );
+    }
   });
 
   it('release and compose.yml answer 503 digests_unresolved naming the image (WP-284)', async () => {
