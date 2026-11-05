@@ -50,10 +50,13 @@ describe('the bindable-integration selector (WP-122)', () => {
       .sort();
     // `queries.ts` defines it and `useBindableIntegrations` wraps it; the screens that show retired
     // rows on purpose are the other readers: the list, and since S-23.11a one integration's own page
-    // (which finds its row in the list read and shows a retired one as retired, with no write).
+    // (which finds its row in the list read and shows a retired one as retired, with no write) —
+    // and since S-23.23 the add-integration wizard, which finds the row it created by `?id=` after a
+    // reload and reads the list's `can_write`; it binds nothing, so the selector's filter is not its.
     expect(callers).toEqual([
       'app/queries.ts',
       'features/integration-detail.tsx',
+      'features/integration-wizard.tsx',
       'features/integrations.tsx',
     ]);
   });

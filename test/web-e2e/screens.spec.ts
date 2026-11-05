@@ -767,6 +767,24 @@ test('the run screen retries with a model and an effort, and sends stage-scoped 
   await page.getByRole('button', { name: 'Steer' }).click();
   await expect(page.getByText(/Accepted\. The agent runs in another process/)).toBeVisible();
 
+  // S-23.23: *Re-run ▾* is offered only once the run has ended (the server refuses `run.retry` on a
+  // live run), so the run read is answered as failed from here on and the page is read again.
+  await page.route(`**/api/runs/${IDS.run}`, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as Record<string, unknown>;
+    await route.fulfill({
+      response,
+      json: {
+        ...body,
+        status: 'failed',
+        terminal_reason: 'error_during_execution',
+        ended_at: new Date().toISOString(),
+      },
+    });
+  });
+  await page.reload();
+  await expect(page.getByLabel('Steer the agent')).toHaveCount(0);
+
   // WP-159: a select over `GET /api/org/models`, starting (WP-167) on *Configured (…)*, which names
   // the run read's `retry_defaults`. Wait for a listed option the run is not on first, so the value
   // is asserted over the loaded list (rule 87). Since S-23.10 the fields are behind *Re-run ▾*.

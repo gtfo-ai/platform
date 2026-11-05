@@ -875,7 +875,8 @@ describe('the project settings page', () => {
     render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
     await screen.findByText('Notifications');
     await waitFor(() => {
-      expect(document.body.textContent).toContain('No chat integration is bound');
+      // S-23.23's vocabulary: a project *uses* an integration, under its Connections.
+      expect(document.body.textContent).toContain('This project uses no chat integration');
     });
     expect(screen.queryByLabelText('Channel')).toBeNull();
   });
