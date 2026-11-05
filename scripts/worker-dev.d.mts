@@ -11,5 +11,6 @@ export type WorkerDevPlan =
   | { readonly kind: 'compose'; readonly args: string[] }
   | { readonly kind: 'usage'; readonly error: string | null };
 export declare const planCommand: (argv: readonly string[]) => WorkerDevPlan;
+export declare const pageAddress: (vitePort: string, token: string | null) => string;
 export declare const pageTokenFrom: (logs: string) => string | null;
 export declare const workerOriginFrom: (portOutput: string) => string | null;

@@ -20,9 +20,9 @@
  *
  * **The page is a second command, not part of `up`**: Vite is a foreground process with its own
  * terminal (and Ctrl-C), while `up -d` returns. `ui` reads the worker's published port with
- * `docker compose port` and its page token from the worker's own start line — the line
- * `pnpm worker:dev logs remote-worker | grep token=` prints anyway — and prints the Vite address
- * with the token in the fragment. This script never reads `.env.worker`'s values: compose does.
+ * `docker compose port` and its page token, if it logged one, from the worker's own start line —
+ * the line `pnpm worker:dev logs remote-worker | grep token=` prints anyway — and prints the Vite
+ * address, with the token in the fragment when there is one. This script never reads `.env.worker`'s values: compose does.
  *
  * Plain Node, no TypeScript resolver: it runs before `pnpm install` is a question.
  */
@@ -102,6 +102,14 @@ export const pageTokenFrom = (logs) => {
   return matches.at(-1)?.[1] ?? null;
 };
 
+/**
+ * The page's address on Vite. A worker that logged a page token gets it in the fragment; one that
+ * logged none — the page is tokenless by default (S-22.17) — is opened as it is. `localhost`, not
+ * `127.0.0.1`: Vite listens on `localhost`, which on macOS is `::1` alone (measured).
+ */
+export const pageAddress = (vitePort, token) =>
+  `http://localhost:${vitePort}/worker.html${token === null ? '' : `#token=${token}`}`;
+
 /** `127.0.0.1:7358` (or `0.0.0.0:7358`, `[::1]:7358`) → `http://127.0.0.1:7358`, else `null`. */
 export const workerOriginFrom = (portOutput) => {
   const line = portOutput.trim().split('\n')[0] ?? '';
@@ -168,11 +176,7 @@ const main = () => {
   });
   const token = pageTokenFrom(`${logs.stdout ?? ''}`);
   const vitePort = process.env.APP_WORKER_DEV_VITE_PORT || DEFAULT_VITE_PORT;
-  process.stdout.write(
-    token === null
-      ? `the worker has not logged its page token yet; open http://localhost:${vitePort}/worker.html#token=<the token from \`pnpm worker:dev logs remote-worker | grep token=\`>\n`
-      : `the page, hot-reloading: http://localhost:${vitePort}/worker.html#token=${token}\n`,
-  );
+  process.stdout.write(`the page, hot-reloading: ${pageAddress(vitePort, token)}\n`);
   const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
   const vite = spawn(
     pnpm,
