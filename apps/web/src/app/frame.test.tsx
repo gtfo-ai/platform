@@ -142,6 +142,9 @@ const fetchFor = (world: World) =>
             task_id: item.task_id,
             role: item.role,
             last_output_at: null,
+            // S-23.15: required on the wire; not claimed yet and no entry, which the frame ignores.
+            seat: null,
+            activity: null,
           };
         }),
       });
