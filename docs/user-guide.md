@@ -936,32 +936,61 @@ such, and so are the failing jobs past the fifth.
 
 ## 5. Run detail and the transcript
 
-Click a run. Header metrics, then four tabs:
+Click a run — in the task's run list, under *Running now* on Home, or on the Agents screen. The page
+is laid out like a GitHub Actions job:
 
-- **Transcript** — the live stream of the agent's turn: messages, tool calls and their results, as
-  they happen. This is the "click and watch" part of the product. Everything in it is rendered as
-  **text**; the application has no markdown-to-HTML step anywhere, on purpose, because all of it —
-  model output, tool results, file contents — is untrusted
-  ([BD-022](decisions/business/BD-022-external-text-is-untrusted.md)). The first row, **system ·
-  init**, is the Claude Code CLI's own start-up message, shown as the CLI sent it. Its `skills` list
-  is everything the CLI found, including its own bundled skills (`deep-research`, `update-config`
-  and others), and it is **not** what this run could use: the run was handed only its role's
-  platform skills (`agentic:kb` and the like) — the only skills written into its workspace — and the
-CLI refuses any other.
+- **The header** leads back to the task, by its ticket key and title, and names the run: its status
+  icon, the stage, the role and the attempt (*Implementation · Developer · attempt 3*). The actions
+  are on the right. **Cancel run** is there while the run is live — the only coloured button then,
+  and it asks before it cancels. **Re-run ▾** becomes the primary button once a run has failed. The
+  **···** menu holds **Take over…** (**Hand back…** while the task is taken over), which opens the
+  same take-over form and hand-back the task page has, and **Download transcript**, the run's
+  transcript as a JSONL file.
+- **The left column** is the task's runs in stage order, each with its status icon, the one you
+  are reading marked — click another to read it. Under it, **Details** opens the settings line
+  (described under *Settings* below), where an unsuccessful run's unfinished work was saved, and the
+  version of the role prompt the run was given.
+- **The summary strip** gives the status, the model, the effort, the cost (marked *est.* when the
+  platform estimated it), the elapsed time, the turns and the tokens. Hover or focus a label for
+  what its number means.
+- **While the run is live**, a *Now:* line says what the agent is doing, in the words the board and
+  the Agents screen use (*Reading files*, *Running a command*, *No activity for 6 min*), with its
+  last few steps under it as **Live activity**.
+
+Then four tabs:
+
+- **Transcript** — the agent's session as a log, live. Each tool call is one **step**: a status
+  icon, the tool, what it was called with and how long it took, collapsed until you open it.
+  Opening it shows the call itself — the change as removed and added text, the command and its
+  output, the file it read, or a sub-agent's own transcript nested inside. The step the agent is on
+  and any step that failed are open already. The model's words are prose between the steps, and its
+  thinking stays folded under *Thinking*. The log scrolls in a pane of its own, sized to the window:
+  at the bottom it follows the end; scroll up and it stays where you are, with **Paused updates, N
+  behind**, until you press **Follow tail**. Everything in it is rendered as **text**; the
+  application has no markdown-to-HTML step anywhere, on purpose, because all of it — model output,
+  tool results, file contents — is untrusted
+  ([BD-022](decisions/business/BD-022-external-text-is-untrusted.md)). The first row, **System ·
+  init**, folded like a step, is the Claude Code CLI's own start-up message, shown as the CLI sent
+  it. Its `skills` list is everything the CLI found, including its own bundled skills
+  (`deep-research`, `update-config` and others), and it is **not** what this run could use: the run
+  was handed only its role's platform skills (`agentic:kb` and the like) — the only skills written
+  into its workspace — and the CLI refuses any other.
 - **Prompt** — the exact system and user prompt that produced this run.
 - **Context pack** — what was retrieved and put in front of the model.
 - **Settings** — the project settings this run was planned with, frozen when the run was created
-  and redacted then. The line under the header says whether they were the same as the task's
-  previous run's.
+  and redacted then. The settings line under **Details** says whether they were the same as the
+  task's previous run's.
 
 A run reads **starting** from the moment the platform's runner takes it until it asks for the
 agent's CLI — while its workspace is prepared — and **running** from then on; a starting run shows
 no elapsed time yet and can be cancelled, and a steer sent to it is recorded and reaches the agent
 as soon as it starts. A run that ends while still starting never ran an agent and cost nothing.
 
-You can **cancel** the run (member), **retry** it with a different model or effort (member — this
-creates a *new* run rather than changing this one), and leave **feedback** scoped to the stage. The
-model is a list, not a box to type into: it offers the models the platform has a price for (the
+You can **cancel** the run (member), **re-run** it (member — this creates a *new* run rather than
+changing this one), and leave **feedback** scoped to the stage at the foot of the page. **Re-run ▾**
+offers *Re-run as configured*, a new run on the stage's configured model and effort, and *Re-run
+with another model or effort…*, a dialog with two lists and **Retry run**. The model is a list, not
+a box to type into: it offers the models the platform has a price for (the
 operator's `price_list`), and it starts on **Configured (…)**, which names the model the project's
 configuration gives this stage. Leaving it there re-plans the new run from the configuration, so
 that is the model it runs (if somebody changes the configuration before you press the button, the
@@ -977,7 +1006,7 @@ refused (`model_not_listed`), so a typo never reaches a run.
 budget, out of time, stalls or crashes, the platform commits what it had changed as one
 `wip: unfinished attempt <n> of implementation (<reason>)` commit and pushes it to the task's
 `agentic/<ticket>` branch, with the run's own credential — the same export a take-over makes. The run
-page says so under the header (*Unfinished work saved: pushed to … at …*), the task's run list marks
+page says so under **Details** (*Unfinished work saved: pushed to … at …*), the task's run list marks
 the run *work saved to branch*, and the escalation's brief tells you a retry continues from that
 branch. **Retry the stage** and the new run starts on that branch and is told to read the previous
 attempt's work and carry on rather than start over; the `wip:` commit stays in the branch's history.
@@ -985,11 +1014,13 @@ A run that changed nothing pushes nothing. If the push fails the run page says s
 only in the run's workspace volume, which is kept for three days. A run you **cancel** is not saved —
 take the task over instead if you want its work.
 
-**Steering a live run is accepted, then applied or refused** (WP-85). It pushes a turn into a
+**Steering a live run is accepted, then applied or refused** (WP-85). The steer box sits under
+the log and stays at the bottom of the window while the run is live; a run that has ended has
+none. A steer pushes a turn into a
 session that is already running, which only the process running that session can do — on a stock
 instance the `runner` container, never the process serving this application. So the message is
 recorded and handed to the runner through the database: the screen says *Accepted* at once, and
-**Commands sent to this run**, under the transcript, then shows whether it was *applied* (it appears
+**Commands sent to this run**, under the steer box, then shows whether it was *applied* (it appears
 in the transcript as a turn attributed to you) or *refused* — *the run ended before it could be
 applied* (it is never applied late), *the live session did not take it* (it was closing; not
 retried) or *no live session was found*. A message usually applies within
@@ -997,7 +1028,8 @@ a second; one that stays *pending* for a couple of minutes means the runner's da
 struggling. You can send one message every five seconds; the limit is yours across the whole
 installation, however many processes serve this application (WP-101).
 
-**Cancel stops the session** (WP-101). When the runner is holding the run — the usual case — the
+**Cancel stops the session** (WP-101). **Cancel run** first asks you to confirm, saying what it
+does; **Keep it running** sends nothing. When the runner is holding the run — the usual case — the
 task is paused at once, the cancel is handed to the runner the same way a steer is, and **Commands
 sent to this run** shows it as *Cancel*: *pending* until the runner interrupts the session, then
 *applied*. The run then ends *cancelled* with what the session had cost up to that moment, charged

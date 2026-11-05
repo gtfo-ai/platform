@@ -13,12 +13,21 @@
  * (`ticket.url`, `mr_ref.url`, `artifacts[].url`), which `urlSchema` accepts with any scheme at
  * all.
  */
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import { HOSTILE, IDS, PROJECT_KEY } from './support/fixtures.js';
 import { resetBackend, signIn } from './support/harness.js';
 
 /** Set by any of the payloads if one of them ever executes. */
 const PWNED = 'window.__pwned';
+
+/** Opens the run page's log step whose line names `summary` (S-23.10: a finished step is collapsed). */
+const openStep = async (page: Page, summary: string): Promise<void> => {
+  const step = page.locator('[data-log-step="tool"]').filter({
+    has: page.locator('summary', { hasText: summary }),
+  });
+  await step.locator('summary').click();
+  await expect(step).toHaveAttribute('open', '');
+};
 
 test.beforeEach(async ({ page, request }) => {
   await resetBackend(request);
@@ -84,6 +93,8 @@ test('a bidi override in tool output is replaced rather than allowed to reorder 
   page,
 }) => {
   await page.goto(`/runs/${IDS.run}`);
+  // S-23.10: a finished tool call is a collapsed log step; its output is what opening it shows.
+  await openStep(page, 'src/retry.ts');
   const output = page.locator('pre code').filter({ hasText: 'export const retries = 3;' });
   await expect(output).toBeVisible();
 
@@ -98,6 +109,7 @@ test('ANSI sequences in shell output are stripped, not rendered as characters', 
   page,
 }) => {
   await page.goto(`/runs/${IDS.run}`);
+  await openStep(page, 'pnpm test');
   const terminal = page.getByTestId('terminal-block').first();
   await expect(terminal).toBeVisible();
 

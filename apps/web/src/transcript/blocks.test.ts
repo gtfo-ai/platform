@@ -73,6 +73,8 @@ describe('toBlocks', () => {
       ['tool', later],
       ['text', envelope.created_at],
     ]);
+    // …while the call's own instant is kept beside it, so the log step can say how long it took.
+    expect((blocks[0] as ToolBlock).startedAt).toBe(envelope.created_at);
     const pending = toBlocks([toolUse(1, 'toolu_2', 'Bash')]);
     expect(pending[0]?.at).toBe(envelope.created_at);
   });

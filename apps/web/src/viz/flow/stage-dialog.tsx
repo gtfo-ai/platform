@@ -27,7 +27,6 @@
  * untrusted (BD-022) and goes through `ui/untrusted.tsx` (`TerminalLines`, `UntrustedText`).
  */
 import type { AgentsResponse, TaskDetailResponse } from '@platform/contracts';
-import { DotFillIcon } from '@primer/octicons-react/DotFillIcon';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useRunMessages } from '../../app/queries.js';
@@ -35,13 +34,13 @@ import { useServices } from '../../app/services.js';
 import { useTopics } from '../../realtime/provider.js';
 import { ACTIVITY_META } from '../../ui/activity.js';
 import { Button } from '../../ui/button.js';
-import { cx } from '../../ui/cx.js';
 import { Dialog } from '../../ui/dialog.js';
 import { ARTIFACT_TYPE_LABEL, loopLabel, ROLE_LABEL, stageLabel } from '../../ui/humanize.js';
 import { formatElapsed, formatRunCost } from '../../ui/kit.js';
-import { StateLabel, type Status, StatusIcon } from '../../ui/status.js';
+import { StateLabel, type Status } from '../../ui/status.js';
 import { TerminalLines, UntrustedText } from '../../ui/untrusted.js';
-import { type ActivityRow, activityRows, clockTime, logLines } from './activity-rows.js';
+import { ActivityList } from './activity-list.js';
+import { activityRows, logLines } from './activity-rows.js';
 import type { FlowGraph, FlowNode, FlowState } from './model.js';
 import { cardBody, KIND_LOOK, modelChip, statusWord } from './stage-card.js';
 
@@ -137,39 +136,6 @@ const useFollowTail = (newest: string | null) => {
   };
   return { ref, following, onScroll, follow: () => setFollowing(true) };
 };
-
-const ROW_STATUS: Readonly<Record<ActivityRow['state'], Status | null>> = {
-  current: 'running',
-  error: 'failure',
-  needs_you: 'needs_you',
-  done: null,
-};
-
-const ActivityList = ({ rows }: { readonly rows: readonly ActivityRow[] }): ReactElement =>
-  rows.length === 0 ? (
-    <p className="text-xs text-fg-muted">Nothing yet. Rows appear as the agent works.</p>
-  ) : (
-    <ol aria-label="Live activity" className="flex flex-col gap-1 text-xs">
-      {rows.map((row) => {
-        const status = ROW_STATUS[row.state];
-        return (
-          <li key={row.key} data-activity-row={row.state} className="flex items-center gap-2">
-            <span className="w-16 shrink-0 tabular-nums text-fg-muted">{clockTime(row.at)}</span>
-            {status === null ? (
-              <span aria-hidden="true" className="inline-flex text-fg-subtle">
-                <DotFillIcon size={12} />
-              </span>
-            ) : (
-              <StatusIcon status={status} size={12} label={ACTIVITY_META[row.activity].label} />
-            )}
-            <span className={cx('truncate', row.state === 'current' ? 'font-medium' : null)}>
-              {row.label}
-            </span>
-          </li>
-        );
-      })}
-    </ol>
-  );
 
 /** The run's live activity and log, while the dialog is open. */
 const RunPanels = ({ runId, live }: { readonly runId: string; readonly live: boolean }) => {

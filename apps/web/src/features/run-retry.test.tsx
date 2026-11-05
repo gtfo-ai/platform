@@ -131,7 +131,13 @@ const open = async (
   const world: World = { run: runOn(model), defaults, listed, retries: [] };
   const user = userEvent.setup();
   render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
-  const select = (await screen.findByLabelText('Retry with model')) as HTMLSelectElement;
+  // S-23.10: the fields are behind *Re-run ▾* → *Re-run with another model or effort…*.
+  await user.click(await screen.findByRole('button', { name: 'Re-run' }));
+  await user.click(
+    await screen.findByRole('menuitem', { name: 'Re-run with another model or effort…' }),
+  );
+  const dialog = await screen.findByRole('dialog', { name: 'Re-run with another model or effort' });
+  const select = (await within(dialog).findByLabelText('Retry with model')) as HTMLSelectElement;
   return { world, user, select };
 };
 
@@ -144,12 +150,47 @@ const optionLabels = (select: HTMLSelectElement): string[] =>
   [...select.options].map((option) => option.textContent ?? '');
 
 const retry = async (world: World, user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(screen.getByRole('button', { name: 'Retry run' }));
+  await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Retry run' }));
   await waitFor(() => {
     expect(world.retries).toHaveLength(1);
   });
   return world.retries[0];
 };
+
+describe('Re-run ▾ (S-23.10)', () => {
+  it('is the primary action after a failure, and re-runs as configured in one choice', async () => {
+    const world: World = {
+      run: runOn('claude-fake-b'),
+      defaults: { model: 'claude-fake-b', effort: 'high' },
+      listed: LISTED,
+      retries: [],
+    };
+    const user = userEvent.setup();
+    render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
+    const trigger = await screen.findByRole('button', { name: 'Re-run' });
+    // The beacon is the primary tone's fill (`ui/button.tsx`): the one thing to do on a failed run.
+    expect(trigger.className).toContain('bg-primary');
+    await user.click(trigger);
+    await user.click(await screen.findByRole('menuitem', { name: 'Re-run as configured' }));
+    await waitFor(() => {
+      expect(world.retries).toEqual([{}]);
+    });
+    expect(await screen.findByText(/A new run was requested/)).toBeTruthy();
+  });
+
+  it('is a quiet button while the run is live', async () => {
+    const world: World = {
+      run: { ...runOn('claude-fake-b'), status: 'running', terminal_reason: null, ended_at: null },
+      defaults: { model: 'claude-fake-b', effort: 'high' },
+      listed: LISTED,
+      retries: [],
+    };
+    render(createApp({ fetchImpl: fetchFor(world), realtime: false }).element);
+    const trigger = await screen.findByRole('button', { name: 'Re-run' });
+    expect(trigger.className).not.toContain('bg-primary');
+    expect(screen.getByRole('button', { name: 'Cancel run' })).toBeTruthy();
+  });
+});
 
 describe('Retry run’s model select (WP-159)', () => {
   it('offers Configured (…) first, then the server’s list, and preselects Configured', async () => {

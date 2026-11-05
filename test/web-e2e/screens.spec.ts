@@ -707,7 +707,12 @@ test('the run screen retries with a model and an effort, and sends stage-scoped 
 
   // WP-159: a select over `GET /api/org/models`, starting (WP-167) on *Configured (…)*, which names
   // the run read's `retry_defaults`. Wait for a listed option the run is not on first, so the value
-  // is asserted over the loaded list (rule 87).
+  // is asserted over the loaded list (rule 87). Since S-23.10 the fields are behind *Re-run ▾*.
+  await page.getByRole('button', { name: 'Re-run' }).click();
+  await page.getByRole('menuitem', { name: 'Re-run with another model or effort…' }).click();
+  await expect(
+    page.getByRole('dialog', { name: 'Re-run with another model or effort' }),
+  ).toBeVisible();
   await expect(
     page.getByLabel('Retry with model').locator('option', { hasText: 'claude-sonnet-5' }),
   ).toHaveCount(1);

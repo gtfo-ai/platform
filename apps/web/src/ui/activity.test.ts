@@ -380,6 +380,7 @@ const tool = (seq: number, minute: number, toolName: string, children: Transcrip
   ({
     ...base(seq, minute),
     kind: 'tool',
+    startedAt: AT(minute),
     toolUseId: `toolu_${seq}`,
     toolName,
     input: {},

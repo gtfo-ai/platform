@@ -554,10 +554,8 @@ describe('the run screen’s context pack (backlog 168 and 172)', () => {
     // Backlog 172: why tier 1 has no text match, naming the dropped word.
     expect(container.textContent).toContain(textSearchText(pack([true, false])) ?? 'unreachable');
     expect(container.textContent).toContain('demo');
-    // And the run's own transcript download, a same-origin link.
-    expect(
-      [...container.querySelectorAll('a[download]')].map((anchor) => anchor.getAttribute('href')),
-    ).toContain(`/api/runs/${RUN}/transcript.jsonl`);
+    // The run's own transcript download moved into the header's run actions menu (S-23.10);
+    // `run-page.test.tsx` holds it there.
   });
 
   it('marks nothing when every tier-1 page was admitted', async () => {

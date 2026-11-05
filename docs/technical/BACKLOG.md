@@ -100,6 +100,9 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 833 | nit | — | The task page's answer box is still named `Answer question <uuid>` for assistive tech (`task-callout.tsx`); the inbox's is a visible *Your answer* label since S-23.11a |
 | 851 | nit | — | The task rail's links are the ticket and the merge request only: no task DTO field carries the chat thread's URL (`chat_threads` is server-side), so research/19 § 5.2's "ticket · MR · thread" lists two |
 | 853 | nit | — | The stage timeline draws a return as the loop glyph and *try N*, not as an edge to the stage it went back to: the task DTO's stage rows carry no `returned_to` (it is in `task_stages`), so a loop's target is not on the page |
+| 860 | nit | — | The run page's ··· *Download transcript* is an `ActionMenuLinkItem` over the absolute same-origin URL (`safeHref`), so it opens a new tab that the attachment closes, not a same-tab `download` anchor: `DownloadLink` cannot be a menu item until it takes a host's props (S-23.9b adds them); switch then |
+| 861 | nit | — | A collapsed log step still renders its body (the renderer's diff, terminal or file, inside a closed `<details>`), so a long run's page holds every tool output in the DOM; with no virtualisation either (`transcript/view.tsx`), a body could be rendered on first open instead |
+| 862 | nit | — | A log step's duration is the gap between the call's and the result's transcript rows' `created_at` (the sink's write instants, `transcript/steps.ts`), not the tool's own execution time; a delayed write stretches it, and nothing on the wire carries the tool's own timing |
 | 132 | ? | — | Unexplained once: authenticated GET /api/artifacts/:id answered 200 with an empty body in verify:e2e; instrumented, not seen since |
 | 7 | ? | — | "Carried, not yet scheduled": a bullet list of carried nits (route-sealed credential never opened by the loader, volume retention, …) |
 

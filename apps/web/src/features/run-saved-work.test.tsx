@@ -122,7 +122,7 @@ describe('the run page of a run whose unfinished work was saved (backlog 467)', 
 
   it('says nothing for a run whose work was not saved', async () => {
     render(createApp({ fetchImpl: fetchWith(runWith(null)), realtime: false }).element);
-    expect(await screen.findByRole('textbox', { name: 'Steer the agent' })).not.toBeNull();
+    expect(await screen.findByTestId('transcript-scroller')).not.toBeNull();
     expect(screen.queryByLabelText('Unfinished work')).toBeNull();
   });
 });

@@ -175,9 +175,18 @@ describe('the run page of a run that never started (backlog 453)', () => {
     expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
   });
 
-  it('shows the transcript and the steer box for a run that started', async () => {
-    render(createApp({ fetchImpl: fetchWith(runWith(null)), realtime: false }).element);
-    expect(await screen.findByRole('textbox', { name: 'Steer the agent' })).not.toBeNull();
+  it('shows the transcript for a run that started, and the steer box only while it is live', async () => {
+    const view = render(
+      createApp({ fetchImpl: fetchWith(runWith(null)), realtime: false }).element,
+    );
+    expect(await screen.findByTestId('transcript-scroller')).not.toBeNull();
     expect(screen.queryByRole('region', { name: 'This run did not start' })).toBeNull();
+    // S-23.10: this run failed, so there is no live session to steer.
+    expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
+    view.unmount();
+
+    const live: RunRecord = { ...runWith(null), status: 'running', terminal_reason: null };
+    render(createApp({ fetchImpl: fetchWith(live), realtime: false }).element);
+    expect(await screen.findByRole('textbox', { name: 'Steer the agent' })).not.toBeNull();
   });
 });

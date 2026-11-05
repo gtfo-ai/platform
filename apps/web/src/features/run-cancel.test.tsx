@@ -8,7 +8,7 @@
  * here rather than reading as success.
  */
 import type { RunReadResponse, RunRecord } from '@platform/contracts';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -113,16 +113,56 @@ beforeEach(() => {
   window.history.pushState({}, '', `/runs/${RUN}`);
 });
 
+/**
+ * S-23.10: *Cancel run* is the header's outline-danger button and it asks first — the dialog's own
+ * *Cancel run* is what sends the command.
+ */
+const confirmCancel = async (user: ReturnType<typeof userEvent.setup>) => {
+  await user.click(await screen.findByRole('button', { name: 'Cancel run' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Cancel this run?' });
+  await user.click(within(dialog).getByRole('button', { name: 'Cancel run' }));
+};
+
 const cancelThrough = async (cancel: () => Response) => {
   const posted: string[] = [];
   const user = userEvent.setup();
   const view = render(createApp({ fetchImpl: fetchWith(cancel, posted), realtime: false }).element);
-  await user.click(await screen.findByRole('button', { name: 'Cancel run' }));
+  await confirmCancel(user);
   await waitFor(() => {
     expect(posted).toContain(`/api/runs/${RUN}/cancel`);
   });
   return view;
 };
+
+describe('Cancel run asks before it cancels (S-23.10)', () => {
+  it('says what cancelling does, and sends nothing when the run is kept', async () => {
+    const posted: string[] = [];
+    const user = userEvent.setup();
+    render(createApp({ fetchImpl: fetchWith(answer(null, 200), posted), realtime: false }).element);
+    await user.click(await screen.findByRole('button', { name: 'Cancel run' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Cancel this run?' });
+    expect(dialog.textContent).toContain('Unfinished work is not saved');
+    await user.click(within(dialog).getByRole('button', { name: 'Keep it running' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(posted).toEqual([]);
+  });
+
+  it('offers no Cancel run once the run has ended', async () => {
+    const ended: RunRecord = {
+      ...RUNNING,
+      status: 'completed',
+      terminal_reason: 'success',
+      ended_at: '2026-09-30T09:05:00.000Z',
+    };
+    render(
+      createApp({ fetchImpl: fetchWith(answer(null, 200), [], ended), realtime: false }).element,
+    );
+    await screen.findByRole('tab', { name: 'Transcript' });
+    expect(screen.queryByRole('button', { name: 'Cancel run' })).toBeNull();
+  });
+});
 
 describe('the run screen’s cancel says which branch happened (WP-101)', () => {
   it('says the stop was accepted for the process running the agent when a command was recorded (202)', async () => {
@@ -182,9 +222,9 @@ describe('the run screen of a starting run (WP-275b)', () => {
       }).element,
     );
     const cancel = await screen.findByRole('button', { name: 'Cancel run' });
-    expect(container.textContent).toContain('starting');
+    expect(container.textContent).toContain('Starting');
     expect(cancel).not.toHaveProperty('disabled', true);
-    await user.click(cancel);
+    await confirmCancel(user);
     await waitFor(() => {
       expect(posted).toContain(`/api/runs/${RUN}/cancel`);
     });

@@ -56,6 +56,11 @@ export interface ThinkingBlock extends BlockBase {
 
 export interface ToolBlock extends BlockBase {
   readonly kind: 'tool';
+  /**
+   * When the call was made — its own row's `created_at`, which `at` stops being once a result is
+   * folded in. The run page's log step reads the two apart as the call's duration.
+   */
+  readonly startedAt: string;
   readonly toolUseId: string;
   readonly toolName: string;
   readonly input: Readonly<Record<string, unknown>>;
@@ -136,6 +141,7 @@ interface ToolDraft {
     id: string;
     seq: number;
     at: string;
+    startedAt: string;
     toolUseId: string;
     toolName: string;
     input: Readonly<Record<string, unknown>>;
@@ -170,6 +176,7 @@ const contentToBlocks = (
             id,
             seq,
             at,
+            startedAt: at,
             toolUseId: item.tool_use_id,
             toolName: item.tool_name,
             input: item.input,

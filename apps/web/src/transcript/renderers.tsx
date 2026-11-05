@@ -9,6 +9,10 @@
  * `toolRendererKind` is a pure function so the *routing* can be asserted without rendering — the
  * part that drifts when the SDK renames a tool is the mapping, not the markup.
  *
+ * Since S-23.10 a body is what a **log step** shows when it is opened (`view.tsx`, `steps.ts`): the
+ * step's own line — status icon, tool, argument summary, duration — replaced the header card that
+ * used to sit above it.
+ *
  * **Every string in here is untrusted** (BD-022): the tool name comes from the model, the input is
  * whatever it invented, and the result is the output of a program running in the agent's
  * workspace. Nothing is rendered as HTML — see `ui/untrusted-text.ts`. The diff renderer shows the
@@ -17,7 +21,6 @@
  * recorded as follow-up.
  */
 import type { ReactElement, ReactNode } from 'react';
-import { Badge, cx } from '../ui/kit.js';
 import { CodeText, JsonView, NumberedCode, TerminalText, UntrustedText } from '../ui/untrusted.js';
 import type { ToolBlock } from './blocks.js';
 
@@ -211,21 +214,3 @@ export const ToolBody = ({ block, renderChildren }: ToolBodyProps): ReactElement
       return <GenericBody block={block} />;
   }
 };
-
-export const ToolHeader = ({ block }: { readonly block: ToolBlock }): ReactElement => (
-  <div className="flex items-center gap-2">
-    <span
-      className={cx(
-        'font-mono text-xs font-semibold',
-        block.result?.isError === true && 'text-danger',
-      )}
-    >
-      {/* The tool name comes from the model: text node, never an attribute or a class. */}
-      <UntrustedText value={block.toolName} />
-    </span>
-    <Badge tone={block.result === null ? 'accent' : block.result.isError ? 'danger' : 'success'}>
-      {block.result === null ? 'running' : block.result.isError ? 'error' : 'done'}
-    </Badge>
-    <span className="ml-auto font-mono text-[11px] text-fg-muted">#{block.seq}</span>
-  </div>
-);

@@ -223,7 +223,7 @@ describe('docs/user-guide.md names the screens the app renders (WP-129)', () => 
       expect(guideFindings(dropped, tabLabels(), navLabels())).toContainEqual(
         `§ 5 lists the tabs ${JSON.stringify(['Transcript', 'Prompt', 'Context pack', '?'])}; the app renders ${JSON.stringify(tabLabels())}`,
       );
-      const miscounted = guide().replace('then four tabs:', 'then three tabs:');
+      const miscounted = guide().replace('Then four tabs:', 'Then three tabs:');
       expect(guideFindings(miscounted, tabLabels(), navLabels())).toEqual([
         `§ 5 says "three tabs"; the app renders ${tabLabels().length}`,
       ]);

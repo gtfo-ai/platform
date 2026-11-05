@@ -14,7 +14,7 @@
  * first assertion of each test is that the number is greater than zero. A fake SSE backend that
  * delivered to nobody would otherwise make every "the screen did not change" assertion pass.
  */
-import type { SseFrame } from '@platform/contracts';
+import type { SseFrame, TranscriptEvent } from '@platform/contracts';
 import { expect, test } from '@playwright/test';
 import { IDS, liveTranscriptEvent, PROJECT_KEY } from './support/fixtures.js';
 import {
@@ -89,6 +89,69 @@ test('a running stage’s transcript appears live on the task page', async ({ pa
   expect(delivered, 'the frame reached no stream, so the assertion below proves nothing').toBe(1);
 
   await expect(transcript.getByText('Streamed after the page was fetched.')).toBeVisible();
+});
+
+/** An assistant frame of a few lines, so a run of them overflows the log pane. */
+const longFrame = (seq: number): SseFrame => ({
+  frame: 'transcript',
+  topic: runTopic,
+  seq,
+  data: {
+    ...liveTranscriptEvent,
+    seq,
+    content: [{ type: 'text', text: `Frame ${seq}, first line.\nSecond line.\nThird line.` }],
+  } as TranscriptEvent,
+});
+
+/**
+ * S-23.10, technical/09's follow-tail: the run's log is a scroll pane of its own, sized to the
+ * viewport — the page does not grow with the transcript — so following the end and "paused, N
+ * behind" are about that pane. Measured in a real browser, where the pane has a layout.
+ */
+test('the run log is its own pane: it follows the end, pauses when scrolled up and counts what arrived', async ({
+  page,
+  request,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`/runs/${IDS.run}`);
+  await expect(page.getByText('Reading the retry helper.')).toBeVisible();
+  await waitForStreamCarrying(request, runTopic, pingProbe(runTopic), 'ping');
+
+  for (let seq = 20; seq < 50; seq += 1) {
+    expect(await publishFrame(request, runTopic, 'assistant', longFrame(seq))).toBe(1);
+  }
+  await expect(page.getByText('Frame 49, first line.')).toBeVisible();
+
+  const pane = page.getByTestId('transcript-scroller');
+  const geometry = () =>
+    pane.evaluate((element) => ({
+      overflows: element.scrollHeight > element.clientHeight,
+      gap: element.scrollHeight - element.scrollTop - element.clientHeight,
+      top: element.scrollTop,
+      height: element.getBoundingClientRect().height,
+    }));
+  // Bounded by the viewport and overflowing, so it is the pane that scrolls, not the page…
+  const sized = await geometry();
+  expect(sized.overflows, 'thirty frames did not overflow the pane').toBe(true);
+  expect(sized.height).toBeLessThanOrEqual(720);
+  // …and it followed the end while the frames arrived.
+  await expect.poll(async () => (await geometry()).gap).toBeLessThan(32);
+
+  // Scrolled up, it stops following and counts what arrives instead of jumping.
+  await pane.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect(page.getByRole('button', { name: 'Follow tail' })).toBeVisible();
+  for (let seq = 50; seq < 53; seq += 1) {
+    expect(await publishFrame(request, runTopic, 'assistant', longFrame(seq))).toBe(1);
+  }
+  await expect(page.getByTestId('paused-updates')).toHaveText('Paused updates, 3 behind');
+  expect((await geometry()).top).toBe(0);
+
+  // Following again goes to the end and clears the count.
+  await page.getByRole('button', { name: 'Follow tail' }).click();
+  await expect.poll(async () => (await geometry()).gap).toBeLessThan(32);
+  await expect(page.getByTestId('paused-updates')).toHaveCount(0);
 });
 
 test('a duplicate frame does not render twice', async ({ page, request }) => {
