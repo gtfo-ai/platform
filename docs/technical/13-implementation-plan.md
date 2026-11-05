@@ -1542,7 +1542,7 @@ screen layouts and sources are in **research/19**. Slices reserve WP-300–WP-32
 | **S-23.10** | The run page as an Actions job: job list, Cancel / Re-run, log steps, live activity, sticky steer | S-23.9b | low | transcript tests green; the log follows in its own scroll pane |
 | **S-23.11a** | Inbox, Integrations (list, detail route, add-integration wizard) and Workers | S-23.4 | low | human field labels; undeclared config values hidden; the allow-list covers the new sub-paths |
 | **S-23.11b** | Settings as sub-pages with a NavList; Knowledge, Budgets, Shadow, Audit log, Statistics | S-23.4 | low | the user guide's § 11 lists the sections (census); a refused budget window is said under its own field |
-| **S-23.12** | The worker's local page in the same language: its room, seats, PhaseTrack, activity and log tail | S-22.13, S-23.3, S-23.2 | high (the local page's auth surface is S-22.13's; this is a re-skin) | worker entry ≤ 120 kB gz; no new endpoint — **scheduled: waits on M22's S-22.13** |
+| **S-23.12** | The worker's local page in the same language: its room, seats, PhaseTrack, activity and log tail | S-22.13, S-23.3, S-23.2 | high (the local page's auth surface is S-22.13's; this is a re-skin) | worker entry ≤ 120 kB gz; no new endpoint — **delivered by M22's S-22.13** (#30: the office room from `ui/bot`, activity, PhaseTrack and log tails, 103.8 kB gz), with this session's visual review |
 | **S-23.13a** | Polish I: accessibility (axe in Playwright), the 1024 and 390 px pass, the readable template canvas, hardened tests, Inter's licence | all above | low | axe clean on the main screens; no horizontal page scroll at 390 px; the template canvas opens at zoom ≥ 0.5 |
 | **S-23.13b** | Polish II: the command palette, keyboard shortcuts, and the docs swept for M23 | all above | low | ⌘K / Ctrl+K / `/` open the palette, `g h/p/i/a/b`, `?`, `j`/`k`, never in a field, a setting turns them off; the guide's shortcut table held by the census; technical/09 § "Visual design language" one coherent section |
 | **S-23.14** | Live domain events on the `org`, `project:<id>` and `task:<id>` topics, read back across instances | — | high (the stream's fan-out and who may see what) | frames carry ids and the type only; a process test shows an event appended by one instance reaching a stream held by another |
@@ -1550,8 +1550,9 @@ screen layouts and sources are in **research/19**. Slices reserve WP-300–WP-32
 | **S-23.16** | The realtime client never loses a topic added while its stream is being replaced | S-23.14 | low | a fake `EventSource` with a delayed `open`: topics added before open are sent once after it; a canary of the old eager POST fails |
 | **S-23.17** | One dark theme, dark only; the page darker than its cards (owner feedback) | S-23.1 | low | no light or system theme, no theme control, no `data-theme`; `contrast.test.ts` holds every pair on both the page and the card ground; `/settings/appearance` redirects to Session |
 
-**What shipped** (2026-11-05): every row above except S-23.12 — one LEDGER line each
-(`docs/technical/LEDGER.md`, from PR #10 on), S-23.9, S-23.11 and S-23.13 each split in two when they
+**What shipped** (2026-11-05): every row above — one LEDGER line each (`docs/technical/LEDGER.md`,
+from PR #10 on), S-23.12 as M22's S-22.13 (the worker's local page, built in this language and
+reviewed visually in this session, so it has no LEDGER line of its own); S-23.9, S-23.11 and S-23.13 each split in two when they
 were cut, S-23.16 added for a realtime-client race found reviewing S-23.5, and S-23.17 for the owner's
 decision that there is one theme, **dark only**. The design language
 as built is technical/09 § "Visual design language (TD-033)"; the user guide was swept screen by

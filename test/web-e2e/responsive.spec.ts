@@ -233,6 +233,33 @@ test.describe('on a 390 px phone', () => {
     expect(await axe(page)).toEqual([]);
   });
 
+  test('the top bar’s search is its magnifier alone, and the palette it opens fits the phone (S-23.13b)', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await expect(page.getByRole('list', { name: 'Needs you' })).toBeVisible();
+    const search = page.getByRole('banner').getByRole('button', { name: 'Search or jump to…' });
+    await expect(search).toBeVisible();
+    // The words and the key hint are for a wide screen: here it is one icon button.
+    await expect(search.getByText('Search or jump to…')).toBeHidden();
+    expect(await search.evaluate((element) => element.getBoundingClientRect().width)).toBeLessThan(
+      48,
+    );
+    expect(await overflowReport(page)).toEqual([]);
+    await search.click();
+    const palette = page.getByRole('dialog', { name: 'Search or jump to' });
+    await expect(palette).toBeVisible();
+    const box = await palette.boundingBox();
+    expect(box).not.toBeNull();
+    if (box !== null) {
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(PHONE.width);
+    }
+    await expect(palette.getByRole('combobox')).toBeFocused();
+    expect(await overflowReport(page)).toEqual([]);
+    expect(await axe(page)).toEqual([]);
+  });
+
   test('Agents: the map is the list on a phone', async ({ page }) => {
     await page.goto('/agents');
     await expect(page.getByText('The map needs a wider screen; here is the list.')).toBeVisible();
