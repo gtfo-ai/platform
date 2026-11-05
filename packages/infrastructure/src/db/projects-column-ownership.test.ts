@@ -168,6 +168,8 @@ const INSERT_SITES: Readonly<Record<string, number>> = {
   // The e2e harness's seed rows — not test-named, so in scope, and declared rather than exempted.
   'test/e2e/support/instance.ts': 1,
   'test/e2e/support/pipeline.ts': 1,
+  // S-22.14: the Docker check's core seeds its two projects (`worker-compose-check.mjs`).
+  'scripts/worker-check/core-entry.mjs': 1,
 };
 
 interface ProjectsWrite {

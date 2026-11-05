@@ -158,6 +158,10 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // waiting — in a transaction it owns, under `retryOnTaskConflict`; a spent bound escapes to the
   // wrapper, which logs it and rethrows the job's own failure, so the failed job stays listed.
   ['packages/application/src/pipeline/job-escalation.ts', 2],
+  // S-22.14 (backlog 744): a claim refused at admission pauses its task, in a transaction the
+  // claimant owns (the server's, or a worker's claim route), under `retryOnTaskConflict`; a task
+  // that already moved answers `false` from its `IllegalTransitionError`.
+  ['packages/application/src/pipeline/claim-admission.ts', 1],
 ]);
 
 /** Tracked *and* committable-but-untracked, which is the tree the pre-push hook sees (rule 85). */
@@ -195,7 +199,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
   }, 15_000);
 
   // WP-249: slowest of 10 green CI runs 2775 ms (median 1861 ms); 2× it, 15 s floor.
-  it('counts forty, which is the number the change states', () => {
+  it('counts forty-one, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -238,7 +242,8 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Plus one at WP-275a**: the refusal of an oversized run plan (`refuseOversizedPlan`).
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
     // **Plus one at WP-276**: an open offer with no stored plan escalates its task (`run_plan_missing`).
-    expect(total).toBe(40);
+    // **Plus one at S-22.14**: a claim refused at admission pauses its task (`claim-admission.ts`).
+    expect(total).toBe(41);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   }, 15_000);
 
