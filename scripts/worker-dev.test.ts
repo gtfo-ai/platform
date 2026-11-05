@@ -17,6 +17,7 @@ import {
   DEFAULT_ENV_FILE,
   DEV_COMPOSE_FILE,
   DEV_PROJECT,
+  pageAddress,
   pageTokenFrom,
   planCommand,
   workerOriginFrom,
@@ -335,6 +336,13 @@ describe('pnpm worker:dev', () => {
     expect(pageTokenFrom(logs)).toBe(second);
     expect(pageTokenFrom('nothing logged yet')).toBeNull();
     expect(pageTokenFrom(`#token=${'a'.repeat(44)}`)).toBeNull();
+  });
+
+  it('prints the page address with the token when one was logged, and without when none was', () => {
+    const token = 'a'.repeat(43);
+    expect(pageAddress('5174', token)).toBe(`http://localhost:5174/worker.html#token=${token}`);
+    // A tokenless page (S-22.17's default) is opened as it is — no placeholder, no complaint.
+    expect(pageAddress('5174', null)).toBe('http://localhost:5174/worker.html');
   });
 
   it("reads the worker's published page address off `docker compose port`", () => {
