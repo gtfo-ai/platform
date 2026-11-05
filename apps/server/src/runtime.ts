@@ -1101,10 +1101,21 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         },
         logger: loggerPort,
       });
+      stopCallbacks.unshift({
+        name: 'transcript-bridge',
+        stop: async () => {
+          await bridge.stop();
+          if (!capabilities.worker) {
+            await eventing.broadcast.close();
+          }
+        },
+      });
       /**
        * The `org`, `project:<id>` and `task:<id>` topics' producer (S-23.14), beside the transcript
        * bridge for the same reason: it publishes into this process's hub, woken by the appender's
-       * live hint from whichever process committed the events.
+       * live hint from whichever process committed the events. Started after the transcript
+       * bridge's stop is registered, so a start that rejects cannot leak that bridge; and its own
+       * stop is unshifted in front of it, so it stops before the broadcast is closed.
        */
       const domainEvents = await startDomainEventBridge({
         hub,
@@ -1113,13 +1124,9 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         logger: loggerPort,
       });
       stopCallbacks.unshift({
-        name: 'transcript-bridge',
+        name: 'domain-event-bridge',
         stop: async () => {
           await domainEvents.stop();
-          await bridge.stop();
-          if (!capabilities.worker) {
-            await eventing.broadcast.close();
-          }
         },
       });
     }

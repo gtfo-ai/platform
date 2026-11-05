@@ -277,6 +277,26 @@ describe('the live types', () => {
   });
 });
 
+describe('the live types’ payloads', () => {
+  /**
+   * The bridge fans an event to `project:<project_id>` and `task:<task_id>` only when the projection
+   * found them, so a live type whose payload did not carry both would silently reach `org` alone.
+   * Every live type's payload schema must therefore **require** both — checked off the catalogue,
+   * so a `task.*` or `run.*` event added later without them fails here.
+   */
+  it.each(LIVE_DOMAIN_EVENT_TYPES)('%s requires project_id and task_id', (type) => {
+    const payload = domainEventSchemasByType[type].shape.payload;
+    for (const key of ['project_id', 'task_id'] as const) {
+      const field = (
+        payload.shape as Record<string, { safeParse: (v: unknown) => { success: boolean } }>
+      )[key];
+      expect(field, `${type}.${key}`).toBeDefined();
+      expect(field?.safeParse(undefined).success, `${type}.${key} is required`).toBe(false);
+      expect(field?.safeParse(null).success, `${type}.${key} is not nullable`).toBe(false);
+    }
+  });
+});
+
 describe('the domain_event frame', () => {
   it('carries the projection and refuses a frame that carries the event', () => {
     const data = {

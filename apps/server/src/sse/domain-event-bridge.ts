@@ -30,7 +30,7 @@
  *     next one instead of leaving a hole. A burst of hints that arrive while a read is in flight is
  *     folded into one range and one more read. **The residual, stated:** a hint that is lost *and*
  *     names positions below the watermark (a late committer whose `NOTIFY` was dropped) is never
- *     read back; the screens catch up on their next refetch (BACKLOG 800).
+ *     read back; the screens catch up on their next refetch (BACKLOG 804).
  *  2. **Each position is published once.** That read can meet rows it has already published (a late
  *     transaction's range spans other transactions' rows), so the bridge remembers the last
  *     {@link DEDUPE_POSITIONS} positions it published and skips them. A position older than that

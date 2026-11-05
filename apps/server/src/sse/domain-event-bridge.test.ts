@@ -279,6 +279,18 @@ describe('a live event somebody is watching', () => {
     expect(harness.hub.bufferedSeqs(`project:${PROJECT}`)).toEqual([]);
   });
 
+  it('publishes a project stream’s event to no task topic nobody watches', async () => {
+    const harness = await start({ rows: [stageEntered(4)] });
+    const project = harness.watch([`project:${PROJECT}`]);
+
+    await harness.hint(4, 4);
+
+    expect(frames(project.sent).map((frame) => frame.seq)).toEqual([4]);
+    expect(harness.hub.bufferedSeqs(`project:${PROJECT}`)).toEqual([4]);
+    expect(harness.hub.bufferedSeqs(`task:${TASK}`)).toEqual([]);
+    expect(harness.hub.bufferedSeqs('org')).toEqual([]);
+  });
+
   it('starts at the range the first hint names, not at the beginning of the log', async () => {
     const harness = await start({ rows: [stageEntered(1), stageEntered(2), stageEntered(9)] });
     const org = harness.watch(['org']);
