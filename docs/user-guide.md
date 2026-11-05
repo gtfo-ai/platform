@@ -524,7 +524,7 @@ one column at a time, rather than wrapping, so the pipeline still reads left to 
 - a **◆** when the task waits on a person — a question, an approval, a task that needs a human, a
   task its budget paused or one somebody took over — with the number of open questions and pending
   approvals beside it (a task paused by hand is somebody's choice, and has none);
-- a badge per loop the task has gone round, against its limit: *Code review 2/3*;
+- a badge per loop the task has gone round, against its limit: *Review 2/3* (two review rounds of three);
 - *touches ACME-12 · 3 files* when the rebase gate found that another active task changes the same
   files (the comparison runs at the rebase gate, so no badge means *not compared yet*).
 

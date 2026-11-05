@@ -375,7 +375,7 @@ describe('a card’s phase (TD-033 decision 7)', () => {
     // Entered code review attempt 2 at 11:50, now is 12:00.
     expect(busy.querySelector('[data-time="in-stage"]')?.textContent).toBe('10m 0s in stage');
     expect(busy.querySelector('[data-task-cost="measured"]')?.textContent).toBe('$0.84');
-    expect(busy.querySelector('[data-loop="code_review"]')?.textContent).toBe('Code review 2/3');
+    expect(busy.querySelector('[data-loop="code_review"]')?.textContent).toBe('Review 2/3');
     // A loop not yet gone round is not shown.
     expect(busy.querySelector('[data-loop="ci_fix"]')).toBeNull();
     // A task in no stage says how long since it was updated instead.
@@ -569,10 +569,10 @@ describe('what a card says, as functions', () => {
   });
 
   it('says a loop against its limit only when the limit is known', () => {
-    expect(loopBadges(BUSY)).toEqual([{ loop: 'code_review', text: 'Code review 2/3' }]);
+    expect(loopBadges(BUSY)).toEqual([{ loop: 'code_review', text: 'Review 2/3' }]);
     expect(
       loopBadges(task(9, { iteration_counters: { code_review: 1 }, loop_limits: null })),
-    ).toEqual([{ loop: 'code_review', text: 'Code review 1' }]);
+    ).toEqual([{ loop: 'code_review', text: 'Review 1' }]);
     expect(loopBadges(task(9, { iteration_counters: { house_loop: 2 }, loop_limits: {} }))).toEqual(
       [{ loop: 'house_loop', text: 'House Loop 2' }],
     );

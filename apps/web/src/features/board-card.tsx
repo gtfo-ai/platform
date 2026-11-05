@@ -10,7 +10,7 @@
  *    activity's sub-label from the agents read; otherwise the state's word beside its status icon;
  *  - time in the current stage · the measured cost (and the runs it leaves out);
  *  - the needs-you ◆ and the count of what waits (open questions, pending approvals), the amber
- *    pulse while an agent is working, the loop badges (*Code review 2/3*), the conflict badge.
+ *    pulse while an agent is working, the loop badges (*Review 2/3*), the conflict badge.
  *
  * The menu's commands are the task page's, through the same `useTaskCommands` hook, so each sends
  * the same body with the same `Idempotency-Key` semantics: *Pause*, *Resume* and *Cancel* with the
@@ -119,7 +119,7 @@ export const stageEnteredAt = (task: TaskListItem): string | null => {
 };
 
 /**
- * The loop badges: *Code review 2/3* when the task's frozen limit is known, the count alone when it
+ * The loop badges: *Review 2/3* when the task's frozen limit is known, the count alone when it
  * is not (`loop_limits: null`, or a loop the limits do not name). A loop not yet gone round is not
  * shown.
  */
