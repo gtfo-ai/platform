@@ -104,7 +104,6 @@ const ingressFor = () =>
       },
     },
     unitOfWork: eventing.unitOfWork,
-    eventStore: eventing.store,
     mergeRequests: integrationAdapters.createPostgresMergeRequestLifecycle({ sql: pool }),
     ids: { next: () => randomUUID() as Id },
     clock: { now: () => new Date().toISOString() as IsoDateTime },

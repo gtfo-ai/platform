@@ -339,7 +339,6 @@ const harnessFor = (
     recorder: {
       inbox,
       unitOfWork,
-      eventStore: { nextStreamSequence: async () => events.length + 1 },
       // The production reader over this harness's own log, so the dedup is the real one. Its
       // first call is the poller's pre-read (the recorder's own read follows it).
       mergeRequests: {

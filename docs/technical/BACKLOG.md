@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 972, so the next is **973**), its grade
+line with the next free number (the highest is 973, so the next is **974**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -15,6 +15,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 171 | major | WP-58 (architect ruling pending) | KB query floor drops the subject word on a single-subject vault; a wrong page can outrank the right one on PostgreSQL (small-to-major) |
 | 854 | major | — | `task.resume` is a `member` action and the domain admits it from `waiting_approval` (`RESUMABLE_TASK_STATES`, `packages/domain/src/permissions.ts:213`), so through `humanEnter` a member's resume may skip an approval only a maintainer may decide; traced by S-23.9b's reviewer, not tested end to end — needs a domain test and a ruling (the task page offers Resume only on `paused`/`needs_human`) |
 | 790 | major | — | A worker's compose networks and each run's `run-<id>` network draw from the daemon's default address pools; Docker's default pools hold 31 networks, and on the machine that first ran `worker-compose-check.mjs` (Docker Desktop 29.8.2) 23 bridge networks of other projects plus the check core's four left none, so the bundle's `compose up` failed `all predefined address pools have been fully subnetted`. The check gives its compose networks explicit `10.213.x.0/24` subnets; the shipped bundle and the launcher's run networks need an operator-settable pool (or the operator guide naming `default-address-pools`) |
+| 973 | minor | — | The knowledge indexer holds its project stream's lock (BACKLOG 971) across one `insert into kb_chunks` per chunk and one `kb_links` insert per link (`postgres-knowledge-store.ts:185`), roughly 0.5–2 s for 2 000 chunks, so every other project-stream writer of that project waits that long; batch them into one `insert … select * from unnest(…)` per document (review of PR #43) |
 | 972 | minor | — | The integration audit log (PR #41) takes its stream lock with its own statement and its own `readSequence` seam; once #41 and BACKLOG 971 are both on `main`, fold it onto `EventAppender.lockStreamSequence` so one statement locks every shared stream (the lock key, `integration_stream/<id>`, is already the same) |
 | 990 | major | S-24.W | The worker's updater refuses a project directory that does not start with `/` (`apps/server/src/updater/plan.ts:26-38`) and mounts it at its host path (TD-032 *As built* §5), so a worker brought up from a Windows directory on Docker Desktop cannot self-update; found planning M24 (research/20 § 6, V-DA1). Numbered 990 to stay clear of unmerged branches' 963+ |
 | 232 | minor | — | Storage gauge (org-dashboard panel, 50 GB warning, partition purge) not built; only Prometheus metrics exist |

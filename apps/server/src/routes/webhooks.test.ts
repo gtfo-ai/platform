@@ -161,7 +161,6 @@ describe('the webhook route at its integration’s rate limit (Q60)', () => {
           throw new Error('nothing is written');
         },
       } as never,
-      eventStore: { nextStreamSequence: async () => 1 },
       // No delivery here reaches the recorder (the bucket refuses first), so nothing is asked.
       mergeRequests: { latest: async () => null },
       ids: { next: () => INTEGRATION },

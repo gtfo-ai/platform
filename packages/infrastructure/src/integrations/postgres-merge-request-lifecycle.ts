@@ -24,6 +24,7 @@ import type {
   MergeRequestLifecycleEvent,
   MergeRequestLifecycleReader,
 } from '@platform/application';
+import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 
 /** The statement, exported so the integration tier's plan check reads the query that runs. */
@@ -41,8 +42,9 @@ export interface PostgresMergeRequestLifecycleOptions {
 export const createPostgresMergeRequestLifecycle = (
   options: PostgresMergeRequestLifecycleOptions,
 ): MergeRequestLifecycleReader => ({
-  latest: async (key) => {
-    const { rows } = await options.sql.query<{ type: MergeRequestLifecycleEvent | null }>(
+  latest: async (key, tx) => {
+    const sql = tx === undefined ? options.sql : postgresTransaction(tx).client;
+    const { rows } = await sql.query<{ type: MergeRequestLifecycleEvent | null }>(
       MERGE_REQUEST_LIFECYCLE_SQL,
       [key.projectId, String(key.iid), key.projectPath ?? ''],
     );

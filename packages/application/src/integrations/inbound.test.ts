@@ -343,12 +343,6 @@ const build = (options: {
         throw new Error('this test produced no decision, so the applier must not be asked');
       }).applier,
     unitOfWork,
-    eventStore: {
-      nextStreamSequence: async () => {
-        options.sequenceReads.push(options.sequenceReads.length + 1);
-        return 7;
-      },
-    },
     mergeRequests: lifecycleOver(options.appended),
     ids: {
       next: () => {
@@ -1250,7 +1244,6 @@ describe('the webhook door’s rate limit (Q60)', () => {
           throw new Error('nothing is written');
         },
       } as never,
-      eventStore: { nextStreamSequence: async () => 1 },
       mergeRequests: lifecycleOver([]),
       ids: { next: () => '00000000-0000-4000-9000-000000000001' as Id },
       clock: { now: () => NOW },

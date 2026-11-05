@@ -130,6 +130,41 @@ runReadinessStoreContract({
   },
 });
 
+/**
+ * BACKLOG 971: the readiness re-check reads the evaluation it carries from **inside** the
+ * transaction that holds the project stream's lock. Handed that transaction, `latest` must read on
+ * its connection: on a pool of one connection, held by the transaction, a read over the pool can
+ * only wait for the connection timeout. So the store is driven on exactly one.
+ */
+describe('the readiness store read inside a transaction (BACKLOG 971)', () => {
+  it('answers latest on the transaction’s own connection, with the pool’s only connection held', async () => {
+    const onePool = createTestPool(database.connectionString, {
+      max: 1,
+      connectionTimeoutMillis: 2_000,
+    });
+    const store = knowledgeAdapters.createPostgresReadinessStore(onePool);
+    const client = await onePool.connect();
+    try {
+      await client.query('begin');
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      await store.record(tx, {
+        id: '00000000-0000-4000-8000-00000000097a' as Id,
+        projectId: projectId as Id,
+        level: 2,
+        criteria: [],
+        evaluatedAt: '2026-09-13T04:00:00.000Z' as never,
+        source: 'discovery',
+      });
+      // The row this transaction wrote, which no other connection could see yet.
+      expect((await store.latest(projectId as Id, tx))?.level).toBe(2);
+    } finally {
+      await client.query('rollback');
+      client.release();
+      await onePool.end();
+    }
+  });
+});
+
 describe('the wizard’s project writes', () => {
   beforeEach(async () => {
     await pool.query("delete from projects where key like 'wiz-%'");

@@ -62,8 +62,12 @@ export interface ReadinessEvaluation {
  */
 export interface ReadinessStore {
   record(tx: Transaction, evaluation: ReadinessEvaluation): Promise<void>;
-  /** The project's most recent evaluation, or `null` when it has never been evaluated. */
-  latest(projectId: Id): Promise<ReadinessEvaluation | null>;
+  /**
+   * The project's most recent evaluation, or `null` when it has never been evaluated. Handed a
+   * transaction, it reads on that transaction's connection — which a caller holding a stream lock
+   * must do, rather than wait on the pool for a second connection (BACKLOG 971).
+   */
+  latest(projectId: Id, tx?: Transaction): Promise<ReadinessEvaluation | null>;
   /**
    * Stores the risk classes a discovery run proposed — `projects.proposed_risk_classes`, migration
    * 0026 (WP-37).
