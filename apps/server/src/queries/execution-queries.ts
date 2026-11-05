@@ -109,3 +109,26 @@ export const remoteRunCredentialRefused = async (
     ) as refused`);
   return result.rows[0]?.refused === true;
 };
+
+/**
+ * A project's open offers — runs waiting for someone to start them — and how they are routed for
+ * workers now (S-22.19, N2): `never` has no `workers_from` (routed to the server only), `later` a
+ * `workers_from` still ahead (the server's head start), both on the database's clock.
+ */
+export const waitingOffers = async (
+  database: Pick<Database, 'execute'>,
+  projectId: string,
+): Promise<{ readonly open: number; readonly never: number; readonly later: number }> => {
+  const result = await database.execute<{ open: number; never: number; later: number }>(sql`
+    select count(*)::int as open,
+           count(*) filter (where workers_from is null)::int as never,
+           count(*) filter (where workers_from > now())::int as later
+      from run_offers
+     where project_id = ${projectId} and state = 'open'`);
+  const row = result.rows[0];
+  return {
+    open: Number(row?.open ?? 0),
+    never: Number(row?.never ?? 0),
+    later: Number(row?.later ?? 0),
+  };
+};

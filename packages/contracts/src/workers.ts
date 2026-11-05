@@ -21,6 +21,7 @@ import {
   workerUpdateResultSchema,
   workerUserCodeSchema,
 } from './worker.js';
+import { workerClaimBlockersSchema } from './worker-claim-blockers.js';
 
 /** What a person typed: normalised by the server (case, spaces, hyphen), so only bounded here. */
 export const typedUserCodeSchema = z.string().min(1).max(32);
@@ -97,70 +98,6 @@ export const workerLastUpdateSchema = z.strictObject({
 });
 export type WorkerLastUpdate = z.infer<typeof workerLastUpdateSchema>;
 
-/**
- * **Why a worker takes no work** — one vocabulary for the Workers screen, a project's execution
- * read and the worker's own local page (TD-031's 2026-11-05 blocker-vocabulary amendment, S-22.19).
- * Ordered **most fundamental first**: a list of blockers is always sorted in this order, and the
- * first is the one sentence a screen shows. Each side answers the half it can know:
- *
- * - `not_set_up` *(local)*: no platform chosen, no Claude sign-in, or the machine not approved yet;
- * - `revoked`: its credential was revoked — it must be approved again;
- * - `offline`: the core has not heard from it in a minute *(core)*, or it cannot reach its core
- *   *(local)*;
- * - `protocol_outdated`: it speaks a worker protocol the core no longer accepts;
- * - `claude_rejected` *(local)*: Claude refused the token it holds;
- * - `paused`: its owner paused it on its page;
- * - `draining`: a drain — finish what runs, take nothing new (the page's *Drain*, or its updater);
- * - `usage_limited`: paused until its Claude usage limit resets;
- * - `launcher_unreachable` *(local)*: its launcher does not answer, so it cannot start a run;
- * - `images_missing`: it holds none of the run images (its launcher is down, or still pulling);
- * - `images_outdated`: it holds images of another build than the core's current one;
- * - `no_eligible_project` *(core)*: no project would give it work — none it may run in admits
- *   workers, or its claim scope names none of those. *Pick only* is the owner's choice, not a
- *   blocker.
- *
- * The words are `WORKER_CLAIM_BLOCKER_WORDS` in `apps/web/src/ui/humanize.ts`, exhaustive by type.
- */
-export const WORKER_CLAIM_BLOCKERS = [
-  'not_set_up',
-  'revoked',
-  'offline',
-  'protocol_outdated',
-  'claude_rejected',
-  'paused',
-  'draining',
-  'usage_limited',
-  'launcher_unreachable',
-  'images_missing',
-  'images_outdated',
-  'no_eligible_project',
-] as const;
-export const workerClaimBlockerSchema = z.enum(WORKER_CLAIM_BLOCKERS);
-export type WorkerClaimBlocker = z.infer<typeof workerClaimBlockerSchema>;
-
-/** A list of blockers in the vocabulary's order, each once — what every answer carries. */
-export const workerClaimBlockersSchema = z
-  .array(workerClaimBlockerSchema)
-  .max(WORKER_CLAIM_BLOCKERS.length)
-  .refine(
-    (list) =>
-      list.every(
-        (blocker, index) =>
-          index === 0 ||
-          WORKER_CLAIM_BLOCKERS.indexOf(list[index - 1] as WorkerClaimBlocker) <
-            WORKER_CLAIM_BLOCKERS.indexOf(blocker),
-      ),
-    'blockers are distinct and in the vocabulary’s order',
-  );
-
-/** Sorts and de-duplicates blockers into the vocabulary's order. */
-export const orderClaimBlockers = (
-  blockers: Iterable<WorkerClaimBlocker>,
-): WorkerClaimBlocker[] => {
-  const present = new Set(blockers);
-  return WORKER_CLAIM_BLOCKERS.filter((blocker) => present.has(blocker));
-};
-
 /** One row of the Workers screen. */
 export const workerSummarySchema = z.strictObject({
   id: idSchema,
@@ -198,6 +135,16 @@ export const workerSummarySchema = z.strictObject({
   running: z.array(z.strictObject({ run_id: idSchema, task_id: idSchema, project_id: idSchema })),
   /** The last update its updater reported (WP-287 (4)), or `null`. */
   last_update: workerLastUpdateSchema.nullable(),
+  /**
+   * Why it takes no work, as the core knows it (S-22.19): the claim's own predicates minus the
+   * per-offer ones, in the vocabulary's order — the first is the one a row shows. Empty when the
+   * core would admit a claim from it now.
+   */
+  claim_blockers: workerClaimBlockersSchema,
+  /** `claim_blockers` is empty: the core would admit a claim from it now (S-22.19). */
+  can_claim: z.boolean(),
+  /** When it last claimed a run (`run_offers.claimed_at`), or `null` — its first run is a milestone. */
+  last_claimed_at: isoDateTimeSchema.nullable(),
 });
 export type WorkerSummary = z.infer<typeof workerSummarySchema>;
 

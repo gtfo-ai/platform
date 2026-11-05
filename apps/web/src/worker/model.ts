@@ -15,6 +15,7 @@ import type {
   AgentRole,
   RunStatus,
   TranscriptEvent,
+  WorkerClaimBlocker,
   WorkerLocalCoreFailure,
   WorkerLocalRun,
   WorkerLocalSignInFailure,
@@ -31,11 +32,33 @@ import {
   toolActivityLabel,
 } from '../ui/activity.js';
 import type { BotPhase } from '../ui/bot/bot.js';
-import { ROLE_LABEL, stageLabel } from '../ui/humanize.js';
+import { ROLE_LABEL, stageLabel, WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import type { Status } from '../ui/status.js';
 import { usagePauseWords } from '../ui/usage-pause.js';
 
-/** The worker's own state, in a person's words. */
-export type WorkerMode = 'claiming' | 'paused' | 'usage_paused' | 'draining' | 'drained';
+/**
+ * The worker's own state, in a person's words. `blocked` (S-22.19) is a connected worker that is
+ * not held and still takes nothing — its launcher, its images, its connection — so *Taking work*
+ * is said only when the worker's `claim_blockers` are empty.
+ */
+export type WorkerMode =
+  | 'claiming'
+  | 'blocked'
+  | 'paused'
+  | 'usage_paused'
+  | 'draining'
+  | 'drained';
+
+/** The blockers that are a hold, which the page's hold line and controls already say. */
+const HOLDS: ReadonlySet<WorkerClaimBlocker> = new Set(['paused', 'draining', 'usage_limited']);
+
+/** The first reason this worker takes no work that is not a hold, or `null` (S-22.19). */
+export const claimBlockerOf = (state: WorkerLocalState): WorkerClaimBlocker | null =>
+  state.claim_blockers.find((blocker) => !HOLDS.has(blocker)) ?? null;
+
+/** A blocker's row word as the middle of a sentence: its first letter lower-cased. */
+const inSentence = (word: string): string =>
+  word === '' ? word : `${word.charAt(0).toLowerCase()}${word.slice(1)}`;
 
 export const workerModeOf = (state: WorkerLocalState, nowMs: number): WorkerMode => {
   if (state.draining) return state.runs.length === 0 ? 'drained' : 'draining';
@@ -43,11 +66,13 @@ export const workerModeOf = (state: WorkerLocalState, nowMs: number): WorkerMode
   if (state.usage_paused_until !== null && Date.parse(state.usage_paused_until) > nowMs) {
     return 'usage_paused';
   }
+  if (claimBlockerOf(state) !== null) return 'blocked';
   return 'claiming';
 };
 
 export const WORKER_MODE_WORDS: Readonly<Record<WorkerMode, string>> = {
   claiming: 'Taking work',
+  blocked: 'Connected, but not taking work',
   paused: 'Paused by you — it takes no new work',
   usage_paused: 'Paused — your Claude usage limit was reached',
   draining: 'Draining — finishing what runs, taking nothing new',
@@ -82,6 +107,98 @@ export const CONTROL_HINTS: Readonly<Record<'pause' | 'resume' | 'drain', string
   drain:
     'Finishes the current run, then takes nothing new, until the worker restarts or you resume. Use it before updating or switching off.',
 };
+
+/**
+ * The hold line under the page's header (S-22.19, R-L5): the worker's current state as one
+ * sentence with its status, and the one action that changes it — *Resume* while it is held,
+ * *Try now* while its launcher (or its images) is what keeps it from work — or none.
+ */
+export interface HoldLine {
+  readonly status: Status;
+  readonly text: string;
+  readonly action: 'resume' | 'try_now' | null;
+}
+
+/** Blockers *Try now* can clear: it asks the launcher again (`POST /api/local/retry`). */
+const RETRYABLE: ReadonlySet<WorkerClaimBlocker> = new Set([
+  'launcher_unreachable',
+  'images_missing',
+]);
+
+export const holdLineOf = (state: WorkerLocalState, nowMs: number): HoldLine => {
+  const mode = workerModeOf(state, nowMs);
+  const runs = state.runs.length;
+  switch (mode) {
+    case 'drained':
+      return {
+        status: 'paused',
+        text: 'Drained: nothing runs, and it takes nothing new until you resume or restart the worker.',
+        action: 'resume',
+      };
+    case 'draining':
+      return {
+        status: 'paused',
+        text: `Draining: finishing ${runs} run${runs === 1 ? '' : 's'}, then taking nothing new until you resume or restart the worker.`,
+        action: 'resume',
+      };
+    case 'paused':
+      return {
+        status: 'paused',
+        text: 'Paused by you: it takes no new work until you resume it. A run already going keeps going.',
+        action: 'resume',
+      };
+    case 'usage_paused':
+      return {
+        status: 'paused',
+        text: `${workerModeWords(state, nowMs)}. It resumes by itself.`,
+        action: null,
+      };
+    case 'blocked': {
+      const blocker = claimBlockerOf(state) as WorkerClaimBlocker;
+      const words = WORKER_CLAIM_BLOCKER_WORDS[blocker];
+      return {
+        status: 'needs_you',
+        text: `Connected, but not taking work: ${inSentence(words.word)}. ${words.fix}`,
+        action: RETRYABLE.has(blocker) ? 'try_now' : null,
+      };
+    }
+    case 'claiming':
+      return { status: 'success', text: 'Taking work', action: null };
+  }
+};
+
+/**
+ * Why the list of waiting runs is empty (S-22.19, R-L7): the core lists nothing to a worker that
+ * cannot take work, for the same reason it claims nothing — or, when nothing blocks it, where runs
+ * that never reach a worker wait.
+ */
+export const emptyOffersWords = (state: WorkerLocalState): string => {
+  const first = state.claim_blockers[0];
+  return first === undefined
+    ? 'No run is waiting for a worker. On projects that prefer the platform server, a run reaches workers only after the server’s head start; each project’s settings on the platform say which.'
+    : `Nothing is listed because this worker can’t take work: ${inSentence(WORKER_CLAIM_BLOCKER_WORDS[first].word)}.`;
+};
+
+/** What the page says when the platform runs a newer build (S-22.19, R-L8): no manual procedure. */
+export const UPDATE_PENDING_WORDS =
+  'The platform runs a newer build. This worker updates itself after its current run, within about 5 minutes. A worker set up without its updater: download the compose file again and run docker compose up -d.';
+
+/** The connection's status icon (S-22.19, R-L6): a failure is never drawn as a wait. */
+export const CONNECTION_STATUS: Readonly<Record<WorkerLocalState['connection'], Status>> = {
+  needs_platform: 'needs_you',
+  needs_claude: 'needs_you',
+  logging_in: 'waiting',
+  handshaking: 'waiting',
+  connected: 'success',
+  revoked: 'failure',
+  upgrade_required: 'needs_you',
+  core_unreachable: 'failure',
+  stopped: 'idle',
+};
+
+/** The platform's wizard, where this worker's setup ends (S-22.19, R-L10). */
+export const platformWizardUrl = (coreUrl: string): string =>
+  `${coreUrl.replace(/\/+$/, '')}/workers/new?step=ready`;
 
 /** The connection, in a person's words. */
 export const CONNECTION_WORDS: Readonly<Record<WorkerLocalState['connection'], string>> = {
@@ -252,7 +369,7 @@ export const deskOf = (run: WorkerLocalRun, state: WorkerLocalState, nowMs: numb
     latest: activityFromBlocks(blocks),
     role: run.role,
     worker:
-      mode === 'claiming'
+      mode === 'claiming' || mode === 'blocked'
         ? 'active'
         : mode === 'paused' || mode === 'usage_paused'
           ? 'paused'
@@ -279,7 +396,7 @@ export const freeDesksOf = (state: WorkerLocalState, nowMs: number): FreeDeskVie
   return Array.from({ length: Math.max(0, state.concurrency - state.runs.length) }, (_, index) => ({
     key: `free-${index}`,
     pose: resting ? 'sipping' : 'sleeping',
-    words: resting ? 'Paused' : 'Free desk',
+    words: mode === 'blocked' ? 'Not taking work' : resting ? 'Paused' : 'Free desk',
     phase: botPhaseOf(`${state.worker_id ?? 'worker'}:${index}`),
   }));
 };

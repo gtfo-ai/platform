@@ -33,6 +33,13 @@
  * **Until the worker is connected the page is the first-run wizard** (`wizard.tsx`, WP-294) and
  * not the room: no mode chip, no *Pause*, *Drain* or *Cancel*. Once connected, the room's *This
  * machine* section offers *Change platform* and *Sign out of Claude* — only while nothing runs.
+ *
+ * **Why it takes nothing is said, not implied** (S-22.19, the worker UX review): *Taking work* only
+ * when the worker's `claim_blockers` are empty; otherwise one sentence in the shared vocabulary's
+ * words (`WORKER_CLAIM_BLOCKER_WORDS`, the platform's Workers screen's too) and, for a launcher that
+ * does not answer, *Try now*. *Pause*, *Resume* and *Drain* are **one control**: a status line says
+ * the current hold, *Resume* is the one primary while held, and *Drain* sits behind *More* with its
+ * explanation.
  */
 import type { WorkerLocalRun, WorkerLocalState } from '@platform/contracts';
 import {
@@ -45,6 +52,7 @@ import {
 } from 'react';
 import { Seat } from '../ui/bot/seat.js';
 import { Button } from '../ui/button.js';
+import { DetailsDisclosure } from '../ui/details.js';
 import { Flash } from '../ui/flash.js';
 import { ROLE_LABEL, stageLabel } from '../ui/humanize.js';
 import { type PhaseStage, PhaseTrack } from '../ui/phase-track.js';
@@ -53,17 +61,23 @@ import { ExternalLink, TerminalText, UntrustedText } from '../ui/untrusted.js';
 import { LocalCallError, type LocalClient } from './client.js';
 import { LauncherNotice } from './launcher-notice.js';
 import {
+  CONNECTION_STATUS,
   CONNECTION_WORDS,
+  claimBlockerOf,
   CONTROL_HINTS,
   coreRunUrl,
   deskOf,
   elapsedWords,
+  emptyOffersWords,
   freeDesksOf,
+  holdLineOf,
   hostOf,
   logLineWords,
+  platformWizardUrl,
   slotsWords,
   spendWords,
   tailLinesOf,
+  UPDATE_PENDING_WORDS,
   wizardOf,
   workerModeOf,
   workerModeWords,
@@ -346,7 +360,8 @@ export const WorkerApp = ({
 
   const at = now();
   const mode = workerModeOf(state, at);
-  const held = state.manually_paused_at !== null;
+  const held = state.manually_paused_at !== null || state.draining;
+  const hold = holdLineOf(state, at);
   const control = async (action: () => Promise<WorkerLocalState>): Promise<void> => {
     setBusy(true);
     try {
@@ -371,52 +386,94 @@ export const WorkerApp = ({
             <UntrustedText value={name} />
           </h1>
           <p className="flex items-center gap-1.5 text-sm text-fg-muted">
-            <StatusIcon
-              status={state.connection === 'connected' ? 'success' : 'waiting'}
-              decorative
-            />
-            <span data-connection={state.connection}>{CONNECTION_WORDS[state.connection]}</span>
+            <StatusIcon status={CONNECTION_STATUS[state.connection]} decorative />
+            <span data-connection={state.connection}>
+              {state.connection === 'connected' && state.core_url !== null ? (
+                <>
+                  {'Connected to '}
+                  <UntrustedText value={hostOf(state.core_url)} />
+                </>
+              ) : (
+                CONNECTION_WORDS[state.connection]
+              )}
+            </span>
           </p>
         </div>
-        <div className="flex flex-wrap items-start gap-4">
+        {held ? null : (
+          <div className="flex flex-wrap items-start gap-4">
+            <div className="flex max-w-56 flex-col gap-1">
+              <Button
+                aria-describedby="worker-pause-hint"
+                disabled={busy || state.connection !== 'connected'}
+                onClick={() => void control(() => client.pause(true))}
+              >
+                Pause
+              </Button>
+              <p id="worker-pause-hint" data-hint="pause" className="text-xs text-fg-muted">
+                {CONTROL_HINTS.pause}
+              </p>
+            </div>
+            <DetailsDisclosure summary="More" className="max-w-64">
+              <div className="flex flex-col gap-1">
+                <Button
+                  size="sm"
+                  aria-describedby="worker-drain-hint"
+                  disabled={busy || state.connection !== 'connected'}
+                  onClick={() => void control(() => client.drain())}
+                >
+                  Drain
+                </Button>
+                <p id="worker-drain-hint" data-hint="drain" className="text-xs text-fg-muted">
+                  {CONTROL_HINTS.drain}
+                </p>
+              </div>
+            </DetailsDisclosure>
+          </div>
+        )}
+      </header>
+
+      <section
+        aria-label="What this worker is doing"
+        data-hold={mode}
+        className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-surface px-4 py-3"
+      >
+        <p className="flex min-w-0 items-start gap-2 text-sm text-fg">
+          <StatusIcon status={hold.status} decorative className="mt-0.5" />
+          <span data-hold-line="">{hold.text}</span>
+        </p>
+        {hold.action === 'resume' ? (
           <div className="flex max-w-56 flex-col gap-1">
             <Button
-              tone={held ? 'primary' : 'default'}
+              tone="primary"
               aria-describedby="worker-pause-hint"
               disabled={busy || state.connection !== 'connected'}
-              onClick={() => void control(() => client.pause(!held))}
+              onClick={() => void control(() => client.pause(false))}
             >
-              {held ? 'Resume' : 'Pause'}
+              Resume
             </Button>
             <p id="worker-pause-hint" data-hint="pause" className="text-xs text-fg-muted">
-              {held ? CONTROL_HINTS.resume : CONTROL_HINTS.pause}
+              {CONTROL_HINTS.resume}
             </p>
           </div>
-          <div className="flex max-w-56 flex-col gap-1">
-            <Button
-              aria-describedby="worker-drain-hint"
-              disabled={busy || state.draining || state.connection !== 'connected'}
-              onClick={() => void control(() => client.drain())}
-            >
-              Drain
-            </Button>
-            <p id="worker-drain-hint" data-hint="drain" className="text-xs text-fg-muted">
-              {CONTROL_HINTS.drain}
-            </p>
-          </div>
-        </div>
-      </header>
+        ) : hold.action === 'try_now' ? (
+          <Button tone="primary" disabled={busy} onClick={() => void control(() => client.retry())}>
+            Try now
+          </Button>
+        ) : null}
+      </section>
 
       {error === null ? null : (
         <Flash tone="danger" title="That did not work">
           <UntrustedText value={sentence(error)} />
         </Flash>
       )}
-      <LauncherNotice state={state} />
+      {/* The status line already says a launcher that keeps the worker from work (S-22.19). */}
+      {mode === 'blocked' && claimBlockerOf(state) === 'launcher_unreachable' ? null : (
+        <LauncherNotice state={state} />
+      )}
       {state.update_pending === true ? (
-        <Flash tone="info" title="An update is waiting">
-          The platform runs a newer build than this worker. Drain it, then update it with the
-          platform’s compose file.
+        <Flash tone="info" title="An update is on its way">
+          {UPDATE_PENDING_WORDS}
         </Flash>
       ) : null}
 
@@ -490,14 +547,15 @@ export const WorkerApp = ({
           ))
         )}
         <p className="text-xs text-fg-muted">
-          Stopping the worker’s container does not cancel a run: the platform treats it as a lost
-          worker and gives the stage to another one. Use <em>Cancel run</em> or <em>Drain</em>.
+          Stopping the worker’s container does not cancel a run: the platform gives the stage to
+          another computer, once. Use <em>Cancel run</em>, or <em>Drain</em> under <em>More</em>.
         </p>
       </section>
 
       <PickWork
         client={client}
         takeBlocked={takeBlockedOf(state, at)}
+        emptyWords={emptyOffersWords(state)}
         onTaken={() => void refresh()}
       />
       <section aria-label="This machine" className="flex flex-col gap-2" data-machine="">
@@ -543,6 +601,15 @@ export const WorkerApp = ({
           <TerminalText value={state.logs.map(logLineWords).join('\n')} />
         </div>
       </section>
+      {state.core_url === null ? null : (
+        <footer className="text-sm" data-platform-wizard="">
+          <ExternalLink
+            url={platformWizardUrl(state.core_url)}
+            label="Finish setting up on the platform"
+            className="text-link underline"
+          />
+        </footer>
+      )}
     </main>
   );
 };

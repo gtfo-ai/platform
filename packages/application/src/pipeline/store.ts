@@ -1954,6 +1954,31 @@ export interface RunOfferRepository {
     tx: Transaction,
     input: { readonly now: IsoDateTime; readonly limit: number },
   ): Promise<readonly ExpiredRunOffer[]>;
+  /**
+   * Open offers with **neither** `server_from` nor `workers_from` — written before WP-278, which a
+   * worker reads as *never* and which never expire (backlog 887) — oldest first: the re-route's
+   * read (`recovery/offer-timeout.ts`'s {@link UnroutedRunOffer} pass).
+   */
+  unroutedOpen(tx: Transaction, limit: number): Promise<readonly UnroutedRunOffer[]>;
+  /**
+   * Writes `routing`'s `server_from`, `workers_from` and `expires_at` onto an offer that is still
+   * open **and still unrouted** — one conditional update, so a claim or a second pass that moved it
+   * first leaves it alone (`false`). The assignee columns are not touched: an offer written before
+   * WP-278 has none.
+   */
+  reroute(
+    tx: Transaction,
+    input: { readonly offerId: Id; readonly routing: OfferRouting },
+  ): Promise<boolean>;
+}
+
+/** {@link RunOfferRepository.unroutedOpen}'s answer (backlog 887). */
+export interface UnroutedRunOffer {
+  readonly offerId: Id;
+  readonly runId: Id;
+  readonly projectId: Id;
+  readonly kind: RunOfferKind;
+  readonly offeredAt: IsoDateTime;
 }
 
 /**

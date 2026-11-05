@@ -16,6 +16,9 @@
  *     `workers_only` offer, at once for an offer from before WP-278), the expiry read finds only open
  *     offers past `expires_at`, and the execution repository's settings, online-assignee and
  *     claimant-liveness reads answer from the database.
+ *  4. **An offer from before WP-278 is re-routed once** (backlog 887): the read finds only open
+ *     offers with neither `*_from`, the write is conditional on that, and a project's execution
+ *     read counts its waiting runs by how they are routed (S-22.19).
  */
 import {
   claimRunOffer,
@@ -28,7 +31,9 @@ import {
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { FEATURE_TEMPLATE, type OfferRouting, SHIPPED_TEMPLATES } from '@platform/domain';
 import { pipeline } from '@platform/infrastructure';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { waitingOffers } from '../../../apps/server/src/queries/execution-queries.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient } from '../support/postgres.js';
 
@@ -621,5 +626,88 @@ describe('the execution routing repository (WP-278, migration 0097)', () => {
       [],
     );
     expect(await running()).toBe(false);
+  });
+});
+
+describe('an offer written before WP-278 is re-routed, once (backlog 887, S-22.19)', () => {
+  it('reads only open offers with neither *_from, and routes each with one conditional update', async () => {
+    const legacy = await committedRun(await committedTask());
+    const routedAlready = await committedRun(await committedTask(), true, routed(null, 0));
+    const claimedLegacy = await committedRun(await committedTask());
+    await serverClaimAt(claimedLegacy.runId, NOW);
+    const unrouted = async () => {
+      const reader = await begin();
+      try {
+        return (await store.offers.unroutedOpen(reader.tx, 10_000)).map((offer) => offer.runId);
+      } finally {
+        await reader.rollback();
+      }
+    };
+    const found = await unrouted();
+    expect(found).toContain(legacy.runId);
+    expect(found).not.toContain(routedAlready.runId);
+    expect(found).not.toContain(claimedLegacy.runId);
+
+    const reroute = async (offerId: Id) => {
+      const writer = await begin();
+      try {
+        const done = await store.offers.reroute(writer.tx, {
+          offerId,
+          routing: routed(null, 0),
+        });
+        await writer.commit();
+        return done;
+      } catch (error) {
+        await writer.rollback();
+        throw error;
+      }
+    };
+    expect(await reroute(legacy.offerId)).toBe(true);
+    const [row] = await read<{
+      server_from: Date | null;
+      workers_from: Date | null;
+      expires_at: Date | null;
+      state: string;
+    }>('select server_from, workers_from, expires_at, state from run_offers where id = $1', [
+      legacy.offerId,
+    ]);
+    expect(row).toMatchObject({ server_from: null, state: 'open' });
+    expect(row?.workers_from?.toISOString()).toBe(at(0));
+    expect(row?.expires_at?.toISOString()).toBe(at(3_600));
+    // The conditional update: a routed offer, and a claimed one, are left alone.
+    expect(await reroute(legacy.offerId)).toBe(false);
+    expect(await reroute(claimedLegacy.offerId)).toBe(false);
+    expect(await unrouted()).not.toContain(legacy.runId);
+  });
+});
+
+describe('a project’s waiting runs, as its execution read counts them (S-22.19, N2)', () => {
+  it('counts open offers, those routed never to reach a worker, and those whose head start is ahead', async () => {
+    const client = createTestClient(database.connectionString);
+    await client.connect();
+    try {
+      const db = drizzle(client) as never;
+      const before = await waitingOffers(db, projectId);
+      const far = '2099-01-01T00:00:00.000Z' as IsoDateTime;
+      await committedRun(await committedTask(), true, {
+        ...routed(0, null),
+        expiresAt: far,
+      });
+      await committedRun(await committedTask(), true, {
+        ...routed(0, 0),
+        workersFrom: far,
+        expiresAt: far,
+      });
+      await committedRun(await committedTask(), true, routed(0, 0));
+      const claimed = await committedRun(await committedTask(), true, routed(0, 0));
+      await serverClaimAt(claimed.runId, NOW);
+      expect(await waitingOffers(db, projectId)).toEqual({
+        open: before.open + 3,
+        never: before.never + 1,
+        later: before.later + 1,
+      });
+    } finally {
+      await client.end();
+    }
   });
 });

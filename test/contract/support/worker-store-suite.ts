@@ -21,6 +21,10 @@
  * - **The claim scope is a state assertion too** (WP-293): stored distinct and sorted, one
  *   `worker.claim_scope` row per change and none for a repeat as a set; a project where the user is
  *   not `member`+ is `invalid` and writes nothing; the chooser lists exactly the user's projects.
+ * - **The claim facts** (S-22.19) are the claim's own predicates: online on the store's clock, a
+ *   hold told apart by its newest `worker.pause` row's `via`, a usage pause still ahead, the
+ *   projects that would give it work (role, mode, run credential, scope — *pick only* counts every
+ *   project) and its newest claim.
  *
  * ## What it does not assert
  *
@@ -54,6 +58,12 @@ export interface WorkerStoreWorld {
   addViewer(email: string): Promise<string>;
   /** A project, with the users who are its members at `member` (WP-293). */
   addProject(key: string, members: readonly string[]): Promise<string>;
+  /** A project's execution mode, stored (S-22.19). */
+  setProjectMode(projectId: string, mode: 'server_only' | 'workers_only' | 'hybrid'): Promise<void>;
+  /** A git binding whose static run credential may not reach a worker (S-22.19). */
+  refuseRemoteCredential(projectId: string): Promise<void>;
+  /** A run the worker claimed at `at` (`run_offers.claimed_at`, S-22.19). */
+  recordClaim(workerId: string, at: Date): Promise<void>;
 }
 
 export interface WorkerStoreHarness {
@@ -295,6 +305,91 @@ export const describeWorkerStoreContract = (harness: WorkerStoreHarness): void =
       expect(all.find((row) => row.id === otherWorker)?.running.map((run) => run.runId)).toEqual([
         othersRun,
       ]);
+    });
+
+    it('lists each worker’s claim facts: online, its hold, a usage pause, its projects, its last claim (S-22.19)', async () => {
+      const world = await harness.create();
+      // A viewer runs only where a membership says so, in both stores alike.
+      const owner = await world.addViewer('facts@example.test');
+      const worker = await registerWorker(world, owner);
+      const facts = async () =>
+        (await world.store.listWorkers(owner)).find((row) => row.id === worker)?.claimFacts;
+      expect(await facts()).toEqual({
+        online: false,
+        usagePaused: false,
+        hold: null,
+        eligibleProjects: 0,
+        lastClaimedAt: null,
+      });
+
+      await world.store.recordContact({ workerId: worker, protocolVersion: 3, imageDigests: [] });
+      const acme = await world.addProject('acme', [owner]);
+      const ops = await world.addProject('ops', [owner]);
+      await world.addProject('elsewhere', []);
+      expect(await facts()).toMatchObject({ online: true, eligibleProjects: 2 });
+      await world.setProjectMode(ops, 'server_only');
+      expect((await facts())?.eligibleProjects).toBe(1);
+      await world.setProjectMode(ops, 'workers_only');
+      await world.refuseRemoteCredential(acme);
+      expect((await facts())?.eligibleProjects).toBe(1);
+      // The scope narrows; pick only counts every project, since a pick ignores it.
+      await world.store.setClaimScope({ workerId: worker, projectIds: [acme] });
+      expect((await facts())?.eligibleProjects).toBe(0);
+      await world.store.setClaimScope({ workerId: worker, projectIds: [] });
+      expect((await facts())?.eligibleProjects).toBe(1);
+
+      const hold = async (paused: boolean, via: 'worker_ui' | 'worker_internal_drain') =>
+        world.store.setManualPause({ workerId: worker, paused, via, now: at(30_000) });
+      await hold(true, 'worker_internal_drain');
+      expect((await facts())?.hold).toBe('draining');
+      await hold(false, 'worker_ui');
+      expect((await facts())?.hold).toBeNull();
+      await hold(true, 'worker_ui');
+      expect((await facts())?.hold).toBe('paused');
+
+      await world.store.setUsagePause({
+        workerId: worker,
+        until: new Date(Date.now() + 3_600_000),
+        estimated: false,
+      });
+      expect((await facts())?.usagePaused).toBe(true);
+      await world.store.setUsagePause({
+        workerId: worker,
+        until: new Date(Date.now() - 60_000),
+        estimated: false,
+      });
+      expect((await facts())?.usagePaused).toBe(false);
+
+      await world.recordClaim(worker, at(40_000));
+      await world.recordClaim(worker, at(50_000));
+      expect((await facts())?.lastClaimedAt).toEqual(at(50_000));
+    });
+
+    it('lists a project’s workers: not revoked, whose user may run there, own or all (S-22.19)', async () => {
+      const world = await harness.create();
+      const member = await world.addViewer('member-of-acme@example.test');
+      const stranger = await world.addViewer('stranger@example.test');
+      const acme = await world.addProject('acme', [member]);
+      const mine = await registerWorker(world, member);
+      const theirs = await registerWorker(world, stranger);
+      const gone = await registerWorker(world, member);
+      await world.store.revokeWorker({
+        workerId: gone,
+        ownerUserId: null,
+        actorUserId: member,
+        now: at(20_000),
+      });
+      const all = await world.store.listWorkersForProject(acme, null);
+      expect(new Map(all.map((row) => [row.id, row.mayRunInProject]))).toEqual(
+        new Map([
+          [mine, true],
+          [theirs, false],
+        ]),
+      );
+      expect(all.every((row) => row.claimFacts !== undefined)).toBe(true);
+      expect(
+        (await world.store.listWorkersForProject(acme, stranger)).map((row) => row.id),
+      ).toEqual([theirs]);
     });
 
     it('revokes: the live runs’ leases expire and nothing else, once; others’ workers read as absent', async () => {

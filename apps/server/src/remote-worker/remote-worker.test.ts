@@ -2431,6 +2431,47 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     }
   });
 
+  it('connected but its launcher is not answering: the page says so, and Try now asks the launcher again (S-22.19, R-L3)', async () => {
+    const stateDir = stateDirWithCredential();
+    const core = fakeCore({});
+    let up = false;
+    let probes = 0;
+    // A long wait between re-probes (backlog 980's backoff): only Try now asks the launcher again.
+    const { worker } = await start({
+      stateDir,
+      core,
+      auth: 'none',
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(ms, 60_000))),
+      health: async () => {
+        probes += 1;
+        if (!up) throw new Error('connect ECONNREFUSED launcher:7780');
+        return { images: { run: DIGEST, egress: DIGEST } };
+      },
+    });
+    try {
+      const port = portOf(worker.uiAddress());
+      await until('connected', () => worker.state().connection === 'connected');
+      await until('the launcher refused', () =>
+        worker.localState().claim_blockers.includes('launcher_unreachable'),
+      );
+      expect((await localState(port)).claim_blockers).toEqual(['launcher_unreachable']);
+      // A connected worker whose launcher is down: Try now asks it again (not `409 connected`).
+      const before = probes;
+      const answered = await post(port, 'retry', {});
+      expect(answered.status).toBe(200);
+      expect(probes).toBeGreaterThan(before);
+      expect(workerLocalStateSchema.parse(JSON.parse(answered.text)).claim_blockers).toEqual([
+        'launcher_unreachable',
+      ]);
+      up = true;
+      await until('the launcher answered', () => worker.localState().claim_blockers.length === 0);
+      // Nothing left to ask again: a connected worker's Try now is refused, as before.
+      expect((await post(port, 'retry', {})).status).toBe(409);
+    } finally {
+      await worker.stop();
+    }
+  });
+
   it('revoked: Connect again deletes the credential and starts a new device flow without a restart (WP-294 (6))', async () => {
     const stateDir = stateDirWithCredential();
     const core = fakeCore({

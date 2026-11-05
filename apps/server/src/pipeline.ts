@@ -1791,6 +1791,12 @@ export const composePipeline = async (
         store: store.offers,
         withdraw: async (offer, reason) => runtime.withdrawOffer(offer, reason),
       },
+      /**
+       * Backlog 887 (S-22.19): an open offer written before WP-278 has neither `*_from`, so no worker
+       * ever took it and it never expired — routed from its project's effective execution setting,
+       * once; `packages/application/src/recovery/offer-timeout.ts`.
+       */
+      unroutedOffers: { store: store.offers, execution: store.execution },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
         settings,

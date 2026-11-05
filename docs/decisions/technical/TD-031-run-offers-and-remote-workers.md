@@ -845,7 +845,7 @@ host on the same L2 segment can reach a loopback publish; the token holds there.
 
 **Amendment (2026-11-05, orchestrator-authorised, S-22.19) — one claim-blocker vocabulary, both sides.** *Why a
 connected worker takes nothing* has one answer list, `WORKER_CLAIM_BLOCKERS` / `workerClaimBlockerSchema` in
-`packages/contracts/src/workers.ts`, ordered most fundamental first (the first is the sentence a screen shows):
+`packages/contracts/src/worker-claim-blockers.ts`, ordered most fundamental first (the first is the sentence a screen shows):
 `not_set_up`, `revoked`, `offline`, `protocol_outdated`, `claude_rejected`, `paused`, `draining`, `usage_limited`,
 `launcher_unreachable`, `images_missing`, `images_outdated`, `no_eligible_project`; the words are one exhaustive
 table, `WORKER_CLAIM_BLOCKER_WORDS` in `apps/web/src/ui/humanize.ts`, read by the SPA and the local page. The core

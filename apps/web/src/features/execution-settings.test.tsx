@@ -50,6 +50,11 @@ const DEFAULTS = {
   server_claimant: 'none',
   notice:
     'No server runner is running on this instance, so this project is treated as workers only: workers may take its runs at once.',
+  workers: [],
+  waiting: {
+    open: 0,
+    closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
+  },
 };
 
 const json = (body: unknown, status = 200): Response =>

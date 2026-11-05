@@ -17,10 +17,12 @@ import {
 } from './worker.js';
 import {
   orderClaimBlockers,
-  revokeWorkerResponseSchema,
   WORKER_CLAIM_BLOCKERS,
   workerClaimBlockerSchema,
   workerClaimBlockersSchema,
+} from './worker-claim-blockers.js';
+import {
+  revokeWorkerResponseSchema,
   workerDeviceDecisionRequestSchema,
   workerDeviceDecisionResponseSchema,
   workerDeviceLookupRequestSchema,
@@ -54,6 +56,9 @@ const summary = {
   concurrency: 1,
   running: [],
   last_update: null,
+  claim_blockers: ['offline'],
+  can_claim: false,
+  last_claimed_at: null,
 };
 
 describe('the device flow’s machine half (TD-031 §10c)', () => {
@@ -264,6 +269,27 @@ describe('the claim-blocker vocabulary (S-22.19)', () => {
     expect(workerClaimBlockersSchema.safeParse(['images_outdated', 'offline']).success).toBe(false);
     expect(workerClaimBlockersSchema.safeParse(['paused', 'paused']).success).toBe(false);
     expect(workerClaimBlockersSchema.safeParse([...WORKER_CLAIM_BLOCKERS]).success).toBe(true);
+  });
+
+  it('rides on every listed worker, with whether it can claim and when it last did', () => {
+    expect(workerSummarySchema.safeParse(summary).success).toBe(true);
+    expect(
+      workerSummarySchema.safeParse({
+        ...summary,
+        claim_blockers: [],
+        can_claim: true,
+        last_claimed_at: AT,
+      }).success,
+    ).toBe(true);
+    expect(
+      workerSummarySchema.safeParse({ ...summary, claim_blockers: ['images_outdated', 'offline'] })
+        .success,
+    ).toBe(false);
+    expect(
+      workerSummarySchema.safeParse({ ...summary, claim_blockers: ['pick_only'] }).success,
+    ).toBe(false);
+    const { can_claim: _absent, ...withoutVerdict } = summary;
+    expect(workerSummarySchema.safeParse(withoutVerdict).success).toBe(false);
   });
 
   it('orders and de-duplicates what a side collected', () => {

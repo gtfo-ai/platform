@@ -15,6 +15,7 @@ import {
   OFFER_TIMEOUT_REASON,
   type OfferTimeoutRecoverySite,
   recoverExpiredOffers,
+  rerouteUnroutedOffers,
 } from './offer-timeout.js';
 import { runStrandedRecovery } from './stranded.js';
 
@@ -236,5 +237,107 @@ describe('the offer-timeout recovery row (WP-278)', () => {
       offers: site(harness),
     });
     expect(report).toContainEqual({ site: 'run_offer_timeout', found: 1, reEnqueued: 0, ended: 1 });
+  });
+});
+
+describe('an offer written before WP-278 is routed from its project’s setting (backlog 887)', () => {
+  const reroute = (harness: PipelineHarness) =>
+    rerouteUnroutedOffers(
+      { unitOfWork: harness.memory },
+      { store: harness.store.offers, execution: harness.store.execution },
+      { now: harness.clock.now(), limit: 50 },
+    );
+
+  it('opens it to workers at once on a workers-only project, with an offer timeout from now', async () => {
+    const harness = await unclaimed();
+    const [offer] = harness.store.offerRows();
+    harness.store.unrouteOffer(offer?.runId as Id);
+    // The pre-WP-278 shape: neither side's instant, no expiry — the timeout row cannot see it.
+    harness.clock.advance(TIMEOUT_SECONDS * 2_000);
+    expect(await pass(harness)).toEqual({ found: 0, ended: 0 });
+
+    const now = harness.clock.now();
+    expect(await reroute(harness)).toEqual({ found: 1, rerouted: 1 });
+    const [after] = harness.store.offerRows();
+    expect(after?.state).toBe('open');
+    expect(after?.routing).toMatchObject({
+      serverFrom: null,
+      workersFrom: now,
+      expiresAt: new Date(Date.parse(now) + TIMEOUT_SECONDS * 1000).toISOString(),
+    });
+    // Bounded by the columns it wrote: the next pass finds nothing to route.
+    expect(await reroute(harness)).toEqual({ found: 0, rerouted: 0 });
+    // And from now on the timeout row owns it.
+    harness.clock.advance(TIMEOUT_SECONDS * 1000);
+    expect(await pass(harness)).toEqual({ found: 1, ended: 1 });
+  });
+
+  it('keeps a server-only project’s offer closed to workers, and routes it so it can expire', async () => {
+    const harness = await unclaimed();
+    harness.store.setExecutionSettings(PROJECT, {
+      mode: 'server_only',
+      prefer: 'server',
+      fallbackAfterSeconds: null,
+      assigneeWindowSeconds: 120,
+      offerTimeoutSeconds: TIMEOUT_SECONDS,
+    });
+    const [offer] = harness.store.offerRows();
+    harness.store.unrouteOffer(offer?.runId as Id);
+    expect(await reroute(harness)).toEqual({ found: 1, rerouted: 1 });
+    expect(harness.store.offerRows()[0]?.routing).toMatchObject({
+      serverFrom: harness.clock.now(),
+      workersFrom: null,
+    });
+    expect(harness.store.offerRows()[0]?.routing.expiresAt).not.toBeNull();
+  });
+
+  it('leaves alone an offer a claim took first, and one that was routed already', async () => {
+    const harness = await unclaimed();
+    expect(await reroute(harness)).toEqual({ found: 0, rerouted: 0 });
+    const [offer] = harness.store.offerRows();
+    harness.store.unrouteOffer(offer?.runId as Id);
+    const claimed = await claimRunOffer(harness.store.offers, {} as never, {
+      eligibility: { runId: offer?.runId as Id },
+      claimantKind: 'server',
+      owner: 'server:test',
+      expiresAt: harness.clock.now(),
+      now: harness.clock.now(),
+    });
+    expect(claimed).not.toBeNull();
+    expect(await reroute(harness)).toEqual({ found: 0, rerouted: 0 });
+    expect(harness.store.offerRows()[0]?.state).toBe('claimed');
+  });
+
+  it('is a row of the stranded pass, reported as run_offer_reroute', async () => {
+    const harness = await unclaimed();
+    const [offer] = harness.store.offerRows();
+    harness.store.unrouteOffer(offer?.runId as Id);
+    const none = async () => [];
+    const report = await runStrandedRecovery({
+      store: {
+        strandedBootstraps: none,
+        markBootstrapAttempt: async () => {},
+        endBootstrap: async () => {},
+        strandedAsks: none,
+        markAskAttempt: async () => {},
+        endAsk: async () => {},
+        strandedHistoryRecords: none,
+        markHistoryRecordAttempt: async () => {},
+        endHistoryRecord: async () => {},
+        strandedCurations: none,
+        markCurationAttempt: async () => {},
+        endCuration: async () => {},
+        asksWithEndedRun: none,
+      },
+      unitOfWork: harness.memory,
+      jobs: harness.jobs,
+      clock: harness.clock,
+      graceMs: 60_000,
+      unroutedOffers: { store: harness.store.offers, execution: harness.store.execution },
+      offers: site(harness),
+    });
+    expect(report).toContainEqual({ site: 'run_offer_reroute', found: 1, reEnqueued: 1, ended: 0 });
+    // Routed first, so the timeout row sees a fresh expiry rather than nothing.
+    expect(report).toContainEqual({ site: 'run_offer_timeout', found: 0, reEnqueued: 0, ended: 0 });
   });
 });

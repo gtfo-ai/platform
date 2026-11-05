@@ -18,21 +18,31 @@
  * The read says whether the instance has a server claimant **now** (`server_claimants`, renewed by
  * every running claimant) and, when it has none, what that does to this project's mode (TD-031 §8:
  * *"says so on the settings screen"*) — `executionNotice` in `@platform/domain` is the sentence.
+ *
+ * **And who would run it** (S-22.19, the worker UX review's N2): each registered worker the reader
+ * may see, whether it takes this project's runs by itself, only when picked, or not at all, and why
+ * — the Workers screen's blockers (`coreClaimBlockersOf`) and the project's own reason — plus the
+ * open offers and how many no worker may take now. All reads; nothing here changes routing.
  */
 import {
   apiErrorSchema,
   type JsonObject,
   type ProjectExecutionResponse,
+  type ProjectExecutionWaiting,
+  type ProjectExecutionWorker,
   projectExecutionResponseSchema,
   putProjectExecutionRequestSchema,
   putProjectExecutionResponseSchema,
   type UserRole,
 } from '@platform/contracts';
 import {
+  can,
+  coreClaimBlockersOf,
   DEFAULT_EXECUTION_SETTINGS,
   type ExecutionSettings,
   effectiveFallbackAfterSeconds,
   executionNotice,
+  type RunImageDigests,
 } from '@platform/domain';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -41,11 +51,13 @@ import { requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { ExecutionWrite } from '../queries/execution-queries.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
+import type { ProjectWorkerRow } from '../queries/worker-queries.js';
 import {
   claimIdempotentAttempt,
   type IdempotencyRecords,
   readIdempotencyKey,
 } from './idempotency.js';
+import { claimFactsOf } from './workers.js';
 
 export const SET_EXECUTION_ACTION = 'project.execution.write';
 
@@ -68,7 +80,90 @@ export interface ProjectExecutionQueries {
   readonly claimAttempt: IdempotencyRecords['claimAttempt'];
   readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
   readonly recordAction: (input: HumanActionInput) => Promise<void>;
+  /**
+   * The registered workers (not revoked) and whether each one's user may run here — every worker
+   * for `userId: null` (an administrator), the user's own otherwise (S-22.19, N2).
+   */
+  readonly workersFor: (projectId: string, userId: string | null) => Promise<ProjectWorkerRow[]>;
+  /** The project's open offers, and how many have no `workers_from` / one still ahead (N2). */
+  readonly waitingOffers: (
+    projectId: string,
+  ) => Promise<{ readonly open: number; readonly never: number; readonly later: number }>;
+  /** The core's current run and egress digests, or `null` (`routes/workers.ts`'s same option). */
+  readonly coreDigests?: () => RunImageDigests | null;
 }
+
+/** What the read adds to the setting (S-22.19, N2): who would take the runs, and what waits. */
+export interface ExecutionAudience {
+  readonly workers: readonly ProjectExecutionWorker[];
+  readonly waiting: ProjectExecutionWaiting;
+}
+
+/**
+ * One worker against one project (S-22.19, N2). The project's reason comes first in the order the
+ * claim would refuse it — the project's mode, its run credential, the worker's user's role — then
+ * the claim scope, which keeps the worker from taking the runs **by itself** only: its owner may
+ * still pick one, so a scope that leaves the project out is `picked_only` (and *pick only*, `[]`,
+ * leaves every project out). Any blocker of the worker's own is `no`, whatever the project says.
+ */
+export const projectWorkerOf = (
+  row: ProjectWorkerRow,
+  input: {
+    readonly projectId: string;
+    readonly settings: ExecutionSettings;
+    readonly credentialRefused: boolean;
+    readonly coreDigests: RunImageDigests | null;
+    readonly now: Date;
+  },
+): ProjectExecutionWorker => {
+  const blockers = coreClaimBlockersOf({
+    ...claimFactsOf(row, input.coreDigests, input.now),
+    eligibleProjects: null,
+  });
+  const scope = row.claimProjects;
+  const reason: ProjectExecutionWorker['project_reason'] =
+    input.settings.mode === 'server_only'
+      ? 'server_only'
+      : input.credentialRefused
+        ? 'credential_refused'
+        : !row.mayRunInProject
+          ? 'role'
+          : scope !== null && !scope.some((project) => project.id === input.projectId)
+            ? 'scope_excludes'
+            : null;
+  const takes: ProjectExecutionWorker['takes'] =
+    blockers.length > 0 || (reason !== null && reason !== 'scope_excludes')
+      ? 'no'
+      : reason === 'scope_excludes'
+        ? 'picked_only'
+        : 'automatically';
+  return {
+    worker_id: row.id,
+    name: row.name,
+    owner: { id: row.userId, name: row.userName, email: row.userEmail },
+    takes,
+    blockers,
+    project_reason: reason,
+  };
+};
+
+/**
+ * The open offers no worker may take now, each under the first reason that holds (N2): the
+ * project's run credential refuses every one that routing would give a worker; otherwise one with
+ * no `workers_from` was routed to the server only, and one whose `workers_from` is ahead waits out
+ * the server's head start.
+ */
+export const waitingOf = (
+  counts: { readonly open: number; readonly never: number; readonly later: number },
+  credentialRefused: boolean,
+): ProjectExecutionWaiting => ({
+  open: counts.open,
+  closed_to_workers: {
+    credential_refused: credentialRefused ? counts.open - counts.never : 0,
+    server_only: counts.never,
+    server_first: credentialRefused ? 0 : counts.later,
+  },
+});
 
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -88,6 +183,13 @@ export const executionDocument = (
   stored: ExecutionSettings | null,
   serverClaimant: boolean,
   workersRefused = false,
+  audience: ExecutionAudience = {
+    workers: [],
+    waiting: {
+      open: 0,
+      closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
+    },
+  },
 ): ProjectExecutionResponse => {
   const settings = stored ?? DEFAULT_EXECUTION_SETTINGS;
   const notices = [
@@ -101,6 +203,8 @@ export const executionDocument = (
     stored: stored !== null,
     server_claimant: serverClaimant ? 'running' : 'none',
     notice: notices.length === 0 ? null : notices.join(' '),
+    workers: audience.workers,
+    waiting: audience.waiting,
   });
 };
 
@@ -120,15 +224,35 @@ export const registerProjectExecutionRoutes = async (
     const value = (request.params as { project_id?: unknown }).project_id;
     return typeof value === 'string' && UUID.test(value) ? value : undefined;
   };
-  const current = async (projectId: string): Promise<ProjectExecutionResponse> => {
+  const current = async (
+    projectId: string,
+    request: FastifyRequest,
+  ): Promise<ProjectExecutionResponse> => {
     if (!(await queries.projectExists(projectId))) {
       throw new NotFoundError(`project ${projectId}`);
     }
-    return executionDocument(
-      await queries.execution(projectId),
-      await queries.serverClaimantRunning(),
-      (await queries.remoteRunCredentialRefused?.(projectId)) ?? false,
+    const actor = request.actor;
+    if (actor === undefined) {
+      // Unreachable through `requirePermission`; whose workers to list is not optional.
+      throw new HttpError(401, 'unauthenticated', 'this endpoint needs an authenticated session');
+    }
+    const stored = await queries.execution(projectId);
+    const refused = (await queries.remoteRunCredentialRefused?.(projectId)) ?? false;
+    const settings = stored ?? DEFAULT_EXECUTION_SETTINGS;
+    const coreDigests = queries.coreDigests?.() ?? null;
+    const now = new Date();
+    // Another person's machine is theirs to name: an administrator sees every worker (the Workers
+    // screen's own rule, `org.workers.manage`), anyone else their own.
+    const rows = await queries.workersFor(
+      projectId,
+      can(actor.role, 'org.workers.manage') ? null : actor.userId,
     );
+    return executionDocument(stored, await queries.serverClaimantRunning(), refused, {
+      workers: rows.map((row) =>
+        projectWorkerOf(row, { projectId, settings, credentialRefused: refused, coreDigests, now }),
+      ),
+      waiting: waitingOf(await queries.waitingOffers(projectId), refused),
+    });
   };
 
   typed.get(
@@ -138,13 +262,13 @@ export const registerProjectExecutionRoutes = async (
       schema: {
         summary: 'Where this project’s agent runs execute',
         description:
-          'TD-031 decision 8. `stored: false` is the defaults (`hybrid`, the server preferred, a 120 s assignee window, a 24 h offer timeout); `fallback_after_seconds: null` is the preference’s default (15 s for the server, 300 s for workers), and `effective_fallback_after_seconds` is what it resolves to. `server_claimant` is whether **this instance** has a server runner claiming offers now; with `none`, `notice` says what that does to this project’s mode — a `hybrid` project opens its runs to workers at once, a `server_only` project’s runs wait. Never set by `.agentic/config.yml`.',
+          'TD-031 decision 8. `stored: false` is the defaults (`hybrid`, the server preferred, a 120 s assignee window, a 24 h offer timeout); `fallback_after_seconds: null` is the preference’s default (15 s for the server, 300 s for workers), and `effective_fallback_after_seconds` is what it resolves to. `server_claimant` is whether **this instance** has a server runner claiming offers now; with `none`, `notice` says what that does to this project’s mode — a `hybrid` project opens its runs to workers at once, a `server_only` project’s runs wait. Never set by `.agentic/config.yml`. **Who would run it** (S-22.19): `workers` — every registered worker for an administrator, your own otherwise — each `automatically`, `picked_only` or `no`, with its own `blockers` and the project’s `project_reason`; `waiting` — the open offers, and how many no worker may take now and why.',
         tags: ['projects'],
         params: projectParamsSchema,
         response: { 200: projectExecutionResponseSchema, 404: apiErrorSchema },
       },
     },
-    async (request) => current(request.params.project_id),
+    async (request) => current(request.params.project_id, request),
   );
 
   typed.put(
@@ -190,7 +314,7 @@ export const registerProjectExecutionRoutes = async (
       });
       if (claim.replayed) {
         // A replay performs nothing and answers with the setting as it is now.
-        return { execution: await current(projectId), performed: false };
+        return { execution: await current(projectId, request), performed: false };
       }
       await claim.run(async (effectReturned) => {
         const written = await queries.writeExecution(projectId, settings);
@@ -210,7 +334,7 @@ export const registerProjectExecutionRoutes = async (
           },
         });
       });
-      return { execution: await current(projectId), performed: true };
+      return { execution: await current(projectId, request), performed: true };
     },
   );
 };

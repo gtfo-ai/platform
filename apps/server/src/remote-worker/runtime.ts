@@ -80,6 +80,7 @@ import {
   workerLocalOffersSchema,
   workerLocalStateSchema,
 } from '@platform/contracts';
+import { localClaimBlockersOf } from '@platform/domain';
 import { launcher as launcherAdapters, runner as runnerAdapters } from '@platform/infrastructure';
 import type { DestinationStream } from 'pino';
 import { asLoggerPort, createLogger, type PinoLogger } from '../logging.js';
@@ -1252,10 +1253,19 @@ export const startRemoteWorker = async (
     restartCycle('connect_again');
   };
 
-  /** *Try now*: the core is asked again at once. */
+  /**
+   * *Try now*: the core is asked again at once — or, on a connected worker whose launcher did not
+   * answer or holds no image (S-22.19, R-L3), the launcher is, and the claim loop woken. A connected
+   * worker with nothing to ask again answers `409`.
+   */
   const retry = async (): Promise<void> => {
     if (connection === 'connected') {
-      throw new LocalUiError(409, 'connected', 'this worker is connected');
+      if (launcherReach === 'ok' && heldDigests.length > 0) {
+        throw new LocalUiError(409, 'connected', 'this worker is connected');
+      }
+      await refreshHeldDigests();
+      wakeClaims();
+      return;
     }
     restartCycle('retry');
   };
@@ -1347,6 +1357,19 @@ export const startRemoteWorker = async (
         idle: sessions.size === 0,
         auth: uiAuth,
       },
+      claim_blockers: localClaimBlockersOf({
+        connection,
+        claudeRejected,
+        manuallyPaused: manuallyPausedAt !== null,
+        draining,
+        usagePaused: usagePauseRemainingMs() > 0,
+        launcherAnswered: launcherReach === 'unknown' ? null : launcherReach === 'ok',
+        heldDigests,
+        coreDigests:
+          coreDigests === null
+            ? null
+            : { run: coreDigests.platform_runtime, egress: coreDigests.platform_egress },
+      }),
       server_time: new Date(now).toISOString(),
     };
     return workerLocalStateSchema.parse(redactKeysAndValues(pageRedactor(), value));

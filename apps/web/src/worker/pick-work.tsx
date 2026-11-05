@@ -63,6 +63,11 @@ export interface PickWorkProps {
   readonly client: LocalClient;
   /** The worker can take nothing now (paused, draining, not connected): *Take* is disabled. */
   readonly takeBlocked: string | null;
+  /**
+   * What an empty list says (S-22.19, R-L7): why this worker sees nothing — the core lists nothing
+   * to a worker that cannot take work — or where runs that never reach a worker wait.
+   */
+  readonly emptyWords?: string;
   /** Called once a take started a run, so the page shows it at once. */
   readonly onTaken: () => void;
   readonly pollMs?: number;
@@ -73,6 +78,7 @@ export interface PickWorkProps {
 export const PickWork = ({
   client,
   takeBlocked,
+  emptyWords = 'Nothing is waiting for this worker right now.',
   onTaken,
   pollMs = OFFERS_POLL_MS,
   visible = visibleNow,
@@ -312,7 +318,9 @@ export const PickWork = ({
         {offers === null ? (
           <Skeleton label="Asking the platform which runs are waiting…" lines={2} />
         ) : offers.length === 0 ? (
-          <p className="text-sm text-fg-muted">Nothing is waiting for this worker right now.</p>
+          <p data-offers-empty="" className="text-sm text-fg-muted">
+            {emptyWords}
+          </p>
         ) : (
           <ul aria-label="Waiting runs" className="flex flex-col gap-2">
             {offers.map((offer) => (

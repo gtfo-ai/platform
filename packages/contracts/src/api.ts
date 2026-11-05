@@ -81,6 +81,7 @@ import {
   taskRecordSchema,
 } from './records.js';
 import { transcriptEventSchema } from './transcript.js';
+import { workerClaimBlockersSchema } from './worker-claim-blockers.js';
 
 // ── Envelopes ────────────────────────────────────────────────────────────────
 
@@ -816,11 +817,64 @@ export const putProjectExecutionRequestSchema = z.strictObject({
  * first and a `server_only` project's wait — `notice` says which, in a sentence the settings screen
  * shows (TD-031 §8: *"says so on the settings screen"*).
  */
+/**
+ * Why a project keeps one worker off its runs, beside the worker's own blockers (S-22.19):
+ * `server_only` (its mode), `credential_refused` (its git connection's run credential may not reach
+ * a developer's machine), `role` (the worker's user may not run there), `scope_excludes` (the
+ * worker's claim scope leaves it out — the owner may still pick its runs).
+ */
+export const projectWorkerReasonSchema = z.enum([
+  'server_only',
+  'credential_refused',
+  'role',
+  'scope_excludes',
+]);
+
+/**
+ * One worker as a project's execution read sees it (S-22.19, N2): whether it would take this
+ * project's runs by itself (`automatically`), only when its owner picks one (`picked_only`), or not
+ * at all (`no`) — and why: its own `blockers` (the Workers screen's, `no_eligible_project` aside)
+ * and the project's `project_reason`.
+ */
+export const projectExecutionWorkerSchema = z.strictObject({
+  worker_id: idSchema,
+  name: z.string().min(1).max(200),
+  /** The worker's owner, as the Workers screen names them. */
+  owner: z.strictObject({ id: idSchema, name: z.string().min(1).nullable(), email: z.email() }),
+  takes: z.enum(['automatically', 'picked_only', 'no']),
+  blockers: workerClaimBlockersSchema,
+  project_reason: projectWorkerReasonSchema.nullable(),
+});
+export type ProjectExecutionWorker = z.infer<typeof projectExecutionWorkerSchema>;
+
+/**
+ * The project's runs waiting for someone to start them (`run_offers` open), and how many of them no
+ * worker may take now (S-22.19, N2), each counted once under the first reason that holds:
+ * `credential_refused` (the project's run credential), `server_only` (the offer was routed never to
+ * reach a worker — the project's mode when it was offered), `server_first` (the platform server's
+ * head start has not ended yet).
+ */
+export const projectExecutionWaitingSchema = z.strictObject({
+  open: z.int().nonnegative(),
+  closed_to_workers: z.strictObject({
+    credential_refused: z.int().nonnegative(),
+    server_only: z.int().nonnegative(),
+    server_first: z.int().nonnegative(),
+  }),
+});
+export type ProjectExecutionWaiting = z.infer<typeof projectExecutionWaitingSchema>;
+
 export const projectExecutionResponseSchema = putProjectExecutionRequestSchema.extend({
   effective_fallback_after_seconds: z.int().nonnegative(),
   stored: z.boolean(),
   server_claimant: z.enum(['running', 'none']),
   notice: z.string().max(1024).nullable(),
+  /**
+   * The registered (not revoked) workers the reader may see — every one for an administrator, their
+   * own otherwise — and whether each would take this project's runs (S-22.19, N2).
+   */
+  workers: z.array(projectExecutionWorkerSchema).max(500),
+  waiting: projectExecutionWaitingSchema,
 });
 
 /** Its answer to a write: the setting as written, and `performed: false` for a replay. */

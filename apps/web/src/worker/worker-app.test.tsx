@@ -19,7 +19,9 @@ import type { TranscriptEvent, WorkerLocalRun, WorkerLocalState } from '@platfor
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 import { LocalCallError, type LocalClient } from './client.js';
+import { CONNECTION_STATUS } from './model.js';
 import { WorkerApp } from './worker-app.js';
 
 const NOW = Date.parse('2026-11-05T10:05:00.000Z');
@@ -77,6 +79,7 @@ const state = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalState => (
   runs: [run()],
   logs: ['{"level":30,"time":1762337100000,"msg":"this worker claimed a run"}'],
   setup: setup(),
+  claim_blockers: [],
   server_time: '2026-11-05T10:05:00.000Z',
   ...overrides,
 });
@@ -379,6 +382,17 @@ describe('a launcher that does not answer (backlog 980)', () => {
     expect(container.textContent).toContain('docker compose logs launcher');
   });
 
+  it('says it once in the room: the status line, when that is what keeps it from work (S-22.19)', async () => {
+    const { container } = renderPage(
+      fakeClient(state({ launcher: 'unreachable', claim_blockers: ['launcher_unreachable'] })),
+    );
+    await screen.findByText('Runs on this machine');
+    expect(container.querySelector('[data-hold-line]')?.textContent).toContain(
+      'its launcher isn’t answering',
+    );
+    expect(container.textContent).not.toContain('This worker’s launcher does not answer');
+  });
+
   it('says nothing while it answers, or before the first probe', async () => {
     for (const launcher of ['ok', 'unknown'] as const) {
       const { container, unmount } = renderPage(fakeClient(state({ launcher })));
@@ -621,5 +635,106 @@ describe('the first-run wizard (WP-294)', () => {
     // A run in flight: neither undo is offered.
     expect(screen.queryByRole('button', { name: 'Change platform' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Sign out of Claude' })).toBeNull();
+  });
+});
+
+describe('why it takes nothing, and one control for its hold (S-22.19)', () => {
+  it('says Taking work only when nothing blocks it, and Connected to its platform', async () => {
+    const { container } = renderPage(fakeClient(state()));
+    await screen.findByText('Runs on this machine');
+    expect(container.querySelector('[data-hold-line]')?.textContent).toBe('Taking work');
+    expect(container.querySelector('[data-connection]')?.textContent).toBe(
+      'Connected to core.example.test',
+    );
+    expect(container.querySelector('[data-mode]')?.getAttribute('data-mode')).toBe('claiming');
+  });
+
+  it('says why a connected worker takes nothing, in the shared words, and Try now asks again', async () => {
+    const client = fakeClient(state({ claim_blockers: ['launcher_unreachable'] }));
+    const { container } = renderPage(client);
+    await screen.findByText('Runs on this machine');
+    const line = container.querySelector('[data-hold-line]')?.textContent ?? '';
+    expect(line).toBe(
+      `Connected, but not taking work: its launcher isn’t answering. ${WORKER_CLAIM_BLOCKER_WORDS.launcher_unreachable.fix}`,
+    );
+    expect(container.textContent).not.toContain('Taking work');
+    expect(container.querySelector('[data-mode]')?.textContent).toBe(
+      'Connected, but not taking work',
+    );
+    expect(container.querySelector('[data-desk="free"]')?.textContent).toContain('Not taking work');
+    await userEvent.click(screen.getByRole('button', { name: 'Try now' }));
+    expect(client.retry).toHaveBeenCalled();
+    // A blocker Try now cannot clear offers no button that would only be refused.
+    cleanup();
+    renderPage(fakeClient(state({ claim_blockers: ['images_outdated'] })));
+    await screen.findByText('Runs on this machine');
+    expect(screen.queryByRole('button', { name: 'Try now' })).toBeNull();
+  });
+
+  it('keeps Drain behind More with its explanation, and a drain makes Resume the one primary', async () => {
+    const client = fakeClient(state());
+    const { container } = renderPage(client);
+    const drain = await screen.findByRole('button', { name: 'Drain' });
+    expect(drain.closest('details')?.querySelector('summary')?.textContent).toBe('More');
+    expect(drain.getAttribute('aria-describedby')).toBe('worker-drain-hint');
+    await userEvent.click(drain);
+    await screen.findByRole('button', { name: 'Resume' });
+    expect(container.querySelector('[data-hold-line]')?.textContent).toBe(
+      'Draining: finishing 1 run, then taking nothing new until you resume or restart the worker.',
+    );
+    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Drain' })).toBeNull();
+    // One primary for the worker's state, in the header and its status line (R1).
+    const primaries = [
+      ...container.querySelectorAll('main > header button, [data-hold] button'),
+    ].filter((button) => button.className.includes('primary'));
+    expect(primaries.map((button) => button.textContent)).toEqual(['Resume']);
+  });
+
+  it('says an update comes by itself, never asking for a drain by hand', async () => {
+    const { container } = renderPage(fakeClient(state({ update_pending: true })));
+    await screen.findByText('Runs on this machine');
+    const flash = screen.getByText(/The platform runs a newer build/);
+    expect(flash.textContent).toContain('updates itself after its current run');
+    expect(flash.textContent).not.toContain('Drain');
+    expect(container.textContent).not.toContain('lost worker');
+  });
+
+  it('links back to the platform’s own setup, on the platform’s origin', async () => {
+    const { container } = renderPage(fakeClient(state()));
+    await screen.findByText('Runs on this machine');
+    const link = container.querySelector('[data-platform-wizard] a');
+    expect(link?.textContent).toBe('Finish setting up on the platform');
+    expect(link?.getAttribute('href')).toBe('https://core.example.test/workers/new?step=ready');
+  });
+
+  it('says why the waiting runs are empty: a blocker, or where runs that never reach a worker wait', async () => {
+    const { container } = renderPage(fakeClient(state({ claim_blockers: ['images_outdated'] })));
+    await waitFor(() =>
+      expect(container.querySelector('[data-offers-empty]')?.textContent).toBe(
+        'Nothing is listed because this worker can’t take work: it has an older build than this platform.',
+      ),
+    );
+    cleanup();
+    const open = renderPage(fakeClient(state()));
+    await waitFor(() =>
+      expect(open.container.querySelector('[data-offers-empty]')?.textContent).toMatch(
+        /^No run is waiting for a worker\. On projects that prefer the platform server/,
+      ),
+    );
+  });
+});
+
+describe('the connection’s icon (S-22.19, R-L6)', () => {
+  it('draws a failure as a failure and only a step under way as a wait', () => {
+    expect(CONNECTION_STATUS.revoked).toBe('failure');
+    expect(CONNECTION_STATUS.core_unreachable).toBe('failure');
+    expect(CONNECTION_STATUS.upgrade_required).toBe('needs_you');
+    expect(
+      Object.entries(CONNECTION_STATUS)
+        .filter(([, status]) => status === 'waiting')
+        .map(([connection]) => connection)
+        .sort(),
+    ).toEqual(['handshaking', 'logging_in']);
   });
 });

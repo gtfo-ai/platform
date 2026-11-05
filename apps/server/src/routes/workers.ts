@@ -52,14 +52,25 @@ import {
   workerStateSchema,
   workersResponseSchema,
 } from '@platform/contracts';
-import { can, isDeviceCodeStale, normaliseUserCode } from '@platform/domain';
+import {
+  type CoreWorkerClaimFacts,
+  can,
+  coreClaimBlockersOf,
+  isDeviceCodeStale,
+  normaliseUserCode,
+  type RunImageDigests,
+} from '@platform/domain';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import type { Actor } from '../auth/rbac.js';
 import { type PermissionGuardDependencies, requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
-import type { WorkerListRow, WorkerStore } from '../queries/worker-queries.js';
+import {
+  WORKER_CONNECTED_SECONDS,
+  type WorkerListRow,
+  type WorkerStore,
+} from '../queries/worker-queries.js';
 import { hashTypedUserCode } from '../workers/secrets.js';
 
 export interface WorkerRoutesOptions {
@@ -67,13 +78,61 @@ export interface WorkerRoutesOptions {
   /** Unused by an org-scoped guard, and required by its type. */
   readonly projectRole: PermissionGuardDependencies['projectRole'];
   readonly now?: () => Date;
+  /**
+   * The core's current run and egress digests (`release()`'s `platform_runtime`/`platform_egress`),
+   * or `null` while it cannot name them — what `images_outdated` compares with (S-22.19). Absent is
+   * `null`: nothing is said about a worker's images but that it holds none.
+   */
+  readonly coreDigests?: () => RunImageDigests | null;
 }
 
 const iso = (value: Date): IsoDateTime => value.toISOString() as IsoDateTime;
 const isoOrNull = (value: Date | null): IsoDateTime | null => (value === null ? null : iso(value));
 
+/**
+ * The core's claim facts of a listed row (S-22.19). A row read without them (not `listWorkers`'s)
+ * is judged online on this process's clock and its projects are not asked.
+ */
+export const claimFactsOf = (
+  row: WorkerListRow,
+  coreDigests: RunImageDigests | null,
+  now: Date,
+): CoreWorkerClaimFacts => {
+  const facts = row.claimFacts;
+  return {
+    revoked: row.revokedAt !== null || row.state === 'revoked',
+    online:
+      facts?.online ??
+      (row.lastSeenAt !== null &&
+        now.getTime() - row.lastSeenAt.getTime() < WORKER_CONNECTED_SECONDS * 1000),
+    protocolVersion: row.protocolVersion,
+    hold: facts?.hold ?? (row.manuallyPausedAt === null ? null : 'paused'),
+    usagePaused:
+      facts?.usagePaused ?? (row.pausedUntil !== null && row.pausedUntil.getTime() > now.getTime()),
+    heldDigests: z.array(imageDigestSchema).parse(row.imageDigests),
+    coreDigests,
+    eligibleProjects: facts?.eligibleProjects ?? null,
+  };
+};
+
 /** One stored row on the wire; a value the contract refuses fails the response, never invented. */
-export const toWireWorker = (row: WorkerListRow): WorkerSummary => ({
+export const toWireWorker = (
+  row: WorkerListRow,
+  coreDigests: RunImageDigests | null = null,
+  now: Date = new Date(),
+): WorkerSummary => {
+  const blockers = coreClaimBlockersOf(claimFactsOf(row, coreDigests, now));
+  return {
+    ...toWireWorkerRow(row),
+    claim_blockers: blockers,
+    can_claim: blockers.length === 0,
+    last_claimed_at: isoOrNull(row.claimFacts?.lastClaimedAt ?? null),
+  };
+};
+
+const toWireWorkerRow = (
+  row: WorkerListRow,
+): Omit<WorkerSummary, 'claim_blockers' | 'can_claim' | 'last_claimed_at'> => ({
   id: row.id,
   name: row.name,
   user: { id: row.userId, email: row.userEmail, name: row.userName },
@@ -241,7 +300,7 @@ export const registerWorkerRoutes = async (
       schema: {
         summary: 'Registered workers: your own, or every one for an administrator',
         description:
-          'Machine, user, created and last seen, protocol, image digests, state, paused until (and whether that instant is the default pause of a usage limit that named no reset, `paused_until_estimated`, WP-285), and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280). `timezone` is the organisation’s, which a usage pause’s time is shown in.',
+          'Machine, user, created and last seen, protocol, image digests, state, paused until (and whether that instant is the default pause of a usage limit that named no reset, `paused_until_estimated`, WP-285), and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280). `timezone` is the organisation’s, which a usage pause’s time is shown in. **Why it takes no work** (S-22.19): `claim_blockers` — the claim’s own predicates minus the per-offer ones, in the vocabulary’s order (`revoked`, `offline`, `protocol_outdated`, `paused`, `draining`, `usage_limited`, `images_missing`, `images_outdated` against this core’s current run and egress digests, `no_eligible_project`) — `can_claim` when it is empty, and `last_claimed_at`.',
         tags: ['workers'],
         response: { 200: workersResponseSchema },
       },
@@ -250,8 +309,10 @@ export const registerWorkerRoutes = async (
       const actor = actorOf(request);
       const all = can(actor.role, 'org.workers.manage');
       const rows = await options.store.listWorkers(all ? null : actor.userId);
+      const digests = options.coreDigests?.() ?? null;
+      const at = now();
       return {
-        items: rows.map(toWireWorker),
+        items: rows.map((row) => toWireWorker(row, digests, at)),
         scope: all ? 'all' : 'own',
         timezone: await options.store.organisationTimezone(),
       };
