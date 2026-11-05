@@ -358,11 +358,15 @@ describe('a deep link answers the shell', () => {
     '/agents',
     '/inbox',
     '/settings',
+    // S-23.11b: a settings section and a project's settings section, each a page of its own.
+    '/settings/policies',
     '/onboarding',
     // S-23.4: the project list is the bare segment, which the allow-list's first-segment rule serves.
     '/projects',
     '/projects/ACME',
     `/projects/ACME/tasks/${PROBE_ID}`,
+    '/projects/ACME/settings/connections',
+    `/projects/ACME/shadow?batch=${PROBE_ID}`,
     `/tasks/${PROBE_ID}`,
     `/runs/${PROBE_ID}`,
     // A client route this server has never heard of: the SPA owns everything under its segments.

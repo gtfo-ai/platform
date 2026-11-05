@@ -88,7 +88,12 @@ test('the frame: Home, the projects list, and a project’s tabs', async ({ page
 
   await tabs.getByRole('link', { name: 'Knowledge' }).click();
   await expect(page).toHaveURL(`/projects/${PROJECT_KEY}/knowledge`);
-  await expect(page.getByRole('button', { name: 'technical/architecture.md' })).toBeVisible();
+  // S-23.11b: the vault's files are a NavList grouped by folder; the item is the file's own name.
+  await expect(
+    page
+      .getByRole('navigation', { name: 'Knowledge files' })
+      .getByRole('button', { name: 'architecture.md' }),
+  ).toBeVisible();
   await expect(tabs.getByRole('link', { name: 'Knowledge' })).toHaveAttribute(
     'aria-current',
     'page',
@@ -284,18 +289,32 @@ test('the agents list shows every live run and opens one’s dialog with a link 
   );
 });
 
-test('the audit log renders an entry with its diff', async ({ page }) => {
+test('the audit log renders an entry in words, with its diff behind Details', async ({ page }) => {
   await page.goto('/audit');
-  await expect(page.getByText('project', { exact: true })).toBeVisible();
+  // S-23.11b: who · what, in words · when — the person resolved from the user list.
+  const list = page.getByRole('list', { name: 'Audit entries' });
+  await expect(list.getByText('changed a project’s settings', { exact: false })).toBeVisible();
+  await expect(list.getByText('Fake Operator')).toBeVisible();
+  await expect(page.getByText('autonomy_level')).toBeHidden();
+  await list.getByText('Details').click();
   await expect(page.getByText('autonomy_level')).toBeVisible();
 });
 
-test('settings shows the session, the user list and the instance version', async ({ page }) => {
+test('settings opens its first section and shows the session, the user list and the instance version', async ({
+  page,
+}) => {
+  // S-23.11b: one section per page, beside a NavList; the bare URL opens the first.
   await page.goto('/settings');
-  await expect(page.getByText('operator@example.invalid').first()).toBeVisible();
-  await expect(page.getByText('0.0.0-fake')).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/appearance$/);
   // A browser that has never chosen gets the dark default (TD-033 § 2).
   await expect(page.getByLabel('Theme preference')).toHaveValue('dark');
+  const nav = page.getByRole('navigation', { name: 'Settings' });
+  await nav.getByRole('link', { name: 'Session' }).click();
+  await expect(page.getByText('operator@example.invalid').first()).toBeVisible();
+  await nav.getByRole('link', { name: 'Users' }).click();
+  await expect(page.getByRole('list', { name: 'Users' }).getByText('Fake Operator')).toBeVisible();
+  await nav.getByRole('link', { name: 'Instance' }).click();
+  await expect(page.getByText('0.0.0-fake')).toBeVisible();
 });
 
 test('org settings carries the organisation budgets WP-30 gave it a writer for', async ({
@@ -303,7 +322,7 @@ test('org settings carries the organisation budgets WP-30 gave it a writer for',
 }) => {
   // The sentence this file's own screen used to carry — *"global budgets … need `GET/PATCH /api/org`,
   // which no work package has built"* — is false since WP-30, and the control is what makes it so.
-  await page.goto('/settings');
+  await page.goto('/settings/budgets');
   await expect(page.getByText('Organisation budgets')).toBeVisible();
   await expect(page.getByText('spent $3.25 of $40.00 this window')).toBeVisible();
 });
@@ -313,8 +332,8 @@ test('org settings lists the provider identities and offers the mapping form (WP
 }) => {
   // PROGRESS backlog 79: `POST /api/org/identities` was served and no screen called it, so every
   // decision from Slack, Jira or GitLab stayed `unmapped_identity`.
-  await page.goto('/settings');
-  await expect(page.getByText('Provider identities', { exact: true })).toBeVisible();
+  await page.goto('/settings/identities');
+  await expect(page.getByRole('heading', { name: 'Provider identities' })).toBeVisible();
   await expect(page.getByText('U0FAKEOPERATOR')).toBeVisible();
   // The display name is provider text: its markup is on the screen as characters, not an element.
   await expect(page.getByText('<img src=x onerror=alert(1)>operator')).toBeVisible();
@@ -325,9 +344,10 @@ test('org settings shows the organisation document and saves a section through P
   page,
   request,
 }) => {
-  // PROGRESS backlogs 146 (2) and 223: the organisation layer had no writer but SQL.
-  await page.goto('/settings');
-  await expect(page.getByText('Organisation settings', { exact: true })).toBeVisible();
+  // PROGRESS backlogs 146 (2) and 223: the organisation layer had no writer but SQL. Since
+  // S-23.11b the maximums are the Policies page, saved by its one Save — only what changed.
+  await page.goto('/settings/policies');
+  await expect(page.getByRole('heading', { name: 'Policies' })).toBeVisible();
   // The stored list is administrator text: held as a value, never parsed into an element.
   await expect(page.getByLabel('Organisation command block list')).toHaveValue(
     '<img src=x onerror=alert(1)>',
@@ -335,7 +355,7 @@ test('org settings shows the organisation document and saves a section through P
   await expect(page.getByLabel('Organisation autonomy maximum')).toHaveValue('supervised');
 
   await page.getByLabel('Organisation autonomy maximum').selectOption('assist');
-  await page.getByRole('button', { name: 'Save autonomy maximum' }).click();
+  await page.getByRole('button', { name: 'Save policies' }).click();
   await expect
     .poll(async () => (await commandLog(request)).filter((entry) => entry.path === '/api/org'))
     .toEqual([{ path: '/api/org', body: { autonomy: { maximum: 'assist' } } }]);
@@ -345,7 +365,7 @@ test('org settings lists a dead letter with its re-queue control (WP-96, backlog
   page,
 }) => {
   // Until WP-96 the fake answered this read with its 404, so the bundle drew only the error notice.
-  await page.goto('/settings');
+  await page.goto('/settings/dead-letters');
   const letter = page.locator('[data-dead-letter="4242"]');
   await expect(letter).toBeVisible();
   await expect(letter.getByText('pipeline.saga')).toBeVisible();
@@ -358,7 +378,7 @@ test('org settings lists a dead letter with its re-queue control (WP-96, backlog
 test('org settings lists a failed job beside the dead letters, with no re-queue (WP-108, backlog 325)', async ({
   page,
 }) => {
-  await page.goto('/settings');
+  await page.goto('/settings/failed-jobs');
   const job = page.locator(`[data-failed-job="${failedJobs.items[0]?.id ?? 'missing'}"]`);
   await expect(job).toBeVisible();
   await expect(job.getByText('pipeline.outbound')).toBeVisible();
@@ -374,12 +394,22 @@ test('org settings lists a failed job beside the dead letters, with no re-queue 
 
 test('the project settings page mirrors every wizard step', async ({ page }) => {
   // product/18:55 — *"nothing is only reachable during onboarding"*. Driven against the built
-  // bundle, so this is the one tier that shows the route exists and the page renders in a browser.
+  // bundle, so this is the one tier that shows the routes exist and the pages render in a browser.
+  // Since S-23.11b each section is a page of its own; the bare URL opens Connections.
   await page.goto(`/projects/${PROJECT_KEY}/settings`);
+  await expect(page).toHaveURL(new RegExp(`/projects/${PROJECT_KEY}/settings/connections$`));
+  const nav = page.getByRole('navigation', { name: 'Project settings' });
+  const section = page.locator('[data-settings-section]');
+  for (const [link, heading] of [
+    ['Connections', 'Connections'],
+    ['Discovery & readiness', 'Discovery & readiness'],
+    ['Business context', 'Business context'],
+  ] as const) {
+    await nav.getByRole('link', { name: link }).click();
+    await expect(section.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+  }
+  await nav.getByRole('link', { name: 'Policies & WIP' }).click();
   for (const heading of [
-    'Connections',
-    'Technical discovery and readiness',
-    'Business context',
     'Autonomy dial',
     'Features',
     'Risk classes',
@@ -387,7 +417,7 @@ test('the project settings page mirrors every wizard step', async ({ page }) => 
     'Notifications',
     'Who changed what',
   ]) {
-    await expect(page.getByText(heading, { exact: true })).toBeVisible();
+    await expect(section.getByRole('heading', { name: heading, exact: true })).toBeVisible();
   }
   // BD-027's *Custom* with the differences listed, and the audit row that says who moved the dial.
   await expect(page.getByText('Custom', { exact: true })).toBeVisible();
@@ -417,7 +447,7 @@ test('the project settings page re-evaluates readiness with its ceiling on the b
 }) => {
   // PROGRESS backlog 230, Q107 (a): discovery again on a maintainer's click. The ceiling is the
   // server's figure, and pressing the button sends one keyed command the fake backend logged.
-  await page.goto(`/projects/${PROJECT_KEY}/settings`);
+  await page.goto(`/projects/${PROJECT_KEY}/settings/discovery`);
   const button = page.getByRole('button', { name: /Re-evaluate readiness — up to \$2\.00/ });
   await expect(button).toBeVisible();
   await expect(page.getByText(/the last discovery cost \$0\.84/)).toBeVisible();
@@ -564,7 +594,10 @@ test('the project panels render the vault, the proposals and the budget meter', 
   page,
 }) => {
   await page.goto(`/projects/${PROJECT_KEY}/knowledge`);
-  await expect(page.getByRole('button', { name: 'technical/architecture.md' })).toBeVisible();
+  // S-23.11b: the files are a NavList grouped by folder; the item is the file's own name.
+  const files = page.getByRole('navigation', { name: 'Knowledge files' });
+  await expect(files.getByRole('heading', { name: 'technical' })).toBeVisible();
+  await expect(files.getByRole('button', { name: 'architecture.md' })).toBeVisible();
   await expect(page.getByText('lessons/retries.md').first()).toBeVisible();
   await expect(page.getByText('significance 0.72')).toBeVisible();
   // WP-96 (backlog 326): the health panel's success branch, which the fake's 404 used to hide.
@@ -599,8 +632,10 @@ test('statistics renders a number, a null ratio and an absence as three differen
   await expect(page.getByText('3', { exact: true }).first()).toBeVisible();
   // The ratio with nothing to divide — not "0.0%".
   await expect(page.getByText('no data in this range').first()).toBeVisible();
-  // The absence, in the section that exists for it, with the owner beside the reason.
-  await expect(page.getByText('Not measured, and why')).toBeVisible();
+  // The absence, in the disclosure that exists for it — collapsed since S-23.11b — with the owner
+  // beside the reason.
+  await expect(page.getByText('Queue wait', { exact: true })).toBeHidden();
+  await page.getByText('Not measured, and why').click();
   await expect(page.getByText('Queue wait', { exact: true })).toBeVisible();
   await expect(
     page.getByText('Nobody yet — a row that folds task.queued against task.dequeued owns it.'),

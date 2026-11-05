@@ -7,7 +7,7 @@
  * repository URL, and every project became `main`.
  */
 import type { ProjectSummary } from '@platform/contracts';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
@@ -224,7 +224,9 @@ describe('the mismatch notice (WP-142, backlog 441)', () => {
   });
 
   it('says on the settings page and beside readiness that GitLab’s default is another branch, and goes when they agree', async () => {
-    window.history.pushState({}, '', '/projects/autix/settings');
+    // Since S-23.11b the default-branch card and the readiness panel are two settings pages, each
+    // carrying the notice once; both are visited through the settings NavList.
+    window.history.pushState({}, '', '/projects/autix/settings/default-branch');
     const sent: Sent[] = [];
     render(
       createApp({
@@ -232,24 +234,30 @@ describe('the mismatch notice (WP-142, backlog 441)', () => {
         realtime: false,
       }).element,
     );
-    await waitFor(() =>
-      // One inside the default-branch card, one beside the readiness panel.
-      expect(screen.getAllByTestId('default-branch-mismatch')).toHaveLength(2),
-    );
+    await waitFor(() => expect(screen.getAllByTestId('default-branch-mismatch')).toHaveLength(1));
     expect(screen.getAllByTestId('default-branch-mismatch')[0]?.textContent).toBe(
       'GitLab’s default branch is main; this project uses develop. Runs check out, merge requests target and the platform protects, polls and measures develop.',
     );
+    const nav = screen.getByRole('navigation', { name: 'Project settings' });
+    fireEvent.click(within(nav).getByRole('link', { name: 'Discovery & readiness' }));
+    // Beside readiness, on its own page.
+    await screen.findByRole('heading', { name: 'Discovery & readiness' });
+    await waitFor(() => expect(screen.getAllByTestId('default-branch-mismatch')).toHaveLength(1));
 
     // The person moves the stored branch to the provider's; the notice disappears with the mismatch.
+    fireEvent.click(within(nav).getByRole('link', { name: 'Default branch' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Save default branch' }));
     await waitFor(() => expect(screen.queryAllByTestId('default-branch-mismatch')).toHaveLength(0));
     expect(sent.filter((entry) => entry.url.endsWith('/default-branch'))[0]?.body).toEqual({
       default_branch: 'main',
     });
+    fireEvent.click(within(nav).getByRole('link', { name: 'Discovery & readiness' }));
+    await screen.findByRole('heading', { name: 'Discovery & readiness' });
+    expect(screen.queryAllByTestId('default-branch-mismatch')).toHaveLength(0);
   });
 
   it('says nothing when the provider agrees, or was not asked', async () => {
-    window.history.pushState({}, '', '/projects/autix/settings');
+    window.history.pushState({}, '', '/projects/autix/settings/default-branch');
     render(
       createApp({
         fetchImpl: server({

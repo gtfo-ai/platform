@@ -92,7 +92,7 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  window.history.pushState({}, '', '/settings');
+  window.history.pushState({}, '', '/settings/dead-letters');
 });
 
 describe('dead letters on the settings page', () => {

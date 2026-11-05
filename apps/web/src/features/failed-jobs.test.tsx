@@ -83,7 +83,7 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  window.history.pushState({}, '', '/settings');
+  window.history.pushState({}, '', '/settings/failed-jobs');
 });
 
 describe('failed jobs on the settings page (WP-108)', () => {

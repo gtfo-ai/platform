@@ -9,7 +9,7 @@
  * the browser, the proposals queue with its decisions, the budget bars and the effective
  * configuration with the source of every key.
  */
-import type { KbHealthResponse, KnowledgeProposalSource } from '@platform/contracts';
+import type { KbHealthResponse } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import { useState } from 'react';
@@ -25,44 +25,36 @@ import {
   useProjectConfig,
 } from '../app/queries.js';
 import { useTopics } from '../realtime/provider.js';
+import { ActionMenu, ActionMenuItem } from '../ui/action-menu.js';
+import { Blankslate } from '../ui/blankslate.js';
+import { Button, buttonClassName } from '../ui/button.js';
 import { DetailsDisclosure } from '../ui/details.js';
+import { Flash } from '../ui/flash.js';
+import {
+  BUDGET_SCOPE_LABEL,
+  BUDGET_WINDOW_LABEL,
+  KNOWLEDGE_PROPOSAL_KIND_LABEL,
+  KNOWLEDGE_PROPOSAL_SOURCE_LABEL,
+  KNOWLEDGE_PROPOSAL_STATUS_LABEL,
+  KNOWLEDGE_PROPOSAL_TYPE_LABEL,
+} from '../ui/humanize.js';
 import {
   Badge,
-  Button,
   Card,
-  EmptyState,
   ErrorNotice,
   formatDateTime,
   formatInteger,
   formatUsd,
   Loading,
-  Metric,
   SectionHeading,
 } from '../ui/kit.js';
+import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
+import { NavList, type NavListGroup } from '../ui/nav-list.js';
+import { Skeleton } from '../ui/skeleton.js';
+import { StatusIcon } from '../ui/status.js';
 import { CodeText, JsonView, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { PipelineFlow } from '../viz/flow/flow-view.js';
-
-/**
- * Where a proposal came from, in a maintainer's words — `knowledge_proposal_source` (WP-35).
- *
- * The **value is why the column exists**: a page mined from merged history cites merge requests
- * somebody can follow, and a page the Discovery agent drafted is a model's reading of a repository
- * it had just met. A queue that renders neither tells a reviewer to weigh them alike, which is the
- * one thing migration 0030 added the `history` value to prevent.
- *
- * A `Record` over the enum rather than a lookup with a fallback, so a seventh source added to
- * `knowledgeProposalSourceSchema` fails the typecheck here instead of rendering as a raw token
- * (standing rule 68: enumerate what you branch on). The strings are the platform's own text; the
- * proposal's own fields stay untrusted and go through `UntrustedText` as before.
- */
-const SOURCE_LABEL: Readonly<Record<KnowledgeProposalSource, string>> = {
-  task: 'from a task',
-  run: 'from a run',
-  feedback: 'from feedback',
-  bootstrap: 'drafted at project setup',
-  human: 'written by a person',
-  history: 'mined from merged history',
-};
 
 const useProjectId = (projectKey: string): string | null => {
   const { project } = useProjectByKey(projectKey);
@@ -75,8 +67,8 @@ const useProjectId = (projectKey: string): string | null => {
 /**
  * What each finding kind means, in a maintainer's words — `kbHealthReportFindingSchema.kind`.
  *
- * A `Record` over the enum for `SOURCE_LABEL`'s reason: an eighth kind fails the typecheck here
- * rather than rendering as a bare token. The strings are the platform's; the finding's `path` and
+ * A `Record` over the enum, as `ui/humanize.ts`'s vocabularies are: an eighth kind fails the
+ * typecheck here rather than rendering as a bare token. The strings are the platform's; the finding's `path` and
  * `detail` quote a committed page and stay untrusted (BD-022).
  */
 const FINDING_LABEL: Readonly<Record<KbHealthResponse['findings'][number]['kind'], string>> = {
@@ -104,67 +96,174 @@ export const KnowledgeHealth = ({
   projectId,
 }: {
   readonly projectId: string | null;
-}): ReactElement => {
+}): ReactElement | null => {
   const health = useKbHealth(projectId);
   const notReported =
     health.error instanceof ApiError && health.error.code === 'kb_health_not_reported';
-  return (
-    <div>
-      <SectionHeading>Health</SectionHeading>
-      {health.isPending && projectId !== null ? (
-        <Loading label="Loading the health report…" />
-      ) : null}
-      {notReported ? (
-        <EmptyState
-          title="No health report yet"
-          hint="The nightly hygiene pass writes one per project: documents the parser refused, links that point nowhere, expired pages, duplicates. None has run for this project yet."
-        />
-      ) : health.isError ? (
-        <ErrorNotice title="The health report could not be loaded." error={health.error} />
-      ) : null}
-      {health.data === undefined ? null : (
-        <Card className="flex flex-col gap-2">
-          <p className="text-xs text-fg-muted">
-            {`${formatInteger(health.data.documents)} document${health.data.documents === 1 ? '' : 's'} indexed · ${health.data.source === 'hygiene' ? 'nightly hygiene pass' : 'Librarian run'} · ${formatDateTime(health.data.created_at)}`}
-            {health.data.commit_sha === null ? null : (
-              <>
-                {' · index at '}
-                <UntrustedText value={health.data.commit_sha.slice(0, 12)} />
-              </>
-            )}
-          </p>
-          {health.data.findings.length === 0 ? (
-            <p className="text-sm" data-kb-health="clean">
-              The last pass found nothing wrong.
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-1 text-xs" data-kb-health="findings">
-              {health.data.findings.map((finding, index) => (
-                <li
-                  // biome-ignore lint/suspicious/noArrayIndexKey: findings are positional; two may share a path and kind.
-                  key={index}
-                  className="flex flex-col gap-0.5 border-t border-line pt-1"
-                >
-                  <span className="flex flex-wrap items-center gap-2">
-                    <Badge tone={finding.kind === 'invalid' ? 'danger' : 'warning'}>
-                      {FINDING_LABEL[finding.kind]}
-                    </Badge>
-                    <span className="font-mono">
-                      <UntrustedText value={finding.path} />
-                    </span>
+  if (health.isPending && projectId !== null) {
+    return <Loading label="Loading the health report…" />;
+  }
+  if (notReported) {
+    return (
+      <Flash title="No health report yet">
+        The nightly hygiene pass writes one per project: documents the parser refused, links that
+        point nowhere, expired pages, duplicates. None has run for this project yet.
+      </Flash>
+    );
+  }
+  if (health.isError) {
+    return <ErrorNotice title="The health report could not be loaded." error={health.error} />;
+  }
+  if (health.data === undefined) {
+    return null;
+  }
+  const data = health.data;
+  const meta = (
+    <p className="text-xs">
+      {`${formatInteger(data.documents)} document${data.documents === 1 ? '' : 's'} indexed · ${data.source === 'hygiene' ? 'nightly hygiene pass' : 'Librarian run'} · ${formatDateTime(data.created_at)}`}
+      {data.commit_sha === null ? null : (
+        <>
+          {' · index at '}
+          <UntrustedText value={data.commit_sha.slice(0, 12)} />
+        </>
+      )}
+    </p>
+  );
+  return data.findings.length === 0 ? (
+    <div data-kb-health="clean">
+      <Flash tone="success" title="The last pass found nothing wrong.">
+        {meta}
+      </Flash>
+    </div>
+  ) : (
+    <div data-kb-health="findings">
+      <Flash
+        tone="warning"
+        title={`The last health pass found ${data.findings.length === 1 ? 'one problem' : `${formatInteger(data.findings.length)} problems`}`}
+      >
+        <div className="flex flex-col gap-2">
+          {meta}
+          <ul className="flex flex-col gap-1 text-xs">
+            {data.findings.map((finding, index) => (
+              <li
+                // biome-ignore lint/suspicious/noArrayIndexKey: findings are positional; two may share a path and kind.
+                key={index}
+                className="flex flex-col gap-0.5 border-t border-line pt-1"
+              >
+                <span className="flex flex-wrap items-center gap-2">
+                  <Badge tone={finding.kind === 'invalid' ? 'danger' : 'warning'}>
+                    {FINDING_LABEL[finding.kind]}
+                  </Badge>
+                  <span className="font-mono">
+                    <UntrustedText value={finding.path} />
                   </span>
-                  <UntrustedText value={finding.detail} />
+                </span>
+                <UntrustedText value={finding.detail} />
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs">
+            An observation, not an instruction: nothing rewrites a page because a finding names it.
+          </p>
+        </div>
+      </Flash>
+    </div>
+  );
+};
+
+type KbProposal = NonNullable<ReturnType<typeof useKbProposals>['data']>['items'][number];
+
+/** A proposal a maintainer can still decide: waiting for review, or approved and failed to apply. */
+const isDecidable = (proposal: KbProposal): boolean =>
+  proposal.status === 'queued' ||
+  proposal.status === 'scored' ||
+  proposal.status === 'apply_failed';
+
+const ProposalRow = ({
+  proposal,
+  pending,
+  onDecide,
+}: {
+  readonly proposal: KbProposal;
+  readonly pending: boolean;
+  readonly onDecide: (decision: 'approve' | 'reject') => void;
+}): ReactElement => (
+  <ListRow
+    leading={
+      <StatusIcon
+        status={
+          proposal.status === 'apply_failed'
+            ? 'failure'
+            : proposal.apply_deferred_reason != null
+              ? 'waiting'
+              : isDecidable(proposal)
+                ? 'needs_you'
+                : proposal.status === 'rejected' || proposal.status === 'discarded'
+                  ? 'cancelled'
+                  : 'success'
+        }
+        label={KNOWLEDGE_PROPOSAL_STATUS_LABEL[proposal.status]}
+      />
+    }
+    title={<UntrustedText value={proposal.target_path} className="font-mono" />}
+    meta={
+      <div className="flex flex-col gap-1">
+        <span>
+          {`${KNOWLEDGE_PROPOSAL_TYPE_LABEL[proposal.type]} · ${KNOWLEDGE_PROPOSAL_KIND_LABEL[proposal.kind]} · ${KNOWLEDGE_PROPOSAL_SOURCE_LABEL[proposal.source]} · significance ${proposal.significance.toFixed(2)}`}
+        </span>
+        {proposal.status === 'apply_failed' ? (
+          // WP-124, backlog 366: approved, re-tried once by the recovery pass, and still not
+          // committed. Approving again is how a maintainer asks for another apply.
+          <span className="text-attention" data-apply-failed="true">
+            <Badge tone="danger">apply failed</Badge>{' '}
+            <UntrustedText value={proposal.apply_failure_reason ?? 'no reason was recorded'} />
+          </span>
+        ) : null}
+        {proposal.apply_deferred_reason == null ? null : (
+          // WP-125, backlog 369: approved, and held back because an open knowledge merge request
+          // already creates this page; applied as an update once that one merges.
+          <span data-apply-deferred="true">
+            <Badge tone="warning">waits for a merge</Badge>{' '}
+            <UntrustedText value={proposal.apply_deferred_reason} />
+          </span>
+        )}
+        <DetailsDisclosure summary="The change and its evidence">
+          <div className="flex flex-col gap-2">
+            <CodeText value={proposal.delta} />
+            <ul className="flex flex-col gap-0.5 text-xs text-fg-muted">
+              {proposal.evidence.map((item) => (
+                <li key={item}>
+                  <UntrustedText value={item} />
                 </li>
               ))}
             </ul>
-          )}
-          <p className="text-xs text-fg-muted">
-            An observation, not an instruction: nothing rewrites a page because a finding names it.
-          </p>
-        </Card>
-      )}
-    </div>
-  );
+          </div>
+        </DetailsDisclosure>
+      </div>
+    }
+    actions={
+      isDecidable(proposal) ? (
+        <div className="flex items-center gap-1">
+          <Button size="sm" disabled={pending} onClick={() => onDecide('approve')}>
+            {proposal.status === 'apply_failed' ? 'Approve again' : 'Approve'}
+          </Button>
+          <ActionMenu label={`More for ${sanitiseUntrusted(proposal.target_path)}`}>
+            <ActionMenuItem tone="danger" disabled={pending} onSelect={() => onDecide('reject')}>
+              Reject
+            </ActionMenuItem>
+          </ActionMenu>
+        </div>
+      ) : (
+        <Badge>{KNOWLEDGE_PROPOSAL_STATUS_LABEL[proposal.status]}</Badge>
+      )
+    }
+  />
+);
+
+/** `technical/architecture.md` → `technical`; a top-level page → `''`. */
+const directoryOf = (path: string): string => {
+  const slash = path.lastIndexOf('/');
+  return slash === -1 ? '' : path.slice(0, slash);
 };
 
 export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
@@ -176,149 +275,115 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
   const decide = useKbProposalCommands(projectId ?? '');
 
   const files = (tree.data?.entries ?? []).filter((entry) => entry.kind === 'file');
+  // The vault as a tree: one NavList group per directory, in the order the index lists them.
+  const directories = [...new Set(files.map((entry) => directoryOf(entry.path)))];
+  const groups: NavListGroup[] = directories.map((directory) => ({
+    ...(directory === '' ? {} : { label: sanitiseUntrusted(directory) }),
+    items: files
+      .filter((entry) => directoryOf(entry.path) === directory)
+      .map((entry) => ({
+        id: entry.path,
+        label: sanitiseUntrusted(entry.path.slice(directory === '' ? 0 : directory.length + 1)),
+        current: path === entry.path,
+        onSelect: () => {
+          setPath(entry.path);
+        },
+      })),
+  }));
+  const items = proposals.data?.items ?? [];
+  const waiting = items.filter(isDecidable).length;
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
-      <aside className="flex flex-col gap-2">
-        <SectionHeading>Vault</SectionHeading>
-        {tree.isPending ? <Loading label="Loading the vault…" /> : null}
+    <div className="grid gap-6 lg:grid-cols-[16rem_1fr]">
+      <aside className="flex min-w-0 flex-col gap-2">
+        <h2 className="px-2 text-sm font-semibold text-fg">Files</h2>
+        {tree.isPending ? <Skeleton label="Loading the files…" lines={4} /> : null}
         {tree.isError ? (
           <ErrorNotice title="The vault could not be listed." error={tree.error} />
         ) : null}
         {tree.isSuccess && files.length === 0 ? (
-          <EmptyState
+          <Blankslate
+            informational
             title="The vault is empty"
-            hint="Knowledge lives in the repository under the project's knowledge_dir. Setting up a project drafts it; the Librarian keeps it current."
+            hint="Knowledge lives in the repository under the project's knowledge directory. Setting up a project drafts it; the Librarian keeps it current."
           />
         ) : null}
-        <ul className="flex flex-col gap-0.5">
-          {files.map((entry) => (
-            <li key={entry.path}>
-              <Button
-                tone={path === entry.path ? 'primary' : 'ghost'}
-                className="w-full justify-start font-mono text-xs"
-                onClick={() => {
-                  setPath(entry.path);
-                }}
-              >
-                <UntrustedText value={entry.path} />
-              </Button>
-            </li>
-          ))}
-        </ul>
+        {files.length === 0 ? null : <NavList label="Knowledge files" groups={groups} />}
       </aside>
 
-      <section className="flex flex-col gap-4">
-        <div>
-          <SectionHeading>Document</SectionHeading>
-          {path === null ? (
-            <EmptyState
-              title="Nothing selected"
-              hint="Pick a document from the vault to read it."
-            />
-          ) : doc.isPending ? (
-            <Loading label="Loading document…" />
-          ) : doc.isError ? (
-            <ErrorNotice title="That document could not be read." error={doc.error} />
-          ) : doc.data === undefined ? null : (
-            <Card className="flex flex-col gap-2">
-              <p className="font-mono text-xs text-fg-muted">
-                <UntrustedText value={doc.data.path} />
-              </p>
-              <UntrustedProse value={doc.data.content} />
-            </Card>
-          )}
-        </div>
-
+      <section className="flex min-w-0 flex-col gap-4">
         <KnowledgeHealth projectId={projectId} />
 
-        <div>
-          <SectionHeading>Proposals</SectionHeading>
-          {proposals.isPending ? <Loading label="Loading proposals…" /> : null}
+        {path === null ? (
+          <Blankslate
+            informational
+            title="Nothing selected"
+            hint="Pick a document from the files to read it."
+          />
+        ) : doc.isPending ? (
+          <Skeleton label="Loading document…" lines={6} />
+        ) : doc.isError ? (
+          <ErrorNotice title="That document could not be read." error={doc.error} />
+        ) : doc.data === undefined ? null : (
+          <Card
+            header={
+              <span className="font-mono">
+                <UntrustedText value={doc.data.path} />
+              </span>
+            }
+          >
+            <UntrustedProse value={doc.data.content} />
+          </Card>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <h2 className="text-base font-semibold text-fg">Proposals</h2>
+          {proposals.isPending ? <Skeleton label="Loading proposals…" lines={3} /> : null}
           {proposals.isError ? (
             <ErrorNotice title="Proposals could not be loaded." error={proposals.error} />
           ) : null}
-          {proposals.isSuccess && proposals.data.items.length === 0 ? (
-            <EmptyState
+          {proposals.isSuccess && items.length === 0 ? (
+            <Blankslate
+              informational
               title="No pending proposals"
-              hint="Retrospective, Feedback and the history bootstrap propose knowledge changes with their evidence, and each card says which. A maintainer approves, edits or rejects; a rejection is what the Librarian learns from."
+              hint="Retrospective, Feedback and the history bootstrap propose knowledge changes with their evidence, and each row says which. A maintainer approves or rejects; a rejection is what the Librarian learns from."
             />
           ) : null}
-          <div className="flex flex-col gap-2">
-            {(proposals.data?.items ?? []).map((proposal) => (
-              <Card key={proposal.id} className="flex flex-col gap-2">
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <Badge tone="accent">{proposal.type}</Badge>
-                  <Badge>{proposal.kind}</Badge>
-                  <Badge tone={proposal.source === 'history' ? 'success' : 'neutral'}>
-                    {SOURCE_LABEL[proposal.source]}
-                  </Badge>
-                  <span className="font-mono">
-                    <UntrustedText value={proposal.target_path} />
+          {items.length === 0 ? null : (
+            <ListBox
+              label="Knowledge proposals"
+              header={
+                <ListBoxHeader>
+                  <span className="font-semibold text-fg">
+                    {`${formatInteger(waiting)} waiting for review`}
                   </span>
-                  <span className="ml-auto text-fg-muted">
-                    significance {proposal.significance.toFixed(2)}
-                  </span>
-                </div>
-                <CodeText value={proposal.delta} />
-                <ul className="flex flex-col gap-0.5 text-xs text-fg-muted">
-                  {proposal.evidence.map((item) => (
-                    <li key={item}>
-                      <UntrustedText value={item} />
-                    </li>
-                  ))}
-                </ul>
-                {proposal.status === 'apply_failed' ? (
-                  // WP-124, backlog 366: approved, re-tried once by the recovery pass, and still not
-                  // committed. Approving again is how a maintainer asks for another apply.
-                  <p className="text-xs text-warning" data-apply-failed="true">
-                    <Badge tone="danger">apply failed</Badge>{' '}
-                    <UntrustedText
-                      value={proposal.apply_failure_reason ?? 'no reason was recorded'}
-                    />
-                  </p>
-                ) : null}
-                {proposal.apply_deferred_reason == null ? null : (
-                  // WP-125, backlog 369: approved, and held back because an open knowledge merge
-                  // request already creates this page; applied as an update once that one merges.
-                  <p className="text-xs text-fg-muted" data-apply-deferred="true">
-                    <Badge tone="warning">waits for a merge</Badge>{' '}
-                    <UntrustedText value={proposal.apply_deferred_reason} />
-                  </p>
-                )}
-                {proposal.status === 'queued' ||
-                proposal.status === 'scored' ||
-                proposal.status === 'apply_failed' ? (
-                  <div className="flex gap-2">
-                    <Button
-                      tone="primary"
-                      disabled={decide.isPending}
-                      onClick={() => {
-                        decide.mutate({ proposalId: proposal.id, decision: 'approve' });
-                      }}
-                    >
-                      {proposal.status === 'apply_failed' ? 'Approve again' : 'Approve'}
-                    </Button>
-                    <Button
-                      tone="danger"
-                      disabled={decide.isPending}
-                      onClick={() => {
-                        decide.mutate({
-                          proposalId: proposal.id,
-                          decision: 'reject',
-                          reason: 'rejected from the UI',
-                        });
-                      }}
-                    >
-                      Reject
-                    </Button>
-                  </div>
-                ) : (
-                  <Badge>{proposal.status}</Badge>
-                )}
-              </Card>
-            ))}
-          </div>
+                  <span>{`${formatInteger(items.length)} in all`}</span>
+                </ListBoxHeader>
+              }
+            >
+              {items.map((proposal) => (
+                <ProposalRow
+                  key={proposal.id}
+                  proposal={proposal}
+                  pending={decide.isPending}
+                  onDecide={(decision) => {
+                    decide.mutate(
+                      decision === 'approve'
+                        ? { proposalId: proposal.id, decision: 'approve' }
+                        : {
+                            proposalId: proposal.id,
+                            decision: 'reject',
+                            reason: 'rejected from the UI',
+                          },
+                    );
+                  }}
+                />
+              ))}
+            </ListBox>
+          )}
+          {decide.isError ? (
+            <ErrorNotice title="The decision was not recorded." error={decide.error} />
+          ) : null}
         </div>
       </section>
     </div>
@@ -327,69 +392,81 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
 
 // ── Budgets ──────────────────────────────────────────────────────────────────
 
+/**
+ * The project's budgets, each as spent of limit on a native `<meter>` — the semantic element carries
+ * the value, the range and the announcement, which a div with `role="meter"` only imitates, and it
+ * needs no `style=` (the CSP's `style-src` admits none).
+ */
 export const BudgetsScreen = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
   const projectId = useProjectId(projectKey);
   const budgets = useProjectBudgets(projectId);
+  const items = budgets.data?.items ?? [];
 
   return (
     <div className="flex flex-col gap-3">
-      <SectionHeading>Budgets</SectionHeading>
-      <p className="text-xs text-fg-muted">
-        A read. Setting a cap is on the{' '}
-        <Link to="/projects/$key/settings" params={{ key: projectKey }}>
-          project settings page
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-lg font-semibold">Budgets</h2>
+        <Link
+          to="/projects/$key/settings/$section"
+          params={{ key: projectKey, section: 'policies' }}
+          className="text-sm"
+        >
+          Set a cap in the project settings
         </Link>
-        , where every other wizard setting lives.
-      </p>
-      {budgets.isPending ? <Loading label="Loading budgets…" /> : null}
+      </div>
+      {budgets.isPending ? <Skeleton label="Loading budgets…" lines={3} /> : null}
       {budgets.isError ? (
         <ErrorNotice title="Budgets could not be loaded." error={budgets.error} />
       ) : null}
-      {budgets.isSuccess && budgets.data.items.length === 0 ? (
-        <EmptyState
+      {budgets.isSuccess && items.length === 0 ? (
+        <Blankslate
           title="No budget is set"
           hint="Without a budget the pipeline spends whatever a stage asks for. A maintainer can set a daily, weekly, monthly or total limit per project."
+          action={
+            <Link
+              to="/projects/$key/settings/$section"
+              params={{ key: projectKey, section: 'policies' }}
+              className={buttonClassName('default')}
+            >
+              Set a budget
+            </Link>
+          }
         />
       ) : null}
-      <div className="grid gap-3 sm:grid-cols-2">
-        {(budgets.data?.items ?? []).map((budget) => {
-          const share = budget.limit_usd === 0 ? 0 : budget.spent_usd / budget.limit_usd;
-          return (
-            <Card key={budget.id} className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <Badge tone="accent">{budget.window}</Badge>
-                <Badge>{budget.scope}</Badge>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Metric
-                  label="Spent"
-                  value={formatUsd(budget.spent_usd)}
-                  definition="Provider-reported cost booked against this budget window."
-                />
-                <Metric
-                  label="Limit"
-                  value={formatUsd(budget.limit_usd)}
-                  definition="The ceiling. Crossing it pauses the work the budget covers."
-                />
-              </div>
-              {/* A native <meter>: the semantic element carries the value, the range and the
-                  announcement, which a div with role="meter" only imitates. */}
-              <meter
-                aria-label="Budget used"
-                className="w-full"
-                min={0}
-                max={Math.max(budget.limit_usd, budget.spent_usd)}
-                value={budget.spent_usd}
-              >
-                {`${Math.round(share * 100)}%`}
-              </meter>
-              <p className="text-xs text-fg-muted">
-                notify at {budget.notify_pct.map((pct) => `${formatInteger(pct)}%`).join(', ')}
-              </p>
-            </Card>
-          );
-        })}
-      </div>
+      {items.length === 0 ? null : (
+        <ListBox label="Budgets">
+          {items.map((budget) => {
+            const share = budget.limit_usd === 0 ? 0 : budget.spent_usd / budget.limit_usd;
+            return (
+              <li key={budget.id} className="flex flex-col gap-2 px-4 py-3">
+                <div className="flex flex-wrap items-baseline gap-2 text-sm">
+                  <span className="font-semibold">{BUDGET_WINDOW_LABEL[budget.window]}</span>
+                  <span className="text-xs text-fg-muted">{BUDGET_SCOPE_LABEL[budget.scope]}</span>
+                  <span className="ml-auto tabular-nums">
+                    <span className="font-semibold">{formatUsd(budget.spent_usd)}</span>
+                    {' of '}
+                    <span>{formatUsd(budget.limit_usd)}</span>
+                  </span>
+                </div>
+                <meter
+                  aria-label="Budget used"
+                  className="w-full"
+                  min={0}
+                  max={Math.max(budget.limit_usd, budget.spent_usd)}
+                  high={budget.limit_usd * 0.8}
+                  optimum={0}
+                  value={budget.spent_usd}
+                >
+                  {`${Math.round(share * 100)}%`}
+                </meter>
+                <p className="text-xs text-fg-muted">
+                  {`${Math.round(share * 100)}% used · notified at ${budget.notify_pct.map((pct) => `${formatInteger(pct)}%`).join(', ')}`}
+                </p>
+              </li>
+            );
+          })}
+        </ListBox>
+      )}
     </div>
   );
 };

@@ -14,7 +14,8 @@
  * as characters.
  */
 import type { KbProposalsResponse, KnowledgeProposalRecord } from '@platform/contracts';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
@@ -86,9 +87,26 @@ const report = (findings: readonly unknown[]) => ({
   },
 });
 
-const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
+/** The vault's files (`GET …/kb/tree`); empty unless a case plants some. */
+let treePaths: readonly string[] = [];
+/** Every decision posted, and what the server answers one with (S-23.11b). */
+let decisions: { readonly url: string; readonly body: unknown }[] = [];
+let decisionAnswer: { readonly status: number; readonly body: unknown } = {
+  status: 200,
+  body: { performed: true },
+};
+
+const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const url = String(input);
   if (url.includes('/api/auth/get-session')) return json(SESSION);
+  if (init?.method === 'POST' && url.includes('/kb/proposals/')) {
+    decisions.push({ url, body: JSON.parse(String(init.body ?? '{}')) });
+    return json(decisionAnswer.body, decisionAnswer.status);
+  }
+  if (url.includes('/kb/doc')) {
+    const path = new URL(url, 'http://localhost').searchParams.get('path') ?? '';
+    return json({ path, commit_sha: null, frontmatter: {}, content: `The page at ${path}.` });
+  }
   if (url.endsWith('/api/projects')) {
     return json({
       items: [
@@ -112,8 +130,28 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
     });
   }
   if (url.includes('/kb/proposals')) return json(proposals);
+  if (url.endsWith(`/api/projects/${PROJECT}/budgets`)) {
+    return json({
+      items: [
+        {
+          id: '00000000-0000-4000-8000-0000000000d1',
+          scope: 'project',
+          scope_id: PROJECT,
+          window: 'month',
+          limit_usd: 40,
+          notify_pct: [50, 80],
+          spent_usd: 3.25,
+        },
+      ],
+    });
+  }
   if (url.includes('/kb/health')) return json(health.body, health.status);
-  if (url.includes('/kb/tree')) return json({ commit_sha: null, entries: [] });
+  if (url.includes('/kb/tree')) {
+    return json({
+      commit_sha: null,
+      entries: treePaths.map((path) => ({ path, kind: 'file', tokens: null, updated_at: null })),
+    });
+  }
   return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
 }) as typeof fetch;
 
@@ -125,6 +163,9 @@ afterEach(() => {
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   health = NOT_REPORTED;
+  treePaths = [];
+  decisions = [];
+  decisionAnswer = { status: 200, body: { performed: true } };
   proposals = {
     items: [
       proposal({ source: 'history' }),
@@ -273,5 +314,94 @@ describe('the knowledge health panel', () => {
       expect(container.querySelector('[data-kb-health="clean"]')).not.toBeNull();
     });
     expect(container.textContent).not.toContain('No health report yet');
+  });
+});
+
+/**
+ * The knowledge screen in the new language (S-23.11b): the vault as a NavList tree, the document
+ * beside it, and the proposals as a list box with *Approve* on each row and *Reject* in its menu —
+ * each decision a command the server receives, and a refused one said rather than swallowed.
+ */
+describe('the knowledge screen’s files, document and decisions (S-23.11b)', () => {
+  it('lists the vault as one NavList group per directory and opens a document as text', async () => {
+    treePaths = ['conventions.md', 'technical/architecture.md', 'technical/<b>data</b>.md'];
+    await renderScreen();
+    const files = await screen.findByRole('navigation', { name: 'Knowledge files' });
+    // The directory is the group's heading; the file is the item.
+    expect(within(files).getByRole('heading', { name: 'technical' })).toBeTruthy();
+    expect(within(files).getByRole('button', { name: 'conventions.md' })).toBeTruthy();
+    expect(files.querySelector('b')).toBeNull();
+    await userEvent.setup().click(within(files).getByRole('button', { name: 'architecture.md' }));
+    expect(await screen.findByText('The page at technical/architecture.md.')).toBeTruthy();
+    expect(
+      within(files).getByRole('button', { name: 'architecture.md' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+
+  it('approves a proposal from its row and rejects one from the row’s menu', async () => {
+    await renderScreen();
+    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const user = userEvent.setup();
+    await user.click(within(list).getAllByRole('button', { name: 'Approve' })[0] as HTMLElement);
+    await waitFor(() => {
+      expect(decisions.map((entry) => entry.url.split('/kb/proposals/')[1])).toEqual([
+        '00000000-0000-4000-8000-0000000000c1/approve',
+      ]);
+    });
+    await user.click(
+      within(list).getByRole('button', { name: 'More for technical/architecture.md' }),
+    );
+    await user.click(await screen.findByRole('menuitem', { name: 'Reject' }));
+    await waitFor(() => {
+      expect(decisions).toHaveLength(2);
+    });
+    expect(decisions[1]?.url).toContain('00000000-0000-4000-8000-0000000000c2/reject');
+    expect(decisions[1]?.body).toEqual({ decision: 'reject', reason: 'rejected from the UI' });
+  });
+
+  it('says a refused decision was not recorded, with the server’s reason', async () => {
+    decisionAnswer = {
+      status: 403,
+      body: { error: { code: 'forbidden', message: 'role viewer may not perform kb.decide' } },
+    };
+    await renderScreen();
+    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    await userEvent
+      .setup()
+      .click(within(list).getAllByRole('button', { name: 'Approve' })[0] as HTMLElement);
+    expect(await screen.findByText('The decision was not recorded.')).toBeTruthy();
+    expect(document.body.textContent).toContain('role viewer may not perform kb.decide');
+  });
+
+  it('shows the health report as a notice, not as a card of its own', async () => {
+    health = report([]);
+    const container = await renderScreen();
+    const clean = await waitFor(() => {
+      const found = container.querySelector('[data-kb-health="clean"] [data-flash]');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    expect(clean.getAttribute('data-flash')).toBe('success');
+  });
+});
+
+describe('the budgets screen (S-23.11b)', () => {
+  it('draws each budget as spent of limit on a native meter, in words, with no inline style', async () => {
+    window.history.pushState({}, '', '/projects/api/budgets');
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    const meter = await screen.findByLabelText('Budget used');
+    expect(meter.tagName).toBe('METER');
+    // The attributes, not the IDL properties: happy-dom's `HTMLMeterElement.value` clamps to 1.
+    expect(meter.getAttribute('value')).toBe('3.25');
+    expect(meter.getAttribute('max')).toBe('40');
+    expect(meter.getAttribute('style')).toBeNull();
+    const list = screen.getByRole('list', { name: 'Budgets' });
+    expect(list.textContent).toContain('Per month');
+    expect(list.textContent).toContain('$3.25 of $40.00');
+    expect(list.textContent).toContain('8% used · notified at 50%, 80%');
+    expect(
+      screen.getByRole('link', { name: 'Set a cap in the project settings' }).getAttribute('href'),
+    ).toBe('/projects/api/settings/policies');
+    expect(container.querySelector('meter[style]')).toBeNull();
   });
 });

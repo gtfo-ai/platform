@@ -47,8 +47,17 @@ import { ProjectFrame, type ProjectTab } from '../app/project-frame.js';
 import type { Services } from '../app/services.js';
 import { AppShell } from '../app/shell.js';
 import { FLEET_VIEWS } from '../features/agents-view.js';
+import type { SessionResponse } from '../auth/session.js';
 import { DashboardScreen } from '../features/dashboard.js';
 import { WIZARD_STEP_IDS } from '../features/onboarding-steps.js';
+import {
+  FIRST_PROJECT_SECTION,
+  firstOrgSection,
+  isOrgSectionFor,
+  isProjectSection,
+  type OrgSettingsSectionId,
+  type ProjectSettingsSectionId,
+} from '../features/settings-sections.js';
 import { SignInScreen } from '../features/sign-in.js';
 import { taskSearchSchema } from '../features/task-tab.js';
 import { ErrorFallback } from '../ui/error-boundary.js';
@@ -169,10 +178,56 @@ const auditRoute = route(
   '/audit',
   lazyRouteComponent(() => import('../features/audit.js'), 'AuditScreen'),
 );
-const settingsRoute = route(
-  '/settings',
-  lazyRouteComponent(() => import('../features/settings.js'), 'SettingsScreen'),
+/**
+ * Org settings (S-23.11b): `/settings/<section>`, each section a page of its own beside a NavList
+ * (`features/settings-sections.ts`). `/settings` — the URL every link and bookmark already uses —
+ * redirects to the first section the caller may open, and so does a section that is unknown or that
+ * the caller's role is not shown (the Operations group is the administrator's).
+ */
+const orgSettingsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/settings',
+});
+
+/** The signed-in role, from the session the authenticated route has already read. */
+const sessionRole = (context: RouterContext) =>
+  context.queryClient.getQueryData<SessionResponse>([...queryKeys.session])?.user.role;
+
+const orgSettingsIndexRoute = createRoute({
+  getParentRoute: () => orgSettingsRoute,
+  path: '/',
+  beforeLoad: ({ context }) => {
+    throw redirect({
+      to: '/settings/$section',
+      params: { section: firstOrgSection(sessionRole(context)) },
+      replace: true,
+    });
+  },
+});
+
+const SettingsScreen = lazyRouteComponent(
+  () => import('../features/settings.js'),
+  'SettingsScreen',
 );
+
+const orgSettingsSectionRoute = createRoute({
+  getParentRoute: () => orgSettingsRoute,
+  path: '$section',
+  beforeLoad: ({ context, params }) => {
+    const role = sessionRole(context);
+    if (!isOrgSectionFor(params.section, role)) {
+      throw redirect({
+        to: '/settings/$section',
+        params: { section: firstOrgSection(role) },
+        replace: true,
+      });
+    }
+  },
+  component: withPreload(function OrgSettings() {
+    const { section } = orgSettingsSectionRoute.useParams();
+    return <SettingsScreen section={section as OrgSettingsSectionId} />;
+  }, SettingsScreen),
+});
 // WP-280: the registered machines, and the device flow's `verification_uri`.
 const workersRoute = route(
   '/workers',
@@ -327,15 +382,24 @@ const pipelineRoute = projectPage(
   }, PipelineScreen),
 );
 
-/** product/10:20's Shadow screen (WP-34). */
-const shadowRoute = projectPage(
-  'shadow',
-  'shadow',
-  withPreload(function Shadow() {
+/**
+ * product/10:20's Shadow screen (WP-34): the batches, and `?batch=<id>` — one batch's page (S-23.11b).
+ * A search parameter for `?artifact=`'s reason: it makes a batch addressable. The id is compared
+ * with the ids the batches read returned and reaches no attribute, so an unknown one says so.
+ */
+const shadowSearchSchema = z.object({ batch: z.string().optional() });
+
+const shadowRoute = createRoute({
+  getParentRoute: () => projectRoute,
+  path: 'shadow',
+  validateSearch: shadowSearchSchema,
+  staticData: { tab: 'shadow' },
+  component: withPreload(function Shadow() {
     const { key } = shadowRoute.useParams();
-    return <ShadowScreen projectKey={key} />;
+    const { batch } = shadowRoute.useSearch();
+    return <ShadowScreen projectKey={key} batchId={batch ?? null} />;
   }, ShadowScreen),
-);
+});
 
 const budgetsRoute = projectPage(
   'budgets',
@@ -346,15 +410,47 @@ const budgetsRoute = projectPage(
   }, BudgetsScreen),
 );
 
-/** product/10:21's project settings page — the mirror of every wizard step (product/18:55). */
-const projectSettingsRoute = projectPage(
-  'settings',
-  'settings',
-  withPreload(function ProjectSettings() {
-    const { key } = projectSettingsRoute.useParams();
-    return <ProjectSettingsScreen projectKey={key} />;
+/**
+ * product/10:21's project settings page — the mirror of every wizard step (product/18:55) — as
+ * sub-pages: `/projects/$key/settings/<section>` (S-23.11b). `/projects/$key/settings`, which every
+ * existing link names, redirects to the first section, as an unknown section does.
+ */
+const projectSettingsRoute = createRoute({
+  getParentRoute: () => projectRoute,
+  path: 'settings',
+  staticData: { tab: 'settings' },
+});
+
+const projectSettingsIndexRoute = createRoute({
+  getParentRoute: () => projectSettingsRoute,
+  path: '/',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/projects/$key/settings/$section',
+      params: { key: params.key, section: FIRST_PROJECT_SECTION },
+      replace: true,
+    });
+  },
+});
+
+const projectSettingsSectionRoute = createRoute({
+  getParentRoute: () => projectSettingsRoute,
+  path: '$section',
+  staticData: { tab: 'settings' },
+  beforeLoad: ({ params }) => {
+    if (!isProjectSection(params.section)) {
+      throw redirect({
+        to: '/projects/$key/settings/$section',
+        params: { key: params.key, section: FIRST_PROJECT_SECTION },
+        replace: true,
+      });
+    }
+  },
+  component: withPreload(function ProjectSettings() {
+    const { key, section } = projectSettingsSectionRoute.useParams();
+    return <ProjectSettingsScreen projectKey={key} section={section as ProjectSettingsSectionId} />;
   }, ProjectSettingsScreen),
-);
+});
 
 /** The run's log takes the full width, as an Actions job's does. */
 const runRoute = createRoute({
@@ -376,7 +472,7 @@ export const routeTree = rootRoute.addChildren([
     integrationRoute,
     statsRoute,
     auditRoute,
-    settingsRoute,
+    orgSettingsRoute.addChildren([orgSettingsIndexRoute, orgSettingsSectionRoute]),
     onboardingRoute,
     workersRoute,
     workerApproveRoute,
@@ -387,7 +483,7 @@ export const routeTree = rootRoute.addChildren([
       pipelineRoute,
       budgetsRoute,
       shadowRoute,
-      projectSettingsRoute,
+      projectSettingsRoute.addChildren([projectSettingsIndexRoute, projectSettingsSectionRoute]),
     ]),
     taskRoute,
     runRoute,

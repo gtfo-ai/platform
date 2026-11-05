@@ -245,9 +245,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** One section of the settings (S-23.11b: a page per section); *Policies & WIP* by default. */
+const openSection = (section: string): void => {
+  window.history.pushState({}, '', `/projects/acme_api/settings/${section}`);
+};
+
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  window.history.pushState({}, '', '/projects/acme_api/settings');
+  openSection('policies');
 });
 
 /**
@@ -255,6 +260,8 @@ beforeEach(() => {
  * command's contract — an `Idempotency-Key` and the hash of the configuration the operator saw.
  */
 describe('the repository configuration card', () => {
+  beforeEach(() => openSection('repository'));
+
   it('proposes the settings with a key and the hash that was read, and shows the merge request', async () => {
     const posts: { url: string; body: unknown; key: string | null }[] = [];
     render(
@@ -282,9 +289,9 @@ describe('the repository configuration card', () => {
         realtime: false,
       }).element,
     );
-    expect(await screen.findByText('Repository configuration')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Repository configuration' })).toBeTruthy();
     await waitFor(() => {
-      expect(document.body.textContent).toContain('.agentic/config.yml: unread');
+      expect(document.body.textContent).toContain('.agentic/config.yml: not read yet');
     });
     await userEvent.click(screen.getByText('Propose these settings to the repository'));
     await waitFor(() => {
@@ -338,6 +345,8 @@ describe('the repository configuration card', () => {
  * says it opened none, and the WIP limits and the unread keys come from the server's answer.
  */
 describe('the configuration the server reports (WP-91)', () => {
+  beforeEach(() => openSection('repository'));
+
   it('lists the last export after a reload, as recorded, with its merge request', async () => {
     render(
       createApp({
@@ -370,7 +379,7 @@ describe('the configuration the server reports (WP-91)', () => {
   it('shows no last export when the project was never exported', async () => {
     render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
     await waitFor(() => {
-      expect(document.body.textContent).toContain('.agentic/config.yml: unread');
+      expect(document.body.textContent).toContain('.agentic/config.yml: not read yet');
     });
     expect(document.body.textContent).not.toContain('Last export');
   });
@@ -409,6 +418,7 @@ describe('the configuration the server reports (WP-91)', () => {
   });
 
   it('shows the WIP limits the server answers, their source, and the unread keys', async () => {
+    openSection('policies');
     render(
       createApp({
         fetchImpl: fetchFor(
@@ -436,9 +446,10 @@ describe('the configuration the server reports (WP-91)', () => {
       }).element,
     );
     await waitFor(() => {
-      expect(document.body.textContent).toContain('Max parallel tasks 1 (project)');
+      // The layer in words (S-23.11b): `project` is these settings, `default` the platform's.
+      expect(document.body.textContent).toContain('Max parallel tasks 1 (these settings)');
     });
-    expect(document.body.textContent).toContain('max tasks in pipeline 5 (default)');
+    expect(document.body.textContent).toContain('max tasks in pipeline 5 (the platform default)');
     expect(document.body.textContent).toContain(
       'pipeline.template_overrides.feature.stages.business_review.enabled',
     );
@@ -451,6 +462,8 @@ describe('the configuration the server reports (WP-91)', () => {
  * *Re-read now* on the existing refresh.
  */
 describe('the project prompt files card (WP-113)', () => {
+  beforeEach(() => openSection('prompts'));
+
   const SHA = 'f00dfeed'.repeat(5);
   const READING = {
     path: '.agentic/config.yml',
@@ -619,6 +632,7 @@ describe('the project prompt files card (WP-113)', () => {
 
 describe('the project settings page', () => {
   it('leaves a retired integration out of the binding picker (WP-122)', async () => {
+    openSection('connections');
     render(createApp({ fetchImpl: withPickerIntegrations(fetchFor({})), realtime: false }).element);
     expect(await screen.findByText('Live workspace')).toBeTruthy();
     expect(screen.queryByText('Retired workspace')).toBeNull();
@@ -692,27 +706,44 @@ describe('the project settings page', () => {
     expect(document.body.textContent).toContain('Unrecognized key: "bogus_root_key"');
   });
 
-  it('mirrors all five wizard steps and shows the audit of who changed what', async () => {
-    // product/18:55 — *"nothing is only reachable during onboarding"*. The headings are the five
-    // steps, plus the audit product/18:5 requires and PROGRESS backlog 52 records as unread.
+  it('mirrors all five wizard steps, one section per page, and shows the audit of who changed what', async () => {
+    // product/18:55 — *"nothing is only reachable during onboarding"*. Since S-23.11b each section
+    // is a page of its own, reached from the settings NavList: every section is opened through its
+    // link and its headings asserted there, plus the audit product/18:5 requires and PROGRESS
+    // backlog 52 records as unread.
+    openSection('connections');
     render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
-    expect(await screen.findByText('Connections')).toBeTruthy();
-    for (const heading of [
-      'Technical discovery and readiness',
-      'Business context',
-      'Autonomy dial',
-      'Features',
-      'Risk classes',
-      'Project budgets',
-      'Notifications',
-      'WIP limits and policies',
-      'Knowledge',
-      'Who changed what',
-    ]) {
-      // Inside the page: since S-23.4 "Knowledge" is also the project's tab above it.
-      const page = document.querySelector<HTMLElement>('[data-project-page]');
-      expect(page, 'the project page').not.toBeNull();
-      expect(within(page as HTMLElement).getByText(heading), heading).toBeTruthy();
+    const user = userEvent.setup();
+    const nav = await screen.findByRole('navigation', { name: 'Project settings' });
+    const sections: readonly (readonly [string, readonly string[]])[] = [
+      ['Connections', ['Connections', 'Ticket lifecycle']],
+      ['Discovery & readiness', ['Discovery & readiness']],
+      ['Business context', ['Business context']],
+      ['History', ['History']],
+      ['Knowledge', ['Knowledge']],
+      [
+        'Policies & WIP',
+        [
+          'Autonomy dial',
+          'Features',
+          'Risk classes',
+          'Project budgets',
+          'Notifications',
+          'WIP limits',
+          'Who changed what',
+        ],
+      ],
+    ];
+    for (const [link, headings] of sections) {
+      await user.click(within(nav).getByRole('link', { name: link }));
+      const page = await waitFor(() => {
+        const found = document.querySelector<HTMLElement>('[data-settings-section]');
+        expect(found?.textContent).toContain(headings[0]);
+        return found as HTMLElement;
+      });
+      for (const heading of headings) {
+        expect(within(page).getByRole('heading', { name: heading }), heading).toBeTruthy();
+      }
     }
     // The audit is *read*, not merely present: the row's actor and action reach the screen. Read
     // off the rendered text because `UntrustedText` may split a string across nodes.

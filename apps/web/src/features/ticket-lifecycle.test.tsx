@@ -188,7 +188,7 @@ const effectiveConfig = (superseded: boolean) => ({
 });
 
 const renderSettings = (state: World) => {
-  window.history.pushState({}, '', `/projects/${PROJECT_ROW.key}/settings`);
+  window.history.pushState({}, '', `/projects/${PROJECT_ROW.key}/settings/connections`);
   render(createApp({ fetchImpl: server(state), realtime: false }).element);
 };
 
@@ -437,7 +437,7 @@ describe('the lifecycle form, review round 1', () => {
     // Another administrator rebinds the project to another tracker; this page reads the bindings
     // again and nothing else. A statuses answer cached for the project, not for the tracker, would
     // then seed the new tracker's form from the first tracker's names.
-    window.history.pushState({}, '', `/projects/${PROJECT_ROW.key}/settings`);
+    window.history.pushState({}, '', `/projects/${PROJECT_ROW.key}/settings/connections`);
     const state = world();
     const app = createApp({ fetchImpl: server(state), realtime: false });
     render(app.element);

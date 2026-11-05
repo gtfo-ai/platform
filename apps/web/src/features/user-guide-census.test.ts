@@ -13,7 +13,9 @@
  *  - every later *"<n> tabs …"* list in § 5 (*"Three tabs can refuse…"*) must name only tabs that
  *    exist, and as many as its number says;
  *  - *The top navigation*'s first bold run (*"Home · Projects · …"*) must be `NAV`'s labels, in
- *    order.
+ *    order;
+ *  - § 11 *Settings*' two dotted bold runs must be the org settings' and a project's settings'
+ *    sections (`features/settings-sections.ts`, S-23.11b), in order.
  *
  * So an added tab, a renamed one, a removed navigation entry and a guide edit that drops one all
  * fail here.
@@ -36,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { NAV } from '../app/shell.js';
 import { TABS } from './run-detail.js';
+import { ORG_SETTINGS_GROUPS, PROJECT_SETTINGS_GROUPS } from './settings-sections.js';
 
 const GUIDE_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -232,5 +235,41 @@ describe('docs/user-guide.md names the screens the app renders (WP-129)', () => 
         `§ 5 "Three tabs" names ${JSON.stringify(['Settings'])}, which the app does not render`,
       );
     });
+  });
+});
+
+/**
+ * Every bold run of a section that is a `·`-separated list, as its labels. The section is read as
+ * one paragraph stream, because a long list wraps across lines inside its `**…**`.
+ */
+export const dottedListsIn = (section: readonly string[]): string[][] =>
+  [...section.join(' ').matchAll(/\*\*([^*]+)\*\*/g)]
+    .map((match) => match[1] ?? '')
+    .filter((run) => run.includes('·'))
+    .map((run) =>
+      run
+        .split('·')
+        .map((label) => label.replace(/\s+/g, ' ').trim())
+        .filter((label) => label.length > 0),
+    );
+
+const sectionLabels = (
+  groups: readonly { readonly sections: readonly { readonly label: string }[] }[],
+) => groups.flatMap((group) => group.sections.map((section) => section.label));
+
+describe('docs/user-guide.md § 11 names the settings sections the app renders (S-23.11b)', () => {
+  it('lists the org settings’ and a project’s settings’ sections, in order', () => {
+    expect(dottedListsIn(sectionOf(guide(), '## 11. Settings'))).toEqual([
+      sectionLabels(ORG_SETTINGS_GROUPS),
+      sectionLabels(PROJECT_SETTINGS_GROUPS),
+    ]);
+  });
+
+  it('fails on a section the guide drops (canary)', () => {
+    const dropped = guide().replace(' · Failed jobs', '');
+    expect(dottedListsIn(sectionOf(dropped, '## 11. Settings'))[0]).not.toEqual(
+      sectionLabels(ORG_SETTINGS_GROUPS),
+    );
+    expect(sectionLabels(ORG_SETTINGS_GROUPS)).toContain('Failed jobs');
   });
 });

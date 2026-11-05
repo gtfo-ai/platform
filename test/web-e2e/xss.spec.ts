@@ -127,7 +127,11 @@ test('a provider setup guide and a knowledge document are text as well', async (
   expect(await page.locator('main script').count()).toBe(0);
 
   await page.goto(`/projects/${PROJECT_KEY}/knowledge`);
-  await page.getByRole('button', { name: 'technical/architecture.md' }).click();
+  // S-23.11b: the files are a NavList grouped by folder, so the item is the file's own name.
+  await page
+    .getByRole('navigation', { name: 'Knowledge files' })
+    .getByRole('button', { name: 'architecture.md' })
+    .click();
   await expect(page.getByText('# Architecture', { exact: false })).toBeVisible();
   expect(await page.locator('main script').count()).toBe(0);
   expect(await page.evaluate(PWNED)).toBeUndefined();
@@ -211,7 +215,8 @@ test('a peer ticket key on the board and a stated absence are text, not markup',
   expect(await page.evaluate(PWNED)).toBeUndefined();
 
   await page.goto('/stats');
-  await expect(page.getByText('Not measured, and why')).toBeVisible();
+  // S-23.11b: the absences are one collapsed disclosure at the foot of the page; open it.
+  await page.getByText('Not measured, and why').click();
   // The reason carries an `<img onerror=…>`; it is on screen as characters and there is no image.
   await expect(page.getByText(HOSTILE.image, { exact: false })).toBeVisible();
   expect(await page.locator('main img').count()).toBe(0);

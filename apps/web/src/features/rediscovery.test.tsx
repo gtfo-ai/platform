@@ -113,7 +113,7 @@ afterEach(() => {
 beforeEach(() => {
   started = [];
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  window.history.pushState({}, '', '/projects/acme_api/settings');
+  window.history.pushState({}, '', '/projects/acme_api/settings/discovery');
 });
 
 const button = async (): Promise<HTMLButtonElement> =>

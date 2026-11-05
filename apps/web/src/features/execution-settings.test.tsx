@@ -98,7 +98,7 @@ beforeEach(() => {
 
 describe('the Execution card (WP-278)', () => {
   it('shows the defaults and says the instance has no server runner', async () => {
-    window.history.pushState({}, '', '/projects/autix/settings');
+    window.history.pushState({}, '', '/projects/autix/settings/execution');
     render(createApp({ fetchImpl: server([]), realtime: false }).element);
     await screen.findByRole('button', { name: 'Save execution setting' });
     expect(screen.getByTestId('execution-settings').textContent).toContain(
@@ -109,7 +109,7 @@ describe('the Execution card (WP-278)', () => {
   });
 
   it('sends the whole setting when saved', async () => {
-    window.history.pushState({}, '', '/projects/autix/settings');
+    window.history.pushState({}, '', '/projects/autix/settings/execution');
     const sent: Sent[] = [];
     render(createApp({ fetchImpl: server(sent), realtime: false }).element);
     await screen.findByRole('button', { name: 'Save execution setting' });
@@ -138,7 +138,7 @@ describe('the Execution card (WP-278)', () => {
   });
 
   it('does not offer a save for a number that is not one', async () => {
-    window.history.pushState({}, '', '/projects/autix/settings');
+    window.history.pushState({}, '', '/projects/autix/settings/execution');
     render(createApp({ fetchImpl: server([]), realtime: false }).element);
     const save = await screen.findByRole('button', { name: 'Save execution setting' });
     fireEvent.change(screen.getByLabelText('Assignee head start (seconds)'), {

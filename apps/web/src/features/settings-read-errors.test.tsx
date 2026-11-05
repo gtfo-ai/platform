@@ -26,19 +26,25 @@ const SESSION: SessionResponse = {
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-/** One read the settings page makes, the notice its failure shows and its role sentence. */
+/**
+ * One read the settings pages make, the page that makes it (S-23.11b: one section per page), the
+ * notice its failure shows and its role sentence.
+ */
 const READS = [
   {
+    page: '/settings/users',
     path: '/api/org/users',
     title: 'The user list could not be loaded.',
     role: 'Reading the organisation needs the viewer role or above.',
   },
   {
+    page: '/settings/budgets',
     path: '/api/org/budgets',
     title: 'The organisation budgets could not be loaded.',
     role: 'Reading a budget needs the viewer role; setting one needs maintainer.',
   },
   {
+    page: '/settings/identities',
     path: '/api/org/identities',
     title: 'The identity mappings could not be loaded.',
     role: 'Reading and writing them needs the admin role, because a mapping decides who may act as whom.',
@@ -84,11 +90,11 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  window.history.pushState({}, '', '/settings');
 });
 
-describe('the settings page’s read errors (WP-122)', () => {
+describe('the settings pages’ read errors (WP-122)', () => {
   it.each(READS)('does not name a 503 on $path a permission problem', async (read) => {
+    window.history.pushState({}, '', read.page);
     render(
       createApp({
         fetchImpl: fetchFailing(read.path, 503, 'the database is restarting'),
@@ -102,6 +108,7 @@ describe('the settings page’s read errors (WP-122)', () => {
   });
 
   it.each(READS)('keeps the role sentence on $path for a 403', async (read) => {
+    window.history.pushState({}, '', read.page);
     render(
       createApp({
         fetchImpl: fetchFailing(read.path, 403, 'role viewer may not perform this'),

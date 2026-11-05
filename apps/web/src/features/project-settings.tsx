@@ -15,6 +15,13 @@
  * | 4 operating mode | `features/operating-mode.tsx`, the *same component* the wizard renders |
  * | 5 commit | the knowledge proposal queue |
  *
+ * **Since S-23.11b the page is sub-pages** (`/projects/$key/settings/<section>`, GitHub's settings
+ * shape, research/19 § 5.2): a NavList of `PROJECT_SETTINGS_GROUPS` (`features/settings-sections.ts`)
+ * and one section per page. `/projects/$key/settings` — the URL every link already names — opens
+ * the first, *Connections*. The wizard's own components keep their own saves (the autonomy dial,
+ * the lifecycle slots, each budget window …): each is one decision with its own write and its own
+ * refusal, and they are the same components the wizard renders, which is what keeps the mirror true.
+ *
  * Step 4 is not re-implemented here: both screens render one component, which is the only way a
  * mirror stays true without somebody remembering. `apps/server/src/routes/settings-mirror.test.ts`
  * is the check, and it fails in both directions.
@@ -43,6 +50,7 @@
  * A form that wrote one key by re-sending the whole document would be a second writer of a document
  * the repository also owns.
  */
+import type { EffectiveConfigResponse, ProjectSummary } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, useEffect, useState } from 'react';
 import {
@@ -53,6 +61,7 @@ import {
   useProjectConfig,
   useProjectReadiness,
 } from '../app/queries.js';
+import { INTEGRATION_TYPE_LABEL } from '../ui/humanize.js';
 import {
   Badge,
   Button,
@@ -62,7 +71,6 @@ import {
   formatDateTime,
   formatInteger,
   Loading,
-  SectionHeading,
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { BusinessInterview } from './business-interview.js';
@@ -73,18 +81,27 @@ import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 import { ProjectPromptFiles } from './project-prompts.js';
 import { ReadinessNotices } from './readiness-notices.js';
 import { Rediscovery } from './rediscovery.js';
+import { SettingsFrame, SettingsSectionHeader } from './settings-frame.js';
+import { PROJECT_SETTINGS_GROUPS, type ProjectSettingsSectionId } from './settings-sections.js';
 import { TicketLifecycle } from './ticket-lifecycle.js';
 import { VerificationMode } from './verification-mode.js';
 
-/**
- * What the export's answer — or the last recorded export — says, in one sentence.
- *
- * `open` is WP-91's (backlog 225): the previous export's merge request is still open, so pressing
- * the button again answers it rather than opening a second one.
- */
+type Project = Pick<ProjectSummary, 'id' | 'key' | 'name'>;
+
 /** A published limit, or a statement that the server published none — never a made-up zero. */
 const wipLimit = (value: number | undefined): string =>
   value === undefined ? 'not published' : formatInteger(value);
+
+/** Which layer set a value (`config.sources`), in the screen's words. */
+const SOURCE_LABEL: Readonly<Record<string, string>> = {
+  default: 'the platform default',
+  org: 'the organisation',
+  project: 'these settings',
+  repo: 'the repository',
+};
+
+const sourceLabel = (source: string | undefined): string =>
+  source === undefined ? 'the platform default' : (SOURCE_LABEL[source] ?? source);
 
 /** Who recorded the evaluation shown (`readiness_evaluations.source`), in the screen's words. */
 const READINESS_SOURCE_LABEL: Readonly<Record<string, string>> = {
@@ -93,6 +110,22 @@ const READINESS_SOURCE_LABEL: Readonly<Record<string, string>> = {
   recheck: 'the re-check after a merge',
 };
 
+/** The repository file's state, as a sentence's subject says it. */
+const REPOSITORY_STATUS_LABEL: Readonly<
+  Record<EffectiveConfigResponse['repository']['status'], string>
+> = {
+  valid: 'read and valid',
+  invalid: 'does not parse',
+  absent: 'not present',
+  unread: 'not read yet',
+};
+
+/**
+ * What the export's answer — or the last recorded export — says, in one sentence.
+ *
+ * `open` is WP-91's (backlog 225): the previous export's merge request is still open, so pressing
+ * the button again answers it rather than opening a second one.
+ */
 const exportSentence = (status: 'exported' | 'unchanged' | 'open'): string =>
   status === 'unchanged'
     ? 'The repository already carries these settings; nothing was proposed.'
@@ -100,15 +133,10 @@ const exportSentence = (status: 'exported' | 'unchanged' | 'open'): string =>
       ? 'A configuration merge request is already open — no second one was opened: '
       : 'Merge request opened on ';
 
-export const ProjectSettingsScreen = ({
-  projectKey,
-}: {
-  readonly projectKey: string;
-}): ReactElement => {
-  const { project, isPending, isError } = useProjectByKey(projectKey);
-  const bindings = useProjectBindings(project?.id ?? null);
-  const readiness = useProjectReadiness(project?.id ?? null);
-  const config = useProjectConfig(project?.id ?? null);
+// ── Connections ──────────────────────────────────────────────────────────────
+
+const Connections = ({ project }: { readonly project: Project }): ReactElement => {
+  const bindings = useProjectBindings(project.id);
   const integrations = useBindableIntegrations();
   const commands = useOnboardingCommands();
   const [selected, setSelected] = useState<readonly string[] | null>(null);
@@ -121,193 +149,172 @@ export const ProjectSettingsScreen = ({
     }
   }, [bindings.isSuccess, bound, selected]);
 
-  if (isPending) {
-    return <Loading label="Loading the project…" />;
-  }
-  if (isError || project === null) {
-    return (
-      <ErrorNotice
-        title="That project could not be found."
-        detail="Projects are addressed by their key, which is what the board and the wizard use."
-      />
-    );
-  }
-
   return (
-    <div className="flex flex-col gap-3">
-      <SectionHeading>
-        Settings — <UntrustedText value={project.name} />
-      </SectionHeading>
-      <p className="text-xs text-fg-muted">
-        Everything the setup wizard asks, reachable at any time. Nothing here is only available
-        while a project is being set up.
-      </p>
-
-      <Card className="flex flex-col gap-2">
-        <SectionHeading>Connections</SectionHeading>
-        {bindings.isSuccess && bound.length === 0 ? (
-          <EmptyState
-            title="No integrations bound"
-            hint="A project needs a ticket board and a git host before the pipeline can start anything."
-          />
-        ) : (
-          <ul className="flex flex-col gap-1 text-sm">
-            {bound.map((binding) => (
-              <li key={binding.integration_id} className="flex items-center gap-2">
-                <Badge tone="accent">{binding.type}</Badge>
-                <UntrustedText value={binding.name} />
-                <Badge>{binding.provider}</Badge>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="text-sm">
-          <Link to="/integrations">Add or test an integration</Link> — credentials are read from the
-          server’s own environment and never travel through the browser.
-        </p>
-        <div className="flex flex-col gap-1">
-          <p className="text-xs font-semibold">Which integrations this project uses</p>
-          {/* A retired integration (WP-114) cannot be bound: the selector leaves it out (WP-122). */}
-          {integrations.items.map((integration) => (
-            <label key={integration.id} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={(selected ?? []).includes(integration.id)}
-                onChange={(event) =>
-                  setSelected(
-                    event.target.checked
-                      ? [...(selected ?? []), integration.id]
-                      : (selected ?? []).filter((id) => id !== integration.id),
-                  )
-                }
-              />
-              <UntrustedText value={integration.name} />
-              <Badge>{integration.type}</Badge>
-            </label>
+    <>
+      <SettingsSectionHeader
+        title="Connections"
+        description="The ticket tracker, git host and chat this project uses, and how its tickets move."
+      />
+      {bindings.isSuccess && bound.length === 0 ? (
+        <EmptyState
+          title="No integrations bound"
+          hint="A project needs a ticket board and a git host before the pipeline can start anything."
+        />
+      ) : (
+        <ul className="flex flex-col gap-1 text-sm">
+          {bound.map((binding) => (
+            <li key={binding.integration_id} className="flex items-center gap-2">
+              <Badge tone="accent">{INTEGRATION_TYPE_LABEL[binding.type]}</Badge>
+              <UntrustedText value={binding.name} />
+            </li>
           ))}
-        </div>
-        <div>
-          <Button
-            disabled={commands.putBindings.isPending}
-            onClick={() => {
-              // The **whole set**: a binding missing from the request is deleted, which is what
-              // makes this re-submittable and what lets somebody correct a mistake without a
-              // second endpoint (`PUT …/bindings`, WP-21).
-              commands.putBindings.mutate({
-                projectId: project.id,
-                // With the configuration each binding already carries: the notification channel is
-                // a key of it (WP-32), and this button must not be a way to lose it.
-                items: (selected ?? []).map((id) => ({
-                  integration_id: id,
-                  config: bindingConfigOf(bindings.data?.items ?? [], id),
-                })),
-              });
-            }}
-          >
-            Save bindings
-          </Button>
-        </div>
-        {commands.putBindings.isError ? (
-          <ErrorNotice title="The bindings were not saved." error={commands.putBindings.error} />
-        ) : null}
-        {/* WP-182 ruling (a): the wizard's step-1 lifecycle slots, mirrored — the same component. */}
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold">Ticket lifecycle</p>
-          <TicketLifecycle projectId={project.id} />
-        </div>
-      </Card>
+        </ul>
+      )}
+      <p className="text-sm">
+        <Link to="/integrations">Add or test an integration</Link> — credentials are read from the
+        server’s own environment and never travel through the browser.
+      </p>
+      <fieldset className="flex flex-col gap-1">
+        <legend className="text-xs font-semibold">Which integrations this project uses</legend>
+        {/* A retired integration (WP-114) cannot be bound: the selector leaves it out (WP-122). */}
+        {integrations.items.map((integration) => (
+          <label key={integration.id} className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={(selected ?? []).includes(integration.id)}
+              onChange={(event) =>
+                setSelected(
+                  event.target.checked
+                    ? [...(selected ?? []), integration.id]
+                    : (selected ?? []).filter((id) => id !== integration.id),
+                )
+              }
+            />
+            <UntrustedText value={integration.name} />
+            <Badge>{INTEGRATION_TYPE_LABEL[integration.type]}</Badge>
+          </label>
+        ))}
+      </fieldset>
+      <div>
+        <Button
+          disabled={commands.putBindings.isPending}
+          onClick={() => {
+            // The **whole set**: a binding missing from the request is deleted, which is what
+            // makes this re-submittable and what lets somebody correct a mistake without a
+            // second endpoint (`PUT …/bindings`, WP-21).
+            commands.putBindings.mutate({
+              projectId: project.id,
+              // With the configuration each binding already carries: the notification channel is
+              // a key of it (WP-32), and this button must not be a way to lose it.
+              items: (selected ?? []).map((id) => ({
+                integration_id: id,
+                config: bindingConfigOf(bindings.data?.items ?? [], id),
+              })),
+            });
+          }}
+        >
+          Save bindings
+        </Button>
+      </div>
+      {commands.putBindings.isError ? (
+        <ErrorNotice title="The bindings were not saved." error={commands.putBindings.error} />
+      ) : null}
+      {/* WP-182 ruling (a): the wizard's step-1 lifecycle slots, mirrored — the same component. */}
+      <div className="flex flex-col gap-2 border-t border-line pt-3">
+        <h3 className="text-sm font-semibold">Ticket lifecycle</h3>
+        <TicketLifecycle projectId={project.id} />
+      </div>
+    </>
+  );
+};
 
-      {/* WP-139: the wizard's default branch, mirrored — the *same component* (product/18:55). */}
-      <Card className="flex flex-col gap-2">
-        <SectionHeading>Default branch</SectionHeading>
-        <DefaultBranch projectId={project.id} />
-      </Card>
+// ── Discovery and readiness ──────────────────────────────────────────────────
 
-      {/* WP-278 (TD-031 decision 8): where the agent runs execute — a settings-only control. */}
-      <Card className="flex flex-col gap-2">
-        <SectionHeading>Execution</SectionHeading>
-        <ExecutionSettings projectId={project.id} />
-      </Card>
-
-      <Card className="flex flex-col gap-2">
-        <SectionHeading>Technical discovery and readiness</SectionHeading>
-        <div>
-          <Button
-            tone="primary"
-            disabled={commands.startDiscovery.isPending}
-            onClick={() => {
-              commands.startDiscovery.mutate(project.id);
-            }}
-          >
-            Start discovery
-          </Button>
+const DiscoveryAndReadiness = ({ project }: { readonly project: Project }): ReactElement => {
+  const readiness = useProjectReadiness(project.id);
+  const commands = useOnboardingCommands();
+  return (
+    <>
+      <SettingsSectionHeader
+        title="Discovery & readiness"
+        description="What the Discovery agent found in the repository, and how ready the project is for agents."
+      />
+      {readiness.isSuccess ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Badge tone={readiness.data.level >= 2 ? 'success' : 'warning'}>
+            Readiness level {readiness.data.level}
+          </Badge>
+          <span className="text-xs text-fg-muted">
+            evaluated {formatDateTime(readiness.data.evaluated_at)} by{' '}
+            <UntrustedText
+              value={READINESS_SOURCE_LABEL[readiness.data.source] ?? readiness.data.source}
+            />
+          </span>
+          {/* WP-143: the CI-rules warning or note — the wizard's own component. */}
+          <ReadinessNotices notices={readiness.data.notices} />
         </div>
+      ) : (
         <p className="text-xs text-fg-muted">
-          Start discovery runs the first evaluation; once it has run, it starts nothing. After a
-          merge the platform re-checks the readiness criteria it can read without a run; the rest
-          keep the latest discovery’s answer until a maintainer re-evaluates.
+          No readiness evaluation yet — running discovery is what records one.
         </p>
-        {commands.startDiscovery.isError ? (
-          <ErrorNotice title="Discovery was not started." error={commands.startDiscovery.error} />
-        ) : null}
-        {/* WP-94, Q107 (a): discovery again, on a maintainer's click, with its ceiling shown. */}
-        <Rediscovery projectId={project.id} />
-        {/* WP-142: R9 and every check read the stored branch; say when the provider's differs. */}
-        <DefaultBranchMismatch projectId={project.id} />
-        {readiness.isSuccess ? (
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge tone={readiness.data.level >= 2 ? 'success' : 'warning'}>
-              Readiness level {readiness.data.level}
-            </Badge>
-            <span className="text-fg-muted">
-              evaluated {formatDateTime(readiness.data.evaluated_at)} by{' '}
-              <UntrustedText
-                value={READINESS_SOURCE_LABEL[readiness.data.source] ?? readiness.data.source}
-              />
-            </span>
-            {/* WP-143: the CI-rules warning or note — the wizard's own component. */}
-            <ReadinessNotices notices={readiness.data.notices} />
-          </div>
-        ) : (
-          <p className="text-xs text-fg-muted">
-            No readiness evaluation yet — running discovery is what records one.
-          </p>
-        )}
-      </Card>
+      )}
+      <div>
+        <Button
+          tone="primary"
+          disabled={commands.startDiscovery.isPending}
+          onClick={() => {
+            commands.startDiscovery.mutate(project.id);
+          }}
+        >
+          Start discovery
+        </Button>
+      </div>
+      <p className="text-xs text-fg-muted">
+        Start discovery runs the first evaluation; once it has run, it starts nothing. After a merge
+        the platform re-checks the readiness criteria it can read without a run; the rest keep the
+        latest discovery’s answer until a maintainer re-evaluates.
+      </p>
+      {commands.startDiscovery.isError ? (
+        <ErrorNotice title="Discovery was not started." error={commands.startDiscovery.error} />
+      ) : null}
+      {/* WP-94, Q107 (a): discovery again, on a maintainer's click, with its ceiling shown. */}
+      <Rediscovery projectId={project.id} />
+      {/* WP-142: R9 and every check read the stored branch; say when the provider's differs. */}
+      <DefaultBranchMismatch projectId={project.id} />
+    </>
+  );
+};
 
-      <Card className="flex flex-col gap-2">
-        <SectionHeading>Business context</SectionHeading>
-        {/* The wizard's step 3, mirrored (product/18:55, WP-64) — the *same component*. */}
-        <BusinessInterview projectId={project.id} projectKey={project.key} />
-        <p className="text-sm">
-          <Link to="/projects/$key/knowledge" params={{ key: project.key }}>
-            Open the knowledge base
-          </Link>
-        </p>
-      </Card>
+// ── Policies & WIP ───────────────────────────────────────────────────────────
 
-      {/**
-       * The wizard's step 3b, mirrored (product/18:55, WP-35) — the *same component*, which is how
-       * the mirror stays true without anybody remembering to keep two of them in step.
-       */}
-      <Card className="flex flex-col gap-2">
-        <SectionHeading>History bootstrap</SectionHeading>
-        <HistoryBootstrap projectId={project.id} projectKey={project.key} />
-      </Card>
-
+/**
+ * product/10:21 lists **WIP limits** and **policies** on this page. The WIP limits are read-only here
+ * and say so: they are `pipeline.wip` (WP-91, BD-010's defaults when nothing sets them), shown as the
+ * effective configuration answers them — with the layer that set each and the organisation's bound
+ * when it lowered one. The policies are the operating mode's (the same component as the wizard's
+ * step 4) and the verification mode.
+ */
+const PoliciesAndWip = ({ project }: { readonly project: Project }): ReactElement => {
+  const config = useProjectConfig(project.id);
+  return (
+    <>
+      <SettingsSectionHeader
+        title="Policies & WIP"
+        description="How autonomous the agents are, which features are on, the risk classes, budgets and notifications — and how much work may run at once."
+      />
       <OperatingMode projectId={project.id} audit />
 
       {/* BD-025's 2026-10-05 amendment (backlog 460): whether agents or CI run the checks. */}
       <VerificationMode projectId={project.id} />
 
       <Card className="flex flex-col gap-1">
-        <SectionHeading>WIP limits and policies</SectionHeading>
+        <h3 className="text-base font-semibold">WIP limits</h3>
         {config.data === undefined ? null : (
           <p className="text-xs text-fg-muted">
             Max parallel tasks {wipLimit(config.data.effective.pipeline?.wip?.max_parallel_tasks)} (
-            {config.data.sources['pipeline.wip.max_parallel_tasks'] ?? 'default'}) · max tasks in
+            {sourceLabel(config.data.sources['pipeline.wip.max_parallel_tasks'])}) · max tasks in
             pipeline {wipLimit(config.data.effective.pipeline?.wip?.max_tasks_in_pipeline)} (
-            {config.data.sources['pipeline.wip.max_tasks_in_pipeline'] ?? 'default'}) —{' '}
+            {sourceLabel(config.data.sources['pipeline.wip.max_tasks_in_pipeline'])}) —{' '}
             <code>pipeline.wip</code> in the settings or <code>.agentic/config.yml</code>. A
             repository file may lower a limit and never raise it, and neither may go above the
             organisation’s maximum.
@@ -326,145 +333,256 @@ export const ProjectSettingsScreen = ({
           shows the merged configuration and where every key came from.
         </p>
       </Card>
+    </>
+  );
+};
 
-      {/**
-       * WP-63, Q94: the repository's own `.agentic/config.yml` wins over these settings once it is
-       * merged (a), it is only ever written through a merge request (b), and this button stays on
-       * the page so a settings change six months from now is reviewable too (c).
-       */}
-      <Card className="flex flex-col gap-2">
-        <SectionHeading>Repository configuration</SectionHeading>
-        {config.data === undefined ? null : (
-          <p className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge tone={config.data.repository.status === 'valid' ? 'success' : 'neutral'}>
-              .agentic/config.yml: {config.data.repository.status}
-            </Badge>
-            {config.data.repository.commit_sha === null ? null : (
-              <span className="font-mono text-fg-muted">
-                at <UntrustedText value={config.data.repository.commit_sha.slice(0, 12)} />
-              </span>
-            )}
-          </p>
-        )}
-        {(config.data?.repository.not_applied ?? []).map((item) => (
-          <p key={item.key} className="text-xs text-fg-muted">
-            Not applied: <code>{item.key}</code> — <UntrustedText value={item.reason} />
-          </p>
-        ))}
+// ── Repository configuration ─────────────────────────────────────────────────
+
+/**
+ * WP-63, Q94: the repository's own `.agentic/config.yml` wins over these settings once it is merged
+ * (a), it is only ever written through a merge request (b), and this button stays on the page so a
+ * settings change six months from now is reviewable too (c).
+ */
+const RepositoryConfiguration = ({ project }: { readonly project: Project }): ReactElement => {
+  const config = useProjectConfig(project.id);
+  const commands = useOnboardingCommands();
+  return (
+    <>
+      <SettingsSectionHeader
+        title="Repository configuration"
+        description={
+          <>
+            The repository’s own <code>.agentic/config.yml</code>, and proposing these settings to
+            it.
+          </>
+        }
+      />
+      {config.data === undefined ? null : (
+        <p className="flex flex-wrap items-center gap-2 text-xs">
+          <Badge tone={config.data.repository.status === 'valid' ? 'success' : 'neutral'}>
+            {`.agentic/config.yml: ${REPOSITORY_STATUS_LABEL[config.data.repository.status]}`}
+          </Badge>
+          {config.data.repository.commit_sha === null ? null : (
+            <span className="font-mono text-fg-muted">
+              at <UntrustedText value={config.data.repository.commit_sha.slice(0, 12)} />
+            </span>
+          )}
+        </p>
+      )}
+      {(config.data?.repository.not_applied ?? []).map((item) => (
+        <p key={item.key} className="text-xs text-fg-muted">
+          Not applied: <code>{item.key}</code> — <UntrustedText value={item.reason} />
+        </p>
+      ))}
+      <p className="text-xs text-fg-muted">
+        The file on the default branch wins over the settings on this page wherever it states a key.
+        Changes made here reach the repository as a merge request — never a direct commit — together
+        with a one-line pointer to the knowledge index in <code>CLAUDE.md</code>.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          tone="primary"
+          disabled={commands.exportConfig.isPending || config.data === undefined}
+          onClick={() => {
+            commands.exportConfig.mutate({
+              projectId: project.id,
+              ...(config.data === undefined ? {} : { base_hash: config.data.hash }),
+            });
+          }}
+        >
+          Propose these settings to the repository
+        </Button>
+        <Button
+          disabled={commands.refreshConfig.isPending}
+          onClick={() => {
+            commands.refreshConfig.mutate(project.id);
+          }}
+        >
+          Re-read the repository
+        </Button>
+      </div>
+      {!commands.exportConfig.isSuccess && config.data?.last_export != null ? (
         <p className="text-xs text-fg-muted">
-          The file on the default branch wins over the settings on this page wherever it states a
-          key. Changes made here reach the repository as a merge request — never a direct commit —
-          together with a one-line pointer to the knowledge index in <code>CLAUDE.md</code>.
+          Last export {formatDateTime(config.data.last_export.exported_at)}:{' '}
+          {exportSentence(config.data.last_export.status)}
+          {config.data.last_export.branch === null ? null : (
+            <code>
+              <UntrustedText value={config.data.last_export.branch} />
+            </code>
+          )}
+          {config.data.last_export.merge_request_url === null ? null : (
+            <>
+              {' — '}
+              <ExternalLink
+                url={config.data.last_export.merge_request_url}
+                label="open the merge request"
+                className="text-accent underline"
+              />
+            </>
+          )}{' '}
+          (as recorded then; pressing the button again checks whether it is still open, and answers
+          it rather than opening a second one)
         </p>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            tone="primary"
-            disabled={commands.exportConfig.isPending || config.data === undefined}
-            onClick={() => {
-              commands.exportConfig.mutate({
-                projectId: project.id,
-                ...(config.data === undefined ? {} : { base_hash: config.data.hash }),
-              });
-            }}
-          >
-            Propose these settings to the repository
-          </Button>
-          <Button
-            disabled={commands.refreshConfig.isPending}
-            onClick={() => {
-              commands.refreshConfig.mutate(project.id);
-            }}
-          >
-            Re-read the repository
-          </Button>
-        </div>
-        {!commands.exportConfig.isSuccess && config.data?.last_export != null ? (
-          <p className="text-xs text-fg-muted">
-            Last export {formatDateTime(config.data.last_export.exported_at)}:{' '}
-            {exportSentence(config.data.last_export.status)}
-            {config.data.last_export.branch === null ? null : (
-              <code>
-                <UntrustedText value={config.data.last_export.branch} />
-              </code>
-            )}
-            {config.data.last_export.merge_request_url === null ? null : (
-              <>
-                {' — '}
-                <ExternalLink
-                  url={config.data.last_export.merge_request_url}
-                  label="open the merge request"
-                  className="text-accent underline"
-                />
-              </>
-            )}{' '}
-            (as recorded then; pressing the button again checks whether it is still open, and
-            answers it rather than opening a second one)
-          </p>
-        ) : null}
-        {commands.exportConfig.isSuccess ? (
-          <p className="text-xs">
-            {exportSentence(commands.exportConfig.data.status)}
-            {commands.exportConfig.data.branch === null ? null : (
-              <code>
-                <UntrustedText value={commands.exportConfig.data.branch} />
-              </code>
-            )}
-            {commands.exportConfig.data.merge_request_url === null ? null : (
-              <>
-                {' — '}
-                <ExternalLink
-                  url={commands.exportConfig.data.merge_request_url}
-                  label="open the merge request"
-                  className="text-accent underline"
-                />
-              </>
-            )}
-          </p>
-        ) : null}
-        {commands.exportConfig.isSuccess && commands.exportConfig.data.status === 'open'
-          ? commands.exportConfig.data.notes.map((note) => (
-              <p key={note} className="text-xs text-fg-muted">
-                <UntrustedText value={note} />
-              </p>
-            ))
-          : null}
-        {commands.exportConfig.isError ? (
-          <ErrorNotice
-            title="The settings were not proposed."
-            error={commands.exportConfig.error}
-          />
-        ) : null}
-        {commands.refreshConfig.isSuccess &&
-        commands.refreshConfig.data.repository.status === 'invalid' ? (
-          <ErrorNotice
-            title="The repository’s .agentic/config.yml does not parse — no run starts until it does."
-            detail={commands.refreshConfig.data.repository.detail ?? ''}
-          />
-        ) : null}
-        {commands.refreshConfig.isError ? (
-          <ErrorNotice
-            title="The repository could not be re-read."
-            error={commands.refreshConfig.error}
-          />
-        ) : null}
-      </Card>
+      ) : null}
+      {commands.exportConfig.isSuccess ? (
+        <p className="text-xs">
+          {exportSentence(commands.exportConfig.data.status)}
+          {commands.exportConfig.data.branch === null ? null : (
+            <code>
+              <UntrustedText value={commands.exportConfig.data.branch} />
+            </code>
+          )}
+          {commands.exportConfig.data.merge_request_url === null ? null : (
+            <>
+              {' — '}
+              <ExternalLink
+                url={commands.exportConfig.data.merge_request_url}
+                label="open the merge request"
+                className="text-accent underline"
+              />
+            </>
+          )}
+        </p>
+      ) : null}
+      {commands.exportConfig.isSuccess && commands.exportConfig.data.status === 'open'
+        ? commands.exportConfig.data.notes.map((note) => (
+            <p key={note} className="text-xs text-fg-muted">
+              <UntrustedText value={note} />
+            </p>
+          ))
+        : null}
+      {commands.exportConfig.isError ? (
+        <ErrorNotice title="The settings were not proposed." error={commands.exportConfig.error} />
+      ) : null}
+      {commands.refreshConfig.isSuccess &&
+      commands.refreshConfig.data.repository.status === 'invalid' ? (
+        <ErrorNotice
+          title="The repository’s .agentic/config.yml does not parse — no run starts until it does."
+          detail={commands.refreshConfig.data.repository.detail ?? ''}
+        />
+      ) : null}
+      {commands.refreshConfig.isError ? (
+        <ErrorNotice
+          title="The repository could not be re-read."
+          error={commands.refreshConfig.error}
+        />
+      ) : null}
+    </>
+  );
+};
 
-      {/* WP-113 (backlog 315 (b)): which prompt files the last reading holds, and what each stage gets. */}
-      <ProjectPromptFiles projectId={project.id} />
+// ── The page ─────────────────────────────────────────────────────────────────
 
-      <Card className="flex flex-col gap-1">
-        <SectionHeading>Knowledge</SectionHeading>
-        <p className="text-sm">
-          <Link to="/projects/$key/knowledge" params={{ key: project.key }}>
-            Review drafted pages and pending proposals
-          </Link>
-        </p>
-        <p className="text-xs text-fg-muted">
-          The wizard’s last step. Approving a proposal commits it on an{' '}
-          <code>agentic/knowledge/*</code> branch with a merge request — never onto the default
-          branch (BD-012, BD-007).
-        </p>
-      </Card>
-    </div>
+const SECTION: Readonly<
+  Record<ProjectSettingsSectionId, (props: { readonly project: Project }) => ReactElement>
+> = {
+  connections: Connections,
+  // WP-278 (TD-031 decision 8): where the agent runs execute — a settings-only control.
+  execution: ({ project }) => (
+    <>
+      <SettingsSectionHeader
+        title="Execution"
+        description="Where this project’s agent runs execute: on the server, on developers’ workers, or both."
+      />
+      <ExecutionSettings projectId={project.id} />
+    </>
+  ),
+  // WP-139: the wizard's default branch, mirrored — the *same component* (product/18:55).
+  'default-branch': ({ project }) => (
+    <>
+      <SettingsSectionHeader
+        title="Default branch"
+        description="The branch agents start from and merge requests target."
+      />
+      <DefaultBranch projectId={project.id} />
+    </>
+  ),
+  discovery: DiscoveryAndReadiness,
+  // The wizard's step 3, mirrored (product/18:55, WP-64) — the *same component*.
+  'business-context': ({ project }) => (
+    <>
+      <SettingsSectionHeader
+        title="Business context"
+        description="What the product is for and who uses it, written as knowledge pages for the agents to read."
+      />
+      <BusinessInterview projectId={project.id} projectKey={project.key} />
+      <p className="text-sm">
+        <Link to="/projects/$key/knowledge" params={{ key: project.key }}>
+          Open the knowledge base
+        </Link>
+      </p>
+    </>
+  ),
+  // The wizard's step 3b, mirrored (product/18:55, WP-35) — the *same component*.
+  history: ({ project }) => (
+    <>
+      <SettingsSectionHeader
+        title="History"
+        description="Lessons mined from the project’s merged history, proposed as knowledge pages."
+      />
+      <HistoryBootstrap projectId={project.id} projectKey={project.key} />
+    </>
+  ),
+  policies: PoliciesAndWip,
+  repository: RepositoryConfiguration,
+  // WP-113 (backlog 315 (b)): which prompt files the last reading holds, and what each stage gets.
+  prompts: ({ project }) => <ProjectPromptFiles projectId={project.id} />,
+  knowledge: ({ project }) => (
+    <>
+      <SettingsSectionHeader
+        title="Knowledge"
+        description="The wizard’s last step: the drafted pages and pending proposals."
+      />
+      <p className="text-sm">
+        <Link to="/projects/$key/knowledge" params={{ key: project.key }}>
+          Review drafted pages and pending proposals
+        </Link>
+      </p>
+      <p className="text-xs text-fg-muted">
+        Approving a proposal commits it on an <code>agentic/knowledge/*</code> branch with a merge
+        request — never onto the default branch.
+      </p>
+    </>
+  ),
+};
+
+export const ProjectSettingsScreen = ({
+  projectKey,
+  section,
+}: {
+  readonly projectKey: string;
+  readonly section: ProjectSettingsSectionId;
+}): ReactElement => {
+  const { project, isPending, isError } = useProjectByKey(projectKey);
+
+  if (isPending) {
+    return <Loading label="Loading the project…" />;
+  }
+  if (isError || project === null) {
+    return (
+      <ErrorNotice
+        title="That project could not be found."
+        detail="Projects are addressed by their key, which is what the board and the wizard use."
+      />
+    );
+  }
+
+  const Section = SECTION[section];
+  return (
+    <SettingsFrame
+      label="Project settings"
+      groups={PROJECT_SETTINGS_GROUPS}
+      current={section}
+      link={(id, props) => (
+        <Link
+          to="/projects/$key/settings/$section"
+          params={{ key: project.key, section: id }}
+          {...props}
+        />
+      )}
+    >
+      <Section project={project} />
+    </SettingsFrame>
   );
 };

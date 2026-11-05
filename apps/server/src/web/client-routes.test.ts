@@ -62,6 +62,19 @@ describe('the SPA’s route tree against the server’s allow-list', () => {
     expect(isClientRoute(['integrations', 'new'])).toBe(true);
   });
 
+  it('serves the shell for every settings section and a project’s settings sections (S-23.11b)', () => {
+    // The sections are children of `/settings` and of the project layout, named in the redirects
+    // that send a bare `/settings` (and an unknown section) to the first one — and both sit under
+    // segments already allowed, so a reload of `/settings/policies` needs no new segment.
+    const paths = declaredPaths();
+    expect(paths).toContain('/settings');
+    expect(paths).toContain('/settings/$section');
+    expect(paths).toContain('/projects/$key/settings/$section');
+    expect(isClientRoute(['settings', 'policies'])).toBe(true);
+    expect(isClientRoute(['settings', 'dead-letters'])).toBe(true);
+    expect(isClientRoute(['projects', 'ACME', 'settings', 'connections'])).toBe(true);
+  });
+
   it('allows exactly the first segments the client declares', () => {
     expect(firstSegments(declaredPaths())).toEqual([...CLIENT_ROUTE_SEGMENTS].sort());
   });

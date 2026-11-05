@@ -1134,26 +1134,31 @@ Two messages come from the platform rather than from a task:
 
 ## 7. Knowledge
 
-**A project → Knowledge.** Four things:
+**A project → Knowledge.** On the left, the knowledge base's **files** as they exist in the project's
+repository, grouped by folder; click one to read it beside the list. Above the document:
 
-- the **browser**: the knowledge base as it exists in the project's repository, as a tree and a
-  document view;
-- the **health report**: what the nightly hygiene pass last found — a page the parser refused (and
-  which is therefore in no agent's context), links that point nowhere, expired pages, duplicates —
-  or *No health report yet* before the first pass has run. A finding is an observation; nothing
-  rewrites a page because one names it;
-- the **proposal queue**: what agents have suggested, each approvable or rejectable;
-- what an approval does: a commit on an `agentic/knowledge/*` branch and a merge request. Never the
+- the **health report**, as a notice: what the nightly hygiene pass last found — a page the parser
+  refused (and which is therefore in no agent's context), links that point nowhere, expired pages,
+  duplicates — or that it found nothing wrong, or *No health report yet* before the first pass has
+  run. A finding is an observation; nothing rewrites a page because one names it;
+
+and below it the **proposals**, one row each: the page it would change, its type and kind, where it
+came from (*mined from merged history*, *drafted at project setup*, *from a task* …) and its
+significance; **The change and its evidence** under a row holds the change itself and what it cites.
+**Approve** is on the row and **Reject** is in its `···` menu; a decision the server refuses says so
+under the list.
+
+- What an approval does: a commit on an `agentic/knowledge/*` branch and a merge request. Never the
   default branch, and never without a maintainer's decision;
 - **apply failed**: an approved proposal the platform could not commit — its apply failed or never
   ran, the recovery pass asked for one more apply, and an hour later it was still not committed (the
-  project may have no git binding, or the provider refused the commit). The card says so, with the
+  project may have no git binding, or the provider refused the commit). The row says so, with the
   reason, and offers **Approve again**, which asks for another apply; **Reject** ends it. Until then
   nothing retries it on its own;
 - **waits for a merge**: an approved proposal for a page that an earlier knowledge merge request
   already creates and nobody has merged yet. It is not stacked onto that merge request's branch (you
   may be reviewing it) and does not open a second one that would conflict with it: it stays
-  approved, the card names the merge request it waits for, and once that one merges the change is
+  approved, the row names the merge request it waits for, and once that one merges the change is
   committed as an update on a branch of its own. If that merge request is closed instead, the page
   is created. Only a page an earlier approval would *create* waits this way: two approved changes to
   a page that already exists still open two merge requests.
@@ -1188,7 +1193,9 @@ repository's file was last read. Read-only here: the settings are edited on the 
 page, which also proposes them to the repository (section 1, step 5); a YAML editor in the browser is
 not built.
 
-**A project → Budgets** shows the budget bars. A budget stops a *new* run from starting: the check
+**A project → Budgets** shows each budget as a meter: its window (*Per month*), what has been spent
+of its limit (*$3.25 of $40.00*), and the share at which you are notified; a cap is set in the
+project's settings, under *Policies & WIP*. A budget stops a *new* run from starting: the check
 happens when a run is admitted, so a run already under way finishes and is accounted for. There are
 three levels — organisation, project and per-task — and the window rolls over on the organisation's
 own timezone without anything scheduled.
@@ -1244,6 +1251,16 @@ pauses before it. The task cap has no configuration key in this build: raise it 
 **Raise this task's cap**, to at least what its remaining stages may spend. In `local` mode the
 dollars are list-price estimates (above), but they are what admission compares.
 
+### Shadow
+
+**A project → Shadow** runs the pipeline on closed tickets you pick and compares what it would have
+built with what a human merged; nothing is written outside the platform. Enter up to 25 ticket keys
+and **Start a shadow batch** (when the project's shadow mode allows one — otherwise the page says
+why). Each batch is a row — when it started, how many tickets, whether it is still running, what it
+spent — and its name opens the batch's own page: its figures in one strip (*Tickets*, *Refused*,
+*Reported*, *Compared*, *Spent*, *Budget*), the cost per ticket by size, the similarity distribution,
+the launch candidates and every ticket with its similarity — or the reason it has none.
+
 ## 9. Integrations
 
 **Integrations** lists the organisation's connected systems — ticket tracker, git host, chat, logs,
@@ -1294,35 +1311,54 @@ retire, and the dialog shows the server's reason.
 
 ## 10. Audit log
 
-A filterable stream of configuration changes, oldest cursor forward. A secret in a diff appears as
-the literal string `"changed"` — that is the server's doing, not the screen's.
+One row per configuration change, newest first: who made it — their initials and name, or *A removed
+account* when that person's account has gone — what they changed, in words (*changed a project's
+settings: Autonomy level*), and when. **Details** under a row holds the raw change and the id of what
+was changed; a secret in it appears as the literal string `"changed"` — that is the server's doing,
+not the screen's. The filter menu in the list's header shows the changes to one kind of thing
+(*Organisation*, *Project*, *Integration*, *Connections*, *Budget* or *Person*) or to all of them, and
+**Load older entries** pages back.
 
 Every human action taken through the product is recorded with the acting user, the command and its
 parameters. A *refused* command records nothing.
 
 ## 11. Settings
 
-The signed-in session, the theme, the instance version, the user list with roles, the
-**organisation budgets** (the caps that stop a new run anywhere in the organisation), **provider
-identities** — which Slack, Jira or GitLab account is which person, without which a decision made in
-those tools is refused as unmapped — and, for an administrator, the **dead letters**: events the
-platform stopped retrying after their handler failed every attempt, each with a **Re-queue** button
-for once the fault is fixed (the operator guide's §9 says what a re-queue does and does not do). The
-newest come first, and **Show older** reaches the rest; the failed-jobs list beside it pages the
-same way.
+**Settings** is one page per section, picked from the list on the left — **Appearance · Session ·
+Policies · Notifications · Budgets · Users · Provider identities · Dead letters · Failed jobs ·
+Instance** — grouped as *Personal*, *Organisation*, *People* and *Operations*; opening **Settings**
+opens the first. A section that changes something has **one Save** at its foot: it stays disabled
+(*Nothing has changed.*) until you change something, and it saves only what you changed. *Appearance*
+is the exception — the theme applies as you pick it, and is kept in this browser only. The
+*Operations* group is shown to an administrator only; anybody else who opens one of its addresses
+lands on *Appearance*.
 
-**Organisation settings** (since WP-93) are the maximums every project is held to, and an
-administrator saves each section on its own:
+- **Session** — who is signed in, and with which role.
+- **Budgets** — the **organisation budgets**, the caps that stop a new run anywhere in the
+  organisation: one field per window (*Per day*, *Per week*, *Per month*, *In total*), each with what
+  has been spent of it; empty is no cap.
+- **Users** — everybody with an account, with their role and whether they are active.
+- **Provider identities** — which Slack, Jira or GitLab account is which person, without which a
+  decision made in those tools is refused as unmapped.
+- **Dead letters** — events the platform stopped retrying after their handler failed every attempt,
+  each with a **Re-queue** button for once the fault is fixed (the operator guide's §9 says what a
+  re-queue does and does not do). The newest come first, and **Show older** reaches the rest;
+  **Failed jobs** pages the same way.
+- **Instance** — the version and build the server is running.
+
+**Policies** and **Notifications** are the organisation settings (since WP-93), which only an
+administrator may save. *Policies* holds the maximums every project is held to:
 
 - the **command maximum** — every agent run's commands are its role's list intersected with this one,
-  so a verb left out of *allow* is removed from every run of every project;
+  so a command left out of *Allowed* is removed from every run of every project;
 - the **autonomy maximum** — the highest dial position a project may choose. A project above it runs
   at the maximum from its next task (the project's own setting is kept, so raising the maximum
   restores it), and a task that is already running keeps the dial it started with;
-- the **WIP maximum** — a project may allow fewer tasks at once, never more;
-- the organisation's **quiet hours** and **digest time** — an organisation budget crossing its
-  threshold at night waits for the morning digest, and a spent budget is still posted at once — and,
-  with two chat accounts, the **default chat account** that speaks for the organisation.
+- the **WIP maximum** — a project may allow fewer tasks at once, never more.
+
+*Notifications* holds the organisation's **quiet hours** and **digest time** — an organisation budget
+crossing its threshold at night waits for the morning digest, and a spent budget is still posted at
+once — and, with two chat accounts, the **default chat account** that speaks for the organisation.
 
 A lowered maximum applies from the next run or task; nothing already running is moved. When you
 save one, the page lists every project the change caps — whose autonomy level or WIP limit in force
@@ -1331,13 +1367,22 @@ again restores it. The provider
 mode (an environment setting) and feature flags (a project's own) are not organisation settings. A
 project's features are switched on its own settings page.
 
-**The ticket lifecycle** is a project's own setting too: the project settings page's *Connections*
-card carries the same form as the wizard's step 1 (§ 1, *The ticket lifecycle*) — every slot a pick
+**A project's Settings tab** has the same shape, one page per section — **Connections · Execution ·
+Default branch · Discovery & readiness · Business context · History · Policies & WIP · Repository
+configuration · Prompt files · Knowledge** — and mirrors every step of the setup wizard, so nothing
+is only reachable while a project is being set up; opening the tab opens *Connections*. The wizard's
+own controls keep their own buttons there (the autonomy dial, the ticket lifecycle, the project
+budgets), because each is one decision with its own save. *Policies & WIP* holds the operating mode —
+the autonomy dial, the features, the risk classes, the project budgets, the notifications and who
+changed what — with the verification mode and the WIP limits in force.
+
+**The ticket lifecycle** is a project's own setting too: the project settings' *Connections* section
+carries the same form as the wizard's step 1 (§ 1, *The ticket lifecycle*) — every slot a pick
 list of the tracker's own statuses, every slot allowed to stay empty, the two claim switches, and the
 same check against the tracker when you save. Change it there at any time; a new *QA* mapping
 applies to tasks created afterwards.
 
-**Verification** is a project's own setting, on its settings page: *Agents run the checks* (the
+**Verification** is a project's own setting, under *Policies & WIP*: *Agents run the checks* (the
 default) or *CI runs the checks*. Choose CI when the project's pipeline already runs the tests and
 static analysis on every merge request and the agents' workspace (2 CPUs, 4 GiB) is too small for
 them — no agent then runs the test suite, a linter, a build or a dependency install (they are
@@ -1346,8 +1391,8 @@ pipeline comes back to the Developer with the failing job's log, and Discovery a
 by reading the CI configuration rather than running anything (the evidence says so). The same key is
 `verification.mode: ci` in `.agentic/config.yml`, which may switch a project to CI but never back.
 
-**Execution** (since WP-278) is where a project's agent runs execute, on its settings page, and
-only an administrator may change it. Every agent run is first *offered*, and whoever may take it
+**Execution** (since WP-278) is where a project's agent runs execute, the *Execution* section of its
+settings, and only an administrator may change it. Every agent run is first *offered*, and whoever may take it
 does:
 
 - **Mode** — *The server only* (the instance's own runner), *Workers only* (developers' registered
@@ -1362,7 +1407,7 @@ does:
   task goes to **Needs you** with the brief *no claimant took this run*; a question is answered
   as failed. Check the mode, and whether a worker or the server runner is actually running.
 
-The card shows whether the instance has a server runner right now. With none, a hybrid project's
+The section shows whether the instance has a server runner right now. With none, a hybrid project's
 runs are offered to workers at once rather than after the fallback, and a *server only* project's
 runs wait — the card says which. A change applies to runs offered after you save it. This is never
 a key of `.agentic/config.yml`: the file refuses an `execution` key, because where code runs and
@@ -1370,12 +1415,13 @@ whose subscription pays is not something a pushed commit may change.
 
 ## 12. Statistics
 
-The organisation's delivery numbers over a range you choose (7, 30, 90 or 365 days) and a bucket
-(day, week, month), with a **CSV download** of the same figures and a table of returns by stage.
-Every number carries its definition, and its caveats are on the screen. A number this build cannot
-compute is listed under **Not measured, and why** with its reason, never drawn as a zero — a zero
-would read as "we delivered nothing" instead of "nothing is measured"; and a range with nothing in
-it says *no data in this range*, which is a different sentence from `0`.
+The organisation's delivery numbers over a range you choose (the last 7, 30, 90 or 365 days) and a
+bucket (by day, week or month), as one strip of figures, with a **Download CSV** of the same figures
+and the returns by stage. Every number carries its definition (hover or focus its name) and its
+caveats are on the screen. A number this build cannot compute is never drawn as a zero — a zero would
+read as "we delivered nothing" instead of "nothing is measured": it is listed under **Not measured,
+and why**, folded at the foot of the page, with its reason. A range with nothing in it says *no data
+in this range*, which is a different sentence from `0`.
 
 ### Workers
 

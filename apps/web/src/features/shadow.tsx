@@ -2,9 +2,10 @@
  * The Shadow screen — product/10:20's *"Shadow — shadow-mode runs: comparison with the human MR,
  * predicted cost, similarity"* (WP-34).
  *
- * Three panels, and the order is the order a founder reads them in: **start a batch**, **the
- * batches**, and **one batch's tickets with its aggregate** (product/19 §13's cost-by-size,
- * similarity distribution and launch candidates).
+ * Two pages, in the order a founder reads them: **start a batch** above **the batches** (a list
+ * box, one row per batch), and — at `?batch=<id>` since S-23.11b — **one batch's page**: its figures
+ * as a metric strip, then product/19 §13's cost-by-size, similarity distribution and launch
+ * candidates, then its tickets.
  *
  * ## Everything on this screen is untrusted, and none of it becomes markup
  *
@@ -45,6 +46,7 @@ import {
   useShadowCommands,
 } from '../app/queries.js';
 import { useTopics } from '../realtime/provider.js';
+import { TASK_STATE_LABEL } from '../ui/humanize.js';
 import {
   Badge,
   Button,
@@ -60,6 +62,9 @@ import {
   Metric,
   SectionHeading,
 } from '../ui/kit.js';
+import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
+import { MetricStrip } from '../ui/metric-strip.js';
+import { StateLabel, StatusIcon } from '../ui/status.js';
 import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 
 /** `0.42` → `42 %`, the one place this screen turns a unit interval into a percentage. */
@@ -164,11 +169,9 @@ const TicketRow = ({ ticket }: { readonly ticket: ShadowBatchTicket }): ReactEle
           </Link>
         )}
         {ticket.task_state === null ? null : (
-          <span className="text-fg-muted text-xs">
-            <UntrustedText value={ticket.task_state} />
-          </span>
+          <span className="text-fg-muted text-xs">{TASK_STATE_LABEL[ticket.task_state]}</span>
         )}
-        {ticket.size === null ? null : <Badge>{ticket.size}</Badge>}
+        {ticket.size === null ? null : <Badge>{`Size ${ticket.size}`}</Badge>}
       </div>
 
       {ticket.refused_reason === null ? null : (
@@ -246,19 +249,72 @@ const TicketRow = ({ ticket }: { readonly ticket: ShadowBatchTicket }): ReactEle
   );
 };
 
-const Aggregate = ({
+/** The aggregate's six figures, as one strip across the batch's page. */
+const BatchMetrics = ({
+  data,
+}: {
+  readonly data: NonNullable<ReturnType<typeof useShadowBatch>['data']>;
+}): ReactElement => (
+  <MetricStrip label="This batch in figures">
+    <Metric
+      label="Tickets"
+      value={formatInteger(data.batch.tickets)}
+      definition="Ticket keys this batch was started with, including the ones the platform refused to run."
+    />
+    <Metric
+      label="Refused"
+      value={formatInteger(data.batch.refused)}
+      definition="Tickets that never became a task: no merge base for the human merge request, an unknown key, or a shadow task that already existed."
+    />
+    <Metric
+      label="Reported"
+      value={formatInteger(data.aggregate.reported)}
+      definition="Tasks of this batch that have finished and produced a shadow report."
+    />
+    <Metric
+      label="Compared"
+      value={formatInteger(data.aggregate.compared)}
+      definition="Reported tasks whose report carries an overlap — both the agent's diff and the human merge request's were read."
+    />
+    <Metric
+      label="Spent"
+      value={formatUsd(data.batch.spent_usd)}
+      definition="Recorded cost of this batch's tasks, summed from each task's running total."
+    />
+    <Metric
+      label="Budget"
+      value={data.batch.budget_usd === null ? 'not set' : formatUsd(data.batch.budget_usd)}
+      definition="The shadow-mode budget as it stood when this batch was created; a new run stops when the month's shadow spend reaches it."
+    />
+  </MetricStrip>
+);
+
+/** One batch's page (`?batch=<id>`): its figures, its tables and its tickets. */
+const BatchPage = ({
   batchId,
   projectId,
+  projectKey,
 }: {
   readonly batchId: string;
   readonly projectId: string;
+  readonly projectKey: string;
 }) => {
   const batch = useShadowBatch(projectId, batchId);
+  const back = (
+    <Link to="/projects/$key/shadow" params={{ key: projectKey }} className="text-sm underline">
+      ← All shadow batches
+    </Link>
+  );
   if (batch.isPending) {
     return <Loading label="Loading the batch" />;
   }
   if (batch.error !== null) {
-    return <ErrorNotice title="This batch could not be loaded." error={batch.error} />;
+    return (
+      <div className="flex flex-col gap-3">
+        {back}
+        <ErrorNotice title="This batch could not be loaded." error={batch.error} />
+      </div>
+    );
   }
   const data = batch.data;
   if (data === undefined) {
@@ -267,38 +323,14 @@ const Aggregate = ({
 
   return (
     <div className="flex flex-col gap-4">
-      <Card className="flex flex-wrap gap-6">
-        <Metric
-          label="Tickets"
-          value={formatInteger(data.batch.tickets)}
-          definition="Ticket keys this batch was started with, including the ones the platform refused to run."
-        />
-        <Metric
-          label="Refused"
-          value={formatInteger(data.batch.refused)}
-          definition="Tickets that never became a task: no merge base for the human merge request, an unknown key, or a shadow task that already existed."
-        />
-        <Metric
-          label="Reported"
-          value={formatInteger(data.aggregate.reported)}
-          definition="Tasks of this batch that have finished and produced a shadow report."
-        />
-        <Metric
-          label="Compared"
-          value={formatInteger(data.aggregate.compared)}
-          definition="Reported tasks whose report carries an overlap — both the agent's diff and the human merge request's were read."
-        />
-        <Metric
-          label="Spent"
-          value={formatUsd(data.batch.spent_usd)}
-          definition="Recorded cost of this batch's tasks, summed from each task's running total."
-        />
-        <Metric
-          label="Budget"
-          value={data.batch.budget_usd === null ? 'not set' : formatUsd(data.batch.budget_usd)}
-          definition="features.shadow_mode.budget_usd as it stood when this batch was created; a new run stops when the month's shadow spend reaches it."
-        />
-      </Card>
+      {back}
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-lg font-semibold">{`Shadow batch · ${formatDateTime(data.batch.created_at)}`}</h2>
+        <StateLabel status={data.batch.completed_at === null ? 'running' : 'success'}>
+          {data.batch.completed_at === null ? 'Running' : 'Complete'}
+        </StateLabel>
+      </div>
+      <BatchMetrics data={data} />
 
       <Card className="flex flex-col gap-2">
         <SectionHeading>Cost per ticket by size</SectionHeading>
@@ -311,7 +343,7 @@ const Aggregate = ({
           <ul className="flex flex-col gap-1 text-xs">
             {data.aggregate.cost_by_size.map((row) => (
               <li key={row.size} className="flex flex-wrap gap-3">
-                <Badge>{row.size}</Badge>
+                <Badge>{`Size ${row.size}`}</Badge>
                 <span>{formatInteger(row.tickets)} ticket(s)</span>
                 <span>median cost {formatUsd(row.median_cost_usd)}</span>
                 <span>
@@ -385,19 +417,32 @@ const Aggregate = ({
   );
 };
 
-export const ShadowScreen = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
+export const ShadowScreen = ({
+  projectKey,
+  batchId = null,
+}: {
+  readonly projectKey: string;
+  /** `?batch=<id>`: that batch's page; `null`, the batches. */
+  readonly batchId?: string | null;
+}): ReactElement => {
   const { project } = useProjectByKey(projectKey);
   const projectId = project?.id ?? null;
   useTopics(projectId === null ? [] : [`project:${projectId}`]);
   const batches = useShadowBatches(projectId);
   const commands = useShadowCommands();
   const [keys, setKeys] = useState('');
-  const [selected, setSelected] = useState<string | null>(null);
+
+  if (batchId !== null) {
+    return projectId === null ? (
+      <Loading label="Loading the batch" />
+    ) : (
+      <BatchPage batchId={batchId} projectId={projectId} projectKey={projectKey} />
+    );
+  }
 
   const items = batches.data?.items ?? [];
   const canStart = batches.data?.can_start ?? false;
   const blocked = batches.data?.blocked_reason ?? null;
-  const current = selected ?? items[0]?.id ?? null;
 
   const start = () => {
     const ticketKeys = keys
@@ -418,7 +463,7 @@ export const ShadowScreen = ({ projectKey }: { readonly projectKey: string }): R
         <p className="text-fg-muted text-sm">
           Runs the pipeline on closed tickets and compares what it would have built with what a
           human merged. Nothing is written outside the platform: every merge request, comment and
-          status change a shadow task would make is refused and recorded as <code>would_have</code>.
+          status change a shadow task would make is refused and recorded as what it would have done.
         </p>
         {canStart ? null : (
           <p className="text-fg-muted text-xs">
@@ -463,32 +508,35 @@ export const ShadowScreen = ({ projectKey }: { readonly projectKey: string }): R
           hint="Pick ten closed tickets your team delivered recently. The platform runs the whole pipeline on each of them and reports how close it got, and at what cost."
         />
       ) : (
-        <Card className="flex flex-col gap-2">
-          <SectionHeading>Batches</SectionHeading>
-          <ul className="flex flex-col gap-1 text-xs">
-            {items.map((batch) => (
-              <li key={batch.id} className="flex flex-wrap items-center gap-3">
-                <Button
-                  tone={batch.id === current ? 'primary' : 'default'}
-                  onClick={() => {
-                    setSelected(batch.id);
-                  }}
+        <ListBox
+          label="Shadow batches"
+          header={
+            <ListBoxHeader>
+              <span className="font-semibold text-fg">
+                {items.length === 1 ? '1 batch' : `${formatInteger(items.length)} batches`}
+              </span>
+            </ListBoxHeader>
+          }
+        >
+          {items.map((batch) => (
+            <ListRow
+              key={batch.id}
+              leading={<StatusIcon status={batch.completed_at === null ? 'running' : 'success'} />}
+              title={
+                <Link
+                  to="/projects/$key/shadow"
+                  params={{ key: projectKey }}
+                  search={{ batch: batch.id }}
+                  className="hover:underline"
                 >
-                  {formatDateTime(batch.created_at)}
-                </Button>
-                <span>{formatInteger(batch.tickets)} ticket(s)</span>
-                <span>{formatUsd(batch.spent_usd)}</span>
-                <span className="text-fg-muted">
-                  {batch.completed_at === null ? 'running' : 'complete'}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      {current === null || projectId === null ? null : (
-        <Aggregate batchId={current} projectId={projectId} />
+                  {`Batch of ${formatDateTime(batch.created_at)}`}
+                </Link>
+              }
+              meta={`${formatInteger(batch.tickets)} ticket(s) · ${batch.completed_at === null ? 'running' : 'complete'}`}
+              trailing={<span>{formatUsd(batch.spent_usd)}</span>}
+            />
+          ))}
+        </ListBox>
       )}
     </div>
   );

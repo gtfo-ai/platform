@@ -16,7 +16,8 @@
  *    human merge request's URL must go through `safeHref`.
  */
 import type { ShadowBatchResponse, ShadowBatchTicket } from '@platform/contracts';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
@@ -190,6 +191,14 @@ const renderScreen = async (): Promise<HTMLElement> => {
   return container;
 };
 
+/** One batch's page — `?batch=<id>` since S-23.11b — which carries the aggregate and the tickets. */
+const renderBatch = async (): Promise<HTMLElement> => {
+  window.history.pushState({}, '', `/projects/api/shadow?batch=${BATCH}`);
+  const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+  await screen.findByRole('region', { name: 'This batch in figures' });
+  return container;
+};
+
 describe('missingSimilarityReason', () => {
   it('names each of the four reasons a figure is absent, and says nothing when there is one', () => {
     expect(missingSimilarityReason(ticket())).toBeNull();
@@ -213,8 +222,19 @@ describe('missingSimilarityReason', () => {
 });
 
 describe('the Shadow screen', () => {
-  it('shows the batch, its aggregate and its launch candidates', async () => {
+  it('lists each batch as a row that opens its page, and draws no aggregate on the list', async () => {
     const container = await renderScreen();
+    const list = await screen.findByRole('list', { name: 'Shadow batches' });
+    const link = within(list).getByRole('link', { name: /^Batch of / });
+    expect(link.getAttribute('href')).toBe(`/projects/api/shadow?batch=${BATCH}`);
+    expect(container.textContent).not.toContain('Launch candidates');
+    await userEvent.setup().click(link);
+    expect(await screen.findByRole('region', { name: 'This batch in figures' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '← All shadow batches' })).toBeTruthy();
+  });
+
+  it('shows the batch, its aggregate and its launch candidates', async () => {
+    const container = await renderBatch();
     await waitFor(() => {
       expect(container.textContent).toContain('Launch candidates');
     });
@@ -274,7 +294,7 @@ describe('the Shadow screen', () => {
         predicted_cost_usd: null,
       }),
     ];
-    const container = await renderScreen();
+    const container = await renderBatch();
     await waitFor(() => {
       expect(container.textContent).toContain('publishes no merge base');
     });
@@ -298,21 +318,22 @@ describe('the Shadow screen', () => {
         } as never,
       }),
     ];
-    const container = await renderScreen();
+    const container = await renderBatch();
     await waitFor(() => {
       expect(container.textContent).toContain('no countable human lines');
     });
     expect(container.textContent).not.toContain('size ratio: 0.00');
     // …and the other direction (standing rule 42): the default fixture's ratio is still printed.
     world.tickets = [ticket()];
-    const rendered = await renderScreen();
+    cleanup();
+    const rendered = await renderBatch();
     await waitFor(() => {
       expect(rendered.textContent).toContain('1.20');
     });
   });
 
   it('renders the human merge request as a link that went through safeHref', async () => {
-    const container = await renderScreen();
+    const container = await renderBatch();
     await waitFor(() => {
       expect(container.textContent).toContain('human MR !7');
     });
@@ -326,7 +347,7 @@ describe('the Shadow screen', () => {
         human_mr: { iid: 7, url: 'javascript:alert(1)' } as never,
       }),
     ];
-    const container = await renderScreen();
+    const container = await renderBatch();
     await waitFor(() => {
       expect(container.textContent).toContain('human MR !7');
     });

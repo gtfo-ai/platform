@@ -58,6 +58,7 @@ import {
   useProjectConfig,
   useSettingsCommands,
 } from '../app/queries.js';
+import { BUDGET_WINDOW_LABEL } from '../ui/humanize.js';
 import {
   Badge,
   type BadgeTone,
@@ -850,6 +851,7 @@ export const Budgets = ({
   pending,
   error,
   scopeLabel,
+  primary = false,
 }: {
   readonly projectId: string | null;
   readonly budgets: readonly BudgetRecord[];
@@ -857,10 +859,21 @@ export const Budgets = ({
   readonly pending: boolean;
   readonly error: unknown;
   readonly scopeLabel: string;
+  /** The page's one primary action: the org Budgets page; never inside the wizard's step. */
+  readonly primary?: boolean;
 }): ReactElement => {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const owned = budgets.filter((budget) =>
     projectId === null ? budget.scope === 'org' : budget.scope_id === projectId,
+  );
+  const stored = (window: (typeof BUDGET_WINDOWS)[number]): string => {
+    const existing = owned.find((budget) => budget.window === window);
+    return existing === undefined ? '' : String(existing.limit_usd);
+  };
+  // One Save for the section (S-23.11b): it writes each window whose field differs from the cap
+  // the server holds, and nothing else — `PUT …/budgets` is one window per request.
+  const changed = BUDGET_WINDOWS.filter(
+    (window) => drafts[window] !== undefined && drafts[window].trim() !== stored(window),
   );
 
   return (
@@ -868,19 +881,19 @@ export const Budgets = ({
       <p className="text-xs text-fg-muted">
         Reaching a cap prevents <em>new</em> runs; a run already in flight finishes, because spend
         already made should not be wasted. A task then reads <em>Paused: budget</em> and a
-        maintainer may raise the cap here.
+        maintainer may raise the cap here. An empty field is no cap.
       </p>
       <ul className="flex flex-col gap-2">
         {BUDGET_WINDOWS.map((window) => {
           const existing = owned.find((budget) => budget.window === window) ?? null;
-          const draft = drafts[window] ?? (existing === null ? '' : String(existing.limit_usd));
+          const draft = drafts[window] ?? stored(window);
           return (
             <li key={window} className="flex flex-wrap items-end gap-2">
               <Field
-                label={`Per ${window}`}
+                label={BUDGET_WINDOW_LABEL[window]}
                 hint={
                   existing === null
-                    ? 'No cap. Empty means no cap.'
+                    ? 'No cap.'
                     : `spent ${formatUsd(existing.spent_usd)} of ${formatUsd(existing.limit_usd)} this window`
                 }
                 type="number"
@@ -889,21 +902,29 @@ export const Budgets = ({
                 value={draft}
                 onChange={(event) => setDrafts({ ...drafts, [window]: event.target.value })}
               />
-              <Button
-                disabled={pending}
-                onClick={() => {
-                  const trimmed = draft.trim();
-                  // An empty field removes the cap. It is not "zero": a zero cap would block every
-                  // run for ever, and the table refuses it anyway.
-                  onSave(window, trimmed === '' ? null : Number(trimmed));
-                }}
-              >
-                {draft.trim() === '' ? 'Remove cap' : 'Save cap'}
-              </Button>
             </li>
           );
         })}
       </ul>
+      <div className="flex items-center gap-3 border-t border-line pt-3">
+        <Button
+          disabled={pending || changed.length === 0}
+          onClick={() => {
+            for (const window of changed) {
+              const trimmed = (drafts[window] ?? '').trim();
+              // An empty field removes the cap. It is not "zero": a zero cap would block every
+              // run for ever, and the table refuses it anyway.
+              onSave(window, trimmed === '' ? null : Number(trimmed));
+            }
+          }}
+          {...(primary ? { tone: 'primary' as const } : {})}
+        >
+          Save budgets
+        </Button>
+        {changed.length === 0 ? (
+          <span className="text-xs text-fg-muted">Nothing has changed.</span>
+        ) : null}
+      </div>
       {error === null || error === undefined ? null : (
         <ErrorNotice title="The budget was not saved." error={error} />
       )}
