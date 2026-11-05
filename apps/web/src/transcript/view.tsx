@@ -373,7 +373,7 @@ export const TranscriptView = ({
           }}
           placeholder="Search transcript"
           aria-label="Search transcript"
-          className="w-56 rounded-md border border-line bg-inset px-2 py-1 text-sm"
+          className="w-56 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
         />
         <Button
           tone={following ? 'primary' : 'default'}

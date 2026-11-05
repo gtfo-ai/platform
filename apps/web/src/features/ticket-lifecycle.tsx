@@ -301,7 +301,7 @@ const SlotRow = ({
         aria-invalid={refusal === undefined ? undefined : true}
         aria-describedby={`${id}-hint`}
         className={`rounded-md border bg-inset px-2 py-1 text-sm ${
-          refusal === undefined ? 'border-line' : 'border-danger'
+          refusal === undefined ? 'border-line-input' : 'border-danger'
         }`}
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -348,7 +348,7 @@ const ReturnedRow = ({
         aria-invalid={refusal === undefined ? undefined : true}
         aria-describedby={`${id}-hint`}
         className={`rounded-md border bg-inset px-2 py-1 text-sm ${
-          refusal === undefined ? 'border-line' : 'border-danger'
+          refusal === undefined ? 'border-line-input' : 'border-danger'
         }`}
         value={[...value]}
         onChange={(event) =>

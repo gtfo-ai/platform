@@ -91,7 +91,7 @@ const QuestionCard = ({
             onChange={(event) => {
               setAnswer(event.target.value);
             }}
-            className="flex-1 rounded-md border border-line bg-inset px-2 py-1 text-sm"
+            className="flex-1 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
             placeholder="Answer…"
           />
           {/* Not the beacon: the header's *Answer* is this page's one primary action. */}

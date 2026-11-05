@@ -256,7 +256,7 @@ const PolicyForm = ({
               {LIST_LABEL[kind]}
               <textarea
                 aria-label={`Organisation command ${kind} list`}
-                className="min-h-24 rounded-md border border-line bg-inset p-2 font-mono text-xs"
+                className="min-h-24 rounded-md border border-line-input bg-inset p-2 font-mono text-xs"
                 value={drafts.lists[kind]}
                 onChange={(event) =>
                   setDrafts({ ...drafts, lists: { ...drafts.lists, [kind]: event.target.value } })
@@ -277,7 +277,7 @@ const PolicyForm = ({
           Maximum
           <select
             aria-label="Organisation autonomy maximum"
-            className="rounded-md border border-line bg-inset px-2 py-1 text-sm"
+            className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
             value={drafts.maximum}
             onChange={(event) => setDrafts({ ...drafts, maximum: event.target.value })}
           >
@@ -435,7 +435,7 @@ const NotificationForm = ({
         Default chat account
         <select
           aria-label="Organisation default chat account"
-          className="rounded-md border border-line bg-inset px-2 py-1 text-sm"
+          className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
           value={drafts.defaultAccount}
           onChange={(event) => setDrafts({ ...drafts, defaultAccount: event.target.value })}
         >

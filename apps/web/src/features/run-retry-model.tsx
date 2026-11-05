@@ -113,7 +113,7 @@ export const RetryModelField = ({
         onChange={(event) => {
           onChange({ ...choice, selected: event.target.value });
         }}
-        className="max-w-56 rounded-md border border-line bg-inset px-2 py-1 text-sm text-fg"
+        className="max-w-56 rounded-md border border-line-input bg-inset px-2 py-1 text-sm text-fg"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
@@ -131,7 +131,7 @@ export const RetryModelField = ({
             onChange({ ...choice, other: event.target.value });
           }}
           placeholder="A model id the list does not carry"
-          className="w-56 rounded-md border border-line bg-inset px-2 py-1 text-sm"
+          className="w-56 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
         />
       ) : null}
       {models.isError ? (

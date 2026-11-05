@@ -780,7 +780,7 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
                         setDrafts({ ...drafts, [entry.name]: event.target.value });
                       }}
                       placeholder="One review item per line"
-                      className="min-h-16 rounded-md border border-line bg-inset px-2 py-1 text-sm"
+                      className="min-h-16 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
                     />
                   )}
                 </div>

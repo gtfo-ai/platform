@@ -208,7 +208,7 @@ export const IdentityMappings = (): ReactElement => {
                 aria-label="Provider"
                 value={provider}
                 onChange={(event) => setProvider(event.target.value)}
-                className="rounded-md border border-line bg-inset px-2 py-1.5 text-sm"
+                className="rounded-md border border-line-input bg-inset px-2 py-1.5 text-sm"
               >
                 {IDENTITY_PROVIDERS.map((id) => (
                   <option key={id} value={id}>
@@ -257,7 +257,7 @@ export const IdentityMappings = (): ReactElement => {
                   aria-label="Platform user"
                   value={userId}
                   onChange={(event) => setUserId(event.target.value)}
-                  className="rounded-md border border-line bg-inset px-2 py-1 text-sm"
+                  className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
                 >
                   <option value="">Choose…</option>
                   {userItems.map((user) => (

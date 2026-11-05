@@ -243,7 +243,7 @@ export const HandBackForm = ({
           onChange={(event) => {
             setStage(event.target.value);
           }}
-          className="rounded-md border border-line bg-inset px-2 py-1 text-sm text-fg"
+          className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm text-fg"
         >
           {options.map((option) => (
             <option key={option} value={option}>
@@ -259,7 +259,7 @@ export const HandBackForm = ({
           setSummary(event.target.value);
         }}
         placeholder="What you did on the branch — it goes onto the ticket’s workpad"
-        className="min-h-16 rounded-md border border-line bg-inset px-2 py-1 text-sm"
+        className="min-h-16 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
       />
       <div>
         <Button
@@ -359,7 +359,7 @@ export const TakeOverForm = ({
             setReason(event.target.value);
           }}
           placeholder="Why (optional, recorded in the audit)"
-          className="rounded-md border border-line bg-inset px-2 py-1 text-sm"
+          className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
         />
         <label className="flex items-center gap-2 text-xs">
           <input

@@ -39,7 +39,7 @@ interface Draft {
 
 const whole = (value: string): number | null => (/^\d+$/.test(value.trim()) ? Number(value) : null);
 
-const selectClass = 'rounded-md border border-line bg-inset px-2 py-1 text-sm';
+const selectClass = 'rounded-md border border-line-input bg-inset px-2 py-1 text-sm';
 
 export const ExecutionSettings = ({ projectId }: { readonly projectId: string }): ReactElement => {
   const execution = useProjectExecution(projectId);
