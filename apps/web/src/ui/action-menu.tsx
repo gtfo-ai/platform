@@ -14,35 +14,41 @@ import type { ReactElement, ReactNode } from 'react';
 import { IconButton } from './button.js';
 import { cx } from './cx.js';
 
-export const ActionMenu = ({
-  label,
-  trigger,
-  children,
-  align = 'end',
-}: {
-  /** The default trigger's accessible name ("More actions"); ignored when `trigger` is given. */
-  readonly label: string;
-  /** A custom trigger; it must accept a ref and spread props, and carry its own name. */
-  readonly trigger?: ReactElement;
+/**
+ * Either the default `···` trigger, named by `label`, or the caller's own `trigger`, which carries
+ * its own name — never both, so a name given here is a name that is shown.
+ */
+export type ActionMenuProps = {
   readonly children: ReactNode;
   readonly align?: 'start' | 'center' | 'end';
-}): ReactElement => (
+} & (
+  | { readonly label: string; readonly trigger?: undefined }
+  | {
+      /** A custom trigger; it must accept a ref and spread props, and carry its own name. */
+      readonly trigger: ReactElement;
+      readonly label?: undefined;
+    }
+);
+
+export const ActionMenu = (props: ActionMenuProps): ReactElement => (
   <Menu.Root>
     <Menu.Trigger
       render={
-        trigger ?? (
+        props.trigger === undefined ? (
           <IconButton
-            aria-label={label}
+            aria-label={props.label}
             icon={<KebabHorizontalIcon size={16} />}
             tone="invisible"
           />
+        ) : (
+          props.trigger
         )
       }
     />
     <Menu.Portal>
-      <Menu.Positioner sideOffset={6} align={align} className="z-50 outline-none">
+      <Menu.Positioner sideOffset={6} align={props.align ?? 'end'} className="z-50 outline-none">
         <Menu.Popup className="min-w-52 rounded-lg border border-line bg-canvas py-1 text-sm text-fg shadow-overlay outline-none transition-opacity duration-100 data-ending-style:opacity-0 data-starting-style:opacity-0">
-          {children}
+          {props.children}
         </Menu.Popup>
       </Menu.Positioner>
     </Menu.Portal>

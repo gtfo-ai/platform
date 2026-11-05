@@ -102,13 +102,17 @@ describe('IconButton', () => {
 
 describe('Counter', () => {
   it('formats the count and takes an accessible reading when the number is not enough', () => {
-    render(
+    const { container } = render(
       <>
         <Counter count={1234} />
         <Counter count={3} label="3 open questions" />
       </>,
     );
     expect(screen.getByText('1,234')).toBeTruthy();
-    expect(screen.getByLabelText('3 open questions').textContent).toBe('3');
+    const [, labelled] = [...container.querySelectorAll('[data-counter]')];
+    // No `aria-label` on a role-less span: hidden text is read, the bare number is not.
+    expect(labelled?.hasAttribute('aria-label')).toBe(false);
+    expect(screen.getByText('3 open questions').className).toContain('sr-only');
+    expect(screen.getByText('3').getAttribute('aria-hidden')).toBe('true');
   });
 });

@@ -15,7 +15,10 @@ export const navItemContent = (item: NavItem): ReactNode => (
   </>
 );
 
-/** The caller's link when it gave one, a button otherwise. */
+/**
+ * The caller's link when it gave one (marked `aria-current="page"` when current), a button
+ * otherwise (marked `aria-pressed`).
+ */
 export const renderNavItem = (item: NavItem, className: string): ReactElement => {
   const props: NavLinkProps = {
     className,
@@ -25,11 +28,13 @@ export const renderNavItem = (item: NavItem, className: string): ReactElement =>
   if (item.render !== undefined) {
     return item.render(props);
   }
+  // Without a link the item is a toggle among views on the same page, not a page: it says it is
+  // the selected one with `aria-pressed`, which is what a button's state is (APG button pattern).
   return (
     <button
       type="button"
       className={props.className}
-      aria-current={props['aria-current']}
+      aria-pressed={item.current === true}
       onClick={item.onSelect}
     >
       {props.children}

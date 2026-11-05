@@ -15,7 +15,12 @@ afterEach(() => {
 });
 
 const items = (onSelect: () => void): NavItem[] => [
-  { id: 'board', label: 'Board', current: true },
+  {
+    id: 'board',
+    label: 'Board',
+    current: true,
+    render: (props) => <button type="button" data-caller-link="" {...props} />,
+  },
   { id: 'runs', label: 'Runs', counter: 4, onSelect },
   {
     id: 'settings',
@@ -31,9 +36,10 @@ describe('UnderlineNav', () => {
     const nav = screen.getByRole('navigation', { name: 'Project' });
     const board = within(nav).getByRole('button', { name: 'Board' });
     expect(board.getAttribute('aria-current')).toBe('page');
-    expect(within(nav).getByRole('button', { name: 'Runs 4' }).hasAttribute('aria-current')).toBe(
-      false,
-    );
+    // A caller's link says `aria-current="page"`; a button item is a toggle and says `aria-pressed`.
+    const runs = within(nav).getByRole('button', { name: 'Runs 4' });
+    expect(runs.hasAttribute('aria-current')).toBe(false);
+    expect(runs.getAttribute('aria-pressed')).toBe('false');
     const underlines = container.querySelectorAll('[data-underline]');
     expect(underlines).toHaveLength(1);
     expect(underlines[0]?.parentElement?.contains(board)).toBe(true);
@@ -74,8 +80,9 @@ describe('NavList', () => {
     const nav = screen.getByRole('navigation', { name: 'Settings' });
     expect(within(nav).getByRole('list', { name: 'Organisation' })).toBeTruthy();
     expect(within(nav).getByRole('list', { name: 'Access' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'General' }).getAttribute('aria-current')).toBe(
-      'page',
+    // No `render`: the current item is a pressed toggle, not a page link.
+    expect(screen.getByRole('button', { name: 'General' }).getAttribute('aria-pressed')).toBe(
+      'true',
     );
     expect(screen.getByRole('button', { name: 'Users 2' })).toBeTruthy();
     expect(container.querySelectorAll('[data-selected-bar]')).toHaveLength(1);

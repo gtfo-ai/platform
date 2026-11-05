@@ -113,7 +113,6 @@ describe('ActionMenu', () => {
   it('takes a custom trigger, which keeps its own name', async () => {
     render(
       <ActionMenu
-        label="ignored"
         trigger={
           <button type="button" aria-label="Account menu">
             A
@@ -123,7 +122,14 @@ describe('ActionMenu', () => {
         <ActionMenuItem>Sign out</ActionMenuItem>
       </ActionMenu>,
     );
-    expect(screen.queryByRole('button', { name: 'ignored' })).toBeNull();
+    // A name and a custom trigger together do not compile: the trigger carries the name.
+    const both = (
+      // @ts-expect-error — `label` is only for the default trigger.
+      <ActionMenu label="x" trigger={<button type="button">y</button>}>
+        {null}
+      </ActionMenu>
+    );
+    expect(both).toBeTruthy();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Account menu' }));
     expect(await screen.findByRole('menuitem', { name: 'Sign out' })).toBeTruthy();
   });

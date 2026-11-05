@@ -104,7 +104,6 @@ const AccountMenu = ({
   const name = user === null ? 'Not signed in' : displayName(user);
   return (
     <ActionMenu
-      label="Account menu"
       trigger={
         <button
           type="button"

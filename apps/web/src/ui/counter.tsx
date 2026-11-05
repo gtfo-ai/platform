@@ -2,7 +2,8 @@
  * A count in a pill (Primer's CounterLabel): beside a nav item, in a list header, on a button.
  *
  * The number is text, so a link reads "Inbox 3" to a screen reader. `label` replaces that reading
- * where the bare number would be ambiguous ("3 open questions").
+ * where the bare number would be ambiguous ("3 open questions"): it is visually hidden text and the
+ * number is `aria-hidden`, because an `aria-label` on a span with no role is not reliably announced.
  */
 import type { ReactElement } from 'react';
 import { cx } from './cx.js';
@@ -33,8 +34,14 @@ export const Counter = ({
       TONES[tone],
       className,
     )}
-    {...(label === undefined ? {} : { 'aria-label': label })}
   >
-    {new Intl.NumberFormat('en').format(count)}
+    {label === undefined ? (
+      new Intl.NumberFormat('en').format(count)
+    ) : (
+      <>
+        <span aria-hidden="true">{new Intl.NumberFormat('en').format(count)}</span>
+        <span className="sr-only">{label}</span>
+      </>
+    )}
   </span>
 );
