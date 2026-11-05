@@ -260,7 +260,8 @@ describe('the claim-blocker vocabulary (S-22.19)', () => {
   it('is one closed list, most fundamental first', () => {
     expect(workerClaimBlockerSchema.options).toEqual([...WORKER_CLAIM_BLOCKERS]);
     expect(WORKER_CLAIM_BLOCKERS[0]).toBe('not_set_up');
-    expect(workerClaimBlockerSchema.safeParse('pick_only').success).toBe(false);
+    expect(workerClaimBlockerSchema.safeParse('pick_only').success).toBe(true);
+    expect(workerClaimBlockerSchema.safeParse('taking_work').success).toBe(false);
   });
 
   it('accepts a list only distinct and in the vocabulary’s order', () => {
@@ -286,7 +287,7 @@ describe('the claim-blocker vocabulary (S-22.19)', () => {
         .success,
     ).toBe(false);
     expect(
-      workerSummarySchema.safeParse({ ...summary, claim_blockers: ['pick_only'] }).success,
+      workerSummarySchema.safeParse({ ...summary, claim_blockers: ['taking_work'] }).success,
     ).toBe(false);
     const { can_claim: _absent, ...withoutVerdict } = summary;
     expect(workerSummarySchema.safeParse(withoutVerdict).success).toBe(false);
