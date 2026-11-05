@@ -101,11 +101,14 @@ const WorkerRow = ({
   worker,
   showUser,
   nowMs,
+  pending,
   onRevoke,
 }: {
   readonly worker: WorkerSummary;
   readonly showUser: boolean;
   readonly nowMs: number;
+  /** A revoke is in flight: the trigger waits for it rather than opening a second confirmation. */
+  readonly pending: boolean;
   readonly onRevoke: () => void;
 }): ReactElement => {
   const [confirming, setConfirming] = useState(false);
@@ -171,7 +174,7 @@ const WorkerRow = ({
                 title={`Revoke ${sanitiseUntrusted(worker.name)}?`}
                 description="Its credential stops working at its next call, and any run it holds is ended and planned again. The machine has to be approved anew to come back."
                 trigger={
-                  <Button tone="danger" size="sm">
+                  <Button tone="danger" size="sm" disabled={pending}>
                     Revoke
                   </Button>
                 }
@@ -260,6 +263,7 @@ export const WorkersScreen = (): ReactElement => {
               worker={worker}
               showUser={workers.data?.scope === 'all'}
               nowMs={nowMs}
+              pending={commands.revokeWorker.isPending}
               onRevoke={() => {
                 commands.revokeWorker.mutate(worker.id);
               }}

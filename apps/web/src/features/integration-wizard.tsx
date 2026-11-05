@@ -338,7 +338,11 @@ export const IntegrationWizardScreen = ({
                 />
               ))}
               <div>
-                <Button type="submit" tone="primary">
+                <Button
+                  type="submit"
+                  tone="primary"
+                  disabled={commands.createIntegration.isPending}
+                >
                   Create integration
                 </Button>
               </div>

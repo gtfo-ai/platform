@@ -601,6 +601,33 @@ describe('an integration’s page', () => {
     expect(await screen.findByText('Last test: passed')).toBeTruthy();
   });
 
+  /**
+   * The server strips only the provider's **declared** credential fields from `config`, so a token
+   * once stored under a key the provider does not declare is published as it is. The page names such
+   * a key and never shows its value — as the old card did, which listed undeclared keys by name.
+   */
+  it('shows the name of a key the provider does not declare, never its value', async () => {
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
+    const PLANTED = 'FAKE-legacy-token-value-0123456789';
+    const legacy: IntegrationSummary = {
+      ...JIRA,
+      config: { ...JIRA.config, legacy_token: PLANTED, host: 'old.example.test' },
+    };
+    const { container } = renderApp(recorder({ items: [legacy] }).fetchImpl);
+    expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
+    // Positive first: a declared field's value is on the page, so "nothing shown" cannot pass.
+    await waitFor(() => {
+      expect(container.textContent).toContain('https://acme.atlassian.example.test');
+    });
+    expect(container.querySelector('[data-config-undeclared="legacy_token"]')?.textContent).toBe(
+      'Not a field this provider declares; value hidden.',
+    );
+    expect(screen.getByText('legacy_token')).toBeTruthy();
+    expect(container.querySelector('[data-config-undeclared="host"]')).not.toBeNull();
+    expect(document.body.innerHTML).not.toContain(PLANTED);
+    expect(document.body.innerHTML).not.toContain('old.example.test');
+  });
+
   it('lists the refused deliveries in their tab, the provider’s words as text', async () => {
     window.history.pushState({}, '', `/integrations/${INTEGRATION}?tab=refused-deliveries`);
     const { container } = renderApp(recorder().fetchImpl);

@@ -253,15 +253,8 @@ const ApprovalRow = ({
 }): ReactElement => (
   <ListRow
     leading={<StatusIcon status="needs_you" label="Approval" />}
-    title={
-      <Link
-        to="/tasks/$taskId"
-        params={{ taskId: approval.task_id }}
-        className="hover:text-link hover:underline"
-      >
-        {`${APPROVAL_KIND_LABEL[approval.kind]} is waiting for you`}
-      </Link>
-    }
+    // Plain text: the row's one link is its *Decide on the task*, so a keyboard meets it once.
+    title={`${APPROVAL_KIND_LABEL[approval.kind]} is waiting for you`}
     meta={
       <span className="inline-flex flex-wrap items-center gap-1.5">
         <WhereLine where={where} stage={null} />

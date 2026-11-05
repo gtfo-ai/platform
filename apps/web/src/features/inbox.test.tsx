@@ -121,12 +121,26 @@ const detail = (record: TaskRecord): TaskDetailResponse => ({
 });
 
 /** The task reads answer only for the tasks named; any other answers 404, "not known yet". */
-const fakeServer = (tasks: Readonly<Record<string, string>> = {}) => {
+const fakeServer = (
+  tasks: Readonly<Record<string, string>> = {},
+  options: { readonly refuseAnswers?: boolean } = {},
+) => {
   const sent: Sent[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if ((init?.method ?? 'GET') === 'POST' && url.includes('/answer')) {
       sent.push({ url, body: JSON.parse(String(init?.body ?? '{}')) });
+      if (options.refuseAnswers === true) {
+        return json(
+          {
+            error: {
+              code: 'illegal_transition',
+              message: 'the question was already answered in the ticket',
+            },
+          },
+          409,
+        );
+      }
       inbox = { ...inbox, questions: [] };
       return json({ question: null, performed: true });
     }
@@ -212,6 +226,10 @@ describe('the approval row', () => {
       `/tasks/${TASK}`,
     );
     expect(screen.getByText('Plan approval is waiting for you')).toBeTruthy();
+    // One link per approval row, not a title link and a button to the same task.
+    expect(
+      screen.getAllByRole('link').filter((link) => link.getAttribute('href') === `/tasks/${TASK}`),
+    ).toHaveLength(1);
   });
 });
 
@@ -307,6 +325,23 @@ describe('a question row', () => {
     expect(sent[0]?.body).toEqual({ answer: 'three' });
     // The inbox is read again, and the answered question has left it.
     expect(await screen.findByText('Nothing needs you')).toBeTruthy();
+  });
+
+  it('says the answer was refused when the server answers 409, and keeps the question', async () => {
+    inbox = { questions: [question()], approvals: [] };
+    const { sent, fetchImpl } = fakeServer({}, { refuseAnswers: true });
+    await renderInbox(fetchImpl);
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole('button', { name: 'Should the retry budget be three or five?' }),
+    );
+    await user.type(screen.getByLabelText('Your answer'), 'five');
+    await user.click(screen.getByRole('button', { name: 'Answer' }));
+    expect(await screen.findByText('That answer was refused.')).toBeTruthy();
+    expect(sent).toHaveLength(1);
+    // Still there, with what was typed, so it can be sent again or answered elsewhere.
+    expect((screen.getByLabelText('Your answer') as HTMLTextAreaElement).value).toBe('five');
+    expect(screen.queryByText('Nothing needs you')).toBeNull();
   });
 
   it('renders an agent’s markup as text', async () => {

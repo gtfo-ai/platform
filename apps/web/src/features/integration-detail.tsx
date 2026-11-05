@@ -103,6 +103,15 @@ const Overview = ({
     | null;
 }): ReactElement => {
   const entries = Object.entries(integration.config);
+  // A value is shown only for a field the provider declares as configuration. The server strips the
+  // provider's declared credential fields and nothing else, so a token an operator once stored under
+  // a key the provider does not declare would be published as it is: its name is shown, never its
+  // value — as the old screen did (it named undeclared keys only).
+  const declared = new Set(
+    (provider?.config_fields ?? [])
+      .map((field) => field.name)
+      .filter((name) => !(provider?.secret_fields ?? []).includes(name)),
+  );
   return (
     <div className="flex flex-col gap-6">
       <IntegrationProblems integration={integration} />
@@ -128,9 +137,15 @@ const Overview = ({
                   <span>{configFieldLabel(key)}</span>
                   <CodeText value={key} className="text-xs" />
                 </dt>
-                <dd className="min-w-0 break-words">
-                  <UntrustedText value={valueText(value)} />
-                </dd>
+                {declared.has(key) ? (
+                  <dd className="min-w-0 break-words">
+                    <UntrustedText value={valueText(value)} />
+                  </dd>
+                ) : (
+                  <dd className="min-w-0 text-fg-muted" data-config-undeclared={key}>
+                    Not a field this provider declares; value hidden.
+                  </dd>
+                )}
               </div>
             ))}
           </dl>

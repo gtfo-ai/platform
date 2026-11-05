@@ -232,6 +232,31 @@ describe('the Workers screen', () => {
     expect(await screen.findByText('The worker is revoked.')).toBeTruthy();
   });
 
+  it('holds the Revoke trigger while a revoke is in flight', async () => {
+    const { fetchImpl: base } = fetchFor('missing', [worker()]);
+    let release: (() => void) | undefined;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return base(input, init);
+    }) as typeof fetch;
+    render(createApp({ fetchImpl, realtime: false }).element);
+    const user = userEvent.setup();
+    const trigger = await screen.findByRole('button', { name: 'Revoke' });
+    await user.click(trigger);
+    await user.click(await screen.findByRole('button', { name: 'Revoke worker' }));
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: 'Revoke' }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+    });
+    release?.();
+    expect(await screen.findByText('The worker is revoked.')).toBeTruthy();
+  });
+
   it('sends nothing when the revoke is cancelled', async () => {
     const { fetchImpl, sent } = fetchFor('missing', [worker()]);
     render(createApp({ fetchImpl, realtime: false }).element);
