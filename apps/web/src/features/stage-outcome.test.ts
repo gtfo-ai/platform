@@ -19,7 +19,15 @@ describe('the stage outcome sentences', () => {
 
   it('says a verdict and an event generically, and a word through the table', () => {
     expect(stageOutcomeSentence('request_changes')).toBe('Verdict: request changes.');
-    expect(stageOutcomeSentence('mr.merged')).toBe('Moved on by mr.merged.');
+    // S-23.22: an event is said in words, never as its dotted name.
+    expect(stageOutcomeSentence('mr.merged')).toBe(
+      'Moved on because the merge request was merged.',
+    );
+    expect(stageOutcomeSentence('task.stage.returned')).toBe(
+      'Moved on because the task was sent back.',
+    );
+    // An event the table does not hold is still its words, not its name.
+    expect(stageOutcomeSentence('ticket.status.changed')).not.toContain('.status.');
     expect(stageOutcomeSentence('task.completed')).toBe('Ended because the task completed.');
     expect(stageOutcomeSentence('take_over.expired')).toBe(
       'Escalated: the take-over saw no activity for five working days.',

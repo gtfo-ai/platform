@@ -26,6 +26,7 @@ import {
 } from '../app/queries.js';
 import { useTopics } from '../realtime/provider.js';
 import { ActionMenu, ActionMenuItem } from '../ui/action-menu.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { Button, buttonClassName } from '../ui/button.js';
 import { DetailsDisclosure } from '../ui/details.js';
@@ -37,6 +38,7 @@ import {
   KNOWLEDGE_PROPOSAL_SOURCE_LABEL,
   KNOWLEDGE_PROPOSAL_STATUS_LABEL,
   KNOWLEDGE_PROPOSAL_TYPE_LABEL,
+  REPOSITORY_STATUS_LABEL,
 } from '../ui/humanize.js';
 import {
   Badge,
@@ -543,17 +545,21 @@ const EffectiveConfiguration = ({
               ))}
             </ul>
             {config.data.status_mapping_superseded ? (
-              <p className="pt-2 text-xs" data-status-mapping="superseded">
-                The project’s ticket lifecycle maps a slot other than <em>Pick up from</em>, so{' '}
-                <code>status_mapping</code> is not applied at all. The slots are on the project
-                settings page.
-              </p>
+              <div className="flex flex-col gap-1 pt-2" data-status-mapping="superseded">
+                <p className="text-xs">
+                  The project’s ticket lifecycle maps a slot other than <em>Pick up from</em>, so
+                  the older status mapping is not applied at all. The slots are on the project
+                  settings page.
+                </p>
+                <ForAdministrators note="status_mapping" />
+              </div>
             ) : null}
           </Card>
           <Card>
             <SectionHeading>Merged configuration</SectionHeading>
             <p className="text-xs text-fg-muted">
-              The repository’s <code>.agentic/config.yml</code>: {config.data.repository.status}
+              The repository’s settings file:{' '}
+              {REPOSITORY_STATUS_LABEL[config.data.repository.status]}
               {config.data.repository.commit_sha === null ? null : (
                 <>
                   {' at '}

@@ -24,7 +24,17 @@ You can watch all of that, and intervene at any point, from the browser.
 
 Open the instance's URL. Sign-up is off by default on a self-hosted instance; the first
 administrator is created from the environment at boot and everyone else is invited by an
-administrator.
+administrator. Until somebody has signed in, the sign-in page says to use the administrator email
+set at install; the exact setting it comes from is under **For administrators**.
+
+**When something is refused, the screen says why in plain words** — *Your role does not allow
+this.*, *That stage is not the one the task is at now.*, *Some settings are invalid: Base URL.* —
+built from what the server answered, not copied from it. The server's own message, which names ids
+and internal paths, is folded under **Technical details** beneath it, for whoever has to look
+further. In the same way, a screen that mentions a server setting, a configuration key or the
+repository's settings file says so in words, and the exact name is under **For administrators**.
+An address that does not exist shows *This page does not exist* inside the usual frame, with the
+address you asked for and **Go to Home**.
 
 Four roles, increasing: **viewer** reads, **member** answers questions and drives a task,
 **maintainer** approves, **admin** manages integrations and users. Every action is checked on the
@@ -537,9 +547,10 @@ to the right-hand column as *Finish setting up*, and when every step is done it 
 follows the oldest project; a later project's steps are the wizard's to show. Every other role, on
 an instance with no project, is told that an admin sets it up.
 
-A maintainer or admin also sees **one banner** when an organisation chat account's credentials
-cannot be decrypted: every project's prompt files are withheld until the account is re-sealed or
-retired under **Integrations**, whose card for that account says the same (WP-157).
+A maintainer or admin also sees **one banner** when an organisation chat account's credentials can
+no longer be read: no project's runs are given the project's prompt files until the credentials are
+replaced or the integration is retired. **Fix it** opens that integration, whose card says the same
+(WP-157).
 
 ### Projects
 
@@ -788,7 +799,7 @@ error naming the transition, not as a silent no-op — and each accepted one lea
 | **Pause** | member | stops the task from entering another stage. Not offered on a task that was **merged**, and refused for one (*task_merged*): there is nothing left to stop, and from a pause it could not reach its retrospective |
 | **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it — if its branch still has the commit the platform's gates judged, through the rebase gate, which checks it against the target branch as it is now (a default branch that moved during the pause is not re-checked while the task is paused) and warns about another task touching the same files, spending no iteration limit (WP-105); if somebody pushed while it was paused, it goes back through the CI gate first (WP-79). It reads *paused* for the moment the platform takes to check; merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge — and so does merging it while the task is paused at **QA**, on a project that has that stage (a pause at an earlier stage is escalated to a human instead). Resuming a task paused at QA takes it back to QA, not to Ready |
 | **Cancel** | maintainer | ends the task; it enters no further stage |
-| **Retry stage** | member | runs the current stage again, optionally with a reason. Costs a run. If the stage's run is still going, it is stopped first and the new attempt starts once it has ended; the screen says which attempt was queued and whether a run was stopped |
+| **Retry stage** | member | runs the current stage again, optionally with a reason — its stage list starts on the current stage. Costs a run. If the stage's run is still going, it is stopped first and the new attempt starts once it has ended; the screen says which attempt was queued and whether a run was stopped |
 | **Return to stage** | maintainer | sends the task back to an earlier stage it has already run; a reason is required, and that stage is given it. Costs an iteration of the loop. Works on a task in **Needs you** too — the way to send an escalated task to the stage that should run again. When the task stopped at a **gate** that recorded a failure — the CI gate after its fix loop ran out — the form shows a box, ticked, *Attach the gate's last failure* with its length in characters: the stage is then given the failing jobs' log excerpts as well as your reason, as two separate blocks, so you need not paste the logs. Untick it to send your reason alone. A task that was **merged** cannot be sent back to a stage before the merge |
 | **Rework** | maintainer | restarts the work with new instructions, which are required. The task moves to a **new branch** (`agentic/<ticket>-r2`, then a higher number on each later rework — the numbers can skip, because a plain return counts too) and the merge request you rejected is **closed** on the git provider with a comment naming the new branch; a new merge request is opened from the new branch when the work gets there again. Like **Return to stage**, it works on a task in **Needs you**, offers the same *Attach the gate's last failure* box, and refuses a merged task |
 | **Answer a question** | member | answers a question the agent asked; the task continues |
@@ -1003,9 +1014,12 @@ is laid out like a GitHub Actions job:
   (described under *Settings* below), where an unsuccessful run's unfinished work was saved, and the
   version of the role prompt the run was given.
 - **The summary strip** gives the status, who executed the run (*Executed by* the platform server,
-  or a developer's remote worker by the name its owner gave it), the model, the effort, the cost (marked *est.* when the
+  or a developer's remote worker by the name its owner gave it), once the run has ended **Ended
+  because** (*Succeeded*, *Ran out of turns*, *Hit its budget*, *Lost its worker*, …), the model, the
+  effort, the cost (marked *est.* when the
   platform estimated it), the elapsed time, the turns and the tokens (in, out, and read from the prompt cache). Hover or focus a label for
-  what its number means.
+  what its number means. The transcript's last row, *The run ended*, gives the same reason in the
+  same words.
 - **While the run is live**, a *Now:* line says what the agent is doing, in the words the board and
   the Agents screen use (*Reading files*, *Running a command*, *No activity for 6 min*), with its
   last few steps under it as **Live activity**.
@@ -1090,13 +1104,14 @@ once like any other run. A message you steered that was still waiting is not del
 ends before it, and it reads *the run ended before it could be applied*. If no process is holding the
 run (the runner is down, or its lease lapsed), there is nothing to interrupt: the run is ended here
 and reads *cancelled* straight away. If the runner dies after you cancel and before it stops the
-session, the platform ends the run itself a few minutes later and it reads *lease expired* rather
-than *cancelled*, because nothing confirmed the stop.
+session, the platform ends the run itself a few minutes later and it reads *Ended because: Lost its
+worker* rather than *Cancelled*, because nothing confirmed the stop.
 
 Three tabs can refuse to show you a document, and that is deliberate: each is the record of what
 this run was given, and none is re-derived after the fact. A run started by this build shows all
 three. A run started before the platform recorded one does not, and never will — **Prompt** and
-**Context pack** say the document *could not be loaded* and give the server's reason, **Settings**
+**Context pack** say the document *could not be loaded* and why, with the server's own message under
+*Technical details*, **Settings**
 says the run predates the record:
 
 - **Prompt** — recorded since migration 0038, redacted at the write, because a prompt carries the
@@ -1345,13 +1360,15 @@ applies. **3. Name its credentials** — for each credential, the *environment v
 reads it from, which must be on the operator's allow-list (operator guide, §4); the value itself
 never crosses the browser. **Create integration** sends it; the server checks the configuration
 against the provider's own schema before it stores anything, so a create can be refused for a reason
-outside the form, and the server's own message — naming the field — is shown (go back a step with
-the step list to correct it). **4. Test the connection** — or skip it — and the wizard ends with
+outside the form, and the screen names the settings it refused (*Some settings are invalid: Base
+URL.*), with the server's own message under *Technical details* (go back a step with the step list to
+correct it). **4. Test the connection** — or skip it — and the wizard ends with
 **Bind it to a project**. **Test connection** shows the same answer here, on the integration's page,
 on its row and in the project wizard beside the binding it is about.
 
 An integration whose stored configuration would not load (one created before the form asked for
-these fields) says so on its row, naming the fields. **Edit configuration** fixes it: a dialog asks
+these fields) says so on its row, naming the settings, with an **Edit configuration** link beside it
+(the same as the `···` menu's). **Edit configuration** fixes it: a dialog asks
 for the required fields again, lets you change the optional ones, and removes the keys the provider
 does not declare.
 
@@ -1360,7 +1377,7 @@ each credential you are replacing, and the server seals the new value and delete
 **Retire** (admin) removes an integration you no longer use: a dialog says what it does first — its
 credentials are deleted and its row stays, marked *Retired*, with no menu, because the audit still
 names it. A project that binds it, or a run credential it minted that is still live, refuses the
-retire, and the dialog shows the server's reason.
+retire, and the dialog says why.
 
 ## 10. Audit log
 

@@ -313,8 +313,28 @@ describe('the integrations list', () => {
     const { sent, fetchImpl } = recorder({ items: [broken] });
     renderApp(fetchImpl);
     expect(await screen.findByText('This configuration would not load.')).toBeTruthy();
-    expect(document.body.textContent).toContain(`PATCH /api/integrations/${INTEGRATION}`);
+    // S-23.22: the visible sentence is built from the paths; the server's message — an id and an
+    // API path — is a diagnostic, inside a collapsed "Technical details".
+    const row = document.querySelector('[data-config-refusal]') as HTMLElement;
+    const technical = row.querySelector('details');
+    expect(technical?.querySelector('summary')?.textContent).toBe('Technical details');
+    expect(technical?.open).toBe(false);
+    expect(technical?.textContent).toContain(`PATCH /api/integrations/${INTEGRATION}`);
+    const visible = row.cloneNode(true) as HTMLElement;
+    visible.querySelector('details')?.remove();
+    expect(visible.textContent).toContain('Some settings are invalid: Organisation, Organization.');
+    expect(visible.textContent).not.toContain('/api/');
+    expect(visible.textContent).not.toContain(INTEGRATION);
     const user = userEvent.setup();
+    // The line's own action opens the same dialog the menu does.
+    await user.click(within(row).getByRole('button', { name: 'Edit configuration' }));
+    expect(
+      await screen.findByRole('dialog', { name: 'Edit the configuration of ACME Sentry' }),
+    ).toBeTruthy();
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
     await choose(user, 'ACME Sentry', 'Edit configuration');
     const dialog = await screen.findByRole('dialog', {
       name: 'Edit the configuration of ACME Sentry',

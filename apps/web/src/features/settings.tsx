@@ -37,6 +37,7 @@ import {
 } from '../app/queries.js';
 import { setShortcutsEnabled, useShortcutsEnabled } from '../app/shortcuts.js';
 import { displayName } from '../auth/session.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
 import { Avatar } from '../ui/avatar.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { USER_ROLE_LABEL, USER_STATUS_LABEL } from '../ui/humanize.js';
@@ -132,7 +133,8 @@ const Users = (): ReactElement => {
         <Blankslate
           informational
           title="No users"
-          hint="A fresh instance takes its first administrator from APP_BOOTSTRAP_ADMIN_EMAIL; everyone else is invited by an administrator."
+          hint="A fresh instance’s first administrator is the one set when it was installed; everyone else is invited by an administrator."
+          secondary={<ForAdministrators note="bootstrap_admin" />}
         />
       ) : null}
       {items.length === 0 ? null : (

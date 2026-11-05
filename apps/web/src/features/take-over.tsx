@@ -44,6 +44,7 @@ import type { RunRecord, TakenOver, TakeOverResponse, TaskState } from '@platfor
 import { type ReactElement, useState } from 'react';
 import { exportDownloadPath, transcriptDownloadPath } from '../api/endpoints.js';
 import { useTakeOverCommands } from '../app/queries.js';
+import { stageLabel } from '../ui/humanize.js';
 import {
   Badge,
   Button,
@@ -247,7 +248,7 @@ export const HandBackForm = ({
         >
           {options.map((option) => (
             <option key={option} value={option}>
-              {option}
+              {stageLabel(option)}
             </option>
           ))}
         </select>
@@ -299,7 +300,7 @@ export const TakenOverDetails = ({
       <Badge tone="warning">taken over</Badge>
       <span>at {formatDateTime(takenOver.at)}</span>
       <span>
-        from <UntrustedText value={takenOver.stage} />
+        from <UntrustedText value={stageLabel(takenOver.stage)} />
       </span>
       {state === 'needs_human' ? <Badge tone="danger">escalated — still held</Badge> : null}
     </div>

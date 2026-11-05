@@ -18,7 +18,7 @@
 import type { IntegrationProvider } from '@platform/contracts';
 import { PlugIcon } from '@primer/octicons-react/PlugIcon';
 import { Link } from '@tanstack/react-router';
-import type { ReactElement } from 'react';
+import { type ReactElement, useState } from 'react';
 import {
   useIntegrationProviders,
   useIntegrationSetupGuide,
@@ -39,7 +39,12 @@ import { StateLabel } from '../ui/status.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
 import { CodeText, CopyableUrl, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { ConnectionTestResult } from './connection-test-result.js';
-import { IntegrationActions, integrationStatus, RefusedDeliveries } from './integration-forms.js';
+import {
+  IntegrationActions,
+  type IntegrationDialog,
+  integrationStatus,
+  RefusedDeliveries,
+} from './integration-forms.js';
 import { boundText, checkedText, IntegrationProblems, providerName } from './integrations.js';
 
 export const INTEGRATION_TABS = ['overview', 'setup-guide', 'refused-deliveries'] as const;
@@ -95,9 +100,12 @@ const Overview = ({
   integration,
   provider,
   projects,
+  onDialog,
 }: {
   readonly integration: NonNullable<ReturnType<typeof useIntegrations>['data']>['items'][number];
   readonly provider: IntegrationProvider | undefined;
+  /** Opens one of the header menu's dialogs from a problem line (S-23.22). */
+  readonly onDialog: (dialog: IntegrationDialog) => void;
   readonly projects:
     | readonly { readonly id: string; readonly key: string; readonly name: string }[]
     | null;
@@ -114,7 +122,19 @@ const Overview = ({
   );
   return (
     <div className="flex flex-col gap-6">
-      <IntegrationProblems integration={integration} />
+      <IntegrationProblems
+        integration={integration}
+        {...(provider === undefined
+          ? {}
+          : {
+              onEditConfiguration: () => {
+                onDialog('configuration');
+              },
+              onReplaceCredentials: () => {
+                onDialog('credentials');
+              },
+            })}
+      />
       {integration.health.detail === null ? null : (
         <p className="text-sm">
           <UntrustedText value={integration.health.detail} />
@@ -198,6 +218,7 @@ export const IntegrationDetailScreen = ({
   const providers = useIntegrationProviders();
   const projects = useProjects();
   const bound = useProjectsByIntegration(projects.data?.items);
+  const [dialog, setDialog] = useState<IntegrationDialog>(null);
   const commands = useOnboardingCommands();
   const { now } = useServices();
   const back = (
@@ -283,6 +304,8 @@ export const IntegrationDetailScreen = ({
                       integration={integration}
                       provider={provider}
                       boundProjects={boundProjects?.length ?? null}
+                      dialog={dialog}
+                      onDialogChange={setDialog}
                     />
                   </>
                 ),
@@ -299,7 +322,12 @@ export const IntegrationDetailScreen = ({
       {/* WP-155 (backlog 451): the one rendering the list and the wizard share. */}
       <ConnectionTestResult test={commands.testIntegration} />
       {tab === 'overview' ? (
-        <Overview integration={integration} provider={provider} projects={boundProjects} />
+        <Overview
+          integration={integration}
+          provider={provider}
+          projects={boundProjects}
+          onDialog={setDialog}
+        />
       ) : null}
       {tab === 'setup-guide' ? <SetupGuide integrationId={integration.id} /> : null}
       {tab === 'refused-deliveries' ? <RefusedDeliveries integrationId={integration.id} /> : null}

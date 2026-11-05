@@ -42,6 +42,7 @@ import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import { useHistoryBootstrapCommands, useHistoryBootstraps } from '../app/queries.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
 import {
   Badge,
   type BadgeTone,
@@ -140,10 +141,14 @@ export const HistoryBootstrap = ({
         {formatUsd(estimate.cap_usd)}.
       </p>
       {estimate.stops_at_cap ? (
-        <p className="text-xs text-warning">
-          The estimate is above the cap, so the bootstrap will mine what the cap pays for and stop.
-          Lower the number, or raise <code>features.history_bootstrap.budget_usd</code>.
-        </p>
+        <div className="flex flex-col gap-1">
+          <p className="text-xs text-warning">
+            The estimate is above the cap, so the bootstrap will mine what the cap pays for and
+            stop. Lower the number, or ask a maintainer to raise the history bootstrap’s cap in the
+            repository’s settings.
+          </p>
+          <ForAdministrators note="history_bootstrap_cap" />
+        </div>
       ) : null}
 
       <div>

@@ -32,7 +32,7 @@ import { firstNameOf, greetingFor } from './dashboard.js';
 import { workerFixture } from './worker.test-fixture.js';
 
 const CONSEQUENCE =
-  'Its credentials cannot be decrypted (a changed APP_SECRET_KEY or a damaged secrets row), so the prompt files of every project are withheld: each repository reading stores the configuration and none of .agentic/prompts/ until the credentials are re-sealed or the account is retired.';
+  'Until they are replaced or the integration is retired, no project’s runs are given the project’s prompt files, because those files cannot be checked for these credentials.';
 
 const PROJECT = (n: number) => `00000000-0000-4000-8000-0000000001${String(n).padStart(2, '0')}`;
 const TASK = (n: number) => `00000000-0000-4000-8000-0000000002${String(n).padStart(2, '0')}`;
@@ -824,9 +824,17 @@ describe('the dashboard and a broken organisation account (WP-157 (a), backlog 4
         expect(container.querySelectorAll('[data-unreadable-accounts]')).toHaveLength(1);
       });
       const banner = container.querySelector('[data-unreadable-accounts]');
-      // The account is named, as text (BD-022), with the consequence the server wrote.
-      expect(banner?.textContent).toContain('<b>acme workspace</b> (slack)');
-      expect(banner?.textContent).toContain('the prompt files of every project are withheld');
+      // The account is named, as text (BD-022), with the consequence the server wrote — and
+      // neither the provider's slug nor "decrypted" (S-23.22).
+      expect(banner?.textContent).toContain(
+        'An integration’s credentials can no longer be read: <b>acme workspace</b>.',
+      );
+      expect(banner?.textContent).not.toContain('(slack)');
+      expect(banner?.textContent).toContain(
+        'no project’s runs are given the project’s prompt files',
+      );
+      // The way to the fix is a link to the integration itself.
+      expect(banner?.querySelector('a')?.getAttribute('href')).toMatch(/^\/integrations\/[^/]+$/);
       expect(container.querySelector('b')).toBeNull();
       // One signal, not one per project row.
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);

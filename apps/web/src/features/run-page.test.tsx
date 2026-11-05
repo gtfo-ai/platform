@@ -389,6 +389,52 @@ describe('the summary strip and what the agent is doing now', () => {
     },
   );
 
+  /**
+   * S-23.22 (the final UX audit's item 5): the page said *that* a run ended and never *why* —
+   * `TERMINAL_REASON_LABEL` had no caller in the SPA. A live run has no reason, so no metric.
+   */
+  it.each([
+    ['error_max_turns', 'Ended becauseRan out of turns'],
+    ['lease_expired', 'Ended becauseLost its worker'],
+    ['success', 'Ended becauseSucceeded'],
+  ] as const)('says why the run ended (%s)', async (reason, expected) => {
+    const ended: RunRecord = {
+      ...LIVE,
+      status: 'failed',
+      terminal_reason: reason,
+      ended_at: '2026-11-05T10:02:00.000Z',
+    };
+    window.history.pushState({}, '', `/runs/${ended.id}`);
+    const base = fetchFor(detail(), LIVE, MESSAGES);
+    const view = render(
+      createApp({
+        fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) =>
+          new URL(String(input), 'http://localhost').pathname === `/api/runs/${ended.id}`
+            ? json(asRead(ended))
+            : base(input, init)) as typeof fetch,
+        realtime: false,
+        now: () => NOW,
+      }).element,
+    );
+    await waitFor(() => {
+      expect(view.container.querySelector('[data-run-summary]')?.textContent ?? '').toContain(
+        expected,
+      );
+    });
+    expect(view.container.querySelector('[data-run-summary]')?.textContent).not.toContain(reason);
+  });
+
+  it('says no reason while the run is live', async () => {
+    const view = open();
+    await screen.findByRole('tab', { name: 'Transcript' });
+    await waitFor(() => {
+      expect(view.container.querySelector('[data-run-summary]')?.textContent).toContain('Status');
+    });
+    expect(view.container.querySelector('[data-run-summary]')?.textContent).not.toContain(
+      'Ended because',
+    );
+  });
+
   it('says Now: in the activity vocabulary and lists the newest live activity', async () => {
     const view = open();
     await waitFor(() => {

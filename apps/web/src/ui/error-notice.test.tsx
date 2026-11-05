@@ -11,7 +11,12 @@
  */
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ApiError, PLATFORM_UPDATED_MESSAGE, PlatformUpdatedError } from '../api/http.js';
+import {
+  ApiError,
+  NetworkError,
+  PLATFORM_UPDATED_MESSAGE,
+  PlatformUpdatedError,
+} from '../api/http.js';
 import { ErrorNotice } from './kit.js';
 
 afterEach(() => {
@@ -51,13 +56,102 @@ describe('ErrorNotice (WP-167)', () => {
     expect(container.innerHTML).toBe('');
   });
 
-  it('shows the error’s own text as the detail, and an explicit detail in its place', () => {
+  it('says the error from its fields, and an explicit detail in its place', () => {
     const error = new ApiError(503, 'unavailable', 'the server is busy');
     const own = render(<ErrorNotice title="t" error={error} />);
-    expect(own.container.textContent).toContain(String(error));
+    expect(visibleText(own.container)).toContain(
+      'The server could not do this right now. Try again in a moment.',
+    );
     own.unmount();
     const explicit = render(<ErrorNotice title="t" error={error} detail="said instead" />);
-    expect(explicit.container.textContent).toContain('said instead');
-    expect(explicit.container.textContent).not.toContain('the server is busy');
+    expect(visibleText(explicit.container)).toContain('said instead');
+    expect(visibleText(explicit.container)).not.toContain('the server is busy');
+  });
+});
+
+/** The notice's text outside any `<details>` — what a person reads without opening anything. */
+const visibleText = (root: HTMLElement): string => {
+  const copy = root.cloneNode(true) as HTMLElement;
+  for (const details of copy.querySelectorAll('details')) {
+    details.remove();
+  }
+  return copy.textContent ?? '';
+};
+
+/** The text inside the notice's collapsed *Technical details*. */
+const technicalText = (root: HTMLElement): string | null => {
+  const details = root.querySelector('details');
+  return details === null || details.open
+    ? null
+    : details.querySelector('summary')?.textContent === 'Technical details'
+      ? (details.textContent ?? '')
+      : null;
+};
+
+/**
+ * **A server's text is a diagnostic** (S-23.22, the final UX audit's item 2): the visible sentence is
+ * built from the error's code, status and paths, and the problem document's `message` — API paths,
+ * ids, row names — is shown only inside a collapsed *Technical details*.
+ */
+describe('ErrorNotice keeps the server’s text behind Technical details (S-23.22)', () => {
+  const SERVER =
+    'integration 00000000-0000-4000-8000-00000000a100 has configuration that provider "jira"\'s schema refuses at: base_url (Invalid URL). Every binding load fails until it is corrected with PATCH /api/integrations/00000000-0000-4000-8000-00000000a100';
+
+  it('names the invalid settings from the paths, and the message only in the details', () => {
+    const error = new ApiError(400, 'invalid_integration_config', SERVER, [
+      { path: 'config.base_url', message: 'Invalid URL' },
+      { path: 'config.project_key', message: 'Required' },
+    ]);
+    const { container } = render(
+      <ErrorNotice title="The integration was not saved." error={error} />,
+    );
+    expect(visibleText(container)).toContain('Some settings are invalid: Base URL, Project key.');
+    expect(visibleText(container)).not.toContain('/api/');
+    expect(visibleText(container)).not.toContain('00000000-0000-4000');
+    expect(technicalText(container)).toContain(SERVER);
+  });
+
+  it.each([
+    [
+      new ApiError(403, 'forbidden', 'role member may not perform task.cancel'),
+      'Your role does not allow this.',
+    ],
+    [
+      new ApiError(409, 'illegal_transition', 'task in state merged cannot cancel'),
+      'This is not possible in the state it is in now.',
+    ],
+    [new ApiError(404, 'not_found', 'no task 1f'), 'It was not found.'],
+    [new ApiError(409, 'some_new_code', 'x'), 'This is not possible in the state it is in now.'],
+    [
+      new ApiError(400, 'invalid_body', 'body/reason must be string', [
+        { path: '/reason', message: 'x' },
+      ]),
+      'Some fields are invalid: Reason.',
+    ],
+  ])('says %s plainly', (error, sentence) => {
+    const { container } = render(<ErrorNotice title="That command was refused." error={error} />);
+    expect(visibleText(container)).toContain(sentence);
+    expect(visibleText(container)).not.toContain(error.message);
+    expect(technicalText(container)).toContain(error.message);
+  });
+
+  it('keeps the client’s own sentences visible, with no details to open', () => {
+    const { container } = render(
+      <ErrorNotice
+        title="t"
+        error={new ApiError(409, 'idempotency_attempt_unknown', 'Check the task first.')}
+      />,
+    );
+    expect(visibleText(container)).toContain('Check the task first.');
+    expect(container.querySelector('details')).toBeNull();
+  });
+
+  it('says a network failure as itself, and anything else as something that went wrong', () => {
+    const network = render(<ErrorNotice title="t" error={new NetworkError(new Error('x'))} />);
+    expect(visibleText(network.container)).toContain('The server could not be reached.');
+    network.unmount();
+    const other = render(<ErrorNotice title="t" error={new Error('boom at line 3')} />);
+    expect(visibleText(other.container)).toContain('Something went wrong.');
+    expect(technicalText(other.container)).toContain('boom at line 3');
   });
 });

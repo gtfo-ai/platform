@@ -50,7 +50,7 @@
  * A form that wrote one key by re-sending the whole document would be a second writer of a document
  * the repository also owns.
  */
-import type { EffectiveConfigResponse, ProjectSummary } from '@platform/contracts';
+import type { ProjectSummary } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import {
@@ -60,7 +60,8 @@ import {
   useProjectConfig,
   useProjectReadiness,
 } from '../app/queries.js';
-import { INTEGRATION_TYPE_LABEL } from '../ui/humanize.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
+import { INTEGRATION_TYPE_LABEL, REPOSITORY_STATUS_LABEL } from '../ui/humanize.js';
 import {
   Badge,
   Button,
@@ -108,16 +109,6 @@ const READINESS_SOURCE_LABEL: Readonly<Record<string, string>> = {
   discovery: 'the first discovery',
   rediscovery: 'a re-evaluation',
   recheck: 'the re-check after a merge',
-};
-
-/** The repository file's state, as a sentence's subject says it. */
-const REPOSITORY_STATUS_LABEL: Readonly<
-  Record<EffectiveConfigResponse['repository']['status'], string>
-> = {
-  valid: 'read and valid',
-  invalid: 'does not parse',
-  absent: 'not present',
-  unread: 'not read yet',
 };
 
 /**
@@ -308,12 +299,12 @@ const PoliciesAndWip = ({ project }: { readonly project: Project }): ReactElemen
             Max parallel tasks {wipLimit(config.data.effective.pipeline?.wip?.max_parallel_tasks)} (
             {sourceLabel(config.data.sources['pipeline.wip.max_parallel_tasks'])}) · max tasks in
             pipeline {wipLimit(config.data.effective.pipeline?.wip?.max_tasks_in_pipeline)} (
-            {sourceLabel(config.data.sources['pipeline.wip.max_tasks_in_pipeline'])}) —{' '}
-            <code>pipeline.wip</code> in the settings or <code>.agentic/config.yml</code>. A
-            repository file may lower a limit and never raise it, and neither may go above the
-            organisation’s maximum.
+            {sourceLabel(config.data.sources['pipeline.wip.max_tasks_in_pipeline'])}) — set in these
+            settings or the repository’s settings file. The repository file may lower a limit and
+            never raise it, and neither may go above the organisation’s maximum.
           </p>
         )}
+        <ForAdministrators note="wip_limits" />
         {(config.data?.not_applied ?? []).map((item) => (
           <p key={item.key} className="text-xs text-fg-muted">
             Not applied: <code>{item.key}</code> — <UntrustedText value={item.reason} />
@@ -345,17 +336,12 @@ const RepositoryConfiguration = ({ project }: { readonly project: Project }): Re
     <>
       <SettingsSectionHeader
         title="Repository configuration"
-        description={
-          <>
-            The repository’s own <code>.agentic/config.yml</code>, and proposing these settings to
-            it.
-          </>
-        }
+        description={<>The repository’s own settings file, and proposing these settings to it.</>}
       />
       {config.data === undefined ? null : (
         <p className="flex flex-wrap items-center gap-2 text-xs">
           <Badge tone={config.data.repository.status === 'valid' ? 'success' : 'neutral'}>
-            {`.agentic/config.yml: ${REPOSITORY_STATUS_LABEL[config.data.repository.status]}`}
+            {`Settings file: ${REPOSITORY_STATUS_LABEL[config.data.repository.status]}`}
           </Badge>
           {config.data.repository.commit_sha === null ? null : (
             <span className="font-mono text-fg-muted">
@@ -452,7 +438,7 @@ const RepositoryConfiguration = ({ project }: { readonly project: Project }): Re
       {commands.refreshConfig.isSuccess &&
       commands.refreshConfig.data.repository.status === 'invalid' ? (
         <ErrorNotice
-          title="The repository’s .agentic/config.yml does not parse — no run starts until it does."
+          title="The repository’s settings file does not parse — no run starts until it does."
           detail={commands.refreshConfig.data.repository.detail ?? ''}
         />
       ) : null}

@@ -16,6 +16,7 @@
 import type { RunRecord, RunSettingsResponse } from '@platform/contracts';
 import type { ReactElement } from 'react';
 import { ApiError } from '../api/http.js';
+import { stageLabel } from '../ui/humanize.js';
 import { Badge, ErrorNotice, Loading, SectionHeading } from '../ui/kit.js';
 import { CodeText } from '../ui/untrusted.js';
 
@@ -56,7 +57,7 @@ export const settingsChangeOf = (run: Comparable, runs: readonly Comparable[]): 
 
 // A run with no stage (an ask or a discovery run) is named as such, never `null (attempt n)`.
 const runName = (run: Comparable): string =>
-  `${run.stage ?? 'a run with no stage'} (attempt ${run.attempt})`;
+  `${run.stage === null ? 'a run with no stage' : stageLabel(run.stage)} (attempt ${run.attempt})`;
 
 /** The comparison in words; `null` when there is nothing to compare with. */
 export const settingsChangeText = (change: SettingsChange): string | null => {

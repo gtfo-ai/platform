@@ -59,7 +59,8 @@ import { Button } from '../ui/button.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { Dialog } from '../ui/dialog.js';
-import { RUN_STATUS_LABEL, runSubject, stageLabel } from '../ui/humanize.js';
+import { Flash } from '../ui/flash.js';
+import { RUN_STATUS_LABEL, runSubject, stageLabel, terminalReasonLabel } from '../ui/humanize.js';
 import {
   Badge,
   Card,
@@ -80,6 +81,7 @@ import { usagePauseWords } from '../ui/usage-pause.js';
 import { ActivityList } from '../viz/flow/activity-list.js';
 import { activityRows } from '../viz/flow/activity-rows.js';
 import { FeedbackForm } from './feedback.js';
+import { PromptsWithheldExplanation } from './prompts-withheld.js';
 import { RunCommandLog } from './run-command-log.js';
 import { isFailedRun, isLiveRun, jobLabel, jobsInStageOrder, RUN_STATUS_ICON } from './run-jobs.js';
 import { isStoppedRun, RunNotStartedPanel } from './run-not-started.js';
@@ -252,6 +254,13 @@ const RunSummary = ({
         }
         definition="Where the run is: starting while its workspace is prepared, running once its agent was asked for, then how it ended."
       />
+      {record.terminal_reason === null || record.terminal_reason === undefined ? null : (
+        <Metric
+          label="Ended because"
+          value={<span className="text-base">{terminalReasonLabel(record.terminal_reason)}</span>}
+          definition="Why the run stopped, as its agent or the platform reported it."
+        />
+      )}
       <Metric
         label="Executed by"
         value={<ExecutedBy seat={record.seat} nowMs={nowMs} />}
@@ -403,9 +412,7 @@ const RetryDialog = ({
             <option value="high">high</option>
           </select>
         </div>
-        {error === null ? null : (
-          <ErrorNotice title="That retry was refused." error={error} detail={error.message} />
-        )}
+        {error === null ? null : <ErrorNotice title="That retry was refused." error={error} />}
       </div>
     </Dialog>
   );
@@ -670,7 +677,9 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
         actions={actions}
       />
 
-      {commands.cancel.isError ? <ErrorNotice title="That cancel was refused." /> : null}
+      {commands.cancel.isError ? (
+        <ErrorNotice title="That cancel was refused." error={commands.cancel.error} />
+      ) : null}
       {commands.cancel.isSuccess ? (
         <p className="text-xs text-fg-muted">
           {commands.cancel.data.command_id === null
@@ -679,11 +688,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
         </p>
       ) : null}
       {commands.retry.isError && dialog !== 'retry' ? (
-        <ErrorNotice
-          title="That retry was refused."
-          error={commands.retry.error}
-          detail={commands.retry.error.message}
-        />
+        <ErrorNotice title="That retry was refused." error={commands.retry.error} />
       ) : null}
       {commands.retry.isSuccess ? (
         <p className="text-xs text-fg-muted">
@@ -844,15 +849,13 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                   </p>
                   {prompt.data.prompts_withheld === null ? null : (
                     // WP-121 (PROGRESS backlog 363): why the project's prompt files are not below.
-                    <ErrorNotice
+                    // S-23.22: the record's own text is a diagnostic, behind Technical details.
+                    <Flash
+                      tone="warning"
                       title="The project’s prompt files were withheld from this prompt."
-                      detail={[
-                        prompt.data.prompts_withheld.reason,
-                        ...prompt.data.prompts_withheld.integrations.map(
-                          (entry) => `${entry.integration}: ${entry.reason}`,
-                        ),
-                      ].join(' — ')}
-                    />
+                    >
+                      <PromptsWithheldExplanation withheld={prompt.data.prompts_withheld} />
+                    </Flash>
                   )}
                   <CodeText value={prompt.data.system_prompt} />
                   <CodeText value={prompt.data.user_prompt} />
@@ -934,7 +937,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
               heading={`Feedback on the ${stageLabel(record.stage)} stage`}
               hint="Scoped to the stage rather than to this attempt: a run is one attempt, and the retrospective reads the stage."
               pending={commands.feedback.isPending}
-              failed={commands.feedback.isError}
+              error={commands.feedback.error}
               accepted={commands.feedback.isSuccess}
               onSubmit={(input) => {
                 if (record.stage !== null) {

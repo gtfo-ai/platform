@@ -63,6 +63,7 @@ import { taskSearchSchema } from '../features/task-tab.js';
 import { WORKER_WIZARD_STEP_IDS } from '../features/worker-wizard-steps.js';
 import { ErrorFallback } from '../ui/error-boundary.js';
 import { Skeleton } from '../ui/skeleton.js';
+import { NotFoundScreen } from './not-found.js';
 
 export interface RouterContext {
   readonly queryClient: QueryClient;
@@ -496,6 +497,17 @@ const runRoute = createRoute({
   component: lazyRouteComponent(() => import('./run-route.js'), 'RunRoute'),
 });
 
+/**
+ * Any other address under the frame: "This page does not exist", inside the shell (S-23.22).
+ * Static paths and parameters outrank a splat, so this matches only what nothing else does. It is
+ * eager, not a chunk: the router's `defaultNotFoundComponent` is the same small screen.
+ */
+const notFoundRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '$',
+  component: NotFoundScreen,
+});
+
 export const routeTree = rootRoute.addChildren([
   signInRoute,
   authenticatedRoute.addChildren([
@@ -524,6 +536,7 @@ export const routeTree = rootRoute.addChildren([
     ]),
     taskRoute,
     runRoute,
+    notFoundRoute,
   ]),
 ]);
 
@@ -557,6 +570,8 @@ export const createAppRouter = (
     context,
     defaultPreload: false,
     defaultErrorComponent: RouteErrorFallback,
+    // A `notFound()` a route throws is the same screen as an address nothing matches (S-23.22).
+    defaultNotFoundComponent: NotFoundScreen,
     // What a lazy screen shows while its chunk loads, once the router's pending delay has passed.
     defaultPendingComponent: RoutePending,
     ...(history === undefined ? {} : { history }),

@@ -34,6 +34,7 @@ import { ApiError, NetworkError } from '../api/http.js';
 import { queryKeys } from '../api/keys.js';
 import { useServices } from '../app/services.js';
 import { safeRedirectPath } from '../routes/redirect.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
 import { ErrorNotice } from '../ui/kit.js';
 import { Logo } from '../ui/logo.js';
 import { DitherCanvas } from './dither-canvas.js';
@@ -90,13 +91,13 @@ const BootstrapHint = (): ReactElement | null => {
     return null;
   }
   return (
-    <p className="mt-6 text-sm leading-relaxed text-pretty text-signin-muted">
-      Nobody has signed in here yet. Use the administrator account set by{' '}
-      <code className="font-mono text-[0.8125rem] [overflow-wrap:anywhere] text-signin-text">
-        APP_BOOTSTRAP_ADMIN_EMAIL
-      </code>
-      .
-    </p>
+    <div className="mt-6 flex flex-col gap-1">
+      <p className="text-sm leading-relaxed text-pretty text-signin-muted">
+        Nobody has signed in here yet. Sign in with the administrator email set when this instance
+        was installed.
+      </p>
+      <ForAdministrators note="bootstrap_admin" />
+    </div>
   );
 };
 

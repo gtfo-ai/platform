@@ -291,7 +291,7 @@ describe('the repository configuration card', () => {
     );
     expect(await screen.findByRole('heading', { name: 'Repository configuration' })).toBeTruthy();
     await waitFor(() => {
-      expect(document.body.textContent).toContain('.agentic/config.yml: not read yet');
+      expect(document.body.textContent).toContain('Settings file: not read yet');
     });
     await userEvent.click(screen.getByText('Propose these settings to the repository'));
     await waitFor(() => {
@@ -379,7 +379,7 @@ describe('the configuration the server reports (WP-91)', () => {
   it('shows no last export when the project was never exported', async () => {
     render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
     await waitFor(() => {
-      expect(document.body.textContent).toContain('.agentic/config.yml: not read yet');
+      expect(document.body.textContent).toContain('Settings file: not read yet');
     });
     expect(document.body.textContent).not.toContain('Last export');
   });
@@ -618,12 +618,23 @@ describe('the project prompt files card (WP-113)', () => {
     );
     const note = await screen.findByRole('note', { name: 'Prompt files withheld' });
     expect(note.textContent).toContain('The prompt files of this reading are withheld.');
-    expect(note.textContent).toContain('the Sentry integration cannot be decrypted');
-    const integrations = screen.getByRole('list', {
-      name: 'Integrations whose credentials could not be read',
-    });
-    expect(integrations.textContent).toContain(HOSTILE_NAME);
-    expect(integrations.textContent).toContain('sealed under key "v1:old"');
+    // S-23.22: the record is a diagnostic — the visible sentence is built from its shape, and the
+    // reason, the integration's id and the store's words are behind "Technical details".
+    expect(note.textContent).toContain(
+      'An integration’s credentials can no longer be read, so the project’s prompt files were not used.',
+    );
+    const technical = note.querySelector('details');
+    expect(technical?.open).toBe(false);
+    expect(technical?.querySelector('summary')?.textContent).toBe('Technical details');
+    expect(technical?.textContent).toContain('the Sentry integration cannot be decrypted');
+    expect(technical?.textContent).toContain(HOSTILE_NAME);
+    expect(technical?.textContent).toContain('sealed under key "v1:old"');
+    const visible = note.cloneNode(true) as HTMLElement;
+    visible.querySelector('details')?.remove();
+    expect(visible.textContent).not.toContain('00000000-0000-4000');
+    expect(within(note).getByRole('link', { name: 'Open Integrations' }).getAttribute('href')).toBe(
+      '/integrations',
+    );
     // Text, never markup.
     expect(note.querySelector('img')).toBeNull();
     expect(document.body.textContent).not.toContain('This reading holds no prompt files');

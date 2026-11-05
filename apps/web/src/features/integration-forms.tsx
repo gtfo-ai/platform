@@ -38,6 +38,7 @@ import { KebabHorizontalIcon } from '@primer/octicons-react/KebabHorizontalIcon'
 import { type ReactElement, useId, useState } from 'react';
 import { useOnboardingCommands, useRefusedDeliveries } from '../app/queries.js';
 import { ActionMenu, ActionMenuItem, ActionMenuSeparator } from '../ui/action-menu.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
 import { Button, IconButton } from '../ui/button.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { Dialog } from '../ui/dialog.js';
@@ -256,7 +257,7 @@ export const SecretEnvField = ({
 }): ReactElement => (
   <Field
     label={`${replacing ? 'New environment variable' : 'Environment variable'} for ${configFieldLabel(field)}`}
-    hint={`Key: ${field}. The variable's name only, never its value; it must be listed in APP_INTEGRATION_SECRET_ENV, and its _FILE companion is read too.`}
+    hint={`Key: ${field}. The variable's name only, never its value; an administrator must allow the name first.`}
     data-secret-key={field}
     autoComplete="off"
     spellCheck={false}
@@ -391,6 +392,7 @@ const CredentialResealer = ({
           onChange={(value) => setNames({ ...names, [field]: value })}
         />
       ))}
+      <ForAdministrators note="secret_env" />
       {commands.resealIntegrationSecrets.isError ? (
         <ErrorNotice
           title="The credentials were not replaced."
@@ -412,7 +414,9 @@ const CredentialResealer = ({
 
 // ── The menu and its dialogs ─────────────────────────────────────────────────
 
-type OpenDialog = 'configuration' | 'credentials' | 'retire' | null;
+/** Which of an integration's dialogs is open; `null` for none. */
+export type IntegrationDialog = 'configuration' | 'credentials' | 'retire' | null;
+type OpenDialog = IntegrationDialog;
 
 /**
  * The `···` of an integration: *Test connection* and *Setup guide* when the caller offers them (the
@@ -426,6 +430,8 @@ export const IntegrationActions = ({
   boundProjects,
   onTest,
   onSetupGuide,
+  dialog,
+  onDialogChange,
 }: {
   readonly integration: IntegrationSummary;
   readonly provider: IntegrationProvider | undefined;
@@ -433,8 +439,16 @@ export const IntegrationActions = ({
   readonly boundProjects: number | null;
   readonly onTest?: () => void;
   readonly onSetupGuide?: () => void;
+  /**
+   * The open dialog, when the caller holds it — so a problem line's *Edit configuration* opens the
+   * same dialog as the menu (S-23.22). Left out, the menu holds it itself.
+   */
+  readonly dialog?: OpenDialog;
+  readonly onDialogChange?: (dialog: OpenDialog) => void;
 }): ReactElement | null => {
-  const [open, setOpen] = useState<OpenDialog>(null);
+  const [ownOpen, setOwnOpen] = useState<OpenDialog>(null);
+  const open = dialog === undefined ? ownOpen : dialog;
+  const setOpen = onDialogChange ?? setOwnOpen;
   // A dialog's form is mounted afresh each time it opens, so a closed one keeps nothing typed.
   const [generation, setGeneration] = useState(0);
   const configFormId = useId();

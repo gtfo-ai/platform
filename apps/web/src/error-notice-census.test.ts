@@ -27,6 +27,14 @@
  * (`api/read-error.ts`) returns `String(error)` for anything but a 403, so its ten notices stay
  * hidden for a `PlatformUpdatedError` only because each also passes `error={…}` — a notice that
  * keeps `detail={readErrorDetail(…)}` and drops `error=` reads green here (WP-167 review round 1).
+ *
+ * ## A "…refused." notice carries the refusal (S-23.22)
+ *
+ * About a dozen notices said *"That command was refused."* and passed no `error`, so the person was
+ * told that the server said no and never why — the sentence `ErrorNotice` builds from the error's
+ * code, and the server's diagnostic behind *Technical details*, both need the error. The second
+ * census refuses an `<ErrorNotice` whose `title` mentions "refused" and that has no `error={…}`
+ * attribute. The same syntactic limits apply: a title held in a variable is not read.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -98,6 +106,53 @@ export const stringifiedNoticeAttributes = (source: string): string[] => {
   return found;
 };
 
+/** The attribute text of every `<ErrorNotice …>` tag in `source`, comments removed. */
+export const noticeTags = (source: string): string[] => {
+  const code = withoutComments(source);
+  const tags: string[] = [];
+  let at = code.indexOf(TAG);
+  while (at !== -1) {
+    let index = at + TAG.length;
+    while (index < code.length && code[index] !== '>') {
+      if (code[index] === '{') {
+        index = closingBrace(code, index);
+      } else if (code[index] === '"' || code[index] === "'") {
+        const next = code.indexOf(code[index] as string, index + 1);
+        index = next === -1 ? code.length : next + 1;
+      } else {
+        index += 1;
+      }
+    }
+    tags.push(code.slice(at + TAG.length, index));
+    at = code.indexOf(TAG, index);
+  }
+  return tags;
+};
+
+/** The raw value of attribute `name` in a tag's text — `"…"` or `{…}` — or `null`. */
+const attributeValue = (tag: string, name: string): string | null => {
+  const match = new RegExp(`\\b${name}=`).exec(tag);
+  if (match === null) {
+    return null;
+  }
+  const start = match.index + match[0].length;
+  if (tag[start] === '{') {
+    return tag.slice(start, closingBrace(tag, start));
+  }
+  const quote = tag[start] as string;
+  const end = tag.indexOf(quote, start + 1);
+  return tag.slice(start, end === -1 ? tag.length : end + 1);
+};
+
+/** The titles of every "…refused" notice in `source` that is not handed its error. */
+export const refusedNoticesWithoutError = (source: string): string[] =>
+  noticeTags(source).flatMap((tag) => {
+    const title = attributeValue(tag, 'title');
+    return title !== null && /refused/i.test(title) && attributeValue(tag, 'error') === null
+      ? [title]
+      : [];
+  });
+
 const walk = (directory: string): string[] =>
   readdirSync(directory).flatMap((entry) => {
     const path = join(directory, entry);
@@ -154,5 +209,57 @@ describe('ErrorNotice is handed the error, not its text (WP-167)', () => {
     ['String( in a quoted title', '<ErrorNotice title="String(e)" />'],
   ])('does not flag %s', (_name, source) => {
     expect(stringifiedNoticeAttributes(source)).toEqual([]);
+  });
+});
+
+describe('a "…refused." ErrorNotice is handed the refusal (S-23.22)', () => {
+  it('finds every refused notice passing its error', () => {
+    const files = sourceFiles();
+    const refused = files.flatMap((path) =>
+      noticeTags(readFileSync(path, 'utf8')).filter((tag) =>
+        /refused/i.test(attributeValue(tag, 'title') ?? ''),
+      ),
+    );
+    // 18 at S-23.22: a walk that read none would also report no violations.
+    expect(refused.length).toBeGreaterThanOrEqual(15);
+    const found = files.flatMap((path) =>
+      refusedNoticesWithoutError(readFileSync(path, 'utf8')).map(
+        (title) => `${relative(SOURCE_ROOT, path)}: ${title}`,
+      ),
+    );
+    expect(found).toEqual([]);
+  });
+
+  it.each([
+    [
+      'a literal title',
+      '<ErrorNotice title="That command was refused." />',
+      ['"That command was refused."'],
+    ],
+    [
+      'an expression title',
+      // A brace inside the expression (`{ verb }`) does not end the attribute.
+      '<ErrorNotice title={pick({ verb }) + " was refused."} detail="x" />',
+      ['{pick({ verb }) + " was refused."}'],
+    ],
+    [
+      'a multi-line element',
+      '<ErrorNotice\n  title="That answer was refused."\n/>',
+      ['"That answer was refused."'],
+    ],
+  ])('flags %s with no error', (_name, source, expected) => {
+    expect(refusedNoticesWithoutError(source)).toEqual(expected);
+  });
+
+  it.each([
+    [
+      'a refused notice with its error',
+      '<ErrorNotice title="That command was refused." error={e} />',
+    ],
+    ['a notice that is not a refusal', '<ErrorNotice title="Could not be loaded." />'],
+    ['a refusal in a comment', '// <ErrorNotice title="x refused" />\nconst c = 1;'],
+    ['another component', '<Other title="That was refused." />'],
+  ])('does not flag %s', (_name, source) => {
+    expect(refusedNoticesWithoutError(source)).toEqual([]);
   });
 });

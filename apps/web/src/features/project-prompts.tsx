@@ -23,6 +23,10 @@
 import type { EffectiveConfigResponse } from '@platform/contracts';
 import type { ReactElement } from 'react';
 import { useOnboardingCommands, useProjectConfig } from '../app/queries.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
+import { DetailsDisclosure } from '../ui/details.js';
+import { Flash } from '../ui/flash.js';
+import { stageLabel } from '../ui/humanize.js';
 import {
   Badge,
   Button,
@@ -33,6 +37,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { PromptsWithheldExplanation } from './prompts-withheld.js';
 
 type StagePrompt = EffectiveConfigResponse['stage_prompts'][number];
 type PromptFile = NonNullable<EffectiveConfigResponse['repository']['prompts']>['files'][number];
@@ -44,7 +49,7 @@ export const STAGE_PROMPT_STATUS_LABEL: Readonly<Record<StagePrompt['status'], s
   not_a_file: 'not a regular file (a link or a directory) — not read',
   oversized: 'over 16 KiB — not read',
   unread: 'no reading holds the prompt directory yet',
-  outside_directory: 'names a file outside .agentic/prompts/ — never read',
+  outside_directory: 'names a file outside the prompts folder — never read',
   not_listed: 'the directory held more than 64 files and this one was not listed',
 };
 
@@ -76,14 +81,13 @@ export const ProjectPromptFiles = ({ projectId }: { readonly projectId: string }
     <Card className="flex flex-col gap-2">
       <SectionHeading>Project prompt files</SectionHeading>
       <p className="text-xs text-fg-muted">
-        Files under <code>.agentic/prompts/</code> on the default branch add a stage’s own
-        instructions to its role prompt: <code>&lt;stage&gt;.md</code> and{' '}
-        <code>&lt;stage&gt;.append.md</code>, or the file a stage’s <code>prompt</code> /{' '}
-        <code>prompt_append</code> key names. A stage gets at most the first{' '}
+        Files in the repository’s prompts folder on the default branch add a stage’s own
+        instructions to its role prompt, one file per stage. A stage gets at most the first{' '}
         {formatInteger(prompts?.cut_at_chars ?? 8_000)} characters of each. An edit applies at the{' '}
         <strong>next reading</strong> — after the next knowledge index run, or when you re-read now
         — never at the merge.
       </p>
+      <ForAdministrators note="prompt_files" />
       {repository === undefined ? null : (
         <p className="flex flex-wrap items-center gap-2 text-xs">
           {repository.commit_sha === null ? (
@@ -105,25 +109,7 @@ export const ProjectPromptFiles = ({ projectId }: { readonly projectId: string }
             <strong>The prompt files of this reading are withheld.</strong> No stage is given one,
             and every run planned meanwhile records why.
           </p>
-          <p className="text-fg-muted">
-            <UntrustedText value={withheld.reason} />
-          </p>
-          {withheld.integrations.length === 0 ? null : (
-            <ul
-              className="flex flex-col gap-1"
-              aria-label="Integrations whose credentials could not be read"
-            >
-              {withheld.integrations.map((entry) => (
-                <li key={entry.integration} className="flex flex-wrap items-center gap-2">
-                  <Badge tone="warning">unreadable</Badge>
-                  <UntrustedText value={entry.integration} />
-                  <span className="text-fg-muted">
-                    <UntrustedText value={entry.reason} />
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <PromptsWithheldExplanation withheld={withheld} />
         </div>
       ) : prompts === null ? (
         <p className="text-xs text-fg-muted">
@@ -160,7 +146,7 @@ export const ProjectPromptFiles = ({ projectId }: { readonly projectId: string }
         <ul className="flex flex-col gap-1 text-xs" aria-label="What each stage is given">
           {stages.map((entry) => (
             <li key={`${entry.stage}:${entry.key}`} className="flex flex-wrap items-center gap-2">
-              <Badge tone="accent">{entry.stage}</Badge>
+              <Badge tone="accent">{stageLabel(entry.stage)}</Badge>
               <span>{entry.key}</span>
               <code>
                 <UntrustedText value={entry.path} />
@@ -187,10 +173,17 @@ export const ProjectPromptFiles = ({ projectId }: { readonly projectId: string }
         </Button>
       </div>
       {refresh.isSuccess && refresh.data.prompts_withheld !== undefined ? (
-        <ErrorNotice
-          title="The configuration was read and the prompt files were not."
-          detail={refresh.data.prompts_withheld}
-        />
+        <Flash tone="warning" title="The configuration was read and the prompt files were not.">
+          <p>
+            An integration’s credentials can no longer be read, so the prompt files cannot be
+            checked for them.
+          </p>
+          <DetailsDisclosure summary="Technical details">
+            <p className="font-mono text-xs [overflow-wrap:anywhere]">
+              <UntrustedText value={refresh.data.prompts_withheld} />
+            </p>
+          </DetailsDisclosure>
+        </Flash>
       ) : null}
       {refresh.isError ? (
         <ErrorNotice title="The repository could not be re-read." error={refresh.error} />

@@ -31,6 +31,7 @@
  * Status names are provider text (BD-022). They are rendered as React text — in an `<option>`, which
  * can hold nothing else, through `sanitiseUntrusted`; everywhere else through `UntrustedText`.
  */
+
 import {
   LIFECYCLE_SINGLE_SLOTS,
   type LifecycleSingleSlot,
@@ -48,6 +49,7 @@ import {
   useProjectConfig,
   useTicketStatuses,
 } from '../app/queries.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
 import { Badge, Button, ErrorNotice, Loading } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
@@ -373,18 +375,20 @@ const ReturnedRow = ({
   );
 };
 
-/** The statuses read's failure, in the person's words. */
+/**
+ * The statuses read's failure, in the person's words. The server's message is `ErrorNotice`'s to
+ * fold under *Technical details* (S-23.22), so no branch passes it as the detail.
+ */
 const statusesFailure = (error: unknown): { title: string; detail?: string } => {
   if (error instanceof ApiError && error.code === 'lifecycle_statuses_unavailable') {
     return {
       title: 'The tracker’s statuses could not be loaded, so the slots cannot be picked yet.',
-      detail: error.message,
     };
   }
   if (error instanceof ApiError && error.status === 403) {
     return { title: 'Reading the tracker’s statuses needs a maintainer.' };
   }
-  return { title: 'The tracker’s statuses could not be loaded.', detail: String(error) };
+  return { title: 'The tracker’s statuses could not be loaded.' };
 };
 
 /**
@@ -505,10 +509,13 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
         </p>
       )}
       {config.data?.status_mapping_superseded === true ? (
-        <p className="text-xs" data-lifecycle="status-mapping-superseded">
-          <Badge tone="warning">Note</Badge> A slot other than <em>Pick up from</em> is mapped, so
-          the configuration’s <code>status_mapping</code> is not applied at all.
-        </p>
+        <div className="flex flex-col gap-1" data-lifecycle="status-mapping-superseded">
+          <p className="text-xs">
+            <Badge tone="warning">Note</Badge> A slot other than <em>Pick up from</em> is mapped, so
+            the configuration’s older status mapping is not applied at all.
+          </p>
+          <ForAdministrators note="status_mapping" />
+        </div>
       ) : null}
       {dropped.map((entry) => (
         <p

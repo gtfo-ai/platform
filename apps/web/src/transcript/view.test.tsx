@@ -112,6 +112,33 @@ describe('TranscriptView', () => {
     expect(screen.getByText('$1.50', { exact: false })).toBeTruthy();
   });
 
+  // S-23.22: the end row says why in the run page's words, never the SDK's raw reason.
+  it.each([
+    ['error_max_turns', 'Ended because: Ran out of turns'],
+    ['a_reason_this_build_does_not_know', 'Ended because: A Reason This Build Does Not Know'],
+  ])('says why the run ended in words (%s)', (reason, expected) => {
+    const { container } = render(
+      <TranscriptView
+        blocks={[
+          {
+            kind: 'result',
+            id: 'r',
+            seq: 1,
+            at: AT,
+            terminalReason: reason,
+            numTurns: 2,
+            durationMs: 10,
+            costUsd: 1.5,
+            isEstimate: false,
+          },
+        ]}
+      />,
+    );
+    const row = container.querySelector('[data-block-kind="result"]');
+    expect(row?.textContent).toContain(expected);
+    expect(row?.textContent).not.toContain(reason);
+  });
+
   it('renders a progress line as untrusted text, with its percentage and a cut marked (backlog 496)', () => {
     const summary = '<b>slice 2</b> pushed';
     const { container } = render(

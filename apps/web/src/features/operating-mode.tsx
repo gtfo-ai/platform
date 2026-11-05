@@ -58,6 +58,7 @@ import {
   useProjectConfig,
   useSettingsCommands,
 } from '../app/queries.js';
+import { type AdminNote, ForAdministrators } from '../ui/admin-notes.js';
 import { BUDGET_WINDOW_LABEL } from '../ui/humanize.js';
 import {
   Badge,
@@ -272,6 +273,8 @@ export const FEATURES_WITHOUT_A_SWITCH: readonly {
   readonly name: string;
   readonly why: string;
   readonly key?: 'human_time';
+  /** The exact key, behind "For administrators" (S-23.22). */
+  readonly note?: AdminNote;
   /** Normalised client paths (`${…}` → `{}`), required on every entry without a `key`. */
   readonly routes?: readonly string[];
 }[] = [
@@ -293,7 +296,8 @@ export const FEATURES_WITHOUT_A_SWITCH: readonly {
   {
     name: 'Human time accounting',
     key: 'human_time',
-    why: 'always recorded from events; the per-user breakdown is off by default and is set in the project’s configuration file (features.human_time.per_user_breakdown), not by a toggle',
+    why: 'always recorded from events; the per-user breakdown is off by default and is set in the repository’s settings file, not by a toggle',
+    note: 'human_time_breakdown',
   },
 ];
 
@@ -606,6 +610,7 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
           {FEATURES_WITHOUT_A_SWITCH.map((feature) => (
             <li key={feature.name}>
               <strong>{feature.name}</strong> — {feature.why}
+              {feature.note === undefined ? null : <ForAdministrators note={feature.note} />}
             </li>
           ))}
         </ul>
@@ -805,13 +810,13 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
             </p>
           )}
           <p className="text-xs text-fg-muted">
-            Nothing is applied until you accept. Accepting writes <code>policies.risk_classes</code>{' '}
-            (and the checklists you wrote, as <code>policies.review_checklists</code>) into this
-            project’s configuration and records who did it; you can edit both afterwards in{' '}
-            <code>.agentic/config.yml</code>. The platform ships no checklist items: a checklist is
-            added to the reviewer’s own default checks, never instead of them, and the review
-            records which lists it was given.
+            Nothing is applied until you accept. Accepting writes the risk classes and the
+            checklists you wrote into this project’s configuration and records who did it; you can
+            edit both afterwards in the repository’s settings file. The platform ships no checklist
+            items: a checklist is added to the reviewer’s own default checks, never instead of them,
+            and the review records which lists it was given.
           </p>
+          <ForAdministrators note="risk_classes" />
         </div>
       )}
 
@@ -821,10 +826,11 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
 
       <p className="text-xs text-fg-muted">
         A class can force a plan approval, add a named reviewer and give the reviewer a checklist.
-        Reviewers are routed at the rebase gate: a <code>CODEOWNERS</code> match first, then this
-        project’s <code>policies.reviewers</code>, then the human who asked for the task — and a
-        handle the git provider does not know is reported rather than assigned to somebody else.
+        Reviewers are routed at the rebase gate: a code-owners match first, then this project’s
+        named reviewers, then the person who asked for the task — and a handle the git provider does
+        not know is reported rather than assigned to somebody else.
       </p>
+      <ForAdministrators note="reviewers" />
     </Section>
   );
 };
@@ -992,13 +998,14 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
             : formatUsd(features.maintenance.budget_usd)}
         </p>
         <p className="text-fg-muted">
-          These are per-feature caps in <code>.agentic/config.yml</code>, not budget rows. Both are
+          These are per-feature caps in the repository’s settings file, not budget rows. Both are
           enforced the same way and over the same window: a run is refused when this project’s spend
           for the calendar month plus what the stage may spend would pass the cap, and the task
           pauses exactly as it does for an organisation or project budget. The shadow cap counts
           shadow tasks; the maintenance cap counts the chores the scheduler created, and once it is
           spent the scheduler creates no more of them for that month.
         </p>
+        <ForAdministrators note="feature_caps" />
       </Card>
     </>
   );

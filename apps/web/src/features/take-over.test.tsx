@@ -6,6 +6,7 @@
  * real query client, the real endpoint parsers and the real intent-key minting. What is asserted is
  * what a person can see and press, and what the request carried.
  */
+
 import type {
   ContextPackRecord,
   RunReadResponse,
@@ -18,6 +19,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { stageLabel } from '../ui/humanize.js';
 import { admittedDocuments, crossedBudgetCap, textSearchText } from './run-detail.js';
 import { interruptedRunOf, workspaceExportText } from './take-over.js';
 
@@ -308,6 +310,11 @@ describe('a take-over in force', () => {
     // The picker is the compiled pipeline's enabled stages, exactly — nothing the route refuses.
     const picker = screen.getByLabelText('Resume at') as HTMLSelectElement;
     expect([...picker.options].map((option) => option.value)).toEqual(TAKEN_OVER.hand_back_stages);
+    // S-23.22: each option is the stage's name, never its id.
+    expect([...picker.options].map((option) => option.textContent)).toEqual(
+      TAKEN_OVER.hand_back_stages.map(stageLabel),
+    );
+    expect([...picker.options].map((option) => option.textContent)).not.toContain('code_review');
     expect(picker.value).toBe('implementation');
     const submit = screen.getByRole('button', { name: 'Hand back' });
     expect(submit).toHaveProperty('disabled', true);

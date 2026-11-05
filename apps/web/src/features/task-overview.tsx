@@ -214,7 +214,7 @@ export const TaskOverview = ({
         heading="Feedback on this task"
         hint="Goes to the Retrospective and the Librarian: what the agents got right or wrong here becomes a knowledge-base proposal."
         pending={commands.feedback.isPending}
-        failed={commands.feedback.isError}
+        error={commands.feedback.error}
         accepted={commands.feedback.isSuccess}
         onSubmit={(input) => {
           commands.feedback.mutate({ scope: 'task', ...input });

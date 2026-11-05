@@ -128,7 +128,7 @@ const QuestionRow = ({
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  const [refused, setRefused] = useState(false);
+  const [refused, setRefused] = useState<unknown>(null);
   const panelId = useId();
   const inputId = useId();
 
@@ -137,12 +137,12 @@ const QuestionRow = ({
       return;
     }
     setBusy(true);
-    setRefused(false);
+    setRefused(null);
     void endpoints
       .answerQuestion(question.task_id, question.id, { answer: text })
       .then(onAnswered)
-      .catch(() => {
-        setRefused(true);
+      .catch((error: unknown) => {
+        setRefused(error);
       })
       .finally(() => {
         setBusy(false);
@@ -235,7 +235,9 @@ const QuestionRow = ({
               <Button onClick={() => setOpen(false)}>Cancel</Button>
             </div>
           </form>
-          {refused ? <ErrorNotice title="That answer was refused." /> : null}
+          {refused === null ? null : (
+            <ErrorNotice title="That answer was refused." error={refused} />
+          )}
         </li>
       ) : null}
     </>

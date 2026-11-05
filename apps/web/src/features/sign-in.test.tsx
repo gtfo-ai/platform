@@ -22,7 +22,7 @@ const SESSION = {
   session: { id: '00000000-0000-4000-8000-000000000002' },
 };
 
-const HINT = /Nobody has signed in here yet\. Use the administrator account set by/;
+const HINT = /Nobody has signed in here yet\. Sign in with the administrator email/;
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -81,14 +81,20 @@ const renderPage = async (): Promise<void> => {
 };
 
 describe('the bootstrap hint', () => {
-  it('names the bootstrap variable while nobody has signed in', async () => {
+  it('says it plainly while nobody has signed in, the variable only for administrators', async () => {
     await renderPage();
     const hint = await screen.findByText(HINT);
     expect(hint.textContent).toBe(
-      'Nobody has signed in here yet. Use the administrator account set by APP_BOOTSTRAP_ADMIN_EMAIL.',
+      'Nobody has signed in here yet. Sign in with the administrator email set when this instance was installed.',
     );
-    // The variable is a code span, and the old footer's wording is gone.
-    expect(hint.querySelector('code')?.textContent).toBe('APP_BOOTSTRAP_ADMIN_EMAIL');
+    // S-23.22: the variable's name is behind "For administrators", never in the sentence.
+    expect(hint.textContent).not.toContain('APP_BOOTSTRAP_ADMIN_EMAIL');
+    const note = document.querySelector('[data-admin-note="bootstrap_admin"]');
+    expect(note?.closest('details')?.querySelector('summary')?.textContent).toBe(
+      'For administrators',
+    );
+    expect(note?.textContent).toContain('APP_BOOTSTRAP_ADMIN_EMAIL');
+    // The old footer's wording is gone.
     expect(document.body.textContent).not.toContain('Accounts are created by an administrator');
   });
 

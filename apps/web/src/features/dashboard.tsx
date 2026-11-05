@@ -42,6 +42,7 @@ import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
 import { Counter } from '../ui/counter.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
+import { Flash } from '../ui/flash.js';
 import { APPROVAL_KIND_LABEL, runSubject, stageLabel } from '../ui/humanize.js';
 import {
   Badge,
@@ -97,17 +98,32 @@ const UnreadableAccountsBanner = (): ReactElement | null => {
   }
   return (
     <div data-unreadable-accounts>
-      <ErrorNotice
-        title={`An organisation account's credentials cannot be decrypted: ${broken
-          .map((integration) => `${integration.name} (${integration.provider})`)
-          .join(', ')}.`}
-        // The server's sentence only (rule 3): no consequence text is invented here.
-        detail={
-          first.credentials_consequence === null
-            ? 'Repair it under Integrations.'
-            : `${first.credentials_consequence} Repair it under Integrations.`
+      <Flash
+        tone="danger"
+        title={
+          <UntrustedText
+            value={`An integration’s credentials can no longer be read: ${broken
+              .map((integration) => integration.name)
+              .join(', ')}.`}
+          />
         }
-      />
+        action={
+          <Link
+            to="/integrations/$integrationId"
+            params={{ integrationId: first.id }}
+            className={buttonClassName('default', 'sm')}
+          >
+            Fix it
+          </Link>
+        }
+      >
+        {/* The server's sentence only (rule 3): no consequence text is invented here. */}
+        {first.credentials_consequence === null ? undefined : (
+          <p>
+            <UntrustedText value={first.credentials_consequence} />
+          </p>
+        )}
+      </Flash>
     </div>
   );
 };

@@ -20,6 +20,7 @@ import type {
   BudgetScope,
   BudgetWindow,
   BuiltinGateStageId,
+  EffectiveConfigResponse,
   IntegrationSummary,
   IntegrationType,
   KnowledgeProposalKind,
@@ -133,6 +134,26 @@ export const TERMINAL_REASON_LABEL: Readonly<Record<RunTerminalReason, string>> 
   rate_limited: 'Hit a usage limit',
 };
 
+/**
+ * Why a run ended, in words — the run page's *Ended because* and the transcript's end row (S-23.22).
+ * The transcript carries the reason as a plain string, so a value this build has no word for is
+ * title-cased rather than printed raw.
+ */
+export const terminalReasonLabel = (reason: string): string =>
+  Object.hasOwn(TERMINAL_REASON_LABEL, reason)
+    ? TERMINAL_REASON_LABEL[reason as RunTerminalReason]
+    : titleCase(reason);
+
+/** The repository settings file's state, as a sentence's subject says it. */
+export const REPOSITORY_STATUS_LABEL: Readonly<
+  Record<EffectiveConfigResponse['repository']['status'], string>
+> = {
+  valid: 'read and valid',
+  invalid: 'does not parse',
+  absent: 'not present',
+  unread: 'not read yet',
+};
+
 /** `task_stages.state`: one attempt at a stage. */
 export const STAGE_STATE_LABEL: Readonly<Record<TaskStageState, string>> = {
   pending: 'Pending',
@@ -193,6 +214,31 @@ export const titleCase = (slug: string): string =>
 /** A stage's human name: the shipped word, or the slug title-cased for a project's own stage. */
 export const stageLabel = (id: string): string =>
   Object.hasOwn(STAGE_LABEL, id) ? STAGE_LABEL[id as ShippedStageId] : titleCase(id);
+
+/**
+ * The events a sentence can name — a human stage's `on:` transition, the event that closed an
+ * attempt — as a clause: "the merge request was merged" (S-23.22). The type is an open vocabulary
+ * (a project template may name any event), so one this table does not hold is said as its words,
+ * `ticket.updated` → "ticket updated", never as the dotted name.
+ */
+const EVENT_PHRASE: Readonly<Record<string, string>> = {
+  'mr.merged': 'the merge request was merged',
+  'mr.closed': 'the merge request was closed',
+  'mr.opened': 'the merge request was opened',
+  'mr.review.comment': 'a reviewer commented on the merge request',
+  'ticket.status.changed': 'the ticket’s status changed',
+  'ticket.updated': 'the ticket was updated',
+  'default_branch.moved': 'the default branch moved',
+  'ci.pipeline.finished': 'the CI pipeline finished',
+  'task.stage.returned': 'the task was sent back',
+  'task.completed': 'the task completed',
+  'task.cancelled': 'the task was cancelled',
+};
+
+export const eventPhrase = (type: string): string =>
+  Object.hasOwn(EVENT_PHRASE, type)
+    ? (EVENT_PHRASE[type] as string)
+    : type.replace(/[._]+/g, ' ').trim();
 
 /** "Implementation · Developer", or the role alone for a run with no stage (an ask). */
 export const runSubject = (run: { readonly stage: string | null; readonly role: AgentRole }) =>

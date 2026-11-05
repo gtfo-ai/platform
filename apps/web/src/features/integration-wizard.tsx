@@ -25,6 +25,7 @@ import type { IntegrationProvider } from '@platform/contracts';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
 import { useIntegrationProviders, useOnboardingCommands } from '../app/queries.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
 import { Button, buttonClassName } from '../ui/button.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { DetailsDisclosure } from '../ui/details.js';
@@ -287,8 +288,9 @@ export const IntegrationWizardScreen = ({
                 />
               ))}
               <p className="text-xs text-fg-muted">
-                Every address must name a host the operator allowed in APP_INTEGRATION_HOSTS.
+                Every address must be on a host an administrator has allowed for this instance.
               </p>
+              <ForAdministrators note="integration_hosts" />
               {optional.length === 0 ? null : (
                 <DetailsDisclosure summary={`Optional settings (${optional.length})`}>
                   <div className="flex flex-col gap-3">
@@ -337,6 +339,7 @@ export const IntegrationWizardScreen = ({
                   }
                 />
               ))}
+              <ForAdministrators note="secret_env" />
               <div>
                 <Button
                   type="submit"

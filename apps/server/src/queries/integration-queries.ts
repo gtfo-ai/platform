@@ -200,12 +200,17 @@ export const storedConfigRefusal = (
 /**
  * What `credentials_readable: false` costs, in platform text (WP-157 (a), PROGRESS backlog 413).
  *
+ * **It is shown to people as it is** (the Integrations row, Home's banner), so it is plain words:
+ * no variable, row, path or id (S-23.22) — `user-facing-copy.test.ts` holds it to that. Why the
+ * credentials cannot be read (a changed `APP_SECRET_KEY`, a damaged `secrets` row) is the operator
+ * guide's, and the withheld directory is `.agentic/prompts/`.
+ *
  * `createProjectBindingSecrets` adds every live communication account to every project's
  * exact-value set, so the repository reading of **every** project stores its configuration and
  * withholds its prompt files (`withheldPrompts` in `packages/application/src/config/repository-config.ts`).
  */
 export const ORGANISATION_ACCOUNT_UNREADABLE_CONSEQUENCE =
-  'Its credentials cannot be decrypted (a changed APP_SECRET_KEY or a damaged secrets row), so the prompt files of every project are withheld: each repository reading stores the configuration and none of .agentic/prompts/ until the credentials are re-sealed or the account is retired.';
+  'Until they are replaced or the integration is retired, no project’s runs are given the project’s prompt files, because those files cannot be checked for these credentials.';
 
 /**
  * Whether each live organisation communication account decrypts, by id — the answer of

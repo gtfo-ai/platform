@@ -291,7 +291,9 @@ export const TaskCallout = ({
                   }}
                 />
               ))}
-              {commands.answer.isError ? <ErrorNotice title="That answer was refused." /> : null}
+              {commands.answer.isError ? (
+                <ErrorNotice title="That answer was refused." error={commands.answer.error} />
+              ) : null}
             </div>
           )}
           {pendingApprovals.length === 0 ? null : (
@@ -306,7 +308,9 @@ export const TaskCallout = ({
                   }}
                 />
               ))}
-              {commands.decide.isError ? <ErrorNotice title="That decision was refused." /> : null}
+              {commands.decide.isError ? (
+                <ErrorNotice title="That decision was refused." error={commands.decide.error} />
+              ) : null}
             </div>
           )}
           {reasons.includes('escalation') ? (

@@ -5,7 +5,8 @@
  * lazy route component — one whose `preload` the router calls while it resolves the match — so a
  * screen added with a static import is a red test here rather than a bundle that quietly grows
  * until `bundle:check` fails for somebody else. Read off the live route tree, both directions: the
- * eager set is exactly the four named, and every other route that renders something is lazy.
+ * eager set is exactly the ones named, and every other route that renders something is lazy. The
+ * not-found screen (S-23.22) is eager too: it is also the router's `defaultNotFoundComponent`.
  */
 import { QueryClient } from '@tanstack/react-query';
 import type { AnyRoute } from '@tanstack/react-router';
@@ -30,8 +31,9 @@ const rendering = (Object.values(router.routesById) as AnyRoute[]).filter(
 const isLazy = (route: AnyRoute): boolean =>
   typeof (route.options.component as Preloadable).preload === 'function';
 
-/** The frame (root, shell, project layout), the sign-in page and Home. */
+/** The frame (root, shell, project layout), the sign-in page, Home and the not-found screen. */
 const EAGER = [
+  '/authenticated/$',
   '__root__',
   '/sign-in',
   '/authenticated',
@@ -47,7 +49,7 @@ describe('the lazy screens', () => {
     );
   });
 
-  it('keeps exactly the frame, sign-in and Home eager', () => {
+  it('keeps exactly the frame, sign-in, Home and the not-found screen eager', () => {
     expect(
       rendering
         .filter((route) => !isLazy(route))

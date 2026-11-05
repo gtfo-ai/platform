@@ -382,7 +382,7 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     await waitFor(() => expect(view.text()).toContain('CI status'));
     // ci_gate: attempt 1 sent the task back, attempt 2 passed — the latest is what the head is.
     expect(view.text()).toContain('green');
-    expect(view.text()).toContain('ci_gate, attempt 2, decided');
+    expect(view.text()).toContain('CI, attempt 2, decided');
     // rebase_gate: parked, closed `failed` with the escalation's own word (backlog 160).
     expect(view.text()).toContain('escalated (undecided)');
   });
@@ -390,8 +390,10 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
   it('says a gate the task never reached is not reached, never a tick', async () => {
     const view = await render$(detailWith({ stages: [], artifacts: [] }));
     await waitFor(() => expect(view.text()).toContain('CI status'));
-    expect(view.text()).toContain('This task has not entered ci_gate.');
-    expect(view.text()).toContain('This task has not entered rebase_gate.');
+    // S-23.22: the gate by its name, never its id.
+    expect(view.text()).toContain('This task has not entered CI.');
+    expect(view.text()).toContain('This task has not entered Rebase check.');
+    expect(view.text()).not.toContain('ci_gate');
     expect(view.text()).not.toContain('green');
   });
 

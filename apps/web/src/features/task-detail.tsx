@@ -68,7 +68,11 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
   // a strict read would have to name one of them.
   const search = useSearch({ strict: false }) as TaskSearch;
   const [dialog, setDialog] = useState<TaskDialog | null>(null);
-  const form = useStageCommandForm(detail.data?.stages ?? [], detail.data?.gate_feedback ?? null);
+  const form = useStageCommandForm(
+    detail.data?.stages ?? [],
+    detail.data?.gate_feedback ?? null,
+    detail.data?.task.current_stage ?? null,
+  );
   const epic = detail.data?.task.template === EPIC_SPLIT_TEMPLATE;
   const breakdown = useTaskBreakdown(taskId, epic);
 
@@ -116,7 +120,10 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
       />
 
       {commands.pause.isError || commands.resume.isError ? (
-        <ErrorNotice title="That command was refused." />
+        <ErrorNotice
+          title="That command was refused."
+          error={commands.pause.error ?? commands.resume.error}
+        />
       ) : null}
       {/* Backlog 494: what a retry did, announced rather than only drawn. */}
       {commands.retryStage.data === undefined ? null : (

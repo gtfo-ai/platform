@@ -58,6 +58,7 @@ import {
   useProjects,
   useRediscoveryGate,
 } from '../app/queries.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
 import { DetailsDisclosure } from '../ui/details.js';
@@ -392,10 +393,11 @@ const FinishStep = ({
       <DetailsDisclosure summary="Learn more">
         <p className="text-xs text-fg-muted">
           Approving a drafted page commits it on an <code>agentic/knowledge/*</code> branch with a
-          merge request — never onto the default branch. The settings are proposed as{' '}
-          <code>.agentic/config.yml</code> and a <code>CLAUDE.md</code> pointer in a merge request;
-          once merged, the file wins over these settings.
+          merge request — never onto the default branch. The settings are proposed as the
+          repository’s settings file and a <code>CLAUDE.md</code> pointer in a merge request; once
+          merged, the file wins over these settings.
         </p>
+        <ForAdministrators note="repository_config" />
       </DetailsDisclosure>
     </div>
   );
@@ -614,10 +616,11 @@ const Wizard = ({
             from a shipped baseline that already carries the project&rsquo;s own test, lint and
             build commands (<code>npm test</code>, <code>npm run &hellip;</code>,{' '}
             <code>make &hellip;</code> and the like) for the roles that run them, and a project may
-            only <em>narrow</em> that baseline through <code>commands</code> in{' '}
-            <code>.agentic/config.yml</code>. An entry no role is granted is ignored and listed on
-            the project&rsquo;s configuration rather than dropped in silence.
+            only <em>narrow</em> that baseline through the repository&rsquo;s settings file. An
+            entry no role is granted is ignored and listed on the project&rsquo;s configuration
+            rather than dropped in silence.
           </p>
+          <ForAdministrators note="command_allow" />
         </DetailsDisclosure>
       </div>
     ) : (

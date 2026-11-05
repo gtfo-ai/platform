@@ -23,6 +23,7 @@
 import { ChevronRightIcon } from '@primer/octicons-react/ChevronRightIcon';
 import { type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { cx, FOCUS_RING } from '../ui/cx.js';
+import { terminalReasonLabel } from '../ui/humanize.js';
 import { Badge, Button, formatInteger, formatUsd } from '../ui/kit.js';
 import { StatusIcon } from '../ui/status.js';
 import { CodeText, JsonView, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
@@ -298,9 +299,7 @@ const BlockView = ({ block }: { readonly block: TranscriptBlock }): ReactElement
       return (
         <LogRow kind="result" label="The run ended" tone="border-t border-line pt-2">
           <span className="flex flex-wrap gap-4 text-xs">
-            <span>
-              reason: <UntrustedText value={block.terminalReason} />
-            </span>
+            <span>Ended because: {terminalReasonLabel(block.terminalReason)}</span>
             <span>turns: {formatInteger(block.numTurns)}</span>
             <span>
               cost: {formatUsd(block.costUsd)}

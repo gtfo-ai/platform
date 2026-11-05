@@ -14,6 +14,7 @@
  */
 import type { ReactElement } from 'react';
 import { useOnboardingCommands, useProjectConfig } from '../app/queries.js';
+import { ForAdministrators } from '../ui/admin-notes.js';
 import { Card, ErrorNotice, Loading, SectionHeading } from '../ui/kit.js';
 
 type Mode = 'local' | 'ci';
@@ -75,8 +76,8 @@ export const VerificationMode = ({ projectId }: { readonly projectId: string }):
               {source}) —{' '}
             </>
           )}
-          <code>verification.mode</code> in the settings or <code>.agentic/config.yml</code>. A
-          repository file may move a project to CI, never back.
+          set here or in the repository’s settings file. The repository file may move a project to
+          CI, never back.
         </legend>
         {MODES.map((choice) => (
           <label key={choice.mode} className="flex items-start gap-2 text-sm">
@@ -95,10 +96,10 @@ export const VerificationMode = ({ projectId }: { readonly projectId: string }):
           </label>
         ))}
       </fieldset>
+      <ForAdministrators note="verification_mode" />
       {effective === 'ci' && source === 'repo' ? (
         <p className="text-xs text-fg-muted">
-          The repository’s <code>.agentic/config.yml</code> sets CI; choosing local here is not
-          applied while it does.
+          The repository’s settings file sets CI; choosing local here is not applied while it does.
         </p>
       ) : null}
       {commands.writeConfig.isError ? (

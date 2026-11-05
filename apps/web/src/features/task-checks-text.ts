@@ -21,6 +21,7 @@ import type {
   TaskReviewThreads,
   TaskState,
 } from '@platform/contracts';
+import { stageLabel } from '../ui/humanize.js';
 import { formatDateTime, formatMinutes } from '../ui/kit.js';
 import type { Status } from '../ui/status.js';
 
@@ -452,7 +453,8 @@ const settledConfirmationText = (ci: StageRow, rebase: StageRow | null): string 
 };
 
 /** Which attempt the value is about, and when it was decided — platform facts only. */
-export const gateBasisText = (row: StageRow | null, gate: string): string => {
+export const gateBasisText = (row: StageRow | null, gateId: string): string => {
+  const gate = stageLabel(gateId);
   if (row === null) {
     return `This task has not entered ${gate}.`;
   }

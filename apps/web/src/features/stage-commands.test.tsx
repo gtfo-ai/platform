@@ -392,6 +392,61 @@ describe('the box that attaches the gate’s last failure (WP-152)', () => {
   });
 });
 
+/**
+ * S-23.22 (the final UX audit's items 6 and 7): *Retry stage* "runs the current stage again" (user
+ * guide § 4), so its picker starts on the task's current stage — it used to start on the first stage
+ * the task entered — and every option is the stage's name, never its id.
+ */
+describe('the stage picker (S-23.22)', () => {
+  it('starts on the current stage and names each stage in words', async () => {
+    const sent: Sent[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({ fetchImpl: fetchFor(escalatedAtCi('active'), sent), realtime: false }).element,
+    );
+    await openStageDialog(user, 'Retry stage…');
+    const picker = screen.getByLabelText('Stage') as HTMLSelectElement;
+    expect(picker.value).toBe('ci_gate');
+    expect([...picker.options].map((option) => [option.value, option.textContent])).toEqual([
+      ['refinement', 'Refinement'],
+      ['implementation', 'Implementation'],
+      ['ci_gate', 'CI'],
+    ]);
+    await user.click(screen.getByRole('button', { name: 'Retry stage' }));
+    await waitFor(() => {
+      expect(sent.find((entry) => entry.path.endsWith('/retry-stage'))?.body).toEqual({
+        stage: 'ci_gate',
+      });
+    });
+  });
+
+  it('shows a refused stage command with the reason, in plain words', async () => {
+    const user = userEvent.setup();
+    const refusing = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? json(
+            {
+              error: {
+                code: 'iteration_limit_reached',
+                message: 'loop ci_fix of task 00000000-0000-4000-8000-0000000000b1 is spent',
+              },
+            },
+            409,
+          )
+        : fetchFor(escalatedAtCi('active'), [])(input, init)) as typeof fetch;
+    render(createApp({ fetchImpl: refusing, realtime: false }).element);
+    await openStageDialog(user, 'Retry stage…');
+    await user.click(screen.getByRole('button', { name: 'Retry stage' }));
+    const alert = await within(screen.getByRole('dialog')).findByRole('alert');
+    expect(alert.textContent).toContain('That stage command was refused.');
+    expect(alert.textContent).toContain('That loop has used all the rounds it is allowed.');
+    // The server's text is a diagnostic, behind a collapsed "Technical details".
+    const details = alert.querySelector('details');
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain('loop ci_fix of task');
+  });
+});
+
 describe('what a retry says it did (backlog 494)', () => {
   it('names the attempt, and that the run still in flight is being stopped first', async () => {
     const sent: Sent[] = [];
@@ -402,7 +457,7 @@ describe('what a retry says it did (backlog 494)', () => {
     await openStageDialog(user, 'Retry stage…');
     await user.click(screen.getByRole('button', { name: 'Retry stage' }));
     const said =
-      'Attempt 2 of ci_gate is queued. The run still in flight is being stopped; the new attempt starts once it has ended.';
+      'Attempt 2 of CI is queued. The run still in flight is being stopped; the new attempt starts once it has ended.';
     // A live region, beside the connection indicator's: the answer is announced, not only drawn.
     const status = await screen.findByText(said);
     expect(status.getAttribute('role')).toBe('status');
@@ -417,7 +472,7 @@ describe('what a retry says it did (backlog 494)', () => {
       performed: true,
     } as const;
     expect(retryOutcomeText({ ...base, attempt: 3, stopped_run: null })).toBe(
-      'Attempt 3 of refinement is queued.',
+      'Attempt 3 of Refinement is queued.',
     );
     expect(
       retryOutcomeText({

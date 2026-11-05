@@ -16,6 +16,7 @@
 import type { InputHTMLAttributes, ReactElement, ReactNode, Ref } from 'react';
 import { useId } from 'react';
 import { PlatformUpdatedError } from '../api/http.js';
+import { errorSentence } from '../api/read-error.js';
 import { Blankslate } from './blankslate.js';
 import {
   Button as PrimitiveButton,
@@ -23,6 +24,7 @@ import {
   type ButtonTone as PrimitiveButtonTone,
 } from './button.js';
 import { cx, FOCUS_RING } from './cx.js';
+import { DetailsDisclosure } from './details.js';
 import { Flash } from './flash.js';
 import { Tooltip } from './tooltip.js';
 import { UntrustedText } from './untrusted.js';
@@ -182,8 +184,12 @@ export const Loading = ({ label }: { readonly label: string }): ReactElement => 
  * not author. `role="alert"` announces it once, which is what a screen reader user needs from a
  * failure that appears without them doing anything.
  *
- * **A screen passes the error itself** (`error`), and its text is the detail unless `detail` says
- * otherwise. **A read refused because the server was upgraded under this tab renders nothing here**
+ * **A screen passes the error itself** (`error`). The visible detail is the screen's own `detail`
+ * when it gives one, and otherwise a sentence built from the error's code, status and paths
+ * (`errorSentence`, `api/read-error.ts`) — **never the server's message**, which is a diagnostic
+ * written for an operator (API paths, ids, row names) and is shown only inside a collapsed
+ * *Technical details* (S-23.22, the final UX audit's item 2). **A read refused because the server was
+ * upgraded under this tab renders nothing here**
  * (WP-154 (d), PROGRESS backlog 487): the shell's banner already says it once for the whole page, so
  * the screen shows no schema error and no second copy of the reload instruction per section. That
  * is decided **by the error's type** — `error instanceof PlatformUpdatedError`, which only the API
@@ -191,7 +197,8 @@ export const Loading = ({ label }: { readonly label: string }): ReactElement => 
  * ruling (b), backlog 524): until WP-167 the notice was hidden when its title or detail *contained*
  * the platform sentence, so an `ApiError` whose server-written message carried those words hid
  * itself. A screen that passes no `error` is never hidden; `apps/web/src/error-notice-census.test.ts`
- * refuses `String(…)` in a `title` or `detail` attribute, the spelling that used to stand in for it.
+ * refuses `String(…)` in a `title` or `detail` attribute, the spelling that used to stand in for it,
+ * and a "…refused." notice with no `error` at all, which told the person nothing about why.
  */
 export const ErrorNotice = ({
   title,
@@ -200,19 +207,28 @@ export const ErrorNotice = ({
 }: {
   readonly title: string;
   readonly detail?: string;
-  /** The failure itself: its text is the default detail, and its type decides whether to hide. */
+  /** The failure itself: its type decides whether to hide, its fields the sentence. */
   readonly error?: unknown;
 }): ReactElement | null => {
   if (error instanceof PlatformUpdatedError) {
     return null;
   }
-  const text = detail ?? (error === undefined ? undefined : String(error));
+  const said = error === undefined ? null : errorSentence(error);
+  const text = detail ?? said?.sentence;
+  const technical = said?.technical ?? null;
   return (
     <Flash tone="danger" live="alert" title={<UntrustedText value={title} />}>
       {text === undefined ? undefined : (
         <p>
           <UntrustedText value={text} />
         </p>
+      )}
+      {technical === null ? undefined : (
+        <DetailsDisclosure summary="Technical details" className="mt-1">
+          <p className="font-mono text-xs [overflow-wrap:anywhere]">
+            <UntrustedText value={technical} />
+          </p>
+        </DetailsDisclosure>
       )}
     </Flash>
   );

@@ -230,7 +230,7 @@ describe('the run screen shows the settings hash and marks a change (WP-112)', (
     );
     await waitFor(() => {
       expect(view.container.textContent).toContain(
-        'Changed since the previous run, refinement (attempt 1).',
+        'Changed since the previous run, Refinement (attempt 1).',
       );
     });
     expect(view.container.textContent).toContain(HASH_B.slice(0, 12));
@@ -248,7 +248,7 @@ describe('the run screen shows the settings hash and marks a change (WP-112)', (
     );
     await waitFor(() => {
       expect(view.container.textContent).toContain(
-        'Same settings as the previous run, refinement (attempt 1).',
+        'Same settings as the previous run, Refinement (attempt 1).',
       );
     });
     expect(view.container.textContent).not.toContain('Changed since');
@@ -329,8 +329,16 @@ describe('the Prompt tab says why the project prompt files are missing (WP-121)'
         'The project’s prompt files were withheld from this prompt.',
       );
     });
-    expect(view.container.textContent).toContain('<b>Sentry</b> integration cannot be decrypted');
-    expect(view.container.textContent).toContain('integration "acme sentry" (sentry, 0f): old key');
+    // S-23.22: said plainly, the record itself behind a collapsed "Technical details".
+    expect(view.container.textContent).toContain(
+      'An integration’s credentials can no longer be read, so the project’s prompt files were not used.',
+    );
+    const technical = [...view.container.querySelectorAll('details')].find(
+      (details) => details.querySelector('summary')?.textContent === 'Technical details',
+    );
+    expect(technical?.open).toBe(false);
+    expect(technical?.textContent).toContain('<b>Sentry</b> integration cannot be decrypted');
+    expect(technical?.textContent).toContain('integration "acme sentry" (sentry, 0f): old key');
     expect(view.container.querySelector('b')).toBeNull();
   });
 

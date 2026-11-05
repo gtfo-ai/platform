@@ -21,7 +21,8 @@ export interface FeedbackFormProps {
   readonly heading: string;
   readonly hint: string;
   readonly pending: boolean;
-  readonly failed: boolean;
+  /** The refusal of the last send, or `null` — its sentence is what the notice says. */
+  readonly error: unknown;
   readonly accepted: boolean;
   readonly onSubmit: (input: { readonly text: string; readonly rating?: number }) => void;
 }
@@ -30,7 +31,7 @@ export const FeedbackForm = ({
   heading,
   hint,
   pending,
-  failed,
+  error,
   accepted,
   onSubmit,
 }: FeedbackFormProps): ReactElement => {
@@ -86,7 +87,7 @@ export const FeedbackForm = ({
           Send feedback
         </Button>
       </form>
-      {failed ? <ErrorNotice title="That feedback was refused." /> : null}
+      {error === null ? null : <ErrorNotice title="That feedback was refused." error={error} />}
       {accepted ? <p className="text-xs text-fg-muted">Feedback recorded.</p> : null}
     </Card>
   );

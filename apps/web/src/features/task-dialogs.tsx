@@ -29,7 +29,7 @@ import type {
 import { type ReactElement, useState } from 'react';
 import type { useTakeOverCommands, useTaskCommands } from '../app/queries.js';
 import { Dialog } from '../ui/dialog.js';
-import { APPROVAL_KIND_LABEL } from '../ui/humanize.js';
+import { APPROVAL_KIND_LABEL, stageLabel } from '../ui/humanize.js';
 import { Button, ErrorNotice, Field, formatUsd } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { HandBackForm, TakeOverForm } from './take-over.js';
@@ -67,7 +67,7 @@ export const gateFeedbackLength = (feedback: NonNullable<GateFeedback>): string 
  * the run is being stopped first — the new attempt starts once it has ended.
  */
 export const retryOutcomeText = (answer: RetryStageResponse): string => {
-  const stage = answer.current_stage ?? 'the stage';
+  const stage = answer.current_stage === null ? 'the stage' : stageLabel(answer.current_stage);
   if (answer.attempt === null) {
     return 'Nothing was re-entered here: the platform re-checks the branch head and re-enters the gate it needs.';
   }
@@ -80,13 +80,26 @@ export const retryOutcomeText = (answer: RetryStageResponse): string => {
     : `${queued} The run still in flight is being stopped; the new attempt starts once it has ended.`;
 };
 
+/**
+ * The stage the pickers start on: the task's **current** stage when it has entered it — *Retry
+ * stage* "runs the current stage again" (user guide § 4) — else the first it entered (S-23.22; it
+ * used to be the first always, so Retry offered Refinement on a task at Code review).
+ */
+export const defaultCommandStage = (
+  options: readonly string[],
+  currentStage: string | null,
+): string =>
+  currentStage !== null && options.includes(currentStage) ? currentStage : (options[0] ?? '');
+
 /** The three stage commands' shared fields (see the module note for why the page holds them). */
 export const useStageCommandForm = (
   stages: readonly { readonly stage: string }[],
   gateFeedback: GateFeedback,
+  currentStage: string | null = null,
 ) => {
   const options = [...new Set(stages.map((entry) => entry.stage))];
-  const [stage, setStage] = useState(options[0] ?? '');
+  const fallback = defaultCommandStage(options, currentStage);
+  const [stage, setStage] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [instructions, setInstructions] = useState('');
   // Ticked by default, as the server's own default is (WP-152 ruling (b)) — and ticked again for
@@ -98,7 +111,8 @@ export const useStageCommandForm = (
   const attachGateFeedback = feedbackKey === null || untickedFor !== feedbackKey;
   return {
     options,
-    selected: options.includes(stage) ? stage : (options[0] ?? ''),
+    // Until a person picks, the default follows the task (it may move while the page is open).
+    selected: stage !== null && options.includes(stage) ? stage : fallback,
     setStage,
     reason,
     setReason,
@@ -132,7 +146,7 @@ const StagePicker = ({ form }: { readonly form: StageCommandForm }): ReactElemen
     >
       {form.options.map((option) => (
         <option key={option} value={option}>
-          {option}
+          {stageLabel(option)}
         </option>
       ))}
     </select>
@@ -156,13 +170,16 @@ const GateFeedbackBox = ({ form }: { readonly form: StageCommandForm }): ReactEl
         }}
       />
       <span>
-        Attach the gate’s last failure from <UntrustedText value={form.gateFeedback.stage} /> (
+        Attach the gate’s last failure from{' '}
+        <UntrustedText value={stageLabel(form.gateFeedback.stage)} /> (
         {gateFeedbackLength(form.gateFeedback)}) to a return or a rework
       </span>
     </label>
   );
 
-const StageRefused = (): ReactElement => <ErrorNotice title="That stage command was refused." />;
+const StageRefused = ({ error }: { readonly error: unknown }): ReactElement => (
+  <ErrorNotice title="That stage command was refused." error={error} />
+);
 
 const Submit = ({
   label,
@@ -227,7 +244,9 @@ const RaiseTaskCap = ({
           Raise this task's cap
         </Button>
       </div>
-      {commands.raiseBudget.isError ? <ErrorNotice title="The cap was not raised." /> : null}
+      {commands.raiseBudget.isError ? (
+        <ErrorNotice title="The cap was not raised." error={commands.raiseBudget.error} />
+      ) : null}
     </div>
   );
 };
@@ -284,7 +303,9 @@ const ApprovalDecision = ({
           Approve
         </Button>
       </div>
-      {commands.decide.isError ? <ErrorNotice title="That decision was refused." /> : null}
+      {commands.decide.isError ? (
+        <ErrorNotice title="That decision was refused." error={commands.decide.error} />
+      ) : null}
     </div>
   );
 };
@@ -353,7 +374,7 @@ export const TaskDialogs = ({
             className={INPUT}
           />
           <Submit label="Retry stage" disabled={commands.retryStage.isPending} />
-          {commands.retryStage.isError ? <StageRefused /> : null}
+          {commands.retryStage.isError ? <StageRefused error={commands.retryStage.error} /> : null}
         </form>
       </Dialog>
 
@@ -392,7 +413,9 @@ export const TaskDialogs = ({
             label="Return to stage"
             disabled={commands.returnToStage.isPending || form.reason.trim() === ''}
           />
-          {commands.returnToStage.isError ? <StageRefused /> : null}
+          {commands.returnToStage.isError ? (
+            <StageRefused error={commands.returnToStage.error} />
+          ) : null}
         </form>
       </Dialog>
 
@@ -431,7 +454,7 @@ export const TaskDialogs = ({
             label="Rework"
             disabled={commands.rework.isPending || form.instructions.trim() === ''}
           />
-          {commands.rework.isError ? <StageRefused /> : null}
+          {commands.rework.isError ? <StageRefused error={commands.rework.error} /> : null}
         </form>
       </Dialog>
 
@@ -451,7 +474,9 @@ export const TaskDialogs = ({
           </Button>
         }
       >
-        {commands.cancel.isError ? <ErrorNotice title="That command was refused." /> : undefined}
+        {commands.cancel.isError ? (
+          <ErrorNotice title="That command was refused." error={commands.cancel.error} />
+        ) : undefined}
       </Dialog>
 
       <Dialog {...shown('take_over')} title="Take over this task">

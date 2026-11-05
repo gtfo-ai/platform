@@ -35,7 +35,13 @@ import { useTopics } from '../../realtime/provider.js';
 import { ACTIVITY_META } from '../../ui/activity.js';
 import { Button } from '../../ui/button.js';
 import { Dialog } from '../../ui/dialog.js';
-import { ARTIFACT_TYPE_LABEL, loopLabel, ROLE_LABEL, stageLabel } from '../../ui/humanize.js';
+import {
+  ARTIFACT_TYPE_LABEL,
+  eventPhrase,
+  loopLabel,
+  ROLE_LABEL,
+  stageLabel,
+} from '../../ui/humanize.js';
 import { formatElapsed, formatRunCost } from '../../ui/kit.js';
 import { StateLabel, type Status } from '../../ui/status.js';
 import { TerminalLines, UntrustedText } from '../../ui/untrusted.js';
@@ -70,7 +76,6 @@ const OUTCOME_WORD: Readonly<Record<FlowGraph['edges'][number]['kind'], string>>
 };
 
 /** "mr.merged" → "mr merged": an event type in words, for "When mr merged → Done". */
-const eventWords = (type: string): string => type.replace(/[._]+/g, ' ');
 
 /** One line per outgoing edge: "Approved → Code review", "Failed → Implementation (CI fixes ≤3)". */
 export const outcomesOf = (graph: FlowGraph, id: string): readonly string[] =>
@@ -79,7 +84,7 @@ export const outcomesOf = (graph: FlowGraph, id: string): readonly string[] =>
     .map((edge) => {
       const when =
         edge.kind === 'on' && edge.onEvent !== null
-          ? `When ${eventWords(edge.onEvent)}`
+          ? `When ${eventPhrase(edge.onEvent)}`
           : OUTCOME_WORD[edge.kind];
       return `${when} → ${stageLabel(edge.to)}${edge.pill === null ? '' : ` (${edge.pill})`}`;
     });

@@ -4,6 +4,7 @@
  */
 import type { TaskStageOutcome, TaskStageOutcomeWord } from '@platform/contracts';
 import { stageVerdictSchema, taskStageOutcomeWordSchema } from '@platform/contracts';
+import { eventPhrase } from '../ui/humanize.js';
 
 /**
  * **The word→sentence table of `task_stages.outcome`** (WP-73, PROGRESS backlog 213). The platform's
@@ -48,7 +49,7 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
     case 'dead_lettered':
       return 'Escalated: an event about this task could not be processed.';
     case 'repository_config_invalid':
-      return 'Escalated: the repository’s .agentic/config.yml does not parse.';
+      return 'Escalated: the repository’s settings file does not parse.';
     case 'ticket_assigned_elsewhere':
       return 'Escalated: the ticket is assigned to somebody else, so no agent run started.';
     case 'ticket_claim_failed':
@@ -79,11 +80,11 @@ export const stageOutcomeSentence = (outcome: TaskStageOutcome): string => {
     return stageOutcomeWordSentence(word.data);
   }
   if (stageVerdictSchema.safeParse(outcome).success) {
-    return `Verdict: ${outcome.replace('_', ' ')}.`;
+    return `Verdict: ${outcome.replaceAll('_', ' ')}.`;
   }
   // The one event name the platform writes as an ending rather than as a move (`closeCurrentStageRow`).
   if (outcome === 'task.completed') {
     return 'Ended because the task completed.';
   }
-  return `Moved on by ${outcome}.`;
+  return `Moved on because ${eventPhrase(outcome)}.`;
 };

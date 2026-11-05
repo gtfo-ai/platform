@@ -24,7 +24,7 @@ import type { IntegrationProvider, IntegrationSummary } from '@platform/contract
 import { PlugIcon } from '@primer/octicons-react/PlugIcon';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Fragment, type ReactElement, useState } from 'react';
-import { readErrorDetail } from '../api/read-error.js';
+import { invalidSettingsSentence, readErrorDetail } from '../api/read-error.js';
 import {
   useIntegrationProviders,
   useIntegrations,
@@ -35,6 +35,8 @@ import {
 import { useServices } from '../app/services.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
+import { cx, FOCUS_RING } from '../ui/cx.js';
+import { DetailsDisclosure } from '../ui/details.js';
 import { INTEGRATION_TYPE_LABEL } from '../ui/humanize.js';
 import { ErrorNotice, formatDateTime, formatInteger } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
@@ -44,7 +46,11 @@ import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { ConnectionTestResult } from './connection-test-result.js';
-import { IntegrationActions, integrationStatus } from './integration-forms.js';
+import {
+  IntegrationActions,
+  type IntegrationDialog,
+  integrationStatus,
+} from './integration-forms.js';
 
 /** "Bound to 2 projects", "Not bound", or nothing while the count is not known. */
 export const boundText = (count: number | null): string | null =>
@@ -73,14 +79,23 @@ export const checkedText = (integration: IntegrationSummary, nowMs: number): str
   return ago === null ? `checked ${formatDateTime(checked)}` : `checked ${ago}`;
 };
 
+const PROBLEM_ACTION = cx('rounded-sm text-link underline hover:no-underline', FOCUS_RING);
+
 /**
- * What is wrong with a stored integration, in the server's words — on the row and on its page.
+ * What is wrong with a stored integration — on the row and on its page — in a sentence built from
+ * the refusal's paths, with the server's own text behind *Technical details* (S-23.22), and the
+ * dialog that repairs it one click away.
  * Nothing for one that loads.
  */
 export const IntegrationProblems = ({
   integration,
+  onEditConfiguration,
+  onReplaceCredentials,
 }: {
   readonly integration: IntegrationSummary;
+  /** Opens *Edit configuration*; left out where no dialog is at hand. */
+  readonly onEditConfiguration?: () => void;
+  readonly onReplaceCredentials?: () => void;
 }): ReactElement | null => {
   const refusal = integration.config_refusal;
   const unreadable = integration.credentials_readable === false;
@@ -90,21 +105,44 @@ export const IntegrationProblems = ({
   return (
     <span className="flex flex-col gap-0.5 text-danger">
       {refusal === null ? null : (
-        <span data-config-refusal={integration.id}>
-          <span className="font-semibold">This configuration would not load. </span>
-          {/* Platform text naming the paths and the PATCH that repairs them; never a value. */}
-          <UntrustedText value={refusal.message} />
+        <span data-config-refusal={integration.id} className="flex flex-col gap-0.5">
+          <span>
+            <span className="font-semibold">This configuration would not load. </span>
+            {/* S-23.22: the sentence is built from the paths; the server's text is a diagnostic. */}
+            {invalidSettingsSentence(refusal.paths)}
+            {onEditConfiguration === undefined ? null : (
+              <>
+                {' '}
+                <button type="button" className={PROBLEM_ACTION} onClick={onEditConfiguration}>
+                  Edit configuration
+                </button>
+              </>
+            )}
+          </span>
+          <DetailsDisclosure summary="Technical details">
+            <p className="font-mono text-xs [overflow-wrap:anywhere]">
+              <UntrustedText value={refusal.message} />
+            </p>
+          </DetailsDisclosure>
         </span>
       )}
       {unreadable ? (
         // WP-157 (a), backlog 413: the account's own row says it, once.
         <span data-credentials-unreadable={integration.id}>
-          <span className="font-semibold">These credentials cannot be decrypted.</span>
+          <span className="font-semibold">These credentials can no longer be read.</span>
           {/* The server's sentence only (rule 3); none invented here when it sends none. */}
           {integration.credentials_consequence === null ? null : (
             <>
               {' '}
-              <UntrustedText value={integration.credentials_consequence} />.
+              <UntrustedText value={integration.credentials_consequence} />
+            </>
+          )}
+          {onReplaceCredentials === undefined ? null : (
+            <>
+              {' '}
+              <button type="button" className={PROBLEM_ACTION} onClick={onReplaceCredentials}>
+                Replace credentials
+              </button>
             </>
           )}
         </span>
@@ -124,6 +162,11 @@ export const IntegrationsScreen = (): ReactElement => {
   const nowMs = now();
   /** Which row's *Test connection* the shared probe answer is drawn under. */
   const [tested, setTested] = useState<string | null>(null);
+  /** Which row's dialog is open — held here so a problem line can open it too (S-23.22). */
+  const [dialogFor, setDialogFor] = useState<{
+    readonly id: string;
+    readonly dialog: IntegrationDialog;
+  } | null>(null);
   const items = integrations.data?.items ?? [];
   const providerOf = (integration: IntegrationSummary): IntegrationProvider | undefined =>
     providers.data?.items.find((entry) => entry.id === integration.provider);
@@ -204,7 +247,19 @@ export const IntegrationsScreen = (): ReactElement => {
                           listed because the audit names it.
                         </span>
                       )}
-                      <IntegrationProblems integration={integration} />
+                      <IntegrationProblems
+                        integration={integration}
+                        {...(provider === undefined
+                          ? {}
+                          : {
+                              onEditConfiguration: () => {
+                                setDialogFor({ id: integration.id, dialog: 'configuration' });
+                              },
+                              onReplaceCredentials: () => {
+                                setDialogFor({ id: integration.id, dialog: 'credentials' });
+                              },
+                            })}
+                      />
                     </span>
                   }
                   {...(boundLine === null ? {} : { trailing: <span>{boundLine}</span> })}
@@ -213,6 +268,10 @@ export const IntegrationsScreen = (): ReactElement => {
                       integration={integration}
                       provider={provider}
                       boundProjects={count}
+                      dialog={dialogFor?.id === integration.id ? dialogFor.dialog : null}
+                      onDialogChange={(dialog) => {
+                        setDialogFor(dialog === null ? null : { id: integration.id, dialog });
+                      }}
                       onTest={() => {
                         setTested(integration.id);
                         commands.testIntegration.mutate(integration.id);
