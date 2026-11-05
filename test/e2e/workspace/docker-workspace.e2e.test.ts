@@ -819,7 +819,9 @@ describe('a run with no checkout (WP-74)', () => {
     const again = fixture.engine.createdNames.length;
     const ful = await startRun();
     try {
-      expect(fixture.engine.createdNames.slice(again)).toContain('mirror-acme');
+      expect(fixture.engine.createdNames.slice(again)).toContain(
+        `mirror-${fixture.controlVolume}-acme`,
+      );
       expect(helpersSince(again, ful.spec.runId)).toEqual([
         'prep',
         'clone',
