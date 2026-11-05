@@ -1009,3 +1009,83 @@ measured only 2 kB smaller.
 drain is a wind-down, not a hold.
 
 **Built by S-22.13** (WP-292 items 2 and 4), before merge.
+
+## Amendment (2026-11-05, architect, session 22) — decision 8: what a developer's worker picks up — a claim scope per worker and an explicit *take this one* (owner request; slice S-22.15, WP-293)
+
+**Context.** The owner: *"eventually possibility to choose what the worker should pick"*. Read at `640ca6ac`;
+nothing was run. Today `POST claims` takes the oldest offer its eligibility admits (`postgres-run-offers.ts`,
+`WORKER_ELIGIBLE`: not excluded, images held, not revoked, the user may act and is `member`+, not paused or
+manually paused, `workers_from` reached or the user's head start, the credential rule), and the body names
+nothing else (`contracts/src/worker.ts:597-601`). `CLAIM_SQL` can already narrow to one run (`$1`). A stage
+offer names no assignee yet (BACKLOG 730).
+
+**Decision.**
+
+1. **Two selectors first, the rest deferred.** **Projects** — a worker's *claim scope*: its automatic
+   claims take every project its eligibility admits (the default, today's behaviour), **named projects
+   only**, or **none** (*pick only*). A developer in several projects needs this first: the repositories
+   they know, and their subscription spent on their own team's work. **Take this one** — an explicit claim
+   of one listed offer from the local page. **Deferred:** stage/role (*only reviews*; a later column beside
+   this one), *assignee = me* (blocked by BACKLOG 730; once fixed, §8's head start already gives the
+   assignee's worker first refusal), a blocklist (the allow-list expresses it; a deny list is a second rule
+   to reconcile).
+2. **Stored on the core, per worker, set by its owner; a preference enforced in the claim, never a
+   boundary.** A new nullable column `workers.claim_project_ids uuid[]` (additive): `null` = every project;
+   `'{}'` = pick only; otherwise those projects. Per **worker**, not per user: a developer's desktop may take
+   everything while their laptop takes only what is picked. Not worker-local configuration: the core needs
+   it at offer time (5) and the Workers screen shows it. It is a conjunct of `WORKER_ELIGIBLE` for an
+   **automatic** claim, because the claim is the one race-free place to filter; a worker filtering what it
+   was given would have to release, spending an epoch and a credential mint per refusal. **It can only
+   narrow**: no value admits an offer the eligibility refuses (integration test: a scope naming a project the
+   user is not a member of, or a `server_only` project, claims nothing). `PUT claim-scope` (worker credential)
+   refuses with `422` an id that is not a project where the user is `member`+ at the write. This keeps the value meaningful
+   and is not a security check; a membership lost later is harmless. Only the worker's owner sets it, from the local
+   page; an administrator sees it and keeps their own levers (the project's mode, revoke). One
+   `human_actions` row `worker.claim_scope` `{worker_id, project_ids, via: 'worker_ui'}`; a repeat of the
+   stored value writes none.
+3. **Take this one is an ordering choice inside the same eligibility, not a priority and not a
+   reservation.** It is **the one claim** with `$1` set, through `POST offers/:run_id/claim` (worker
+   credential, not held): `200` with the package exactly as `claims`, or `409 offer_not_claimable` when the
+   statement claimed nothing. That one answer covers taken, withdrawn, not yet the worker's, and ineligible, so it reveals no reason.
+   It **ignores the claim scope**, which is what *pick only* is for, and nothing else. It does not ignore
+   `workers_from`, because hybrid's `server_from` preference and `offer_timeout` are the administrator's
+   routing (BD-032 decision 3; Q127). It does not ignore another user's head start (BD-032 decision 5), the
+   exclusions, or either pause. **No hold**: a pick competes at the row lock like any claim, and the server's
+   claimant or another worker that commits first wins. The server claimant is unchanged. One `human_actions`
+   row `worker.take_offer` `{worker_id, run_id, via: 'worker_ui'}` in the claim's transaction; `run.claimed`
+   is unchanged.
+4. **Visibility: `GET offers`** (worker credential) lists at most 50 open offers, oldest first, that this
+   worker could claim **now**. It uses the same `WORKER_ELIGIBLE` text with the scope ignored, so the list
+   and the claim cannot disagree. Each entry has the run id, kind, project key, ticket key, task title,
+   stage, role, `offered_at`, and whether the scope takes it automatically. **It discloses nothing new**:
+   every listed task is in a project where the user is `member`+ and may act, and that user already reads
+   its title and ticket on the board (`task.read` is `viewer`). The same credential already obtains a whole
+   run package through `claims`. A revoked worker or a user who may not act gets `401`, as on every verb.
+   **BD-022:** the title and ticket key are untrusted. They come from the **redacted** ticket snapshot
+   through WP-292's display-block builder and are bounded as there. `worker.html` renders them as text
+   nodes (`no-html.test.ts` unchanged). An ask is listed with its task and stage *question*, **never the
+   question's text**. The local page proxies the list as `GET /api/local/offers` and a pick as `POST
+   /api/local/offers/:run_id/take` under WP-292's bearer, `Host` and `Origin` rules. It polls only while
+   visible, every 10 s.
+5. **Routing.** Offer time is unchanged but for one rule: the **online assignee** (§8) also requires that the
+   assignee's worker's scope takes the project automatically (`null` or containing it). Otherwise a
+   pick-only worker would hold every offer for `assignee_window` for nothing. Offers no worker's scope takes
+   are left as today. The server takes them from `server_from`, any worker whose scope admits them takes
+   them, a person picks them, or `offer_timeout` withdraws them and escalates the task. `/readyz` is unchanged.
+6. **Protocol 3**, accepted `[2, 3]`. The handshake's `worker.claim_project_ids` is sent only at `≥ 3`.
+   A v2 worker calls none of the four new verbs (`GET`/`PUT claim-scope`, `GET offers`,
+   `POST offers/:run_id/claim`).
+
+**Rejected.** *Filtering on the worker*: the worker would claim and then release, and the core could not
+route the head start. *Per user*: one setting for machines that want different ones. *A pick that jumps
+`server_from`*: Q127. *A reservation* (a pick holds the offer for N seconds): a fourth timestamp in the
+claim for a click that takes milliseconds. *A join table* `worker_claim_projects`: two writes per change,
+and *pick only* would still need a flag. A stale id in the array never matches anything.
+
+**Residuals.** If every worker on a `workers_only` core is *pick only*, the pool is a manual queue, and
+`offer_timeout` (24 h) is its backstop. The Execution screen does not yet say *no connected worker takes
+this project automatically* (deferred). On a `hybrid`, server-preferred project the list is nearly always
+empty, because the server claims within `fallback_after`. A tampered worker can list and pick exactly what
+`claims` already admits for it.
+
+**Built by S-22.15** (WP-293).
