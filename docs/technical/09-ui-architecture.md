@@ -49,7 +49,13 @@ project, the `/projects/$key` **layout route** (`app/project-frame.tsx`) draws t
 PageHeader and tabs above an `<Outlet/>`; no URL changed when it arrived. A route tells the frame
 about itself through `staticData` — its project `tab`, `fullWidth` (the board and the run log;
 everything else is centred at 1280 px) and `ownsHeading` (a task's page, so the project's name above
-it is not a second `<h1>`). **Every screen is a lazy route chunk** except the frame, the sign-in page
+it is not a second `<h1>`). **The frame sticks** (S-23.18): the top bar always, and from `sm` the row
+under it (the org UnderlineNav, or the project's tab row — the project's title scrolls away), at
+`z-20` — above the page and the flow canvas, below a full-screen canvas (`z-30`), dialogs and every
+portalled menu, tooltip and the palette. `styles.css` declares the rows' heights (`--app-bar-height`,
+`--app-sticky-height`), which the run log pane and the Agents map subtract and `scroll-padding-top`
+uses so an anchor, `scrollIntoView` or a `j`/`k` focus move stops below the frame;
+`test/web-e2e/sticky-header.spec.ts` holds the declared heights to the drawn rows. **Every screen is a lazy route chunk** except the frame, the sign-in page
 and Home: `lazyRouteComponent` per screen module, so the router preloads the chunk while it resolves
 the match and shows `defaultPendingComponent` (a `Skeleton`) only past its pending delay. The chunks
 are served from `'self'`, so the CSP is unchanged. The initial graph was 293 722 B gzipped before

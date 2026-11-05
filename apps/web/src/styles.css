@@ -203,6 +203,30 @@ body,
   height: 100%;
 }
 
+/*
+ * The sticky frame (S-23.18, `app/shell.tsx`): the top bar sticks, and from `sm` (Tailwind's 40rem)
+ * the row under it does too — the organisation's UnderlineNav, or inside a project the tab row (the
+ * project's title scrolls away). On a phone only the top bar sticks, so the content keeps the screen.
+ *
+ * The heights are the rows' own: the top bar is `h-14` plus its 1 px bottom border, an UnderlineNav
+ * row is its item (`my-2` + `py-1.5` + a 1.25rem line) plus the row's border. A full-height pane
+ * subtracts `--app-sticky-height` rather than a guess, and `scroll-padding-top` makes an anchor
+ * jump, `scrollIntoView` and a focus move (`j`/`k`) stop below the frame rather than under it.
+ * `test/web-e2e/sticky-header.spec.ts` measures all three against the drawn rows.
+ */
+html {
+  --app-bar-height: calc(3.5rem + 1px);
+  --app-nav-height: calc(3rem + 1px);
+  --app-sticky-height: var(--app-bar-height);
+  scroll-padding-top: calc(var(--app-sticky-height) + 0.5rem);
+}
+
+@media (width >= 40rem) {
+  html {
+    --app-sticky-height: calc(var(--app-bar-height) + var(--app-nav-height));
+  }
+}
+
 body {
   margin: 0;
   background-color: var(--bg-canvas);

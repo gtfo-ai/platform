@@ -215,7 +215,7 @@ export const AgentsScreen = (): ReactElement => {
         ) : wide ? (
           <div
             data-testid="fleet-canvas-frame"
-            className="h-[min(72vh,680px)] min-h-[420px] overflow-hidden rounded-lg border border-line"
+            className="h-[min(calc(100dvh-var(--app-sticky-height)-4rem),680px)] min-h-[420px] overflow-hidden rounded-lg border border-line"
           >
             <Suspense fallback={<Skeleton label="Drawing the map…" className="h-full w-full" />}>
               <FleetCanvas

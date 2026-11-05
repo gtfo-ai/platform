@@ -55,6 +55,9 @@ button. A task's page sits under its project's header too, on the Board tab, whe
 board; from the inbox or Agents it does not yet. Every address is the one it always was:
 `/projects/ACME` is the board, `/projects/ACME/knowledge` its knowledge, and so on.
 
+**The top bar and the row under it stay at the top while you scroll** — inside a project only the tabs
+do, and the project's name scrolls away; on a phone only the top bar stays, so the page keeps the screen.
+
 **The top bar**, left to right:
 
 - the **agentic.** wordmark, which goes Home;

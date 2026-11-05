@@ -171,7 +171,7 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
 
   return (
     <div className="flex flex-col">
-      <div data-project-frame="" className="border-b border-line bg-canvas">
+      <div data-project-frame="" className="bg-canvas">
         <div className="w-full px-4 pt-4 sm:px-6">
           <PageHeader
             titleAs={frame.ownsHeading ? 'p' : 'h1'}
@@ -210,8 +210,16 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
                 }
               : {})}
           />
-          <UnderlineNav label="Project" items={items} bordered={false} />
         </div>
+      </div>
+      {/* The tab row sticks under the top bar from `sm` (S-23.18) and the title above it scrolls
+          away: a sibling of the page rather than inside the band, because a sticky box only sticks
+          within its parent. */}
+      <div
+        data-project-tabs=""
+        className="z-20 border-b border-line bg-canvas px-4 sm:sticky sm:top-(--app-bar-height) sm:px-6"
+      >
+        <UnderlineNav label="Project" items={items} bordered={false} />
       </div>
       <div data-project-page="" className={cx(pageWidth(frame.fullWidth), 'py-6')}>
         <Outlet />

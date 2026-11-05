@@ -772,10 +772,12 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                 />
               ) : null}
               {/* The log pane is its own scroll container sized to the viewport, so following
-                  the end and "paused, N behind" work on it and the page does not grow. */}
+                  the end and "paused, N behind" work on it and the page does not grow. Its height
+                  is what the sticky frame leaves (`--app-sticky-height`, S-23.18) less the steer
+                  box and the page's bottom padding, so scrolled to it the whole pane is in view. */}
               <TranscriptView
                 blocks={snapshot.blocks}
-                scrollerClassName="h-[max(20rem,calc(100dvh-16rem))]"
+                scrollerClassName="h-[max(20rem,calc(100dvh-var(--app-sticky-height)-6.5rem))]"
               />
               {/* `created` is live but has no session yet: the server refuses a steer there
                   (`run_not_live`), so the box appears once the run is claimed. */}

@@ -13,6 +13,11 @@
  * project's own layout (`app/project-frame.tsx`) draws its header and tabs instead, as a GitHub
  * repository replaces the dashboard's navigation.
  *
+ * **Both rows stick** while the page scrolls (S-23.18) — the top bar always, the second row from
+ * `sm` (inside a project only its tabs; the project's title scrolls away). `styles.css` declares
+ * their heights and the `scroll-padding-top` that keeps a focused or anchored target out from under
+ * them.
+ *
  * The connection state is not decoration. This app never polls (see `queries.ts`), so a stream
  * that has stopped delivering is a screen that has silently stopped updating — the failure product
  * /10 cares about most ("live updates everywhere, no refresh"). The dot is the one place that says
@@ -520,7 +525,10 @@ export const AppShell = (): ReactElement => {
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="border-b border-line bg-header text-fg">
+      {/* Sticky (S-23.18): above the page and the flow canvas / office (`z-20`), below a
+          full-screen canvas (`z-30`), a dialog's backdrop (`z-40`) and every portalled menu,
+          tooltip and the palette (`z-50`). The heights are `styles.css`'s `--app-*-height`. */}
+      <header className="sticky top-0 z-20 border-b border-line bg-header text-fg">
         <div className="flex h-14 items-center gap-2 px-3 sm:px-6">
           <Link
             to="/"
@@ -564,7 +572,7 @@ export const AppShell = (): ReactElement => {
         <UnderlineNav
           label="Primary"
           items={orgItems}
-          className="bg-canvas px-4 sm:px-6"
+          className="z-20 bg-canvas px-4 sm:sticky sm:top-(--app-bar-height) sm:px-6"
           more={(collapsed) => <NavMore items={collapsed} />}
         />
       ) : null}
