@@ -61,7 +61,13 @@ import {
   projectContainers,
   serviceOf,
 } from './docker.js';
-import { pinReferences, readEnvFile, restorePrevious, writeFileAtomically } from './env-file.js';
+import {
+  copyFileAtomically,
+  pinReferences,
+  readEnvFile,
+  restorePrevious,
+  writeFileAtomically,
+} from './env-file.js';
 import {
   HOST_BUNDLE_MOUNT,
   PREVIOUS_TEMPLATE_FILE,
@@ -285,7 +291,11 @@ const exists = async (file: string): Promise<boolean> =>
 /** Whether a file is a worker bundle: it declares the `updater` service. Never another project's file. */
 const isWorkerBundle = async (file: string): Promise<boolean> =>
   readFile(file, 'utf8').then(
-    (text) => /\n {2}updater:\n/.test(text) && text.includes('ROLE: updater'),
+    (text) => {
+      // Line endings aside: a file saved on Windows is the same bundle.
+      const lines = text.replace(/\r\n?/g, '\n');
+      return /\n {2}updater:\n/.test(lines) && lines.includes('ROLE: updater');
+    },
     () => false,
   );
 
@@ -294,15 +304,20 @@ const isWorkerBundle = async (file: string): Promise<boolean> =>
  * label's first file, `com.docker.compose.project.config_files`, is used — a Windows label's
  * directory is meaningless here), else the first of {@link BUNDLE_FILE_NAMES} there; either only
  * when it is a worker bundle, so a folder that also holds another project's `compose.yml` keeps it.
- * None, and the apply writes `compose.yaml`.
+ * None, and the apply writes `compose.yaml` — unless a `compose.yaml` that is **not** a worker bundle
+ * is there, which is never overwritten: `null`, and nothing of the folder is rewritten.
  */
-export const bundleFileIn = async (folder: string, configFiles: string | null): Promise<string> => {
+export const bundleFileIn = async (
+  folder: string,
+  configFiles: string | null,
+): Promise<string | null> => {
   const recorded = configFiles?.split(',')[0]?.trim().split(/[\\/]/).pop() ?? '';
   const names = [...(/^[A-Za-z0-9._-]+$/.test(recorded) ? [recorded] : []), ...BUNDLE_FILE_NAMES];
   for (const name of names) {
     if (await isWorkerBundle(path.join(folder, name))) return path.join(folder, name);
   }
-  return path.join(folder, BUNDLE_FILE_NAMES[0]);
+  const fallback = path.join(folder, BUNDLE_FILE_NAMES[0]);
+  return (await exists(fallback)) ? null : fallback;
 };
 
 /** `<registry>/<namespace>` of a `…/platform@sha256:…` reference: what the core renders with. */
@@ -327,11 +342,14 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
       .map((container) => container.Config?.Labels?.['com.docker.compose.project.config_files'])
       .find((label): label is string => typeof label === 'string' && label !== '') ?? null;
   const bundleFile = await bundleFileIn(plan.working_dir, recordedFiles);
+  /** Where the compose file is written (and, for a crashed apply, put back). */
+  const bundleTarget = bundleFile ?? path.join(plan.working_dir, BUNDLE_FILE_NAMES[0]);
   /**
    * A git checkout (the repository's own `compose.worker.yml`, run from a clone) is never rewritten:
-   * its files are tracked. Its `.env` is pinned as before, and the image's template is what runs.
+   * its files are tracked; nor is a folder whose only compose file is not a worker bundle. Its env
+   * file is pinned as before, and the image's template is what runs.
    */
-  const writeBack = !(await exists(path.join(plan.working_dir, '.git')));
+  const writeBack = bundleFile !== null && !(await exists(path.join(plan.working_dir, '.git')));
   /** Where the folder's files are kept before they are rewritten: the rollback's source. */
   const kept = path.join(deps.stateDir, PREVIOUS_BUNDLE_DIRECTORY, plan.id);
   let state: UpdateState = {
@@ -469,42 +487,63 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
   };
 
   /**
-   * The folder's compose file and `.env` back as they were before this apply wrote them: `file` when
-   * the folder's compose file is back, `absent` when it had none, `none` when nothing was kept.
+   * The parts of the folder this apply has rewritten, each set only once it is on disk: a failure is
+   * answered by putting back exactly those, each on its own (S-22.21, review of PR #57). The compose
+   * file's write is atomic (a rename), so a failed write leaves it untouched and needs no restore.
    */
-  const restoreFolder = async (): Promise<'file' | 'absent' | 'none'> => {
-    const keptFile = path.join(kept, path.basename(bundleFile));
-    if (await exists(keptFile)) {
-      await writeFileAtomically(bundleFile, await readFile(keptFile, 'utf8'));
-      await restorePrevious(plan.env_file);
-      return 'file';
+  const written = { env: false, bundle: false };
+
+  /**
+   * Puts back what `parts` names, each part independently and byte for byte (a copy, then a rename).
+   * Answers `file` when the folder's compose file is back, `absent` when it had none (the new one is
+   * removed), `none` when it was not asked for or nothing was kept. **Throws** naming every part that
+   * could not be put back: a half-restored folder is reported, never swallowed.
+   */
+  const restoreFolder = async (parts: {
+    readonly env: boolean;
+    readonly bundle: boolean;
+  }): Promise<'file' | 'absent' | 'none'> => {
+    const failures: string[] = [];
+    let bundleState: 'file' | 'absent' | 'none' = 'none';
+    if (parts.bundle) {
+      try {
+        const keptFile = path.join(kept, path.basename(bundleTarget));
+        if (await exists(keptFile)) {
+          await copyFileAtomically(keptFile, bundleTarget);
+          bundleState = 'file';
+        } else if (await exists(path.join(kept, KEPT_ABSENT))) {
+          await rm(bundleTarget, { force: true });
+          bundleState = 'absent';
+        }
+      } catch (error) {
+        failures.push(`the compose file: ${(error as Error).message}`);
+      }
     }
-    if (await exists(path.join(kept, KEPT_ABSENT))) {
-      await rm(bundleFile, { force: true });
-      await restorePrevious(plan.env_file);
-      return 'absent';
+    if (parts.env) {
+      try {
+        await restorePrevious(plan.env_file);
+      } catch (error) {
+        failures.push(`the env file: ${(error as Error).message}`);
+      }
     }
-    return 'none';
+    if (failures.length > 0) {
+      throw new Error(`the install folder could not be put back (${failures.join('; ')})`);
+    }
+    return bundleState;
   };
 
   const rollback = async (why: string, fallbackTemplate: string): Promise<void> => {
     await save({ step: 'rolling_back', detail: why });
     logger.warn({ update_id: plan.id, why }, 'the update failed; rolling back');
-    let template = bundleFile;
+    let template = bundleTarget;
     try {
-      const restored = await restoreFolder();
-      if (restored === 'none') {
-        // Nothing of the folder was kept (an apply that crashed before it wrote, or an older one):
-        // the env file alone, and the previous image's template with the previous references.
-        await restorePrevious(plan.env_file);
-      }
+      // An apply that crashed knows nothing of what it wrote: everything that was kept goes back.
+      const parts = plan.mode === 'rollback' ? { env: true, bundle: true } : written;
+      const restored = await restoreFolder(parts);
       // The previous image's template when the folder holds no compose file of its own to run.
       if (restored !== 'file') template = fallbackTemplate;
     } catch (error) {
-      await finish(
-        'failed',
-        `${why}; the previous bundle could not be restored: ${(error as Error).message}`,
-      );
+      await finish('failed', `${why}; ${(error as Error).message}`);
       return;
     }
     const back = await upAndCheck(template, plan.from, { restartWorker: true });
@@ -556,25 +595,33 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
   try {
     if (writeBack) {
       await mkdir(kept, { recursive: true });
-      if (await exists(bundleFile)) {
-        await copyFile(bundleFile, path.join(kept, path.basename(bundleFile)));
+      if (await exists(bundleTarget)) {
+        await copyFile(bundleTarget, path.join(kept, path.basename(bundleTarget)));
       } else {
         await writeFile(path.join(kept, KEPT_ABSENT), '');
       }
     }
     await pinReferences(plan.env_file, plan.to);
-    if (writeBack) await writeFileAtomically(bundleFile, rendered);
+    written.env = true;
+    if (writeBack) {
+      await writeFileAtomically(bundleTarget, rendered);
+      written.bundle = true;
+    }
     await save({ step: 'pinned' });
   } catch (error) {
-    const detail = `the install folder could not be written: ${(error as Error).message}`;
-    await restoreFolder().catch(() => 'none');
+    let detail = `the install folder could not be written, so nothing of it was changed: ${(error as Error).message}`;
+    try {
+      await restoreFolder(written);
+    } catch (restore) {
+      detail = `the install folder could not be written (${(error as Error).message}), and ${(restore as Error).message}`;
+    }
     await restartDrained(deps.templatePath);
     await finish('failed', detail);
     return state;
   }
 
   // 4–5. Up from the folder, and check.
-  const running = writeBack ? bundleFile : deps.templatePath;
+  const running = writeBack ? bundleTarget : deps.templatePath;
   const up = await upAndCheck(running, plan.to);
   if (!up.ok) {
     await rollback(up.detail, previousTemplate);

@@ -291,7 +291,8 @@ describe('the updater’s poll', () => {
       ),
     );
     expect(plan.working_dir).toBe('/var/lib/platform/host-bundle');
-    expect(plan.env_file).toBe('/var/lib/platform/host-bundle/.env');
+    // The env file the project was brought up with (`--env-file .env.worker`), by its name.
+    expect(plan.env_file).toBe('/var/lib/platform/host-bundle/.env.worker');
     expect(create).toContain(`type=volume,source=agentic-worker_updates,target=${w.stateDir}`);
     expect(create.join(' ')).not.toContain('com.docker.compose');
     expect(w.calls).toContainEqual([
@@ -310,9 +311,9 @@ describe('the updater’s poll', () => {
       '/run/desktop/mnt/host/c/Users/dev/agentic-worker',
     ],
     [
-      'a folder with a space and a comma',
-      '/Users/dev/Library/Application Support/agentic,worker',
-      '/Users/dev/Library/Application Support/agentic,worker',
+      'a folder with a space',
+      '/Users/dev/Library/Application Support/agentic-worker',
+      '/Users/dev/Library/Application Support/agentic-worker',
     ],
   ])(
     'updates a project brought up from %s: the plan names the fixed container path, and the folder is mounted from the source Docker reported (S-22.21, backlog 990)',
@@ -493,7 +494,7 @@ describe('where the updater runs', () => {
       project: {
         name: 'agentic-worker',
         workingDir: '/var/lib/platform/host-bundle',
-        envFile: '/var/lib/platform/host-bundle/.env',
+        envFile: '/var/lib/platform/host-bundle/.env.worker',
       },
       hostBundleSource: '/home/dev/worker',
       image: refsOf('a').platform,
@@ -512,7 +513,7 @@ describe('where the updater runs', () => {
           ...SELF.Config.Labels,
           'com.docker.compose.project.working_dir': 'C:\\Users\\dev\\agentic-worker',
           'com.docker.compose.project.environment_file':
-            'C:\\Users\\dev\\agentic-worker\\.env,D:\\other.env',
+            'C:\\Users\\dev\\agentic-worker\\.env.worker',
         },
       },
       Mounts: [
@@ -536,7 +537,7 @@ describe('where the updater runs', () => {
     expect(self.project).toEqual({
       name: 'agentic-worker',
       workingDir: '/var/lib/platform/host-bundle',
-      envFile: '/var/lib/platform/host-bundle/.env',
+      envFile: '/var/lib/platform/host-bundle/.env.worker',
     });
     expect(self.hostBundleSource).toBe('/run/desktop/mnt/host/c/Users/dev/agentic-worker');
     const inspected = (container: unknown) => async () => ({
@@ -560,6 +561,46 @@ describe('where the updater runs', () => {
         config,
       ),
     ).rejects.toThrow(/"My Worker" is not one Compose accepts/);
+    // The env file is kept current only as a file of the folder, and only one of them.
+    const withEnvFiles = (environmentFile: string) =>
+      inspected({
+        ...SELF,
+        Config: {
+          ...SELF.Config,
+          Labels: {
+            ...SELF.Config.Labels,
+            'com.docker.compose.project.environment_file': environmentFile,
+          },
+        },
+      });
+    await expect(
+      discoverSelf(
+        withEnvFiles('/home/dev/worker/.env,/home/dev/worker/.env.worker'),
+        'self',
+        config,
+      ),
+    ).rejects.toThrow(/2 env files/);
+    await expect(
+      discoverSelf(withEnvFiles('/etc/agentic/worker.env'), 'self', config),
+    ).rejects.toThrow(/is not a file in its folder/);
+    await expect(
+      discoverSelf(withEnvFiles('/home/dev/worker/sub/.env'), 'self', config),
+    ).rejects.toThrow(/is not a file in its folder/);
+    const plain = await discoverSelf(
+      inspected({
+        ...SELF,
+        Config: {
+          ...SELF.Config,
+          Labels: {
+            'com.docker.compose.project': 'agentic-worker',
+            'com.docker.compose.project.working_dir': '/home/dev/worker',
+          },
+        },
+      }),
+      'self',
+      config,
+    );
+    expect(plain.project.envFile).toBe('/var/lib/platform/host-bundle/.env');
   });
 
   it('mounts the worker credential read-only into the apply', () => {

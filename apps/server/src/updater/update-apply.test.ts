@@ -90,12 +90,14 @@ const world = async (options: {
   readonly bundle?: string | null;
   /** Compose's `config_files` label on the worker (default: none recorded). */
   readonly configFiles?: string;
+  /** The env file's name in the folder (default `.env`; the owner's clone uses `.env.worker`). */
+  readonly envFileName?: string;
 }) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'apply-'));
   const stateDir = await mkdtemp(path.join(tmpdir(), 'apply-state-'));
   const workerStateDir = await mkdtemp(path.join(tmpdir(), 'apply-worker-state-'));
   await writeFile(path.join(workerStateDir, 'credential'), `${CREDENTIAL}\n`);
-  const envFile = path.join(directory, '.env');
+  const envFile = path.join(directory, options.envFileName ?? '.env');
   if (options.envFile !== null) {
     await writeFile(envFile, options.envFile ?? 'LOG_LEVEL=debug\n');
   }
@@ -493,6 +495,79 @@ describe('the install folder, kept current (S-22.21, TD-032 decision 4, backlog 
     await runApply(w.plan, w.deps);
     expect(await readFile(own, 'utf8')).toBe(rendered('b'));
     await expect(stat(w.bundleFile)).rejects.toThrow();
+  });
+});
+
+describe('the owner’s layout and a write that fails (review of PR #57)', () => {
+  it('a clone run with --env-file .env.worker -f compose.worker.yml: only .env.worker is pinned; .env and the tracked file stay byte for byte', async () => {
+    const w = await world({
+      bundle: null,
+      envFileName: '.env.worker',
+      configFiles: '/Users/dev/www/agentic-platform/compose.worker.yml',
+    });
+    const folder = path.dirname(w.bundleFile);
+    await mkdir(path.join(folder, '.git'));
+    // The core's own .env beside it, which the worker must never read or be written into.
+    const coreEnv = `${'# the core\nLOG_LEVEL=trace\n'.repeat(2_000)}APP_WORKSPACE_GIT_IMAGE=core-only\n`;
+    await writeFile(path.join(folder, '.env'), coreEnv);
+    const tracked = path.join(folder, 'compose.worker.yml');
+    await writeFile(tracked, TEMPLATE);
+    const state = await runApply(w.plan, w.deps);
+    expect(state.result).toBe('succeeded');
+    expect(await readFile(path.join(folder, '.env'), 'utf8')).toBe(coreEnv);
+    await expect(stat(path.join(folder, '.env.previous'))).rejects.toThrow();
+    expect(await readFile(tracked, 'utf8')).toBe(TEMPLATE);
+    expect(w.envFile).toBe(path.join(folder, '.env.worker'));
+    expect(managedReferencesOf(await readFile(w.envFile, 'utf8'))).toEqual(refs('b'));
+    expect(await readFile(previousOf(w.envFile), 'utf8')).toBe('LOG_LEVEL=debug\n');
+    const up = composeCalls(w.calls).find((call) => verb(call).startsWith('up -d --wait'));
+    expect(up?.args.slice(5, 7)).toEqual(['--env-file', w.envFile]);
+    expect(up?.args).toContain(w.templatePath);
+    // The core's values reach no Compose call: the worker's env file is the only one read.
+    for (const call of composeCalls(w.calls)) {
+      expect(call.env.APP_WORKSPACE_GIT_IMAGE).toBeUndefined();
+      expect(call.args).not.toContain(path.join(folder, '.env'));
+    }
+  });
+
+  it('a compose file that cannot be written leaves the folder as it was — the pinned .env put back — and reports failed', async () => {
+    const w = await world({});
+    const folder = path.dirname(w.bundleFile);
+    // Its temporary file is a directory: the atomic write fails, as on a Windows editor's lock.
+    await mkdir(path.join(folder, `.compose.yaml.updater-${process.pid}`));
+    const state = await runApply(w.plan, w.deps);
+    expect(state).toMatchObject({ result: 'failed', reported: true });
+    expect(state.detail).toContain('could not be written, so nothing of it was changed');
+    expect(await readFile(w.envFile, 'utf8')).toBe('LOG_LEVEL=debug\n');
+    expect(await readFile(w.bundleFile, 'utf8')).toBe(rendered('a'));
+    expect(
+      composeCalls(w.calls)
+        .map(verb)
+        .filter((line) => !line.startsWith('config')),
+    ).toEqual(['pull --quiet', 'restart remote-worker']);
+  });
+
+  it('a folder that cannot be put back either is reported as such, never swallowed', async () => {
+    const w = await world({});
+    const folder = path.dirname(w.bundleFile);
+    await mkdir(path.join(folder, `.compose.yaml.updater-${process.pid}`));
+    await mkdir(path.join(folder, `.env.restore-${process.pid}`));
+    const state = await runApply(w.plan, w.deps);
+    expect(state.result).toBe('failed');
+    expect(state.detail).toContain('could not be put back (the env file:');
+    expect(w.reports).toEqual([
+      expect.objectContaining({ result: 'failed', detail: expect.stringContaining('put back') }),
+    ]);
+  });
+
+  it('never overwrites a compose.yaml that is not a worker bundle, and reads one saved with CRLF as one', async () => {
+    const w = await world({ bundle: 'services:\n  db:\n    image: postgres\n' });
+    await runApply(w.plan, w.deps);
+    expect(await readFile(w.bundleFile, 'utf8')).toBe('services:\n  db:\n    image: postgres\n');
+    expect(managedReferencesOf(await readFile(w.envFile, 'utf8'))).toEqual(refs('b'));
+    const crlf = await world({ bundle: rendered('a').replaceAll('\n', '\r\n') });
+    await runApply(crlf.plan, crlf.deps);
+    expect(await readFile(crlf.bundleFile, 'utf8')).toBe(rendered('b'));
   });
 });
 

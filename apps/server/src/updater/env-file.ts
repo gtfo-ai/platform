@@ -2,10 +2,11 @@
  * **The updater's managed block in the worker's env file** — WP-287 (2), TD-032 decision 4.
  *
  * The four product images are named in `compose.worker.yml` as `${PLATFORM_*_IMAGE:-…}`, so the
- * updater re-pins them by owning a **marked block** of those four lines in the project's env file
- * (the `--env-file` the project was brought up with, which compose records on every container, else
- * `<project directory>/.env`). The person's own `docker compose up` reads the same file, so it keeps
- * the pinned digests. The file is written **atomically** (a temporary file in the same directory,
+ * updater re-pins them by owning a **marked block** of those four lines in the project's env file: the
+ * one file of the install folder the project was brought up with — the **name** of the single
+ * `--env-file` Compose recorded on its containers (`com.docker.compose.project.environment_file`),
+ * inside the folder the updater has mounted, else `.env` (`envFileNameOf` in `updater.ts`, S-22.21).
+ * The person's own `docker compose up` reads the same file, so it keeps the pinned digests. The file is written **atomically** (a temporary file in the same directory,
  * then a rename) and the whole previous file is kept as `<file>.previous` — the rollback restores it
  * byte for byte.
  *
@@ -135,8 +136,20 @@ export const pinReferences = async (file: string, references: ImageReferences): 
   await writeFileAtomically(file, rewriteManagedBlock(current, references));
 };
 
+/**
+ * `source` over `target` byte for byte and atomically — a copy beside `target`, then a rename — with
+ * `target`'s directory owner. The temporary name is `.<target>.restore-<pid>`, distinct from a write's.
+ */
+export const copyFileAtomically = async (source: string, target: string): Promise<void> => {
+  const directory = path.dirname(target);
+  const owner = await stat(directory);
+  const temporary = path.join(directory, `.${path.basename(target)}.restore-${process.pid}`);
+  await copyFile(source, temporary);
+  await chown(temporary, owner.uid, owner.gid).catch(() => undefined);
+  await rename(temporary, target);
+};
+
 /** The rollback: `.previous` back, byte for byte. */
 export const restorePrevious = async (file: string): Promise<void> => {
-  const previous = await readFile(previousOf(file), 'utf8');
-  await writeFileAtomically(file, previous);
+  await copyFileAtomically(previousOf(file), file);
 };

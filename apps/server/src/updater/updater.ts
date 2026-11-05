@@ -97,12 +97,57 @@ export interface UpdaterDeps {
   readonly sleep: (ms: number) => Promise<void>;
 }
 
-/** The compose project an apply drives: the person's project by name, from the mounted folder. */
-export const bundleOf = (name: string): ComposeProject => ({
+/**
+ * The compose project an apply drives: the person's project by name, from the mounted folder, with
+ * the env file it was brought up with — by its name, inside that folder ({@link envFileNameOf}).
+ */
+export const bundleOf = (name: string, envFileName = '.env'): ComposeProject => ({
   name,
   workingDir: HOST_BUNDLE_MOUNT,
-  envFile: path.posix.join(HOST_BUNDLE_MOUNT, '.env'),
+  envFile: path.posix.join(HOST_BUNDLE_MOUNT, envFileName),
 });
+
+/** A host path's last segment, either separator (a Windows label's too); `null` when unusable. */
+const lastSegment = (
+  hostPath: string,
+): { readonly folder: string; readonly name: string } | null => {
+  const trimmed = hostPath.replace(/[\\/]+$/, '');
+  const at = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+  const name = trimmed.slice(at + 1);
+  if (at < 0 || !/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') return null;
+  return { folder: trimmed.slice(0, at).replace(/[\\/]+$/, ''), name };
+};
+
+/**
+ * The name of the env file the project was brought up with (`--env-file .env.worker`), from Compose's
+ * `environment_file` label, inside the folder the `working_dir` label names — else `.env`. Only the
+ * file's **name** is used (the folder is the mount); the labels are compared as strings, never
+ * opened. Several env files, or one outside the project's folder, cannot be kept current through the
+ * mount: refused by name, before anything is pulled or drained.
+ */
+export const envFileNameOf = (labels: Readonly<Record<string, string>>): string => {
+  const files = (labels['com.docker.compose.project.environment_file'] ?? '')
+    .split(',')
+    .map((file) => file.trim())
+    .filter(Boolean);
+  if (files.length === 0) return '.env';
+  if (files.length > 1) {
+    throw new UpdaterSetupError(
+      `the project was brought up with ${files.length} env files; the updater keeps one current (pass a single --env-file)`,
+    );
+  }
+  const file = lastSegment(files[0] as string);
+  const workingDir = (labels['com.docker.compose.project.working_dir'] ?? '').replace(
+    /[\\/]+$/,
+    '',
+  );
+  if (file === null || workingDir === '' || file.folder !== workingDir) {
+    throw new UpdaterSetupError(
+      `the project's env file ${JSON.stringify((files[0] as string).slice(0, 200))} is not a file in its folder ${JSON.stringify(workingDir.slice(0, 200))}; the updater keeps only the folder's own files current`,
+    );
+  }
+  return file.name;
+};
 
 /** Where this updater runs, read off its own container. */
 export interface SelfContainer {
@@ -156,8 +201,9 @@ export const discoverSelf = async (
     }
     return mount.Name;
   };
+  const envFileName = envFileNameOf(labels);
   return {
-    project: bundleOf(name),
+    project: bundleOf(name, envFileName),
     hostBundleSource: folder.Source,
     image: self.Config?.Image ?? '',
     networks: Object.keys(self.NetworkSettings?.Networks ?? {}).sort(),

@@ -16,7 +16,7 @@ The bundle's project name is fixed (`name: agentic-worker`, `compose.worker.yml:
 The updater reaches the bundle's folder through a bind mount at a fixed container path
 (`/var/lib/platform/host-bundle`, from `${APP_WORKER_BUNDLE_DIR:-.}`), whose source Docker resolves,
 and writes each applied build back into it; it reads no host path off a label (TD-032's 2026-11-05
-decision-4 amendment, S-22.21). It labels its apply container `org.platform.update-apply` (`updater.ts:70`). It
+decision-4 amendment, S-22.21). It labels its apply container `org.platform.update-apply` (`updater.ts:80`). It
 rewrites the `.env` block and renders the template from the **verified image**, never from a file the
 core served (TD-032 §3).
 

@@ -97,10 +97,15 @@ try {
   Set-Content -LiteralPath (Join-Path $state 'wd') -Value '/var/lib/platform/host-bundle'
   & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
   Test-That ($LASTEXITCODE -eq 0) "a re-run after an update accepts its own install (it exited $LASTEXITCODE)"
+  # And a folder without the mark, meeting that same project, refuses: it is someone else's.
+  $unmarked = Join-Path $root 'unmarked'
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $unmarked -NoOpen
+  Test-That ($LASTEXITCODE -eq 3) "an unmarked folder meeting an existing project is refused (it exited $LASTEXITCODE)"
+  Test-That (-not (Test-Path -LiteralPath (Join-Path $unmarked 'compose.yaml'))) 'the refused folder gets no compose file'
 
   # As `irm | iex` runs it: in the caller's own scope, which must survive with nothing of the
-  # installer left. With no options it targets $HOME\agentic-worker, which the stub's running
-  # project (brought up from $workerDir) makes it refuse (exit 3) before it writes anything.
+  # installer left. With no options it targets $HOME\agentic-worker, which has no mark, so the stub's
+  # running project makes it refuse (exit 3) before it writes anything.
   $probe = "Invoke-Expression ([IO.File]::ReadAllText('$script')); " +
     "`$left = @(Get-Variable -Name Dir, Core, NoOpen, Uninstall, Purge, installerExitCode, CoreAddress, WorkerDir -Scope Global -ErrorAction SilentlyContinue).Count + " +
     "@(Get-Command -Name Install-Worker, Exit-Installer -ErrorAction SilentlyContinue).Count; " +

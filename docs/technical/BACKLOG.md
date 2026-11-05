@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 1030, so the next is **1031**), its grade
+line with the next free number (the highest is 1052, so the next is **1053**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -134,6 +134,9 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 943 | minor | — | The primary-button census (`apps/web/src/ui/primary-census.ts`) is asserted per screen in the screen tests (task, run, dead letters, onboarding steps, integrations, frame banner); a global `afterEach` over every rendered ui test would catch a state no screen test names, after the remaining § 2 offenders (942) are fixed |
 | 944 | minor | — | Vocabulary not unified by S-23.23 (the UX audit's § 4): *Watch the run* / *Open the full run* / *Open the run (live)* (one page holds several, so *Open run* needs scoped names), *Start discovery* / *Re-evaluate readiness* (→ *Run discovery* / *Re-run discovery*), *vault* (→ *Knowledge base*), *Operating mode* / *Autonomy dial* / *Policies & WIP* (→ *Autonomy*, *Autonomy & limits*), the Re-run dialog's *Retry with model* / *Retry with effort* labels, and *Bind N integrations* on the shared save button (`binding-selection.tsx`, in-flight) |
 | 945 | minor | — | The Execution section's *Head start for the assignee’s worker* hint says the ticket assignee's online worker gets the head start (`execution-settings.tsx`), while the guide's § 11 and backlog 730 say a stage offer names no assignee, so only an ask's asker gets it; the screen's sentence is the false one (left: the file was outside S-23.23) |
+| 1050 | minor | — | The updater's write-back skips a git checkout by looking for `.git` in the install folder itself; a folder nested inside a repository (its parents are outside the mount) is still rewritten, tracked files included |
+| 1051 | minor | — | A crash-recovery rollback (`mode: 'rollback'`) restores the folder's `.env.previous` even when the crashed apply never pinned, so it can put back a stale file from an earlier update (pre-existing since WP-287) |
+| 1052 | minor | — | `updates/previous-bundle/<update id>/` copies are never pruned; keep all but the last few (the rollback reads only its own) |
 | 713 | nit | — | worker_device_codes rows are never deleted; bounded by the 200-pending limit per ten minutes, but grow with use; add a sweep of consumed/expired rows |
 | 874 | nit | — | A run that leaves the agents list is read once (`GET /api/runs/:id`) to cheer or slump at its desk for 20 s; a run that started and ended between two agents reads, or ended while the page was closed, never shows — a `run.finished`/`run.failed` frame carrying its ending would make it exact |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
