@@ -73,7 +73,7 @@ activity is `activityOf`'s, a loop pill says "Review ≤3" or "Review · used 1 
 layout library: the main path is one row left → right, a stage entered only by a failure or a disabled
 one sits above it, a return between two cards of the row curves below, deeper the further it reaches;
 a task's first view frames the current stage with two cards either side at zoom ≥ 0.75, a
-template's the whole graph at zoom ≥ 0.45, and *Fit all* shows every stage; on a task a loop pill
+template's every stage (zoom down to 0.2, so nothing is cut off; a two-row layout was weighed and rejected in `flow-canvas.tsx`), and *Fit all* shows every stage; on a task a loop pill
 is drawn only once spent, or while its edge is pointed at or a card it touches has focus) and
 `activity-rows.ts` (the dialog's "Live activity" rows — one per tool call, thinking burst and text
 burst — and its log lines, from the transcript's blocks). `stage-card.tsx` is the card, a real

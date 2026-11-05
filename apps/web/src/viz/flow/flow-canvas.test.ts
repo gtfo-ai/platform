@@ -4,7 +4,7 @@
  * (`test/web-e2e/csp.spec.ts`).
  */
 import { describe, expect, it } from 'vitest';
-import { firstViewOf, pillShown, toReactFlow } from './flow-canvas.js';
+import { firstViewOf, pillShown, TEMPLATE_FIT_MIN_ZOOM, toReactFlow } from './flow-canvas.js';
 import { FEATURE_GRAPH } from './graph.test-fixture.js';
 import { layoutFlow } from './layout.js';
 import { type FlowEdge, templateFlow } from './model.js';
@@ -41,8 +41,14 @@ describe('loop pills', () => {
 });
 
 describe('the first view', () => {
-  it('fits a whole template at zoom ≥ 0.45, and a task around its current stage at ≥ 0.75', () => {
-    expect(firstViewOf(null)).toEqual({ padding: 0.1, minZoom: 0.45, maxZoom: 1 });
+  it('fits every stage of a template, and a task around its current stage at ≥ 0.75', () => {
+    expect(firstViewOf(null)).toEqual({
+      padding: 0.08,
+      minZoom: TEMPLATE_FIT_MIN_ZOOM,
+      maxZoom: 1,
+    });
+    // Low enough for the shipped feature template's thirteen-stage row at a 1 190 px page.
+    expect(TEMPLATE_FIT_MIN_ZOOM).toBeLessThanOrEqual(0.25);
     expect(firstViewOf(['a', 'b'])).toEqual({
       nodes: [{ id: 'a' }, { id: 'b' }],
       padding: 0.15,

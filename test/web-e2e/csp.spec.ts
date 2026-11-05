@@ -243,10 +243,33 @@ test('the flow canvas and its stage dialog open under the policy without a viola
   await signIn(page);
   await expect(page.getByRole('heading', { name: 'Organisation' })).toBeVisible();
 
-  // The Pipeline tab: a template, drawn by the lazy chunk, laid out left to right.
+  // The Pipeline tab: a template, drawn by the lazy chunk, laid out left to right — and opened
+  // whole: at a 1 190 px page no stage of the thirteen-stage feature row is cut off.
+  await page.setViewportSize({ width: 1190, height: 900 });
   await page.goto(`/projects/${PROJECT_KEY}/pipeline`);
   const template = page.locator('[data-flow-canvas="template"]');
   await expect(template).toBeVisible();
+  const canvasBox = await page.getByTestId('flow-canvas-frame').boundingBox();
+  const cards = template.locator('[data-stage-card]');
+  await expect(cards).toHaveCount(15);
+  await expect
+    .poll(
+      async () => {
+        const boxes = await cards.evaluateAll((elements) =>
+          elements.map((element) => element.getBoundingClientRect().toJSON() as DOMRect),
+        );
+        return boxes.filter(
+          (box) =>
+            canvasBox === null ||
+            box.left < canvasBox.x ||
+            box.top < canvasBox.y ||
+            box.right > canvasBox.x + canvasBox.width ||
+            box.bottom > canvasBox.y + canvasBox.height,
+        ).length;
+      },
+      { message: 'a stage card of the template is outside the canvas on first view' },
+    )
+    .toBe(0);
   const refinement = template.locator('[data-stage-card="refinement"]');
   const implementation = template.locator('[data-stage-card="implementation"]');
   await expect(implementation).toBeVisible();

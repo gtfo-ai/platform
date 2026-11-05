@@ -13,7 +13,7 @@
  *
  * Positions come from `layout.ts`, never from React Flow: each node is handed its size, so the
  * first paint is already laid out. A task's first view frames the current stage with two cards
- * either side (`focusOf`) at zoom ≥ 0.75; a template's fits the whole graph at zoom ≥ 0.45; the
+ * either side (`focusOf`) at zoom ≥ 0.75; a template's fits every stage, however small; the
  * *Fit all* control shows every stage. Every return curve is a custom edge (`FlowEdgePath`) that
  * dips below the row and carries its loop pill (on a task, only once spent, or while pointed at or
  * beside a focused card — `pillShown`); a spacer node at the deepest curve's bottom keeps a fit of
@@ -234,13 +234,24 @@ export const toReactFlow = (
 };
 
 /**
- * The first view's fit. A template is read whole — every stage, as large as that allows, never
- * below 0.45. A task is read around where it is — the current stage with two either side
- * (`focus`), never below 0.75, so the cards stay legible at a page's width.
+ * How far out a template's first view may zoom to show **every** stage. The shipped feature
+ * template is thirteen stages on its row — about 3 750 px of cards — so at a 1 190 px page the fit
+ * lands near 0.26: the shape of the whole pipeline, with the names small; the zoom buttons and the
+ * list give the words. A two-row "snake" was weighed and not taken: the tab's 380 px canvas is
+ * height-bound once the cards above the row and the return curves below it are counted, so two rows
+ * would reach about 0.4 for a layout whose cross-row returns no longer read as returns. Also the
+ * canvas's own floor, so *Fit all* on a task's long row fits too.
+ */
+export const TEMPLATE_FIT_MIN_ZOOM = 0.2;
+
+/**
+ * The first view's fit. A template is read whole — every stage, nothing cut off, padding 0.08. A
+ * task is read around where it is — the current stage with two either side (`focus`), never below
+ * 0.75, so the cards stay legible at a page's width.
  */
 export const firstViewOf = (focus: readonly string[] | null) =>
   focus === null
-    ? { padding: 0.1, minZoom: 0.45, maxZoom: 1 }
+    ? { padding: 0.08, minZoom: TEMPLATE_FIT_MIN_ZOOM, maxZoom: 1 }
     : { nodes: focus.map((id) => ({ id })), padding: 0.15, minZoom: 0.75, maxZoom: 1 };
 
 export const FlowCanvas = ({
@@ -321,7 +332,7 @@ export const FlowCanvas = ({
         fitView
         fitViewOptions={fitViewOptions}
         ariaLabelConfig={{ 'controls.fitView.ariaLabel': 'Fit all' }}
-        minZoom={0.3}
+        minZoom={TEMPLATE_FIT_MIN_ZOOM}
         maxZoom={1.75}
         nodesDraggable={false}
         nodesConnectable={false}
