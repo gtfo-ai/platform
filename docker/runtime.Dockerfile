@@ -61,8 +61,8 @@ RUN apt-get update \
 WORKDIR /out
 # One layer, and every download is `--fail` so a 404 stops the build instead of writing an HTML
 # error page into a file called `gh`.
-# Every download also retries (`--retry 5 --retry-all-errors --retry-delay 3`): GitHub's release
-# CDN answered 504 three times on 2026-11-05 (jira-cli, both arches), each cured by a re-run; a retry
+# Every download also retries (`--retry 10 --retry-all-errors --retry-delay 10
+# --retry-max-time 300`): GitHub's release CDN answered 504 for minutes at a time on 2026-11-05 (five 3 s retries were not enough); a retry
 # is the same request again, so it cannot change what is installed.
 RUN set -eux; \
     case "${TARGETARCH}" in \
@@ -70,17 +70,17 @@ RUN set -eux; \
       arm64) sentry_arch=aarch64; jira_arch=arm64 ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz"; \
+    curl -fsSL --retry 10 --retry-all-errors --retry-delay 10 --retry-max-time 300 -o gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz"; \
     tar -xzf gh.tgz --strip-components=2 "gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh"; \
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o glab.tgz "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/${GLAB_VERSION}/glab_${GLAB_VERSION}_linux_${TARGETARCH}.tar.gz"; \
+    curl -fsSL --retry 10 --retry-all-errors --retry-delay 10 --retry-max-time 300 -o glab.tgz "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/${GLAB_VERSION}/glab_${GLAB_VERSION}_linux_${TARGETARCH}.tar.gz"; \
     tar -xzf glab.tgz --strip-components=1 bin/glab; \
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o logcli.zip "https://github.com/grafana/loki/releases/download/v${LOGCLI_VERSION}/logcli-linux-${TARGETARCH}.zip"; \
+    curl -fsSL --retry 10 --retry-all-errors --retry-delay 10 --retry-max-time 300 -o logcli.zip "https://github.com/grafana/loki/releases/download/v${LOGCLI_VERSION}/logcli-linux-${TARGETARCH}.zip"; \
     unzip -q -j logcli.zip "logcli-linux-${TARGETARCH}" -d .; \
     mv "logcli-linux-${TARGETARCH}" logcli; \
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o sentry-cli "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-${sentry_arch}"; \
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o jira.tgz "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_CLI_VERSION}/jira_${JIRA_CLI_VERSION}_linux_${jira_arch}.tar.gz"; \
+    curl -fsSL --retry 10 --retry-all-errors --retry-delay 10 --retry-max-time 300 -o sentry-cli "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-${sentry_arch}"; \
+    curl -fsSL --retry 10 --retry-all-errors --retry-delay 10 --retry-max-time 300 -o jira.tgz "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_CLI_VERSION}/jira_${JIRA_CLI_VERSION}_linux_${jira_arch}.tar.gz"; \
     tar -xzf jira.tgz --strip-components=2 "jira_${JIRA_CLI_VERSION}_linux_${jira_arch}/bin/jira"; \
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o acli "${ACLI_URL}"; \
+    curl -fsSL --retry 10 --retry-all-errors --retry-delay 10 --retry-max-time 300 -o acli "${ACLI_URL}"; \
     rm -f ./*.tgz ./*.zip; \
     chmod 0755 gh glab logcli sentry-cli jira acli
 
