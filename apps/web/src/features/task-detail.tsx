@@ -76,6 +76,17 @@ import {
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import {
+  APPROVAL_KIND_LABEL,
+  APPROVAL_STATUS_LABEL,
+  ARTIFACT_TYPE_LABEL,
+  QUESTION_STATUS_LABEL,
+  RUN_STATUS_LABEL,
+  runSubject,
+  STAGE_STATE_LABEL,
+  stageLabel,
+  TASK_STATE_LABEL,
+} from '../ui/humanize.js';
+import {
   Badge,
   Button,
   Card,
@@ -676,7 +687,7 @@ const AcceptanceChecks = ({
   const latest = latestAcceptanceVerdict(artifacts);
   const body = useArtifactBody(taskId, latest?.id ?? null);
   const verdictDefinition =
-    'The business review’s verdict on this change, from its latest Acceptance Verdict (product/04).';
+    'The business review’s verdict on this change, from its latest Acceptance Verdict.';
   const criteriaDefinition =
     'The acceptance criteria the business review judged, from the same verdict, each with the reviewer’s evidence.';
   if (latest === null) {
@@ -794,13 +805,13 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
     case 'context_budget_above_ceiling':
       return 'Escalated: the project’s context budget is above this release’s ceiling.';
     case 'protected_paths_changed':
-      return 'Sent the task back: the change touches protected paths the plan did not declare or the code review did not confirm (BD-024).';
+      return 'Sent the task back: the change touches protected paths the plan did not declare or the code review did not confirm.';
     case 'protected_paths_awaiting_review':
       return 'Passed; the protected paths the plan declared await the code review, whose confirmation the rebase gate checks before Ready.';
     case 'protected_paths_clean':
-      return 'The tamper check found no protected path the change may not touch; the pipeline decided the gate (BD-024).';
+      return 'The tamper check found no protected path the change may not touch; the pipeline decided the gate.';
     case 'protected_paths_confirmed':
-      return 'Passed; the code review confirmed every protected path the plan declared (BD-024).';
+      return 'Passed; the code review confirmed every protected path the plan declared.';
     case 'unknown':
       return 'Finished without a verdict.';
     case 'unrecognised':
@@ -919,7 +930,7 @@ const QuestionCard = ({
         <Badge tone={question.blocking ? 'warning' : 'neutral'}>
           {question.blocking ? 'blocking' : 'non-blocking'}
         </Badge>
-        <span className="text-xs text-fg-muted">{question.stage}</span>
+        <span className="text-xs text-fg-muted">{stageLabel(question.stage)}</span>
         <span className="ml-auto text-xs text-fg-muted">{formatDateTime(question.asked_at)}</span>
       </div>
       {/* Written by an agent: rendered, never executed (BD-022). */}
@@ -962,7 +973,7 @@ const QuestionCard = ({
         </form>
       ) : (
         <p className="text-sm text-fg-muted">
-          {question.status}
+          {QUESTION_STATUS_LABEL[question.status]}
           {question.answer === null || question.answer === undefined ? null : (
             <>
               {' — '}
@@ -1051,8 +1062,8 @@ const ApprovalCard = ({
 }): ReactElement => (
   <Card className="flex flex-col gap-2">
     <div className="flex items-center gap-2">
-      <Badge tone="accent">{approval.kind}</Badge>
-      <span className="text-xs text-fg-muted">{approval.status}</span>
+      <Badge tone="accent">{APPROVAL_KIND_LABEL[approval.kind]}</Badge>
+      <span className="text-xs text-fg-muted">{APPROVAL_STATUS_LABEL[approval.status]}</span>
       <span className="ml-auto text-xs text-fg-muted">{formatDateTime(approval.requested_at)}</span>
     </div>
     {approval.status === 'pending' ? (
@@ -1339,8 +1350,8 @@ const ArtifactBody = ({
   return (
     <div className="flex flex-col gap-2">
       <p className="text-xs text-fg-muted">
-        {artifact.artifact_type} v{artifact.version} · schema {artifact.schema_version} ·{' '}
-        {formatDateTime(artifact.created_at)} ·{' '}
+        {ARTIFACT_TYPE_LABEL[artifact.artifact_type]} v{artifact.version} · schema{' '}
+        {artifact.schema_version} · {formatDateTime(artifact.created_at)} ·{' '}
         {`${artifact.redaction_count} redaction${artifact.redaction_count === 1 ? '' : 's'}`}
       </p>
       {artifact.markdown === null ? null : <UntrustedProse value={artifact.markdown} />}
@@ -1437,7 +1448,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
               <li key={`${stage.stage}:${stage.attempt}`} data-testid="timeline-entry">
                 <Card className="flex flex-col gap-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{stage.stage}</span>
+                    <span className="text-sm font-medium">{stageLabel(stage.stage)}</span>
                     <Badge
                       tone={
                         stage.state === 'completed'
@@ -1449,7 +1460,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                               : 'neutral'
                       }
                     >
-                      {stage.state}
+                      {STAGE_STATE_LABEL[stage.state]}
                     </Badge>
                     {stage.attempt > 1 ? (
                       <Badge tone="warning">{`try ${stage.attempt}`}</Badge>
@@ -1479,7 +1490,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <h1 className="text-lg font-semibold">
             <UntrustedText value={task.ticket.key} />
           </h1>
-          <Badge tone="accent">{task.state}</Badge>
+          <Badge tone="accent">{TASK_STATE_LABEL[task.state]}</Badge>
           <Badge>{task.template}</Badge>
           {task.mode === 'shadow' ? <Badge tone="warning">shadow</Badge> : null}
           {/*
@@ -1624,7 +1635,9 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                 <li key={artifact.id}>
                   <Card className="flex flex-col gap-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{artifact.artifact_type}</span>
+                      <span className="text-sm font-medium">
+                        {ARTIFACT_TYPE_LABEL[artifact.artifact_type]}
+                      </span>
                       <Badge>{`v${artifact.version}`}</Badge>
                       {/*
                        * A router `Link`, never an `href` (WP-52): the body is rendered on this
@@ -1671,7 +1684,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                       params={{ runId: run.id }}
                       className="text-sm font-medium hover:underline"
                     >
-                      {run.stage === null ? run.role : `${run.stage} · ${run.role}`}
+                      {runSubject(run)}
                     </Link>
                     <Badge
                       tone={
@@ -1685,7 +1698,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                               : 'neutral'
                       }
                     >
-                      {run.status}
+                      {RUN_STATUS_LABEL[run.status]}
                     </Badge>
                     {/* Backlog 467: the run's unfinished work is on the task's branch. */}
                     {run.saved_work?.pushed === true ? (
@@ -1706,7 +1719,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
 
         <FeedbackForm
           heading="Feedback on this task"
-          hint="Goes to the Retrospective and the Librarian: what the agents got right or wrong here becomes a knowledge-base proposal (product/10)."
+          hint="Goes to the Retrospective and the Librarian: what the agents got right or wrong here becomes a knowledge-base proposal."
           pending={commands.feedback.isPending}
           failed={commands.feedback.isError}
           accepted={commands.feedback.isSuccess}
@@ -1722,7 +1735,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <Metric
             label="Cost so far"
             value={formatUsd(task.cost_actual_usd)}
-            definition="Provider-reported cost of every measured run on this task; estimated in local provider mode (BD-011). A run that ended without a figure is left out of the sum, and counted beneath it when there is one."
+            definition="Provider-reported cost of every measured run on this task; estimated in local provider mode. A run that ended without a figure is left out of the sum, and counted beneath it when there is one."
           />
           {/*
             **What the total leaves out** (WP-131, PROGRESS backlog 403). `cost_actual_usd` adds only
@@ -1748,7 +1761,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <Metric
             label="Estimate"
             value={task.estimate_usd === null ? 'none' : formatUsd(task.estimate_usd)}
-            definition="Predicted at refinement from this project's finished tasks, before the work ran; above the project's threshold it waits for a budget approval (product/09)."
+            definition="Predicted at refinement from this project's finished tasks, before the work ran; above the project's threshold it waits for a budget approval."
           />
           <p className="-mt-2 text-[11px] text-fg-muted">{estimateBasisText(task)}</p>
           <Metric
@@ -1756,7 +1769,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             value={
               task.estimate_accuracy === null ? 'not yet' : `${task.estimate_accuracy.toFixed(2)}×`
             }
-            definition="What the task has spent, divided by the estimate (product/19 §10): 1.00× is on the nose, 2.00× is twice what was predicted. Computed from those two numbers and nothing else."
+            definition="What the task has spent, divided by the estimate: 1.00× is on the nose, 2.00× is twice what was predicted. Computed from those two numbers and nothing else."
           />
           {/*
             **product/09:29's *"total cost of delivery"*, in the only honest form this build can
@@ -1772,7 +1785,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                 ? 'none recorded'
                 : `${formatUsd(task.cost_actual_usd)} tokens · ${formatMinutes(humanTime.total_minutes)} human`
             }
-            definition="Human minutes derived from events, never from tracking (product/19 §16): review from the first human comment on the merge request to the merge, capped at 8 h per calendar day and excluding gaps over 2 h; 30 min per question; 10 min flat per approval; 5 min flat per steer. The dollars and the minutes are shown side by side and are never added: that would need an hourly rate this platform does not have."
+            definition="Human minutes derived from events, never from tracking: review from the first human comment on the merge request to the merge, capped at 8 h per calendar day and excluding gaps over 2 h; 30 min per question; 10 min flat per approval; 5 min flat per steer. The dollars and the minutes are shown side by side and are never added: that would need an hourly rate this platform does not have."
           />
           <p className="-mt-2 text-[11px] text-fg-muted">{humanTimeBreakdown(humanTime)}</p>
           {humanTimeWithheldText(humanTime) === null ? null : (
@@ -1817,7 +1830,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <Metric
             label="CI status"
             value={gateValueText(ciGate, { pass: 'green', fail: 'red' })}
-            definition="The CI gate's verdict on the merge request's head, from the provider's own pipeline (product/04 S4); an escalation names the reason the gate could not decide."
+            definition="The CI gate's verdict on the merge request's head, from the provider's own pipeline; an escalation names the reason the gate could not decide."
           />
           <p className="-mt-2 text-[11px] text-fg-muted">{gateBasisText(ciGate, 'ci_gate')}</p>
           {/*
@@ -1829,12 +1842,12 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <Metric
             label="Tamper check"
             value={tamperValueText(ciGate, rebaseGate)}
-            definition="BD-024's check: the existing files this change modifies, deletes or renames away, against the project's protected paths (tests and CI/lint configuration by default), minus the changes the plan declared and the code review confirmed. The CI gate makes it; a change the plan declared passes there until the rebase gate, just before Ready, reads the code review's confirmation. Anything left sends the task back to the developer, naming the paths; adding a new file is never flagged. A CI gate that settled before WP-105 kept no word for what its check found, and is never shown as clean."
+            definition="The protected-paths check: the existing files this change modifies, deletes or renames away, against the project's protected paths (tests and CI/lint configuration by default), minus the changes the plan declared and the code review confirmed. The CI gate makes it; a change the plan declared passes there until the rebase gate, just before Ready, reads the code review's confirmation. Anything left sends the task back to the developer, naming the paths; adding a new file is never flagged. A CI gate that settled before this check was recorded kept no word for what it found, and is never shown as clean."
           />
           <Metric
             label="Rebase status"
             value={gateValueText(rebaseGate, { pass: 'up to date', fail: 'conflicts' })}
-            definition="The rebase gate's verdict: whether the merge request merges cleanly onto the default branch as it is now (BD-030). It is checked again every time the default branch moves while the task waits for its merge, and whenever a person brings the task back to Ready (WP-105)."
+            definition="The rebase gate's verdict: whether the merge request merges cleanly onto the default branch as it is now. It is checked again every time the default branch moves while the task waits for its merge, and whenever a person brings the task back to Ready."
           />
           <p className="-mt-2 text-[11px] text-fg-muted">
             {gateBasisText(rebaseGate, 'rebase_gate')}
@@ -1842,7 +1855,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <Metric
             label="Review threads"
             value={reviewThreadsValueText(task.review_threads)}
-            definition="Human review threads on the merge request, as BD-007's review window last read them: open threads send the task back to Implementation with the reviewers' comments."
+            definition="Human review threads on the merge request, as the review window last read them: open threads send the task back to Implementation with the reviewers' comments."
           />
           <p className="-mt-2 text-[11px] text-fg-muted">
             {reviewThreadsBasisText(task.review_threads)}
@@ -1857,7 +1870,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <Metric
             label="Coverage delta"
             value={coverageValueText(task.coverage)}
-            definition="What this project's CI reports for the change, minus what it reports for the default branch, in percentage points (product/18:38). Shown when the pipeline reports coverage; 'not reported' means it does not, which is never the same as zero."
+            definition="What this project's CI reports for the change, minus what it reports for the default branch, in percentage points. Shown when the pipeline reports coverage; 'not reported' means it does not, which is never the same as zero."
           />
           {/*
             The sentence carries a **branch name and two revisions** — repository text somebody
@@ -1877,7 +1890,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <Metric
             label="Dependencies"
             value={dependencyValueText(task.dependencies, task.state)}
-            definition="Packages this change adds to a manifest or lockfile, and what the project's policy did about them (product/04:58): 'allow' proceeds, 'ask' raises the question below, 'block' sends the task back. Licence and last release come from a package registry an operator has declared; with none declared the platform asks nobody and says so."
+            definition="Packages this change adds to a manifest or lockfile, and what the project's policy did about them: 'allow' proceeds, 'ask' raises the question below, 'block' sends the task back. Licence and last release come from a package registry an operator has declared; with none declared the platform asks nobody and says so."
           />
           {/*
             Package names, manifest paths and a registry's licence string — third-party text
@@ -1914,7 +1927,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <Metric
             label="Required reviewers"
             value={reviewersValueText(task.required_reviewers)}
-            definition="Who this merge request needs a review from, as the platform routed them (product/19:138): CODEOWNERS on the default branch first, then the project's reviewers setting, then the human who asked — plus anyone a risk class requires. A handle with no account on this provider is named rather than dropped."
+            definition="Who this merge request needs a review from, as the platform routed them: CODEOWNERS on the default branch first, then the project's reviewers setting, then the human who asked — plus anyone a risk class requires. A handle with no account on this provider is named rather than dropped."
           />
           <p className="-mt-2 text-[11px] text-fg-muted">
             <UntrustedText value={reviewersBasisText(task.required_reviewers)} />

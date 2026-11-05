@@ -62,9 +62,41 @@ describe('toBlocks', () => {
     expect(tool.result).toEqual({ isError: false, content: 'file contents' });
   });
 
+  it('dates a tool call by its result once the result arrives, and every other block by its row', () => {
+    const later = '2026-09-10T09:04:00.000Z';
+    const blocks = toBlocks([
+      toolUse(1, 'toolu_1', 'Bash'),
+      { ...toolResult(2, 'toolu_1', 'ok'), created_at: later } as TranscriptEvent,
+      assistant(3, [{ type: 'text', text: 'done' }] as never),
+    ]);
+    expect(blocks.map((block) => [block.kind, block.at])).toEqual([
+      ['tool', later],
+      ['text', envelope.created_at],
+    ]);
+    const pending = toBlocks([toolUse(1, 'toolu_2', 'Bash')]);
+    expect(pending[0]?.at).toBe(envelope.created_at);
+  });
+
+  it('dates a streaming block by its last delta', () => {
+    const [block] = toBlocks([
+      {
+        ...envelope,
+        kind: 'stream_block',
+        seq: 4,
+        block_index: 0,
+        block: { type: 'text', text: 'half' },
+        first_delta_at: '2026-09-10T09:01:00.000Z',
+        last_delta_at: '2026-09-10T09:02:00.000Z',
+      } as TranscriptEvent,
+    ]);
+    expect(block).toMatchObject({ kind: 'text', streaming: true, at: '2026-09-10T09:02:00.000Z' });
+  });
+
   it('shows a tool result whose call was never delivered rather than swallowing it', () => {
     const blocks = toBlocks([toolResult(2, 'toolu_missing', 'orphaned output')]);
-    expect(blocks).toEqual([{ kind: 'user', id: '2:0', seq: 2, text: 'orphaned output' }]);
+    expect(blocks).toEqual([
+      { kind: 'user', id: '2:0', seq: 2, at: envelope.created_at, text: 'orphaned output' },
+    ]);
   });
 
   it('nests a subagent’s entries under the tool call that started them', () => {
@@ -223,6 +255,7 @@ describe('toBlocks', () => {
         kind: 'progress',
         id: '7',
         seq: 7,
+        at: envelope.created_at,
         summary: 'slice 2 pushed',
         percentComplete: 40,
         truncated: true,
@@ -231,6 +264,7 @@ describe('toBlocks', () => {
         kind: 'progress',
         id: '8',
         seq: 8,
+        at: envelope.created_at,
         summary: 'tests',
         percentComplete: null,
         truncated: false,

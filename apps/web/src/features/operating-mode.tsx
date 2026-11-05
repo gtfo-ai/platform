@@ -104,7 +104,7 @@ export const AUTONOMY_CHOICES = [
   {
     level: 'autonomous',
     label: 'Autonomous',
-    hint: 'No plan approval except for risk classes; still never merges (BD-007).',
+    hint: 'No plan approval except for risk classes; still never merges.',
   },
 ] as const satisfies readonly {
   level: 'observe' | 'assist' | 'supervised' | 'autonomous';
@@ -170,7 +170,7 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
     cost: '~$1–3 per merge request',
     touches: 'posts discussion threads on merge requests',
     caveat:
-      'This toggle is what turns the mode on. Selecting Observe on the dial only *recommends* it — the dial’s own review-only field has no reader (BD-028: adoption features are opt-in).',
+      'This toggle is what turns the mode on. Selecting Observe on the dial only *recommends* it — the dial’s own review-only field has no reader: adoption features are opt-in.',
   },
   {
     key: 'shadow_mode',
@@ -307,7 +307,7 @@ export const FEATURES_WITHOUT_A_SWITCH: readonly {
  */
 export const POLICIES_THAT_SET_NOTHING: Readonly<Record<string, string>> = {
   review_only:
-    'a recommendation only — the Review-only mode card below is the switch (BD-028: adoption features are opt-in)',
+    'a recommendation only — the Review-only mode card below is the switch: adoption features are opt-in',
   suggested_readiness_min:
     'published only — the suggested cap shown above is computed from the project’s readiness level',
 };
@@ -412,7 +412,7 @@ export const AutonomyDial = ({ projectId }: { readonly projectId: string }): Rea
         <p className="text-xs text-fg-muted">
           Readiness is level {current.readiness_level}, which suggests at most{' '}
           <strong>{current.suggested_cap}</strong>. A suggestion is all it is — a maintainer may
-          choose any position, visibly (BD-027, Q21).
+          choose any position, visibly.
         </p>
       )}
       {aboveCap ? (
@@ -867,7 +867,7 @@ export const Budgets = ({
     <Section title={`${scopeLabel} budgets`}>
       <p className="text-xs text-fg-muted">
         Reaching a cap prevents <em>new</em> runs; a run already in flight finishes, because spend
-        already made should not be wasted (BD-010). A task then reads <em>Paused: budget</em> and a
+        already made should not be wasted. A task then reads <em>Paused: budget</em> and a
         maintainer may raise the cap here.
       </p>
       <ul className="flex flex-col gap-2">

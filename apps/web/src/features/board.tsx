@@ -17,6 +17,7 @@ import { START_TICKET_ANCHOR, useStartTicketRequests } from '../app/project-fram
 import { useProjectByKey, useProjectTasks, useStartTask } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
+import { stageLabel, TASK_STATE_LABEL } from '../ui/humanize.js';
 import {
   Badge,
   Button,
@@ -109,10 +110,16 @@ const TaskCard = ({
         </p>
       )}
       <p className="text-sm">
-        <Badge tone={task.state === 'needs_human' ? 'warning' : 'neutral'}>{task.state}</Badge>
+        <Badge tone={task.state === 'needs_human' ? 'warning' : 'neutral'}>
+          {TASK_STATE_LABEL[task.state]}
+        </Badge>
       </p>
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-fg-muted">
-        <span>{task.current_stage ?? 'no stage'}</span>
+        <span>
+          {task.current_stage === null || task.current_stage === undefined
+            ? 'no stage'
+            : stageLabel(task.current_stage)}
+        </span>
         <span>·</span>
         {/*
           The measured total, and what it leaves out (WP-134, PROGRESS backlog 408): the card is the

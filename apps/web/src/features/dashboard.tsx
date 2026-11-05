@@ -98,7 +98,7 @@ export const DashboardScreen = (): ReactElement => {
             <Metric
               label="Spend, 30 days"
               value={formatUsd(spend)}
-              definition="Sum of provider-reported cost across all projects over the last 30 days; estimated where the provider reports none (BD-011)."
+              definition="Sum of provider-reported cost across all projects over the last 30 days; estimated where the provider reports none."
             />
             <Metric
               label="Open tasks"
@@ -173,7 +173,7 @@ export const DashboardScreen = (): ReactElement => {
                 <Metric
                   label="Readiness"
                   value={`L${project.readiness_level}`}
-                  definition="Readiness level 0–5 from the last evaluation (product/17). Report-only; it never auto-remediates."
+                  definition="Readiness level 0–5 from the last evaluation. Report-only; it never auto-remediates."
                 />
               </div>
             </Card>

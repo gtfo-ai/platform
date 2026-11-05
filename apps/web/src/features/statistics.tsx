@@ -176,7 +176,7 @@ export const StatisticsScreen = (): ReactElement => {
       {stats.data.returns_by_stage.length === 0 ? (
         <EmptyState
           title="No stage was entered in this range"
-          hint="Return rate per stage is returns into a stage divided by entries into it (product/19 §10). With no entries there is nothing to divide, which is not the same as a rate of zero."
+          hint="Return rate per stage is returns into a stage divided by entries into it. With no entries there is nothing to divide, which is not the same as a rate of zero."
         />
       ) : (
         <Card>

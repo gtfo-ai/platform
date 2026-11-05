@@ -35,6 +35,7 @@ import {
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import { TranscriptView } from '../transcript/view.js';
+import { RUN_STATUS_LABEL, runSubject, stageLabel } from '../ui/humanize.js';
 import {
   Badge,
   Button,
@@ -171,9 +172,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
     <div className="flex min-h-0 flex-col gap-4">
       <Card>
         <div className="flex flex-wrap items-center gap-2 pb-3">
-          <h1 className="text-lg font-semibold">
-            {record.stage === null ? record.role : `${record.stage} · ${record.role}`}
-          </h1>
+          <h1 className="text-lg font-semibold">{runSubject(record)}</h1>
           <Badge
             tone={
               // WP-275b: `starting` is a live run too — claimed, its CLI not yet asked for.
@@ -186,7 +185,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                     : 'neutral'
             }
           >
-            {record.status}
+            {RUN_STATUS_LABEL[record.status]}
           </Badge>
           {crossedBudgetCap(record) ? <Badge tone="warning">budget cap crossed</Badge> : null}
           <Badge>{record.mode}</Badge>
@@ -199,7 +198,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           <Metric
             label="Cost"
             value={formatRunCost(record.cost, { estimate: true })}
-            definition="Provider-reported cost of this run. Estimated from the price list in local provider mode (BD-011). Not measured when the run ended with no figure from the provider, which is not the same as free."
+            definition="Provider-reported cost of this run. Estimated from the price list in local provider mode. Not measured when the run ended with no figure from the provider, which is not the same as free."
           />
           <Metric
             label="Turns"
@@ -502,8 +501,8 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
       {/* An ask run has no stage to give feedback on (backlog 493). */}
       {record.stage === null ? null : (
         <FeedbackForm
-          heading={`Feedback on the ${record.stage} stage`}
-          hint="Scoped to the stage rather than to this attempt: a run is one attempt, and the retrospective reads the stage (product/10)."
+          heading={`Feedback on the ${stageLabel(record.stage)} stage`}
+          hint="Scoped to the stage rather than to this attempt: a run is one attempt, and the retrospective reads the stage."
           pending={commands.feedback.isPending}
           failed={commands.feedback.isError}
           accepted={commands.feedback.isSuccess}

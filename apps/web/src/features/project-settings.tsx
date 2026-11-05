@@ -163,7 +163,7 @@ export const ProjectSettingsScreen = ({
         )}
         <p className="text-sm">
           <Link to="/integrations">Add or test an integration</Link> — credentials are read from the
-          server’s own environment and never travel through the browser (BD-002).
+          server’s own environment and never travel through the browser.
         </p>
         <div className="flex flex-col gap-1">
           <p className="text-xs font-semibold">Which integrations this project uses</p>

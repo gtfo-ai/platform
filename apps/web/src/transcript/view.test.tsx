@@ -8,10 +8,13 @@ afterEach(() => {
   cleanup();
 });
 
+const AT = '2026-11-05T10:00:00.000Z';
+
 const tool = (overrides: Partial<ToolBlock> = {}): ToolBlock => ({
   kind: 'tool',
   id: 't1',
   seq: 1,
+  at: AT,
   toolUseId: 'toolu_1',
   toolName: 'Bash',
   input: { command: 'pnpm test' },
@@ -57,7 +60,9 @@ describe('blockText and filterBlocks', () => {
   it('searches a subagent’s nested blocks too', () => {
     const nested = tool({
       toolName: 'Task',
-      children: [{ kind: 'text', id: 'c1', seq: 2, text: 'buried treasure', streaming: false }],
+      children: [
+        { kind: 'text', id: 'c1', seq: 2, at: AT, text: 'buried treasure', streaming: false },
+      ],
     });
     expect(blockText(nested)).toContain('buried treasure');
   });
@@ -70,7 +75,7 @@ describe('blockText and filterBlocks', () => {
   it('filters case-insensitively', () => {
     const blocks: TranscriptBlock[] = [
       tool(),
-      { kind: 'text', id: 'x', seq: 2, text: 'unrelated', streaming: false },
+      { kind: 'text', id: 'x', seq: 2, at: AT, text: 'unrelated', streaming: false },
     ];
     expect(filterBlocks(blocks, 'PNPM')).toHaveLength(1);
     expect(filterBlocks(blocks, 'nothing here')).toHaveLength(0);
@@ -82,12 +87,13 @@ describe('TranscriptView', () => {
     const { container } = render(
       <TranscriptView
         blocks={[
-          { kind: 'text', id: 'a', seq: 1, text: 'assistant says hello', streaming: false },
+          { kind: 'text', id: 'a', seq: 1, at: AT, text: 'assistant says hello', streaming: false },
           tool(),
           {
             kind: 'result',
             id: 'r',
             seq: 3,
+            at: AT,
             terminalReason: 'success',
             numTurns: 2,
             durationMs: 10,
@@ -109,7 +115,15 @@ describe('TranscriptView', () => {
     const { container } = render(
       <TranscriptView
         blocks={[
-          { kind: 'progress', id: 'p', seq: 4, summary, percentComplete: 40, truncated: true },
+          {
+            kind: 'progress',
+            id: 'p',
+            seq: 4,
+            at: AT,
+            summary,
+            percentComplete: 40,
+            truncated: true,
+          },
         ]}
       />,
     );
@@ -123,6 +137,7 @@ describe('TranscriptView', () => {
         kind: 'progress',
         id: 'p',
         seq: 4,
+        at: AT,
         summary,
         percentComplete: null,
         truncated: false,
@@ -147,7 +162,7 @@ describe('TranscriptView', () => {
             toolName: 'Task',
             input: { prompt: 'investigate' },
             children: [
-              { kind: 'text', id: 'c1', seq: 2, text: 'nested finding', streaming: false },
+              { kind: 'text', id: 'c1', seq: 2, at: AT, text: 'nested finding', streaming: false },
             ],
           }),
         ]}
@@ -162,7 +177,14 @@ describe('TranscriptView', () => {
     const { container } = render(
       <TranscriptView
         blocks={[
-          { kind: 'thinking', id: 'k', seq: 1, text: 'private reasoning', streaming: false },
+          {
+            kind: 'thinking',
+            id: 'k',
+            seq: 1,
+            at: AT,
+            text: 'private reasoning',
+            streaming: false,
+          },
         ]}
       />,
     );
@@ -181,8 +203,8 @@ describe('TranscriptView', () => {
     render(
       <TranscriptView
         blocks={[
-          { kind: 'text', id: 'a', seq: 1, text: 'alpha', streaming: false },
-          { kind: 'text', id: 'b', seq: 2, text: 'beta', streaming: false },
+          { kind: 'text', id: 'a', seq: 1, at: AT, text: 'alpha', streaming: false },
+          { kind: 'text', id: 'b', seq: 2, at: AT, text: 'beta', streaming: false },
         ]}
       />,
     );

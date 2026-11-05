@@ -65,7 +65,8 @@ test('the board puts each task in the column its state belongs to', async ({ pag
   const waiting = page.getByRole('region', { name: 'Needs human' });
   await expect(active.getByRole('link', { name: 'DEMO-1' })).toBeVisible();
   await expect(waiting.getByRole('link', { name: 'DEMO-2' })).toBeVisible();
-  await expect(active.getByText('implementation')).toBeVisible();
+  // The stage's human name (TD-033), not its id.
+  await expect(active.getByText('Implementation', { exact: true })).toBeVisible();
   // The iteration counter product/10 asks for ("review 2/3" in its example).
   await expect(active.getByText('review 1')).toBeVisible();
 });
@@ -76,11 +77,14 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
 
   await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
-  // Scoped to the timeline: `refinement` is also an option of the stage-command select.
-  await expect(page.locator('ol').getByText('refinement')).toBeVisible();
+  // Scoped to the timeline: `refinement` is also an option of the stage-command select. The
+  // timeline names the stage in words (TD-033).
+  await expect(page.locator('ol').getByText('Refinement', { exact: true })).toBeVisible();
   // The stage's outcome word, through the word→sentence table (WP-73, backlog 213).
   await expect(page.getByText('Verdict: approve.')).toBeVisible();
-  await expect(page.getByRole('link', { name: 'implementation · developer' })).toBeVisible();
+  await expect(
+    page.getByRole('link', { name: 'Implementation · Developer', exact: true }),
+  ).toBeVisible();
   await expect(page.getByText('Cost so far', { exact: true })).toBeVisible();
   // WP-28: the refinement estimate, what it rests on and product/19 §10's accuracy — three numbers
   // the Checks panel showed as `$0.00` under the label *"Estimate"* before this row, because it read
@@ -172,7 +176,9 @@ test('answering a question sends the command and the question leaves the inbox',
 
 test('the agents view lists the running run and links to it', async ({ page }) => {
   await page.goto('/agents');
-  await expect(page.getByRole('link', { name: 'implementation · developer' })).toBeVisible();
+  await expect(
+    page.getByRole('link', { name: 'Implementation · Developer', exact: true }),
+  ).toBeVisible();
   await expect(page.getByText('claude-opus-5')).toBeVisible();
 });
 

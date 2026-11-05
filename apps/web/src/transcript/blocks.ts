@@ -34,6 +34,11 @@ import type { ContentBlock, TranscriptEvent } from '@platform/contracts';
 export interface BlockBase {
   readonly id: string;
   readonly seq: number;
+  /**
+   * When the block last changed: its row's `created_at`, or — for a tool call — the row of the
+   * result folded into it. `ui/activity.ts` reads it to tell a silent run from a busy one.
+   */
+  readonly at: string;
 }
 
 export interface TextBlock extends BlockBase {
@@ -130,6 +135,7 @@ interface ToolDraft {
     kind: 'tool';
     id: string;
     seq: number;
+    at: string;
     toolUseId: string;
     toolName: string;
     input: Readonly<Record<string, unknown>>;
@@ -143,6 +149,7 @@ const nullish = <T>(value: T | null | undefined): T | null => value ?? null;
 const contentToBlocks = (
   content: readonly ContentBlock[],
   seq: number,
+  at: string,
   streaming: boolean,
 ): { blocks: TranscriptBlock[]; tools: ToolDraft[] } => {
   const blocks: TranscriptBlock[] = [];
@@ -151,10 +158,10 @@ const contentToBlocks = (
     const id = `${seq}:${index}`;
     switch (item.type) {
       case 'text':
-        blocks.push({ kind: 'text', id, seq, text: item.text, streaming });
+        blocks.push({ kind: 'text', id, seq, at, text: item.text, streaming });
         break;
       case 'thinking':
-        blocks.push({ kind: 'thinking', id, seq, text: item.thinking, streaming });
+        blocks.push({ kind: 'thinking', id, seq, at, text: item.thinking, streaming });
         break;
       case 'tool_use': {
         const draft: ToolDraft = {
@@ -162,6 +169,7 @@ const contentToBlocks = (
             kind: 'tool',
             id,
             seq,
+            at,
             toolUseId: item.tool_use_id,
             toolName: item.tool_name,
             input: item.input,
@@ -196,7 +204,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
   const top: TranscriptBlock[] = [];
   const drafts = new Map<string, ToolDraft>();
   /** Coalesced partials waiting for the assistant message that will replace them. */
-  let pending = new Map<number, { block: ContentBlock; seq: number }>();
+  let pending = new Map<number, { block: ContentBlock; seq: number; at: string }>();
 
   const sink = (event: TranscriptEvent): TranscriptBlock[] => {
     const parent = event.parent_tool_use_id;
@@ -214,8 +222,8 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
       return;
     }
     const entries = [...pending.entries()].sort(([left], [right]) => left - right);
-    for (const [index, { block, seq }] of entries) {
-      const { blocks, tools } = contentToBlocks([block], seq, true);
+    for (const [index, { block, seq, at }] of entries) {
+      const { blocks, tools } = contentToBlocks([block], seq, at, true);
       for (const tool of tools) {
         drafts.set(tool.block.toolUseId, tool);
       }
@@ -229,14 +237,23 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
   for (const event of ordered) {
     switch (event.kind) {
       case 'stream_block':
-        pending.set(event.block_index, { block: event.block, seq: event.seq });
+        pending.set(event.block_index, {
+          block: event.block,
+          seq: event.seq,
+          at: event.last_delta_at,
+        });
         break;
 
       case 'assistant': {
         // The completed message supersedes the partials that produced it.
         pending = new Map();
         const target = sink(event);
-        const { blocks, tools } = contentToBlocks(event.content, event.seq, false);
+        const { blocks, tools } = contentToBlocks(
+          event.content,
+          event.seq,
+          event.created_at,
+          false,
+        );
         for (const tool of tools) {
           drafts.set(tool.block.toolUseId, tool);
         }
@@ -251,6 +268,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
             const draft = drafts.get(item.tool_use_id);
             if (draft !== undefined) {
               draft.block.result = { isError: item.is_error, content: item.content };
+              draft.block.at = event.created_at;
               return;
             }
             // A result whose call was never delivered: show it rather than swallow it.
@@ -258,6 +276,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
               kind: 'user',
               id: `${event.seq}:${index}`,
               seq: event.seq,
+              at: event.created_at,
               text: item.content,
             });
             return;
@@ -267,6 +286,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
               kind: 'user',
               id: `${event.seq}:${index}`,
               seq: event.seq,
+              at: event.created_at,
               text: item.text,
             });
           }
@@ -279,6 +299,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
           kind: 'hook',
           id: `${event.seq}`,
           seq: event.seq,
+          at: event.created_at,
           hook: event.hook,
           toolName: nullish(event.tool_name),
           decision: nullish(event.decision),
@@ -292,6 +313,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
           kind: 'steer',
           id: `${event.seq}`,
           seq: event.seq,
+          at: event.created_at,
           message: event.message,
           authorUserId: event.author_user_id,
         });
@@ -302,6 +324,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
           kind: 'compaction',
           id: `${event.seq}`,
           seq: event.seq,
+          at: event.created_at,
           phase: event.phase,
           preTokens: nullish(event.pre_tokens),
           postTokens: nullish(event.post_tokens),
@@ -313,6 +336,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
           kind: 'system',
           id: `${event.seq}`,
           seq: event.seq,
+          at: event.created_at,
           subtype: event.subtype,
           model: nullish(event.model),
           data: event.data,
@@ -324,6 +348,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
           kind: 'progress',
           id: `${event.seq}`,
           seq: event.seq,
+          at: event.created_at,
           summary: event.summary,
           percentComplete: nullish(event.percent_complete),
           truncated: event.truncated,
@@ -335,6 +360,7 @@ export const toBlocks = (events: readonly TranscriptEvent[]): TranscriptBlock[] 
           kind: 'result',
           id: `${event.seq}`,
           seq: event.seq,
+          at: event.created_at,
           terminalReason: event.terminal_reason,
           numTurns: event.num_turns,
           durationMs: event.duration_ms,

@@ -10,6 +10,7 @@ import { type ReactElement, useState } from 'react';
 import { useInbox } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
+import { APPROVAL_KIND_LABEL, APPROVAL_STATUS_LABEL, stageLabel } from '../ui/humanize.js';
 import {
   Badge,
   Button,
@@ -94,7 +95,7 @@ export const InboxScreen = (): ReactElement => {
             <Badge tone={question.blocking ? 'warning' : 'neutral'}>
               {question.blocking ? 'blocking' : 'question'}
             </Badge>
-            <span className="text-xs text-fg-muted">{question.stage}</span>
+            <span className="text-xs text-fg-muted">{stageLabel(question.stage)}</span>
             <Link
               to="/tasks/$taskId"
               params={{ taskId: question.task_id }}
@@ -134,8 +135,8 @@ export const InboxScreen = (): ReactElement => {
 
       {approvals.map((approval) => (
         <Card key={approval.id} className="flex flex-wrap items-center gap-2">
-          <Badge tone="accent">{approval.kind}</Badge>
-          <span className="text-xs text-fg-muted">{approval.status}</span>
+          <Badge tone="accent">{APPROVAL_KIND_LABEL[approval.kind]}</Badge>
+          <span className="text-xs text-fg-muted">{APPROVAL_STATUS_LABEL[approval.status]}</span>
           <Link
             to="/tasks/$taskId"
             params={{ taskId: approval.task_id }}

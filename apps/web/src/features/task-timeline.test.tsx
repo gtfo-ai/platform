@@ -289,10 +289,11 @@ describe('the stage timeline on the task page (WP-154 (a), (b))', () => {
     const list = await screen.findByRole('list', { name: 'Timeline, newest first' });
     const entries = within(list).getAllByTestId('timeline-entry');
     expect(entries.map((entry) => entry.textContent?.slice(0, 20))).toEqual([
-      expect.stringMatching(/^implementation/),
-      expect.stringMatching(/^implementation/),
-      expect.stringMatching(/^plan_approval/),
-      expect.stringMatching(/^refinement/),
+      // The stages' human names (TD-033): a shipped stage's word, a project's own slug title-cased.
+      expect.stringMatching(/^Implementation/),
+      expect.stringMatching(/^Implementation/),
+      expect.stringMatching(/^Plan Approval/),
+      expect.stringMatching(/^Refinement/),
     ]);
     expect(entries[0]?.textContent).toContain('try 2');
     const hrefOf = (index: number, name: string) =>

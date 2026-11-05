@@ -1,0 +1,98 @@
+/**
+ * The human words (TD-033 decision 6). The records are exhaustive by type; these tests hold the
+ * runtime half: every **value** the contracts and the shipped templates can produce has its own
+ * word — compared with the enums themselves, so a value added there fails here as well as in
+ * `typecheck` — and an unknown stage slug is never printed raw.
+ */
+import {
+  agentRoleSchema,
+  approvalKindSchema,
+  approvalStatusSchema,
+  artifactTypeSchema,
+  BUILTIN_GATE_STAGE_IDS,
+  BUILTIN_STAGE_IDS,
+  questionStatusSchema,
+  runStatusSchema,
+  runTerminalReasonSchema,
+  taskStageStateSchema,
+  taskStateSchema,
+} from '@platform/contracts';
+import { SHIPPED_STAGE_IDS } from '@platform/domain';
+import { describe, expect, it } from 'vitest';
+import {
+  APPROVAL_KIND_LABEL,
+  APPROVAL_STATUS_LABEL,
+  ARTIFACT_TYPE_LABEL,
+  GATE_LABEL,
+  QUESTION_STATUS_LABEL,
+  ROLE_LABEL,
+  RUN_STATUS_LABEL,
+  runSubject,
+  STAGE_LABEL,
+  STAGE_STATE_LABEL,
+  stageLabel,
+  TASK_STATE_LABEL,
+  TERMINAL_REASON_LABEL,
+  titleCase,
+} from './humanize.js';
+
+const VOCABULARIES = [
+  ['task state', taskStateSchema.options, TASK_STATE_LABEL],
+  ['role', agentRoleSchema.options, ROLE_LABEL],
+  ['run status', runStatusSchema.options, RUN_STATUS_LABEL],
+  ['terminal reason', runTerminalReasonSchema.options, TERMINAL_REASON_LABEL],
+  ['stage attempt state', taskStageStateSchema.options, STAGE_STATE_LABEL],
+  ['artifact type', artifactTypeSchema.options, ARTIFACT_TYPE_LABEL],
+  ['approval kind', approvalKindSchema.options, APPROVAL_KIND_LABEL],
+  ['approval status', approvalStatusSchema.options, APPROVAL_STATUS_LABEL],
+  ['question status', questionStatusSchema.options, QUESTION_STATUS_LABEL],
+  ['gate', BUILTIN_GATE_STAGE_IDS, GATE_LABEL],
+] as const;
+
+describe('humanize', () => {
+  it.each(VOCABULARIES)(
+    'names every %s, and no value it does not have',
+    (_name, values, labels) => {
+      expect(Object.keys(labels).sort()).toEqual([...values].sort());
+      for (const value of values) {
+        const word = (labels as Readonly<Record<string, string>>)[value];
+        expect(word).toMatch(/^[A-Z]/);
+        // A word, not the identifier back: `needs_human` is not a label.
+        expect(word).not.toMatch(/_/);
+      }
+      // Two values with one word would be two states a person cannot tell apart.
+      expect(new Set(Object.values(labels)).size).toBe(values.length);
+    },
+  );
+
+  it('names every stage the shipped templates declare, not only the ticket flow’s', () => {
+    for (const id of [...BUILTIN_STAGE_IDS, ...SHIPPED_STAGE_IDS]) {
+      expect(Object.hasOwn(STAGE_LABEL, id), id).toBe(true);
+    }
+    expect(new Set(Object.values(STAGE_LABEL)).size).toBe(Object.keys(STAGE_LABEL).length);
+  });
+
+  it('uses the words the research names for the states it names', () => {
+    expect(TASK_STATE_LABEL.waiting_approval).toBe('Waiting for approval');
+    expect(stageLabel('ci_gate')).toBe('CI');
+    expect(stageLabel('code_review')).toBe('Code review');
+    expect(stageLabel('rebase_gate')).toBe('Rebase check');
+    expect(RUN_STATUS_LABEL.timed_out).toBe('Timed out');
+  });
+
+  it('title-cases a project’s own stage rather than printing the slug', () => {
+    expect(stageLabel('security_scan')).toBe('Security Scan');
+    expect(stageLabel('load-test_2')).toBe('Load Test 2');
+    expect(titleCase('__')).toBe('');
+    // An inherited property name is a slug like any other, not a lookup hit.
+    expect(stageLabel('constructor')).toBe('Constructor');
+    expect(stageLabel('__proto__')).toBe('Proto');
+  });
+
+  it('says which stage and role a run belongs to, or the role alone for an ask', () => {
+    expect(runSubject({ stage: 'implementation', role: 'developer' })).toBe(
+      'Implementation · Developer',
+    );
+    expect(runSubject({ stage: null, role: 'ask' })).toBe('Ask');
+  });
+});

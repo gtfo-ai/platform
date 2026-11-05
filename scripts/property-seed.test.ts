@@ -184,7 +184,7 @@ describe('the exploration run', () => {
     expect(() => chooseSeed(['--seed', 'x'], () => 99)).toThrow(PROPERTY_SEED_VARIABLE);
   });
 
-  it('runs the files on the three projects, without coverage', () => {
+  it('runs the files on the four projects, without coverage', () => {
     const args = explorationArgs(['a.test.ts', 'b.test.ts']);
     expect(args).toEqual([
       'exec',
@@ -196,6 +196,8 @@ describe('the exploration run', () => {
       'contract',
       '--project',
       'process',
+      '--project',
+      'ui',
       'a.test.ts',
       'b.test.ts',
     ]);

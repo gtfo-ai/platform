@@ -496,7 +496,7 @@ const CreateIntegrationForm = ({
             <Field
               key={field}
               label={`Environment variable for ${field}`}
-              hint="The variable's name only, never its value. Its _FILE companion is read too (TD-020)."
+              hint="The variable's name only, never its value. Its _FILE companion is read too."
               value={draft.secretEnv[field] ?? ''}
               onChange={(event) =>
                 setDraft({
@@ -623,7 +623,7 @@ export const IntegrationsScreen = (): ReactElement => {
           error={integrations.error}
           detail={readErrorDetail(
             integrations.error,
-            'Reading integration configuration needs the maintainer role (Q36).',
+            'Reading integration configuration needs the maintainer role.',
           )}
         />
       ) : null}
@@ -768,7 +768,7 @@ export const IntegrationsScreen = (): ReactElement => {
         <p className="text-xs text-fg-muted">
           The credential itself never comes through the browser: name the{' '}
           <strong>environment variable</strong> the server should read it from, and the server seals
-          the value it reads (TD-020, BD-002). The name has to be on the operator-declared{' '}
+          the value it reads. The name has to be on the operator-declared{' '}
           <code>APP_INTEGRATION_SECRET_ENV</code> allow-list, which is empty by default, and every
           URL must name a host on <code>APP_INTEGRATION_HOSTS</code>.
         </p>

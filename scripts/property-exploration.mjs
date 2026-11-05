@@ -40,8 +40,12 @@ import { withoutComments } from './source-scanner.mjs';
 /** A call that runs a property — the census's and this script's one definition. */
 export const RUNS_A_PROPERTY = /\bfc\s*\.\s*(?:assert|check)\s*\(/;
 
-/** The projects that collect every property file today (`property-seed.test.ts` holds it). */
-export const EXPLORATION_PROJECTS = ['unit', 'contract', 'process'];
+/**
+ * The projects that collect every property file today (`property-seed.test.ts` holds it). `ui`
+ * since S-23.2: `apps/web/src/ui/activity.test.ts` holds `activityOf` total with a property, and
+ * the `ui` project is the only one that collects `apps/web/src`.
+ */
+export const EXPLORATION_PROJECTS = ['unit', 'contract', 'process', 'ui'];
 
 /** Whether a source's code — comments removed, strings kept — runs a property. */
 export const runsAProperty = (source) =>

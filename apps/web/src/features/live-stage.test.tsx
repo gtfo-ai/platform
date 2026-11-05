@@ -197,7 +197,7 @@ describe('the live stage on the task page (backlogs 455 and 496)', () => {
     });
     render(app.element);
     const panel = await screen.findByTestId('live-stage');
-    expect(panel.textContent).toContain('implementation · developer');
+    expect(panel.textContent).toContain('Implementation · Developer');
     expect(panel.textContent).toContain('for 10m 0s');
     expect(panel.textContent).toContain('30%');
     expect(screen.getByTestId('live-stage-progress').textContent).toBe(
@@ -239,7 +239,7 @@ describe('the live stage on the task page (backlogs 455 and 496)', () => {
     });
     render(app.element);
     const panel = await screen.findByTestId('live-stage');
-    expect(panel.textContent).toContain('starting');
+    expect(panel.textContent).toContain('Starting');
     expect(panel.textContent).toContain('not started yet');
     expect(panel.textContent).not.toContain('for ');
   });

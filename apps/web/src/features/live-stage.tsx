@@ -25,6 +25,7 @@ import { Link } from '@tanstack/react-router';
 import { lazy, type ReactElement, Suspense, useSyncExternalStore } from 'react';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
+import { RUN_STATUS_LABEL, runSubject } from '../ui/humanize.js';
 import { Badge, Card, formatElapsed, formatInteger } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 
@@ -84,10 +85,8 @@ export const LiveStagePanel = ({ run }: { readonly run: RunRecord }): ReactEleme
             aria-hidden="true"
             className="inline-block size-2.5 rounded-full bg-accent motion-safe:animate-pulse"
           />
-          <span className="text-sm font-medium">
-            {run.stage} · {run.role}
-          </span>
-          <Badge tone="accent">{run.status}</Badge>
+          <span className="text-sm font-medium">{runSubject(run)}</span>
+          <Badge tone="accent">{RUN_STATUS_LABEL[run.status]}</Badge>
           <span className="text-xs text-fg-muted">
             {run.started_at === null || run.started_at === undefined
               ? 'not started yet'

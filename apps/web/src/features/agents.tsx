@@ -11,6 +11,7 @@ import type { ReactElement } from 'react';
 import { useAgents } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
+import { RUN_STATUS_LABEL, runSubject } from '../ui/humanize.js';
 import {
   Badge,
   Card,
@@ -51,9 +52,9 @@ export const AgentsScreen = (): ReactElement => {
               params={{ runId: entry.run.id }}
               className="text-sm font-medium hover:underline"
             >
-              {entry.run.stage === null ? entry.role : `${entry.run.stage} · ${entry.role}`}
+              {runSubject({ stage: entry.run.stage, role: entry.role })}
             </Link>
-            <Badge tone="accent">{entry.run.status}</Badge>
+            <Badge tone="accent">{RUN_STATUS_LABEL[entry.run.status]}</Badge>
             <span className="font-mono text-xs text-fg-muted">
               <UntrustedText value={entry.run.model} />
             </span>

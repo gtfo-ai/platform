@@ -556,7 +556,7 @@ describe('the run screen’s budget cap badge (backlog 466)', () => {
   it('marks a completed run whose terminal reason is the budget cap', async () => {
     await renderRun(completed('error_max_budget_usd'));
     expect(screen.getByText('budget cap crossed')).toBeDefined();
-    expect(screen.getByText('completed')).toBeDefined();
+    expect(screen.getByText('Completed')).toBeDefined();
   });
 
   it('marks neither an ordinary completed run nor a run the cap stopped', async () => {

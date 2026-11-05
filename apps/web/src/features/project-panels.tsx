@@ -337,7 +337,7 @@ export const BudgetsScreen = ({ projectKey }: { readonly projectKey: string }): 
         <Link to="/projects/$key/settings" params={{ key: projectKey }}>
           project settings page
         </Link>
-        , where every other wizard setting lives (product/18).
+        , where every other wizard setting lives.
       </p>
       {budgets.isPending ? <Loading label="Loading budgets…" /> : null}
       {budgets.isError ? (
@@ -367,7 +367,7 @@ export const BudgetsScreen = ({ projectKey }: { readonly projectKey: string }): 
                 <Metric
                   label="Limit"
                   value={formatUsd(budget.limit_usd)}
-                  definition="The ceiling. Crossing it pauses the work the budget covers (BD-010)."
+                  definition="The ceiling. Crossing it pauses the work the budget covers."
                 />
               </div>
               {/* A native <meter>: the semantic element carries the value, the range and the
@@ -466,8 +466,8 @@ export const PipelineScreen = ({ projectKey }: { readonly projectKey: string }):
           </Card>
           <p className="text-xs text-fg-muted">
             Read-only here. The settings are edited on the project settings page, which also
-            proposes them to the repository as a merge request; the editor TD-013 names (CodeMirror
-            6 with the YAML schema) is not built.
+            proposes them to the repository as a merge request; a schema-aware YAML editor is not
+            built.
           </p>
         </>
       )}

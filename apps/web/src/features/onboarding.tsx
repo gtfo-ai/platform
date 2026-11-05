@@ -146,7 +146,7 @@ export const OnboardingScreen = (): ReactElement => {
       <SectionHeading>Onboarding</SectionHeading>
       <p className="text-xs text-fg-muted">
         Every step is optional and every one of them is reachable from the project’s own settings
-        later. Nothing here is the only way to do anything (product/06).
+        later. Nothing here is the only way to do anything.
       </p>
 
       {items.length > 1 ? (
@@ -203,7 +203,7 @@ export const OnboardingScreen = (): ReactElement => {
             />
             <Field
               label="Repository URL"
-              hint="https:// or file:// — an SSH remote is refused (technical/12)."
+              hint="https:// or file:// — an SSH remote is refused."
               value={draft.repoUrl}
               onChange={(event) => setDraft({ ...draft, repoUrl: event.target.value })}
             />
@@ -473,8 +473,7 @@ export const OnboardingScreen = (): ReactElement => {
               reads the last N merged merge requests with their review comments, the closed tickets
               of the same window and the commit messages, and proposes the conventions, pitfalls and
               recurring reviewer requests it can cite. This is the <em>same component</em> the
-              project settings page renders (product/18: nothing is reachable only during
-              onboarding).
+              project settings page renders: nothing is reachable only during onboarding.
             </p>
             <HistoryBootstrap projectId={project.id} projectKey={project.key} />
           </>
@@ -490,9 +489,10 @@ export const OnboardingScreen = (): ReactElement => {
         ) : (
           <>
             <p className="text-xs text-fg-muted">
-              All five of product/18&rsquo;s step-4 items. This is the <em>same component</em> the
-              project settings page renders — a mirror kept true by not having two of it
-              (product/18: nothing is reachable only during onboarding).
+              {/* product/18's five step-4 items; nothing is reachable only during onboarding. */}
+              The operating mode and every feature switch. This is the <em>same component</em> the
+              project settings page renders — a mirror kept true by not having two of it — so
+              nothing here is reachable only during onboarding.
             </p>
             <OperatingMode projectId={project.id} />
             <p className="text-xs text-fg-muted">
@@ -500,7 +500,7 @@ export const OnboardingScreen = (): ReactElement => {
               from a shipped baseline that already carries the project&rsquo;s own test, lint and
               build commands (<code>npm test</code>, <code>npm run &hellip;</code>,{' '}
               <code>make &hellip;</code> and the like) for the roles that run them, and a project
-              may only <em>narrow</em> that baseline (BD-025) through <code>commands</code> in{' '}
+              may only <em>narrow</em> that baseline through <code>commands</code> in{' '}
               <code>.agentic/config.yml</code>. An entry no role is granted is ignored and listed on
               the project&rsquo;s configuration rather than dropped in silence.
             </p>
@@ -512,7 +512,7 @@ export const OnboardingScreen = (): ReactElement => {
         <p className="text-xs text-fg-muted">
           The Discovery agent’s drafted pages are proposals, not commits. Approving one puts it on
           an `agentic/knowledge/*` branch with a merge request — the platform never writes to the
-          default branch (BD-012, BD-007).
+          default branch.
         </p>
         {project === null ? (
           <EmptyState

@@ -219,7 +219,8 @@ test('a hostile scheme in a DTO url never reaches an href on the task screen', a
   // Playwright's strict mode failed the locator rather than the assertion. The label is what this
   // line is about, so the locator now says so.
   await expect(page.getByText('Merge request', { exact: true })).toBeVisible();
-  await expect(page.getByText('ReviewVerdict')).toBeVisible();
+  // The artifact's type in words since S-23.2 (`ui/humanize.ts`), not its identifier.
+  await expect(page.getByText('Review verdict', { exact: true }).first()).toBeVisible();
   // Exactly two: the `data:` merge request and — since WP-38 — the dependency whose registry page
   // the fixture gives a `data:` URL. It was **four** until WP-52: the `vbscript:` and `file:`
   // artifacts were refused *by `safeHref` at render time*, and now they are not rendered as URLs at
