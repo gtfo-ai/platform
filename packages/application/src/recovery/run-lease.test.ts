@@ -114,6 +114,8 @@ const sweep = async (options: {
   readonly earlierLosses?: number;
   /** The revocation throws (WP-286): the re-plan still goes ahead. */
   readonly revokeThrows?: boolean;
+  /** The task never recorded entering its stage: no row to count the loss on (WP-286). */
+  readonly noStageRow?: boolean;
 }) => {
   const store = createMemoryPipelineStore();
   const eventing = new MemoryEventing();
@@ -124,12 +126,14 @@ const sweep = async (options: {
 
   await eventing.transaction(async (scope) => {
     await store.tasks.insert(scope.tx, task(options.taskState ?? 'active', options.taskAttempt));
-    await store.tasks.recordStageEntered(scope.tx, {
-      taskId: TASK,
-      stage: 'implementation',
-      attempt: 1,
-      causedByEventId: null,
-    });
+    if (options.noStageRow !== true) {
+      await store.tasks.recordStageEntered(scope.tx, {
+        taskId: TASK,
+        stage: 'implementation',
+        attempt: 1,
+        causedByEventId: null,
+      });
+    }
     await store.runs.insert(scope.tx, {
       id: RUN,
       taskId: TASK,
@@ -268,6 +272,19 @@ describe('the run-lease sweep', () => {
     });
     // TD-031 §2: the minted credential is revoked before the stage is offered again.
     expect(order).toEqual([`revoke:${RUN}`, 'enqueue:stage.execute']);
+  });
+
+  it('escalates an entry with no stage row to count on, worded as that and never as a second loss', async () => {
+    const { report, stored, jobs, eventing } = await sweep({ claim: true, noStageRow: true });
+    expect(report.replanned).toBe(0);
+    expect(jobs.take('stage.execute')).toHaveLength(0);
+    expect(stored?.task.state).toBe('needs_human');
+    const escalated = eventing.log.find((row) => row.event.type === 'task.escalated')?.event;
+    const payload = escalated?.payload as { reason: string; blocker_brief: string };
+    expect(payload.reason).toContain('has no row to count the loss on');
+    expect(payload.reason).not.toContain('twice');
+    expect(payload.blocker_brief).not.toContain('twice');
+    expect(payload.blocker_brief).toContain('no process was renewing its lease');
   });
 
   it('re-plans even when the revocation throws, the residual logged (TD-031 §2)', async () => {

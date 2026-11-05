@@ -568,16 +568,29 @@ const endOneRun = async (
         };
       }
       if (canTransitionTask(task.task.state, 'needs_human')) {
-        const earlier = await options.store.earlierLostRuns(scope.tx, {
-          ...entry,
-          runId: run.runId,
-        });
+        /**
+         * Two endings, worded apart: the entry's **second** loss names both runs; an entry with **no
+         * row** to count on (a stage the task never recorded entering) cannot be re-planned at all,
+         * and its brief is the plain lost-lease one with that said — never "lost its run twice".
+         */
+        const ending =
+          lost === null
+            ? {
+                reason: `${endingReason(run, unspawned)}; its stage entry has no row to count the loss on, so it is not offered again`,
+                brief: blockerBrief(run, task.task.ticket.key, unspawned),
+              }
+            : {
+                reason: secondLossReason(run),
+                brief: secondLossBrief(
+                  run,
+                  task.task.ticket.key,
+                  await options.store.earlierLostRuns(scope.tx, { ...entry, runId: run.runId }),
+                  unspawned,
+                ),
+              };
         const escalated = escalateTask(
           task.task,
-          {
-            reason: `run ${run.runId}: ${secondLossReason(run)}`,
-            blockerBrief: secondLossBrief(run, task.task.ticket.key, earlier, unspawned),
-          },
+          { reason: `run ${run.runId}: ${ending.reason}`, blockerBrief: ending.brief },
           context,
         );
         await options.pipeline.tasks.save(scope.tx, { ...task, task: escalated.aggregate });
@@ -585,7 +598,7 @@ const endOneRun = async (
           ...entry,
           state: 'failed',
           outcome: 'failed',
-          returnReason: secondLossReason(run),
+          returnReason: ending.reason,
           returnedTo: null,
         });
         events.push(...escalated.events);

@@ -1025,6 +1025,20 @@ export const createOrganisationIntegrationsPort = (options: {
   });
 
 /**
+ * **The server claimant's usage pause, by provider mode** (WP-285, TD-031 decision 11: "the
+ * server's own runner, when `local`, follows the same rule"): in `local` mode the claimant runs on
+ * a subscription and pauses on its limit for the limit's reset or `APP_WORKER_USAGE_PAUSE_DEFAULT`;
+ * in `api` mode it never pauses (a `429` still ends that run `rate_limited`).
+ */
+export const claimantUsagePauseOf = (
+  providerMode: 'api' | 'local',
+  defaultSeconds: number | undefined,
+): { readonly claimantUsagePause?: { readonly defaultMs: number } } =>
+  providerMode === 'local'
+    ? { claimantUsagePause: { defaultMs: (defaultSeconds ?? DEFAULT_USAGE_PAUSE_SECONDS) * 1_000 } }
+    : {};
+
+/**
  * The platform tools a run of this pipeline is given, over the pipeline's **one** integrations port
  * (WP-181 review round 2): `get_conversation` reads through it with the reader factory the stage
  * planner's `conversation` blocks use, and the merge-request tools mutate through it. Its own
@@ -1306,13 +1320,7 @@ export const composePipeline = async (
       ? {}
       : { runnerConcurrency: options.runnerConcurrency }),
     // WP-285 (TD-031 decision 11): a subscription's claimant stops claiming until its limit resets.
-    ...(options.agent.providerMode === 'local'
-      ? {
-          claimantUsagePause: {
-            defaultMs: (options.usagePauseDefaultSeconds ?? DEFAULT_USAGE_PAUSE_SECONDS) * 1_000,
-          },
-        }
-      : {}),
+    ...claimantUsagePauseOf(options.agent.providerMode, options.usagePauseDefaultSeconds),
     broadcast: options.eventing.broadcast,
     /** WP-277: whether this process is a claimant — see {@link runsAgents} above. */
     runsAgents,

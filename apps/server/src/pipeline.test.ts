@@ -29,6 +29,7 @@ import { createFakeTaskManagement } from '@platform/integrations';
 import type pg from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  claimantUsagePauseOf,
   composePipelinePlatformTools,
   createProjectSettingsPort,
   RunnerUnavailableError,
@@ -506,5 +507,18 @@ describe('the composed get_conversation', () => {
     expect(answer.entries.map((entry) => entry.source)).toEqual(['ticket']);
     expect(answer.entries[0]?.body).toBe('Rotate [REDACTED:integration:tracker_token], please.');
     expect(JSON.stringify(answer)).not.toContain(PLANTED);
+  });
+});
+
+/** WP-285 (TD-031 decision 11): only a subscription's server claimant pauses on its usage limit. */
+describe('the server claimant’s usage pause, by provider mode (WP-285)', () => {
+  it('pauses in local mode, for the configured default, and never in api mode', () => {
+    expect(claimantUsagePauseOf('local', 900)).toEqual({
+      claimantUsagePause: { defaultMs: 900_000 },
+    });
+    expect(claimantUsagePauseOf('local', undefined)).toEqual({
+      claimantUsagePause: { defaultMs: 3_600_000 },
+    });
+    expect(claimantUsagePauseOf('api', 900)).toEqual({});
   });
 });

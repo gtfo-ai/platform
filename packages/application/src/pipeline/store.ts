@@ -1012,20 +1012,17 @@ export interface TaskRepository {
     },
   ): Promise<void>;
   /**
-   * Closes the row `recordStageEntered` opened, with what the stage decided.
-   *
-   * `state` is one of `taskStageExitStateSchema`'s three words and the store **parses** it before
-   * writing (WP-55): the column's vocabulary is the contracts', not whatever a caller spelled.
-   * `returnedTo` is the stage a return sent the task to — non-null exactly when `state` is
-   * `returned` — and it is what {@link lastReturnReason} reads by.
-   */
-  /**
    * **Counts one more re-offerable ending on the stage entry** and answers the new count (WP-285,
    * WP-286, TD-031 §12): `lost` is `task_stages.lost_runs` — a run the lease sweep ended
    * `lease_expired` — and `usage_limited` is `usage_limited_runs` — a run that ended `rate_limited`.
    * One `update … returning`, in the terminal writer's own transaction, so two writers cannot both
    * read a count of zero. The first of each re-plans the entry and the second escalates it. `null`
    * when the entry has no row (a stage the task never recorded entering): the caller escalates.
+   *
+   * **It locks the task's row before the entry's** (`tasks`, then `task_stages`), the order every
+   * other terminal writer takes them in — `settleRun`'s `addSpend` before its `recordStageExited`
+   * — so the lease sweep, which writes nothing to `tasks` before it counts, cannot take them the
+   * other way round.
    */
   countStageRunEnding(
     tx: Transaction,
@@ -1036,6 +1033,14 @@ export interface TaskRepository {
       readonly kind: 'lost' | 'usage_limited';
     },
   ): Promise<number | null>;
+  /**
+   * Closes the row `recordStageEntered` opened, with what the stage decided.
+   *
+   * `state` is one of `taskStageExitStateSchema`'s three words and the store **parses** it before
+   * writing (WP-55): the column's vocabulary is the contracts', not whatever a caller spelled.
+   * `returnedTo` is the stage a return sent the task to — non-null exactly when `state` is
+   * `returned` — and it is what {@link lastReturnReason} reads by.
+   */
   recordStageExited(
     tx: Transaction,
     entry: {
@@ -1659,7 +1664,7 @@ export interface NewRunOffer {
   readonly routing: OfferRouting;
   /**
    * The workers this offer is **not** for (`excluded_worker_ids`, TD-031 §12): the stage entry's
-   * previous offer's exclusions, plus the worker that lost or was limited on it —
+   * previous offer's exclusions, plus the worker that lost it —
    * {@link RunOfferRepository.carriedExclusions}, read by `stage.execute` when it re-plans an entry.
    * Absent is none.
    */
@@ -1878,11 +1883,13 @@ export interface RunOfferRepository {
   /** The run token's holder (WP-281), or `null` for a run with no offer. */
   runTokenHolder(tx: Transaction, runId: Id): Promise<RunTokenHolder | null>;
   /**
-   * **The exclusions a re-planned stage entry carries** (WP-285, WP-286, TD-031 §12): the newest
-   * stage offer of `(task, stage, attempt)` — its `excluded_worker_ids`, plus its `worker_id` when
-   * its run ended `rate_limited` or `lease_expired` (the limited or lost worker; a revoked worker's
-   * runs end `lease_expired` too, WP-280). `[]` for an entry with no offer yet, and for one whose
-   * newest offer a server claimant held. Each id once, in the order they were excluded.
+   * **The exclusions a re-planned stage entry carries** (WP-286, TD-031 §12): the newest stage
+   * offer of `(task, stage, attempt)` — its `excluded_worker_ids`, plus its `worker_id` when its run
+   * ended `lease_expired` (the lost worker; a revoked worker's runs end that way too, WP-280). **Not**
+   * a worker a usage limit stopped (`rate_limited`): its own pause refuses it at the claim until the
+   * reset, and excluding it would leave a single-worker core with nobody to claim (TD-031's
+   * 2026-11-05 amendment). `[]` for an entry with no offer yet, and for one whose newest offer a
+   * server claimant held. Each id once, in the order they were excluded.
    */
   carriedExclusions(
     tx: Transaction,

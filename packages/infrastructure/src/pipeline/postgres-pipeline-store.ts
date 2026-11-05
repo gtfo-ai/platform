@@ -1219,9 +1219,11 @@ export const createPostgresPipelineStore = (
       // One statement, so two terminal writers of the entry cannot both read zero (WP-285/WP-286).
       // The column name is chosen here from a closed pair, never interpolated from the caller.
       const column = entry.kind === 'lost' ? 'lost_runs' : 'usage_limited_runs';
+      // The task's row first, then the entry's: `tasks` → `task_stages`, every terminal writer's order.
       const { rows } = await sqlOf(tx).query<{ count: number }>(
-        `update task_stages set ${column} = ${column} + 1
-          where task_id = $1 and stage = $2 and attempt = $3
+        `with locked as (select id from tasks where id = $1 for update)
+         update task_stages set ${column} = ${column} + 1
+          where task_id = (select id from locked) and stage = $2 and attempt = $3
           returning ${column} as count`,
         [entry.taskId, entry.stage, entry.attempt],
       );

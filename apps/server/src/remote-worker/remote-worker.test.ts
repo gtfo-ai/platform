@@ -1538,6 +1538,38 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     }
   });
 
+  /** WP-285: the end of a usage pause never lifts a person's hold — the two are separate pauses. */
+  it('keeps a person’s Pause when the usage pause it was set during ends', async () => {
+    const stateDir = stateDirWithCredential();
+    const pkg = runPackageSchema.parse({ ...runPackage() });
+    const core = fakeCore({ claims: [pkg] });
+    const RESET_IN_MS = 600;
+    const { worker } = await start({ stateDir, core, script: () => limitedScript(RESET_IN_MS) });
+    try {
+      await until('the usage pause', () => core.events.includes('core:pause'));
+      const pause = workerPauseRequestSchema.parse(
+        JSON.parse(core.captured.find((call) => call.verb === 'pause')?.body ?? '{}'),
+      );
+      await worker.setPaused(true);
+      expect(worker.localState().manually_paused_at).not.toBeNull();
+      const claimsAtHold = core.captured.filter((call) => call.verb === 'claims').length;
+      // Past the limit's reset, and a little more.
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, Date.parse(pause.until) - Date.now()) + 300),
+      );
+      expect(worker.localState().usage_paused_until).toBeNull();
+      expect(worker.localState().manually_paused_at).not.toBeNull();
+      expect(core.captured.filter((call) => call.verb === 'claims').length).toBe(claimsAtHold);
+      // Nothing asked the core to lift the person's hold.
+      const resumed = core.captured
+        .filter((call) => call.verb === 'manual-pause')
+        .map((call) => workerManualPauseRequestSchema.parse(JSON.parse(call.body)).paused);
+      expect(resumed).toEqual([true]);
+    } finally {
+      await worker.stop();
+    }
+  });
+
   it('drains: claims nothing more and remembers it; the next start clears a drain’s pause — only a drain’s', async () => {
     const stateDir = stateDirWithCredential();
     const core = fakeCore({});
