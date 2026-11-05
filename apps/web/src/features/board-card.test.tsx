@@ -129,6 +129,7 @@ const WAITING = task(2, {
 /** Paused by a person; nothing open, no agent. Its ticket link is a `javascript:` URL. */
 const PAUSED = task(3, {
   state: 'paused',
+  paused_reason: 'manual',
   current_stage: 'implementation',
   ticket: { provider: 'jira', key: 'ACME-3', url: 'javascript:alert(1)' },
   stages: [
@@ -223,7 +224,19 @@ const runRecord = (run: Record<string, unknown>) => ({
   ...run,
 });
 
-const open = (options: { readonly agents?: boolean; readonly path?: string } = {}) => {
+/** The caller may do everything the menu offers; `MEMBER` may cancel and return nothing. */
+const ALL = { cancel: true, returnToStage: true } as const;
+const MEMBER = { cancel: false, returnToStage: false } as const;
+
+const open = (
+  options: {
+    readonly agents?: boolean;
+    readonly path?: string;
+    readonly items?: readonly TaskListItem[];
+    readonly may?: { readonly cancel: boolean; readonly returnToStage: boolean };
+  } = {},
+) => {
+  const may = options.may ?? ALL;
   const sent: Sent[] = [];
   let taskReads = 0;
   const asked: string[] = [];
@@ -243,9 +256,11 @@ const open = (options: { readonly agents?: boolean; readonly path?: string } = {
     if (path === `/api/projects/${PROJECT}/tasks`) {
       taskReads += 1;
       return json({
-        items: [BUSY, WAITING, PAUSED, DONE],
+        items: options.items ?? [BUSY, WAITING, PAUSED, DONE],
         next_cursor: null,
         can_start_task: true,
+        can_cancel_task: may.cancel,
+        can_return_to_stage: may.returnToStage,
       });
     }
     if (path === '/api/org/agents') {
@@ -511,6 +526,17 @@ describe('the card’s menu', () => {
     expect(hostile.queryByRole('menuitem', { name: 'Open MR' })).toBeNull();
   });
 
+  it('offers a member neither Cancel nor Return to stage, which are a maintainer’s', async () => {
+    const user = userEvent.setup();
+    open({ may: MEMBER });
+    const menu = await menuOf(user, 'ACME-1');
+    expect(menu.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Pause',
+      'Open ticket',
+      'Open MR',
+    ]);
+  });
+
   it('offers nothing but the links once the task has ended', async () => {
     const user = userEvent.setup();
     open();
@@ -528,7 +554,11 @@ describe('what a card says, as functions', () => {
     expect(needsYou(task(9, { state: 'active', open_questions: 1 }))).toBe(true);
     expect(asksLabel(task(9, { pending_approvals: 1 }))).toBe('1 approval waiting');
     expect(needsYou(BUSY)).toBe(false);
+    // A pause only a person ends waits on one; a manual pause is somebody's choice.
     expect(needsYou(PAUSED)).toBe(false);
+    expect(needsYou(task(9, { state: 'paused', paused_reason: 'budget' }))).toBe(true);
+    expect(needsYou(task(9, { state: 'paused', paused_reason: 'taken_over' }))).toBe(true);
+    expect(needsYou(task(9, { state: 'paused', paused_reason: null }))).toBe(false);
   });
 
   it('times the latest attempt of the current stage, and nothing without one', () => {
@@ -549,25 +579,29 @@ describe('what a card says, as functions', () => {
   });
 
   it('offers each command only where its state allows it', () => {
-    expect(menuCommandsFor(BUSY)).toEqual({
+    expect(menuCommandsFor(BUSY, ALL)).toEqual({
       pause: true,
       resume: false,
       cancel: true,
       returnTo: ['refinement', 'implementation', 'code_review'],
     });
-    expect(menuCommandsFor(PAUSED)).toMatchObject({ pause: false, resume: true, cancel: true });
-    expect(menuCommandsFor(task(9, { state: 'needs_human' }))).toMatchObject({
+    expect(menuCommandsFor(PAUSED, ALL)).toMatchObject({
+      pause: false,
+      resume: true,
+      cancel: true,
+    });
+    expect(menuCommandsFor(task(9, { state: 'needs_human' }), ALL)).toMatchObject({
       pause: false,
       resume: true,
     });
-    expect(menuCommandsFor(DONE)).toEqual({
+    expect(menuCommandsFor(DONE, ALL)).toEqual({
       pause: false,
       resume: false,
       cancel: false,
       returnTo: [],
     });
     // A queued task entered no stage; a merged one is never sent back.
-    expect(menuCommandsFor(task(9, { state: 'queued' })).returnTo).toEqual([]);
+    expect(menuCommandsFor(task(9, { state: 'queued' }), ALL).returnTo).toEqual([]);
     expect(
       menuCommandsFor(
         task(9, {
@@ -581,8 +615,26 @@ describe('what a card says, as functions', () => {
             },
           ],
         }),
-      ).returnTo,
-    ).toEqual([]);
+        ALL,
+      ),
+    ).toEqual({ pause: false, resume: true, cancel: true, returnTo: [] });
+    // Merged and in its retrospective: still cancellable (the domain allows it, as the task page
+    // offers it), never paused, never sent back before the merge.
+    for (const state of ['merged', 'retro'] as const) {
+      expect(menuCommandsFor(task(9, { state, stages: BUSY.stages }), ALL), state).toEqual({
+        pause: false,
+        resume: false,
+        cancel: true,
+        returnTo: [],
+      });
+    }
+    // The caller's role decides cancel and return; the state rules still decide the rest.
+    expect(menuCommandsFor(BUSY, MEMBER)).toEqual({
+      pause: true,
+      resume: false,
+      cancel: false,
+      returnTo: [],
+    });
   });
 });
 
@@ -660,5 +712,28 @@ describe('the list view (?view=list)', () => {
     expect(filterTasks(all, { ...NO_FILTERS, template: 'chore' })).toEqual([DONE]);
     expect(filterTasks(all, { ...NO_FILTERS, needsYou: true })).toEqual([WAITING]);
     expect(filterTasks(all, { state: 'active', template: 'feature', needsYou: false })).toEqual([]);
+  });
+});
+
+describe('a pause that waits on a person (needs you)', () => {
+  const BUDGET = task(5, { state: 'paused', paused_reason: 'budget', current_stage: null });
+  const TAKEN = task(6, { state: 'paused', paused_reason: 'taken_over', current_stage: null });
+
+  it('marks a budget pause and a take-over, not a manual pause, on the card and in the filter', async () => {
+    const user = userEvent.setup();
+    open({ items: [PAUSED, BUDGET, TAKEN], path: '/projects/acme?view=list' });
+    await screen.findByRole('list', { name: 'Tasks' });
+    const marked = (id: string) =>
+      document.querySelector(`[data-board-row="${id}"] [data-needs-you]`) !== null;
+    expect(marked(BUDGET.id)).toBe(true);
+    expect(marked(TAKEN.id)).toBe(true);
+    expect(marked(PAUSED.id)).toBe(false);
+
+    await user.click(screen.getByRole('checkbox', { name: 'Needs you' }));
+    expect(
+      [...document.querySelectorAll('[data-board-row]')].map((row) =>
+        row.getAttribute('data-board-row'),
+      ),
+    ).toEqual([BUDGET.id, TAKEN.id]);
   });
 });

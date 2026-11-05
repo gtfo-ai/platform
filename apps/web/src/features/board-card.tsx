@@ -78,9 +78,16 @@ const WAITING_ON_A_PERSON: ReadonlySet<TaskState> = new Set([
 /** Questions plus approvals the task is waiting on. */
 export const asksOf = (task: TaskListItem): number => task.open_questions + task.pending_approvals;
 
-/** Whether the task waits on a person: a waiting state, or anything open in its inbox. */
+/**
+ * Whether the task waits on a person: a waiting state, anything open in its inbox, or a pause only
+ * a person ends — a budget pause (somebody raises the cap) or a take-over (the person hands it
+ * back). A manual pause is somebody's choice and waits on nobody, so it is not needs-you.
+ */
 export const needsYou = (task: TaskListItem): boolean =>
-  WAITING_ON_A_PERSON.has(task.state) || asksOf(task) > 0;
+  WAITING_ON_A_PERSON.has(task.state) ||
+  asksOf(task) > 0 ||
+  (task.state === 'paused' &&
+    (task.paused_reason === 'budget' || task.paused_reason === 'taken_over'));
 
 /** "2 open questions and 1 approval waiting" — the count badge's reading. */
 export const asksLabel = (task: TaskListItem): string => {
@@ -161,7 +168,20 @@ export const agentWorking = (agent: AgentEntry | undefined): boolean =>
 
 // ── Which commands the menu offers ───────────────────────────────────────────
 
-const ENDED: ReadonlySet<TaskState> = new Set(['done', 'cancelled', 'merged', 'retro']);
+/** Over: nothing but the links. `merged` and `retro` are not — a cancel is still the domain's. */
+const ENDED: ReadonlySet<TaskState> = new Set(['done', 'cancelled']);
+
+/** Past the merge: nothing to pause, and never sent back to a stage before it. */
+const MERGED_STATES: ReadonlySet<TaskState> = new Set(['merged', 'retro']);
+
+/**
+ * What the caller may do in this project — the tasks page's `can_cancel_task` and
+ * `can_return_to_stage`, the routes' own `can()` over the caller's role.
+ */
+export interface MenuCapabilities {
+  readonly cancel: boolean;
+  readonly returnToStage: boolean;
+}
 
 export interface MenuCommands {
   readonly pause: boolean;
@@ -172,19 +192,22 @@ export interface MenuCommands {
 }
 
 /**
- * What the menu offers for a state. The server is the judge — each command is refused by the
- * aggregate with a named 409 — so this only keeps the menu from offering what cannot be meant: no
- * pause of a paused task, no resume of a running one, nothing but the links once the task ended,
- * and no return for a task that entered no stage or was merged (`merged_gate`, as the task page).
+ * What the menu offers for a state, and for what the caller may do. The server is the judge — each
+ * command is refused by the aggregate with a named 409, and by the role with a 403 — so this only
+ * keeps the menu from offering what cannot be meant: no pause of a paused task or of one that
+ * entered `merged_gate` (as the task page), no resume of a running one, a cancel until the task is
+ * done or cancelled, no return for a task that entered no stage or was merged, and neither cancel
+ * nor return to a caller whose role the route would refuse.
  */
-export const menuCommandsFor = (task: TaskListItem): MenuCommands => {
+export const menuCommandsFor = (task: TaskListItem, may: MenuCapabilities): MenuCommands => {
   const ended = ENDED.has(task.state);
   const stages = [...new Set(task.stages.map((row) => row.stage))];
+  const merged = MERGED_STATES.has(task.state) || stages.includes('merged_gate');
   return {
-    pause: !ended && task.state !== 'paused' && task.state !== 'needs_human',
+    pause: !ended && !merged && task.state !== 'paused' && task.state !== 'needs_human',
     resume: task.state === 'paused' || task.state === 'needs_human',
-    cancel: !ended,
-    returnTo: ended || stages.includes('merged_gate') || task.state === 'queued' ? [] : stages,
+    cancel: may.cancel && !ended,
+    returnTo: !may.returnToStage || ended || merged || task.state === 'queued' ? [] : stages,
   };
 };
 
@@ -388,15 +411,17 @@ type OpenDialog = 'cancel' | 'return' | null;
 export const TaskMenu = ({
   task,
   projectId,
+  may,
   commands,
 }: {
   readonly task: TaskListItem;
   readonly projectId: string;
+  readonly may: MenuCapabilities;
   readonly commands: ReturnType<typeof useTaskCommands>;
 }): ReactElement => {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState<OpenDialog>(null);
-  const offered = menuCommandsFor(task);
+  const offered = menuCommandsFor(task, may);
   const key = task.ticket.key;
   const refresh = async (): Promise<void> => {
     await queryClient.invalidateQueries({ queryKey: ['project', projectId, 'tasks'] });
@@ -644,6 +669,7 @@ interface TaskViewProps {
   readonly task: TaskListItem;
   readonly projectKey: string;
   readonly projectId: string;
+  readonly may: MenuCapabilities;
   readonly agent: AgentEntry | undefined;
   readonly nowMs: number;
 }
@@ -663,7 +689,7 @@ const WorkingDot = ({ agent }: { readonly agent: AgentEntry | undefined }): Reac
     <StatusIcon status="running" size={12} label="An agent is working on it" />
   ) : null;
 
-export const TaskCard = ({ task, projectKey, projectId, agent, nowMs }: TaskViewProps) => {
+export const TaskCard = ({ task, projectKey, projectId, may, agent, nowMs }: TaskViewProps) => {
   const commands = useTaskCommands(task.id);
   return (
     <article
@@ -680,7 +706,7 @@ export const TaskCard = ({ task, projectKey, projectId, agent, nowMs }: TaskView
         <span className="-mt-1 -mr-1 flex shrink-0 items-center gap-1.5">
           <WorkingDot agent={agent} />
           <NeedsYouMarker task={task} />
-          <TaskMenu task={task} projectId={projectId} commands={commands} />
+          <TaskMenu task={task} projectId={projectId} may={may} commands={commands} />
         </span>
       </div>
       <p className="text-sm">
@@ -695,7 +721,7 @@ export const TaskCard = ({ task, projectKey, projectId, agent, nowMs }: TaskView
 };
 
 /** The same task as an Issues-style row (the list view). */
-export const TaskRow = ({ task, projectKey, projectId, agent, nowMs }: TaskViewProps) => {
+export const TaskRow = ({ task, projectKey, projectId, may, agent, nowMs }: TaskViewProps) => {
   const commands = useTaskCommands(task.id);
   const activity = cardActivity(task, agent, nowMs);
   return (
@@ -729,7 +755,7 @@ export const TaskRow = ({ task, projectKey, projectId, agent, nowMs }: TaskViewP
       <span className="flex shrink-0 items-center gap-1.5">
         <WorkingDot agent={agent} />
         <NeedsYouMarker task={task} />
-        <TaskMenu task={task} projectId={projectId} commands={commands} />
+        <TaskMenu task={task} projectId={projectId} may={may} commands={commands} />
       </span>
     </li>
   );

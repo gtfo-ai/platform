@@ -91,7 +91,13 @@ const open = (options: {
       );
     }
     if (path === `/api/projects/${PROJECT}/tasks`) {
-      return json({ items: [], next_cursor: null, can_start_task: options.canStart });
+      return json({
+        items: [],
+        next_cursor: null,
+        can_start_task: options.canStart,
+        can_cancel_task: true,
+        can_return_to_stage: true,
+      });
     }
     if (path === '/api/projects') return json({ items: [PROJECT_ROW] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);

@@ -104,7 +104,13 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   const url = String(input);
   if (url.includes('/api/auth/get-session')) return json(SESSION);
   if (url.includes(`/api/projects/${PROJECT}/tasks`)) {
-    return json({ items: [task({}), WARNED], next_cursor: null, can_start_task: false });
+    return json({
+      items: [task({}), WARNED],
+      next_cursor: null,
+      can_start_task: false,
+      can_cancel_task: true,
+      can_return_to_stage: true,
+    });
   }
   if (url.endsWith('/api/projects')) {
     return json({
@@ -171,6 +177,8 @@ describe('the conflict badge on the board', () => {
           ],
           next_cursor: null,
           can_start_task: false,
+          can_cancel_task: true,
+          can_return_to_stage: true,
         });
       }
       return fetchImpl(input);

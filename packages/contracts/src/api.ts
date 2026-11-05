@@ -1432,6 +1432,13 @@ export const tasksResponseSchema = page(taskListItemSchema).extend({
    * everyone else regardless. A fact about the caller, like `can_raise_budget`.
    */
   can_start_task: z.boolean(),
+  /**
+   * Whether the caller may cancel, and return to a stage, a task in this project — `task.cancel`
+   * and `task.return_to_stage` over the same role, once per page (S-23.9a). The card's menu offers
+   * those commands only then; the routes refuse everyone else regardless.
+   */
+  can_cancel_task: z.boolean(),
+  can_return_to_stage: z.boolean(),
 });
 
 /** The longest ticket key `POST /api/projects/:id/tasks` accepts (WP-122). */

@@ -35,7 +35,13 @@ import { Button, EmptyState, ErrorNotice, Field } from '../ui/kit.js';
 import { ListBox, ListBoxHeader } from '../ui/list-box.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { UntrustedText } from '../ui/untrusted.js';
-import { type AgentEntry, needsYou, TaskCard, TaskRow } from './board-card.js';
+import {
+  type AgentEntry,
+  type MenuCapabilities,
+  needsYou,
+  TaskCard,
+  TaskRow,
+} from './board-card.js';
 
 /** The columns, in pipeline order. Every state appears exactly once, so no task can be invisible. */
 export const BOARD_COLUMNS = [
@@ -269,11 +275,12 @@ interface ViewProps {
   readonly items: readonly TaskListItem[];
   readonly projectKey: string;
   readonly projectId: string;
+  readonly may: MenuCapabilities;
   readonly agents: ReadonlyMap<string, AgentEntry>;
   readonly nowMs: number;
 }
 
-const Columns = ({ items, projectKey, projectId, agents, nowMs }: ViewProps): ReactElement => (
+const Columns = ({ items, projectKey, projectId, may, agents, nowMs }: ViewProps): ReactElement => (
   // It scrolls sideways below `xl`. Not a tab stop of its own: every card holds a link and a menu
   // button, and focusing one scrolls its column into view.
   <div
@@ -313,6 +320,7 @@ const Columns = ({ items, projectKey, projectId, agents, nowMs }: ViewProps): Re
               task={task}
               projectKey={projectKey}
               projectId={projectId}
+              may={may}
               agent={agents.get(task.id)}
               nowMs={nowMs}
             />
@@ -328,7 +336,14 @@ const SELECT = cx(
   FOCUS_RING,
 );
 
-const ListView = ({ items, projectKey, projectId, agents, nowMs }: ViewProps): ReactElement => {
+const ListView = ({
+  items,
+  projectKey,
+  projectId,
+  may,
+  agents,
+  nowMs,
+}: ViewProps): ReactElement => {
   const [filters, setFilters] = useState<BoardFilters>(NO_FILTERS);
   const shown = filterTasks(items, filters);
   const templates = [...new Set(items.map((task) => task.template))].sort();
@@ -414,6 +429,7 @@ const ListView = ({ items, projectKey, projectId, agents, nowMs }: ViewProps): R
             task={task}
             projectKey={projectKey}
             projectId={projectId}
+            may={may}
             agent={agents.get(task.id)}
             nowMs={nowMs}
           />
@@ -472,6 +488,11 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
     items,
     projectKey: project.key,
     projectId: project.id,
+    // The page's own answer for this caller; a page not read yet offers neither.
+    may: {
+      cancel: tasks.data?.can_cancel_task === true,
+      returnToStage: tasks.data?.can_return_to_stage === true,
+    },
     agents: live,
     nowMs,
   };

@@ -317,6 +317,8 @@ const fetchFor = (world: World) =>
             })),
           next_cursor: null,
           can_start_task: true,
+          can_cancel_task: true,
+          can_return_to_stage: true,
         });
       }
       if (what === 'readiness') {

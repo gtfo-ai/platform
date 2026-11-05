@@ -1231,6 +1231,8 @@ export const tasksPage = {
   items: [featureListItem, bugListItem],
   next_cursor: null,
   can_start_task: true,
+  can_cancel_task: true,
+  can_return_to_stage: true,
 };
 
 export const projectsPage = { items: [project] };

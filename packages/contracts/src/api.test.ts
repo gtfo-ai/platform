@@ -689,28 +689,59 @@ describe('the list envelopes and the KB health report', () => {
       loop_limits: { code_review: 3 },
     };
     expect(
-      tasksResponseSchema.parse({ items: [task], next_cursor: null, can_start_task: true }),
+      tasksResponseSchema.parse({
+        items: [task],
+        next_cursor: null,
+        can_start_task: true,
+        can_cancel_task: true,
+        can_return_to_stage: true,
+      }),
     ).toBeTruthy();
     expect(
       tasksResponseSchema.parse({
         items: [task],
         next_cursor: `${AT}|${uuid(12)}`,
         can_start_task: false,
+        can_cancel_task: true,
+        can_return_to_stage: true,
       }),
     ).toBeTruthy();
     // `next_cursor` is required, not optional: "no more pages" and "the field was forgotten" would
     // otherwise be the same response.
-    expect(tasksResponseSchema.safeParse({ items: [task], can_start_task: true }).success).toBe(
-      false,
-    );
+    expect(
+      tasksResponseSchema.safeParse({
+        items: [task],
+        can_start_task: true,
+        can_cancel_task: true,
+        can_return_to_stage: true,
+      }).success,
+    ).toBe(false);
     // So is the caller's capability (WP-122): a board that cannot tell "may not start" from "the
     // server did not say" would offer or hide the form by accident.
     expect(tasksResponseSchema.safeParse({ items: [task], next_cursor: null }).success).toBe(false);
+    // …and the menu's two capabilities (S-23.9a), each required.
+    for (const key of ['can_cancel_task', 'can_return_to_stage'] as const) {
+      const full = {
+        items: [task],
+        next_cursor: null,
+        can_start_task: true,
+        can_cancel_task: true,
+        can_return_to_stage: true,
+      };
+      const { [key]: _dropped, ...without } = full;
+      expect(tasksResponseSchema.safeParse(without).success, key).toBe(false);
+    }
 
     // S-23.9a: the card's glance is required and strict. A page whose item forgot the stage rows or
     // a count would draw "no stage" and "nothing waits on you" — a claim, not a missing value.
     const page = (item: unknown) =>
-      tasksResponseSchema.safeParse({ items: [item], next_cursor: null, can_start_task: true });
+      tasksResponseSchema.safeParse({
+        items: [item],
+        next_cursor: null,
+        can_start_task: true,
+        can_cancel_task: true,
+        can_return_to_stage: true,
+      });
     for (const key of ['stages', 'open_questions', 'pending_approvals', 'loop_limits'] as const) {
       const { [key]: _dropped, ...without } = task;
       expect(page(without).success, key).toBe(false);

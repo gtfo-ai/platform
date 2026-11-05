@@ -650,6 +650,9 @@ export const registerProjectRoutes = async (
         // capability over the role this guard resolved, so the board offers the form only to someone
         // the route would admit.
         can_start_task: role !== undefined && can(role, 'task.create'),
+        // S-23.9a: the card menu's two maintainer commands, over the same role.
+        can_cancel_task: role !== undefined && can(role, 'task.cancel'),
+        can_return_to_stage: role !== undefined && can(role, 'task.return_to_stage'),
       };
     },
   );

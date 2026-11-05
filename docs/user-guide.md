@@ -521,8 +521,9 @@ one column at a time, rather than wrapping, so the pipeline still reads left to 
   provider, or priced from the price list in `local` provider mode. A run that ended with nobody
   measuring it is left out of that figure, and the card then says so beside it — *excl. 2
   unmeasured*;
-- a **◆** when the task waits on a person — a question, an approval, or a task that needs a human —
-  with the number of open questions and pending approvals beside it;
+- a **◆** when the task waits on a person — a question, an approval, a task that needs a human, a
+  task its budget paused or one somebody took over — with the number of open questions and pending
+  approvals beside it (a task paused by hand is somebody's choice, and has none);
 - a badge per loop the task has gone round, against its limit: *Code review 2/3*;
 - *touches ACME-12 · 3 files* when the rebase gate found that another active task changes the same
   files (the comparison runs at the rebase gate, so no badge means *not compared yet*).
@@ -533,8 +534,8 @@ cancelling does (it ends the task for good); *Return to stage…* asks which sta
 entered to send it back to, and why — the stage is given your reason; a task that stopped at a gate
 which recorded a failure carries it too, as the task page's ticked *Attach the gate's last failure*
 box does (open the task to send your reason alone). Who may do what is the table in section 4 —
-cancelling and returning are a maintainer's, and the board says so if the server refuses. A
-finished task offers only the links. A link the provider sent that is not a web address is shown struck through rather than
+cancelling and returning are a maintainer's, so a member's menu does not offer them. A merged task
+can still be cancelled but not paused or sent back; a done or cancelled task offers only the links. A link the provider sent that is not a web address is shown struck through rather than
 followed.
 
 **List** (the toggle above the columns, or `?view=list`) shows the same tasks as a list, newest

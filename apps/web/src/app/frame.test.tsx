@@ -160,7 +160,13 @@ const fetchFor = (world: World) =>
       });
     }
     if (/^\/api\/projects\/[^/]+\/tasks$/.test(path)) {
-      return json({ items: [], next_cursor: null, can_start_task: world.canStart === true });
+      return json({
+        items: [],
+        next_cursor: null,
+        can_start_task: world.canStart === true,
+        can_cancel_task: true,
+        can_return_to_stage: true,
+      });
     }
     return json(
       { error: { code: 'not_found', message: 'the fake server has no such route' } },

@@ -106,6 +106,13 @@ describe('the manual start (WP-122)', () => {
     // The board's read says who is offered the form, in both directions.
     expect((await memberApi.projectTasks(pipeline.projectId, {})).can_start_task).toBe(true);
     expect((await viewerApi.projectTasks(pipeline.projectId, {})).can_start_task).toBe(false);
+    // S-23.9a: cancel and return-to-stage are a maintainer's, so a member is offered neither.
+    const memberPage = await memberApi.projectTasks(pipeline.projectId, {});
+    expect(memberPage.can_cancel_task).toBe(false);
+    expect(memberPage.can_return_to_stage).toBe(false);
+    const adminPage = await spaEndpoints(admin, []).projectTasks(pipeline.projectId, {});
+    expect(adminPage.can_cancel_task).toBe(true);
+    expect(adminPage.can_return_to_stage).toBe(true);
     const refused = await viewerApi
       .startTask(pipeline.projectId, { ticket_key: UNMATCHED.key }, 'viewer-1')
       .then(
