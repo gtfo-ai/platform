@@ -115,9 +115,11 @@ test.describe('on a laptop the top bar and the row under it stick', () => {
     const frameBottom = await expectStuck(page, tabs);
     await expect(tabs.getByRole('navigation', { name: 'Project' })).toBeVisible();
     // The project's title is not part of the frame: it has gone up behind it.
+    // Scrolled behind the top bar: the title band ends at or above the banner's bottom edge.
     expect((await boxOf(page.locator('[data-project-frame]'))).bottom).toBeLessThanOrEqual(
-      frameBottom,
+      (await boxOf(page.getByRole('banner'))).bottom + 0.5,
     );
+    expect(frameBottom).toBeGreaterThan(0);
 
     // A menu opened from the top bar draws over the tab row.
     await page

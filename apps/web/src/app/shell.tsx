@@ -572,7 +572,7 @@ export const AppShell = (): ReactElement => {
         <UnderlineNav
           label="Primary"
           items={orgItems}
-          className="z-20 bg-canvas px-4 sm:sticky sm:top-(--app-bar-height) sm:px-6"
+          className="bg-canvas px-4 sm:sticky sm:z-20 sm:top-(--app-bar-height) sm:px-6"
           more={(collapsed) => <NavMore items={collapsed} />}
         />
       ) : null}

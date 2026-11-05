@@ -217,7 +217,7 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
           within its parent. */}
       <div
         data-project-tabs=""
-        className="z-20 border-b border-line bg-canvas px-4 sm:sticky sm:top-(--app-bar-height) sm:px-6"
+        className="border-b border-line bg-canvas px-4 sm:sticky sm:z-20 sm:top-(--app-bar-height) sm:px-6"
       >
         <UnderlineNav label="Project" items={items} bordered={false} />
       </div>
