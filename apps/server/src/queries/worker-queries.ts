@@ -36,6 +36,7 @@ import {
 } from '@platform/contracts';
 import {
   checkDeviceDecision,
+  DEFAULT_EXECUTION_MODE,
   type DeviceCodeState,
   type DevicePollDecision,
   decideDevicePoll,
@@ -139,7 +140,44 @@ export interface WorkerListRow {
    * only; absent on the row a worker call's contact answers, which is asked on every heartbeat.
    */
   readonly lastUpdate?: WorkerUpdateRecord | null;
+  /**
+   * What the core knows about whether it can claim (S-22.19) — read by {@link WorkerStore.listWorkers}
+   * only, like {@link lastUpdate}; `domain`'s `coreClaimBlockersOf` turns it into blockers.
+   */
+  readonly claimFacts?: WorkerClaimRowFacts;
 }
+
+/** The row half of a worker's claim blockers (S-22.19), each on the database's clock. */
+export interface WorkerClaimRowFacts {
+  /** Seen within {@link WORKER_CONNECTED_SECONDS}. */
+  readonly online: boolean;
+  /** `paused_until` still ahead (a usage limit). */
+  readonly usagePaused: boolean;
+  /**
+   * The owner's hold (`manually_paused_at`), told apart by the newest `worker.pause` row's `via`:
+   * `draining` for `worker_ui_drain`/`worker_internal_drain`, `paused` otherwise; `null` for none.
+   */
+  readonly hold: 'paused' | 'draining' | null;
+  /**
+   * Projects that would give it work: its user may run there (the effective role), the project's
+   * mode is not `server_only`, its run credential may reach a worker, and the claim scope names it —
+   * `null` (every project) and `[]` (*pick only*, whose picks ignore the scope) count every project.
+   */
+  readonly eligibleProjects: number;
+  /** Its newest claim (`run_offers.claimed_at`), or `null`. */
+  readonly lastClaimedAt: Date | null;
+}
+
+/** A listed worker, and whether its user may run in the project asked about (S-22.19). */
+export interface ProjectWorkerRow extends WorkerListRow {
+  readonly mayRunInProject: boolean;
+}
+
+/** The `via` of a hold that is a drain's (TD-031's 2026-11-05 amendment, decision 3). */
+export const DRAIN_VIAS: readonly WorkerManualPauseVia[] = [
+  'worker_ui_drain',
+  'worker_internal_drain',
+];
 
 /** A worker's update report as recorded (`human_actions`, action `worker.update`). */
 export interface WorkerUpdateRecord {
@@ -227,6 +265,11 @@ export interface WorkerStore {
   decideDeviceCode(input: DeviceDecisionInput): Promise<DeviceDecisionResult>;
   /** Every worker when `userId` is `null`; the user's own otherwise. Newest first. */
   listWorkers(userId: string | null): Promise<WorkerListRow[]>;
+  /**
+   * {@link listWorkers}' rows — **not revoked** — with whether each worker's user may run in
+   * `projectId` now (the claim's effective-role predicate): a project's execution read (S-22.19).
+   */
+  listWorkersForProject(projectId: string, userId: string | null): Promise<ProjectWorkerRow[]>;
   revokeWorker(input: {
     readonly workerId: string;
     /** `null` for an administrator, who may revoke any worker; a user id restricts to that user's. */
@@ -431,6 +474,62 @@ const RUNNING_OF_WORKER = sql`coalesce((
            left join projects p on p.id = x.id
        ), '[]'::json) end as claim_projects`;
 
+const MAY_RUN_IN_LISTED = sql.raw(pipelineAdapters.userMayRunInProjectSql('w.user_id', 'p.id'));
+const CREDENTIAL_REFUSED_P = sql.raw(pipelineAdapters.remoteRunCredentialRefusedSql('p.id'));
+
+/**
+ * A listed worker's claim facts (S-22.19), as columns of a `workers w` select — {@link WorkerClaimRowFacts}.
+ * The hold's `via` is the newest `worker.pause` row's (one per performed pause); a hold with no row
+ * (a seed, or a row the audit lost) reads as the owner's pause. The project count asks the claim's
+ * own predicates (`userMayRunInProjectSql`, `remoteRunCredentialRefusedSql`) per project.
+ */
+const CLAIM_FACTS_OF_WORKER = sql`
+  (w.last_seen_at is not null
+     and w.last_seen_at > now() - make_interval(secs => ${WORKER_CONNECTED_SECONDS})) as online,
+  (w.paused_until is not null and w.paused_until > now()) as usage_paused,
+  case when w.manually_paused_at is null then null
+       else (select h.params ->> 'via'
+               from human_actions h
+              where h.action = 'worker.pause' and h.params ->> 'worker_id' = w.id::text
+              order by h.created_at desc, h.id desc
+              limit 1) end as hold_via,
+  (select max(o.claimed_at) from run_offers o where o.worker_id = w.id) as last_claimed_at,
+  (select count(*)::int
+     from projects p
+     left join project_execution_settings s on s.project_id = p.id
+    where coalesce(s.mode, ${DEFAULT_EXECUTION_MODE}) <> 'server_only'
+      and (w.claim_project_ids is null or cardinality(w.claim_project_ids) = 0
+           or p.id = any(w.claim_project_ids))
+      and ${MAY_RUN_IN_LISTED}
+      and not ${CREDENTIAL_REFUSED_P}) as eligible_projects`;
+
+type ClaimFactsSql = {
+  online: boolean;
+  usage_paused: boolean;
+  hold_via: string | null;
+  last_claimed_at: Date | string | null;
+  eligible_projects: number;
+};
+
+/** A hold's `via` → the vocabulary's hold. */
+export const holdOf = (
+  manuallyPaused: boolean,
+  via: string | null,
+): 'paused' | 'draining' | null =>
+  !manuallyPaused
+    ? null
+    : (DRAIN_VIAS as readonly string[]).includes(via ?? '')
+      ? 'draining'
+      : 'paused';
+
+const toClaimFacts = (row: WorkerRowSql & ClaimFactsSql): WorkerClaimRowFacts => ({
+  online: row.online === true,
+  usagePaused: row.usage_paused === true,
+  hold: holdOf(row.manually_paused_at !== null, row.hold_via),
+  eligibleProjects: Number(row.eligible_projects ?? 0),
+  lastClaimedAt: at(row.last_claimed_at),
+});
+
 /**
  * The newest `worker.update` row per worker, for the listed workers: one pass over `human_actions`
  * filtered on the action (it has no index on it — the Workers screen is read by a person, rarely;
@@ -623,12 +722,12 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
   },
 
   async listWorkers(userId) {
-    const { rows } = await database.execute<WorkerRowSql>(sql`
-      select w.*, u.email, u.name as user_name, ${RUNNING_OF_WORKER}
+    const { rows } = await database.execute<WorkerRowSql & ClaimFactsSql>(sql`
+      select w.*, u.email, u.name as user_name, ${RUNNING_OF_WORKER}, ${CLAIM_FACTS_OF_WORKER}
         from workers w join users u on u.id = w.user_id
        where ${userId === null ? sql`true` : sql`w.user_id = ${userId}`}
        order by w.created_at desc, w.id desc`);
-    const listed = rows.map(toWorkerListRow);
+    const listed = rows.map((row) => ({ ...toWorkerListRow(row), claimFacts: toClaimFacts(row) }));
     if (listed.length === 0) return listed;
     const updates = await database.execute<{
       worker_id: string;
@@ -642,6 +741,26 @@ export const createPostgresWorkerStore = (database: Database): WorkerStore => ({
       ]),
     );
     return listed.map((row) => ({ ...row, lastUpdate: byWorker.get(row.id) ?? null }));
+  },
+
+  async listWorkersForProject(projectId, userId) {
+    const mayRun = sql.raw(pipelineAdapters.userMayRunInProjectSql('w.user_id', 'q.pid'));
+    const { rows } = await database.execute<
+      WorkerRowSql & ClaimFactsSql & { may_run_in_project: boolean }
+    >(sql`
+      select w.*, u.email, u.name as user_name, ${RUNNING_OF_WORKER}, ${CLAIM_FACTS_OF_WORKER},
+             ${mayRun} as may_run_in_project
+        from workers w
+        join users u on u.id = w.user_id
+       cross join (select ${projectId}::uuid as pid) q
+       where w.revoked_at is null
+         and ${userId === null ? sql`true` : sql`w.user_id = ${userId}`}
+       order by w.created_at desc, w.id desc`);
+    return rows.map((row) => ({
+      ...toWorkerListRow(row),
+      claimFacts: toClaimFacts(row),
+      mayRunInProject: row.may_run_in_project === true,
+    }));
   },
 
   async recordUpdateReport({ workerId, report, now }) {

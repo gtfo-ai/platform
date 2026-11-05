@@ -664,6 +664,28 @@ worker_ui}` in the claim's transaction. The page proxies them as `GET`/`POST /ap
 on the worker (`409 no_free_slot` there, before the core is asked). `GET /api/workers` publishes each
 worker's `claim_projects` (`null`, `[]`, or `[{id, key}]`), which the Workers screen shows read only.
 
+**Why a worker takes nothing** (S-22.19, TD-031's 2026-11-05 blocker-vocabulary amendment): one
+vocabulary, `WORKER_CLAIM_BLOCKERS` (`packages/contracts/src/worker-claim-blockers.ts`), most fundamental
+first, worded once (`WORKER_CLAIM_BLOCKER_WORDS`, `apps/web/src/ui/humanize.ts`). `GET /api/workers`
+adds per worker `claim_blockers` — the claim's predicates minus the per-offer ones: `revoked`, `offline`
+(no call in 60 s), `protocol_outdated`, `paused`/`draining` (the hold, told apart by its newest
+`worker.pause` row's `via`), `usage_limited`, `images_missing` (none reported), `images_outdated` (not
+the core's current run and egress digests; nothing is said while the core cannot name them),
+`no_eligible_project` (no project its user may run in, whose mode is not `server_only` and whose run
+credential may reach a worker, inside its scope — *pick only* counts every project) — `can_claim` when
+the list is empty, and `last_claimed_at` (`run_offers.claimed_at`). `GET /api/projects/:id/execution`
+adds `workers` — each registered worker the reader may see (every one for an administrator, their own
+otherwise) with `takes` `automatically`/`picked_only`/`no`, its own `blockers` and the project's
+`project_reason` (`server_only`, `credential_refused`, `role`, `scope_excludes`) — and `waiting`: the
+open offers, and how many no worker may take now (`credential_refused`, `server_only`, `server_first`).
+The local page's `GET /api/local/state` carries the worker's half as `claim_blockers` (`not_set_up`,
+`offline`, `protocol_outdated`, `claude_rejected`, the holds, `launcher_unreachable`, `images_missing`,
+`images_outdated`), and its `POST /api/local/retry` on a **connected** worker whose launcher did not
+answer (or holds no image) asks the launcher again and wakes the claim loop (`409 connected` when there
+is nothing to ask again). No protocol change. An open offer written before WP-278 (neither `*_from`,
+no `expires_at`) is routed from its project's effective setting by the recovery pass's
+`run_offer_reroute` row, once (backlog 887).
+
 The opt-in itself is the GitLab configuration key `remote_run_credential: allow | deny` (default `deny`),
 written through `PATCH /api/integrations/:id` (`integration.write`, admin), whose `human_actions` row
 carries the value; the Integrations screen shows the residual beside the switch. With `allow`, a static

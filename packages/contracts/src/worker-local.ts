@@ -28,6 +28,7 @@ import {
   workerClaimScopeSchema,
   workerOffersResponseSchema,
 } from './worker.js';
+import { WORKER_CLAIM_BLOCKERS, workerClaimBlockerSchema } from './worker-claim-blockers.js';
 
 /** The local verbs' prefix on the worker's UI listener. */
 export const WORKER_LOCAL_API_PREFIX = '/api/local';
@@ -256,6 +257,13 @@ export const workerLocalStateSchema = z.strictObject({
   logs: z.array(z.string().max(WORKER_LOCAL_LOG_LINE_MAX_CHARS + 32)).max(WORKER_LOCAL_LOG_TAIL),
   /** The first-run wizard's facts (WP-294). */
   setup: workerLocalSetupSchema,
+  /**
+   * Why this worker takes no work, as the machine knows it (S-22.19): its connection, Claude's
+   * verdict on its token, its holds, whether its launcher answered and which images it holds against
+   * the digests its core named — the one vocabulary, most fundamental first (the worker sorts it;
+   * the page's guard checks members and bound only). Empty: *Taking work*.
+   */
+  claim_blockers: z.array(workerClaimBlockerSchema).max(WORKER_CLAIM_BLOCKERS.length),
   server_time: isoDateTimeSchema,
 });
 export type WorkerLocalState = z.infer<typeof workerLocalStateSchema>;

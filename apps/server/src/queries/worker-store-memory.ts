@@ -10,9 +10,10 @@
  * flips (`setUserMayAct`, `banUser`) rather than `users.status`/`banned`, judged by the same
  * `userMayAct` the session hook uses.
  */
-import type { JsonObject, RunStatus } from '@platform/contracts';
+import type { ExecutionMode, JsonObject, RunStatus } from '@platform/contracts';
 import {
   checkDeviceDecision,
+  DEFAULT_EXECUTION_MODE,
   type DeviceCodeState,
   decideDevicePoll,
   deviceCodeLimitExceeded,
@@ -22,10 +23,13 @@ import {
 import { userMayAct } from './identity-queries.js';
 import {
   type CredentialSubject,
+  holdOf,
   type NewDeviceCode,
   normaliseScope,
+  type ProjectWorkerRow,
   type ScopeProject,
   WORKER_CONNECTED_SECONDS,
+  type WorkerClaimRowFacts,
   type WorkerListRow,
   type WorkerStore,
   type WorkerUpdateRecord,
@@ -102,6 +106,12 @@ export interface MemoryWorkerStore extends WorkerStore {
    * in PostgreSQL (the effective role), a set here (WP-293).
    */
   addProject(project: ScopeProject, runners: readonly string[]): void;
+  /** A project's execution mode (`project_execution_settings.mode`; none stored is `hybrid`). */
+  setProjectMode(projectId: string, mode: ExecutionMode): void;
+  /** A project whose run credential may not reach a worker (a static token without the opt-in). */
+  refuseRemoteCredential(projectId: string): void;
+  /** A claim of a run by this worker at `at` (`run_offers.claimed_at`, S-22.19). */
+  recordClaim(workerId: string, at: Date): void;
 }
 
 const stateOf = (row: CodeRow): DeviceCodeState => ({
@@ -146,6 +156,38 @@ export const createMemoryWorkerStore = (
   >();
   const mayRunIn = (userId: string, projectId: string): boolean =>
     projects.get(projectId)?.runners.has(userId) === true;
+  const modes = new Map<string, ExecutionMode>();
+  const refused = new Set<string>();
+  const claims = new Map<string, Date>();
+
+  /** The SQL store's `CLAIM_FACTS_OF_WORKER`, over this double's maps (S-22.19). */
+  const claimFactsOf = (worker: WorkerRowMemory): WorkerClaimRowFacts => {
+    const at = now().getTime();
+    let via: string | null = null;
+    for (let index = audit.length - 1; index >= 0; index -= 1) {
+      const row = audit[index];
+      if (row?.action === 'worker.pause' && row.params.worker_id === worker.id) {
+        via = typeof row.params.via === 'string' ? row.params.via : null;
+        break;
+      }
+    }
+    const scope = worker.claimProjectIds ?? null;
+    return {
+      online:
+        worker.lastSeenAt !== null &&
+        at - worker.lastSeenAt.getTime() < WORKER_CONNECTED_SECONDS * 1000,
+      usagePaused: worker.pausedUntil !== null && worker.pausedUntil.getTime() > at,
+      hold: holdOf(worker.manuallyPausedAt !== null, via),
+      eligibleProjects: [...projects.keys()].filter(
+        (projectId) =>
+          (modes.get(projectId) ?? DEFAULT_EXECUTION_MODE) !== 'server_only' &&
+          (scope === null || scope.length === 0 || scope.includes(projectId)) &&
+          mayRunIn(worker.userId, projectId) &&
+          !refused.has(projectId),
+      ).length,
+      lastClaimedAt: claims.get(worker.id) ?? null,
+    };
+  };
 
   const expire = (workerIds: ReadonlySet<string>): number => {
     let count = 0;
@@ -223,6 +265,12 @@ export const createMemoryWorkerStore = (
     addUser: (user) => users.set(user.id, user),
     addProject: (project, runners) =>
       projects.set(project.id, { project, runners: new Set(runners) }),
+    setProjectMode: (projectId, mode) => modes.set(projectId, mode),
+    refuseRemoteCredential: (projectId) => refused.add(projectId),
+    recordClaim: (workerId, at) => {
+      const previous = claims.get(workerId);
+      if (previous === undefined || previous < at) claims.set(workerId, at);
+    },
     setUserMayAct: (userId, mayAct) => {
       if (mayAct) disabled.delete(userId);
       else disabled.add(userId);
@@ -375,7 +423,23 @@ export const createMemoryWorkerStore = (
       return [...workers.values()]
         .filter((worker) => userId === null || worker.userId === userId)
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .map((worker) => ({ ...listRowOf(worker), lastUpdate: lastUpdateOf(worker.id) }));
+        .map((worker) => ({
+          ...listRowOf(worker),
+          lastUpdate: lastUpdateOf(worker.id),
+          claimFacts: claimFactsOf(worker),
+        }));
+    },
+
+    async listWorkersForProject(projectId, userId): Promise<ProjectWorkerRow[]> {
+      return [...workers.values()]
+        .filter((worker) => worker.revokedAt === null)
+        .filter((worker) => userId === null || worker.userId === userId)
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .map((worker) => ({
+          ...listRowOf(worker),
+          claimFacts: claimFactsOf(worker),
+          mayRunInProject: mayRunIn(worker.userId, projectId),
+        }));
     },
 
     async recordUpdateReport({ workerId, report, now }) {

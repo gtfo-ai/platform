@@ -19,6 +19,7 @@ let db: Database;
 let projectId: string;
 let orgId: string;
 let users = 0;
+let integrations = 0;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('workers');
@@ -47,6 +48,9 @@ const reset = async (): Promise<void> => {
   await pool.query('delete from worker_device_codes');
   await pool.query('delete from workers');
   await pool.query('delete from human_actions');
+  await pool.query('delete from bindings');
+  await pool.query('delete from integrations');
+  await pool.query('delete from project_execution_settings');
   // WP-293's projects: every one but the suite's own run project.
   await pool.query('delete from project_members');
   await pool.query('delete from projects where id <> $1', [projectId]);
@@ -120,6 +124,38 @@ describeWorkerStoreContract({
           );
         }
         return id;
+      },
+      setProjectMode: async (projectId, mode) => {
+        await pool.query(
+          `insert into project_execution_settings (project_id, mode, prefer, assignee_window_seconds,
+                                                   offer_timeout_seconds)
+           values ($1, $2, 'server', 120, 86400)
+           on conflict (project_id) do update set mode = excluded.mode`,
+          [projectId, mode],
+        );
+      },
+      refuseRemoteCredential: async (projectId) => {
+        integrations += 1;
+        const integration = await pool.query<{ id: string }>(
+          `insert into integrations (org_id, type, provider, name, config)
+           values ($1, 'git', 'gitlab', $2, '{"run_credential": "static"}'::jsonb) returning id`,
+          [orgId, `git-${integrations}`],
+        );
+        await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
+          projectId,
+          integration.rows[0]?.id,
+        ]);
+      },
+      recordClaim: async (workerId, at) => {
+        const runId = await seedRun(workerId, 'running');
+        await pool.query(
+          `insert into run_offers (id, run_id, task_id, project_id, stage, attempt, kind, state,
+                                   lease_epoch, claimant_kind, offered_at, claimed_at, worker_id)
+           select gen_random_uuid(), r.id, r.task_id, r.project_id, 'implementation', 1, 'stage',
+                  'claimed', 1, 'worker', $2, $2, $3
+             from runs r where r.id = $1`,
+          [runId, at, workerId],
+        );
       },
       leaseExpired: async (runId) => {
         const row = await pool.query<{ expired: boolean }>(

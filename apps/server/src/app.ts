@@ -92,6 +92,7 @@ import {
   findProjectExecution,
   remoteRunCredentialRefused,
   serverClaimantRunning,
+  waitingOffers,
   writeProjectExecution,
 } from './queries/execution-queries.js';
 import { claimCommandAttempt, releaseCommandAttempt } from './queries/idempotency-queries.js';
@@ -657,10 +658,18 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       trustedClientIpHeader: config.trustedClientIpHeader,
       ...(options.workersNow === undefined ? {} : { now: options.workersNow }),
     });
+    /** The core's current run and egress images, what a worker's blockers compare with (S-22.19). */
+    const coreRunDigests = () => {
+      const release = workerRelease();
+      return release === null
+        ? null
+        : { run: release.digests.platform_runtime, egress: release.digests.platform_egress };
+    };
     await registerWorkerRoutes(app, {
       store: workerStore,
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
+      coreDigests: coreRunDigests,
       ...(options.workersNow === undefined ? {} : { now: options.workersNow }),
     });
     await registerWorkerProtocolRoutes(app, {
@@ -769,6 +778,10 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         serverClaimantRunning: async () => serverClaimantRunning(options.database),
         remoteRunCredentialRefused: async (projectId) =>
           remoteRunCredentialRefused(options.database, projectId),
+        workersFor: async (projectId, userId) =>
+          workerStore.listWorkersForProject(projectId, userId),
+        waitingOffers: async (projectId) => waitingOffers(options.database, projectId),
+        coreDigests: coreRunDigests,
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
         releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),

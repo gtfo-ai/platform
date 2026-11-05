@@ -33,3 +33,20 @@ export const userMayRunInProjectSql = (userColumn: string, projectColumn: string
     or exists (select 1 from project_members rm
                 where rm.user_id = ${userColumn} and rm.project_id = ${projectColumn}
                   and rm.role::text = any(${ROLE_ARRAY})))`;
+
+/**
+ * A predicate true when the project `projectColumn`'s **run credential keeps remote workers off its
+ * runs** (WP-282, TD-031 decision 5, Q124 (a)): a live git binding whose integration gives runs a
+ * static token or a deploy key without `remote_run_credential: allow`. **The claim's own clause**
+ * (`workerEligibleSql` in `postgres-run-offers.ts` asks `not` this), defined once so the reads that
+ * explain why a worker takes nothing (S-22.19) ask exactly what the claim asks.
+ */
+export const remoteRunCredentialRefusedSql = (projectColumn: string): string => `exists (
+           select 1
+             from bindings b
+             join integrations i on i.id = b.integration_id
+            where b.project_id = ${projectColumn}
+              and i.type = 'git'
+              and i.retired_at is null
+              and coalesce(i.config ->> 'run_credential', 'minted') <> 'minted'
+              and coalesce(i.config ->> 'remote_run_credential', 'deny') <> 'allow')`;

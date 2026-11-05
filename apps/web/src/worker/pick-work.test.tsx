@@ -292,6 +292,7 @@ describe('takeBlockedOf (WP-293)', () => {
       idle: true,
       auth: 'none',
     },
+    claim_blockers: [],
     server_time: '2026-11-05T10:00:00.000Z',
   };
   const now = Date.parse('2026-11-05T10:00:00.000Z');

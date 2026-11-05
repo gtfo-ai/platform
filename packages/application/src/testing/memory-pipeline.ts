@@ -241,6 +241,11 @@ export interface MemoryPipelineStore extends PipelineStore {
   setAssigneeOnline(projectId: Id, userId: Id, online: boolean): void;
   /** The holders of a fresh `server_claimants` row, as the claimant renewed them (WP-278). */
   serverClaimantHolders(): readonly string[];
+  /**
+   * Clears an offer's `server_from`, `workers_from` and `expires_at` — the shape of an offer written
+   * before WP-278 (backlog 887), which no writer of this build produces.
+   */
+  unrouteOffer(runId: Id): void;
 }
 
 /** One `run_commands` row as this store keeps it (migration 0060). */
@@ -1981,6 +1986,44 @@ export const createMemoryPipelineStore = (
           offeredAt: offer.offeredAt,
           expiresAt: offer.routing.expiresAt as IsoDateTime,
         })),
+    unroutedOpen: async (_tx, limit) =>
+      [...offers.values()]
+        .filter(
+          (offer) =>
+            offer.state === 'open' &&
+            offer.routing.serverFrom === null &&
+            offer.routing.workersFrom === null,
+        )
+        .sort((a, b) => Date.parse(a.offeredAt) - Date.parse(b.offeredAt))
+        .slice(0, limit)
+        .map((offer) => ({
+          offerId: offer.id,
+          runId: offer.runId,
+          projectId: offer.projectId,
+          kind: offer.kind,
+          offeredAt: offer.offeredAt,
+        })),
+    reroute: async (_tx, input) => {
+      const offer = [...offers.values()].find((candidate) => candidate.id === input.offerId);
+      if (
+        offer === undefined ||
+        offer.state !== 'open' ||
+        offer.routing.serverFrom !== null ||
+        offer.routing.workersFrom !== null
+      ) {
+        return false;
+      }
+      offers.set(offer.runId, {
+        ...offer,
+        routing: {
+          ...offer.routing,
+          serverFrom: input.routing.serverFrom,
+          workersFrom: input.routing.workersFrom,
+          expiresAt: input.routing.expiresAt,
+        },
+      });
+      return true;
+    },
     openWithoutPlan: async (_tx, limit) =>
       [...offers.values()]
         .filter((offer) => offer.state === 'open' && !plans.has(offer.runId))
@@ -2587,6 +2630,14 @@ export const createMemoryPipelineStore = (
       else onlineAssignees.delete(key);
     },
     serverClaimantHolders: () => [...serverClaimants],
+    unrouteOffer: (runId) => {
+      const offer = offers.get(runId);
+      if (offer === undefined) return;
+      offers.set(runId, {
+        ...offer,
+        routing: { ...offer.routing, serverFrom: null, workersFrom: null, expiresAt: null },
+      });
+    },
     writeEstimate: (taskId, estimate) => {
       const current = tasks.get(taskId);
       if (current === undefined) {

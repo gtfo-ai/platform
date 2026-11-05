@@ -1570,11 +1570,21 @@ than five minutes asks you to confirm that a second time. Name the machine and a
 machine collects its credential the next time it asks, within seconds.
 
 A machine its owner paused from the worker's own page reads **Paused by its owner**: it takes no new
-work until it is resumed there. That page — on the developer's machine only, at the address the
-worker prints — shows what the worker is doing and has **Cancel run**, which does exactly what the
-task page's *Cancel* does: the run stops and **its task is paused** until somebody resumes it.
-Stopping the worker's container is not a cancel; the platform treats it as a lost worker and plans
-the stage again — once: a second lost run of the same stage goes to *Needs human*, naming both runs
+work until it is resumed there. That page — on the developer's machine only, at
+`http://127.0.0.1:7357` — shows what the worker is doing and has **Cancel run**, which does exactly
+what the task page's *Cancel* does: the run stops and **its task is paused** until somebody resumes it.
+A line under its header says what the worker is doing in one sentence: **Taking work** only when
+nothing keeps it from work, otherwise **Connected, but not taking work** and why — its launcher is
+not answering (with **Try now**, which asks it again), it has no run images or an older build than the
+platform, Claude refused its sign-in — or the hold: *Paused by you*, *Draining: finishing 1 run…*, a
+usage limit. While it is held, **Resume** is the one button; otherwise **Pause** is beside the header
+and **Drain** is under **More**, with what each does written under it. The list of runs waiting for a
+worker says why it is empty, and an update is said to come by itself (the worker updates after its
+current run). The platform's `GET /api/workers` answers the same reasons for each worker
+(`claim_blockers`, in the same words), and a project's execution settings say which workers would take
+its runs and how many waiting runs no worker may take now.
+Stopping the worker's container is not a cancel; the platform gives the stage to another computer
+— once: a second lost run of the same stage goes to *Needs human*, naming both runs
 and the machines that held them.
 
 When a worker reaches its Claude **usage limit** the run it was doing ends — not as the task's failure

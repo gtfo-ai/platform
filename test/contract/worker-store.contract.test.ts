@@ -50,6 +50,9 @@ describeWorkerStoreContract({
         store.addProject({ id, key, name: `Project ${key}` }, members);
         return id;
       },
+      setProjectMode: async (projectId, mode) => store.setProjectMode(projectId, mode),
+      refuseRemoteCredential: async (projectId) => store.refuseRemoteCredential(projectId),
+      recordClaim: async (workerId, at) => store.recordClaim(workerId, at),
     };
   },
 });

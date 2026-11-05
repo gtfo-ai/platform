@@ -98,6 +98,9 @@ export const worker = (n: number, overrides: Partial<WorkerSummary> = {}): Worke
   concurrency: 3,
   running: [],
   last_update: null,
+  claim_blockers: [],
+  can_claim: true,
+  last_claimed_at: null,
   ...overrides,
 });
 

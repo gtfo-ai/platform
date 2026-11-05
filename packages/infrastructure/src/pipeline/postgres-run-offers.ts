@@ -44,7 +44,7 @@ import type {
 import { ACTIVE_RUN_STATUSES } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
-import { userMayRunInProjectSql } from './running-role.js';
+import { remoteRunCredentialRefusedSql, userMayRunInProjectSql } from './running-role.js';
 import { USER_MAY_ACT_SQL, workerUsableSql } from './worker-holder.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
@@ -148,15 +148,7 @@ const workerEligibleSql = (p: {
               and ${userMayRunInProjectSql('w.user_id', 'o.project_id')}
               and (o.workers_from <= ${p.now}::timestamptz
                    or (o.assignee_user_id = w.user_id and ${p.now}::timestamptz < o.assignee_until)))
-     and not exists (
-           select 1
-             from bindings b
-             join integrations i on i.id = b.integration_id
-            where b.project_id = o.project_id
-              and i.type = 'git'
-              and i.retired_at is null
-              and coalesce(i.config ->> 'run_credential', 'minted') <> 'minted'
-              and coalesce(i.config ->> 'remote_run_credential', 'deny') <> 'allow'))`;
+     and not ${remoteRunCredentialRefusedSql('o.project_id')})`;
 
 /**
  * **A worker's claim scope takes offer `o`** (WP-293, TD-031's 2026-11-05 claim-scope amendment,
@@ -586,6 +578,39 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       offeredAt: iso(row.offered_at) as IsoDateTime,
       expiresAt: iso(row.expires_at) as IsoDateTime,
     }));
+  },
+  unroutedOpen: async (tx, limit) => {
+    const { rows } = await sqlOf(tx).query<{
+      id: string;
+      run_id: string;
+      project_id: string;
+      kind: RunOfferKind;
+      offered_at: Date;
+    }>(
+      `select id, run_id, project_id, kind, offered_at
+         from run_offers
+        where state = 'open' and server_from is null and workers_from is null
+        order by offered_at, id
+        limit $1`,
+      [limit],
+    );
+    return rows.map((row) => ({
+      offerId: row.id,
+      runId: row.run_id,
+      projectId: row.project_id,
+      kind: row.kind,
+      offeredAt: iso(row.offered_at) as IsoDateTime,
+    }));
+  },
+  reroute: async (tx, input) => {
+    const result = await sqlOf(tx).query(
+      `update run_offers
+          set server_from = $2::timestamptz, workers_from = $3::timestamptz,
+              expires_at = $4::timestamptz
+        where id = $1 and state = 'open' and server_from is null and workers_from is null`,
+      [input.offerId, input.routing.serverFrom, input.routing.workersFrom, input.routing.expiresAt],
+    );
+    return (result.rowCount ?? 0) > 0;
   },
   load: async (tx, runId) => {
     const { rows } = await sqlOf(tx).query<RunOfferRow>(

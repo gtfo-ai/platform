@@ -332,6 +332,58 @@ describe('the remote worker process (WP-283 (1), (3))', () => {
     );
   });
 
+  it('says its launcher is not answering until it does, then takes work, with no restart (S-22.19, R-L3)', async () => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    writeFileSync(path.join(stateDir, CREDENTIAL_FILE), `${CREDENTIAL}\n`, { mode: 0o600 });
+    const core = fakeCore();
+    let up = false;
+    worker = await startRemoteWorker({
+      config: config(stateDir),
+      coreFetch: core.fetch,
+      // A launcher that comes up after its worker (the self-update race).
+      launcher: {
+        health: async () => {
+          if (!up) throw new Error('connect ECONNREFUSED launcher:7780');
+          return { images: { run: DIGEST, egress: DIGEST } };
+        },
+      } as unknown as launcherAdapters.LauncherControlClient,
+      launcherProbeTimeoutMs: 20,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
+    });
+    await until('connected, its launcher refused', () => {
+      const local = worker?.localState();
+      return local?.connection === 'connected' && local.claim_blockers.length > 0;
+    });
+    expect(worker.localState().claim_blockers).toEqual(['launcher_unreachable']);
+    up = true;
+    await until(
+      'the page says it takes work',
+      () => worker?.localState().claim_blockers.length === 0,
+    );
+    expect(core.verbs.filter((verb) => verb === 'handshake')).toHaveLength(1);
+    expect(worker.localState()).toMatchObject({ connection: 'connected', launcher: 'ok' });
+  });
+
+  it('names a hold, and another build’s images, in the local blockers (S-22.19)', async () => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    writeFileSync(path.join(stateDir, CREDENTIAL_FILE), `${CREDENTIAL}\n`, { mode: 0o600 });
+    const core = fakeCore();
+    const OLD = `sha256:${'0'.repeat(64)}`;
+    worker = await startRemoteWorker({
+      config: { ...config(stateDir), imageDigests: [OLD] },
+      coreFetch: core.fetch,
+      launcher: {
+        health: async () => ({ images: { run: OLD, egress: OLD } }),
+      } as unknown as launcherAdapters.LauncherControlClient,
+      sleep: async () => {},
+    });
+    const address = await worker.listen();
+    await until('a claim', () => core.verbs.includes('claims'));
+    expect(worker.localState().claim_blockers).toEqual(['images_outdated']);
+    await fetch(`${address}/internal/drain`, { method: 'POST' });
+    expect(worker.localState().claim_blockers).toEqual(['draining', 'images_outdated']);
+  });
+
   it('reuses a stored credential, and stops claiming when the core refuses it (revoked)', async () => {
     const stateDir = mkdtempSync(path.join(scratch, 'state-'));
     const core = fakeCore({ handshake: 401 });

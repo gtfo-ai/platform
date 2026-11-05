@@ -9,6 +9,7 @@ import {
   runTerminalReasonSchema,
   transcriptEventSchema,
   WORKER_LOCAL_API_PREFIX,
+  workerClaimBlockerSchema,
   workerLocalCancelResponseSchema,
   workerLocalClaimScopeSchema,
   workerLocalCoreCheckResponseSchema,
@@ -28,6 +29,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createLocalClient, LocalCallError, takeToken } from './client.js';
 import {
   CANCEL,
+  CLAIM_BLOCKERS,
   CLAIM_SCOPE,
   CONNECTIONS,
   CORE_CHECK,
@@ -225,6 +227,7 @@ const STATE = {
     idle: false,
     auth: 'none',
   },
+  claim_blockers: ['not_set_up'],
   server_time: '2026-11-05T10:05:00.000Z',
 };
 
@@ -292,6 +295,7 @@ describe('the page’s boundary check against the worker’s schemas (WP-292)', 
     expect(sorted(SIGN_IN_PHASES)).toEqual(sorted(workerLocalSignInPhaseSchema.options));
     expect(sorted(SIGN_IN_FAILURES)).toEqual(sorted(workerLocalSignInFailureSchema.options));
     expect(sorted(UI_AUTHS)).toEqual(sorted(workerUiAuthSchema.options));
+    expect(sorted(CLAIM_BLOCKERS)).toEqual(sorted(workerClaimBlockerSchema.options));
     expect(HOOKS.length).toBeGreaterThan(0);
     expect(Object.keys(workerLocalStateSchema.shape.core_protocol.unwrap().shape).sort()).toEqual([
       'accepted',

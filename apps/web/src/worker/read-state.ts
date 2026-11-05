@@ -25,7 +25,7 @@ import type {
   WorkerLocalState,
   WorkerLocalTakeResponse,
 } from '@platform/contracts';
-import { ROLE_LABEL, TERMINAL_REASON_LABEL } from '../ui/humanize.js';
+import { ROLE_LABEL, TERMINAL_REASON_LABEL, WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 
 /** The local verbs' prefix — `WORKER_LOCAL_API_PREFIX`, held equal by the test. */
 export const LOCAL_API_PREFIX = '/api/local';
@@ -70,6 +70,8 @@ const object = (keys: Record<string, Spec>): Spec => ({ t: 'object', keys });
 /** The agent roles — `ROLE_LABEL`'s keys, which the test holds to `agentRoleSchema`. */
 export const ROLES: readonly string[] = Object.keys(ROLE_LABEL);
 export const TERMINAL_REASONS: readonly string[] = Object.keys(TERMINAL_REASON_LABEL);
+/** Why a worker takes no work (S-22.19) — the words' keys, which the test holds to the zod enum. */
+export const CLAIM_BLOCKERS: readonly string[] = Object.keys(WORKER_CLAIM_BLOCKER_WORDS);
 export const CONNECTIONS = [
   'needs_platform',
   'needs_claude',
@@ -283,6 +285,11 @@ export const STATE: Spec = object({
     idle: { t: 'boolean' },
     auth: { t: 'enum', values: UI_AUTHS },
   }),
+  claim_blockers: {
+    t: 'array',
+    of: { t: 'enum', values: CLAIM_BLOCKERS },
+    max: CLAIM_BLOCKERS.length,
+  },
   server_time: datetime,
 });
 

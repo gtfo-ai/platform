@@ -11,12 +11,15 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
+import type { ProjectWorkerRow } from '../queries/worker-queries.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
 import {
   executionDocument,
+  projectWorkerOf,
   REMOTE_CREDENTIAL_REFUSED_NOTICE,
   registerProjectExecutionRoutes,
   SET_EXECUTION_ACTION,
+  waitingOf,
 } from './project-execution.js';
 
 const PROJECT = '00000000-0000-4000-8000-000000002781';
@@ -33,10 +36,51 @@ const BODY = {
 
 interface World {
   role: UserRole | null;
+  /** The organisation role (`users.role`): an administrator sees every worker (S-22.19). */
+  orgRole: UserRole;
   exists: boolean;
   stored: ExecutionSettings | null;
   claimant: boolean;
+  workers: ProjectWorkerRow[];
+  /** Whose workers the route asked for: `null` every worker. */
+  askedFor: (string | null)[];
+  offers: { open: number; never: number; later: number };
 }
+
+const RUN_IMAGE = `sha256:${'a'.repeat(64)}`;
+const EGRESS_IMAGE = `sha256:${'b'.repeat(64)}`;
+const OTHER_USER = '00000000-0000-4000-8000-000000002784';
+
+/** A connected worker holding the core's images, whose user may run in {@link PROJECT}. */
+const workerRow = (overrides: Partial<ProjectWorkerRow> = {}): ProjectWorkerRow => ({
+  id: '00000000-0000-4000-8000-0000000027a1',
+  name: 'alice-laptop',
+  userId: USER,
+  userEmail: 'alice@example.test',
+  userName: 'Alice',
+  createdAt: new Date('2026-11-05T09:00:00.000Z'),
+  lastSeenAt: new Date(),
+  protocolVersion: 3,
+  imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
+  state: 'active',
+  revokedAt: null,
+  pausedUntil: null,
+  pausedReason: null,
+  pausedUntilEstimated: false,
+  manuallyPausedAt: null,
+  claimProjects: null,
+  concurrency: 1,
+  running: [],
+  claimFacts: {
+    online: true,
+    usagePaused: false,
+    hold: null,
+    eligibleProjects: 1,
+    lastClaimedAt: null,
+  },
+  mayRunInProject: true,
+  ...overrides,
+});
 
 let app: FastifyInstance;
 let world: World;
@@ -47,7 +91,16 @@ const build = async (): Promise<void> => {
   writes = [];
   actions = [];
   const attempts = new Map<string, { bodyDigest: string | null; params: JsonObject }>();
-  world = { role: 'admin', exists: true, stored: null, claimant: true };
+  world = {
+    role: 'admin',
+    orgRole: 'member',
+    exists: true,
+    stored: null,
+    claimant: true,
+    workers: [],
+    askedFor: [],
+    offers: { open: 0, never: 0, later: 0 },
+  };
   app = fastify();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -61,7 +114,7 @@ const build = async (): Promise<void> => {
       email: 'admin@example.test',
       name: 'Admin',
       // The organisation role is `member` so the project role is what decides (`rbac.ts`).
-      role: 'member',
+      role: world.orgRole,
       sessionId: 'session-1',
     };
   });
@@ -78,6 +131,12 @@ const build = async (): Promise<void> => {
         return { status: 'written', before };
       },
       serverClaimantRunning: async () => world.claimant,
+      workersFor: async (_projectId, userId) => {
+        world.askedFor.push(userId);
+        return world.workers.filter((row) => userId === null || row.userId === userId);
+      },
+      waitingOffers: async () => world.offers,
+      coreDigests: () => ({ run: RUN_IMAGE, egress: EGRESS_IMAGE }),
       ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
         actions.push({ action: input.action, params: input.params });
@@ -111,6 +170,11 @@ describe('GET /api/projects/:id/execution', () => {
       stored: false,
       server_claimant: 'running',
       notice: null,
+      workers: [],
+      waiting: {
+        open: 0,
+        closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
+      },
     });
   });
 
@@ -228,5 +292,111 @@ describe('the execution setting says why remote workers take none of a project�
       offerTimeoutSeconds: 86_400,
     } as ExecutionSettings;
     expect(executionDocument(serverOnly, true, true).notice ?? '').not.toContain('Remote workers');
+  });
+});
+
+describe('who would run this project, and what waits (S-22.19, N2)', () => {
+  const input = {
+    projectId: PROJECT,
+    settings: {
+      mode: 'hybrid',
+      prefer: 'server',
+      fallbackAfterSeconds: null,
+      assigneeWindowSeconds: 120,
+      offerTimeoutSeconds: 86_400,
+    } as ExecutionSettings,
+    credentialRefused: false,
+    coreDigests: { run: RUN_IMAGE, egress: EGRESS_IMAGE },
+    now: new Date(),
+  };
+
+  it('takes the runs by itself, only when picked, or not at all — and says why', () => {
+    expect(projectWorkerOf(workerRow(), input)).toMatchObject({
+      takes: 'automatically',
+      blockers: [],
+      project_reason: null,
+    });
+    expect(
+      projectWorkerOf(workerRow({ claimProjects: [{ id: PROJECT, key: 'ACME' }] }), input).takes,
+    ).toBe('automatically');
+    // Pick only, and a scope that names another project: the owner may still pick its runs.
+    for (const claimProjects of [[], [{ id: OTHER_USER, key: 'OPS' }]]) {
+      expect(projectWorkerOf(workerRow({ claimProjects }), input)).toMatchObject({
+        takes: 'picked_only',
+        project_reason: 'scope_excludes',
+      });
+    }
+    expect(projectWorkerOf(workerRow({ mayRunInProject: false }), input)).toMatchObject({
+      takes: 'no',
+      project_reason: 'role',
+    });
+    expect(projectWorkerOf(workerRow(), { ...input, credentialRefused: true }).project_reason).toBe(
+      'credential_refused',
+    );
+    expect(
+      projectWorkerOf(workerRow(), {
+        ...input,
+        settings: { ...input.settings, mode: 'server_only' },
+      }),
+    ).toMatchObject({ takes: 'no', project_reason: 'server_only' });
+    // The worker's own blocker is `no` whatever the project says — and not the project's to name.
+    expect(
+      projectWorkerOf(workerRow({ imageDigests: [`sha256:${'0'.repeat(64)}`] }), input),
+    ).toMatchObject({ takes: 'no', blockers: ['images_outdated'], project_reason: null });
+    expect(
+      projectWorkerOf(
+        workerRow({
+          claimFacts: {
+            online: true,
+            usagePaused: false,
+            hold: null,
+            eligibleProjects: 0,
+            lastClaimedAt: null,
+          },
+        }),
+        input,
+      ).blockers,
+    ).toEqual([]);
+  });
+
+  it('counts each waiting run under the first reason no worker may take it', () => {
+    expect(waitingOf({ open: 5, never: 1, later: 2 }, false)).toEqual({
+      open: 5,
+      closed_to_workers: { credential_refused: 0, server_only: 1, server_first: 2 },
+    });
+    expect(waitingOf({ open: 5, never: 1, later: 2 }, true)).toEqual({
+      open: 5,
+      closed_to_workers: { credential_refused: 4, server_only: 1, server_first: 0 },
+    });
+  });
+
+  it('lists every worker to an administrator and only your own to anyone else', async () => {
+    world.workers = [
+      workerRow(),
+      workerRow({
+        id: '00000000-0000-4000-8000-0000000027a2',
+        name: 'bob-desktop',
+        userId: OTHER_USER,
+      }),
+    ];
+    world.offers = { open: 3, never: 1, later: 0 };
+    world.role = 'viewer';
+    const own = (await app.inject({ method: 'GET', url: URL })).json();
+    expect(own.workers.map((worker: { name: string }) => worker.name)).toEqual(['alice-laptop']);
+    expect(own.workers[0]).toMatchObject({
+      takes: 'automatically',
+      owner: { id: USER, name: 'Alice', email: 'alice@example.test' },
+    });
+    expect(own.waiting).toEqual({
+      open: 3,
+      closed_to_workers: { credential_refused: 0, server_only: 1, server_first: 0 },
+    });
+    world.orgRole = 'admin';
+    const all = (await app.inject({ method: 'GET', url: URL })).json();
+    expect(all.workers.map((worker: { name: string }) => worker.name)).toEqual([
+      'alice-laptop',
+      'bob-desktop',
+    ]);
+    expect(world.askedFor).toEqual([USER, null]);
   });
 });

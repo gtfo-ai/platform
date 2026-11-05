@@ -11,7 +11,7 @@
  * a `task_asks` row `pending` for ever. Nothing re-emits it, nothing retries it, and nothing logs
  * it — `EventBus` logs only the case where a callback *threw*.
  *
- * ## Fifteen sites, thirteen of them here, and the other two named rather than silently absent
+ * ## Sixteen sites, fourteen of them here, and the other two named rather than silently absent
  *
  * | site | entry | what is lost | where the recovery is |
  * |---|---|---|---|
@@ -29,6 +29,7 @@
  * | a knowledge apply that failed or never ran (WP-124) | **366** | a change a human accepted, never committed; the proposal reads approved for ever | **here** — `knowledge_apply`, in `./knowledge-apply.ts`: one apply per project under a mark, then `apply_failed` with a reason on the proposal queue |
  * | a discovery run's recording that failed or never ran (WP-124) | **366** | a paid run's readiness evaluation and drafted pages | **here** — `discovery_record`, in `./discovery-record.ts`: the recording job once more under a mark, then the discovery task escalates with a brief |
  * | a bound-and-escalate job whose last try **expired** rather than threw (WP-156) | **421** | a person waits on an escalation the wrapper never made: pg-boss fails an expired job without its handler throwing | **here** — `expired_job`, in `./expired-job.ts`: the task escalated once per job id under a mark, never re-enqueued |
+ * | an offer written before WP-278 (S-22.19) | **887** | a worker reads its null `workers_from` as *never* and it has no `expires_at`: on a core with no server runner it waits for ever | **here** — `run_offer_reroute`, in `./offer-timeout.ts`: routed from the project's effective setting, once, bounded by the columns it writes |
  * | an agent run's offer nobody claimed (WP-278) | — | the task's stage entry, held by an open offer for ever (a `workers_only` project with no worker, a `server_only` one with no runner) | **here** — `run_offer_timeout`, in `./offer-timeout.ts`: past its `expires_at` the offer is withdrawn, its run cancelled and the task escalated with *no claimant took this run* (an ask is refused), never re-offered |
  * | a create answer the runner never received (WP-103) | **286** | a run container, sidecar, network and control directory nobody holds a handle for | `./orphan-workspaces.ts`, on **the runner's own timer** at this pass's interval — it needs the launcher client, which only a process configured to run agents holds, while this pass rides a job any worker takes |
  *
@@ -174,7 +175,12 @@ import {
   type StrandedApply,
 } from './knowledge-apply.js';
 import type { NotificationRepostSite, UndeliveredNotification } from './notification-repost.js';
-import { type OfferTimeoutRecoverySite, recoverExpiredOffers } from './offer-timeout.js';
+import {
+  type OfferRerouteRecoverySite,
+  type OfferTimeoutRecoverySite,
+  recoverExpiredOffers,
+  rerouteUnroutedOffers,
+} from './offer-timeout.js';
 import {
   enqueueRunCredentialRevocation,
   type RunCredentialRecoverySite,
@@ -457,6 +463,14 @@ export interface StrandedRecoveryOptions {
    * reason `runs` is: its ending escalates through the pipeline's executors.
    */
   readonly offers?: OfferTimeoutRecoverySite;
+  /**
+   * The re-route of offers written before WP-278 (backlog 887, `./offer-timeout.ts`): an open offer
+   * with neither `*_from`, routed from its project's effective setting. Run before the timeout row,
+   * so a re-routed offer's `expires_at` is the timeout row's from then on.
+   *
+   * **Absent is "such an offer keeps waiting"** — every build before S-22.19.
+   */
+  readonly unroutedOffers?: OfferRerouteRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -1077,6 +1091,24 @@ export const runStrandedRecovery = async (
       site: 'deadline_reminder',
       found: deadlines.reminderFound,
       reEnqueued: deadlines.reminded,
+      ended: 0,
+    });
+  }
+
+  if (options.unroutedOffers !== undefined) {
+    // Not an ending and not a re-enqueue: a routing write, bounded by the columns it writes.
+    const unrouted = await rerouteUnroutedOffers(
+      {
+        unitOfWork: options.unitOfWork,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      },
+      options.unroutedOffers,
+      { now, limit },
+    );
+    sites.push({
+      site: 'run_offer_reroute',
+      found: unrouted.found,
+      reEnqueued: unrouted.rerouted,
       ended: 0,
     });
   }

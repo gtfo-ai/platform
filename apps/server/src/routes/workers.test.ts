@@ -48,7 +48,11 @@ interface World {
 let app: FastifyInstance | undefined;
 
 const build = async (
-  options: { trustProxy?: TrustProxySetting; header?: string | null } = {},
+  options: {
+    trustProxy?: TrustProxySetting;
+    header?: string | null;
+    coreDigests?: () => { run: string; egress: string } | null;
+  } = {},
 ): Promise<{ app: FastifyInstance; store: MemoryWorkerStore; world: World }> => {
   const store = createMemoryWorkerStore();
   for (const [id, email] of [
@@ -92,7 +96,12 @@ const build = async (
     trustedClientIpHeader: options.header ?? null,
     now,
   });
-  await registerWorkerRoutes(instance, { store, projectRole: async () => null, now });
+  await registerWorkerRoutes(instance, {
+    store,
+    projectRole: async () => null,
+    now,
+    ...(options.coreDigests === undefined ? {} : { coreDigests: options.coreDigests }),
+  });
   app = instance;
   return { app: instance, store, world };
 };
@@ -421,6 +430,109 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
     const all = (await instance.inject({ method: 'GET', url: '/api/workers' })).json();
     const bobs = all.items.find((item: { id: string }) => item.id === bob.workerId);
     expect(bobs.running).toEqual([{ run_id: bobsRun, task_id: TASK, project_id: PROJECT }]);
+  });
+
+  it('says why each worker takes no work, in the vocabulary’s order, and when it last claimed (S-22.19)', async () => {
+    const RUN_IMAGE = `sha256:${'a'.repeat(64)}`;
+    const EGRESS_IMAGE = `sha256:${'b'.repeat(64)}`;
+    const OLD_IMAGE = `sha256:${'0'.repeat(64)}`;
+    let digests: { run: string; egress: string } | null = { run: RUN_IMAGE, egress: EGRESS_IMAGE };
+    const { app: instance, store, world } = await build({ coreDigests: () => digests });
+    const alice = await register(instance, world, ALICE);
+    const read = async () => {
+      world.actor = { userId: ALICE, role: 'member' };
+      const [item] = (await instance.inject({ method: 'GET', url: '/api/workers' })).json().items;
+      return item as {
+        claim_blockers: string[];
+        can_claim: boolean;
+        last_claimed_at: string | null;
+      };
+    };
+    // Approved and never heard from: not connected, no images reported, no project for it.
+    expect(await read()).toMatchObject({
+      claim_blockers: ['offline', 'images_missing', 'no_eligible_project'],
+      can_claim: false,
+      last_claimed_at: null,
+    });
+    store.addProject({ id: PROJECT, key: 'ACME', name: 'Acme' }, [ALICE]);
+    await store.recordContact({
+      workerId: alice.workerId,
+      protocolVersion: 3,
+      imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
+    });
+    expect(await read()).toMatchObject({ claim_blockers: [], can_claim: true });
+
+    // Another build's images than the core's — and nothing said while the core cannot name its own.
+    await store.recordContact({
+      workerId: alice.workerId,
+      protocolVersion: 3,
+      imageDigests: [OLD_IMAGE, EGRESS_IMAGE],
+    });
+    expect((await read()).claim_blockers).toEqual(['images_outdated']);
+    digests = null;
+    expect((await read()).claim_blockers).toEqual([]);
+    digests = { run: RUN_IMAGE, egress: EGRESS_IMAGE };
+    await store.recordContact({
+      workerId: alice.workerId,
+      protocolVersion: 1,
+      imageDigests: [RUN_IMAGE, EGRESS_IMAGE],
+    });
+    expect((await read()).claim_blockers).toEqual(['protocol_outdated']);
+    await store.recordContact({ workerId: alice.workerId, protocolVersion: 3, imageDigests: null });
+
+    // The owner's hold: a drain's when its newest pause row says so, the owner's pause otherwise.
+    const hold = async (paused: boolean, via: 'worker_ui' | 'worker_ui_drain') =>
+      store.setManualPause({ workerId: alice.workerId, paused, via, now: new Date(world.clock) });
+    await hold(true, 'worker_ui_drain');
+    expect((await read()).claim_blockers).toEqual(['draining']);
+    await hold(false, 'worker_ui');
+    await hold(true, 'worker_ui');
+    expect((await read()).claim_blockers).toEqual(['paused']);
+    await hold(false, 'worker_ui');
+    store.setPausedUntil(alice.workerId, new Date(Date.now() + 3_600_000));
+    expect((await read()).claim_blockers).toEqual(['usage_limited']);
+    store.setPausedUntil(alice.workerId, null);
+
+    // No project gives it work: its only one runs on the server only, or keeps its token off workers.
+    store.setProjectMode(PROJECT, 'server_only');
+    expect((await read()).claim_blockers).toEqual(['no_eligible_project']);
+    store.setProjectMode(PROJECT, 'workers_only');
+    expect((await read()).can_claim).toBe(true);
+    store.refuseRemoteCredential(PROJECT);
+    expect((await read()).claim_blockers).toEqual(['no_eligible_project']);
+
+    const claimedAt = new Date(T0 + 60_000);
+    store.recordClaim(alice.workerId, claimedAt);
+    expect((await read()).last_claimed_at).toBe(claimedAt.toISOString());
+
+    world.actor = { userId: ALICE, role: 'member' };
+    await instance.inject({ method: 'DELETE', url: `/api/workers/${alice.workerId}` });
+    expect((await read()).claim_blockers).toEqual(['revoked']);
+  });
+
+  it('counts a pick-only worker’s every project, and a scope naming none that admits workers as none (S-22.19)', async () => {
+    const { app: instance, store, world } = await build();
+    const alice = await register(instance, world, ALICE);
+    const OTHER = '00000000-0000-4000-8000-0000002315b2';
+    store.addProject({ id: PROJECT, key: 'ACME', name: 'Acme' }, [ALICE]);
+    store.addProject({ id: OTHER, key: 'OPS', name: 'Ops' }, [ALICE]);
+    store.setProjectMode(OTHER, 'server_only');
+    await store.recordContact({
+      workerId: alice.workerId,
+      protocolVersion: 3,
+      imageDigests: [`sha256:${'a'.repeat(64)}`],
+    });
+    const blockers = async () => {
+      world.actor = { userId: ALICE, role: 'member' };
+      return (await instance.inject({ method: 'GET', url: '/api/workers' })).json().items[0]
+        .claim_blockers;
+    };
+    await store.setClaimScope({ workerId: alice.workerId, projectIds: [] });
+    expect(await blockers()).toEqual([]);
+    await store.setClaimScope({ workerId: alice.workerId, projectIds: [OTHER] });
+    expect(await blockers()).toEqual(['no_eligible_project']);
+    await store.setClaimScope({ workerId: alice.workerId, projectIds: [OTHER, PROJECT] });
+    expect(await blockers()).toEqual([]);
   });
 
   it('revokes: the credential stops authenticating and the live runs’ leases expire, once', async () => {
