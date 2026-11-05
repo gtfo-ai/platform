@@ -1,0 +1,207 @@
+/*
+ * The office bot's motion (`ui/bot/bot.tsx`, layers in `ui/bot/poses.ts`). Imported by `styles.css`.
+ *
+ * Every animated layer is one `bot-*` class with a `step-end` opacity loop, so exactly one frame of
+ * a pair shows at a time and the pixels never blend. The base styles show each loop's **first**
+ * frame — typing A, the eyes open, the small `Z`, the first thought dot, the `!`, steam A — which is
+ * what a still bot (`.bot-static`) and `prefers-reduced-motion: reduce` get.
+ *
+ * `.bot-phase-1` … `.bot-phase-3` start every loop of one bot part-way through (a negative delay,
+ * so nothing waits), at offsets chosen not to divide any loop's period, so neighbouring seats do
+ * not move together.
+ */
+@keyframes bot-typing-a {
+  0% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes bot-typing-b {
+  0% {
+    opacity: 0;
+  }
+  50%,
+  100% {
+    opacity: 1;
+  }
+}
+
+/* Eyes shut for 3 % of 4.5 s: about 0.14 s. */
+@keyframes bot-blink {
+  0% {
+    opacity: 0;
+  }
+  94% {
+    opacity: 1;
+  }
+  97%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* The small `Z`, then the big one above it, then a pause with neither. */
+@keyframes bot-z-small {
+  0% {
+    opacity: 1;
+  }
+  70%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes bot-z-big {
+  0% {
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  70%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* One dot more per frame; each frame holds the dots before it, so one shows at a time. */
+@keyframes bot-thought-1 {
+  0% {
+    opacity: 1;
+  }
+  33.333%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes bot-thought-2 {
+  0% {
+    opacity: 0;
+  }
+  33.333% {
+    opacity: 1;
+  }
+  66.667%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes bot-thought-3 {
+  0% {
+    opacity: 0;
+  }
+  66.667%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes bot-exclaim {
+  0% {
+    opacity: 1;
+  }
+  65%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes bot-steam-a {
+  0% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes bot-steam-b {
+  0% {
+    opacity: 0;
+  }
+  50%,
+  100% {
+    opacity: 1;
+  }
+}
+
+.bot-typing-b,
+.bot-blink,
+.bot-z-big,
+.bot-thought-2,
+.bot-thought-3,
+.bot-steam-b {
+  opacity: 0;
+}
+
+.bot-typing-a {
+  animation: bot-typing-a 0.8s step-end infinite;
+}
+.bot-typing-b {
+  animation: bot-typing-b 0.8s step-end infinite;
+}
+.bot-blink {
+  animation: bot-blink 4.5s step-end infinite;
+}
+.bot-z-small {
+  animation: bot-z-small 3s step-end infinite;
+}
+.bot-z-big {
+  animation: bot-z-big 3s step-end infinite;
+}
+.bot-thought-1 {
+  animation: bot-thought-1 2.4s step-end infinite;
+}
+.bot-thought-2 {
+  animation: bot-thought-2 2.4s step-end infinite;
+}
+.bot-thought-3 {
+  animation: bot-thought-3 2.4s step-end infinite;
+}
+.bot-exclaim {
+  animation: bot-exclaim 1.2s step-end infinite;
+}
+.bot-steam-a {
+  animation: bot-steam-a 1s step-end infinite;
+}
+.bot-steam-b {
+  animation: bot-steam-b 1s step-end infinite;
+}
+
+/* More specific than a layer's class, so only the delay changes. */
+.bot-phase-1 g {
+  animation-delay: -0.37s;
+}
+.bot-phase-2 g {
+  animation-delay: -1.13s;
+}
+.bot-phase-3 g {
+  animation-delay: -2.29s;
+}
+
+.bot-static g {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bot-typing-a,
+  .bot-typing-b,
+  .bot-blink,
+  .bot-z-small,
+  .bot-z-big,
+  .bot-thought-1,
+  .bot-thought-2,
+  .bot-thought-3,
+  .bot-exclaim,
+  .bot-steam-a,
+  .bot-steam-b {
+    animation: none;
+  }
+}

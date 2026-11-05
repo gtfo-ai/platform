@@ -21,24 +21,15 @@
  * cells. A sprite pixel is {@link PEEK_BOT_PIXEL_CSS_PX} CSS px — the dither field's cell — so the
  * bot sits on the same grid as the field behind it. The bottom row is the block's top edge.
  */
+import { SPRITE_INKS, type SpriteRun, spriteRuns } from '../ui/bot/sprite.js';
 
 /** One sprite pixel, in CSS px: the dither field's `DITHER_CELL_CSS_PX`. */
 export const PEEK_BOT_PIXEL_CSS_PX = 5;
 export const PEEK_BOT_COLS = 37;
 export const PEEK_BOT_ROWS = 35;
 
-/**
- * Each character's Tailwind fill class, over the `--signin-*` tokens. Literal class names, so
- * Tailwind's scanner finds them.
- */
-export const PEEK_BOT_INKS = {
-  N: 'fill-signin-night',
-  L: 'fill-signin-lit',
-  D: 'fill-signin-edge',
-  S: 'fill-signin-muted',
-  W: 'fill-signin-text',
-  E: 'fill-signin-beacon',
-} as const;
+/** Each character's Tailwind fill class: the shared sprite inks over the `--signin-*` tokens. */
+export const PEEK_BOT_INKS = SPRITE_INKS;
 
 export type PeekBotInk = keyof typeof PEEK_BOT_INKS;
 
@@ -170,46 +161,11 @@ export const PEEK_BOT_BLINK: readonly string[] = [
 ];
 
 /** A horizontal run of same-ink pixels: one `<rect>`. */
-export interface PeekBotRun {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly ink: PeekBotInk;
-}
-
-const isInk = (char: string): char is PeekBotInk => Object.hasOwn(PEEK_BOT_INKS, char);
+export type PeekBotRun = SpriteRun;
 
 /**
- * A layer as horizontal runs, so a frame is about a hundred rects rather than a thousand. Throws on
- * a row wider than the grid, a layer taller than it, or a character that is neither `.` nor an ink:
- * a typo in a hand-edited grid should fail the unit tier rather than draw a hole.
+ * A layer as horizontal runs (`ui/bot/sprite.ts`'s `spriteRuns` over this grid). Throws on a row
+ * wider than the grid, a layer taller than it, or a character that is neither `.` nor an ink.
  */
-export const peekBotRuns = (layer: readonly string[]): PeekBotRun[] => {
-  if (layer.length > PEEK_BOT_ROWS) {
-    throw new Error(`peek-bot layer has ${layer.length} rows, the grid has ${PEEK_BOT_ROWS}`);
-  }
-  const runs: PeekBotRun[] = [];
-  layer.forEach((row, y) => {
-    if (row.length > PEEK_BOT_COLS) {
-      throw new Error(`peek-bot row ${y} is ${row.length} wide, the grid is ${PEEK_BOT_COLS}`);
-    }
-    let x = 0;
-    while (x < row.length) {
-      const char = row[x] ?? '.';
-      if (char === '.') {
-        x += 1;
-        continue;
-      }
-      if (!isInk(char)) {
-        throw new Error(`peek-bot row ${y} has ${JSON.stringify(char)} at column ${x}`);
-      }
-      let end = x + 1;
-      while (row[end] === char) {
-        end += 1;
-      }
-      runs.push({ x, y, width: end - x, ink: char });
-      x = end;
-    }
-  });
-  return runs;
-};
+export const peekBotRuns = (layer: readonly string[]): PeekBotRun[] =>
+  spriteRuns(layer, PEEK_BOT_COLS, PEEK_BOT_ROWS, 'peek-bot');

@@ -64,8 +64,15 @@ Measured on an M3 Max (36 GB, MPS), ComfyUI 0.44.0 on port 8000 (the comfyui MCP
 ## What is not in the repository
 
 The four master renders and the two edits (PNG, ~0.8 MB each) are not committed — the repository
-holds no binaries, and `nul:check` refuses one not declared in `.gitattributes`. They regenerate from
+holds no binaries but the office poses' two reference sheets, and `nul:check` refuses one not
+declared in `.gitattributes`. They regenerate from
 the workflows (fixed seeds; MPS output can differ in the last bits between versions), and the
 frames that matter are already the grids in `peek-bot-sprite.ts`. To add a pose, regenerate the
 master from step 1, edit it in step 2 with the same "keep the exact same robot" prompt, and run step
 3 with the **same** `cut_y` and cell size so the new frame lands on the same grid.
+
+## The office poses
+
+The same character sitting at a desk, in eight poses for the pixel office, with its props, is the
+addendum [office-poses.md](office-poses.md); its workflows, scripts and raw grids are under
+`office/`.

@@ -210,6 +210,8 @@ describe('a comment stripper is recognised by its shape', () => {
       'the opening `/` of a regular-expression literal, blanked so a bracket in it does not unbalance the call matcher — it reads the scanner’s output, so comments are already gone (WP-249, moved by WP-256)',
     'apps/launcher/src/runtime.test.ts slashSlash':
       'the third slash of `unix:///path` in an error message',
+    'apps/web/src/ui/bot/bot.test.tsx slashStar':
+      "a **CSS** comment stripper over `bot.css`, so a rule's selector is read without the comment above it — another language than the scanner reads (S-23.3)",
   };
 
   it(

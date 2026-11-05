@@ -23,6 +23,8 @@
  * the new look without an edit.
  */
 @import "tailwindcss";
+/* The office bot's motion (`ui/bot/`), beside its components so the worker entry can share it. */
+@import "./ui/bot/bot.css";
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 

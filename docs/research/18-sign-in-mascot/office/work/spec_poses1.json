@@ -1,0 +1,46 @@
+{
+ "name": "01-poses-seed7",
+ "image": "mascot_sit_base.png",
+ "items": [
+  {
+   "prefix": "typing",
+   "seed": 7,
+   "prompt": "Keep the exact same robot, same pixel art style, same colors, same round helmet, dark visor, amber antenna ball, blue ear pods and amber chest light, same size and position, same sitting pose on an invisible chair facing the viewer, and the same flat pure green background. Both arms reach forward at chest height, both mitten hands held level in front of the body as if typing on a small laptop keyboard. Same glowing amber eyes looking down at the hands. Do not draw any chair, desk or floor. Everything else stays identical."
+  },
+  {
+   "prefix": "thinking",
+   "seed": 7,
+   "prompt": "Keep the exact same robot, same pixel art style, same colors, same round helmet, dark visor, amber antenna ball, blue ear pods and amber chest light, same size and position, same sitting pose on an invisible chair facing the viewer, and the same flat pure green background. One mitten hand is raised to its chin, the other arm folded across the body supporting that elbow, head tilted slightly up, glowing amber eyes looking upward, thinking hard. Do not draw any chair, desk or floor. Everything else stays identical."
+  },
+  {
+   "prefix": "sleeping",
+   "seed": 7,
+   "prompt": "Keep the exact same robot, same pixel art style, same colors, same round helmet, dark visor, amber antenna ball, blue ear pods and amber chest light, same size and position, same sitting pose on an invisible chair facing the viewer, and the same flat pure green background. The helmet is tilted to one side, the robot is dozing: the glowing eyes are closed, shown as two thin flat horizontal lines. Both hands rest limp in its lap. Do not draw any chair, desk or floor. Everything else stays identical."
+  },
+  {
+   "prefix": "raise_hand",
+   "seed": 7,
+   "prompt": "Keep the exact same robot, same pixel art style, same colors, same round helmet, dark visor, amber antenna ball, blue ear pods and amber chest light, same size and position, same sitting pose on an invisible chair facing the viewer, and the same flat pure green background. One arm is raised straight up high above the helmet, mitten hand open, like asking a question in class. The other hand rests on its knee. Same glowing amber eyes. Do not draw any chair, desk or floor. Everything else stays identical."
+  },
+  {
+   "prefix": "cheer",
+   "seed": 7,
+   "prompt": "Keep the exact same robot, same pixel art style, same colors, same round helmet, dark visor, amber antenna ball, blue ear pods and amber chest light, same size and position, same sitting pose on an invisible chair facing the viewer, and the same flat pure green background. Both arms are raised high above the helmet in a joyful victory cheer, mitten hands open. Same glowing amber eyes, happy. Do not draw any chair, desk or floor. Everything else stays identical."
+  },
+  {
+   "prefix": "confused",
+   "seed": 7,
+   "prompt": "Keep the exact same robot, same pixel art style, same colors, same round helmet, dark visor, amber antenna ball, blue ear pods and amber chest light, same size and position, same sitting pose on an invisible chair facing the viewer, and the same flat pure green background. One mitten hand scratches the side of the helmet, the head tilted, puzzled and confused. The other hand rests on its knee. Same glowing amber eyes. Do not draw any chair, desk or floor. Everything else stays identical."
+  },
+  {
+   "prefix": "slumped",
+   "seed": 7,
+   "prompt": "Keep the exact same robot, same pixel art style, same colors, same round helmet, dark visor, amber antenna ball, blue ear pods and amber chest light, same size and position, same sitting pose on an invisible chair facing the viewer, and the same flat pure green background. The robot slumps forward sadly, shoulders and helmet drooping down, arms hanging limp between its knees, defeated. The glowing eyes look down. Do not draw any chair, desk or floor. Everything else stays identical."
+  },
+  {
+   "prefix": "sipping",
+   "seed": 7,
+   "prompt": "Keep the exact same robot, same pixel art style, same colors, same round helmet, dark visor, amber antenna ball, blue ear pods and amber chest light, same size and position, same sitting pose on an invisible chair facing the viewer, and the same flat pure green background. Both mitten hands hold a white coffee mug in front of the visor at chest height, taking a relaxed sip. Same glowing amber eyes. Do not draw any chair, desk or floor. Everything else stays identical."
+  }
+ ]
+}
