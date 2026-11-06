@@ -1334,7 +1334,7 @@ no comments (`ticket-poll.ts:97`), and GitLab notes are normalised only on merge
 1. **Ownership is stored on the task** (migration **0104**, additive). `tasks.owner_user_id uuid references users on
    delete set null`, `owner_source` (`tracker` | `platform`), `owner_changed_at`, and `ticket_assignee jsonb`. The last
    column holds the last-seen tracker assignee: `{provider, external_id, display_name}` (the name redacted through the
-   binding's redactor and bounded to 128 chars, BD-022; the fourth stored sink of provider text) and `platform: bool`,
+   binding's redactor and bounded to 128 chars, BD-022: one more stored sink of provider text) and `platform: bool`,
    which is true for a binding's own account (`bindings.account_identity`, 0090) or a `machine` identity. `null` means
    unassigned. Every owner write goes through one narrow `TaskRepository.saveOwner` (compare-and-set on the previous
    owner; a new writer in `tasks-column-ownership.test.ts`). Each write is decided by a pure domain function and records
