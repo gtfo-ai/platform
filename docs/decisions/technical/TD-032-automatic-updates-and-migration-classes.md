@@ -505,8 +505,13 @@ never reached an existing install.
 3. The defaults are read off the model of the template being brought up. A variable used more than
    once is carried when **any** of its uses has no non-empty default (the conservative reading), and
    its value is read from such a use first.
-4. **When it lands.** The update that deploys this rule is applied by the previous updater, which still
-   carries the old values; a worker already holding an old default un-sticks on the update after that.
+4. **When it lands.** The forward apply runs from the new, verified image (`launchApply(plan,
+   to.platform)` in `updater.ts`), so the update that deploys this rule already applies it, and a worker
+   holding an old default (the carried `300`) drops it on that same update. Only a `mode: 'rollback'`
+   apply runs from the updater's own — the old — image, and with it the old rule.
+5. **`APP_CORE_URL` follows the core.** The file the folder runs is rendered with
+   `${APP_CORE_URL:-<core>}` (`plan.core_url`), a non-empty default, so it is not carried; only the
+   image's own template (`${APP_CORE_URL:-}`: a git checkout, a rollback's last resort) carries it.
 
 As built: `carriedEnvironment` and `variablesWithoutDefault` in `apps/server/src/updater/apply.ts`, the
 tests in `apps/server/src/updater/update-apply.test.ts`.

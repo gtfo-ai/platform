@@ -483,8 +483,9 @@ compose project is its code's property — every Compose call names the project.
 instead, remove the `updater` and `updater-docker-proxy` services, download the compose file again and
 `docker compose up -d`. A second worker on one machine sets its own project name,
 `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and
-`APP_WORKER_UI_PORT` — in its folder's `.env`, because each has a default in the template and a value
-given only on the shell goes back to it at the next update.
+`APP_WORKER_UI_PORT` — **in its folder's `.env`**, never only on the shell: each has a default in the
+template, and a value given only on the shell goes back to it at the next update, so a second worker
+would then share the first worker's control volume, cache volume and run network.
 
 #### One-command install (S-22.20)
 

@@ -49,9 +49,13 @@
  * once is carried when **any** use has no non-empty default (the conservative reading: a use that
  * would otherwise read empty must not lose the value), and its value is taken from such a use first.
  * A `${VAR:+…}`/`${VAR+…}` use is no source (the container holds the alternative, not `VAR`) and no
- * reason to carry. A worker already holding an old default un-sticks on its first update *applied by
- * an updater with this rule*: the update that deploys it is applied by the previous updater, so the
- * effect lands one update later. A value a person set in the folder's `.env` needs no carriage:
+ * reason to carry. `APP_CORE_URL` is one such setting in the file the folder runs: the render writes
+ * `${APP_CORE_URL:-<core>}` with `plan.core_url`, so it follows the core the updater talks to and is
+ * not carried; only the image's own template (a git checkout, a rollback's last resort) declares it
+ * `${APP_CORE_URL:-}` and carries it. A worker already holding an old default un-sticks on the very
+ * update that deploys this rule: the forward apply runs from the new, verified image, so it already
+ * applies the new rule. Only a `mode: 'rollback'` apply runs from the updater's own — the old — image,
+ * and with it the old rule. A value a person set in the folder's `.env` needs no carriage:
  * Compose reads that file, here as in their own `docker compose up` — a setting a newer template reads
  * for the first time included. The one value
  * passed besides is {@link BUNDLE_SOURCE_VARIABLE}: from the folder as project directory, the
@@ -199,6 +203,8 @@ export const carriedEnvironment = (
     for (const [key, value] of Object.entries(definition.environment ?? {})) {
       const whole = typeof value === 'string' ? WHOLE_REFERENCE.exec(value) : null;
       const variable = whole?.[1];
+      // `${V:+x}`/`${V+x}`: the container holds the alternative, never `V` — no source.
+      if (whole?.[2]?.endsWith('+')) continue;
       if (variable === undefined || managed.has(variable) || envFileKeys.has(variable)) continue;
       if (!withoutDefault.has(variable)) continue;
       const current = env.get(key);

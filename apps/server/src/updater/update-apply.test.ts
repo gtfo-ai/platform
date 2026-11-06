@@ -55,7 +55,11 @@ const FOLDER_SOURCE = '/run/desktop/mnt/host/c/Users/dev/agentic-worker';
 /** A compose interpolation, `${inner}`, spelled so it is not read as a template placeholder. */
 const ref = (inner: string): string => `$${'{'}${inner}}`;
 
-/** The template as `compose config --no-interpolate` answers it: the shipped services' shape. */
+/**
+ * The template as `compose config --no-interpolate` answers it: the shipped services' shape. This is
+ * the **image's** template (`APP_CORE_URL` with no default); the fake answers a rendered file with
+ * {@link modelOfFile}, whose `APP_CORE_URL` defaults to the core's URL as the render writes it.
+ */
 const MODEL = {
   services: {
     'launcher-token': { restart: 'no' },
@@ -81,6 +85,32 @@ const MODEL = {
     updater: { restart: 'unless-stopped' },
     'updater-docker-proxy': { restart: 'unless-stopped' },
   },
+};
+
+/**
+ * What `compose config --no-interpolate` answers for `file`: {@link MODEL} for the image's template,
+ * and for a rendered file the same with the `${APP_CORE_URL:-<core>}` default the render wrote into it.
+ */
+const modelOfFile = (file: string, templatePath: string): typeof MODEL => {
+  if (file === templatePath) return MODEL;
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return MODEL;
+  }
+  const core = /\$\{APP_CORE_URL:-([^}]+)\}/.exec(text)?.[1];
+  if (core === undefined) return MODEL;
+  const worker = MODEL.services['remote-worker'];
+  return {
+    services: {
+      ...MODEL.services,
+      'remote-worker': {
+        ...worker,
+        environment: { ...worker.environment, APP_CORE_URL: ref(`APP_CORE_URL:-${core}`) },
+      },
+    },
+  };
 };
 
 interface Call {
@@ -117,7 +147,10 @@ const world = async (options: {
   const calls: Call[] = [];
   const docker: DockerRun = async (args, runOptions = {}) => {
     calls.push({ args, env: { ...runOptions.env } });
-    if (args.includes('config')) return { stdout: JSON.stringify(MODEL), stderr: '' };
+    if (args.includes('config')) {
+      const file = args[args.indexOf('-f') + 1] as string;
+      return { stdout: JSON.stringify(modelOfFile(file, templatePath)), stderr: '' };
+    }
     if (args[0] === 'container' && args[1] === 'ls') {
       return { stdout: 'c-worker\nc-launcher\nc-updater\n', stderr: '' };
     }
@@ -272,10 +305,7 @@ describe('an update that comes up healthy', () => {
     const w = await world({});
     await runApply(w.plan, w.deps);
     const up = composeCalls(w.calls).find((call) => verb(call).startsWith('up -d --wait'));
-    expect(up?.env).toMatchObject({
-      CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
-      APP_CORE_URL: 'https://core.example.test',
-    });
+    expect(up?.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN });
     // A setting the template has a default for follows the template, whatever the container held.
     expect(up?.env.APP_WORKER_CONCURRENCY).toBeUndefined();
     expect(up?.env.APP_WORKER_CONTROL_VOLUME).toBeUndefined();
@@ -286,6 +316,17 @@ describe('an update that comes up healthy', () => {
     }
     expect(await readFile(w.envFile, 'utf8')).not.toContain(CLAUDE_TOKEN);
     expect(JSON.stringify(await readState(w.stateDir))).not.toContain(CLAUDE_TOKEN);
+  });
+
+  it('the rendered file’s core URL is the plan’s, never carried from the running worker', async () => {
+    const w = await world({});
+    const coreUrl = 'https://new-core.example.test';
+    await runApply({ ...w.plan, core_url: coreUrl }, w.deps);
+    const up = composeCalls(w.calls).find((call) => verb(call).startsWith('up -d --wait'));
+    expect(up?.args).toContain(w.bundleFile);
+    // The running worker held `https://core.example.test`; the render's default is the plan's.
+    expect(await readFile(w.bundleFile, 'utf8')).toContain(ref(`APP_CORE_URL:-${coreUrl}`));
+    expect(up?.env.APP_CORE_URL).toBeUndefined();
   });
 });
 
@@ -679,6 +720,17 @@ describe('the pure pieces', () => {
     expect(
       carriedEnvironment(embedded, runningAs({ APP_UPDATE_POLL_SECONDS: '300' }), new Set()),
     ).toEqual({ APP_UPDATE_POLL_SECONDS: '300' });
+  });
+
+  it('never takes a `:+`/`+` use as a source: the container holds the alternative, not the variable', () => {
+    const model = modelOf({
+      TOKEN_SET: ref('CLAUDE_CODE_OAUTH_TOKEN:+yes'),
+      TOKEN_ALSO_SET: ref('CLAUDE_CODE_OAUTH_TOKEN+yes'),
+      NOTE: `token ${ref('CLAUDE_CODE_OAUTH_TOKEN')}`,
+    });
+    const running = runningAs({ TOKEN_SET: 'yes', TOKEN_ALSO_SET: 'yes', NOTE: 'token x' });
+    expect(variablesWithoutDefault(model)).toEqual(new Set(['CLAUDE_CODE_OAUTH_TOKEN']));
+    expect(carriedEnvironment(model, running, new Set())).toEqual({});
   });
 
   it('never carries a variable the env file sets, defaulted or not', () => {
