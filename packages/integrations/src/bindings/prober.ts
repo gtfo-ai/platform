@@ -105,7 +105,6 @@ export interface IntegrationProbeCheck {
   readonly detail: string;
 }
 
-/** `<provider>:<integrationId>:<field>` — the naming both other loaders use. */
 /**
  * The `integration_actions.action` of every call **this prober** makes (S-25.3, review of PR #75).
  *
@@ -129,6 +128,7 @@ export const PROBE_ACTION = {
 /** {@link PROBE_ACTION}'s values: the actions a health read must not count as traffic. */
 export const PROBE_ACTIONS: readonly string[] = Object.values(PROBE_ACTION);
 
+/** `<provider>:<integrationId>:<field>` — the naming both other loaders use. */
 const secretName = (account: IntegrationAccount, field: string): string =>
   `${account.provider}:${account.integrationId}:${field}`;
 
