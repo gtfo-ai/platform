@@ -202,6 +202,20 @@ export const notificationDraft = (input: {
 };
 
 /**
+ * The lines of a message body, joined **and then unlabelled as a whole** (review of PR #82).
+ *
+ * Each untrusted field is unlabelled on its own, but a link's label may span a newline — the
+ * converter's pattern is `\[([^\]]*)\]\(…\)` and `[^\]]` matches one — so two fields that are each
+ * harmless make one link when joined: a ticket key `[Approve` in the title and a detail (a model's
+ * return reason) opening `](https://evil.example)` became a link labelled with the platform's own
+ * title. The same holds for a detail ending `[Click` above a ticket URL that contains
+ * `](https://evil.example)` — `boundUrl` admits both brackets, being printable ASCII. A pass over
+ * the joined body closes every such pair at once; no platform sentence contains `[…](…)`, so it
+ * changes nothing the platform wrote.
+ */
+const joinedLines = (lines: readonly string[]): string => unlabelledLinks(lines.join('\n'));
+
+/**
  * The chat message for one notification.
  *
  * `markdown` only — never `blocks`. The port is explicit that a caller supplying blocks owns the
@@ -211,11 +225,11 @@ export const notificationDraft = (input: {
  * in the workspace, which is precisely the bot product/18 exists to keep welcome.
  */
 export const notificationBody = (draft: NotificationDraft): MessageBody => ({
-  markdown: [
+  markdown: joinedLines([
     `**${draft.title}**`,
     ...(draft.detail === null ? [] : [draft.detail]),
     ...(draft.url === null ? [] : [draft.url]),
-  ].join('\n'),
+  ]),
 });
 
 /** How an approval was settled, as the approval aggregate records it. */
@@ -269,11 +283,11 @@ export const settledApprovalBody = (input: {
       ? null
       : boundText(unlabelledLinks(input.decider), SETTLED_APPROVAL_DECIDER_MAX);
   return {
-    markdown: [
+    markdown: joinedLines([
       `**${boundText(`${name}: the approval is settled`, NOTIFICATION_TITLE_MAX)}**`,
       settledApprovalText(input.outcome, decider),
       ...(url === null ? [] : [url]),
-    ].join('\n'),
+    ]),
   };
 };
 
@@ -312,10 +326,10 @@ export const settledQuestionBody = (input: {
       ? null
       : boundText(unlabelledLinks(input.answerer), SETTLED_APPROVAL_DECIDER_MAX);
   return {
-    markdown: [
+    markdown: joinedLines([
       `**${boundText(`${name}: the question is settled`, NOTIFICATION_TITLE_MAX)}**`,
       settledQuestionText(input.outcome, answerer),
       ...(url === null ? [] : [url]),
-    ].join('\n'),
+    ]),
   };
 };

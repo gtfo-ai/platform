@@ -2076,6 +2076,24 @@ describe('links in a notification’s detail', () => {
     );
     // One pass would rebuild `[y](https://a)` out of what it removed.
     expect(unlabelledLinks('[x]([y](https://a.example))')).toBe('https://a.example');
+    // Review of PR #82: a label spanning the fields a body joins is closed by the body's own pass.
+    for (const draft of [
+      notificationDraft({
+        notificationClass: 'escalation',
+        subject: { name: '[Approve safely', url: null },
+        detail: '](https://attacker.example/x) the loop is spent',
+      }),
+      notificationDraft({
+        notificationClass: 'escalation',
+        subject: {
+          name: 'ACME-1',
+          url: 'https://tickets.example.test/x](https://attacker.example/y)',
+        },
+        detail: 'Read [the brief',
+      }),
+    ]) {
+      expect(notificationBody(draft).markdown).not.toMatch(/\[([^\]]*)\]\(([^\s)]+)\)/);
+    }
     expect(unlabelledLinks('no links here')).toBe('no links here');
     // A mention written as a link keeps no brackets either; `toMrkdwn` keeps it inert.
     expect(unlabelledLinks('[urgent](!channel)')).toBe('!channel');

@@ -395,6 +395,14 @@ describe('approval decisions', () => {
       expect(result.events[0]?.subjectArtifactId).toBeUndefined();
     });
 
+    it('refuses a value carrying a key this adapter never writes (strict, review of PR #82)', async () => {
+      const result = await deliver(
+        withSubject(true, { a: APPROVAL_ID, d: 'approved', t: TASK_ID, s: PLAN_ID, x: 1 }),
+      );
+      expect(result.events).toEqual([]);
+      expect(result.ignored[0]?.reason).toBe('malformed_payload');
+    });
+
     it('refuses a value whose plan is not an id this adapter writes', async () => {
       const result = await deliver(
         withSubject(true, { a: APPROVAL_ID, d: 'approved', t: TASK_ID, s: '../../etc' }),

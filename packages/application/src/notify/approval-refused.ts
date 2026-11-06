@@ -115,6 +115,7 @@ export const runApprovalRefused = async (
       thread,
       body: approvalRefusalBody({
         name: chat.redactor.redactText(read.task.task.ticket.key).value,
+        kind: read.approval.approval.kind,
         refusal,
         reviewUrl: taskPageUrl(options.baseUrl, read.task.task.id),
       }),

@@ -90,9 +90,21 @@ describe('why a press approved nothing, in words', () => {
     }
   });
 
+  it('names the link by the approval’s kind', () => {
+    expect(
+      approvalRefusalBody({
+        name: 'ACME-1',
+        kind: 'budget',
+        refusal: 'approval_subject_mismatch',
+        reviewUrl: 'https://agentic.example.test/tasks/t-1',
+      }).markdown,
+    ).toContain('Review the budget on the task page: https://agentic.example.test/tasks/t-1');
+  });
+
   it('answers with the reason and the task page, under the ticket key', () => {
     const body = approvalRefusalBody({
       name: 'ACME-1',
+      kind: 'plan',
       refusal: 'approval_subject_superseded',
       reviewUrl: 'https://agentic.example.test/tasks/t-1',
     });
@@ -102,6 +114,69 @@ describe('why a press approved nothing, in words', () => {
       'Review the plan on the task page: https://agentic.example.test/tasks/t-1',
     ]);
     expect(body.blocks).toBeUndefined();
+  });
+});
+
+/** Slack's own link pattern (`mrkdwn.ts`'s `LINK`), which a label may span a comma or a line in. */
+const SLACK_LINK = /\[([^\]]*)\]\(([^\s)]+)\)/;
+
+describe('no link is built across the items a body joins (review of PR #82)', () => {
+  const bodyOf = (plan: Record<string, unknown>, classes: string[] = ['payments']) => {
+    const summary = planSummaryOf(1, { ...IMPLEMENTATION_PLAN, ...plan } as never);
+    if (summary === null) {
+      throw new Error('the fixture is a plan');
+    }
+    return approvalRequestBody({
+      draft: notificationDraft({
+        notificationClass: 'approval',
+        subject: { name: 'ACME-1', url: null },
+        detail: null,
+      }),
+      kind: 'plan',
+      plan: { kind: 'shown', artifactId: 'p-1', summary },
+      reasons: [{ code: 'risk_class', classes }],
+      reviewUrl: 'https://agentic.example.test/tasks/t-1',
+    }).markdown;
+  };
+
+  it('two paths joined with a comma', () => {
+    const markdown = bodyOf({
+      files_to_change: [
+        { path: '[Approve safely', change: 'x' },
+        { path: '](https://evil.example/approve)', change: 'x' },
+      ],
+    });
+    expect(markdown).not.toMatch(SLACK_LINK);
+    expect(markdown).toContain('https://evil.example/approve');
+  });
+
+  it('a risk split across two lines', () => {
+    const markdown = bodyOf({ risks: ['[Approve now', '](https://evil.example/approve)'] });
+    expect(markdown).not.toMatch(SLACK_LINK);
+  });
+
+  it('two risk class names in one reason, and the label survives nowhere', () => {
+    expect(
+      approvalReasonWords({
+        code: 'risk_class',
+        classes: ['[Approve safely', '](https://evil.example)'],
+      }),
+    ).not.toMatch(SLACK_LINK);
+    const markdown = bodyOf({}, ['[Approve safely', '](https://evil.example/approve)']);
+    expect(markdown).not.toMatch(SLACK_LINK);
+    // The words stay as text; what is gone is the link that would have worn them as its label.
+    expect(markdown).not.toContain('[Approve safely');
+  });
+
+  it('a refusal body, whose ticket key is provider text', () => {
+    expect(
+      approvalRefusalBody({
+        name: '[Approve',
+        kind: 'plan',
+        refusal: 'approval_subject_mismatch',
+        reviewUrl: 'https://agentic.example.test/tasks/t-1](https://evil.example)',
+      }).markdown,
+    ).not.toMatch(SLACK_LINK);
   });
 });
 

@@ -18,6 +18,14 @@
  * the provider's converter neutralises mentions and broadcasts, as for every notification. A risk
  * class name is project configuration and is bounded the same way.
  *
+ * **Links are unlabelled once more after every join** (review of PR #82). A link's label may span
+ * a comma and a newline — the converter's pattern is `\[([^\]]*)\]\(…\)`, and `[^\]]` matches
+ * both — so two items that are each harmless can make one when they are joined: the paths
+ * `["[Approve safely", "](https://evil.example/approve)"]` became
+ * `<https://evil.example/approve|Approve safely, >` beside the real Approve button. Per item is
+ * therefore not enough; every body this module builds is passed through `unlabelledLinks` whole,
+ * after the join, which no platform line is affected by (none contains `[…](…)`).
+ *
  * Pure and total: no clock, no I/O, no provider.
  */
 import {
@@ -63,9 +71,12 @@ export const approvalReasonWords = (reason: ApprovalReason): string => {
   switch (reason.code) {
     case 'risk_class': {
       const classes = reason.classes.map((name) => oneLine(name, APPROVAL_RISK_CLASS_MAX));
-      return classes.length === 1
-        ? `The plan touches the ${classes[0]} risk class, and this project asks a person to approve plans that do.`
-        : `The plan touches the ${listOf(classes)} risk classes, and this project asks a person to approve plans that do.`;
+      // Unlabelled after the join too: two class names can make one link between them.
+      return unlabelledLinks(
+        classes.length === 1
+          ? `The plan touches the ${classes[0]} risk class, and this project asks a person to approve plans that do.`
+          : `The plan touches the ${listOf(classes)} risk classes, and this project asks a person to approve plans that do.`,
+      );
     }
     case 'probation':
       return `The project is on probation: ${reason.completed} of its first ${reason.of} tasks are done.`;
@@ -211,15 +222,18 @@ export const approvalRequestBody = (input: {
   readonly reviewUrl: string | null;
   readonly note?: string | null;
 }): MessageBody => ({
-  markdown: [
-    `**${input.draft.title}**`,
-    ...(input.draft.detail === null ? [] : [input.draft.detail]),
-    ...(input.note === undefined || input.note === null ? [] : [input.note]),
-    ...(input.plan === null ? [] : planLines(input.plan)),
-    ...reasonLines(input.reasons),
-    ...reviewLine(input.kind, input.reviewUrl),
-    ...(input.draft.url === null ? [] : [input.draft.url]),
-  ].join('\n'),
+  // The whole body, after the join (module note): a label may span the lines it was joined from.
+  markdown: unlabelledLinks(
+    [
+      `**${input.draft.title}**`,
+      ...(input.draft.detail === null ? [] : [input.draft.detail]),
+      ...(input.note === undefined || input.note === null ? [] : [input.note]),
+      ...(input.plan === null ? [] : planLines(input.plan)),
+      ...reasonLines(input.reasons),
+      ...reviewLine(input.kind, input.reviewUrl),
+      ...(input.draft.url === null ? [] : [input.draft.url]),
+    ].join('\n'),
+  ),
 });
 
 /**
@@ -230,16 +244,20 @@ export const approvalRequestBody = (input: {
 export const approvalRefusalBody = (input: {
   /** The ticket key, already redacted. */
   readonly name: string;
+  /** The approval's kind, for the link's verb. */
+  readonly kind: ApprovalKind;
   readonly refusal: ApprovalSubjectRefusal;
   readonly reviewUrl: string | null;
 }): MessageBody => {
   const name = boundText(unlabelledLinks(input.name), NOTIFICATION_KEY_MAX);
   return {
-    markdown: [
-      `**${boundText(`${name}: the approval was not applied`, NOTIFICATION_TITLE_MAX)}**`,
-      APPROVAL_REFUSAL_WORDS[input.refusal],
-      ...reviewLine('plan', input.reviewUrl),
-    ].join('\n'),
+    markdown: unlabelledLinks(
+      [
+        `**${boundText(`${name}: the approval was not applied`, NOTIFICATION_TITLE_MAX)}**`,
+        APPROVAL_REFUSAL_WORDS[input.refusal],
+        ...reviewLine(input.kind, input.reviewUrl),
+      ].join('\n'),
+    ),
   };
 };
 

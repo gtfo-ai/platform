@@ -162,7 +162,8 @@ const answerValueSchema = z.object({
    */
   t: z.uuid().optional(),
 });
-const approvalValueSchema = z.object({
+/** Strict (review of PR #82): a key this adapter never writes makes the value somebody else's. */
+const approvalValueSchema = z.strictObject({
   a: z.uuid(),
   d: z.enum(['approved', 'rejected']),
   /**
