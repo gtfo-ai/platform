@@ -319,7 +319,8 @@ const fetchFor = (world: World) =>
           role: entry.role,
           last_output_at: null,
           seat: null,
-          activity: null,
+          // S-25.7: the row shows the activity, so the fake carries the latest entry.
+          activity: { kind: 'tool', tool_name: 'Read', at: minutesAgo(1) },
         })),
       });
     }
@@ -640,7 +641,7 @@ describe('Home, needs you first', () => {
 });
 
 describe('Home, running now', () => {
-  it('lists each live run with where it is, its model, elapsed time, cost and latest progress', async () => {
+  it('lists each live run with where it is, what it is doing, elapsed time, cost and latest progress', async () => {
     const world = newWorld({
       runs: [
         run({
@@ -665,7 +666,9 @@ describe('Home, running now', () => {
       expect(row.textContent).toContain('ACME-7');
     });
     expect(row.textContent).toContain('p1');
-    expect(row.textContent).toContain('claude-test');
+    // What it is doing in the one activity vocabulary — never the model id (BACKLOG 1262).
+    expect(row.querySelector('[data-home-activity]')?.textContent).toBe('Working: Reading files');
+    expect(row.textContent).not.toContain('claude-test');
     expect(row.textContent).toContain('12m 0s');
     expect(row.textContent).toContain('$0.84');
     expect(row.textContent).toContain('Writing the <script>migration</script>');
@@ -719,6 +722,13 @@ describe('Home, the projects and the rail', () => {
     // The old organisation metric, moved here with its definition.
     expect(within(spend).getByText('Spend, last 30 days')).toBeTruthy();
     expect(within(spend).getByText('$30.00')).toBeTruthy();
+    // S-25.7 (research/21 F8): Spend leads on to the caps and to what the spend bought.
+    expect(
+      within(spend).getByRole('link', { name: 'Organisation budgets' }).getAttribute('href'),
+    ).toBe('/settings/budgets');
+    expect(within(spend).getByRole('link', { name: 'Statistics' }).getAttribute('href')).toBe(
+      '/stats',
+    );
 
     const instance = box('Instance');
     expect(await within(instance).findByText('0.4.0-test')).toBeTruthy();

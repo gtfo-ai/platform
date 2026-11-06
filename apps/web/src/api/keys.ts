@@ -59,6 +59,7 @@ export const queryKeys = {
   projectRepository: (id: string) => ['project', id, 'repository'] as const,
   projectExecution: (id: string) => ['project', id, 'execution'] as const,
   projectBudgets: (id: string) => ['project', id, 'budgets'] as const,
+  projectSpend: (id: string, window: string) => ['project', id, 'spend', window] as const,
   projectAutonomy: (id: string) => ['project', id, 'autonomy'] as const,
   projectAudit: (id: string) => ['project', id, 'audit'] as const,
   /** WP-34: under the project's prefix, so a `project:<id>` frame refreshes the Shadow screen. */

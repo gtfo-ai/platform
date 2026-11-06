@@ -189,13 +189,14 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
   },
   {
     key: 'shadow_mode',
-    name: 'Shadow mode',
-    value: 'See what the agent would have built for your last N tickets, at what cost.',
+    name: 'Trial runs',
+    value:
+      'A trial run on tickets you already shipped: what the agent would have built, at what cost.',
     defaultState: 'off',
     cost: '~$5–15 per ticket, from a separate budget',
     touches: 'nothing external',
     caveat:
-      'This toggle and How much agents do alone both have to allow it: shadow runs are what the Observe position runs, so a project past Observe answers “not allowed” even with this on. Start a batch from the project’s Shadow screen.',
+      'This toggle and How much agents do alone both have to allow it: a trial is what the Observe position runs, so a project past Observe answers “not allowed” even with this on. Start one from the project’s Trial page.',
   },
   {
     key: 'ticket_linter',
@@ -1018,7 +1019,14 @@ export const Budgets = ({
 };
 
 /** The project half, wired to its own reads and commands. */
-export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): ReactElement => {
+export const ProjectBudgets = ({
+  projectId,
+  primary = false,
+}: {
+  readonly projectId: string;
+  /** The Budgets tab's one primary action; never inside the wizard's step. */
+  readonly primary?: boolean;
+}): ReactElement => {
   const budgets = useProjectBudgets(projectId);
   const config = useProjectConfig(projectId);
   const commands = useSettingsCommands();
@@ -1032,6 +1040,7 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
         projectId={projectId}
         budgets={budgets.data?.items ?? []}
         scopeLabel="Project"
+        primary={primary}
         onSave={(window, limitUsd) =>
           commands.setProjectBudget.mutateAsync({ projectId, window, limit_usd: limitUsd })
         }
@@ -1039,7 +1048,7 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
       <Card className="flex flex-col gap-1 text-xs">
         <p className="font-semibold">Separate feature budgets</p>
         <p className="text-fg-muted">
-          Shadow mode:{' '}
+          Trial runs:{' '}
           {features.shadow_mode?.budget_usd === undefined
             ? 'not set'
             : formatUsd(features.shadow_mode.budget_usd)}{' '}
@@ -1052,9 +1061,9 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
           These are per-feature caps in the repository’s settings file, not budget rows. Both are
           enforced the same way and over the same window: a run is refused when this project’s spend
           for the calendar month plus what the stage may spend would pass the cap, and the task
-          pauses exactly as it does for an organisation or project budget. The shadow cap counts
-          shadow tasks; the maintenance cap counts the chores the scheduler created, and once it is
-          spent the scheduler creates no more of them for that month.
+          pauses exactly as it does for an organisation or project budget. The trial cap counts the
+          trial run’s tasks; the maintenance cap counts the chores the scheduler created, and once
+          it is spent the scheduler creates no more of them for that month.
         </p>
         <ForAdministrators note="feature_caps" />
       </Card>
@@ -1270,19 +1279,27 @@ export const SettingsAudit = ({ projectId }: { readonly projectId: string }): Re
  *
  * `audit` is off in the wizard: a project being created has no settings history, and an empty panel
  * on the first screen an operator sees would be noise.
+ *
+ * `budgets` is what stands where the caps are (S-25.7, product/10's 2026-11-06 IA amendment: the
+ * project's *Budgets* tab is where a cap is both read and set). The wizard keeps the editor — a
+ * project being created has no tab yet — and the settings page passes a pointer to the tab, so the
+ * editor exists once per screen and `ProjectBudgets` is still one component (the mirror test holds
+ * the Budgets tab among the settings screens).
  */
 export const OperatingMode = ({
   projectId,
   audit = false,
+  budgets = <ProjectBudgets projectId={projectId} />,
 }: {
   readonly projectId: string;
   readonly audit?: boolean;
+  readonly budgets?: ReactElement;
 }): ReactElement => (
   <div className="flex flex-col gap-3">
     <AutonomyDial projectId={projectId} />
     <FeatureToggles projectId={projectId} />
     <RiskClasses projectId={projectId} />
-    <ProjectBudgets projectId={projectId} />
+    {budgets}
     <Notifications projectId={projectId} />
     {audit ? <SettingsAudit projectId={projectId} /> : null}
   </div>

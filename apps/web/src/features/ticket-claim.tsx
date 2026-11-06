@@ -26,7 +26,8 @@ export const claimStateOf = (claim: NonNullable<TaskRecord['ticket_claim']>): Cl
 
 const CLAIM_BADGE: Readonly<Record<ClaimState, { label: string; tone: BadgeTone }>> = {
   confirmed: { label: 'ticket claimed', tone: 'success' },
-  shadow: { label: 'claim (shadow)', tone: 'warning' },
+  // A trial's task (S-25.7: *Shadow* is shown as *Trial*): nothing was assigned.
+  shadow: { label: 'Trial run', tone: 'warning' },
   released: { label: 'claim released', tone: 'neutral' },
 };
 
@@ -34,10 +35,10 @@ const CLAIM_BADGE: Readonly<Record<ClaimState, { label: string; tone: BadgeTone 
 export const claimSentence = (claim: NonNullable<TaskRecord['ticket_claim']>): string => {
   const claimed = formatDateTime(claim.claimed_at);
   if (claim.released_at !== null) {
-    return `Claimed ${claimed}${claim.status === 'shadow' ? ' in shadow mode' : ''}; given back ${formatDateTime(claim.released_at)} — the ticket is no longer assigned to the platform.`;
+    return `Claimed ${claimed}${claim.status === 'shadow' ? ' in a trial run' : ''}; given back ${formatDateTime(claim.released_at)} — the ticket is no longer assigned to the platform.`;
   }
   return claim.status === 'shadow'
-    ? `Shadow mode, ${claimed}: the platform would have assigned the ticket to itself, and assigned nothing.`
+    ? `Trial run, ${claimed}: the platform would have assigned the ticket to itself, and assigned nothing.`
     : `Assigned to the platform’s own account ${claimed}, and confirmed on the tracker.`;
 };
 

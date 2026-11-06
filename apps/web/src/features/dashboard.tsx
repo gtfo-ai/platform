@@ -47,6 +47,7 @@ import { useServices } from '../app/services.js';
 import { CONNECTION_DOT, connectionLabel } from '../app/shell.js';
 import { displayName, type SessionUser } from '../auth/session.js';
 import { useRealtime, useTopics } from '../realtime/provider.js';
+import { ACTIVITY_META, activityOf } from '../ui/activity.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
 import { Counter } from '../ui/counter.js';
@@ -55,6 +56,7 @@ import { Flash } from '../ui/flash.js';
 import {
   APPROVAL_KIND_LABEL,
   leadingClaimBlocker,
+  PROJECT_STATUS_LABEL,
   runSubject,
   stageLabel,
 } from '../ui/humanize.js';
@@ -547,6 +549,32 @@ const NeedsYouBox = ({
 
 // ── Running now ──────────────────────────────────────────────────────────────
 
+type AgentEntry = NonNullable<ReturnType<typeof useAgents>['data']>['items'][number];
+
+/**
+ * A running agent's activity in the words every other screen uses (`ui/activity.ts`): "Working:
+ * Reading files". Home has no task state or asks for the row, so it reads the run and its latest
+ * transcript entry — what a person needing to act looks like is Home's *Needs you* box above.
+ */
+const homeActivityWords = (entry: AgentEntry, now: number): string => {
+  const { activity, detail } = activityOf({
+    run: {
+      status: entry.run.status,
+      terminal_reason: entry.run.terminal_reason ?? null,
+      started_at: entry.run.started_at ?? null,
+    },
+    seat: entry.seat !== null,
+    latest:
+      entry.activity === null
+        ? null
+        : { kind: entry.activity.kind, tool_name: entry.activity.tool_name, at: entry.activity.at },
+    role: entry.role,
+    now,
+  });
+  const word = ACTIVITY_META[activity].label;
+  return detail === null ? word : `${word}: ${detail}`;
+};
+
 const RunningBox = ({ projects }: { readonly projects: readonly ProjectItem[] }) => {
   const agents = useAgents();
   const { now } = useServices();
@@ -620,7 +648,9 @@ const RunningBox = ({ projects }: { readonly projects: readonly ProjectItem[] })
                   <span className="inline-flex flex-wrap items-center gap-1.5">
                     <Where project={projectKey} ticket={known?.ticket ?? null} stage={null} />
                     <Dot />
-                    <UntrustedText value={entry.run.model} className="font-mono" />
+                    {/* What it is doing, in the one activity vocabulary — never a model id
+                        (research/21 § 4, BACKLOG 1262). */}
+                    <span data-home-activity="">{homeActivityWords(entry, nowMs)}</span>
                   </span>
                   {entry.run.latest_progress === null ? null : (
                     <span data-home-progress="" className="text-fg">
@@ -708,7 +738,7 @@ const ProjectsBox = ({
               <span className="inline-flex flex-wrap items-center gap-2">
                 <UntrustedText value={project.key} className="font-mono" />
                 {project.status === 'active' ? null : (
-                  <Badge tone="neutral">{project.status}</Badge>
+                  <Badge tone="neutral">{PROJECT_STATUS_LABEL[project.status]}</Badge>
                 )}
               </span>
             }
@@ -795,6 +825,16 @@ const SpendBox = ({ projects }: { readonly projects: readonly ProjectItem[] }) =
         value={formatUsd(spend)}
         definition="Sum of provider-reported cost across all projects over the last 30 days; estimated where the provider reports none."
       />
+      {/* Where the figures go from here (research/21 § 3's missing path, F8): the caps, and the
+          statistics that say what the spend bought. */}
+      <p className="flex flex-wrap gap-x-3 text-sm" data-home-spend-links="">
+        <Link to="/settings/$section" params={{ section: 'budgets' }} className="text-link">
+          Organisation budgets
+        </Link>
+        <Link to="/stats" className="text-link">
+          Statistics
+        </Link>
+      </p>
     </RailBox>
   );
 };

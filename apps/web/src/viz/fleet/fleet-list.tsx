@@ -92,9 +92,8 @@ const RunRow = ({
                 : activityWords(run)}
             </span>
             <span aria-hidden="true">·</span>
+            {/* No model id on the row (research/21 § 4, BACKLOG 1262): the run's dialog names it. */}
             <span>{seatWords(seat)}</span>
-            <span aria-hidden="true">·</span>
-            <span className="font-mono">{sanitiseUntrusted(run.run.model)}</span>
           </span>
           {run.phases.length === 0 ? null : (
             <PhaseTrack

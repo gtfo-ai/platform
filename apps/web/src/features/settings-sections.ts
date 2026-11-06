@@ -130,6 +130,8 @@ export const PROJECT_SETTINGS_GROUPS = [
       { id: 'discovery', label: 'Discovery & readiness' },
       { id: 'business-context', label: 'Business context' },
       { id: 'history', label: 'History' },
+      // S-25.7: where the Trial page lives once the project has gone live (product/10's IA amendment).
+      { id: 'trial', label: 'Trial run' },
     ],
   },
   {

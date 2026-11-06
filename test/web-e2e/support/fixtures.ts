@@ -46,6 +46,7 @@ import {
   projectAuditResponseSchema,
   projectBindingsResponseSchema,
   projectExecutionResponseSchema,
+  projectSpendResponseSchema,
   projectSummarySchema,
   rediscoveryGateResponseSchema,
   runCommandsResponseSchema,
@@ -1229,6 +1230,31 @@ export const orgSettings = orgSettingsResponseSchema.parse({
     autonomy: { maximum: 'supervised' },
   },
   updated_at: now,
+});
+
+/**
+ * `GET /api/projects/:id/spend` (S-25.7): the month's booked cost per stage and its top tasks, one
+ * of them partly estimated — the Budgets tab's breakdown. The ticket title is hostile on purpose.
+ */
+export const projectSpend = projectSpendResponseSchema.parse({
+  window: 'month',
+  window_start: now,
+  usd: 12.5,
+  estimated_usd: 0.5,
+  stages: [
+    { stage: 'implementation', usd: 9, estimated_usd: 0.5 },
+    { stage: 'refinement', usd: 3.5, estimated_usd: 0 },
+  ],
+  top_tasks: [
+    {
+      task_id: IDS.taskFeature,
+      ticket_key: 'DEMO-1',
+      ticket_title: `Checkout ${HOSTILE.script}`,
+      mode: 'normal',
+      usd: 12.5,
+      estimated_usd: 0.5,
+    },
+  ],
 });
 
 /** The organisation's own caps — `GET /api/org/budgets`, served since WP-30. */

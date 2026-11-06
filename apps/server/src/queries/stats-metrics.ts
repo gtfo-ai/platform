@@ -745,16 +745,17 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
   },
   // product/19 §13; served per batch by `GET /api/shadow-batches/:id` (WP-34).
   shadow_similarity: {
-    label: 'Shadow similarity',
+    // S-25.7: *Shadow* is shown as *Trial* (product/10's 2026-11-06 IA amendment).
+    label: 'Trial similarity',
     definition:
-      'How close a shadow run’s change came to the human merge request it was compared with.',
+      'How close a trial run’s change came to the merge request a person made for the same ticket.',
     unit: 'ratio',
     aggregation: 'mean',
     absent: {
       reason:
-        'Measured per shadow batch, the unit in which the comparison means something: a similarity averaged over batches run against different repositories at different times answers no useful question.',
+        'Measured per trial, the unit in which the comparison means something: a similarity averaged over trials run against different repositories at different times answers no useful question.',
       owner:
-        'Shown per batch on the Shadow screen, with the similarity distribution, the cost by size and the launch candidates.',
+        'Shown per trial on the project’s Trial page, with the similarity distribution, the cost by size and the launch candidates.',
     },
   },
   // product/16 (visible to everyone in the project, Q22). Absent: `ticketRef` carries no author

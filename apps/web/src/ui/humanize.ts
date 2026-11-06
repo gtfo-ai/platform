@@ -176,7 +176,7 @@ export const ARTIFACT_TYPE_LABEL: Readonly<Record<ArtifactType, string>> = {
   AcceptanceVerdict: 'Acceptance verdict',
   RetroReport: 'Retrospective report',
   LibrarianProposals: 'Knowledge proposals',
-  ShadowReport: 'Shadow report',
+  ShadowReport: 'Trial report',
   ReadinessReport: 'Readiness report',
   DiscoveryDraft: 'Discovery draft',
   AskAnswer: 'Answer',

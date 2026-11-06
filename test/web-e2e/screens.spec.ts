@@ -312,7 +312,8 @@ test('the agents list shows every live run and opens one’s dialog with a link 
     'demo_service · DEMO-6 · Export the invoice as CSV',
   ]);
   await expect(runs.getByText('worker jan-mbp')).toBeVisible();
-  await expect(runs.getByText('claude-opus-5').first()).toBeVisible();
+  // S-25.7 (research/21 § 4, BACKLOG 1262): a row says what the agent is doing, not its model id.
+  await expect(runs.getByText('claude-opus-5')).toHaveCount(0);
   await runs.getByRole('button', { name: /^demo_service · DEMO-1/ }).click();
   const dialog = page.getByRole('dialog', { name: 'DEMO-1 · Implementation' });
   await expect(dialog.getByRole('link', { name: 'Open run' })).toHaveAttribute(
@@ -325,7 +326,8 @@ test('the audit log renders an entry in words, with its diff behind Details', as
   await page.goto('/audit');
   // S-23.11b: who · what, in words · when — the person resolved from the user list.
   const list = page.getByRole('list', { name: 'Audit entries' });
-  await expect(list.getByText('changed a project’s settings', { exact: false })).toBeVisible();
+  // S-25.7 (research/21 F15): the row names the project it changed.
+  await expect(list.getByText('changed the settings of', { exact: false })).toBeVisible();
   await expect(list.getByText('Fake Operator')).toBeVisible();
   await expect(page.getByText('autonomy_level')).toBeHidden();
   await list.getByText('Details').click();
@@ -445,7 +447,8 @@ test('the project settings page mirrors every wizard step', async ({ page }) => 
     'How much agents do alone',
     'Features',
     'Sensitive areas',
-    'Project budgets',
+    // S-25.7: the cap editor moved to the Budgets tab; Rules & limits points there.
+    'Budgets',
     'Notifications',
     'Who changed what',
   ]) {
@@ -652,6 +655,14 @@ test('the project panels render the knowledge base, the suggested edits and the 
   await page.goto(`/projects/${PROJECT_KEY}/budgets`);
   await expect(page.getByLabel('Cap used')).toBeVisible();
   await expect(page.getByText('$100.00')).toBeVisible();
+  // S-25.7 (research/21 F8): where the month's money went, and the cap set on the same page.
+  await expect(
+    page.getByRole('list', { name: 'By stage' }).getByText('Implementation'),
+  ).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Top tasks' }).getByText('DEMO-1')).toBeVisible();
+  await expect(page.getByText('$9.00 ($0.50 estimated)')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Project budgets', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save budgets' })).toBeVisible();
 
   await page.goto(`/projects/${PROJECT_KEY}/pipeline`);
   // S-23.5: the canvas leads the tab; the configuration is folded below it.
@@ -679,7 +690,9 @@ test('statistics renders a number, a null ratio and an absence as three differen
   await expect(page.getByRole('heading', { level: 2, name: 'Quality' })).toBeVisible();
   const returns = page.locator('[data-metric-card="returns_per_delivered_task"]');
   await expect(returns.getByText('8.0', { exact: true })).toBeVisible();
-  await expect(returns.getByText('1 observation', { exact: true })).toBeVisible();
+  // S-25.7 (research/21 F15): what the figure is from, and which way is good.
+  await expect(returns.getByText('From 1 delivered task', { exact: true })).toBeVisible();
+  await expect(returns.getByText('Lower is better', { exact: true })).toBeVisible();
   // A trend where two buckets carry a value, drawn as an SVG with its words beside it.
   const delivered = page.locator('[data-metric-card="tasks_delivered"]');
   await expect(delivered.locator('svg polyline')).toHaveCount(1);

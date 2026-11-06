@@ -1,11 +1,22 @@
 /**
- * The Shadow screen — product/10:20's *"Shadow — shadow-mode runs: comparison with the human MR,
- * predicted cost, similarity"* (WP-34).
+ * The Trial screen — product/10:20's *"Shadow — shadow-mode runs: comparison with the human MR,
+ * predicted cost, similarity"* (WP-34), shown as **Trial** since S-25.7 (product/10's 2026-11-06 IA
+ * amendment, Q-UX-3: *"a trial run on tickets you already shipped"*). The URL stays
+ * `/projects/$key/shadow` and the contract's words (`shadow_mode`, shadow batches) are unchanged;
+ * only what a person reads moved.
  *
- * Two pages, in the order a founder reads them: **start a batch** above **the batches** (a list
- * box, one row per batch), and — at `?batch=<id>` since S-23.11b — **one batch's page**: its figures
- * as a metric strip, then product/19 §13's cost-by-size, similarity distribution and launch
- * candidates, then its tickets.
+ * Two pages, in the order a founder reads them: **start a trial** above **the trials** (a list box,
+ * one row per batch), and — at `?batch=<id>` since S-23.11b — **one trial's page**: its figures as a
+ * metric strip, then product/19 §13's cost-by-size, similarity distribution and launch candidates,
+ * then its tickets.
+ *
+ * ## One state at a time (research/21 F7)
+ *
+ * The list page used to draw *"A batch cannot be started"*, a red *could not be loaded* and the
+ * empty state together. It now draws exactly one: while the read is pending, a loading line; when it
+ * failed, the error and nothing else; when a trial may not start, why — the server's
+ * `blocked_reason` as a sentence — and no form; otherwise the form, whose hint is what the empty
+ * state used to say. The trials already run are listed under whichever of the last two holds.
  *
  * ## Everything on this screen is untrusted, and none of it becomes markup
  *
@@ -47,6 +58,7 @@ import {
 } from '../app/queries.js';
 import { useTopics } from '../realtime/provider.js';
 import { cx } from '../ui/cx.js';
+import { Flash } from '../ui/flash.js';
 import { TASK_STATE_LABEL } from '../ui/humanize.js';
 import {
   Badge,
@@ -256,27 +268,27 @@ const TicketRow = ({ ticket }: { readonly ticket: ShadowBatchTicket }): ReactEle
   );
 };
 
-/** The aggregate's six figures, as one strip across the batch's page. */
+/** The aggregate's six figures, as one strip across the trial's page. */
 const BatchMetrics = ({
   data,
 }: {
   readonly data: NonNullable<ReturnType<typeof useShadowBatch>['data']>;
 }): ReactElement => (
-  <MetricStrip label="This batch in figures">
+  <MetricStrip label="This trial in figures">
     <Metric
       label="Tickets"
       value={formatInteger(data.batch.tickets)}
-      definition="Ticket keys this batch was started with, including the ones the platform refused to run."
+      definition="Ticket keys this trial was started with, including the ones the platform refused to run."
     />
     <Metric
       label="Refused"
       value={formatInteger(data.batch.refused)}
-      definition="Tickets that never became a task: no merge base for the human merge request, an unknown key, or a shadow task that already existed."
+      definition="Tickets that never became a task: no merge base for the human merge request, an unknown key, or a trial task that already existed."
     />
     <Metric
       label="Reported"
       value={formatInteger(data.aggregate.reported)}
-      definition="Tasks of this batch that have finished and produced a shadow report."
+      definition="Tasks of this trial that have finished and produced a trial report."
     />
     <Metric
       label="Compared"
@@ -286,17 +298,17 @@ const BatchMetrics = ({
     <Metric
       label="Spent"
       value={formatUsd(data.batch.spent_usd)}
-      definition="Recorded cost of this batch's tasks, summed from each task's running total."
+      definition="Recorded cost of this trial's tasks, summed from each task's running total."
     />
     <Metric
       label="Budget"
       value={data.batch.budget_usd === null ? 'not set' : formatUsd(data.batch.budget_usd)}
-      definition="The shadow-mode budget as it stood when this batch was created; a new run stops when the month's shadow spend reaches it."
+      definition="The trial budget as it stood when this trial was created; a new run stops when the month's trial spend reaches it."
     />
   </MetricStrip>
 );
 
-/** One batch's page (`?batch=<id>`): its figures, its tables and its tickets. */
+/** One trial's page (`?batch=<id>`): its figures, its tables and its tickets. */
 const BatchPage = ({
   batchId,
   projectId,
@@ -309,30 +321,30 @@ const BatchPage = ({
   const batch = useShadowBatch(projectId, batchId);
   const back = (
     <Link to="/projects/$key/shadow" params={{ key: projectKey }} className="text-sm underline">
-      ← All shadow batches
+      ← All trials
     </Link>
   );
   if (batch.isPending) {
-    return <Loading label="Loading the batch" />;
+    return <Loading label="Loading the trial" />;
   }
   if (batch.error !== null) {
     return (
       <div className="flex flex-col gap-3">
         {back}
-        <ErrorNotice title="This batch could not be loaded." error={batch.error} />
+        <ErrorNotice title="This trial could not be loaded." error={batch.error} />
       </div>
     );
   }
   const data = batch.data;
   if (data === undefined) {
-    return <EmptyState title="No batch" hint="This batch is not readable by this build." />;
+    return <EmptyState title="No trial" hint="This trial is not readable by this build." />;
   }
 
   return (
     <div className="flex flex-col gap-4">
       {back}
       <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-lg font-semibold">{`Shadow batch · ${formatDateTime(data.batch.created_at)}`}</h2>
+        <h2 className="text-lg font-semibold">{`Trial run · ${formatDateTime(data.batch.created_at)}`}</h2>
         <StateLabel status={data.batch.completed_at === null ? 'running' : 'success'}>
           {data.batch.completed_at === null ? 'Running' : 'Complete'}
         </StateLabel>
@@ -344,7 +356,7 @@ const BatchPage = ({
         {data.aggregate.cost_by_size.length === 0 ? (
           <EmptyState
             title="No sized ticket has finished yet"
-            hint="A size comes from the plan a shadow run produced, so this table fills in as the batch works through its tickets."
+            hint="A size comes from the plan the trial’s run produced, so this table fills in as the trial works through its tickets."
           />
         ) : (
           <ul className="flex flex-col gap-1 text-xs">
@@ -388,7 +400,7 @@ const BatchPage = ({
         {data.aggregate.launch_candidates.length === 0 ? (
           <EmptyState
             title="No launch candidate yet"
-            hint="A candidate is a ticket the agent matched closely (60 % overlap or more) for no more than this batch’s median cost."
+            hint="A candidate is a ticket the agent matched closely (60 % overlap or more) for no more than this trial’s median cost."
           />
         ) : (
           <ul className="flex flex-col gap-1 text-xs">
@@ -427,12 +439,22 @@ const BatchPage = ({
   );
 };
 
+/** The server's `blocked_reason` — a clause — as the sentence the notice says. */
+export const trialBlockedSentence = (reason: string | null): string => {
+  const trimmed = reason?.trim() ?? '';
+  if (trimmed === '') {
+    return 'A trial cannot be started for this project.';
+  }
+  const capital = `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
+  return /[.!?]$/.test(capital) ? capital : `${capital}.`;
+};
+
 export const ShadowScreen = ({
   projectKey,
   batchId = null,
 }: {
   readonly projectKey: string;
-  /** `?batch=<id>`: that batch's page; `null`, the batches. */
+  /** `?batch=<id>`: that trial's page; `null`, the trials. */
   readonly batchId?: string | null;
 }): ReactElement => {
   const { project } = useProjectByKey(projectKey);
@@ -443,29 +465,35 @@ export const ShadowScreen = ({
   const [keys, setKeys] = useState('');
 
   const items = batches.data?.items ?? [];
+  const backToAll = (
+    <Link to="/projects/$key/shadow" params={{ key: projectKey }} className="text-sm underline">
+      ← All trials
+    </Link>
+  );
+
+  // One state at a time (F7): pending, then failed, then the page.
+  if (projectId === null || batches.isPending) {
+    return <Loading label={batchId === null ? 'Loading trials' : 'Loading the trial'} />;
+  }
+  if (batches.error !== null) {
+    return (
+      <div className="flex flex-col gap-3" data-trial-state="error">
+        {batchId === null ? null : backToAll}
+        <ErrorNotice title="Trials could not be loaded." error={batches.error} />
+      </div>
+    );
+  }
 
   if (batchId !== null) {
     // The id is compared with the batches **this project's** read returned before anything is
     // asked by it, so another project's batch is never shown under this project's tab.
-    if (projectId === null || batches.isPending) {
-      return <Loading label="Loading the batch" />;
-    }
-    if (batches.error !== null) {
-      return <ErrorNotice title="Shadow batches could not be loaded." error={batches.error} />;
-    }
     if (!items.some((batch) => batch.id === batchId)) {
       return (
         <div className="flex flex-col gap-3" data-shadow-batch="unknown">
-          <Link
-            to="/projects/$key/shadow"
-            params={{ key: projectKey }}
-            className="text-sm underline"
-          >
-            ← All shadow batches
-          </Link>
+          {backToAll}
           <EmptyState
-            title="No such batch in this project"
-            hint="The link names a shadow batch this project does not have. Pick one from the project’s batches."
+            title="No such trial in this project"
+            hint="The link names a trial this project does not have. Pick one from the project’s trials."
           />
         </div>
       );
@@ -473,15 +501,14 @@ export const ShadowScreen = ({
     return <BatchPage batchId={batchId} projectId={projectId} projectKey={projectKey} />;
   }
 
-  const canStart = batches.data?.can_start ?? false;
-  const blocked = batches.data?.blocked_reason ?? null;
+  const canStart = batches.data.can_start;
 
   const start = () => {
     const ticketKeys = keys
       .split(/[\s,]+/)
       .map((key) => key.trim())
       .filter((key) => key !== '');
-    if (projectId === null || ticketKeys.length === 0) {
+    if (ticketKeys.length === 0) {
       return;
     }
     commands.startBatch.mutate({ projectId, ticket_keys: ticketKeys });
@@ -491,61 +518,56 @@ export const ShadowScreen = ({
   return (
     <div className="flex flex-col gap-4">
       <Card className="flex flex-col gap-2">
-        <SectionHeading>Shadow mode</SectionHeading>
+        <SectionHeading>Trial run</SectionHeading>
         <p className="text-fg-muted text-sm">
-          Runs the pipeline on closed tickets and compares what it would have built with what a
-          human merged. Nothing is written outside the platform: every merge request, comment and
-          status change a shadow task would make is refused and recorded as what it would have done.
+          A trial run on tickets you already shipped: the pipeline runs on closed tickets and
+          compares what it would have built with what a person merged. Nothing is written outside
+          the platform: every merge request, comment and status change a trial would make is refused
+          and recorded as what it would have done.
         </p>
-        {canStart ? null : (
-          <p className="text-fg-muted text-xs">
-            {blocked === null ? (
-              'A batch cannot be started for this project.'
-            ) : (
-              <UntrustedText value={blocked} />
+        {canStart ? (
+          <div className="flex flex-col gap-2" data-trial-state="ready">
+            <Field
+              label="Ticket keys"
+              hint={
+                items.length === 0
+                  ? 'Pick ten closed tickets your team delivered recently, separated by spaces or commas (at most 25). The platform runs the whole pipeline on each and reports how close it got, and at what cost.'
+                  : 'Closed tickets, separated by spaces or commas. At most 25 per trial.'
+              }
+              value={keys}
+              onChange={(event) => {
+                setKeys(event.target.value);
+              }}
+            />
+            <div>
+              <Button
+                tone="primary"
+                disabled={keys.trim() === '' || commands.startBatch.isPending}
+                onClick={start}
+              >
+                Start a trial run
+              </Button>
+            </div>
+            {commands.startBatch.error === null ? null : (
+              <ErrorNotice title="The trial was not started." error={commands.startBatch.error} />
             )}
-          </p>
-        )}
-        <Field
-          label="Ticket keys"
-          hint="Closed tickets, separated by spaces or commas. At most 25 per batch."
-          value={keys}
-          disabled={!canStart}
-          onChange={(event) => {
-            setKeys(event.target.value);
-          }}
-        />
-        <div>
-          <Button
-            tone="primary"
-            disabled={!canStart || keys.trim() === '' || commands.startBatch.isPending}
-            onClick={start}
-          >
-            Start a shadow batch
-          </Button>
-        </div>
-        {commands.startBatch.error === null ? null : (
-          <ErrorNotice title="The batch was not started." error={commands.startBatch.error} />
+          </div>
+        ) : (
+          <div data-trial-state="blocked">
+            <Flash title="A trial cannot start yet">
+              <UntrustedText value={trialBlockedSentence(batches.data.blocked_reason)} />
+            </Flash>
+          </div>
         )}
       </Card>
 
-      {batches.isPending ? <Loading label="Loading shadow batches" /> : null}
-      {batches.error === null ? null : (
-        <ErrorNotice title="Shadow batches could not be loaded." error={batches.error} />
-      )}
-
-      {items.length === 0 ? (
-        <EmptyState
-          title="No shadow batch yet"
-          hint="Pick ten closed tickets your team delivered recently. The platform runs the whole pipeline on each of them and reports how close it got, and at what cost."
-        />
-      ) : (
+      {items.length === 0 ? null : (
         <ListBox
-          label="Shadow batches"
+          label="Trials"
           header={
             <ListBoxHeader>
               <span className="font-semibold text-fg">
-                {items.length === 1 ? '1 batch' : `${formatInteger(items.length)} batches`}
+                {items.length === 1 ? '1 trial' : `${formatInteger(items.length)} trials`}
               </span>
             </ListBoxHeader>
           }
@@ -561,7 +583,7 @@ export const ShadowScreen = ({
                   search={{ batch: batch.id }}
                   {...rowLink('hover:underline')}
                 >
-                  {`Batch of ${formatDateTime(batch.created_at)}`}
+                  {`Trial of ${formatDateTime(batch.created_at)}`}
                 </Link>
               }
               meta={`${formatInteger(batch.tickets)} ticket(s) · ${batch.completed_at === null ? 'running' : 'complete'}`}

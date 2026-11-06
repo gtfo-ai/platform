@@ -36,7 +36,14 @@
  * | pickup rule, WIP limits, lifecycle slot, bindings | **start rule**, **Parallel tasks**, *moment*, **connections** |
  * | probation | *extra checks on the first N tasks* |
  * | Re-queue | **Try again** |
- * | a raw role or integration type | the label maps in `ui/humanize.ts` |
+ * | a raw role, integration type or project status | the label maps in `ui/humanize.ts` |
+ *
+ * **S-25.7** (product/10's 2026-11-06 IA amendment, research/21 F7 and F15) adds two more:
+ *
+ * | internal term | the plain words |
+ * |---|---|
+ * | Shadow, shadow batch, shadow mode, claim (shadow) | **Trial**, *a trial run*, **Trial runs** |
+ * | N observations | *From N tasks* (what the samples count) |
  *
  * **What it cannot see, stated**: a word assembled at run time, a server-written string (the
  * server's catalogues are their own census's), and a concept spelled a way this table does not
@@ -94,9 +101,18 @@ export const RETIRED_WORDS: readonly { readonly pattern: RegExp; readonly use: s
   { pattern: /\bbindings (?:could|were) not\b|\bBound: /, use: 'connections' },
   { pattern: /\bon probation\b|\bProbation ends\b/, use: 'extra checks on the first N tasks' },
   { pattern: /\bRe-queue\b/, use: 'Try again' },
-  // A raw role or integration type (a raw project status is left on the dashboard, which S-25.6
-  // rewrites: BACKLOG 1262).
-  { pattern: /`Role: \$\{user\.role\}`|<Badge>\{integration\.type\}/, use: 'a label map' },
+  // A raw role, integration type or project status (the last closed BACKLOG 1262 at S-25.7).
+  {
+    pattern: /`Role: \$\{user\.role\}`|<Badge>\{integration\.type\}|>\{project\.status\}</,
+    use: 'a label map',
+  },
+  // S-25.7: *Shadow* is shown as *Trial*; the route and the contract keep their words.
+  {
+    pattern:
+      /\bShadow (?:batch|batches|mode|screen|report|similarity)\b|\bclaim \(shadow\)|label: 'Shadow'/,
+    use: 'Trial / a trial run',
+  },
+  { pattern: /\bobservations\b/, use: 'From N tasks' },
 ];
 
 /** Each line of `source` outside comments; a `//` that follows a non-space is kept (a URL). */
@@ -139,6 +155,12 @@ describe('the vocabulary scanner', () => {
     ['a raw role', '{`Role: ${user.role}`}'],
     ['a lifecycle slot called a step', "'None selected leaves the step unmapped.'"],
     ['a raw integration type', '<Badge>{integration.type}</Badge>'],
+    // S-25.7.
+    ['a raw project status', '<Badge tone="neutral">{project.status}</Badge>'],
+    ['a shadow heading', '<SectionHeading>Shadow mode</SectionHeading>'],
+    ['a shadow tab', "{ tab: 'shadow', label: 'Shadow', icon: EyeIcon },"],
+    ['a shadow claim badge', "shadow: { label: 'claim (shadow)', tone: 'warning' },"],
+    ['an observation count', '`${formatInteger(samples)} observations`'],
   ])('finds a retired word in %s', (_name, source) => {
     expect(retiredWords(source)).not.toEqual([]);
   });
@@ -157,6 +179,11 @@ describe('the vocabulary scanner', () => {
     [
       'the plain words',
       "const t = 'Protected files · Up to date · Message the agent · 2 secrets hidden';",
+    ],
+    // S-25.7: the route, the contract's words and a mapped status are not the retired words.
+    [
+      'the trial words and the identifiers',
+      "const t = 'Trial run · From 3 tasks · An observation, not an instruction'; to='/projects/$key/shadow'; useShadowBatches(); PROJECT_STATUS_LABEL[project.status];",
     ],
   ])('ignores %s', (_name, source) => {
     expect(retiredWords(source)).toEqual([]);

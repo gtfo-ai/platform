@@ -12,6 +12,14 @@
  * an invented name. **What** is the entity type in words and the changed keys as labels
  * (`configFieldLabel`): an entity type this build does not know is title-cased, never dropped.
  *
+ * **Which project** (S-25.7, research/21 S12, F15): a row of type `project` names its project — its
+ * `entity_id` is the project's id, looked up in the project list the caller may read — and the
+ * *Project* filter keeps the rows of one project. `GET /api/org/audit` filters by type only, so the
+ * project filter asks the server for type `project` and keeps that project's rows **on the client**,
+ * over the pages loaded so far; the screen says so, and *Load older entries* reaches further back.
+ * A row of another type (a connection, a budget) carries no project the screen can name, and is not
+ * guessed at.
+ *
  * The `diff` column is opaque JSON in which a secret appears as the literal string `"changed"` —
  * the server's job, not this screen's — and it is rendered as text like everything else; the keys
  * and every id go through `ui/untrusted.tsx`.
@@ -19,7 +27,7 @@
 import { FilterIcon } from '@primer/octicons-react/FilterIcon';
 import { LogIcon } from '@primer/octicons-react/LogIcon';
 import { type ReactElement, useState } from 'react';
-import { useAudit, useOrgUsers } from '../app/queries.js';
+import { useAudit, useOrgUsers, useProjects } from '../app/queries.js';
 import {
   ActionMenu,
   ActionMenuRadioGroup,
@@ -36,6 +44,7 @@ import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { JsonView, UntrustedText } from '../ui/untrusted.js';
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 
 /** The filter's value for "every type". */
 const ALL = 'all';
@@ -44,15 +53,33 @@ const KNOWN_TYPES = Object.keys(AUDIT_ENTITY_FILTER_LABEL);
 
 export const AuditScreen = (): ReactElement => {
   const [entityType, setEntityType] = useState<string>(ALL);
+  const [projectFilter, setProjectFilter] = useState<string>(ALL);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
+  // A project's rows are of type `project`: that is what the server is asked for once one is picked.
+  const askedType = projectFilter === ALL ? entityType : 'project';
   const filters = {
-    ...(entityType === ALL ? {} : { entity_type: entityType }),
+    ...(askedType === ALL ? {} : { entity_type: askedType }),
     ...(cursor === undefined ? {} : { cursor }),
   };
   const audit = useAudit(filters);
   const users = useOrgUsers();
+  const projects = useProjects();
+  const projectList = projects.data?.items ?? [];
   const nextCursor = audit.data?.next_cursor ?? null;
-  const items = audit.data?.items ?? [];
+  /** The project a row names: a `project` row's entity, when the caller may read that project. */
+  const projectOf = (entry: { readonly entity_type: string; readonly entity_id: string | null }) =>
+    entry.entity_type === 'project' && entry.entity_id !== null
+      ? (projectList.find((project) => project.id === entry.entity_id) ?? null)
+      : null;
+  const items = (audit.data?.items ?? []).filter(
+    (entry) => projectFilter === ALL || projectOf(entry)?.id === projectFilter,
+  );
+  const projectLabel =
+    projectFilter === ALL
+      ? 'All projects'
+      : sanitiseUntrusted(
+          projectList.find((project) => project.id === projectFilter)?.name ?? 'A project',
+        );
   const nameOf = (userId: string | null): string => {
     if (userId === null) {
       return 'A removed account';
@@ -61,7 +88,7 @@ export const AuditScreen = (): ReactElement => {
     return user === undefined ? 'Someone' : (user.name ?? user.email);
   };
   const filterLabel =
-    entityType === ALL ? 'All types' : (AUDIT_ENTITY_FILTER_LABEL[entityType] ?? entityType);
+    askedType === ALL ? 'All types' : (AUDIT_ENTITY_FILTER_LABEL[askedType] ?? askedType);
 
   return (
     <div className="flex flex-col gap-4">
@@ -76,37 +103,71 @@ export const AuditScreen = (): ReactElement => {
         header={
           <ListBoxHeader
             actions={
-              <ActionMenu
-                trigger={
-                  <Button
-                    size="sm"
-                    tone="invisible"
-                    leadingIcon={<FilterIcon size={16} />}
-                    aria-label={`Filter by type: ${filterLabel}`}
-                  >
-                    {filterLabel}
-                  </Button>
-                }
-              >
-                <ActionMenuRadioGroup
-                  label="Show changes to"
-                  value={entityType}
-                  onValueChange={(value: string) => {
-                    setEntityType(value);
-                    setCursor(undefined);
-                  }}
+              <>
+                <ActionMenu
+                  trigger={
+                    <Button
+                      size="sm"
+                      tone="invisible"
+                      leadingIcon={<FilterIcon size={16} />}
+                      aria-label={`Filter by project: ${projectLabel}`}
+                    >
+                      {projectLabel}
+                    </Button>
+                  }
                 >
-                  <ActionMenuRadioItem value={ALL} closeOnClick>
-                    All types
-                  </ActionMenuRadioItem>
-                  <ActionMenuSeparator />
-                  {KNOWN_TYPES.map((type) => (
-                    <ActionMenuRadioItem key={type} value={type} closeOnClick>
-                      {AUDIT_ENTITY_FILTER_LABEL[type]}
+                  <ActionMenuRadioGroup
+                    label="Show changes to"
+                    value={projectFilter}
+                    onValueChange={(value: string) => {
+                      setProjectFilter(value);
+                      setCursor(undefined);
+                    }}
+                  >
+                    <ActionMenuRadioItem value={ALL} closeOnClick>
+                      All projects
                     </ActionMenuRadioItem>
-                  ))}
-                </ActionMenuRadioGroup>
-              </ActionMenu>
+                    <ActionMenuSeparator />
+                    {projectList.map((project) => (
+                      <ActionMenuRadioItem key={project.id} value={project.id} closeOnClick>
+                        {sanitiseUntrusted(project.name)}
+                      </ActionMenuRadioItem>
+                    ))}
+                  </ActionMenuRadioGroup>
+                </ActionMenu>
+                <ActionMenu
+                  trigger={
+                    <Button
+                      size="sm"
+                      tone="invisible"
+                      leadingIcon={<FilterIcon size={16} />}
+                      aria-label={`Filter by type: ${filterLabel}`}
+                      disabled={projectFilter !== ALL}
+                    >
+                      {filterLabel}
+                    </Button>
+                  }
+                >
+                  <ActionMenuRadioGroup
+                    label="Show changes to"
+                    value={entityType}
+                    onValueChange={(value: string) => {
+                      setEntityType(value);
+                      setCursor(undefined);
+                    }}
+                  >
+                    <ActionMenuRadioItem value={ALL} closeOnClick>
+                      All types
+                    </ActionMenuRadioItem>
+                    <ActionMenuSeparator />
+                    {KNOWN_TYPES.map((type) => (
+                      <ActionMenuRadioItem key={type} value={type} closeOnClick>
+                        {AUDIT_ENTITY_FILTER_LABEL[type]}
+                      </ActionMenuRadioItem>
+                    ))}
+                  </ActionMenuRadioGroup>
+                </ActionMenu>
+              </>
             }
           >
             <span className="font-semibold text-fg">
@@ -128,7 +189,13 @@ export const AuditScreen = (): ReactElement => {
               informational
               className="border-0"
               icon={<LogIcon size={24} />}
-              title={entityType === ALL ? 'No audit entries' : 'No changes of this type'}
+              title={
+                projectFilter !== ALL
+                  ? 'No changes to this project on these pages'
+                  : entityType === ALL
+                    ? 'No audit entries'
+                    : 'No changes of this type'
+              }
               hint="Every configuration change is recorded here, with who made it. An empty log means nothing has been changed on this instance yet."
             />
           </li>
@@ -136,6 +203,7 @@ export const AuditScreen = (): ReactElement => {
         {items.map((entry) => {
           const who = nameOf(entry.user_id);
           const keys = Object.keys(entry.diff);
+          const project = projectOf(entry);
           return (
             <ListRow
               key={entry.id}
@@ -145,7 +213,16 @@ export const AuditScreen = (): ReactElement => {
                   <span className="font-semibold">
                     <UntrustedText value={who} />
                   </span>{' '}
-                  {`changed ${auditEntityLabel(entry.entity_type)}`}
+                  {project === null ? (
+                    `changed ${auditEntityLabel(entry.entity_type)}`
+                  ) : (
+                    <>
+                      {'changed the settings of '}
+                      <span className="font-semibold" data-audit-project="">
+                        <UntrustedText value={project.name} />
+                      </span>
+                    </>
+                  )}
                   {keys.length === 0 ? null : (
                     <>
                       {': '}
@@ -176,6 +253,13 @@ export const AuditScreen = (): ReactElement => {
           );
         })}
       </ListBox>
+
+      {projectFilter === ALL ? null : (
+        <p className="text-xs text-fg-muted" data-audit-project-filter="">
+          The project filter keeps this project’s settings changes among the entries loaded so far.
+          {nextCursor === null ? '' : ' Load older entries to look further back.'}
+        </p>
+      )}
 
       {nextCursor === null ? null : (
         <div>

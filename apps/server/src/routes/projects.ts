@@ -31,6 +31,7 @@ import type {
   SecretRedactor,
 } from '@platform/application';
 import {
+  budgetWindowStart,
   ignoredProjectAllow,
   PROJECT_PROMPTS_DIR,
   ProjectSettingsInvalidError,
@@ -55,6 +56,8 @@ import {
   type LastConfigExport,
   listTasksQuerySchema,
   type OrganisationSettings,
+  projectSpendQuerySchema,
+  projectSpendResponseSchema,
   projectsResponseSchema,
   type RepositoryConfigReading,
   type RiskClass,
@@ -80,7 +83,7 @@ import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
 import { organisationSettingsForRequest, repositorySnapshotFrom } from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
-import { findProjectTimezone, listProjectBudgets } from '../queries/cost-queries.js';
+import { findProjectTimezone, listProjectBudgets, projectSpend } from '../queries/cost-queries.js';
 import type { Database } from '../queries/identity-queries.js';
 import {
   type ConfigLayerColumns,
@@ -616,6 +619,51 @@ export const registerProjectRoutes = async (
         zone.timezone,
       );
       return { items: [...items] };
+    },
+  );
+
+  typed.get(
+    '/api/projects/:project_id/spend',
+    {
+      // `preValidation`, not `preHandler`: the querystring is validated before `preHandler`, so an
+      // anonymous caller with a bad `window` would be told the route's shape before being refused.
+      preValidation: requirePermission(guard, 'project.read', {
+        project: (request) => (request.params as { project_id: string }).project_id,
+      }),
+      schema: {
+        summary:
+          'Where the project’s booked cost went in one budget window: per stage and top tasks',
+        description:
+          'A projection over the cost ledger (`cost_entries`), cut at the same window start the budgets read uses, in the organisation’s timezone. `estimated_usd` is the part the platform priced because the provider reported no cost; a run nothing could price is in no figure. A ticket key and title are external text (BD-022): render them, never execute them.',
+        tags: ['projects'],
+        params: projectParamsSchema,
+        querystring: projectSpendQuerySchema,
+        response: { 200: projectSpendResponseSchema },
+      },
+    },
+    async (request) => {
+      const projectId = request.params.project_id;
+      const window = request.query.window ?? 'month';
+      const zone = await findProjectTimezone(options.database, projectId);
+      if (zone === undefined) {
+        throw new NotFoundError(`project ${projectId}`);
+      }
+      // The budgets read's own boundary, so "this month" is the same month on both halves of the
+      // screen (Q12); `new Date()` for the reason the budgets route gives.
+      const windowStart = budgetWindowStart(
+        window,
+        new Date().toISOString() as IsoDateTime,
+        zone.timezone,
+      );
+      const spend = await projectSpend(options.database, projectId, windowStart);
+      return {
+        window,
+        window_start: windowStart,
+        usd: spend.usd,
+        estimated_usd: spend.estimated_usd,
+        stages: [...spend.stages],
+        top_tasks: [...spend.top_tasks],
+      };
     },
   );
 

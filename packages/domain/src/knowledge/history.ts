@@ -111,7 +111,8 @@ export const curateHistoryFindings = (
     if (proposal.evidence.length === 0) {
       return refuse(
         proposal,
-        'the proposal cites no merge request or ticket, and product/19 §18 makes a citation a precondition of the queue',
+        // product/19 §18: a citation is a precondition of the queue.
+        'the proposal cites no merge request or ticket, and only a cited proposal is queued for review',
       );
     }
 
@@ -127,7 +128,8 @@ export const curateHistoryFindings = (
     if (proposal.finding === 'convention' && proposal.occurrences < MIN_CONVENTION_OCCURRENCES) {
       return refuse(
         proposal,
-        `a convention is recorded once it has been observed ${MIN_CONVENTION_OCCURRENCES} times (product/19 §18) and this one reports ${proposal.occurrences}`,
+        // product/19 §18's threshold.
+        `a convention is recorded once it has been observed ${MIN_CONVENTION_OCCURRENCES} times, and this one reports ${proposal.occurrences}`,
       );
     }
 
@@ -142,7 +144,8 @@ export const curateHistoryFindings = (
       if (deepest < MIN_PITFALL_REVIEW_ROUNDS) {
         return refuse(
           proposal,
-          `a pitfall comes from a merge request with at least ${MIN_PITFALL_REVIEW_ROUNDS} review rounds (product/19 §18); the deepest one cited has ${deepest}`,
+          // product/19 §18's definition of a pitfall.
+          `a pitfall comes from a merge request with at least ${MIN_PITFALL_REVIEW_ROUNDS} review rounds; the deepest one cited has ${deepest}`,
         );
       }
     }

@@ -10,7 +10,7 @@
  *  - (b) the wizard's *Test connection* shows the Integrations card's answer — pending, failed with
  *    its checks, and the error notice — beside the integration that was tested;
  *  - (c) step 2 reads the discovery task back on load (a fresh app is a refresh), shows queued,
- *    running with the agent's latest progress line and *Watch live* (the run's page), needs a person with the escalation's reason,
+ *    running with the agent's latest progress line and *Watch live* (the run's page), needs a person with the escalation's brief (never its reason code),
  *    and done with the readiness level — and follows the task when a frame for it arrives.
  */
 import type {
@@ -478,10 +478,11 @@ describe('the discovery step reads the discovery task back (WP-155 (c), backlog 
     expect(status.getAttribute('data-discovery-phase')).toBe('queued');
   });
 
-  it('shows a parked discovery with the escalation’s reason and brief, as text', async () => {
+  it('shows a parked discovery with the escalation’s brief as text, and its reason code nowhere (BACKLOG 1263)', async () => {
     const escalation = {
       at: '2026-10-07T05:30:00.000Z',
-      reason: 'run_failed',
+      // A producer's code, as the lease sweep writes one: an id and a snake_case word.
+      reason: 'run 00000000-0000-4000-8000-0000000000f1: lease_expired',
       brief: 'The run failed: <img src=x onerror=alert(1)> exit 1',
       brief_original_chars: null,
     };
@@ -494,11 +495,12 @@ describe('the discovery step reads the discovery task back (WP-155 (c), backlog 
     );
     const status = await screen.findByTestId('discovery-status');
     await waitFor(() => {
-      expect(status.textContent).toContain('run_failed');
+      expect(status.textContent).toContain('The run failed: <img src=x onerror=alert(1)> exit 1');
     });
     expect(status.getAttribute('data-discovery-phase')).toBe('needs_human');
     expect(status.textContent).toContain('needs a person');
-    expect(status.textContent).toContain('The run failed: <img src=x onerror=alert(1)> exit 1');
+    expect(status.textContent).not.toContain('lease_expired');
+    expect(status.textContent).not.toContain('00000000-0000-4000-8000-0000000000f1');
     expect(container.querySelector('img')).toBeNull();
   });
 

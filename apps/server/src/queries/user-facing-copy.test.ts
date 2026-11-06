@@ -166,6 +166,13 @@ const NAMED_WRITERS: readonly {
     path: 'packages/application/src/shadow/batch.ts',
     marker: /\bSHADOW_BATCH_BLOCKED_DETAIL\b/,
   },
+  // S-25.7, BACKLOG 1266: a history bootstrap's refused proposal is stored as a discarded knowledge
+  // proposal whose first evidence line is the curation's reason, and the Knowledge screen lists it.
+  {
+    field: 'history refusal reason',
+    path: 'packages/domain/src/knowledge/history.ts',
+    marker: /\brefuse\(\s*proposal,/,
+  },
 ];
 
 /** Every spec reference in `source`'s code, comments removed, as `line: reference`. */

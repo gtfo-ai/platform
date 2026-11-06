@@ -737,6 +737,8 @@ describe('the project settings page', () => {
       ['Discovery & readiness', ['Discovery & readiness']],
       ['Business context', ['Business context']],
       ['History', ['History']],
+      // S-25.7: where the Trial page is reached from once the tab is gone.
+      ['Trial run', ['Trial run']],
       ['Knowledge', ['Knowledge']],
       [
         'Rules & limits',
@@ -744,7 +746,8 @@ describe('the project settings page', () => {
           'How much agents do alone',
           'Features',
           'Sensitive areas',
-          'Project budgets',
+          // S-25.7: the cap editor is the Budgets tab's; Rules & limits points there.
+          'Budgets',
           'Notifications',
           'Parallel tasks',
           'Who changed what',
@@ -1021,11 +1024,39 @@ describe('the verification mode', () => {
 });
 
 /**
+ * The cap editor left Rules & limits for the Budgets tab (S-25.7, product/10's 2026-11-06 IA
+ * amendment): the settings page points there, draws no cap field of its own, and the Trial run
+ * section links to the Trial page.
+ */
+describe('where the caps and the trial are reached from (S-25.7)', () => {
+  it('points Rules & limits at the Budgets tab and draws no cap field there', async () => {
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    const link = await screen.findByRole('link', { name: 'Open Budgets' });
+    expect(link.getAttribute('href')).toBe('/projects/acme_api/budgets');
+    expect(screen.queryByRole('heading', { name: 'Project budgets' })).toBeNull();
+    expect(screen.queryByLabelText('Per day')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save budgets' })).toBeNull();
+  });
+
+  it('links the Trial run section to the Trial page, whose URL is unchanged', async () => {
+    openSection('trial');
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    const link = await screen.findByRole('link', { name: 'Open the trial page' });
+    expect(link.getAttribute('href')).toBe('/projects/acme_api/shadow');
+  });
+});
+
+/**
  * The project budgets' one Save (review of PR #25): several changed windows are several requests,
  * sent one after another, and a refusal of the first stays on the screen beside its own field when a
- * later window succeeds — one mutation fired twice used to keep only the last call's answer.
+ * later window succeeds — one mutation fired twice used to keep only the last call's answer. Since
+ * S-25.7 the editor is on the Budgets tab, and its Save is that page's primary action.
  */
 describe('the project budgets’ one Save', () => {
+  beforeEach(() => {
+    window.history.pushState({}, '', '/projects/acme_api/budgets');
+  });
+
   it('sends both changed windows, shows the first one’s refusal beside it, and nothing beside the second', async () => {
     const puts: unknown[] = [];
     const base = fetchFor({});

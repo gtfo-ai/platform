@@ -206,15 +206,18 @@ describe('the statistics screen', () => {
     );
   });
 
-  it('prints an average count as a plain number and pluralises the observations', async () => {
+  it('prints an average count as a plain number, says what it is from and which way is good (S-25.7)', async () => {
     const container = await renderScreen();
     const returns = container.querySelector('[data-metric-card="returns_per_delivered_task"]');
     expect(returns?.textContent).toContain('8.0');
     expect(returns?.textContent).not.toContain('%');
-    expect(returns?.textContent).toContain('1 observation');
-    expect(returns?.textContent).not.toContain('1 observations');
+    // "From 1 delivered task", never "1 observation" (research/21 F15).
+    expect(returns?.textContent).toContain('From 1 delivered task');
+    expect(returns?.querySelector('[data-metric-reading]')?.textContent).toBe('Lower is better');
     const delivered = container.querySelector('[data-metric-card="tasks_delivered"]');
-    expect(delivered?.textContent).toContain('3 observations');
+    expect(delivered?.textContent).toContain('From 3 delivered tasks');
+    expect(delivered?.querySelector('[data-metric-reading]')?.textContent).toBe('Higher is better');
+    expect(container.textContent).not.toMatch(/observation/i);
   });
 
   it('draws a sparkline only where two buckets carry a value, with the trend in words', async () => {
@@ -238,7 +241,9 @@ describe('the statistics screen', () => {
   it('names the zone the days were cut in', async () => {
     const container = await renderScreen();
     expect(container.textContent).toContain('Europe/Prague');
-    expect(container.textContent).toContain('2026-05-09 to 2026-06-07');
+    // The same date format as every other screen (S-25.7, research/21 F15), never ISO.
+    expect(container.textContent).toContain('May 9, 2026 to Jun 7, 2026');
+    expect(container.textContent).not.toContain('2026-05-09');
   });
 
   it('prints a stage with no entries as "no entries" rather than 0%', async () => {

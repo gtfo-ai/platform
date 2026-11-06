@@ -66,7 +66,8 @@ beside the Settings list, with their entry marked — except the two wizards, *N
 *Add a worker*, which keep the page to themselves — and the search finds them by name.
 
 **Inside a project the row becomes the project's own tabs** — **Board**, **Knowledge**,
-**Pipeline**, **Budgets**, **Shadow** and **Settings** — under a header with the project's name, its
+**Pipeline**, **Budgets**, **Trial** (only before the project's first live task or while it has a
+trial — section 8, *Trial*) and **Settings** — under a header with the project's name, its
 key, its readiness (what agents may do there, below under *Projects*) and — on the board, if you may
 start a ticket in it — a **Start a ticket** button. A task's page sits under its project's header
 too, on the Board tab, when opened from its board; from the inbox or Agents it does not yet. Every
@@ -452,13 +453,14 @@ touches that class's paths. The screen asks for each list's items before *Accept
 a class naming a checklist the configuration does not define is refused; the review then records
 which lists it was given (`checklists_applied` on the Review Verdict).
 
-**Shadow mode** (the Observe position) runs the pipeline on closed tickets you pick and posts
-nothing. For each ticket that has a human merge request it also runs **one reviewer over that human
+**Trial runs** (the Observe position; *Shadow mode* before S-25.7) runs the pipeline on closed
+tickets you pick and posts nothing — a trial run on tickets you already shipped (section 8,
+*Trial*). For each ticket that has a human merge request it also runs **one reviewer over that human
 merge request**, and that review is a task of its own: a card on the board keyed
-`mr!<iid>/shadow/<task id>`, in shadow mode, with its own spend counted against the shadow budget. It
-posts nothing on the merge request — every comment it would have written is recorded in the audit
-log as *would have* — and its findings, with a comparison of which of the agent's own acceptance
-criteria each side met, appear on the ticket's shadow report once it ends.
+`mr!<iid>/shadow/<task id>`, part of the trial, with its own spend counted against the trial's
+budget. It posts nothing on the merge request — every comment it would have written is recorded in
+the audit log as *would have* — and its findings, with a comparison of which of the agent's own
+acceptance criteria each side met, appear on the ticket's trial report once it ends.
 
 ### Step 6 — Review and finish
 
@@ -552,14 +554,18 @@ answers three questions in this order: what needs you, what is moving, and where
   section of Settings (*Stuck events*, *Failed background jobs*). Nobody else is shown them, or asked
   for them.
 - **Running now (N)**: every run that is running — its stage and role (the link to the run), the
-  project, the ticket, the model, how long it has run, what it has cost so far and the latest
-  progress line the agent reported. **Agents →** has the whole list.
-- **Projects**: one row per project — its name (the way into its board), its key, its readiness
+  project, the ticket, what it is doing in the words the Agents page uses (*Working: Reading files*,
+  *Thinking*, *Stuck: No activity for 12 min*), how long it has run, what it has cost so far and the
+  latest progress line the agent reported. **Agents →** has the whole list; a run's model is on its
+  own page.
+- **Projects**: one row per project — its name (the way into its board), its key, a word for its
+  status when it is not active (*Paused*, *Archived*), its readiness
   (what agents may do there, as on the Projects page), its open tasks and its spend over the last 30 days — and, for an admin, **New project**,
   which opens the wizard.
 - On the right, **Spend** — *Against the monthly cap*, the organisation's monthly cap as
   *$412 of $1,000* with a meter, when one is set (the month so far), and *Spend, last 30 days*
-  across all projects either way: two windows, each named on its own line — and **Instance**:
+  across all projects either way: two windows, each named on its own line, then **Organisation
+  budgets** (where those caps are set) and **Statistics** (what the spend bought) — and **Instance**:
   whether the live connection is up, and the version.
 
 Every box refreshes on its own when something happens — a question asked, a run started or
@@ -647,8 +653,8 @@ somebody:
   everything the drawing does, in words — *DEMO-1 · Checkout flow · Code review · working: Reading
   files · worker jan-mbp* — so a screen reader hears what a glance sees.
 - **List**: every live run as a row, what needs you first, then what is stuck, then the rest oldest
-  first — project, ticket and title, the stage, what the agent is doing, where it runs, the model, the
-  stage strip, how long and how much — with a `···` menu: **Open run**, **Open task** and **Cancel
+  first — project, ticket and title, the stage, what the agent is doing, where it runs, the
+  stage strip, how long and how much (the model is in the run's dialog) — with a `···` menu: **Open run**, **Open task** and **Cancel
   run…**, which asks before it stops the agent. A run that has just ended stays at the end of the
   list as *just finished* or *just ended* for as long as the map and the office keep it at its desk.
   Below it, what needs you and every seat with its slots.
@@ -852,8 +858,8 @@ a member or above. A viewer is not offered it; the export would refuse them.
 
 **The claim and the QA stage** show under the header's meta line when there is something to show (the
 project's ticket lifecycle, step 1). *ticket claimed* means the platform assigned the ticket to its
-own account and the tracker confirmed it; *claim (shadow)* means a shadow task recorded what it would
-have assigned and assigned nothing; *claim released* means the claim was given back — on a cancel, a
+own account and the tracker confirmed it; *Trial run* means a trial's task (section 8, *Trial*)
+recorded what it would have assigned and assigned nothing; *claim released* means the claim was given back — on a cancel, a
 rework, or a task that stopped between the assignment and its record — and the ticket is no longer
 the platform's. Each says when. A task that never claimed (no lifecycle saved, or a task older than
 the claim) shows nothing. **QA stage** means this task was created while the project mapped a *QA*
@@ -1334,18 +1340,19 @@ Two messages come from the platform rather than from a task:
 ## 7. Knowledge
 
 **A project → Knowledge.** On the left, the knowledge base's **files** as they exist in the project's
-repository, grouped by folder; click one to read it beside the list. Above the document:
+repository, grouped by folder. The page reads in the order you need it:
 
-- the **health report**, as a notice: what the nightly hygiene pass last found — a page the parser
-  refused (and which is therefore in no agent's context), links that point nowhere, expired pages,
-  duplicates — or that it found nothing wrong, or *No health report yet* before the first pass has
-  run. A finding is an observation; nothing rewrites a page because one names it;
-
-and below it the **Suggested edits** (the platform's knowledge *proposals*), one row each: the page it
-would change, its type and kind, and where it came from (*mined from merged history*, *drafted at
-project setup*, *from a task* …); **The change and its evidence** under a row holds the change itself and what it cites,
-and it is **open** on every row still waiting for a decision, so *Approve* is never pressed with the
-change collapsed.
+- first the **Suggested edits** (the platform's knowledge *proposals*) — the ones waiting for your
+  decision at the top, the decided ones below them — one row each: the page it would change, its
+  type and kind, and where it came from (*mined from merged history*, *drafted at project setup*,
+  *from a task* …); **The change and its evidence** under a row holds the change itself and what it
+  cites, and it is **open** on every row still waiting for a decision, so *Approve* is never pressed
+  with the change collapsed;
+- then the file you clicked on the left, if any;
+- then the **Health** report, as a notice: what the nightly hygiene pass last found — a page the
+  parser refused (and which is therefore in no agent's context), links that point nowhere, expired
+  pages, duplicates — or that it found nothing wrong, or *No health report yet* before the first pass
+  has run. A finding is an observation; nothing rewrites a page because one names it.
 **Approve** is on the row and **Reject** is in its `···` menu; a decision the server refuses says so
 under the list.
 
@@ -1398,9 +1405,17 @@ repository's file was last read. Read-only here: the settings are edited on the 
 page, which also proposes them to the repository (section 1, step 6); a YAML editor in the browser is
 not built.
 
-**A project → Budgets** shows each budget as a meter: its window (*Per month*), what has been spent
-of its limit (*$3.25 of $40.00*), and the share at which you are notified; a cap is set in the
-project's settings, under *Rules & limits*. A budget stops a *new* run from starting: the check
+**A project → Budgets** is where a project's cap is both read and set. It shows each budget as a
+meter: its window (*Per month*), what has been spent of its limit (*$3.25 of $40.00*), and the share
+at which you are notified. Below that, **where the money went**: pick a window (*Per day*, *Per
+week*, *Per month* — the default — or *In total*) and the page lists what the cost ledger booked in
+it **by stage**, most first, and the **top tasks**, each linking to its task (a trial's task says
+*Trial run*). Where part of a figure is the platform's own price for a run whose provider reported
+no cost, it says so (*$2.50 ($0.25 estimated)*); a run nothing could price is in no figure. Last on
+the page is the editor, **Project budgets**: a field per window, an empty field is no cap, and
+**Save budgets** writes the windows you changed. *Rules & limits* in the project's settings points
+here rather than carrying a second editor; the setup wizard keeps its own, because a project being
+created has no Budgets tab yet. A budget stops a *new* run from starting: the check
 happens when a run is admitted, so a run already under way finishes and is accounted for. There are
 three levels — organisation, project and per-task — and the window rolls over on the organisation's
 own timezone without anything scheduled.
@@ -1456,15 +1471,21 @@ pauses before it. The task cap has no configuration key in this build: raise it 
 **Raise this task's cap**, to at least what its remaining stages may spend. In `local` mode the
 dollars are list-price estimates (above), but they are what admission compares.
 
-### Shadow
+### Trial
 
-**A project → Shadow** runs the pipeline on closed tickets you pick and compares what it would have
-built with what a human merged; nothing is written outside the platform. Enter up to 25 ticket keys
-and **Start a shadow batch** (when the project's shadow mode allows one — otherwise the page says
-why). Each batch is a row — when it started, how many tickets, whether it is still running, what it
-spent — and its name opens the batch's own page: its figures in one strip (*Tickets*, *Refused*,
-*Reported*, *Compared*, *Spent*, *Budget*), the cost per ticket by size, the similarity distribution,
-the launch candidates and every ticket with its similarity — or the reason it has none.
+**A project → Trial** is a trial run on tickets you already shipped: it runs the pipeline on closed
+tickets you pick and compares what it would have built with what a person merged; nothing is written
+outside the platform. (It was called *Shadow*; its address is still `/projects/<key>/shadow`.) The
+tab is there **before the project's first live task, and while it has a trial**; otherwise the page
+is under the project's **Settings → Trial run**, which links to it. The page shows one thing at a
+time: while it loads, a line saying so; if it could not be read, that error alone; if a trial may not
+start, why, in a sentence (*Trial runs are off for this project …* — switch on **Trial runs** under
+*Rules & limits*, with How much agents do alone at Observe); otherwise the form: enter up to 25 ticket
+keys and **Start a trial run**. Each trial is a row — when it started, how many tickets, whether it
+is still running, what it spent — and its name opens the trial's own page: its figures in one strip
+(*Tickets*, *Refused*, *Reported*, *Compared*, *Spent*, *Budget*), the cost per ticket by size, the
+similarity distribution, the launch candidates and every ticket with its similarity — or the reason
+it has none. A trial's task says *Trial run* beside its ticket claim, because it assigned nothing.
 
 ## 9. Integrations
 
@@ -1546,12 +1567,16 @@ retire, and the dialog says why.
 ## 10. Audit log
 
 One row per configuration change, newest first: who made it — their initials and name, or *A removed
-account* when that person's account has gone — what they changed, in words (*changed a project's
-settings: Autonomy level*), and when. **Details** under a row holds the raw change and the id of what
-was changed; a secret in it appears as the literal string `"changed"` — that is the server's doing,
-not the screen's. The filter menu in the list's header shows the changes to one kind of thing
-(*Organisation*, *Project*, *Integration*, *Connections*, *Budget* or *Person*) or to all of them, and
-**Load older entries** pages back.
+account* when that person's account has gone — what they changed, in words, naming the project when
+it is a project's settings (*changed the settings of Payments: Autonomy level*), and when.
+**Details** under a row holds the raw change and the id of what was changed; a secret in it appears
+as the literal string `"changed"` — that is the server's doing, not the screen's. Two filter menus
+sit in the list's header. **Project** keeps one project's settings changes: the server filters by
+kind only, so it asks for project changes and keeps that project's among the entries loaded so far
+(the page says so; **Load older entries** looks further back), and a change to a project's
+connections or a budget, which does not name its project, is not among them. The other shows the
+changes to one kind of thing (*Organisation*, *Project*, *Integration*, *Connections*, *Budget* or
+*Person*) or to all of them, and **Load older entries** pages back.
 
 Every action a person takes through the product is recorded with the acting user, the command and
 its parameters — but **this screen lists only the configuration changes**; a task's own commands are
@@ -1619,13 +1644,15 @@ mode (an environment setting) and feature flags (a project's own) are not organi
 project's features are switched on its own settings page.
 
 **A project's Settings tab** has the same shape, one page per section — **Connections · Execution ·
-Default branch · Discovery & readiness · Business context · History · Rules & limits · Repository
-configuration · Prompt files · Knowledge** — and mirrors every step of the setup wizard, so nothing
-is only reachable while a project is being set up; opening the tab opens *Connections*. The wizard's
-own controls keep their own buttons there (How much agents do alone, the ticket lifecycle, the project
-budgets), because each is one decision with its own save. *Rules & limits* (*Policies & WIP*
-before) holds the operating mode —
-**How much agents do alone**, the features, the **Sensitive areas**, the project budgets, the
+Default branch · Discovery & readiness · Business context · History · Trial run · Rules & limits ·
+Repository configuration · Prompt files · Knowledge** — and mirrors every step of the setup wizard,
+so nothing is only reachable while a project is being set up; opening the tab opens *Connections*.
+The wizard's own controls keep their own buttons there (How much agents do alone, the ticket
+lifecycle), because each is one decision with its own save; the project budgets are set on the
+project's **Budgets** tab (section 8), where the money they cap is shown. *Trial run* links to the
+project's Trial page, which is reached from here once its tab is gone. *Rules & limits* (*Policies &
+WIP* before) holds the operating mode —
+**How much agents do alone**, the features, the **Sensitive areas**, a pointer to *Budgets*, the
 notifications and who changed what — with the verification mode (*Checks run by: agents* or *CI*)
 and **Parallel tasks**, the limits in force. Unlike an organisation
 section it has **no one Save at its foot**: each card saves on its own, some as you change them and
@@ -1694,9 +1721,12 @@ cycle time), **Quality** (first-pass acceptance, clean first-MR rate, human inte
 returns per delivered task), **Cost** (spend in this range, lifetime cost per delivered task,
 estimated share of spend, estimate error, cache hit ratio), **Time** (agent time, question response
 time, reviewer minutes per delivered task, human minutes), then **Knowledge** and **Merge requests
-and tickets** for the rest. Each figure is a card: the value, its name, and one line saying how many
-observations it rests on (*1 observation*, *12 observations*). Hover or focus the name to read its
-definition. Where the period holds at least two days (or weeks, or months) with a value, a small line
+and tickets** for the rest. Each figure is a card: the value, its name, which way is good (*Higher
+is better*, *Lower is better*, or *A volume, not a score* for a count of how much happened — this
+build shows no previous period to compare with), and what the figure is from (*From 12 delivered
+tasks*, *From 3 answered questions*, *From 5 data points* where the count is not of one thing).
+The range above the cards is written like every other date (*Sep 10, 2026 to Oct 9, 2026*), with
+the timezone the days were cut in. Hover or focus the name to read its definition. Where the period holds at least two days (or weeks, or months) with a value, a small line
 under the figure shows its trend.
 
 How to read a few of them:

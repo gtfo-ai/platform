@@ -656,6 +656,19 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   });
 
+  it('serves the spend breakdown S-25.7 added, and refuses an anonymous caller before its query', async () => {
+    // Named positively (standing rule 10). The Budgets tab's per-stage and top-task breakdown: a
+    // bad `window` from an anonymous caller is still a 401, because the guard runs at
+    // `preValidation` — before the querystring is validated — and a 400 would describe the route.
+    expect((await probe('/api/projects/{}/spend')).served).toBe(true);
+    const response = await app.inject({
+      method: 'GET',
+      url: `${probeUrl('/api/projects/{}/spend')}?window=fortnight`,
+    });
+    const body = response.json() as ApiErrorBody;
+    expect(`${response.statusCode} ${body.error?.code ?? ''}`).toBe('401 unauthenticated');
+  });
+
   it('refuses an anonymous caller on every settings write, by its own method', async () => {
     // The same hole the wizard's commands have — Fastify validates the body before `preHandler` —
     // asked with **no body at all**, so a guard that slipped back answers 400 and fails here.

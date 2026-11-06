@@ -10,7 +10,7 @@
  * only when the tasks read says `can_start_task`, and the connection's live region keeps the exact
  * word the realtime spec asserts.
  */
-import type { ProjectSummary, RunRecord, UserRole } from '@platform/contracts';
+import type { ProjectSummary, RunRecord, TaskListItem, UserRole } from '@platform/contracts';
 import { QueryClient } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -121,10 +121,64 @@ interface World {
   readonly canStart?: boolean;
   /** The signed-in role; `member` unless a case needs another. */
   readonly role?: UserRole;
+  /** The board's first page of tasks; empty unless a case needs some (S-25.7's Trial tab). */
+  readonly tasks?: readonly TaskListItem[];
+  /** How many trials (shadow batches) the project has; the read answers 404 when undefined. */
+  readonly trials?: number;
 }
+
+/** A board row (S-25.7): a live task unless `mode` or the ticket's provider says otherwise. */
+const task = (overrides: Partial<TaskListItem>): TaskListItem =>
+  ({
+    id: '00000000-0000-4000-8000-0000000000b1',
+    project_id: '00000000-0000-4000-8000-000000000101',
+    ticket: { provider: 'jira', key: 'ACME-21', url: 'https://tickets.example.invalid/ACME-21' },
+    ticket_title: 'A ticket',
+    template: 'feature',
+    mode: 'normal',
+    state: 'active',
+    current_stage: 'implementation',
+    size: null,
+    branch: null,
+    mr_ref: null,
+    workpad_ref: null,
+    iteration_counters: {},
+    risk_classes: [],
+    coverage: null,
+    dependencies: null,
+    required_reviewers: null,
+    review_threads: null,
+    conflict: null,
+    cost_actual_usd: 0,
+    unmeasured_runs: 0,
+    budget_cap_usd: 50,
+    paused_reason: null,
+    paused_budget_scope: null,
+    cost_estimated_usd: 0,
+    estimate_usd: null,
+    estimate_basis: null,
+    estimate_samples: null,
+    estimate_accuracy: null,
+    requested_by_user_id: null,
+    requested_by_identity: null,
+    created_at: '2026-06-01T09:00:00.000Z',
+    updated_at: '2026-06-01T09:00:00.000Z',
+    completed_at: null,
+    ticket_claim: null,
+    qa_stage: false,
+    // The card's glance (S-23.9a).
+    stages: [],
+    open_questions: 0,
+    pending_approvals: 0,
+    loop_limits: null,
+    ...overrides,
+  }) as TaskListItem;
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+/** How many times the trials were read: only once a live task makes them the question. */
+let trialReads = 0;
 
 const fetchFor = (world: World) =>
   (async (input: RequestInfo | URL): Promise<Response> => {
@@ -162,9 +216,26 @@ const fetchFor = (world: World) =>
         approvals: Array.from({ length: world.approvals ?? 0 }, (_, index) => approval(index + 1)),
       });
     }
+    if (/^\/api\/projects\/[^/]+\/shadow-batches$/.test(path) && world.trials !== undefined) {
+      trialReads += 1;
+      return json({
+        items: Array.from({ length: world.trials }, (_, index) => ({
+          id: `00000000-0000-4000-8000-0000000005${String(index).padStart(2, '0')}`,
+          project_id: '00000000-0000-4000-8000-000000000101',
+          created_at: '2026-06-01T09:00:00.000Z',
+          completed_at: null,
+          budget_usd: null,
+          spent_usd: 0,
+          tickets: 1,
+          refused: 0,
+        })),
+        can_start: true,
+        blocked_reason: null,
+      });
+    }
     if (/^\/api\/projects\/[^/]+\/tasks$/.test(path)) {
       return json({
-        items: [],
+        items: world.tasks ?? [],
         next_cursor: null,
         can_start_task: world.canStart === true,
         can_cancel_task: true,
@@ -199,6 +270,7 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  trialReads = 0;
 });
 
 /** The top bar, once the authenticated route has rendered it. */
@@ -508,13 +580,15 @@ describe('the project layout route', () => {
       screen.getByRole('button', { name: 'Readiness: Agents plan on their own' }).textContent,
     ).toBe('Agents plan on their own');
     const tabs = screen.getByRole('navigation', { name: 'Project' });
+    // No live task yet, so the Trial tab is there (S-25.7) once the tasks read has answered.
+    await within(tabs).findByRole('link', { name: 'Trial' });
     const links = within(tabs).getAllByRole('link');
     expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
       ['Board', '/projects/p1'],
       ['Knowledge', '/projects/p1/knowledge'],
       ['Pipeline', '/projects/p1/pipeline'],
       ['Budgets', '/projects/p1/budgets'],
-      ['Shadow', '/projects/p1/shadow'],
+      ['Trial', '/projects/p1/shadow'],
       ['Settings', '/projects/p1/settings'],
     ]);
     expect(within(tabs).getByRole('link', { name: 'Board' }).getAttribute('aria-current')).toBe(
@@ -535,6 +609,65 @@ describe('the project layout route', () => {
         .queryAllByRole('link', { name: 'Knowledge' })
         .filter((link) => !tabs.contains(link)),
     ).toEqual([]);
+  });
+
+  describe('the Trial tab (S-25.7, product/10’s IA amendment)', () => {
+    const tabNames = async (): Promise<string[]> => {
+      const tabs = await screen.findByRole('navigation', { name: 'Project' });
+      return within(tabs)
+        .getAllByRole('link')
+        .map((link) => link.textContent ?? '');
+    };
+
+    it('is hidden once the project has a live task and no trial, and the trials are read to decide', async () => {
+      start({ projects: [project(1)], tasks: [task({})], trials: 0 }, '/projects/p1');
+      await waitFor(() => {
+        expect(trialReads).toBe(1);
+      });
+      await waitFor(async () => {
+        expect(await tabNames()).toEqual(['Board', 'Knowledge', 'Pipeline', 'Budgets', 'Settings']);
+      });
+    });
+
+    it('is shown while a trial exists, even after the first live task', async () => {
+      start({ projects: [project(1)], tasks: [task({})], trials: 1 }, '/projects/p1');
+      await waitFor(async () => {
+        expect(await tabNames()).toContain('Trial');
+      });
+    });
+
+    it('is shown before the first live task — a trial’s own task and a discovery are not one — without reading the trials', async () => {
+      start(
+        {
+          projects: [project(1)],
+          tasks: [
+            task({ id: '00000000-0000-4000-8000-0000000000c1', mode: 'shadow' }),
+            task({
+              id: '00000000-0000-4000-8000-0000000000c2',
+              template: 'discovery',
+              ticket: {
+                provider: 'platform',
+                key: 'discovery',
+                url: 'https://platform.example.invalid/discovery',
+              },
+            }),
+          ],
+          trials: 0,
+        },
+        '/projects/p1',
+      );
+      await waitFor(async () => {
+        expect(await tabNames()).toContain('Trial');
+      });
+      expect(trialReads).toBe(0);
+    });
+
+    it('is shown, and current, on the Trial page reached from Settings', async () => {
+      start({ projects: [project(1)], tasks: [task({})], trials: 0 }, '/projects/p1/shadow');
+      const tabs = await screen.findByRole('navigation', { name: 'Project' });
+      const trial = await within(tabs).findByRole('link', { name: 'Trial' });
+      expect(trial.getAttribute('aria-current')).toBe('page');
+    });
   });
 
   it('marks the sub-page’s tab, and omits Start a ticket for a caller who may not start one', async () => {

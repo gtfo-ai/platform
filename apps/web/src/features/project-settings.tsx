@@ -287,9 +287,24 @@ const PoliciesAndWip = ({ project }: { readonly project: Project }): ReactElemen
     <>
       <SettingsSectionHeader
         title="Rules & limits"
-        description="How autonomous the agents are, which features are on, the risk classes, budgets and notifications — and how much work may run at once."
+        description="How autonomous the agents are, which features are on, the sensitive areas and notifications — and how much work may run at once."
       />
-      <OperatingMode projectId={project.id} audit />
+      <OperatingMode
+        projectId={project.id}
+        audit
+        budgets={
+          // S-25.7 (product/10's IA amendment): the cap is read and set on the Budgets tab, once.
+          <Card className="flex flex-col gap-1">
+            <h3 className="text-base font-semibold">Budgets</h3>
+            <p className="text-sm text-fg-muted">
+              Budgets is where the cap is set, beside what the project has spent and on what.{' '}
+              <Link to="/projects/$key/budgets" params={{ key: project.key }}>
+                Open Budgets
+              </Link>
+            </p>
+          </Card>
+        }
+      />
 
       {/* BD-025's 2026-10-05 amendment (backlog 460): whether agents or CI run the checks. */}
       <VerificationMode projectId={project.id} />
@@ -504,6 +519,25 @@ const SECTION: Readonly<
         description="Lessons mined from the project’s merged history, proposed as knowledge pages."
       />
       <HistoryBootstrap projectId={project.id} projectKey={project.key} />
+    </>
+  ),
+  // S-25.7 (product/10's 2026-11-06 IA amendment): the Trial tab is shown only before the first live
+  // task or while a trial exists, so this is where the page is always reachable from.
+  trial: ({ project }) => (
+    <>
+      <SettingsSectionHeader
+        title="Trial run"
+        description="A trial run on tickets you already shipped: what the agents would have built, compared with what your team merged, and at what cost."
+      />
+      <p className="text-sm">
+        <Link to="/projects/$key/shadow" params={{ key: project.key }}>
+          Open the trial page
+        </Link>
+      </p>
+      <p className="text-xs text-fg-muted">
+        A trial writes nothing outside the platform. It is switched on with <em>Trial runs</em>{' '}
+        under Rules &amp; limits, and runs only while How much agents do alone is at Observe.
+      </p>
     </>
   ),
   policies: PoliciesAndWip,

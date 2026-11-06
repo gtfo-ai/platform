@@ -8,7 +8,7 @@
  * The one exception is a read no event announces: the *Add a worker* wizard asks for the workers
  * every 5 s while the person waits for a machine (`features/worker-wizard.tsx` says why).
  */
-import type { BusinessInterviewRequest } from '@platform/contracts';
+import type { BudgetWindow, BusinessInterviewRequest } from '@platform/contracts';
 import {
   type UseQueryResult,
   useInfiniteQuery,
@@ -217,6 +217,20 @@ export const useProjectBudgets = (projectId: string | null) => {
   return useQuery({
     queryKey: queryKeys.projectBudgets(projectId ?? ''),
     queryFn: () => endpoints.projectBudgets(projectId ?? ''),
+    enabled: projectId !== null,
+    ...FOREVER,
+  });
+};
+
+/**
+ * `GET /api/projects/:id/spend?window=` — one budget window's booked cost per stage and its top
+ * tasks (S-25.7). Under the project's prefix, so a `project:<id>` frame refreshes it with the caps.
+ */
+export const useProjectSpend = (projectId: string | null, window: BudgetWindow) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.projectSpend(projectId ?? '', window),
+    queryFn: () => endpoints.projectSpend(projectId ?? '', window),
     enabled: projectId !== null,
     ...FOREVER,
   });
