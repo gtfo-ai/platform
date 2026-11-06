@@ -147,6 +147,9 @@ test('Home: a press on a project’s meta line opens it, and its counts keep the
     const fact = row.locator(`[title="${definition}"]`);
     expect(await onTopAtCentre(page, fact), definition).toBe(true);
   }
+  // S-25.2: the readiness badge is a button over the row link, so a press on it opens the level's
+  // definition rather than the project.
+  expect(await onTopAtCentre(page, row.getByRole('button', { name: /^Readiness: / }))).toBe(true);
   const meta = row.locator('[data-row-meta]');
   // Calibration: the meta line is under the project's link, not a target of its own.
   expect(await hitAtCentre(page, meta)).toBe(`a /projects/${PROJECT_KEY}`);

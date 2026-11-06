@@ -186,7 +186,7 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
             }
             state={
               <>
-                <ReadinessLabel level={project.readiness_level} />
+                <ReadinessLabel level={project.readiness_level} project={project} />
                 {project.status === 'active' ? null : (
                   <Badge tone="neutral">{project.status}</Badge>
                 )}

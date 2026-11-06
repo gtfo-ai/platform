@@ -39,6 +39,10 @@
  * stage dialog's log, both with no violation — and the live edge's dash animation stops under
  * reduced motion, which React Flow's own stylesheet does not do.
  *
+ * Since S-25.2, the first **Popover** (Base UI, the readiness badge's definition): opened on the
+ * Projects list by a click and by Enter, positioned under its badge, closed by Escape with the
+ * focus back, with no violation.
+ *
  * Since S-23.6, the **Agents page's three views**: the fleet map (a second lazy canvas chunk), the
  * pixel office (a lazy chunk of SVG text grids, always the dark room) and the list, each over the
  * fixtures' three runs, two workers and hostile titles — drawn, opened and switched under the
@@ -215,6 +219,38 @@ test('Base UI opens a menu and a tooltip under the policy without a violation (T
   if (tipBox !== null && labelBox !== null) {
     expect(tipBox.y + tipBox.height).toBeLessThanOrEqual(labelBox.y + 1);
   }
+
+  expect(await violations(page)).toEqual([]);
+});
+
+test('Base UI opens a popover under the policy without a violation (S-25.2)', async ({ page }) => {
+  await signIn(page);
+  // The readiness badge on the Projects list: a Base UI Popover, opened by a click and closed by
+  // Escape with the focus back on it. The fixture's project is level 3.
+  await page.goto('/projects');
+  const trigger = page.getByRole('button', { name: 'Readiness: Agents plan on their own' });
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  const popover = page.getByRole('dialog', { name: 'Level 3 · Agent-ready' });
+  await expect(popover).toBeVisible();
+  await expect(popover.getByRole('link', { name: 'Discovery & readiness' })).toHaveAttribute(
+    'href',
+    `/projects/${PROJECT_KEY}/settings/discovery`,
+  );
+  // Positioned under its trigger rather than left at the top of the document: the CSSOM write took
+  // effect, which is what the policy question was.
+  const [popBox, triggerBox] = await Promise.all([popover.boundingBox(), trigger.boundingBox()]);
+  expect(popBox).not.toBeNull();
+  expect(triggerBox).not.toBeNull();
+  if (popBox !== null && triggerBox !== null) {
+    expect(popBox.y).toBeGreaterThanOrEqual(triggerBox.y + triggerBox.height - 1);
+  }
+  await page.keyboard.press('Escape');
+  await expect(popover).toBeHidden();
+  await expect(trigger).toBeFocused();
+  // And from the keyboard.
+  await page.keyboard.press('Enter');
+  await expect(popover).toBeVisible();
 
   expect(await violations(page)).toEqual([]);
 });

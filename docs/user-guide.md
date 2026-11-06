@@ -60,8 +60,8 @@ shows only its number. There is no
 
 **Inside a project the row becomes the project's own tabs** — **Board**, **Knowledge**,
 **Pipeline**, **Budgets**, **Shadow** and **Settings** — under a header with the project's name, its
-key, its readiness level and — on the board, if you may start a ticket in it — a **Start a ticket**
-button. A task's page sits under its project's header too, on the Board tab, when opened from its
+key, its readiness (what agents may do there, below under *Projects*) and — on the board, if you may
+start a ticket in it — a **Start a ticket** button. A task's page sits under its project's header too, on the Board tab, when opened from its
 board; from the inbox or Agents it does not yet. Every address is the one it always was:
 `/projects/ACME` is the board, `/projects/ACME/knowledge` its knowledge, and so on.
 
@@ -539,7 +539,7 @@ answers three questions in this order: what needs you, what is moving, and where
   project, the ticket, the model, how long it has run, what it has cost so far and the latest
   progress line the agent reported. **Agents →** has the whole list.
 - **Projects**: one row per project — its name (the way into its board), its key, its readiness
-  level, its open tasks and its spend over the last 30 days — and, for an admin, **New project**,
+  (what agents may do there, as on the Projects page), its open tasks and its spend over the last 30 days — and, for an admin, **New project**,
   which opens the wizard.
 - On the right, **Spend** — *Against the monthly cap*, the organisation's monthly cap as
   *$412 of $1,000* with a meter, when one is set (the month so far), and *Spend, last 30 days*
@@ -577,11 +577,20 @@ replaced or the integration is retired. **Fix it** opens that integration, whose
 ### Projects
 
 **Projects** in the top navigation: every project you can read, one row each — its name (the way
-into its board), its key, its **readiness** level with the level's name (*L0 Unverified* in red;
-*L1 Basic* and *L2 Reliable*; *L3 Agent-ready* and up in green), its open tasks and its spend over
-the last 30 days. **New project** at the top right opens the wizard; with no project yet, the page
+into its board), its key, its **readiness**, its open tasks and its spend over the last 30 days. **New project** at the top right opens the wizard; with no project yet, the page
 says what a project is and offers the same. How many things wait for you is not shown per project
 yet — the inbox's count in the top bar is the total.
+
+**Readiness says what agents may do in the project**, not the ladder's number
+([product/17](product/17-repository-readiness.md)): *Plans need your OK* at level 0 — the normal
+start, drawn in a neutral grey, never red — *Big plans need your OK* at levels 1 and 2, *Agents plan
+on their own* at level 3 and *Ready for more autonomy* at level 4, the last two in green. The same
+badge is on the project's header and on Home. **Press it** (or focus it and press Enter) for its
+definition: the level's name and number (*Level 0 · Unverified*), what the level means now, the next
+level and what it needs, the first criterion it is missing with how to fix it, and a link to the
+project's *Discovery & readiness* settings. The missing criterion is read from the project's latest
+readiness evaluation when you open it; a project discovery has not evaluated yet says nothing is
+known to be missing.
 
 ### Agents
 

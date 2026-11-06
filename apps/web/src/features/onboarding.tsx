@@ -88,7 +88,7 @@ import {
   type WizardStepId,
 } from './onboarding-steps.js';
 import { AUTONOMY_CHOICES, OperatingMode } from './operating-mode.js';
-import { readinessWord } from './readiness-label.js';
+import { readinessNameAndWord, readinessSummary } from './readiness-label.js';
 import { ReadinessNotices } from './readiness-notices.js';
 import { StepActionToneContext, useStepActionTone } from './step-action-tone.js';
 
@@ -200,7 +200,8 @@ const ReadinessPanel = ({ readiness }: { readonly readiness: ReadinessResponse }
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="text-base font-semibold">Readiness level {readiness.level}</span>
         <span className="text-sm text-fg-muted">
-          {readinessWord(readiness.level)} · evaluated {formatDateTime(readiness.evaluated_at)}
+          {readinessNameAndWord(readiness.level)} · evaluated{' '}
+          {formatDateTime(readiness.evaluated_at)}
         </span>
       </div>
       {/* A native <meter>, as the budgets screen's: the element carries the value and the range. */}
@@ -345,7 +346,7 @@ const FinishStep = ({
         </Fact>
         <Fact label="Readiness">
           {reads.readiness.isSuccess
-            ? `Level ${reads.readiness.data.level} — ${readinessWord(reads.readiness.data.level)}`
+            ? readinessSummary(reads.readiness.data.level)
             : 'Not evaluated yet'}
         </Fact>
         <Fact label="Business context">

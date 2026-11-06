@@ -678,10 +678,19 @@ describe('Home, the projects and the rail', () => {
     const projectLink = within(rows[0] as HTMLElement).getByRole('link', { name: 'Project 1' });
     // S-23.26: the project's name is the row's stretched link.
     expect(projectLink.hasAttribute(ROW_LINK_ATTRIBUTE)).toBe(true);
-    expect(rows[0]?.textContent).toContain('L2 Reliable');
+    // S-25.2: what agents may do, as the popover trigger that defines it.
+    expect(
+      within(rows[0] as HTMLElement).getByRole('button', {
+        name: 'Readiness: Big plans need your OK',
+      }),
+    ).toBeTruthy();
     expect(rows[0]?.textContent).toContain('1 open');
     expect(rows[0]?.textContent).toContain('$10.00 · 30d');
-    expect(rows[1]?.textContent).toContain('L0 Unverified');
+    expect(
+      within(rows[1] as HTMLElement)
+        .getByRole('button', { name: 'Readiness: Plans need your OK' })
+        .getAttribute('data-readiness-tone'),
+    ).toBe('neutral');
 
     const spend = box('Spend');
     expect(await within(spend).findByText('$412.00 of $1,000.00')).toBeTruthy();

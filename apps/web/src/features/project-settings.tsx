@@ -80,6 +80,7 @@ import { ExecutionSettings } from './execution-settings.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 import { ProjectPromptFiles } from './project-prompts.js';
+import { readinessNameAndWord, readinessTone } from './readiness-label.js';
 import { ReadinessNotices } from './readiness-notices.js';
 import { Rediscovery } from './rediscovery.js';
 import { SettingsFrame, SettingsSectionHeader } from './settings-frame.js';
@@ -226,8 +227,9 @@ const DiscoveryAndReadiness = ({ project }: { readonly project: Project }): Reac
       />
       {readiness.isSuccess ? (
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <Badge tone={readiness.data.level >= 2 ? 'success' : 'warning'}>
-            Readiness level {readiness.data.level}
+          {/* product/17's 2026-11-06 amendment: level 0 is the normal start, drawn neutral. */}
+          <Badge tone={readinessTone(readiness.data.level)}>
+            {`Readiness level ${readiness.data.level} · ${readinessNameAndWord(readiness.data.level)}`}
           </Badge>
           <span className="text-xs text-fg-muted">
             evaluated {formatDateTime(readiness.data.evaluated_at)} by{' '}

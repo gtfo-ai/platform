@@ -766,7 +766,7 @@ describe('the New project wizard', () => {
     await waitFor(() => {
       expect(set.textContent).toContain('Acme Jira, Acme GitLab');
     });
-    expect(set.textContent).toContain('Level 1 — L1 Basic');
+    expect(set.textContent).toContain('Big plans need your OK (level 1, Basic)');
     expect(set.textContent).toContain('Supervised');
     expect(set.textContent).toContain('1 drafted page');
     expect(set.textContent).toContain('Skipped — it can be answered later from the settings');
