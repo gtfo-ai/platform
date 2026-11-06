@@ -257,8 +257,9 @@ services:
     stop_grace_period: 60s
     restart: unless-stopped
 
-  # **The updater** (WP-287, TD-032 decisions 3, 4 and 6): follows the core's digests by itself. Every
-  # 5 minutes (and on a 426 the worker reports) it asks the core's `release`, **verifies every advertised
+  # **The updater** (WP-287, TD-032 decisions 3, 4 and 6): follows the core's digests by itself. At
+  # start, then every minute (backing off on failure), and on a 426 the worker reports, it asks the
+  # core's `release`, **verifies every advertised
   # digest's build attestation** against the identity below — configured here, never served by the core
   # — refuses a downgrade, pulls, drains the worker, waits until it is idle, and starts a one-shot
   # `update-apply` container from the **new** image, which writes the new build back into this folder

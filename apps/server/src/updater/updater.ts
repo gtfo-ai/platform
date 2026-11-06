@@ -376,7 +376,8 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     );
   };
 
-  const launchApply = async (plan: UpdatePlan, image: string): Promise<void> => {
+  /** Starts the apply and waits for it: `true` only when `state.json` reads `succeeded` for `plan`. */
+  const launchApply = async (plan: UpdatePlan, image: string): Promise<boolean> => {
     const me = await selfContainer();
     const created = (
       await docker(
@@ -410,6 +411,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       { update_id: plan.id, result: state?.result ?? null, detail: state?.detail ?? null },
       'the apply container ended',
     );
+    return state !== null && state.id === plan.id && state.result === 'succeeded';
   };
 
   /**
@@ -619,8 +621,9 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       finished_at: null,
       reported: false,
     });
-    await launchApply(plan, to.platform);
-    return 'ok';
+    // An apply that did not end `succeeded` — rolled back, failed, or a state that cannot be read
+    // (so nothing settled it) — is a failed poll: it backs off rather than draining again in a minute.
+    return (await launchApply(plan, to.platform)) ? 'ok' : 'failed';
   };
 
   const recover = async (): Promise<void> => {
@@ -736,8 +739,8 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
         } catch (error) {
           logger.error({ err: error }, 'the start-up recovery failed');
         }
-        // The first poll is now, not one interval in: a worker installed one build behind its core
-        // asks at once (TD-032's 2026-11-06 amendment).
+        // The first poll is at start, before the first wait (as before; TD-032's 2026-11-06
+        // amendment holds it): a worker installed one build behind its core asks at once.
         let failures = 0;
         while (!stopped) {
           let outcome: PollOutcome;
