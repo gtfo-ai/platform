@@ -1526,28 +1526,6 @@ export const listTasksQuerySchema = paginationQuerySchema.extend({
 });
 
 /**
- * `GET /api/projects/:id/tasks` — one page of a project's tasks, newest first (WP-15h part 2).
- *
- * This one **is** paginated, because a project accumulates tasks without bound and the client
- * already sends `limit` and `cursor`. `next_cursor` is opaque: it is the keyset the server issued,
- * and a client that parses it is reading a shape no contract fixes.
- */
-/**
- * One task of the board's page (S-23.9a): the {@link taskRecordSchema} record plus what a card says
- * at a glance — which phase, for how long, and whether it waits on a person. Read over the page's
- * ids and never over the project, as the conflict badge's read is.
- *
- * - `stages`: the task's entered `task_stages` rows, oldest first (`entered_at`, then `attempt`) —
- *   the strip `phaseStagesFor` draws from, and the current row's `entered_at` is the card's time
- *   in stage. Nothing upcoming is invented: a stage the task has not entered is not here.
- * - `open_questions` / `pending_approvals`: the task's `questions` with status `open` and its
- *   `approvals` with status `pending` — the counts the inbox lists for it.
- * - `loop_limits`: the task's **frozen** iteration limits over the defaults (the `/pipeline`
- *   read's `frozenLimits`), keyed as `iteration_counters` is, so a card can say *code review 2/3*.
- *   `null` when the stored limits do not parse: the card then says the count alone rather than a
- *   ceiling it does not know.
- */
-/**
  * The CI failure a `ci_gate` attempt recorded (S-25.11), read off `task_stages.signature` — the
  * convergence rule's `ci:<status>:<failing jobs, sorted>@<head>` (`ciFailureSignature`), which the
  * gate writes on the attempt that failed. `jobs` is the failing jobs' names **as the signature
@@ -1622,8 +1600,28 @@ export const taskStopSchema = z.strictObject({
 export type TaskStop = z.infer<typeof taskStopSchema>;
 
 /**
+ * `GET /api/projects/:id/tasks` — one page of a project's tasks, newest first (WP-15h part 2).
+ *
+ * This one **is** paginated, because a project accumulates tasks without bound and the client
+ * already sends `limit` and `cursor`. `next_cursor` is opaque: it is the keyset the server issued,
+ * and a client that parses it is reading a shape no contract fixes.
+ */
+/**
+ * One task of the board's page (S-23.9a): the {@link taskRecordSchema} record plus what a card says
+ * at a glance — which phase, for how long, and whether it waits on a person. Read over the page's
+ * ids and never over the project, as the conflict badge's read is.
+ *
+ * - `stages`: the task's entered `task_stages` rows, oldest first (`entered_at`, then `attempt`) —
+ *   the strip `phaseStagesFor` draws from, and the current row's `entered_at` is the card's time
+ *   in stage. Nothing upcoming is invented: a stage the task has not entered is not here.
+ * - `open_questions` / `pending_approvals`: the task's `questions` with status `open` and its
+ *   `approvals` with status `pending` — the counts the inbox lists for it.
+ * - `loop_limits`: the task's **frozen** iteration limits over the defaults (the `/pipeline`
+ *   read's `frozenLimits`), keyed as `iteration_counters` is, so a card can say *code review 2/3*.
+ *   `null` when the stored limits do not parse: the card then says the count alone rather than a
+ *   ceiling it does not know.
  * - `latest_return` / `stop` (S-25.11): the task's newest {@link taskReturnSchema} and its
- *   {@link taskStopSchema} — what the card's short form says ("CI failed · fixing, round 2 of 3").
+ *   {@link taskStopSchema} — what the card's short form says ("CI failed · fixing, round 2/3").
  */
 export const taskListItemSchema = taskRecordSchema.extend({
   latest_return: taskReturnSchema.nullable(),

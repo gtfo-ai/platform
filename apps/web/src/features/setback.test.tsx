@@ -16,7 +16,7 @@ import type {
 } from '@platform/contracts';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cardSetback } from './board-card.js';
+import { cardSetback, SetbackLine } from './board-card.js';
 import {
   jobsPhrase,
   openReturn,
@@ -239,6 +239,25 @@ describe('fixing: the agent is on it', () => {
     } satisfies TaskListItem;
     expect(cardSetback(card)).toBe('CI failed · fixing, round 2/3');
     expect(cardSetback({ ...card, latest_return: null })).toBeNull();
+    // The fixing line asks nothing, so it is muted on the card; a stop keeps the attention tone.
+    render(<SetbackLine task={card} />);
+    const fixing = document.querySelector('[data-card-setback]');
+    expect(fixing?.getAttribute('data-card-setback')).toBe('fixing');
+    expect(fixing?.className).toContain('text-fg-muted');
+    cleanup();
+    render(
+      <SetbackLine
+        task={{
+          ...card,
+          state: 'needs_human',
+          current_stage: 'ci_gate',
+          stop: stop({ cause: 'no_answer', ci_failure: null }),
+        }}
+      />,
+    );
+    const stopped = document.querySelector('[data-card-setback]');
+    expect(stopped?.getAttribute('data-card-setback')).toBe('stopped');
+    expect(stopped?.className).toContain('text-attention');
   });
 
   it('renders the job names the row recorded as text', () => {
@@ -271,6 +290,32 @@ describe('not recorded: a return that says so rather than guessing', () => {
     expect(sentence?.getAttribute('data-setback-recorded')).toBe('no');
     expect(sentence?.textContent).toBe(
       'It went back from CI; the reason was not recorded. The Developer is working on it.',
+    );
+  });
+
+  it('says a returned attempt whose rounds were used up never went anywhere', () => {
+    const spent = ciReturn({ attempt: 4 });
+    const value = stop({ cause: 'tries_spent', attempt: 4, loop: 'ci_fix' });
+    expect(timelineReturnLine(spent, value)).toBe(
+      'CI failed on the merge request (job unit). It did not go back to Implementation: the rounds it is allowed were used up, so it stopped here for a person.',
+    );
+    // Another attempt, or another cause, still went back.
+    expect(timelineReturnLine(ciReturn(), value)).toBe(
+      'Sent back to Implementation: CI failed on the merge request (job unit).',
+    );
+    expect(timelineReturnLine(spent, { ...value, cause: 'same_failure' })).toBe(
+      'Sent back to Implementation: CI failed on the merge request (job unit).',
+    );
+  });
+
+  it('words a CI-red return production closes with the tamper check’s word as a CI failure', () => {
+    // gates.ts' settlement closes a red pipeline's return `protected_paths_clean`, not `returned`.
+    const clean = ciReturn({ outcome: 'protected_paths_clean' });
+    expect(returnWords(clean, TASK, LIMITS).sentence).toBe(
+      'CI failed on the merge request (job unit): the Developer is fixing it (round 2 of 3).',
+    );
+    expect(timelineReturnLine(clean)).toBe(
+      'Sent back to Implementation: CI failed on the merge request (job unit).',
     );
   });
 

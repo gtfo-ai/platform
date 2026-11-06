@@ -88,6 +88,22 @@ describe('returnsOf', () => {
     });
   });
 
+  it('reads a CI-red return by its signature, whichever word its tamper check closed the row with', () => {
+    // What production writes on a red pipeline's return (gates.ts' settlement, WP-105): the tamper
+    // check's word, `protected_paths_clean` — not `returned`. The CI failure rests on the signature.
+    const clean = {
+      ...ciReturned(3, '2026-11-07T11:00:00.000Z', 'ci:failed:unit@cccc'),
+      outcome: 'protected_paths_clean' as const,
+    };
+    const [entry] = returnsOf([clean], PIPELINE);
+    expect(entry?.outcome).toBe('protected_paths_clean');
+    expect(entry?.ci_failure).toEqual({ status: 'failed', jobs: 'unit' });
+    expect(entry?.loop).toBe('ci_fix');
+    expect(stopOf({ state: 'needs_human', currentStage: 'ci_gate' }, [clean])?.cause).toBe(
+      'tries_spent',
+    );
+  });
+
   it('claims no loop, and no CI failure, where the row does not prove them', () => {
     // A code review's return: the loop is not on the row (a person's return spends another).
     const review = row({

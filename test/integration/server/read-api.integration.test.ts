@@ -1185,6 +1185,24 @@ describe('the task projection', () => {
     expect(card?.latest_return?.ci_failure).toEqual({ status: 'failed', jobs: 'unit' });
     expect(card?.stop).toBeNull();
 
+    // What production writes on a red pipeline's return: the tamper check's word, not `returned`
+    // (gates.ts' settlement, WP-105). The CI failure rests on the signature, not on the word.
+    const clean = await taskAt('BACK-3', 'active', 'implementation', '{"ci_fix": 1}');
+    await stageRow(clean, {
+      stage: 'ci_gate',
+      attempt: 1,
+      state: 'returned',
+      outcome: 'protected_paths_clean',
+      reason: 'pipeline p-9 failed: lint',
+      returnedTo: 'implementation',
+      signature: 'ci:failed:lint@def456',
+      exited: '2026-11-07T10:30:00.000Z',
+    });
+    const cleanReturn = (await findTaskDetail(drizzled, clean))?.returns[0];
+    expect(cleanReturn?.outcome).toBe('protected_paths_clean');
+    expect(cleanReturn?.ci_failure).toEqual({ status: 'failed', jobs: 'lint' });
+    expect(cleanReturn?.loop).toBe('ci_fix');
+
     // Stopped: the CI check timed out (AUT-6655's shape) — `failed`/`undecided`, the sentence kept.
     const LONG = `the CI gate on a poll-only gitlab binding timed out: ${'x'.repeat(2_100)}`;
     const timedOut = await taskAt('BACK-2', 'needs_human', 'ci_gate');

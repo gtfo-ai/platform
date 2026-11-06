@@ -150,7 +150,19 @@ export const returnWords = (ret: TaskReturn, task: SetbackTask, limits: Limits):
 };
 
 /** The stage timeline's line under a returned attempt: where it went and why. */
-export const timelineReturnLine = (ret: TaskReturn): string => {
+export const timelineReturnLine = (ret: TaskReturn, stop: TaskStop | null = null): string => {
+  // The rounds were used up: the row keeps `returned_to`, but the task never went there — it
+  // stopped at this attempt for a person (`returnToStage` escalates instead of moving it).
+  if (
+    stop?.cause === 'tries_spent' &&
+    stop.stage === ret.from_stage &&
+    stop.attempt === ret.attempt
+  ) {
+    const cause = causeOf(ret);
+    const where = ret.to_stage === null ? '' : ` to ${stageLabel(ret.to_stage)}`;
+    const stayed = `It did not go back${where}: the rounds it is allowed were used up, so it stopped here for a person.`;
+    return cause === null ? stayed : `${cause}. ${stayed}`;
+  }
   if (ret.to_stage === null) {
     return 'Sent back; where to was not recorded.';
   }

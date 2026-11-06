@@ -21,6 +21,7 @@ import type {
   TaskDetailResponse,
   TaskReturn,
   TaskStageState,
+  TaskStop,
 } from '@platform/contracts';
 import { UndoIcon } from '@primer/octicons-react/UndoIcon';
 import { Link } from '@tanstack/react-router';
@@ -110,6 +111,7 @@ const TimelineRunLink = ({ link }: { readonly link: TimelineLink }): ReactElemen
 const StageTimeline = ({
   stages,
   returns,
+  stop,
   runs,
   nowMs,
   openerFor,
@@ -117,6 +119,8 @@ const StageTimeline = ({
   readonly stages: TaskDetailResponse['stages'];
   /** The task's returns (S-25.11): an attempt that sent the task back says where and why. */
   readonly returns: readonly TaskReturn[];
+  /** The task's stop: a returned attempt whose rounds were used up never went anywhere. */
+  readonly stop: TaskStop | null;
   readonly runs: readonly RunRecord[];
   readonly nowMs: number;
   /** The stage dialog's opener for a stage the flow has a card for (`FlowListMode`). */
@@ -202,7 +206,7 @@ const StageTimeline = ({
               {went === null ? null : (
                 <p className="text-xs text-fg-muted" data-timeline-return="">
                   {/* Platform words around the job names the row recorded (provider text). */}
-                  <UntrustedText value={timelineReturnLine(went)} />
+                  <UntrustedText value={timelineReturnLine(went, stop)} />
                 </p>
               )}
               <TimelineRunLink link={link} />
@@ -246,6 +250,7 @@ export const TaskOverview = ({
           <StageTimeline
             stages={stages}
             returns={detail.returns}
+            stop={detail.stop}
             runs={runs}
             nowMs={nowMs}
             openerFor={openerFor}

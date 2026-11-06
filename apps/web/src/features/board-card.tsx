@@ -138,10 +138,15 @@ export const cardSetback = (task: TaskListItem): string | null =>
   setbackShort(task, task.stages, task.latest_return, task.stop, task.loop_limits);
 
 /** The short form's line, or nothing. */
-const SetbackLine = ({ task }: { readonly task: TaskListItem }): ReactElement | null => {
+export const SetbackLine = ({ task }: { readonly task: TaskListItem }): ReactElement | null => {
   const text = cardSetback(task);
+  // The fixing line asks nothing of the reader, so it is muted; a stop keeps the attention tone.
+  const fixing = openReturn(task, task.stages, task.latest_return) !== null;
   return text === null ? null : (
-    <span data-card-setback="" className="text-xs text-attention">
+    <span
+      data-card-setback={fixing ? 'fixing' : 'stopped'}
+      className={cx('text-xs', fixing ? 'text-fg-muted' : 'text-attention')}
+    >
       {/* Platform words; a CI failure's job names are not in the short form. */}
       {text}
     </span>
