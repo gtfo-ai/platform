@@ -202,3 +202,37 @@ targets"):
 - **It is held by tests.** `row-link-census.test.ts` refuses a row that renders a title link without the
   primitive. `test/web-e2e/row-click.spec.ts` clicks a row's meta text with a real mouse. BACKLOG 949 lists
   the rows deliberately left as they are.
+
+
+## Amendment 2026-11-06 — every content block on a card; fields inset; no card inside a card (product owner)
+
+The product owner, on the deployed screens: "many cards across platform still use the same background color as
+the body/content background itself", and the native `<select>` "without proper styling".
+
+The 2026-11-05 amendment gave the page and the card two grounds. This amendment says which content goes on
+which ground (S-25.10, S-25.10b):
+- **The page (`--bg-canvas`) holds only the frame.** That means the page heading and its one-line intent,
+  the navigation, the tabs, and the Settings side list. Every other block of content sits on a card:
+  - a form;
+  - a list;
+  - a panel;
+  - a wizard step;
+  - a notice that belongs to a section;
+  - a blankslate standing alone.
+- **A card is `--bg-default` with the default border** (`ui/card.tsx`, `SettingsCard`). Its header row is
+  `--bg-subtle`. Dialogs and menus use the same ground.
+- **A field is `bg-inset`**, one step darker than the card it sits on. This covers inputs, textareas and the
+  branded Select (`ui/select.tsx`, which replaces the native `<select>` everywhere). It also covers a code
+  block and a log inside a card. A field is never on the card's own ground. Nothing on a card is drawn on the
+  canvas colour.
+- **No card inside a card.** Inside a card, a sub-section is separated by a divider or a heading, never by a
+  second border:
+  - an empty list is a borderless blankslate, or a plain line of text;
+  - a notice is a coloured line, not a box.
+  A screen that needs two separate boxes puts them side by side on the page, not one in the other.
+- **Held by tests.**
+  - The S-25.10 card-ground census refuses a bordered box on the wrong ground.
+  - `test/web-e2e/settings-cards.spec.ts` and `page-cards.spec.ts` open every Settings, Admin and project
+    screen, the task and run pages, and both wizards against the fixture backend. They fail on visible text
+    that sits on the canvas colour outside the frame. A screen the fixture backend cannot load does not count
+    as checked.

@@ -48,7 +48,11 @@ const ArtifactBody = ({
   }
   const artifact = body.data;
   return (
-    <article className="flex min-w-0 flex-col gap-3" aria-label="Artifact">
+    // A document in a box (S-25.10b), as a knowledge page is.
+    <article
+      className="flex min-w-0 flex-col gap-3 rounded-lg border border-line bg-default p-4"
+      aria-label="Artifact"
+    >
       <header className="flex flex-col gap-0.5">
         <h2 className="text-base font-semibold">
           {`${ARTIFACT_TYPE_LABEL[artifact.artifact_type]} v${artifact.version}`}

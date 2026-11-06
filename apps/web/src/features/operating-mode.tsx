@@ -591,7 +591,8 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
       ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
         {FEATURE_CARDS.map((card) => (
-          <Card key={card.key} className="flex flex-col gap-1">
+          // A tile inside the Features card (S-25.10b): the header-row ground, no second border.
+          <div key={card.key} className="flex flex-col gap-1 rounded-md bg-subtle p-3">
             <label className="flex items-center gap-2 text-sm font-semibold">
               <input
                 type="checkbox"
@@ -620,7 +621,7 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
                 pause begins and once when it ends.
               </p>
             ) : null}
-          </Card>
+          </div>
         ))}
       </div>
       {commands.writeConfig.isError ? (
@@ -727,6 +728,7 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
     <Section title="Sensitive areas">
       {names.length === 0 ? (
         <EmptyState
+          inset
           title="No sensitive areas configured"
           hint="A sensitive area (a risk class in the settings file) is a set of paths (auth, payments, migrations, infra) that forces a plan approval, can route the review to named people and can give the reviewer a checklist of your own when a change touches them."
         />
@@ -1252,6 +1254,7 @@ export const SettingsAudit = ({ projectId }: { readonly projectId: string }): Re
       ) : null}
       {audit.isSuccess && audit.data.items.length === 0 ? (
         <EmptyState
+          inset
           title="No settings changes recorded"
           hint="Every accepted write to this project’s settings leaves one row here."
         />

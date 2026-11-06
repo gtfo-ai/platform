@@ -676,20 +676,23 @@ export const WorkerApproveScreen = (): ReactElement => {
           <p>Somebody who sends you a code is asking you to give their machine your access.</p>
         </Flash>
       </div>
-      <Field
-        label="Code shown by the machine"
-        placeholder="XXXX-XXXX"
-        autoComplete="off"
-        spellCheck={false}
-        className="h-14 max-w-xs rounded-md border border-line-input bg-inset px-4 font-mono text-3xl tracking-[0.2em] text-fg uppercase placeholder:text-fg-subtle"
-        value={typed}
-        onChange={(event) => {
-          setTyped(event.target.value);
-          setConfirmed(false);
-          setApproval(null);
-          decision.reset();
-        }}
-      />
+      {/* The code field on the card ground (S-25.10b), as every Settings form is. */}
+      <Card>
+        <Field
+          label="Code shown by the machine"
+          placeholder="XXXX-XXXX"
+          autoComplete="off"
+          spellCheck={false}
+          className="h-14 max-w-xs rounded-md border border-line-input bg-inset px-4 font-mono text-3xl tracking-[0.2em] text-fg uppercase placeholder:text-fg-subtle"
+          value={typed}
+          onChange={(event) => {
+            setTyped(event.target.value);
+            setConfirmed(false);
+            setApproval(null);
+            decision.reset();
+          }}
+        />
+      </Card>
       {code !== null && device.isPending ? <Loading label="Looking the code up…" /> : null}
       {device.isError && !decision.isSuccess ? (
         <ErrorNotice

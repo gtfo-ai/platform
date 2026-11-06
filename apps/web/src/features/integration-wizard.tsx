@@ -365,9 +365,10 @@ export const IntegrationWizardScreen = ({
       {header}
       <div className="grid gap-6 md:grid-cols-[14rem_1fr]">
         <Stepper label="New integration" steps={steps} />
+        {/* The step on the card ground (S-25.10b): a form is a box, the page is the canvas. */}
         <section
           aria-label={STEP_LABEL[step]}
-          className="flex min-w-0 flex-col gap-4"
+          className="flex min-w-0 flex-col gap-4 rounded-lg border border-line bg-default p-4"
           data-wizard-step={step}
         >
           <h2 className="text-base font-semibold">{STEP_LABEL[step]}</h2>

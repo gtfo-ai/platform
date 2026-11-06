@@ -17,7 +17,7 @@ export const Timeline = ({
   readonly children: ReactNode;
   readonly className?: string;
 }): ReactElement => (
-  <ol aria-label={label} className={cx('flex flex-col', className)}>
+  <ol aria-label={label} data-timeline="" className={cx('flex flex-col', className)}>
     {children}
   </ol>
 );

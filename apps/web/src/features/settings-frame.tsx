@@ -7,11 +7,19 @@
  * Each section is a page with its own title and, where it writes anything, **one** Save at its foot.
  * A section is never a long scroll of other sections' controls.
  *
+ * **Everything a section shows sits on a card** (S-25.10b, TD-033's 2026-11-05 amendment): the page
+ * is the canvas, and a form, a field, a definition list or a block of facts is a box on the card
+ * ground (`Card`, `ListBox`, `Blankslate`, a notice's tint) — as Budgets' form always was. Only the
+ * section's header, its headings and a line of prose stand on the canvas.
+ * `test/web-e2e/settings-cards.spec.ts` holds every org section and Admin screen to it in a browser,
+ * against the fixture backend's data.
+ *
  * An entry with a `to` (the org settings' Admin group, S-25.6) is a screen at its own URL: it is
  * linked there, whatever the caller's `link` would make of its id.
  */
 import { Link } from '@tanstack/react-router';
 import type { ReactElement, ReactNode } from 'react';
+import { Card } from '../ui/kit.js';
 import type { NavLinkProps } from '../ui/nav-item.js';
 import { NavList } from '../ui/nav-list.js';
 import type { SettingsGroup } from './settings-sections.js';
@@ -66,4 +74,13 @@ export const SettingsSectionHeader = ({
     <h2 className="text-lg font-semibold text-fg">{title}</h2>
     {description === undefined ? null : <p className="text-sm text-fg-muted">{description}</p>}
   </div>
+);
+
+/**
+ * A section's body on the card ground (S-25.10b): the form, the facts and the notes a section
+ * shows, in one box under its header — as Budgets' form always was. A section that is already a
+ * stack of cards (a project's *Rules & limits*) does not take it, so no card holds another.
+ */
+export const SettingsCard = ({ children }: { readonly children: ReactNode }): ReactElement => (
+  <Card className="flex flex-col gap-4 text-sm">{children}</Card>
 );

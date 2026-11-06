@@ -99,6 +99,10 @@ const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise
     });
   }
   if (path === '/api/version') return json({ version: '0.0.0-dev', commit: null, built_at: null });
+  if (path === '/api/org') return json({ settings: {}, updated_at: null });
+  if (path === '/api/org/identities' || path === '/api/org/identities/candidates') {
+    return json({ items: [] });
+  }
   if (path === '/api/org/users' || path === '/api/integrations') return json({ items: [] });
   return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
 }) as typeof fetch;
@@ -117,6 +121,9 @@ beforeEach(() => {
     budgetAnswer: () => ({ status: 200, body: {} }),
   };
 });
+
+/** Queries bound to one element (`within`). */
+type Scope = ReturnType<typeof within>;
 
 const open = (path: string): void => {
   window.history.pushState({}, '', path);
@@ -342,6 +349,32 @@ describe('the org settings sub-routes', () => {
     expect(await screen.findByRole('button', { name: 'Save budgets' })).toBeTruthy();
   });
 
+  it.each([
+    ['policies', (scope: Scope) => scope.findByLabelText('Organisation autonomy maximum')],
+    ['notifications', (scope: Scope) => scope.findByLabelText('Organisation default chat account')],
+    ['identities', (scope: Scope) => scope.findByRole('form', { name: 'Map a provider account' })],
+    ['instance', (scope: Scope) => scope.findByText('0.0.0-dev')],
+    ['session', (scope: Scope) => scope.findByText('Role: Administrator')],
+    ['keyboard', (scope: Scope) => scope.findByRole('checkbox')],
+  ] as const)(
+    'draws the %s section’s content inside a card, never on the page canvas (S-25.10b)',
+    async (section, content) => {
+      // The owner's rule (TD-033's 2026-11-05 amendment): the page is the canvas, a form or a
+      // block of facts is a box on the card ground. Policies drew its form on the canvas while
+      // Budgets drew its in a card; `test/web-e2e/settings-cards.spec.ts` holds every section in a
+      // browser, this holds the ones that were found on it.
+      open(`/settings/${section}`);
+      const frame = await waitFor(() => {
+        const found = document.querySelector<HTMLElement>('[data-settings-section]');
+        expect(found?.getAttribute('data-settings-section')).toBe(section);
+        return found as HTMLElement;
+      });
+      const card = (await content(within(frame))).closest('.bg-default');
+      expect(card, section).not.toBeNull();
+      expect(frame.contains(card)).toBe(true);
+    },
+  );
+
   it('draws each org section with at most one primary action', async () => {
     for (const group of ORG_SETTINGS_GROUPS) {
       for (const section of group.sections) {
@@ -389,6 +422,23 @@ describe('the project settings sub-routes', () => {
     await waitFor(() => {
       expect(window.location.pathname).toBe('/projects/api/settings/connections');
     });
+  });
+});
+
+describe('a project’s settings on the card ground (S-25.10b, backlog 1292)', () => {
+  it.each([
+    ['trial', 'Open the trial page'],
+    ['knowledge', 'Review drafted pages and pending proposals'],
+  ] as const)('draws the %s section’s body inside a card', async (section, link) => {
+    open(`/projects/api/settings/${section}`);
+    const frame = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-settings-section]');
+      expect(found?.getAttribute('data-settings-section')).toBe(section);
+      return found as HTMLElement;
+    });
+    const card = (await within(frame).findByRole('link', { name: link })).closest('.bg-default');
+    expect(card, section).not.toBeNull();
+    expect(frame.contains(card)).toBe(true);
   });
 });
 

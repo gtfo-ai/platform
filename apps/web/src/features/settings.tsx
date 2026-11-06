@@ -46,7 +46,7 @@ import { ForAdministrators } from '../ui/admin-notes.js';
 import { Avatar } from '../ui/avatar.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { USER_ROLE_LABEL, USER_STATUS_LABEL } from '../ui/humanize.js';
-import { Badge, ErrorNotice, formatDateTime, Loading } from '../ui/kit.js';
+import { Badge, Card, ErrorNotice, formatDateTime, Loading } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
 import { StatusIcon } from '../ui/status.js';
@@ -67,23 +67,25 @@ const KeyboardShortcuts = (): ReactElement => {
         title="Keyboard shortcuts"
         description="Single keys that jump around the application. The choice applies as you make it, and is kept in this browser only."
       />
-      <label className="flex w-fit items-start gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => {
-            setShortcutsEnabled(event.target.checked);
-          }}
-          className="mt-0.5"
-        />
-        <span className="flex flex-col gap-0.5">
-          Use single-key shortcuts
-          <span className="text-xs text-fg-muted">
-            Such as g h for Home, j and k in a list, and ? for the whole list. They never fire while
-            you type in a field, and ⌘ K or Ctrl K opens the search either way.
+      <Card>
+        <label className="flex w-fit items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => {
+              setShortcutsEnabled(event.target.checked);
+            }}
+            className="mt-0.5"
+          />
+          <span className="flex flex-col gap-0.5">
+            Use single-key shortcuts
+            <span className="text-xs text-fg-muted">
+              Such as g h for Home, j and k in a list, and ? for the whole list. They never fire
+              while you type in a field, and ⌘ K or Ctrl K opens the search either way.
+            </span>
           </span>
-        </span>
-      </label>
+        </label>
+      </Card>
     </>
   );
 };
@@ -97,7 +99,7 @@ const Session = (): ReactElement => {
       {user === undefined ? (
         <p className="text-sm text-fg-muted">Not signed in.</p>
       ) : (
-        <div className="flex items-center gap-3 text-sm">
+        <Card className="flex items-center gap-3 text-sm">
           <Avatar name={displayName(user)} size={40} decorative />
           <div className="flex flex-col">
             <span className="font-semibold">
@@ -108,7 +110,7 @@ const Session = (): ReactElement => {
             </span>
             <span className="text-xs text-fg-muted">{`Role: ${USER_ROLE_LABEL[user.role]}`}</span>
           </div>
-        </div>
+        </Card>
       )}
     </>
   );
@@ -218,35 +220,37 @@ const Instance = (): ReactElement => {
   return (
     <>
       <SettingsSectionHeader title="Instance" description="The release this server is running." />
-      {version.data === undefined ? (
-        <p className="text-sm text-fg-muted">Version unavailable.</p>
-      ) : (
-        <dl className="grid w-fit grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
-          <dt className="text-fg-muted">Version</dt>
-          <dd className="font-mono">
-            <UntrustedText value={version.data.version} />
-          </dd>
-          {version.data.commit === null ? null : (
-            <>
-              <dt className="text-fg-muted">Commit</dt>
-              <dd className="font-mono">
-                <UntrustedText value={version.data.commit} />
-              </dd>
-            </>
-          )}
-          {version.data.built_at === null ? null : (
-            <>
-              <dt className="text-fg-muted">Built</dt>
-              <dd>{formatDateTime(version.data.built_at)}</dd>
-            </>
-          )}
-        </dl>
-      )}
-      <p className="text-xs text-fg-muted">
-        Whether agents run on an API key or a Claude subscription is an environment setting, and
-        feature flags are a project’s, so neither is editable here. The organisation’s maximums are
-        under Policies, and its budgets under Budgets.
-      </p>
+      <Card className="flex flex-col gap-3">
+        {version.data === undefined ? (
+          <p className="text-sm text-fg-muted">Version unavailable.</p>
+        ) : (
+          <dl className="grid w-fit grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+            <dt className="text-fg-muted">Version</dt>
+            <dd className="font-mono">
+              <UntrustedText value={version.data.version} />
+            </dd>
+            {version.data.commit === null ? null : (
+              <>
+                <dt className="text-fg-muted">Commit</dt>
+                <dd className="font-mono">
+                  <UntrustedText value={version.data.commit} />
+                </dd>
+              </>
+            )}
+            {version.data.built_at === null ? null : (
+              <>
+                <dt className="text-fg-muted">Built</dt>
+                <dd>{formatDateTime(version.data.built_at)}</dd>
+              </>
+            )}
+          </dl>
+        )}
+        <p className="text-xs text-fg-muted">
+          Whether agents run on an API key or a Claude subscription is an environment setting, and
+          feature flags are a project’s, so neither is editable here. The organisation’s maximums
+          are under Policies, and its budgets under Budgets.
+        </p>
+      </Card>
     </>
   );
 };

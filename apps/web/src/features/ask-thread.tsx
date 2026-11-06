@@ -198,8 +198,9 @@ export const AskThread = ({
         Answered from this task's own audit trail and artifacts, with links to the runs behind the
         answer.
       </p>
+      {/* The form on the card ground (S-25.10b); each answer below is a card of its own. */}
       <form
-        className="flex flex-col gap-2"
+        className="flex flex-col gap-2 rounded-lg border border-line bg-default p-4"
         onSubmit={(submitted) => {
           submitted.preventDefault();
           if (question.trim() === '') {
@@ -217,7 +218,7 @@ export const AskThread = ({
         </label>
         <textarea
           id="ask-question"
-          className="min-h-20 rounded border border-border bg-bg px-2 py-1 text-sm"
+          className="min-h-20 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
           value={question}
           // 4 000 is `MAX_ASK_QUESTION_CHARS`, which the server **refuses** past rather than
           // truncating: half a question is a different question. The control stops the caller from

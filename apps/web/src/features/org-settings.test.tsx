@@ -389,6 +389,50 @@ describe('one Save per settings page (S-23.11b)', () => {
     expect(screen.queryByText('Nothing has changed.')).toBeNull();
   });
 
+  it('draws the two parallel-task maximums as one aligned row, with the hint under both (S-25.10b)', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor({ settings: { pipeline: { wip: { max_parallel_tasks: 2 } } } }),
+        realtime: false,
+      }).element,
+    );
+    const parallel = await screen.findByLabelText('Parallel tasks');
+    const inPipeline = screen.getByLabelText('Tasks in the pipeline');
+    // One grid row aligned at the top: each field is a direct cell of the same row, so the labels
+    // share a line and the inputs a width and a height. A field carrying its own hint was taller
+    // than its neighbour and lifted its label in a row aligned at the end.
+    const row = parallel.closest('[data-parallel-maximums]') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.className).toContain('grid-cols-2');
+    expect(row.className).toContain('items-start');
+    expect(inPipeline.closest('[data-parallel-maximums]')).toBe(row);
+    const cells = [...row.children];
+    expect(cells.indexOf(parallel.parentElement as Element)).toBe(0);
+    expect(cells.indexOf(inPipeline.parentElement as Element)).toBe(1);
+    // The hint is the row's own last line, spanning both, and it describes both inputs.
+    const hint = cells[2] as HTMLElement;
+    expect(hint.textContent).toBe('A project may state fewer, never more. Empty is no maximum.');
+    expect(hint.className).toContain('col-span-2');
+    expect(parallel.getAttribute('aria-describedby')).toBe(hint.id);
+    expect(inPipeline.getAttribute('aria-describedby')).toBe(hint.id);
+    expect(parallel.parentElement?.querySelector('p')).toBeNull();
+  });
+
+  it('draws each page’s form inside a card, never on the page canvas (S-25.10b)', async () => {
+    const { unmount } = render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    const policies = await screen.findByLabelText('Organisation autonomy maximum');
+    expect(policies.closest('.bg-default')).not.toBeNull();
+    expect(screen.getByRole('button', SAVE_POLICIES).closest('.bg-default')).not.toBeNull();
+    unmount();
+    window.history.pushState({}, '', '/settings/notifications');
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    const account = await screen.findByLabelText('Organisation default chat account');
+    expect(account.closest('.bg-default')).not.toBeNull();
+    expect(screen.getByLabelText('Digest at').closest('.bg-default')).toBe(
+      account.closest('.bg-default'),
+    );
+  });
+
   it('shows the server’s refusal of a notifications save', async () => {
     window.history.pushState({}, '', '/settings/notifications');
     render(

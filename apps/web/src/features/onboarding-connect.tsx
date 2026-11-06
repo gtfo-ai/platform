@@ -52,7 +52,11 @@ const Section = ({
   readonly purpose: string;
   readonly children: ReactNode;
 }): ReactElement => (
-  <section aria-label={title} className="flex flex-col gap-2 border-t border-line pt-4">
+  // On the card ground (S-25.10b): each part of the step is a box, the page is the canvas.
+  <section
+    aria-label={title}
+    className="flex flex-col gap-2 rounded-lg border border-line bg-default p-4"
+  >
     <h3 className="text-base font-semibold">{title}</h3>
     <p className="text-sm text-fg-muted">{purpose}</p>
     {children}
@@ -183,6 +187,7 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
       </div>
       {integrations.isSuccess && integrations.items.length === 0 ? (
         <EmptyState
+          inset
           title="No integrations yet"
           hint="An integration is a connection to a ticket tracker, a git host or a chat workspace. Add one on the Integrations screen, then come back here to connect it to this project."
           action={

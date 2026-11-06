@@ -26,7 +26,9 @@
  * `POST /__test__/publish` writes one frame to every stream subscribed to a topic, and
  * `POST /__test__/control` writes a `reset` or a `shutdown`. `GET /__test__/streams` reports the
  * query string of every `GET /events` this server has seen, which is how the suite proves a
- * reconnect carried `last_event_id` rather than assuming it. These paths exist only in this file
+ * reconnect carried `last_event_id` rather than assuming it. `POST /__test__/wizard-open` serves a
+ * git binding and a readiness evaluation, so the New project wizard's steps past Connect are open
+ * (S-25.10b); `reset` takes both away again. These paths exist only in this file
  * and are the reason it lives under `test/`.
  */
 import { createReadStream, existsSync, statSync } from 'node:fs';
@@ -246,6 +248,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
    * about the bootstrap hint sees the page an instance in use shows; `'fails'` answers 500.
    */
   let setupState: boolean | 'fails' = false;
+  /** `POST /__test__/wizard-open`: a git binding and a readiness evaluation are served. */
+  let wizardOpen = false;
 
   const writeFrame = (stream: Stream, frame: SseFrame, event: string): void => {
     const lines: string[] = [];
@@ -383,7 +387,15 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       connects.length = 0;
       commands.length = 0;
       setupState = false;
+      wizardOpen = false;
       json(response, 200, { reset: true });
+      return;
+    }
+    // S-25.10b: the New project wizard past Connect — a git binding and a readiness evaluation,
+    // so its later steps draw rather than their "not open yet" gate.
+    if (path === '/__test__/wizard-open' && method === 'POST') {
+      wizardOpen = true;
+      json(response, 200, { open: true });
       return;
     }
     if (path === '/__test__/setup-state' && method === 'POST') {
@@ -766,6 +778,14 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         routes[`/api/tasks/${taskId}/audit`] = { items: [] };
       }
       routes[`/api/projects/${fixtures.IDS.project}/pipeline`] = fixtures.projectPipelines;
+      routes[`/api/projects/${fixtures.IDS.project}/shadow-batches`] = fixtures.shadowBatches;
+      routes[`/api/projects/${fixtures.IDS.project}/repository`] = fixtures.projectRepository;
+      routes[`/api/projects/${fixtures.IDS.project}/history-bootstraps`] =
+        fixtures.historyBootstraps;
+      if (wizardOpen) {
+        routes[`/api/projects/${fixtures.IDS.project}/bindings`] = fixtures.openWizardBindings;
+        routes[`/api/projects/${fixtures.IDS.project}/readiness`] = fixtures.readiness;
+      }
       const body = routes[path];
       if (body !== undefined) {
         json(response, 200, body);

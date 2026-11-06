@@ -366,7 +366,7 @@ export const TranscriptView = ({
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
-      <div className="flex items-center gap-2">
+      <div data-toolbar="" className="flex items-center gap-2">
         <input
           type="search"
           value={query}

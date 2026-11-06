@@ -159,15 +159,18 @@ export const EmptyState = ({
   title,
   hint,
   action,
+  inset = false,
 }: {
   readonly title: string;
   readonly hint: string;
   readonly action?: ReactNode;
+  /** Inside a card: no box of its own (`Blankslate`'s `inset`, S-25.10b). */
+  readonly inset?: boolean;
 }): ReactElement =>
   action === undefined ? (
-    <Blankslate informational title={title} hint={hint} />
+    <Blankslate informational title={title} hint={hint} inset={inset} />
   ) : (
-    <Blankslate title={title} hint={hint} action={action} />
+    <Blankslate title={title} hint={hint} action={action} inset={inset} />
   );
 
 export const Loading = ({ label }: { readonly label: string }): ReactElement => (

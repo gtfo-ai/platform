@@ -24,11 +24,11 @@
  * textareas hold it as a value, never as markup.
  */
 import type { CappedProject, OrganisationSettings } from '@platform/contracts';
-import { type ReactElement, type ReactNode, useState } from 'react';
+import { type ReactElement, type ReactNode, useId, useState } from 'react';
 import { useBindableIntegrations, useOrgSettings, useSettingsCommands } from '../app/queries.js';
 import { Button } from '../ui/button.js';
 import { AUTONOMY_LEVEL_LABEL } from '../ui/humanize.js';
-import { ErrorNotice, Field, formatDateTime, Loading } from '../ui/kit.js';
+import { Card, ErrorNotice, Field, formatDateTime, Loading } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 
@@ -56,7 +56,10 @@ const numberOrUndefined = (text: string): number | undefined =>
 
 type Patch = Parameters<ReturnType<typeof useSettingsCommands>['patchOrgSettings']['mutate']>[0];
 
-/** The document's read, its loading and failure, around a page's form. */
+/**
+ * The document's read, its loading and failure, around a page's form — and the **card** the form
+ * sits in (S-25.10b): the page is the canvas, a form is a box on the card ground, as Budgets' is.
+ */
 const OrgDocument = ({
   children,
 }: {
@@ -73,7 +76,7 @@ const OrgDocument = ({
         />
       ) : null}
       {document.isSuccess ? (
-        <>
+        <Card className="flex flex-col gap-4">
           <p className="text-xs text-fg-muted">
             Saving needs the administrator role.
             {document.data.updated_at === null
@@ -81,7 +84,7 @@ const OrgDocument = ({
               : ` Last changed ${formatDateTime(document.data.updated_at)}.`}
           </p>
           {children(document.data.settings, document.data.updated_at)}
-        </>
+        </Card>
       ) : null}
     </>
   );
@@ -240,6 +243,7 @@ const PolicyForm = ({
   readonly onSave: (body: Patch) => void;
 }): ReactElement => {
   const [drafts, setDrafts] = useState<PolicyDrafts>(() => policyDraftsOf(settings));
+  const maximumsHint = useId();
   const changed = changedSections(policyPatchOf(drafts), policyPatchOf(policyDraftsOf(settings)));
   const dirty = Object.keys(changed).length > 0;
 
@@ -294,10 +298,17 @@ const PolicyForm = ({
 
       <fieldset className="flex flex-col gap-2">
         <legend className="font-semibold">Parallel tasks maximum</legend>
-        <div className="flex flex-wrap items-end gap-2">
+        {/* One row (S-25.10b): two equal columns aligned at the top, so the labels share a line and
+            the inputs a height and a width, and the hint under both — it is true of both. In a
+            flex row aligned at the end, the first field's own hint lifted its label above the
+            second's and widened its input. */}
+        <div
+          className="grid max-w-md grid-cols-2 items-start gap-x-3 gap-y-1"
+          data-parallel-maximums=""
+        >
           <Field
             label="Parallel tasks"
-            hint="A project may state fewer, never more. Empty is no maximum."
+            aria-describedby={maximumsHint}
             type="number"
             min={1}
             value={drafts.parallel}
@@ -305,11 +316,15 @@ const PolicyForm = ({
           />
           <Field
             label="Tasks in the pipeline"
+            aria-describedby={maximumsHint}
             type="number"
             min={1}
             value={drafts.inPipeline}
             onChange={(event) => setDrafts({ ...drafts, inPipeline: event.target.value })}
           />
+          <p id={maximumsHint} className="col-span-2 text-xs text-fg-muted">
+            A project may state fewer, never more. Empty is no maximum.
+          </p>
         </div>
       </fieldset>
 

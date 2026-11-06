@@ -30,6 +30,7 @@ import {
   deadLettersResponseSchema,
   effectiveConfigResponseSchema,
   failedJobsResponseSchema,
+  historyBootstrapsResponseSchema,
   identityMappingListSchema,
   inboxResponseSchema,
   integrationProvidersResponseSchema,
@@ -46,8 +47,10 @@ import {
   projectAuditResponseSchema,
   projectBindingsResponseSchema,
   projectExecutionResponseSchema,
+  projectRepositoryResponseSchema,
   projectSpendResponseSchema,
   projectSummarySchema,
+  readinessResponseSchema,
   rediscoveryGateResponseSchema,
   runCommandsResponseSchema,
   runMessagesResponseSchema,
@@ -55,6 +58,7 @@ import {
   runReadResponseSchema,
   runRecordSchema,
   setupGuideResponseSchema,
+  shadowBatchesResponseSchema,
   taskBreakdownSchema,
   taskDetailResponseSchema,
   taskListItemSchema,
@@ -1533,6 +1537,89 @@ export const projectBindings = projectBindingsResponseSchema.parse({
       config: {},
     },
   ],
+});
+
+/**
+ * The project's bindings once a git host is bound too (S-25.10b): what `POST /__test__/wizard-open`
+ * switches the bindings read to, so the New project wizard's Connect step is done and the steps past
+ * it are open rather than drawn as their "not open yet" gate. The git binding is **invented** for
+ * this corpus; nothing else reads it.
+ */
+export const openWizardBindings = projectBindingsResponseSchema.parse({
+  items: [
+    ...projectBindings.items,
+    {
+      integration_id: id(51),
+      type: 'git',
+      provider: 'gitlab',
+      name: 'GitLab (fake)',
+      config: {},
+    },
+  ],
+});
+
+/**
+ * `GET /api/projects/:id/readiness` — an evaluation, served only after `POST /__test__/wizard-open`
+ * (the default fake answers 404, the "not evaluated" a project starts with). One criterion is
+ * enough for the wizard's Technical discovery step to count as done.
+ */
+export const readiness = readinessResponseSchema.parse({
+  level: 1,
+  evaluated_at: now,
+  criteria: [
+    {
+      id: 'R1',
+      passed: true,
+      evidence: 'npm test exits 0',
+      unlocks: 'Agents can check their own work.',
+      detected_by: 'agent',
+    },
+  ],
+  source: 'discovery',
+  next_improvements: [],
+  notices: [],
+});
+
+/**
+ * `GET /api/projects/:id/repository` (S-25.10b): the stored default branch, no provider read — what
+ * the project settings' *Default branch* section draws its form over.
+ */
+export const projectRepository = projectRepositoryResponseSchema.parse({
+  default_branch: 'main',
+  provider: null,
+  provider_unavailable: null,
+  live_tasks: 0,
+});
+
+/**
+ * `GET /api/projects/:id/history-bootstraps` (S-25.10b): nothing mined yet, and a bootstrap may
+ * start — the *History* section's and the wizard step's empty state and start form. The estimate's
+ * figures are **invented**.
+ */
+export const historyBootstraps = historyBootstrapsResponseSchema.parse({
+  items: [],
+  can_start: true,
+  blocked_reason: null,
+  estimate: {
+    merge_requests: 200,
+    batch_size: 20,
+    batches: 10,
+    estimated_usd: 4,
+    cap_usd: 10,
+    stops_at_cap: false,
+    days: 182,
+  },
+  max_merge_requests: 1000,
+});
+
+/**
+ * `GET /api/projects/:id/shadow-batches` (S-25.10b): no trial yet, and one may start — what the
+ * Trial page draws its start form for.
+ */
+export const shadowBatches = shadowBatchesResponseSchema.parse({
+  items: [],
+  can_start: true,
+  blocked_reason: null,
 });
 
 /**

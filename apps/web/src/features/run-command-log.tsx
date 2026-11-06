@@ -65,7 +65,10 @@ export const RunCommandLog = ({
     return null;
   }
   return (
-    <section aria-label="Commands sent to this run" className="flex flex-col gap-2">
+    <section
+      aria-label="Commands sent to this run"
+      className="flex flex-col gap-2 rounded-lg border border-line bg-default p-4"
+    >
       <SectionHeading>Commands sent to this run</SectionHeading>
       <ul className="flex flex-col gap-1 text-xs">
         {commands.map((command) => (
