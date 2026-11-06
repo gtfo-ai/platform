@@ -216,10 +216,15 @@ const PlatformStep = ({
   );
 };
 
-/** Whole seconds since `active` last became true, ticking each second; 0 while it is false. */
-const useSecondsWhile = (active: boolean): number => {
+/**
+ * Whole seconds since `active` last became true **or `restart` changed**, ticking each second; 0
+ * while it is false. Counted from when this page saw it — the state carries no start time — so a
+ * reload counts from the reload.
+ */
+const useSecondsWhile = (active: boolean, restart: number): number => {
   const [since, setSince] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `restart` is read only as the moment to count from again.
   useEffect(() => {
     if (!active) {
       setSince(null);
@@ -230,7 +235,7 @@ const useSecondsWhile = (active: boolean): number => {
     setNow(started);
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
-  }, [active]);
+  }, [active, restart]);
   return since === null ? 0 : Math.max(0, Math.floor((now - since) / 1_000));
 };
 
@@ -253,8 +258,10 @@ const ClaudeStep = ({
   const [code, setCode] = useState('');
   const [token, setToken] = useState('');
   const [tokenProblem, setTokenProblem] = useState<string | null>(null);
+  /** Pastes the worker took: a paste that supersedes a running check starts the count again. */
+  const [pastes, setPastes] = useState(0);
   const { sign_in: signIn } = state.setup;
-  const checkingFor = useSecondsWhile(signIn.phase === 'checking');
+  const checkingFor = useSecondsWhile(signIn.phase === 'checking', pastes);
   if (state.setup.claude_source === 'environment') {
     return (
       <Flash tone="danger" title="Claude no longer accepts this worker’s sign-in">
@@ -277,6 +284,7 @@ const ClaudeStep = ({
       try {
         const next = await client.claudeToken(pasted);
         setToken('');
+        setPastes((count) => count + 1);
         return next;
       } catch (error) {
         // A refusal of the paste is said beside the field, and the page reads the worker again.

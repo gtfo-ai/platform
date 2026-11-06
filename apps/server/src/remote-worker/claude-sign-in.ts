@@ -389,6 +389,8 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
     /** The after-code bound, armed by `submitCode`. */
     codeTimer: ReturnType<typeof setTimeout> | null;
   } | null = null;
+  /** `start()` is making the session's home: no session yet, but one is coming. */
+  let starting = false;
   /** Every check still running — a superseded one included, so `close()` awaits it. */
   const checks = new Set<Promise<void>>();
   /** The generation of the check whose verdict still counts, while it runs. */
@@ -452,11 +454,14 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
       if (verdict === 'accepted') {
         try {
           await options.onToken(token);
+          // Superseded while it was stored: the newer sign-in's phase is its own.
+          if (mine !== generation) return;
           phase = 'idle';
           failure = null;
           options.logger.info({}, 'Claude accepted the sign-in; this worker uses it from now on');
         } catch (error) {
           options.logger.error({ err: error }, 'the Claude token could not be stored');
+          if (mine !== generation) return;
           fail('check_failed');
         }
         return;
@@ -499,7 +504,7 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
     }
   };
 
-  const busy = (): boolean => session !== null || checkRunning();
+  const busy = (): boolean => starting || session !== null || checkRunning();
 
   return {
     status: () => ({ phase, url, failure }),
@@ -511,7 +516,10 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
       failure = null;
       url = null;
       const mine = generation;
-      const home = await mkdtemp(path.join(tmpdir(), 'claude-sign-in-'));
+      starting = true;
+      const home = await mkdtemp(path.join(tmpdir(), 'claude-sign-in-')).finally(() => {
+        starting = false;
+      });
       if (mine !== generation) {
         // Cancelled, or a token pasted, while the home was made: this session never starts.
         await rm(home, { recursive: true, force: true }).catch(() => undefined);
