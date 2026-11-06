@@ -52,7 +52,11 @@ const Section = ({
   readonly purpose: string;
   readonly children: ReactNode;
 }): ReactElement => (
-  <section aria-label={title} className="flex flex-col gap-2 border-t border-line pt-4">
+  // On the card ground (S-25.10b): each part of the step is a box, the page is the canvas.
+  <section
+    aria-label={title}
+    className="flex flex-col gap-2 rounded-lg border border-line bg-default p-4"
+  >
     <h3 className="text-base font-semibold">{title}</h3>
     <p className="text-sm text-fg-muted">{purpose}</p>
     {children}

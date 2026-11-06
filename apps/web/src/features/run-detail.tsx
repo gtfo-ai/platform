@@ -585,7 +585,10 @@ const LiveNow = ({
   const meta = ACTIVITY_META[now.activity];
   const rows = activityRows(blocks, { live: true }).slice(-LIVE_ACTIVITY_ROWS);
   return (
-    <section aria-label="What the agent is doing" className="flex flex-col gap-2">
+    <section
+      aria-label="What the agent is doing"
+      className="flex flex-col gap-2 rounded-lg border border-line bg-default p-4"
+    >
       <p
         data-run-now={now.activity}
         className="flex flex-wrap items-center gap-2 text-sm font-medium"

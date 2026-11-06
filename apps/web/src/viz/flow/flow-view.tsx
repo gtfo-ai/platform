@@ -140,7 +140,7 @@ export const FlowView = ({
         full ? 'fixed inset-0 z-30 bg-canvas p-4' : null,
       )}
     >
-      <div className="flex flex-wrap items-center gap-2">
+      <div data-toolbar="" className="flex flex-wrap items-center gap-2">
         {toolbar}
         <div className="ml-auto flex items-center gap-2">
           {wide ? (

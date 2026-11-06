@@ -68,7 +68,7 @@ export const Stepper = ({
   readonly steps: readonly Step[];
   readonly className?: string;
 }): ReactElement => (
-  <ol aria-label={label} className={cx('flex flex-col', className)}>
+  <ol aria-label={label} data-stepper="" className={cx('flex flex-col', className)}>
     {steps.map((step, index) => {
       const labelClass = cx(
         'text-sm',

@@ -425,6 +425,23 @@ describe('the project settings sub-routes', () => {
   });
 });
 
+describe('a project’s settings on the card ground (S-25.10b, backlog 1292)', () => {
+  it.each([
+    ['trial', 'Open the trial page'],
+    ['knowledge', 'Review drafted pages and pending proposals'],
+  ] as const)('draws the %s section’s body inside a card', async (section, link) => {
+    open(`/projects/api/settings/${section}`);
+    const frame = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-settings-section]');
+      expect(found?.getAttribute('data-settings-section')).toBe(section);
+      return found as HTMLElement;
+    });
+    const card = (await within(frame).findByRole('link', { name: link })).closest('.bg-default');
+    expect(card, section).not.toBeNull();
+    expect(frame.contains(card)).toBe(true);
+  });
+});
+
 describe('the section tables', () => {
   it('hide each section from a role below its own, and from a session not yet read', () => {
     const groups = (role: UserRole | undefined) =>

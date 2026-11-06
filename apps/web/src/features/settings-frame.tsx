@@ -19,6 +19,7 @@
  */
 import { Link } from '@tanstack/react-router';
 import type { ReactElement, ReactNode } from 'react';
+import { Card } from '../ui/kit.js';
 import type { NavLinkProps } from '../ui/nav-item.js';
 import { NavList } from '../ui/nav-list.js';
 import type { SettingsGroup } from './settings-sections.js';
@@ -73,4 +74,13 @@ export const SettingsSectionHeader = ({
     <h2 className="text-lg font-semibold text-fg">{title}</h2>
     {description === undefined ? null : <p className="text-sm text-fg-muted">{description}</p>}
   </div>
+);
+
+/**
+ * A section's body on the card ground (S-25.10b): the form, the facts and the notes a section
+ * shows, in one box under its header — as Budgets' form always was. A section that is already a
+ * stack of cards (a project's *Rules & limits*) does not take it, so no card holds another.
+ */
+export const SettingsCard = ({ children }: { readonly children: ReactNode }): ReactElement => (
+  <Card className="flex flex-col gap-4 text-sm">{children}</Card>
 );

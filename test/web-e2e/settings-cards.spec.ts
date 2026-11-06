@@ -9,10 +9,12 @@
  *
  * ### What is read
  *
- * Every org settings section and every Admin screen the NavList links to — **from the table**
- * (`ORG_SETTINGS_GROUPS`), so a new section is held the moment it exists and must name what it
- * waits for — plus the screens drawn inside the same frame at their own URLs (an integration's
- * page and its setup guide, the machine approval). Each is opened as the fixture backend's
+ * Every org settings section and every Admin screen the NavList links to, and every section of a
+ * project's settings — **from the tables** (`ORG_SETTINGS_GROUPS`, `PROJECT_SETTINGS_GROUPS`), so a
+ * new section is held the moment it exists and must name what it waits for — plus the screens
+ * drawn inside the same frame at their own URLs (an integration's page and its setup guide, the
+ * machine approval). The scan is `support/card-ground.ts`'s; `page-cards.spec.ts` holds the other
+ * screens to it. Each is opened as the fixture backend's
  * administrator, its content is awaited, and then every visible text node inside
  * `[data-settings-section]` must have an ancestor, up to the section itself, whose **computed**
  * background is neither transparent nor the canvas — a card, a list box, a blankslate, a notice's
@@ -21,23 +23,20 @@
  *
  * ### What may stand on the canvas
  *
- * The section's own header and the page header (`[data-page-header]`), a heading, a navigation
- * (an integration's tabs), visually hidden text, and a paragraph (`<p>`): a line of prose — an
- * introduction, a count, a note under a list — is the page's, not a box's. That last exemption is
- * the residual, stated rather than implied: a `<p>` inside a form on the canvas is not reported,
- * though the form's labels are.
+ * Headings, prose, links and buttons on their own, and the page's chrome: `support/card-ground.ts`
+ * lists them, with the residual.
  */
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import {
   ORG_SETTINGS_GROUPS,
   type OrgAdminLinkId,
   type OrgSettingsSectionId,
+  PROJECT_SETTINGS_GROUPS,
+  type ProjectSettingsSectionId,
 } from '../../apps/web/src/features/settings-sections.js';
-import { IDS } from './support/fixtures.js';
+import { textOnTheCanvas } from './support/card-ground.js';
+import { IDS, PROJECT_KEY } from './support/fixtures.js';
 import { resetBackend, signIn } from './support/harness.js';
-
-/** The page colour, `--bg-canvas` (deep night): no box's ground. */
-const CANVAS = 'rgb(15, 13, 34)';
 
 test.beforeEach(async ({ page, request }) => {
   await resetBackend(request);
@@ -66,6 +65,23 @@ const READY: Readonly<
   instance: (section) => section.getByText('0.0.0-fake'),
   session: (section) => section.getByText('operator@example.invalid'),
   keyboard: (section) => section.getByRole('checkbox'),
+};
+
+/** What each project settings section shows once it has drawn. */
+const PROJECT_READY: Readonly<Record<ProjectSettingsSectionId, (section: Locator) => Locator>> = {
+  connections: (section) => section.getByRole('heading', { name: 'Ticket lifecycle' }),
+  execution: (section) => section.locator('[data-testid="execution-settings"]'),
+  'default-branch': (section) => section.locator('.bg-default').first(),
+  discovery: (section) => section.getByRole('button', { name: 'Start discovery' }),
+  'business-context': (section) => section.getByRole('link', { name: 'Open the knowledge base' }),
+  history: (section) => section.locator('.bg-default').first(),
+  trial: (section) => section.getByRole('link', { name: 'Open the trial page' }),
+  policies: (section) => section.getByRole('heading', { name: 'Verification' }),
+  repository: (section) =>
+    section.getByRole('button', { name: 'Propose these settings to the repository' }),
+  prompts: (section) => section.getByRole('heading', { name: 'Project prompt files' }),
+  knowledge: (section) =>
+    section.getByRole('link', { name: 'Review drafted pages and pending proposals' }),
 };
 
 interface Screen {
@@ -100,41 +116,17 @@ const SCREENS: readonly Screen[] = [
     path: '/workers/approve',
     ready: (section) => section.getByLabel('Code shown by the machine'),
   },
+  // A project's own settings (backlog 1292): the same frame, the same rule.
+  ...PROJECT_SETTINGS_GROUPS.flatMap((group) =>
+    group.sections.map(
+      (section): Screen => ({
+        name: `project ${section.label}`,
+        path: `/projects/${PROJECT_KEY}/settings/${section.id}`,
+        ready: PROJECT_READY[section.id],
+      }),
+    ),
+  ),
 ];
-
-/** Every visible text in `root` that no ground stands under, as `<tag> text`. */
-const textOnTheCanvas = (root: Locator): Promise<string[]> =>
-  root.evaluate((section, canvas) => {
-    const CHROME = 'h1, h2, h3, h4, h5, h6, p, nav, [data-page-header], .sr-only';
-    const grounded = (element: Element): boolean => {
-      for (let at: Element | null = element; at !== null; at = at.parentElement) {
-        const ground = getComputedStyle(at).backgroundColor;
-        if (ground !== 'rgba(0, 0, 0, 0)' && ground !== 'transparent' && ground !== canvas) {
-          return true;
-        }
-        if (at === section) {
-          return false;
-        }
-      }
-      return false;
-    };
-    const found: string[] = [];
-    const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-      const text = (node.textContent ?? '').trim();
-      const parent = node.parentElement;
-      if (text === '' || parent === null || parent.closest(CHROME) !== null) {
-        continue;
-      }
-      if (!parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
-        continue;
-      }
-      if (!grounded(parent)) {
-        found.push(`<${parent.tagName.toLowerCase()}> ${text.slice(0, 60)}`);
-      }
-    }
-    return found;
-  }, CANVAS);
 
 test('the scan finds text on the canvas, and passes it once it is on a card (the canary)', async ({
   page,

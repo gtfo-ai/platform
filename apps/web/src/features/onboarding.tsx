@@ -63,7 +63,7 @@ import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { readinessCriterionLabel } from '../ui/humanize.js';
-import { Badge, Button, ErrorNotice, formatDateTime, formatUsd } from '../ui/kit.js';
+import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd } from '../ui/kit.js';
 import { PageHeader } from '../ui/page-header.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
@@ -599,7 +599,9 @@ const Wizard = ({
         }}
       />
     ) : current === 'discovery' ? (
-      <DiscoveryStep project={project} reads={reads} />
+      <Card className="flex flex-col gap-3">
+        <DiscoveryStep project={project} reads={reads} />
+      </Card>
     ) : current === 'business' ? (
       <div className="flex flex-col gap-3">
         <p className="text-sm text-fg-muted">
@@ -614,10 +616,14 @@ const Wizard = ({
           </Link>
           , under <em>Business context</em>.
         </p>
-        <BusinessInterview projectId={project.id} projectKey={project.key} />
+        <Card>
+          <BusinessInterview projectId={project.id} projectKey={project.key} />
+        </Card>
       </div>
     ) : current === 'history' ? (
-      <HistoryBootstrap projectId={project.id} projectKey={project.key} />
+      <Card>
+        <HistoryBootstrap projectId={project.id} projectKey={project.key} />
+      </Card>
     ) : current === 'autonomy' ? (
       <div className="flex flex-col gap-3">
         <OperatingMode projectId={project.id} />
@@ -635,7 +641,9 @@ const Wizard = ({
         </DetailsDisclosure>
       </div>
     ) : (
-      <FinishStep project={project} reads={reads} />
+      <Card>
+        <FinishStep project={project} reads={reads} />
+      </Card>
     );
 
   return (
