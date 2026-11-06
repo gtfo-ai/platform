@@ -384,7 +384,7 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
     // S-23.23: a reject asks first, says what it does, and sends the person's own reason — never
     // the canned "rejected from the UI" it used to.
     const dialog = await screen.findByRole('dialog', { name: 'Reject this suggested edit?' });
-    expect(dialog.textContent).toContain('the proposal is closed for good');
+    expect(dialog.textContent).toContain('the suggestion is closed for good');
     expect(decisions).toHaveLength(1);
     await user.type(
       within(dialog).getByLabelText('Why (the Librarian learns from it)'),
