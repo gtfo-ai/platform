@@ -14,7 +14,7 @@ import { AttestationRefusedError, type AttestationVerifier } from './attestation
 import { DEFAULT_UPDATE_POLL_SECONDS, loadUpdaterConfig, type UpdaterConfig } from './config.js';
 import type { DockerRun } from './docker.js';
 import { HEARTBEAT_EVERY_MS, HEARTBEAT_FILE, HEARTBEAT_STALE_AFTER_MS } from './heartbeat.js';
-import { PREVIOUS_TEMPLATE_FILE, readState, updatePlanSchema } from './plan.js';
+import { PREVIOUS_TEMPLATE_FILE, readState, statePathOf, updatePlanSchema } from './plan.js';
 import { RegistryError } from './registry.js';
 import {
   applyContainerArgs,
@@ -102,6 +102,12 @@ const world = async (options: {
   readonly pullFailsOnce?: boolean;
   /** `run()` is stopped once this many `GET release` calls were made. */
   readonly stopAfterReleases?: number;
+  /**
+   * What the apply container leaves in `state.json` when it ends (default: nothing, so the state
+   * still reads the updater's own `launched` step); `unreadable` overwrites it with text no reader
+   * parses.
+   */
+  readonly applyEnds?: 'succeeded' | 'rolled_back' | 'unreadable';
 }) => {
   /**
    * A virtual clock: `sleep` advances it, so `run()`'s loop is driven without waiting, and each
@@ -218,6 +224,15 @@ const world = async (options: {
       return { stdout: 'apply-1\n', stderr: '' };
     }
     if (args[0] === 'container' && args[1] === 'start') events.push('start apply');
+    if (args[0] === 'container' && args[1] === 'wait' && options.applyEnds !== undefined) {
+      const file = statePathOf(stateDir);
+      if (options.applyEnds === 'unreadable') {
+        await writeFile(file, 'not a state');
+      } else {
+        const state = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+        await writeFile(file, JSON.stringify({ ...state, result: options.applyEnds }));
+      }
+    }
     return { stdout: '', stderr: '' };
   };
   const verified: string[] = [];
@@ -528,7 +543,11 @@ describe('the updater’s poll', () => {
   });
 
   it('does not verify an advertised set again while the core keeps advertising it (TD-032, 2026-11-06)', async () => {
-    const w = await world({ advertised: digests('b'), pullFailsOnce: true });
+    const w = await world({
+      advertised: digests('b'),
+      pullFailsOnce: true,
+      applyEnds: 'succeeded',
+    });
     // The first poll verifies the target's four and the running set's four, then the pull fails.
     expect(await w.updater.tick()).toBe('failed');
     expect(w.verified).toHaveLength(8);
@@ -552,7 +571,7 @@ describe('the updater’s cadence (TD-032’s 2026-11-06 amendment)', () => {
     );
   });
 
-  it('asks the core at once when it starts, not one interval in', async () => {
+  it('asks the core at once when it starts, before the first wait (as before the 2026-11-06 amendment)', async () => {
     const w = await world({ advertised: digests('a'), pollMs: 60_000, stopAfterReleases: 1 });
     await w.updater.run();
     expect(w.releaseAt).toEqual([0]);
@@ -574,6 +593,26 @@ describe('the updater’s cadence (TD-032’s 2026-11-06 amendment)', () => {
     await w.updater.run();
     // 503 at 0 → wait 120 s; 503 → 240 s; 503 → 300 s (the cap); 503 → 300 s; works → 60 s.
     expect(w.releaseAt).toEqual([0, 120_000, 360_000, 660_000, 960_000, 1_020_000]);
+  });
+
+  it('reads an apply that did not end succeeded as a failed poll, and backs off one whose state cannot be read (review of PR #66)', async () => {
+    const succeeded = await world({ advertised: digests('b'), applyEnds: 'succeeded' });
+    expect(await succeeded.updater.tick()).toBe('ok');
+    // Rolled back: failed, and the set is settled — the next poll neither drains nor applies.
+    const rolledBack = await world({ advertised: digests('b'), applyEnds: 'rolled_back' });
+    expect(await rolledBack.updater.tick()).toBe('failed');
+    expect(await rolledBack.updater.tick()).toBe('ok');
+    expect(rolledBack.events.filter((event) => event === 'drain')).toHaveLength(1);
+    // Unreadable: nothing could settle the set, so each poll drains again — backed off, never every
+    // minute.
+    const unreadable = await world({
+      advertised: digests('b'),
+      applyEnds: 'unreadable',
+      pollMs: 60_000,
+      stopAfterReleases: 3,
+    });
+    await unreadable.updater.run();
+    expect(unreadable.releaseAt).toEqual([0, 120_000, 360_000]);
   });
 
   it('reads a core that answers 503 as a failed poll', async () => {

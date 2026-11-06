@@ -462,8 +462,8 @@ wizard said "It has an older build than this platform" for about 7 minutes (inst
 update finished 08:54) before its updater applied the update. The owner: updates should land faster.
 
 1. **At start, then every minute.** The updater asks the core's `release` at once when it starts (after
-   the start-up recovery), not one interval in, and then every `APP_UPDATE_POLL_SECONDS`, whose default
-   is now **60** (was 300). The variable and its bounds (1 to 86400 s) are unchanged; a `426` still wakes
+   the start-up recovery), as before (the loop already polled before its first wait; a test now holds
+   it), and then every `APP_UPDATE_POLL_SECONDS`, whose default is now **60** (was 300). The variable and its bounds (1 to 86400 s) are unchanged; a `426` still wakes
    a poll at once. The request is one small `GET`, and verification is not repeated by it: the
    attestations are read only when the advertised digests differ from the running ones, and a set
    that verified is **remembered by its digests**, so a poll that answers the same set again (after a
@@ -478,6 +478,9 @@ update finished 08:54) before its updater applied the update. The owner: updates
 3. **What did not change.** Drain-then-idle, the apply and its rollback, the report and the downgrade
    bound are as decision 6 and the amendments above state. The time a worker takes to update is still
    bounded below by its run in flight, which it finishes first.
+4. **An apply that did not end `succeeded` is a failed poll.** When the apply container ends and
+   `updates/state.json` does not read `succeeded` for that update — rolled back, failed, or unreadable —
+   the poll backs off, so a state the updater cannot read never drains and applies again every minute.
 
 As built: `apps/server/src/updater/updater.ts` (`nextPollDelayMs`, `MAX_POLL_BACKOFF_MS`, the loop in
 `run`), `config.ts` (`DEFAULT_UPDATE_POLL_SECONDS = 60`), `compose.worker.yml`'s default, and the tests in
