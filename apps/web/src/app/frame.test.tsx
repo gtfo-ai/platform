@@ -370,7 +370,7 @@ describe('the top bar', () => {
 
   it('marks the current page inside the More menu when it has collapsed there', async () => {
     const user = userEvent.setup();
-    // A 700 px viewport: Workers through Settings are in the menu; Agents stays in the row.
+    // A 700 px viewport: Statistics is in the menu (below `md`); Agents stays in the row.
     const real = window.matchMedia.bind(window);
     vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => {
       const min = /min-width: (\d+)px/.exec(query);
@@ -384,16 +384,26 @@ describe('the top bar', () => {
         removeEventListener: () => undefined,
       } as unknown as MediaQueryList;
     });
-    start({ projects: [project(1)] }, '/settings');
+    start({ projects: [project(1)] }, '/stats');
     await user.click(await screen.findByRole('button', { name: 'More navigation' }));
     const menu = await screen.findByRole('menu');
-    expect(within(menu).getByRole('menuitem', { name: 'Settings (current)' })).toBeTruthy();
-    expect(within(menu).getByRole('menuitem', { name: 'Statistics' })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: 'Statistics (current)' })).toBeTruthy();
     expect(within(menu).queryByRole('menuitem', { name: /^Agents/ })).toBeNull();
   });
 });
 
 describe('the organisation navigation', () => {
+  it('is the five daily screens, and nothing of Settings’ Admin group (S-25.6, Q-UX-1)', () => {
+    // The census changes once: product/10's 2026-11-06 amendment names the row.
+    expect(NAV.map((entry) => [entry.label, entry.to])).toEqual([
+      ['Home', '/'],
+      ['Projects', '/projects'],
+      ['Inbox', '/inbox'],
+      ['Agents', '/agents'],
+      ['Statistics', '/stats'],
+    ]);
+  });
+
   it('is NAV, in order, with Home current on Home and the counts beside their entries', async () => {
     start({ projects: [project(1), project(2)], running: 1, questions: 4 }, '/');
     const nav = await screen.findByRole('navigation', { name: 'Primary' });
@@ -413,18 +423,47 @@ describe('the organisation navigation', () => {
   });
 
   it('marks the section of a nested path current, and gives way to the project tabs inside a project', async () => {
-    start({ projects: [project(1)] }, '/workers/approve');
+    start({ projects: [project(1)] }, '/stats');
     const nav = await screen.findByRole('navigation', { name: 'Primary' });
-    expect(within(nav).getByRole('link', { name: 'Workers' }).getAttribute('aria-current')).toBe(
+    expect(within(nav).getByRole('link', { name: 'Statistics' }).getAttribute('aria-current')).toBe(
       'page',
     );
     expect(within(nav).getByRole('link', { name: 'Home' }).hasAttribute('aria-current')).toBe(
       false,
     );
     cleanup();
+    // A moved screen marks no entry of the row: it is Settings' (`routes/admin-routes.test.tsx`).
+    start({ projects: [project(1)] }, '/workers/approve');
+    const row = await screen.findByRole('navigation', { name: 'Primary' });
+    await screen.findByRole('navigation', { name: 'Settings' });
+    expect(
+      within(row)
+        .getAllByRole('link')
+        .filter((link) => link.hasAttribute('aria-current')),
+    ).toEqual([]);
+    cleanup();
     start({ projects: [project(1)] }, '/projects/p1');
     await screen.findByRole('navigation', { name: 'Project' });
     expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
+  });
+});
+
+describe('the account menu', () => {
+  it('holds Settings, which the top row no longer does (S-25.6)', async () => {
+    const user = userEvent.setup();
+    start({ projects: [project(1)] }, '/');
+    await user.click(await within(await banner()).findByRole('button', { name: 'Account menu' }));
+    const menu = await screen.findByRole('menu');
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Settings', 'Sign out']);
+    await user.click(within(menu).getByRole('menuitem', { name: 'Settings' }));
+    // A member lands on the first section they may change (S-25.6): Keyboard shortcuts.
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/settings/keyboard');
+    });
   });
 });
 

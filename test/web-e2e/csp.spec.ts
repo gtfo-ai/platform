@@ -499,6 +499,12 @@ test('the Agents page draws its map, office and list under the policy, titles as
   );
   await expect(map.locator('.react-flow__edge.animated')).not.toHaveCount(0);
   await expect(map.locator('[data-fleet-node="seat"]')).toHaveCount(3);
+  // S-25.6 (research/21 S07): the page has no primary of its own — the map is the content — and
+  // the map's Needs you node is the Inbox's door.
+  await expect(page.getByRole('link', { name: 'Open inbox' })).toHaveCount(0);
+  await expect(
+    map.locator('[data-fleet-node="needs"]').getByRole('link', { name: 'Needs you (2)' }),
+  ).toHaveAttribute('href', '/inbox');
   await page
     .getByRole('button', {
       name: /^DEMO-5 · Flaky retries .+ · Investigation · thinking · worker jan-mbp$/,

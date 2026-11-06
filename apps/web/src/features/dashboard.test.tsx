@@ -248,6 +248,9 @@ interface World {
   /** S-23.20: the execution read's `server_claimant`; absent, the read answers 404. */
   serverClaimant?: 'running' | 'none';
   workers: WorkerSummary[];
+  /** S-25.6: the Operations reads' `total`s; absent, the read answers 404. */
+  stuckEvents?: number;
+  failedJobs?: number;
   asked: string[];
 }
 
@@ -320,6 +323,17 @@ const fetchFor = (world: World) =>
     }
     if (path === '/api/org/inbox') {
       return json({ questions: world.questions, approvals: world.approvals });
+    }
+    // The server refuses both below admin (`org.dead_letters.manage`); the fake does too.
+    if (path === '/api/org/dead-letters' && world.stuckEvents !== undefined) {
+      return world.role === 'admin'
+        ? json({ items: [], total: world.stuckEvents, next_cursor: null })
+        : json({ error: { code: 'forbidden', message: 'admin only' } }, 403);
+    }
+    if (path === '/api/org/failed-jobs' && world.failedJobs !== undefined) {
+      return world.role === 'admin'
+        ? json({ items: [], total: world.failedJobs, next_cursor: null })
+        : json({ error: { code: 'forbidden', message: 'admin only' } }, 403);
     }
     if (path === `/api/artifacts/${PLAN_ARTIFACT}`) {
       return json({
@@ -881,6 +895,110 @@ describe('Home on a new instance: the setup checklist', () => {
     expect(screen.queryByRole('list', { name: 'Setup steps' })).toBeNull();
     expect(primaries(container)).toHaveLength(0);
     expect(world.asked).not.toContain('/api/integrations');
+  });
+});
+
+describe('Home once the setup project has run a ticket (S-25.6, research/21 F10)', () => {
+  it('drops the checklist on a working install, though discovery and the dial were never ticked', async () => {
+    // The F10 install: a ticket ran (task 9, a Jira ticket), and readiness 0 with no evaluation and
+    // a dial never applied would have read "3 of 5 done" for good.
+    const world = newWorld({
+      projects: [project(1, { readiness_level: 0 })],
+      materialised: new Set(),
+    });
+    const { container } = start(world);
+    await screen.findByRole('link', { name: 'Project 1' });
+    await waitFor(() => {
+      expect(world.asked).toContain(`/api/projects/${PROJECT(1)}/tasks`);
+    });
+    await waitFor(() => {
+      expect(primaries(container).map((element) => element.textContent)).toEqual(['New project']);
+    });
+    expect(screen.queryByRole('region', { name: 'Set up' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Missing from setup' })).toBeNull();
+  });
+
+  it('names a missing git host, what that costs, and where to connect one', async () => {
+    const world = newWorld({ integrations: [integration('task_management')] });
+    const { container } = start(world);
+    const missing = await screen.findByRole('region', { name: 'Missing from setup' });
+    expect(missing.textContent).toContain(
+      'Merge requests can’t be opened until a git host is connected.',
+    );
+    expect(
+      within(missing).getByRole('link', { name: 'Connect a git host →' }).getAttribute('href'),
+    ).toBe('/integrations');
+    // The checklist that said "4 of 5 done" with step 1 current is gone.
+    expect(screen.queryByRole('region', { name: 'Set up' })).toBeNull();
+    expect(screen.queryByText(/of 5 done/)).toBeNull();
+    // The missing piece is a link, not a second primary: New project stays the page's one.
+    expect(primaries(container).map((element) => element.textContent)).toEqual(['New project']);
+  });
+
+  it('names a missing worker where nothing on the server runs the project', async () => {
+    const world = newWorld({ serverClaimant: 'none' });
+    start(world);
+    const missing = await screen.findByRole('region', { name: 'Missing from setup' });
+    await waitFor(() => {
+      expect(missing.querySelector('[data-missing-piece="worker"]')).not.toBeNull();
+    });
+    expect(
+      within(missing).getByRole('link', { name: 'Connect a worker →' }).getAttribute('href'),
+    ).toBe('/workers/new');
+  });
+});
+
+describe('Home: background failures in Needs you, for an administrator (S-25.6, F14)', () => {
+  it('adds a row per failing kind with its count, each to its settings section', async () => {
+    const world = newWorld({
+      questions: [question(1, 'Which currency?', 5)],
+      stuckEvents: 3,
+      failedJobs: 1,
+    });
+    start(world);
+    const needs = box('Needs you');
+    const stuck = await within(needs).findByRole('link', { name: 'Review 3 events are stuck' });
+    expect(stuck.getAttribute('href')).toBe('/settings/dead-letters');
+    expect(
+      within(needs)
+        .getByRole('link', { name: 'Review 1 background job failed' })
+        .getAttribute('href'),
+    ).toBe('/settings/failed-jobs');
+    // The count is every row: one question and the two background rows.
+    await waitFor(() => {
+      expect(within(needs).getByText('3 waiting for you')).toBeTruthy();
+    });
+    // After the people's rows.
+    const rows = within(within(needs).getByRole('list', { name: 'Needs you' })).getAllByRole(
+      'listitem',
+    );
+    expect(rows[0]?.textContent).toContain('Which currency?');
+  });
+
+  it('draws no row for a count of zero, nor for a read that failed', async () => {
+    let world = newWorld({ stuckEvents: 0, failedJobs: 0 });
+    start(world);
+    expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
+    expect(document.querySelector('[data-home-background]')).toBeNull();
+    expect(world.asked).toContain('/api/org/dead-letters');
+    expect(world.asked).toContain('/api/org/failed-jobs');
+    cleanup();
+    // Absent counts: the fake answers 404, which is no row — never a claim that nothing failed
+    // beyond the box's own quiet line.
+    world = newWorld();
+    start(world);
+    expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
+    expect(document.querySelector('[data-home-background]')).toBeNull();
+  });
+
+  it('is not asked for, nor shown, below administrator', async () => {
+    const world = newWorld({ role: 'maintainer', stuckEvents: 3, failedJobs: 1 });
+    start(world);
+    await screen.findByRole('link', { name: 'Project 1' });
+    expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
+    expect(document.querySelector('[data-home-background]')).toBeNull();
+    expect(world.asked).not.toContain('/api/org/dead-letters');
+    expect(world.asked).not.toContain('/api/org/failed-jobs');
   });
 });
 

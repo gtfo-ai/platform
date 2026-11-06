@@ -252,7 +252,7 @@ describe('dead letters on the settings page', () => {
     const showOlder = () =>
       screen
         .queryAllByRole('button', { name: 'Show older' })
-        .filter((button) => button.closest('section')?.textContent?.includes('Dead letters'));
+        .filter((button) => button.closest('section')?.textContent?.includes('Stuck events'));
     for (const position of [4101, 4100]) {
       const [button] = showOlder();
       expect(button, `Show older before ${position}`).toBeDefined();

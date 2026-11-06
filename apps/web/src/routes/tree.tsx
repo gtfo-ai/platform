@@ -28,7 +28,15 @@
  * **`/projects/$key` is a layout** (`app/project-frame.tsx`): the project header and tabs, with the
  * board as its index child and every project page — the task route included — as a child. No URL
  * changed. A child says which tab it is, whether it takes the full width and whether it has its own
- * `<h1>` through `staticData`, which the frame reads off the matches. */
+ * `<h1>` through `staticData`, which the frame reads off the matches.
+ *
+ * **Settings' Admin screens are a pathless layout** (S-25.6, product/10's 2026-11-06 IA amendment):
+ * Integrations, Workers and the Audit log left the top row for org Settings' *Admin* group, and the
+ * routes under `/integrations`, `/workers` and `/audit` are children of `adminRoute`, which draws the
+ * settings NavList around them (`features/admin-frame.tsx`). **No path and no search schema
+ * changed**: `/workers/approve?code=…` — the device flow's `verification_uri`, which installed
+ * workers print — and `/workers/new?step=ready` resolve as they always did, query string and all
+ * (`routes/admin-routes.test.tsx` holds both). */
 
 import type { QueryClient } from '@tanstack/react-query';
 import {
@@ -47,6 +55,7 @@ import { ProjectFrame, type ProjectTab } from '../app/project-frame.js';
 import type { Services } from '../app/services.js';
 import { AppShell } from '../app/shell.js';
 import type { SessionResponse } from '../auth/session.js';
+import { AdminFrame } from '../features/admin-frame.js';
 import { FLEET_VIEWS } from '../features/agents-view.js';
 import { DashboardScreen } from '../features/dashboard.js';
 import { WIZARD_STEP_IDS } from '../features/onboarding-steps.js';
@@ -56,6 +65,7 @@ import {
   isOrgSectionFor,
   isProjectSection,
   type OrgSettingsSectionId,
+  orgAdminPathOf,
   type ProjectSettingsSectionId,
 } from '../features/settings-sections.js';
 import { SignInScreen } from '../features/sign-in.js';
@@ -132,7 +142,23 @@ const inboxRoute = route(
   '/inbox',
   lazyRouteComponent(() => import('../features/inbox.js'), 'InboxScreen'),
 );
-const integrationsRoute = route(
+/**
+ * The Admin group's layout (S-25.6): no path of its own, so every URL below is the one it always
+ * was; it draws the settings NavList around the screen (`features/admin-frame.tsx`). Eager, like
+ * the project's layout: as a chunk of its own it split a module shared with the worker's page into
+ * a chunk of its own too, which cost that page's 120 kB budget more than the SPA's gained
+ * (`bundle:check`, measured: +0.6 kB there for −0.4 kB here).
+ */
+const adminRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  id: 'admin',
+  component: AdminFrame,
+});
+
+const adminPage = <TPath extends string>(path: TPath, component: RouteComponent) =>
+  createRoute({ getParentRoute: () => adminRoute, path, component });
+
+const integrationsRoute = adminPage(
   '/integrations',
   lazyRouteComponent(() => import('../features/integrations.js'), 'IntegrationsScreen'),
 );
@@ -156,7 +182,7 @@ const integrationWizardSearchSchema = z.object({
   id: z.uuid().optional().catch(undefined),
 });
 const integrationWizardRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
+  getParentRoute: () => adminRoute,
   path: '/integrations/new',
   validateSearch: integrationWizardSearchSchema,
   component: withPreload(function IntegrationWizard() {
@@ -165,7 +191,7 @@ const integrationWizardRoute = createRoute({
   }, IntegrationWizardScreen),
 });
 const integrationRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
+  getParentRoute: () => adminRoute,
   path: '/integrations/$integrationId',
   validateSearch: integrationSearchSchema,
   component: withPreload(function Integration() {
@@ -178,15 +204,16 @@ const statsRoute = route(
   '/stats',
   lazyRouteComponent(() => import('../features/statistics.js'), 'StatisticsScreen'),
 );
-const auditRoute = route(
+const auditRoute = adminPage(
   '/audit',
   lazyRouteComponent(() => import('../features/audit.js'), 'AuditScreen'),
 );
 /**
  * Org settings (S-23.11b): `/settings/<section>`, each section a page of its own beside a NavList
  * (`features/settings-sections.ts`). `/settings` — the URL every link and bookmark already uses —
- * redirects to the first section the caller may open, and so does a section that is unknown or that
- * the caller's role is not shown (the Operations group is the administrator's).
+ * redirects to the first section the caller's role may change (S-25.6), and so does a section that
+ * is unknown or that the caller's role is not shown (the Operations group is the administrator's).
+ * An Admin entry's id (`/settings/workers`) goes to that screen's own URL.
  */
 const orgSettingsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
@@ -219,6 +246,10 @@ const orgSettingsSectionRoute = createRoute({
   path: '$section',
   beforeLoad: ({ context, params }) => {
     const role = sessionRole(context);
+    const admin = orgAdminPathOf(params.section);
+    if (admin !== null) {
+      throw redirect({ to: admin, replace: true });
+    }
     if (!isOrgSectionFor(params.section, role)) {
       throw redirect({
         to: '/settings/$section',
@@ -233,11 +264,11 @@ const orgSettingsSectionRoute = createRoute({
   }, SettingsScreen),
 });
 // WP-280: the registered machines, and the device flow's `verification_uri`.
-const workersRoute = route(
+const workersRoute = adminPage(
   '/workers',
   lazyRouteComponent(() => import('../features/workers.js'), 'WorkersScreen'),
 );
-const workerApproveRoute = route(
+const workerApproveRoute = adminPage(
   '/workers/approve',
   lazyRouteComponent(() => import('../features/workers.js'), 'WorkerApproveScreen'),
 );
@@ -261,7 +292,7 @@ const workerWizardSearchSchema = z.object({
 });
 
 const workerWizardRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
+  getParentRoute: () => adminRoute,
   path: '/workers/new',
   validateSearch: workerWizardSearchSchema,
   component: withPreload(function WorkerWizard() {
@@ -521,16 +552,18 @@ export const routeTree = rootRoute.addChildren([
     projectsRoute,
     agentsRoute,
     inboxRoute,
-    integrationsRoute,
-    integrationWizardRoute,
-    integrationRoute,
     statsRoute,
-    auditRoute,
+    adminRoute.addChildren([
+      integrationsRoute,
+      integrationWizardRoute,
+      integrationRoute,
+      auditRoute,
+      workersRoute,
+      workerApproveRoute,
+      workerWizardRoute,
+    ]),
     orgSettingsRoute.addChildren([orgSettingsIndexRoute, orgSettingsSectionRoute]),
     onboardingRoute,
-    workersRoute,
-    workerApproveRoute,
-    workerWizardRoute,
     projectRoute.addChildren([
       boardRoute,
       projectTaskRoute,

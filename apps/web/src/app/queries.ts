@@ -710,11 +710,14 @@ export const useIdentityCandidates = (enabled: boolean) => {
  * oldest dead letter rather than stopping at the newest fifty. Admin-only on the server, so a
  * non-admin's 403 is an answer the section names — not retried, and not drawn as an empty list that
  * would read as "nothing is poisoned".
+ *
+ * `enabled: false` asks nothing: Home asks only for an administrator (S-25.6).
  */
-export const useDeadLetters = () => {
+export const useDeadLetters = (enabled = true) => {
   const { endpoints } = useServices();
   return useInfiniteQuery({
     queryKey: [...queryKeys.deadLetters],
+    enabled,
     queryFn: ({ pageParam }) =>
       endpoints.deadLetters(pageParam === null ? {} : { cursor: pageParam }),
     initialPageParam: null as string | null,
@@ -764,11 +767,14 @@ export const useWorkerDevice = (userCode: string | null) => {
  * `GET /api/org/failed-jobs` (WP-108, PROGRESS backlog 325): the jobs pg-boss gave up on, a page at
  * a time with *Show older* following `next_cursor` (WP-114, backlog 324). Admin-only like the dead
  * letters beside it, and not retried for the same reason.
+ *
+ * `enabled: false` asks nothing: Home asks only for an administrator (S-25.6).
  */
-export const useFailedJobs = () => {
+export const useFailedJobs = (enabled = true) => {
   const { endpoints } = useServices();
   return useInfiniteQuery({
     queryKey: [...queryKeys.failedJobs],
+    enabled,
     queryFn: ({ pageParam }) =>
       endpoints.failedJobs(pageParam === null ? {} : { cursor: pageParam }),
     initialPageParam: null as string | null,

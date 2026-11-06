@@ -269,11 +269,11 @@ describe('docs/user-guide.md § 11 names the settings sections the app renders (
   });
 
   it('fails on a section the guide drops (canary)', () => {
-    const dropped = guide().replace(' · Failed jobs', '');
+    const dropped = guide().replace(' · Failed background jobs', '');
     expect(dottedListsIn(sectionOf(dropped, '## 11. Settings'))[0]).not.toEqual(
       sectionLabels(ORG_SETTINGS_GROUPS),
     );
-    expect(sectionLabels(ORG_SETTINGS_GROUPS)).toContain('Failed jobs');
+    expect(sectionLabels(ORG_SETTINGS_GROUPS)).toContain('Failed background jobs');
   });
 });
 

@@ -20,16 +20,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import {
-  READINESS_HOW_TO,
   READINESS_LEVELS,
-  READINESS_RUNG_REQUIREMENTS,
-  READINESS_UNLOCKS,
   readinessBadgeWord,
   readinessLadderName,
   readinessNameAndWord,
   readinessSummary,
   readinessTone,
 } from './readiness-label.js';
+import {
+  READINESS_HOW_TO,
+  READINESS_LEVEL_MEANINGS,
+  READINESS_RUNG_REQUIREMENTS,
+  READINESS_UNLOCKS,
+} from './readiness-popover.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 
@@ -149,7 +152,7 @@ describe('the readiness badge, per level', () => {
 
       await userEvent.setup().click(trigger);
       const popover = await screen.findByRole('dialog', { name: ladder });
-      const meaning = READINESS_LEVELS[level]?.meaning;
+      const meaning = READINESS_LEVEL_MEANINGS[level];
       if (meaning !== undefined) {
         expect(popover.textContent).toContain(meaning);
       } else {
@@ -180,20 +183,41 @@ describe('the readiness badge, per level', () => {
 });
 
 describe('the readiness popover', () => {
+  it('is a lazy chunk: the badge is a plain button until it is approached, and the swap keeps the focus (S-25.6)', async () => {
+    render(createApp({ fetchImpl: fetchFor(0), realtime: false }).element);
+    const plain = await badge('Plans need your OK');
+    // The popover trigger's own attributes, before its module has arrived.
+    expect(plain.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(plain.getAttribute('aria-expanded')).toBe('false');
+    plain.focus();
+    // Focus imports the chunk; the popover's trigger replaces the button — a new element with the
+    // same id and name — and the focus moves with it rather than falling to the body.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Readiness: Plans need your OK' })).not.toBe(plain);
+    });
+    const swapped = screen.getByRole('button', { name: 'Readiness: Plans need your OK' });
+    expect(swapped.id).toBe(plain.id);
+    expect(document.activeElement).toBe(swapped);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Nothing was read: approaching the badge is not opening it.
+    expect(readinessReads).toBe(0);
+  });
+
   it('opens from the keyboard and gives the focus back on Escape', async () => {
     const user = userEvent.setup();
     render(createApp({ fetchImpl: fetchFor(0), realtime: false }).element);
-    const trigger = await badge('Plans need your OK');
-    trigger.focus();
+    (await badge('Plans need your OK')).focus();
     await user.keyboard('{Enter}');
     const popover = await screen.findByRole('dialog', { name: 'Level 0 · Unverified' });
+    // Re-read: the first press may have arrived before the chunk, whose trigger replaced the button.
+    const trigger = await badge('Plans need your OK');
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     expect(popover.textContent).toContain('It needs: Tests run green, CI runs on merge requests.');
     await user.keyboard('{Escape}');
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Level 0 · Unverified' })).toBeNull();
     });
-    expect(document.activeElement).toBe(trigger);
+    expect(document.activeElement).toBe(await badge('Plans need your OK'));
     // And Space, a button's other key.
     await user.keyboard(' ');
     expect(await screen.findByRole('dialog', { name: 'Level 0 · Unverified' })).toBeTruthy();
@@ -225,6 +249,7 @@ describe('the client’s readiness tables', () => {
   it('are the domain’s ladder and its criteria', () => {
     expect(READINESS_RUNG_REQUIREMENTS).toEqual(READINESS_LEVEL_REQUIREMENTS);
     expect(READINESS_LEVELS).toHaveLength(READINESS_LEVEL_REQUIREMENTS.length + 1);
+    expect(READINESS_LEVEL_MEANINGS).toHaveLength(READINESS_LEVELS.length);
     expect(Object.keys(READINESS_HOW_TO)).toEqual([...READINESS_CRITERION_IDS]);
     expect(Object.keys(READINESS_UNLOCKS)).toEqual([...READINESS_CRITERION_IDS]);
     for (const id of READINESS_CRITERION_IDS) {
@@ -234,8 +259,8 @@ describe('the client’s readiness tables', () => {
         expect(text, id).not.toMatch(SPEC_REFERENCE);
       }
     }
-    for (const level of READINESS_LEVELS) {
-      expect(level.meaning).not.toMatch(SPEC_REFERENCE);
+    for (const meaning of READINESS_LEVEL_MEANINGS) {
+      expect(meaning).not.toMatch(SPEC_REFERENCE);
     }
   });
 });

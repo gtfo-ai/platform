@@ -12,7 +12,7 @@
  * Escape is the Dialog's (it closes, and the focus returns to what opened it).
  *
  * **What it offers comes from reads already made** — no endpoint of its own: the organisation's
- * screens (`NAV`), the current project's tabs, every project in the projects read, every task in
+ * screens (`PALETTE_SCREENS`: the top row's, Settings, and Settings' Admin screens), the current project's tabs, every project in the projects read, every task in
  * whichever project task reads are in the query cache (the board's, Home's escalated tasks, the
  * `+` menu's), and the actions — New project (an administrator's, as in the `+` menu), Start a
  * ticket in this project (when the tasks read says the caller may), Open inbox, and the shortcuts
@@ -36,7 +36,7 @@ import {
 import { cx } from '../ui/cx.js';
 import { Dialog } from '../ui/dialog.js';
 import { UntrustedText } from '../ui/untrusted.js';
-import { NAV } from './nav.js';
+import { PALETTE_SCREENS, type ScreenPath } from './nav.js';
 import {
   PROJECT_TABS,
   type ProjectTab,
@@ -50,7 +50,7 @@ export type PaletteAction = 'new-project' | 'start-ticket' | 'inbox' | 'shortcut
 
 /** Where an option goes, or what it does — never a closure, so the list is plain data. */
 export type PaletteTarget =
-  | { readonly kind: 'screen'; readonly to: (typeof NAV)[number]['to'] }
+  | { readonly kind: 'screen'; readonly to: ScreenPath }
   | { readonly kind: 'tab'; readonly projectKey: string; readonly tab: ProjectTab }
   | { readonly kind: 'project'; readonly projectKey: string }
   | { readonly kind: 'task'; readonly taskId: string; readonly projectKey: string | null }
@@ -121,7 +121,7 @@ export const paletteItems = (context: PaletteContext): PaletteItem[] => {
       target: { kind: 'action', action: 'shortcuts' },
     },
   );
-  for (const entry of NAV) {
+  for (const entry of PALETTE_SCREENS) {
     items.push({
       key: `screen:${entry.to}`,
       group: 'Screen',

@@ -4,10 +4,19 @@
  * Facts in, steps out: which step is ticked, which is current, where *Continue setup* goes, and when
  * the checklist is gone. The facts are what `dashboard.tsx` reads from the server; nothing here is
  * stored by the client, so the table is the whole of the decision.
+ *
+ * Since S-25.6 (research/21 F10) a second table sits on top of it: once the setup project has run a
+ * ticket, Home shows only the pieces still missing — `missingPieces` and `homeSetup`.
  */
 import { describe, expect, it } from 'vitest';
 import { leadingClaimBlocker, UPDATER_FIX } from '../ui/humanize.js';
-import { type SetupFacts, setupChecklist, setupProjectOf } from './home-setup.js';
+import {
+  homeSetup,
+  missingPieces,
+  type SetupFacts,
+  setupChecklist,
+  setupProjectOf,
+} from './home-setup.js';
 
 const facts = (over: Partial<SetupFacts> = {}): SetupFacts => ({
   connect: 'todo',
@@ -229,5 +238,78 @@ describe('setupProjectOf', () => {
       { id: 'c', created_at: '2026-10-03T00:00:00.000Z' },
     ];
     expect(setupProjectOf(projects)?.id).toBe('a');
+  });
+});
+
+describe('homeSetup: once a ticket has run, only a missing piece is named (S-25.6, F10)', () => {
+  const ALL_PIECES = { tracker: 'done', git: 'done' } as const;
+
+  it('shows the checklist until the setup project has run a ticket', () => {
+    const checklist = setupChecklist(facts({ connect: 'done', project: 'done' }), 'acme');
+    expect(homeSetup(checklist, []).kind).toBe('checklist');
+    // …and nothing while a fact is still being read, rather than a box that flickers.
+    const settling = setupChecklist(facts({ connect: 'pending', project: 'done' }), 'acme');
+    expect(homeSetup(settling, []).kind).toBe('none');
+  });
+
+  it('hides the checklist on a working install whose discovery and dial were never ticked', () => {
+    // The F10 install: "4 of 5 done" for good. A ticket ran, so the steps no longer matter.
+    const checklist = setupChecklist(
+      facts({ connect: 'done', project: 'done', ticket: 'done' }),
+      'acme',
+    );
+    expect(checklist.complete).toBe(false);
+    expect(homeSetup(checklist, missingPieces(ALL_PIECES))).toEqual({ kind: 'none' });
+  });
+
+  it('names what is missing, and what that costs, once a ticket has run', () => {
+    const checklist = setupChecklist(
+      facts({ connect: 'todo', project: 'done', ticket: 'done' }),
+      'acme',
+    );
+    const missing = missingPieces({ tracker: 'done', git: 'todo' });
+    expect(homeSetup(checklist, missing)).toEqual({
+      kind: 'missing',
+      pieces: [
+        {
+          id: 'git',
+          text: 'Merge requests can’t be opened until a git host is connected.',
+          action: 'Connect a git host',
+          destination: { to: '/integrations' },
+        },
+      ],
+    });
+  });
+
+  it.each([
+    [{ tracker: 'todo', git: 'done' }, ['tracker']],
+    [{ tracker: 'todo', git: 'todo' }, ['tracker', 'git']],
+    [{ tracker: 'done', git: 'done', worker: 'todo' }, ['worker']],
+    // Only an answered "no" is missing: a read that failed or has not answered names nothing.
+    [{ tracker: 'unknown', git: 'pending', worker: 'unknown' }, []],
+    // A platform that runs agent work on its server has no worker piece at all.
+    [{ tracker: 'done', git: 'done' }, []],
+  ] as const)('missingPieces(%j) names %j', (pieces, ids) => {
+    expect(missingPieces(pieces).map((piece) => piece.id)).toEqual(ids);
+  });
+
+  it('names a worker that cannot take work, and resumes its wizard at Ready', () => {
+    const blocker = leadingClaimBlocker(['offline']);
+    const [piece] = missingPieces(
+      { tracker: 'done', git: 'done', worker: 'todo' },
+      {
+        name: 'jan-mbp',
+        reason: blocker?.word ?? '',
+        fix: blocker?.fix ?? '',
+        createdAt: '2026-10-01T00:00:00.000Z',
+      },
+    );
+    expect(piece?.text).toContain('jan-mbp can’t take work');
+    expect(piece?.text).toContain(blocker?.fix ?? '∅');
+    expect(piece?.destination).toEqual({
+      to: '/workers/new',
+      step: 'ready',
+      since: '2026-10-01T00:00:00.000Z',
+    });
   });
 });

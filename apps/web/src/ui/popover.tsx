@@ -13,6 +13,10 @@
  * The popup is portalled to the body, so a trigger inside a whole-row link (`row-link.ts`) opens it
  * without the row's stretched link covering it; a `<button>` in such a row is lifted above the link
  * by the stylesheet, so a press on it opens the popover rather than the row.
+ *
+ * `defaultOpen` with a `triggerId` opens it on mount, anchored to that trigger — what a caller does
+ * that mounts the popover only once its trigger was pressed (`features/readiness-label.tsx` keeps
+ * this module out of the initial graph that way, S-25.6).
  */
 import { Popover as BasePopover } from '@base-ui/react/popover';
 import type { ReactElement, ReactNode } from 'react';
@@ -24,6 +28,8 @@ export const Popover = ({
   onOpenChange,
   side = 'bottom',
   align = 'start',
+  triggerId,
+  defaultOpen = false,
 }: {
   /** The element that opens it; it must accept a ref and spread props, and carry its own name. */
   readonly trigger: ReactElement;
@@ -34,11 +40,16 @@ export const Popover = ({
   readonly onOpenChange?: (open: boolean) => void;
   readonly side?: 'top' | 'bottom' | 'left' | 'right';
   readonly align?: 'start' | 'center' | 'end';
+  /** The trigger's id: the caller's, so it survives the trigger being drawn by this module. */
+  readonly triggerId?: string;
+  /** Open on mount, against the trigger `triggerId` names. */
+  readonly defaultOpen?: boolean;
 }): ReactElement => (
   <BasePopover.Root
     {...(onOpenChange === undefined ? {} : { onOpenChange: (open: boolean) => onOpenChange(open) })}
+    {...(defaultOpen ? { defaultOpen: true, defaultTriggerId: triggerId ?? null } : {})}
   >
-    <BasePopover.Trigger render={trigger} />
+    <BasePopover.Trigger {...(triggerId === undefined ? {} : { id: triggerId })} render={trigger} />
     <BasePopover.Portal>
       <BasePopover.Positioner side={side} align={align} sideOffset={6} className="z-50">
         <BasePopover.Popup

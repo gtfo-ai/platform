@@ -9,9 +9,10 @@
  * connection dot, the `+` menu, the inbox with its count, and the avatar menu. Menus are Base UI's
  * (`ui/action-menu.tsx`) and portalled to `<body>`, drawn on the card ground (`bg-default`).
  *
- * **The second row** is the organisation's UnderlineNav (`NAV`) outside a project; inside one, the
- * project's own layout (`app/project-frame.tsx`) draws its header and tabs instead, as a GitHub
- * repository replaces the dashboard's navigation.
+ * **The second row** is the organisation's UnderlineNav (`NAV`, the five daily screens since S-25.6)
+ * outside a project; inside one, the project's own layout (`app/project-frame.tsx`) draws its header
+ * and tabs instead, as a GitHub repository replaces the dashboard's navigation. Settings — and with
+ * it the Admin screens, Integrations, Workers and the Audit log — is the account menu's.
  *
  * **Both rows stick** while the page scrolls (S-23.18) — the top bar always, the second row from
  * `sm` (inside a project only its tabs; the project's title scrolls away). `styles.css` declares
@@ -27,6 +28,7 @@
 
 import type { ProjectSummary } from '@platform/contracts';
 import { DeviceDesktopIcon } from '@primer/octicons-react/DeviceDesktopIcon';
+import { GearIcon } from '@primer/octicons-react/GearIcon';
 import { InboxIcon } from '@primer/octicons-react/InboxIcon';
 import { PlayIcon } from '@primer/octicons-react/PlayIcon';
 import { PlusIcon } from '@primer/octicons-react/PlusIcon';
@@ -122,8 +124,9 @@ export const connectionLabel = (
 };
 
 /**
- * The avatar menu: who is signed in and "Sign out". The trigger is named "Account menu"; there is
- * no theme choice (one dark theme, TD-033's 2026-11-05 amendment).
+ * The avatar menu: who is signed in, *Settings* and "Sign out". The trigger is named "Account
+ * menu"; there is no theme choice (one dark theme, TD-033's 2026-11-05 amendment). Settings is here
+ * rather than in the top row since S-25.6 (product/10's 2026-11-06 IA amendment), as GitHub's is.
  */
 const AccountMenu = ({
   user,
@@ -132,6 +135,7 @@ const AccountMenu = ({
   readonly user: SessionUser | null;
   readonly onSignOut: () => void;
 }): ReactElement => {
+  const navigate = useNavigate();
   const name = user === null ? 'Not signed in' : displayName(user);
   return (
     <ActionMenu
@@ -162,6 +166,14 @@ const AccountMenu = ({
       {user === null ? null : (
         <>
           <ActionMenuSeparator />
+          <ActionMenuItem
+            leadingIcon={<GearIcon size={16} />}
+            onSelect={() => {
+              void navigate({ to: '/settings' });
+            }}
+          >
+            Settings
+          </ActionMenuItem>
           <ActionMenuItem leadingIcon={<SignOutIcon size={16} />} onSelect={onSignOut}>
             Sign out
           </ActionMenuItem>

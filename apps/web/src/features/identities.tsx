@@ -1,5 +1,6 @@
 /**
- * Provider identities — who a Slack, Jira or GitLab account is (WP-43, PROGRESS backlog 79).
+ * Linked accounts (*Provider identities* until S-25.6) — who a Slack, Jira or GitLab account is
+ * (WP-43, PROGRESS backlog 79).
  *
  * `POST /api/org/identities` has existed since WP-31 and **nothing in the SPA called it**, so on
  * every instance an approval pressed in Slack or an answer written in a ticket arrived as
@@ -110,8 +111,8 @@ export const IdentityMappings = (): ReactElement => {
   };
 
   return (
-    <section aria-label="Provider identities">
-      <SectionHeading>Provider identities</SectionHeading>
+    <section aria-label="Linked accounts">
+      <SectionHeading>Linked accounts</SectionHeading>
       <p className="pb-2 text-xs text-fg-muted">
         A decision that arrives from Slack, Jira or GitLab — an approval button, an answer in a
         thread or a ticket comment — counts only when its author is mapped here to a person. An

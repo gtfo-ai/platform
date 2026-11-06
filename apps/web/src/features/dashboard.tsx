@@ -4,11 +4,17 @@
  *
  * The page opens with **Needs you** — every open question and pending approval in the organisation,
  * and every task escalated to a person — then **Running now**, then the **Projects**; the rail on
- * the right holds the spend and the instance. A brand-new instance gets none of that: for an admin
- * with no project, or no integration, Home **is** the setup checklist (`home-setup.ts`), a Stepper
- * whose every ✓ is read from the server and whose one primary button continues at the first step
- * that is not done. Once a project exists the checklist moves into the rail until its last step is
- * done, and then it is gone.
+ * the right holds the spend and the instance. For an administrator *Needs you* also carries the
+ * **background failures** (S-25.6, product/10's 2026-11-06 amendment, research/21 F14): a row for the
+ * stuck events and one for the failed background jobs, each only while its count is above zero —
+ * the two reads' own `total`s, which nobody else is asked for (the server refuses them below admin).
+ * A brand-new instance gets none of that: for an admin with no project, or no integration, Home
+ * **is** the setup checklist (`home-setup.ts`), a Stepper whose every ✓ is read from the server and
+ * whose one primary button continues at the first step that is not done. Once a project exists the
+ * checklist moves into the rail — **until the setup project runs a ticket** (research/21 F10). From
+ * then on the checklist is gone, and the rail names only a piece that is still missing, with what
+ * its absence costs and where to fix it ("Merge requests can't be opened until a git host is
+ * connected").
  *
  * **At most one primary button on the page**: *Continue setup* while the checklist shows, *New
  * project* once it does not — and *New project* only for an admin, the one role `project.create`
@@ -24,6 +30,8 @@ import { ApiError } from '../api/http.js';
 import {
   useAgents,
   useBindableIntegrations,
+  useDeadLetters,
+  useFailedJobs,
   useInbox,
   useOrgBudgets,
   useProjectAutonomy,
@@ -70,6 +78,10 @@ import { ApprovalSummary } from './approval-summary.js';
 import { reviewVerb } from './approval-text.js';
 import {
   type BlockedWorker,
+  type HomeSetup,
+  homeSetup,
+  type MissingPiece,
+  missingPieces,
   PLATFORM_TICKET_PROVIDER,
   type SetupChecklist,
   type SetupDestination,
@@ -283,8 +295,59 @@ const actionWord = (item: NeedsYouItem): string =>
       ? reviewVerb(item.approval?.kind ?? 'plan')
       : 'Open';
 
-const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }) => {
+/** A background failure an administrator sees in *Needs you*: the section it opens, and its count. */
+interface BackgroundRow {
+  readonly section: 'dead-letters' | 'failed-jobs';
+  readonly title: string;
+  readonly meta: string;
+}
+
+/**
+ * The background failures, from the two Operations reads' `total` (admin only; `enabled` false asks
+ * nothing). A read that failed or has not answered gives no row — an unknown is not a zero, and it
+ * is not a failure to report either; the section itself says what its read answered.
+ */
+const useBackgroundRows = (
+  admin: boolean,
+): { readonly rows: readonly BackgroundRow[]; readonly settled: boolean } => {
+  const letters = useDeadLetters(admin);
+  const jobs = useFailedJobs(admin);
+  if (!admin) {
+    return { rows: [], settled: true };
+  }
+  const stuck = letters.data?.pages[0]?.total ?? 0;
+  const failed = jobs.data?.pages[0]?.total ?? 0;
+  const rows: BackgroundRow[] = [];
+  if (stuck > 0) {
+    rows.push({
+      section: 'dead-letters',
+      title: stuck === 1 ? '1 event is stuck' : `${formatInteger(stuck)} events are stuck`,
+      meta: 'Their handlers failed on every retry, so the platform stopped offering them.',
+    });
+  }
+  if (failed > 0) {
+    rows.push({
+      section: 'failed-jobs',
+      title:
+        failed === 1
+          ? '1 background job failed'
+          : `${formatInteger(failed)} background jobs failed`,
+      meta: 'Each failed on every retry its queue allows.',
+    });
+  }
+  return { rows, settled: !letters.isPending && !jobs.isPending };
+};
+
+const NeedsYouBox = ({
+  projects,
+  admin,
+}: {
+  readonly projects: readonly ProjectItem[];
+  /** An administrator also sees the background failures (S-25.6). */
+  readonly admin: boolean;
+}) => {
   const inbox = useInbox();
+  const background = useBackgroundRows(admin);
   const { now } = useServices();
   const escalated = useProjectsTasks(
     projects.map((project) => project.id),
@@ -342,7 +405,9 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
 
   // The count (and the empty line) wait for the escalated-task reads too, so N does not jump once
   // they answer; a failed read is settled, its rows simply absent.
-  const settled = inbox.isSuccess && escalated.every((read) => !read.isPending);
+  const settled =
+    inbox.isSuccess && escalated.every((read) => !read.isPending) && background.settled;
+  const count = items.length + background.rows.length;
   const shown = items.slice(0, HOME_ROWS);
   const keys = useTicketKeys(
     shown.filter((item) => item.ticket === null).map((item) => item.taskId),
@@ -365,8 +430,8 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
               title="Needs you"
               {...(settled
                 ? {
-                    count: items.length,
-                    countLabel: `${formatInteger(items.length)} waiting for you`,
+                    count,
+                    countLabel: `${formatInteger(count)} waiting for you`,
                   }
                 : {})}
             />
@@ -383,7 +448,7 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
             <ErrorNotice title="What needs you could not be loaded." error={inbox.error} />
           </li>
         ) : null}
-        {settled && items.length === 0 ? <QuietLine>Nothing needs you right now.</QuietLine> : null}
+        {settled && count === 0 ? <QuietLine>Nothing needs you right now.</QuietLine> : null}
         {shown.map((item) => {
           const known = keys.get(item.taskId);
           const projectKey =
@@ -428,6 +493,32 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
         {items.length > shown.length ? (
           <QuietLine>{`${formatInteger(items.length - shown.length)} more in the inbox.`}</QuietLine>
         ) : null}
+        {/* After the people's rows and never cut by `HOME_ROWS`: a queue of questions must not
+            hide that the platform itself is stuck. */}
+        {background.rows.map((row) => (
+          <ListRow
+            key={row.section}
+            leading={<StatusIcon status="failure" />}
+            title={<span data-home-background={row.section}>{row.title}</span>}
+            meta={
+              <span className="inline-flex flex-wrap items-center gap-1.5">
+                <span>{row.meta}</span>
+                <Dot />
+                <span>Shown to administrators</span>
+              </span>
+            }
+            actions={
+              <Link
+                to="/settings/$section"
+                params={{ section: row.section }}
+                {...rowLink(buttonClassName('default', 'sm'))}
+              >
+                Review
+                <span className="sr-only">{` ${row.title}`}</span>
+              </Link>
+            }
+          />
+        ))}
       </ListBox>
     </section>
   );
@@ -827,6 +918,34 @@ const SetupBox = ({
   );
 };
 
+/**
+ * Once the setup project has run a ticket: the pieces a working install still lacks, each with what
+ * its absence costs and a link to fix it (research/21 F10). No primary button: Home's one primary is
+ * *New project* then, and each piece's link says exactly what it opens.
+ */
+const MissingBox = ({ pieces }: { readonly pieces: readonly MissingPiece[] }): ReactElement => (
+  <section
+    aria-label="Missing from setup"
+    data-home-box="missing"
+    className="flex flex-col gap-3 rounded-md border border-line bg-default p-4"
+  >
+    <h2 className="text-sm font-semibold text-fg">Missing from setup</h2>
+    <ul className="flex flex-col gap-3">
+      {pieces.map((piece) => (
+        <li key={piece.id} data-missing-piece={piece.id} className="flex flex-col gap-1 text-sm">
+          <span className="inline-flex items-start gap-2">
+            <StatusIcon status="waiting" size={12} decorative />
+            <span>{piece.text}</span>
+          </span>
+          <DestinationLink destination={piece.destination} className={HEADER_LINK}>
+            {`${piece.action} →`}
+          </DestinationLink>
+        </li>
+      ))}
+    </ul>
+  </section>
+);
+
 /** Every fact the checklist needs, from the reads an admin may make. */
 const useSetupChecklist = (projects: readonly ProjectItem[]) => {
   const integrations = useBindableIntegrations();
@@ -842,14 +961,24 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
   const need = useWorkerNeed(setupId);
   const workers = useWorkersWhen(need === true);
 
-  const connect: SetupFact = integrations.isPending
-    ? 'pending'
-    : integrations.isError
-      ? 'unknown'
-      : integrations.items.some((item) => item.type === 'task_management') &&
-          integrations.items.some((item) => item.type === 'git')
-        ? 'done'
-        : 'todo';
+  const has = (type: 'task_management' | 'git'): SetupFact =>
+    integrations.isPending
+      ? 'pending'
+      : integrations.isError
+        ? 'unknown'
+        : integrations.items.some((item) => item.type === type)
+          ? 'done'
+          : 'todo';
+  const tracker = has('task_management');
+  const git = has('git');
+  const connect: SetupFact =
+    tracker === 'done' && git === 'done'
+      ? 'done'
+      : tracker === 'todo' || git === 'todo'
+        ? 'todo'
+        : tracker === 'pending' || git === 'pending'
+          ? 'pending'
+          : 'unknown';
   const discovery: SetupFact =
     setup !== null && setup.readiness_level > 0
       ? 'done'
@@ -910,18 +1039,23 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
           createdAt: newest.created_at,
         };
 
+  const checklist = setupChecklist(
+    {
+      connect,
+      project: projects.length > 0 ? 'done' : 'todo',
+      discovery,
+      autonomy: autonomyFact,
+      ...(worker === undefined ? {} : { worker }),
+      ticket,
+    },
+    setup?.key ?? null,
+    blockedWorker,
+  );
   return {
-    checklist: setupChecklist(
-      {
-        connect,
-        project: projects.length > 0 ? 'done' : 'todo',
-        discovery,
-        autonomy: autonomyFact,
-        ...(worker === undefined ? {} : { worker }),
-        ticket,
-      },
-      setup?.key ?? null,
-      blockedWorker,
+    checklist,
+    home: homeSetup(
+      checklist,
+      missingPieces({ tracker, git, ...(worker === undefined ? {} : { worker }) }, blockedWorker),
     ),
     noIntegration: integrations.isSuccess && integrations.items.length === 0,
   };
@@ -929,27 +1063,33 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
 
 // ── The page ─────────────────────────────────────────────────────────────────
 
+const NO_SETUP: HomeSetup = { kind: 'none' };
+
 const Boxes = ({
   projects,
   setup,
   canCreateProject,
+  admin,
 }: {
   readonly projects: readonly ProjectItem[];
-  /** The checklist while it is unfinished; `null` when it is done, or not this person's to do. */
-  readonly setup: SetupChecklist | null;
+  /** The checklist, the missing pieces or nothing — always nothing for somebody not an admin. */
+  readonly setup: HomeSetup;
   readonly canCreateProject: boolean;
+  /** An administrator's *Needs you* also lists the background failures. */
+  readonly admin: boolean;
 }): ReactElement => (
   <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
     <div className="flex min-w-0 flex-col gap-6">
-      <NeedsYouBox projects={projects} />
+      <NeedsYouBox projects={projects} admin={admin} />
       <RunningBox projects={projects} />
       <ProjectsBox
         projects={projects}
-        newProject={!canCreateProject ? null : setup === null ? 'primary' : 'default'}
+        newProject={!canCreateProject ? null : setup.kind === 'checklist' ? 'default' : 'primary'}
       />
     </div>
     <aside aria-label="At a glance" className="flex flex-col gap-4">
-      {setup === null ? null : <SetupBox checklist={setup} size="rail" />}
+      {setup.kind === 'checklist' ? <SetupBox checklist={setup.checklist} size="rail" /> : null}
+      {setup.kind === 'missing' ? <MissingBox pieces={setup.pieces} /> : null}
       <SpendBox projects={projects} />
       <InstanceBox />
     </aside>
@@ -965,7 +1105,7 @@ const AdminHome = ({
   /** The projects read's `can_create` (S-23.23), the create route's own answer. */
   readonly canCreateProject: boolean;
 }) => {
-  const { checklist, noIntegration } = useSetupChecklist(projects);
+  const { checklist, home, noIntegration } = useSetupChecklist(projects);
   if (projects.length === 0 || noIntegration) {
     return checklist.settling ? (
       <Skeleton label="Checking what is set up…" />
@@ -973,14 +1113,9 @@ const AdminHome = ({
       <SetupBox checklist={checklist} size="page" />
     );
   }
-  // While a fact is still being read, the boxes render without the checklist rather than flicker it.
-  return (
-    <Boxes
-      projects={projects}
-      setup={checklist.settling || checklist.complete ? null : checklist}
-      canCreateProject={canCreateProject}
-    />
-  );
+  // While a fact is still being read, the boxes render without the checklist rather than flicker
+  // it; once a ticket has run, only a missing piece is named (`homeSetup`).
+  return <Boxes projects={projects} setup={home} canCreateProject={canCreateProject} admin />;
 };
 
 export const DashboardScreen = (): ReactElement => {
@@ -1017,7 +1152,7 @@ export const DashboardScreen = (): ReactElement => {
             hint="An admin connects the tracker and the git host and creates the first project. This page then shows what needs you and what the agents are doing."
           />
         ) : (
-          <Boxes projects={items} setup={null} canCreateProject={false} />
+          <Boxes projects={items} setup={NO_SETUP} canCreateProject={false} admin={false} />
         )
       ) : null}
     </div>

@@ -251,12 +251,19 @@ const NeedsNode = ({ data }: NodeProps<MapFlowNode>): ReactElement => {
       className="flex h-full w-full flex-col gap-1.5 rounded-xl border border-running bg-running-bg/40 px-3 py-2.5"
     >
       <Handles />
-      <span className="flex items-center gap-2 text-sm font-semibold text-running">
+      {/* The Inbox's door on this page (S-25.6): the header no longer has an *Open inbox* button. */}
+      <Link
+        to="/inbox"
+        className={cx(
+          'nodrag nopan flex items-center gap-2 self-start rounded-sm text-sm font-semibold text-running hover:underline',
+          FOCUS_RING,
+        )}
+      >
         <span aria-hidden="true" className="inline-flex">
           <BellFillIcon size={16} />
         </span>
         {`Needs you (${needs.length})`}
-      </span>
+      </Link>
       <ul className="flex flex-col gap-1 text-xs">
         {shown.map((need) => (
           <li key={need.id} className="min-w-0">

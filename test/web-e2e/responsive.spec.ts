@@ -172,11 +172,12 @@ test.describe('on a 390 px phone', () => {
     await expect(page.getByRole('list', { name: 'Needs you' })).toBeVisible();
     const primary = page.getByRole('navigation', { name: 'Primary' });
     await expect(primary.getByRole('link', { name: 'Home' })).toBeVisible();
-    // Agents and everything after it collapse below `sm`; the More menu holds them.
+    // Agents and Statistics collapse below `sm`; the More menu holds them (S-25.6: the row is the
+    // five daily screens, and Settings is the account menu's).
     await expect(primary.getByRole('link', { name: /^Agents/ })).toBeHidden();
     await primary.getByRole('button', { name: 'More navigation' }).click();
     await expect(page.getByRole('menuitem', { name: /^Agents/ })).toBeVisible();
-    await expect(page.getByRole('menuitem', { name: /^Settings/ })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: /^Statistics/ })).toBeVisible();
     await page.keyboard.press('Escape');
     // "3 running": the number is shown, the word is for a screen reader only.
     const running = page.getByRole('banner').getByRole('link', { name: /running/ });

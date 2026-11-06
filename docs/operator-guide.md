@@ -669,7 +669,7 @@ process cannot answer*, never zero:
 | Metric | What it says | Alert on |
 |---|---|---|
 | `event_dispatch_pending` | events committed and not yet dispatched (worker roles) | a value that keeps growing |
-| `event_dispatch_dead_lettered` | events that spent `APP_DISPATCH_MAX_ATTEMPTS` and left the queue — **Settings → Dead letters** names each one (§9) | anything above 0 |
+| `event_dispatch_dead_lettered` | events that spent `APP_DISPATCH_MAX_ATTEMPTS` and left the queue — **Settings → Stuck events** names each one, and Home's *Needs you* says how many to an admin (§9) | anything above 0 |
 | `notifications_undelivered{planned="immediate"}` | chat notifications nobody received, past `pipeline.outbound`'s whole retry window (about 48 minutes), after every one of the job's three attempts tried to deliver and failed — on a project with the digest off, and for every organisation budget alarm, the recovery pass re-posts each one **once** more under the same idempotency key (WP-84) and nothing retries it after that; an organisation budget alarm whose chat configuration the platform refused (two accounts each naming a channel, Q103) is counted here too; a question or approval notification the platform **withheld** because the question was answered or the approval decided first is not (it was correctly not sent) | anything above 0: a revoked chat token or a refused organisation configuration shows up here, not as an absence of messages |
 | `notifications_undelivered{planned="digest"}` | lines held for a digest that has not carried them a day later | anything above 0 |
 | `platform_storage_bytes{component="database"}` | `pg_database_size` of the platform's database | growth; see §6 |
@@ -1613,8 +1613,9 @@ refuses to start with the variable's name in the message. The platform never gue
 An event whose handler fails `APP_DISPATCH_MAX_ATTEMPTS` times (10 by default, about twenty minutes
 of retrying) is **dead-lettered**: it leaves the dispatch queue, the events behind it in its stream
 move on, and — when it belongs to a task — that task is parked in *Needs human* with a brief naming
-the event and the handler. `event_dispatch_dead_lettered` (§3) counts them. **Settings → Dead
-letters** (admin only; `GET /api/org/dead-letters`) lists each one: its position, event type, stream,
+the event and the handler. `event_dispatch_dead_lettered` (§3) counts them. **Settings → Stuck
+events** (admin only; `GET /api/org/dead-letters`; *Dead letters* before S-25.6) lists each one, and
+an administrator's Home shows a *N events are stuck* row in *Needs you* while there are any: its position, event type, stream,
 the handler that failed, how many times, the last error (redacted by the platform's patterns and cut
 at 2 000 characters — the full text is in the log), and the task it escalated, if any. An event that
 names no task has no brief anywhere else, so this list is where it shows up. The newest fifty come
@@ -1634,8 +1635,8 @@ left no audit row.
 ### Failed jobs: a job the job queue stopped retrying
 
 The job queue (pg-boss) retries a job whose handler throws up to its queue's retry limit and then
-marks it **failed**. **Settings → Failed jobs** (admin only; `GET /api/org/failed-jobs`, WP-108)
-lists them, newest first (**Show older** pages back to the oldest, WP-114): the queue, how many times it was tried, the retry limit, when it failed and
+marks it **failed**. **Settings → Failed background jobs** (admin only; `GET /api/org/failed-jobs`,
+WP-108; *Failed jobs* before S-25.6, and counted on an administrator's Home) lists them, newest first (**Show older** pages back to the oldest, WP-114): the queue, how many times it was tried, the retry limit, when it failed and
 the failure's message (redacted by the platform's patterns and cut at 2 000 characters; the job's
 payload is never shown). Beside each one is the platform's own census of that queue — whether it
 ends its own failures or relies on the retries, what a failed job of it drops, and, since WP-124,
@@ -1761,7 +1762,7 @@ Stated here so an operator meets them in a document rather than in production:
   its log — so an approval is posted with Approve / Request changes **while that process holds the
   connection** (since WP-72 it renews a liveness row the notification band reads; with no such
   process the approval arrives as text naming the task page), and a click from an account an
-  admin has mapped on **Settings → Provider identities** is decided like one on the task page (a
+  admin has mapped on **Settings → Linked accounts** is decided like one on the task page (a
   plan needs a maintainer). `APP_INTEGRATION_HOSTS` must name `slack.com` for the connection to
   open. Since WP-88 a question is posted the same way, with a button per option, and a *reply* in
   its Slack thread answers it from a mapped account: the platform records which thread belongs to

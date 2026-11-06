@@ -49,14 +49,19 @@ server on every request — the browser only hides what you cannot do.
 
 ### The top navigation
 
-**Home · Projects · Inbox · Agents · Workers · Integrations · Statistics · Audit log · Settings** — the
-row under the top bar, its current entry underlined in amber. **Projects** carries the number of
-projects, **Inbox** what waits for you (open questions plus pending approvals) and **Agents** the
-runs in flight; a count that is zero, or not loaded yet, is not drawn. On a narrow screen the last
-entries move into a **More navigation** (`···`) menu at the end of the row, and the running pill
-shows only its number. There is no
-*Onboarding* entry: a project is set up once, so the wizard is **New project** — in the top bar's
-**+** menu and on the **Projects** page.
+**Home · Projects · Inbox · Agents · Statistics** — the row under the top bar, the five screens of
+every day, its current entry underlined in amber. **Projects** carries the number of projects,
+**Inbox** what waits for you (open questions plus pending approvals) and **Agents** the runs in
+flight; a count that is zero, or not loaded yet, is not drawn. On a narrow screen the last entries
+move into a **More navigation** (`···`) menu at the end of the row, and the running pill shows only
+its number. There is no *Onboarding* entry: a project is set up once, so the wizard is **New
+project** — in the top bar's **+** menu and on the **Projects** page.
+
+**Settings** is in the account menu (your avatar, top right). The screens you open weekly rather than
+daily — **Integrations**, **Workers** and the **Audit log** — are its **Admin** section (section 11).
+Their addresses are the ones they always had (`/integrations`, `/workers`, `/workers/approve`,
+`/audit`, and so on), so a bookmark or the link a worker shows you still opens them; they now open
+beside the Settings list, with their entry marked, and the search finds them by name.
 
 **Inside a project the row becomes the project's own tabs** — **Board**, **Knowledge**,
 **Pipeline**, **Budgets**, **Shadow** and **Settings** — under a header with the project's name, its
@@ -107,7 +112,8 @@ compare and always shows the error.
 command palette: type part of a screen's name, a project's name or key, or a ticket key, move with
 ↑ and ↓, and press Enter to go there; Esc closes it. Besides the places it offers a few actions:
 **New project** (for an admin), **Start a ticket in this project** (inside a project you may start
-tickets in), **Open inbox** and **Keyboard shortcuts**. It searches what the page has already read,
+tickets in), **Open inbox** and **Keyboard shortcuts**. Its screens are the top row's, **Settings**,
+and Settings' **Integrations**, **Workers** and **Audit log**. It searches what the page has already read,
 so a task is found by its ticket key once its project's board (or Home) has been opened in this
 tab; it asks the server for nothing new.
 
@@ -537,6 +543,11 @@ answers three questions in this order: what needs you, what is moving, and where
   **Review plan** or **Open** — which opens the task. No row approves in one click: the plan is read
   on the task page, beside its buttons. The oldest waits at the top; the box shows five
   and **View inbox →** has the rest. When nothing waits it says *Nothing needs you right now.*
+  **An administrator also sees what broke in the background** here, after those rows and never
+  pushed out by them: *3 events are stuck* (events whose handler failed every retry) and *1
+  background job failed*, each only while its count is above zero, and each **Review** opens its
+  section of Settings (*Stuck events*, *Failed background jobs*). Nobody else is shown them, or asked
+  for them.
 - **Running now (N)**: every run that is running — its stage and role (the link to the run), the
   project, the ticket, the model, how long it has run, what it has cost so far and the latest
   progress line the agent reported. **Agents →** has the whole list.
@@ -567,9 +578,16 @@ has a ticket's task), never from what this browser remembers, so a step done in 
 through the API is ticked too. **Continue setup** opens the first step that is not done — the
 Integrations screen, the wizard (on the project, when it exists) or the board's *Start a ticket*
 dialog — and every step's name is a link to its own screen. Once a project exists, the checklist moves
-to the right-hand column as *Finish setting up*, and when every step is done it disappears. It
-follows the oldest project; a later project's steps are the wizard's to show. Every other role, on
-an instance with no project, is told that an admin sets it up.
+to the right-hand column as *Finish setting up*. **Once that project has run a ticket the checklist
+is gone**, whether or not discovery and the autonomy dial were ever ticked — those have working
+defaults, and the project's settings hold them. From then on the right-hand column names only a
+piece that is still **missing**, under *Missing from setup*, with what its absence costs and a link to
+fix it: *Merge requests can't be opened until a git host is connected* (**Connect a git host →**),
+*New tickets can't reach the agents until a tracker is connected*, or — where nothing on the server
+runs the project — that no agent can run its tickets until a worker is connected (or why the one you
+have can't take work yet). With nothing missing, there is no box at all. The checklist follows the
+oldest project; a later project's steps are the wizard's to show. Every other role, on an instance
+with no project, is told that an admin sets it up.
 
 A maintainer or admin also sees **one banner** when an organisation chat account's credentials can
 no longer be read: no project's runs are given the project's prompt files until the credentials are
@@ -598,8 +616,9 @@ known to be missing.
 
 **Agents** in the top navigation answers *what are my agents and workers doing right now, and what
 needs me*. Under the title one line says it in words — *2 working · 1 needs you · 1 waiting · 3 free
-seats*, and *· 1 stuck* when an agent has been silent too long — and while something needs you the
-page's one button is **Open inbox**. Below it, three views of the same live data; the one you pick is
+seats*, and *· 1 stuck* when an agent has been silent too long. The page has no button of its own:
+what needs you is the map's **Needs you** box, whose title opens the inbox, and the list's own
+section. Below it, three views of the same live data; the one you pick is
 remembered in this browser and is part of the address (`/agents?view=office`), so it can be sent to
 somebody:
 
@@ -1537,17 +1556,24 @@ on that task's *Activity* tab. A *refused* command records nothing.
 
 ## 11. Settings
 
-**Settings** is one page per section, picked from the list on the left (on a phone, a one-line
-menu above the section that names the one you are on) — **Session · Keyboard shortcuts ·
-Policies · Notifications · Budgets · Users · Provider identities ·
-Dead letters · Failed jobs · Instance** — grouped as *Personal*, *Organisation*, *People* and
-*Operations*; opening **Settings** opens the first. A section that changes something has **one
-Save** at its foot: it stays disabled (*Nothing has changed.*) until you change something, and it
-saves only what you changed. *Keyboard shortcuts* is the exception — it applies as you pick it,
-and is kept in this browser only. *Provider
-identities*, *Dead letters* and *Failed jobs* are an administrator's and are shown to an
-administrator only; anybody else who opens one of their addresses lands on *Session*. *Instance*
-is everybody's.
+**Settings** — in the account menu, top right — is one page per section, picked from the list on the
+left (on a phone, a one-line menu above the section that names the one you are on) — **Policies ·
+Notifications · Budgets · Users · Linked accounts · Integrations · Workers · Audit log · Stuck
+events · Failed background jobs · Instance · Session · Keyboard shortcuts** — grouped as
+*Organisation*, *People*, *Admin*, *Operations* and *Personal*. **Opening Settings opens the first
+section your role may change**: *Policies* for an administrator, *Budgets* for a maintainer,
+*Keyboard shortcuts* for everybody else. A section that changes something has **one Save** at its
+foot: it stays disabled (*Nothing has changed.*) until you change something, and it saves only what
+you changed. *Keyboard shortcuts* is the exception — it applies as you pick it, and is kept in this
+browser only. *Linked accounts*, *Stuck events* and *Failed background jobs* are an administrator's
+and are shown to an administrator only, *Integrations* and the *Audit log* to a maintainer or an
+administrator; anybody else who opens one of their addresses lands where *Settings* does.
+*Workers*, *Instance* and the *Personal* sections are everybody's.
+
+**The Admin section is three screens with addresses of their own** — **Integrations** (section 9),
+**Workers** (section 12, *Workers*) and the **Audit log** (section 10). They open at `/integrations`,
+`/workers` and `/audit` as they always did, beside this list with their entry marked;
+`/settings/integrations` and the like take you there too.
 
 - **Session** — who is signed in, and with which role.
 - **Keyboard shortcuts** — **Use single-key shortcuts**, on until you turn it off: whether `g h`,
@@ -1558,12 +1584,13 @@ is everybody's.
   has been spent of it; empty is no cap. **Save budgets** writes each changed window in turn, and a
   window the server refuses says so under its own field.
 - **Users** — everybody with an account, with their role and whether they are active.
-- **Provider identities** — which Slack, Jira or GitLab account is which person, without which a
-  decision made in those tools is refused as unmapped.
-- **Dead letters** — events the platform stopped retrying after their handler failed every attempt,
-  each with a **Try again** button for once the fault is fixed (the operator guide's §9 says what a
-  re-queue does and does not do). The newest come first, and **Show older** reaches the rest;
-  **Failed jobs** pages the same way.
+- **Linked accounts** (*Provider identities* before) — which Slack, Jira or GitLab account is which
+  person, without which a decision made in those tools is refused as unmapped.
+- **Stuck events** (*Dead letters* before) — events the platform stopped retrying after their handler
+  failed every attempt, each with a **Try again** button for once the fault is fixed (the operator
+  guide's §9 says what a re-queue does and does not do). The newest come first, and **Show older**
+  reaches the rest; **Failed background jobs** (*Failed jobs* before) pages the same way. Home's
+  *Needs you* tells an administrator when either has something in it.
 - **Instance** — the version and build the server is running.
 
 **Policies** and **Notifications** are the organisation settings (since WP-93), which only an

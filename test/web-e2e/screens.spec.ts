@@ -20,10 +20,12 @@ test.beforeEach(async ({ page, request }) => {
 
 /**
  * Home (S-23.7): what needs you first, then what is running, then the projects, with the spend and
- * the instance in the rail. The fixture's organisation has a tracker and no git host, so the setup
- * checklist sits in the rail too and its one primary button continues at the first undone step.
+ * the instance in the rail. The fixture's organisation has a tracker and no git host, and its
+ * project has run tickets — so since S-25.6 (research/21 F10) the checklist is gone and the rail
+ * names only the missing piece and what it costs. The fixture's operator is an administrator, so
+ * *Needs you* also carries the stuck event and the failed background job (F14).
  */
-test('Home: needs you, running now, the projects, the rail and the unfinished setup', async ({
+test('Home: needs you, running now, the projects, the rail and the missing piece', async ({
   page,
 }) => {
   const needs = page.getByRole('list', { name: 'Needs you' });
@@ -53,11 +55,22 @@ test('Home: needs you, running now, the projects, the rail and the unfinished se
   ).toBeVisible();
   await expect(page.getByRole('region', { name: 'Instance' }).getByText('Live')).toBeVisible();
 
-  const setup = page.getByRole('region', { name: 'Set up' });
+  // The background failures, an administrator's rows, each to its settings section.
+  await expect(needs.getByRole('link', { name: 'Review 1 event is stuck' })).toHaveAttribute(
+    'href',
+    '/settings/dead-letters',
+  );
+  await expect(needs.getByRole('link', { name: 'Review 1 background job failed' })).toHaveAttribute(
+    'href',
+    '/settings/failed-jobs',
+  );
+
+  await expect(page.getByRole('region', { name: 'Set up' })).toHaveCount(0);
+  const missing = page.getByRole('region', { name: 'Missing from setup' });
   await expect(
-    setup.getByRole('link', { name: /^Connect your tracker and git host/ }),
-  ).toHaveAttribute('href', '/integrations');
-  await expect(setup.getByRole('link', { name: 'Continue setup' })).toHaveAttribute(
+    missing.getByText('Merge requests can’t be opened until a git host is connected.'),
+  ).toBeVisible();
+  await expect(missing.getByRole('link', { name: 'Connect a git host →' })).toHaveAttribute(
     'href',
     '/integrations',
   );
@@ -319,15 +332,16 @@ test('the audit log renders an entry in words, with its diff behind Details', as
   await expect(page.getByText('autonomy_level')).toBeVisible();
 });
 
-test('settings opens its first section and shows the session, the user list and the instance version', async ({
+test('settings opens the first section the role may change and shows the session, the user list and the instance version', async ({
   page,
 }) => {
-  // S-23.11b: one section per page, beside a NavList; the bare URL opens the first.
+  // S-23.11b: one section per page, beside a NavList. S-25.6: the bare URL opens the first section
+  // the role may change — Policies for the fixture's administrator — rather than Session.
   await page.goto('/settings');
-  // One dark theme (TD-033's 2026-11-05 amendment): no Appearance section, so Session is first.
-  await expect(page).toHaveURL(/\/settings\/session$/);
+  await expect(page).toHaveURL(/\/settings\/policies$/);
   await expect(page.getByLabel('Theme preference')).toHaveCount(0);
   const nav = page.getByRole('navigation', { name: 'Settings' });
+  await nav.getByRole('link', { name: 'Session' }).click();
   await expect(page.getByText('operator@example.invalid').first()).toBeVisible();
   await nav.getByRole('link', { name: 'Users' }).click();
   await expect(page.getByRole('list', { name: 'Users' }).getByText('Fake Operator')).toBeVisible();
@@ -351,7 +365,7 @@ test('org settings lists the provider identities and offers the mapping form (WP
   // PROGRESS backlog 79: `POST /api/org/identities` was served and no screen called it, so every
   // decision from Slack, Jira or GitLab stayed `unmapped_identity`.
   await page.goto('/settings/identities');
-  await expect(page.getByRole('heading', { name: 'Provider identities' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Linked accounts' })).toBeVisible();
   await expect(page.getByText('U0FAKEOPERATOR')).toBeVisible();
   // The display name is provider text: its markup is on the screen as characters, not an element.
   await expect(page.getByText('<img src=x onerror=alert(1)>operator')).toBeVisible();
@@ -600,11 +614,11 @@ test('the wizard’s step 1 maps the ticket lifecycle from the tracker’s own s
   });
 });
 
-test('the retired Appearance URL lands on Session, and a box sits above the page', async ({
+test('the retired Appearance URL lands where /settings does, and a box sits above the page', async ({
   page,
 }) => {
   await page.goto('/settings/appearance');
-  await expect(page).toHaveURL(/\/settings\/session$/);
+  await expect(page).toHaveURL(/\/settings\/policies$/);
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
   // TD-033's 2026-11-05 amendment: the page is the top bar's deep night, a card one step lighter.
   expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
