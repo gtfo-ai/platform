@@ -20,6 +20,11 @@ interface Common {
   readonly secondary?: ReactNode;
   /** `spacious` for a whole screen, `compact` inside a box. */
   readonly size?: 'compact' | 'spacious';
+  /**
+   * Drawn inside a card (S-25.10b): no border and no ground of its own, so a card never holds a
+   * second bordered box — the card is the blankslate's box.
+   */
+  readonly inset?: boolean;
   readonly className?: string;
 }
 
@@ -28,13 +33,23 @@ export type BlankslateProps =
   | (Common & { readonly informational: true; readonly action?: ReactNode });
 
 export const Blankslate = (props: BlankslateProps): ReactElement => {
-  const { title, hint, icon, secondary, size = 'compact', className, action } = props;
+  const {
+    title,
+    hint,
+    icon,
+    secondary,
+    size = 'compact',
+    inset = false,
+    className,
+    action,
+  } = props;
   return (
     <div
       data-blankslate={props.informational === true ? 'informational' : 'actionable'}
       className={cx(
-        'flex flex-col items-center gap-2 rounded-md border border-line bg-default text-center',
-        size === 'spacious' ? 'px-6 py-16' : 'px-6 py-8',
+        'flex flex-col items-center gap-2 text-center',
+        inset ? null : 'rounded-md border border-line bg-default',
+        size === 'spacious' ? 'px-6 py-16' : inset ? 'px-4 py-4' : 'px-6 py-8',
         className,
       )}
     >

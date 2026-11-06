@@ -144,6 +144,7 @@ const Connections = ({ project }: { readonly project: Project }): ReactElement =
       <SettingsCard>
         {selection.ready && bound.length === 0 ? (
           <EmptyState
+            inset
             title="No integrations in use yet"
             hint="A project needs a ticket board and a git host before the pipeline can start anything. Tick them below and save."
           />
@@ -491,9 +492,9 @@ const SECTION: Readonly<
         title="Execution"
         description="Who runs this project’s agents: the platform server, developers’ own computers (workers), or both."
       />
-      <SettingsCard>
-        <ExecutionSettings projectId={project.id} />
-      </SettingsCard>
+      {/* Not a SettingsCard: the section draws its own boxes — the status, the credential notice,
+          who would take the work and the form — and a card around them would hold cards. */}
+      <ExecutionSettings projectId={project.id} />
     </>
   ),
   // WP-139: the wizard's default branch, mirrored — the *same component* (product/18:55).

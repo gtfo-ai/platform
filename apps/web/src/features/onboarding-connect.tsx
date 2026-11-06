@@ -187,6 +187,7 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
       </div>
       {integrations.isSuccess && integrations.items.length === 0 ? (
         <EmptyState
+          inset
           title="No integrations yet"
           hint="An integration is a connection to a ticket tracker, a git host or a chat workspace. Add one on the Integrations screen, then come back here to connect it to this project."
           action={

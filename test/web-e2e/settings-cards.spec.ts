@@ -34,7 +34,7 @@ import {
   PROJECT_SETTINGS_GROUPS,
   type ProjectSettingsSectionId,
 } from '../../apps/web/src/features/settings-sections.js';
-import { textOnTheCanvas } from './support/card-ground.js';
+import { nestedCards, textOnTheCanvas } from './support/card-ground.js';
 import { IDS, PROJECT_KEY } from './support/fixtures.js';
 import { resetBackend, signIn } from './support/harness.js';
 
@@ -71,10 +71,10 @@ const READY: Readonly<
 const PROJECT_READY: Readonly<Record<ProjectSettingsSectionId, (section: Locator) => Locator>> = {
   connections: (section) => section.getByRole('heading', { name: 'Ticket lifecycle' }),
   execution: (section) => section.locator('[data-testid="execution-settings"]'),
-  'default-branch': (section) => section.locator('.bg-default').first(),
+  'default-branch': (section) => section.getByRole('button', { name: 'Save default branch' }),
   discovery: (section) => section.getByRole('button', { name: 'Start discovery' }),
   'business-context': (section) => section.getByRole('link', { name: 'Open the knowledge base' }),
-  history: (section) => section.locator('.bg-default').first(),
+  history: (section) => section.getByLabel('Merge requests to mine'),
   trial: (section) => section.getByRole('link', { name: 'Open the trial page' }),
   policies: (section) => section.getByRole('heading', { name: 'Verification' }),
   repository: (section) =>
@@ -150,6 +150,17 @@ test('the scan finds text on the canvas, and passes it once it is on a card (the
     element.setAttribute('class', 'bg-default');
   });
   expect(await textOnTheCanvas(section)).toEqual([]);
+  // …and a bordered box on the card ground inside the Instance card is a card in a card.
+  await section
+    .locator('.bg-default')
+    .first()
+    .evaluate((card) => {
+      const inner = document.createElement('div');
+      inner.setAttribute('class', 'rounded-md border border-line bg-default');
+      inner.textContent = 'a box in a box';
+      card.append(inner);
+    });
+  expect(await nestedCards(section)).toEqual(['<div> a box in a box']);
 });
 
 for (const screen of SCREENS) {
@@ -158,5 +169,6 @@ for (const screen of SCREENS) {
     const section = sectionOf(page);
     await expect(screen.ready(section)).toBeVisible();
     expect(await textOnTheCanvas(section), screen.path).toEqual([]);
+    expect(await nestedCards(section), screen.path).toEqual([]);
   });
 }

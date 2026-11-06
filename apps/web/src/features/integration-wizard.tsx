@@ -131,7 +131,7 @@ const ProviderStep = ({
             key={provider.id}
             className={cx(
               'flex cursor-pointer gap-3 rounded-md border p-3 has-focus-visible:ring-2 has-focus-visible:ring-link',
-              chosen ? 'border-link bg-subtle' : 'border-line bg-default hover:bg-subtle',
+              chosen ? 'border-link bg-subtle' : 'border-line hover:bg-subtle',
             )}
           >
             <input

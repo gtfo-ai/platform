@@ -176,6 +176,7 @@ export const HistoryBootstrap = ({
 
       {items.length === 0 ? (
         <EmptyState
+          inset
           title="No history has been mined yet"
           hint="A bootstrap reads six months of merged merge requests once; the proposals it writes are reviewed on the Knowledge screen."
         />

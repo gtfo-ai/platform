@@ -23,6 +23,27 @@ describe('Blankslate', () => {
     expect(classes).not.toContain('bg-canvas');
   });
 
+  it('draws no box of its own inside a card when inset, so no card holds a second border (S-25.10b)', () => {
+    const { container } = render(
+      <>
+        <Blankslate
+          title="No budget yet"
+          hint="Set one to stop runs at a cap."
+          informational
+          inset
+        />
+        <EmptyState title="Nothing mined yet" hint="Start a bootstrap." inset />
+      </>,
+    );
+    for (const node of container.querySelectorAll('[data-blankslate]')) {
+      const classes = node.className.split(' ');
+      expect(classes).not.toContain('border');
+      expect(classes).not.toContain('bg-default');
+      expect(classes).not.toContain('rounded-md');
+    }
+    expect(container.querySelectorAll('[data-blankslate]')).toHaveLength(2);
+  });
+
   it('says what is missing, what will appear, and offers the next step', () => {
     const { container } = render(
       <Blankslate

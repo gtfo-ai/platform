@@ -43,7 +43,7 @@ import {
   type WaitingClosedReason,
   wordInSentence,
 } from '../ui/humanize.js';
-import { Button, ErrorNotice, Field } from '../ui/kit.js';
+import { Button, Card, ErrorNotice, Field } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
@@ -392,28 +392,34 @@ export const ExecutionSettings = ({ projectId }: { readonly projectId: string })
 
   return (
     <div className="flex flex-col gap-3" data-testid="execution-settings">
-      <p className="text-sm">
-        Who runs this project’s agents now:{' '}
-        <strong className="font-semibold">{EXECUTION_CHOICES[storedChoice].label}</strong>{' '}
-        {data.stored ? null : <span className="text-xs text-fg-muted">(the default)</span>}
-      </p>
-      <p className="flex items-start gap-2 text-sm" data-testid="execution-server">
-        <span className="pt-0.5">
-          <StatusIcon status={data.server_claimant === 'running' ? 'success' : 'idle'} decorative />
-        </span>
-        {data.server_claimant === 'running'
-          ? 'The platform server runs agent work on this platform.'
-          : 'The platform server doesn’t run agent work on this platform, so only workers can run agent stages.'}
-      </p>
-      {serverNotice === '' ? null : (
-        <p className="text-xs" role="status" data-testid="execution-notice">
-          {serverNotice}
+      {/* Each part on the card ground, side by side rather than nested (S-25.10b). */}
+      <Card className="flex flex-col gap-3">
+        <p className="text-sm">
+          Who runs this project’s agents now:{' '}
+          <strong className="font-semibold">{EXECUTION_CHOICES[storedChoice].label}</strong>{' '}
+          {data.stored ? null : <span className="text-xs text-fg-muted">(the default)</span>}
         </p>
-      )}
+        <p className="flex items-start gap-2 text-sm" data-testid="execution-server">
+          <span className="pt-0.5">
+            <StatusIcon
+              status={data.server_claimant === 'running' ? 'success' : 'idle'}
+              decorative
+            />
+          </span>
+          {data.server_claimant === 'running'
+            ? 'The platform server runs agent work on this platform.'
+            : 'The platform server doesn’t run agent work on this platform, so only workers can run agent stages.'}
+        </p>
+        {serverNotice === '' ? null : (
+          <p className="text-xs" role="status" data-testid="execution-notice">
+            {serverNotice}
+          </p>
+        )}
+      </Card>
       {credentialRefused ? <CredentialNotice projectId={projectId} /> : null}
       <WhoWouldTake data={data} />
       <form
-        className="flex flex-col gap-3"
+        className="flex flex-col gap-3 rounded-lg border border-line bg-default p-4"
         onSubmit={(event) => {
           event.preventDefault();
           if (!valid || headStart === null || timeout === null) return;
