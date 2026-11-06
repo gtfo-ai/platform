@@ -272,26 +272,19 @@ const namedObjectsPresent = async () => {
 const containerRows = async () => {
   const { containers } = await projectObjects();
   if (containers.length === 0) return [];
-  const { stdout } = await docker([
-    'container',
-    'inspect',
-    '--format',
-    [
-      '{{.Id}}',
-      '{{index .Config.Labels "com.docker.compose.service"}}',
-      '{{.State.Status}}',
-      '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}',
-      '{{.State.ExitCode}}',
-      '{{.Created}}',
-      '{{.Config.Image}}',
-    ].join('|'),
-    ...containers,
-  ]);
-  return lines(stdout)
-    .map((line) => {
-      const [id, service, state, health, exitCode, created, image] = line.split('|');
-      return { id, service, state, health, exitCode, created, image };
-    })
+  // The whole document, read here: a `--format` template that names `.State.Health` fails outright
+  // for a container with no healthcheck (`map has no entry for key "Health"`, measured on 28.0.4).
+  const { stdout } = await docker(['container', 'inspect', ...containers]);
+  return JSON.parse(stdout)
+    .map((container) => ({
+      id: container.Id,
+      service: container.Config?.Labels?.['com.docker.compose.service'] ?? '',
+      state: container.State?.Status ?? '',
+      health: container.State?.Health?.Status ?? 'none',
+      exitCode: String(container.State?.ExitCode ?? ''),
+      created: container.Created ?? '',
+      image: container.Config?.Image ?? '',
+    }))
     .sort((a, b) => a.service.localeCompare(b.service));
 };
 
@@ -326,6 +319,18 @@ const waitHealthy = async (what) => {
   }
 };
 
+/** Compose's per-layer pull lines (hundreds per install), dropped from what the check prints. */
+const withoutPullProgress = (text) =>
+  text
+    .split('\n')
+    .filter(
+      (line) =>
+        !/^\s*[0-9a-f]{12} (Pulling fs layer|Waiting|Downloading|Verifying Checksum|Download complete|Extracting|Pull complete|Already exists)/.test(
+          line,
+        ),
+    )
+    .join('\n');
+
 /** The person's line, run by a shell with `pipefail`, so a failed download is not an empty script. */
 const pipeLine = async (url, scriptArgs) => {
   const line = `curl -fsSL '${url}' | sh -s -- ${scriptArgs.join(' ')}`;
@@ -348,14 +353,14 @@ const pipeLine = async (url, scriptArgs) => {
       { env, cwd: tmpdir(), timeout: INSTALL_MS, maxBuffer: 64 * 1024 * 1024 },
     );
     const output = redact(`${stdout}${stderr}`);
-    console.log(output.replace(/^/gm, '  | '));
+    console.log(withoutPullProgress(output).replace(/^/gm, '  | '));
     return { ok: true, output };
   } catch (error) {
     const ended = error?.killed
       ? `killed (${error.signal ?? 'signal'}) after ${INSTALL_MS / 1000} s`
       : `exit ${String(error?.code ?? 'unknown')}`;
     const output = redact(`${error?.stdout ?? ''}${error?.stderr ?? ''}`);
-    console.log(output.replace(/^/gm, '  | '));
+    console.log(withoutPullProgress(output).replace(/^/gm, '  | '));
     return { ok: false, output, ended };
   }
 };
@@ -443,6 +448,7 @@ const main = async () => {
     for (const [key, image] of Object.entries(IMAGES)) {
       const tagged = `${namespace}/${image}:install-check`;
       stages.set(`docker push ${tagged}`);
+      pushed.push(tagged);
       await docker(['image', 'tag', `${image}:${TAG}`, tagged]);
       await docker(['image', 'push', '--quiet', tagged], { timeoutMs: COMPOSE_MS });
       // The registry's own answer (under the containerd store it is not the local id).
@@ -520,6 +526,9 @@ const main = async () => {
       'the installer says the worker is running',
       first.output.includes('The worker is running.'),
     );
+    // What the services read the moment the installer said "running" (it waits for the worker,
+    // the updater and the page; the launcher's health is not among them). A note, not an assertion.
+    console.log(`note  when the installer returned: ${summary(await containerRows())}`);
     const afterInstall = await waitHealthy('the installed worker’s services');
     check(
       'every service runs, the worker, launcher and updater are healthy, the one-shots exited 0',
