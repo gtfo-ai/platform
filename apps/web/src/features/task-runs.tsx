@@ -10,6 +10,7 @@ import type { ReactElement } from 'react';
 import { RUN_STATUS_LABEL, runSubject } from '../ui/humanize.js';
 import { Badge, EmptyState, formatElapsed, formatRunCost } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
+import { rowLink } from '../ui/row-link.js';
 import { type Status, StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 
@@ -66,7 +67,7 @@ export const TaskRuns = ({
             <StatusIcon status={RUN_STATUS[run.status]} label={RUN_STATUS_LABEL[run.status]} />
           }
           title={
-            <Link to="/runs/$runId" params={{ runId: run.id }} className="hover:underline">
+            <Link to="/runs/$runId" params={{ runId: run.id }} {...rowLink('hover:underline')}>
               {runSubject(run)}
             </Link>
           }

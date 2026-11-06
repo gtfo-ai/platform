@@ -36,6 +36,7 @@ import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { NavList } from '../ui/nav-list.js';
 import { PageHeader } from '../ui/page-header.js';
 import { formatAgo } from '../ui/relative-time.js';
+import { rowLink } from '../ui/row-link.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
@@ -164,9 +165,10 @@ const QuestionRow = ({
             aria-expanded={open}
             aria-controls={panelId}
             onClick={() => setOpen(!open)}
-            className={cx(
+            // The row's one stretched control (S-23.26): a click anywhere on the row opens the
+            // answer form — on this page, not a command; *Open task* keeps its own click.
+            {...rowLink(
               'inline-flex max-w-full items-start gap-1 rounded-sm text-left hover:text-link',
-              FOCUS_RING,
             )}
             data-inbox-question={question.id}
           >
@@ -255,7 +257,8 @@ const ApprovalRow = ({
 }): ReactElement => (
   <ListRow
     leading={<StatusIcon status="needs_you" label="Approval" />}
-    // Plain text: the row's one link is its *Decide on the task*, so a keyboard meets it once.
+    // Plain text: the row's one link is its *Decide on the task*, so a keyboard meets it once — and
+    // it is the row's stretched link (S-23.26): a click anywhere opens the task, never decides.
     title={`${APPROVAL_KIND_LABEL[approval.kind]} is waiting for you`}
     meta={
       <span className="inline-flex flex-wrap items-center gap-1.5">
@@ -268,7 +271,7 @@ const ApprovalRow = ({
       <Link
         to="/tasks/$taskId"
         params={{ taskId: approval.task_id }}
-        className={buttonClassName('default', 'sm')}
+        {...rowLink(buttonClassName('default', 'sm'))}
       >
         Decide on the task
       </Link>

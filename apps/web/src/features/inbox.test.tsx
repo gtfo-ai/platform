@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import { formatDateTime } from '../ui/kit.js';
+import { ROW_LINK_ATTRIBUTE } from '../ui/row-link.js';
 import { firstLine } from './inbox.js';
 
 const TASK = '00000000-0000-4000-8000-0000000000c1';
@@ -236,6 +237,11 @@ describe('the approval row', () => {
     expect(
       screen.getAllByRole('link').filter((link) => link.getAttribute('href') === `/tasks/${TASK}`),
     ).toHaveLength(1);
+    // S-23.26: that one link is the row's stretched link, so a click anywhere on the row opens the
+    // task — where the approval is decided; the row itself decides nothing.
+    expect(
+      screen.getByRole('link', { name: 'Decide on the task' }).hasAttribute(ROW_LINK_ATTRIBUTE),
+    ).toBe(true);
   });
 });
 
@@ -309,6 +315,12 @@ describe('a question row', () => {
       name: 'Should the retry budget be three or five?',
     });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    // S-23.26: the toggle is the row's stretched control (a click anywhere opens the answer form,
+    // on this page), and *Open task* is not — it keeps its own click above it.
+    expect(toggle.hasAttribute(ROW_LINK_ATTRIBUTE)).toBe(true);
+    expect(screen.getByRole('link', { name: 'Open task' }).hasAttribute(ROW_LINK_ATTRIBUTE)).toBe(
+      false,
+    );
     // Collapsed: the second line and the answer box are not on screen.
     expect(screen.queryByLabelText('Your answer')).toBeNull();
     expect(document.body.textContent).not.toContain('The ticket says both.');

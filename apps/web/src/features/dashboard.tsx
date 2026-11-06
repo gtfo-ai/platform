@@ -59,6 +59,7 @@ import {
   Metric,
 } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
+import { rowLink } from '../ui/row-link.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { type Step, Stepper } from '../ui/stepper.js';
@@ -392,10 +393,12 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
                 </span>
               }
               actions={
+                // The row's one link (S-23.26): the title is text, so the action is what a click
+                // anywhere on the row opens — the task, never the command itself.
                 <Link
                   to="/tasks/$taskId"
                   params={{ taskId: item.taskId }}
-                  className={buttonClassName('default', 'sm')}
+                  {...rowLink(buttonClassName('default', 'sm'))}
                 >
                   {ACTION_WORD[item.kind]}
                   {/* Plain text, not `UntrustedText`: its links would nest inside this one. */}
@@ -478,7 +481,7 @@ const RunningBox = ({ projects }: { readonly projects: readonly ProjectItem[] })
                 <Link
                   to="/runs/$runId"
                   params={{ runId: entry.run.id }}
-                  className="hover:text-link hover:underline"
+                  {...rowLink('hover:text-link hover:underline')}
                 >
                   {runSubject({ stage: entry.run.stage, role: entry.role })}
                 </Link>
@@ -567,7 +570,7 @@ const ProjectsBox = ({
               <Link
                 to="/projects/$key"
                 params={{ key: project.key }}
-                className="hover:text-link hover:underline"
+                {...rowLink('hover:text-link hover:underline')}
               >
                 <UntrustedText value={project.name} />
               </Link>

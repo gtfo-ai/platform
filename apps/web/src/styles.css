@@ -258,6 +258,64 @@ body {
 }
 
 /*
+ * Whole-row click targets (S-23.26, `ui/row-link.ts`): GitHub's stretched link. A row that carries
+ * `.row-link-host` and holds one `[data-row-link]` control is clicked anywhere: the control's
+ * `::after` covers the row (the row is its containing block, so nothing positioned may sit between
+ * them), and every *other* control in the row is lifted above it, so it keeps its own click. No
+ * handler is put on the row: it stays one real link — tab order, a middle- or ⌘-click into a new
+ * tab, *Copy link* and a screen reader's list of links are the browser's own.
+ *
+ * Two halves on purpose. The lift is in the components layer, so a utility on a control
+ * (`sr-only`'s `position: absolute`, an `absolute` badge) still wins over `relative` — a visually
+ * hidden checkbox stays hidden. The stretch, the hover and the ring are unlayered, so a row's
+ * `bg-default` and a control's own `FOCUS_RING` do not beat them: the ring is drawn round the row,
+ * which is what the click covers. A row with no row link gets no hover — it is not a target.
+ */
+@layer components {
+  .row-link-host
+    :is(
+      a[href],
+      button,
+      input,
+      select,
+      textarea,
+      summary,
+      label,
+      [role="button"],
+      [tabindex]:not([tabindex="-1"])
+    ):not([data-row-link]) {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+.row-link-host {
+  position: relative;
+  transition: background-color 120ms ease-out;
+}
+
+.row-link-host:has([data-row-link]):hover {
+  background-color: var(--bg-subtle);
+}
+
+.row-link-host [data-row-link]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  border-radius: var(--row-link-radius, 0);
+}
+
+.row-link-host [data-row-link]:focus-visible {
+  outline: none;
+}
+
+.row-link-host [data-row-link]:focus-visible::after {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/*
  * The running beacon (`ui/status.tsx`): a slow pulse, so a running agent reads as alive from
  * across the room. Reduced motion stops it on its first frame (fully opaque) — the rule below the
  * global one, because the global rule only shortens an animation and this one should not run.

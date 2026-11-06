@@ -19,7 +19,9 @@
  * press. *Open ticket* and *Open merge request* are `ActionMenuLinkItem`s, so their `href` is `safeHref`'s.
  *
  * The card is **not** wrapped in a link: the title is the link into the task, and the menu carries
- * its own items — an anchor inside an anchor is invalid HTML.
+ * its own items — an anchor inside an anchor is invalid HTML. The title is the card's (and the
+ * row's) stretched link instead (S-23.26, `ui/row-link.ts`): a click anywhere on either opens the
+ * task, and the menu, the ticket's own link and the badges keep their clicks above it.
  */
 import type { AgentsResponse, TaskListItem, TaskState } from '@platform/contracts';
 import { BeakerIcon } from '@primer/octicons-react/BeakerIcon';
@@ -55,6 +57,7 @@ import { Dialog } from '../ui/dialog.js';
 import { loopLabel, stageLabel, TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
 import { Badge, Button, ErrorNotice, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
+import { ROW_LINK_HOST, rowLink } from '../ui/row-link.js';
 import { StatusIcon } from '../ui/status.js';
 import { needsYou as needsYouOf } from '../ui/task-status.js';
 import { UntrustedText } from '../ui/untrusted.js';
@@ -298,7 +301,7 @@ const TitleLink = ({
   <Link
     to="/projects/$key/tasks/$taskId"
     params={{ key: projectKey, taskId: task.id }}
-    className="font-semibold break-words text-fg hover:text-link hover:underline"
+    {...rowLink('font-semibold break-words text-fg hover:text-link hover:underline')}
     data-ticket-title={task.ticket_title === null ? 'unread' : 'read'}
   >
     {/*
@@ -698,7 +701,9 @@ export const TaskCard = ({ task, projectKey, projectId, may, agent, nowMs }: Tas
       data-agent-working={agentWorking(agent) ? 'true' : undefined}
       aria-label={sanitiseUntrusted(task.ticket.key)}
       className={cx(
-        'flex flex-col gap-2 rounded-lg border bg-default p-3 shadow-sm',
+        ROW_LINK_HOST,
+        // The ring a keyboard focus draws round the card follows its corners.
+        'flex flex-col gap-2 rounded-lg border bg-default p-3 shadow-sm [--row-link-radius:var(--radius-lg)]',
         agentWorking(agent) ? 'border-running/60' : 'border-line',
       )}
     >
@@ -729,7 +734,7 @@ export const TaskRow = ({ task, projectKey, projectId, may, agent, nowMs }: Task
     <li
       data-board-row={task.id}
       data-agent-working={agentWorking(agent) ? 'true' : undefined}
-      className="flex min-h-12 items-start gap-3 px-4 py-2.5 hover:bg-subtle"
+      className={cx(ROW_LINK_HOST, 'flex min-h-12 items-start gap-3 px-4 py-2.5')}
     >
       <div className="flex h-5 shrink-0 items-center">
         <StatusIcon

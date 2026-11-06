@@ -23,6 +23,7 @@ import { Dialog } from '../../ui/dialog.js';
 import { ErrorNotice, formatElapsed, formatRunCost } from '../../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../../ui/list-box.js';
 import { PhaseTrack } from '../../ui/phase-track.js';
+import { rowLink } from '../../ui/row-link.js';
 import { StatusIcon } from '../../ui/status.js';
 import { sanitiseUntrusted } from '../../ui/untrusted-text.js';
 import {
@@ -71,7 +72,8 @@ const RunRow = ({
             onOpen(run.id);
           }}
           data-fleet-row={run.id}
-          className={cx('rounded-sm text-left hover:text-link hover:underline', FOCUS_RING)}
+          // The row's stretched control (S-23.26): a click anywhere on the row opens the dialog.
+          {...rowLink('rounded-sm text-left hover:text-link hover:underline')}
         >
           {runListTitle(run)}
         </button>
@@ -273,7 +275,8 @@ export const FleetList = ({
                 <Link
                   to="/tasks/$taskId"
                   params={{ taskId: need.taskId }}
-                  className={buttonClassName('default', 'sm')}
+                  // The row's link (S-23.26): the title is text, so a click anywhere opens the task.
+                  {...rowLink(buttonClassName('default', 'sm'))}
                 >
                   {NEED_ACTION[need.kind]}
                   <span className="sr-only">{` ${need.ticketKey === null ? 'this task' : sanitiseUntrusted(need.ticketKey)}`}</span>

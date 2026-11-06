@@ -21,6 +21,7 @@ import { buttonClassName } from '../ui/button.js';
 import { Badge, ErrorNotice, formatInteger, formatUsd } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
+import { rowLink } from '../ui/row-link.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { ReadinessLabel } from './readiness-label.js';
@@ -96,7 +97,7 @@ export const ProjectsScreen = (): ReactElement => {
                 <Link
                   to="/projects/$key"
                   params={{ key: project.key }}
-                  className="hover:text-link hover:underline"
+                  {...rowLink('hover:text-link hover:underline')}
                 >
                   <UntrustedText value={project.name} />
                 </Link>

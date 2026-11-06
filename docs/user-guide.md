@@ -131,6 +131,14 @@ integrations, the board's list view, the Agents list and the other lists drawn a
 shortcuts** turns them all off for this browser — ⌘ K and Ctrl K still open the search, because a
 key chord with ⌘ or Ctrl cannot be typed by accident.
 
+**A row that opens something opens from anywhere on it**, not only from its title: a project, a
+run, an integration, a task on the board (its card too), a *Needs you* item — which opens its task,
+so **Approve** and **Answer** are always decided on the task page, never by a click on the row. A
+row's own buttons and menus (`···`, *Open task*, a problem's repair) keep their own click. The row
+is still an ordinary link, so ⌘-click or a middle click opens it in a new tab and right-click copies
+it. A row with nowhere to go — a worker, an audit entry, a knowledge proposal — does not light up
+under the pointer.
+
 ## 1. Setting up a project — New project
 
 **New project** — in the top bar's **+** menu, the button on **Projects**, or Home when there is no

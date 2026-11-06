@@ -3,9 +3,13 @@
  *
  * A box with a quiet border; a subtle header row with the counts and filters; rows of 48 px with the
  * status icon first, the title, a meta line under it, right-aligned facts and an overflow slot.
+ *
+ * Every `ListRow` is a row-link host (S-23.26, `row-link.ts`): a row whose title (or action) spreads
+ * `rowLink()` is clicked anywhere and gets the hover; a row with no row link gets neither.
  */
 import type { ReactElement, ReactNode } from 'react';
 import { cx } from './cx.js';
+import { ROW_LINK_HOST } from './row-link.js';
 
 export const ListBox = ({
   label,
@@ -64,7 +68,8 @@ export const ListRow = ({
   // off at 390 px).
   <li
     className={cx(
-      'flex min-h-12 flex-wrap items-start gap-x-3 gap-y-1 px-4 py-2.5 hover:bg-subtle sm:flex-nowrap',
+      ROW_LINK_HOST,
+      'flex min-h-12 flex-wrap items-start gap-x-3 gap-y-1 px-4 py-2.5 sm:flex-nowrap',
       className,
     )}
   >

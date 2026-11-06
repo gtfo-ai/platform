@@ -46,6 +46,7 @@ import {
   useShadowCommands,
 } from '../app/queries.js';
 import { useTopics } from '../realtime/provider.js';
+import { cx } from '../ui/cx.js';
 import { TASK_STATE_LABEL } from '../ui/humanize.js';
 import {
   Badge,
@@ -64,6 +65,7 @@ import {
 } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { MetricStrip } from '../ui/metric-strip.js';
+import { ROW_LINK_HOST, rowLink } from '../ui/row-link.js';
 import { StateLabel, StatusIcon } from '../ui/status.js';
 import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 
@@ -154,7 +156,9 @@ export const HumanSideOfReport = ({
 const TicketRow = ({ ticket }: { readonly ticket: ShadowBatchTicket }): ReactElement => {
   const missing = missingSimilarityReason(ticket);
   return (
-    <li className="flex flex-col gap-1 border-line border-b py-2 last:border-b-0">
+    <li
+      className={cx(ROW_LINK_HOST, 'flex flex-col gap-1 border-line border-b py-2 last:border-b-0')}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={ticket.refused_reason === null ? 'neutral' : 'warning'}>
           <UntrustedText value={ticket.ticket_key} />
@@ -163,7 +167,7 @@ const TicketRow = ({ ticket }: { readonly ticket: ShadowBatchTicket }): ReactEle
           <Link
             to="/tasks/$taskId"
             params={{ taskId: ticket.task_id }}
-            className="text-xs underline"
+            {...rowLink('text-xs underline')}
           >
             open the task
           </Link>
@@ -386,7 +390,10 @@ const BatchPage = ({
         ) : (
           <ul className="flex flex-col gap-1 text-xs">
             {data.aggregate.launch_candidates.map((candidate) => (
-              <li key={candidate.ticket_key} className="flex flex-wrap items-center gap-3">
+              <li
+                key={candidate.ticket_key}
+                className={cx(ROW_LINK_HOST, 'flex flex-wrap items-center gap-3')}
+              >
                 <Badge tone="success">
                   <UntrustedText value={candidate.ticket_key} />
                 </Badge>
@@ -395,7 +402,7 @@ const BatchPage = ({
                 <Link
                   to="/tasks/$taskId"
                   params={{ taskId: candidate.task_id }}
-                  className="underline"
+                  {...rowLink('underline')}
                 >
                   open the task
                 </Link>
@@ -549,7 +556,7 @@ export const ShadowScreen = ({
                   to="/projects/$key/shadow"
                   params={{ key: projectKey }}
                   search={{ batch: batch.id }}
-                  className="hover:underline"
+                  {...rowLink('hover:underline')}
                 >
                   {`Batch of ${formatDateTime(batch.created_at)}`}
                 </Link>

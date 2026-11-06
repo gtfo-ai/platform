@@ -20,6 +20,7 @@
  * The choice is this browser's, kept under {@link SHORTCUTS_STORAGE_KEY}.
  */
 import { useSyncExternalStore } from 'react';
+import { ROW_LINK_ATTRIBUTE } from '../ui/row-link.js';
 
 /** Where a `g` chord goes. `board` needs a project; the listener ignores it outside one. */
 export type JumpTarget = 'home' | 'projects' | 'inbox' | 'agents' | 'board';
@@ -172,9 +173,11 @@ export const LIST_BOX_ATTRIBUTE = 'data-list-box';
 const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
- * `j`/`k` inside a list: the row after (or before) the one holding the focus gets it, on its first
- * focusable element — a row with nothing to focus is skipped. `false` when the focus is not inside a
- * list, or there is no row that way, so the press is left alone.
+ * `j`/`k` inside a list: the row after (or before) the one holding the focus gets it, on its row
+ * link when it has one (S-23.26, `ui/row-link.ts` — the control a click anywhere on the row
+ * presses, which need not be its first: a *Needs you* row's is its action, after the title's own
+ * links), else on its first focusable element — a row with nothing to focus is skipped. `false`
+ * when the focus is not inside a list, or there is no row that way, so the press is left alone.
  */
 export const moveInList = (active: Element | null, step: 1 | -1): boolean => {
   const list = active?.closest(`[${LIST_BOX_ATTRIBUTE}]`) ?? null;
@@ -187,7 +190,10 @@ export const moveInList = (active: Element | null, step: 1 | -1): boolean => {
     return false;
   }
   for (let index = current + step; index >= 0 && index < rows.length; index += step) {
-    const target = rows[index]?.querySelector<HTMLElement>(FOCUSABLE);
+    const row = rows[index];
+    const target =
+      row?.querySelector<HTMLElement>(`[${ROW_LINK_ATTRIBUTE}]`) ??
+      row?.querySelector<HTMLElement>(FOCUSABLE);
     if (target !== null && target !== undefined) {
       target.focus();
       return true;

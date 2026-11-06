@@ -82,7 +82,7 @@ position, never its text; project names, ticket keys and titles are `UntrustedTe
 are `app/shortcuts.ts` (pure: the `g` chord, `decideKey`, the typing guard, `moveInList`, the setting)
 applied by one `keydown` listener in `app/keyboard.tsx`: `g h`/`g p`/`g i`/`g a`/`g b` jump, `?` opens
 the sheet (`SHORTCUT_GROUPS`, which the user guide's table is held to by `user-guide-census.test.ts`),
-`j`/`k` move between the rows of the `ListBox` holding the focus (`data-list-box`). No single-key
+`j`/`k` move between the rows of the `ListBox` holding the focus (`data-list-box`), onto a row's row link when it has one. No single-key
 shortcut fires in an input, a textarea, a select, anything `contenteditable`, or inside a dialog or a
 menu; **Settings → Keyboard shortcuts** turns them off for the browser (`agentic.shortcuts`, WCAG
 2.1.4), and ⌘K / Ctrl+K stays, because a modifier chord is not typed by accident. The palette and
@@ -106,7 +106,8 @@ has no TanStack Router, can import it. Every primitive has a happy-dom test of i
 | `status.tsx` | `StatusIcon`, `StateLabel` — `queued`, `running` (animated beacon), `success`, `failure`, `cancelled`, `skipped`, `needs_you` (beacon), `waiting`, `paused`, `idle`; icon + colour + word, an exhaustive record |
 | `page-header.tsx` | `PageHeader` — back slot, the page's `<h1>` (`titleAs="p"` when the page below has its own), state, meta, actions; `divider={false}` when an UnderlineNav draws the line |
 | `underline-nav.tsx`, `nav-list.tsx` | `UnderlineNav` (icon, counter, `aria-current`, the selected underline; an item's `collapseBelow` moves it into the caller's `more` menu on narrow widths), `NavList` (groups, the selected bar) |
-| `list-box.tsx` | `ListBox`, `ListBoxHeader`, `ListRow` (status first, title, meta, trailing facts, overflow) |
+| `list-box.tsx` | `ListBox`, `ListBoxHeader`, `ListRow` (status first, title, meta, trailing facts, overflow; a row-link host) |
+| `row-link.ts` | Whole-row click targets (S-23.26), GitHub's stretched link: `ROW_LINK_HOST` on the row (every `ListRow` has it; the board's card and list row, the shadow report's ticket rows add it) and `rowLink()` spread on the row's **one** primary control — the title's router `Link`, the call-to-action link when the title is text (a *Needs you* row's *Answer*/*Approve*, which opens the task and decides nothing), or a title button that opens something on the page (the Agents list's run dialog, the inbox question's answer form). The control's `::after` covers the row and every other control is lifted above it (`styles.css`, "Whole-row click targets"), so there is no click handler on the row: tab order, a middle- or ⌘-click, *Copy link* and a screen reader's links are the browser's. A row with no destination gets no row link and no hover. A row click never performs a mutation. `row-link-census.test.ts` refuses a `ListRow` with a link or a title button and no `rowLink()`; `test/web-e2e/row-click.spec.ts` presses rows with a real mouse |
 | `blankslate.tsx`, `flash.tsx` | `Blankslate` (title and hint required; an action unless `informational`, enforced by its type), `Flash` (info / warning / danger / success, optional action; danger is `role="alert"`) |
 | `timeline.tsx`, `stepper.tsx` | `Timeline`, `Stepper` (done / current / upcoming / optional, `aria-current="step"`, states as words) |
 | `skeleton.tsx`, `avatar.tsx` | `Skeleton` (a polite status, shimmer off under reduced motion), `Avatar` (initials, a deterministic hue of six tokens; never an image) |

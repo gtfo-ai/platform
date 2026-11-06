@@ -189,6 +189,22 @@ describe('moveInList', () => {
     expect(moveInList(document.activeElement, 1)).toBe(false);
     expect(document.activeElement).toBe(outside);
   });
+
+  it('lands on a row’s row link rather than its first control (S-23.26)', () => {
+    // A *Needs you* row: the title's own link comes first, and the row's link — the one a click
+    // anywhere on the row presses — is its action, after it.
+    document.body.innerHTML = `
+      <ul data-list-box="">
+        <li><a href="/one" id="one">One</a></li>
+        <li>
+          <a href="https://example.invalid/doc" id="in-title">a link in the title</a>
+          <a href="/tasks/two" data-row-link="" id="two">Answer</a>
+        </li>
+      </ul>`;
+    document.getElementById('one')?.focus();
+    expect(moveInList(document.activeElement, 1)).toBe(true);
+    expect(document.activeElement).toBe(document.getElementById('two'));
+  });
 });
 
 describe('the setting', () => {

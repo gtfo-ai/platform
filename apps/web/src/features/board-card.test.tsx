@@ -22,6 +22,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { ROW_LINK_ATTRIBUTE, ROW_LINK_HOST } from '../ui/row-link.js';
 import { filterTasks, NO_FILTERS } from './board.js';
 import { asksLabel, loopBadges, menuCommandsFor, needsYou, stageEnteredAt } from './board-card.js';
 
@@ -290,6 +291,35 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+describe('a whole card and a whole row open the task (S-23.26)', () => {
+  it('stretches the title link over the card and the row, and nothing else', async () => {
+    open();
+    const article = await card('ACME-1');
+    // The card is the host and its one row link is the title, into the task.
+    expect(article.classList.contains(ROW_LINK_HOST)).toBe(true);
+    const stretched = article.querySelectorAll(`[${ROW_LINK_ATTRIBUTE}]`);
+    expect(stretched).toHaveLength(1);
+    expect(stretched[0]?.hasAttribute('data-ticket-title')).toBe(true);
+    expect(stretched[0]?.getAttribute('href')).toBe(`/projects/acme/tasks/${BUSY.id}`);
+    // The menu is not the stretched control: it keeps its own click above the link.
+    expect(
+      within(article)
+        .getByRole('button', { name: /^Actions for/ })
+        .hasAttribute(ROW_LINK_ATTRIBUTE),
+    ).toBe(false);
+
+    cleanup();
+    open({ path: '/projects/acme?view=list' });
+    const list = await screen.findByRole('list', { name: 'Tasks' });
+    const row = list.querySelector<HTMLElement>(`[data-board-row="${BUSY.id}"]`);
+    expect(row?.classList.contains(ROW_LINK_HOST)).toBe(true);
+    expect(row?.querySelectorAll(`[${ROW_LINK_ATTRIBUTE}]`)).toHaveLength(1);
+    expect(row?.querySelector(`[${ROW_LINK_ATTRIBUTE}]`)?.hasAttribute('data-ticket-title')).toBe(
+      true,
+    );
+  });
 });
 
 describe('the board’s columns', () => {

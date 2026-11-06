@@ -44,6 +44,7 @@ import { ErrorNotice, formatDateTime, formatInteger } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
 import { formatAgo } from '../ui/relative-time.js';
+import { rowLink } from '../ui/row-link.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
@@ -254,7 +255,7 @@ export const IntegrationsScreen = (): ReactElement => {
                     <Link
                       to="/integrations/$integrationId"
                       params={{ integrationId: integration.id }}
-                      className="hover:text-link hover:underline"
+                      {...rowLink('hover:text-link hover:underline')}
                     >
                       <UntrustedText value={integration.name} />
                     </Link>

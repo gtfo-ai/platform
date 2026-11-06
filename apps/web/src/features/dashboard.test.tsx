@@ -29,6 +29,7 @@ import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import type { EventStream } from '../realtime/client.js';
 import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import { ROW_LINK_ATTRIBUTE, ROW_LINK_HOST } from '../ui/row-link.js';
 import { firstNameOf, greetingFor } from './dashboard.js';
 import { workerFixture } from './worker.test-fixture.js';
 
@@ -528,6 +529,12 @@ describe('Home, needs you first', () => {
       'Answer',
     ]);
     expect(actions[2]?.getAttribute('href')).toBe(`/tasks/${TASK(3)}`);
+    // S-23.26: the title is text, so each row's stretched link — what a click anywhere on the row
+    // presses — is its action, into the task, and it is the only one.
+    for (const [index, row] of rows.entries()) {
+      expect(row.classList.contains(ROW_LINK_HOST)).toBe(true);
+      expect([...row.querySelectorAll(`[${ROW_LINK_ATTRIBUTE}]`)]).toEqual([actions[index]]);
+    }
     // The count says all three, and the header leads to the inbox.
     const header = box('Needs you');
     expect(within(header).getByText('3 waiting for you')).toBeTruthy();
@@ -575,6 +582,9 @@ describe('Home, running now', () => {
     const link = await within(list).findByRole('link', { name: 'Implementation · Developer' });
     expect(link.getAttribute('href')).toBe(`/runs/${RUN}`);
     const row = link.closest('li') as HTMLElement;
+    // S-23.26: the run's link is the row's stretched link.
+    expect(row.classList.contains(ROW_LINK_HOST)).toBe(true);
+    expect([...row.querySelectorAll(`[${ROW_LINK_ATTRIBUTE}]`)]).toEqual([link]);
     await waitFor(() => {
       expect(row.textContent).toContain('ACME-7');
     });
@@ -607,7 +617,9 @@ describe('Home, the projects and the rail', () => {
     const list = await screen.findByRole('list', { name: 'Projects' });
     const rows = within(list).getAllByRole('listitem');
     expect(rows).toHaveLength(2);
-    expect(within(rows[0] as HTMLElement).getByRole('link', { name: 'Project 1' })).toBeTruthy();
+    const projectLink = within(rows[0] as HTMLElement).getByRole('link', { name: 'Project 1' });
+    // S-23.26: the project's name is the row's stretched link.
+    expect(projectLink.hasAttribute(ROW_LINK_ATTRIBUTE)).toBe(true);
     expect(rows[0]?.textContent).toContain('L2 Reliable');
     expect(rows[0]?.textContent).toContain('1 open');
     expect(rows[0]?.textContent).toContain('$10.00 · 30d');
