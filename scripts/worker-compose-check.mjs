@@ -62,10 +62,12 @@
  *     worker logs the plain address `http://127.0.0.1:<port>` and creates no `ui-token`; the publish
  *     is `127.0.0.1` only; the page and `/api/local/state` answer on `127.0.0.1` right after `up -d`
  *     with **no token**, and `421` for a foreign `Host`; `claude --version` runs from the
- *     `claude-cli` volume inside `remote-worker` (the run image's CLI, copied by the
- *     `pull-runtime-image` one-shot); a one-off `remote-worker` started with **no token and no URL**
- *     serves its page `200`, at the wizard's first step (`needs_platform`); the same port on the
- *     host's **other** address answers nothing; and **a run container** — each task's refinement run,
+ *     `claude-cli` volume inside `remote-worker` (the run image's CLI — here the check's stand-in,
+ *     which answers `--version` as the real one does — copied by the `pull-runtime-image` one-shot;
+ *     a failure prints the exec's stderr in full, every secret value replaced by its name); a
+ *     one-off `remote-worker` started with **no token and no URL** serves its page `200`, at the
+ *     wizard's first step (`needs_platform`); the same port on the host's **other** address answers
+ *     nothing; and **a run container** — each task's refinement run,
  *     through the fake CLI, against the worker's name and every address of it the check seeds into the
  *     repository (`.wcc-probe-targets`) — connects to none of them on the UI port. What a container on
  *     the run egress network (the sidecar's and the helpers' network, never a run's) reaches is
@@ -152,7 +154,7 @@ const quietly = (dockerArgs) => docker(dockerArgs).catch(() => undefined);
 
 const compose =
   (project, files, directory) =>
-  async (composeArgs, extraEnv = {}) =>
+  async (composeArgs, extraEnv = {}, options = {}) =>
     run(
       'docker',
       [
@@ -169,8 +171,30 @@ const compose =
         env: { ...process.env, PLATFORM_TAG: TAG, ...extraEnv },
         maxBuffer: 64 * 1024 * 1024,
         timeout: TIMEOUT_MS,
+        ...options,
       },
     );
+
+/**
+ * What a failed `execFile` says, whole: how it ended, its stderr and its stdout, in full — with every
+ * secret value the check holds replaced by its name, so a failure detail can never print one.
+ */
+const failureDetail = (error, secrets) => {
+  const redact = (text) =>
+    Object.entries(secrets).reduce(
+      (current, [name, value]) =>
+        typeof value === 'string' && value.length > 0
+          ? current.split(value).join(`[${name}]`)
+          : current,
+      String(text ?? ''),
+    );
+  const ended = error?.killed
+    ? `killed (${error.signal ?? 'signal'}) after its timeout`
+    : `exit ${String(error?.code ?? 'unknown')}${error?.signal ? ` (${error.signal})` : ''}`;
+  return redact(
+    `${ended}\n--- stderr\n${error?.stderr ?? ''}\n--- stdout\n${error?.stdout ?? ''}\n--- error\n${error?.message ?? String(error)}`,
+  );
+};
 
 const imageId = async (image) =>
   (await docker(['image', 'inspect', image, '--format', '{{.Id}}'])).stdout.trim();
@@ -1070,17 +1094,32 @@ const main = async () => {
       'test -e /var/lib/platform/worker-state/ui-token && echo present || echo absent',
     ]);
     check('no ui-token is created under none', tokenFile.stdout.trim() === 'absent');
-    const cli = await bundle([
-      'exec',
-      '-T',
-      'remote-worker',
-      '/opt/claude-cli/claude',
-      '--version',
-    ]).catch((error) => ({ stdout: String(error) }));
+    // The volume holds the check's run image's `claude` — `fake-claude-stage.mjs`, which answers
+    // `--version` as the real CLI does. Bounded like a query, not like a compose `up`: a CLI that
+    // waits on its stdin (`exec -T` keeps it open) is a failure in a minute, not in fifteen.
+    const cli = await bundle(
+      ['exec', '-T', 'remote-worker', '/opt/claude-cli/claude', '--version'],
+      {},
+      { timeout: DOCKER_QUERY_MS },
+    ).then(
+      ({ stdout }) => ({ ok: /\(Claude Code\)/.test(stdout), detail: stdout.trim().slice(0, 120) }),
+      (error) => ({
+        ok: false,
+        detail: failureDetail(error, {
+          CLAUDE_TOKEN,
+          RUN_TOKEN,
+          SECRET_KEY,
+          ADMIN_PASSWORD,
+          WORKER_CREDENTIAL: credential,
+          DEPLOY_KEY: key.privateKey.trim(),
+          DEPLOY_KEY_FRAGMENT: key.fragment,
+        }),
+      }),
+    );
     check(
       'claude --version runs from the claude-cli volume inside remote-worker',
-      /Claude Code/.test(cli.stdout),
-      cli.stdout.trim().slice(0, 120),
+      cli.ok,
+      cli.detail,
     );
     const published = (await bundle(['port', 'remote-worker', '7357'])).stdout.trim();
     check(

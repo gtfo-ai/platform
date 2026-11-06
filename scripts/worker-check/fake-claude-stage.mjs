@@ -27,7 +27,17 @@ import path from 'node:path';
 import process from 'node:process';
 
 const SESSION = 'fake-session-worker-check';
+/** The version this stand-in reports, in `system/init` and to `--version`. */
+const CLAUDE_CODE_VERSION = '2.1.267';
 const argv = process.argv.slice(2);
+// `claude --version`, answered the way the real CLI answers it and before anything reads stdin:
+// `worker-compose-check` runs it from the worker's `claude-cli` volume (which holds this file), with
+// a stdin `docker compose exec -T` keeps open — read as a stream, it never ends (CI run 42181721359
+// waited out the check's fifteen-minute compose timeout on it).
+if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-v')) {
+  process.stdout.write(`${CLAUDE_CODE_VERSION} (Claude Code)\n`);
+  process.exit(0);
+}
 const flag = (name) => {
   const at = argv.indexOf(name);
   return at >= 0 && at + 1 < argv.length ? argv[at + 1] : null;
@@ -249,7 +259,7 @@ const run = async () => {
     type: 'system',
     subtype: 'init',
     apiKeySource: 'none',
-    claude_code_version: '2.1.267',
+    claude_code_version: CLAUDE_CODE_VERSION,
     cwd: process.cwd(),
     tools: [],
     mcp_servers: [{ name: 'platform', status: 'connected' }],
