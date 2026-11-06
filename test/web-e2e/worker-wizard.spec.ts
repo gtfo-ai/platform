@@ -25,6 +25,18 @@ test('Add a worker: from the + menu through Install and Start, with this platfor
   page,
   baseURL,
 }) => {
+  // The `Desktop Chrome` device sends a Windows user agent, so Chromium reports Windows; this test
+  // is the macOS/Linux reader's, and says so (the Windows one is below).
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'Linux x86_64' });
+    Object.defineProperty(Navigator.prototype, 'userAgentData', {
+      get: () => ({ platform: 'Linux' }),
+    });
+  });
+  await page.reload();
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
   await page.getByRole('button', { name: 'Create new…' }).click();
   await page.getByRole('menuitem', { name: 'Add a worker' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Add a worker' })).toBeVisible();
@@ -33,7 +45,7 @@ test('Add a worker: from the + menu through Install and Start, with this platfor
 
   const origin = new URL(baseURL ?? '').origin;
   // The core serves the one-line installers (S-22.20, S-22.21, `INSTALLER_AVAILABLE`): both shown,
-  // macOS/Linux first on this Linux browser, with the by-hand setup behind a disclosure.
+  // macOS/Linux first on a Linux browser, with the by-hand setup behind a disclosure.
   await expect(page.locator('[data-installer]')).toHaveCount(2);
   await expect(page.locator('[data-installer]').first()).toHaveAttribute('data-installer', 'unix');
   await expect(page.getByLabel('macOS or Linux (Terminal)', { exact: true })).toHaveValue(
