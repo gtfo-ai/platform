@@ -741,12 +741,12 @@ describe('the project settings page', () => {
       [
         'Policies & WIP',
         [
-          'Autonomy dial',
+          'How much agents do alone',
           'Features',
-          'Risk classes',
+          'Sensitive areas',
           'Project budgets',
           'Notifications',
-          'WIP limits',
+          'Parallel tasks',
           'Who changed what',
         ],
       ],
@@ -773,7 +773,7 @@ describe('the project settings page', () => {
 
   it('renders the policies the dial actually set, from the stored preset', async () => {
     const { container } = render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
-    await screen.findByText('Autonomy dial');
+    await screen.findByText('How much agents do alone');
     // The number a re-derivation would have had to invent: it comes from `policies`, not `level`.
     await waitFor(() => {
       expect(container.textContent).toContain('probation_tasks');
@@ -784,7 +784,7 @@ describe('the project settings page', () => {
   it('does not call a project Custom when nothing is overridden', async () => {
     // Standing rule 42's first half, and the one a badge that always rendered would fail.
     render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
-    await screen.findByText('Autonomy dial');
+    await screen.findByText('How much agents do alone');
     expect(screen.queryByText('Custom')).toBeNull();
     expect(screen.queryByText('never applied')).toBeNull();
     expect(screen.queryByText('preset out of date')).toBeNull();
@@ -901,7 +901,7 @@ describe('the project settings page', () => {
         realtime: false,
       }).element,
     );
-    await screen.findByText('Autonomy dial');
+    await screen.findByText('How much agents do alone');
     await waitFor(() => {
       expect(document.body.textContent).toContain('A suggestion is all it is');
     });
@@ -988,7 +988,7 @@ describe('the verification mode', () => {
       }).element,
     );
     expect(await screen.findByText('Verification')).toBeTruthy();
-    expect((await screen.findByTestId('verification-mode-effective')).textContent).toBe('local');
+    expect((await screen.findByTestId('verification-mode-effective')).textContent).toBe('agents');
     await user.click(screen.getByRole('radio', { name: /CI runs the checks/ }));
     await waitFor(() => expect(puts).toHaveLength(1));
     expect(puts[0]?.url).toContain(`/api/projects/${PROJECT}/config`);
@@ -1013,10 +1013,10 @@ describe('the verification mode', () => {
         realtime: false,
       }).element,
     );
-    expect((await screen.findByTestId('verification-mode-effective')).textContent).toBe('ci');
+    expect((await screen.findByTestId('verification-mode-effective')).textContent).toBe('CI');
     const ci = screen.getByRole('radio', { name: /CI runs the checks/ }) as HTMLInputElement;
     expect(ci.checked).toBe(true);
-    expect(screen.getByText(/choosing local here is not applied/)).toBeTruthy();
+    expect(screen.getByText(/choosing agents here is not applied/)).toBeTruthy();
   });
 });
 

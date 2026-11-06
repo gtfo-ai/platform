@@ -175,7 +175,7 @@ export const crossedBudgetCap = (run: Pick<RunRecord, 'status' | 'terminal_reaso
 export const TABS: readonly { readonly id: Tab; readonly label: string }[] = [
   { id: 'transcript', label: 'Transcript' },
   { id: 'prompt', label: 'Prompt' },
-  { id: 'context', label: 'Context pack' },
+  { id: 'context', label: 'What the agent was given' },
   { id: 'settings', label: 'Settings' },
 ];
 
@@ -315,7 +315,7 @@ const RunSummary = ({
       <Metric
         label="Cost"
         value={formatRunCost(record.cost, { estimate: true })}
-        definition="Provider-reported cost of this run. Estimated from the price list in local provider mode. Not measured when the run ended with no figure from the provider, which is not the same as free."
+        definition="Provider-reported cost of this run. On a Claude subscription, cost is estimated from the price list. Not measured when the run ended with no figure from the provider, which is not the same as free."
       />
       <Metric
         label="Elapsed"
@@ -769,7 +769,9 @@ export const RunDetailScreen = ({
                 setDialog('take_over');
               }}
             >
-              {detail.taken_over === null ? 'Take over…' : 'Taken over: resume / hand back…'}
+              {detail.taken_over === null
+                ? 'Work on it yourself…'
+                : 'A person is working on it: resume / give back…'}
             </ActionMenuItem>
             <ActionMenuSeparator />
           </>
@@ -832,8 +834,8 @@ export const RunDetailScreen = ({
       ) : null}
       {detail?.taken_over === null || detail === undefined ? null : (
         <p className="text-xs text-fg-muted">
-          This task is taken over by a person: the pipeline is paused until it is handed back, from
-          the run actions menu.
+          A person is working on this task: the pipeline is paused until it is given back to the
+          agent, from the run actions menu.
         </p>
       )}
 
@@ -937,7 +939,7 @@ export const RunDetailScreen = ({
                   }}
                 >
                   <input
-                    aria-label="Steer the agent"
+                    aria-label="Message the agent"
                     value={steer}
                     onChange={(event) => {
                       setSteer(event.target.value);
@@ -948,12 +950,12 @@ export const RunDetailScreen = ({
                   {/* `default`: an inline form, and Cancel run stays the one coloured action while
                       the run is live (S-23.23, the UX audit's § 2). */}
                   <Button type="submit" disabled={commands.steer.isPending || steer.trim() === ''}>
-                    Steer
+                    Send
                   </Button>
                 </form>
               ) : null}
               {commands.steer.isError ? (
-                <ErrorNotice title="That steer was not accepted: the run may have ended, or you sent one within the last five seconds (the limit is one message per five seconds)." />
+                <ErrorNotice title="That message was not accepted: the run may have ended, or you sent one within the last five seconds (the limit is one message per five seconds)." />
               ) : null}
               {commands.steer.isSuccess ? (
                 <p className="text-xs text-fg-muted">
@@ -1004,11 +1006,11 @@ export const RunDetailScreen = ({
 
           {tab === 'context' ? (
             <div className="flex flex-col gap-3">
-              <SectionHeading>Context pack</SectionHeading>
-              {contextPack.isPending ? <Loading label="Loading context pack…" /> : null}
+              <SectionHeading>What the agent was given</SectionHeading>
+              {contextPack.isPending ? <Loading label="Loading what the agent was given…" /> : null}
               {contextPack.isError ? (
                 <ErrorNotice
-                  title="The context pack could not be loaded."
+                  title="What the agent was given could not be loaded."
                   error={contextPack.error}
                 />
               ) : null}
@@ -1018,22 +1020,22 @@ export const RunDetailScreen = ({
                     <Metric
                       label="Token budget"
                       value={formatInteger(contextPack.data.budget_tokens)}
-                      definition="Token budget the context assembler was allowed to spend."
+                      definition="How many tokens of knowledge pages this run could be given."
                     />
                     <Metric
                       label="Used"
                       value={formatInteger(contextPack.data.total_tokens)}
-                      definition="Tokens the assembled pack actually cost."
+                      definition="How many tokens the pages it was given came to."
                     />
                     <Metric
                       label="Documents"
                       value={formatInteger(admittedDocuments(contextPack.data))}
-                      definition="Knowledge-base documents this run was shown: the unconditional tier 0 and the tier-1 documents that were admitted. A tier-1 page whose paths: rule matched nothing in the repository is listed below as not admitted and is not counted."
+                      definition="Knowledge pages this run was given: the ones every run gets, and the ones matched to this task. A matched page whose path rule found no file in the repository is listed below as not given and is not counted."
                     />
                   </div>
                   {textSearchText(contextPack.data) === null ? (
                     <p className="pb-2 text-xs text-fg-muted">
-                      This run’s pack was recorded before the text search’s outcome was.
+                      This run was recorded before the platform stored what its text search found.
                     </p>
                   ) : (
                     <p className="pb-2 text-xs text-fg-muted">
@@ -1060,7 +1062,7 @@ export const RunDetailScreen = ({
                         {entry.validated ? null : (
                           <span data-not-admitted="true">
                             <Badge tone="warning">
-                              not admitted — its paths: did not resolve at the indexed commit
+                              not given — its path rule found no file in the repository
                             </Badge>
                           </span>
                         )}
@@ -1127,8 +1129,12 @@ export const RunDetailScreen = ({
             }
           }}
           size="lg"
-          title={detail.taken_over === null ? 'Take over this task' : 'Hand the task back'}
-          description={`${sanitiseUntrusted(detail.task.ticket.key)} — the take-over is the task's, whichever run you opened it from.`}
+          title={
+            detail.taken_over === null
+              ? 'Work on this task yourself'
+              : 'Give the task back to the agent'
+          }
+          description={`${sanitiseUntrusted(detail.task.ticket.key)} — this is the task's, whichever run you opened it from.`}
         >
           <TakeOverPanel
             taskId={detail.task.id}

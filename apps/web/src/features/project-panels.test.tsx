@@ -185,7 +185,7 @@ beforeEach(() => {
 
 const renderScreen = async (): Promise<HTMLElement> => {
   const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-  await screen.findByText('Proposals');
+  await screen.findByText('Suggested edits');
   return container;
 };
 
@@ -200,7 +200,8 @@ describe('the proposal queue', () => {
     expect(container.textContent).toContain('drafted at project setup');
     // …and the fields the card already carried are still there.
     expect(container.textContent).toContain('conventions.md');
-    expect(container.textContent).toContain('significance 0.50');
+    // S-25.5: the significance score is the Librarian's ranking, not a reader's fact (research/21 § 4).
+    expect(container.textContent).not.toContain('significance');
   });
 
   it('says why an approved proposal failed to apply, as text, and offers to approve it again (WP-124)', async () => {
@@ -299,7 +300,7 @@ describe('the knowledge health panel', () => {
       expect(container.querySelector('[data-kb-health="findings"]')).not.toBeNull();
     });
     const text = container.textContent ?? '';
-    expect(text).toContain('refused by the parser — in no context pack');
+    expect(text).toContain('cannot be read — never given to agents');
     expect(text).toContain('technical/broken.md');
     expect(text).toContain(hostile);
     expect(text).toContain('dangling link');
@@ -356,7 +357,7 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
       next_cursor: null,
     };
     await renderScreen();
-    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const list = await screen.findByRole('list', { name: 'Suggested edits' });
     const rows = within(list).getAllByRole('listitem');
     const waiting = rows.find((row) => row.textContent?.includes('conventions.md')) as HTMLElement;
     const decided = rows.find((row) => row.textContent?.includes('decided.md')) as HTMLElement;
@@ -368,7 +369,7 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
 
   it('approves a proposal from its row and rejects one from the row’s menu', async () => {
     await renderScreen();
-    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const list = await screen.findByRole('list', { name: 'Suggested edits' });
     const user = userEvent.setup();
     await user.click(within(list).getAllByRole('button', { name: 'Approve' })[0] as HTMLElement);
     await waitFor(() => {
@@ -405,7 +406,7 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
 
   it('keeps a proposal when the reject is not confirmed', async () => {
     await renderScreen();
-    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const list = await screen.findByRole('list', { name: 'Suggested edits' });
     const user = userEvent.setup();
     await user.click(
       within(list).getByRole('button', { name: 'More for technical/architecture.md' }),
@@ -425,7 +426,7 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
       body: { error: { code: 'forbidden', message: 'role viewer may not perform kb.decide' } },
     };
     await renderScreen();
-    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const list = await screen.findByRole('list', { name: 'Suggested edits' });
     await userEvent
       .setup()
       .click(within(list).getAllByRole('button', { name: 'Approve' })[0] as HTMLElement);

@@ -63,7 +63,7 @@ const CONSEQUENCE: Readonly<Record<LifecycleNoteSlot, string>> = {
 
 /** The not-configured note's message (product/17: "neither claims tickets nor moves them"). */
 export const LIFECYCLE_NOT_CONFIGURED_MESSAGE =
-  'The task-management binding has no ticket lifecycle: the platform neither claims tickets nor moves them, and new tasks have no QA stage. Map the slots in the project settings to change that.';
+  'The ticket tracker connection has no ticket lifecycle: the platform neither claims tickets nor moves them, and new tasks have no QA stage. Choose a status for each step in the project settings to change that.';
 
 /**
  * Q118, answered by its recommendation (a) (orchestrator, session 15): a task-management binding
@@ -75,7 +75,7 @@ export const LIFECYCLE_NOT_CONFIGURED_MESSAGE =
 export const BINDING_ACCOUNT_IS_A_PERSON_CODE = 'binding_account_is_a_person';
 
 export const BINDING_ACCOUNT_IS_A_PERSON_MESSAGE =
-  'The task-management binding acts as a platform user’s own account. It works, but the platform claims tickets by assigning them to that account, so a ticket assigned to that person reads as already claimed by the platform, and the tracker shows the person doing what the agent did. A dedicated account per installation avoids both. This is information, not a failure.';
+  'The ticket tracker connection signs in as a platform user’s own account. It works, but the platform claims tickets by assigning them to that account, so a ticket assigned to that person reads as already claimed by the platform, and the tracker shows the person doing what the agent did. A dedicated account per installation avoids both. This is information, not a failure.';
 
 /** The note for a binding whose own account is a mapped platform user (Q118 (a)). */
 export const bindingAccountPersonNote = (): LifecycleReadinessNote => ({

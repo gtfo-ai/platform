@@ -122,7 +122,7 @@ describe('dead letters on the settings page', () => {
       '2 dead-lettered events.',
     );
     // S-23.23 (the UX audit's § 2): a per-row action is `default sm`, so two cards draw no beacon.
-    expect(primaryLabels()).not.toContain('Re-queue');
+    expect(primaryLabels()).not.toContain('Try again');
     assertOnePrimaryAtMost(document, 'the dead letters page');
   });
 
@@ -170,7 +170,7 @@ describe('dead letters on the settings page', () => {
   it('re-queues through POST …/requeue, carrying an Idempotency-Key', async () => {
     const { sent, fetchImpl } = fetchFor({ items: [letter({})], total: 1, next_cursor: null });
     render(createApp({ fetchImpl, realtime: false }).element);
-    const button = await screen.findByRole('button', { name: 'Re-queue' });
+    const button = await screen.findByRole('button', { name: 'Try again' });
     const user = userEvent.setup();
     await user.click(button);
     await waitFor(() => {

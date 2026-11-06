@@ -42,15 +42,15 @@ export const runCommandStateText = (
 
 /** What an applied command did, per kind — a record per kind so a new kind is a type error here. */
 const APPLIED: Record<RunCommandRecord['kind'], string> = {
-  steer: 'delivered to the live session as a turn.',
+  steer: 'the agent received it.',
   take_over: 'the run was asked to stop and export its workspace.',
   cancel: 'the session was asked to stop; the run ends cancelled with what it had cost.',
 };
 
 /** The command's name on the screen. */
 const LABEL: Record<RunCommandRecord['kind'], string> = {
-  steer: 'Steer',
-  take_over: 'Take-over stop',
+  steer: 'Message',
+  take_over: 'Stopped for a person',
   cancel: 'Cancel',
 };
 

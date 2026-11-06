@@ -49,6 +49,7 @@ import { UnderlineNav } from '../ui/underline-nav.js';
 import { CopyableUrl, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { ConnectionTestResult } from './connection-test-result.js';
 import {
+  currentHealthStatus,
   IntegrationActions,
   type IntegrationDialog,
   integrationStatus,
@@ -127,7 +128,7 @@ const HealthFacts = ({
       <h2 id="integration-health" className="text-base font-semibold">
         Health
       </h2>
-      {integration.current_health.status === 'not_checked_recently' ? (
+      {currentHealthStatus(integration, nowMs) === 'not_checked_recently' ? (
         <p className="text-sm text-fg-muted" data-health-stale="">
           {`Nothing has called it, delivered from it or tested it in the last ${INTEGRATION_HEALTH_STALE_AFTER_HOURS} hours, so its health is not known now.`}
         </p>
@@ -311,9 +312,9 @@ export const IntegrationDetailScreen = ({
     );
   }
   const provider = providers.data?.items.find((entry) => entry.id === integration.provider);
-  const { status, word } = integrationStatus(integration);
-  const retired = integration.retired_at !== null;
   const nowMs = now();
+  const { status, word } = integrationStatus(integration, nowMs);
+  const retired = integration.retired_at !== null;
   // S-23.23: the test and every write are an administrator's (`integration.write`).
   const canWrite = integrations.data.can_write;
 

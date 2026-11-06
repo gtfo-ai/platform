@@ -309,7 +309,7 @@ export type PromptsRedaction = 'patterns' | 'exact';
  * Platform text: it names no project, path or value.
  */
 export const PATTERN_READING_WITHHELD_REASON =
-  'this reading was stored before its prompt files were redacted by the exact values of the credentials the platform holds (TD-012, WP-121), so none of its prompt texts are served until the repository is read again — the knowledge index process re-reads it, or POST /api/projects/:project_id/config/refresh does now';
+  'this reading was stored before its prompt files were checked for the exact values of the credentials the platform holds, so none of its prompt texts are used until the repository is read again — the knowledge index process re-reads it, or refreshing the project’s settings reads it now';
 
 type RepositoryConfigSnapshotState =
   | { readonly status: 'absent'; readonly commitSha: string; readonly readAt: IsoDateTime }
@@ -448,7 +448,7 @@ export const interpretRepositoryConfig = (input: {
   }
   if (entry.kind === 'not_a_file') {
     return invalid(
-      `${REPOSITORY_CONFIG_PATH} is not a regular file (git mode ${entry.mode}); a symlink or a submodule is listed and never followed (TD-026 decision 9)`,
+      `${REPOSITORY_CONFIG_PATH} is not a regular file (git mode ${entry.mode}); a symlink or a submodule is listed and never followed`,
     );
   }
   if (entry.kind === 'oversized') {
@@ -799,7 +799,7 @@ const withheldPrompts = (
             .map((entry) => `${entry.integration} (${entry.reason})`)
             .join(
               '; ',
-            )} cannot be decrypted, so the prompt files cannot be redacted against them and none are stored until they can (TD-012, WP-107)`,
+            )} cannot be decrypted, so the prompt files cannot be redacted against them and none are stored until they can`,
         ),
         integrations: credentials.unreadable.map((entry) => ({
           integration: redactText(entry.integration),

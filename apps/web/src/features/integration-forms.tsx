@@ -34,6 +34,7 @@
  * Each opens in a `Dialog`: a human's multi-field or destructive action (research/19 § 3.9).
  */
 import type { IntegrationProvider, IntegrationSummary } from '@platform/contracts';
+import { INTEGRATION_HEALTH_STALE_AFTER_HOURS } from '@platform/contracts';
 import { KebabHorizontalIcon } from '@primer/octicons-react/KebabHorizontalIcon';
 import { type ReactElement, useId, useState } from 'react';
 import { useOnboardingCommands, useRefusedDeliveries } from '../app/queries.js';
@@ -67,19 +68,39 @@ const HEALTH_STATUS: Readonly<Record<IntegrationCurrentHealthStatus, Status>> = 
   never_checked: 'queued',
 };
 
+const STALE_AFTER_MS = INTEGRATION_HEALTH_STALE_AFTER_HOURS * 60 * 60 * 1000;
+
+/**
+ * `current_health.status` as of **the browser's** clock (S-25.5): the server decided it against the
+ * stale bound when it answered, and a page left open — or a cached read — can outlive that. So a
+ * `working` whose evidence (`current_health.at`) is older than the bound is said as *Not checked
+ * recently*, never *Working*: the one word a row may not claim on old evidence.
+ */
+export const currentHealthStatus = (
+  integration: Pick<IntegrationSummary, 'current_health'>,
+  nowMs: number,
+): IntegrationCurrentHealthStatus => {
+  const { status, at } = integration.current_health;
+  return status === 'working' && at !== null && nowMs - Date.parse(at) > STALE_AFTER_MS
+    ? 'not_checked_recently'
+    : status;
+};
+
 /**
  * The status icon and its word for a row: its health **now** — read by the server from its traffic
- * and the last probe against the stale bound (S-25.3), never the probe alone — or *Retired*.
+ * and the last probe against the stale bound (S-25.3), never the probe alone, and held to the bound
+ * by this clock ({@link currentHealthStatus}) — or *Retired*.
  */
 export const integrationStatus = (
   integration: IntegrationSummary,
-): { readonly status: Status; readonly word: string } =>
-  integration.retired_at === null
-    ? {
-        status: HEALTH_STATUS[integration.current_health.status],
-        word: INTEGRATION_CURRENT_HEALTH_LABEL[integration.current_health.status],
-      }
-    : { status: 'cancelled', word: 'Retired' };
+  nowMs: number,
+): { readonly status: Status; readonly word: string } => {
+  if (integration.retired_at !== null) {
+    return { status: 'cancelled', word: 'Retired' };
+  }
+  const current = currentHealthStatus(integration, nowMs);
+  return { status: HEALTH_STATUS[current], word: INTEGRATION_CURRENT_HEALTH_LABEL[current] };
+};
 
 // ── Values ───────────────────────────────────────────────────────────────────
 

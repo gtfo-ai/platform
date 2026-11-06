@@ -23,6 +23,7 @@ import { Link } from '@tanstack/react-router';
 import { type ReactElement, type ReactNode, useState } from 'react';
 import { useBindableIntegrations, useOnboardingCommands } from '../app/queries.js';
 import { buttonClassName } from '../ui/button.js';
+import { INTEGRATION_TYPE_LABEL } from '../ui/humanize.js';
 import { Badge, Button, EmptyState, ErrorNotice, Field } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { SaveBindingsButton, useBindingSelection } from './binding-selection.js';
@@ -162,7 +163,7 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
                 />
                 <UntrustedText value={integration.name} />
               </label>
-              <Badge>{integration.type}</Badge>
+              <Badge>{INTEGRATION_TYPE_LABEL[integration.type]}</Badge>
               <Button
                 type="button"
                 tone="ghost"
@@ -183,7 +184,7 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
       {integrations.isSuccess && integrations.items.length === 0 ? (
         <EmptyState
           title="No integrations yet"
-          hint="An integration is a connection to a ticket tracker, a git host or a chat workspace. Add one on the Integrations screen, then come back here to bind it."
+          hint="An integration is a connection to a ticket tracker, a git host or a chat workspace. Add one on the Integrations screen, then come back here to connect it to this project."
           action={
             <Link to="/integrations" className={buttonClassName('default')}>
               Add an integration
@@ -224,12 +225,12 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
       </div>
       {selection.error === null ? null : (
         <ErrorNotice
-          title="The project’s bindings could not be loaded, so none can be changed."
+          title="The project’s connections could not be loaded, so none can be changed."
           error={selection.error}
         />
       )}
       {commands.putBindings.isError ? (
-        <ErrorNotice title="The bindings were not saved." error={commands.putBindings.error} />
+        <ErrorNotice title="The connections were not saved." error={commands.putBindings.error} />
       ) : null}
       {/* Backlog 552: said before the save, as the lifecycle card says its own default. */}
       {selected.some((id) =>
@@ -240,15 +241,15 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
         }),
       ) ? (
         <p className="text-xs text-fg-muted" data-lifecycle="wizard-default">
-          Binding a ticket tracker here also saves its ticket lifecycle with every slot empty and
+          Connecting a ticket tracker here also saves its ticket lifecycle with no step mapped and
           the claim on: before a task’s first run the platform assigns the ticket to the tracker
-          integration’s own account. Map the slots, or switch the claim off, in the ticket lifecycle
-          form below.
+          integration’s own account. Choose a status for each step, or switch the claim off, in the
+          ticket lifecycle form below.
         </p>
       ) : null}
       {selection.ready && stored.length > 0 ? (
         <p className="text-xs text-fg-muted" data-bound="">
-          Bound: {stored.map((item) => item.name).join(', ')}
+          Connected: {stored.map((item) => item.name).join(', ')}
         </p>
       ) : null}
     </div>
@@ -292,7 +293,7 @@ export const ConnectStep = ({
     </Section>
     <Section
       title="Ticket lifecycle"
-      purpose="Which of your tracker’s statuses the platform moves a ticket to. Every slot may stay empty; the claim is on by default."
+      purpose="Which of your tracker’s statuses the platform moves a ticket to. Every step may stay unmapped; the claim is on by default."
     >
       {project === null ? (
         <p className="text-sm text-fg-muted">Available once a ticket tracker is bound.</p>

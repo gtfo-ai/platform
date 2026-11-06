@@ -238,9 +238,9 @@ const Instance = (): ReactElement => {
         </dl>
       )}
       <p className="text-xs text-fg-muted">
-        The Claude provider mode is an environment setting and feature flags are a project’s, so
-        neither is editable here. The organisation’s maximums are under Policies, and its budgets
-        under Budgets.
+        Whether agents run on an API key or a Claude subscription is an environment setting, and
+        feature flags are a project’s, so neither is editable here. The organisation’s maximums are
+        under Policies, and its budgets under Budgets.
       </p>
     </>
   );

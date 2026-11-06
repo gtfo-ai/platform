@@ -295,7 +295,7 @@ const PoliciesAndWip = ({ project }: { readonly project: Project }): ReactElemen
       <VerificationMode projectId={project.id} />
 
       <Card className="flex flex-col gap-1">
-        <h3 className="text-base font-semibold">WIP limits</h3>
+        <h3 className="text-base font-semibold">Parallel tasks</h3>
         {config.data === undefined ? null : (
           <p className="text-xs text-fg-muted">
             Max parallel tasks {wipLimit(config.data.effective.pipeline?.wip?.max_parallel_tasks)} (

@@ -278,11 +278,11 @@ const ConflictBadge = ({
     {/* A long peer key gives way at the badge's edge on a narrow row, rather than past the box. */}
     <span
       className="min-w-0 truncate"
-      title={`Touches the same files as ${sanitiseUntrusted(conflict.other_ticket_key)}: ${conflict.path_count} overlapping path(s)${
+      title={`Touches the same files as ${sanitiseUntrusted(conflict.other_ticket_key)}: ${conflict.path_count} overlapping file(s)${
         conflict.truncated
           ? ', and the comparison did not read every file of both merge requests, so there may be more'
           : ''
-      }. The comparison runs when either task enters the rebase gate, and both tasks are warned when it finds an overlap; a task with no badge has not been compared yet.`}
+      }. The comparison runs when either task reaches the up-to-date check, and both tasks are warned when it finds an overlap; a task with no badge has not been compared yet.`}
     >
       {'touches '}
       <UntrustedText value={conflict.other_ticket_key} />

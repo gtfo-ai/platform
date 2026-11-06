@@ -468,7 +468,7 @@ const returnTo = (
   if (loop === null) {
     return escalate(
       `return from "${from}" belongs to no bounded loop`,
-      `The pipeline wanted to send this task back from "${from}" to "${target}", but "${from}" is not one of the stages whose return cycles BD-008 bounds, so the round could not be counted. Decide the next step by hand, or give the stage a bounded loop in the template.`,
+      `The pipeline wanted to send this task back from "${from}" to "${target}", but "${from}" is not one of the stages whose rounds of sending back are bounded, so the round could not be counted. Decide the next step by hand, or give the stage a bounded loop in the template.`,
     );
   }
   const targetIndex = indexOf(pipeline, target);

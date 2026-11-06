@@ -31,6 +31,7 @@ import { ChevronRightIcon } from '@primer/octicons-react/ChevronRightIcon';
 import { type ReactElement, type ReactNode, useId } from 'react';
 import { useArtifactBody } from '../app/queries.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
+import { titleCase } from '../ui/humanize.js';
 import { Badge, Card, ErrorReason, formatMinutes, formatUsd, Metric } from '../ui/kit.js';
 import { type Status, StatusIcon } from '../ui/status.js';
 import { Tooltip } from '../ui/tooltip.js';
@@ -308,26 +309,26 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
       value: gateValueText(ciGate, { pass: 'green', fail: 'red' }),
       status: gateStatus(ciGate),
       definition:
-        "The CI gate's verdict on the merge request's head, from the provider's own pipeline; an escalation names the reason the gate could not decide.",
+        "The CI check's verdict on the merge request's latest commit, from the git host's own pipeline; when it needs you, it says why it could not decide.",
       basis: gateBasisText(ciGate, 'ci_gate'),
       required: true,
     },
     {
       id: 'tamper',
-      label: 'Tamper check',
+      label: 'Protected files',
       value: tamperValueText(ciGate, rebaseGate),
       status: tamperStatus(ciGate, rebaseGate),
       definition:
-        "The protected-paths check: the existing files this change modifies, deletes or renames away, against the project's protected paths (tests and CI/lint configuration by default), minus the changes the plan declared and the code review confirmed. The CI gate makes it; a change the plan declared passes there until the rebase gate, just before Ready, reads the code review's confirmation. Anything left sends the task back to the developer, naming the paths; adding a new file is never flagged. A CI gate that settled before this check was recorded kept no word for what it found, and is never shown as clean.",
+        'Whether the change edits, deletes or renames files this project protects (tests and CI or lint configuration by default). A change the plan declared is allowed once the code review confirms it; anything else sends the task back to the developer, naming the files. Adding a new file is never flagged. A check made before the platform stored its result shows as not recorded, never as untouched.',
       required: true,
     },
     {
       id: 'rebase',
-      label: 'Rebase status',
-      value: gateValueText(rebaseGate, { pass: 'up to date', fail: 'conflicts' }),
+      label: 'Up to date',
+      value: gateValueText(rebaseGate, { pass: 'yes', fail: 'conflicts' }),
       status: gateStatus(rebaseGate),
       definition:
-        'The rebase gate’s verdict: whether the merge request merges cleanly onto the default branch as it is now. It is checked again every time the default branch moves while the task waits for its merge, and whenever a person brings the task back to Ready.',
+        'Whether the merge request merges cleanly onto the default branch (usually main) as it is now. It is checked again every time the default branch moves while the task waits for its merge, and whenever a person brings the task back to Ready.',
       basis: gateBasisText(rebaseGate, 'rebase_gate'),
       required: true,
     },
@@ -381,11 +382,11 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
     },
     {
       id: 'coverage',
-      label: 'Coverage delta',
+      label: 'Test coverage',
       value: coverageValueText(task.coverage),
       status: coverageStatus(task.coverage),
       definition:
-        "What this project's CI reports for the change, minus what it reports for the default branch, in percentage points. Shown when the pipeline reports coverage; 'not reported' means it does not, which is never the same as zero.",
+        "How much of the code the tests cover with this change, minus how much they cover on the default branch, in percentage points. Shown when the CI pipeline reports coverage; 'not reported' means it does not, which is never the same as zero.",
       // A branch name and two revisions — repository text somebody chose (BD-022).
       basis: <UntrustedText value={coverageBasisText(task.coverage)} />,
       required: false,
@@ -406,14 +407,14 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
       value: reviewersValueText(task.required_reviewers),
       status: reviewersStatus(task.required_reviewers),
       definition:
-        "Who this merge request needs a review from, as the platform routed them: CODEOWNERS on the default branch first, then the project's reviewers setting, then the human who asked — plus anyone a risk class requires. A handle with no account on this provider is named rather than dropped.",
+        "Who this merge request needs a review from, as the platform chose them: the code owners file on the default branch first, then the project's reviewers setting, then the person who asked — plus anyone a sensitive area requires. A name with no account on the git host is shown rather than dropped.",
       // The handles are untrusted: `CODEOWNERS` is written by whoever can push to the repository.
       basis: <UntrustedText value={reviewersBasisText(task.required_reviewers)} />,
       required: false,
     },
     {
       id: 'risk',
-      label: 'Risk classes',
+      label: 'Sensitive areas',
       value:
         task.risk_classes.length === 0 ? (
           'none'
@@ -421,14 +422,14 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
           <span className="inline-flex flex-wrap justify-end gap-1">
             {task.risk_classes.map((risk) => (
               <Badge key={risk} tone="warning">
-                {risk}
+                {titleCase(risk)}
               </Badge>
             ))}
           </span>
         ),
       status: task.risk_classes.length === 0 ? 'success' : 'waiting',
       definition:
-        'The risk classes this change touches, from the project’s configuration; a class can require its own reviewers and its own review checklist.',
+        'The parts of the code this project marks as sensitive (its risk classes) that this change touches; an area can require its own reviewers and its own review checklist.',
       ...(checklists === null
         ? {}
         : {
@@ -491,7 +492,7 @@ const CostBox = ({ detail }: { readonly detail: TaskDetailResponse }): ReactElem
       <Metric
         label="Cost so far"
         value={formatUsd(task.cost_actual_usd)}
-        definition="Provider-reported cost of every measured run on this task; estimated in local provider mode. A run that ended without a figure is left out of the sum, and counted beneath it when there is one."
+        definition="Provider-reported cost of every measured run on this task; on a Claude subscription, cost is estimated. A run that ended without a figure is left out of the sum, and counted beneath it when there is one."
       />
       <div className="-mt-2 flex flex-col gap-1">
         <meter
@@ -525,7 +526,7 @@ const CostBox = ({ detail }: { readonly detail: TaskDetailResponse }): ReactElem
             : // Dollars are the agents' cost, never "tokens" (S-23.23, the UX audit's § 4).
               `${formatUsd(task.cost_actual_usd)} · ${formatMinutes(humanTime.total_minutes)} of people’s time`
         }
-        definition="Human minutes derived from events, never from tracking: review from the first human comment on the merge request to the merge, capped at 8 h per calendar day and excluding gaps over 2 h; 30 min per question; 10 min flat per approval; 5 min flat per steer. The dollars and the minutes are shown side by side and are never added: that would need an hourly rate this platform does not have."
+        definition="Human minutes derived from events, never from tracking: review from the first human comment on the merge request to the merge, capped at 8 h per calendar day and excluding gaps over 2 h; 30 min per question; 10 min flat per approval; 5 min flat per message to an agent. The dollars and the minutes are shown side by side and are never added: that would need an hourly rate this platform does not have."
       />
       <p className="-mt-2 text-[11px] text-fg-muted">{humanTimeBreakdown(humanTime)}</p>
       {withheld === null ? null : <p className="-mt-2 text-[11px] text-fg-muted">{withheld}</p>}

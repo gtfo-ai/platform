@@ -75,8 +75,8 @@ const useProjectId = (projectKey: string): string | null => {
  * `detail` quote a committed page and stay untrusted (BD-022).
  */
 const FINDING_LABEL: Readonly<Record<KbHealthResponse['findings'][number]['kind'], string>> = {
-  invalid: 'refused by the parser — in no context pack',
-  unresolved_paths: 'paths match nothing tracked — dropped from packs',
+  invalid: 'cannot be read — never given to agents',
+  unresolved_paths: 'its paths match no file — never given to agents',
   expired: 'expired',
   dangling: 'dangling link',
   duplicate: 'duplicate id',
@@ -212,7 +212,7 @@ const ProposalRow = ({
     meta={
       <div className="flex flex-col gap-1">
         <span>
-          {`${KNOWLEDGE_PROPOSAL_TYPE_LABEL[proposal.type]} · ${KNOWLEDGE_PROPOSAL_KIND_LABEL[proposal.kind]} · ${KNOWLEDGE_PROPOSAL_SOURCE_LABEL[proposal.source]} · significance ${proposal.significance.toFixed(2)}`}
+          {`${KNOWLEDGE_PROPOSAL_TYPE_LABEL[proposal.type]} · ${KNOWLEDGE_PROPOSAL_KIND_LABEL[proposal.kind]} · ${KNOWLEDGE_PROPOSAL_SOURCE_LABEL[proposal.source]}`}
         </span>
         {proposal.status === 'apply_failed' ? (
           // WP-124, backlog 366: approved, re-tried once by the recovery pass, and still not
@@ -312,12 +312,12 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
         <h2 className="px-2 text-sm font-semibold text-fg">Files</h2>
         {tree.isPending ? <Skeleton label="Loading the files…" lines={4} /> : null}
         {tree.isError ? (
-          <ErrorNotice title="The vault could not be listed." error={tree.error} />
+          <ErrorNotice title="The knowledge base could not be listed." error={tree.error} />
         ) : null}
         {tree.isSuccess && files.length === 0 ? (
           <Blankslate
             informational
-            title="The vault is empty"
+            title="The knowledge base is empty"
             hint="Knowledge lives in the repository under the project's knowledge directory. Setting up a project drafts it; the Librarian keeps it current."
           />
         ) : null}
@@ -352,21 +352,21 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
         )}
 
         <div className="flex flex-col gap-2">
-          <h2 className="text-base font-semibold text-fg">Proposals</h2>
-          {proposals.isPending ? <Skeleton label="Loading proposals…" lines={3} /> : null}
+          <h2 className="text-base font-semibold text-fg">Suggested edits</h2>
+          {proposals.isPending ? <Skeleton label="Loading suggested edits…" lines={3} /> : null}
           {proposals.isError ? (
-            <ErrorNotice title="Proposals could not be loaded." error={proposals.error} />
+            <ErrorNotice title="Suggested edits could not be loaded." error={proposals.error} />
           ) : null}
           {proposals.isSuccess && items.length === 0 ? (
             <Blankslate
               informational
-              title="No pending proposals"
-              hint="Retrospective, Feedback and the history bootstrap propose knowledge changes with their evidence, and each row says which. A maintainer approves or rejects; a rejection is what the Librarian learns from."
+              title="No suggested edits waiting"
+              hint="Retrospective, Feedback and the history bootstrap suggest edits to the knowledge base with their evidence, and each row says which. A maintainer approves or rejects; a rejection is what the Librarian learns from."
             />
           ) : null}
           {items.length === 0 ? null : (
             <ListBox
-              label="Knowledge proposals"
+              label="Suggested edits"
               header={
                 <ListBoxHeader>
                   <span className="font-semibold text-fg">
@@ -403,8 +403,8 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
                 setRejecting(null);
               }
             }}
-            title="Reject this proposal?"
-            consequence="The page is not changed, and the proposal is closed for good; your reason is what the Librarian learns from."
+            title="Reject this suggested edit?"
+            consequence="The page is not changed, and the suggestion is closed for good; your reason is what the Librarian learns from."
             confirmLabel="Reject"
             reason={{
               label: 'Why (the Librarian learns from it)',
@@ -591,8 +591,8 @@ const EffectiveConfiguration = ({
             {config.data.status_mapping_superseded ? (
               <div className="flex flex-col gap-1 pt-2" data-status-mapping="superseded">
                 <p className="text-xs">
-                  The project’s ticket lifecycle maps a slot other than <em>Pick up from</em>, so
-                  the older status mapping is not applied at all. The slots are on the project
+                  The project’s ticket lifecycle maps a step other than <em>Pick up from</em>, so
+                  the older status mapping is not applied at all. The steps are on the project
                   settings page.
                 </p>
                 <ForAdministrators note="status_mapping" />

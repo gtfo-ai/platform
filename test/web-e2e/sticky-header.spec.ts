@@ -171,7 +171,7 @@ test.describe('on a laptop the top bar and the row under it stick', () => {
     const frameBottom = await expectStuck(page, page.locator('[data-project-tabs]'));
     await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
     const pane = await boxOf(scroller);
-    const steer = await boxOf(page.getByLabel('Steer the agent'));
+    const steer = await boxOf(page.getByLabel('Message the agent'));
     expect(pane.top).toBeGreaterThanOrEqual(frameBottom);
     expect(pane.bottom).toBeLessThanOrEqual(720);
     expect(steer.bottom).toBeLessThanOrEqual(720);

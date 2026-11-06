@@ -229,8 +229,8 @@ const openTaskMenu = async (user: User): Promise<HTMLElement> => {
 /** …and *Take over…* opens the dialog with the form the panel had, under the same labels. */
 const openTakeOver = async (user: User): Promise<void> => {
   await openTaskMenu(user);
-  await user.click(await screen.findByRole('menuitem', { name: 'Take over…' }));
-  await screen.findByRole('dialog', { name: 'Take over this task' });
+  await user.click(await screen.findByRole('menuitem', { name: 'Work on it yourself…' }));
+  await screen.findByRole('dialog', { name: 'Work on this task yourself' });
 };
 
 beforeEach(() => {
@@ -248,7 +248,7 @@ describe('the take-over control on the task screen', () => {
     await openTakeOver(user);
     await user.type(screen.getByLabelText('Why you are taking it over'), 'the agent is looping');
     await user.click(screen.getByRole('checkbox', { name: /archive the workspace/ }));
-    await user.click(screen.getByRole('button', { name: 'Take over' }));
+    await user.click(screen.getByRole('button', { name: 'Work on it yourself' }));
 
     // Accepted: the dialog closes and the page carries the answer.
     await waitFor(() => {
@@ -282,8 +282,8 @@ describe('the take-over control on the task screen', () => {
     );
     const menu = await openTaskMenu(user);
     expect(within(menu).getByRole('menuitem', { name: 'Download JSON' })).toBeTruthy();
-    expect(within(menu).queryByRole('menuitem', { name: 'Take over…' })).toBeNull();
-    expect(container.textContent).not.toContain('Take over');
+    expect(within(menu).queryByRole('menuitem', { name: 'Work on it yourself…' })).toBeNull();
+    expect(container.textContent).not.toContain('Work on it yourself');
   });
 });
 
@@ -298,7 +298,7 @@ describe('a take-over in force', () => {
         realtime: false,
       }).element,
     );
-    await screen.findByText('Taken over by a person');
+    await screen.findByText('A person is working on it');
     // Backlog 164: the escalation does not end the take-over, and the page says both.
     expect(container.textContent).toContain('needs you — still held');
     expect(container.textContent).toContain('claude --resume sess-1');
@@ -311,8 +311,8 @@ describe('a take-over in force', () => {
     expect(hrefs).toEqual([`/api/runs/${RUN}/transcript.jsonl`, `/api/runs/${RUN}/export.tar`]);
 
     // The hand-back is the header's one primary action while a take-over is in force (S-23.9b).
-    await user.click(screen.getByRole('button', { name: 'Hand back…' }));
-    await screen.findByRole('dialog', { name: 'Hand the task back' });
+    await user.click(screen.getByRole('button', { name: 'Give it back to the agent…' }));
+    await screen.findByRole('dialog', { name: 'Give the task back to the agent' });
     // The picker is the compiled pipeline's enabled stages, exactly — nothing the route refuses.
     const picker = screen.getByLabelText('Resume at') as HTMLSelectElement;
     expect([...picker.options].map((option) => option.value)).toEqual(TAKEN_OVER.hand_back_stages);
@@ -322,7 +322,7 @@ describe('a take-over in force', () => {
     );
     expect([...picker.options].map((option) => option.textContent)).not.toContain('code_review');
     expect(picker.value).toBe('implementation');
-    const submit = screen.getByRole('button', { name: 'Hand back' });
+    const submit = screen.getByRole('button', { name: 'Give it back to the agent' });
     expect(submit).toHaveProperty('disabled', true);
     await user.selectOptions(picker, 'code_review');
     await user.type(screen.getByLabelText('What you did'), 'fixed the rounding by hand');
@@ -343,11 +343,11 @@ describe('a take-over in force', () => {
         realtime: false,
       }).element,
     );
-    await screen.findByText('Taken over by a person');
+    await screen.findByText('A person is working on it');
     expect(container.textContent).toContain('No stage to hand back to');
     expect(container.textContent).toContain('cannot be read on this build');
-    expect(screen.queryByRole('button', { name: 'Hand back' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Hand back…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Give it back to the agent' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Give it back to the agent…' })).toBeNull();
   });
 
   /**
@@ -372,12 +372,12 @@ describe('a take-over in force', () => {
         realtime: false,
       }).element,
     );
-    await screen.findByText('Taken over by a person');
+    await screen.findByText('A person is working on it');
     expect(container.textContent).toContain('No stage to hand back to');
     expect(container.textContent).toContain('This task was merged');
     expect(container.textContent).not.toContain('cannot be read on this build');
-    expect(screen.queryByRole('button', { name: 'Hand back' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Hand back…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Give it back to the agent' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Give it back to the agent…' })).toBeNull();
   });
 });
 
@@ -412,8 +412,8 @@ describe('a merged task (WP-194)', () => {
     expect(container.textContent).toContain('nothing to take over or pause');
     const menu = await openTaskMenu(user);
     expect(within(menu).queryByRole('menuitem', { name: 'Pause' })).toBeNull();
-    expect(within(menu).queryByRole('menuitem', { name: 'Take over…' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Take over' })).toBeNull();
+    expect(within(menu).queryByRole('menuitem', { name: 'Work on it yourself…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Work on it yourself' })).toBeNull();
     expect(screen.queryByRole('form', { name: `Take task ${TASK} over` })).toBeNull();
     // Cancel stays: the refusal's way out.
     expect(within(menu).getByRole('menuitem', { name: 'Cancel task…' })).toBeTruthy();
@@ -430,12 +430,12 @@ describe('a merged task (WP-194)', () => {
       }).element,
     );
     const user = userEvent.setup();
-    await screen.findByText('Taken over by a person');
+    await screen.findByText('A person is working on it');
     expect(container.textContent).toContain('This task was merged, so it never goes back');
     const menu = await openTaskMenu(user);
     expect(within(menu).queryByRole('menuitem', { name: 'Pause' })).toBeNull();
-    expect(within(menu).queryByRole('menuitem', { name: 'Take over…' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Take over' })).toBeNull();
+    expect(within(menu).queryByRole('menuitem', { name: 'Work on it yourself…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Work on it yourself' })).toBeNull();
   });
 
   it('an unmerged task in the same state is offered both', async () => {
@@ -445,8 +445,8 @@ describe('a merged task (WP-194)', () => {
     );
     const menu = await openTaskMenu(user);
     expect(within(menu).getByRole('menuitem', { name: 'Pause' })).toBeTruthy();
-    await user.click(within(menu).getByRole('menuitem', { name: 'Take over…' }));
-    expect(await screen.findByRole('button', { name: 'Take over' })).toBeTruthy();
+    await user.click(within(menu).getByRole('menuitem', { name: 'Work on it yourself…' }));
+    expect(await screen.findByRole('button', { name: 'Work on it yourself' })).toBeTruthy();
     expect(screen.getByRole('form', { name: `Take task ${TASK} over` })).toBeTruthy();
     expect(container.textContent).not.toContain('nothing to take over or pause');
   });
@@ -466,7 +466,7 @@ describe('which run the take-over panel offers', () => {
         realtime: false,
       }).element,
     );
-    await screen.findByText('Taken over by a person');
+    await screen.findByText('A person is working on it');
     return view.container;
   };
 
@@ -553,7 +553,7 @@ describe('the run screen’s context pack (backlog 168 and 172)', () => {
         realtime: false,
       }).element,
     );
-    await user.click(await screen.findByRole('tab', { name: 'Context pack' }));
+    await user.click(await screen.findByRole('tab', { name: 'What the agent was given' }));
     await screen.findByText('Documents');
     return view;
   };

@@ -106,8 +106,8 @@ export const recoverExpiredOffers = async (
         expires_at: offer.expiresAt,
       },
       offer.kind === 'stage'
-        ? 'no claimant took this run before its offer timeout, so the offer was withdrawn and the task escalated to needs_human (TD-031 decision 1)'
-        : 'no claimant took this ask’s run before its offer timeout, so the offer was withdrawn and the ask refused (TD-031 decisions 1 and 13)',
+        ? 'no claimant took this run before its offer timeout, so the offer was withdrawn and the task escalated to needs_human'
+        : 'no claimant took this ask’s run before its offer timeout, so the offer was withdrawn and the ask refused',
     );
   }
   return { found: expired.length, ended };

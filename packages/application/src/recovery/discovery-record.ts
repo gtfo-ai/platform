@@ -93,7 +93,7 @@ export interface DiscoveryRecordRecoverySite {
 
 /** The reason on the row and in the brief — platform text only. */
 export const discoveryUnrecordedReason = (attemptedAt: IsoDateTime): string =>
-  `the discovery run finished and stored its draft, but its readiness evaluation and drafted pages were never recorded — the recording job failed, never ran, or skipped a draft its schema refuses — the recovery pass asked for it once more at ${attemptedAt}, and it still had not recorded an hour later (PROGRESS backlog 366)`;
+  `the discovery run finished and stored its draft, but its readiness evaluation and drafted pages were never recorded — the recording job failed, never ran, or skipped a draft its schema refuses — the recovery pass asked for it once more at ${attemptedAt}, and it still had not recorded an hour later`;
 
 export interface DiscoveryRecordRecoveryReport {
   readonly site: 'discovery_record';
@@ -128,7 +128,7 @@ export const recoverStrandedDiscoveryRecords = async (
       reEnqueued += 1;
       logger.warn(
         fields,
-        'a discovery run’s draft was never recorded, so its recording job was enqueued again — once, and the discovery task is escalated if that does not take (PROGRESS backlog 366)',
+        'a discovery run’s draft was never recorded, so its recording job was enqueued again — once, and the discovery task is escalated if that does not take',
       );
       continue;
     }
@@ -159,7 +159,7 @@ export const recoverStrandedDiscoveryRecords = async (
     );
     logger.error(
       { ...fields, attempted_at: row.recoveryAttemptedAt, ending },
-      'a discovery run’s findings were still not recorded after their one recovery attempt; the discovery task was escalated with a brief (PROGRESS backlog 366)',
+      'a discovery run’s findings were still not recorded after their one recovery attempt; the discovery task was escalated with a brief',
     );
   }
   return { site: 'discovery_record', found: rows.length, reEnqueued, ended };

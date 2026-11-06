@@ -516,7 +516,7 @@ export class IterationLimitReachedError extends Error {
 
   constructor(loop: IterationLoop, limit: number) {
     super(
-      `this task has been round the "${loop}" loop ${limit} times, which is its limit (BD-008); ` +
+      `this task has been round the "${loop}" loop ${limit} times, which is its limit; ` +
         'the platform will not send it back again. Cancel it, or take it over and finish it by hand',
     );
     this.loop = loop;
@@ -580,7 +580,7 @@ export class SteerWindowClosedError extends Error {
 
   constructor() {
     super(
-      `steering is limited to one message every ${STEER_MIN_INTERVAL_MS / 1_000} seconds per person (technical/08); your last message was accepted moments ago, try again in a moment`,
+      `steering is limited to one message every ${STEER_MIN_INTERVAL_MS / 1_000} seconds per person; your last message was accepted moments ago, try again in a moment`,
     );
   }
 }

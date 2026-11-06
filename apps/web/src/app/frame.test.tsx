@@ -559,7 +559,7 @@ describe('the projects list', () => {
     ).toBe('neutral');
     expect(first.textContent).toContain('4 open');
     expect(first.textContent).toContain('$12.50');
-    expect((rows[1] as HTMLElement).textContent).toContain('paused');
+    expect((rows[1] as HTMLElement).textContent).toContain('Paused');
     expect(screen.getByText('2 projects')).toBeTruthy();
     const main = screen.getByRole('main');
     expect(within(main).getByRole('heading', { level: 1, name: 'Projects' })).toBeTruthy();

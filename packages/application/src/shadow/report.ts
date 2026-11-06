@@ -432,7 +432,7 @@ const escalateRefusedShadowReport = async (
   const logger = options.logger ?? silentLogger;
   logger.error(
     { task_id: stored.task.id, path: refusal.path },
-    'the shadow report carries a secret in a field the platform reads as an identifier, so it was not written; the task is escalated rather than the job retried (TD-012, PROGRESS backlog 131)',
+    'the shadow report carries a secret in a field the platform reads as an identifier, so it was not written; the task is escalated rather than the job retried',
   );
   await retryOnTaskConflict(
     {
@@ -455,7 +455,7 @@ const escalateRefusedShadowReport = async (
                 `The shadow report for ${current.task.ticket.key} was not written: the field ` +
                 `"${refusal.path}" carries a value the platform's redactor recognises as a secret, and ` +
                 'the platform reads that field as an identifier, so it refuses the document rather ' +
-                'than rewriting it (TD-012). The value came from the provider — most likely a branch ' +
+                'than rewriting it. The value came from the provider — most likely a branch ' +
                 'name on the human merge request. Check that merge request, rotate the credential if ' +
                 'it is real, and close the task; nothing was stored.',
             },

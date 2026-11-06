@@ -90,8 +90,8 @@ export const EMPTY_BOARD_TITLE = 'Tickets you label for agents appear here';
  */
 export const emptyBoardHint = (canStart: boolean): string =>
   canStart
-    ? "A task appears when a ticket matches this project's pickup rule — a label, a status, an epic or a query — or when you start one by its key."
-    : "A task appears when a ticket matches this project's pickup rule — a label, a status, an epic or a query. A member of the project can also start one by its key.";
+    ? "A task appears when a ticket matches this project's start rule — a label, a status, an epic or a query — or when you start one by its key."
+    : "A task appears when a ticket matches this project's start rule — a label, a status, an epic or a query. A member of the project can also start one by its key.";
 
 // ── The list view's filters ──────────────────────────────────────────────────
 
@@ -176,7 +176,7 @@ export const StartTicketForm = ({
           <Field
             {...(inputRef === undefined ? {} : { ref: inputRef })}
             label="Ticket key"
-            hint="For a ticket no pickup rule matches. The WIP limits, the autonomy dial and one task per ticket still apply."
+            hint="For a ticket no start rule matches. The limit on parallel tasks, How much agents do alone and one task per ticket still apply."
             placeholder="ACME-123"
             value={key}
             onChange={(event) => setKey(event.target.value)}
@@ -545,7 +545,7 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
               params={{ key: project.key }}
               className={buttonClassName('default')}
             >
-              Open pickup rules
+              Open start rules
             </Link>
           }
           {...(canStart

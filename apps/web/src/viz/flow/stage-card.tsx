@@ -57,9 +57,9 @@ export const KIND_LOOK: Readonly<
   Record<StageKind, { readonly icon: Icon; readonly word: string }>
 > = {
   agent: { icon: DependabotIcon, word: 'Agent stage' },
-  gate: { icon: ShieldCheckIcon, word: 'Gate' },
+  gate: { icon: ShieldCheckIcon, word: 'Automatic check' },
   human: { icon: PersonIcon, word: 'Waits for a person' },
-  system: { icon: GearIcon, word: 'System step' },
+  system: { icon: GearIcon, word: 'Automatic step' },
 };
 
 /**

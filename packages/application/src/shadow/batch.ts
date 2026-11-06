@@ -124,9 +124,9 @@ export type ShadowBatchBlocker = 'feature_disabled' | 'shadow_not_allowed' | 'no
 
 export const SHADOW_BATCH_BLOCKED_DETAIL: Readonly<Record<ShadowBatchBlocker, string>> = {
   feature_disabled:
-    'shadow mode is off for this project; turn it on in settings (features.shadow_mode.enabled) before starting a batch',
+    'shadow mode is off for this project; turn it on in the project’s feature settings before starting a batch',
   shadow_not_allowed:
-    'this project’s autonomy dial does not allow shadow runs; shadow mode is what the Observe position runs, and a project past it delivers for real instead',
+    'this project’s How much agents do alone setting does not allow shadow runs; shadow runs are what the Observe position does, and a project past it delivers for real instead',
   no_templates:
     'this project’s settings define no ticket template, so there is no pipeline to run a shadow task on',
 };
@@ -136,7 +136,7 @@ const REFUSAL_DETAIL: Readonly<Record<ShadowBatchRefusal, string>> = {
   ticket_unreadable:
     'the task-management provider does not know this ticket, so a shadow run would have no ticket to read',
   no_comparison_base:
-    'the human merge request for this ticket publishes no merge base, and a comparison against today’s default branch would measure drift rather than similarity (Q82)',
+    'the human merge request for this ticket publishes no merge base, and a comparison against today’s default branch would measure drift rather than similarity',
 };
 
 export interface ShadowBatchOptions {

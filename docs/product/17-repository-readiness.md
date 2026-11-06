@@ -27,6 +27,13 @@ Binary criteria, detected automatically by the Discovery agent at onboarding and
 | R13 | Secret scanning in CI or pre-commit | config | Lower risk from agent commits |
 | R14 | Dependency lockfile present and installable offline from allow-listed registries | workspace build | Deterministic builds inside the network allow-list |
 
+*Amended 2026-11-06 (M25, S-25.5; BACKLOG 1241).* The *Unlocks / protects* column is the spec's shorthand. What the
+platform publishes as a criterion's `unlocks` (`READINESS_CRITERIA` in `packages/domain/src/readiness/criteria.ts`) is the
+same promise **in plain words**, because the wizard's readiness panel and `next_improvements` show it as it is
+(product/10's *Plain words* rule): no stage name, no decision id, no internal term — R9 reads *"A person always merges:
+an agent cannot approve its own merge request."*, not *"Human merge guarantee (BD-007)"*. The domain's unit tier holds
+every `unlocks`, and every knowledge section's, to that rule.
+
 **A project that verifies on CI** (`verification.mode: ci`, BD-025's 2026-10-05 amendment) does not let agents run its suite, its installs or its setup, so R1, R2 and R6 are **read, not run**: R1 from a CI job that runs the test suite, R2 from a job timeout or a documented duration, R6 from the documented setup command. The evidence says so in the platform's words; the criteria and the levels are unchanged.
 
 **"Could not check" is not "failed"** (BD-026's 2026-10-06 amendment). R1, R2 and R6 are the three criteria discovery answers by **running** a command, and in a project that verifies locally the run workspace may be unable to run it at all: the platform's run image has no interpreter for the project's language (a PHP project's `php` and `composer` are absent), or the platform's command policy refused the command or its install. Such a criterion is recorded **not checked**, with the reason as its evidence — never as a fail, because the workspace's limits are a fact about the platform, not about the repository. A criterion that is read rather than run cannot be "not checked": a report saying so is recorded as a fail. A command that **ran and failed** is a fail. What "not checked" does to the level is the ladder rule below, and when the project has a CI configuration the readiness report carries a note suggesting `verification.mode: ci`, under which discovery reads the three from it instead.

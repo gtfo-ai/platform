@@ -111,7 +111,11 @@ export interface ReadinessCriterion {
   readonly title: string;
   /** product/17's "How detected" column. */
   readonly detection: string;
-  /** product/17's "Unlocks / protects" column. **Platform text, never model output.** */
+  /**
+   * product/17's "Unlocks / protects" column, **in plain words** (S-25.5, BACKLOG 1241; product/17's
+   * 2026-11-06 amendment): the wizard and the readiness read show it as it is, so it names no stage,
+   * no decision id and no internal term. **Platform text, never model output.**
+   */
   readonly unlocks: string;
   readonly detectedBy: ReadinessDetector;
   /** How the re-check after a merge answers it — see {@link ReadinessRecheckSource}. */
@@ -143,7 +147,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     // the project's declared test command. It read the CI configuration from WP-21 to WP-54.
     detection: 'test command found in how-to-run.md/CI config and executed in the workspace',
     unlocks:
-      'Implementation self-check; acceptance evidence; test tamper gate has something to protect',
+      'Agents check their own work against your tests, and the evidence that a ticket is done is real.',
     detectedBy: 'agent',
     recheck: 'carried',
     recheckReason: 'it needs the test command run in a workspace',
@@ -157,7 +161,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     // product/17 says "measured": the duration of the test command the discovery run executed for
     // R1 (WP-54). A documented duration or a CI timeout was the stand-in until then.
     detection: 'measured: the duration of the test command executed for R1',
-    unlocks: 'Fast inner loop; fewer per-run timeouts',
+    unlocks: 'Agents get test results quickly, so fewer runs time out.',
     detectedBy: 'agent',
     recheck: 'carried',
     recheckReason: 'it needs the test command run and timed in a workspace',
@@ -169,7 +173,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R3',
     title: 'CI runs on merge requests',
     detection: 'pipeline events observed for MRs',
-    unlocks: 'Deterministic CI gate; flaky detection',
+    unlocks: 'Every merge request is checked by CI the same way, and flaky tests can be spotted.',
     detectedBy: 'agent',
     recheck: 'ci_events',
     recheckReason:
@@ -179,7 +183,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R4',
     title: 'CI is reliable (< 5% flaky reruns in last 30 days)',
     detection: 'gate statistics',
-    unlocks: 'Returns caused by infrastructure are not blamed on the agent',
+    unlocks: 'A failure caused by CI itself is not blamed on the agent.',
     detectedBy: 'agent',
     recheck: 'carried',
     recheckReason: 'the platform keeps no flaky-rerun statistic yet',
@@ -188,7 +192,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R5',
     title: 'Lint and formatter enforced in CI',
     detection: 'config + CI job',
-    unlocks: 'Reviewer skips style; fewer nit iterations',
+    unlocks: 'Review skips style, so there are fewer rounds of small fixes.',
     detectedBy: 'agent',
     recheck: 'carried',
     recheckReason: 'it needs a judgement about which CI job enforces which tool',
@@ -202,7 +206,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     // `docker *` is blocked for every stage and a run has no daemon (the module docblock's residual).
     detection:
       'a one-command setup executed in the workspace (make setup, a package script, ./.agentic/workspace/setup); a devcontainer or compose file is read, since a run has no Docker',
-    unlocks: 'Reproducible workspaces; app can be booted for business review',
+    unlocks:
+      'Every workspace is set up the same way, and the app can be started to check a change.',
     detectedBy: 'agent',
     recheck: 'carried',
     recheckReason: 'it needs the setup command run in a workspace',
@@ -214,7 +219,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R7',
     title: 'Type checking or static analysis in CI (where applicable)',
     detection: 'config',
-    unlocks: 'Earlier error detection in Implementation',
+    unlocks: 'Mistakes are caught earlier, while the change is being written.',
     detectedBy: 'agent',
     recheck: 'carried',
     recheckReason: 'it needs a judgement about the CI configuration',
@@ -223,7 +228,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R8',
     title: 'CLAUDE.md/AGENTS.md present, ≤ 200 lines, links to the KB index',
     detection: 'file inspection',
-    unlocks: 'Context pack quality; lower token cost',
+    unlocks: 'Agents start with better context and spend fewer tokens finding their way.',
     detectedBy: 'agent',
     recheck: 'tree',
     recheckReason: 'CLAUDE.md and AGENTS.md are read at the merged commit',
@@ -232,7 +237,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R9',
     title: 'Protected default branch, MR required, bot cannot self-approve',
     detection: 'git provider API',
-    unlocks: 'Human merge guarantee (BD-007)',
+    unlocks: 'A person always merges: an agent cannot approve its own merge request.',
     detectedBy: 'platform',
     recheck: 'platform',
     recheckReason: 'the git provider is asked again',
@@ -241,7 +246,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R10',
     title: 'MR template and commit convention documented',
     detection: 'files/KB',
-    unlocks: 'MR hygiene checks are objective',
+    unlocks: 'Merge requests can be checked against written rules rather than taste.',
     detectedBy: 'agent',
     // WP-94 (backlog 231): a template and a commitlint configuration at named paths pass it; a
     // convention documented in prose is invisible to a path, so a miss carries.
@@ -253,7 +258,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R11',
     title: 'Observability bindings present (Sentry project, Loki labels)',
     detection: 'integration bindings',
-    unlocks: 'Investigation stage has evidence for bugs',
+    unlocks: 'Agents investigating a bug can read its errors and logs.',
     detectedBy: 'platform',
     recheck: 'platform',
     recheckReason: 'the bindings are read again',
@@ -262,7 +267,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R12',
     title: 'Knowledge completeness ≥ 70%',
     detection: 'KB score',
-    unlocks: 'Refinement drift detection, fewer questions',
+    unlocks:
+      'Agents notice when a ticket contradicts what the project knows, and ask fewer questions.',
     detectedBy: 'platform',
     recheck: 'platform',
     recheckReason: 'the index of the merged commit is scored again',
@@ -271,7 +277,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R13',
     title: 'Secret scanning in CI or pre-commit',
     detection: 'config',
-    unlocks: 'Lower risk from agent commits',
+    unlocks: 'An agent’s commit is less likely to leak a secret.',
     detectedBy: 'agent',
     // WP-94 (backlog 231): a hook or CI file naming a scanner passes it; a scanner in a file the
     // platform does not read (a GitHub Actions workflow) is invisible, so a miss carries.
@@ -283,7 +289,7 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     id: 'R14',
     title: 'Dependency lockfile present and installable offline from allow-listed registries',
     detection: 'workspace build',
-    unlocks: 'Deterministic builds inside the network allow-list',
+    unlocks: 'Builds are the same every time, inside the allowed network.',
     detectedBy: 'agent',
     recheck: 'carried',
     recheckReason: 'it needs the lockfile install run in a workspace',
@@ -431,7 +437,7 @@ export const KNOWLEDGE_COMPLETENESS_SECTIONS: readonly {
   {
     id: 'direction',
     path: 'business/direction.md',
-    unlocks: 'drift detection in Refinement (product/05)',
+    unlocks: 'noticing a ticket that goes against where the product is heading',
   },
   { id: 'quality_bar', path: 'business/quality-bar.md', unlocks: 'the definition of done' },
   {

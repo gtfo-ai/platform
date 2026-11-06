@@ -182,8 +182,8 @@ describe('the features without a switch (backlog 208)', () => {
   it('names, for every entry without a key, routes the app really calls', () => {
     const unkeyed = FEATURES_WITHOUT_A_SWITCH.filter((entry) => entry.key === undefined);
     expect(unkeyed.map((entry) => entry.name)).toEqual([
-      'Steer',
-      'Take over / hand back',
+      'Message a running agent',
+      'Work on a task yourself / give it back',
       'Cost estimate before spend',
     ]);
     for (const entry of unkeyed) {

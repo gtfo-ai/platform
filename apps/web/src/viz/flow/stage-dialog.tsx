@@ -38,6 +38,7 @@ import { Dialog } from '../../ui/dialog.js';
 import {
   ARTIFACT_TYPE_LABEL,
   eventPhrase,
+  LOOP_DEFINITION,
   loopLabel,
   ROLE_LABEL,
   stageLabel,
@@ -111,7 +112,7 @@ const SeatNote = ({ live, seat }: { readonly live: boolean; readonly seat: Seat 
         .
       </>
     )}{' '}
-    Steer or stop it from the run page.
+    Message or stop it from the run page.
   </p>
 );
 
@@ -216,7 +217,7 @@ const StageConfiguration = ({
   const rows: [string, string][] = [
     [
       'Kind',
-      `${KIND_LOOK[node.kind].word}${node.advisory ? ' (advisory: its verdict never sends the task back)' : ''}`,
+      `${KIND_LOOK[node.kind].word}${node.advisory ? ' (for information only: it never sends the task back)' : ''}`,
     ],
     ...(node.role === null ? [] : [['Role', ROLE_LABEL[node.role]] as [string, string]]),
     ...(node.kind === 'agent'
@@ -242,7 +243,7 @@ const StageConfiguration = ({
         : 'never — the pipeline walks over this stage',
     ],
     ...loops.map((edge): [string, string] => [
-      `${loopLabel(edge.loop ?? '')} loop`,
+      loopLabel(edge.loop ?? ''),
       edge.loopLimit === null
         ? `back to ${stageLabel(edge.to)}`
         : `back to ${stageLabel(edge.to)}, at most ${edge.loopLimit} time${edge.loopLimit === 1 ? '' : 's'}${edge.loopUsed === null ? '' : ` (used ${edge.loopUsed})`}`,
@@ -258,6 +259,7 @@ const StageConfiguration = ({
           </div>
         ))}
       </dl>
+      {loops.length === 0 ? null : <p className="text-xs text-fg-muted">{LOOP_DEFINITION}</p>}
       {outcomes.length === 0 ? null : (
         <div>
           <h3 className="text-sm font-semibold">Where it goes next</h3>

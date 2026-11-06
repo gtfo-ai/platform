@@ -293,7 +293,7 @@ const ApprovalRow = ({
  */
 const ExpiryNote = (): ReactElement => (
   <div className="flex flex-col gap-1 text-xs text-fg-muted" data-inbox-expiry-note="true">
-    <p>An item that expires leaves this list.</p>
+    <p>Questions and approvals waiting for a person, across all projects.</p>
     <DetailsDisclosure summary="Learn more" className="text-xs">
       <p>
         A question or approval that expires leaves this list: it can no longer be answered or

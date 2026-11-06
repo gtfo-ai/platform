@@ -90,13 +90,13 @@ export const MAINTENANCE_CHORES = {
     does: 'bump or replace the packages the registry reports deprecated or unmaintained',
     refusal: null,
     detail:
-      'briefed from what WP-38’s dependency gate recorded on this project’s tasks, with the registry’s licence and last release',
+      'briefed from what the dependency check recorded on this project’s tasks, with the registry’s licence and last release',
   },
   flaky: {
     does: 'hunt flaky tests',
     refusal: 'no_flaky_detection',
     detail:
-      'this build detects no flaky test: product/04 says flaky detection is not implemented, so a flaky-test chore would be a run with no findings to work from',
+      'this build detects no flaky test: flaky detection is not implemented, so a flaky-test chore would be a run with no findings to work from',
   },
   docs: {
     does: 'fix documentation that has drifted from the code',
@@ -108,7 +108,7 @@ export const MAINTENANCE_CHORES = {
     does: 'pay down lint debt',
     refusal: 'no_lint_finding_source',
     detail:
-      'this build schedules no lint-debt chore: a chore is briefed from findings the platform already holds, and nothing records a project’s lint output — a run can execute the project’s declared lint command since WP-54, so what is missing is a finding source, not a capability',
+      'this build schedules no lint-debt chore: a chore is briefed from findings the platform already holds, and nothing records a project’s lint output — a run can execute the project’s declared lint command, so what is missing is a finding source, not a capability',
   },
   kb: {
     does: 'clear the knowledge-base findings the nightly hygiene pass recorded',

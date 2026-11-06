@@ -319,7 +319,7 @@ export const withPlatformMergeRequestRecord = (
     gaps.push(
       `The platform recorded merge request !${recorded.iid} for this task; the run reported ${
         typeof reportedIid === 'number' ? `!${reportedIid}` : 'another one'
-      }, which was not recorded (WP-138: the platform's record wins).`,
+      }, which was not recorded (the platform's record wins).`,
     );
   }
   return { ...object, mr: { ...recorded } as JsonValue, known_gaps: gaps } as JsonValue;

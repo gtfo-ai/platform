@@ -30,6 +30,7 @@ import type {
   OrgUsersResponse,
   ProjectExecutionWaiting,
   ProjectExecutionWorker,
+  ProjectSummary,
   QuestionStatus,
   RunStatus,
   RunTerminalReason,
@@ -73,7 +74,7 @@ export const STAGE_LABEL: Readonly<Record<ShippedStageId, string>> = {
   ci_gate: 'CI',
   code_review: 'Code review',
   business_review: 'Business review',
-  rebase_gate: 'Rebase check',
+  rebase_gate: 'Up-to-date check',
   qa: 'QA',
   ready_for_merge: 'Ready to merge',
   merged_gate: 'Merge check',
@@ -276,20 +277,26 @@ export const readinessCriterionLabel = (id: string): string =>
 
 /**
  * The bounded return loops (`tasks.iteration_counters`' keys, the graph edges' `loop`), as the flow
- * canvas's loop pill says them (S-23.5). A loop the platform does not ship is title-cased, never
- * printed raw; `humanize.test.ts` holds the table to the domain's `ITERATION_LOOPS`.
+ * canvas's loop pill says them (S-23.5): the rounds a stage may send the task back for, in the
+ * plural, because the pill counts them (S-25.5, research/21 § 4). A loop the platform does not ship
+ * is title-cased, never printed raw; `humanize.test.ts` holds the table to the domain's
+ * `ITERATION_LOOPS`.
  */
 export const LOOP_LABEL: Readonly<Record<string, string>> = {
-  code_review: 'Review',
-  business_review: 'Acceptance',
+  code_review: 'Review rounds',
+  business_review: 'Acceptance rounds',
   ci_fix: 'CI fixes',
-  human_rounds: 'Review rounds',
-  refinement_questions: 'Questions',
+  human_rounds: 'Human review rounds',
+  refinement_questions: 'Question rounds',
   architecture_revisions: 'Plan revisions',
   rebase: 'Conflict fixes',
-  rebase_rechecks: 'Re-checks',
+  rebase_rechecks: 'Up-to-date re-checks',
   dependency_policy: 'Dependency checks',
 };
+
+/** What a loop is, one hover away (product/10's 2026-11-06 *Plain words* rule). */
+export const LOOP_DEFINITION =
+  'How many times this step may send the task back before a person is asked to decide.';
 
 export const loopLabel = (slug: string): string =>
   Object.hasOwn(LOOP_LABEL, slug) ? (LOOP_LABEL[slug] as string) : titleCase(slug);
@@ -308,7 +315,7 @@ export const LOOP_ROUND_LABEL: Readonly<Record<string, string>> = {
   refinement_questions: 'Question',
   architecture_revisions: 'Plan revision',
   rebase: 'Conflict fix',
-  rebase_rechecks: 'Re-check',
+  rebase_rechecks: 'Up-to-date re-check',
   dependency_policy: 'Dependency check',
 };
 
@@ -647,6 +654,13 @@ export const WAITING_CLOSED_REASON_WORDS: Readonly<Record<WaitingClosedReason, s
 };
 
 // ── Settings, knowledge, budgets and the audit log (S-23.11b) ────────────────
+
+/** A project's state (`projects.status`), beside its name in the header and the list (S-25.5). */
+export const PROJECT_STATUS_LABEL: Readonly<Record<ProjectSummary['status'], string>> = {
+  active: 'Active',
+  paused: 'Paused',
+  archived: 'Archived',
+};
 
 /** A person's role in the organisation (`users.role`). */
 export const USER_ROLE_LABEL: Readonly<Record<UserRole, string>> = {

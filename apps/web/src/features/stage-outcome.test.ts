@@ -32,7 +32,7 @@ describe('the stage outcome sentences', () => {
     expect(stageOutcomeSentence('ticket.status.changed')).not.toContain('.status.');
     expect(stageOutcomeSentence('task.completed')).toBe('Ended because the task completed.');
     expect(stageOutcomeSentence('take_over.expired')).toBe(
-      'Needs you: the take-over saw no activity for five working days.',
+      'Needs you: the person working on it showed no activity for five working days.',
     );
   });
 });

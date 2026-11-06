@@ -40,19 +40,19 @@ export const reasonCopy = (reason: ApprovalReason): ReasonCopy => {
       return {
         why:
           reason.classes.length === 1
-            ? `The plan touches the ${reason.classes[0]} risk class, and this project asks a person to approve plans that do.`
-            : `The plan touches the ${listOf(reason.classes)} risk classes, and this project asks a person to approve plans that do.`,
-        stop: 'To stop being asked for this, change the plan-approval rule for risk classes in the project’s policies. Keeping it is recommended: a risk class is about the change, not about trust in the agents.',
+            ? `The plan touches ${reason.classes[0]}, an area this project marks as sensitive, and this project asks a person to approve plans that do.`
+            : `The plan touches ${listOf(reason.classes)}, areas this project marks as sensitive, and this project asks a person to approve plans that do.`,
+        stop: 'To stop being asked for this, change the plan-approval rule for sensitive areas in the project’s policies. Keeping it is recommended: a sensitive area is about the change, not about trust in the agents.',
         section: 'policies',
-        link: 'Risk classes',
+        link: 'Sensitive areas',
       };
     case 'probation': {
       const left = Math.max(0, reason.of - reason.completed);
       return {
-        why: `The project is on probation: ${reason.completed} of its first ${reason.of} tasks are done.`,
-        stop: `Probation ends by itself after ${reason.of} completed tasks (${left} to go), or a maintainer ends it in the autonomy dial.`,
+        why: `This project’s first ${reason.of} tasks get extra checks, and ${reason.completed} of them are done.`,
+        stop: `The extra checks end by themselves after ${reason.of} completed tasks (${left} to go), or a maintainer ends them under How much agents do alone.`,
         section: 'policies',
-        link: 'Autonomy dial',
+        link: 'How much agents do alone',
       };
     }
     case 'policy_always':
@@ -64,10 +64,10 @@ export const reasonCopy = (reason: ApprovalReason): ReasonCopy => {
             link: 'Repository configuration',
           }
         : {
-            why: 'This project’s autonomy dial asks a person to approve every plan.',
-            stop: 'To be asked less, move the autonomy dial to Supervised (large plans only) or Autonomous.',
+            why: 'This project’s How much agents do alone setting asks a person to approve every plan.',
+            stop: 'To be asked less, set How much agents do alone to Supervised (large plans only) or Autonomous.',
             section: 'policies',
-            link: 'Autonomy dial',
+            link: 'How much agents do alone',
           };
     case 'size_at_or_above':
       return reason.source === 'stage_override'
@@ -81,16 +81,16 @@ export const reasonCopy = (reason: ApprovalReason): ReasonCopy => {
           }
         : {
             why: `The plan’s size is ${reason.size}, at or above the project’s threshold of ${reason.threshold}.`,
-            stop: 'To be asked less, raise the size threshold or the autonomy dial in the project’s policies.',
+            stop: 'To be asked less, raise the size threshold or How much agents do alone in the project’s policies.',
             section: 'policies',
-            link: 'Autonomy dial',
+            link: 'How much agents do alone',
           };
     case 'estimate_above_threshold':
       return {
         why: `The estimate, ${formatUsd(reason.estimate_usd)}, is above this project’s threshold of ${formatUsd(reason.threshold_usd)}.`,
-        stop: 'To be asked less, move the autonomy dial to a position with a higher threshold, or none.',
+        stop: 'To be asked less, set How much agents do alone to a position with a higher threshold, or none.',
         section: 'policies',
-        link: 'Autonomy dial',
+        link: 'How much agents do alone',
       };
   }
 };

@@ -140,7 +140,7 @@ describe('starting a ticket by hand (WP-122, S-23.9a)', () => {
     });
     // The intake hint is the field's description.
     expect(field.getAttribute('aria-describedby')).toBeTruthy();
-    expect(dialog.getByText(/For a ticket no pickup rule matches/)).toBeTruthy();
+    expect(dialog.getByText(/For a ticket no start rule matches/)).toBeTruthy();
     await user.type(field, ' ACME-7 ');
     await user.click(dialog.getByRole('button', { name: 'Start' }));
     await waitFor(() => {
@@ -223,13 +223,13 @@ describe('starting a ticket by hand (WP-122, S-23.9a)', () => {
     expect(
       member.view.container.querySelector('[data-blankslate] [data-pose="sleeping"]'),
     ).not.toBeNull();
-    const rules = member.view.getByRole('link', { name: 'Open pickup rules' });
+    const rules = member.view.getByRole('link', { name: 'Open start rules' });
     expect(rules.getAttribute('href')).toBe('/projects/acme/settings');
     cleanup();
     const viewer = open({ canStart: false });
     await viewer.view.findByText(EMPTY_BOARD_TITLE);
     expect(viewer.view.container.textContent).toContain(emptyBoardHint(false));
-    expect(viewer.view.getByRole('link', { name: 'Open pickup rules' })).toBeTruthy();
+    expect(viewer.view.getByRole('link', { name: 'Open start rules' })).toBeTruthy();
 
     // The rule kinds a binding has (`ticketMatchRuleSchema`) and nothing else: no "component".
     for (const hint of [emptyBoardHint(true), emptyBoardHint(false)]) {

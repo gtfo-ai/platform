@@ -1621,7 +1621,7 @@ names no task has no brief anywhere else, so this list is where it shows up. The
 first and **Show older** pages back to the oldest (WP-114).
 
 Once the handler is fixed — usually a new build, sometimes a provider permission — press
-**Re-queue** (`POST /api/org/dead-letters/:position/requeue`). It puts the **same** event back in the
+**Try again** — the re-queue (`POST /api/org/dead-letters/:position/requeue`). It puts the **same** event back in the
 queue: nothing is copied into the log, and every handler that already succeeded for it is skipped,
 so what those did is not done twice. The press is recorded in the audit (`human_actions`, action
 `org.dead_letter.requeue`, with the event's task when it has one). The task the dead letter escalated

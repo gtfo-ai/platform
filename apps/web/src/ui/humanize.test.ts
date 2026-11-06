@@ -194,7 +194,7 @@ describe('humanize', () => {
     expect(TASK_STATE_LABEL.waiting_approval).toBe('Waiting for approval');
     expect(stageLabel('ci_gate')).toBe('CI');
     expect(stageLabel('code_review')).toBe('Code review');
-    expect(stageLabel('rebase_gate')).toBe('Rebase check');
+    expect(stageLabel('rebase_gate')).toBe('Up-to-date check');
     expect(RUN_STATUS_LABEL.timed_out).toBe('Timed out');
   });
 
@@ -249,7 +249,7 @@ describe('humanize', () => {
 describe('the loop words and ordinals (S-23.5)', () => {
   it('names every loop the domain ships, and nothing else', () => {
     expect(Object.keys(LOOP_LABEL).sort()).toEqual([...ITERATION_LOOPS].sort());
-    expect(loopLabel('code_review')).toBe('Review');
+    expect(loopLabel('code_review')).toBe('Review rounds');
     // A loop this build does not ship is title-cased rather than printed raw.
     expect(loopLabel('custom_loop')).toBe('Custom Loop');
     // An inherited property name is a slug like any other, not a lookup hit.
@@ -259,7 +259,7 @@ describe('the loop words and ordinals (S-23.5)', () => {
   it('counts a loop in rounds, of its limit when known (S-25.4)', () => {
     expect(Object.keys(LOOP_ROUND_LABEL).sort()).toEqual([...ITERATION_LOOPS].sort());
     expect(loopRoundLabel('code_review', 1, 3)).toBe('Review round 1 of 3');
-    expect(loopRoundLabel('rebase_rechecks', 2, 3)).toBe('Re-check round 2 of 3');
+    expect(loopRoundLabel('rebase_rechecks', 2, 3)).toBe('Up-to-date re-check round 2 of 3');
     expect(loopRoundLabel('code_review', 2)).toBe('Review round 2');
     expect(loopRoundLabel('house_loop', 2, 5)).toBe('House Loop round 2 of 5');
     expect(loopRoundLabel('constructor', 1)).toBe('Constructor round 1');

@@ -119,7 +119,7 @@ describe('the run page of a run that never started (backlog 453)', () => {
     expect(panel.textContent).toContain('<img src=x onerror=alert(1)>');
     expect(view.container.querySelector('img')).toBeNull();
     // No transcript and no steer box for a session that does not exist.
-    expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Message the agent' })).toBeNull();
   });
 
   it('says the launcher gave no words when there were none, and announces a cut it made', async () => {
@@ -172,7 +172,7 @@ describe('the run page of a run that never started (backlog 453)', () => {
     expect(panel.textContent).not.toContain('workspace could not be created');
     expect(panel.textContent).not.toContain('handed to a person');
     expect(panel.textContent).not.toContain('The launcher gave no reason');
-    expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Message the agent' })).toBeNull();
   });
 
   it('shows the transcript for a run that started, and the steer box only while it is live', async () => {
@@ -182,11 +182,11 @@ describe('the run page of a run that never started (backlog 453)', () => {
     expect(await screen.findByTestId('transcript-scroller')).not.toBeNull();
     expect(screen.queryByRole('region', { name: 'This run did not start' })).toBeNull();
     // S-23.10: this run failed, so there is no live session to steer.
-    expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Message the agent' })).toBeNull();
     view.unmount();
 
     const live: RunRecord = { ...runWith(null), status: 'running', terminal_reason: null };
     render(createApp({ fetchImpl: fetchWith(live), realtime: false }).element);
-    expect(await screen.findByRole('textbox', { name: 'Steer the agent' })).not.toBeNull();
+    expect(await screen.findByRole('textbox', { name: 'Message the agent' })).not.toBeNull();
   });
 });

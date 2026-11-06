@@ -1166,7 +1166,7 @@ const waitForProvider = async (
   if (decision.kind === 'recheck') {
     logger.warn(
       { ...fields, err: outage.error, retry_in_ms: decision.delayMs },
-      'the provider did not answer the gate; the gate asks again (PROGRESS backlog 490)',
+      'the provider did not answer the gate; the gate asks again',
     );
     await enqueueStage(options.jobs, {
       ...request,
@@ -1186,7 +1186,7 @@ const waitForProvider = async (
   };
   logger.warn(
     { ...fields, err: outage.error, ending: decision.kind },
-    'the provider did not answer the gate within its bound; the task is parked (PROGRESS backlog 490)',
+    'the provider did not answer the gate within its bound; the task is parked',
   );
   await settle(options, request, {
     kind: 'escalate',

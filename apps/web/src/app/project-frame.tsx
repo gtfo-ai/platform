@@ -28,6 +28,7 @@ import { type ReactElement, useSyncExternalStore } from 'react';
 import { ReadinessLabel } from '../features/readiness-label.js';
 import { useTopics } from '../realtime/provider.js';
 import { buttonClassName } from '../ui/button.js';
+import { PROJECT_STATUS_LABEL } from '../ui/humanize.js';
 import { Badge, cx, EmptyState, ErrorNotice } from '../ui/kit.js';
 import type { NavItem, NavLinkProps } from '../ui/nav-item.js';
 import { PageHeader } from '../ui/page-header.js';
@@ -209,7 +210,7 @@ export const ProjectBands = ({
               <>
                 <ReadinessLabel level={project.readiness_level} project={project} />
                 {project.status === 'active' ? null : (
-                  <Badge tone="neutral">{project.status}</Badge>
+                  <Badge tone="neutral">{PROJECT_STATUS_LABEL[project.status]}</Badge>
                 )}
               </>
             }

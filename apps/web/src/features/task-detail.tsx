@@ -141,8 +141,8 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
       />
 
       {takenOver !== null ? (
-        <section aria-label="Taken over">
-          <Flash tone="warning" title="Taken over by a person">
+        <section aria-label="A person is working on it">
+          <Flash tone="warning" title="A person is working on it">
             <div className="flex flex-col gap-3 pt-1">
               <TakenOverDetails
                 state={task.state}
@@ -166,8 +166,8 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           </Flash>
         </section>
       ) : answered === undefined ? null : (
-        <section aria-label="Taken over">
-          <Flash tone="success" title="You took this task over">
+        <section aria-label="A person is working on it">
+          <Flash tone="success" title="You are working on this task">
             <TakeOverAnswer answered={answered} />
           </Flash>
         </section>

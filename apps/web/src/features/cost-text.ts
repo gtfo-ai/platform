@@ -26,4 +26,4 @@ export const unmeasuredRunsShortText = (count: number): string => `excl. ${count
  * count beside it is what says how many.
  */
 export const BOARD_COST_TITLE =
-  'Measured cost so far for this task: reported by the provider, or priced from the price list in local provider mode. A run that ended without a figure is left out, and counted beside the total when there is one.';
+  'Measured cost so far for this task: reported by the provider, or — on a Claude subscription — estimated from the price list. A run that ended without a figure is left out, and counted beside the total when there is one.';

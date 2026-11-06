@@ -158,16 +158,16 @@ const CHECKS: readonly {
   // WP-46 on WP-55's rows: the CI gate's latest `task_stages` row, closed with its verdict.
   { item: 'CI green', shown: 'CI status' },
   // The same, for the rebase gate.
-  { item: 'rebase status', shown: 'Rebase status' },
+  { item: 'rebase status', shown: 'Up to date' },
   // WP-46: `tasks.review_threads`, written by BD-007's review window where it counts them.
   { item: 'review threads open/resolved', shown: 'Review threads' },
   // WP-46: the same Acceptance Verdict's `verdict`.
   { item: 'business verdict', shown: 'Business verdict' },
   // WP-81: BD-024's gate, made by the CI gate as part of its read — the word its row is closed with.
-  { item: 'tamper check', shown: 'Tamper check' },
-  { item: 'coverage delta', shown: 'Coverage delta' },
+  { item: 'tamper check', shown: 'Protected files' },
+  { item: 'coverage delta', shown: 'Test coverage' },
   { item: 'dependency status', shown: 'Dependencies' },
-  { item: 'risk classes', shown: 'Risk classes' },
+  { item: 'risk classes', shown: 'Sensitive areas' },
   { item: 'required reviewers', shown: 'Required reviewers' },
   { item: 'budget vs estimate', shown: 'Estimate' },
   { item: 'questions pending', shown: 'Questions pending' },
@@ -200,7 +200,7 @@ const renderPanel = async (): Promise<HTMLElement> => {
   const { container } = render(createApp({ fetchImpl, realtime: false }).element);
   await screen.findByText('Checks');
   await waitFor(() => {
-    expect(container.textContent).toContain('Tamper check');
+    expect(container.textContent).toContain('Protected files');
   });
   return container;
 };
@@ -390,7 +390,7 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     expect(view.text()).toContain('green');
     expect(view.text()).toContain('CI, attempt 2, decided');
     // rebase_gate: parked, closed `failed` with the escalation's own word (backlog 160).
-    expect(view.text()).toContain('escalated (undecided)');
+    expect(view.text()).toContain('needs you: it could not decide');
   });
 
   it('says a gate the task never reached is not reached, never a tick', async () => {
@@ -398,7 +398,7 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     await waitFor(() => expect(view.text()).toContain('CI status'));
     // S-23.22: the gate by its name, never its id.
     expect(view.text()).toContain('This task has not entered CI.');
-    expect(view.text()).toContain('This task has not entered Rebase check.');
+    expect(view.text()).toContain('This task has not entered Up-to-date check.');
     expect(view.text()).not.toContain('ci_gate');
     expect(view.text()).not.toContain('green');
   });
@@ -409,10 +409,7 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
    */
   it('reads the tamper check off the CI gate’s latest row, each word its own answer', async () => {
     const cases: readonly [TaskDetailResponse['stages'], string][] = [
-      [
-        [stage('ci_gate', 1, 'returned', 'protected_paths_changed')],
-        'protected paths changed, sent back',
-      ],
+      [[stage('ci_gate', 1, 'returned', 'protected_paths_changed')], 'changed, sent back'],
       [
         [stage('ci_gate', 1, 'completed', 'protected_paths_awaiting_review')],
         'declared changes await the code review',
@@ -422,15 +419,15 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
           stage('ci_gate', 1, 'returned', 'protected_paths_changed'),
           stage('ci_gate', 2, 'completed', 'protected_paths_clean'),
         ],
-        'clean',
+        'untouched',
       ],
       [[stage('ci_gate', 1, 'running', null)], 'checking'],
       [[], 'not reached'],
     ];
     for (const [stages, expected] of cases) {
       const view = await render$(detailWith({ stages, artifacts: [] }));
-      await waitFor(() => expect(view.text()).toContain('Tamper check'));
-      expect(view.text(), expected).toContain(`Tamper check${expected}`);
+      await waitFor(() => expect(view.text()).toContain('Protected files'));
+      expect(view.text(), expected).toContain(`Protected files${expected}`);
       cleanup();
     }
   });
@@ -444,10 +441,10 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
    */
   it('reads clean only off the recorded outcome, and not recorded off a row that has none (backlog 280)', async () => {
     const cases: readonly [TaskDetailResponse['stages'], string, string][] = [
-      [[stage('ci_gate', 1, 'completed', 'protected_paths_clean')], 'clean', 'CI statusgreen'],
+      [[stage('ci_gate', 1, 'completed', 'protected_paths_clean')], 'untouched', 'CI statusgreen'],
       [
         [stage('ci_gate', 1, 'returned', 'protected_paths_clean')],
-        'clean',
+        'untouched',
         'CI statusred, sent back',
       ],
       [[stage('ci_gate', 1, 'completed', 'pass')], 'not recorded', 'CI statusgreen'],
@@ -455,11 +452,11 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     ];
     for (const [stages, expected, ci] of cases) {
       const view = await render$(detailWith({ stages, artifacts: [] }));
-      await waitFor(() => expect(view.text()).toContain('Tamper check'));
-      expect(view.text(), expected).toContain(`Tamper check${expected}`);
+      await waitFor(() => expect(view.text()).toContain('Protected files'));
+      expect(view.text(), expected).toContain(`Protected files${expected}`);
       expect(view.text(), ci).toContain(ci);
-      if (expected !== 'clean') {
-        expect(view.text(), expected).not.toContain('Tamper checkclean');
+      if (expected !== 'untouched') {
+        expect(view.text(), expected).not.toContain('Protected filesuntouched');
       }
       cleanup();
     }
@@ -490,7 +487,7 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
           ),
         ],
         'declared changes confirmed by the code review',
-        'Rebase statusup to date',
+        'Up to dateyes',
       ],
       [
         [
@@ -501,12 +498,12 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
           ),
         ],
         'declared changes not confirmed, sent back',
-        'Rebase statussent back by the tamper check',
+        'Up to datesent back: protected files changed',
       ],
       [
         [provisional, later(stage('rebase_gate', 1, 'running', null), '2026-09-12T10:30:00.000Z')],
         'declared changes await the code review',
-        'Rebase statuschecking',
+        'Up to datechecking',
       ],
       // A rebase row from the round **before** this CI pass says nothing about it.
       [
@@ -518,13 +515,13 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
           provisional,
         ],
         'declared changes await the code review',
-        'Rebase statusup to date',
+        'Up to dateyes',
       ],
     ];
     for (const [stages, expected, rebase] of cases) {
       const view = await render$(detailWith({ stages, artifacts: [] }));
-      await waitFor(() => expect(view.text()).toContain('Tamper check'));
-      expect(view.text(), expected).toContain(`Tamper check${expected}`);
+      await waitFor(() => expect(view.text()).toContain('Protected files'));
+      expect(view.text(), expected).toContain(`Protected files${expected}`);
       expect(view.text(), rebase).toContain(rebase);
       cleanup();
     }
@@ -535,10 +532,10 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
       detailWith({ stages: [stage('ci_gate', 1, 'returned', 'escalated')], artifacts: [] }),
     );
     await waitFor(() => expect(view.text()).toContain('CI status'));
-    expect(view.text()).toContain('CI statusescalated, then sent back by a person');
+    expect(view.text()).toContain('CI statusneeded you, then sent back by a person');
     expect(view.text()).not.toContain('red, sent back');
     // Nothing settled the gate, so the tamper check was not recorded — never *clean*.
-    expect(view.text()).toContain(`Tamper check${'not recorded'}`);
+    expect(view.text()).toContain(`Protected files${'not recorded'}`);
   });
 
   it('does not call a tamper return red CI, nor a provisional pass anything but green', async () => {
@@ -549,7 +546,7 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
       }),
     );
     await waitFor(() => expect(returned.text()).toContain('CI status'));
-    expect(returned.text()).toContain('CI statussent back by the tamper check');
+    expect(returned.text()).toContain('CI statussent back: protected files changed');
     expect(returned.text()).not.toContain('red, sent back');
     cleanup();
     const provisional = await render$(

@@ -58,6 +58,7 @@ import { buttonClassName } from '../ui/button.js';
 import { Counter } from '../ui/counter.js';
 import { FOCUS_RING } from '../ui/cx.js';
 import { Flash } from '../ui/flash.js';
+import { USER_ROLE_LABEL } from '../ui/humanize.js';
 import { type BadgeTone, Button, cx, formatInteger } from '../ui/kit.js';
 import { Logo } from '../ui/logo.js';
 import type { NavItem, NavLinkProps } from '../ui/nav-item.js';
@@ -154,7 +155,7 @@ const AccountMenu = ({
         ) : (
           <>
             Signed in as <span className="font-semibold text-fg">{name}</span>
-            <span className="block">{`Role: ${user.role}`}</span>
+            <span className="block">{`Role: ${USER_ROLE_LABEL[user.role]}`}</span>
           </>
         )}
       </ActionMenuHeader>

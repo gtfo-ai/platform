@@ -395,8 +395,8 @@ export const sweepExpiredRunLeases = async (
           cli_spawn_requested: !acted.unspawned,
         },
         acted.unspawned
-          ? 'no process was renewing this run’s lease and it had not asked for its CLI, so the run was failed as not started, its task escalated, and its cost recorded as a measured zero (WP-150)'
-          : 'no process was renewing this run’s lease, so the run was failed and its task escalated; the reservation it held is released and no cost was recorded because nobody measured one (PROGRESS backlog 109)',
+          ? 'no process was renewing this run’s lease and it had not asked for its CLI, so the run was failed as not started, its task escalated, and its cost recorded as a measured zero'
+          : 'no process was renewing this run’s lease, so the run was failed and its task escalated; the reservation it held is released and no cost was recorded because nobody measured one',
       );
       continue;
     }
@@ -432,7 +432,7 @@ const replanEntry = async (
   } catch (error) {
     logger.error(
       { err: error, run_id: run.runId, task_id: run.taskId },
-      'the lost run’s minted credential could not be revoked before its stage was offered again; the recovery pass revokes it once more, and the stage is re-planned anyway (TD-031 §2)',
+      'the lost run’s minted credential could not be revoked before its stage was offered again; the recovery pass revokes it once more, and the stage is re-planned anyway',
     );
   }
   const effort = effortSchema.safeParse(entry.effort);
@@ -453,7 +453,7 @@ const replanEntry = async (
       lease_owner: run.leaseOwner,
       lease_expires_at: run.leaseExpiresAt,
     },
-    'no process was renewing this run’s lease, so the run was failed and — the first loss of its stage entry — the stage is offered again with the machine that lost it excluded (WP-286, TD-031 §12)',
+    'no process was renewing this run’s lease, so the run was failed and — the first loss of its stage entry — the stage is offered again with the machine that lost it excluded',
   );
 };
 

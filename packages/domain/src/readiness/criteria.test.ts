@@ -62,6 +62,33 @@ describe('the criteria table', () => {
     ).toEqual(['R9', 'R11', 'R12']);
   });
 
+  /**
+   * S-25.5 (BACKLOG 1241): the wizard's readiness panel and the read's `next_improvements` print
+   * `unlocks` as it is, so it is held to the screens' rule — no spec reference, and none of the
+   * pipeline's internal words (a stage by name, "gate", "context pack", "MR").
+   */
+  it('says what every criterion and knowledge section unlocks in plain words (BACKLOG 1241)', () => {
+    const INTERNAL =
+      /\b(?:BD|TD|WP|Q)-?\d+\b|product\/\d+|\b(?:Implementation|Refinement|Investigation|Architecture)\b|\bgate\b|context pack|\bMR\b|\btamper\b/;
+    const unlocks = [
+      ...READINESS_CRITERIA.map((criterion) => [criterion.id, criterion.unlocks] as const),
+      ...KNOWLEDGE_COMPLETENESS_SECTIONS.map((section) => [section.id, section.unlocks] as const),
+    ];
+    expect(unlocks.length).toBe(24);
+    for (const [id, text] of unlocks) {
+      expect(INTERNAL.test(text), `${id}: ${text}`).toBe(false);
+    }
+    // Calibration: the pattern refuses the words the old table carried.
+    for (const old of [
+      'Human merge guarantee (BD-007)',
+      'Earlier error detection in Implementation',
+      'drift detection in Refinement (product/05)',
+      'Deterministic CI gate; flaky detection',
+    ]) {
+      expect(INTERNAL.test(old), old).toBe(true);
+    }
+  });
+
   it('gives every criterion a non-empty “unlocks”, because the score is a value proposition', () => {
     // product/17: "Each criterion states what it unlocks so the score is a value proposition, not a
     // scolding." Asserted over the whole set rather than spot-checked (rule 68).
