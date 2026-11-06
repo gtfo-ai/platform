@@ -380,3 +380,20 @@ what a check depends on; the **nightly run of every check** is what catches a ch
   the check had passed, has the fix. The mount now sets `NoCopy`. `worker-update-check` could not
   start: its worker reached the core and the registry as `host.docker.internal`, which a Linux engine
   does not resolve; on Linux it now uses the default bridge's gateway (`--host-address` overrides).
+
+## Amendment (2026-11-07, backlog 747) — every push to `main` gets its image
+
+`image.yml`'s concurrency group was one per branch, and GitHub keeps only the newest *pending* run of
+a group, so of three quick pushes to `main` the middle one was cancelled before it started and its
+commit never got a `sha-<7>` image. While `RELEASE_VERSIONING` is off the group is now the commit
+(`image-<ref>-<sha>` for a push), so every push runs at once and to the end. Because two runs can
+then publish together and the older can finish last, the `merge` step reads `main`'s head
+(`gh api repos/<repo>/commits/main`, the job's read-only token) and moves `edge` and `latest` only
+when this run built it; an older run publishes `sha-<7>` alone, and a head that cannot be read fails
+the step. That also refuses the WP-71 residual of a re-run or dispatch at an older `main` commit
+moving `latest` backwards; a re-run of the head still republishes. Residual: when the newest push's
+run fails, `latest` stays where the last head run left it. With versioning on, pushes to `main`
+queue per ref as before, so two runs never compute a version at once, and backlog 747's lost-commit
+case remains for that mode only. `scripts/release.test.ts` holds the group expression and runs the
+merge step against the stub `gh` and `docker` (head is this run, head moved on, a branch, an
+unreadable head).

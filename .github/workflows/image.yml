@@ -43,12 +43,22 @@ on:
 permissions:
   contents: read
 
-# Pushes to `main` queue rather than cancel, so two runs never compute a version at once: the
-# second one's `version` job starts after the first run's tag exists. GitHub keeps one *pending* run
-# per group, so a third push can replace a queued second — whose commits are then in the third's
-# range, because a version is computed from everything since the last tag, not from one push.
+# **A push's group is its commit, while versioning is off** (backlog 747). With one group per branch
+# GitHub keeps only the newest *pending* run, so of three quick pushes to `main` the middle one was
+# cancelled before it started and its commit never got a `sha-<7>` image. Every push now runs, at
+# once and to the end; what keeps `edge` and `latest` on the newest push is the head check in the
+# `merge` step, not the queue.
+#
+# **With `RELEASE_VERSIONING` enabled pushes to `main` queue again** (one group per ref, as before),
+# so two runs never compute a version at once: the second one's `version` job starts after the
+# first run's tag exists. A third push can then still replace a queued second — whose commits are in
+# the third's range, because a version is computed from everything since the last tag — and that
+# second commit gets no `sha-<7>` of its own; the residual is backlog 747's, kept for that mode only.
+# A pull request's newer run cancels its older one either way.
 concurrency:
-  group: image-${{ github.ref }}
+  group: >-
+    image-${{ github.ref }}-${{ (github.event_name == 'push' && vars.RELEASE_VERSIONING != 'enabled')
+    && github.sha || 'serial' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -321,23 +331,35 @@ jobs:
       # nobody reviewed is the defect whichever of the two it is. Keeping `edge` loose to preserve
       # a dispatch habit would leave exactly half the hole open.
       #
-      # **Residual, stated rather than discovered**: a **re-run** of this workflow at an older
-      # `main` commit, or a dispatch on `main` at an older sha, moves `latest` *backwards*. It is
-      # not refused here, because a re-run is an operator's deliberate act on a commit that *was*
-      # on `main` — the artefact is genuine and re-publishing it is sometimes the point (a
-      # registry-side transient is re-run three times in this project's own log). What is lost is
-      # the "newest" in *newest push to `main`*, and the recovery is the same act: re-run the head.
-      # Refusing it would need this job to compare `GITHUB_SHA` with the branch's current head,
-      # which is a second API read and a race of its own.
+      # **And only from the newest commit on `main`** (backlog 747). Pushes no longer queue (see
+      # `concurrency` above), so two runs can publish at once and the older one can finish last;
+      # the step therefore reads `main`'s head and moves `edge` and `latest` only when this run
+      # built it. An older run publishes `sha-<7>` alone — the newer run moves the pointers. The
+      # same check refuses what used to be a stated residual: a re-run or a dispatch at an older
+      # `main` commit no longer moves `latest` backwards (a re-run of the head still republishes
+      # it, which is the registry-transient recovery this project's log has needed). A head that
+      # cannot be read fails the step rather than guess. **Residual, stated**: when the newest
+      # push's run fails, `latest` stays where the last run that *was* the head left it — possibly
+      # two commits back — until a later push or a re-run of the head.
       - id: merge
+        name: merge the manifest list
+        env:
+          IMAGE: ${{ matrix.image }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          repo="${REGISTRY}/${owner}/${{ matrix.image }}"
+          repo="${REGISTRY}/${owner}/${IMAGE}"
           short="${GITHUB_SHA::7}"
           tags="sha-${short}"
+          head=""
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            head=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          fi
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "${head}" = "${GITHUB_SHA}" ]; then
             tags="${tags} edge latest"
+          elif [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "main is at ${head}, not ${GITHUB_SHA}: publishing sha-${short} only; the newer run moves edge and latest"
           fi
           refs=""
           for tag in ${tags}; do refs="${refs} -t ${repo}:${tag}"; done

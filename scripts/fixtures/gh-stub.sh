@@ -11,9 +11,22 @@
 #   gh release create <tag> --target <sha> --title <title> --notes-file <file>
 #       Recorded (one line per call in `STUB_LOG`), the notes file copied to `${STUB_DIR}/notes.md`
 #       so the test can read what the release would have said; exits `STUB_GH_EXIT` (default 0).
+#   gh api repos/<owner>/<repo>/commits/main --jq .sha
+#       The `merge` step's read of `main`'s head (backlog 747): prints `STUB_MAIN_HEAD`, or exits
+#       `STUB_GH_API_EXIT` when that is set and not 0.
 set -uo pipefail
 
 printf 'gh %s\n' "$*" >> "$STUB_LOG"
+
+if [ "${1:-}" = 'api' ] && [[ "${2:-}" == repos/*/commits/main ]] && [ "${3:-}" = '--jq' ] \
+  && [ "${4:-}" = '.sha' ]; then
+  if [ "${STUB_GH_API_EXIT:-0}" != 0 ]; then
+    echo 'stub gh: HTTP 502' >&2
+    exit "${STUB_GH_API_EXIT}"
+  fi
+  printf '%s\n' "${STUB_MAIN_HEAD:?STUB_MAIN_HEAD is not set}"
+  exit 0
+fi
 
 if [ "${1:-}" != 'release' ] || [ "${2:-}" != 'create' ]; then
   echo "stub gh: unexpected command: $*" >&2

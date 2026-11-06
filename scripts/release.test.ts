@@ -583,11 +583,102 @@ describe("image.yml's tags on a push to main (TD-019 amendment)", () => {
   it('publishes both moving tags only from refs/heads/main, never from a dispatch on a branch', () => {
     const { condition } = mainBranchArm();
 
-    expect(condition).toBe('"${GITHUB_REF}" = "refs/heads/main"');
+    // Since backlog 747 also the head check: only the run that built `main`'s head moves them.
+    expect(condition).toBe(
+      '"${GITHUB_REF}" = "refs/heads/main" ] && [ "${head}" = "${GITHUB_SHA}"',
+    );
     // …and there is no unguarded fall-through beside it: an `else` here would restore the hole
     // while leaving the `elif` above it green.
     const step = workflow.slice(workflow.indexOf('tags="sha-${short}"'));
     expect(step.slice(0, step.indexOf('\n          refs='))).not.toMatch(/\n\s+else\n/);
+  });
+});
+
+/**
+ * **Every push builds, and only the newest moves the pointers** (backlog 747). One concurrency group
+ * per branch let GitHub replace a pending run, so a quick second push to `main` never got a
+ * `sha-<7>` image. The group is per commit while versioning is off; `edge` and `latest` are then
+ * kept on the newest push by the `merge` step reading `main`'s head — **executed** here against the
+ * stub `gh` and `docker`, because the whole claim is in that shell.
+ */
+describe("image.yml's concurrency and the merge step's head check (backlog 747)", () => {
+  const workflow = read(IMAGE_WORKFLOW);
+  const SHA = 'a'.repeat(40);
+  const NEWER = 'b'.repeat(40);
+
+  it('groups a push by its commit while versioning is off, and by its ref once it is on', () => {
+    const block = /\nconcurrency:\n {2}group: >-\n((?: {4}.*\n)+)/.exec(workflow)?.[1] ?? '';
+    expect(block.replace(/\s+/g, ' ').trim()).toBe(
+      "image-${{ github.ref }}-${{ (github.event_name == 'push' && " +
+        `vars.${SWITCH_VARIABLE} != '${SWITCH_VALUE}') && github.sha || 'serial' }}`,
+    );
+    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+  });
+
+  const drive = (env: Record<string, string>) => {
+    const step = runScript(jobOf(workflow, 'merge'), 'merge the manifest list');
+    const directory = stubDirectory();
+    try {
+      const result = spawnSync('bash', ['-c', step], {
+        cwd: directory,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          PATH: `${directory}:${process.env.PATH ?? ''}`,
+          GITHUB_OUTPUT: join(directory, 'outputs'),
+          STUB_LOG: join(directory, 'calls.log'),
+          STUB_DIR: directory,
+          GITHUB_REPOSITORY_OWNER: 'Acme',
+          GITHUB_REPOSITORY: 'Acme/platform',
+          REGISTRY: 'ghcr.io',
+          IMAGE: 'platform',
+          GITHUB_SHA: SHA,
+          ...env,
+        },
+      });
+      return { status: result.status, stdout: result.stdout, calls: callsIn(directory) };
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  };
+  const creates = (calls: string[]) =>
+    calls.filter((call) => call.startsWith('docker buildx imagetools create'));
+  const repo = 'ghcr.io/acme/platform';
+
+  it('moves edge and latest when this run built main’s head', () => {
+    const outcome = drive({ GITHUB_REF: 'refs/heads/main', STUB_MAIN_HEAD: SHA });
+    expect(outcome.status).toBe(0);
+    expect(outcome.calls).toContain('gh api repos/Acme/platform/commits/main --jq .sha');
+    expect(creates(outcome.calls)).toEqual([
+      `docker buildx imagetools create -t ${repo}:sha-aaaaaaa -t ${repo}:edge -t ${repo}:latest ` +
+        `${repo}:sha-aaaaaaa-amd64 ${repo}:sha-aaaaaaa-arm64`,
+    ]);
+  });
+
+  it('publishes sha-<7> alone when main has moved past this run, and says why', () => {
+    const outcome = drive({ GITHUB_REF: 'refs/heads/main', STUB_MAIN_HEAD: NEWER });
+    expect(outcome.status).toBe(0);
+    expect(creates(outcome.calls)).toEqual([
+      `docker buildx imagetools create -t ${repo}:sha-aaaaaaa ` +
+        `${repo}:sha-aaaaaaa-amd64 ${repo}:sha-aaaaaaa-arm64`,
+    ]);
+    expect(outcome.stdout).toContain(`main is at ${NEWER}, not ${SHA}`);
+  });
+
+  it('never reads the head, nor moves a pointer, off refs/heads/main', () => {
+    const outcome = drive({ GITHUB_REF: 'refs/heads/feature', STUB_MAIN_HEAD: SHA });
+    expect(outcome.status).toBe(0);
+    expect(outcome.calls.filter((call) => call.startsWith('gh '))).toEqual([]);
+    expect(creates(outcome.calls)).toEqual([
+      `docker buildx imagetools create -t ${repo}:sha-aaaaaaa ` +
+        `${repo}:sha-aaaaaaa-amd64 ${repo}:sha-aaaaaaa-arm64`,
+    ]);
+  });
+
+  it('fails, publishing nothing, when main’s head cannot be read', () => {
+    const outcome = drive({ GITHUB_REF: 'refs/heads/main', STUB_GH_API_EXIT: '1' });
+    expect(outcome.status).not.toBe(0);
+    expect(creates(outcome.calls)).toEqual([]);
   });
 });
 
