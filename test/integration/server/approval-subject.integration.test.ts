@@ -66,8 +66,11 @@ const taskWithAttempt = async (key: string) => {
 const plan = async (taskId: string, version: number, producedByRunId: string | null) =>
   (
     await one<{ id: string }>(
-      `insert into artifacts (task_id, type, version, data, schema_version, produced_by_run_id)
-       values ($1, 'ImplementationPlan', $2, '{"estimated_size": "L"}'::jsonb, '1', $3)
+      // `redaction_count` is required of every new artifact (migration 0038's
+      // `artifacts_redaction_count_recorded`): 0 is "the redactor ran and replaced nothing".
+      `insert into artifacts (task_id, type, version, data, schema_version, produced_by_run_id,
+                              redaction_count)
+       values ($1, 'ImplementationPlan', $2, '{"estimated_size": "L"}'::jsonb, '1', $3, 0)
        returning id`,
       [taskId, version, producedByRunId],
     )

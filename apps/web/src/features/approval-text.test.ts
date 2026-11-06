@@ -71,10 +71,12 @@ describe('reasonCopy', () => {
       source: 'stage_override',
     });
     expect(size.section).toBe('repository');
-    expect(size.stop).toContain('size_threshold');
-    // The override may only have turned above_size on: its plan_approval is named too, and the
-    // dial — which would not stop that ask — is not (review of PR #76).
-    expect(size.stop).toContain('plan_approval');
+    expect(size.stop).toContain('size threshold');
+    // The override may only have turned above_size on: its plan-approval setting is named too, and
+    // the dial, which would not stop that ask, is not (review of PR #76). In plain words: visible
+    // copy names no configuration file or key (`admin-names-census.test.ts`).
+    expect(size.stop).toContain('plan-approval setting');
+    expect(size.stop).toContain('repository configuration');
     expect(size.stop).not.toContain('autonomy dial');
   });
 
