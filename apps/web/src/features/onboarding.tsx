@@ -413,7 +413,7 @@ const FinishStep = ({
 const purposeOf = (step: WizardStepId, reads: WizardReads | null): string => {
   switch (step) {
     case 'connect':
-      return 'Name the project, point it at its repository and bind the integrations it uses. A few minutes; nothing is charged.';
+      return 'Point the project at its repository, name it and bind the integrations it uses. A few minutes; nothing is charged.';
     case 'discovery':
       return `An agent reads your repository and reports how ready it is for agents. It is one agent run, usually some minutes long, and costs ${
         reads?.ceilingUsd === null || reads === null

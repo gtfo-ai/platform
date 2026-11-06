@@ -2,9 +2,10 @@
  * The New project wizard's first step, **Connect** — three sections on one page (research/19 § 6):
  * the project's details, the integrations it uses, and the tracker's ticket lifecycle.
  *
- * - **Project details** creates the project (`POST /api/projects`, with an `Idempotency-Key` per
- *   intent) and, once it exists, shows it with the git provider's default branch — the same
- *   `DefaultBranch` the settings page renders (product/18:55).
+ * - **Project details** asks for the repository first and proposes the name and key from it
+ *   (S-25.8, `repository-proposal.ts`), creates the project (`POST /api/projects`, with an
+ *   `Idempotency-Key` per intent) and, once it exists, shows it with the git provider's default
+ *   branch — the same `DefaultBranch` the settings page renders (product/18:55).
  * - **Integrations** tests and binds the integrations that exist. **It does not create one** (PROGRESS
  *   backlog 55): that is the Integrations screen's, which an empty list links to. A *Test connection*
  *   shows its answer beside the integration it tested, through the Integrations screen's own
@@ -28,6 +29,13 @@ import { SaveBindingsButton, useBindingSelection } from './binding-selection.js'
 import { ConnectionTestResult } from './connection-test-result.js';
 import { DefaultBranch } from './default-branch.js';
 import {
+  draftWithName,
+  draftWithRepositoryUrl,
+  type EditedFields,
+  EMPTY_PROJECT_DRAFT,
+  type ProjectDraft,
+} from './repository-proposal.js';
+import {
   TicketLifecycle,
   wizardBindingConfig,
   wizardWritesDefaultBlock,
@@ -50,14 +58,19 @@ const Section = ({
   </section>
 );
 
-/** Project details, before the project exists: the create form. */
+/**
+ * Project details, before the project exists: the create form. The repository comes first and the
+ * name and key are proposed from it (S-25.8, `repository-proposal.ts`); a field the person typed
+ * into is theirs, and a later change of the URL leaves it alone.
+ */
 const CreateProjectForm = ({
   onCreated,
 }: {
   readonly onCreated: (key: string) => void;
 }): ReactElement => {
   const commands = useOnboardingCommands();
-  const [draft, setDraft] = useState({ key: '', name: '', repoUrl: '', defaultBranch: '' });
+  const [draft, setDraft] = useState<ProjectDraft>(EMPTY_PROJECT_DRAFT);
+  const [edited, setEdited] = useState<EditedFields>({ name: false, key: false });
   return (
     <form
       className="flex flex-col gap-2"
@@ -77,21 +90,28 @@ const CreateProjectForm = ({
       }}
     >
       <Field
-        label="Key"
-        hint="Lower-case letters, digits and underscores; it ends up in addresses and branch names."
-        value={draft.key}
-        onChange={(event) => setDraft({ ...draft, key: event.target.value })}
+        label="Repository URL"
+        hint="https:// or file:// — an SSH remote is refused. The name and the key below are proposed from it."
+        value={draft.repoUrl}
+        onChange={(event) => setDraft(draftWithRepositoryUrl(draft, edited, event.target.value))}
       />
       <Field
         label="Name"
+        hint="Proposed from the repository’s name; any name you like."
         value={draft.name}
-        onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+        onChange={(event) => {
+          setEdited({ ...edited, name: true });
+          setDraft(draftWithName(draft, edited, event.target.value));
+        }}
       />
       <Field
-        label="Repository URL"
-        hint="https:// or file:// — an SSH remote is refused."
-        value={draft.repoUrl}
-        onChange={(event) => setDraft({ ...draft, repoUrl: event.target.value })}
+        label="Key"
+        hint="Proposed from the name: lower-case letters, digits and underscores, because it ends up in addresses and branch names."
+        value={draft.key}
+        onChange={(event) => {
+          setEdited({ ...edited, key: true });
+          setDraft({ ...draft, key: event.target.value });
+        }}
       />
       <Field
         label="Default branch"

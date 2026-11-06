@@ -175,8 +175,13 @@ Every step is also on the project's **Settings** page, so nothing is reachable o
 
 ### Step 1 — Connect
 
-Three sections on one page. **Project details**: give the project a **key**, a name, a repository
-URL and its **default branch** — *Create project* creates it and keeps you on this step. Then
+Three sections on one page. **Project details** starts from the **repository URL**: paste it, and
+the **name** and the **key** are proposed from it — `https://gitlab.com/autix/autix-core.git` (or
+`git@gitlab.com:autix/autix-core.git`) proposes the name *autix-core* and the key `autix_core`. Both
+stay editable: a field you typed into is yours, and changing the URL afterwards leaves it alone;
+while you have not touched the key, it follows the name you type. Then the **default branch**, which
+is **not** proposed — a URL does not say which branch is the default, and nothing has asked the git
+provider yet. *Create project* creates the project and keeps you on this step. Then
 **Integrations**: the ones it uses. Then **Ticket lifecycle** (below).
 
 The default branch is required (WP-139): it is the branch every run checks out, every merge request

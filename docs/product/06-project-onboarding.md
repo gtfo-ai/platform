@@ -16,6 +16,9 @@ Populate the project's knowledge base with the context a senior colleague would 
 ### Step 1 — Connect (required)
 *Amended 2026-11-06 (M25).* The step asks for the **repository first**, and proposes the project's name, key and default
 branch from it. Each proposal stays editable. The key's hint then explains a default rather than asking a riddle.
+*As built (S-25.8):* the name and the key are proposed from the URL in the browser, and a field the person edited is
+never overwritten by a later URL change. A URL does not carry the default branch and the project has no git binding yet,
+so the field starts empty; the git provider's default is proposed once a git integration is bound (WP-139/WP-142).
 
 Repository, task-management binding (Jira project + pick-up rule), Slack channel, observability bindings. The platform clones the repository and validates access.
 
