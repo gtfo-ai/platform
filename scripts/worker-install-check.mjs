@@ -46,24 +46,29 @@
  *     the four registry digests;
  *  2. **the install**: the piped line exits 0; every container of the project is running — the
  *     `remote-worker`, the `launcher`, the **`updater`** and both socket proxies — and each that
- *     declares a healthcheck (the worker, the launcher, the updater) is `healthy`; the one-shots
- *     exited 0; the worker runs the registry digest the core advertises; the local page and
- *     `/api/local/state` answer `200` on `127.0.0.1:<port>`;
+ *     declares a healthcheck (the worker, the launcher, the updater) is `healthy`; the four
+ *     one-shots (`launcher-token`, `pull-runtime-image`, `pull-egress-image`, `pull-git-image`) are
+ *     there and exited 0, and no service is there that neither list names; the worker, the updater,
+ *     the launcher and the run and egress pulls run the registry digests the core advertises; the
+ *     local page and `/api/local/state` answer `200` on `127.0.0.1:<port>`;
  *  3. **the re-run** of the same line exits 0, says the worker is already installed, and **recreates
  *     nothing**: every container id (and creation time) is the one before; the services are healthy
  *     and the page answers again;
  *  4. **`--uninstall --purge`** (the same piped line) exits 0 and leaves **nothing**: no container,
- *     volume or network of the project, neither named volume nor the run network, and no folder;
+ *     volume or network of the project, neither named volume nor the run network, and no folder.
+ *     The launcher's repository cache volume is made first (`docker volume create`; only a run's
+ *     first clone makes it, and none runs here), so the purge's removal of it is exercised;
  *  5. nothing of the check is left: the core down with its volumes, the registry and the pushed image
  *     references removed — whatever happened (`finally`).
  *
- * Every exec and request is bounded; a failure prints the command's output with every secret value
+ * Every exec and request is bounded, each stage by its own bound, and the bounds sum under the
+ * workflow job's 30 min (see {@link INSTALL_MS}'s neighbours); a failure prints the command's output with every secret value
  * the check holds replaced by its name. Not a `verify` target, for the reason none of the Docker
  * checks are: it needs a daemon. With no daemon or no image it exits 1 naming what is missing.
  */
 import { execFile } from 'node:child_process';
 import { lookup } from 'node:dns/promises';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -104,7 +109,7 @@ const WORKER_NAMES = {
   APP_WORKER_RUN_NETWORK: `agentic-install-check-${SUFFIX}-run-egress`,
   APP_WORKER_UI_PORT: String(UI_PORT),
 };
-/** The services that keep running; the others are one-shots that exit 0. */
+/** The services that keep running. */
 const LONG_RUNNING = [
   'remote-worker',
   'launcher',
@@ -112,6 +117,8 @@ const LONG_RUNNING = [
   'docker-socket-proxy',
   'updater-docker-proxy',
 ];
+/** The one-shots, each of which must exist and have exited 0 — one missing from the bundle fails. */
+const ONE_SHOTS = ['launcher-token', 'pull-egress-image', 'pull-git-image', 'pull-runtime-image'];
 /** The services whose healthcheck must read `healthy` (the image's, or the bundle's own). */
 const HEALTHCHECKED = ['remote-worker', 'launcher', 'updater'];
 const IMAGES = {
@@ -127,12 +134,30 @@ const ADMIN_EMAIL = 'operator@example.test';
 const ADMIN_PASSWORD = 'install-check-not-a-real-password';
 const SECRETS = { SECRET_KEY, ADMIN_PASSWORD };
 
+/**
+ * The bounds, each a stage's own, so a wedged one ends with a `FAIL` line naming it. Their sum stays
+ * under the workflow job's 30 min (`docker-checks.yml`): registry 1 + its answer 1 + four pushes 6 +
+ * core up 3 + its health 1 + install 5 + health 1.5 + re-run 3 + health 1.5 + uninstall 2 + core down
+ * 2 = 27 min, the rest for the docker queries (measured green: about 1 min to the core's first answer
+ * — registry, four pushes and the core — and about 2.5 min in all).
+ */
 const DOCKER_QUERY_MS = 60_000;
-const COMPOSE_MS = 15 * 60_000;
-/** The installer's own wait is 300 s (`AGENTIC_INSTALL_WAIT_SECONDS`); a pull comes before it. */
-const INSTALL_MS = 12 * 60_000;
+const REGISTRY_MS = 60_000;
+const PUSH_MS = 90_000;
+const CORE_UP_MS = 3 * 60_000;
+const CORE_DOWN_MS = 2 * 60_000;
+/** The installer's own wait for the worker (`AGENTIC_INSTALL_WAIT_SECONDS`), inside the run's bound. */
+const INSTALLER_WAIT_SECONDS = 180;
+/** A first install: the pull and the installer's own wait. */
+const INSTALL_MS = 5 * 60_000;
+/** A re-run: nothing to pull, the same wait. */
+const RERUN_MS = 3 * 60_000;
+/** `--uninstall --purge`: one `compose down --volumes` and a volume removal. */
+const UNINSTALL_MS = 2 * 60_000;
 /** How long every service may take to read healthy once the installer has returned. */
-const HEALTHY_MS = 3 * 60_000;
+const HEALTHY_MS = 90_000;
+/** A host-name lookup: the installer's address for the core. */
+const LOOKUP_MS = 10_000;
 
 const stages = createStages();
 const failures = [];
@@ -162,7 +187,7 @@ const lines = (stdout) =>
     .map((line) => line.trim())
     .filter(Boolean);
 
-const core = (composeArgs) =>
+const core = (composeArgs, timeoutMs = DOCKER_QUERY_MS) =>
   run(
     'docker',
     [
@@ -185,9 +210,19 @@ const core = (composeArgs) =>
         APP_WORKSPACE_CACHE_VOLUME: `${CORE}-repo-cache`,
       },
       maxBuffer: 64 * 1024 * 1024,
-      timeout: COMPOSE_MS,
+      timeout: timeoutMs,
     },
   );
+
+/** The core's compose, its output and errors redacted, for what a failure prints. */
+const redactedCore = async (composeArgs) => {
+  try {
+    const { stdout, stderr } = await core(composeArgs);
+    return { stdout: redact(stdout), stderr: redact(stderr) };
+  } catch (error) {
+    throw new Error(redact(`${String(error)}\n${error?.stdout ?? ''}${error?.stderr ?? ''}`));
+  }
+};
 
 const freePort = () =>
   new Promise((resolve, reject) => {
@@ -220,7 +255,7 @@ const resolveHostAddress = async () => {
     throw new Error(`the host address for containers is not a host name or address: '${address}'`);
   }
   try {
-    await lookup(address);
+    await stages.within(`resolving ${address}`, LOOKUP_MS, () => lookup(address));
   } catch {
     throw new Error(
       `this host does not resolve '${address}', and the installer's own curl must reach the core there ` +
@@ -288,7 +323,10 @@ const containerRows = async () => {
     .sort((a, b) => a.service.localeCompare(b.service));
 };
 
-/** Whether every long-running service runs, every healthchecked one is healthy, every one-shot exited 0. */
+/**
+ * Whether every long-running service runs, every healthchecked one is healthy, every one-shot exists
+ * and exited 0, and no service is there that neither list names.
+ */
 const serviceProblems = (rows) => {
   const problems = [];
   for (const service of LONG_RUNNING) {
@@ -299,9 +337,16 @@ const serviceProblems = (rows) => {
       problems.push(`${service}: ${row.health}`);
     }
   }
-  for (const row of rows.filter((candidate) => !LONG_RUNNING.includes(candidate.service))) {
-    if (row.state !== 'exited' || row.exitCode !== '0') {
-      problems.push(`${row.service}: ${row.state} (exit ${row.exitCode})`);
+  for (const service of ONE_SHOTS) {
+    const row = rows.find((candidate) => candidate.service === service);
+    if (row === undefined) problems.push(`${service}: missing`);
+    else if (row.state !== 'exited' || row.exitCode !== '0') {
+      problems.push(`${service}: ${row.state} (exit ${row.exitCode})`);
+    }
+  }
+  for (const row of rows) {
+    if (!LONG_RUNNING.includes(row.service) && !ONE_SHOTS.includes(row.service)) {
+      problems.push(`${row.service}: a service this check does not know`);
     }
   }
   return problems;
@@ -332,10 +377,14 @@ const withoutPullProgress = (text) =>
     .join('\n');
 
 /** The person's line, run by a shell with `pipefail`, so a failed download is not an empty script. */
-const pipeLine = async (url, scriptArgs) => {
+const pipeLine = async (url, scriptArgs, timeoutMs) => {
   const line = `curl -fsSL '${url}' | sh -s -- ${scriptArgs.join(' ')}`;
   console.log(`$ ${line}`);
-  const env = { ...process.env, ...WORKER_NAMES };
+  const env = {
+    ...process.env,
+    ...WORKER_NAMES,
+    AGENTIC_INSTALL_WAIT_SECONDS: String(INSTALLER_WAIT_SECONDS),
+  };
   // The installer unsets what would re-pin it; nothing of this process's own compose settings leaks.
   delete env.PLATFORM_TAG;
   try {
@@ -350,14 +399,14 @@ const pipeLine = async (url, scriptArgs) => {
         url,
         ...scriptArgs,
       ],
-      { env, cwd: tmpdir(), timeout: INSTALL_MS, maxBuffer: 64 * 1024 * 1024 },
+      { env, cwd: tmpdir(), timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 },
     );
     const output = redact(`${stdout}${stderr}`);
     console.log(withoutPullProgress(output).replace(/^/gm, '  | '));
     return { ok: true, output };
   } catch (error) {
     const ended = error?.killed
-      ? `killed (${error.signal ?? 'signal'}) after ${INSTALL_MS / 1000} s`
+      ? `killed (${error.signal ?? 'signal'}) after ${timeoutMs / 1000} s`
       : `exit ${String(error?.code ?? 'unknown')}`;
     const output = redact(`${error?.stdout ?? ''}${error?.stderr ?? ''}`);
     console.log(withoutPullProgress(output).replace(/^/gm, '  | '));
@@ -429,7 +478,7 @@ const main = async () => {
   coreDirectory = path.join(directory, 'core');
   /** The installer's folder: absent, so the first run makes it (a person's `~/agentic-worker`). */
   const workerDirectory = path.join(directory, 'agentic-worker');
-  await run('mkdir', ['-p', coreDirectory]);
+  await mkdir(coreDirectory, { recursive: true });
   const pushed = [];
   let installed = false;
   try {
@@ -439,10 +488,10 @@ const main = async () => {
     await docker(
       ['run', '-d', '--name', REGISTRY_CONTAINER, '-p', `${registryPort}:5000`, 'registry:2'],
       {
-        timeoutMs: COMPOSE_MS,
+        timeoutMs: REGISTRY_MS,
       },
     );
-    await waitForOk(stages, `http://127.0.0.1:${registryPort}/v2/`);
+    await waitForOk(stages, `http://127.0.0.1:${registryPort}/v2/`, { totalMs: 60_000 });
     const namespace = `localhost:${registryPort}/acme`;
     const digests = {};
     for (const [key, image] of Object.entries(IMAGES)) {
@@ -450,7 +499,7 @@ const main = async () => {
       stages.set(`docker push ${tagged}`);
       pushed.push(tagged);
       await docker(['image', 'tag', `${image}:${TAG}`, tagged]);
-      await docker(['image', 'push', '--quiet', tagged], { timeoutMs: COMPOSE_MS });
+      await docker(['image', 'push', '--quiet', tagged], { timeoutMs: PUSH_MS });
       // The registry's own answer (under the containerd store it is not the local id).
       const { response } = await boundedFetch(
         stages,
@@ -494,8 +543,8 @@ const main = async () => {
       ].join('\n'),
     );
     stages.set('core: docker compose up');
-    await core(['up', '-d', '--no-build', '--wait', 'app']);
-    await waitForOk(stages, `http://127.0.0.1:${CORE_PORT}/healthz`);
+    await core(['up', '-d', '--no-build', '--wait', 'app'], CORE_UP_MS);
+    await waitForOk(stages, `http://127.0.0.1:${CORE_PORT}/healthz`, { totalMs: 60_000 });
 
     // 1. What the core serves.
     stages.set('the served script and bundle');
@@ -520,7 +569,7 @@ const main = async () => {
     const installArgs = ['--dir', workerDirectory, '--no-open'];
     stages.set('the install');
     installed = true;
-    const first = await pipeLine(installUrl, installArgs);
+    const first = await pipeLine(installUrl, installArgs, INSTALL_MS);
     check('the install line exits 0', first.ok, first.ended);
     check(
       'the installer says the worker is running',
@@ -541,18 +590,27 @@ const main = async () => {
       updater?.state === 'running' && updater.health === 'healthy',
       updater === undefined ? 'missing' : `${updater.state}/${updater.health}`,
     );
-    const worker = afterInstall.rows.find((row) => row.service === 'remote-worker');
-    check(
-      'the worker runs the registry digest the core advertises',
-      worker?.image === reference('platform'),
-      worker?.image,
-    );
+    // Each service on the registry digest the core advertises for it — this run's build.
+    for (const [service, key] of [
+      ['remote-worker', 'platform'],
+      ['updater', 'platform'],
+      ['launcher', 'platform_launcher'],
+      ['pull-runtime-image', 'platform_runtime'],
+      ['pull-egress-image', 'platform_egress'],
+    ]) {
+      const row = afterInstall.rows.find((candidate) => candidate.service === service);
+      check(
+        `${service} runs the registry digest the core advertises (${key})`,
+        row?.image === reference(key),
+        row?.image ?? 'missing',
+      );
+    }
     const page = await pageAnswers();
     check(`the local page answers on 127.0.0.1:${UI_PORT}`, page.ok, page.detail);
 
     // 3. The re-run: a repair that recreates nothing.
     stages.set('the re-run');
-    const second = await pipeLine(installUrl, installArgs);
+    const second = await pipeLine(installUrl, installArgs, RERUN_MS);
     check('the re-run exits 0', second.ok, second.ended);
     check(
       'the re-run says the worker is already installed and recreates nothing',
@@ -575,14 +633,23 @@ const main = async () => {
     const pageAgain = await pageAnswers();
     check('the local page answers after the re-run', pageAgain.ok, pageAgain.detail);
 
-    // 4. Uninstall and purge.
+    // 4. Uninstall and purge. The launcher makes its repository cache volume at a run's first
+    // clone, and no run happens here, so it is made by hand: the purge's own removal of it (a
+    // volume Compose does not own) is then exercised rather than skipped.
     stages.set('the uninstall');
-    const removed = await pipeLine(installUrl, [
-      '--uninstall',
-      '--purge',
-      '--dir',
-      workerDirectory,
-    ]);
+    await docker(['volume', 'create', WORKER_NAMES.APP_WORKER_CACHE_VOLUME]);
+    check(
+      `the launcher's cache volume ${WORKER_NAMES.APP_WORKER_CACHE_VOLUME} exists before the purge`,
+      await docker(['volume', 'inspect', WORKER_NAMES.APP_WORKER_CACHE_VOLUME]).then(
+        () => true,
+        () => false,
+      ),
+    );
+    const removed = await pipeLine(
+      installUrl,
+      ['--uninstall', '--purge', '--dir', workerDirectory],
+      UNINSTALL_MS,
+    );
     check('the uninstall line exits 0', removed.ok, removed.ended);
     const left = await projectObjects();
     const leftNamed = await namedObjectsPresent();
@@ -592,6 +659,10 @@ const main = async () => {
       ...left.networks.map((name) => `network ${name}`),
       ...leftNamed,
     ];
+    check(
+      `the purge removed the cache volume ${WORKER_NAMES.APP_WORKER_CACHE_VOLUME}`,
+      !leftNamed.includes(`volume ${WORKER_NAMES.APP_WORKER_CACHE_VOLUME}`),
+    );
     check(
       `no container, volume or network of ${PROJECT} is left, nor the named volumes and run network`,
       leftOver.length === 0,
@@ -605,7 +676,7 @@ const main = async () => {
     installed = !(leftOver.length === 0 && !folderLeft);
   } catch (error) {
     failures.push(`${stages.current}: ${redact(String(error?.stderr ?? '') || String(error))}`);
-    await describeInstance(core, 'core ').catch(() => undefined);
+    await describeInstance(redactedCore, 'core ').catch(() => undefined);
     const rows = await containerRows().catch(() => []);
     if (rows.length > 0) console.error(`--- ${PROJECT}: ${summary(rows)}`);
   } finally {
@@ -641,7 +712,7 @@ const main = async () => {
         await docker(['volume', 'rm', volume]).catch(() => undefined);
       }
     }
-    await core(['down', '-v', '--remove-orphans']).catch(() => undefined);
+    await core(['down', '-v', '--remove-orphans'], CORE_DOWN_MS).catch(() => undefined);
     await docker(['container', 'rm', '-f', REGISTRY_CONTAINER]).catch(() => undefined);
     for (const image of pushed) await docker(['image', 'rm', image]).catch(() => undefined);
     await rm(directory, { recursive: true, force: true });
