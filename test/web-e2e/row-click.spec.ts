@@ -68,6 +68,16 @@ const hitAtCentre = async (page: Page, target: Locator): Promise<string> => {
   });
 };
 
+/** Whether the browser's hit-test at the centre of `target` reaches it (or something inside it). */
+const onTopAtCentre = async (page: Page, target: Locator): Promise<boolean> => {
+  await settle(page, target);
+  return target.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return hit !== null && (hit === element || element.contains(hit));
+  });
+};
+
 test('Home: a press on a Running now row’s meta line opens the run', async ({ page }) => {
   const row = page
     .getByRole('list', { name: 'Running now' })
@@ -117,15 +127,27 @@ test('Home: a press on a Needs you row’s meta line opens the task, and so does
   await expect(page).toHaveURL(`/tasks/${IDS.taskFeature}`);
 });
 
-test('Home: a press on a project’s counts opens the project', async ({ page }) => {
+test('Home: a press on a project’s meta line opens it, and its counts keep their tooltips', async ({
+  page,
+}) => {
   const row = page
     .getByRole('list', { name: 'Projects' })
     .getByRole('listitem')
     .filter({ has: page.getByRole('link', { name: /Demo service/ }) });
-  const counts = row.locator('[data-row-trailing]');
-  // Calibration: the counts are under the project's link, not a target of their own.
-  expect(await hitAtCentre(page, counts)).toBe(`a /projects/${PROJECT_KEY}`);
-  await pressAtCentre(page, counts);
+  // product/10: every number shown has a tooltip. A native `title=` under the row link's `::after`
+  // would never show, so the counts and the cost are lifted above it: the browser's hit-test at
+  // their centre is the span that carries the tooltip, not the link.
+  for (const definition of [
+    'Tasks in this project that are not done or cancelled.',
+    'Provider-reported cost for this project over the last 30 days.',
+  ]) {
+    const fact = row.locator(`[title="${definition}"]`);
+    expect(await onTopAtCentre(page, fact), definition).toBe(true);
+  }
+  const meta = row.locator('[data-row-meta]');
+  // Calibration: the meta line is under the project's link, not a target of its own.
+  expect(await hitAtCentre(page, meta)).toBe(`a /projects/${PROJECT_KEY}`);
+  await pressAtCentre(page, meta);
   await expect(page).toHaveURL(`/projects/${PROJECT_KEY}`);
 });
 

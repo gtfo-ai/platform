@@ -65,7 +65,7 @@ import {
 } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { MetricStrip } from '../ui/metric-strip.js';
-import { ROW_LINK_HOST, rowLink } from '../ui/row-link.js';
+import { ROW_LINK_HOST, ROW_LINK_LIFT, rowLink } from '../ui/row-link.js';
 import { StateLabel, StatusIcon } from '../ui/status.js';
 import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 
@@ -247,7 +247,10 @@ const TicketRow = ({ ticket }: { readonly ticket: ShadowBatchTicket }): ReactEle
       )}
       {ticket.report === null ? null : <HumanSideOfReport report={ticket.report} />}
       {ticket.report === null || ticket.report.notes === '' ? null : (
-        <UntrustedProse className="text-fg-muted text-xs" value={ticket.report.notes} />
+        // Lifted above the row's link (S-23.26): the notes stay selectable and do not open the task.
+        <div className={ROW_LINK_LIFT}>
+          <UntrustedProse className="text-fg-muted text-xs" value={ticket.report.notes} />
+        </div>
       )}
     </li>
   );

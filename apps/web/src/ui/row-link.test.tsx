@@ -28,7 +28,7 @@ import {
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ListBox, ListRow } from './list-box.js';
-import { ROW_LINK_ATTRIBUTE, ROW_LINK_HOST, rowLink } from './row-link.js';
+import { ROW_LINK_ATTRIBUTE, ROW_LINK_HOST, ROW_LINK_LIFT, rowLink } from './row-link.js';
 
 const CSS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'styles.css'), 'utf8');
 
@@ -105,9 +105,22 @@ describe('rowLink', () => {
         CSS,
       );
     expect(lift, 'the lift rule is missing or out of the components layer').not.toBeNull();
-    for (const control of ['a[href]', 'button', 'input', 'select', 'summary', 'label']) {
-      expect(lift?.[1]).toContain(control);
+    // Every control, anything with a native tooltip (a count's or a cost's `title=`, product/10:
+    // every number shown has one) and the explicit lift class.
+    for (const lifted of [
+      'a[href]',
+      'button',
+      'input',
+      'select',
+      'summary',
+      'label',
+      '[title]',
+      `.${ROW_LINK_LIFT}`,
+    ]) {
+      expect(lift?.[1]).toContain(lifted);
     }
+    // A pulsing beacon after the link is painted above its `::after`, so it lets the press through.
+    expect(rule(`.${ROW_LINK_HOST} .status-running`)).toContain('pointer-events: none');
   });
 });
 
@@ -128,6 +141,9 @@ describe('a row with a row link', () => {
   });
 
   it('has no handler of its own: a click on the meta text navigates nowhere', async () => {
+    // The guard against a row `onClick`: happy-dom has no layout, so this click is not under the
+    // link's `::after` — it lands on the meta span and bubbles through the `<li>`. Only a handler on
+    // the row (or on the box) could navigate from here, and the primitive forbids one.
     const router = mount(() => undefined);
     const meta = await screen.findByText('DEMO · 3 open');
     await act(async () => {

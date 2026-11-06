@@ -265,6 +265,11 @@ body {
  * handler is put on the row: it stays one real link — tab order, a middle- or ⌘-click into a new
  * tab, *Copy link* and a screen reader's list of links are the browser's own.
  *
+ * Lifted as well: an element with a native `title=` — every number shown has a tooltip
+ * (product/10), and a tooltip under the `::after` would never show, so a press on a count or a cost
+ * shows its definition rather than opening the row — and `.row-link-lift`, for a block of text a
+ * reader should be able to select (a row's free-text notes).
+ *
  * Two halves on purpose. The lift is in the components layer, so a utility on a control
  * (`sr-only`'s `position: absolute`, an `absolute` badge) still wins over `relative` — a visually
  * hidden checkbox stays hidden. The stretch, the hover and the ring are unlayered, so a row's
@@ -282,7 +287,9 @@ body {
       summary,
       label,
       [role="button"],
-      [tabindex]:not([tabindex="-1"])
+      [tabindex]:not([tabindex="-1"]),
+      [title],
+      .row-link-lift
     ):not([data-row-link]) {
     position: relative;
     z-index: 1;
@@ -332,6 +339,15 @@ body {
 
 .status-running {
   animation: status-running-pulse 1.6s ease-in-out infinite;
+}
+
+/*
+ * Whole-row click targets (above): a pulsing beacon (an opacity animation) is painted in the
+ * positioned layer, so one placed after the row link would sit above the link's `::after` and
+ * swallow the press. It is click-through instead — the press reaches the row link under it.
+ */
+.row-link-host .status-running {
+  pointer-events: none;
 }
 
 /* The skeleton's shimmer (`ui/skeleton.tsx`), on the same terms. */
