@@ -430,7 +430,7 @@ export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, Cla
   },
   protocol_outdated: {
     word: 'Needs an update',
-    fix: 'It speaks an older version than this platform accepts. Its updater fixes this within 5 minutes; to do it now, download the compose file again and run “docker compose up -d”.',
+    fix: 'It speaks an older version than this platform accepts. Its updater fixes this within a minute or two; to do it now, download the compose file again and run “docker compose up -d”.',
   },
   platform_images_unresolved: {
     word: 'The platform can’t name its run images',

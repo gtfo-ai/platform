@@ -177,7 +177,8 @@ so the updater needs no database credential. Settings → *Updates* (admin) rend
 
 ### 6. Worker mode: the sequence
 
-The worker's updater polls the core's `release` every 5 minutes and on every `426` the worker
+The worker's updater polls the core's `release` every 5 minutes *(amended 2026-11-06: at start, then every
+minute, backing off on failure — see the amendment at the end)* and on every `426` the worker
 reports. A different set of digests, each verified (decision 3) → it asks the worker process (local `POST /internal/drain` on the
 worker's own compose network, never published) to stop claiming, waits until it reports **idle** (no run
 held), then the apply container (from the verified new image, carrying its own template): pull the verified images (including the run and egress images, so the
@@ -453,3 +454,31 @@ older build.
    older updater (the folder mounted at its host path) applies as before. The only refusal added is
    for an updater with no `host-bundle` mount, a compose file that predates this, and it names the
    fix: download the compose file again.
+
+## Amendment (2026-11-06, owner) — decision 6: the worker's updater asks at start and every minute, and backs off on failure
+
+**Why.** A worker installed during a deploy started one build behind its core, and the Add-a-worker
+wizard said "It has an older build than this platform" for about 7 minutes (installed 08:47 UTC, the
+update finished 08:54) before its updater applied the update. The owner: updates should land faster.
+
+1. **At start, then every minute.** The updater asks the core's `release` at once when it starts (after
+   the start-up recovery), not one interval in, and then every `APP_UPDATE_POLL_SECONDS`, whose default
+   is now **60** (was 300). The variable and its bounds (1 to 86400 s) are unchanged; a `426` still wakes
+   a poll at once. The request is one small `GET`, and verification is not repeated by it: the
+   attestations are read only when the advertised digests differ from the running ones, and a set
+   that verified is **remembered by its digests**, so a poll that answers the same set again (after a
+   pull that failed, say) does not verify it again. The running set's build is read once, as before.
+2. **A failed poll backs off.** A poll the updater will ask again later — the core did not answer or
+   answered something other than its release, refused the worker's credential, a registry or Sigstore's
+   trust root did not answer, or the verified images could not be pulled — doubles the wait before the
+   next (60 → 120 → 240 → 300 s), capped at **5 minutes** (or at the configured interval, when an
+   operator set a longer one), so a broken core is not asked every minute. The first poll that works
+   resets the wait to the interval. A refusal (an attestation that does not verify, a downgrade) is not
+   a failed poll: it is settled for that set, as before.
+3. **What did not change.** Drain-then-idle, the apply and its rollback, the report and the downgrade
+   bound are as decision 6 and the amendments above state. The time a worker takes to update is still
+   bounded below by its run in flight, which it finishes first.
+
+As built: `apps/server/src/updater/updater.ts` (`nextPollDelayMs`, `MAX_POLL_BACKOFF_MS`, the loop in
+`run`), `config.ts` (`DEFAULT_UPDATE_POLL_SECONDS = 60`), `compose.worker.yml`'s default, and the tests in
+`apps/server/src/updater/updater.test.ts`.

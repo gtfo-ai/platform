@@ -12,7 +12,7 @@
  * | `APP_TRUSTED_IMAGE_REPOSITORY` | the `platform` image's repository, e.g. `ghcr.io/<owner>/platform`; the other three are `-launcher`, `-runtime`, `-egress` beside it (TD-032 §3) |
  * | `APP_TRUSTED_BUILDER` | `<owner>/<repo>/.github/workflows/<file>@<ref>` — the workflow whose attestation is trusted |
  * | `APP_UPDATE_REGISTRY_ENDPOINTS` | optional: `host=origin,…`, where a registry is read from (`registry.ts`; not a trust decision) |
- * | `APP_UPDATE_POLL_SECONDS` | how often `release` is asked, default 300 (TD-032 §6: every 5 minutes) |
+ * | `APP_UPDATE_POLL_SECONDS` | how often `release` is asked, 1 to 86400, default 60 (TD-032 §6 as amended 2026-11-06: at start, then every minute; a failed poll backs off, doubling up to 5 minutes) |
  * | `APP_UPDATE_CHECK_SECONDS` | the apply's `--wait-timeout` and its `core_handshake` bound, default 120 |
  * | `APP_WORKER_LOCAL_URL` | the worker's local listener (`/internal/drain`, `/internal/state`, `/readyz`) |
  * | `APP_WORKER_STATE_DIR` | the `worker-state` volume, read-only: the worker credential `GET release` and `update-report` carry |
@@ -33,7 +33,7 @@ import { parseImageRepositoryName, parseRegistryEndpoints } from './registry.js'
 export const UPDATER_ROLE = 'updater';
 export const UPDATE_APPLY_ROLE = 'update-apply';
 
-export const DEFAULT_UPDATE_POLL_SECONDS = 300;
+export const DEFAULT_UPDATE_POLL_SECONDS = 60;
 export const DEFAULT_UPDATE_CHECK_SECONDS = 120;
 export const DEFAULT_WORKER_LOCAL_URL = 'http://remote-worker:8080';
 export const DEFAULT_UPDATE_STATE_DIR = '/var/lib/platform/updates';

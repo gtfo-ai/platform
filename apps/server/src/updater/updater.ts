@@ -1,15 +1,21 @@
 /**
  * **`ROLE=updater`, worker mode** — WP-287 (2), TD-032 decisions 3, 4 and 6.
  *
- * A long-running container of the worker's compose project. Every {@link UpdaterConfig.pollMs}
- * (five minutes) — and at once when the worker reports a `426` (its `/internal/state` reads
+ * A long-running container of the worker's compose project. **At start** (after the start-up
+ * recovery), then every {@link UpdaterConfig.pollMs} (a minute, TD-032's 2026-11-06 amendment to
+ * decision 6) — and at once when the worker reports a `426` (its `/internal/state` reads
  * `upgrade_required`, looked at every 15 s) — it asks the core's `GET release` with the worker's
- * credential and, when the advertised digests differ from the four this worker runs:
+ * credential. A poll that **failed** (the core did not answer, refused the credential, or a
+ * registry or Sigstore's trust root did not answer) **backs off**: the next waits twice as long,
+ * up to {@link MAX_POLL_BACKOFF_MS}, and the first poll that works resets it
+ * ({@link nextPollDelayMs}). When the advertised digests differ from the four this worker runs:
  *
  *  1. **verifies every advertised digest's build attestation** against the identity configured on
  *     this worker (`attestation.ts`). A digest that does not verify is refused, reported (`failed`,
  *     naming it) **once per advertised set**, and **nothing is pulled**. A worker with no verifier
- *     configured refuses by name, the same way;
+ *     configured refuses by name, the same way. A set that verified is **remembered** (its commit
+ *     and time), so a poll that answers the same set again — after a pull that failed, say — does
+ *     not verify it again; the running set's build is read once for the same reason;
  *  2. **refuses a downgrade** below the running build unless the core's protocol range excludes this
  *     worker (`decide.ts`), reported the same way;
  *  3. **pulls** the four verified references (so a pull failure changes nothing and drains nothing);
@@ -76,6 +82,23 @@ import { parseImageRepositoryName } from './registry.js';
 
 /** How often the worker's `/internal/state` is read for a `426` and, while draining, for idle. */
 export const WORKER_STATE_POLL_MS = 15_000;
+/** The longest a failed poll's back-off waits (TD-032's 2026-11-06 amendment): five minutes. */
+export const MAX_POLL_BACKOFF_MS = 300_000;
+
+/** What one poll came to: `failed` is a poll to be asked again later, and backs the next one off. */
+export type PollOutcome = 'ok' | 'failed';
+
+/**
+ * The wait before the next poll: the configured interval after a poll that worked, doubling with
+ * each consecutive failure up to {@link MAX_POLL_BACKOFF_MS} — or the interval itself, when an
+ * operator configured a longer one than that.
+ */
+export const nextPollDelayMs = (pollMs: number, consecutiveFailures: number): number => {
+  if (consecutiveFailures <= 0) return pollMs;
+  const cap = Math.max(MAX_POLL_BACKOFF_MS, pollMs);
+  return Math.min(pollMs * 2 ** Math.min(consecutiveFailures, 30), cap);
+};
+
 /** The label every apply container carries, valued with the project's name. */
 export const APPLY_LABEL = 'org.platform.update-apply';
 export { HOST_BUNDLE_MOUNT };
@@ -271,7 +294,7 @@ const digestsKey = (digests: CoreImageDigests): string =>
 
 export interface Updater {
   /** One poll, as the loop runs it — exported for the tests. */
-  tick(): Promise<void>;
+  tick(): Promise<PollOutcome>;
   /** Start-up recovery: finish what a crashed apply left (`state.json`). */
   recover(): Promise<void>;
   /** Runs `recover` then the loop until {@link Updater.stop}. */
@@ -290,6 +313,12 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     config.coreUrl ?? (await readStoredCoreUrl(config.workerStateDir).catch(() => null));
   /** The running set's verified build — its commit and time — once read (it does not change). */
   let runningBuild: { readonly commit: string | null; readonly at: Date | null } | null = null;
+  /** The last advertised set that verified, by its digests: not verified again while it is advertised. */
+  let verifiedTarget: {
+    readonly key: string;
+    readonly commit: string;
+    readonly at: Date;
+  } | null = null;
   /** Advertised sets this updater will not try again: refused, rolled back or failed. */
   const settled = new Set<string>();
   let stopped = false;
@@ -431,14 +460,14 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     return { kind: 'verified', commit, at };
   };
 
-  const tick = async (): Promise<void> => {
+  const tick = async (): Promise<PollOutcome> => {
     const coreUrl = await effectiveCoreUrl();
     if (coreUrl === null) {
       logger.info(
         {},
         'no core is configured yet (APP_CORE_URL or the worker’s page); the updater waits',
       );
-      return;
+      return 'ok';
     }
     const core = createCoreClient({
       baseUrl: coreUrl,
@@ -447,7 +476,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     const token = await credential(coreUrl);
     if (token === null) {
       logger.debug({}, 'this worker is not logged in yet; there is nothing to follow');
-      return;
+      return 'ok';
     }
     let answer: Awaited<ReturnType<typeof core.release>>;
     try {
@@ -458,31 +487,40 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       } else {
         logger.warn({ err: error }, 'the core’s release could not be read; asked again later');
       }
-      return;
+      return 'failed';
     }
     const running = runningDigestsOf(config.running);
     const advertised = answer.digests;
     if (advertised === null || running === null || sameDigests(running, advertised)) {
       logger.debug({}, 'nothing to update');
-      return;
+      return 'ok';
     }
-    if (settled.has(digestsKey(advertised))) return;
+    const advertisedKey = digestsKey(advertised);
+    if (settled.has(advertisedKey)) return 'ok';
     // 1. Every digest's attestation, before anything else is read or pulled; one commit for all four.
-    const target = await verifySet(advertised);
-    if (target === null) return;
-    if (target.kind === 'refused') {
-      await refuse(running, advertised, target.why);
-      return;
+    // A set that verified once is not verified again while the core keeps advertising it.
+    let target: { readonly commit: string; readonly at: Date };
+    if (verifiedTarget?.key === advertisedKey) {
+      target = verifiedTarget;
+    } else {
+      const verified = await verifySet(advertised);
+      if (verified === null) return 'failed';
+      if (verified.kind === 'refused') {
+        await refuse(running, advertised, verified.why);
+        return 'ok';
+      }
+      verifiedTarget = { key: advertisedKey, commit: verified.commit, at: verified.at };
+      target = verifiedTarget;
+      logger.info(
+        { advertised, commit: target.commit },
+        'every advertised digest’s build attestation verifies, all four at one commit',
+      );
     }
-    logger.info(
-      { advertised, commit: target.commit },
-      'every advertised digest’s build attestation verifies, all four at one commit',
-    );
     // 2. Not a downgrade (unless the core no longer serves this worker): the running set's build,
     // read the same way. A running set that does not verify cannot be ordered.
     if (runningBuild === null) {
       const current = await verifySet(running);
-      if (current === null) return;
+      if (current === null) return 'failed';
       runningBuild =
         current.kind === 'verified'
           ? { commit: current.commit, at: current.at }
@@ -498,10 +536,10 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       runningAt: runningBuild.at,
       targetAt: target.at,
     });
-    if (decision.kind === 'none') return;
+    if (decision.kind === 'none') return 'ok';
     if (decision.kind === 'refuse') {
       await refuse(running, advertised, decision.why);
-      return;
+      return 'ok';
     }
     // 2b. Where this updater runs, before anything is pulled or drained (S-22.20): a project it
     // cannot apply to — no install folder mounted at the fixed path (a compose file from before
@@ -517,7 +555,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
         advertised,
         `this updater cannot apply an update here: ${error.message}`,
       );
-      return;
+      return 'ok';
     }
     const repositories = repositoriesOf(config.verifier?.repository ?? '');
     const to = Object.fromEntries(
@@ -530,7 +568,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       }
     } catch (error) {
       logger.warn({ err: error }, 'the verified images could not be pulled; asked again later');
-      return;
+      return 'failed';
     }
     // 4. Drain, then wait until idle — however long the run in flight takes.
     logger.info({ to }, 'draining this worker for the update');
@@ -550,7 +588,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       }
       await deps.sleep(WORKER_STATE_POLL_MS);
     }
-    if (stopped) return;
+    if (stopped) return 'ok';
     // 5. The rollback's template, the state, and the apply from the new image.
     await copyFile(deps.templatePath, path.join(config.stateDir, PREVIOUS_TEMPLATE_FILE));
     const plan: UpdatePlan = {
@@ -582,6 +620,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       reported: false,
     });
     await launchApply(plan, to.platform);
+    return 'ok';
   };
 
   const recover = async (): Promise<void> => {
@@ -646,9 +685,9 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     );
   };
 
-  /** Sleeps until the next poll, or until the worker reports a `426`. */
-  const pause = async (): Promise<void> => {
-    const deadline = deps.now().getTime() + config.pollMs;
+  /** Sleeps `ms` until the next poll, or until the worker reports a `426`. */
+  const pause = async (ms: number): Promise<void> => {
+    const deadline = deps.now().getTime() + ms;
     while (!stopped && deps.now().getTime() < deadline) {
       await Promise.race([
         deps.sleep(Math.min(WORKER_STATE_POLL_MS, Math.max(0, deadline - deps.now().getTime()))),
@@ -697,13 +736,26 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
         } catch (error) {
           logger.error({ err: error }, 'the start-up recovery failed');
         }
+        // The first poll is now, not one interval in: a worker installed one build behind its core
+        // asks at once (TD-032's 2026-11-06 amendment).
+        let failures = 0;
         while (!stopped) {
+          let outcome: PollOutcome;
           try {
-            await tick();
+            outcome = await tick();
           } catch (error) {
             logger.error({ err: error }, 'an update poll failed');
+            outcome = 'failed';
           }
-          await pause();
+          failures = outcome === 'failed' ? failures + 1 : 0;
+          const delay = nextPollDelayMs(config.pollMs, failures);
+          if (failures > 0) {
+            logger.info(
+              { consecutive_failures: failures, next_poll_seconds: delay / 1000 },
+              'the poll failed; the next one backs off',
+            );
+          }
+          await pause(delay);
         }
       } finally {
         clearInterval(heartbeat);
