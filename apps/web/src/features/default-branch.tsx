@@ -36,7 +36,7 @@ const CiLocation = ({
   ) : (
     <>
       Where the CI configuration lives is unknown (<UntrustedText value={ci.reason} />
-      ); the CI gate waits rather than reading “no CI”.
+      ); the CI check waits rather than reading “no CI”.
     </>
   );
 

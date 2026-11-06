@@ -718,6 +718,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         },
         [`/api/projects/${fixtures.IDS.project}/config`]: fixtures.effectiveConfig,
         [`/api/projects/${fixtures.IDS.project}/budgets`]: fixtures.budgets,
+        [`/api/projects/${fixtures.IDS.project}/spend`]: fixtures.projectSpend,
         // WP-182: the tracker binding and its statuses, which the lifecycle pick lists read.
         [`/api/projects/${fixtures.IDS.project}/bindings`]: fixtures.projectBindings,
         [`/api/projects/${fixtures.IDS.project}/ticket-statuses`]: fixtures.ticketStatuses,

@@ -663,7 +663,7 @@ describe('the New project wizard', () => {
     const go = screen.getByRole('link', { name: 'Go to Technical discovery' });
     expect(go.getAttribute('href')).toBe('/onboarding?project=acme_api&step=discovery');
     // The step's controls are not rendered, and there is no Continue to press.
-    expect(screen.queryByText('Autonomy dial')).toBeNull();
+    expect(screen.queryByText('How much agents do alone')).toBeNull();
     expect(screen.queryByRole('button', { name: /^Continue to / })).toBeNull();
   });
 
@@ -710,7 +710,7 @@ describe('the New project wizard', () => {
 
   it('holds Continue on How autonomous until the operating mode is saved', async () => {
     openAt(wizardOf('autonomy'), fetchFor('recorded', { materialised: false }));
-    expect(await screen.findByText('Autonomy dial')).toBeTruthy();
+    expect(await screen.findByText('How much agents do alone')).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByText('Save the operating mode to continue.')).toBeTruthy();
     });
@@ -718,7 +718,7 @@ describe('the New project wizard', () => {
     expect(continueButton().disabled).toBe(true);
     cleanup();
     openAt(wizardOf('autonomy'), fetchFor('recorded'));
-    await screen.findByText('Autonomy dial');
+    await screen.findByText('How much agents do alone');
     await waitFor(() => {
       expect(continueButton().disabled).toBe(false);
     });
@@ -728,7 +728,7 @@ describe('the New project wizard', () => {
   // done, then Continue. Before this, each of these drew both.
   it('draws one primary: the step’s own action until it is done, then Continue', async () => {
     openAt(wizardOf('autonomy'), fetchFor('recorded', { materialised: false }));
-    expect(await screen.findByText('Autonomy dial')).toBeTruthy();
+    expect(await screen.findByText('How much agents do alone')).toBeTruthy();
     await waitFor(() => {
       expect(primaryLabels()).toEqual(['Save operating mode']);
     });
@@ -736,7 +736,7 @@ describe('the New project wizard', () => {
     cleanup();
 
     openAt(wizardOf('autonomy'), fetchFor('recorded'));
-    await screen.findByText('Autonomy dial');
+    await screen.findByText('How much agents do alone');
     await waitFor(() => {
       expect(primaryLabels()).toEqual(['Continue to Review and finish']);
     });
@@ -1052,8 +1052,8 @@ describe('the wizard’s step 4, How autonomous', () => {
     const { container } = render(
       createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element,
     );
-    await screen.findByText('Autonomy dial');
-    for (const heading of ['Features', 'Risk classes', 'Project budgets', 'Notifications']) {
+    await screen.findByText('How much agents do alone');
+    for (const heading of ['Features', 'Sensitive areas', 'Project budgets', 'Notifications']) {
       expect(screen.getByText(heading), heading).toBeTruthy();
     }
     // product/19 §124's five card fields, on a card whose behaviour is shipped (WP-24).
@@ -1097,7 +1097,7 @@ describe('the wizard’s step 4, How autonomous', () => {
     const { container } = render(createApp({ fetchImpl: recording, realtime: false }).element);
     const accept = await screen.findByRole('button', { name: 'Accept these classes' });
     // Nothing is applied yet: the configured set is empty while the offer is on the screen.
-    expect(container.textContent).toContain('No risk classes configured');
+    expect(container.textContent).toContain('No sensitive areas configured');
     expect(sent).toEqual([]);
 
     // WP-45: the `payments` class names a checklist the project has not written, and the schema
@@ -1174,7 +1174,7 @@ describe('the wizard’s step 4, How autonomous', () => {
       expect((replace as HTMLButtonElement).disabled).toBe(false);
     });
     fireEvent.click(replace);
-    const dialog = await screen.findByRole('dialog', { name: 'Replace the risk classes?' });
+    const dialog = await screen.findByRole('dialog', { name: 'Replace the sensitive areas?' });
     expect(dialog.textContent).toContain('replaced by the 2 proposed here');
     expect(sent).toEqual([]);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Replace the classes' }));
@@ -1191,7 +1191,7 @@ describe('the wizard’s step 4, How autonomous', () => {
     );
     // Waited on the dial, not on the step's title: the title renders before the projects list
     // arrives, so a wait on it would assert against a screen that has not resumed a project yet.
-    await screen.findByText('Autonomy dial');
+    await screen.findByText('How much agents do alone');
     // The sentence spans an `<em>`, so it is read off the rendered text rather than matched against
     // one element.
     expect(container.textContent).toContain('may only narrow that baseline');

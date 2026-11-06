@@ -233,7 +233,7 @@ export const logLines = (blocks: readonly TranscriptBlock[]): readonly LogLine[]
         lines.push({ key: block.id, tone: 'note', prefix: '▸ progress: ', text: block.summary });
         break;
       case 'steer':
-        lines.push({ key: block.id, tone: 'note', prefix: '» steer: ', text: block.message });
+        lines.push({ key: block.id, tone: 'note', prefix: '» message: ', text: block.message });
         break;
       case 'result':
         lines.push({ key: block.id, tone: 'note', prefix: '— the run ended', text: '' });

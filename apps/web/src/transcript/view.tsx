@@ -253,7 +253,7 @@ const BlockView = ({ block }: { readonly block: TranscriptBlock }): ReactElement
       );
     case 'steer':
       return (
-        <LogRow kind="steer" label="Steer" tone="border-l-2 border-link">
+        <LogRow kind="steer" label="Message to the agent" tone="border-l-2 border-link">
           <div className="w-full">
             <UntrustedProse value={block.message} />
           </div>

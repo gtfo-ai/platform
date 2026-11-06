@@ -119,6 +119,15 @@ Ship skeletons with headings and one-line guidance: `index.md` (map, ≤ 200 lin
 | Readiness cap | any | any | suggests ≥ level 1 | suggests ≥ level 2 |
 Overrides allowed for any cell; the dial then shows *Custom*.
 
+*Amended 2026-11-06 (M25, S-25.5, research/21 F17).* The table is the policy; the screen says each position as what
+happens to a ticket, never as the policy names. The project settings section is **How much agents do alone** (the
+autonomy dial, named in its first line), and the four positions read: *Observe* — "Agents start no ticket. You can try
+them on past tickets; nothing reaches your repository." · *Assist* — "Agents write the spec and the plan for a ticket,
+then stop; a person writes the code." · *Supervised* — "The default. Agents deliver; you approve the plan of a large
+ticket, and the first 5 tasks get extra checks." · *Autonomous* — "Agents deliver without asking, unless a change
+touches a sensitive area. A person still merges." *Probation* is said as **extra checks on the first N tasks**, and a
+*risk class* as a **sensitive area** (`AUTONOMY_CHOICES` and `approval-text.ts` in `apps/web/src/features/`).
+
 ## 12. Wizard step 4 feature cards (BD-028)
 Each card: name · one-sentence value · default · cost implication · what it touches externally. Examples: *Review-only* — "Get review findings on your team's MRs today; teaches the knowledge base before the agent writes code" · off · ~$1–3 per MR · posts threads on MRs. *Shadow mode* — "See what the agent would have built for your last N tickets, at what cost" · off · ~$5–15 per ticket, separate budget · nothing external. *Ticket linter* — "Questions a developer would ask, posted on new tickets" · off · ~$0.10 per ticket · one Jira comment per ticket. *Maintenance* — "Weekly chores: dependency bumps, flaky tests, docs drift" · off · budget you set · MRs. *Digest/quiet hours* — "One Slack summary a day; urgent items still immediate" · digest on, quiet hours off · none. Similar cards for cost estimate threshold, human time per-user breakdown, ask-the-task, steer/take-over roles.
 

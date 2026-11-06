@@ -68,6 +68,7 @@ import {
   approvalViewSchema,
   autonomyPoliciesSchema,
   budgetRecordSchema,
+  budgetWindowSchema,
   configSourceSchema,
   contextPackRecordSchema,
   humanTimeKindSchema,
@@ -2928,6 +2929,62 @@ export const inboxResponseSchema = z.strictObject({
 
 export const budgetsResponseSchema = z.strictObject({ items: z.array(budgetRecordSchema) });
 
+/** At most this many tasks in `GET /api/projects/:id/spend`'s `top_tasks`. */
+export const PROJECT_SPEND_TOP_TASKS = 5;
+
+/** `GET /api/projects/:id/spend?window=` — the budget window the breakdown is read over. */
+export const projectSpendQuerySchema = z.strictObject({
+  window: budgetWindowSchema.optional(),
+});
+
+/**
+ * One line of a spend breakdown: what the cost ledger booked, and how much of it is an estimate.
+ *
+ * `estimated_usd` is the part of `usd` the platform priced from its price list because the provider
+ * reported no cost (`cost_entries.is_estimate`, BD-011); it is never more than `usd`. A run the
+ * ledger could not price at all has **no** ledger row and is in neither figure (rule 16): the
+ * breakdown is what was booked, never a guess at what was not.
+ */
+const spendLineSchema = {
+  usd: usdSchema,
+  estimated_usd: usdSchema,
+} as const;
+
+/**
+ * `GET /api/projects/:id/spend` — where a project's money went in one budget window (S-25.7,
+ * product/10's 2026-11-06 IA amendment: *Budgets* shows the per-stage breakdown and the top tasks).
+ *
+ * A projection over `cost_entries` — the ledger's truth, which `budget_windows` is a rebuildable
+ * projection of — cut at the same window start the budgets read uses (`budgetWindowStart`, in the
+ * organisation's timezone), so the two figures agree about when the month turned. `window_start` is
+ * that instant; the `total` window starts at the epoch. `stages` is every stage with booked spend,
+ * most first; `top_tasks` the {@link PROJECT_SPEND_TOP_TASKS} most expensive tasks. Both are empty
+ * when nothing was booked, which is a spend of zero rather than a missing answer.
+ */
+export const projectSpendResponseSchema = z.strictObject({
+  window: budgetWindowSchema,
+  window_start: isoDateTimeSchema,
+  ...spendLineSchema,
+  /**
+   * `stage: null` is spend outside a pipeline stage — an ask of the task, which the ledger books
+   * under its placeholder `'(none)'`, not a stage id.
+   */
+  stages: z.array(z.strictObject({ stage: stageIdSchema.nullable(), ...spendLineSchema })),
+  top_tasks: z
+    .array(
+      z.strictObject({
+        task_id: idSchema,
+        /** The ticket's key and title are provider text (BD-022): render them, never execute them. */
+        ticket_key: nonEmptyStringSchema,
+        /** The ticket's title as the platform read it, or `null` when it never did. */
+        ticket_title: z.string().nullable(),
+        mode: taskModeSchema,
+        ...spendLineSchema,
+      }),
+    )
+    .max(PROJECT_SPEND_TOP_TASKS),
+});
+
 export const kbTreeResponseSchema = z.strictObject({
   commit_sha: nonEmptyStringSchema.nullable(),
   entries: z.array(
@@ -3485,6 +3542,8 @@ export type FailedJob = z.infer<typeof failedJobSchema>;
 export type FailedJobsResponse = z.infer<typeof failedJobsResponseSchema>;
 export type RequeueDeadLetterResponse = z.infer<typeof requeueDeadLetterResponseSchema>;
 export type BudgetsResponse = z.infer<typeof budgetsResponseSchema>;
+export type ProjectSpendQuery = z.infer<typeof projectSpendQuerySchema>;
+export type ProjectSpendResponse = z.infer<typeof projectSpendResponseSchema>;
 export type SetAutonomyRequest = z.infer<typeof setAutonomyRequestSchema>;
 export type AutonomyResponse = z.infer<typeof autonomyResponseSchema>;
 export type AutonomyOverride = z.infer<typeof autonomyOverrideSchema>;

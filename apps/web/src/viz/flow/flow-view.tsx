@@ -45,6 +45,7 @@ import { Button } from '../../ui/button.js';
 import { cx } from '../../ui/cx.js';
 import { titleCase } from '../../ui/humanize.js';
 import { ErrorNotice, Loading } from '../../ui/kit.js';
+import { Select } from '../../ui/select.js';
 import { Skeleton } from '../../ui/skeleton.js';
 import { FlowList } from './flow-list.js';
 import { type FlowGraph, taskFlow, templateFlow } from './model.js';
@@ -234,20 +235,19 @@ export const PipelineFlow = ({ projectId }: { readonly projectId: string | null 
       toolbar={
         <label htmlFor={pickerId} className="flex items-center gap-2 text-sm">
           <span className="font-medium">Template</span>
-          <select
+          <Select
             id={pickerId}
             value={selected.template}
             onChange={(event) => {
               setChosen(event.target.value);
             }}
-            className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
           >
             {items.map((item) => (
               <option key={item.template} value={item.template}>
                 {titleCase(item.template)}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       }
     />

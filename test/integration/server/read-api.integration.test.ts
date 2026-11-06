@@ -1716,8 +1716,10 @@ describe('the list projections', () => {
         'platform',
       ]);
       // `unlocks` comes from the platform's table, not from the stored copy — the row above wrote
-      // an empty string and the read publishes product/17's sentence.
-      expect(response?.criteria[0]?.unlocks).toContain('Implementation self-check');
+      // an empty string and the read publishes product/17's sentence, in plain words (S-25.5).
+      expect(response?.criteria[0]?.unlocks).toContain(
+        'Agents check their own work against your tests',
+      );
       // R1 and R3 pass, so the next rung is level 2 and the advice names its criteria.
       expect(response?.next_improvements.map((entry) => entry.id)).toEqual(['R2', 'R4', 'R5']);
     } finally {

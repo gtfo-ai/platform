@@ -18,6 +18,7 @@ import { useProjects } from '../app/queries.js';
 import { useTopics } from '../realtime/provider.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
+import { PROJECT_STATUS_LABEL } from '../ui/humanize.js';
 import { Badge, ErrorNotice, formatInteger, formatUsd } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
@@ -108,7 +109,7 @@ export const ProjectsScreen = (): ReactElement => {
                     <UntrustedText value={project.key} />
                   </span>
                   {project.status === 'active' ? null : (
-                    <Badge tone="neutral">{project.status}</Badge>
+                    <Badge tone="neutral">{PROJECT_STATUS_LABEL[project.status]}</Badge>
                   )}
                 </span>
               }

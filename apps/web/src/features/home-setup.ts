@@ -26,6 +26,15 @@
  * - **ticket** — the setup project's task list holds a task whose ticket is a provider's, not one
  *   of the platform's own one-off tasks (discovery, review-only, the lint: `provider: 'platform'`).
  *
+ * **Once a ticket has run, the checklist is gone unless a piece is missing** (product/10's
+ * 2026-11-06 amendment, research/21 F10). A working install lingered on "4 of 5 done" for good, with
+ * step 1 current while every later step was ticked. So `homeSetup` asks one question first — did
+ * the setup project run a ticket? — and if it did, the steps no longer matter: what Home shows is
+ * only the **pieces** a working install still lacks (`missingPieces`: the tracker, the git host, and
+ * on a platform that needs one a worker that takes work), each with what its absence costs and
+ * where to fix it. Discovery and the autonomy dial are choices with working defaults, not pieces,
+ * so they are not named again once a ticket has run (the project's settings still hold them).
+ *
  * **The setup project is the oldest one.** The checklist follows one project, the one the instance
  * was set up with, so the reads stay at three however many projects there are; a later project's
  * own steps are the wizard's to show (`/onboarding?project=<key>`), not Home's.
@@ -195,3 +204,99 @@ export const setupProjectOf = <T extends { readonly created_at: string; readonly
         : oldest,
     null,
   );
+
+// ── Once a ticket has run: what is missing ───────────────────────────────────
+
+/** A piece a working install still needs: without it something the reader expects cannot happen. */
+export type MissingPieceId = 'tracker' | 'git' | 'worker';
+
+/** The facts the pieces are read from — each `done`, `todo`, `pending` or `unknown`. */
+export interface SetupPieces {
+  /** A live `task_management` integration exists. */
+  readonly tracker: SetupFact;
+  /** A live `git` integration exists. */
+  readonly git: SetupFact;
+  /** As `SetupFacts.worker`: absent where the platform needs no worker. */
+  readonly worker?: SetupFact;
+}
+
+export interface MissingPiece {
+  readonly id: MissingPieceId;
+  /** What is missing and what that costs, in one sentence. */
+  readonly text: string;
+  /** The link's words. */
+  readonly action: string;
+  readonly destination: SetupDestination;
+}
+
+/**
+ * The pieces that are **answered missing** (`todo`), in the order they matter. A read that failed
+ * or has not answered names nothing: an unknown is not a missing piece (rule 16), and a box that
+ * claims one on a read error would send an administrator to fix what works.
+ */
+export const missingPieces = (
+  pieces: SetupPieces,
+  blockedWorker: BlockedWorker | null = null,
+): MissingPiece[] => {
+  const missing: MissingPiece[] = [];
+  if (pieces.tracker === 'todo') {
+    missing.push({
+      id: 'tracker',
+      text: 'New tickets can’t reach the agents until a tracker is connected.',
+      action: 'Connect a tracker',
+      destination: { to: '/integrations' },
+    });
+  }
+  if (pieces.git === 'todo') {
+    missing.push({
+      id: 'git',
+      text: 'Merge requests can’t be opened until a git host is connected.',
+      action: 'Connect a git host',
+      destination: { to: '/integrations' },
+    });
+  }
+  if (pieces.worker === 'todo') {
+    missing.push(
+      blockedWorker === null
+        ? {
+            id: 'worker',
+            text: 'No agent can run this project’s tickets until a worker is connected: nothing on the platform server runs them.',
+            action: 'Connect a worker',
+            destination: { to: '/workers/new' },
+          }
+        : {
+            id: 'worker',
+            text:
+              blockedWorker.updating === true
+                ? `${blockedWorker.name} is updating now. ${blockedWorker.fix}`
+                : `No agent can run this project’s tickets yet: ${blockedWorker.name} can’t take work (${wordInSentence(blockedWorker.reason)}). ${blockedWorker.fix}`,
+            action: 'Open the worker’s setup',
+            destination: { to: '/workers/new', step: 'ready', since: blockedWorker.createdAt },
+          },
+    );
+  }
+  return missing;
+};
+
+/** What Home's setup box is: the checklist, the missing pieces, or nothing. */
+export type HomeSetup =
+  | { readonly kind: 'checklist'; readonly checklist: SetupChecklist }
+  | { readonly kind: 'missing'; readonly pieces: readonly MissingPiece[] }
+  | { readonly kind: 'none' };
+
+/**
+ * The checklist until the setup project has run a ticket (and nothing while a fact is still being
+ * read, rather than a box that flickers); after that, only the pieces still missing — or nothing.
+ */
+export const homeSetup = (
+  checklist: SetupChecklist,
+  missing: readonly MissingPiece[],
+): HomeSetup => {
+  const ticket = checklist.steps.find((step) => step.id === 'ticket');
+  if (ticket?.fact === 'done') {
+    return missing.length === 0 ? { kind: 'none' } : { kind: 'missing', pieces: missing };
+  }
+  return checklist.settling || checklist.complete
+    ? { kind: 'none' }
+    : { kind: 'checklist', checklist };
+};

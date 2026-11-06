@@ -60,7 +60,7 @@ import {
 } from '../app/queries.js';
 import { type AdminNote, ForAdministrators } from '../ui/admin-notes.js';
 import { ConfirmDialog } from '../ui/confirm-dialog.js';
-import { BUDGET_WINDOW_LABEL } from '../ui/humanize.js';
+import { AUTONOMY_LEVEL_LABEL, BUDGET_WINDOW_LABEL } from '../ui/humanize.js';
 import {
   Badge,
   type BadgeTone,
@@ -96,19 +96,30 @@ export const bindingConfigOf = (
     : undefined;
 };
 
-/** product/19 §11's four dial positions, in order, with the one sentence each one is. */
+/**
+ * product/19 §11's four dial positions, in order, with the one sentence each one is — said as what
+ * happens to a ticket, never as the policy names (S-25.5, F17; product/19 §11's 2026-11-06 wording).
+ */
 export const AUTONOMY_CHOICES = [
-  { level: 'observe', label: 'Observe', hint: 'Nothing is picked up; shadow runs only.' },
-  { level: 'assist', label: 'Assist', hint: 'Scoping only — the agent stops after architecture.' },
+  {
+    level: 'observe',
+    label: 'Observe',
+    hint: 'Agents start no ticket. You can try them on past tickets; nothing reaches your repository.',
+  },
+  {
+    level: 'assist',
+    label: 'Assist',
+    hint: 'Agents write the spec and the plan for a ticket, then stop; a person writes the code.',
+  },
   {
     level: 'supervised',
     label: 'Supervised',
-    hint: 'The default: plan approval above size L, probation for the first 5 tasks.',
+    hint: 'The default. Agents deliver; you approve the plan of a large ticket, and the first 5 tasks get extra checks.',
   },
   {
     level: 'autonomous',
     label: 'Autonomous',
-    hint: 'No plan approval except for risk classes; still never merges.',
+    hint: 'Agents deliver without asking, unless a change touches a sensitive area. A person still merges.',
   },
 ] as const satisfies readonly {
   level: 'observe' | 'assist' | 'supervised' | 'autonomous';
@@ -178,13 +189,14 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
   },
   {
     key: 'shadow_mode',
-    name: 'Shadow mode',
-    value: 'See what the agent would have built for your last N tickets, at what cost.',
+    name: 'Trial runs',
+    value:
+      'A trial run on tickets you already shipped: what the agent would have built, at what cost.',
     defaultState: 'off',
     cost: '~$5–15 per ticket, from a separate budget',
     touches: 'nothing external',
     caveat:
-      'This toggle and the autonomy dial both have to allow it: shadow runs are what the Observe position runs, so a project past Observe answers “not allowed” even with this on. Start a batch from the project’s Shadow screen.',
+      'This toggle and How much agents do alone both have to allow it: a trial is what the Observe position runs, so a project past Observe answers “not allowed” even with this on. Start one from the project’s Trial page.',
   },
   {
     key: 'ticket_linter',
@@ -203,7 +215,7 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
     cost: 'the budget you set',
     touches: 'opens merge requests',
     caveat:
-      'The autonomy dial’s level applies here and its per-stage policies do not: at Observe no chore is created (Observe means no agent merge requests), and at Assist, Supervised and Autonomous each chore runs to a merge request a human reviews. Two of the five chore types run in this build — dependency bumps, from what the dependency gate recorded about this project’s packages, and knowledge-base hygiene, from the nightly pass. The other three are refused by name when they are configured, and the nightly pass reports them in the project’s daily digest (in the server log when the project has no digest or no chat binding): Flaky tests and docs drift have no detector in this build, and lint debt has no finding source — nothing records your project’s lint output for a chore to be briefed from.',
+      'How much agents do alone applies here and its per-stage policies do not: at Observe no chore is created (Observe means no agent merge requests), and at Assist, Supervised and Autonomous each chore runs to a merge request a human reviews. Two of the five chore types run in this build — dependency bumps, from what the dependency gate recorded about this project’s packages, and knowledge-base hygiene, from the nightly pass. The other three are refused by name when they are configured, and the nightly pass reports them in the project’s daily digest (in the server log when the project has no digest or no chat binding): Flaky tests and docs drift have no detector in this build, and lint debt has no finding source — nothing records your project’s lint output for a chore to be briefed from.',
   },
   {
     key: 'digest',
@@ -233,7 +245,7 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
       'Tickets typed Spike get a research run that ends at a human with a report, not a merge request.',
     defaultState: 'off',
     cost: 'one agent run per spike, within the stage’s run budget',
-    touches: 'nothing external beyond the workpad comment',
+    touches: 'nothing external beyond the ticket’s progress comment',
     caveat:
       'Turning it on changes what an existing Spike-typed ticket gets: it stops going through the default pipeline.',
   },
@@ -282,13 +294,13 @@ export const FEATURES_WITHOUT_A_SWITCH: readonly {
   readonly routes?: readonly string[];
 }[] = [
   {
-    name: 'Steer',
+    name: 'Message a running agent',
     why: 'on for members and maintainers; the run page carries the control',
     routes: ['/api/runs/{}/steer'],
   },
   {
-    name: 'Take over / hand back',
-    why: 'on; the task page carries both controls, and a taken-over workspace is kept for fourteen days, which is fixed in this build',
+    name: 'Work on a task yourself / give it back',
+    why: 'on; the task page carries both controls, and the workspace of a task a person worked on is kept for fourteen days, which is fixed in this build',
     routes: ['/api/tasks/{}/take-over', '/api/tasks/{}/hand-back'],
   },
   {
@@ -329,7 +341,7 @@ export const POLICIES_THAT_SET_NOTHING: Readonly<Record<string, string>> = {
  * would be false for the second group, so the line under the control names both.
  */
 export const DIAL_TIMING_NOTE =
-  'A move applies to running tasks in part: whether business review runs, the stop after architecture and the number of human review rounds are fixed when a task starts; plan approval, probation, the budget threshold, the question timeout and knowledge auto-apply are read when they are used.';
+  'A move applies to running tasks in part: whether business review runs, the stop after architecture and the number of human review rounds are fixed when a task starts; plan approval, the extra checks on the first tasks, the budget threshold, the question timeout and knowledge auto-apply are read when they are used.';
 
 /** BD-010's windows, in the order a person thinks about them. */
 const BUDGET_WINDOWS = ['day', 'week', 'month', 'total'] as const;
@@ -376,16 +388,19 @@ export const AutonomyDial = ({ projectId }: { readonly projectId: string }): Rea
       AUTONOMY_CHOICES.findIndex((choice) => choice.level === current.suggested_cap);
 
   return (
-    <Section title="Autonomy dial">
+    <Section title="How much agents do alone">
+      <p className="text-xs text-fg-muted">
+        One setting (the autonomy dial) decides what agents may do without asking a person.
+      </p>
       {autonomy.isPending ? <Loading label="Loading the dial…" /> : null}
       {autonomy.isError ? (
-        <ErrorNotice title="The autonomy dial could not be loaded." error={autonomy.error} />
+        <ErrorNotice title="This setting could not be loaded." error={autonomy.error} />
       ) : null}
 
       {current === null ? null : (
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={LEVEL_TONE[current.level as AutonomyChoice] ?? 'neutral'}>
-            {current.level}
+            {AUTONOMY_LEVEL_LABEL[current.level as AutonomyChoice] ?? current.level}
           </Badge>
           {current.is_custom ? <Badge tone="warning">Custom</Badge> : null}
           {current.materialised ? null : <Badge tone="warning">never applied</Badge>}
@@ -421,8 +436,10 @@ export const AutonomyDial = ({ projectId }: { readonly projectId: string }): Rea
       {current === null ? null : (
         <p className="text-xs text-fg-muted">
           Readiness is level {current.readiness_level}, which suggests at most{' '}
-          <strong>{current.suggested_cap}</strong>. A suggestion is all it is — a maintainer may
-          choose any position, visibly.
+          <strong>
+            {AUTONOMY_LEVEL_LABEL[current.suggested_cap as AutonomyChoice] ?? current.suggested_cap}
+          </strong>
+          . A suggestion is all it is — a maintainer may choose any position, visibly.
         </p>
       )}
       {aboveCap ? (
@@ -598,9 +615,9 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
             pausedAtObserve &&
             features.maintenance?.enabled === true ? (
               <p className="text-xs text-warning">
-                Paused at Observe: the autonomy dial is at Observe, so the nightly pass creates no
-                chore until the dial moves past it. The daily digest says so once when the pause
-                begins and once when it ends.
+                Paused at Observe: How much agents do alone is at Observe, so the nightly pass
+                creates no chore until it moves past it. The daily digest says so once when the
+                pause begins and once when it ends.
               </p>
             ) : null}
           </Card>
@@ -707,11 +724,11 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
   };
 
   return (
-    <Section title="Risk classes">
+    <Section title="Sensitive areas">
       {names.length === 0 ? (
         <EmptyState
-          title="No risk classes configured"
-          hint="A risk class is a set of paths (auth, payments, migrations, infra) that forces a plan approval, can route the review to named people and can give the reviewer a checklist of your own when a change touches them."
+          title="No sensitive areas configured"
+          hint="A sensitive area (a risk class in the settings file) is a set of paths (auth, payments, migrations, infra) that forces a plan approval, can route the review to named people and can give the reviewer a checklist of your own when a change touches them."
         />
       ) : (
         <ul className="flex flex-col gap-1 text-xs">
@@ -820,12 +837,12 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
             <ConfirmDialog
               open={confirmingReplace}
               onOpenChange={setConfirmingReplace}
-              title="Replace the risk classes?"
+              title="Replace the sensitive areas?"
               consequence={`The ${names.length === 1 ? 'class' : `${names.length} classes`} in force now ${names.length === 1 ? 'is' : 'are'} replaced by the ${proposed.length === 1 ? 'one' : proposed.length} proposed here; a class that is not among them stops applying.`}
               confirmLabel="Replace the classes"
               pending={commands.writeConfig.isPending}
               error={commands.writeConfig.error}
-              errorTitle="The risk classes were not saved."
+              errorTitle="The sensitive areas were not saved."
               onConfirm={() => {
                 accept(() => {
                   setConfirmingReplace(false);
@@ -842,7 +859,7 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
             </p>
           )}
           <p className="text-xs text-fg-muted">
-            Nothing is applied until you accept. Accepting writes the risk classes and the
+            Nothing is applied until you accept. Accepting writes the sensitive areas and the
             checklists you wrote into this project’s configuration and records who did it; you can
             edit both afterwards in the repository’s settings file. The platform ships no checklist
             items: a checklist is added to the reviewer’s own default checks, never instead of them,
@@ -853,12 +870,15 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
       )}
 
       {commands.writeConfig.isError && !confirmingReplace ? (
-        <ErrorNotice title="The risk classes were not saved." error={commands.writeConfig.error} />
+        <ErrorNotice
+          title="The sensitive areas were not saved."
+          error={commands.writeConfig.error}
+        />
       ) : null}
 
       <p className="text-xs text-fg-muted">
-        A class can force a plan approval, add a named reviewer and give the reviewer a checklist.
-        Reviewers are routed at the rebase gate: a code-owners match first, then this project’s
+        An area can force a plan approval, add a named reviewer and give the reviewer a checklist.
+        Reviewers are chosen at the up-to-date check: a code-owners match first, then this project’s
         named reviewers, then the person who asked for the task — and a handle the git provider does
         not know is reported rather than assigned to somebody else.
       </p>
@@ -999,7 +1019,14 @@ export const Budgets = ({
 };
 
 /** The project half, wired to its own reads and commands. */
-export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): ReactElement => {
+export const ProjectBudgets = ({
+  projectId,
+  primary = false,
+}: {
+  readonly projectId: string;
+  /** The Budgets tab's one primary action; never inside the wizard's step. */
+  readonly primary?: boolean;
+}): ReactElement => {
   const budgets = useProjectBudgets(projectId);
   const config = useProjectConfig(projectId);
   const commands = useSettingsCommands();
@@ -1013,6 +1040,7 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
         projectId={projectId}
         budgets={budgets.data?.items ?? []}
         scopeLabel="Project"
+        primary={primary}
         onSave={(window, limitUsd) =>
           commands.setProjectBudget.mutateAsync({ projectId, window, limit_usd: limitUsd })
         }
@@ -1020,7 +1048,7 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
       <Card className="flex flex-col gap-1 text-xs">
         <p className="font-semibold">Separate feature budgets</p>
         <p className="text-fg-muted">
-          Shadow mode:{' '}
+          Trial runs:{' '}
           {features.shadow_mode?.budget_usd === undefined
             ? 'not set'
             : formatUsd(features.shadow_mode.budget_usd)}{' '}
@@ -1033,9 +1061,9 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
           These are per-feature caps in the repository’s settings file, not budget rows. Both are
           enforced the same way and over the same window: a run is refused when this project’s spend
           for the calendar month plus what the stage may spend would pass the cap, and the task
-          pauses exactly as it does for an organisation or project budget. The shadow cap counts
-          shadow tasks; the maintenance cap counts the chores the scheduler created, and once it is
-          spent the scheduler creates no more of them for that month.
+          pauses exactly as it does for an organisation or project budget. The trial cap counts the
+          trial run’s tasks; the maintenance cap counts the chores the scheduler created, and once
+          it is spent the scheduler creates no more of them for that month.
         </p>
         <ForAdministrators note="feature_caps" />
       </Card>
@@ -1251,19 +1279,27 @@ export const SettingsAudit = ({ projectId }: { readonly projectId: string }): Re
  *
  * `audit` is off in the wizard: a project being created has no settings history, and an empty panel
  * on the first screen an operator sees would be noise.
+ *
+ * `budgets` is what stands where the caps are (S-25.7, product/10's 2026-11-06 IA amendment: the
+ * project's *Budgets* tab is where a cap is both read and set). The wizard keeps the editor — a
+ * project being created has no tab yet — and the settings page passes a pointer to the tab, so the
+ * editor exists once per screen and `ProjectBudgets` is still one component (the mirror test holds
+ * the Budgets tab among the settings screens).
  */
 export const OperatingMode = ({
   projectId,
   audit = false,
+  budgets = <ProjectBudgets projectId={projectId} />,
 }: {
   readonly projectId: string;
   readonly audit?: boolean;
+  readonly budgets?: ReactElement;
 }): ReactElement => (
   <div className="flex flex-col gap-3">
     <AutonomyDial projectId={projectId} />
     <FeatureToggles projectId={projectId} />
     <RiskClasses projectId={projectId} />
-    <ProjectBudgets projectId={projectId} />
+    {budgets}
     <Notifications projectId={projectId} />
     {audit ? <SettingsAudit projectId={projectId} /> : null}
   </div>

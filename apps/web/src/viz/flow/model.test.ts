@@ -89,7 +89,7 @@ describe('a template (the Pipeline tab)', () => {
     expect(nodeOf(graph, 'qa').state).toBe('disabled');
     expect(
       graph.edges.find((edge) => edge.from === 'code_review' && edge.loop !== null)?.pill,
-    ).toBe('Review ≤3');
+    ).toBe('Review rounds: up to 3');
     expect(graph.edges.every((edge) => !edge.live && edge.loopUsed === null)).toBe(true);
   });
 
@@ -100,7 +100,7 @@ describe('a template (the Pipeline tab)', () => {
     // A gate card says what it waits for: no role, and never an empty card.
     expect(stageCardName(nodeOf(graph, 'ci_gate'))).toBe('CI, Waits for the CI pipeline');
     expect(stageCardName(nodeOf(graph, 'rebase_gate'))).toBe(
-      'Rebase check, Checks the branch is up to date with the default branch',
+      'Up-to-date check, Checks the branch is up to date with the default branch',
     );
     expect(cardBody({ id: 'security_scan', kind: 'gate', role: null })).toBe(
       'Waits for an event to settle it',
@@ -108,7 +108,7 @@ describe('a template (the Pipeline tab)', () => {
     expect(cardBody({ id: 'constructor', kind: 'gate', role: null })).toBe(
       'Waits for an event to settle it',
     );
-    expect(stageCardName(nodeOf(graph, 'intake'))).toBe('Intake, System step');
+    expect(stageCardName(nodeOf(graph, 'intake'))).toBe('Intake, Automatic step');
     expect(stageCardName(nodeOf(graph, 'qa'))).toBe(
       'QA, Acceptance tester, Disabled, claude-test · high',
     );
@@ -118,10 +118,10 @@ describe('a template (the Pipeline tab)', () => {
 describe('loop pills', () => {
   it('say the ceiling for a template and what is spent for a task', () => {
     expect(loopPill(null, 3, null)).toBeNull();
-    expect(loopPill('code_review', 3, null)).toBe('Review ≤3');
-    expect(loopPill('code_review', null, null)).toBe('Review');
-    expect(loopPill('code_review', 3, 1)).toBe('Review · used 1 of 3');
-    expect(loopPill('code_review', null, 2)).toBe('Review · used 2');
+    expect(loopPill('code_review', 3, null)).toBe('Review rounds: up to 3');
+    expect(loopPill('code_review', null, null)).toBe('Review rounds');
+    expect(loopPill('code_review', 3, 1)).toBe('Review rounds: 1 of 3 used');
+    expect(loopPill('code_review', null, 2)).toBe('Review rounds: 2 used');
   });
 });
 
@@ -230,9 +230,9 @@ describe('a task (the task page)', () => {
     });
     expect(ended.edges.some((edge) => edge.live)).toBe(false);
     const review = graph.edges.find((edge) => edge.from === 'code_review' && edge.loop !== null);
-    expect(review?.pill).toBe('Review · used 1 of 3');
+    expect(review?.pill).toBe('Review rounds: 1 of 3 used');
     const ci = graph.edges.find((edge) => edge.from === 'ci_gate' && edge.loop !== null);
-    expect(ci?.pill).toBe('CI fixes · used 0 of 3');
+    expect(ci?.pill).toBe('CI fixes: 0 of 3 used');
     expect(
       graph.edges.find((edge) => edge.from === 'intake' && edge.to === 'refinement')?.traversed,
     ).toBe(true);

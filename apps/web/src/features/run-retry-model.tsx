@@ -23,6 +23,7 @@
 import type { ReactElement } from 'react';
 import { useOrgModels } from '../app/queries.js';
 import { ErrorNotice } from '../ui/kit.js';
+import { Select } from '../ui/select.js';
 
 /**
  * The select's values: *Configured (…)*, *Other…*, and `model:<id>` for every model option. A model
@@ -107,13 +108,13 @@ export const RetryModelField = ({
   const options = retryModelOptions(current, configured, listed);
   return (
     <>
-      <select
+      <Select
         aria-label="Retry with model"
         value={choice.selected}
         onChange={(event) => {
           onChange({ ...choice, selected: event.target.value });
         }}
-        className="max-w-56 rounded-md border border-line-input bg-inset px-2 py-1 text-sm text-fg"
+        className="max-w-56"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
@@ -121,7 +122,7 @@ export const RetryModelField = ({
           </option>
         ))}
         <option value={OTHER_MODEL}>Other…</option>
-      </select>
+      </Select>
       {choice.selected === OTHER_MODEL ? (
         <input
           aria-label="Other model id"

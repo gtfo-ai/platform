@@ -251,7 +251,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** One section of the settings (S-23.11b: a page per section); *Policies & WIP* by default. */
+/** One section of the settings (S-23.11b: a page per section); *Rules & limits* by default. */
 const openSection = (section: string): void => {
   window.history.pushState({}, '', `/projects/acme_api/settings/${section}`);
 };
@@ -737,16 +737,19 @@ describe('the project settings page', () => {
       ['Discovery & readiness', ['Discovery & readiness']],
       ['Business context', ['Business context']],
       ['History', ['History']],
+      // S-25.7: where the Trial page is reached from once the tab is gone.
+      ['Trial run', ['Trial run']],
       ['Knowledge', ['Knowledge']],
       [
-        'Policies & WIP',
+        'Rules & limits',
         [
-          'Autonomy dial',
+          'How much agents do alone',
           'Features',
-          'Risk classes',
-          'Project budgets',
+          'Sensitive areas',
+          // S-25.7: the cap editor is the Budgets tab's; Rules & limits points there.
+          'Budgets',
           'Notifications',
-          'WIP limits',
+          'Parallel tasks',
           'Who changed what',
         ],
       ],
@@ -773,7 +776,7 @@ describe('the project settings page', () => {
 
   it('renders the policies the dial actually set, from the stored preset', async () => {
     const { container } = render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
-    await screen.findByText('Autonomy dial');
+    await screen.findByText('How much agents do alone');
     // The number a re-derivation would have had to invent: it comes from `policies`, not `level`.
     await waitFor(() => {
       expect(container.textContent).toContain('probation_tasks');
@@ -784,7 +787,7 @@ describe('the project settings page', () => {
   it('does not call a project Custom when nothing is overridden', async () => {
     // Standing rule 42's first half, and the one a badge that always rendered would fail.
     render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
-    await screen.findByText('Autonomy dial');
+    await screen.findByText('How much agents do alone');
     expect(screen.queryByText('Custom')).toBeNull();
     expect(screen.queryByText('never applied')).toBeNull();
     expect(screen.queryByText('preset out of date')).toBeNull();
@@ -901,7 +904,7 @@ describe('the project settings page', () => {
         realtime: false,
       }).element,
     );
-    await screen.findByText('Autonomy dial');
+    await screen.findByText('How much agents do alone');
     await waitFor(() => {
       expect(document.body.textContent).toContain('A suggestion is all it is');
     });
@@ -988,7 +991,7 @@ describe('the verification mode', () => {
       }).element,
     );
     expect(await screen.findByText('Verification')).toBeTruthy();
-    expect((await screen.findByTestId('verification-mode-effective')).textContent).toBe('local');
+    expect((await screen.findByTestId('verification-mode-effective')).textContent).toBe('agents');
     await user.click(screen.getByRole('radio', { name: /CI runs the checks/ }));
     await waitFor(() => expect(puts).toHaveLength(1));
     expect(puts[0]?.url).toContain(`/api/projects/${PROJECT}/config`);
@@ -1013,19 +1016,47 @@ describe('the verification mode', () => {
         realtime: false,
       }).element,
     );
-    expect((await screen.findByTestId('verification-mode-effective')).textContent).toBe('ci');
+    expect((await screen.findByTestId('verification-mode-effective')).textContent).toBe('CI');
     const ci = screen.getByRole('radio', { name: /CI runs the checks/ }) as HTMLInputElement;
     expect(ci.checked).toBe(true);
-    expect(screen.getByText(/choosing local here is not applied/)).toBeTruthy();
+    expect(screen.getByText(/choosing agents here is not applied/)).toBeTruthy();
+  });
+});
+
+/**
+ * The cap editor left Rules & limits for the Budgets tab (S-25.7, product/10's 2026-11-06 IA
+ * amendment): the settings page points there, draws no cap field of its own, and the Trial run
+ * section links to the Trial page.
+ */
+describe('where the caps and the trial are reached from (S-25.7)', () => {
+  it('points Rules & limits at the Budgets tab and draws no cap field there', async () => {
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    const link = await screen.findByRole('link', { name: 'Open Budgets' });
+    expect(link.getAttribute('href')).toBe('/projects/acme_api/budgets');
+    expect(screen.queryByRole('heading', { name: 'Project budgets' })).toBeNull();
+    expect(screen.queryByLabelText('Per day')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save budgets' })).toBeNull();
+  });
+
+  it('links the Trial run section to the Trial page, whose URL is unchanged', async () => {
+    openSection('trial');
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    const link = await screen.findByRole('link', { name: 'Open the trial page' });
+    expect(link.getAttribute('href')).toBe('/projects/acme_api/shadow');
   });
 });
 
 /**
  * The project budgets' one Save (review of PR #25): several changed windows are several requests,
  * sent one after another, and a refusal of the first stays on the screen beside its own field when a
- * later window succeeds — one mutation fired twice used to keep only the last call's answer.
+ * later window succeeds — one mutation fired twice used to keep only the last call's answer. Since
+ * S-25.7 the editor is on the Budgets tab, and its Save is that page's primary action.
  */
 describe('the project budgets’ one Save', () => {
+  beforeEach(() => {
+    window.history.pushState({}, '', '/projects/acme_api/budgets');
+  });
+
   it('sends both changed windows, shows the first one’s refusal beside it, and nothing beside the second', async () => {
     const puts: unknown[] = [];
     const base = fetchFor({});

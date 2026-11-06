@@ -295,7 +295,7 @@ describe('the box that attaches the gate’s last failure (WP-152)', () => {
     ...escalatedAtCi('needs_human'),
     gate_feedback: { stage: 'ci_gate', attempt: 1, chars: 6_012, original_chars: 20_657 },
   });
-  const BOX = /Attach the gate’s last failure/;
+  const BOX = /Attach the check’s last failure/;
 
   it('offers the box ticked, with the excerpt’s length, and sends it ticked by default', async () => {
     const sent: Sent[] = [];

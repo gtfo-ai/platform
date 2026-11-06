@@ -187,7 +187,7 @@ const platformAnswer = (
       const score = knowledgeCompleteness(signals.indexedKnowledgePaths);
       return {
         passed: score >= KNOWLEDGE_COMPLETENESS_THRESHOLD,
-        evidence: `knowledge completeness is ${Math.round(score * 100)}% (product/06's ten sections); the criterion needs ${Math.round(KNOWLEDGE_COMPLETENESS_THRESHOLD * 100)}%`,
+        evidence: `knowledge completeness is ${Math.round(score * 100)}% of the ten knowledge sections; the criterion needs ${Math.round(KNOWLEDGE_COMPLETENESS_THRESHOLD * 100)}%`,
       };
     }
     default:

@@ -236,7 +236,7 @@ export const strandedStagesIn = async (
 
 /** Why the task was parked — stored on `task.escalated` and on the stage row (platform text only). */
 export const strandedStageReason = (row: StrandedStage, attemptedAt: IsoDateTime): string =>
-  `the "${row.stage}" stage (attempt ${String(row.attempt)}) was entered at ${row.enteredAt} and never started: no job was queued for it and no run was created; the platform re-enqueued it once at ${attemptedAt} and it still did not start (PROGRESS backlog 320)`;
+  `the "${row.stage}" stage (attempt ${String(row.attempt)}) was entered at ${row.enteredAt} and never started: no job was queued for it and no run was created; the platform re-enqueued it once at ${attemptedAt} and it still did not start`;
 
 /**
  * Why a task whose attempt already **ended a run** was parked rather than re-run (WP-108 review
@@ -248,7 +248,7 @@ export const endedRunReason = (
 ): string =>
   `the "${row.stage}" stage (attempt ${String(row.attempt)}) is still open, but its run ended “${ended.status}”${
     ended.terminalReason === null ? '' : ` (${ended.terminalReason})`
-  } and nothing moved the task on; the platform does not start a stage again after its run ended (PROGRESS backlog 320)`;
+  } and nothing moved the task on; the platform does not start a stage again after its run ended`;
 
 /** The brief for an attempt whose run ended — a person's cancel named as such. */
 export const endedRunBrief = (
@@ -339,7 +339,7 @@ export const failedJobReason = (
   failed: NonNullable<StrandedStage['failedJob']>,
   attemptedAt: IsoDateTime,
 ): string =>
-  `the "${row.stage}" stage (attempt ${String(row.attempt)}) was entered at ${row.enteredAt} and its stage.execute job failed: the queue spent its retries (${String(failed.tries)} tries), the last one at ${failed.failedAt} ${lastTryOutcome(failed, 'throwing')}; the platform re-enqueued the stage once at ${attemptedAt} and it is still stuck (PROGRESS backlogs 320, 490)`;
+  `the "${row.stage}" stage (attempt ${String(row.attempt)}) was entered at ${row.enteredAt} and its stage.execute job failed: the queue spent its retries (${String(failed.tries)} tries), the last one at ${failed.failedAt} ${lastTryOutcome(failed, 'throwing')}; the platform re-enqueued the stage once at ${attemptedAt} and it is still stuck`;
 
 /** The brief for a stage whose job kept failing — not one that "never started". */
 export const failedJobBrief = (
@@ -419,7 +419,7 @@ export const endStrandedStage = async (
     // same writers. The task is still stranded and still marked, so the next pass ends it.
     logger.error(
       { task_id: row.taskId, stage: row.stage, err: error },
-      'a stage nothing ever ran could not be escalated: every write lost a race; the next recovery pass tries again (PROGRESS backlog 320)',
+      'a stage nothing ever ran could not be escalated: every write lost a race; the next recovery pass tries again',
     );
     return false;
   }

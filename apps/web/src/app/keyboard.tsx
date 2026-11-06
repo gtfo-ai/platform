@@ -114,6 +114,9 @@ export const CommandLayer = ({
             case 'agents':
               void now.navigate({ to: '/agents' });
               return;
+            case 'settings':
+              void now.navigate({ to: '/settings' });
+              return;
             case 'board':
               if (now.project !== null) {
                 void now.navigate({ to: '/projects/$key', params: { key: now.project.key } });

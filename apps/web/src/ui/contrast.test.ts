@@ -129,6 +129,9 @@ const PAIRS: readonly Pair[] = [
     ['--border-input', '--focus-ring', '--accent-selected'],
     [...PAGE_AND_CARD, '--bg-subtle', '--bg-inset'],
   ),
+  // A checked checkbox or radio (`accent-color`, S-25.10) on every ground a box sits on, the hover
+  // of a checkbox list's row included.
+  ...nonText(['--accent-control'], GROUNDS),
 ];
 
 /** What is drawn on the top bar's ground (`app/shell.tsx`). */
@@ -215,6 +218,24 @@ describe('the colour tokens (TD-033 § 2, one dark theme)', () => {
     // ListBox, dialogs, menus) must not read the page colour, or the cards vanish into the page.
     expect(withoutComments(CSS)).toMatch(/--color-surface:\s*var\(--bg-default\);/);
     expect(withoutComments(CSS)).toMatch(/--color-default:\s*var\(--bg-default\);/);
+  });
+
+  it('gives checkboxes and radios the brand accent, never the operating system blue (S-25.10)', () => {
+    expect(resolve(TOKENS, '--accent-control')).toBe('#b3a8ff');
+    expect(withoutComments(CSS)).toMatch(
+      /input:is\(\[type="checkbox"\],\s*\[type="radio"\]\)\s*\{\s*accent-color:\s*var\(--accent-control\);/,
+    );
+    // And the pair is held: a grey accent fails on the card by name.
+    const grey = CSS.replace(
+      '--accent-control: var(--brand-lavender);',
+      '--accent-control: #2c2856;',
+    );
+    expect(grey).not.toBe(CSS);
+    expect(
+      failures(tokensOf(grey), PAIRS).some((line) =>
+        line.startsWith('--accent-control #2c2856 on --bg-default #15132b'),
+      ),
+    ).toBe(true);
   });
 
   it('keeps base hex values inside the token block', () => {

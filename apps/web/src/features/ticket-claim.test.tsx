@@ -42,8 +42,10 @@ describe('the claim and the QA stage on the task page (WP-182 ruling (c))', () =
       />,
     );
     expect(rendered()).toBe('shadow');
-    expect(screen.getByText('claim (shadow)')).toBeTruthy();
-    expect(screen.getByText(/assigned nothing/)).toBeTruthy();
+    // S-25.7: a trial's claim says so in the screen's word, never "shadow".
+    expect(screen.getByText('Trial run')).toBeTruthy();
+    expect(screen.getByText(/^Trial run, .*assigned nothing/)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/shadow/i);
   });
 
   it('shows a released claim, whichever it was before', () => {

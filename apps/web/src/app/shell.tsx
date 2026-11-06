@@ -6,12 +6,15 @@
  * to right: the wordmark (Home); inside a project, `/ <name> ▾`, the
  * breadcrumb that is also the project switcher; then **Search or jump to…** (the command palette,
  * and the keyboard shortcuts behind it — `app/keyboard.tsx`), the running indicator with the
- * connection dot, the `+` menu, the inbox with its count, and the avatar menu. Menus are Base UI's
+ * connection dot, the `+` menu, the inbox with its count, the Settings gear (S-25.6), and the avatar
+ * menu. Menus are Base UI's
  * (`ui/action-menu.tsx`) and portalled to `<body>`, drawn on the card ground (`bg-default`).
  *
- * **The second row** is the organisation's UnderlineNav (`NAV`) outside a project; inside one, the
- * project's own layout (`app/project-frame.tsx`) draws its header and tabs instead, as a GitHub
- * repository replaces the dashboard's navigation.
+ * **The second row** is the organisation's UnderlineNav (`NAV`, the five daily screens since S-25.6)
+ * outside a project; inside one, the project's own layout (`app/project-frame.tsx`) draws its header
+ * and tabs instead, as a GitHub repository replaces the dashboard's navigation. Settings — and with
+ * it the Admin screens, Integrations, Workers and the Audit log — is the top bar's gear (from `sm`;
+ * on a phone the account menu's entry, which every width keeps) and `g s`.
  *
  * **Both rows stick** while the page scrolls (S-23.18) — the top bar always, the second row from
  * `sm` (inside a project only its tabs; the project's title scrolls away). `styles.css` declares
@@ -27,6 +30,7 @@
 
 import type { ProjectSummary } from '@platform/contracts';
 import { DeviceDesktopIcon } from '@primer/octicons-react/DeviceDesktopIcon';
+import { GearIcon } from '@primer/octicons-react/GearIcon';
 import { InboxIcon } from '@primer/octicons-react/InboxIcon';
 import { PlayIcon } from '@primer/octicons-react/PlayIcon';
 import { PlusIcon } from '@primer/octicons-react/PlusIcon';
@@ -44,6 +48,7 @@ import {
 } from '@tanstack/react-router';
 import { type ReactElement, useSyncExternalStore } from 'react';
 import { displayName, type SessionUser } from '../auth/session.js';
+import { ORG_ADMIN_LINKS } from '../features/settings-sections.js';
 import { useRealtime, useTopics } from '../realtime/provider.js';
 import {
   ActionMenu,
@@ -58,10 +63,12 @@ import { buttonClassName } from '../ui/button.js';
 import { Counter } from '../ui/counter.js';
 import { FOCUS_RING } from '../ui/cx.js';
 import { Flash } from '../ui/flash.js';
+import { USER_ROLE_LABEL } from '../ui/humanize.js';
 import { type BadgeTone, Button, cx, formatInteger } from '../ui/kit.js';
 import { Logo } from '../ui/logo.js';
 import type { NavItem, NavLinkProps } from '../ui/nav-item.js';
 import { StatusIcon } from '../ui/status.js';
+import { Tooltip } from '../ui/tooltip.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
@@ -121,8 +128,9 @@ export const connectionLabel = (
 };
 
 /**
- * The avatar menu: who is signed in and "Sign out". The trigger is named "Account menu"; there is
- * no theme choice (one dark theme, TD-033's 2026-11-05 amendment).
+ * The avatar menu: who is signed in, *Settings* and "Sign out". The trigger is named "Account
+ * menu"; there is no theme choice (one dark theme, TD-033's 2026-11-05 amendment). Settings is here
+ * rather than in the top row since S-25.6 (product/10's 2026-11-06 IA amendment), as GitHub's is.
  */
 const AccountMenu = ({
   user,
@@ -131,6 +139,7 @@ const AccountMenu = ({
   readonly user: SessionUser | null;
   readonly onSignOut: () => void;
 }): ReactElement => {
+  const navigate = useNavigate();
   const name = user === null ? 'Not signed in' : displayName(user);
   return (
     <ActionMenu
@@ -154,13 +163,21 @@ const AccountMenu = ({
         ) : (
           <>
             Signed in as <span className="font-semibold text-fg">{name}</span>
-            <span className="block">{`Role: ${user.role}`}</span>
+            <span className="block">{`Role: ${USER_ROLE_LABEL[user.role]}`}</span>
           </>
         )}
       </ActionMenuHeader>
       {user === null ? null : (
         <>
           <ActionMenuSeparator />
+          <ActionMenuItem
+            leadingIcon={<GearIcon size={16} />}
+            onSelect={() => {
+              void navigate({ to: '/settings' });
+            }}
+          >
+            Settings
+          </ActionMenuItem>
           <ActionMenuItem leadingIcon={<SignOutIcon size={16} />} onSelect={onSignOut}>
             Sign out
           </ActionMenuItem>
@@ -455,6 +472,38 @@ export const InboxButton = ({ count }: { readonly count: number | undefined }): 
   </Link>
 );
 
+/**
+ * The Settings gear (S-25.6): Settings left the top row, and its Admin group — Integrations,
+ * Workers, the Audit log — is two presses from anywhere through it. Current on Settings and on every
+ * Admin screen (`aria-current`, as the row's entries are). Hidden below `sm`, where the top bar has
+ * no room for it; the account menu's *Settings* is there at every width.
+ */
+export const SettingsButton = (): ReactElement => {
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const current =
+    isCurrentSection('/settings', pathname) ||
+    ORG_ADMIN_LINKS.some((link) => isCurrentSection(link.to, pathname));
+  return (
+    <Tooltip content="Settings" side="bottom">
+      <Link
+        to="/settings"
+        aria-label="Settings"
+        {...(current ? { 'aria-current': 'page' as const } : {})}
+        // Exact: `/settings` itself redirects, so the router never marks it; `current` above is the
+        // one judgement, and it counts the Admin screens as Settings' too.
+        activeOptions={{ exact: true }}
+        className={cx(
+          buttonClassName('invisible'),
+          'size-8 px-0 py-0 max-sm:hidden',
+          current ? 'text-fg' : undefined,
+        )}
+      >
+        <GearIcon size={16} />
+      </Link>
+    </Tooltip>
+  );
+};
+
 /** The org navigation's items, as UnderlineNav takes them: a router link, a menu target, a count. */
 const useOrgNavItems = (counts: FrameCounts): NavItem[] => {
   const navigate = useNavigate();
@@ -575,6 +624,7 @@ export const AppShell = (): ReactElement => {
               canAddWorker={user !== null}
             />
             <InboxButton count={counts.inbox} />
+            <SettingsButton />
             <AccountMenu
               user={user}
               onSignOut={() => {

@@ -48,7 +48,7 @@ const CODE_SENTENCE: Readonly<Record<string, string>> = {
   run_not_live: 'The run has already ended.',
   budget_not_raised: 'The new cap must be above the cap in force.',
   not_paused_by_task_cap: 'The task is not paused by its own cap.',
-  no_gate_feedback: 'There is no gate failure to attach.',
+  no_gate_feedback: 'There is no check failure to attach.',
   model_not_listed: 'That model is not one this project may use.',
   take_in_progress: 'Someone is already taking this over.',
   policy_violation: 'A project policy does not allow this.',

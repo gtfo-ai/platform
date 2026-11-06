@@ -24,7 +24,7 @@ const LABEL: Record<ReadinessResponse['notices'][number]['code'], string> = {
   // WP-181 (BD-031 ruling 7): the ticket lifecycle's notes, one per unmapped slot. The pick lists
   // that map them are `ticket-lifecycle.tsx` (WP-182); here a note is labelled, rendered as a note
   // and never as a failure (WP-182 ruling (b), `ticket-lifecycle.test.tsx`).
-  lifecycle_slot_unmapped: 'Ticket lifecycle slot not mapped',
+  lifecycle_slot_unmapped: 'Ticket moment without a status',
   lifecycle_not_configured: 'No ticket lifecycle',
   // Q118 (a): the tracker binding acts as a person's own account.
   binding_account_is_a_person: 'Tracker account is a person',

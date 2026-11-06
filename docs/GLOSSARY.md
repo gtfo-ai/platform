@@ -24,10 +24,10 @@ Use these words exactly, in docs, UI and code. Add new terms here before using t
 | **Event** | An immutable fact that happened (`task.stage.completed`). Handlers react to events with priorities and may emit more events. |
 | **Handler** | A unit of behaviour subscribed to an event. Integrations, stages and notifications are handlers. |
 | **Knowledge base (KB)** | The per-project vault of markdown documents in `.agentic/knowledge` plus its platform-side index. |
-| **Context pack** | The set of KB documents and task artifacts assembled for a specific run, with the reason each was included. |
+| **Context pack** | The set of KB documents and task artifacts assembled for a specific run, with the reason each was included. On screen: *What the agent was given* (S-25.5). |
 | **Rule** | A short imperative instruction always injected into agents of a scope (project/stage). Lives in `.agentic/rules`. |
 | **Lesson** | A dated, sourced insight from a retrospective or feedback, stored in the KB. May be promoted to a rule. |
-| **Proposal** | A suggested change to the KB awaiting approval (or auto-applied per policy). |
+| **Proposal** | A suggested change to the KB awaiting approval (or auto-applied per policy). On screen: *Suggested edit* (S-25.5). |
 | **Librarian** | The agent that consolidates proposals into the KB and keeps it tidy. |
 | **Onboarding** | The guided process of populating a project's KB with business and technical context. |
 | **Workspace** | The isolated checkout in which an agent runs for a task. |

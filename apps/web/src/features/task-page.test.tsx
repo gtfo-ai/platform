@@ -483,15 +483,15 @@ describe('the needs-you callout', () => {
     expect(whole?.textContent).toContain('a rounding property test');
     // Why it was asked — every reason — and per reason how to stop being asked, linked.
     expect(card.querySelector('[data-approval-reason="probation"]')?.textContent).toContain(
-      '2 of its first 5 tasks are done',
+      'and 2 of them are done',
     );
     expect(card.querySelector('[data-approval-retire="probation"]')?.textContent).toContain(
-      'Probation ends by itself after 5 completed tasks (3 to go)',
+      'The extra checks end by themselves after 5 completed tasks (3 to go)',
     );
     expect(card.querySelector('[data-approval-reason="size_at_or_above"]')?.textContent).toContain(
       'The plan’s size is L, at or above the project’s threshold of L.',
     );
-    const links = within(card).getAllByRole('link', { name: 'Autonomy dial' });
+    const links = within(card).getAllByRole('link', { name: 'How much agents do alone' });
     expect(links).toHaveLength(2);
     expect(links[0]?.getAttribute('href')).toBe('/projects/acme/settings/policies');
     // What each answer does next.
@@ -572,7 +572,7 @@ describe('the needs-you callout', () => {
     const callout = await screen.findByRole('region', { name: 'Needs you' });
     expect(callout.textContent).toContain('This task needs a person');
     expect(callout.querySelector('[data-escalation-reason]')?.textContent).toBe(
-      'Needs you: the gate could not decide in its allotted checks.',
+      'Needs you: the check could not decide in the tries it is allowed.',
     );
   });
 
@@ -639,13 +639,13 @@ describe('the ··· menu', () => {
     [
       'a queued task: no pause or take-over',
       { state: 'queued' as const },
-      ['Pause', 'Take over…'],
+      ['Pause', 'Work on it yourself…'],
       'Cancel task…',
     ],
     [
       'a task a person paused: no take-over',
       { state: 'paused' as const, paused_reason: 'manual' as const },
-      ['Take over…', 'Pause', 'Resume'],
+      ['Work on it yourself…', 'Pause', 'Resume'],
       'Cancel task…',
     ],
     ['a merged task: no cancel', { state: 'merged' as const }, ['Cancel task…'], 'Retry stage…'],
@@ -668,7 +668,7 @@ describe('the ··· menu', () => {
     expect(items).toEqual(
       expect.arrayContaining([
         'Pause',
-        'Take over…',
+        'Work on it yourself…',
         'Return to stage…',
         'Rework…',
         'Cancel task…',
@@ -874,7 +874,7 @@ describe('the tabs', () => {
     start(WITH_ARTIFACT, `/tasks/${TASK}?artifact=${ARTIFACT}`);
     const article = await screen.findByRole('article', { name: 'Artifact' });
     expect(current()).toBe('Artifacts1');
-    expect(article.textContent).toContain('1 redaction');
+    expect(article.textContent).toContain('1 secret hidden');
     const raw = article.querySelector('details');
     expect(raw?.querySelector('summary')?.textContent).toBe('Raw JSON');
     // No prose of its own, so the JSON is open; and it is characters, not markup.

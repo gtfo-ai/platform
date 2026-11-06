@@ -10,7 +10,7 @@
  * only when the tasks read says `can_start_task`, and the connection's live region keeps the exact
  * word the realtime spec asserts.
  */
-import type { ProjectSummary, RunRecord, UserRole } from '@platform/contracts';
+import type { ProjectSummary, RunRecord, TaskListItem, UserRole } from '@platform/contracts';
 import { QueryClient } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -121,10 +121,64 @@ interface World {
   readonly canStart?: boolean;
   /** The signed-in role; `member` unless a case needs another. */
   readonly role?: UserRole;
+  /** The board's first page of tasks; empty unless a case needs some (S-25.7's Trial tab). */
+  readonly tasks?: readonly TaskListItem[];
+  /** How many trials (shadow batches) the project has; the read answers 404 when undefined. */
+  readonly trials?: number;
 }
+
+/** A board row (S-25.7): a live task unless `mode` or the ticket's provider says otherwise. */
+const task = (overrides: Partial<TaskListItem>): TaskListItem =>
+  ({
+    id: '00000000-0000-4000-8000-0000000000b1',
+    project_id: '00000000-0000-4000-8000-000000000101',
+    ticket: { provider: 'jira', key: 'ACME-21', url: 'https://tickets.example.invalid/ACME-21' },
+    ticket_title: 'A ticket',
+    template: 'feature',
+    mode: 'normal',
+    state: 'active',
+    current_stage: 'implementation',
+    size: null,
+    branch: null,
+    mr_ref: null,
+    workpad_ref: null,
+    iteration_counters: {},
+    risk_classes: [],
+    coverage: null,
+    dependencies: null,
+    required_reviewers: null,
+    review_threads: null,
+    conflict: null,
+    cost_actual_usd: 0,
+    unmeasured_runs: 0,
+    budget_cap_usd: 50,
+    paused_reason: null,
+    paused_budget_scope: null,
+    cost_estimated_usd: 0,
+    estimate_usd: null,
+    estimate_basis: null,
+    estimate_samples: null,
+    estimate_accuracy: null,
+    requested_by_user_id: null,
+    requested_by_identity: null,
+    created_at: '2026-06-01T09:00:00.000Z',
+    updated_at: '2026-06-01T09:00:00.000Z',
+    completed_at: null,
+    ticket_claim: null,
+    qa_stage: false,
+    // The card's glance (S-23.9a).
+    stages: [],
+    open_questions: 0,
+    pending_approvals: 0,
+    loop_limits: null,
+    ...overrides,
+  }) as TaskListItem;
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+/** How many times the trials were read: only once a live task makes them the question. */
+let trialReads = 0;
 
 const fetchFor = (world: World) =>
   (async (input: RequestInfo | URL): Promise<Response> => {
@@ -162,9 +216,26 @@ const fetchFor = (world: World) =>
         approvals: Array.from({ length: world.approvals ?? 0 }, (_, index) => approval(index + 1)),
       });
     }
+    if (/^\/api\/projects\/[^/]+\/shadow-batches$/.test(path) && world.trials !== undefined) {
+      trialReads += 1;
+      return json({
+        items: Array.from({ length: world.trials }, (_, index) => ({
+          id: `00000000-0000-4000-8000-0000000005${String(index).padStart(2, '0')}`,
+          project_id: '00000000-0000-4000-8000-000000000101',
+          created_at: '2026-06-01T09:00:00.000Z',
+          completed_at: null,
+          budget_usd: null,
+          spent_usd: 0,
+          tickets: 1,
+          refused: 0,
+        })),
+        can_start: true,
+        blocked_reason: null,
+      });
+    }
     if (/^\/api\/projects\/[^/]+\/tasks$/.test(path)) {
       return json({
-        items: [],
+        items: world.tasks ?? [],
         next_cursor: null,
         can_start_task: world.canStart === true,
         can_cancel_task: true,
@@ -199,6 +270,7 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  trialReads = 0;
 });
 
 /** The top bar, once the authenticated route has rendered it. */
@@ -370,7 +442,7 @@ describe('the top bar', () => {
 
   it('marks the current page inside the More menu when it has collapsed there', async () => {
     const user = userEvent.setup();
-    // A 700 px viewport: Workers through Settings are in the menu; Agents stays in the row.
+    // A 700 px viewport: Statistics is in the menu (below `md`); Agents stays in the row.
     const real = window.matchMedia.bind(window);
     vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => {
       const min = /min-width: (\d+)px/.exec(query);
@@ -384,16 +456,26 @@ describe('the top bar', () => {
         removeEventListener: () => undefined,
       } as unknown as MediaQueryList;
     });
-    start({ projects: [project(1)] }, '/settings');
+    start({ projects: [project(1)] }, '/stats');
     await user.click(await screen.findByRole('button', { name: 'More navigation' }));
     const menu = await screen.findByRole('menu');
-    expect(within(menu).getByRole('menuitem', { name: 'Settings (current)' })).toBeTruthy();
-    expect(within(menu).getByRole('menuitem', { name: 'Statistics' })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: 'Statistics (current)' })).toBeTruthy();
     expect(within(menu).queryByRole('menuitem', { name: /^Agents/ })).toBeNull();
   });
 });
 
 describe('the organisation navigation', () => {
+  it('is the five daily screens, and nothing of Settings’ Admin group (S-25.6, Q-UX-1)', () => {
+    // The census changes once: product/10's 2026-11-06 amendment names the row.
+    expect(NAV.map((entry) => [entry.label, entry.to])).toEqual([
+      ['Home', '/'],
+      ['Projects', '/projects'],
+      ['Inbox', '/inbox'],
+      ['Agents', '/agents'],
+      ['Statistics', '/stats'],
+    ]);
+  });
+
   it('is NAV, in order, with Home current on Home and the counts beside their entries', async () => {
     start({ projects: [project(1), project(2)], running: 1, questions: 4 }, '/');
     const nav = await screen.findByRole('navigation', { name: 'Primary' });
@@ -413,18 +495,77 @@ describe('the organisation navigation', () => {
   });
 
   it('marks the section of a nested path current, and gives way to the project tabs inside a project', async () => {
-    start({ projects: [project(1)] }, '/workers/approve');
+    start({ projects: [project(1)] }, '/stats');
     const nav = await screen.findByRole('navigation', { name: 'Primary' });
-    expect(within(nav).getByRole('link', { name: 'Workers' }).getAttribute('aria-current')).toBe(
+    expect(within(nav).getByRole('link', { name: 'Statistics' }).getAttribute('aria-current')).toBe(
       'page',
     );
     expect(within(nav).getByRole('link', { name: 'Home' }).hasAttribute('aria-current')).toBe(
       false,
     );
     cleanup();
+    // A moved screen marks no entry of the row: it is Settings' (`routes/admin-routes.test.tsx`).
+    start({ projects: [project(1)] }, '/workers/approve');
+    const row = await screen.findByRole('navigation', { name: 'Primary' });
+    await screen.findByRole('navigation', { name: 'Settings' });
+    expect(
+      within(row)
+        .getAllByRole('link')
+        .filter((link) => link.hasAttribute('aria-current')),
+    ).toEqual([]);
+    cleanup();
     start({ projects: [project(1)] }, '/projects/p1');
     await screen.findByRole('navigation', { name: 'Project' });
     expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
+  });
+});
+
+describe('the Settings gear (S-25.6, review of #83)', () => {
+  it('links the top bar to Settings, and is current there and on every Admin screen', async () => {
+    start({ projects: [project(1)] }, '/');
+    const gear = await within(await banner()).findByRole('link', { name: 'Settings' });
+    expect(gear.getAttribute('href')).toBe('/settings');
+    expect(gear.hasAttribute('aria-current')).toBe(false);
+    // Between the inbox and the avatar.
+    const order = [
+      within(await banner()).getByRole('link', { name: /^Open the inbox/ }),
+      gear,
+      within(await banner()).getByRole('button', { name: 'Account menu' }),
+    ];
+    for (const [index, element] of order.slice(1).entries()) {
+      expect(
+        (order[index] as HTMLElement).compareDocumentPosition(element) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+    cleanup();
+    for (const path of ['/settings/keyboard', '/workers', '/workers/approve']) {
+      start({ projects: [project(1)] }, path);
+      const current = await within(await banner()).findByRole('link', { name: 'Settings' });
+      await waitFor(() => {
+        expect(current.getAttribute('aria-current'), path).toBe('page');
+      });
+      cleanup();
+    }
+  });
+});
+
+describe('the account menu', () => {
+  it('holds Settings, which the top row no longer does (S-25.6)', async () => {
+    const user = userEvent.setup();
+    start({ projects: [project(1)] }, '/');
+    await user.click(await within(await banner()).findByRole('button', { name: 'Account menu' }));
+    const menu = await screen.findByRole('menu');
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Settings', 'Sign out']);
+    await user.click(within(menu).getByRole('menuitem', { name: 'Settings' }));
+    // A member lands on the first section they may change (S-25.6): Keyboard shortcuts.
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/settings/keyboard');
+    });
   });
 });
 
@@ -439,13 +580,15 @@ describe('the project layout route', () => {
       screen.getByRole('button', { name: 'Readiness: Agents plan on their own' }).textContent,
     ).toBe('Agents plan on their own');
     const tabs = screen.getByRole('navigation', { name: 'Project' });
+    // No live task yet, so the Trial tab is there (S-25.7) once the tasks read has answered.
+    await within(tabs).findByRole('link', { name: 'Trial' });
     const links = within(tabs).getAllByRole('link');
     expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
       ['Board', '/projects/p1'],
       ['Knowledge', '/projects/p1/knowledge'],
       ['Pipeline', '/projects/p1/pipeline'],
       ['Budgets', '/projects/p1/budgets'],
-      ['Shadow', '/projects/p1/shadow'],
+      ['Trial', '/projects/p1/shadow'],
       ['Settings', '/projects/p1/settings'],
     ]);
     expect(within(tabs).getByRole('link', { name: 'Board' }).getAttribute('aria-current')).toBe(
@@ -466,6 +609,65 @@ describe('the project layout route', () => {
         .queryAllByRole('link', { name: 'Knowledge' })
         .filter((link) => !tabs.contains(link)),
     ).toEqual([]);
+  });
+
+  describe('the Trial tab (S-25.7, product/10’s IA amendment)', () => {
+    const tabNames = async (): Promise<string[]> => {
+      const tabs = await screen.findByRole('navigation', { name: 'Project' });
+      return within(tabs)
+        .getAllByRole('link')
+        .map((link) => link.textContent ?? '');
+    };
+
+    it('is hidden once the project has a live task and no trial, and the trials are read to decide', async () => {
+      start({ projects: [project(1)], tasks: [task({})], trials: 0 }, '/projects/p1');
+      await waitFor(() => {
+        expect(trialReads).toBe(1);
+      });
+      await waitFor(async () => {
+        expect(await tabNames()).toEqual(['Board', 'Knowledge', 'Pipeline', 'Budgets', 'Settings']);
+      });
+    });
+
+    it('is shown while a trial exists, even after the first live task', async () => {
+      start({ projects: [project(1)], tasks: [task({})], trials: 1 }, '/projects/p1');
+      await waitFor(async () => {
+        expect(await tabNames()).toContain('Trial');
+      });
+    });
+
+    it('is shown before the first live task — a trial’s own task and a discovery are not one — without reading the trials', async () => {
+      start(
+        {
+          projects: [project(1)],
+          tasks: [
+            task({ id: '00000000-0000-4000-8000-0000000000c1', mode: 'shadow' }),
+            task({
+              id: '00000000-0000-4000-8000-0000000000c2',
+              template: 'discovery',
+              ticket: {
+                provider: 'platform',
+                key: 'discovery',
+                url: 'https://platform.example.invalid/discovery',
+              },
+            }),
+          ],
+          trials: 0,
+        },
+        '/projects/p1',
+      );
+      await waitFor(async () => {
+        expect(await tabNames()).toContain('Trial');
+      });
+      expect(trialReads).toBe(0);
+    });
+
+    it('is shown, and current, on the Trial page reached from Settings', async () => {
+      start({ projects: [project(1)], tasks: [task({})], trials: 0 }, '/projects/p1/shadow');
+      const tabs = await screen.findByRole('navigation', { name: 'Project' });
+      const trial = await within(tabs).findByRole('link', { name: 'Trial' });
+      expect(trial.getAttribute('aria-current')).toBe('page');
+    });
   });
 
   it('marks the sub-page’s tab, and omits Start a ticket for a caller who may not start one', async () => {
@@ -559,7 +761,7 @@ describe('the projects list', () => {
     ).toBe('neutral');
     expect(first.textContent).toContain('4 open');
     expect(first.textContent).toContain('$12.50');
-    expect((rows[1] as HTMLElement).textContent).toContain('paused');
+    expect((rows[1] as HTMLElement).textContent).toContain('Paused');
     expect(screen.getByText('2 projects')).toBeTruthy();
     const main = screen.getByRole('main');
     expect(within(main).getByRole('heading', { level: 1, name: 'Projects' })).toBeTruthy();

@@ -6,7 +6,11 @@
  *
  * Each section is a page with its own title and, where it writes anything, **one** Save at its foot.
  * A section is never a long scroll of other sections' controls.
+ *
+ * An entry with a `to` (the org settings' Admin group, S-25.6) is a screen at its own URL: it is
+ * linked there, whatever the caller's `link` would make of its id.
  */
+import { Link } from '@tanstack/react-router';
 import type { ReactElement, ReactNode } from 'react';
 import type { NavLinkProps } from '../ui/nav-item.js';
 import { NavList } from '../ui/nav-list.js';
@@ -35,7 +39,12 @@ export const SettingsFrame = <TId extends string>({
           id: section.id,
           label: section.label,
           current: section.id === current,
-          render: (props: NavLinkProps) => link(section.id, props),
+          render: (props: NavLinkProps) =>
+            section.to === undefined ? (
+              link(section.id, props)
+            ) : (
+              <Link to={section.to} {...props} />
+            ),
         })),
       }))}
     />

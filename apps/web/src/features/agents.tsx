@@ -16,7 +16,9 @@
  * dialog: the run's live activity and log, *Open run*, *Open task*.
  *
  * The header says the counts in words — "2 working · 1 needs you · 1 waiting · 3 free slots" — and
- * its one primary action is *Open inbox*, only while something needs you. With nothing live, the
+ * has **no primary action** (S-25.6, research/21 S07): the map is the content, and *Open inbox* was
+ * another screen's job. What needs you is the map's *Needs you* node, which links to the Inbox, and
+ * the list's own section. With nothing live, the
  * map and the list are a blankslate that says how to start, and the office shows everyone asleep
  * under the same words. Live through `useFleet` (the `org` topic, a 15 s clock, the `run:<id>`
  * topics of the runs on screen).
@@ -251,15 +253,6 @@ export const AgentsScreen = (): ReactElement => {
               <span data-fleet-counts="">{countsSentence(fleet.counts)}</span>
             ) : undefined
           }
-          {...(fleet.counts.needsYou > 0
-            ? {
-                actions: (
-                  <Link to="/inbox" className={buttonClassName('primary')}>
-                    Open inbox
-                  </Link>
-                ),
-              }
-            : {})}
         />
         <UnderlineNav label="Agents views" items={items} />
       </div>

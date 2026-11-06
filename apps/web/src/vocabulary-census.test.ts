@@ -15,6 +15,36 @@
  * | merge request | **merge request**, spelled out | "Open MR" |
  * | money vs tokens | **Cost**, **Cap**, **Token budget**; one window per label | "$… tokens", "Spend this month" |
  *
+ * **S-25.5 (research/21 § 4, product/10's 2026-11-06 *Plain words* rule)** adds the internal terms a
+ * person saw on a screen, each retired for its plain words — the census table, one row each:
+ *
+ * | internal term | the plain words |
+ * |---|---|
+ * | Tamper check, protected paths | **Protected files** |
+ * | Rebase status, rebase gate | **Up to date**, *the up-to-date check* |
+ * | Coverage delta, "+2.5 pp" | **Test coverage**, *+2.5 points* |
+ * | Risk classes | **Sensitive areas** |
+ * | Gate, System step, advisory | **Automatic check**, **Automatic step**, *for information only* |
+ * | "costs an iteration of the loop" | *uses one of the rounds* |
+ * | Context pack, in no context pack | **Knowledge given** (the run tab), *What the agent was given* (its heading), *never given to agents* |
+ * | Steer | **Message the agent**, **Send** |
+ * | Take over, Hand back, Taken over | **Work on it yourself**, **Give it back to the agent** |
+ * | workpad | *the ticket's progress comment* |
+ * | N redactions | *N secrets hidden* |
+ * | local provider mode | *on a Claude subscription, cost is estimated* |
+ * | vault, significance 0.72 | **knowledge base**; the score is dropped |
+ * | pickup rule, WIP limits, lifecycle slot, bindings | **start rule**, **Parallel tasks**, *moment*, **connections** |
+ * | probation | *extra checks on the first N tasks* |
+ * | Re-queue | **Try again** |
+ * | a raw role, integration type or project status | the label maps in `ui/humanize.ts` |
+ *
+ * **S-25.7** (product/10's 2026-11-06 IA amendment, research/21 F7 and F15) adds two more:
+ *
+ * | internal term | the plain words |
+ * |---|---|
+ * | Shadow, shadow batch, shadow mode, claim (shadow) | **Trial**, *a trial run*, **Trial runs** |
+ * | N observations | *From N tasks* (what the samples count) |
+ *
  * **What it cannot see, stated**: a word assembled at run time, a server-written string (the
  * server's catalogues are their own census's), and a concept spelled a way this table does not
  * list. A word that is also a code identifier (`claimant_kind`, `escalated` as an enum value) is
@@ -41,6 +71,48 @@ export const RETIRED_WORDS: readonly { readonly pattern: RegExp; readonly use: s
   { pattern: /\bOpen MR\b/, use: 'Open merge request' },
   { pattern: /\} tokens · /, use: 'a cost in dollars, never "tokens"' },
   { pattern: /\bSpend this month\b/, use: 'one time window per label' },
+  // S-25.5: research/21 § 4's census.
+  { pattern: /\bTamper check\b|\btamper check\b/, use: 'Protected files' },
+  { pattern: /\bRebase status\b|\brebase gate\b/, use: 'Up to date / the up-to-date check' },
+  { pattern: /\bCoverage delta\b|\} pp`/, use: 'Test coverage, in points' },
+  { pattern: /\bRisk classes\b/, use: 'Sensitive areas' },
+  { pattern: /\bSystem step\b|word: 'Gate'|\(advisory:/, use: 'Automatic check / step' },
+  { pattern: /\biteration of the loop\b/, use: 'one of the rounds' },
+  {
+    pattern: /\bContext pack\b|\bin no context pack\b/,
+    use: 'Knowledge given / What the agent was given',
+  },
+  { pattern: /\bSteer the agent\b|label="Steer"|'Steer'/, use: 'Message the agent' },
+  {
+    pattern: /\bTake over…|'Take over'|\bTaken over\b|\bHand back\b|\bHand the task back\b/,
+    use: 'Work on it yourself / Give it back to the agent',
+  },
+  { pattern: /\bworkpad\b/, use: 'the ticket’s progress comment' },
+  { pattern: /\} redactions?\b|\b\d+ redactions?\b/, use: 'N secrets hidden' },
+  { pattern: /\blocal provider mode\b/, use: 'on a Claude subscription, cost is estimated' },
+  { pattern: /\b[Tt]he vault\b|\bsignificance \$\{/, use: 'knowledge base; no score' },
+  { pattern: /\b[Pp]ickup rules?\b/, use: 'start rule' },
+  { pattern: /\bWIP limits\b/, use: 'Parallel tasks' },
+  // A lifecycle slot is a *moment* (the form's own word), never *step*, the pipeline's (review of PR #84).
+  {
+    pattern: /\bMap the slots\b|\blifecycle slots?\b|\bslots? empty\b|\bstep (?:unmapped|mapped)\b/,
+    use: 'moment',
+  },
+  { pattern: /\bbindings (?:could|were) not\b|\bBound: /, use: 'connections' },
+  { pattern: /\bon probation\b|\bProbation ends\b/, use: 'extra checks on the first N tasks' },
+  { pattern: /\bRe-queue\b/, use: 'Try again' },
+  // A raw role, integration type or project status (the last closed BACKLOG 1262 at S-25.7).
+  {
+    pattern: /`Role: \$\{user\.role\}`|<Badge>\{integration\.type\}|>\{project\.status\}</,
+    use: 'a label map',
+  },
+  // S-25.7: *Shadow* is shown as *Trial*; the route and the contract keep their words.
+  {
+    pattern:
+      /\bShadow (?:batch|batches|mode|screen|report|similarity)\b|\bclaim \(shadow\)|label: 'Shadow'/,
+    use: 'Trial / a trial run',
+  },
+  { pattern: /\bobservations\b/, use: 'From N tasks' },
 ];
 
 /** Each line of `source` outside comments; a `//` that follows a non-space is kept (a URL). */
@@ -69,6 +141,26 @@ describe('the vocabulary scanner', () => {
     ['a button label', '<Button>Retry run</Button>'],
     ['a link label', '<ActionMenuLinkItem label="Open MR" />'],
     ['a badge', '<Badge>{`try ${stage.attempt}`}</Badge>'],
+    // S-25.5: research/21 § 4's terms, one spelling each.
+    ['a check row', "{ label: 'Tamper check' }"],
+    ['a tab', "{ id: 'context', label: 'Context pack' }"],
+    ['a steer box', '<input aria-label="Steer the agent" />'],
+    ['a menu item', '<ActionMenuItem>Take over…</ActionMenuItem>'],
+    ['a button', '<Button>Hand back</Button>'],
+    ['a placeholder', 'placeholder="it goes onto the ticket’s workpad"'],
+    ['a count', '{`${count} redactions`}'],
+    ['a coverage value', 'return `${delta} pp`;'],
+    ['a stage kind', "gate: { icon: ShieldCheckIcon, word: 'Gate' },"],
+    ['a significance score', '`· significance ${score}`'],
+    ['a raw role', '{`Role: ${user.role}`}'],
+    ['a lifecycle slot called a step', "'None selected leaves the step unmapped.'"],
+    ['a raw integration type', '<Badge>{integration.type}</Badge>'],
+    // S-25.7.
+    ['a raw project status', '<Badge tone="neutral">{project.status}</Badge>'],
+    ['a shadow heading', '<SectionHeading>Shadow mode</SectionHeading>'],
+    ['a shadow tab', "{ tab: 'shadow', label: 'Shadow', icon: EyeIcon },"],
+    ['a shadow claim badge', "shadow: { label: 'claim (shadow)', tone: 'warning' },"],
+    ['an observation count', '`${formatInteger(samples)} observations`'],
   ])('finds a retired word in %s', (_name, source) => {
     expect(retiredWords(source)).not.toEqual([]);
   });
@@ -79,6 +171,20 @@ describe('the vocabulary scanner', () => {
     ['an enum value', "const state = 'escalated';"],
     ['an identifier', 'const kind = run.claimant_kind;'],
     ['the agreed words', "const t = 'Needs you: handed to a person · 2 free slots · Re-run';"],
+    // S-25.5: the identifiers the retired words are spelled like.
+    [
+      'an identifier spelled like a term',
+      'const ref = task.workpad_ref; const steer = useSteer();',
+    ],
+    [
+      'the plain words',
+      "const t = 'Protected files · Up to date · Message the agent · 2 secrets hidden';",
+    ],
+    // S-25.7: the route, the contract's words and a mapped status are not the retired words.
+    [
+      'the trial words and the identifiers',
+      "const t = 'Trial run · From 3 tasks · An observation, not an instruction'; to='/projects/$key/shadow'; useShadowBatches(); PROJECT_STATUS_LABEL[project.status];",
+    ],
   ])('ignores %s', (_name, source) => {
     expect(retiredWords(source)).toEqual([]);
   });

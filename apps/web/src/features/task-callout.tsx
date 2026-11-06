@@ -139,7 +139,7 @@ const EscalationText = ({
     mayResume ? (
       <p>
         This task was merged and is waiting for a person. Resume it to run its retrospective — a
-        task stopped at the merge gate resumes there too — or retry the retrospective or librarian
+        task stopped at the merge check resumes there too — or retry the retrospective or librarian
         stage it stopped at; it cannot be sent back before the merge.
       </p>
     ) : (

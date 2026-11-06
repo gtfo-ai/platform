@@ -208,6 +208,13 @@ const lifecycleCard = async (): Promise<HTMLElement> => {
 const slotSelect = (card: HTMLElement, label: string): HTMLSelectElement =>
   within(card).getByLabelText(label) as HTMLSelectElement;
 
+/** *Returned*: a checkbox list since S-25.10, never a native multi-select. */
+const returnedGroup = (card: HTMLElement): HTMLElement =>
+  within(card).getByRole('group', { name: 'Returned' });
+
+const returnedBox = (card: HTMLElement, name: string): HTMLInputElement =>
+  within(returnedGroup(card)).getByRole('checkbox', { name }) as HTMLInputElement;
+
 const trackerConfigOf = (body: unknown): Record<string, unknown> => {
   const items = (body as { items: { integration_id: string; config?: Record<string, unknown> }[] })
     .items;
@@ -237,8 +244,9 @@ describe('the ticket lifecycle pick lists (WP-182 criterion (1))', () => {
       ).toEqual(['', ...loaded]);
       expect(options[0]?.textContent).toBe('Not mapped');
     }
-    const returned = Array.from(slotSelect(card, 'Returned').options);
-    expect(returned.map((option) => option.value)).toEqual(loaded);
+    const returned = within(returnedGroup(card)).getAllByRole('checkbox') as HTMLInputElement[];
+    expect(returned.map((box) => box.value)).toEqual(loaded);
+    expect(card.querySelector('select[multiple]')).toBeNull();
     expect(within(card).getAllByText('Testing (in progress)').length).toBeGreaterThan(0);
     expect(within(card).getAllByText('Finished (done)').length).toBeGreaterThan(0);
     // One read of the tracker for the whole card, not one per select.
@@ -251,7 +259,8 @@ describe('the ticket lifecycle pick lists (WP-182 criterion (1))', () => {
     const card = await lifecycleCard();
     const user = userEvent.setup();
     await user.selectOptions(slotSelect(card, 'In review'), 'Waiting for review');
-    await user.selectOptions(slotSelect(card, 'Returned'), ['Sent back']);
+    await user.click(returnedBox(card, 'Sent back (to do)'));
+    expect(within(returnedGroup(card)).getByText('1 selected of at most 10')).toBeTruthy();
     await user.click(within(card).getByRole('button', { name: 'Save the ticket lifecycle' }));
     await waitFor(() => expect(state.puts).toHaveLength(1));
     const config = trackerConfigOf(state.puts[0]);
@@ -323,11 +332,16 @@ describe('the ticket lifecycle pick lists (WP-182 criterion (1))', () => {
     );
     const slot = card.querySelector<HTMLElement>('[data-lifecycle-slot="in_review"]');
     expect(within(slot as HTMLElement).getByText(/does not list among its statuses/)).toBeTruthy();
-    for (const label of ['Pick up from', 'In progress', 'Approved', 'QA', 'Done', 'Returned']) {
+    for (const label of ['Pick up from', 'In progress', 'Approved', 'QA', 'Done']) {
       expect(slotSelect(card, label).getAttribute('aria-invalid'), label).toBeNull();
     }
+    for (const box of within(returnedGroup(card)).getAllByRole('checkbox')) {
+      expect(box.getAttribute('aria-invalid')).toBeNull();
+    }
     expect(
-      within(card).getByText('Nothing was saved: a slot names a status the tracker does not list.'),
+      within(card).getByText(
+        'Nothing was saved: a moment names a status the tracker does not list.',
+      ),
     ).toBeTruthy();
   });
 
@@ -385,7 +399,7 @@ describe('the ticket lifecycle pick lists (WP-182 criterion (1))', () => {
     renderSettings(state);
     expect(
       await screen.findByText(
-        'The tracker’s statuses could not be loaded, so the slots cannot be picked yet.',
+        'The tracker’s statuses could not be loaded, so the moments cannot be mapped yet.',
       ),
     ).toBeTruthy();
     expect(document.querySelector('[data-ticket-lifecycle]')).toBeNull();

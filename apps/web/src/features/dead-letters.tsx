@@ -1,6 +1,6 @@
 /**
- * Dead letters — the events the dispatcher gave up on, and the control that serves one again
- * (WP-95, PROGRESS backlog 126).
+ * Stuck events (the dead letters; *Dead letters* until S-25.6) — the events the dispatcher gave up
+ * on, and the control that serves one again (WP-95, PROGRESS backlog 126).
  *
  * WP-49 bounded a poisoned event: after `APP_DISPATCH_MAX_ATTEMPTS` failures it leaves the queue,
  * its stream moves on, and the task it names is escalated. What an operator got was a gauge
@@ -96,14 +96,14 @@ const DeadLetterCard = ({
           >
             <UntrustedText value={letter.task.ticket_key} />
           </Link>{' '}
-          was escalated; a re-queue leaves it where the escalation put it.
+          was escalated; trying again leaves it where the escalation put it.
         </>
       )}
     </p>
     <div>
       {/* A per-row action: `default sm`, never one beacon per card (S-23.23, the UX audit's § 2). */}
       <Button size="sm" disabled={pending} onClick={onRequeue}>
-        Re-queue
+        Try again
       </Button>
     </div>
   </Card>
@@ -118,10 +118,10 @@ export const DeadLetters = (): ReactElement => {
   const total = pages.at(-1)?.total ?? 0;
   return (
     <section>
-      <SectionHeading>Dead letters</SectionHeading>
+      <SectionHeading>Stuck events</SectionHeading>
       <p className="pb-2 text-xs text-fg-muted">
         Events whose handler failed on every attempt, so the dispatcher stopped offering them. Fix
-        the handler first: a re-queue dispatches the <strong>same</strong> event again — handlers
+        the handler first: trying again dispatches the <strong>same</strong> event again — handlers
         that already succeeded for it are skipped, so nothing they did is repeated — and if it fails
         again it is dead-lettered again after the same number of attempts.
       </p>
@@ -150,7 +150,7 @@ export const DeadLetters = (): ReactElement => {
       ) : null}
       {commands.requeueDeadLetter.isError ? (
         <ErrorNotice
-          title="That event was not re-queued."
+          title="That event was not tried again."
           error={commands.requeueDeadLetter.error}
         />
       ) : null}

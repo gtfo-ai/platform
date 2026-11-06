@@ -72,7 +72,7 @@ describe('the account menu', () => {
     await user.click(await screen.findByRole('button', { name: 'Account menu' }));
     const menu = await screen.findByRole('menu');
     expect(menu.textContent).toContain('Signed in as Fake Operator');
-    expect(menu.textContent).toContain('Role: maintainer');
+    expect(menu.textContent).toContain('Role: Maintainer');
   });
 
   it('offers no theme choice and writes no theme anywhere', async () => {

@@ -145,6 +145,11 @@ const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise
       ],
     });
   }
+  if (url.includes(`/api/projects/${PROJECT}/spend`)) {
+    const window = new URL(url, 'http://app.example.invalid').searchParams.get('window') ?? '';
+    spendWindows.push(window);
+    return json(window === 'day' ? EMPTY_SPEND : { ...SPEND, window });
+  }
   if (url.includes('/kb/health')) return json(health.body, health.status);
   if (url.includes('/kb/tree')) {
     return json({
@@ -155,6 +160,50 @@ const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise
   return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
 }) as typeof fetch;
 
+/** `GET …/spend` (S-25.7): the windows asked for, and what each answers. */
+let spendWindows: string[] = [];
+
+const SPEND = {
+  window: 'month',
+  window_start: '2026-09-01T00:00:00.000Z',
+  usd: 3.3,
+  estimated_usd: 0.25,
+  stages: [
+    { stage: 'implementation', usd: 2.5, estimated_usd: 0.25 },
+    { stage: 'refinement', usd: 0.75, estimated_usd: 0 },
+    // Spend outside a stage — an ask — is published with no stage (review of PR #86).
+    { stage: null, usd: 0.05, estimated_usd: 0 },
+  ],
+  top_tasks: [
+    {
+      task_id: '00000000-0000-4000-8000-0000000000e1',
+      ticket_key: 'ACME-7',
+      // A ticket title is provider text: it must reach the row as characters.
+      ticket_title: 'Checkout <img src=x>',
+      mode: 'normal',
+      usd: 2.5,
+      estimated_usd: 0.25,
+    },
+    {
+      task_id: '00000000-0000-4000-8000-0000000000e2',
+      ticket_key: 'ACME-3',
+      ticket_title: null,
+      mode: 'shadow',
+      usd: 0.75,
+      estimated_usd: 0,
+    },
+  ],
+};
+
+const EMPTY_SPEND = {
+  window: 'day',
+  window_start: '2026-09-14T00:00:00.000Z',
+  usd: 0,
+  estimated_usd: 0,
+  stages: [],
+  top_tasks: [],
+};
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -163,6 +212,7 @@ afterEach(() => {
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   health = NOT_REPORTED;
+  spendWindows = [];
   treePaths = [];
   decisions = [];
   decisionAnswer = { status: 200, body: { performed: true } };
@@ -185,7 +235,7 @@ beforeEach(() => {
 
 const renderScreen = async (): Promise<HTMLElement> => {
   const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-  await screen.findByText('Proposals');
+  await screen.findByText('Suggested edits');
   return container;
 };
 
@@ -200,7 +250,8 @@ describe('the proposal queue', () => {
     expect(container.textContent).toContain('drafted at project setup');
     // …and the fields the card already carried are still there.
     expect(container.textContent).toContain('conventions.md');
-    expect(container.textContent).toContain('significance 0.50');
+    // S-25.5: the significance score is the Librarian's ranking, not a reader's fact (research/21 § 4).
+    expect(container.textContent).not.toContain('significance');
   });
 
   it('says why an approved proposal failed to apply, as text, and offers to approve it again (WP-124)', async () => {
@@ -299,7 +350,7 @@ describe('the knowledge health panel', () => {
       expect(container.querySelector('[data-kb-health="findings"]')).not.toBeNull();
     });
     const text = container.textContent ?? '';
-    expect(text).toContain('refused by the parser — in no context pack');
+    expect(text).toContain('cannot be read — never given to agents');
     expect(text).toContain('technical/broken.md');
     expect(text).toContain(hostile);
     expect(text).toContain('dangling link');
@@ -356,7 +407,7 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
       next_cursor: null,
     };
     await renderScreen();
-    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const list = await screen.findByRole('list', { name: 'Suggested edits' });
     const rows = within(list).getAllByRole('listitem');
     const waiting = rows.find((row) => row.textContent?.includes('conventions.md')) as HTMLElement;
     const decided = rows.find((row) => row.textContent?.includes('decided.md')) as HTMLElement;
@@ -366,9 +417,43 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
     expect(decided.querySelector('details')?.open).toBe(false);
   });
 
+  /**
+   * S-25.7 (product/10's 2026-11-06 amendment, research/21 S14): the proposals waiting for the
+   * reader come first — above the health pass, and above the decided ones in the list.
+   */
+  it('puts the waiting proposals first: above the health pass, and above the decided ones', async () => {
+    health = report([]);
+    proposals = {
+      items: [
+        proposal({
+          id: '00000000-0000-4000-8000-0000000000c4',
+          target_path: 'decided.md',
+          status: 'rejected',
+        }),
+        proposal({ target_path: 'waiting.md' }),
+      ],
+      next_cursor: null,
+    };
+    const container = await renderScreen();
+    const list = await screen.findByRole('list', { name: 'Suggested edits' });
+    const panel = await waitFor(() => {
+      const found = container.querySelector('[data-kb-health]');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    // Document order: the queue precedes the health panel.
+    expect(list.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The list's own rows: each row nests its evidence lines as list items of their own.
+    const paths = within(list)
+      .getAllByRole('listitem')
+      .filter((row) => row.parentElement === list)
+      .map((row) => (row.textContent?.includes('waiting.md') ? 'waiting' : 'decided'));
+    expect(paths).toEqual(['waiting', 'decided']);
+  });
+
   it('approves a proposal from its row and rejects one from the row’s menu', async () => {
     await renderScreen();
-    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const list = await screen.findByRole('list', { name: 'Suggested edits' });
     const user = userEvent.setup();
     await user.click(within(list).getAllByRole('button', { name: 'Approve' })[0] as HTMLElement);
     await waitFor(() => {
@@ -382,8 +467,8 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
     await user.click(await screen.findByRole('menuitem', { name: 'Reject…' }));
     // S-23.23: a reject asks first, says what it does, and sends the person's own reason — never
     // the canned "rejected from the UI" it used to.
-    const dialog = await screen.findByRole('dialog', { name: 'Reject this proposal?' });
-    expect(dialog.textContent).toContain('the proposal is closed for good');
+    const dialog = await screen.findByRole('dialog', { name: 'Reject this suggested edit?' });
+    expect(dialog.textContent).toContain('the suggestion is closed for good');
     expect(decisions).toHaveLength(1);
     await user.type(
       within(dialog).getByLabelText('Why (the Librarian learns from it)'),
@@ -405,13 +490,13 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
 
   it('keeps a proposal when the reject is not confirmed', async () => {
     await renderScreen();
-    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const list = await screen.findByRole('list', { name: 'Suggested edits' });
     const user = userEvent.setup();
     await user.click(
       within(list).getByRole('button', { name: 'More for technical/architecture.md' }),
     );
     await user.click(await screen.findByRole('menuitem', { name: 'Reject…' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Reject this proposal?' });
+    const dialog = await screen.findByRole('dialog', { name: 'Reject this suggested edit?' });
     await user.click(within(dialog).getByRole('button', { name: 'Keep it' }));
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
@@ -425,7 +510,7 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
       body: { error: { code: 'forbidden', message: 'role viewer may not perform kb.decide' } },
     };
     await renderScreen();
-    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const list = await screen.findByRole('list', { name: 'Suggested edits' });
     await userEvent
       .setup()
       .click(within(list).getAllByRole('button', { name: 'Approve' })[0] as HTMLElement);
@@ -459,9 +544,62 @@ describe('the budgets screen (S-23.11b)', () => {
     expect(list.textContent).toContain('Per month');
     expect(list.textContent).toContain('$3.25 of $40.00');
     expect(list.textContent).toContain('8% used · notified at 50%, 80%');
-    expect(
-      screen.getByRole('link', { name: 'Set a cap in the project settings' }).getAttribute('href'),
-    ).toBe('/projects/api/settings/policies');
     expect(container.querySelector('meter[style]')).toBeNull();
+  });
+
+  /**
+   * S-25.7 (product/10's 2026-11-06 IA amendment, research/21 F8): the cap is set here — no link
+   * out to the settings page — and the page's one primary action is the editor's Save.
+   */
+  it('sets the cap on the same page, with Save budgets as its one primary action', async () => {
+    window.history.pushState({}, '', '/projects/api/budgets');
+    render(createApp({ fetchImpl, realtime: false }).element);
+    expect(await screen.findByRole('heading', { name: 'Project budgets' })).toBeTruthy();
+    expect(screen.getByLabelText('Per month')).toBeTruthy();
+    const save = screen.getByRole('button', { name: 'Save budgets' });
+    // The amber primary is the `border-primary-line` class (`ui/button.tsx`): one per view.
+    expect(save.className).toContain('border-primary-line');
+    const main = screen.getByRole('main');
+    expect(main.querySelectorAll('.border-primary-line')).toHaveLength(1);
+    expect(screen.queryByRole('link', { name: /project settings/i })).toBeNull();
+  });
+
+  it('shows the month’s spend per stage and its top tasks, an estimate labelled one', async () => {
+    window.history.pushState({}, '', '/projects/api/budgets');
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    const stages = await screen.findByRole('list', { name: 'By stage' });
+    expect(spendWindows).toEqual(['month']);
+    const rows = within(stages).getAllByRole('listitem');
+    expect(rows).toHaveLength(3);
+    // Most first, each in words, the priced part said as an estimate and only where there is one.
+    expect(rows[0]?.textContent).toContain('Implementation');
+    expect(rows[0]?.textContent).toContain('$2.50 ($0.25 estimated)');
+    expect(rows[1]?.textContent).toContain('Refinement');
+    expect(rows[1]?.textContent).not.toContain('estimated');
+    expect(rows[2]?.textContent).toContain('Questions to an agent');
+    expect(rows[2]?.textContent).toContain('$0.05');
+    expect(
+      screen.getByRole('heading', { name: 'Spent this month: $3.30 ($0.25 estimated)' }),
+    ).toBeTruthy();
+    const tasks = screen.getByRole('list', { name: 'Top tasks' });
+    const link = within(tasks).getByRole('link', { name: /ACME-7/ });
+    expect(link.getAttribute('href')).toBe(
+      '/projects/api/tasks/00000000-0000-4000-8000-0000000000e1',
+    );
+    // The title is characters, never an element; a trial's task says so in words.
+    expect(link.textContent).toContain('Checkout <img src=x>');
+    expect(container.querySelector('img')).toBeNull();
+    expect(within(tasks).getByText('Trial run')).toBeTruthy();
+  });
+
+  it('asks for the window chosen, and says nothing was spent rather than drawing empty lists', async () => {
+    window.history.pushState({}, '', '/projects/api/budgets');
+    render(createApp({ fetchImpl, realtime: false }).element);
+    await screen.findByRole('list', { name: 'By stage' });
+    await userEvent.setup().selectOptions(screen.getByLabelText('Window'), 'day');
+    expect(await screen.findByText('Nothing was spent today')).toBeTruthy();
+    expect(spendWindows).toEqual(['month', 'day']);
+    expect(screen.queryByRole('list', { name: 'By stage' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Top tasks' })).toBeNull();
   });
 });

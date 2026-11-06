@@ -3,19 +3,24 @@
  * of sections (`features/settings-sections.ts`) and one section per page at `/settings/<section>`,
  * each with one Save where it writes anything (research/19 § 5.2):
  *
- *  - **Personal** — *Session* (who is signed in, with which role) and *Keyboard shortcuts* (whether
- *    single-key shortcuts are on — this browser's own choice, `app/shortcuts.ts`); there is no
- *    *Appearance*, since the application has one dark theme (TD-033's 2026-11-05 amendment);
- *  - **Organisation** — *Policies* (the command, autonomy and WIP maximums) and *Notifications*
+ *  - **Organisation** — *Policies* (the command, autonomy and parallel tasks maximums) and *Notifications*
  *    (quiet hours, digest, the default chat account), the two halves of the organisation settings
  *    document (`features/org-settings.tsx`, `GET/PATCH /api/org`, WP-93), and *Budgets* — BD-010's
  *    organisation caps, `GET/PUT /api/org/budgets` (WP-30);
- *  - **People** — *Users* (`GET /api/org/users`, which needs `org.read`) and *Provider identities*
+ *  - **People** — *Users* (`GET /api/org/users`, which needs `org.read`) and *Linked accounts*
  *    (`features/identities.tsx`, WP-43), without which every decision arriving from Slack, Jira or
  *    GitLab is `unmapped_identity`;
- *  - **Operations**, the administrator's only — *Dead letters* (`features/dead-letters.tsx`, WP-95:
- *    the events the dispatcher gave up on, and the re-queue), *Failed jobs* (`features/failed-jobs.tsx`,
- *    WP-108) and *Instance* (the version and build).
+ *  - **Admin** (S-25.6) — *Integrations*, *Workers* and the *Audit log*, three screens at their own
+ *    URLs that this NavList links to and draws itself around (`features/admin-frame.tsx`);
+ *  - **Operations**, the administrator's only — *Stuck events* (`features/dead-letters.tsx`, WP-95:
+ *    the events the dispatcher gave up on, and the re-queue), *Failed background jobs*
+ *    (`features/failed-jobs.tsx`, WP-108) and *Instance* (the version and build);
+ *  - **Personal** — *Session* (who is signed in, with which role) and *Keyboard shortcuts* (whether
+ *    single-key shortcuts are on — this browser's own choice, `app/shortcuts.ts`); there is no
+ *    *Appearance*, since the application has one dark theme (TD-033's 2026-11-05 amendment).
+ *
+ * `/settings` opens the first section the caller's role may change (S-25.6, research/21 S13):
+ * *Policies* for an administrator, *Budgets* for a maintainer, *Keyboard shortcuts* for anybody else.
  *
  * The budgets were the expensive absence once: `insert into budgets` occurred in exactly two files
  * and both were tests, so the organisation cap that is supposed to stop every new run everywhere was
@@ -238,9 +243,9 @@ const Instance = (): ReactElement => {
         </dl>
       )}
       <p className="text-xs text-fg-muted">
-        The Claude provider mode is an environment setting and feature flags are a project’s, so
-        neither is editable here. The organisation’s maximums are under Policies, and its budgets
-        under Budgets.
+        Whether agents run on an API key or a Claude subscription is an environment setting, and
+        feature flags are a project’s, so neither is editable here. The organisation’s maximums are
+        under Policies, and its budgets under Budgets.
       </p>
     </>
   );

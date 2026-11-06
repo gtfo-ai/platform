@@ -54,6 +54,7 @@ import {
   formatDateTime,
   SectionHeading,
 } from '../ui/kit.js';
+import { Select } from '../ui/select.js';
 import { CodeText, DownloadLink, UntrustedText } from '../ui/untrusted.js';
 
 /** States in which there is nothing left to take over. */
@@ -238,20 +239,19 @@ export const HandBackForm = ({
     >
       <label className="flex items-center gap-2 text-xs text-fg-muted" htmlFor="hand-back-stage">
         Resume at
-        <select
+        <Select
           id="hand-back-stage"
           value={selected}
           onChange={(event) => {
             setStage(event.target.value);
           }}
-          className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm text-fg"
         >
           {options.map((option) => (
             <option key={option} value={option}>
               {stageLabel(option)}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
       <textarea
         aria-label="What you did"
@@ -259,7 +259,7 @@ export const HandBackForm = ({
         onChange={(event) => {
           setSummary(event.target.value);
         }}
-        placeholder="What you did on the branch — it goes onto the ticket’s workpad"
+        placeholder="What you did on the branch — it goes onto the ticket’s progress comment"
         className="min-h-16 rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
       />
       <div>
@@ -268,11 +268,14 @@ export const HandBackForm = ({
           tone="primary"
           disabled={commands.handBack.isPending || summary.trim() === ''}
         >
-          Hand back
+          Give it back to the agent
         </Button>
       </div>
       {commands.handBack.isError ? (
-        <ErrorNotice title="The hand-back was refused." error={commands.handBack.error} />
+        <ErrorNotice
+          title="Giving it back to the agent was refused."
+          error={commands.handBack.error}
+        />
       ) : null}
     </form>
   );
@@ -297,7 +300,7 @@ export const TakenOverDetails = ({
 }): ReactElement => (
   <>
     <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
-      <Badge tone="warning">taken over</Badge>
+      <Badge tone="warning">held by a person</Badge>
       <span>at {formatDateTime(takenOver.at)}</span>
       <span>
         from <UntrustedText value={stageLabel(takenOver.stage)} />
@@ -374,12 +377,12 @@ export const TakeOverForm = ({
         </label>
         <div>
           <Button type="submit" tone="danger" disabled={commands.takeOver.isPending}>
-            Take over
+            Work on it yourself
           </Button>
         </div>
       </form>
       {commands.takeOver.isError ? (
-        <ErrorNotice title="The take-over was refused." error={commands.takeOver.error} />
+        <ErrorNotice title="Working on it yourself was refused." error={commands.takeOver.error} />
       ) : null}
     </>
   );
@@ -432,7 +435,7 @@ export const TakeOverPanel = ({
   if (takenOver !== null) {
     return (
       <div>
-        <SectionHeading>Taken over by a person</SectionHeading>
+        <SectionHeading>A person is working on it</SectionHeading>
         <Card className="flex flex-col gap-3">
           <TakenOverDetails state={state} takenOver={takenOver} runs={runs} answered={answered} />
           <HandBackForm taskId={taskId} takenOver={takenOver} merged={merged} commands={commands} />
@@ -450,7 +453,7 @@ export const TakeOverPanel = ({
   if (merged) {
     return (
       <div>
-        <SectionHeading>Take over</SectionHeading>
+        <SectionHeading>Work on it yourself</SectionHeading>
         <Card>
           <p className="text-xs text-fg-muted">{MERGED_NO_TAKE_OVER}</p>
         </Card>
@@ -460,7 +463,7 @@ export const TakeOverPanel = ({
 
   return (
     <div>
-      <SectionHeading>Take over</SectionHeading>
+      <SectionHeading>Work on it yourself</SectionHeading>
       <Card className="flex flex-col gap-2">
         <TakeOverForm taskId={taskId} commands={commands} />
         {answered === undefined ? null : <TakeOverAnswer answered={answered} />}

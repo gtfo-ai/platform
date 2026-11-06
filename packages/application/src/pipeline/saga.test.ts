@@ -3686,7 +3686,7 @@ describe('a gate whose provider does not answer (backlog 490)', () => {
         `Check that ${HOST} is reachable from the platform's host (and its status page), then hand the task back at ci_gate.`,
     );
     expect(escalation?.payload.reason).toBe(
-      `the "ci_gate" gate could not be decided: ${HOST} did not answer for 60 minutes: unavailable (${String(reads)} failed reads); it stopped at the platform's 60-minute limit for a provider outage at a gate (PROGRESS backlog 490)`,
+      `the "ci_gate" gate could not be decided: ${HOST} did not answer for 60 minutes: unavailable (${String(reads)} failed reads); it stopped at the platform's 60-minute limit for a provider outage at a gate`,
     );
     expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
     expect(stageJobs(harness)).toEqual([]);

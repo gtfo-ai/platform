@@ -343,7 +343,7 @@ describe('the task page’s Flow section', () => {
     const current = list.querySelector('li[aria-current="step"]');
     expect(current?.textContent).toContain('Implementation');
     expect(
-      within(list).getByText('Can send back to Architecture (Plan revisions · used 0 of 2)'),
+      within(list).getByText('Can send back to Architecture (Plan revisions: 0 of 2 used)'),
     ).toBeDefined();
   });
 
@@ -513,7 +513,7 @@ describe('the Pipeline tab', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Code review' });
     expect(dialog.textContent).toContain('Review verdict');
     expect(dialog.textContent).toContain('back to Implementation, at most 3 times');
-    expect(dialog.textContent).toContain('Approved → Rebase check');
+    expect(dialog.textContent).toContain('Approved → Up-to-date check');
     expect(within(dialog).queryByRole('link', { name: 'Open run' })).toBeNull();
 
     expect(screen.getByText('Effective configuration').closest('details')).not.toBeNull();

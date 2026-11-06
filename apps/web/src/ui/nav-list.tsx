@@ -116,7 +116,7 @@ export const NavList = ({
     <nav
       aria-label={label}
       data-nav-list="disclosure"
-      className={cx('rounded-md border border-line bg-canvas', className)}
+      className={cx('rounded-md border border-line bg-default', className)}
     >
       <details key={current?.id ?? ''} className="group">
         <summary

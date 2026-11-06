@@ -14,7 +14,12 @@
  * timezone, so the dashboard and the budget agree on when the month turned (BD-010, Q12).
  */
 import { budgetWindowStart, resolveBudgetTimezone } from '@platform/application';
-import type { BudgetRecord, Id, IsoDateTime } from '@platform/contracts';
+import {
+  type BudgetRecord,
+  type Id,
+  type IsoDateTime,
+  PROJECT_SPEND_TOP_TASKS,
+} from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
 import type { SQL } from 'drizzle-orm';
 import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
@@ -248,6 +253,112 @@ export const listOrgBudgets = async (
     .limit(1);
   const { timezone } = resolveBudgetTimezone(zone[0]?.timezone ?? null);
   return budgetsWithSpend(database, eq(budgets.scope, 'org'), at, timezone);
+};
+
+/** A ledger sum as the DTO publishes it: `numeric` arrives as a string, and an empty sum as null. */
+const sum = (value: string | number | null): number => (value === null ? 0 : Number(value));
+
+/**
+ * `GET /api/projects/:id/spend` (S-25.7) — where the project's booked cost went since `windowStart`:
+ * per stage and for its {@link PROJECT_SPEND_TOP_TASKS} most expensive tasks.
+ *
+ * **Read off `cost_entries`, never off `budget_windows` or `tasks.cost_usd`**: the ledger rows are
+ * the truth the other two are projections of (technical/03), and they are the only place a figure
+ * carries its stage and whether the platform priced it (`is_estimate`). A run the ledger could not
+ * price has no row, so it is in no line here — the screen says the breakdown is what was booked.
+ *
+ * **The boundary is near the budget's, not the same one.** The ledger charges a budget window at the
+ * charge's `occurred_at` (the run's ending event), while `cost_entries.created_at` is when the row
+ * was written — the handler's transaction, usually milliseconds later, but later still for a
+ * redelivered event or a late cost (`cost/late.ts`). So a run that ended just before a window
+ * turned and was booked just after it is in the budget's previous window and in this read's new
+ * one. `created_at` is used because it is the partition key (a month's read prunes the others) and
+ * the only time the row carries; the screen calls the figures what the ledger booked in the
+ * window, never the budget's own spend.
+ *
+ * **A run outside a stage** — an ask, the only run with no stage — is booked with the ledger's
+ * placeholder stage `'(none)'` (`cost/ledger.ts`), which is not a stage id; it is published as
+ * `stage: null` and the screen names it.
+ */
+export const projectSpend = async (
+  database: Database,
+  projectId: string,
+  windowStart: IsoDateTime,
+): Promise<{
+  readonly usd: number;
+  readonly estimated_usd: number;
+  /** `stage: null` is spend outside a stage — an ask (the ledger's `'(none)'`). */
+  readonly stages: readonly { stage: string | null; usd: number; estimated_usd: number }[];
+  readonly top_tasks: readonly {
+    task_id: Id;
+    ticket_key: string;
+    ticket_title: string | null;
+    mode: 'normal' | 'shadow';
+    usd: number;
+    estimated_usd: number;
+  }[];
+}> => {
+  const stageRows = await database.execute<{
+    stage: string | null;
+    usd: string | null;
+    estimated_usd: string | null;
+  }>(sql`
+    select nullif(c.stage, '(none)') as stage,
+           sum(c.usd) as usd,
+           sum(case when c.is_estimate then c.usd else 0 end) as estimated_usd
+      from cost_entries c
+     where c.project_id = ${projectId}::uuid
+       and c.created_at >= ${windowStart}::timestamptz
+     group by 1
+     order by sum(c.usd) desc, 1 nulls last
+  `);
+  const taskRows = await database.execute<{
+    task_id: string;
+    ticket_key: string;
+    ticket_title: string | null;
+    mode: 'normal' | 'shadow';
+    usd: string | null;
+    estimated_usd: string | null;
+  }>(sql`
+    select t.id as task_id,
+           t.ticket_key as ticket_key,
+           -- A title that is not a string publishes null, as the task read's ticketTitleOf does.
+           case when jsonb_typeof(t.ticket_snapshot -> 'title') = 'string'
+                then t.ticket_snapshot ->> 'title' end as ticket_title,
+           t.mode as mode,
+           spend.usd as usd,
+           spend.estimated_usd as estimated_usd
+      from (select c.task_id,
+                   sum(c.usd) as usd,
+                   sum(case when c.is_estimate then c.usd else 0 end) as estimated_usd
+              from cost_entries c
+             where c.project_id = ${projectId}::uuid
+               and c.created_at >= ${windowStart}::timestamptz
+             group by c.task_id
+             order by sum(c.usd) desc, c.task_id
+             limit ${PROJECT_SPEND_TOP_TASKS}) spend
+      join tasks t on t.id = spend.task_id
+     order by spend.usd desc, t.id
+  `);
+  const stages = stageRows.rows.map((row) => ({
+    stage: row.stage,
+    usd: sum(row.usd),
+    estimated_usd: sum(row.estimated_usd),
+  }));
+  return {
+    // The whole is the sum of its stages, so the total and the breakdown cannot disagree.
+    usd: stages.reduce((total, line) => total + line.usd, 0),
+    estimated_usd: stages.reduce((total, line) => total + line.estimated_usd, 0),
+    stages,
+    top_tasks: taskRows.rows.map((row) => ({
+      task_id: row.task_id as Id,
+      ticket_key: row.ticket_key,
+      ticket_title: row.ticket_title,
+      mode: row.mode,
+      usd: sum(row.usd),
+      estimated_usd: sum(row.estimated_usd),
+    })),
+  };
 };
 
 /**

@@ -94,7 +94,7 @@ describe('the human-time breakdown line', () => {
     const line = humanTimeBreakdown(humanTime());
     expect(line).toContain('No human activity recorded');
     // …and names the four things that would create one, so the sentence is actionable.
-    expect(line).toContain('review comment, question, approval or steer');
+    expect(line).toContain('review comment, question, approval or message to an agent');
   });
 
   it('distinguishes a measured zero from an absence', () => {
@@ -112,7 +112,7 @@ describe('the human-time breakdown line', () => {
         entries: 4,
       }),
     );
-    expect(line).toBe('review 2 h 13 m · approvals 10 m · steers 5 m over 4 entries.');
+    expect(line).toBe('review 2 h 13 m · approvals 10 m · messages to agents 5 m over 4 entries.');
     // A kind with no minutes is left out rather than printed as a zero: the absent case must not
     // be the quiet one, and here the absence is the *whole line's* job (rule 16, rule 18).
     expect(line).not.toContain('questions');
@@ -142,12 +142,12 @@ const measured = (over: Partial<TaskCoverage> = {}): TaskCoverage => ({
 
 describe('the coverage delta on the Checks panel', () => {
   it('signs the delta, both ways, in percentage points', () => {
-    expect(coverageValueText(measured())).toBe('+2.5 pp');
-    expect(coverageValueText(measured({ head_pct: 70, delta_pct: -9 }))).toBe('-9.0 pp');
+    expect(coverageValueText(measured())).toBe('+2.5 points');
+    expect(coverageValueText(measured({ head_pct: 70, delta_pct: -9 }))).toBe('-9.0 points');
   });
 
   it('prints a measured zero as a zero, and says both numbers beneath it', () => {
-    expect(coverageValueText(measured({ head_pct: 79, delta_pct: 0 }))).toBe('0.0 pp');
+    expect(coverageValueText(measured({ head_pct: 79, delta_pct: 0 }))).toBe('0.0 points');
     const line = coverageBasisText(measured({ head_pct: 79, delta_pct: 0 }));
     expect(line).toContain('79.0 %');
     expect(line).toContain('against 79.0 %');
@@ -345,7 +345,7 @@ const routed = (over: Partial<TaskReviewers> = {}): TaskReviewers => ({
 describe('the required reviewers on the Checks panel', () => {
   it('distinguishes "not routed yet" from "routed and found nobody"', () => {
     expect(reviewersValueText(null)).toBe('not routed');
-    expect(reviewersBasisText(null)).toContain('has not routed');
+    expect(reviewersBasisText(null)).toContain('has not reached yet');
     const nobody = routed({ source: 'none', handles: [], assigned: [], unresolved: [] });
     expect(reviewersValueText(nobody)).toBe('none');
     expect(reviewersBasisText(nobody)).toContain('assigned to nobody');
@@ -354,11 +354,11 @@ describe('the required reviewers on the Checks panel', () => {
   it('counts what was assigned and names what could not be', () => {
     expect(reviewersValueText(routed())).toBe('1 of 2 assigned, 1 unresolved');
     expect(reviewersBasisText(routed())).toContain('@billing-team');
-    expect(reviewersBasisText(routed())).toContain('CODEOWNERS on the default branch');
+    expect(reviewersBasisText(routed())).toContain('the code owners file on the default branch');
     // Everything resolved: the count says so and nothing is named unresolved.
     const clean = routed({ assigned: ['4242', '7'], unresolved: [] });
     expect(reviewersValueText(clean)).toBe('2 of 2 assigned');
-    expect(reviewersBasisText(clean)).not.toContain('No account on this provider');
+    expect(reviewersBasisText(clean)).not.toContain('No account on the git host');
   });
 
   it('says which step of the precedence chose them', () => {
@@ -366,7 +366,7 @@ describe('the required reviewers on the Checks panel', () => {
       'the project’s reviewers setting',
     );
     expect(reviewersBasisText(routed({ source: 'requester' }))).toContain(
-      'the human who asked for the task',
+      'the person who asked for the task',
     );
   });
 });

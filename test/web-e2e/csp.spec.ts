@@ -43,6 +43,11 @@
  * Projects list by a click and by Enter, positioned under its badge, closed by Escape with the
  * focus back, with no violation.
  *
+ * Since S-25.10, the **Select** primitive (the native `<select>` with its OS arrow removed and an
+ * Octicon chevron over it) and the **checkbox list**: the ticket lifecycle's fields drawn on the card
+ * ground with no inline style and no data-URI arrow, an option chosen, and a lavender checkbox
+ * checked from the keyboard, with no violation.
+ *
  * Since S-23.6, the **Agents page's three views**: the fleet map (a second lazy canvas chunk), the
  * pixel office (a lazy chunk of SVG text grids, always the dark room) and the list, each over the
  * fixtures' three runs, two workers and hostile titles — drawn, opened and switched under the
@@ -255,6 +260,64 @@ test('Base UI opens a popover under the policy without a violation (S-25.2)', as
   expect(await violations(page)).toEqual([]);
 });
 
+test('the Select and the checkbox list are drawn in the brand under the policy (S-25.10)', async ({
+  page,
+}) => {
+  await signIn(page);
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
+  // The ticket lifecycle on the wizard's step 1: six Selects and *Returned*'s checkbox list.
+  await page.goto(`/onboarding?project=${PROJECT_KEY}&step=connect`);
+  const card = page.locator(`[data-ticket-lifecycle="${IDS.integration}"]`);
+  const qa = card.getByRole('combobox', { name: 'QA' });
+  await expect(qa).toBeVisible();
+  // The native element, its OS arrow gone, on the field ground inside the input edge — with no
+  // inline style and no data-URI arrow, which `style-src`/`img-src 'self'` would refuse.
+  const drawn = await qa.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const wrapper = element.closest('[data-select]');
+    const chevron = wrapper?.querySelector('[data-select-chevron] svg');
+    return {
+      tag: element.tagName,
+      appearance: style.appearance,
+      background: style.backgroundColor,
+      image: style.backgroundImage,
+      edge: style.borderTopColor,
+      styled: element.hasAttribute('style') || (wrapper?.hasAttribute('style') ?? true),
+      chevron:
+        chevron === null || chevron === undefined ? 0 : chevron.getBoundingClientRect().width,
+      through: chevron?.parentElement ? getComputedStyle(chevron.parentElement).pointerEvents : '',
+    };
+  });
+  expect(drawn).toEqual({
+    tag: 'SELECT',
+    appearance: 'none',
+    background: 'rgb(15, 13, 34)',
+    image: 'none',
+    edge: 'rgb(118, 113, 176)',
+    styled: false,
+    chevron: 16,
+    through: 'none',
+  });
+  await qa.selectOption('Testing');
+  await expect(qa).toHaveValue('Testing');
+
+  // *Returned*: a checkbox per status in the brand's lavender, checked from the keyboard.
+  const returned = card.getByRole('group', { name: 'Returned' });
+  const box = returned.getByRole('checkbox', { name: 'Sent back (to do)' });
+  expect(await box.evaluate((element) => getComputedStyle(element).accentColor)).toBe(
+    'rgb(179, 168, 255)',
+  );
+  await box.focus();
+  await page.keyboard.press('Space');
+  await expect(box).toBeChecked();
+  await expect(returned.getByText('1 selected of at most 10')).toBeVisible();
+  await expect(card.locator('select[multiple]')).toHaveCount(0);
+
+  expect(await violations(page)).toEqual([]);
+});
+
 test('Inter is served from this origin and the sign-in headline is Inter Black (TD-033)', async ({
   page,
 }) => {
@@ -395,7 +458,9 @@ test('the flow canvas and its stage dialog open under the policy without a viola
     expect(right.x).toBeGreaterThan(left.x + left.width);
     expect(Math.abs(right.y + right.height / 2 - (left.y + left.height / 2))).toBeLessThan(2);
   }
-  await expect(template.locator('[data-loop-pill="code_review"]')).toHaveText('Review ≤3');
+  await expect(template.locator('[data-loop-pill="code_review"]')).toHaveText(
+    'Review rounds: up to 3',
+  );
   const lazyChunks = await page.evaluate(
     () =>
       performance
@@ -497,6 +562,12 @@ test('the Agents page draws its map, office and list under the policy, titles as
   );
   await expect(map.locator('.react-flow__edge.animated')).not.toHaveCount(0);
   await expect(map.locator('[data-fleet-node="seat"]')).toHaveCount(3);
+  // S-25.6 (research/21 S07): the page has no primary of its own — the map is the content — and
+  // the map's Needs you node is the Inbox's door.
+  await expect(page.getByRole('link', { name: 'Open inbox' })).toHaveCount(0);
+  await expect(
+    map.locator('[data-fleet-node="needs"]').getByRole('link', { name: 'Needs you (2)' }),
+  ).toHaveAttribute('href', '/inbox');
   await page
     .getByRole('button', {
       name: /^DEMO-5 · Flaky retries .+ · Investigation · thinking · worker jan-mbp$/,

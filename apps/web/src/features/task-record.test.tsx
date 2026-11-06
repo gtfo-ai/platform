@@ -198,7 +198,7 @@ describe('the claim and the QA stage in the task header (WP-182 ruling (c))', ()
         qa_stage: true,
       },
     });
-    expect(await view.findByText('claim (shadow)')).toBeTruthy();
+    expect(await view.findByText('Trial run')).toBeTruthy();
     expect(view.getByText('QA stage')).toBeTruthy();
   });
 

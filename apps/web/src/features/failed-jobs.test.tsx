@@ -211,7 +211,7 @@ describe('failed jobs on the settings page (WP-108)', () => {
     });
     expect(container.querySelector(`[data-failed-job="${ids[2]}"]`)).toBeNull();
     const older = (await screen.findAllByRole('button', { name: 'Show older' })).find((button) =>
-      button.closest('section')?.textContent?.includes('Failed jobs'),
+      button.closest('section')?.textContent?.includes('Failed background jobs'),
     );
     expect(older).toBeDefined();
     fireEvent.click(older as HTMLElement);
@@ -224,7 +224,9 @@ describe('failed jobs on the settings page (WP-108)', () => {
     expect(
       screen
         .queryAllByRole('button', { name: 'Show older' })
-        .filter((button) => button.closest('section')?.textContent?.includes('Failed jobs')),
+        .filter((button) =>
+          button.closest('section')?.textContent?.includes('Failed background jobs'),
+        ),
     ).toHaveLength(0);
   });
 

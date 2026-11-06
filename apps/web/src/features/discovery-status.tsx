@@ -186,8 +186,9 @@ export const DiscoveryStatus = ({
           </p>
         ) : (
           <p>
+            {/* The brief says why in words; the reason is a producer's code (`run <id>: …` from
+                the lease sweep), so it is not shown (BACKLOG 1263). */}
             It is waiting for a person since {formatDateTime(escalation.at)}:{' '}
-            <Badge tone="warning">{escalation.reason}</Badge>{' '}
             <UntrustedText value={escalation.brief} />
             {escalation.brief_original_chars === null ? null : (
               <span className="text-fg-muted">

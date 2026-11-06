@@ -55,7 +55,7 @@ const ArtifactBody = ({
         </h2>
         <p className="text-xs text-fg-muted">
           schema {artifact.schema_version} · {formatDateTime(artifact.created_at)} ·{' '}
-          {`${artifact.redaction_count} redaction${artifact.redaction_count === 1 ? '' : 's'}`}
+          {`${artifact.redaction_count} secret${artifact.redaction_count === 1 ? '' : 's'} hidden`}
         </p>
       </header>
       {artifact.markdown === null ? null : <UntrustedProse value={artifact.markdown} />}

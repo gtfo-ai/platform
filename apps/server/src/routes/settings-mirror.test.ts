@@ -39,14 +39,19 @@ import { repositoryRoot, webSourceFiles, withoutComments } from './web-sources.j
 const WIZARD = 'apps/web/src/features/onboarding.tsx';
 
 /**
- * The settings screens product/10 names: the project's own page, the org page and the integrations
- * page, which is where product/10 puts "test connection" and where an integration is created. Since
+ * The settings screens product/10 names: the project's own page (and, since S-25.7, its Budgets tab),
+ * the org page and the integrations page, which is where product/10 puts "test connection" and where an integration is created. Since
  * S-23.11a the integrations page is three route modules — the list, one integration's page and the
  * add-integration wizard (`/integrations/new`), each lazily loaded, so none imports another — and all
  * three are named here.
  */
 const SETTINGS_SCREENS = [
   'apps/web/src/features/project-settings.tsx',
+  // S-25.7 (product/10's 2026-11-06 IA amendment): a project's cap is set on its *Budgets* tab, which
+  // draws the wizard's `ProjectBudgets`; *Rules & limits* points there instead. The file still
+  // reaches `operating-mode.tsx` through project settings, so this line says where the control is
+  // rather than what makes the census pass.
+  'apps/web/src/features/project-panels.tsx',
   'apps/web/src/features/settings.tsx',
   'apps/web/src/features/integrations.tsx',
   'apps/web/src/features/integration-detail.tsx',

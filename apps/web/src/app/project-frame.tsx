@@ -28,13 +28,15 @@ import { type ReactElement, useSyncExternalStore } from 'react';
 import { ReadinessLabel } from '../features/readiness-label.js';
 import { useTopics } from '../realtime/provider.js';
 import { buttonClassName } from '../ui/button.js';
+import { PROJECT_STATUS_LABEL } from '../ui/humanize.js';
 import { Badge, cx, EmptyState, ErrorNotice } from '../ui/kit.js';
 import type { NavItem, NavLinkProps } from '../ui/nav-item.js';
 import { PageHeader } from '../ui/page-header.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
 import { UntrustedText } from '../ui/untrusted.js';
-import { useProjectByKey, useProjectTasks } from './queries.js';
+import { useProjectByKey, useProjectTasks, useShadowBatches } from './queries.js';
+import { needsTrialCount, trialTabShown } from './trial-tab.js';
 
 /** The board's start form's id: the header's *Start a ticket* and the `+` menu's both go there. */
 export const START_TICKET_ANCHOR = 'start-ticket';
@@ -73,7 +75,8 @@ export const PROJECT_TABS = [
   { tab: 'knowledge', label: 'Knowledge', icon: BookIcon },
   { tab: 'pipeline', label: 'Pipeline', icon: WorkflowIcon },
   { tab: 'budgets', label: 'Budgets', icon: CreditCardIcon },
-  { tab: 'shadow', label: 'Shadow', icon: EyeIcon },
+  // Shown as *Trial* (product/10's 2026-11-06 IA amendment); the route and the id stay `shadow`.
+  { tab: 'shadow', label: 'Trial', icon: EyeIcon },
   { tab: 'settings', label: 'Settings', icon: GearIcon },
 ] as const;
 
@@ -178,13 +181,24 @@ export const ProjectBands = ({
   const tasks = useProjectTasks(project.id);
   const frame = useFrameMatch();
   useTopics([`project:${project.id}`]);
-  const items: NavItem[] = PROJECT_TABS.map(({ tab, label, icon: Glyph }) => ({
-    id: tab,
-    label,
-    icon: <Glyph size={16} />,
-    current: (frame.tab ?? 'board') === tab,
-    render: (props: NavLinkProps) => tabLink(tab, project.key, props),
-  }));
+  // The Trial tab only before the first live task, or while a trial exists (`trial-tab.ts`); the
+  // trials are read only once a live task makes them the question.
+  const taskItems = tasks.data?.items;
+  const trials = useShadowBatches(needsTrialCount(taskItems) ? project.id : null);
+  const showTrial = trialTabShown({
+    tasks: taskItems,
+    trials: trials.data?.items.length,
+    current: frame.tab === 'shadow',
+  });
+  const items: NavItem[] = PROJECT_TABS.filter(({ tab }) => tab !== 'shadow' || showTrial).map(
+    ({ tab, label, icon: Glyph }) => ({
+      id: tab,
+      label,
+      icon: <Glyph size={16} />,
+      current: (frame.tab ?? 'board') === tab,
+      render: (props: NavLinkProps) => tabLink(tab, project.key, props),
+    }),
+  );
   // The header's primary only on the board itself: a sub-page and a task's page each keep their
   // own one primary action (research/19 § 3.1), and the `+` menu still offers the start there.
   const canStart =
@@ -209,7 +223,7 @@ export const ProjectBands = ({
               <>
                 <ReadinessLabel level={project.readiness_level} project={project} />
                 {project.status === 'active' ? null : (
-                  <Badge tone="neutral">{project.status}</Badge>
+                  <Badge tone="neutral">{PROJECT_STATUS_LABEL[project.status]}</Badge>
                 )}
               </>
             }

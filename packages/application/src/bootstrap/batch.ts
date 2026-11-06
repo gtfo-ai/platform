@@ -89,12 +89,12 @@ export type HistoryBootstrapBlocker =
 
 export const HISTORY_BOOTSTRAP_BLOCKED_DETAIL: Readonly<Record<HistoryBootstrapBlocker, string>> = {
   feature_disabled:
-    'the history bootstrap is off for this project; turn it on in settings (features.history_bootstrap.enabled) before starting one',
+    'the history bootstrap is off for this project; turn it on in the project’s feature settings before starting one',
   no_git_binding:
-    'this project has no git integration bound, so there is no merged history to mine; bind one first',
+    'this project has no git host connected, so there is no merged history to mine; connect one first',
   already_running:
     'this project already has a history bootstrap that has not finished; a second one would re-read the same history and spend a second cap',
-  merge_requests_out_of_range: `the number of merge requests must be between 1 and ${MAX_BOOTSTRAP_MERGE_REQUESTS} (product/19 §18)`,
+  merge_requests_out_of_range: `the number of merge requests must be between 1 and ${MAX_BOOTSTRAP_MERGE_REQUESTS}`,
 };
 
 /** The estimate the wizard is shown before start, and the batch records. */

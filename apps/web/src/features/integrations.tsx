@@ -54,6 +54,7 @@ import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { ConnectionTestResult } from './connection-test-result.js';
 import {
+  currentHealthStatus,
   IntegrationActions,
   type IntegrationDialog,
   integrationStatus,
@@ -316,13 +317,13 @@ export const IntegrationsScreen = (): ReactElement => {
             <ListBox label={group.label}>
               {rows.map((integration) => {
                 const provider = providerOf(integration);
-                const { status, word } = integrationStatus(integration);
+                const { status, word } = integrationStatus(integration, nowMs);
                 const isLive = integration.retired_at === null;
                 // S-25.3: a stale verdict offers the probe in place, to someone who may run it.
                 const testAgain =
                   isLive &&
                   canWrite &&
-                  integration.current_health.status === 'not_checked_recently';
+                  currentHealthStatus(integration, nowMs) === 'not_checked_recently';
                 const test = () => {
                   setTested(integration.id);
                   commands.testIntegration.mutate(integration.id);

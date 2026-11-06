@@ -250,7 +250,7 @@ export const escalatingOnLastTry =
               tries,
               ending,
             },
-            'a job a person waits on failed on its last try, so its task was escalated with a brief (TD-004’s M7 amendment, PROGRESS backlog 366)',
+            'a job a person waits on failed on its last try, so its task was escalated with a brief',
           );
         } catch (escalationError) {
           (options.logger ?? silentLogger).error(

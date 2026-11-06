@@ -42,21 +42,25 @@ describe('reasonCopy', () => {
     },
   );
 
-  it('names the risk classes, and recommends keeping the rule', () => {
+  it('names the sensitive areas, and recommends keeping the rule', () => {
     expect(reasonCopy({ code: 'risk_class', classes: ['auth'] }).why).toContain(
-      'the auth risk class',
+      'touches auth, an area this project marks as sensitive',
     );
     const many = reasonCopy({ code: 'risk_class', classes: ['auth', 'payments', 'migrations'] });
-    expect(many.why).toContain('auth, payments and migrations risk classes');
+    expect(many.why).toContain(
+      'auth, payments and migrations, areas this project marks as sensitive',
+    );
     expect(many.stop).toContain('Keeping it is recommended');
     expect(many.section).toBe('policies');
   });
 
-  it('says how far probation has to go, and who may end it early', () => {
+  it('says how far the first tasks’ extra checks have to go, and who may end them early', () => {
     const copy = reasonCopy({ code: 'probation', completed: 2, of: 5 });
-    expect(copy.why).toBe('The project is on probation: 2 of its first 5 tasks are done.');
+    expect(copy.why).toBe('This project’s first 5 tasks get extra checks, and 2 of them are done.');
     expect(copy.stop).toContain('after 5 completed tasks (3 to go)');
-    expect(copy.stop).toContain('a maintainer ends it');
+    expect(copy.stop).toContain('a maintainer ends them');
+    // S-25.5: the outcome, never the internal word (research/21 § 4).
+    expect(`${copy.why} ${copy.stop}`).not.toMatch(/probation/i);
   });
 
   it('sends a stage override to the repository configuration, and the dial to the policies', () => {
@@ -77,7 +81,7 @@ describe('reasonCopy', () => {
     // copy names no configuration file or key (`admin-names-census.test.ts`).
     expect(size.stop).toContain('plan-approval setting');
     expect(size.stop).toContain('repository configuration');
-    expect(size.stop).not.toContain('autonomy dial');
+    expect(size.stop).not.toContain('How much agents do alone');
   });
 
   it('names both budget figures', () => {

@@ -49,6 +49,7 @@ import { UnderlineNav } from '../ui/underline-nav.js';
 import { CopyableUrl, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { ConnectionTestResult } from './connection-test-result.js';
 import {
+  currentHealthStatus,
   IntegrationActions,
   type IntegrationDialog,
   integrationStatus,
@@ -127,13 +128,13 @@ const HealthFacts = ({
       <h2 id="integration-health" className="text-base font-semibold">
         Health
       </h2>
-      {integration.current_health.status === 'not_checked_recently' ? (
+      {currentHealthStatus(integration, nowMs) === 'not_checked_recently' ? (
         <p className="text-sm text-fg-muted" data-health-stale="">
           {`Nothing has called it, delivered from it or tested it in the last ${INTEGRATION_HEALTH_STALE_AFTER_HOURS} hours, so its health is not known now.`}
         </p>
       ) : null}
       <dl
-        className="grid grid-cols-[minmax(10rem,auto)_1fr] gap-x-4 gap-y-2 rounded-md border border-line p-4 text-sm"
+        className="grid grid-cols-[minmax(10rem,auto)_1fr] gap-x-4 gap-y-2 rounded-md border border-line bg-default p-4 text-sm"
         data-health-facts=""
       >
         <dt className="text-fg-muted">Last call</dt>
@@ -243,7 +244,7 @@ const Overview = ({
         {entries.length === 0 ? (
           <p className="text-sm text-fg-muted">Nothing is configured beyond the credentials.</p>
         ) : (
-          <dl className="grid grid-cols-[minmax(10rem,auto)_1fr] gap-x-4 gap-y-2 rounded-md border border-line p-4 text-sm">
+          <dl className="grid grid-cols-[minmax(10rem,auto)_1fr] gap-x-4 gap-y-2 rounded-md border border-line bg-default p-4 text-sm">
             {entries.map(([key, value]) => (
               <div key={key} className="contents">
                 <dt className="text-fg-muted">{configFieldLabel(key)}</dt>
@@ -311,9 +312,9 @@ export const IntegrationDetailScreen = ({
     );
   }
   const provider = providers.data?.items.find((entry) => entry.id === integration.provider);
-  const { status, word } = integrationStatus(integration);
-  const retired = integration.retired_at !== null;
   const nowMs = now();
+  const { status, word } = integrationStatus(integration, nowMs);
+  const retired = integration.retired_at !== null;
   // S-23.23: the test and every write are an administrator's (`integration.write`).
   const canWrite = integrations.data.can_write;
 

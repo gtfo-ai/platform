@@ -214,7 +214,7 @@ export const gateOutageReason = (facts: GateOutageFacts, decision: GateOutageDec
     decision.kind === 'backstop'
       ? `it stopped at its backstop of ${String(decision.limit)} failed reads`
       : `it stopped at ${boundWords(facts.bound)}`
-  } (PROGRESS backlog 490)`;
+  }`;
 
 /** The brief a person reads on the task page. */
 export const gateOutageBrief = (facts: GateOutageFacts): string =>

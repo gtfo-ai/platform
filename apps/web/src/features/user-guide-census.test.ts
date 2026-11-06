@@ -198,8 +198,8 @@ describe('docs/user-guide.md names the screens the app renders (WP-129)', () => 
     // A parser that found nothing would agree with an empty table; these are the guide's own words.
     const lists = tabListsIn(sectionOf(guide(), '## 5. Run detail and the transcript'));
     expect(lists.map((list) => list.labels)).toEqual([
-      ['Transcript', 'Prompt', 'Context pack', 'Settings'],
-      ['Prompt', 'Context pack', 'Settings'],
+      ['Transcript', 'Prompt', 'Knowledge given', 'Settings'],
+      ['Prompt', 'Knowledge given', 'Settings'],
     ]);
     expect(navigationLabelsIn(sectionOf(guide(), '### The top navigation'))).toEqual(navLabels());
     expect(navLabels().length).toBeGreaterThan(0);
@@ -227,7 +227,7 @@ describe('docs/user-guide.md names the screens the app renders (WP-129)', () => 
         '- the project settings',
       );
       expect(guideFindings(dropped, tabLabels(), navLabels())).toContainEqual(
-        `§ 5 lists the tabs ${JSON.stringify(['Transcript', 'Prompt', 'Context pack', '?'])}; the app renders ${JSON.stringify(tabLabels())}`,
+        `§ 5 lists the tabs ${JSON.stringify(['Transcript', 'Prompt', 'Knowledge given', '?'])}; the app renders ${JSON.stringify(tabLabels())}`,
       );
       const miscounted = guide().replace('Then four tabs:', 'Then three tabs:');
       expect(guideFindings(miscounted, tabLabels(), navLabels())).toEqual([
@@ -269,11 +269,11 @@ describe('docs/user-guide.md § 11 names the settings sections the app renders (
   });
 
   it('fails on a section the guide drops (canary)', () => {
-    const dropped = guide().replace(' · Failed jobs', '');
+    const dropped = guide().replace(' · Failed background jobs', '');
     expect(dottedListsIn(sectionOf(dropped, '## 11. Settings'))[0]).not.toEqual(
       sectionLabels(ORG_SETTINGS_GROUPS),
     );
-    expect(sectionLabels(ORG_SETTINGS_GROUPS)).toContain('Failed jobs');
+    expect(sectionLabels(ORG_SETTINGS_GROUPS)).toContain('Failed background jobs');
   });
 });
 

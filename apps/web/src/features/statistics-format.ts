@@ -41,12 +41,120 @@ export const formatStatValue = (value: number | null, unit: StatUnit): string | 
   }
 };
 
-/** *"1 observation"*, *"12 observations"*, or the sentence for none. */
-export const formatObservations = (samples: number): string => {
+/**
+ * Which way a metric is good (research/21 S11, F15): *"Returns per delivered task 8.0"* with no
+ * sense of good or bad was the finding. A `Record` over the contract's enum, as `ui/humanize.ts`'s
+ * vocabularies are, so a metric added to the contract fails the typecheck here rather than reaching
+ * the screen with no reading. `null` is a volume — how much happened — which is neither: more tasks
+ * started or more money spent is not, on its own, better or worse. The read carries no previous
+ * period, so the card says the direction and never a comparison it cannot make.
+ */
+export const STAT_READING: Readonly<Record<StatMetricId, 'higher' | 'lower' | null>> = {
+  tasks_started: null,
+  tasks_delivered: 'higher',
+  merge_rate: 'higher',
+  first_pass_acceptance: 'higher',
+  clean_first_mr_rate: 'higher',
+  human_intervention_rate: 'lower',
+  returns_per_delivered_task: 'lower',
+  cycle_time_hours: 'lower',
+  // An average per delivered task, not a total: less agent time for the same delivery is better.
+  agent_time_hours: 'lower',
+  cost_total: null,
+  cost_per_delivered_task: 'lower',
+  // The part the platform had to price itself: lower means more of the spend was reported.
+  estimated_spend_share: 'lower',
+  // An error (|estimate − actual| ÷ actual), whatever the id says.
+  estimate_accuracy: 'lower',
+  cache_hit_ratio: 'higher',
+  question_response_minutes: 'lower',
+  reviewer_minutes_per_delivered_task: 'lower',
+  human_minutes: 'lower',
+  kb_proposal_acceptance: 'higher',
+  kb_usage: 'higher',
+  // A count of conflicts: more resolved also means more conflicts happened.
+  rebase_conflicts_resolved: null,
+  rebase_conflicts_escalated: 'lower',
+  concurrent_task_overlaps: 'lower',
+  review_findings_accepted: 'higher',
+  review_findings_dismissed: 'lower',
+  ticket_lint_comments: null,
+  tickets_edited_after_lint: 'higher',
+  shadow_similarity: 'higher',
+  clean_first_mr_rate_by_author: 'higher',
+  readiness_attributed_returns: 'lower',
+  loc_changed: null,
+  defect_escape: 'lower',
+  queue_wait_minutes: 'lower',
+  // A total, like `cost_total`.
+  total_cost_of_delivery: null,
+};
+
+/** The card's reading line: *"Higher is better"*, *"Lower is better"*, or that it is a volume. */
+export const statReadingWords = (id: StatMetricId): string => {
+  const reading = STAT_READING[id];
+  return reading === 'higher'
+    ? 'Higher is better'
+    : reading === 'lower'
+      ? 'Lower is better'
+      : 'A volume, not a score';
+};
+
+/**
+ * What a metric's `samples` count, where the fold makes it a known thing (`foldStats` in
+ * `apps/server/src/queries/stats-metrics.ts`: each `add` is one sample unless it says otherwise).
+ * A metric this table does not name is said as *"N data points"* — never *"observations"*, which
+ * research/21 § 4 found nobody reads.
+ */
+const SAMPLE_NOUN: Partial<Record<StatMetricId, readonly [string, string]>> = {
+  // One sample per task started in the range.
+  tasks_started: ['task', 'tasks'],
+  merge_rate: ['task', 'tasks'],
+  human_intervention_rate: ['task', 'tasks'],
+  // One sample per task delivered (merged) in the range.
+  tasks_delivered: ['delivered task', 'delivered tasks'],
+  first_pass_acceptance: ['delivered task', 'delivered tasks'],
+  clean_first_mr_rate: ['delivered task', 'delivered tasks'],
+  returns_per_delivered_task: ['delivered task', 'delivered tasks'],
+  cycle_time_hours: ['delivered task', 'delivered tasks'],
+  agent_time_hours: ['delivered task', 'delivered tasks'],
+  cost_per_delivered_task: ['delivered task', 'delivered tasks'],
+  reviewer_minutes_per_delivered_task: ['delivered task', 'delivered tasks'],
+  defect_escape: ['delivered task', 'delivered tasks'],
+  estimate_accuracy: ['delivered task', 'delivered tasks'],
+  // One per answered question, per decided proposal, per eligible run, per linted ticket.
+  question_response_minutes: ['answered question', 'answered questions'],
+  kb_proposal_acceptance: ['decided proposal', 'decided proposals'],
+  kb_usage: ['run', 'runs'],
+  tickets_edited_after_lint: ['linted ticket', 'linted tickets'],
+  loc_changed: ['measured merge request', 'measured merge requests'],
+  // The cost rollup is one row per day with spend.
+  cost_total: ['day with spend', 'days with spend'],
+  cache_hit_ratio: ['day with spend', 'days with spend'],
+  estimated_spend_share: ['day with spend', 'days with spend'],
+};
+
+/** *"From 12 delivered tasks"*, *"From 1 task"*, or the sentence for none. */
+export const formatSamples = (id: StatMetricId, samples: number): string => {
   if (samples === 0) {
-    return 'No observations in this range';
+    return 'Nothing measured in this range';
   }
-  return `${formatInteger(samples)} ${samples === 1 ? 'observation' : 'observations'}`;
+  const [one, many] = SAMPLE_NOUN[id] ?? ['data point', 'data points'];
+  return `From ${formatInteger(samples)} ${samples === 1 ? one : many}`;
+};
+
+const CIVIL_DATE = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeZone: 'UTC' });
+
+/**
+ * A civil date (`2026-09-10`) the way every other screen writes a date — *"Sep 10, 2026"* — read
+ * at UTC midnight and formatted in UTC, so the reader's own zone never moves it a day. A value
+ * that is not a date is shown as it came.
+ */
+export const formatCivilDate = (day: string): string => {
+  const at = new Date(`${day}T00:00:00.000Z`);
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(at.getTime())
+    ? CIVIL_DATE.format(at)
+    : day;
 };
 
 /**

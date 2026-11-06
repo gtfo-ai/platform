@@ -291,7 +291,7 @@ beforeEach(() => {
 });
 
 describe('the Agents page', () => {
-  it('says what every agent is doing in the header, and offers the inbox while something needs you', async () => {
+  it('says what every agent is doing in the header, with no primary action of its own (S-25.6)', async () => {
     media(1280);
     start('/agents');
     expect(await screen.findByRole('heading', { level: 1, name: 'Agents' })).toBeDefined();
@@ -300,7 +300,13 @@ describe('the Agents page', () => {
         '2 working · 2 need you · 2 waiting · 1 free slot · 1 stuck',
       );
     });
-    expect(screen.getByRole('link', { name: 'Open inbox' }).getAttribute('href')).toBe('/inbox');
+    // research/21 S07: *Open inbox* was another screen's job; the map's Needs you node links there.
+    expect(screen.queryByRole('link', { name: 'Open inbox' })).toBeNull();
+    expect(
+      [...document.querySelectorAll('main a, main button')].filter((element) =>
+        element.className.includes('border-primary-line'),
+      ),
+    ).toEqual([]);
     // The map is the default view, drawn by its own lazy chunk.
     expect(await screen.findByTestId('fleet-canvas-frame')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Map' }).getAttribute('aria-pressed')).toBe('true');

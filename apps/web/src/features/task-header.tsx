@@ -204,7 +204,7 @@ export const TaskHeader = ({
           onOpen('hand_back');
         }}
       >
-        Hand back…
+        Give it back to the agent…
       </Button>
     ) : primary === 'answer' ? (
       <Button
@@ -283,7 +283,7 @@ export const TaskHeader = ({
             onOpen('take_over');
           }}
         >
-          Take over…
+          Work on it yourself…
         </ActionMenuItem>
       ) : null}
       {stageOptions === 0 ? null : (

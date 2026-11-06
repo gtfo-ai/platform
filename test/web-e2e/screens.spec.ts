@@ -20,10 +20,12 @@ test.beforeEach(async ({ page, request }) => {
 
 /**
  * Home (S-23.7): what needs you first, then what is running, then the projects, with the spend and
- * the instance in the rail. The fixture's organisation has a tracker and no git host, so the setup
- * checklist sits in the rail too and its one primary button continues at the first undone step.
+ * the instance in the rail. The fixture's organisation has a tracker and no git host, and its
+ * project has run tickets — so since S-25.6 (research/21 F10) the checklist is gone and the rail
+ * names only the missing piece and what it costs. The fixture's operator is an administrator, so
+ * *Needs you* also carries the stuck event and the failed background job (F14).
  */
-test('Home: needs you, running now, the projects, the rail and the unfinished setup', async ({
+test('Home: needs you, running now, the projects, the rail and the missing piece', async ({
   page,
 }) => {
   const needs = page.getByRole('list', { name: 'Needs you' });
@@ -53,11 +55,22 @@ test('Home: needs you, running now, the projects, the rail and the unfinished se
   ).toBeVisible();
   await expect(page.getByRole('region', { name: 'Instance' }).getByText('Live')).toBeVisible();
 
-  const setup = page.getByRole('region', { name: 'Set up' });
+  // The background failures, an administrator's rows, each to its settings section.
+  await expect(needs.getByRole('link', { name: 'Review 1 event is stuck' })).toHaveAttribute(
+    'href',
+    '/settings/dead-letters',
+  );
+  await expect(needs.getByRole('link', { name: 'Review 1 background job failed' })).toHaveAttribute(
+    'href',
+    '/settings/failed-jobs',
+  );
+
+  await expect(page.getByRole('region', { name: 'Set up' })).toHaveCount(0);
+  const missing = page.getByRole('region', { name: 'Missing from setup' });
   await expect(
-    setup.getByRole('link', { name: /^Connect your tracker and git host/ }),
-  ).toHaveAttribute('href', '/integrations');
-  await expect(setup.getByRole('link', { name: 'Continue setup' })).toHaveAttribute(
+    missing.getByText('Merge requests can’t be opened until a git host is connected.'),
+  ).toBeVisible();
+  await expect(missing.getByRole('link', { name: 'Connect a git host →' })).toHaveAttribute(
     'href',
     '/integrations',
   );
@@ -204,8 +217,8 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
    * it was measured against. product/18:38's *"coverage delta shown in Checks"* is this line, and
    * the base is named on the screen rather than assumed (standing rule 63).
    */
-  await expect(page.getByText('Coverage delta', { exact: true })).toBeVisible();
-  await expect(page.getByText('+2.5 pp')).toBeVisible();
+  await expect(page.getByText('Test coverage', { exact: true })).toBeVisible();
+  await expect(page.getByText('+2.5 points')).toBeVisible();
   await expand('coverage');
   await expect(page.getByText(/81\.5 % on bbbbbbb, against 79\.0 % on main/)).toBeVisible();
   /**
@@ -237,7 +250,7 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   // …and since WP-81 the eleventh, the tamper check, is answered too — off the CI gate's row, so on
   // this fixture it says *not reached* like CI status — and the panel carries no apology for an
   // absent item (`checks-panel.test.tsx` holds the whole census both ways).
-  await expect(page.getByText('Tamper check', { exact: true })).toBeVisible();
+  await expect(page.getByText('Protected files', { exact: true })).toBeVisible();
   await expect(page.getByText(/Not on this panel/)).toHaveCount(0);
 });
 
@@ -261,9 +274,9 @@ test('a task nothing has measured says so, rather than showing a zero coverage d
   // delta" reads as *"the agent added no coverage"* (standing rule 16), so the absent case has its
   // own words and its own test rather than sharing the measured one's rendering.
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskBug}`);
-  await expect(page.getByText('Coverage delta', { exact: true })).toBeVisible();
+  await expect(page.getByText('Test coverage', { exact: true })).toBeVisible();
   await expect(page.getByText('not measured')).toBeVisible();
-  await expect(page.getByText('0.0 pp')).toHaveCount(0);
+  await expect(page.getByText('0.0 points')).toHaveCount(0);
 });
 
 test('answering a question sends the command and the question leaves the inbox', async ({
@@ -299,7 +312,8 @@ test('the agents list shows every live run and opens one’s dialog with a link 
     'demo_service · DEMO-6 · Export the invoice as CSV',
   ]);
   await expect(runs.getByText('worker jan-mbp')).toBeVisible();
-  await expect(runs.getByText('claude-opus-5').first()).toBeVisible();
+  // S-25.7 (research/21 § 4, BACKLOG 1262): a row says what the agent is doing, not its model id.
+  await expect(runs.getByText('claude-opus-5')).toHaveCount(0);
   await runs.getByRole('button', { name: /^demo_service · DEMO-1/ }).click();
   const dialog = page.getByRole('dialog', { name: 'DEMO-1 · Implementation' });
   await expect(dialog.getByRole('link', { name: 'Open run' })).toHaveAttribute(
@@ -312,22 +326,24 @@ test('the audit log renders an entry in words, with its diff behind Details', as
   await page.goto('/audit');
   // S-23.11b: who · what, in words · when — the person resolved from the user list.
   const list = page.getByRole('list', { name: 'Audit entries' });
-  await expect(list.getByText('changed a project’s settings', { exact: false })).toBeVisible();
+  // S-25.7 (research/21 F15): the row names the project it changed.
+  await expect(list.getByText('changed the settings of', { exact: false })).toBeVisible();
   await expect(list.getByText('Fake Operator')).toBeVisible();
   await expect(page.getByText('autonomy_level')).toBeHidden();
   await list.getByText('Details').click();
   await expect(page.getByText('autonomy_level')).toBeVisible();
 });
 
-test('settings opens its first section and shows the session, the user list and the instance version', async ({
+test('settings opens the first section the role may change and shows the session, the user list and the instance version', async ({
   page,
 }) => {
-  // S-23.11b: one section per page, beside a NavList; the bare URL opens the first.
+  // S-23.11b: one section per page, beside a NavList. S-25.6: the bare URL opens the first section
+  // the role may change — Policies for the fixture's administrator — rather than Session.
   await page.goto('/settings');
-  // One dark theme (TD-033's 2026-11-05 amendment): no Appearance section, so Session is first.
-  await expect(page).toHaveURL(/\/settings\/session$/);
+  await expect(page).toHaveURL(/\/settings\/policies$/);
   await expect(page.getByLabel('Theme preference')).toHaveCount(0);
   const nav = page.getByRole('navigation', { name: 'Settings' });
+  await nav.getByRole('link', { name: 'Session' }).click();
   await expect(page.getByText('operator@example.invalid').first()).toBeVisible();
   await nav.getByRole('link', { name: 'Users' }).click();
   await expect(page.getByRole('list', { name: 'Users' }).getByText('Fake Operator')).toBeVisible();
@@ -351,7 +367,7 @@ test('org settings lists the provider identities and offers the mapping form (WP
   // PROGRESS backlog 79: `POST /api/org/identities` was served and no screen called it, so every
   // decision from Slack, Jira or GitLab stayed `unmapped_identity`.
   await page.goto('/settings/identities');
-  await expect(page.getByRole('heading', { name: 'Provider identities' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Linked accounts' })).toBeVisible();
   await expect(page.getByText('U0FAKEOPERATOR')).toBeVisible();
   // The display name is provider text: its markup is on the screen as characters, not an element.
   await expect(page.getByText('<img src=x onerror=alert(1)>operator')).toBeVisible();
@@ -389,7 +405,7 @@ test('org settings lists a dead letter with its re-queue control (WP-96, backlog
   await expect(letter.getByText('pipeline.saga')).toBeVisible();
   // Handler text is untrusted: its markup is on the screen as characters.
   await expect(letter.getByText('boom <script>window.__pwned = true;</script>')).toBeVisible();
-  await expect(letter.getByRole('button', { name: 'Re-queue' })).toBeVisible();
+  await expect(letter.getByRole('button', { name: 'Try again' })).toBeVisible();
   await expect(page.getByText('The dead letters could not be loaded.')).toHaveCount(0);
 });
 
@@ -426,12 +442,13 @@ test('the project settings page mirrors every wizard step', async ({ page }) => 
     await nav.getByRole('link', { name: link }).click();
     await expect(section.getByRole('heading', { name: heading, exact: true })).toBeVisible();
   }
-  await nav.getByRole('link', { name: 'Policies & WIP' }).click();
+  await nav.getByRole('link', { name: 'Rules & limits' }).click();
   for (const heading of [
-    'Autonomy dial',
+    'How much agents do alone',
     'Features',
-    'Risk classes',
-    'Project budgets',
+    'Sensitive areas',
+    // S-25.7: the cap editor moved to the Budgets tab; Rules & limits points there.
+    'Budgets',
     'Notifications',
     'Who changed what',
   ]) {
@@ -560,7 +577,7 @@ test('the wizard’s step 1 maps the ticket lifecycle from the tracker’s own s
   request,
 }) => {
   // BD-031 ruling 7: the slots are pick lists loaded from the tracker. Against the built bundle, so
-  // this is the tier that shows the selects, the multi-select and the save work in a browser.
+  // this is the tier that shows the selects, the *Returned* checkboxes and the save work in a browser.
   await page.goto(`/onboarding?project=${PROJECT_KEY}&step=connect`);
   const card = page.locator(`[data-ticket-lifecycle="${IDS.integration}"]`);
   const qa = card.getByLabel('QA', { exact: true });
@@ -575,7 +592,10 @@ test('the wizard’s step 1 maps the ticket lifecycle from the tracker’s own s
   ]);
   await card.getByLabel('In review', { exact: true }).selectOption('Waiting for review');
   await qa.selectOption('Testing');
-  await card.getByLabel('Returned', { exact: true }).selectOption(['Sent back']);
+  // *Returned* is a checkbox list since S-25.10 (a native multi-select needed Cmd/Ctrl-click).
+  const returned = card.getByRole('group', { name: 'Returned' });
+  await returned.getByRole('checkbox', { name: 'Sent back (to do)' }).check();
+  await expect(returned.getByText('1 selected of at most 10')).toBeVisible();
   await card.getByRole('button', { name: 'Save the ticket lifecycle' }).click();
   // Waited on what the page writes last, then the log read as what it implies (rule 87).
   await expect(card.getByText('The ticket lifecycle was saved.')).toBeVisible();
@@ -600,11 +620,11 @@ test('the wizard’s step 1 maps the ticket lifecycle from the tracker’s own s
   });
 });
 
-test('the retired Appearance URL lands on Session, and a box sits above the page', async ({
+test('the retired Appearance URL lands where /settings does, and a box sits above the page', async ({
   page,
 }) => {
   await page.goto('/settings/appearance');
-  await expect(page).toHaveURL(/\/settings\/session$/);
+  await expect(page).toHaveURL(/\/settings\/policies$/);
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
   // TD-033's 2026-11-05 amendment: the page is the top bar's deep night, a card one step lighter.
   expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
@@ -620,7 +640,7 @@ test('the retired Appearance URL lands on Session, and a box sits above the page
   );
 });
 
-test('the project panels render the vault, the proposals and the budget meter', async ({
+test('the project panels render the knowledge base, the suggested edits and the budget meter', async ({
   page,
 }) => {
   await page.goto(`/projects/${PROJECT_KEY}/knowledge`);
@@ -629,7 +649,7 @@ test('the project panels render the vault, the proposals and the budget meter', 
   await expect(files.getByRole('heading', { name: 'technical' })).toBeVisible();
   await expect(files.getByRole('button', { name: 'architecture.md' })).toBeVisible();
   await expect(page.getByText('lessons/retries.md').first()).toBeVisible();
-  await expect(page.getByText('significance 0.72')).toBeVisible();
+  await expect(page.getByText('significance')).toHaveCount(0);
   // WP-96 (backlog 326): the health panel's success branch, which the fake's 404 used to hide.
   await expect(page.locator('[data-kb-health="findings"]')).toBeVisible();
   await expect(page.getByText('links to runbooks/missing.md')).toBeVisible();
@@ -637,7 +657,18 @@ test('the project panels render the vault, the proposals and the budget meter', 
 
   await page.goto(`/projects/${PROJECT_KEY}/budgets`);
   await expect(page.getByLabel('Cap used')).toBeVisible();
-  await expect(page.getByText('$100.00')).toBeVisible();
+  // The meter's own figure; the cap field below repeats it in its hint (spent … of … this window).
+  await expect(
+    page.getByRole('list', { name: 'Budgets', exact: true }).getByText('$100.00', { exact: true }),
+  ).toBeVisible();
+  // S-25.7 (research/21 F8): where the month's money went, and the cap set on the same page.
+  await expect(
+    page.getByRole('list', { name: 'By stage' }).getByText('Implementation'),
+  ).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Top tasks' }).getByText('DEMO-1')).toBeVisible();
+  await expect(page.getByText('$9.00 ($0.50 estimated)')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Project budgets', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save budgets' })).toBeVisible();
 
   await page.goto(`/projects/${PROJECT_KEY}/pipeline`);
   // S-23.5: the canvas leads the tab; the configuration is folded below it.
@@ -665,7 +696,9 @@ test('statistics renders a number, a null ratio and an absence as three differen
   await expect(page.getByRole('heading', { level: 2, name: 'Quality' })).toBeVisible();
   const returns = page.locator('[data-metric-card="returns_per_delivered_task"]');
   await expect(returns.getByText('8.0', { exact: true })).toBeVisible();
-  await expect(returns.getByText('1 observation', { exact: true })).toBeVisible();
+  // S-25.7 (research/21 F15): what the figure is from, and which way is good.
+  await expect(returns.getByText('From 1 delivered task', { exact: true })).toBeVisible();
+  await expect(returns.getByText('Lower is better', { exact: true })).toBeVisible();
   // A trend where two buckets carry a value, drawn as an SVG with its words beside it.
   const delivered = page.locator('[data-metric-card="tasks_delivered"]');
   await expect(delivered.locator('svg polyline')).toHaveCount(1);
@@ -789,10 +822,10 @@ test('the run screen retries with a model and an effort, and sends stage-scoped 
 
   // WP-85: what became of each steer, read from the command log and said in words.
   const sent = page.getByRole('region', { name: 'Commands sent to this run' });
-  await expect(sent.getByText(/delivered to the live session/)).toBeVisible();
+  await expect(sent.getByText(/the agent received it/)).toBeVisible();
   await expect(sent.getByText(/the run ended before this message could be applied/)).toBeVisible();
-  await page.getByLabel('Steer the agent').fill('also check the rounding');
-  await page.getByRole('button', { name: 'Steer' }).click();
+  await page.getByLabel('Message the agent').fill('also check the rounding');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(page.getByText(/Accepted\. The agent runs in another process/)).toBeVisible();
 
   // S-23.23: *Re-run ▾* is offered only once the run has ended (the server refuses `run.retry` on a
@@ -811,7 +844,7 @@ test('the run screen retries with a model and an effort, and sends stage-scoped 
     });
   });
   await page.reload();
-  await expect(page.getByLabel('Steer the agent')).toHaveCount(0);
+  await expect(page.getByLabel('Message the agent')).toHaveCount(0);
 
   // WP-159: a select over `GET /api/org/models`, starting (WP-167) on *Configured (…)*, which names
   // the run read's `retry_defaults`. Wait for a listed option the run is not on first, so the value
@@ -901,10 +934,10 @@ test('the task screen takes a task over and renders what the response carries (W
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
   await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
   await page.getByRole('button', { name: 'Task actions' }).click();
-  await page.getByRole('menuitem', { name: 'Take over…' }).click();
+  await page.getByRole('menuitem', { name: 'Work on it yourself…' }).click();
   await page.getByLabel('Why you are taking it over').fill('the agent is looping');
   await page.getByRole('checkbox', { name: /archive the workspace/ }).check();
-  await page.getByRole('button', { name: 'Take over', exact: true }).click();
+  await page.getByRole('button', { name: 'Work on it yourself', exact: true }).click();
 
   await expect(page.getByText('git fetch && git checkout agentic/demo-1')).toBeVisible();
   await expect(
@@ -923,7 +956,7 @@ test('a taken-over task that escalated still shows the branch, the downloads and
 }) => {
   await page.goto(`/tasks/${IDS.taskTaken}`);
   await expect(page.getByRole('heading', { name: 'DEMO-3' })).toBeVisible();
-  await expect(page.getByText('Taken over by a person')).toBeVisible();
+  await expect(page.getByText('A person is working on it')).toBeVisible();
   await expect(page.getByText('needs you — still held')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Download the transcript (JSONL)' })).toHaveAttribute(
     'href',
@@ -935,7 +968,7 @@ test('a taken-over task that escalated still shows the branch, the downloads and
   );
 
   // The hand-back is the header's one primary action while the take-over is in force (S-23.9b).
-  await page.getByRole('button', { name: 'Hand back…' }).click();
+  await page.getByRole('button', { name: 'Give it back to the agent…' }).click();
   const picker = page.getByLabel('Resume at');
   // S-23.22: each option says the stage's name; its value is still the id the route takes.
   await expect(picker.locator('option')).toHaveText([
@@ -945,7 +978,7 @@ test('a taken-over task that escalated still shows the branch, the downloads and
   ]);
   await picker.selectOption('code_review');
   await page.getByLabel('What you did').fill('fixed it by hand');
-  await page.getByRole('button', { name: 'Hand back' }).click();
+  await page.getByRole('button', { name: 'Give it back to the agent', exact: true }).click();
   await expect
     .poll(async () => (await commandLog(request)).map((entry) => entry.path))
     .toContain(`/api/tasks/${IDS.taskTaken}/hand-back`);
@@ -985,7 +1018,7 @@ test('the run screen counts only admitted documents and marks the one that was n
 }) => {
   await page.goto(`/runs/${IDS.run}`);
   await expect(page.getByRole('heading', { name: 'implementation · developer' })).toBeVisible();
-  await page.getByRole('tab', { name: 'Context pack' }).click();
+  await page.getByRole('tab', { name: 'Knowledge given' }).click();
   // Tier 0 and the one validated tier-1 page: two, not three (PROGRESS backlog 168).
   await expect(
     page.getByText('Documents', { exact: true }).locator('xpath=following-sibling::*[1]'),

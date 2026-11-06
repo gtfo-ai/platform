@@ -26,6 +26,7 @@ import type { useTakeOverCommands, useTaskCommands } from '../app/queries.js';
 import { Dialog } from '../ui/dialog.js';
 import { stageLabel } from '../ui/humanize.js';
 import { Button, ErrorNotice, Field, formatUsd } from '../ui/kit.js';
+import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { HandBackForm, TakeOverForm } from './take-over.js';
 
@@ -63,7 +64,7 @@ export const gateFeedbackLength = (feedback: NonNullable<GateFeedback>): string 
 export const retryOutcomeText = (answer: RetryStageResponse): string => {
   const stage = answer.current_stage === null ? 'the stage' : stageLabel(answer.current_stage);
   if (answer.attempt === null) {
-    return 'Nothing was re-entered here: the platform re-checks the branch head and re-enters the gate it needs.';
+    return 'Nothing was re-entered here: the platform re-checks the branch head and re-enters the check it needs.';
   }
   const queued = `Attempt ${answer.attempt} of ${stage} is queued.`;
   if (answer.stopped_run === null) {
@@ -142,20 +143,19 @@ const StagePicker = ({
   // The label beside the select rather than around it, so its name is "Stage" and not the options.
   <div className="flex items-center gap-2 text-xs text-fg-muted">
     <label htmlFor="stage-command">Stage</label>
-    <select
+    <Select
       id="stage-command"
       value={value}
       onChange={(event) => {
         form.setStage(event.target.value);
       }}
-      className={`${INPUT} text-fg`}
     >
       {form.options.map((option) => (
         <option key={option} value={option}>
           {stageLabel(option)}
         </option>
       ))}
-    </select>
+    </Select>
   </div>
 );
 
@@ -176,7 +176,7 @@ const GateFeedbackBox = ({ form }: { readonly form: StageCommandForm }): ReactEl
         }}
       />
       <span>
-        Attach the gate’s last failure from{' '}
+        Attach the check’s last failure from{' '}
         <UntrustedText value={stageLabel(form.gateFeedback.stage)} /> (
         {gateFeedbackLength(form.gateFeedback)}) to a return or a rework
       </span>
@@ -325,7 +325,7 @@ export const TaskDialogs = ({
       <Dialog
         {...shown('return')}
         title="Return to a stage"
-        description="Sends the task back to a stage it has already run. The stage is given your reason; it costs an iteration of the loop."
+        description="Sends the task back to a stage it has already run. The stage is given your reason; it uses one of the rounds that stage may send the task back for."
       >
         <form
           className="flex flex-col gap-3"
@@ -423,7 +423,7 @@ export const TaskDialogs = ({
         ) : undefined}
       </Dialog>
 
-      <Dialog {...shown('take_over')} title="Take over this task">
+      <Dialog {...shown('take_over')} title="Work on this task yourself">
         <div className="flex flex-col gap-2">
           <TakeOverForm taskId={taskId} commands={takeOverCommands} onDone={close} />
         </div>
@@ -432,7 +432,7 @@ export const TaskDialogs = ({
       {takenOver === null ? null : (
         <Dialog
           {...shown('hand_back')}
-          title="Hand the task back"
+          title="Give the task back to the agent"
           description="The pipeline resumes at the stage you choose, from what is on the branch."
         >
           <HandBackForm

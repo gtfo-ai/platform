@@ -1,5 +1,6 @@
 /**
- * Failed jobs — the jobs pg-boss gave up on after their last retry (WP-108, PROGRESS backlog 325).
+ * Failed background jobs (*Failed jobs* until S-25.6) — the jobs pg-boss gave up on after their
+ * last retry (WP-108, PROGRESS backlog 325).
  *
  * The dead letters above are the **event** queue's; these are the **job** queue's: a stage run, a
  * provider call, a timer or a schedule whose handler threw on every attempt its queue allows. Until
@@ -106,7 +107,7 @@ export const FailedJobs = (): ReactElement => {
   const total = pages.at(-1)?.total ?? 0;
   return (
     <section>
-      <SectionHeading>Failed jobs</SectionHeading>
+      <SectionHeading>Failed background jobs</SectionHeading>
       <p className="pb-2 text-xs text-fg-muted">
         Jobs whose handler failed on every attempt its queue allows. This list is a read — there is
         no re-queue here — and the job queue keeps a failed job only for its retention window, days

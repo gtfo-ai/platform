@@ -33,6 +33,7 @@ import { Dialog } from '../ui/dialog.js';
 import { TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
 import { Button, EmptyState, ErrorNotice, Field } from '../ui/kit.js';
 import { ListBox, ListBoxHeader } from '../ui/list-box.js';
+import { Select } from '../ui/select.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import {
@@ -90,8 +91,8 @@ export const EMPTY_BOARD_TITLE = 'Tickets you label for agents appear here';
  */
 export const emptyBoardHint = (canStart: boolean): string =>
   canStart
-    ? "A task appears when a ticket matches this project's pickup rule — a label, a status, an epic or a query — or when you start one by its key."
-    : "A task appears when a ticket matches this project's pickup rule — a label, a status, an epic or a query. A member of the project can also start one by its key.";
+    ? "A task appears when a ticket matches this project's start rule — a label, a status, an epic or a query — or when you start one by its key."
+    : "A task appears when a ticket matches this project's start rule — a label, a status, an epic or a query. A member of the project can also start one by its key.";
 
 // ── The list view's filters ──────────────────────────────────────────────────
 
@@ -176,7 +177,7 @@ export const StartTicketForm = ({
           <Field
             {...(inputRef === undefined ? {} : { ref: inputRef })}
             label="Ticket key"
-            hint="For a ticket no pickup rule matches. The WIP limits, the autonomy dial and one task per ticket still apply."
+            hint="For a ticket no start rule matches. The limit on parallel tasks, How much agents do alone and one task per ticket still apply."
             placeholder="ACME-123"
             value={key}
             onChange={(event) => setKey(event.target.value)}
@@ -352,11 +353,6 @@ const Columns = ({ items, projectKey, projectId, may, agents, nowMs }: ViewProps
   </div>
 );
 
-const SELECT = cx(
-  'h-7 rounded-md border border-line-input bg-inset px-2 text-sm text-fg',
-  FOCUS_RING,
-);
-
 const ListView = ({
   items,
   projectKey,
@@ -394,13 +390,13 @@ const ListView = ({
             <label htmlFor={stateId} className="text-fg-muted">
               State
             </label>
-            <select
+            <Select
               id={stateId}
               value={filters.state}
               onChange={(event) =>
                 setFilters({ ...filters, state: event.target.value as BoardFilters['state'] })
               }
-              className={SELECT}
+              controlSize="sm"
             >
               <option value="all">All</option>
               {STATES_IN_ORDER.map((state) => (
@@ -408,17 +404,17 @@ const ListView = ({
                   {TASK_STATE_LABEL[state]}
                 </option>
               ))}
-            </select>
+            </Select>
           </span>
           <span className="inline-flex items-center gap-1.5">
             <label htmlFor={templateId} className="text-fg-muted">
               Template
             </label>
-            <select
+            <Select
               id={templateId}
               value={filters.template}
               onChange={(event) => setFilters({ ...filters, template: event.target.value })}
-              className={SELECT}
+              controlSize="sm"
             >
               <option value="all">All</option>
               {templates.map((template) => (
@@ -426,7 +422,7 @@ const ListView = ({
                   {titleCase(template)}
                 </option>
               ))}
-            </select>
+            </Select>
           </span>
           <label className="inline-flex items-center gap-1.5">
             <input
@@ -545,7 +541,7 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
               params={{ key: project.key }}
               className={buttonClassName('default')}
             >
-              Open pickup rules
+              Open start rules
             </Link>
           }
           {...(canStart

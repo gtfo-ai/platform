@@ -10,6 +10,7 @@
  * changes*, `api_token` is *API token*, and each key is still named in its control's hint.
  */
 import type { IntegrationSummary, IntegrationsResponse } from '@platform/contracts';
+import { INTEGRATION_HEALTH_STALE_AFTER_HOURS } from '@platform/contracts';
 import {
   configIssuesOf,
   findShippedProvider,
@@ -22,6 +23,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { currentHealthStatus, integrationStatus } from './integration-forms.js';
 
 const INTEGRATION = '00000000-0000-4000-8000-0000000000d1';
 const PROJECT = '00000000-0000-4000-8000-0000000000e1';
@@ -483,8 +485,11 @@ describe('the integrations list', () => {
       'allow',
       'deny',
     ]);
-    // The residual sits beside the switch, as text, and on no other field.
-    const residual = control?.parentElement?.querySelector('[data-config-residual]');
+    // The residual sits beside the switch, as text, and on no other field. S-25.10: the switch is
+    // the brand's `Select`, so the field is the parent of its wrapper.
+    const residual = control
+      ?.closest('[data-select]')
+      ?.parentElement?.querySelector('[data-config-residual]');
     expect(residual?.textContent).toMatch(/90 days/);
     expect(residual?.textContent).toMatch(/every project the key is enabled on/);
     expect(residual?.textContent).toMatch(/Default: deny/);
@@ -794,6 +799,40 @@ describe('the integrations list — identity, health now and use (S-25.3)', () =
     const maintainer = await screen.findByRole('list', { name: 'Tickets' });
     expect(maintainer.textContent).toContain('Not checked recently');
     expect(within(maintainer).queryByRole('button', { name: 'Test again' })).toBeNull();
+  });
+
+  /**
+   * S-25.5: the server holds `working` to the 24 h bound when it answers; a page left open, or a
+   * cached read, can outlive that answer. The row is held to the bound by the browser's clock, so
+   * it never says *Working* on evidence older than the bound — both sides of the bound asserted.
+   */
+  it('never says Working on evidence older than the stale bound by the browser’s clock (S-25.5)', async () => {
+    const BOUND_MS = INTEGRATION_HEALTH_STALE_AFTER_HOURS * 3_600_000;
+    const at = (ageMs: number) => new Date(NOW - ageMs).toISOString();
+    const working = (ageMs: number): IntegrationSummary => ({
+      ...JIRA,
+      current_health: { status: 'working', basis: 'call', at: at(ageMs) },
+      activity: { last_call: { at: at(ageMs), ok: true }, last_delivery_at: null },
+    });
+    // Just inside the bound, the server's word stands; just past it, it does not.
+    expect(currentHealthStatus(working(BOUND_MS - 60_000), NOW)).toBe('working');
+    expect(currentHealthStatus(working(BOUND_MS + 60_000), NOW)).toBe('not_checked_recently');
+    expect(integrationStatus(working(BOUND_MS + 60_000), NOW).word).toBe('Not checked recently');
+    expect(integrationStatus(working(BOUND_MS - 60_000), NOW).word).toBe('Working');
+    // Every other verdict is the server's, whatever its age.
+    const failing: IntegrationSummary = {
+      ...JIRA,
+      current_health: { status: 'failing', basis: 'call', at: at(3 * BOUND_MS) },
+    };
+    expect(currentHealthStatus(failing, NOW)).toBe('failing');
+    expect(currentHealthStatus(JIRA, NOW)).toBe('never_checked');
+    // …and on the row: the word, and the probe offered in place, as for the server's own stale.
+    renderApp(recorder({ items: [working(BOUND_MS + 60 * 60_000)] }).fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Tickets' });
+    const row = within(list).getByRole('link', { name: 'ACME Jira' }).closest('li') as HTMLElement;
+    expect(row.textContent).toContain('Not checked recently');
+    expect(row.textContent).not.toContain('Working');
+    expect(within(row).getByRole('button', { name: 'Test again' })).toBeTruthy();
   });
 
   it('reads a probe that passed with warnings as a pass on the row and on the page', async () => {

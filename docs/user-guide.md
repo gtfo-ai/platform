@@ -49,17 +49,25 @@ server on every request — the browser only hides what you cannot do.
 
 ### The top navigation
 
-**Home · Projects · Inbox · Agents · Workers · Integrations · Statistics · Audit log · Settings** — the
-row under the top bar, its current entry underlined in amber. **Projects** carries the number of
-projects, **Inbox** what waits for you (open questions plus pending approvals) and **Agents** the
-runs in flight; a count that is zero, or not loaded yet, is not drawn. On a narrow screen the last
-entries move into a **More navigation** (`···`) menu at the end of the row, and the running pill
-shows only its number. There is no
-*Onboarding* entry: a project is set up once, so the wizard is **New project** — in the top bar's
-**+** menu and on the **Projects** page.
+**Home · Projects · Inbox · Agents · Statistics** — the row under the top bar, the five screens of
+every day, its current entry underlined in amber. **Projects** carries the number of projects,
+**Inbox** what waits for you (open questions plus pending approvals) and **Agents** the runs in
+flight; a count that is zero, or not loaded yet, is not drawn. On a narrow screen the last entries
+move into a **More navigation** (`···`) menu at the end of the row, and the running pill shows only
+its number. There is no *Onboarding* entry: a project is set up once, so the wizard is **New
+project** — in the top bar's **+** menu and on the **Projects** page.
+
+**Settings** is the **gear** in the top bar, between the inbox and your avatar (on a phone, the
+account menu's *Settings*; `g` `s` from the keyboard). The screens you open weekly rather than
+daily — **Integrations**, **Workers** and the **Audit log** — are its **Admin** section (section 11).
+Their addresses are the ones they always had (`/integrations`, `/workers`, `/workers/approve`,
+`/audit`, and so on), so a bookmark or the link a worker shows you still opens them; they now open
+beside the Settings list, with their entry marked — except the two wizards, *New integration* and
+*Add a worker*, which keep the page to themselves — and the search finds them by name.
 
 **Inside a project the row becomes the project's own tabs** — **Board**, **Knowledge**,
-**Pipeline**, **Budgets**, **Shadow** and **Settings** — under a header with the project's name, its
+**Pipeline**, **Budgets**, **Trial** (only before the project's first live task or while it has a
+trial — section 8, *Trial*) and **Settings** — under a header with the project's name, its
 key, its readiness (what agents may do there, below under *Projects*) and — on the board, if you may
 start a ticket in it — a **Start a ticket** button. A task's page sits under its project's header
 too, on the Board tab, when opened from its board; from the inbox or Agents it does not yet. Every
@@ -107,7 +115,8 @@ compare and always shows the error.
 command palette: type part of a screen's name, a project's name or key, or a ticket key, move with
 ↑ and ↓, and press Enter to go there; Esc closes it. Besides the places it offers a few actions:
 **New project** (for an admin), **Start a ticket in this project** (inside a project you may start
-tickets in), **Open inbox** and **Keyboard shortcuts**. It searches what the page has already read,
+tickets in), **Open inbox** and **Keyboard shortcuts**. Its screens are the top row's, **Settings**,
+and Settings' **Integrations**, **Workers** and **Audit log**. It searches what the page has already read,
 so a task is found by its ticket key once its project's board (or Home) has been opened in this
 tab; it asks the server for nothing new.
 
@@ -122,6 +131,7 @@ The shortcuts — `?` lists them all:
 | `g` `p` | Projects |
 | `g` `i` | Inbox |
 | `g` `a` | Agents |
+| `g` `s` | Settings |
 | `g` `b` | The board, inside a project |
 | `j` | Next row |
 | `k` | Previous row |
@@ -239,7 +249,7 @@ moved at that point, and the stage still runs.
 | **In review** | Moved here when the agent's code review starts. |
 | **Approved** | Moved here when the agent's own review has passed and its findings are fixed. |
 | **QA** | Mapped, tasks created from then on get a human **QA** stage before Ready for merge, and the ticket is moved here when the task enters it. |
-| **Returned** | One or more statuses, never set by the platform: a person moving the ticket into one of them returns the task to the agent. |
+| **Returned** | One or more statuses, never set by the platform: a person moving the ticket into one of them returns the task to the agent. A checkbox per status, with a count of how many are ticked; at most ten. |
 | **Done** | Moved here when the merge request is merged. |
 
 Two switches sit under the slots. **Claim the ticket before the first run** (on unless you switch it
@@ -393,14 +403,15 @@ the default N — and which ones is the ticket tracker's order, not the platform
 
 ### Step 5 — How autonomous
 
-The autonomy dial ([product/19](product/19-operating-definitions.md) §11), four positions:
+**How much agents do alone** — the autonomy dial ([product/19](product/19-operating-definitions.md) §11) — has four
+positions, each said as what happens to a ticket:
 
 | Position | What it means |
 |---|---|
-| **Observe** | nothing is picked up; shadow runs only |
-| **Assist** | scoping only — the agent stops after architecture |
-| **Supervised** *(default)* | plan approval above size L, probation on |
-| **Autonomous** | no plan approval except for risk classes; still never merges |
+| **Observe** | Agents start no ticket. You can try them on past tickets; nothing reaches your repository. |
+| **Assist** | Agents write the spec and the plan for a ticket, then stop; a person writes the code. |
+| **Supervised** *(default)* | Agents deliver; you approve the plan of a large ticket, and the first 5 tasks get extra checks (the platform's *probation*). |
+| **Autonomous** | Agents deliver without asking, unless a change touches a sensitive area (a *risk class*). A person still merges. |
 
 Choosing one and pressing **Save operating mode** writes the project's configuration; *Continue*
 opens once it has been saved once. Which commands the agents may run is not edited here — *Learn
@@ -442,13 +453,14 @@ touches that class's paths. The screen asks for each list's items before *Accept
 a class naming a checklist the configuration does not define is refused; the review then records
 which lists it was given (`checklists_applied` on the Review Verdict).
 
-**Shadow mode** (the Observe position) runs the pipeline on closed tickets you pick and posts
-nothing. For each ticket that has a human merge request it also runs **one reviewer over that human
+**Trial runs** (the Observe position; *Shadow mode* before S-25.7) runs the pipeline on closed
+tickets you pick and posts nothing — a trial run on tickets you already shipped (section 8,
+*Trial*). For each ticket that has a human merge request it also runs **one reviewer over that human
 merge request**, and that review is a task of its own: a card on the board keyed
-`mr!<iid>/shadow/<task id>`, in shadow mode, with its own spend counted against the shadow budget. It
-posts nothing on the merge request — every comment it would have written is recorded in the audit
-log as *would have* — and its findings, with a comparison of which of the agent's own acceptance
-criteria each side met, appear on the ticket's shadow report once it ends.
+`mr!<iid>/shadow/<task id>`, part of the trial, with its own spend counted against the trial's
+budget. It posts nothing on the merge request — every comment it would have written is recorded in
+the audit log as *would have* — and its findings, with a comparison of which of the agent's own
+acceptance criteria each side met, appear on the ticket's trial report once it ends.
 
 ### Step 6 — Review and finish
 
@@ -536,15 +548,24 @@ answers three questions in this order: what needs you, what is moving, and where
   **Review plan** or **Open** — which opens the task. No row approves in one click: the plan is read
   on the task page, beside its buttons. The oldest waits at the top; the box shows five
   and **View inbox →** has the rest. When nothing waits it says *Nothing needs you right now.*
+  **An administrator also sees what broke in the background** here, after those rows and never
+  pushed out by them: *3 events are stuck* (events whose handler failed every retry) and *1
+  background job failed*, each only while its count is above zero, and each **Review** opens its
+  section of Settings (*Stuck events*, *Failed background jobs*). Nobody else is shown them, or asked
+  for them.
 - **Running now (N)**: every run that is running — its stage and role (the link to the run), the
-  project, the ticket, the model, how long it has run, what it has cost so far and the latest
-  progress line the agent reported. **Agents →** has the whole list.
-- **Projects**: one row per project — its name (the way into its board), its key, its readiness
+  project, the ticket, what it is doing in the words the Agents page uses (*Working: Reading files*,
+  *Thinking*, *Stuck: No activity for 12 min*), how long it has run, what it has cost so far and the
+  latest progress line the agent reported. **Agents →** has the whole list; a run's model is on its
+  own page.
+- **Projects**: one row per project — its name (the way into its board), its key, a word for its
+  status when it is not active (*Paused*, *Archived*), its readiness
   (what agents may do there, as on the Projects page), its open tasks and its spend over the last 30 days — and, for an admin, **New project**,
   which opens the wizard.
 - On the right, **Spend** — *Against the monthly cap*, the organisation's monthly cap as
   *$412 of $1,000* with a meter, when one is set (the month so far), and *Spend, last 30 days*
-  across all projects either way: two windows, each named on its own line — and **Instance**:
+  across all projects either way: two windows, each named on its own line, then **Organisation
+  budgets** (where those caps are set) and **Statistics** (what the spend bought) — and **Instance**:
   whether the live connection is up, and the version.
 
 Every box refreshes on its own when something happens — a question asked, a run started or
@@ -566,9 +587,16 @@ has a ticket's task), never from what this browser remembers, so a step done in 
 through the API is ticked too. **Continue setup** opens the first step that is not done — the
 Integrations screen, the wizard (on the project, when it exists) or the board's *Start a ticket*
 dialog — and every step's name is a link to its own screen. Once a project exists, the checklist moves
-to the right-hand column as *Finish setting up*, and when every step is done it disappears. It
-follows the oldest project; a later project's steps are the wizard's to show. Every other role, on
-an instance with no project, is told that an admin sets it up.
+to the right-hand column as *Finish setting up*. **Once that project has run a ticket the checklist
+is gone**, whether or not discovery and the autonomy dial were ever ticked — those have working
+defaults, and the project's settings hold them. From then on the right-hand column names only a
+piece that is still **missing**, under *Missing from setup*, with what its absence costs and a link to
+fix it: *Merge requests can't be opened until a git host is connected* (**Connect a git host →**),
+*New tickets can't reach the agents until a tracker is connected*, or — where nothing on the server
+runs the project — that no agent can run its tickets until a worker is connected (or why the one you
+have can't take work yet). With nothing missing, there is no box at all. The checklist follows the
+oldest project; a later project's steps are the wizard's to show. Every other role, on an instance
+with no project, is told that an admin sets it up.
 
 A maintainer or admin also sees **one banner** when an organisation chat account's credentials can
 no longer be read: no project's runs are given the project's prompt files until the credentials are
@@ -597,8 +625,9 @@ known to be missing.
 
 **Agents** in the top navigation answers *what are my agents and workers doing right now, and what
 needs me*. Under the title one line says it in words — *2 working · 1 needs you · 1 waiting · 3 free
-seats*, and *· 1 stuck* when an agent has been silent too long — and while something needs you the
-page's one button is **Open inbox**. Below it, three views of the same live data; the one you pick is
+seats*, and *· 1 stuck* when an agent has been silent too long. The page has no button of its own:
+what needs you is the map's **Needs you** box, whose title opens the inbox, and the list's own
+section. Below it, three views of the same live data; the one you pick is
 remembered in this browser and is part of the address (`/agents?view=office`), so it can be sent to
 somebody:
 
@@ -624,15 +653,15 @@ somebody:
   everything the drawing does, in words — *DEMO-1 · Checkout flow · Code review · working: Reading
   files · worker jan-mbp* — so a screen reader hears what a glance sees.
 - **List**: every live run as a row, what needs you first, then what is stuck, then the rest oldest
-  first — project, ticket and title, the stage, what the agent is doing, where it runs, the model, the
-  stage strip, how long and how much — with a `···` menu: **Open run**, **Open task** and **Cancel
+  first — project, ticket and title, the stage, what the agent is doing, where it runs, the
+  stage strip, how long and how much (the model is in the run's dialog) — with a `···` menu: **Open run**, **Open task** and **Cancel
   run…**, which asks before it stops the agent. A run that has just ended stays at the end of the
   list as *just finished* or *just ended* for as long as the map and the office keep it at its desk.
   Below it, what needs you and every seat with its slots.
   This is the view that always tells the whole story; the other two never say anything it does not.
 
 A card, a desk or a row opens the same dialog: the run's **Live activity** beside its **log**, where it
-runs, and **Open task** / **Open run** — steering and stopping stay on the run page. The page updates
+runs, and **Open task** / **Open run** — messaging the agent and stopping it stay on the run page. The page updates
 on its own: an event from the platform refreshes the lists, the clock moves *elapsed* and *stuck*
 every 15 seconds, and the *Now: …* of up to twelve runs on screen follows their transcripts live
 (at most one refresh a second).
@@ -691,7 +720,7 @@ pipeline still reads left to right.
 **Open ticket** and **Open merge request** — the task page's own commands. *Cancel…* asks first and says what
 cancelling does (it ends the task for good); *Return to stage…* asks which stage the task has
 entered to send it back to, and why — the stage is given your reason; a task that stopped at a gate
-which recorded a failure carries it too, as the task page's ticked *Attach the gate's last failure*
+which recorded a failure carries it too, as the task page's ticked *Attach the check's last failure*
 box does (open the task to send your reason alone). Who may do what is the table in section 4 —
 cancelling and returning are a maintainer's, so a member's menu does not offer them. A merged task
 can still be cancelled but not paused or sent back; a done or cancelled task offers only the links. A link the provider sent that is not a web address is shown struck through rather than
@@ -701,7 +730,7 @@ followed.
 first, with filters for the **state**, the **template** and **Needs you**.
 
 **An empty board** says how tickets arrive — a ticket that matches the project's **pickup rule** (a
-label, a status, an epic or a query) — with **Open pickup rules**, which goes to the project's
+label, a status, an epic or a query) — with **Open start rules**, which goes to the project's
 settings, and, if you may start one, **Start a ticket by hand**.
 
 The columns are task **states**, not pipeline stages, and that is deliberate for now: the column list
@@ -713,7 +742,7 @@ command that the domain can refuse, not by dropping a card.
 
 ### Starting a ticket by hand
 
-A ticket reaches the board when it matches the project's **pickup rule** — the label, status, epic or
+A ticket reaches the board when it matches the project's **start rule** (the pickup rule) — the label, status, epic or
 query its task-management integration picks up. For a ticket no rule matches, a **member** (or above)
 presses the project header's **Start a ticket** (or the top bar's **+ → Start a ticket…**, or an
 empty board's **Start a ticket by hand**): a small dialog opens with the cursor in its **Ticket key**
@@ -749,19 +778,19 @@ live on that task's topic.
   **Ticket** and the **Merge request** (once there is one), the template, the stage it is in, what it
   has cost so far and how long ago it was opened. Under it,
   the phase strip — one glyph per stage, the current one pulsing — names the stage and what the agent
-  is doing now. On the right is **one button, chosen by what the task is waiting for**: *Hand back…*
+  is doing now. On the right is **one button, chosen by what the task is waiting for**: *Give it back to the agent…*
   while you hold it (below), *Answer* when an agent asked a question (it takes you to the answer
   box), *Review plan* when a plan or a budget waits for a maintainer (it takes you to the approval in
   the needs-you box, where the plan is shown), *Raise this task's cap…* when the
   task's own cap paused it and you may raise budgets, *Resume* when the task is paused or waiting
   for a person — and none when nothing waits on you. Resume is never offered past an open question
   or a pending approval: answer or decide it instead. Everything else is in the **`···`**
-  menu beside it: *Pause*, *Resume*, *Take over…*, *Retry stage…*, *Return to stage…*, *Rework…*,
+  menu beside it: *Pause*, *Resume*, *Work on it yourself…*, *Retry stage…*, *Return to stage…*, *Rework…*,
   *Raise this task's cap…*, *Download JSON* and *Cancel task…*. A command with fields, or one you
   cannot undo, opens a dialog with those fields. The menu leaves out what the platform would refuse
-  for anybody — Pause, Take over, Return and Rework on a merged task, any stage command on a task
+  for anybody — Pause, Work on it yourself, Return and Rework on a merged task, any stage command on a task
   that has entered no stage, a take-over of a finished task — and what would do nothing useful:
-  Pause and Take over on a queued task, Take over on a task somebody paused, Cancel once the task
+  Pause and Work on it yourself on a queued task, Work on it yourself on a task somebody paused, Cancel once the task
   is merged or in its retrospective.
 - **The needs-you box**, under the header, appears only when something waits on a person: each open
   question with its answer box, each pending approval with *Approve* and *Reject…* (see *Deciding an
@@ -782,13 +811,13 @@ its run cost, *Sent back*, *Failed*, *Skipped*, *Upcoming*, *Disabled* — and o
 what the agent is doing, *Working* with *Now: Reading files*, *Needs you* when a question or approval
 is waiting, *Stuck* when it has been silent too long — with the model, and *2nd attempt* when the
 stage is running again. The connector into the stage that is running moves; a curve below the row
-counts how often a loop has been spent (*Review · used 1 of 3*) — shown once the loop has been used,
+counts how often a loop has been spent (*Review rounds: 1 of 3 used*) — shown once the loop has been used,
 or while you point at the curve or focus a card it touches. The graph opens on the current stage
 and its neighbours; **Fit all** shows the whole pipeline. Click a card to watch that stage's
 run: a **Live activity** list (the time, a dot, what the agent did — one row per tool call or burst
 of thinking or writing) beside a **Log** that follows the end of the run until you scroll up (*Follow
 the end* resumes), both updating as the agent works. It is watch-only and says where the agent runs
-(the platform's server or a named worker); *Open run* goes to the run page, where you can steer or
+(the platform's server or a named worker); *Open run* goes to the run page, where you can message or
 stop it, and *Open artifact* opens what the stage wrote on this page. A stage no agent runs (a gate,
 Ready to merge) shows its configuration instead. **Full screen** works as on the Pipeline tab
 (section 8). **List** — and a screen too narrow for the graph — shows the **stage timeline** in the
@@ -813,13 +842,13 @@ the tool, not that it is idle — the run page's transcript is the full record.
 
 Below that line, the panel shows **the run's transcript as it happens** — the same entries as the
 run page, arriving live — bounded to the newest 30 blocks, with *Open the full run* for the whole session, its search and the
-steer box.
+**Message the agent** box.
 
 Every artifact on the **Artifacts** tab **opens**: choosing one on the left shows the document the
 stage produced, on this page, as text — its prose, with the raw JSON behind *Raw JSON* (open when the
 document has no prose of its own). It is model output, so it is rendered the way everything else untrusted is — as
 characters, never as markup and never as a link. The line above it says how many credentials the
-platform replaced in it before storing it. An artifact produced **before** the upgrade that
+platform replaced in it before storing it (*2 secrets hidden*). An artifact produced **before** the upgrade that
 introduced that redaction is not shown at all: nothing redacted it, artifacts are never rewritten,
 and the platform will not publish a document it cannot vouch for — it says so by name instead.
 
@@ -829,8 +858,8 @@ a member or above. A viewer is not offered it; the export would refuse them.
 
 **The claim and the QA stage** show under the header's meta line when there is something to show (the
 project's ticket lifecycle, step 1). *ticket claimed* means the platform assigned the ticket to its
-own account and the tracker confirmed it; *claim (shadow)* means a shadow task recorded what it would
-have assigned and assigned nothing; *claim released* means the claim was given back — on a cancel, a
+own account and the tracker confirmed it; *Trial run* means a trial's task (section 8, *Trial*)
+recorded what it would have assigned and assigned nothing; *claim released* means the claim was given back — on a cancel, a
 rework, or a task that stopped between the assignment and its record — and the ticket is no longer
 the platform's. Each says when. A task that never claimed (no lifecycle saved, or a task older than
 the claim) shows nothing. **QA stage** means this task was created while the project mapped a *QA*
@@ -838,8 +867,8 @@ status, so a person tests it before Ready for merge (below).
 
 ### What you can do from here
 
-The commands in the table below — the header's one button and the `···` menu — plus **take over**,
-**hand back** and **ask the task** (below); a run's own commands — re-run, cancel and steer — are on the run screen (section 5).
+The commands in the table below — the header's one button and the `···` menu — plus **Work on it yourself**,
+**Give it back to the agent** and **ask the task** (below); a run's own commands — re-run, cancel and message — are on the run screen (section 5).
 **The page offers only what your role may do**: the *Who* column is checked by the server for each
 of you, so a member sees no *Cancel task…*, *Return to stage…* or *Rework…*, and where an approval
 waits the needs-you box says *A maintainer decides this* instead of offering Approve and Reject; a
@@ -853,13 +882,14 @@ asked — so you never approve blind:
   the whole plan** (open as well) with the alternatives, data and API changes, the test plan and the
   rest. It is *the* plan the approval was asked about — its version and stage attempt are named — not
   whatever plan is newest. A budget approval shows the estimate and the threshold it crossed.
-- **Why you are asked**: every reason the platform recorded — the project is on probation (*2 of its
-  first 5 tasks are done*), the plan touches a risk class (named), its size reached the threshold, the
-  autonomy dial or a stage override asks for every plan, or the estimate is above the budget threshold.
-- **How to stop being asked**, under each reason, with a link to the setting that retires it: the
-  autonomy dial or the size threshold (*Settings → Policies & WIP*), a stage override
-  (*Repository configuration*), the risk-class rule (keeping it is recommended), or probation, which
-  ends by itself after its tasks are done or when a maintainer ends it. The platform names the lever;
+- **Why you are asked**: every reason the platform recorded — the project's first tasks get extra
+  checks (*This project's first 5 tasks get extra checks, and 2 of them are done*), the plan touches a
+  sensitive area (named), its size reached the threshold, **How much agents do alone** or a stage
+  override asks for every plan, or the estimate is above the budget threshold.
+- **How to stop being asked**, under each reason, with a link to the setting that retires it: **How
+  much agents do alone** or the size threshold (*Settings → Rules & limits*), a stage override
+  (*Repository configuration*), the sensitive-area rule (keeping it is recommended), or the extra
+  checks, which end by themselves after their tasks are done or when a maintainer ends them. The platform names the lever;
   it never pulls it. Approvals are meant to become rarer as trust grows.
 - **What happens next**: *Approve* — Implementation starts on this plan; *Reject* — the plan goes back
   to Architecture with your reason (a budget's reject stops the task for a person).
@@ -877,8 +907,8 @@ error naming the transition, not as a silent no-op — and each accepted one lea
 | **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it — if its branch still has the commit the platform's gates judged, through the rebase gate, which checks it against the target branch as it is now (a default branch that moved during the pause is not re-checked while the task is paused) and warns about another task touching the same files, spending no iteration limit (WP-105); if somebody pushed while it was paused, it goes back through the CI gate first (WP-79). It reads *paused* for the moment the platform takes to check; merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge — and so does merging it while the task is paused at **QA**, on a project that has that stage (a pause at an earlier stage is escalated to a human instead). Resuming a task paused at QA takes it back to QA, not to Ready |
 | **Cancel** | maintainer | ends the task; it enters no further stage |
 | **Retry stage** | member | runs the current stage again, optionally with a reason — its stage list starts on the current stage. Costs a run. If the stage's run is still going, it is stopped first and the new attempt starts once it has ended; the screen says which attempt was queued and whether a run was stopped |
-| **Return to stage** | maintainer | sends the task back to an earlier stage it has already run; a reason is required, and that stage is given it. Costs an iteration of the loop. Works on a task in **Needs you** too — the way to send an escalated task to the stage that should run again. When the task stopped at a **gate** that recorded a failure — the CI gate after its fix loop ran out — the form shows a box, ticked, *Attach the gate's last failure* with its length in characters: the stage is then given the failing jobs' log excerpts as well as your reason, as two separate blocks, so you need not paste the logs. Untick it to send your reason alone. A task that was **merged** cannot be sent back to a stage before the merge |
-| **Rework** | maintainer | restarts the work with new instructions, which are required. The task moves to a **new branch** (`agentic/<ticket>-r2`, then a higher number on each later rework — the numbers can skip, because a plain return counts too) and the merge request you rejected is **closed** on the git provider with a comment naming the new branch; a new merge request is opened from the new branch when the work gets there again. Like **Return to stage**, it works on a task in **Needs you**, offers the same *Attach the gate's last failure* box, and refuses a merged task |
+| **Return to stage** | maintainer | sends the task back to an earlier stage it has already run; a reason is required, and that stage is given it. Uses one of the rounds that stage may send the task back for. Works on a task in **Needs you** too — the way to send an escalated task to the stage that should run again. When the task stopped at a **gate** that recorded a failure — the CI gate after its fix loop ran out — the form shows a box, ticked, *Attach the check's last failure* with its length in characters: the stage is then given the failing jobs' log excerpts as well as your reason, as two separate blocks, so you need not paste the logs. Untick it to send your reason alone. A task that was **merged** cannot be sent back to a stage before the merge |
+| **Rework** | maintainer | restarts the work with new instructions, which are required. The task moves to a **new branch** (`agentic/<ticket>-r2`, then a higher number on each later rework — the numbers can skip, because a plain return counts too) and the merge request you rejected is **closed** on the git provider with a comment naming the new branch; a new merge request is opened from the new branch when the work gets there again. Like **Return to stage**, it works on a task in **Needs you**, offers the same *Attach the check's last failure* box, and refuses a merged task |
 | **Answer a question** | member | answers a question the agent asked; the task continues |
 | **Decide an approval** | maintainer | approves or rejects a plan (and, where configured, a budget) |
 | **Feedback** | member | **Good** / **Bad** (a toggle: press it again to clear it) plus text, on the task |
@@ -888,7 +918,7 @@ going back to work: **Resume** runs the retrospective (a task stopped at the mer
 resumes into the retrospective, the move the gate would have made) and the task reaches done;
 **Retry stage** does the same when it stopped at the retrospective or the librarian, and is refused
 at the merge gate, because retrying that gate would record the merge again. Returning, reworking or handing it back to any stage before the merge is refused by name
-(*task_merged*), because its branch is already in the default branch. **Pause** and **Take over** are
+(*task_merged*), because its branch is already in the default branch. **Pause** and **Work on it yourself** are
 refused the same way (WP-165), and the task page offers neither (WP-194): there is nothing to stop
 or hand over, and from a pause the task could not reach its retrospective. Cancelling a run on such a task — a question you asked it, say —
 stops the run and leaves the task waiting for a person, where **Resume** still finishes it.
@@ -896,7 +926,7 @@ stops the run and leaves the task waiting for a person, where **Resume** still f
 The stage list offered by *retry*, *return to stage* and *rework* comes from the task's **own**
 history rather than from the pipeline template, for the same reason as the board's columns; a task
 that has entered no stage yet is offered none of the three rather than a control that can only fail.
-The three dialogs share the stage you picked, and an untick of *Attach the gate's last failure*
+The three dialogs share the stage you picked, and an untick of *Attach the check's last failure*
 holds for that escalation until the gate escalates again. Each dialog's submit button stays disabled
 until the command's own required fields are filled, so you do not send a request the server will
 reject; it closes when the command was accepted, and a refusal is shown inside it.
@@ -985,28 +1015,30 @@ The product defines eleven merge-readiness checks, and the box shows **all eleve
   business review wrote: how many criteria were met, not met or untestable (each with the
   reviewer's evidence), and whether it approved or asked for changes. No verdict yet says
   *no verdict*; a verdict the server refuses to serve says *unavailable* and why.
-- **CI status** and **Rebase status** — the latest attempt of each gate: green or red, up to date
-  or conflicts, *checking* while it decides, *not reached* before the task gets there, and
+- **CI status** and **Up to date** (with the default branch) — the latest attempt of each automatic
+  check: green or red, yes or conflicts, *checking* while it decides, *not reached* before the task gets there, and
   and why the gate stopped for a person when it did.
 - **Review threads** — open and resolved human threads on the merge request, as the platform last
   counted them. It counts when somebody comments while the task waits at QA or Ready for merge, and again when the
   merge request reports every thread resolved — which GitLab sends only for a project that requires
   resolved threads before merging. A thread resolved without a comment while others stay open is
   not counted until one of those happens; until the first count it says *not read*, never zero.
-- **Coverage delta**, **Dependencies**, **Risk classes**, **Required reviewers**, the **Estimate**
+- **Test coverage** (the change against the default branch, in points), **Dependencies**,
+  **Sensitive areas** (the project's risk classes the change touches), **Required reviewers**, the **Estimate**
   against what the task has spent, and **Questions pending** — and beside it, a twelfth row the
   product's list does not have, **Approvals pending**.
 
-- **Tamper check** — BD-024's check, made by the CI gate: the existing files the change modifies,
+- **Protected files** — BD-024's check (the platform calls it the *tamper check*), made with the CI
+  check: the existing files the change modifies,
   deletes or renames away, against the project's protected paths (tests and CI/lint configuration
   by default), minus the changes the plan declared and the code review confirmed. Adding a new test
-  is never flagged. *protected paths changed, sent back* when anything
-  is left (the developer is told which paths, and CI status then says *sent back by the tamper
-  check* rather than red); *declared changes await the code review* when the plan declared them and
-  the review has not judged the change yet — the rebase gate, just before Ready, reads the code
+  is never flagged. *changed, sent back* when anything
+  is left (the developer is told which paths, and CI status then says *sent back: protected files
+  changed* rather than red); *declared changes await the code review* when the plan declared them and
+  the review has not judged the change yet — the up-to-date check, just before Ready, reads the code
   review's confirmation, so neither review runs twice; then *declared changes confirmed by the code
   review*, or *declared changes not confirmed, sent back* (the developer is told which paths, as
-  for an undeclared change); *clean* when the check ran and found nothing; *checking*; or *not
+  for an undeclared change); *no unapproved changes* when the check ran and found no protected file changed, or found only changes the plan declared and the code review confirmed; *checking*; or *not
   reached*. A CI gate whose row carries no record of the check reads *not recorded*: one that
   settled before WP-105 recorded what its check found (before WP-81 no check was made at all, and
   from WP-81 on a clean check closed its row with the same word), or one a person returned from
@@ -1023,9 +1055,10 @@ such, and so are the failing jobs past the fifth.
 
 ### Taking over, the epic breakdown, and asking the task
 
-- **Take over** (the `···` menu) and **hand back** (the header's button while you hold the task)
-  are on this screen, each in a dialog (and on the run screen, for the run's task).
-  **Take over** pauses the pipeline, interrupts the running agent, commits and
+- **Work on it yourself…** (the `···` menu; the platform calls this a *take-over*) and **Give it
+  back to the agent…** (the header's button while you hold the task, a *hand-back*) are on this
+  screen, each in a dialog (and on the run screen, for the run's task). The task page then reads *A
+  person is working on it*. **Work on it yourself** pauses the pipeline, interrupts the running agent, commits and
   pushes its work in progress on `agentic/<ticket>` and answers with the branch, the
   `claude --resume` command and whether the workspace was exported — the panel shows exactly those,
   in the tense the platform means them (*requested* is "being pushed as the run winds down", not
@@ -1040,15 +1073,15 @@ such, and so are the failing jobs past the fifth.
   and the run screen shows whether the stop was applied. When no run was in flight, nothing was
   exported and the panel offers neither download; a take-over recorded before WP-73 names the run it
   *infers* and says so
-  — and **Hand back**, whose stage list is the stages of the task's own pipeline that a hand-back
+  — and **Give it back to the agent**, whose stage list is the stages of the task's own pipeline that a hand-back
   would accept, so it offers nothing the platform would refuse: never the merge gate, the
   retrospective, the librarian or done, and **Ready for merge** only when you took the task over at
   Ready (WP-165). A task that was **merged** cannot be taken over at all, and the panel says so instead of offering it; one taken over before that
   rule existed is offered no stage, and the panel says it was merged — cancel it, or resume it into
   its retrospective once it is waiting for a person. Handing back to **Ready for merge** does not skip the checks: when the branch is not
   the commit the platform's gates judged — you pushed, or the platform cannot read it — the task
-  re-enters the CI gate and walks through review and the rebase gate to Ready again, spending none of
-  its iteration limits; an unchanged branch goes back through the rebase gate alone — one
+  re-enters the CI check and walks through review and the up-to-date check to Ready again, spending none of
+  its iteration limits; an unchanged branch goes back through the up-to-date check alone — one
   mergeability read, no iteration limit spent — which checks it against the target branch as it is
   now and re-reads the code review's confirmation of any protected path CI excused, so a round that
   changed the plan without pushing cannot wait at Ready on the old confirmation (WP-105). Handing back
@@ -1091,10 +1124,10 @@ laid out like a GitHub Actions job:
   run: its status icon, the stage, the role and the attempt (*Implementation · Developer · attempt
   3*). The actions are on the right. **Cancel run** is there while the run is live — a red-outlined
   button, never the amber one: while a run is live, watching is the job, so the page has no primary
-  button at all (the steer box's *Steer* and the transcript's *Following* toggle are plain), and it
+  button at all (the message box's *Send* and the transcript's *Following* toggle are plain), and it
   asks before it cancels. **Re-run ▾** is offered once the run has ended — the server refuses a re-run of a live
   one — and becomes the primary button once a run has failed. The
-  **···** menu holds **Take over…** (**Taken over: resume / hand back…** while the task is taken over), which opens the
+  **···** menu holds **Work on it yourself…** (**A person is working on it: resume / give back…** while the task is taken over), which opens the
   same take-over form and hand-back the task page has, and **Download transcript**, the run's
   transcript as a JSONL file.
 - **The left column** is the task's runs in stage order, each with its status icon, the one you
@@ -1136,14 +1169,14 @@ Then four tabs:
   into its workspace — and the CLI refuses any other.
 - **Prompt** — the exact system and user prompt that produced this run, each under its own heading
   (*System prompt*, *User prompt*).
-- **Context pack** — what was retrieved and put in front of the model.
+- **Knowledge given** — what the agent was given: the knowledge pages retrieved and put in front of the model.
 - **Settings** — the project settings this run was planned with, frozen when the run was created
   and redacted then. The settings line under **Details** says whether they were the same as the
   task's previous run's.
 
 A run reads **starting** from the moment the platform's runner takes it until it asks for the
 agent's CLI — while its workspace is prepared — and **running** from then on; a starting run shows
-no elapsed time yet and can be cancelled, and a steer sent to it is recorded and reaches the agent
+no elapsed time yet and can be cancelled, and a message sent to it is recorded and reaches the agent
 as soon as it starts. A run that ends while still starting never ran an agent and cost nothing.
 
 You can **cancel** the run (member), **re-run** it (member — this creates a *new* run rather than
@@ -1172,15 +1205,16 @@ branch. **Retry the stage** and the new run starts on that branch and is told to
 attempt's work and carry on rather than start over; the `wip:` commit stays in the branch's history.
 A run that changed nothing pushes nothing. If the push fails the run page says so, and the work is
 only in the run's workspace volume, which is kept for three days. A run you **cancel** is not saved —
-take the task over instead if you want its work.
+choose **Work on it yourself** instead if you want its work.
 
-**Steering a live run is accepted, then applied or refused** (WP-85). The steer box sits under
-the log and stays at the bottom of the window while the run is live — from the moment it is claimed
-(*starting*); a run still waiting for a seat, or one that has ended, has none. A steer pushes a turn into a
+**A message to a live run is accepted, then applied or refused** (WP-85). The **Message the agent**
+box (its button is **Send**) sits under the log and stays at the bottom of the window while the run
+is live — from the moment it is claimed (*starting*); a run still waiting for a seat, or one that has
+ended, has none. A message pushes a turn into a
 session that is already running, which only the process running that session can do — on a stock
 instance the `runner` container, never the process serving this application. So the message is
 recorded and handed to the runner through the database: the screen says *Accepted* at once, and
-**Commands sent to this run**, under the steer box, then shows whether it was *applied* (it appears
+**Commands sent to this run**, under the message box, then shows whether it was *applied* (it appears
 in the transcript as a turn attributed to you) or *refused* — *the run ended before it could be
 applied* (it is never applied late), *the live session did not take it* (it was closing; not
 retried) or *no live session was found*. A message usually applies within
@@ -1190,10 +1224,10 @@ installation, however many processes serve this application (WP-101).
 
 **Cancel stops the session** (WP-101). **Cancel run** first asks you to confirm, saying what it
 does; **Keep it running** sends nothing. When the runner is holding the run — the usual case — the
-task is paused at once, the cancel is handed to the runner the same way a steer is, and **Commands
+task is paused at once, the cancel is handed to the runner the same way a message is, and **Commands
 sent to this run** shows it as *Cancel*: *pending* until the runner interrupts the session, then
 *applied*. The run then ends *cancelled* with what the session had cost up to that moment, charged
-once like any other run. A message you steered that was still waiting is not delivered — the run
+once like any other run. A message you sent that was still waiting is not delivered — the run
 ends before it, and it reads *the run ended before it could be applied*. If no process is holding the
 run (the runner is down, or its lease lapsed), there is nothing to interrupt: the run is ended here
 and reads *cancelled* straight away. If the runner dies after you cancel and before it stops the
@@ -1203,7 +1237,7 @@ worker* rather than *Cancelled*, because nothing confirmed the stop.
 Three tabs can refuse to show you a document, and that is deliberate: each is the record of what
 this run was given, and none is re-derived after the fact. A run started by this build shows all
 three. A run started before the platform recorded one does not, and never will — **Prompt** and
-**Context pack** say the document *could not be loaded* and why, with the server's own message under
+**Knowledge given** say the document *could not be loaded* and why, with the server's own message under
 *Technical details*, **Settings**
 says the run predates the record:
 
@@ -1211,7 +1245,7 @@ says the run predates the record:
   credentials the run was handed. An older prompt is not re-derivable: its delimiter is a fresh
   random value per prompt and its knowledge excerpts are a point-in-time read, so re-assembling one
   would show you a document that run never saw.
-- **Context pack** — recorded with the run since migration 0041, budget included. For an older run
+- **Knowledge given** — recorded with the run since migration 0041, budget included. For an older run
   only the retrieved rows exist, and summing them would publish "budget equals total" as a fact. A
   pack with nothing in it is not refused: it says *No knowledge pages were put in front of the
   model*, beside its token budget.
@@ -1265,8 +1299,9 @@ default `escalation` and `budget_exhausted`, which the list replaces rather than
 A question is due after the project's question timeout — **1 working day** by default, counted on the
 organisation's working calendar, so one asked late on a Friday is due on Monday — and an expired
 question is not silently dropped; it moves the task to needing a human. It also **leaves the
-inbox**, because it can no longer be answered — the inbox says so in one line under its title, with
-the rest behind **Learn more** — and the task page
+inbox**, because it can no longer be answered — the line under the inbox's title says what the list is
+(*Questions and approvals waiting for a person, across all projects.*), and **Learn more** beside it says
+what an expired item does — and the task page
 is where it is retried or cancelled. **Before that, one
 reminder**: halfway through the working time to the deadline, the project's chat channel gets a
 message saying the question is still unanswered, which names the task page (it has no buttons). A
@@ -1305,18 +1340,19 @@ Two messages come from the platform rather than from a task:
 ## 7. Knowledge
 
 **A project → Knowledge.** On the left, the knowledge base's **files** as they exist in the project's
-repository, grouped by folder; click one to read it beside the list. Above the document:
+repository, grouped by folder. The page reads in the order you need it:
 
-- the **health report**, as a notice: what the nightly hygiene pass last found — a page the parser
-  refused (and which is therefore in no agent's context), links that point nowhere, expired pages,
-  duplicates — or that it found nothing wrong, or *No health report yet* before the first pass has
-  run. A finding is an observation; nothing rewrites a page because one names it;
-
-and below it the **proposals**, one row each: the page it would change, its type and kind, where it
-came from (*mined from merged history*, *drafted at project setup*, *from a task* …) and its
-significance; **The change and its evidence** under a row holds the change itself and what it cites,
-and it is **open** on every row still waiting for a decision, so *Approve* is never pressed with the
-change collapsed.
+- first the **Suggested edits** (the platform's knowledge *proposals*) — the ones waiting for your
+  decision at the top, the decided ones below them — one row each: the page it would change, its
+  type and kind, and where it came from (*mined from merged history*, *drafted at project setup*,
+  *from a task* …); **The change and its evidence** under a row holds the change itself and what it
+  cites, and it is **open** on every row still waiting for a decision, so *Approve* is never pressed
+  with the change collapsed;
+- then the file you clicked on the left, if any;
+- then the **Health** report, as a notice: what the nightly hygiene pass last found — a page the
+  parser refused (and which is therefore in no agent's context), links that point nowhere, expired
+  pages, duplicates — or that it found nothing wrong, or *No health report yet* before the first pass
+  has run. A finding is an observation; nothing rewrites a page because one names it.
 **Approve** is on the row and **Reject** is in its `···` menu; a decision the server refuses says so
 under the list.
 
@@ -1355,7 +1391,9 @@ edited here.
 connected in the order a task goes when everything passes; a stage that only a failure enters (the
 conflict resolution behind the rebase check) or that the pipeline skips (marked *Disabled*) sits above
 the row, and every way a stage can send the task back is a dashed curve below it with its limit
-(*Review ≤3*: the review may send the work back at most three times). Click a card for the stage's
+(*Review rounds: up to 3*: the review may send the work back at most three times; the stage's dialog says what a round is).
+A gate's card reads *Automatic check* and a stage the platform completes itself *Automatic step*; an advisory stage says
+*for information only: it never sends the task back*. Click a card for the stage's
 configuration: its role, model, what it writes, its loops and where each of its outcomes goes. A gate's card says what it waits for (*Waits for the CI pipeline*). Drag
 to pan; it opens on the first stages at a size you can read, the **+**, **−** and **Fit all** buttons zoom (Fit all shows the whole pipeline); **Full
 screen** gives the graph the window, Escape gives it back. On a narrow screen, or with **List**, the
@@ -1367,9 +1405,17 @@ repository's file was last read. Read-only here: the settings are edited on the 
 page, which also proposes them to the repository (section 1, step 6); a YAML editor in the browser is
 not built.
 
-**A project → Budgets** shows each budget as a meter: its window (*Per month*), what has been spent
-of its limit (*$3.25 of $40.00*), and the share at which you are notified; a cap is set in the
-project's settings, under *Policies & WIP*. A budget stops a *new* run from starting: the check
+**A project → Budgets** is where a project's cap is both read and set. It shows each budget as a
+meter: its window (*Per month*), what has been spent of its limit (*$3.25 of $40.00*), and the share
+at which you are notified. Below that, **where the money went**: pick a window (*Per day*, *Per
+week*, *Per month* — the default — or *In total*) and the page lists what the cost ledger booked in
+it **by stage**, most first (a question asked of a task, which runs outside the pipeline, is the line *Questions to an agent*), and the **top tasks**, each linking to its task (a trial's task says
+*Trial run*). Where part of a figure is the platform's own price for a run whose provider reported
+no cost, it says so (*$2.50 ($0.25 estimated)*); a run nothing could price is in no figure. Last on
+the page is the editor, **Project budgets**: a field per window, an empty field is no cap, and
+**Save budgets** writes the windows you changed. *Rules & limits* in the project's settings points
+here rather than carrying a second editor; the setup wizard keeps its own, because a project being
+created has no Budgets tab yet. A budget stops a *new* run from starting: the check
 happens when a run is admitted, so a run already under way finishes and is accounted for. There are
 three levels — organisation, project and per-task — and the window rolls over on the organisation's
 own timezone without anything scheduled.
@@ -1425,15 +1471,21 @@ pauses before it. The task cap has no configuration key in this build: raise it 
 **Raise this task's cap**, to at least what its remaining stages may spend. In `local` mode the
 dollars are list-price estimates (above), but they are what admission compares.
 
-### Shadow
+### Trial
 
-**A project → Shadow** runs the pipeline on closed tickets you pick and compares what it would have
-built with what a human merged; nothing is written outside the platform. Enter up to 25 ticket keys
-and **Start a shadow batch** (when the project's shadow mode allows one — otherwise the page says
-why). Each batch is a row — when it started, how many tickets, whether it is still running, what it
-spent — and its name opens the batch's own page: its figures in one strip (*Tickets*, *Refused*,
-*Reported*, *Compared*, *Spent*, *Budget*), the cost per ticket by size, the similarity distribution,
-the launch candidates and every ticket with its similarity — or the reason it has none.
+**A project → Trial** is a trial run on tickets you already shipped: it runs the pipeline on closed
+tickets you pick and compares what it would have built with what a person merged; nothing is written
+outside the platform. (It was called *Shadow*; its address is still `/projects/<key>/shadow`.) The
+tab is there **before the project's first live task, and while it has a trial**; otherwise the page
+is under the project's **Settings → Trial run**, which links to it. The page shows one thing at a
+time: while it loads, a line saying so; if it could not be read, that error alone; if a trial may not
+start, why, in a sentence (*Trial runs are off for this project …* — switch on **Trial runs** under
+*Rules & limits*, with How much agents do alone at Observe); otherwise the form: enter up to 25 ticket
+keys and **Start a trial run**. Each trial is a row — when it started, how many tickets, whether it
+is still running, what it spent — and its name opens the trial's own page: its figures in one strip
+(*Tickets*, *Refused*, *Reported*, *Compared*, *Spent*, *Budget*), the cost per ticket by size, the
+similarity distribution, the launch candidates and every ticket with its similarity — or the reason
+it has none. A trial's task says *Trial run* beside its ticket claim, because it assigned nothing.
 
 ## 9. Integrations
 
@@ -1515,12 +1567,16 @@ retire, and the dialog says why.
 ## 10. Audit log
 
 One row per configuration change, newest first: who made it — their initials and name, or *A removed
-account* when that person's account has gone — what they changed, in words (*changed a project's
-settings: Autonomy level*), and when. **Details** under a row holds the raw change and the id of what
-was changed; a secret in it appears as the literal string `"changed"` — that is the server's doing,
-not the screen's. The filter menu in the list's header shows the changes to one kind of thing
-(*Organisation*, *Project*, *Integration*, *Connections*, *Budget* or *Person*) or to all of them, and
-**Load older entries** pages back.
+account* when that person's account has gone — what they changed, in words, naming the project when
+it is a project's settings (*changed the settings of Payments: Autonomy level*), and when.
+**Details** under a row holds the raw change and the id of what was changed; a secret in it appears
+as the literal string `"changed"` — that is the server's doing, not the screen's. Two filter menus
+sit in the list's header. **Project** keeps one project's settings changes: the server filters by
+kind only, so it asks for project changes and keeps that project's among those **on this page** (the
+page says so; **Load older entries** shows the page before it), and a change to a project's
+connections or a budget, which does not name its project, is not among them. The other shows the
+changes to one kind of thing (*Organisation*, *Project*, *Integration*, *Connections*, *Budget* or
+*Person*) or to all of them, and **Load older entries** pages back.
 
 Every action a person takes through the product is recorded with the acting user, the command and
 its parameters — but **this screen lists only the configuration changes**; a task's own commands are
@@ -1528,17 +1584,25 @@ on that task's *Activity* tab. A *refused* command records nothing.
 
 ## 11. Settings
 
-**Settings** is one page per section, picked from the list on the left (on a phone, a one-line
-menu above the section that names the one you are on) — **Session · Keyboard shortcuts ·
-Policies · Notifications · Budgets · Users · Provider identities ·
-Dead letters · Failed jobs · Instance** — grouped as *Personal*, *Organisation*, *People* and
-*Operations*; opening **Settings** opens the first. A section that changes something has **one
-Save** at its foot: it stays disabled (*Nothing has changed.*) until you change something, and it
-saves only what you changed. *Keyboard shortcuts* is the exception — it applies as you pick it,
-and is kept in this browser only. *Provider
-identities*, *Dead letters* and *Failed jobs* are an administrator's and are shown to an
-administrator only; anybody else who opens one of their addresses lands on *Session*. *Instance*
-is everybody's.
+**Settings** — the gear in the top bar, also in the account menu — is one page per section, picked from the list on the
+left (on a phone, a one-line menu above the section that names the one you are on) — **Policies ·
+Notifications · Budgets · Users · Linked accounts · Integrations · Workers · Audit log · Stuck
+events · Failed background jobs · Instance · Session · Keyboard shortcuts** — grouped as
+*Organisation*, *People*, *Admin*, *Operations* and *Personal*. **Opening Settings opens the first
+section your role may change**: *Policies* for an administrator, *Budgets* for a maintainer,
+*Keyboard shortcuts* for everybody else. A section that changes something has **one Save** at its
+foot: it stays disabled (*Nothing has changed.*) until you change something, and it saves only what
+you changed. *Keyboard shortcuts* is the exception — it applies as you pick it, and is kept in this
+browser only. *Linked accounts*, *Stuck events* and *Failed background jobs* are an administrator's
+and are shown to an administrator only, *Integrations* and the *Audit log* to a maintainer or an
+administrator; anybody else who opens one of their addresses lands where *Settings* does.
+*Workers*, *Instance* and the *Personal* sections are everybody's.
+
+**The Admin section is three screens with addresses of their own** — **Integrations** (section 9),
+**Workers** (section 12, *Workers*) and the **Audit log** (section 10). They open at `/integrations`,
+`/workers` and `/audit` as they always did, beside this list with their entry marked (the
+*New integration* and *Add a worker* wizards take the whole page for their own steps);
+`/settings/integrations` and the like take you there too.
 
 - **Session** — who is signed in, and with which role.
 - **Keyboard shortcuts** — **Use single-key shortcuts**, on until you turn it off: whether `g h`,
@@ -1549,12 +1613,13 @@ is everybody's.
   has been spent of it; empty is no cap. **Save budgets** writes each changed window in turn, and a
   window the server refuses says so under its own field.
 - **Users** — everybody with an account, with their role and whether they are active.
-- **Provider identities** — which Slack, Jira or GitLab account is which person, without which a
-  decision made in those tools is refused as unmapped.
-- **Dead letters** — events the platform stopped retrying after their handler failed every attempt,
-  each with a **Re-queue** button for once the fault is fixed (the operator guide's §9 says what a
-  re-queue does and does not do). The newest come first, and **Show older** reaches the rest;
-  **Failed jobs** pages the same way.
+- **Linked accounts** (*Provider identities* before) — which Slack, Jira or GitLab account is which
+  person, without which a decision made in those tools is refused as unmapped.
+- **Stuck events** (*Dead letters* before) — events the platform stopped retrying after their handler
+  failed every attempt, each with a **Try again** button for once the fault is fixed (the operator
+  guide's §9 says what a re-queue does and does not do). The newest come first, and **Show older**
+  reaches the rest; **Failed background jobs** (*Failed jobs* before) pages the same way. Home's
+  *Needs you* tells an administrator when either has something in it.
 - **Instance** — the version and build the server is running.
 
 **Policies** and **Notifications** are the organisation settings (since WP-93), which only an
@@ -1565,7 +1630,7 @@ administrator may save. *Policies* holds the maximums every project is held to:
 - the **autonomy maximum** — the highest dial position a project may choose. A project above it runs
   at the maximum from its next task (the project's own setting is kept, so raising the maximum
   restores it), and a task that is already running keeps the dial it started with;
-- the **WIP maximum** — a project may allow fewer tasks at once, never more.
+- the **parallel tasks maximum** — a project may allow fewer tasks at once, never more.
 
 *Notifications* holds the organisation's **quiet hours** and **digest time** — an organisation budget
 crossing its threshold at night waits for the morning digest, and a spent budget is still posted at
@@ -1579,13 +1644,17 @@ mode (an environment setting) and feature flags (a project's own) are not organi
 project's features are switched on its own settings page.
 
 **A project's Settings tab** has the same shape, one page per section — **Connections · Execution ·
-Default branch · Discovery & readiness · Business context · History · Policies & WIP · Repository
-configuration · Prompt files · Knowledge** — and mirrors every step of the setup wizard, so nothing
-is only reachable while a project is being set up; opening the tab opens *Connections*. The wizard's
-own controls keep their own buttons there (the autonomy dial, the ticket lifecycle, the project
-budgets), because each is one decision with its own save. *Policies & WIP* holds the operating mode —
-the autonomy dial, the features, the risk classes, the project budgets, the notifications and who
-changed what — with the verification mode and the WIP limits in force. Unlike an organisation
+Default branch · Discovery & readiness · Business context · History · Trial run · Rules & limits ·
+Repository configuration · Prompt files · Knowledge** — and mirrors every step of the setup wizard,
+so nothing is only reachable while a project is being set up; opening the tab opens *Connections*.
+The wizard's own controls keep their own buttons there (How much agents do alone, the ticket
+lifecycle), because each is one decision with its own save; the project budgets are set on the
+project's **Budgets** tab (section 8), where the money they cap is shown. *Trial run* links to the
+project's Trial page, which is reached from here once its tab is gone. *Rules & limits* (*Policies &
+WIP* before) holds the operating mode —
+**How much agents do alone**, the features, the **Sensitive areas**, a pointer to *Budgets*, the
+notifications and who changed what — with the verification mode (*Checks run by: agents* or *CI*)
+and **Parallel tasks**, the limits in force. Unlike an organisation
 section it has **no one Save at its foot**: each card saves on its own, some as you change them and
 the rest with their own button. **Replace with these classes…** asks first when risk classes are
 already in force, saying that a class not among the proposed ones stops applying.
@@ -1596,7 +1665,7 @@ list of the tracker's own statuses, every slot allowed to stay empty, the two cl
 same check against the tracker when you save. Change it there at any time; a new *QA* mapping
 applies to tasks created afterwards.
 
-**Verification** is a project's own setting, under *Policies & WIP*: *Agents run the checks* (the
+**Verification** is a project's own setting, under *Rules & limits*: *Agents run the checks* (the
 default) or *CI runs the checks*. Choose CI when the project's pipeline already runs the tests and
 static analysis on every merge request and the agents' workspace (2 CPUs, 4 GiB) is too small for
 them — no agent then runs the test suite, a linter, a build or a dependency install (they are
@@ -1652,9 +1721,12 @@ cycle time), **Quality** (first-pass acceptance, clean first-MR rate, human inte
 returns per delivered task), **Cost** (spend in this range, lifetime cost per delivered task,
 estimated share of spend, estimate error, cache hit ratio), **Time** (agent time, question response
 time, reviewer minutes per delivered task, human minutes), then **Knowledge** and **Merge requests
-and tickets** for the rest. Each figure is a card: the value, its name, and one line saying how many
-observations it rests on (*1 observation*, *12 observations*). Hover or focus the name to read its
-definition. Where the period holds at least two days (or weeks, or months) with a value, a small line
+and tickets** for the rest. Each figure is a card: the value, its name, which way is good (*Higher
+is better*, *Lower is better*, or *A volume, not a score* for a count of how much happened — this
+build shows no previous period to compare with), and what the figure is from (*From 12 delivered
+tasks*, *From 3 answered questions*, *From 5 data points* where the count is not of one thing).
+The range above the cards is written like every other date (*Sep 10, 2026 to Oct 9, 2026*), with
+the timezone the days were cut in. Hover or focus the name to read its definition. Where the period holds at least two days (or weeks, or months) with a value, a small line
 under the figure shows its trend.
 
 How to read a few of them:

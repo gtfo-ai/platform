@@ -130,26 +130,51 @@ const primaries = (): Element[] =>
   );
 
 describe('the org settings sub-routes', () => {
-  it('opens /settings at its first section, with the NavList and the section marked current', async () => {
+  it('opens /settings at the first section the administrator may change, with the NavList and the section marked current', async () => {
     open('/settings');
     const nav = await screen.findByRole('navigation', { name: 'Settings' });
+    // S-25.6 (research/21 S13): Policies, not Session.
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings/session');
+      expect(window.location.pathname).toBe('/settings/policies');
     });
-    expect(within(nav).getByRole('link', { name: 'Session' }).getAttribute('aria-current')).toBe(
+    expect(within(nav).getByRole('link', { name: 'Policies' }).getAttribute('aria-current')).toBe(
       'page',
     );
     // One dark theme (TD-033's 2026-11-05 amendment): no Appearance section and no theme control.
     expect(within(nav).queryByRole('link', { name: 'Appearance' })).toBeNull();
-    // Every group, in order, for the administrator.
+    // Every group, in order, for the administrator — the Admin group (Q-UX-1) among them.
     expect(
       within(nav)
         .getAllByRole('heading')
         .map((heading) => heading.textContent),
-    ).toEqual(['Personal', 'Organisation', 'People', 'Operations']);
-    expect(await screen.findByRole('heading', { name: 'Session' })).toBeTruthy();
+    ).toEqual(['Organisation', 'People', 'Admin', 'Operations', 'Personal']);
+    // The Admin entries are the moved screens, at the URLs they always had.
+    expect(
+      ['Integrations', 'Workers', 'Audit log'].map((name) =>
+        within(nav).getByRole('link', { name }).getAttribute('href'),
+      ),
+    ).toEqual(['/integrations', '/workers', '/audit']);
+    expect(await screen.findByRole('heading', { name: 'Policies' })).toBeTruthy();
     expect(screen.queryByLabelText('Theme preference')).toBeNull();
   });
+
+  it.each([
+    ['admin', '/settings/policies', 'Policies'],
+    ['maintainer', '/settings/budgets', 'Budgets'],
+    ['member', '/settings/keyboard', 'Keyboard shortcuts'],
+    ['viewer', '/settings/keyboard', 'Keyboard shortcuts'],
+  ] as const)(
+    'lands a %s on the first section the role may change: %s',
+    async (role, path, name) => {
+      world.role = role;
+      open('/settings');
+      await waitFor(() => {
+        expect(window.location.pathname).toBe(path);
+      });
+      const nav = await screen.findByRole('navigation', { name: 'Settings' });
+      expect(within(nav).getByRole('link', { name }).getAttribute('aria-current')).toBe('page');
+    },
+  );
 
   it('moves between sections through the NavList', async () => {
     open('/settings/session');
@@ -162,28 +187,35 @@ describe('the org settings sub-routes', () => {
     });
   });
 
-  it('redirects an unknown section to the first one', async () => {
+  it('redirects an unknown section to the one /settings opens', async () => {
     open('/settings/no-such-section');
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings/session');
+      expect(window.location.pathname).toBe('/settings/policies');
     });
-    expect(await screen.findByRole('heading', { name: 'Session' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Policies' })).toBeTruthy();
   });
 
-  it('redirects the retired Appearance bookmark to Session, with no theme control anywhere', async () => {
+  it('redirects the retired Appearance bookmark like any unknown section, with no theme control anywhere', async () => {
     open('/settings/appearance');
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings/session');
+      expect(window.location.pathname).toBe('/settings/policies');
     });
-    expect(await screen.findByRole('heading', { name: 'Session' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Policies' })).toBeTruthy();
     expect(screen.queryByLabelText('Theme preference')).toBeNull();
+  });
+
+  it('still opens Session where it is asked for by name', async () => {
+    open('/settings/session');
+    expect(await screen.findByRole('heading', { name: 'Session' })).toBeTruthy();
+    expect(window.location.pathname).toBe('/settings/session');
   });
 
   it('shows the administrator’s sections to nobody else, and redirects their paths before any read', async () => {
     world.role = 'maintainer';
     open('/settings/dead-letters');
+    // A maintainer lands on Budgets, the first section the role may change (S-25.6).
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings/session');
+      expect(window.location.pathname).toBe('/settings/budgets');
     });
     const nav = await screen.findByRole('navigation', { name: 'Settings' });
     expect(
@@ -191,22 +223,27 @@ describe('the org settings sub-routes', () => {
         .getAllByRole('link')
         .map((link) => link.textContent),
     ).toEqual([
-      'Session',
-      'Keyboard shortcuts',
       'Policies',
       'Notifications',
       'Budgets',
       'Users',
+      // The Admin group: Integrations and the Audit log are a maintainer's (`integration.read`,
+      // `org.audit.read`), Workers everybody's own.
+      'Integrations',
+      'Workers',
+      'Audit log',
       // Instance reads the public version: everybody's (review of PR #25).
       'Instance',
+      'Session',
+      'Keyboard shortcuts',
     ]);
     expect(world.requested).not.toContain('/api/org/dead-letters');
-    // Provider identities is the administrator's on the server (`org.users.manage`) too.
+    // Linked accounts is the administrator's on the server (`org.users.manage`) too.
     cleanup();
     world.requested = [];
     open('/settings/identities');
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings/session');
+      expect(window.location.pathname).toBe('/settings/budgets');
     });
     expect(world.requested).not.toContain('/api/org/identities');
     cleanup();
@@ -218,7 +255,8 @@ describe('the org settings sub-routes', () => {
     world.role = 'admin';
     world.requested = [];
     open('/settings/dead-letters');
-    expect(await screen.findByRole('heading', { name: 'Dead letters' })).toBeTruthy();
+    // S-25.6: the plain-words name (research/21 § 4); the URL is unchanged.
+    expect(await screen.findByRole('heading', { name: 'Stuck events' })).toBeTruthy();
     await waitFor(() => {
       expect(world.requested).toContain('/api/org/dead-letters');
     });
@@ -308,7 +346,8 @@ describe('the org settings sub-routes', () => {
     for (const group of ORG_SETTINGS_GROUPS) {
       for (const section of group.sections) {
         cleanup();
-        open(`/settings/${section.id}`);
+        // An Admin entry is a screen at its own URL, drawn in the same frame.
+        open('to' in section ? section.to : `/settings/${section.id}`);
         await screen.findByRole('navigation', { name: 'Settings' });
         await waitFor(() => {
           expect(
@@ -354,18 +393,26 @@ describe('the project settings sub-routes', () => {
 });
 
 describe('the section tables', () => {
-  it('hide the administrator’s sections from every other role, and from a session not yet read', () => {
-    for (const role of ['maintainer', 'member', 'viewer', undefined] as const) {
-      expect(
-        orgSettingsGroupsFor(role).map((group) => [
-          group.label,
-          group.sections.map((section) => section.id),
-        ]),
-      ).toEqual([
-        ['Personal', ['session', 'keyboard']],
+  it('hide each section from a role below its own, and from a session not yet read', () => {
+    const groups = (role: UserRole | undefined) =>
+      orgSettingsGroupsFor(role).map((group) => [
+        group.label,
+        group.sections.map((section) => section.id),
+      ]);
+    expect(groups('maintainer')).toEqual([
+      ['Organisation', ['policies', 'notifications', 'budgets']],
+      ['People', ['users']],
+      ['Admin', ['integrations', 'workers', 'audit']],
+      ['Operations', ['instance']],
+      ['Personal', ['session', 'keyboard']],
+    ]);
+    for (const role of ['member', 'viewer', undefined] as const) {
+      expect(groups(role)).toEqual([
         ['Organisation', ['policies', 'notifications', 'budgets']],
         ['People', ['users']],
+        ['Admin', ['workers']],
         ['Operations', ['instance']],
+        ['Personal', ['session', 'keyboard']],
       ]);
     }
     expect(

@@ -39,7 +39,7 @@ describe('runCommandStateText', () => {
   it('says an applied steer reached the live session, and an applied stop asked for the export', () => {
     expect(
       runCommandStateText({ ...base, state: 'applied', applied_at: '2026-09-28T09:00:02.000Z' }),
-    ).toContain('delivered to the live session');
+    ).toContain('the agent received it');
     expect(
       runCommandStateText({
         ...base,
@@ -127,7 +127,7 @@ describe('RunCommandLog', () => {
     // Untrusted text stays text (BD-022): the tag is characters, not an element.
     expect(container.querySelector('b')).toBeNull();
     expect(items[0]?.textContent).toContain('<b>not markup</b>');
-    expect(items[1]?.textContent).toContain('Take-over stop');
+    expect(items[1]?.textContent).toContain('Stopped for a person');
     expect(items[1]?.textContent).toContain('the run ended before this stop could be applied');
   });
 });

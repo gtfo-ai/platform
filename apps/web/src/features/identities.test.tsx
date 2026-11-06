@@ -104,7 +104,7 @@ beforeEach(() => {
 describe('provider identities on the settings page', () => {
   it('lists the mapped accounts, with the provider’s strings as text (BD-022)', async () => {
     const { container } = render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
-    await screen.findByRole('heading', { name: 'Provider identities' });
+    await screen.findByRole('heading', { name: 'Linked accounts' });
     await waitFor(() => {
       expect(container.textContent).toContain('U0FAKEDANA');
     });
@@ -187,7 +187,7 @@ describe('provider identities on the settings page', () => {
     const { container } = render(
       createApp({ fetchImpl: fetchFor({ identities: 'forbidden' }), realtime: false }).element,
     );
-    await screen.findByRole('heading', { name: 'Provider identities' });
+    await screen.findByRole('heading', { name: 'Linked accounts' });
     await waitFor(() => {
       expect(container.textContent).toContain('The identity mappings could not be loaded.');
     });

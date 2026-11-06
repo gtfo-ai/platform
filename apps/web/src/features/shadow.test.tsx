@@ -1,5 +1,5 @@
 /**
- * The Shadow screen against product/10:20 (WP-34).
+ * The Trial screen (the Shadow screen until S-25.7) against product/10:20 (WP-34).
  *
  * > *"Shadow — shadow-mode runs: comparison with the human MR, predicted cost, similarity"*
  *
@@ -9,8 +9,9 @@
  *    a screen that printed an em dash for all of them would tell a founder that a running batch had
  *    produced a bad comparison. `missingSimilarityReason` is the decision and every branch of it is
  *    driven, both through the function and through the rendered page.
- *  - **the gate**. When a batch cannot be started the screen says why, rather than offering a
- *    button that answers 409.
+ *  - **the gate, one state at a time** (S-25.7, research/21 F7). When a trial cannot be started the
+ *    screen says why, as a sentence, rather than offering a button that answers 409 — and never
+ *    beside an error or an empty state: pending, failed, blocked and ready are four pages.
  *  - **untrusted text stays text** (BD-022). The ticket key, the refusal sentence and the report's
  *    notes all come from outside; a planted `<script>` must be on the page as characters, and the
  *    human merge request's URL must go through `safeHref`.
@@ -21,7 +22,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { HumanSideOfReport, missingSimilarityReason } from './shadow.js';
+import { HumanSideOfReport, missingSimilarityReason, trialBlockedSentence } from './shadow.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const BATCH = '00000000-0000-4000-8000-0000000000b1';
@@ -120,6 +121,8 @@ interface World {
   blockedReason: string | null;
   tickets: readonly ShadowBatchTicket[];
   batches: number;
+  /** The batches read answers 500 (S-25.7's error state). */
+  failBatches?: boolean;
 }
 
 let world: World;
@@ -151,6 +154,9 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   }
   if (url.includes('/api/shadow-batches/')) return json(batch(world.tickets));
   if (url.endsWith('/shadow-batches')) {
+    if (world.failBatches === true) {
+      return json({ error: { code: 'internal', message: 'the read failed' } }, 500);
+    }
     return json({
       items:
         world.batches === 0
@@ -187,7 +193,7 @@ beforeEach(() => {
 
 const renderScreen = async (): Promise<HTMLElement> => {
   const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-  await screen.findByText('Shadow mode');
+  await screen.findByText('Trial run');
   return container;
 };
 
@@ -195,9 +201,20 @@ const renderScreen = async (): Promise<HTMLElement> => {
 const renderBatch = async (): Promise<HTMLElement> => {
   window.history.pushState({}, '', `/projects/api/shadow?batch=${BATCH}`);
   const { container } = render(createApp({ fetchImpl, realtime: false }).element);
-  await screen.findByRole('region', { name: 'This batch in figures' });
+  await screen.findByRole('region', { name: 'This trial in figures' });
   return container;
 };
+
+describe('trialBlockedSentence (S-25.7)', () => {
+  it('says the server’s clause as a sentence, and says something when there is none', () => {
+    expect(trialBlockedSentence('trial runs are off for this project')).toBe(
+      'Trial runs are off for this project.',
+    );
+    expect(trialBlockedSentence('Already a sentence.')).toBe('Already a sentence.');
+    expect(trialBlockedSentence(null)).toBe('A trial cannot be started for this project.');
+    expect(trialBlockedSentence('  ')).toBe('A trial cannot be started for this project.');
+  });
+});
 
 describe('missingSimilarityReason', () => {
   it('names each of the four reasons a figure is absent, and says nothing when there is one', () => {
@@ -221,7 +238,7 @@ describe('missingSimilarityReason', () => {
   });
 });
 
-describe('the Shadow screen', () => {
+describe('the Trial screen', () => {
   it('says a batch id the project’s batches do not name is not this project’s, and reads nothing by it', async () => {
     // Review of PR #25: the id is compared with this project's batches before the batch is read,
     // so another project's batch is never drawn under this project's tab.
@@ -240,24 +257,25 @@ describe('the Shadow screen', () => {
         realtime: false,
       }).element,
     );
-    expect(await screen.findByText('No such batch in this project')).toBeTruthy();
+    expect(await screen.findByText('No such trial in this project')).toBeTruthy();
     expect(requested.some((url) => url.includes('/shadow-batches/'))).toBe(false);
-    expect(screen.queryByRole('region', { name: 'This batch in figures' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'This trial in figures' })).toBeNull();
     // …and the other direction: the project's own batch id is read and drawn.
     cleanup();
     await renderBatch();
-    expect(screen.queryByText('No such batch in this project')).toBeNull();
+    expect(screen.queryByText('No such trial in this project')).toBeNull();
   });
 
   it('lists each batch as a row that opens its page, and draws no aggregate on the list', async () => {
     const container = await renderScreen();
-    const list = await screen.findByRole('list', { name: 'Shadow batches' });
-    const link = within(list).getByRole('link', { name: /^Batch of / });
+    const list = await screen.findByRole('list', { name: 'Trials' });
+    const link = within(list).getByRole('link', { name: /^Trial of / });
+    // The URL is the old one (S-25.7 renamed the words, not the route).
     expect(link.getAttribute('href')).toBe(`/projects/api/shadow?batch=${BATCH}`);
     expect(container.textContent).not.toContain('Launch candidates');
     await userEvent.setup().click(link);
-    expect(await screen.findByRole('region', { name: 'This batch in figures' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: '← All shadow batches' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'This trial in figures' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '← All trials' })).toBeTruthy();
   });
 
   it('shows the batch, its aggregate and its launch candidates', async () => {
@@ -274,24 +292,47 @@ describe('the Shadow screen', () => {
     expect(container.textContent).toContain('found by a title scan');
   });
 
-  it('teaches an empty state rather than shrugging', async () => {
+  it('teaches the first trial in the form itself, with no separate empty state (S-25.7)', async () => {
     world.batches = 0;
     const container = await renderScreen();
     await waitFor(() => {
-      expect(container.textContent).toContain('No shadow batch yet');
+      expect(container.querySelector('[data-trial-state="ready"]')).not.toBeNull();
     });
     expect(container.textContent).toContain('closed tickets your team delivered');
+    expect(screen.queryByRole('list', { name: 'Trials' })).toBeNull();
+    expect(container.querySelectorAll('[data-trial-state]')).toHaveLength(1);
   });
 
-  it('says why a batch cannot be started, and disables the button', async () => {
+  it('says why a trial cannot start, as a sentence, and nothing else — no form, no empty state (S-25.7, F7)', async () => {
     world.canStart = false;
-    world.blockedReason = 'shadow mode is off for this project';
+    world.batches = 0;
+    world.blockedReason = 'trial runs are off for this project';
     const container = await renderScreen();
-    await waitFor(() => {
-      expect(container.textContent).toContain('shadow mode is off for this project');
+    const blocked = await waitFor(() => {
+      const found = container.querySelector('[data-trial-state="blocked"]');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
     });
-    const button = screen.getByRole('button', { name: 'Start a shadow batch' });
-    expect((button as HTMLButtonElement).disabled).toBe(true);
+    // The server's clause, in words: capitalised and ended.
+    expect(blocked.textContent).toContain('Trial runs are off for this project.');
+    expect(container.querySelectorAll('[data-trial-state]')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Start a trial run' })).toBeNull();
+    expect(screen.queryByLabelText('Ticket keys')).toBeNull();
+    expect(container.textContent).not.toContain('closed tickets your team delivered');
+    expect(container.textContent).not.toContain('could not be loaded');
+  });
+
+  it('shows a failed read as the error alone, never beside the notice or the form (S-25.7, F7)', async () => {
+    world.failBatches = true;
+    world.canStart = false;
+    render(createApp({ fetchImpl, realtime: false }).element);
+    // The app's client retries a failed read once (about a second), so the wait allows for it.
+    const failed = await screen.findByText('Trials could not be loaded.', {}, { timeout: 5_000 });
+    expect(failed).toBeTruthy();
+    expect(document.querySelectorAll('[data-trial-state]')).toHaveLength(1);
+    expect(document.querySelector('[data-trial-state="error"]')).not.toBeNull();
+    expect(screen.queryByText('A trial cannot start yet')).toBeNull();
+    expect(screen.queryByLabelText('Ticket keys')).toBeNull();
   });
 
   it('offers the button when the project may start one — the other direction', async () => {
@@ -301,8 +342,9 @@ describe('the Shadow screen', () => {
     });
     // Still disabled until something is typed, which is a different reason and is the one the
     // screen should give a founder who has not chosen any tickets.
-    const button = screen.getByRole('button', { name: 'Start a shadow batch' });
+    const button = screen.getByRole('button', { name: 'Start a trial run' });
     expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(container.querySelector('[data-trial-state="blocked"]')).toBeNull();
   });
 
   it('renders a refused ticket’s reason as text, and prints "not run" for its similarity', async () => {

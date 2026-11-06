@@ -13,23 +13,29 @@
  * 4. a project discovery has not evaluated is told so rather than given an invented criterion;
  * 5. the client's tables are the domain's ladder and criteria.
  */
-import { READINESS_CRITERION_IDS, READINESS_LEVEL_REQUIREMENTS } from '@platform/domain';
+import {
+  READINESS_CRITERIA,
+  READINESS_CRITERION_IDS,
+  READINESS_LEVEL_REQUIREMENTS,
+} from '@platform/domain';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import {
-  READINESS_HOW_TO,
   READINESS_LEVELS,
-  READINESS_RUNG_REQUIREMENTS,
-  READINESS_UNLOCKS,
   readinessBadgeWord,
   readinessLadderName,
   readinessNameAndWord,
   readinessSummary,
   readinessTone,
 } from './readiness-label.js';
+import {
+  READINESS_HOW_TO,
+  READINESS_LEVEL_MEANINGS,
+  READINESS_RUNG_REQUIREMENTS,
+} from './readiness-popover.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 
@@ -66,8 +72,12 @@ const json = (body: unknown, status = 200): Response =>
 /** The first missing criterion of the next rung, as `nextReadinessImprovements` would name it. */
 const FIRST_MISSING: Readonly<Record<number, string>> = { 0: 'R3', 1: 'R9', 2: 'R8', 3: 'R11' };
 
-/** The read's `unlocks` is the domain's text, which carries spec references (R9's names BD-007). */
-const DOMAIN_UNLOCKS = 'Human merge guarantee (BD-007); Investigation stage has evidence';
+/**
+ * What the read says a criterion unlocks: the domain's own plain words (S-25.5, BACKLOG 1241), which
+ * the popover renders as they arrive since S-25.7 (1260) rather than from a client copy.
+ */
+const unlocksOf = (id: string): string =>
+  READINESS_CRITERIA.find((criterion) => criterion.id === id)?.unlocks ?? '';
 
 /** What a person must never be shown: a decision, slice or question id, or a spec page (F18). */
 const SPEC_REFERENCE = /\b(?:BD|TD|WP|Q)-?\d+\b|product\/\d+|technical\/\d+/;
@@ -95,7 +105,7 @@ const fetchFor = (level: number, readiness: 'evaluated' | 'not_evaluated' = 'eva
         next_improvements:
           missing === undefined
             ? []
-            : [{ id: missing, title: 'the criterion', unlocks: DOMAIN_UNLOCKS }],
+            : [{ id: missing, title: 'the criterion', unlocks: unlocksOf(missing) }],
       });
     }
     if (url.endsWith('/api/projects')) return json({ items: [projectRow(level)] });
@@ -149,7 +159,7 @@ describe('the readiness badge, per level', () => {
 
       await userEvent.setup().click(trigger);
       const popover = await screen.findByRole('dialog', { name: ladder });
-      const meaning = READINESS_LEVELS[level]?.meaning;
+      const meaning = READINESS_LEVEL_MEANINGS[level];
       if (meaning !== undefined) {
         expect(popover.textContent).toContain(meaning);
       } else {
@@ -164,8 +174,9 @@ describe('the readiness badge, per level', () => {
           expect(popover.querySelector(`[data-readiness-missing="${missing}"]`)).not.toBeNull();
         });
         expect(popover.textContent).toContain(READINESS_HOW_TO[missing] ?? '∅');
-        expect(popover.textContent).toContain(`It unlocks: ${READINESS_UNLOCKS[missing] ?? '∅'}`);
-        expect(popover.textContent).not.toContain(DOMAIN_UNLOCKS);
+        // The read's own words, as they arrived — never a second copy that could drift from them.
+        expect(unlocksOf(missing)).not.toBe('');
+        expect(popover.textContent).toContain(`It unlocks: ${unlocksOf(missing)}`);
         expect(readinessReads).toBe(1);
       } else if (level === 4) {
         expect(popover.textContent).toContain('the top of the readiness ladder');
@@ -180,20 +191,50 @@ describe('the readiness badge, per level', () => {
 });
 
 describe('the readiness popover', () => {
+  it('is a lazy chunk: the badge is a plain button until it is pressed, and the swap keeps the focus (S-25.6)', async () => {
+    const user = userEvent.setup();
+    render(createApp({ fetchImpl: fetchFor(0), realtime: false }).element);
+    const plain = await badge('Plans need your OK');
+    // The popover trigger's own attributes, before its module has arrived.
+    expect(plain.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(plain.getAttribute('aria-expanded')).toBe('false');
+    // Hover and focus only fetch the chunk ahead: the element under the pointer stays the same, so
+    // a press on its way is not lost to a swap (CI on #83).
+    await user.hover(plain);
+    plain.focus();
+    await new Promise((settle) => setTimeout(settle, 50));
+    expect(screen.getByRole('button', { name: 'Readiness: Plans need your OK' })).toBe(plain);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(readinessReads).toBe(0);
+    // A press swaps it: the popover's trigger — a new element, the same id and name — opens at once.
+    await user.keyboard('{Enter}');
+    expect(await screen.findByRole('dialog', { name: 'Level 0 · Unverified' })).toBeTruthy();
+    const swapped = screen.getByRole('button', { name: 'Readiness: Plans need your OK' });
+    expect(swapped).not.toBe(plain);
+    expect(swapped.id).toBe(plain.id);
+    // …and the focus comes back to it, not to the body, when the popover closes.
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(document.activeElement).toBe(swapped);
+  });
+
   it('opens from the keyboard and gives the focus back on Escape', async () => {
     const user = userEvent.setup();
     render(createApp({ fetchImpl: fetchFor(0), realtime: false }).element);
-    const trigger = await badge('Plans need your OK');
-    trigger.focus();
+    (await badge('Plans need your OK')).focus();
     await user.keyboard('{Enter}');
     const popover = await screen.findByRole('dialog', { name: 'Level 0 · Unverified' });
+    // Re-read: the first press may have arrived before the chunk, whose trigger replaced the button.
+    const trigger = await badge('Plans need your OK');
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     expect(popover.textContent).toContain('It needs: Tests run green, CI runs on merge requests.');
     await user.keyboard('{Escape}');
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Level 0 · Unverified' })).toBeNull();
     });
-    expect(document.activeElement).toBe(trigger);
+    expect(document.activeElement).toBe(await badge('Plans need your OK'));
     // And Space, a button's other key.
     await user.keyboard(' ');
     expect(await screen.findByRole('dialog', { name: 'Level 0 · Unverified' })).toBeTruthy();
@@ -225,17 +266,20 @@ describe('the client’s readiness tables', () => {
   it('are the domain’s ladder and its criteria', () => {
     expect(READINESS_RUNG_REQUIREMENTS).toEqual(READINESS_LEVEL_REQUIREMENTS);
     expect(READINESS_LEVELS).toHaveLength(READINESS_LEVEL_REQUIREMENTS.length + 1);
+    expect(READINESS_LEVEL_MEANINGS).toHaveLength(READINESS_LEVELS.length);
     expect(Object.keys(READINESS_HOW_TO)).toEqual([...READINESS_CRITERION_IDS]);
-    expect(Object.keys(READINESS_UNLOCKS)).toEqual([...READINESS_CRITERION_IDS]);
     for (const id of READINESS_CRITERION_IDS) {
       expect(READINESS_HOW_TO[id], id).toMatch(/^[A-Z].*\.$/);
-      expect(READINESS_UNLOCKS[id], id).toMatch(/^[A-Z].*\.$/);
-      for (const text of [READINESS_HOW_TO[id], READINESS_UNLOCKS[id]]) {
+      // The popover renders the domain's `unlocks` as it is: a sentence, with no spec reference.
+      expect(unlocksOf(id), id).toMatch(/^[A-Z].*\.$/);
+      for (const text of [READINESS_HOW_TO[id], unlocksOf(id)]) {
         expect(text, id).not.toMatch(SPEC_REFERENCE);
       }
     }
-    for (const level of READINESS_LEVELS) {
-      expect(level.meaning).not.toMatch(SPEC_REFERENCE);
+    for (const meaning of READINESS_LEVEL_MEANINGS) {
+      expect(meaning).not.toMatch(SPEC_REFERENCE);
+      // product/19 §11's 2026-11-06 wording: *extra checks on the first N tasks*, never "probation".
+      expect(meaning).not.toMatch(/probation/i);
     }
   });
 });

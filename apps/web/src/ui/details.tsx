@@ -30,6 +30,6 @@ export const DetailsDisclosure = ({
       </span>
       {summary}
     </summary>
-    <div className="mt-2 rounded-md border border-line bg-inset p-3">{children}</div>
+    <div className="mt-2 rounded-md border border-line bg-default p-3">{children}</div>
   </details>
 );

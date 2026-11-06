@@ -1,16 +1,20 @@
 /**
  * The statistics screen's formatting, one rule at a time (S-23.19): a value per unit, `null` as no
- * value, the observation count pluralised, the sections, and the sparkline's geometry and words.
+ * value, what the samples count, each metric's reading, the range's dates, the sections, and the
+ * sparkline's geometry and words.
  */
 import type { StatBucket, StatMetricId, StatUnit } from '@platform/contracts';
 import { statMetricIdSchema, statUnitSchema } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import {
-  formatObservations,
+  formatCivilDate,
+  formatSamples,
   formatStatValue,
   groupIntoSections,
+  STAT_READING,
   STAT_SECTIONS,
   sparklineSegments,
+  statReadingWords,
   trendSummary,
 } from './statistics-format.js';
 
@@ -55,14 +59,66 @@ describe('formatStatValue', () => {
   });
 });
 
-describe('formatObservations', () => {
-  it.each([
-    [0, 'No observations in this range'],
-    [1, '1 observation'],
-    [2, '2 observations'],
-    [1200, '1,200 observations'],
-  ])('prints %d as %s', (samples, printed) => {
-    expect(formatObservations(samples)).toBe(printed);
+describe('formatSamples (S-25.7, research/21 F15)', () => {
+  it.each<[StatMetricId, number, string]>([
+    ['tasks_started', 0, 'Nothing measured in this range'],
+    ['tasks_started', 1, 'From 1 task'],
+    ['merge_rate', 3, 'From 3 tasks'],
+    ['returns_per_delivered_task', 1200, 'From 1,200 delivered tasks'],
+    ['question_response_minutes', 2, 'From 2 answered questions'],
+    ['cost_total', 1, 'From 1 day with spend'],
+    // A metric whose samples are not a named thing says so plainly.
+    ['concurrent_task_overlaps', 4, 'From 4 data points'],
+  ])('says %s with %d samples as %s', (id, samples, printed) => {
+    expect(formatSamples(id, samples)).toBe(printed);
+  });
+
+  it('never says "observation", for any metric of the contract', () => {
+    for (const id of statMetricIdSchema.options) {
+      for (const samples of [0, 1, 2]) {
+        expect(formatSamples(id, samples), id).not.toMatch(/observation/i);
+      }
+    }
+  });
+});
+
+describe('the reading direction (S-25.7, research/21 F15)', () => {
+  it('gives every metric of the contract a reading, and says it in words', () => {
+    // Parameterised over the enum (rule 68): the `Record` type fails a new id at the typecheck,
+    // and this fails one that slipped past it at run time.
+    expect(Object.keys(STAT_READING).sort()).toEqual([...statMetricIdSchema.options].sort());
+    expect(statReadingWords('returns_per_delivered_task')).toBe('Lower is better');
+    expect(statReadingWords('merge_rate')).toBe('Higher is better');
+    expect(statReadingWords('cost_total')).toBe('A volume, not a score');
+  });
+
+  it('reads a count and a total as volumes, and an average per delivered task as a score (review of #86)', () => {
+    // More conflicts resolved also means more conflicts; a total cost is how much, like `cost_total`.
+    expect(STAT_READING.rebase_conflicts_resolved).toBeNull();
+    expect(STAT_READING.total_cost_of_delivery).toBeNull();
+    expect(STAT_READING.cost_total).toBeNull();
+    // Agent time is an average per delivered task: less for the same delivery is better.
+    expect(STAT_READING.agent_time_hours).toBe('lower');
+  });
+
+  it('reads a cost, a time and a rate of trouble as lower-is-better', () => {
+    for (const id of [
+      'cost_per_delivered_task',
+      'cycle_time_hours',
+      'human_intervention_rate',
+      'estimate_accuracy',
+    ] as const) {
+      expect(STAT_READING[id], id).toBe('lower');
+    }
+  });
+});
+
+describe('formatCivilDate', () => {
+  it('writes a civil date as the other screens write a date, in no reader’s zone', () => {
+    expect(formatCivilDate('2026-09-10')).toBe('Sep 10, 2026');
+    // The last day of a month stays on it: read and written in UTC, never shifted a day.
+    expect(formatCivilDate('2026-09-30')).toBe('Sep 30, 2026');
+    expect(formatCivilDate('not a date')).toBe('not a date');
   });
 });
 

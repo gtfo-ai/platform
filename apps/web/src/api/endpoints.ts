@@ -34,6 +34,7 @@ import {
   askTaskRequestSchema,
   askTaskResponseSchema,
   autonomyResponseSchema,
+  type BudgetWindow,
   budgetsResponseSchema,
   businessInterviewRequestSchema,
   businessInterviewResponseSchema,
@@ -83,6 +84,7 @@ import {
   projectPipelinesResponseSchema,
   projectRecordSchema,
   projectRepositoryResponseSchema,
+  projectSpendResponseSchema,
   projectsResponseSchema,
   putBudgetsRequestSchema,
   putProjectBindingsRequestSchema,
@@ -258,6 +260,11 @@ export interface Endpoints {
     projectId: string,
   ) => Promise<z.output<typeof rediscoveryGateResponseSchema>>;
   readonly projectBudgets: (projectId: string) => Promise<z.output<typeof budgetsResponseSchema>>;
+  /** `GET …/spend` (S-25.7): one budget window's booked cost per stage and its top tasks. */
+  readonly projectSpend: (
+    projectId: string,
+    window: BudgetWindow,
+  ) => Promise<z.output<typeof projectSpendResponseSchema>>;
   readonly orgBudgets: () => Promise<z.output<typeof budgetsResponseSchema>>;
   /** `GET /api/org` — the organisation settings document (WP-93). */
   readonly orgSettings: () => Promise<z.output<typeof orgSettingsResponseSchema>>;
@@ -730,6 +737,11 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       }),
     projectBudgets: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/budgets`, { schema: budgetsResponseSchema }),
+    projectSpend: (projectId, window) =>
+      client.get(`/api/projects/${seg(projectId)}/spend`, {
+        schema: projectSpendResponseSchema,
+        query: { window },
+      }),
     orgBudgets: () => client.get('/api/org/budgets', { schema: budgetsResponseSchema }),
     orgSettings: () => client.get('/api/org', { schema: orgSettingsResponseSchema }),
     projectAutonomy: (projectId) =>

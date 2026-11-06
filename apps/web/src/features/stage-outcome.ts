@@ -29,9 +29,9 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
     case 'escalated':
       return 'Handed to a person: it needs you.';
     case 'undecided':
-      return 'Needs you: the gate could not decide in its allotted checks.';
+      return 'Needs you: the check could not decide in the tries it is allowed.';
     case 'unsupported':
-      return 'Needs you: the project’s integrations cannot answer this gate.';
+      return 'Needs you: the project’s connections cannot answer this check.';
     case 'converged':
       return 'Needs you: the same failure repeated, so another round would not help.';
     case 'question.expired':
@@ -43,7 +43,7 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
     case 'plan.rejected':
       return 'Sent back: a maintainer rejected the plan, and the next attempt is given the reason.';
     case 'take_over.expired':
-      return 'Needs you: the take-over saw no activity for five working days.';
+      return 'Needs you: the person working on it showed no activity for five working days.';
     case 'write_conflict':
       return 'Needs you: the platform’s write lost every retry against another writer.';
     case 'dead_lettered':
@@ -59,13 +59,13 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
     case 'context_budget_above_ceiling':
       return 'Needs you: the project’s context budget is above this release’s ceiling.';
     case 'protected_paths_changed':
-      return 'Sent the task back: the change touches protected paths the plan did not declare or the code review did not confirm.';
+      return 'Sent the task back: the change touches protected files the plan did not declare or the code review did not confirm.';
     case 'protected_paths_awaiting_review':
-      return 'Passed; the protected paths the plan declared await the code review, whose confirmation the rebase gate checks before Ready.';
+      return 'Passed; the protected files the plan declared wait for the code review to confirm them, which is checked before Ready.';
     case 'protected_paths_clean':
-      return 'The tamper check found no protected path the change may not touch; the pipeline decided the gate.';
+      return 'No protected file was touched that the change may not touch; the CI pipeline decided the check.';
     case 'protected_paths_confirmed':
-      return 'Passed; the code review confirmed every protected path the plan declared.';
+      return 'Passed; the code review confirmed every protected file the plan declared.';
     case 'unknown':
       return 'Finished without a verdict.';
     case 'unrecognised':

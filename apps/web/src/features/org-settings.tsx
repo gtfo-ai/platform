@@ -7,7 +7,8 @@
  *    - the **command maximum** (BD-025 §2) — every run's command policy is intersected with it;
  *    - the **autonomy maximum** — the highest dial position a project may select; a project already
  *      above a lowered maximum runs at it from the next read, and a task keeps the dial it froze;
- *    - the **WIP maximum** — a project's `pipeline.wip` may state less, never more;
+ *    - the **parallel tasks maximum** (*WIP maximum* until S-25.6) — a project's `pipeline.wip` may
+ *      state less, never more;
  *  - **Notifications** — the organisation's quiet hours, digest time and **default chat account**
  *    (Q103 (c)).
  *
@@ -28,6 +29,7 @@ import { useBindableIntegrations, useOrgSettings, useSettingsCommands } from '..
 import { Button } from '../ui/button.js';
 import { AUTONOMY_LEVEL_LABEL } from '../ui/humanize.js';
 import { ErrorNotice, Field, formatDateTime, Loading } from '../ui/kit.js';
+import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 
 const LEVELS = ['observe', 'assist', 'supervised', 'autonomous'] as const;
@@ -275,9 +277,8 @@ const PolicyForm = ({
         </p>
         <label className="flex w-fit flex-col gap-1 text-sm">
           Maximum
-          <select
+          <Select
             aria-label="Organisation autonomy maximum"
-            className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
             value={drafts.maximum}
             onChange={(event) => setDrafts({ ...drafts, maximum: event.target.value })}
           >
@@ -287,12 +288,12 @@ const PolicyForm = ({
                 {AUTONOMY_LEVEL_LABEL[level]}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="font-semibold">WIP maximum</legend>
+        <legend className="font-semibold">Parallel tasks maximum</legend>
         <div className="flex flex-wrap items-end gap-2">
           <Field
             label="Parallel tasks"
@@ -433,9 +434,8 @@ const NotificationForm = ({
       </div>
       <label className="flex w-fit flex-col gap-1 text-sm">
         Default chat account
-        <select
+        <Select
           aria-label="Organisation default chat account"
-          className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
           value={drafts.defaultAccount}
           onChange={(event) => setDrafts({ ...drafts, defaultAccount: event.target.value })}
         >
@@ -445,7 +445,7 @@ const NotificationForm = ({
               {account.name}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
       {drafts.defaultAccount === '' ? null : (
         <p className="text-xs text-fg-muted">

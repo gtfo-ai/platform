@@ -28,9 +28,20 @@ const MODES: readonly { readonly mode: Mode; readonly label: string; readonly hi
   {
     mode: 'ci',
     label: 'CI runs the checks',
-    hint: 'No agent runs the test suite, static analysis, builds or dependency installs: those commands are blocked and every agent with a shell is told the CI gate runs them on the merge request. Discovery reads R1, R2 and R6 from the CI configuration instead of running them.',
+    hint: 'No agent runs the test suite, static analysis, builds or dependency installs: those commands are blocked and every agent with a shell is told the CI pipeline runs them on the merge request. Discovery reads whether the tests pass, how fast they are and whether setup is one command from the CI configuration instead of running them.',
   },
 ];
+
+/** Who runs the checks, as the legend says it (S-25.5: never the key's own value). */
+const RUN_BY: Readonly<Record<Mode, string>> = { local: 'agents', ci: 'CI' };
+
+/** Which layer set the mode (`config.sources`), in the screen's words. */
+const SET_BY: Readonly<Record<string, string>> = {
+  default: 'the platform default',
+  org: 'the organisation',
+  project: 'these settings',
+  repo: 'the repository’s settings file',
+};
 
 const modeOf = (value: unknown): Mode | undefined =>
   value === 'local' || value === 'ci' ? value : undefined;
@@ -72,8 +83,9 @@ export const VerificationMode = ({ projectId }: { readonly projectId: string }):
         <legend className="text-xs text-fg-muted">
           {effective === undefined ? null : (
             <>
-              In force: <strong data-testid="verification-mode-effective">{effective}</strong> (
-              {source}) —{' '}
+              Checks run by:{' '}
+              <strong data-testid="verification-mode-effective">{RUN_BY[effective]}</strong> (set by{' '}
+              {SET_BY[source] ?? source}) —{' '}
             </>
           )}
           set here or in the repository’s settings file. The repository file may move a project to
@@ -99,7 +111,7 @@ export const VerificationMode = ({ projectId }: { readonly projectId: string }):
       <ForAdministrators note="verification_mode" />
       {effective === 'ci' && source === 'repo' ? (
         <p className="text-xs text-fg-muted">
-          The repository’s settings file sets CI; choosing local here is not applied while it does.
+          The repository’s settings file sets CI; choosing agents here is not applied while it does.
         </p>
       ) : null}
       {commands.writeConfig.isError ? (

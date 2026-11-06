@@ -25,8 +25,10 @@
  * Eight cramped columns in one strip became **sections with headings** — Throughput, Quality,
  * Cost, Time, then the rest of the catalogue (`STAT_SECTIONS`) — each a grid of compact cards, four
  * per row at 1280 px and up, two on a tablet, one on a phone. A card is the value large, its label
- * (the tooltip trigger), one muted *"n observations"* line and, when the buckets carry at least two
- * values, a sparkline with the same facts as text for a screen reader.
+ * (the tooltip trigger), its reading — *"Lower is better"* (S-25.7, research/21 F15) — one muted
+ * *"From 12 delivered tasks"* line saying what the figure counts and, when the buckets carry at
+ * least two values, a sparkline with the same facts as text for a screen reader. The range is
+ * written as every other screen writes a date (*"Sep 10, 2026"*).
  *
  * ## Everything here is platform text, and it is still rendered as text
  *
@@ -46,16 +48,19 @@ import { stageLabel } from '../ui/humanize.js';
 import { ErrorNotice, formatInteger, Metric } from '../ui/kit.js';
 import { ListBox, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
+import { Select } from '../ui/select.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { Sparkline } from '../ui/sparkline.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import {
-  formatObservations,
+  formatCivilDate,
+  formatSamples,
   formatStatValue,
   groupIntoSections,
   SPARK_HEIGHT,
   SPARK_WIDTH,
   sparklineSegments,
+  statReadingWords,
   trendSummary,
 } from './statistics-format.js';
 
@@ -74,8 +79,6 @@ const BUCKET_LABEL: Readonly<Record<(typeof BUCKETS)[number], string>> = {
   week: 'By week',
   month: 'By month',
 };
-
-const SELECT_CLASS = 'rounded-md border border-line-input bg-inset px-2 py-1 text-sm';
 
 /**
  * One metric card: the value large, the label with its definition, one muted line, a sparkline.
@@ -113,8 +116,12 @@ const MetricCard = ({
         }
         definition={metric.definition}
       />
+      {/* Which way is good (research/21 F15), then what the figure is from. */}
+      <span className="text-xs text-fg-muted" data-metric-reading="">
+        {statReadingWords(metric.id)}
+      </span>
       <span className="text-xs text-fg-muted">
-        {formatted === null ? 'No data in this range' : formatObservations(metric.samples)}
+        {formatted === null ? 'No data in this range' : formatSamples(metric.id, metric.samples)}
       </span>
       {segments === null || summary === null ? null : (
         <Sparkline
@@ -187,7 +194,8 @@ export const StatisticsScreen = (): ReactElement => {
         title="Statistics"
         meta={
           <span>
-            {stats.data.range.from} to {stats.data.range.to} · {stats.data.range.timezone}
+            {formatCivilDate(stats.data.range.from)} to {formatCivilDate(stats.data.range.to)} ·{' '}
+            {stats.data.range.timezone}
             {stats.data.range.timezone_substituted
               ? ' (the organisation’s timezone setting is not a zone this server can use; days are cut in UTC)'
               : ''}
@@ -195,8 +203,7 @@ export const StatisticsScreen = (): ReactElement => {
         }
         actions={
           <>
-            <select
-              className={SELECT_CLASS}
+            <Select
               value={range}
               onChange={(event) => setRange(event.target.value as (typeof RANGES)[number])}
               aria-label="Range"
@@ -206,9 +213,8 @@ export const StatisticsScreen = (): ReactElement => {
                   {RANGE_LABEL[option]}
                 </option>
               ))}
-            </select>
-            <select
-              className={SELECT_CLASS}
+            </Select>
+            <Select
               value={bucket}
               onChange={(event) => setBucket(event.target.value as (typeof BUCKETS)[number])}
               aria-label="Granularity"
@@ -218,7 +224,7 @@ export const StatisticsScreen = (): ReactElement => {
                   {BUCKET_LABEL[option]}
                 </option>
               ))}
-            </select>
+            </Select>
             <ExternalLink
               url={`${window.location.origin}${csvPath}`}
               label="Download CSV"

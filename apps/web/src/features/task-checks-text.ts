@@ -60,7 +60,7 @@ export const estimateBasisText = (task: TaskRecord): string => {
  */
 export const humanTimeBreakdown = (humanTime: HumanTimeSummary): string => {
   if (humanTime.entries === 0) {
-    return 'No human activity recorded on this task yet — no review comment, question, approval or steer.';
+    return 'No human activity recorded on this task yet — no review comment, question, approval or message to an agent.';
   }
   const parts = HUMAN_TIME_KIND_LABELS.flatMap(([kind, label]) => {
     const minutes = humanTime.by_kind[kind] ?? 0;
@@ -120,7 +120,8 @@ export const coverageValueText = (coverage: TaskCoverage | null): string => {
   }
   // `toFixed` carries its own minus sign; the plus is the one that has to be added, and a delta
   // without a sign is the thing a maintainer cannot read at a glance.
-  return `${coverage.delta_pct > 0 ? '+' : ''}${coverage.delta_pct.toFixed(1)} pp`;
+  // S-25.5: *points*, spelled out — "pp" is a statistician's abbreviation (research/21 § 4).
+  return `${coverage.delta_pct > 0 ? '+' : ''}${coverage.delta_pct.toFixed(1)} points`;
 };
 
 /**
@@ -291,23 +292,23 @@ export const reviewersValueText = (reviewers: TaskReviewers | null): string => {
 /** Who, by name — untrusted handles out of `CODEOWNERS` or the project's configuration. */
 export const reviewersBasisText = (reviewers: TaskReviewers | null): string => {
   if (reviewers === null) {
-    return 'The rebase gate has not routed this merge request yet.';
+    return 'Reviewers are chosen at the up-to-date check, which this merge request has not reached yet.';
   }
   const source =
     reviewers.source === 'codeowners'
-      ? 'CODEOWNERS on the default branch'
+      ? 'the code owners file on the default branch'
       : reviewers.source === 'project_config'
         ? 'the project’s reviewers setting'
         : reviewers.source === 'requester'
-          ? 'the human who asked for the task'
+          ? 'the person who asked for the task'
           : 'nothing';
   if (reviewers.handles.length === 0) {
-    return `No CODEOWNERS match, no project reviewers and no mapped requester, so this merge request was assigned to nobody.`;
+    return `No code owner matches, the project names no reviewers and the person who asked has no account here, so this merge request was assigned to nobody.`;
   }
   const unresolved =
     reviewers.unresolved.length === 0
       ? ''
-      : ` No account on this provider for ${reviewers.unresolved.join(', ')}, so nobody was assigned for them.`;
+      : ` No account on the git host for ${reviewers.unresolved.join(', ')}, so nobody was assigned for them.`;
   const truncated = reviewers.truncated
     ? ' More were routed than one merge request may carry.'
     : '';
@@ -367,12 +368,12 @@ export const gateValueText = (
       // rebase item does not call that a conflict. PROGRESS backlog 483: a person who sends a task
       // back out of an escalation closes the parked attempt `escalated` — the gate did not fail.
       return row.outcome === 'protected_paths_changed'
-        ? 'sent back by the tamper check'
+        ? 'sent back: protected files changed'
         : row.outcome === 'escalated'
-          ? 'escalated, then sent back by a person'
+          ? 'needed you, then sent back by a person'
           : `${words.fail}, sent back`;
     case 'failed':
-      return `escalated${row.outcome === null ? '' : ` (${row.outcome})`}`;
+      return needsYouText(row.outcome);
     default:
       return row.state;
   }
@@ -410,19 +411,35 @@ export const tamperValueText = (ci: StageRow | null, rebase: StageRow | null = n
   }
   switch (ci.outcome) {
     case 'protected_paths_changed':
-      return 'protected paths changed, sent back';
+      return 'changed, sent back';
     case 'protected_paths_awaiting_review':
       return settledConfirmationText(ci, rebase);
     case 'protected_paths_clean':
-      return 'clean';
+      // Not *untouched*: `judgeTamper` is also clean when protected files did change and every
+      // change was declared and confirmed by the review (review of PR #84).
+      return 'no unapproved changes';
     case 'pass':
       return TAMPER_NOT_RECORDED;
     default:
-      return ci.state === 'returned'
-        ? TAMPER_NOT_RECORDED
-        : `not decided${ci.outcome === null ? '' : ` (${ci.outcome})`}`;
+      return ci.state === 'returned' ? TAMPER_NOT_RECORDED : needsYouText(ci.outcome);
   }
 };
+
+/**
+ * Why a check stopped and waits for a person, in words (S-25.5, research/21 § 4): the outcome its
+ * row was closed with — `undecided`, `unsupported`, `converged` — is the platform's word, never
+ * printed raw; any other is the bare *needs you*, and the timeline's line says the rest.
+ */
+const NEEDS_YOU_WORDS: Readonly<Record<string, string>> = {
+  undecided: 'needs you: it could not decide',
+  unsupported: 'needs you: it cannot be checked here',
+  converged: 'needs you: the same failure repeated',
+};
+
+const needsYouText = (outcome: StageRow['outcome']): string =>
+  outcome !== null && Object.hasOwn(NEEDS_YOU_WORDS, outcome)
+    ? (NEEDS_YOU_WORDS[outcome] as string)
+    : 'needs you';
 
 /**
  * A CI row closed `pass` or `returned` with no tamper word. Two writers leave one: a gate that
@@ -571,7 +588,7 @@ const HUMAN_TIME_KIND_LABELS: readonly (readonly [HumanTimeKind, string])[] = [
   ['review', 'review'],
   ['question', 'questions'],
   ['approval', 'approvals'],
-  ['steer', 'steers'],
+  ['steer', 'messages to agents'],
 ];
 
 // ── The merge box's statuses (S-23.9b) ───────────────────────────────────────

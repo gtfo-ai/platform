@@ -198,7 +198,7 @@ describe('the outage brief', () => {
         "Check that gitlab.com is reachable from the platform's host (and its status page), then hand the task back at ci_gate.",
     );
     expect(gateOutageReason(facts(), { kind: 'timed_out' })).toBe(
-      'the "ci_gate" gate could not be decided: gitlab.com did not answer for 60 minutes: unavailable (14 failed reads); it stopped at the CI timeout of 60 minutes from the gate\'s entry (`pipeline.limits.ci_timeout_minutes = 60`) (PROGRESS backlog 490)',
+      'the "ci_gate" gate could not be decided: gitlab.com did not answer for 60 minutes: unavailable (14 failed reads); it stopped at the CI timeout of 60 minutes from the gate\'s entry (`pipeline.limits.ci_timeout_minutes = 60`)',
     );
   });
 

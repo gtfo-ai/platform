@@ -329,7 +329,7 @@ describe('the run page’s header', () => {
     });
     open(LIVE, detail(), MESSAGES, projects);
     const box = (await screen.findByRole('textbox', {
-      name: 'Steer the agent',
+      name: 'Message the agent',
     })) as HTMLInputElement;
     // While the projects read is out, neither row is drawn: no organisation row to take back.
     expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
@@ -339,7 +339,7 @@ describe('the run page’s header', () => {
     release([PROJECT_ROW]);
     await screen.findByRole('navigation', { name: 'Project' });
     // The same element, with what was typed in it: the screen was not remounted.
-    const after = screen.getByRole('textbox', { name: 'Steer the agent' }) as HTMLInputElement;
+    const after = screen.getByRole('textbox', { name: 'Message the agent' }) as HTMLInputElement;
     expect(after).toBe(box);
     expect(after.value).toBe('also check the rounding');
     expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
@@ -352,7 +352,7 @@ describe('the run page’s header', () => {
     expect(screen.getByRole('navigation', { name: 'Primary' })).toBeTruthy();
   });
 
-  it('keeps Take over… and Download transcript in the run actions menu', async () => {
+  it('keeps Work on it yourself… and Download transcript in the run actions menu', async () => {
     const user = userEvent.setup();
     open();
     await user.click(await screen.findByRole('button', { name: 'Run actions' }));
@@ -361,8 +361,8 @@ describe('the run page’s header', () => {
     expect(new URL(download.getAttribute('href') ?? '').pathname).toBe(
       `/api/runs/${IMPL_2}/transcript.jsonl`,
     );
-    await user.click(menu.getByRole('menuitem', { name: 'Take over…' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Take over this task' });
+    await user.click(menu.getByRole('menuitem', { name: 'Work on it yourself…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Work on this task yourself' });
     expect(within(dialog).getByRole('form', { name: `Take task ${TASK} over` })).toBeTruthy();
   });
 
@@ -373,7 +373,7 @@ describe('the run page’s header', () => {
     await user.click(await screen.findByRole('button', { name: 'Run actions' }));
     const menu = within(await screen.findByRole('menu'));
     expect(menu.getByRole('menuitem', { name: 'Download transcript' })).toBeTruthy();
-    expect(menu.queryByRole('menuitem', { name: 'Take over…' })).toBeNull();
+    expect(menu.queryByRole('menuitem', { name: 'Work on it yourself…' })).toBeNull();
   });
 });
 
@@ -578,7 +578,7 @@ describe('the summary strip and what the agent is doing now', () => {
     await screen.findByTestId('transcript-scroller');
     expect(view.container.querySelector('[data-run-now]')).toBeNull();
     expect(screen.queryByRole('list', { name: 'Live activity' })).toBeNull();
-    expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Message the agent' })).toBeNull();
   });
 });
 
@@ -589,7 +589,7 @@ describe('the summary strip and what the agent is doing now', () => {
 describe('one primary action at most', () => {
   it('draws none on a live run — Cancel run is its one coloured action — and no Re-run', async () => {
     open();
-    await screen.findByRole('textbox', { name: 'Steer the agent' });
+    await screen.findByRole('textbox', { name: 'Message the agent' });
     // The toggle says its state with `aria-pressed`, not with the beacon's colour.
     expect(screen.getByRole('button', { name: /^Follow/ }).hasAttribute('aria-pressed')).toBe(true);
     expect(primaryLabels()).toEqual([]);
@@ -605,7 +605,7 @@ describe('one primary action at most', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-project-frame]')).not.toBeNull();
     });
-    await screen.findByRole('textbox', { name: 'Steer the agent' });
+    await screen.findByRole('textbox', { name: 'Message the agent' });
     expect(primaryLabels()).toEqual([]);
   });
 
@@ -635,7 +635,7 @@ describe('the transcript as log steps', () => {
       'I will add the rate table first.',
     );
     // The steer box sits under the log while the run is live.
-    expect(screen.getByRole('textbox', { name: 'Steer the agent' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeTruthy();
   });
 
   it('offers no steer box to a run still waiting for a seat, which the server would refuse', async () => {
@@ -643,7 +643,7 @@ describe('the transcript as log steps', () => {
     const view = open(created, detail(), []);
     expect(await screen.findByRole('button', { name: 'Cancel run' })).toBeTruthy();
     await screen.findByTestId('transcript-scroller');
-    expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Message the agent' })).toBeNull();
     // S-25.4: only a run nobody has taken yet is "waiting to be picked up".
     expect(view.container.querySelector('[data-run-summary]')?.textContent).toContain(
       'Runs onwaiting to be picked up',

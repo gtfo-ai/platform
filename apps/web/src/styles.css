@@ -104,6 +104,13 @@
   --running-fg: var(--brand-beacon);
   --running-bg: #3a2c26;
   --focus-ring: var(--brand-lavender);
+  /*
+   * A checked checkbox or radio (S-25.10): the brand's lavender, never the operating system's blue.
+   * Lavender rather than the beacon, because a checked box is a state and the beacon is "the thing
+   * to do" (TD-033 § 2; a toggle is never the primary, S-23.23). The browser picks the tick's own
+   * colour against it.
+   */
+  --accent-control: var(--brand-lavender);
   --shadow-overlay: 0 8px 24px rgb(8 6 24 / 0.55), 0 0 0 1px var(--border-default);
 
   /* Avatars: initials in night on a pastel of the lavender/amber family. */
@@ -254,6 +261,17 @@ body {
   select:not(:disabled),
   summary {
     cursor: pointer;
+  }
+}
+
+/*
+ * Checkboxes and radios take the brand accent (S-25.10, `--accent-control`), in the base layer so a
+ * utility still wins. A `<select>` is drawn by `ui/select.tsx` (its arrow an Octicon, no
+ * `background-image`, which `img-src 'self'` would refuse as a data URI).
+ */
+@layer base {
+  input:is([type="checkbox"], [type="radio"]) {
+    accent-color: var(--accent-control);
   }
 }
 

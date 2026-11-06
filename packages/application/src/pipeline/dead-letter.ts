@@ -118,7 +118,7 @@ export const createDeadLetterEscalation = (
           stream_type: record.event.event.stream_type,
           handler: record.handler,
         },
-        'an event was dead-lettered and names no task, so nothing was escalated; this one is an operator’s to read (WP-49)',
+        'an event was dead-lettered and names no task, so nothing was escalated; this one is an operator’s to read',
       );
       return;
     }
@@ -131,7 +131,7 @@ export const createDeadLetterEscalation = (
           task_id: taskId,
           handler: record.handler,
         },
-        'an event was dead-lettered and the task it names does not exist, so nothing was escalated (WP-49)',
+        'an event was dead-lettered and the task it names does not exist, so nothing was escalated',
       );
       return;
     }
@@ -143,7 +143,7 @@ export const createDeadLetterEscalation = (
           state: stored.task.state,
           handler: record.handler,
         },
-        'an event was dead-lettered and its task cannot be escalated from where it is; the dead letter stands (WP-49)',
+        'an event was dead-lettered and its task cannot be escalated from where it is; the dead letter stands',
       );
       return;
     }
@@ -170,7 +170,7 @@ export const createDeadLetterEscalation = (
         handler: record.handler,
         attempts: record.attempts,
       },
-      'an event was dead-lettered and its task was escalated to needs_human with a brief naming the event and the handler (WP-49)',
+      'an event was dead-lettered and its task was escalated to needs_human with a brief naming the event and the handler',
     );
   };
 };

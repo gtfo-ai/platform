@@ -97,7 +97,7 @@ const LIVE: readonly RunRecord['status'][] = ['created', 'starting', 'running'];
 const edgeId = (edge: PipelineGraphEdge, index: number): string =>
   `${edge.from}->${edge.to}:${edge.kind}:${edge.on_event ?? ''}:${index}`;
 
-/** "Review ≤3" for a template; "Review · used 1 of 3" for a task. */
+/** "Review rounds: up to 3" for a template; "Review rounds: 1 of 3 used" for a task (S-25.5). */
 export const loopPill = (
   loop: string | null,
   limit: number | null,
@@ -108,9 +108,9 @@ export const loopPill = (
   }
   const label = loopLabel(loop);
   if (used === null) {
-    return limit === null ? label : `${label} ≤${limit}`;
+    return limit === null ? label : `${label}: up to ${limit}`;
   }
-  return limit === null ? `${label} · used ${used}` : `${label} · used ${used} of ${limit}`;
+  return limit === null ? `${label}: ${used} used` : `${label}: ${used} of ${limit} used`;
 };
 
 const baseNode = (node: PipelineGraph['nodes'][number]) => ({

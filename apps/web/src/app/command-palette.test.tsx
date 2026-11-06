@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionResponse } from '../auth/session.js';
 import { createApp } from './app.js';
 import { filterPalette, MAX_RESULTS, type PaletteItem, paletteItems } from './command-palette.js';
-import { NAV } from './nav.js';
+import { PALETTE_SCREENS } from './nav.js';
 import { PROJECT_TABS } from './project-frame.js';
 
 const HOSTILE_NAME = 'Acme <img src=x onerror="window.__pwned=true"> shop';
@@ -178,8 +178,24 @@ describe('paletteItems', () => {
   it('offers every screen, project and cached task, and the actions the caller may take', () => {
     const items = paletteItems(CONTEXT);
     expect(items.filter((item) => item.group === 'Screen').map((item) => item.label)).toEqual(
-      NAV.map((entry) => entry.label),
+      PALETTE_SCREENS.map((entry) => entry.label),
     );
+    // S-25.6: the screens that left the top row are still a search away, at their own URLs.
+    expect(
+      items
+        .filter((item) => item.group === 'Screen')
+        .map((item) => (item.target.kind === 'screen' ? item.target.to : null)),
+    ).toEqual([
+      '/',
+      '/projects',
+      '/inbox',
+      '/agents',
+      '/stats',
+      '/settings',
+      '/integrations',
+      '/workers',
+      '/audit',
+    ]);
     expect(items.filter((item) => item.group === 'Project').map((item) => item.label)).toEqual([
       HOSTILE_NAME,
       'Billing',
