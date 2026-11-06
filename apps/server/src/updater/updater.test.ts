@@ -11,12 +11,19 @@ import { describe, expect, it } from 'vitest';
 import { asLoggerPort, createLogger } from '../logging.js';
 import { createCoreClient } from '../remote-worker/core-client.js';
 import { AttestationRefusedError, type AttestationVerifier } from './attestation.js';
-import type { UpdaterConfig } from './config.js';
+import { DEFAULT_UPDATE_POLL_SECONDS, loadUpdaterConfig, type UpdaterConfig } from './config.js';
 import type { DockerRun } from './docker.js';
 import { HEARTBEAT_EVERY_MS, HEARTBEAT_FILE, HEARTBEAT_STALE_AFTER_MS } from './heartbeat.js';
 import { PREVIOUS_TEMPLATE_FILE, readState, updatePlanSchema } from './plan.js';
 import { RegistryError } from './registry.js';
-import { applyContainerArgs, createUpdater, discoverSelf, mountSpec } from './updater.js';
+import {
+  applyContainerArgs,
+  createUpdater,
+  discoverSelf,
+  MAX_POLL_BACKOFF_MS,
+  mountSpec,
+  nextPollDelayMs,
+} from './updater.js';
 
 const CREDENTIAL = `wkr_${'a'.repeat(26)}_${'b'.repeat(43)}`;
 /** One build's four images: each set's digests are its own (a release rebuilds all four). */
@@ -87,7 +94,23 @@ const world = async (options: {
   readonly folderSource?: string;
   /** `false`: the updater has no `host-bundle` mount (a compose file from before S-22.21). */
   readonly folderMount?: boolean;
+  /** The configured poll interval (default 300 s, the value these tests were written against). */
+  readonly pollMs?: number;
+  /** The first `n` `GET release` calls answer 503 (a core in trouble). */
+  readonly releaseFailures?: number;
+  /** The first `docker image pull` fails (a registry that went away after the verification). */
+  readonly pullFailsOnce?: boolean;
+  /** `run()` is stopped once this many `GET release` calls were made. */
+  readonly stopAfterReleases?: number;
 }) => {
+  /**
+   * A virtual clock: `sleep` advances it, so `run()`'s loop is driven without waiting, and each
+   * `GET release` is stamped with the virtual milliseconds since the start.
+   */
+  const start = Date.parse('2026-11-05T12:00:00Z');
+  let clock = start;
+  const releaseAt: number[] = [];
+  let stopRun: (() => void) | null = null;
   const stateDir = await mkdtemp(path.join(tmpdir(), 'updater-state-'));
   const workerStateDir = await mkdtemp(path.join(tmpdir(), 'updater-worker-'));
   await writeFile(path.join(workerStateDir, 'credential'), options.credentialFile ?? CREDENTIAL);
@@ -114,6 +137,16 @@ const world = async (options: {
     if (authorization !== undefined) authorizations.push(authorization);
     if (url.endsWith('/api/worker/v1/release')) {
       events.push('release');
+      releaseAt.push(clock - start);
+      if (
+        options.stopAfterReleases !== undefined &&
+        releaseAt.length >= options.stopAfterReleases
+      ) {
+        stopRun?.();
+      }
+      if (releaseAt.length <= (options.releaseFailures ?? 0)) {
+        return new Response(null, { status: 503 });
+      }
       return Response.json({
         protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [WORKER_PROTOCOL_VERSION] },
         digests: options.advertised,
@@ -137,6 +170,7 @@ const world = async (options: {
     return new Response(null, { status: 404 });
   };
   const calls: (readonly string[])[] = [];
+  let pullFails = options.pullFailsOnce === true;
   const docker: DockerRun = async (args) => {
     calls.push(args);
     if (args[0] === 'container' && args[1] === 'inspect') {
@@ -171,7 +205,14 @@ const world = async (options: {
       };
       return { stdout: JSON.stringify([self]), stderr: '' };
     }
-    if (args[0] === 'image' && args[1] === 'pull') events.push(`pull ${args.at(-1)}`);
+    if (args[0] === 'image' && args[1] === 'pull') {
+      if (pullFails) {
+        pullFails = false;
+        events.push('pull failed');
+        throw new Error('the registry went away');
+      }
+      events.push(`pull ${args.at(-1)}`);
+    }
     if (args[0] === 'container' && args[1] === 'create') {
       events.push('create apply');
       return { stdout: 'apply-1\n', stderr: '' };
@@ -219,7 +260,7 @@ const world = async (options: {
         ? 'this worker has no attestation verifier configured, so it does not self-update: APP_TRUSTED_BUILDER is unset'
         : null,
     registryEndpoints: new Map(),
-    pollMs: 300_000,
+    pollMs: options.pollMs ?? 300_000,
     checkSeconds: 120,
     workerUrl: 'http://remote-worker:8080',
     workerStateDir,
@@ -236,10 +277,14 @@ const world = async (options: {
     containerId: 'self',
     templatePath,
     applyEnvironment: { DOCKER_HOST: 'tcp://updater-docker-proxy:2375' },
-    now: () => new Date('2026-11-05T12:00:00Z'),
-    sleep: async () => undefined,
+    now: () => new Date(clock),
+    sleep: async (ms) => {
+      clock += ms;
+    },
   });
+  stopRun = () => updater.stop();
   return {
+    releaseAt,
     updater,
     events,
     reports,
@@ -474,11 +519,80 @@ describe('the updater’s poll', () => {
     expect(JSON.stringify(w.reports)).toContain('APP_TRUSTED_BUILDER is unset');
   });
 
-  it('does nothing when the core advertises what it runs', async () => {
+  it('does nothing when the core advertises what it runs — and verifies nothing', async () => {
     const w = await world({ advertised: digests('a') });
-    await w.updater.tick();
+    expect(await w.updater.tick()).toBe('ok');
     expect(w.events).toEqual(['release']);
     expect(w.reports).toEqual([]);
+    expect(w.verified).toEqual([]);
+  });
+
+  it('does not verify an advertised set again while the core keeps advertising it (TD-032, 2026-11-06)', async () => {
+    const w = await world({ advertised: digests('b'), pullFailsOnce: true });
+    // The first poll verifies the target's four and the running set's four, then the pull fails.
+    expect(await w.updater.tick()).toBe('failed');
+    expect(w.verified).toHaveLength(8);
+    expect(w.events).toEqual(['release', 'pull failed']);
+    // The same set again: nothing is verified a second time, and the update goes ahead.
+    expect(await w.updater.tick()).toBe('ok');
+    expect(w.verified).toHaveLength(8);
+    expect(w.events).toContain('start apply');
+    expect(w.reports).toEqual([]);
+  });
+});
+
+describe('the updater’s cadence (TD-032’s 2026-11-06 amendment)', () => {
+  it('defaults to a poll every 60 s and keeps the variable and its bounds', () => {
+    expect(DEFAULT_UPDATE_POLL_SECONDS).toBe(60);
+    expect(loadUpdaterConfig({}).pollMs).toBe(60_000);
+    expect(loadUpdaterConfig({ APP_UPDATE_POLL_SECONDS: '30' }).pollMs).toBe(30_000);
+    expect(loadUpdaterConfig({ APP_UPDATE_POLL_SECONDS: '300' }).pollMs).toBe(300_000);
+    expect(() => loadUpdaterConfig({ APP_UPDATE_POLL_SECONDS: '0' })).toThrow(
+      /APP_UPDATE_POLL_SECONDS must be a whole number of seconds from 1 to 86400/,
+    );
+  });
+
+  it('asks the core at once when it starts, not one interval in', async () => {
+    const w = await world({ advertised: digests('a'), pollMs: 60_000, stopAfterReleases: 1 });
+    await w.updater.run();
+    expect(w.releaseAt).toEqual([0]);
+  });
+
+  it('then asks every interval while the polls work', async () => {
+    const w = await world({ advertised: digests('a'), pollMs: 60_000, stopAfterReleases: 4 });
+    await w.updater.run();
+    expect(w.releaseAt).toEqual([0, 60_000, 120_000, 180_000]);
+  });
+
+  it('backs a failed poll off, doubling up to five minutes, and a poll that works resets it', async () => {
+    const w = await world({
+      advertised: digests('a'),
+      pollMs: 60_000,
+      releaseFailures: 4,
+      stopAfterReleases: 6,
+    });
+    await w.updater.run();
+    // 503 at 0 → wait 120 s; 503 → 240 s; 503 → 300 s (the cap); 503 → 300 s; works → 60 s.
+    expect(w.releaseAt).toEqual([0, 120_000, 360_000, 660_000, 960_000, 1_020_000]);
+  });
+
+  it('reads a core that answers 503 as a failed poll', async () => {
+    const w = await world({ advertised: digests('a'), releaseFailures: 1 });
+    expect(await w.updater.tick()).toBe('failed');
+    expect(await w.updater.tick()).toBe('ok');
+  });
+
+  it('computes the wait: the interval, doubled per consecutive failure, capped at five minutes or the interval', () => {
+    expect(MAX_POLL_BACKOFF_MS).toBe(300_000);
+    expect(nextPollDelayMs(60_000, 0)).toBe(60_000);
+    expect(nextPollDelayMs(60_000, 1)).toBe(120_000);
+    expect(nextPollDelayMs(60_000, 2)).toBe(240_000);
+    expect(nextPollDelayMs(60_000, 3)).toBe(300_000);
+    expect(nextPollDelayMs(60_000, 1_000)).toBe(300_000);
+    expect(nextPollDelayMs(30_000, 1)).toBe(60_000);
+    // An operator's longer interval is never shortened, and never stretched past itself.
+    expect(nextPollDelayMs(600_000, 0)).toBe(600_000);
+    expect(nextPollDelayMs(600_000, 3)).toBe(600_000);
   });
 });
 

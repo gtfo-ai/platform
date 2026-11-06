@@ -288,7 +288,7 @@ services:
       APP_TRUSTED_BUILDER: ${APP_TRUSTED_BUILDER:-gtfo-ai/platform/.github/workflows/image.yml@refs/heads/main}
       # Where a registry is read from (a mirror); every read is by digest, so not a trust decision.
       APP_UPDATE_REGISTRY_ENDPOINTS: ${APP_UPDATE_REGISTRY_ENDPOINTS:-}
-      APP_UPDATE_POLL_SECONDS: ${APP_UPDATE_POLL_SECONDS:-300}
+      APP_UPDATE_POLL_SECONDS: ${APP_UPDATE_POLL_SECONDS:-60}
       APP_UPDATE_CHECK_SECONDS: ${APP_UPDATE_CHECK_SECONDS:-120}
       APP_WORKER_LOCAL_URL: http://remote-worker:8080
       APP_WORKER_STATE_DIR: /var/lib/platform/worker-state

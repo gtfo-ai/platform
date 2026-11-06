@@ -191,7 +191,7 @@ export const emptyOffersWords = (state: WorkerLocalState): string => {
 
 /** What the page says when the platform runs a newer build (S-22.19, R-L8): no manual procedure. */
 export const UPDATE_PENDING_WORDS =
-  'The platform runs a newer build. This worker updates itself after its current run, within about 5 minutes. A worker set up without its updater: download the compose file again and run docker compose up -d.';
+  'The platform runs a newer build. This worker updates itself after its current run, usually within a minute or two. Nothing to do.';
 
 /** The connection's status icon (S-22.19, R-L6): a failure is never drawn as a wait. */
 export const CONNECTION_STATUS: Readonly<Record<WorkerLocalState['connection'], Status>> = {

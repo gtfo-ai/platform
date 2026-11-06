@@ -438,8 +438,12 @@ user).
   `workers_only` instance is *pick only*, runs wait for a person to pick them, up to `offer_timeout`.
 
 **The worker updates itself** (WP-287, TD-032 decisions 3, 4 and 6). The `updater` service follows the
-core: every 5 minutes, and at once when the worker meets a `426`, it reads the core's
-`GET /api/worker/v1/release` and, when the four digests there differ from the ones it runs:
+core: when it starts, then every minute (`APP_UPDATE_POLL_SECONDS`, default `60`), and at once when the
+worker meets a `426`, it reads the core's `GET /api/worker/v1/release` — a poll that fails (the core
+does not answer or refuses the credential, a registry or Sigstore does not answer) waits twice as long
+before the next, up to 5 minutes, and the first that works goes back to every minute — and, when the
+four digests there differ from the ones it runs (a set that verified is not verified again while the
+core keeps advertising it):
 
 1. **verifies each digest's build attestation** — the provenance `image.yml` attests every published
    image with — **keylessly**, the way `gh attestation verify` does (Fulcio certificate, Rekor entry,
