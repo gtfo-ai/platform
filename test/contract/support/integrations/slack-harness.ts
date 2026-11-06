@@ -167,6 +167,16 @@ export const slackReplayContext = (
     freshPort,
     emitPostedApproval: (authorId, decision) =>
       signedDelivery(approvalClickBody(authorId, SLACK_APPROVAL_ID, decision, SLACK_TASK_ID)),
+    emitShownApproval: (authorId, subjectArtifactId) =>
+      signedDelivery(
+        approvalClickBody(
+          authorId,
+          SLACK_APPROVAL_ID,
+          'approved',
+          SLACK_TASK_ID,
+          subjectArtifactId,
+        ),
+      ),
     channel: CHANNEL,
     missingChannel: MISSING_CHANNEL,
     taskId: SLACK_TASK_ID,

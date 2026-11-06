@@ -528,10 +528,44 @@ export interface ReadyHeadCheckData {
 }
 
 /**
- * Everything `pipeline.outbound` carries: a project's duty, the organisation's one, or a human's way
- * into Ready waiting to be judged (WP-79).
+ * One wake-up of `approval_refused` (S-25.9, `notify/approval-refused.ts`): a chat *Approve* the
+ * subject guard refused (TD-035 decision 6) is answered in the approval's thread with the reason and
+ * the task page. A payload of its own, like {@link ReadyHeadCheckData}: a refusal appends **no**
+ * event (the ingress refuses onto its `inbox` row), so there is no `cause_event_id` to give it.
+ *
+ * Enqueued by the webhook ingress **after** the delivery's commit — a rolled-back delivery (a lost
+ * race) answers nothing. `reply_id` is drawn once at the enqueue and is the reply's idempotency key,
+ * so a retried job replays rather than answering twice; two presses are two deliveries and two
+ * replies.
  */
-export type OutboundJobData = PipelineOutboundData | OrganisationOutboundData | ReadyHeadCheckData;
+export interface ApprovalRefusedData {
+  readonly duty: 'approval_refused';
+  readonly project_id: string;
+  readonly task_id: string;
+  readonly approval_id: string;
+  /** `ApprovalSubjectRefusal` — parsed on fire, a wake-up being a wire boundary. */
+  readonly refusal: string;
+  readonly reply_id: string;
+  readonly [key: string]: unknown;
+}
+
+/**
+ * Everything `pipeline.outbound` carries: a project's duty, the organisation's one, a human's way
+ * into Ready waiting to be judged (WP-79), or a refused chat approval's answer (S-25.9).
+ */
+export type OutboundJobData =
+  | PipelineOutboundData
+  | OrganisationOutboundData
+  | ReadyHeadCheckData
+  | ApprovalRefusedData;
+
+/** {@link enqueueOutbound} for `approval_refused`; called after the ingress's commit. */
+export const enqueueApprovalRefused = async (
+  jobs: Jobs,
+  data: ApprovalRefusedData,
+): Promise<void> => {
+  await jobs.enqueue<OutboundJobData>({ queue: JOB_QUEUES.pipelineOutbound, data });
+};
 
 /**
  * {@link enqueueOutbound} for `ready_head_check` — the same queue, and called after the command's

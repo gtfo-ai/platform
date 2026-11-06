@@ -1248,6 +1248,12 @@ export interface HarnessCommunication {
     markdown: string;
     /** Set for an approval posted with its buttons (`postApproval`, WP-43). */
     approval?: string;
+    /**
+     * An approval only (S-25.9): the plan its Approve echoes — `null` when the duty told the port
+     * the message shows none — and the task page it links.
+     */
+    subjectArtifactId?: string | null;
+    reviewUrl?: string | null;
     /** Set for a question posted through `postQuestion` (WP-88), with the options it offered. */
     question?: string;
     options?: readonly string[];
@@ -1313,7 +1319,7 @@ const stubCommunication = (
     },
     postApproval: async (
       thread: { channel: string; thread_id: string },
-      approval: { id: string },
+      approval: { id: string; subject_artifact_id?: string | null; review_url?: string | null },
       body: { markdown: string },
     ) => {
       const id = next();
@@ -1322,6 +1328,8 @@ const stubCommunication = (
         thread: thread.thread_id,
         markdown: body.markdown,
         approval: approval.id,
+        subjectArtifactId: approval.subject_artifact_id ?? null,
+        reviewUrl: approval.review_url ?? null,
       });
       return {
         provider: 'fake-chat',

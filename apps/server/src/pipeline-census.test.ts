@@ -334,6 +334,8 @@ const WRAPPED_JOBS_CALL_SITES: Readonly<Record<string, string>> = {
   createKnowledgeCommands: 'the proposal decision, which asks for a commit (WP-18b).',
   createProjectConfigCommands:
     'a change of the default branch asks for a knowledge index of the new branch (WP-142) and a readiness re-check pinned to the commit its configuration read answered (WP-147).',
+  composeWebhookIngress:
+    'the webhook ingress (S-25.9): a chat Approve the subject guard refused is answered in its thread by a `pipeline.outbound` job enqueued after the delivery commits.',
   composeRemoteRuns:
     'the worker protocol (WP-281): a remote run’s settle enqueues its stage entry’s start-failure retry and hand-back re-run after its commit, as `settleRun` does for the server claimant.',
 };

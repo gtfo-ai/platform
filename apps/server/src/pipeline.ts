@@ -611,6 +611,12 @@ export interface ComposeWebhookIngressOptions {
   readonly logger: Logger;
   /** The HTTP door's bucket (WP-87, Q60); required, so `null` is a decision rather than an omission. */
   readonly rateLimit: WebhookRateLimit | null;
+  /**
+   * The process's job client (S-25.9): a refused chat approval is answered in its thread by a
+   * `pipeline.outbound` job enqueued after the delivery commits. `null` only where this role holds
+   * no job client, and then the refusal is on the `inbox` row alone.
+   */
+  readonly jobs: Jobs | null;
 }
 
 export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): WebhookIngress =>
@@ -660,6 +666,7 @@ export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): We
     timer: { now: () => Date.now() },
     logger: options.logger,
     rateLimit: options.rateLimit,
+    jobs: options.jobs,
   });
 
 const nowIso = (): IsoDateTime => new Date().toISOString() as IsoDateTime;

@@ -162,7 +162,8 @@ const answerValueSchema = z.object({
    */
   t: z.uuid().optional(),
 });
-const approvalValueSchema = z.object({
+/** Strict (review of PR #82): a key this adapter never writes makes the value somebody else's. */
+const approvalValueSchema = z.strictObject({
   a: z.uuid(),
   d: z.enum(['approved', 'rejected']),
   /**
@@ -173,6 +174,12 @@ const approvalValueSchema = z.object({
    * click could arrive.
    */
   t: z.uuid().optional(),
+  /**
+   * The plan the message showed, on a plan approval's **Approve** only (S-25.9, `blocks.ts`'s
+   * `approvalButtonValue`). Handed to the decision beside the payload and checked there against the
+   * approval's recorded subject; a button without it (posted before S-25.9) approves no plan.
+   */
+  s: z.uuid().optional(),
 });
 
 interface RecognisedAction {
@@ -303,6 +310,10 @@ const normaliseBlockActions = async (
       reason: null,
     },
     actor: actorFor(context, author, userId),
+    // Only an Approve carries the plan it showed; a Request changes needs none (TD-035 decision 6).
+    ...(fromAction === 'approved' && parsed.data.s !== undefined
+      ? { subjectArtifactId: parsed.data.s as Id }
+      : {}),
   };
   return { events: [event], ignored: [] };
 };

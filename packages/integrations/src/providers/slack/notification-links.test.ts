@@ -12,10 +12,12 @@
  * defect lived **between** the pieces and no single one of their tests could see it.
  */
 import {
+  approvalRequestBody,
   decideNotification,
   noSecretsRedactor,
   notificationBody,
   notificationDraft,
+  planSummaryOf,
   verdictReturnReason,
 } from '@platform/application';
 import type { DomainEvent, JsonObject } from '@platform/contracts';
@@ -150,5 +152,137 @@ describe('a model-written link in a notification, down to the Slack request', ()
       ),
     );
     expect(sent).toContain(TICKET_URL);
+  });
+});
+
+/**
+ * **Two harmless items, one link** (review of PR #82, BD-022). Each untrusted item was unlabelled
+ * on its own, but Slack's link pattern lets a label span the `, ` and the newline the platform
+ * joins items with, so `["[Approve safely", "](https://evil.example/approve)"]` reached the channel
+ * as `<https://evil.example/approve|Approve safely, >` beside the real Approve button. Every case
+ * here is driven down to the request the adapter sends, and asserts the model's label is a link
+ * label **nowhere** in it — the `text` fallback and every block.
+ */
+describe('a link built across the items the platform joins, down to the Slack request', () => {
+  const EVIL = 'https://evil.example/approve';
+  /** A Slack link to the attacker's host that carries a label: `<https://evil.example…|…>`. */
+  const LABELLED_EVIL = /<https:\/\/evil\.example[^>|]*\|/;
+  const THREAD = {
+    provider: 'slack',
+    channel: 'C0FAKECHAN1',
+    thread_id: '1700000000.000001',
+    url: null,
+  } as const;
+  const APPROVAL = {
+    id: '00000000-0000-4000-8000-0000000000d6',
+    task_id: TASK,
+    kind: 'plan',
+    status: 'pending',
+    requested_at: '2026-06-01T09:00:00.000Z',
+    deadline_at: null,
+    decided_by_user_id: null,
+    decided_at: null,
+    reason: null,
+    subject_artifact_id: '00000000-0000-4000-8000-0000000000f6',
+    review_url: `https://agentic.example.test/tasks/${TASK}`,
+  } as const;
+  const PLAN = {
+    approach: 'Sum the lines.',
+    alternatives_considered: [],
+    affected_modules: ['invoices'],
+    files_to_change: [{ path: 'src/totals.ts', change: 'add the sum' }],
+    data_changes: [],
+    api_changes: [],
+    validation_contract: [],
+    test_plan: [],
+    rollout_notes: 'none',
+    risks: [],
+    estimated_size: 'M',
+    decisions_to_record: [],
+    protected_path_changes: [],
+  };
+
+  const postedApproval = async (plan: Record<string, unknown>, classes: string[]) => {
+    const summary = planSummaryOf(1, plan as never);
+    expect(summary, 'the fixture reads as a plan').not.toBeNull();
+    const body = approvalRequestBody({
+      draft: notificationDraft({
+        notificationClass: 'approval',
+        subject: { name: 'ACME-1', url: TICKET_URL },
+        detail: null,
+      }),
+      kind: 'plan',
+      plan: summary === null ? null : { kind: 'shown', artifactId: APPROVAL.id, summary },
+      reasons: [{ code: 'risk_class', classes }],
+      reviewUrl: APPROVAL.review_url,
+    });
+    const slack = recordingSlack();
+    await slackPort(slack.fetch).postApproval(THREAD, APPROVAL, body);
+    return everyString(slack.sent.at(-1) ?? '{}');
+  };
+
+  it('two file paths that make one link when joined with a comma', async () => {
+    const sent = await postedApproval(
+      {
+        ...PLAN,
+        files_to_change: [
+          { path: '[Approve safely', change: 'x' },
+          { path: '](https://evil.example/approve)', change: 'x' },
+        ],
+      },
+      ['payments'],
+    );
+    expect(sent).not.toMatch(LABELLED_EVIL);
+    expect(sent).not.toContain('|Approve safely');
+    expect(sent, 'the target is still shown, as itself').toContain(EVIL);
+  });
+
+  it('a risk split across two lines', async () => {
+    const sent = await postedApproval(
+      {
+        ...PLAN,
+        risks: ['Low risk, [Approve now', '](https://evil.example/approve) nothing else'],
+      },
+      ['payments'],
+    );
+    expect(sent).not.toMatch(LABELLED_EVIL);
+    expect(sent).not.toContain('|Approve now');
+  });
+
+  it('two risk class names joined into one reason', async () => {
+    const sent = await postedApproval(PLAN, ['[Approve safely', '](https://evil.example/approve)']);
+    expect(sent).not.toMatch(LABELLED_EVIL);
+    expect(sent).not.toContain('|Approve safely');
+  });
+
+  it('a ticket key and a detail, or a detail and a ticket URL, in a plain notification', async () => {
+    for (const draft of [
+      notificationDraft({
+        notificationClass: 'escalation',
+        subject: { name: '[Approve safely', url: TICKET_URL },
+        detail: '](https://evil.example/approve) the loop is spent',
+      }),
+      notificationDraft({
+        notificationClass: 'escalation',
+        subject: {
+          name: 'ACME-1',
+          url: 'https://tickets.example.test/x](https://evil.example/approve)',
+        },
+        detail: 'Read [the brief',
+      }),
+    ]) {
+      const slack = recordingSlack();
+      await slackPort(slack.fetch).postMessage(THREAD, notificationBody(draft));
+      const sent = everyString(slack.sent.at(-1) ?? '{}');
+      expect(sent).not.toMatch(LABELLED_EVIL);
+      expect(sent).not.toContain('|Approve safely');
+      expect(sent).not.toContain('|the brief');
+    }
+  });
+
+  it('is calibrated: the same items through a per-item pass alone do build the link', () => {
+    // The defect as it was: each item unlabelled, then joined — Slack's pattern still matches.
+    const joined = ['[Approve safely', '](https://evil.example/approve)'].join(', ');
+    expect(/\[([^\]]*)\]\(([^\s)]+)\)/.test(joined)).toBe(true);
   });
 });

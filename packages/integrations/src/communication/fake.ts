@@ -127,6 +127,11 @@ interface StoredMessage {
   blocks: unknown;
   kind: 'thread' | 'question' | 'approval' | 'message' | 'digest';
   updated: number;
+  /**
+   * An approval only (S-25.9): the plan its Approve would echo, `null` when the port was told the
+   * message shows none — what a test asserts the duty handed the port.
+   */
+  subject_artifact_id?: string | null;
 }
 
 const answerBody = z.strictObject({
@@ -144,6 +149,8 @@ const approvalBody = z.strictObject({
   author_id: z.string().min(1),
   decision: z.enum(['approved', 'rejected']),
   reason: z.string().nullish(),
+  /** The plan an Approve echoes (S-25.9) — Slack's button `s`, in this fake's own shape. */
+  subject_artifact_id: z.uuid().nullish(),
 });
 
 const feedbackBody = z.strictObject({
@@ -196,6 +203,8 @@ export interface FakeCommunication extends CommunicationPort {
     readonly decision: 'approved' | 'rejected';
     readonly reason?: string;
     readonly deliveryId?: string;
+    /** The plan the Approve echoes (S-25.9); absent, the click names none. */
+    readonly subjectArtifactId?: Id;
   }): WebhookDelivery;
   emitFeedback(input: {
     readonly taskId?: Id | null;
@@ -477,6 +486,12 @@ export const createFakeCommunication = (options: FakeCommunicationOptions): Fake
           reason: body.reason ?? null,
         },
         actor: { kind: 'user', user_id: userId, identity: author },
+        // S-25.9: beside the payload, as the Slack adapter hands it over.
+        ...(body.decision === 'approved' &&
+        body.subject_artifact_id !== undefined &&
+        body.subject_artifact_id !== null
+          ? { subjectArtifactId: body.subject_artifact_id as Id }
+          : {}),
       };
       return { events: [event], ignored: [] };
     },
@@ -527,10 +542,15 @@ export const createFakeCommunication = (options: FakeCommunicationOptions): Fake
       return post(thread.channel, thread.thread_id, body, 'question');
     },
 
-    postApproval: async (thread, _approval: ApprovalPost, body) => {
+    postApproval: async (thread, approval: ApprovalPost, body) => {
       core.enter('post_approval');
       requireThread('post_approval', thread);
-      return post(thread.channel, thread.thread_id, body, 'approval');
+      const posted = post(thread.channel, thread.thread_id, body, 'approval');
+      const stored = messages[messages.length - 1];
+      if (stored !== undefined) {
+        stored.subject_artifact_id = approval.subject_artifact_id ?? null;
+      }
+      return posted;
     },
 
     postMessage: async (thread, body) => {
@@ -608,6 +628,9 @@ export const createFakeCommunication = (options: FakeCommunicationOptions): Fake
           author_id: input.authorId,
           decision: input.decision,
           reason: input.reason ?? null,
+          ...(input.subjectArtifactId === undefined
+            ? {}
+            : { subject_artifact_id: input.subjectArtifactId }),
         },
       }),
 

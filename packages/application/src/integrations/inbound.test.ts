@@ -31,6 +31,8 @@ import type {
   ResolvedInboundIntegration,
 } from '../ports/integrations/inbox.js';
 import { eagerInboundLoader } from '../ports/integrations/inbox.js';
+import type { Jobs } from '../ports/jobs.js';
+import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import {
@@ -217,14 +219,42 @@ const auditDouble = () => {
  * property the ordering in `inbound.ts` exists for.
  */
 const decisionsDouble = (answer: (projectId: Id) => InboundDecisionOutcome) => {
-  const applied: { projectId: Id; type: string; delivery: unknown }[] = [];
+  const applied: {
+    projectId: Id;
+    type: string;
+    delivery: unknown;
+    subjectArtifactId?: Id | undefined;
+  }[] = [];
   const applier: InboundDecisionApplier = {
     apply: async (_tx, { projectId, draft, delivery }) => {
-      applied.push({ projectId, type: draft.type, delivery });
+      applied.push({
+        projectId,
+        type: draft.type,
+        delivery,
+        subjectArtifactId: draft.subjectArtifactId,
+      });
       return answer(projectId);
     },
   };
   return { applier, applied };
+};
+
+/** A `Jobs` that records what was enqueued — and, at that moment, whether the inbox row existed. */
+const recordingJobs = (
+  inboxRows: () => number,
+  options: { readonly fail?: boolean } = {},
+): { readonly jobs: Jobs; readonly enqueued: { queue: string; data: unknown; rows: number }[] } => {
+  const enqueued: { queue: string; data: unknown; rows: number }[] = [];
+  const jobs = {
+    enqueue: async (request: { queue: string; data: unknown }) => {
+      if (options.fail === true) {
+        throw new Error('the queue is down');
+      }
+      enqueued.push({ queue: request.queue, data: request.data, rows: inboxRows() });
+      return null;
+    },
+  } as unknown as Jobs;
+  return { jobs, enqueued };
 };
 
 const approvalDecided = (projectId: Id) => ({
@@ -281,6 +311,8 @@ const build = (options: {
   readonly rateLimit?: WebhookRateLimit | null;
   readonly now?: () => number;
   readonly threads?: InboundThreadDirectory;
+  /** S-25.9: where a refused chat approval's thread reply is enqueued; `null` when not asked. */
+  readonly jobs?: Jobs | null;
 }) => {
   let nextId = 0;
   const loader: InboundIntegrationLoader = eagerInboundLoader(async () => options.resolved ?? null);
@@ -332,6 +364,7 @@ const build = (options: {
   };
   return createWebhookIngress({
     rateLimit: options.rateLimit ?? null,
+    jobs: options.jobs ?? null,
     loader,
     inbox: options.inbox.store,
     audit: options.audit.log,
@@ -361,6 +394,7 @@ const harnessFor = (
     readonly conflicts?: number;
     readonly decisions?: InboundDecisionApplier;
     readonly threads?: InboundThreadDirectory;
+    readonly jobs?: (inbox: ReturnType<typeof inboxDouble>) => Jobs;
   } = {},
 ): IngressHarness => {
   const inbox = inboxDouble();
@@ -378,6 +412,7 @@ const harnessFor = (
     sequenceReads,
     ...(overrides.decisions === undefined ? {} : { decisions: overrides.decisions }),
     ...(overrides.threads === undefined ? {} : { threads: overrides.threads }),
+    ...(overrides.jobs === undefined ? {} : { jobs: overrides.jobs(inbox) }),
   });
   return {
     deliver: (delivery = DELIVERY) =>
@@ -1061,6 +1096,115 @@ describe('a human decision arriving from a provider', () => {
     expect(harness.appended[0]).toMatchObject({ stream_id: PROJECT, stream_seq: 7 });
     expect(harness.appended[1]).toBe(aggregateEvent);
   });
+
+  // ── S-25.9: the plan a button echoed, and the answer to a refused press ─────────────────────
+
+  const ECHOED = '00000000-0000-4000-8000-0000000000f1' as Id;
+  const echoingScript: NormaliserScript = {
+    result: (context) => ({
+      events: [{ ...approvalDecided(context.projectId), subjectArtifactId: ECHOED }],
+      ignored: [],
+    }),
+  };
+  const subjectRefusal = (): InboundDecisionOutcome => ({
+    kind: 'refused',
+    reason: 'approval_subject_superseded',
+    detail: 'plan is no longer the latest',
+    reply: {
+      taskId: '00000000-0000-4000-8000-0000000000e1' as Id,
+      approvalId: '00000000-0000-4000-8000-0000000000e2' as Id,
+      refusal: 'approval_subject_superseded',
+    },
+  });
+
+  it('hands the plan the button echoed to the decision, beside the payload', async () => {
+    const decisions = decisionsDouble(() => ({ kind: 'applied', events: [] }));
+    const harness = harnessFor(resolvedWith(echoingScript), { decisions: decisions.applier });
+
+    await harness.deliver();
+
+    expect(decisions.applied[0]?.subjectArtifactId).toBe(ECHOED);
+  });
+
+  it('answers a subject refusal in its thread by a job enqueued after the delivery commits', async () => {
+    const decisions = decisionsDouble(subjectRefusal);
+    let recorder: ReturnType<typeof recordingJobs> | null = null;
+    const harness = harnessFor(resolvedWith(echoingScript), {
+      decisions: decisions.applier,
+      jobs: (inbox) => {
+        recorder = recordingJobs(() => inbox.rows.size);
+        return recorder.jobs;
+      },
+    });
+
+    const outcome = await harness.deliver();
+
+    expect(outcome).toMatchObject({ kind: 'accepted', events: 0, ignored: 1 });
+    expect(harness.inbox.only().error).toBe(
+      'decision_refused: approval_subject_superseded: plan is no longer the latest',
+    );
+    const enqueued = (recorder as ReturnType<typeof recordingJobs> | null)?.enqueued ?? [];
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0]).toMatchObject({
+      queue: JOB_QUEUES.pipelineOutbound,
+      // The inbox row had committed when the reply was asked for.
+      rows: 1,
+      data: {
+        duty: 'approval_refused',
+        project_id: PROJECT,
+        task_id: '00000000-0000-4000-8000-0000000000e1',
+        approval_id: '00000000-0000-4000-8000-0000000000e2',
+        refusal: 'approval_subject_superseded',
+      },
+    });
+    expect(typeof (enqueued[0]?.data as { reply_id?: unknown } | undefined)?.reply_id).toBe(
+      'string',
+    );
+  });
+
+  it('answers nothing for a refusal that carries no reply, or for the delivery that lost its race', async () => {
+    const notPermitted = decisionsDouble(() => ({
+      kind: 'refused',
+      reason: 'not_permitted',
+      detail: 'a viewer cannot approve a plan',
+    }));
+    let first: ReturnType<typeof recordingJobs> | null = null;
+    const viewer = harnessFor(resolvedWith(echoingScript), {
+      decisions: notPermitted.applier,
+      jobs: (inbox) => {
+        first = recordingJobs(() => inbox.rows.size);
+        return first.jobs;
+      },
+    });
+    await viewer.deliver();
+    expect((first as ReturnType<typeof recordingJobs> | null)?.enqueued).toEqual([]);
+
+    // Two deliveries of one click, both refused inside their transactions: one row lands, and
+    // the reply is asked for once — the rolled-back attempt's refusal never committed.
+    let second: ReturnType<typeof recordingJobs> | null = null;
+    const raced = harnessFor(resolvedWith(echoingScript), {
+      decisions: decisionsDouble(subjectRefusal).applier,
+      jobs: (inbox) => {
+        second = recordingJobs(() => inbox.rows.size);
+        return second.jobs;
+      },
+    });
+    const outcomes = await Promise.all([raced.deliver(), raced.deliver()]);
+    expect(outcomes.map((outcome) => outcome.kind).sort()).toEqual(['accepted', 'duplicate']);
+    expect((second as ReturnType<typeof recordingJobs> | null)?.enqueued).toHaveLength(1);
+  });
+
+  it('still accepts the delivery when the reply cannot be queued (rule 20)', async () => {
+    const harness = harnessFor(resolvedWith(echoingScript), {
+      decisions: decisionsDouble(subjectRefusal).applier,
+      jobs: (inbox) => recordingJobs(() => inbox.rows.size, { fail: true }).jobs,
+    });
+
+    const outcome = await harness.deliver();
+
+    expect(outcome).toMatchObject({ kind: 'accepted' });
+    expect(harness.inbox.rows.size).toBe(1);
+  });
 });
 
 describe('the refused accounts a row records (WP-44, PROGRESS backlog 198)', () => {
@@ -1249,6 +1393,7 @@ describe('the webhook door’s rate limit (Q60)', () => {
       clock: { now: () => NOW },
       timer: { now: () => clock.ms },
       rateLimit: { policy, onLimited: (entry) => counted.push(entry.integrationId) },
+      jobs: null,
     });
     const send = (integrationId: Id) =>
       ingress.deliver({ provider: 'fake', integrationId, delivery: DELIVERY, transport: 'http' });

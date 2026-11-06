@@ -28,7 +28,14 @@
  *  6. **Deliver, or leave it for the digest.** An immediate delivery that throws leaves the row
  *     undelivered, which means the next digest carries it: a failure is a delay, never a loss.
  */
-import type { Id, IsoDateTime, JsonObject, NotificationClass, TaskMode } from '@platform/contracts';
+import type {
+  Id,
+  IsoDateTime,
+  JsonObject,
+  JsonValue,
+  NotificationClass,
+  TaskMode,
+} from '@platform/contracts';
 import { notificationClassSchema } from '@platform/contracts';
 import {
   isUrgentNotification,
@@ -44,10 +51,19 @@ import {
   noRunScopedSecrets,
 } from '../pipeline/integrations.js';
 import type { PipelineOutboundData } from '../pipeline/jobs.js';
-import type { MessageRef } from '../ports/integrations/communication.js';
+import type { PipelineStore, StoredApproval } from '../pipeline/store.js';
+import type { SecretRedactor } from '../ports/integrations/audit.js';
+import type { ApprovalPost, MessageRef } from '../ports/integrations/communication.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import type { Transaction } from '../ports/transaction.js';
 import { settleApprovalMessage } from './approval-settled.js';
+import {
+  type ApprovalPlanView,
+  approvalRequestBody,
+  planSummaryOf,
+  taskPageUrl,
+} from './approval-text.js';
 import type { NotifyOptions } from './options.js';
 import { digestSettingsOf, localMinutesOf } from './policy.js';
 import { awaitsImmediateRetry } from './ports.js';
@@ -400,24 +416,42 @@ export const runNotification = async (
        * text naming the task page, which is the conservative direction.
        */
       const unreachable = await unreachableReason();
+      /**
+       * **The message shows what it asks about** (S-25.9, BD-006's 2026-11-06 amendment): the
+       * plan's summary, every reason in words, and the task page — read now, from the approval's
+       * own recorded subject and reasons, and redacted with this binding's redactor before anything
+       * is cut. The Approve echoes the plan it showed; a plan approval whose plan the message
+       * cannot show gets no Approve (the adapter's rule), only the way to the task page.
+       */
+      const evidence = await options.unitOfWork.transaction(async (scope) =>
+        approvalEvidenceOf(options.store, scope.tx, approval),
+      );
+      const plan = planViewOf(evidence.plan, chat.redactor);
+      const reviewUrl = taskPageUrl(options.baseUrl, stored.task.id);
+      const approvalBody = (note: string | null) =>
+        approvalRequestBody({
+          draft,
+          kind: approval.approval.kind,
+          plan: approval.approval.kind === 'plan' ? plan : null,
+          reasons: approval.reasons ?? null,
+          reviewUrl,
+          note,
+        });
       if (unreachable === null) {
+        const post: ApprovalPost = {
+          ...toApprovalRecord(approval.approval),
+          subject_artifact_id: plan.kind === 'shown' ? (plan.artifactId as Id) : null,
+          review_url: reviewUrl,
+        };
         buttonsAt = await chats.approval(
-          {
-            thread,
-            approval: toApprovalRecord(approval.approval),
-            body,
-            idempotencyKey,
-          },
+          { thread, approval: post, body: approvalBody(null), idempotencyKey },
           context,
         );
       } else {
         await chats.message(
           {
             thread,
-            body: notificationBody({
-              ...draft,
-              detail: `${draft.detail ?? ''}\nDecide on the task page: ${unreachable}.`.trim(),
-            }),
+            body: approvalBody(`Decide on the task page: ${unreachable}.`),
             idempotencyKey,
           },
           context,
@@ -461,6 +495,65 @@ export const runNotification = async (
     // The same race for a question (WP-88): answered or expired while it was being posted.
     await settleQuestionMessage(options, { projectId, questionId: question.id });
   }
+};
+
+/** The plan an approval is about, as stored — before the binding's redactor and the bounds. */
+type ApprovalPlanEvidence =
+  | {
+      readonly kind: 'stored';
+      readonly artifactId: Id;
+      readonly version: number;
+      readonly data: JsonValue;
+    }
+  | { readonly kind: 'unrecorded' | 'superseded' };
+
+/**
+ * What an approval message shows, read in one transaction (S-25.9): for a plan approval, its subject
+ * as the decide guard reads it (`planSubject`: recorded, or derived by TD-035 decision 5's one exact
+ * chain) and only while it is still the task's latest plan — the same two questions
+ * `assertApprovesItsSubject` asks, so a message never offers an Approve the guard would refuse.
+ */
+const approvalEvidenceOf = async (
+  store: Pick<PipelineStore, 'approvals' | 'artifacts'>,
+  tx: Transaction,
+  stored: StoredApproval,
+): Promise<{ readonly plan: ApprovalPlanEvidence | null }> => {
+  if (stored.approval.kind !== 'plan') {
+    return { plan: null };
+  }
+  const subject = await store.approvals.planSubject(tx, stored.approval.id);
+  if (subject === null) {
+    return { plan: { kind: 'unrecorded' } };
+  }
+  const latest = await store.artifacts.latest(tx, stored.approval.taskId, 'ImplementationPlan');
+  if (latest === null || latest.id !== subject.artifactId) {
+    return { plan: { kind: 'superseded' } };
+  }
+  return {
+    plan: { kind: 'stored', artifactId: latest.id, version: latest.version, data: latest.data },
+  };
+};
+
+/**
+ * The plan as the message shows it: redacted with the binding's redactor **before** the summary
+ * cuts anything (WP-30's order), then bounded. A non-plan approval reads as `unrecorded`, which
+ * nothing renders: the caller passes no plan for it.
+ */
+const planViewOf = (
+  evidence: ApprovalPlanEvidence | null,
+  redactor: SecretRedactor,
+): ApprovalPlanView => {
+  if (evidence === null || evidence.kind !== 'stored') {
+    return { kind: evidence?.kind ?? 'unrecorded' };
+  }
+  const redacted =
+    typeof evidence.data === 'object' && evidence.data !== null && !Array.isArray(evidence.data)
+      ? (redactor.redactJson(evidence.data as JsonObject).value as JsonValue)
+      : evidence.data;
+  const summary = planSummaryOf(evidence.version, redacted);
+  return summary === null
+    ? { kind: 'unreadable' }
+    : { kind: 'shown', artifactId: evidence.artifactId, summary };
 };
 
 /**

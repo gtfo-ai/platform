@@ -19,6 +19,7 @@ import {
   approvalBlockId,
   questionBlockId,
   REJECT_ACTION_ID,
+  REVIEW_ACTION_ID,
 } from './blocks.js';
 import { normaliseSlackDelivery, type SlackInboundDeps } from './inbound.js';
 
@@ -356,6 +357,69 @@ describe('approval decisions', () => {
     });
     expect(result.events).toEqual([]);
     expect(result.ignored[0]?.reason).toBe('malformed_payload');
+  });
+
+  /**
+   * S-25.9 (TD-035 decision 6): the plan an Approve showed rides beside the payload — never in it,
+   * the payload being the catalogue's strict one — and only on an Approve.
+   */
+  describe('the plan an Approve echoes (S-25.9)', () => {
+    const PLAN_ID = '00000000-0000-4000-8000-0000000000f7';
+    const withSubject = (approve: boolean, value: Record<string, unknown>) => {
+      const click = approvalClick(MAPPED, approve);
+      return { ...click, actions: [{ ...click.actions[0], value: JSON.stringify(value) }] };
+    };
+
+    it('hands the decision the plan the button carried, and keeps the payload the catalogue’s', async () => {
+      const result = await deliver(
+        withSubject(true, { a: APPROVAL_ID, d: 'approved', t: TASK_ID, s: PLAN_ID }),
+      );
+      const [event] = result.events;
+      expect(event?.subjectArtifactId).toBe(PLAN_ID);
+      expect(event?.payload).not.toHaveProperty('subject_artifact_id');
+      expect(event?.payload).not.toHaveProperty('s');
+    });
+
+    it('carries no plan for a button that has none (posted before S-25.9), so the decision refuses it', async () => {
+      const result = await deliver(
+        withSubject(true, { a: APPROVAL_ID, d: 'approved', t: TASK_ID }),
+      );
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0]?.subjectArtifactId).toBeUndefined();
+    });
+
+    it('drops an echo on Request changes, which needs none', async () => {
+      const result = await deliver(
+        withSubject(false, { a: APPROVAL_ID, d: 'rejected', t: TASK_ID, s: PLAN_ID }),
+      );
+      expect(result.events[0]?.subjectArtifactId).toBeUndefined();
+    });
+
+    it('refuses a value carrying a key this adapter never writes (strict, review of PR #82)', async () => {
+      const result = await deliver(
+        withSubject(true, { a: APPROVAL_ID, d: 'approved', t: TASK_ID, s: PLAN_ID, x: 1 }),
+      );
+      expect(result.events).toEqual([]);
+      expect(result.ignored[0]?.reason).toBe('malformed_payload');
+    });
+
+    it('refuses a value whose plan is not an id this adapter writes', async () => {
+      const result = await deliver(
+        withSubject(true, { a: APPROVAL_ID, d: 'approved', t: TASK_ID, s: '../../etc' }),
+      );
+      expect(result.events).toEqual([]);
+      expect(result.ignored[0]?.reason).toBe('malformed_payload');
+    });
+
+    it('decides nothing when the Review plan link is pressed', async () => {
+      const click = approvalClick(MAPPED, true);
+      const result = await deliver({
+        ...click,
+        actions: [{ ...click.actions[0], action_id: REVIEW_ACTION_ID, value: undefined }],
+      });
+      expect(result.events).toEqual([]);
+      expect(result.ignored[0]?.reason).toBe('unsupported_event');
+    });
   });
 });
 

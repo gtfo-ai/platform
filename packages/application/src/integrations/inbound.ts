@@ -70,6 +70,7 @@ import type {
 import { domainEventSchemasByType } from '@platform/contracts';
 import { StreamConflictError } from '../errors.js';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
+import { enqueueApprovalRefused } from '../pipeline/jobs.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type {
   InboundThreadHandle,
@@ -87,6 +88,7 @@ import type {
   InboxStore,
   ResolvedInboundIntegration,
 } from '../ports/integrations/inbox.js';
+import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
@@ -94,6 +96,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import {
   type InboundDecisionApplier,
   type InboundDecisionRefusal,
+  type InboundDecisionReply,
   isInboundDecisionType,
 } from './inbound-decisions.js';
 import {
@@ -234,6 +237,12 @@ export interface WebhookIngressOptions {
    * `null` makes that a choice somebody wrote down.
    */
   readonly rateLimit: WebhookRateLimit | null;
+  /**
+   * Where a refused chat approval's thread reply is enqueued (S-25.9): the `pipeline.outbound`
+   * duty `approval_refused`, after the delivery's commit. **Required**, so `null` — no reply, the
+   * refusal still on the `inbox` row — is a choice a composition writes down (standing rule 31).
+   */
+  readonly jobs: Jobs | null;
 }
 
 export interface WebhookIngress {
@@ -321,6 +330,11 @@ interface DecisionRefusalLine {
   readonly detail: string;
 }
 
+/** A refused chat approval to answer in its thread once the delivery commits (S-25.9). */
+export interface InboundRefusalReply extends InboundDecisionReply {
+  readonly projectId: Id;
+}
+
 /** Thrown inside the transaction to roll a lost race back: the other delivery's row landed. */
 class DuplicateDeliveryRollback extends Error {
   override readonly name = 'DuplicateDeliveryRollback';
@@ -367,6 +381,8 @@ export interface InboundProjectEvents {
     readonly type: DomainEvent['type'];
     readonly payload: unknown;
     readonly actor: Actor;
+    /** An approve's echoed plan (S-25.9, `NormalisedEvent.subjectArtifactId`). */
+    readonly subjectArtifactId?: Id;
   }[];
 }
 
@@ -408,6 +424,11 @@ export type NormalisedDeliveryRecordOutcome =
       readonly kind: 'recorded';
       readonly events: number;
       readonly refused: number;
+      /**
+       * The refused chat approvals to answer in their threads (S-25.9) — committed refusals only:
+       * a lost race is `duplicate` and answers nothing.
+       */
+      readonly replies: readonly InboundRefusalReply[];
       /** Merge-request lifecycle drafts dropped as repeats of what the log already says (WP-110). */
       readonly repeated: number;
       readonly failure: { readonly text: string | null; readonly count: number };
@@ -478,6 +499,7 @@ export const recordNormalisedDelivery = async (
         const lifecycle = await latestLifecycles(options.mergeRequests, record.byProject, scope.tx);
         const events: DomainEvent[] = [];
         const refusals: DecisionRefusalLine[] = [];
+        const replies: InboundRefusalReply[] = [];
         let repeated = 0;
         for (const group of record.byProject) {
           let seq = sequences.get(group.projectId) ?? 1;
@@ -501,7 +523,15 @@ export const recordNormalisedDelivery = async (
             if (isInboundDecisionType(draft.type)) {
               const outcome = await options.decisions.apply(scope.tx, {
                 projectId: group.projectId,
-                draft: { type: draft.type, payload: draft.payload, actor: draft.actor },
+                draft: {
+                  type: draft.type,
+                  payload: draft.payload,
+                  actor: draft.actor,
+                  // S-25.9: the plan the button showed, checked by the subject guard.
+                  ...(draft.subjectArtifactId === undefined
+                    ? {}
+                    : { subjectArtifactId: draft.subjectArtifactId }),
+                },
                 // Which door, for the decision's `human_actions` row (WP-88, backlog 199). The
                 // delivery id is already redacted by whoever built it.
                 delivery: {
@@ -514,6 +544,9 @@ export const recordNormalisedDelivery = async (
                 events.push(...outcome.events);
               } else {
                 refusals.push({ reason: outcome.reason, detail: outcome.detail });
+                if (outcome.reply !== undefined) {
+                  replies.push({ ...outcome.reply, projectId: group.projectId });
+                }
               }
               continue;
             }
@@ -551,6 +584,7 @@ export const recordNormalisedDelivery = async (
           failure,
           events: events.length,
           refused: refusals.length,
+          replies,
           repeated,
         };
       });
@@ -648,6 +682,43 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
       'webhook deliveries for this integration are over its rate limit and are answered 429 without being verified or stored (Q60)',
     );
     limitedLog.set(integrationId, { loggedAt: now, suppressed: 0 });
+  };
+
+  /**
+   * A refused chat approval is answered in its thread (S-25.9), by a `pipeline.outbound` job
+   * enqueued **after** the delivery's commit — `Jobs.enqueue` joins no transaction, and an answer
+   * for a delivery that rolled back would describe a refusal nobody recorded. The direction is
+   * inbound, so a failed enqueue is logged and the delivery still accepted (standing rule 20): the
+   * refusal is on the `inbox` row and the approval is still pending on the task page.
+   */
+  const enqueueRefusalReplies = async (replies: readonly InboundRefusalReply[]): Promise<void> => {
+    if (replies.length === 0) {
+      return;
+    }
+    if (options.jobs === null) {
+      logger.info(
+        { refused: replies.length },
+        'a refused chat approval is not answered in its thread: this ingress was composed with no job queue',
+      );
+      return;
+    }
+    for (const reply of replies) {
+      try {
+        await enqueueApprovalRefused(options.jobs, {
+          duty: 'approval_refused',
+          project_id: reply.projectId,
+          task_id: reply.taskId,
+          approval_id: reply.approvalId,
+          refusal: reply.refusal,
+          reply_id: options.ids.next(),
+        });
+      } catch (error) {
+        logger.warn(
+          { err: error, approval_id: reply.approvalId, refusal: reply.refusal },
+          'a refused chat approval could not be queued for its thread reply; the refusal is on the inbox row',
+        );
+      }
+    }
   };
 
   const audit = async (
@@ -906,6 +977,8 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
         });
         return { kind: 'duplicate', deliveryId };
       }
+
+      await enqueueRefusalReplies(recorded.replies);
 
       const redactionCount = headers.count + payload.count + recorded.failure.count;
       await audit(resolved, {

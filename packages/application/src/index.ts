@@ -105,7 +105,9 @@ export * from './knowledge/text-search-record.js';
 export * from './maintenance/ports.js';
 export * from './maintenance/scheduler.js';
 // The notification band, the digest and quiet hours (WP-32)
+export * from './notify/approval-refused.js';
 export * from './notify/approval-settled.js';
+export * from './notify/approval-text.js';
 export * from './notify/digest.js';
 export * from './notify/handlers.js';
 export * from './notify/maintenance-report.js';

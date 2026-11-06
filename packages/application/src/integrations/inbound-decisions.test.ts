@@ -70,12 +70,35 @@ const DELIVERY = {
   deliveryId: 'slack:interaction:U1:1780000002.000300',
 };
 
-const harness = (options: { readonly role?: UserRole | null; readonly taskProject?: Id } = {}) => {
+/** The plan the approval is about, a newer one, and one it is not about (S-25.9). */
+const PLAN = '00000000-0000-4000-8000-0000000000f1' as Id;
+const NEWER_PLAN = '00000000-0000-4000-8000-0000000000f2' as Id;
+
+const harness = (
+  options: {
+    readonly role?: UserRole | null;
+    readonly taskProject?: Id;
+    /** The approval's kind; `plan` by default. */
+    readonly kind?: 'plan' | 'budget';
+    /** What `planSubject` answers — `null` is *not recorded*. `PLAN` by default. */
+    readonly subject?: Id | null;
+    /** The task's latest `ImplementationPlan`. `PLAN` by default. */
+    readonly latest?: Id | null;
+  } = {},
+) => {
   const actions: { tx: Transaction; entry: InboundHumanActionEntry }[] = [];
   const approvals = new Map<Id, StoredApproval>();
   const questions = new Map<Id, Question>();
+  const subject = options.subject === undefined ? PLAN : options.subject;
+  const latest = options.latest === undefined ? PLAN : options.latest;
   const approval: Approval = createApproval(
-    { id: APPROVAL, taskId: TASK, projectId: PROJECT, kind: 'plan', deadlineFrom: () => null },
+    {
+      id: APPROVAL,
+      taskId: TASK,
+      projectId: PROJECT,
+      kind: options.kind ?? 'plan',
+      deadlineFrom: () => null,
+    },
     context(),
   );
   approvals.set(APPROVAL, { approval, stage: 'architecture' as never, attempt: 1 });
@@ -101,6 +124,15 @@ const harness = (options: { readonly role?: UserRole | null; readonly taskProjec
         save: async (_tx: Transaction, stored: StoredApproval) => {
           approvals.set(stored.approval.id, stored);
         },
+        // S-25.9: the subject guard's two reads, the same the decide command makes.
+        planSubject: async (_tx: Transaction, id: Id) =>
+          id === APPROVAL && subject !== null ? { artifactId: subject, basis: 'recorded' } : null,
+      },
+      artifacts: {
+        latest: async (_tx: Transaction, taskId: Id, type: string) =>
+          taskId === TASK && type === 'ImplementationPlan' && latest !== null
+            ? { id: latest }
+            : null,
       },
       questions: {
         load: async (_tx: Transaction, id: Id) => questions.get(id) ?? null,
@@ -126,7 +158,11 @@ const harness = (options: { readonly role?: UserRole | null; readonly taskProjec
   return { applier, approvals, questions, actions };
 };
 
-const approvalDraft = (overrides: Record<string, unknown> = {}): InboundDecisionDraft => ({
+/** A click; `echo` is the plan the button carried (S-25.9) — the subject by default, `null` none. */
+const approvalDraft = (
+  overrides: Record<string, unknown> = {},
+  echo: Id | null = PLAN,
+): InboundDecisionDraft => ({
   type: 'task.approval.decided',
   payload: {
     project_id: PROJECT,
@@ -138,6 +174,7 @@ const approvalDraft = (overrides: Record<string, unknown> = {}): InboundDecision
     ...overrides,
   },
   actor: person,
+  ...(echo === null ? {} : { subjectArtifactId: echo }),
 });
 
 const answerDraft = (overrides: Record<string, unknown> = {}): InboundDecisionDraft => ({
@@ -293,6 +330,102 @@ describe('an approval decided from a provider', () => {
     });
 
     expect(outcome).toMatchObject({ kind: 'refused', reason: 'malformed_decision' });
+  });
+});
+
+/**
+ * **A chat Approve approves only the plan its message showed** (S-25.9, BACKLOG 1200, TD-035
+ * decision 6) — the decide command's own guard, asked from the chat door. Each refusal leaves the
+ * row pending, writes no `human_actions` row, and carries the thread reply the ingress enqueues.
+ */
+describe('the plan a chat Approve echoes (S-25.9)', () => {
+  it('approves when the button names the recorded plan and it is still the latest', async () => {
+    const { applier, approvals, actions } = harness();
+
+    const outcome = await applier.apply(TX, {
+      projectId: PROJECT,
+      delivery: DELIVERY,
+      draft: approvalDraft({}, PLAN),
+    });
+
+    expect(outcome.kind).toBe('applied');
+    expect(approvals.get(APPROVAL)?.approval.status).toBe('approved');
+    expect(actions).toHaveLength(1);
+  });
+
+  it.each([
+    { case: 'another plan', options: {}, echo: NEWER_PLAN, refusal: 'approval_subject_mismatch' },
+    { case: 'no plan at all', options: {}, echo: null, refusal: 'approval_subject_mismatch' },
+    {
+      case: 'a plan no longer the latest',
+      options: { latest: NEWER_PLAN },
+      echo: PLAN,
+      refusal: 'approval_subject_superseded',
+    },
+    {
+      case: 'an approval whose plan was not recorded',
+      options: { subject: null },
+      echo: PLAN,
+      refusal: 'approval_subject_unrecorded',
+    },
+  ] as const)(
+    'refuses an Approve naming $case, answers it in the thread, and decides nothing',
+    async (row) => {
+      const { applier, approvals, actions } = harness(row.options);
+
+      const outcome = await applier.apply(TX, {
+        projectId: PROJECT,
+        delivery: DELIVERY,
+        draft: approvalDraft({}, row.echo),
+      });
+
+      expect(outcome).toMatchObject({
+        kind: 'refused',
+        reason: row.refusal,
+        reply: { taskId: TASK, approvalId: APPROVAL, refusal: row.refusal },
+      });
+      expect(approvals.get(APPROVAL)?.approval.status).toBe('pending');
+      expect(actions, 'a refused decision writes no human_actions row').toEqual([]);
+    },
+  );
+
+  it('lets a Request changes through without any plan, recorded or echoed', async () => {
+    const { applier, approvals } = harness({ subject: null, latest: null });
+
+    const outcome = await applier.apply(TX, {
+      projectId: PROJECT,
+      delivery: DELIVERY,
+      draft: approvalDraft({ decision: 'rejected' }, null),
+    });
+
+    expect(outcome.kind).toBe('applied');
+    expect(approvals.get(APPROVAL)?.approval.status).toBe('rejected');
+  });
+
+  it('asks no echo of a budget approval', async () => {
+    const { applier, approvals } = harness({ kind: 'budget', subject: null, latest: null });
+
+    const outcome = await applier.apply(TX, {
+      projectId: PROJECT,
+      delivery: DELIVERY,
+      draft: approvalDraft({}, null),
+    });
+
+    expect(outcome.kind).toBe('applied');
+    expect(approvals.get(APPROVAL)?.approval.status).toBe('approved');
+  });
+
+  it('asks the aggregate first: a viewer with a stale button is refused for the role, with no reply', async () => {
+    const { applier } = harness({ role: 'viewer', latest: NEWER_PLAN });
+
+    const outcome = await applier.apply(TX, {
+      projectId: PROJECT,
+      delivery: DELIVERY,
+      draft: approvalDraft({}, PLAN),
+    });
+
+    expect(outcome).toMatchObject({ kind: 'refused', reason: 'not_permitted' });
+    expect(outcome.kind === 'refused' ? outcome.reply : 'applied').toBeUndefined();
   });
 });
 

@@ -100,6 +100,7 @@ const optionsOf = (harness: PipelineHarness, now: string, timezone = 'UTC'): Not
     organisation: harness.organisation,
     heldConnections: harness.heldConnections,
     organisationSettings: harness.organisationSettings,
+    baseUrl: 'https://agentic.example.test',
   };
 };
 

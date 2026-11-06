@@ -866,7 +866,8 @@ asked — so you never approve blind:
 
 *Approve* approves exactly the plan on screen. An approval asked before approvals recorded their plan
 says *not recorded*, and — like one whose plan has since been replaced by a newer one — it can only
-be rejected, which asks for a fresh plan. A Slack button still approves without showing the plan.
+be rejected, which asks for a fresh plan. Slack follows the same rule: its approval message shows the
+plan and the reasons, and its *Approve* approves only the plan that message showed (below).
 Each is an operation the task aggregate either performs or **refuses by name** — a refusal comes back as an
 error naming the transition, not as a silent no-op — and each accepted one leaves a row in the audit.
 
@@ -1235,7 +1236,13 @@ no row approves in one click. With nothing
 pending the page says *Nothing needs you*.
 
 A question the agent asks may also arrive in Slack, and all channels are equivalent — **the first
-answer wins**. An approval arrives in Slack with **Approve / Request changes** buttons; a click
+answer wins**. An approval arrives in Slack with what it is about: for a plan, its version, size,
+the files it changes (the first few), its risks and a line of its approach; every reason it was asked,
+in words; and a **Review plan** link to the task page. It has **Approve / Request changes** buttons,
+and *Approve* approves exactly the plan in that message — pressed after the plan was replaced, or on
+a message older than the plan, it approves nothing and the bot answers in the thread with the reason
+and the task page link. A plan approval whose plan was not recorded (or has been replaced) is posted
+with **Review plan** and **Request changes** only, never *Approve*. A click
 counts only when an admin has mapped your Slack account to you on **Settings → Provider
 identities**, and only if your role may decide it — the same rule as the button on the task page. A
 question arrives with a button per option, and a reply *typed* in its Slack thread answers it too,

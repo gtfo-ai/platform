@@ -312,6 +312,81 @@ describe('slack adapter, beyond the shared suite', () => {
     expect(JSON.stringify(posted.blocks)).toContain(`agentic:approval:${context.approvalId}`);
   });
 
+  /**
+   * S-25.9 (BD-006's 2026-11-06 amendment, TD-035 decision 6): the request Slack receives for a
+   * plan approval — the plan in the text, its Approve carrying the plan it shows, the task page as
+   * a link — and, for a plan the message cannot show, no Approve at all.
+   */
+  describe('a plan approval shows what it approves', () => {
+    const PLAN = '00000000-0000-4000-8000-0000000005a1';
+    const REVIEW = 'https://agentic.example.test/tasks/00000000-0000-4000-8000-0000000000c1';
+    const approvalWith = (context: ReturnType<typeof slackReplayContext>, subject: string | null) =>
+      ({
+        id: context.approvalId,
+        task_id: context.taskId,
+        kind: 'plan',
+        status: 'pending',
+        requested_at: '2026-06-01T09:05:00.000Z',
+        deadline_at: null,
+        decided_by_user_id: null,
+        decided_at: null,
+        reason: null,
+        subject_artifact_id: subject,
+        review_url: REVIEW,
+      }) as const;
+    const elementsOf = (body: unknown) =>
+      ((body as { blocks: { type: string; elements?: unknown[] }[] }).blocks.find(
+        (block) => block.type === 'actions',
+      )?.elements ?? []) as { action_id: string; value?: string; url?: string }[];
+
+    it('carries the plan on its Approve, links the task page, and keeps the text the platform wrote', async () => {
+      const context = slackReplayContext();
+      const thread = await context.port.postTaskThread({
+        channel: CHANNEL,
+        taskId: context.taskId,
+        body: { markdown: 'Picked up **TASK-1**' },
+      });
+      expect(thread.thread_id, 'the thread the approval is posted into').toBe(THREAD_TS);
+      // The recorded `Approve the plan?` exchange: the replay answers only a request it holds, and
+      // what this case is about is the Block Kit the adapter builds around the text. The plan's own
+      // words through the converter are `notification-links.test.ts`'s, driven to the request.
+      await context.port.postApproval(thread, approvalWith(context, PLAN), {
+        markdown: 'Approve the plan?',
+      });
+
+      const body = context.replay.requests.at(-1)?.body as { text: string; blocks: unknown };
+      expect(body.text, 'the text the platform wrote, unchanged').toBe('Approve the plan?');
+      const elements = elementsOf(body);
+      expect(elements.map((element) => element.action_id)).toEqual([
+        'agentic_approve',
+        'agentic_reject',
+        'agentic_review',
+      ]);
+      expect(JSON.parse(elements[0]?.value ?? '')).toMatchObject({ s: PLAN, d: 'approved' });
+      expect(JSON.parse(elements[1]?.value ?? '')).not.toHaveProperty('s');
+      expect(elements[2]?.url).toBe(REVIEW);
+    });
+
+    it('posts no Approve when the message shows no plan', async () => {
+      const context = slackReplayContext();
+      const thread = await context.port.postTaskThread({
+        channel: CHANNEL,
+        taskId: context.taskId,
+        body: { markdown: 'Picked up **TASK-1**' },
+      });
+      expect(thread.thread_id, 'the thread the approval is posted into').toBe(THREAD_TS);
+      await context.port.postApproval(thread, approvalWith(context, null), {
+        markdown: 'Approve the plan?',
+      });
+
+      const elements = elementsOf(context.replay.requests.at(-1)?.body);
+      expect(elements.map((element) => element.action_id)).toEqual([
+        'agentic_reject',
+        'agentic_review',
+      ]);
+    });
+  });
+
   it('refuses Block Kit Slack would refuse, before the request leaves the process', async () => {
     const context = slackReplayContext();
     const before = context.replay.requests.length;
