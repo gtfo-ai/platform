@@ -31,7 +31,9 @@ import {
   claimBlockerLines,
   configFieldLabel,
   GATE_LABEL,
+  INTEGRATION_CURRENT_HEALTH_LABEL,
   INTEGRATION_HEALTH_LABEL,
+  INTEGRATION_ROLE_GROUPS,
   INTEGRATION_TYPE_LABEL,
   INTEGRATION_TYPE_PURPOSE,
   isUpdating,
@@ -76,7 +78,27 @@ const VOCABULARIES = [
     INTEGRATION_HEALTH_LABEL,
   ],
   ['worker pause reason', workerPauseReasonSchema.options, WORKER_PAUSE_REASON_LABEL],
+  [
+    'integration health now',
+    integrationSummarySchema.shape.current_health.shape.status.options,
+    INTEGRATION_CURRENT_HEALTH_LABEL,
+  ],
 ] as const;
+
+describe('the integrations list’s groups (S-25.3)', () => {
+  it('names every integration type once, in product/08’s order', () => {
+    expect(INTEGRATION_ROLE_GROUPS.map((group) => group.label)).toEqual([
+      'Tickets',
+      'Code & merge requests',
+      'Chat',
+      'Errors',
+      'Logs',
+    ]);
+    expect(INTEGRATION_ROLE_GROUPS.map((group) => group.type).sort()).toEqual(
+      [...integrationTypeSchema.options].sort(),
+    );
+  });
+});
 
 describe('humanize', () => {
   it.each(VOCABULARIES)(

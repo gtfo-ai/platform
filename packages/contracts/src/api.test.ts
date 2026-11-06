@@ -626,8 +626,61 @@ describe('the list envelopes and the KB health report', () => {
       retired_at: null,
       credentials_readable: null,
       credentials_consequence: null,
+      activity: { last_call: null, last_delivery_at: null },
+      current_health: { status: 'never_checked' as const, basis: null, at: null },
+      used_by: [],
     };
     expect(integrationsResponseSchema.parse({ items: [integration] })).toBeTruthy();
+    // S-25.3: traffic, health now and the projects are required, so a server that forgot them is
+    // caught; a health word outside the enum and an empty use are refused.
+    for (const key of ['activity', 'current_health', 'used_by'] as const) {
+      const { [key]: _forgot, ...without } = integration;
+      expect(integrationsResponseSchema.safeParse({ items: [without] }).success, key).toBe(false);
+    }
+    expect(
+      integrationsResponseSchema.safeParse({
+        items: [
+          {
+            ...integration,
+            activity: {
+              last_call: { at: '2026-11-06T09:00:00.000Z', ok: true },
+              last_delivery_at: null,
+            },
+            current_health: { status: 'working', basis: 'call', at: '2026-11-06T09:00:00.000Z' },
+            used_by: [
+              {
+                project_id: uuid(12),
+                project_key: 'autix',
+                project_name: 'Autix',
+                uses: [{ label: 'Tickets from', value: 'AUT' }],
+              },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      integrationsResponseSchema.safeParse({
+        items: [{ ...integration, current_health: { status: 'healthy', basis: null, at: null } }],
+      }).success,
+    ).toBe(false);
+    expect(
+      integrationsResponseSchema.safeParse({
+        items: [
+          {
+            ...integration,
+            used_by: [
+              {
+                project_id: uuid(12),
+                project_key: 'autix',
+                project_name: 'Autix',
+                uses: [{ label: 'Tickets from', value: '' }],
+              },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(false);
     // WP-157: both credential fields are required-nullable, so a server that forgot them is caught.
     const { credentials_readable: _unread, ...withoutReadable } = integration;
     expect(integrationsResponseSchema.safeParse({ items: [withoutReadable] }).success).toBe(false);

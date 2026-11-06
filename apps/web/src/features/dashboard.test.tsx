@@ -62,6 +62,9 @@ const integration = (
   retired_at: null,
   credentials_readable: null,
   credentials_consequence: null,
+  activity: { last_call: null, last_delivery_at: null },
+  current_health: { status: 'never_checked', basis: null, at: null },
+  used_by: [],
   ...over,
 });
 

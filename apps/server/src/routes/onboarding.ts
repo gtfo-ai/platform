@@ -111,8 +111,8 @@ import type { Database } from '../queries/identity-queries.js';
 import { findConfigLayers, findProjectRole } from '../queries/identity-queries.js';
 import {
   findIntegrationRow,
+  integrationSummaryOf,
   storedConfigRefusal,
-  toIntegrationSummary,
 } from '../queries/integration-queries.js';
 import {
   assertNotRetired,
@@ -654,7 +654,7 @@ export const registerOnboardingRoutes = async (
         throw new NotFoundError(`integration ${integrationId}`);
       }
       // The command's answer does not decrypt anything: `credentials_readable` is the list's (WP-157).
-      return toIntegrationSummary(row, findShippedProvider(row.provider), null);
+      return integrationSummaryOf(options.database, row, null, new Date());
     },
   );
 
@@ -665,7 +665,7 @@ export const registerOnboardingRoutes = async (
       throw new NotFoundError(`integration ${integrationId}`);
     }
     // Unchecked (`null`): the list answers it, and the SPA re-reads the list after a command.
-    return toIntegrationSummary(row, findShippedProvider(row.provider), null);
+    return integrationSummaryOf(options.database, row, null, new Date());
   };
 
   /**

@@ -2,9 +2,17 @@
  * Integrations (`/integrations`) — the organisation's connected systems as a list box, GitHub's
  * settings list (research/19 § 5.2 "Integrations", TD-033 § 1).
  *
- * One row per integration: its health as a status icon and word, its name (the way into its own
- * page, `/integrations/$id`), its provider and kind, when it was last checked, and how many projects
- * bind it. The row's `···` holds *Test connection*, *Setup guide*, *Edit configuration*, *Replace
+ * Grouped by what an integration does for a project — *Tickets*, *Code & merge requests*, *Chat*,
+ * *Errors*, *Logs* (S-25.3, product/08's 2026-11-06 amendment) — one row per integration: its
+ * health **now** as a status icon and word, its name (the way into its own page,
+ * `/integrations/$id`), its provider as a role glyph and its name (`ui/provider-icon.tsx`, never a
+ * brand logo; the screen carries the trademark line), what decided the health and how long ago, and
+ * the projects that use it, linked. The health is the server's (`current_health`): read from the
+ * integration's traffic — the newest call and the newest verified delivery — with the last probe as
+ * one data point, and nothing older than `INTEGRATION_HEALTH_STALE_AFTER_HOURS` ever reads
+ * *Working*. A row that reads *Not checked recently* offers *Test again* in place, to someone who may
+ * test (a row command: the row keeps its stretched link and the button sits above it, TD-033's
+ * 2026-11-06 amendment). The row's `···` holds *Test connection*, *Setup guide*, *Edit configuration*, *Replace
  * credentials* and *Retire* (`integration-forms.tsx`); the header's one primary action is **New
  * integration**, the four-step wizard (`integration-wizard.tsx`). The writes are an administrator's
  * (`integration.write`): the list read's `can_write` decides whether they are offered at all, and a
@@ -19,35 +27,31 @@
  * (`config_refusal`, WP-100) and an organisation account whose credentials cannot be decrypted
  * (`credentials_readable: false`, WP-157 (a)) are named on the row, in the server's own words; a
  * retired integration (WP-114) is listed as retired with no menu, because it refuses every write.
- * "Used by N projects" is every project's bindings read (`useProjectsByIntegration`) and is left out
- * until all of them have answered — a count from half the reads would be a wrong number.
+ * "Used by *Autix*" is the list read's own `used_by` (S-25.3) — before it, every project's bindings
+ * read, one request per project.
  */
 import type { IntegrationProvider, IntegrationSummary } from '@platform/contracts';
 import { PlugIcon } from '@primer/octicons-react/PlugIcon';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Fragment, type ReactElement, useState } from 'react';
 import { invalidSettingsSentence, readErrorDetail } from '../api/read-error.js';
-import {
-  useIntegrationProviders,
-  useIntegrations,
-  useOnboardingCommands,
-  useProjects,
-  useProjectsByIntegration,
-} from '../app/queries.js';
+import { useIntegrationProviders, useIntegrations, useOnboardingCommands } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { Blankslate } from '../ui/blankslate.js';
-import { buttonClassName } from '../ui/button.js';
+import { Button, buttonClassName } from '../ui/button.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { DetailsDisclosure } from '../ui/details.js';
-import { INTEGRATION_TYPE_LABEL } from '../ui/humanize.js';
+import { INTEGRATION_ROLE_GROUPS } from '../ui/humanize.js';
 import { ErrorNotice, formatDateTime, formatInteger } from '../ui/kit.js';
-import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
+import { ListBox, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
+import { PROVIDER_TRADEMARK_NOTICE, ProviderIcon } from '../ui/provider-icon.js';
 import { formatAgo } from '../ui/relative-time.js';
 import { rowLink } from '../ui/row-link.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { ConnectionTestResult } from './connection-test-result.js';
 import {
   IntegrationActions,
@@ -56,15 +60,55 @@ import {
 } from './integration-forms.js';
 
 /**
- * "Used by 2 projects", "Not used by a project", or nothing while the count is not known — the
- * vocabulary's one word for a project's integrations, *Connections* (S-23.23, the UX audit's § 4).
+ * "Not used by a project", or "Used by N projects" where names do not fit (the retire dialog's
+ * count) — the vocabulary's one word for a project's integrations, *Connections* (S-23.23, the UX
+ * audit's § 4).
  */
-export const boundText = (count: number | null): string | null =>
-  count === null
-    ? null
-    : count === 0
-      ? 'Not used by a project'
-      : `Used by ${count === 1 ? '1 project' : `${formatInteger(count)} projects`}`;
+export const boundText = (count: number): string =>
+  count === 0
+    ? 'Not used by a project'
+    : `Used by ${count === 1 ? '1 project' : `${formatInteger(count)} projects`}`;
+
+/** How many projects a row names before "+N" (S-25.3: "Autix, Demo +2"). */
+export const USED_BY_NAMED = 2;
+
+const PROJECT_LINK = cx('rounded-sm text-link hover:underline', FOCUS_RING);
+
+/**
+ * "Used by *Autix*", "Used by *Autix*, *Demo*", "Used by *Autix*, *Demo* +2" — each named project
+ * a link to its board; the rest are counted, and named in the count's tooltip. Project names are
+ * operator text, rendered as text.
+ */
+export const UsedBy = ({
+  users,
+}: {
+  readonly users: IntegrationSummary['used_by'];
+}): ReactElement => {
+  if (users.length === 0) {
+    return <span data-used-by="none">{boundText(0)}</span>;
+  }
+  const named = users.slice(0, USED_BY_NAMED);
+  const rest = users.slice(USED_BY_NAMED);
+  return (
+    <span data-used-by="">
+      Used by{' '}
+      {named.map((user, index) => (
+        <Fragment key={user.project_id}>
+          {index === 0 ? null : ', '}
+          <Link to="/projects/$key" params={{ key: user.project_key }} className={PROJECT_LINK}>
+            <UntrustedText value={user.project_name} />
+          </Link>
+        </Fragment>
+      ))}
+      {rest.length === 0 ? null : (
+        <span
+          data-used-by-rest={rest.length}
+          title={sanitiseUntrusted(rest.map((user) => user.project_name).join(', '))}
+        >{` +${formatInteger(rest.length)}`}</span>
+      )}
+    </span>
+  );
+};
 
 /** The provider's display name, or its id for one this build does not ship. */
 export const providerName = (
@@ -72,17 +116,32 @@ export const providerName = (
   provider: IntegrationProvider | undefined,
 ): string => provider?.display_name ?? integration.provider;
 
-/** "checked 5 m ago", "never checked", or "retired 1 Oct 2026, 09:00". */
-export const checkedText = (integration: IntegrationSummary, nowMs: number): string => {
+/**
+ * What decided the row's health, and how long ago (S-25.3): "last call 5 m ago", "last call failed
+ * 2 h ago", "last delivery 1 h ago", "tested 32 d ago", "test failed 3 h ago" — or "no calls or
+ * deliveries yet", or "retired 1 Oct 2026, 09:00". Every word is the server's evidence: the basis
+ * and the instant are `current_health`'s, and whether a call failed is `activity.last_call`'s.
+ */
+export const healthText = (integration: IntegrationSummary, nowMs: number): string => {
   if (integration.retired_at !== null) {
     return `retired ${formatDateTime(integration.retired_at)}`;
   }
-  const checked = integration.health.checked_at;
-  if (checked === null) {
-    return 'never checked';
+  const { basis, at } = integration.current_health;
+  if (basis === null || at === null) {
+    return 'no calls or deliveries yet';
   }
-  const ago = formatAgo(checked, nowMs);
-  return ago === null ? `checked ${formatDateTime(checked)}` : `checked ${ago}`;
+  const what =
+    basis === 'call'
+      ? integration.activity.last_call?.ok === false
+        ? 'last call failed'
+        : 'last call'
+      : basis === 'delivery'
+        ? 'last delivery'
+        : integration.health.status === 'down' || integration.health.status === 'degraded'
+          ? 'test failed'
+          : 'tested';
+  const ago = formatAgo(at, nowMs);
+  return `${what} ${ago ?? formatDateTime(at)}`;
 };
 
 const PROBLEM_ACTION = cx('rounded-sm text-link underline hover:no-underline', FOCUS_RING);
@@ -160,8 +219,6 @@ export const IntegrationProblems = ({
 export const IntegrationsScreen = (): ReactElement => {
   const integrations = useIntegrations();
   const providers = useIntegrationProviders();
-  const projects = useProjects();
-  const bound = useProjectsByIntegration(projects.data?.items);
   const commands = useOnboardingCommands();
   const navigate = useNavigate();
   const { now } = useServices();
@@ -231,102 +288,142 @@ export const IntegrationsScreen = (): ReactElement => {
         )
       ) : null}
       {items.length === 0 ? null : (
-        <ListBox
-          label="Integrations"
-          header={
-            <ListBoxHeader>
-              <span className="font-semibold text-fg">{`${formatInteger(live)} active`}</span>
-              {items.length === live ? null : (
-                <span className="text-fg-muted">{`${formatInteger(items.length - live)} retired`}</span>
-              )}
-            </ListBoxHeader>
-          }
-        >
-          {items.map((integration) => {
-            const provider = providerOf(integration);
-            const { status, word } = integrationStatus(integration);
-            const count = bound === null ? null : (bound.get(integration.id)?.length ?? 0);
-            const boundLine = integration.retired_at === null ? boundText(count) : null;
-            return (
-              <Fragment key={integration.id}>
-                <ListRow
-                  leading={<StatusIcon status={status} label={word} />}
-                  title={
-                    <Link
-                      to="/integrations/$integrationId"
-                      params={{ integrationId: integration.id }}
-                      {...rowLink('hover:text-link hover:underline')}
-                    >
-                      <UntrustedText value={integration.name} />
-                    </Link>
-                  }
-                  meta={
-                    <span className="flex flex-col gap-0.5" data-integration={integration.id}>
-                      <span>
-                        <UntrustedText value={providerName(integration, provider)} />
-                        {` · ${INTEGRATION_TYPE_LABEL[integration.type]} · ${word} · ${checkedText(
-                          integration,
-                          nowMs,
-                        )}`}
-                      </span>
-                      {integration.retired_at === null ? null : (
-                        <span data-integration-retired={integration.id}>
-                          Its credentials are deleted and nothing loads or changes it. It stays
-                          listed because the audit names it.
-                        </span>
-                      )}
-                      <IntegrationProblems
-                        integration={integration}
-                        // The repairs are writes: an administrator's only (S-23.23).
-                        {...(provider === undefined || !canWrite
-                          ? {}
-                          : {
-                              onEditConfiguration: () => {
-                                setDialogFor({ id: integration.id, dialog: 'configuration' });
-                              },
-                              onReplaceCredentials: () => {
-                                setDialogFor({ id: integration.id, dialog: 'credentials' });
-                              },
-                            })}
-                      />
-                    </span>
-                  }
-                  {...(boundLine === null ? {} : { trailing: <span>{boundLine}</span> })}
-                  actions={
-                    <IntegrationActions
-                      integration={integration}
-                      provider={provider}
-                      boundProjects={count}
-                      dialog={dialogFor?.id === integration.id ? dialogFor.dialog : null}
-                      onDialogChange={(dialog) => {
-                        setDialogFor(dialog === null ? null : { id: integration.id, dialog });
-                      }}
-                      canWrite={canWrite}
-                      onTest={() => {
-                        setTested(integration.id);
-                        commands.testIntegration.mutate(integration.id);
-                      }}
-                      onSetupGuide={() => {
-                        void navigate({
-                          to: '/integrations/$integrationId',
-                          params: { integrationId: integration.id },
-                          search: { tab: 'setup-guide' },
-                        });
-                      }}
-                    />
-                  }
-                />
-                {tested === integration.id ? (
-                  <li className="px-4 pb-3 pl-11" data-connection-test-for={integration.id}>
-                    {/* WP-155 (backlog 451): the one rendering the wizard's step 1 shares. */}
-                    <ConnectionTestResult test={commands.testIntegration} />
-                  </li>
-                ) : null}
-              </Fragment>
-            );
-          })}
-        </ListBox>
+        <p className="text-sm text-fg-muted" data-integration-counts="">
+          <span className="font-semibold text-fg">{`${formatInteger(live)} active`}</span>
+          {items.length === live ? null : ` · ${formatInteger(items.length - live)} retired`}
+        </p>
       )}
+      {/* S-25.3: grouped by what an integration does for a project, in product/08's order. */}
+      {INTEGRATION_ROLE_GROUPS.map((group) => {
+        const rows = items.filter((integration) => integration.type === group.type);
+        if (rows.length === 0) {
+          return null;
+        }
+        return (
+          <section
+            key={group.type}
+            aria-labelledby={`integrations-${group.type}`}
+            className="flex flex-col gap-2"
+            data-integration-group={group.type}
+          >
+            <h2 id={`integrations-${group.type}`} className="text-base font-semibold">
+              {group.label}
+            </h2>
+            <ListBox label={group.label}>
+              {rows.map((integration) => {
+                const provider = providerOf(integration);
+                const { status, word } = integrationStatus(integration);
+                const isLive = integration.retired_at === null;
+                // S-25.3: a stale verdict offers the probe in place, to someone who may run it.
+                const testAgain =
+                  isLive &&
+                  canWrite &&
+                  integration.current_health.status === 'not_checked_recently';
+                const test = () => {
+                  setTested(integration.id);
+                  commands.testIntegration.mutate(integration.id);
+                };
+                return (
+                  <Fragment key={integration.id}>
+                    <ListRow
+                      leading={<StatusIcon status={status} label={word} />}
+                      title={
+                        <Link
+                          to="/integrations/$integrationId"
+                          params={{ integrationId: integration.id }}
+                          {...rowLink('hover:text-link hover:underline')}
+                        >
+                          <UntrustedText value={integration.name} />
+                        </Link>
+                      }
+                      meta={
+                        <span className="flex flex-col gap-0.5" data-integration={integration.id}>
+                          <span className="inline-flex flex-wrap items-center gap-x-1">
+                            <ProviderIcon
+                              type={integration.type}
+                              name={providerName(integration, provider)}
+                            />
+                            {` · ${word} · ${healthText(integration, nowMs)}`}
+                          </span>
+                          {isLive ? null : (
+                            <span data-integration-retired={integration.id}>
+                              Its credentials are deleted and nothing loads or changes it. It stays
+                              listed because the audit names it.
+                            </span>
+                          )}
+                          <IntegrationProblems
+                            integration={integration}
+                            // The repairs are writes: an administrator's only (S-23.23).
+                            {...(provider === undefined || !canWrite
+                              ? {}
+                              : {
+                                  onEditConfiguration: () => {
+                                    setDialogFor({ id: integration.id, dialog: 'configuration' });
+                                  },
+                                  onReplaceCredentials: () => {
+                                    setDialogFor({ id: integration.id, dialog: 'credentials' });
+                                  },
+                                })}
+                          />
+                        </span>
+                      }
+                      {...(isLive
+                        ? {
+                            trailing: (
+                              <>
+                                {testAgain ? (
+                                  <Button
+                                    size="sm"
+                                    disabled={commands.testIntegration.isPending}
+                                    onClick={test}
+                                    data-test-again={integration.id}
+                                  >
+                                    Test again
+                                  </Button>
+                                ) : null}
+                                <UsedBy users={integration.used_by} />
+                              </>
+                            ),
+                          }
+                        : {})}
+                      actions={
+                        <IntegrationActions
+                          integration={integration}
+                          provider={provider}
+                          boundProjects={integration.used_by.length}
+                          dialog={dialogFor?.id === integration.id ? dialogFor.dialog : null}
+                          onDialogChange={(dialog) => {
+                            setDialogFor(dialog === null ? null : { id: integration.id, dialog });
+                          }}
+                          canWrite={canWrite}
+                          onTest={test}
+                          onSetupGuide={() => {
+                            void navigate({
+                              to: '/integrations/$integrationId',
+                              params: { integrationId: integration.id },
+                              search: { tab: 'setup-guide' },
+                            });
+                          }}
+                        />
+                      }
+                    />
+                    {tested === integration.id ? (
+                      <li className="px-4 pb-3 pl-11" data-connection-test-for={integration.id}>
+                        {/* WP-155 (backlog 451): the one rendering the wizard's step 1 shares. */}
+                        <ConnectionTestResult test={commands.testIntegration} />
+                      </li>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </ListBox>
+          </section>
+        );
+      })}
+      {/* research/21 § 8: the providers are named, never drawn with their marks. */}
+      <p className="text-xs text-fg-muted" data-trademark-notice="">
+        {PROVIDER_TRADEMARK_NOTICE}
+      </p>
     </div>
   );
 };

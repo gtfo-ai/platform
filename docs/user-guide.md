@@ -1368,21 +1368,41 @@ the launch candidates and every ticket with its similarity — or the reason it 
 
 ## 9. Integrations
 
-**Integrations** lists the organisation's connected systems — ticket tracker, git host, chat, logs,
-error tracker — one row each: its health (*Healthy*, *Degraded*, *Down*, *Not checked*, or
-*Retired*) as an icon and a word, its name, its provider and kind, when it was last checked
-(*checked 5 m ago*), and how many projects bind it. Each row's **`···`** menu has **Test connection**
-(the answer appears under the row), **Setup guide**, **Edit configuration**, **Replace credentials**
-and **Retire**. Click a name to open the integration's own page, with three tabs:
+**Integrations** lists the organisation's connected systems, grouped by what each does for a project
+— **Tickets**, **Code & merge requests**, **Chat**, **Errors**, **Logs** — one row each: its health
+**now** as an icon and a word, its name, its provider (a small glyph for its role — a merge for a git
+host, an open issue for a ticket tracker — and the provider's name; never the provider's logo),
+what the health was read from and how long ago (*last call 5 m ago*, *last delivery 1 h ago*, *tested
+3 h ago*), and the projects that use it, linked (*Used by Autix*; past two, *Used by Autix, Demo +2*,
+the rest named when you hover the count).
 
-- **Overview** — anything wrong with it, its configuration (each setting under its name in words,
-  with the key beside it, `site_url`), and the projects that bind it. **Test connection** is the
-  page's button, and the `···` beside it holds the rest.
+The health is read from the integration's **traffic**, not only from the last test: the last call the
+platform made to the provider, and the last webhook (or poll) delivery it received and verified, with
+the last **Test connection** as one more fact. *Working* means something succeeded in the last
+24 hours; *Some calls failing* means the newest call failed after one that worked; *Failing* means
+calls failed and none worked; *Not checked recently* means nothing happened in the last 24 hours — a
+test that passed a month ago does not make an integration *Working* — and an administrator gets a
+**Test again** button on that row; *Never checked* means nothing has happened at all; and *Retired*.
+A failed call can be one request's fault (a ticket that no longer exists), which is why one failure
+after a success reads *Some calls failing* and the next successful call clears it.
+
+Each row's **`···`** menu has **Test connection** (the answer appears under the row), **Setup guide**,
+**Edit configuration**, **Replace credentials** and **Retire**. Click anywhere on a row to open the
+integration's own page, with three tabs:
+
+- **Overview** — anything wrong with it; its **health** with the facts it was read from (the last call
+  and whether it succeeded, the last delivery, the last connection test), each with its age; the
+  **projects** that use it, each with what for (*Autix · Tickets from AUT · Picked up with label
+  agentic*); and its configuration, each setting under its name in words. **Test connection** is the
+  page's button, and the `···` beside it holds the rest. Secrets are stored encrypted and never shown.
 - **Setup guide** — the provider's own guide, written for the provider's screens and the same text
   the operator reads. For a provider with an inbound webhook it shows the webhook URL to paste into
   the provider, with a **Copy** button; a provider with no inbound half says it has none.
-- **Refused deliveries** — what the provider sent that the platform refused, and why (an unmapped
+- **Rejected webhooks** — what the provider sent that the platform refused, and why (an unmapped
   chat account, a decision the clicker may not make).
+
+GitLab, Jira, Slack, Sentry and Loki are trademarks of their respective owners; this project is not
+affiliated with or endorsed by them. The screens carry the same line.
 
 Nothing on these screens is a credential: the server strips every field a provider declares to be a
 secret before publishing an integration's configuration, and publishes nothing at all for a provider

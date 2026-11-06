@@ -4,18 +4,23 @@
  * action, **Test connection**; the `···` with the rest (`integration-forms.tsx`); and an
  * UnderlineNav of three tabs, each addressable as `?tab=`:
  *
- * - **Overview** — what is wrong with it, if anything (the server's words), its non-secret
- *   configuration under human labels with the key beside each, and the projects that bind it;
+ * - **Overview** — what is wrong with it, if anything (the server's words); its health now and the
+ *   evidence it was read from — the last call, the last delivery, the last test — each with its age
+ *   (S-25.3); the projects that use it, each with what it uses it for ("Tickets from AUT · Picked
+ *   up with label agentic"); and its non-secret configuration under human labels only — the raw
+ *   keys are the server's refusals' and the edit dialog's hints, not this page's (research/21 S10);
  * - **Setup guide** — the provider's own guide and the webhook URL to paste into the provider
  *   (WP-95, PROGRESS backlog 272), copied and never followed; a provider with no inbound half says
  *   it has none;
- * - **Refused deliveries** — what its inbound half refused, and why (WP-44).
+ * - **Rejected webhooks** — what its inbound half refused, and why (WP-44); the tab's address is
+ *   still `?tab=refused-deliveries`, so a link saved before S-25.3 opens it.
  *
  * It reads nothing new: the row comes from the list read (`GET /api/integrations` has no read by
- * id), the guide and the refusals from their own endpoints when their tab is open, the bound
- * projects from each project's bindings read. An id the list does not hold is said plainly.
+ * id) — its health and its projects included since S-25.3 — and the guide and the refusals from
+ * their own endpoints when their tab is open. An id the list does not hold is said plainly.
  */
-import type { IntegrationProvider } from '@platform/contracts';
+import type { IntegrationProvider, IntegrationSummary } from '@platform/contracts';
+import { INTEGRATION_HEALTH_STALE_AFTER_HOURS } from '@platform/contracts';
 import { PlugIcon } from '@primer/octicons-react/PlugIcon';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
@@ -24,20 +29,24 @@ import {
   useIntegrationSetupGuide,
   useIntegrations,
   useOnboardingCommands,
-  useProjects,
-  useProjectsByIntegration,
 } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { Button, buttonClassName } from '../ui/button.js';
-import { configFieldLabel, INTEGRATION_TYPE_LABEL } from '../ui/humanize.js';
-import { ErrorNotice } from '../ui/kit.js';
+import {
+  configFieldLabel,
+  INTEGRATION_HEALTH_LABEL,
+  INTEGRATION_TYPE_LABEL,
+} from '../ui/humanize.js';
+import { ErrorNotice, formatDateTime } from '../ui/kit.js';
 import type { NavLinkProps } from '../ui/nav-item.js';
 import { PageHeader } from '../ui/page-header.js';
+import { PROVIDER_TRADEMARK_NOTICE, ProviderIcon } from '../ui/provider-icon.js';
+import { formatAgo } from '../ui/relative-time.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StateLabel } from '../ui/status.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
-import { CodeText, CopyableUrl, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { CopyableUrl, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { ConnectionTestResult } from './connection-test-result.js';
 import {
   IntegrationActions,
@@ -45,7 +54,7 @@ import {
   integrationStatus,
   RefusedDeliveries,
 } from './integration-forms.js';
-import { boundText, checkedText, IntegrationProblems, providerName } from './integrations.js';
+import { healthText, IntegrationProblems, providerName, UsedBy } from './integrations.js';
 
 export const INTEGRATION_TABS = ['overview', 'setup-guide', 'refused-deliveries'] as const;
 export type IntegrationTab = (typeof INTEGRATION_TABS)[number];
@@ -53,7 +62,7 @@ export type IntegrationTab = (typeof INTEGRATION_TABS)[number];
 const TAB_LABEL: Readonly<Record<IntegrationTab, string>> = {
   overview: 'Overview',
   'setup-guide': 'Setup guide',
-  'refused-deliveries': 'Refused deliveries',
+  'refused-deliveries': 'Rejected webhooks',
 };
 
 const BACK = 'rounded-sm text-sm text-link hover:underline';
@@ -96,27 +105,82 @@ const SetupGuide = ({ integrationId }: { readonly integrationId: string }): Reac
   );
 };
 
+/** "5 m ago", or the instant when it is too old for a relative age. */
+const agoText = (at: string, nowMs: number): string => formatAgo(at, nowMs) ?? formatDateTime(at);
+
+/**
+ * The evidence the health was read from (S-25.3), each fact with its age: the last call that
+ * reached the provider, the last verified delivery, the last *Test connection*. "None" is said, not
+ * left out, so an empty fact is not mistaken for one that did not load.
+ */
+const HealthFacts = ({
+  integration,
+  nowMs,
+}: {
+  readonly integration: IntegrationSummary;
+  readonly nowMs: number;
+}): ReactElement => {
+  const { last_call: call, last_delivery_at: delivery } = integration.activity;
+  const probe = integration.health;
+  return (
+    <section aria-labelledby="integration-health" className="flex flex-col gap-2">
+      <h2 id="integration-health" className="text-base font-semibold">
+        Health
+      </h2>
+      {integration.current_health.status === 'not_checked_recently' ? (
+        <p className="text-sm text-fg-muted" data-health-stale="">
+          {`Nothing has called it, delivered from it or tested it in the last ${INTEGRATION_HEALTH_STALE_AFTER_HOURS} hours, so its health is not known now.`}
+        </p>
+      ) : null}
+      <dl
+        className="grid grid-cols-[minmax(10rem,auto)_1fr] gap-x-4 gap-y-2 rounded-md border border-line p-4 text-sm"
+        data-health-facts=""
+      >
+        <dt className="text-fg-muted">Last call</dt>
+        <dd data-health-fact="call">
+          {call === null
+            ? 'None yet'
+            : `${call.ok ? 'Succeeded' : 'Failed'} ${agoText(call.at, nowMs)}`}
+        </dd>
+        <dt className="text-fg-muted">Last delivery</dt>
+        <dd data-health-fact="delivery">
+          {delivery === null ? 'None yet' : `Received ${agoText(delivery, nowMs)}`}
+        </dd>
+        <dt className="text-fg-muted">Last connection test</dt>
+        <dd data-health-fact="probe">
+          {probe.checked_at === null
+            ? 'Never tested'
+            : `${INTEGRATION_HEALTH_LABEL[probe.status]} ${agoText(probe.checked_at, nowMs)}`}
+        </dd>
+      </dl>
+      {probe.detail === null ? null : (
+        <p className="text-sm">
+          <UntrustedText value={probe.detail} />
+        </p>
+      )}
+    </section>
+  );
+};
+
 const Overview = ({
   integration,
   provider,
-  projects,
   onDialog,
   canWrite,
+  nowMs,
 }: {
-  readonly integration: NonNullable<ReturnType<typeof useIntegrations>['data']>['items'][number];
+  readonly integration: IntegrationSummary;
   readonly provider: IntegrationProvider | undefined;
   /** The list read's `can_write`: a problem line offers its repair only then (S-23.23). */
   readonly canWrite: boolean;
   /** Opens one of the header menu's dialogs from a problem line (S-23.22). */
   readonly onDialog: (dialog: IntegrationDialog) => void;
-  readonly projects:
-    | readonly { readonly id: string; readonly key: string; readonly name: string }[]
-    | null;
+  readonly nowMs: number;
 }): ReactElement => {
   const entries = Object.entries(integration.config);
   // A value is shown only for a field the provider declares as configuration. The server strips the
   // provider's declared credential fields and nothing else, so a token an operator once stored under
-  // a key the provider does not declare would be published as it is: its name is shown, never its
+  // a key the provider does not declare would be published as it is: its label is shown, never its
   // value — as the old screen did (it named undeclared keys only).
   const declared = new Set(
     (provider?.config_fields ?? [])
@@ -138,28 +202,51 @@ const Overview = ({
               },
             })}
       />
-      {integration.health.detail === null ? null : (
-        <p className="text-sm">
-          <UntrustedText value={integration.health.detail} />
-        </p>
-      )}
+      <HealthFacts integration={integration} nowMs={nowMs} />
+      <section aria-labelledby="integration-projects" className="flex flex-col gap-2">
+        <h2 id="integration-projects" className="text-base font-semibold">
+          Projects
+        </h2>
+        {integration.used_by.length === 0 ? (
+          <p className="text-sm text-fg-muted">
+            No project uses it yet. A project picks it in its first wizard step, or in its settings
+            under Connections.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-1 text-sm" aria-label="Projects that use it">
+            {integration.used_by.map((user) => (
+              <li key={user.project_id} data-integration-user={user.project_key}>
+                <Link
+                  to="/projects/$key/settings"
+                  params={{ key: user.project_key }}
+                  className="text-link hover:underline"
+                >
+                  <UntrustedText value={user.project_name} />
+                </Link>
+                {/* S-25.3: what the project uses it for, in the catalogue's words and its values. */}
+                {user.uses.map((use) => (
+                  <span key={use.label} className="text-fg-muted">
+                    {` · ${use.label} `}
+                    <UntrustedText value={use.value} />
+                  </span>
+                ))}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
       <section aria-labelledby="integration-configuration" className="flex flex-col gap-2">
         <h2 id="integration-configuration" className="text-base font-semibold">
           Configuration
         </h2>
-        <p className="text-xs text-fg-muted">
-          Credentials are not shown: the server keeps them sealed and publishes only the rest.
-        </p>
+        <p className="text-xs text-fg-muted">Secrets are stored encrypted and never shown.</p>
         {entries.length === 0 ? (
           <p className="text-sm text-fg-muted">Nothing is configured beyond the credentials.</p>
         ) : (
           <dl className="grid grid-cols-[minmax(10rem,auto)_1fr] gap-x-4 gap-y-2 rounded-md border border-line p-4 text-sm">
             {entries.map(([key, value]) => (
               <div key={key} className="contents">
-                <dt className="flex flex-col text-fg-muted">
-                  <span>{configFieldLabel(key)}</span>
-                  <CodeText value={key} className="text-xs" />
-                </dt>
+                <dt className="text-fg-muted">{configFieldLabel(key)}</dt>
                 {declared.has(key) ? (
                   <dd className="min-w-0 break-words">
                     <UntrustedText value={valueText(value)} />
@@ -179,33 +266,6 @@ const Overview = ({
           </p>
         ) : null}
       </section>
-      <section aria-labelledby="integration-projects" className="flex flex-col gap-2">
-        <h2 id="integration-projects" className="text-base font-semibold">
-          Projects
-        </h2>
-        {projects === null ? (
-          <p className="text-sm text-fg-muted">Which projects use it could not be read.</p>
-        ) : projects.length === 0 ? (
-          <p className="text-sm text-fg-muted">
-            No project uses it yet. A project picks it in its first wizard step, or in its settings
-            under Connections.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-1 text-sm">
-            {projects.map((project) => (
-              <li key={project.id}>
-                <Link
-                  to="/projects/$key/settings"
-                  params={{ key: project.key }}
-                  className="text-link hover:underline"
-                >
-                  <UntrustedText value={project.name} />
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
     </div>
   );
 };
@@ -219,8 +279,6 @@ export const IntegrationDetailScreen = ({
 }): ReactElement => {
   const integrations = useIntegrations();
   const providers = useIntegrationProviders();
-  const projects = useProjects();
-  const bound = useProjectsByIntegration(projects.data?.items);
   const [dialog, setDialog] = useState<IntegrationDialog>(null);
   const commands = useOnboardingCommands();
   const { now } = useServices();
@@ -254,10 +312,8 @@ export const IntegrationDetailScreen = ({
   }
   const provider = providers.data?.items.find((entry) => entry.id === integration.provider);
   const { status, word } = integrationStatus(integration);
-  const boundProjects = bound === null ? null : (bound.get(integration.id) ?? []);
-  const boundLine =
-    integration.retired_at === null ? boundText(boundProjects?.length ?? null) : null;
   const retired = integration.retired_at !== null;
+  const nowMs = now();
   // S-23.23: the test and every write are an administrator's (`integration.write`).
   const canWrite = integrations.data.can_write;
 
@@ -284,11 +340,15 @@ export const IntegrationDetailScreen = ({
           title={<UntrustedText value={integration.name} />}
           state={<StateLabel status={status}>{word}</StateLabel>}
           meta={
-            <span>
-              <UntrustedText value={providerName(integration, provider)} />
-              {` · ${INTEGRATION_TYPE_LABEL[integration.type]} · ${checkedText(integration, now())}${
-                boundLine === null ? '' : ` · ${boundLine}`
-              }`}
+            <span className="inline-flex flex-wrap items-center gap-x-1">
+              <ProviderIcon type={integration.type} name={providerName(integration, provider)} />
+              {` · ${INTEGRATION_TYPE_LABEL[integration.type]} · ${healthText(integration, nowMs)}`}
+              {retired ? null : (
+                <>
+                  {' · '}
+                  <UsedBy users={integration.used_by} />
+                </>
+              )}
             </span>
           }
           {...(retired || !canWrite
@@ -308,7 +368,7 @@ export const IntegrationDetailScreen = ({
                     <IntegrationActions
                       integration={integration}
                       provider={provider}
-                      boundProjects={boundProjects?.length ?? null}
+                      boundProjects={integration.used_by.length}
                       dialog={dialog}
                       onDialogChange={setDialog}
                       canWrite
@@ -336,13 +396,17 @@ export const IntegrationDetailScreen = ({
         <Overview
           integration={integration}
           provider={provider}
-          projects={boundProjects}
           onDialog={setDialog}
           canWrite={canWrite && !retired}
+          nowMs={nowMs}
         />
       ) : null}
       {tab === 'setup-guide' ? <SetupGuide integrationId={integration.id} /> : null}
       {tab === 'refused-deliveries' ? <RefusedDeliveries integrationId={integration.id} /> : null}
+      {/* research/21 § 8: the providers are named, never drawn with their marks. */}
+      <p className="text-xs text-fg-muted" data-trademark-notice="">
+        {PROVIDER_TRADEMARK_NOTICE}
+      </p>
     </div>
   );
 };

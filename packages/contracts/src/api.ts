@@ -193,6 +193,48 @@ export const orgAuditQuerySchema = paginationQuerySchema.extend({
 
 export const orgAuditResponseSchema = page(auditEntrySchema);
 
+/**
+ * How long a piece of evidence about an integration counts as **now** (S-25.3, product/08's
+ * 2026-11-06 amendment): 24 hours. A call, a delivery or a probe older than this says what was true
+ * then, so an integration with nothing newer reads `not_checked_recently` — never `working`. A day,
+ * because a project that runs tickets talks to its tracker and its git host many times a day, and a
+ * quiet weekend should not alarm anybody.
+ */
+export const INTEGRATION_HEALTH_STALE_AFTER_HOURS = 24;
+
+/**
+ * What the platform knows about an integration **now**, read from its traffic (S-25.3):
+ *
+ * - `working` — inside the stale bound, the newest outbound call (or probe) succeeded, or there was
+ *   no outbound call and a verified inbound delivery arrived;
+ * - `degraded` — the newest outbound call (or probe) inside the bound failed, and an earlier one
+ *   inside it succeeded;
+ * - `failing` — outbound calls (or probes) inside the bound failed and none succeeded;
+ * - `not_checked_recently` — nothing inside the bound, something before it;
+ * - `never_checked` — no call, delivery or probe on record.
+ *
+ * `basis` names what decided it (`call`, `delivery` or `probe`) and `at` is its instant — for
+ * `not_checked_recently`, the newest evidence of any age. Both are `null` for `never_checked`.
+ */
+export const integrationCurrentHealthSchema = z.strictObject({
+  status: z.enum(['working', 'degraded', 'failing', 'not_checked_recently', 'never_checked']),
+  basis: z.enum(['call', 'delivery', 'probe']).nullable(),
+  at: isoDateTimeSchema.nullable(),
+});
+
+/**
+ * One project that binds an integration, and what it uses it for (S-25.3). `uses` are the
+ * provider's own identifying settings for that project — its label in platform words, its value as
+ * configured (operator text, rendered as text): *Tickets from* `AUT`, *Picked up with label*
+ * `agentic`. Empty when the provider declares none or none is set. Never a credential field.
+ */
+export const integrationUserSchema = z.strictObject({
+  project_id: idSchema,
+  project_key: nonEmptyStringSchema,
+  project_name: nonEmptyStringSchema,
+  uses: z.array(z.strictObject({ label: nonEmptyStringSchema, value: nonEmptyStringSchema })),
+});
+
 export const integrationSummarySchema = z.strictObject({
   id: idSchema,
   type: integrationTypeSchema,
@@ -246,6 +288,21 @@ export const integrationSummarySchema = z.strictObject({
    * project are withheld* — or `null` whenever `credentials_readable` is not `false`.
    */
   credentials_consequence: nonEmptyStringSchema.nullable(),
+  /**
+   * Its traffic (S-25.3): the newest outbound call the platform made through it that reached the
+   * provider (`ok` or `failed` in `integration_actions`; shadow `would_have` and idempotent
+   * `replayed` rows reached nobody and are not evidence), and the newest **verified** inbound
+   * delivery (`inbox`). `null` where there is none. `health` above is the last *Test connection*
+   * alone; this is what happened since.
+   */
+  activity: z.strictObject({
+    last_call: z.strictObject({ at: isoDateTimeSchema, ok: z.boolean() }).nullable(),
+    last_delivery_at: isoDateTimeSchema.nullable(),
+  }),
+  /** Derived server-side from `activity` and `health` against the stale bound (S-25.3). */
+  current_health: integrationCurrentHealthSchema,
+  /** The projects that bind it, by key, with what each uses it for (S-25.3). */
+  used_by: z.array(integrationUserSchema),
 });
 
 /**
@@ -3298,6 +3355,8 @@ export type OrgAuditQuery = z.infer<typeof orgAuditQuerySchema>;
 export type OrgAuditResponse = z.infer<typeof orgAuditResponseSchema>;
 export type EventsQuery = z.infer<typeof eventsQuerySchema>;
 export type IntegrationSummary = z.infer<typeof integrationSummarySchema>;
+export type IntegrationCurrentHealth = z.infer<typeof integrationCurrentHealthSchema>;
+export type IntegrationUser = z.infer<typeof integrationUserSchema>;
 export type IntegrationsResponse = z.infer<typeof integrationsResponseSchema>;
 export type CreateIntegrationRequest = z.infer<typeof createIntegrationRequestSchema>;
 export type TestIntegrationResponse = z.infer<typeof testIntegrationResponseSchema>;

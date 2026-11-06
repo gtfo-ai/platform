@@ -136,6 +136,25 @@ export interface ProviderCatalogueEntry {
    * {@link configIssuesOf} read it, so no consumer names a provider's keys.
    */
   readonly staticRunCredential: StaticRunCredentialSupport | null;
+  /**
+   * The settings that say **what a project uses this provider for** (S-25.3, product/08's
+   * 2026-11-06 amendment): Jira's project keys and pick-up rule, GitLab's repository, Slack's
+   * channel. The integrations screen names each project's use from these — {@link usesOf} is the
+   * one reader — instead of the raw configuration keys. Never a credential field (`catalogue.test.ts`
+   * holds every entry to the provider's declared non-credential fields).
+   */
+  readonly usageFields: readonly UsageField[];
+}
+
+/**
+ * One setting that names a project's use of a provider: the config key, its label in platform words
+ * and, when the key is overridden by another, the key that wins (Jira's `pickup_status` wins over
+ * `pickup_label`, as its schema's docblock says).
+ */
+export interface UsageField {
+  readonly field: string;
+  readonly label: string;
+  readonly unless?: string;
 }
 
 /**
@@ -275,6 +294,7 @@ const entryOf = (
     readonly staticRunCredential?: StaticRunCredentialSupport;
   },
   inboundWebhook: boolean,
+  usageFields: readonly UsageField[],
 ): ProviderCatalogueEntry => ({
   id: registration.id,
   type: registration.type,
@@ -288,6 +308,7 @@ const entryOf = (
   configFields: configFieldsOf(registration.configSchema, registration.secretFields),
   accountConfigSchema: withoutCredentials(registration.configSchema, registration.secretFields),
   staticRunCredential: registration.staticRunCredential ?? null,
+  usageFields,
 });
 
 /**
@@ -296,11 +317,21 @@ const entryOf = (
  * Ordered by id so the integrations screen is stable between reads.
  */
 export const SHIPPED_PROVIDERS: readonly ProviderCatalogueEntry[] = [
-  entryOf(gitlabProviderRegistration, true),
-  entryOf({ ...JIRA_CLOUD_PROVIDER_METADATA, agentTooling: JIRA_CLOUD_AGENT_TOOLING }, true),
-  entryOf(lokiProviderRegistration, false),
-  entryOf(sentryProviderRegistration, false),
-  entryOf(slackProviderRegistration, true),
+  entryOf(gitlabProviderRegistration, true, [{ field: 'project', label: 'Repository' }]),
+  entryOf({ ...JIRA_CLOUD_PROVIDER_METADATA, agentTooling: JIRA_CLOUD_AGENT_TOOLING }, true, [
+    { field: 'project_keys', label: 'Tickets from' },
+    { field: 'pickup_status', label: 'Picked up at status' },
+    { field: 'pickup_label', label: 'Picked up with label', unless: 'pickup_status' },
+  ]),
+  entryOf(lokiProviderRegistration, false, [
+    { field: 'tenant_id', label: 'Tenant' },
+    { field: 'excerpt_selector', label: 'Log selector' },
+  ]),
+  entryOf(sentryProviderRegistration, false, [{ field: 'organization', label: 'Organization' }]),
+  entryOf(slackProviderRegistration, true, [
+    { field: 'channel', label: 'Channel' },
+    { field: 'digest_channel', label: 'Digest channel' },
+  ]),
 ].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
 
 /** The shipped provider with this id, or `undefined` for one this build does not ship. */
@@ -375,6 +406,52 @@ export const configIssuesOf = (
         message: issue.message,
       },
     ];
+  });
+};
+
+/** One named use: a {@link UsageField}'s label and the value configured for it. */
+export interface IntegrationUse {
+  readonly label: string;
+  readonly value: string;
+}
+
+/** A configured value as text: a string as itself, a list of strings joined; anything else none. */
+const useValueOf = (value: JsonValue | undefined): string | null => {
+  if (typeof value === 'string') {
+    return value.trim() === '' ? null : value;
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === 'string')) {
+    const joined = value.filter((entry) => entry.trim() !== '').join(', ');
+    return joined === '' ? null : joined;
+  }
+  return null;
+};
+
+/**
+ * What a project uses this provider for (S-25.3): each {@link ProviderCatalogueEntry.usageFields}
+ * entry with a value in `config` — the binding's **effective** configuration, the account's
+ * document with the binding's overlay on top — over the provider's own defaults, so Jira's
+ * `pickup_label` reads `agentic` where nobody wrote it, as the loader would. A field whose
+ * `unless` key has a value is skipped; a field in the provider's `secretFields` is never read,
+ * whatever a declaration says. `[]` for a provider this build does not ship.
+ */
+export const usesOf = (
+  entry: ProviderCatalogueEntry | undefined,
+  config: JsonObject,
+): readonly IntegrationUse[] => {
+  if (entry === undefined) {
+    return [];
+  }
+  const effective: JsonObject = { ...entry.configDefaults, ...config };
+  return entry.usageFields.flatMap((usage): IntegrationUse[] => {
+    if (entry.secretFields.includes(usage.field)) {
+      return [];
+    }
+    if (usage.unless !== undefined && useValueOf(effective[usage.unless]) !== null) {
+      return [];
+    }
+    const value = useValueOf(effective[usage.field]);
+    return value === null ? [] : [{ label: usage.label, value }];
   });
 };
 

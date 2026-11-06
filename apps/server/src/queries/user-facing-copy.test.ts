@@ -10,12 +10,19 @@
  * **The list is by hand, and says so**: a new user-facing constant is added here when it is written.
  * The patterns are the web censuses' own, restated because a server test may not import a web file.
  */
+import { SHIPPED_PROVIDERS } from '@platform/integrations';
 import { describe, expect, it } from 'vitest';
 import { ORGANISATION_ACCOUNT_UNREADABLE_CONSEQUENCE } from './integration-queries.js';
 
 /** Every server sentence a screen renders verbatim, by name. */
 const USER_FACING: Readonly<Record<string, string>> = {
   ORGANISATION_ACCOUNT_UNREADABLE_CONSEQUENCE,
+  // S-25.3: what a project uses an integration for — `used_by[].uses[].label`, shown as it is.
+  ...Object.fromEntries(
+    SHIPPED_PROVIDERS.flatMap((provider) =>
+      provider.usageFields.map((usage) => [`${provider.id} use: ${usage.field}`, usage.label]),
+    ),
+  ),
 };
 
 const FORBIDDEN: readonly (readonly [string, RegExp])[] = [

@@ -27,8 +27,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
 import {
   findIntegrationRow,
+  integrationSummaryOf,
   listIntegrationRows,
-  toIntegrationSummary,
 } from '../../../apps/server/src/queries/integration-queries.js';
 import {
   createIntegration,
@@ -290,7 +290,7 @@ describe('retiring an integration (WP-114, backlog 331)', () => {
     expect(stored?.health).toEqual({});
     const listed = (await listIntegrationRows(db)).find((each) => each.id === id);
     expect(listed).toBeDefined();
-    const summary = toIntegrationSummary(listed as never, gitlab, null);
+    const summary = await integrationSummaryOf(db, listed as never, null, new Date());
     expect(summary.retired_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(summary.config_refusal).toBeNull();
 
