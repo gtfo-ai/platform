@@ -56,7 +56,9 @@ jobs:
           package-manager-cache: false
       # The changed files of a pull request (since its merge base) or of a push; anything else — a
       # schedule, a dispatch, a push whose previous head is unknown (a new branch, a force push) —
-      # runs every check, because a list that cannot be computed is not an empty list.
+      # runs every check, because a list that cannot be computed is not an empty list. `--no-renames`:
+      # a rename is listed as a deletion and an addition, so moving a file out of a listed path still
+      # selects the check (with rename detection only the new name is printed).
       - id: plan
         name: the checks this change runs
         env:
@@ -72,7 +74,7 @@ jobs:
             range="${PUSH_BEFORE}...${GITHUB_SHA}"
           fi
           changed="${RUNNER_TEMP}/changed-files"
-          if [ -n "${range}" ] && git diff --name-only "${range}" > "${changed}"; then
+          if [ -n "${range}" ] && git diff --no-renames --name-only "${range}" > "${changed}"; then
             node scripts/docker-checks.mjs plan --changed "${changed}" --github-output
           else
             node scripts/docker-checks.mjs plan --all --github-output

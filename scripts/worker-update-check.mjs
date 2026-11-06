@@ -4,7 +4,12 @@
  * core by itself, on one daemon.
  *
  *     node scripts/build-images.mjs --tag <tag>
- *     node scripts/worker-update-check.mjs --tag <tag> [--project-suffix <s>]
+ *     node scripts/worker-update-check.mjs --tag <tag> [--project-suffix <s>] [--host-address <a>]
+ *
+ * `--host-address` is how a container reaches this host. It is detected for Docker Desktop and for a
+ * Linux engine; any other engine (OrbStack, colima) gets the Linux answer, the default bridge's
+ * gateway, which is the engine VM's address and not measured here — if the check cannot reach its
+ * core or registry, pass `--host-address host.docker.internal` (or the name the engine gives the host).
  *
  * ## What it brings up
  *
@@ -96,7 +101,8 @@ const NAMESPACE = `${REGISTRY}/acme`;
  * answers `host.docker.internal`; a Linux engine (a CI runner, `.github/workflows/docker-checks.yml`)
  * resolves no such name unless a container declares `host-gateway`, which the shipped bundle does not
  * and which an update's own `compose up` would not carry — so there it is the default bridge's
- * gateway, an address of the host that every bridge network routes to. `--host-address` overrides.
+ * gateway, an address of the host that every bridge network routes to. `--host-address` overrides
+ * (OrbStack and colima are neither and get the bridge answer, unmeasured — the usage above).
  * Set by {@link resolveHostAddress} before anything uses it.
  */
 let HOST_ADDRESS = optionValue('--host-address', '');

@@ -15,7 +15,11 @@
  *  - **`paths`** — on a pull request or push that changes one of the listed paths, and on every
  *    scheduled run. The check takes minutes, or brings up whole compose projects, and guards a part of
  *    the tree that can be named. A path list is an **under**-approximation of what a check depends
- *    on; the nightly run of every check is what catches a change no list named.
+ *    on; the nightly run of every check is what catches a change no list named. Its floor is held by
+ *    a census in the test: every path a check's scripts read or import **by name** (a
+ *    `new URL('../…', import.meta.url)`, a `join(REPO, '…')`, a `${REPO_ROOT}/…` template, a relative
+ *    import, an `@platform/<pkg>` import → `packages/<pkg>/`) is on its list. What the named files
+ *    import in turn is not followed — that is what the nightly run is for.
  *
  * A change to this file or to the workflow runs every check, and so does any run whose changed files
  * cannot be listed (a scheduled run, a dispatch, the first push of a branch) — `--all`.
@@ -122,9 +126,18 @@ export const DOCKER_CHECKS = [
       'scripts/launcher-control-plane-launcher.mjs',
       'scripts/launcher-control-plane-runner.mjs',
       'scripts/real-model-preflight.mjs',
+      'scripts/ts-source-resolver.mjs',
+      // Read or imported by name (the census in the test): the launcher's stop_grace_period, the
+      // server's defaults, and the rings the runner half imports through their index.
+      'compose.yml',
       'apps/server/src/agent.ts',
+      'apps/server/src/config.ts',
       'apps/server/src/workspaces.ts',
-      'packages/application/src/recovery/orphan-workspaces.ts',
+      'packages/application/',
+      'packages/contracts/',
+      'packages/domain/',
+      'packages/infrastructure/',
+      'packages/prompts/',
     ],
     why: 'three containers and minutes of deliberate waiting (a two-minute shim observation among them)',
   },
@@ -136,6 +149,11 @@ export const DOCKER_CHECKS = [
       ...WORKER,
       'scripts/worker-compose-check.mjs',
       'scripts/worker-check/',
+      // `scripts/worker-check/core-entry.mjs` imports these by package name (the census in the test).
+      'packages/contracts/',
+      'packages/domain/',
+      'packages/infrastructure/',
+      'packages/integrations/',
       'packages/application/src/pipeline/claimant.ts',
       'packages/application/src/pipeline/claim-admission.ts',
       'packages/application/src/pipeline/lease.ts',
@@ -199,7 +217,7 @@ export const planChecks = (changed, checks = DOCKER_CHECKS) => {
     .map((check) => check.name);
 };
 
-/** `git diff --name-only` output → the files, blank lines dropped. */
+/** `git diff --no-renames --name-only` output → the files, blank lines dropped. */
 export const parseChanged = (text) =>
   text
     .split('\n')

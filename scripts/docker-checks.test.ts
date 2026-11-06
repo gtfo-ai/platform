@@ -7,9 +7,17 @@
  * paths that exist — a list naming a moved file stops matching without a word.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { censusPaths } from './census-files.mjs';
@@ -82,7 +90,7 @@ describe('which Docker checks a change runs', () => {
     expect(matchesPath('docs/compose.yml', ['compose.yml'])).toBe(false);
   });
 
-  it('reads `git diff --name-only` output', () => {
+  it('reads `git diff --no-renames --name-only` output', () => {
     expect(parseChanged('a.ts\n\n  b/c.ts \n')).toEqual(['a.ts', 'b/c.ts']);
     expect(parseChanged('')).toEqual([]);
   });
@@ -96,6 +104,232 @@ describe('which Docker checks a change runs', () => {
     expect(missing).toEqual([]);
     for (const path of HARNESS_PATHS)
       expect(existsSync(join(repositoryRoot, path)), path).toBe(true);
+  });
+});
+
+/**
+ * The census of what a path-selected check's scripts name. A path list is an under-approximation by
+ * design (the nightly run is the backstop), but a path a check's own scripts read or import **by
+ * name** is one nobody has to guess, and a list that misses one lets a pull request that changes it
+ * merge green while `main` goes red at night (the review of PR #45 found six).
+ *
+ * From the check's `scripts/<name>.mjs`, and every `scripts/**.mjs` it reaches through the same
+ * spellings (a helper it imports, mounts or starts — a directory under `scripts/` brings every
+ * `.mjs` in it), it reads:
+ *
+ *  - `new URL('<relative>', import.meta.url)` — an import or a read relative to the script;
+ *  - `from '<relative>'`, `import('<relative>')`, `import '<relative>'` — a relative import;
+ *  - `from '@platform/<pkg>'` (and the other two import spellings) — `packages/<pkg>/`, the whole
+ *    ring, because a package's index re-exports it; `packages/<pkg>/src/index.ts` reads the same way;
+ *  - `join(REPO, '<a>', '<b>')` (also `REPO_ROOT`, `ROOT`, `repositoryRoot`, with or without
+ *    `path.`) — a path under the checkout. An argument that is not a string literal is reported as
+ *    unresolvable and fails the census, rather than being skipped;
+ *  - `${REPO_ROOT}/<path>` (also `REPO`, `ROOT`) inside a template — a file the check mounts or runs.
+ *
+ * A relative path in `scripts/worker-check/` resolves from `apps/server/worker-check/`, where
+ * `worker-compose-check` mounts it into the product image; a `.js` specifier names its `.ts` source;
+ * `node_modules/` is `pnpm-lock.yaml`'s; the checkout's root itself (`new URL('../', …)`, the base a
+ * resolver joins onto) names nothing.
+ *
+ * **What it cannot see**, stated so nobody reads it as more: what a named file imports in turn (a
+ * single file such as `apps/server/src/agent.ts` names that file only — the nightly run covers the
+ * rest); a path built from a variable (`new URL(target)`, `join(REPO, name)` is refused, but
+ * `join(base, 'x')` with any other base is not read); a path that only exists inside a container
+ * (`/app/apps/server/src/main.ts`); the whole checkout mounted as `${REPO_ROOT}:${REPO_ROOT}` (no path
+ * after it); a bare package other than `@platform/*` (the lockfile's); and an image's contents, which
+ * the run-plane list names by Dockerfile instead. Comments are not stripped, so a spelling in a
+ * docblock counts — which can only ask for more paths, never fewer.
+ */
+const MOUNTED_AT: Record<string, string> = {
+  'scripts/worker-check/': 'apps/server/worker-check/',
+};
+const ROOT_NAMES = '(?:REPO_ROOT|REPO|ROOT|repositoryRoot)';
+
+const isDirectory = (path: string): boolean => {
+  try {
+    return statSync(join(repositoryRoot, path)).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+/** A repository-relative path → the path a list entry would name. */
+const canonical = (raw: string): string => {
+  let path = posix.normalize(raw).replace(/^\.\//, '');
+  // The checkout's root itself (`new URL('../', import.meta.url)`, a resolver's base) names nothing.
+  if (path === '' || path === '.' || path === './') return '';
+  for (const [source, target] of Object.entries(MOUNTED_AT)) {
+    const bare = target.slice(0, -1);
+    if (path === bare || path.startsWith(target)) path = source + path.slice(target.length);
+  }
+  if (path.startsWith('node_modules/') || path === 'node_modules') return 'pnpm-lock.yaml';
+  if (path.endsWith('.js') && existsSync(join(repositoryRoot, `${path.slice(0, -3)}.ts`))) {
+    path = `${path.slice(0, -3)}.ts`;
+  }
+  const index = /^packages\/([^/]+)\/src\/index\.ts$/.exec(path);
+  if (index) return `packages/${index[1]}/`;
+  if (!path.endsWith('/') && isDirectory(path)) path = `${path}/`;
+  return path;
+};
+
+/** The directory a script's relative specifiers resolve from (its mount point, if it has one). */
+const baseOf = (source: string): string => {
+  const directory = `${posix.dirname(source)}/`;
+  for (const [from, to] of Object.entries(MOUNTED_AT)) {
+    if (directory.startsWith(from)) return to + directory.slice(from.length);
+  }
+  return directory;
+};
+
+/** Every path `text` (the source at `source`) names by one of the spellings above. */
+const namedPaths = (source: string, text: string): { paths: string[]; unresolved: string[] } => {
+  const paths: string[] = [];
+  const unresolved: string[] = [];
+  const add = (raw: string) => {
+    const path = canonical(raw);
+    if (path !== '') paths.push(path);
+  };
+  const relative = (specifier: string) => add(posix.join(baseOf(source), specifier));
+  const specifier = (value: string) => {
+    if (value.startsWith('./') || value.startsWith('../')) relative(value);
+    const platform = /^@platform\/([a-z0-9-]+)/.exec(value);
+    if (platform) paths.push(`packages/${platform[1]}/`);
+  };
+  for (const match of text.matchAll(/new URL\(\s*'([^']+)'\s*,\s*import\.meta\.url\s*\)/g)) {
+    relative(match[1] as string);
+  }
+  for (const pattern of [
+    /\bfrom\s+'([^']+)'/g,
+    /\bimport\(\s*'([^']+)'\s*\)/g,
+    /^\s*import\s+'([^']+)'/gm,
+  ]) {
+    for (const match of text.matchAll(pattern)) specifier(match[1] as string);
+  }
+  for (const match of text.matchAll(
+    new RegExp(`\\bjoin\\(\\s*${ROOT_NAMES}\\s*,([^)]*)\\)`, 'g'),
+  )) {
+    const parts = (match[1] as string).split(',').map((part) => part.trim());
+    const literals = parts.map((part) => /^'([^']*)'$/.exec(part)?.[1]);
+    if (literals.some((literal) => literal === undefined))
+      unresolved.push(`${source}: ${match[0]}`);
+    else add(literals.join('/'));
+  }
+  for (const match of text.matchAll(new RegExp(`\\$\\{${ROOT_NAMES}\\}/([\\w./-]+)`, 'g'))) {
+    add(match[1] as string);
+  }
+  return { paths, unresolved };
+};
+
+/** A check's script, every `scripts/**.mjs` it reaches, and every path any of them names. */
+const censusOf = (name: string) => {
+  const sources = new Set<string>();
+  const named = new Set<string>();
+  const unresolved: string[] = [];
+  const queue = [`scripts/${name}.mjs`];
+  while (queue.length > 0) {
+    const source = queue.shift() as string;
+    if (sources.has(source)) continue;
+    sources.add(source);
+    const found = namedPaths(source, read(source));
+    unresolved.push(...found.unresolved);
+    for (const path of found.paths) {
+      named.add(path);
+      if (!path.startsWith('scripts/')) continue;
+      if (path.endsWith('/')) {
+        for (const entry of readdirSync(join(repositoryRoot, path)).sort()) {
+          if (entry.endsWith('.mjs')) queue.push(`${path}${entry}`);
+        }
+      } else if (path.endsWith('.mjs')) queue.push(path);
+    }
+  }
+  return { sources: [...sources], named: [...named].sort(), unresolved };
+};
+
+/** Whether a change to `path` (a file, or anything under a `/`-terminated directory) selects the check. */
+const selects = (path: string, name: string, paths: readonly string[]): boolean =>
+  path === `scripts/${name}.mjs` ||
+  (path.endsWith('/')
+    ? paths.some((entry) => entry.endsWith('/') && path.startsWith(entry))
+    : matchesPath(path, paths));
+
+describe('a path-selected check lists every path its scripts name', () => {
+  const PATH_CHECKS = DOCKER_CHECKS.filter((check) => check.when === 'paths');
+
+  it('reads each spelling, resolves a mounted helper from its mount point, and refuses a variable', () => {
+    const text = [
+      "await import(new URL('../apps/server/src/config.ts', import.meta.url).href);",
+      "readFileSync(new URL('../compose.yml', import.meta.url), 'utf8');",
+      "import { x } from './compose-check-support.mjs';",
+      "import { y } from '@platform/domain';",
+      "const z = await import('@platform/contracts/sub');",
+      "new URL('../packages/prompts/src/index.ts', import.meta.url);",
+      "path.join(REPO, 'scripts', 'worker-check', 'fake-claude-stage.mjs');",
+      'path.join(REPO, name);',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the template spelling is the text under test.
+      '`${REPO_ROOT}/scripts/launcher-control-plane-runner.mjs:/app/x.mjs:ro`',
+      "import closeWithGrace from 'close-with-grace';",
+      "import process from 'node:process';",
+      "import './ts-source-resolver.mjs';",
+      "const base = new URL('../', import.meta.url).href;",
+    ].join('\n');
+    expect(namedPaths('scripts/some-check.mjs', text)).toEqual({
+      paths: [
+        'apps/server/src/config.ts',
+        'compose.yml',
+        'packages/prompts/',
+        'scripts/compose-check-support.mjs',
+        'packages/domain/',
+        'packages/contracts/',
+        'scripts/ts-source-resolver.mjs',
+        'scripts/worker-check/fake-claude-stage.mjs',
+        'scripts/launcher-control-plane-runner.mjs',
+      ],
+      unresolved: ['scripts/some-check.mjs: join(REPO, name)'],
+    });
+    // Mounted at apps/server/worker-check/: `../src/runtime.js` is the server's runtime source.
+    expect(
+      namedPaths('scripts/worker-check/core-entry.mjs', "import { s } from '../src/runtime.js';")
+        .paths,
+    ).toEqual(['apps/server/src/runtime.ts']);
+  });
+
+  it('finds every named path on the check’s list', () => {
+    expect(PATH_CHECKS.length).toBeGreaterThan(0);
+    const missing: string[] = [];
+    const unresolved: string[] = [];
+    const named: Record<string, string[]> = {};
+    for (const check of PATH_CHECKS) {
+      const census = censusOf(check.name);
+      named[check.name] = census.named;
+      unresolved.push(...census.unresolved);
+      for (const path of census.named) {
+        if (!existsSync(join(repositoryRoot, path)))
+          missing.push(`${check.name}: ${path} (absent)`);
+        else if (!selects(path, check.name, check.paths)) missing.push(`${check.name}: ${path}`);
+      }
+    }
+    expect(unresolved).toEqual([]);
+    expect(missing).toEqual([]);
+    // Not vacuous: the paths the review of PR #45 found missing are among what the census reads.
+    expect(named['launcher-control-plane-check']).toEqual(
+      expect.arrayContaining([
+        'compose.yml',
+        'apps/server/src/config.ts',
+        'packages/application/',
+        'packages/domain/',
+        'packages/prompts/',
+        'scripts/launcher-control-plane-runner.mjs',
+      ]),
+    );
+    expect(named['worker-compose-check']).toEqual(
+      expect.arrayContaining([
+        'packages/contracts/',
+        'packages/domain/',
+        'packages/infrastructure/',
+        'scripts/worker-check/core-entry.mjs',
+        'apps/server/src/runtime.ts',
+      ]),
+    );
   });
 });
 
@@ -173,6 +407,8 @@ describe('every Docker check is run by some workflow', () => {
     const lines = commandLines(read(WORKFLOW));
     const text = lines.join('\n');
     expect(text).toContain('node scripts/docker-checks.mjs plan --changed');
+    // A rename is a deletion and an addition, so a file moved out of a listed path still selects.
+    expect(text).toContain('git diff --no-renames --name-only');
     expect(text).toContain('node scripts/docker-checks.mjs plan --all');
     // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell and Actions expression are the text under test.
     expect(text).toContain('node scripts/docker-checks.mjs run "${CHECK}"');
