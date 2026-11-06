@@ -238,6 +238,12 @@ const json = (body: unknown, status = 200): Response =>
 
 const BUG_GRAPH = { ...FEATURE_GRAPH, template: 'bug' };
 
+/**
+ * Holds the run's transcript page back until a test releases it, so a test that asserts what the
+ * card says **before** the transcript arrives does not race the read (`null`: answered at once).
+ */
+let transcriptGate: Promise<void> | null = null;
+
 const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   const url = String(input);
   if (url.includes('/api/auth/get-session')) return json(SESSION);
@@ -245,7 +251,10 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   if (url.endsWith(`/api/tasks/${TASK}/asks`)) return json({ items: [] });
   if (url.endsWith(`/api/tasks/${TASK}/audit`)) return json({ items: [] });
   if (url.endsWith(`/api/tasks/${TASK}`)) return json(detail);
-  if (url.includes(`/api/runs/${RUN}/messages`)) return json({ items: messages, next_seq: null });
+  if (url.includes(`/api/runs/${RUN}/messages`)) {
+    await transcriptGate;
+    return json({ items: messages, next_seq: null });
+  }
   if (url.endsWith('/api/org/agents')) return json(agents);
   if (url.endsWith(`/api/projects/${PROJECT}/pipeline`)) {
     return json({ items: [FEATURE_GRAPH, BUG_GRAPH] });
@@ -275,6 +284,7 @@ const start = (path: string) => {
 };
 
 afterEach(() => {
+  transcriptGate = null;
   cleanup();
   vi.restoreAllMocks();
 });
@@ -306,17 +316,27 @@ describe('the task page’s Flow section', () => {
 
   it('says each stage’s state on the cards, the list a screen reader reads beside the canvas', async () => {
     viewport(1280);
+    // The transcript page is held back: until it answers, the card can only be the agents read's.
+    let releaseTranscript: () => void = () => undefined;
+    transcriptGate = new Promise<void>((resolve) => {
+      releaseTranscript = resolve;
+    });
     start(`/tasks/${TASK}`);
     const list = await screen.findByRole('list', { name: 'Feature pipeline as a list' });
     expect(list.getAttribute('data-flow-list')).toBe('screen-reader');
-    // The current card says what the agent is doing — the agents read's newest entry (*Reading
-    // files*) until the transcript has delivered anything, then the transcript's (*Running a
-    // command*, the fixture's Bash call). Which one this read lands on is the live stage panel's
-    // transcript page racing the lazily loaded canvas, so both are the right answer here; the
-    // hand-over itself is the dialog test's below.
-    await within(list).findByRole('button', {
-      name: /^Implementation, Developer, Working, Now: (Reading files|Running a command), claude-test · high$/,
+    // The current card says what the agent is doing — the agents read's newest entry, until the
+    // transcript has delivered anything.
+    const reading = 'Implementation, Developer, Working, Now: Reading files, claude-test · high';
+    await within(list).findByRole('button', { name: reading });
+    // …and once the transcript has delivered, the card reads it instead (its last entry is six
+    // minutes before the fixture's clock, so the agents read's word is gone).
+    releaseTranscript();
+    await waitFor(() => {
+      expect(within(list).queryByRole('button', { name: reading })).toBeNull();
     });
+    expect(
+      within(list).getByRole('button', { name: /^Implementation, Developer, / }),
+    ).toBeDefined();
     expect(
       within(list).getByRole('button', { name: /^Refinement, Product manager, Done, / }),
     ).toBeDefined();
