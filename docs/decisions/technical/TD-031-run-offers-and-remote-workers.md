@@ -1157,8 +1157,10 @@ empty, because the server claims within `fallback_after`. A tampered worker can 
      pasted token checked. Whitespace inside a paste is removed (a terminal wraps it), and another
      shape is refused on the page and by the worker (`400`) before any check (amended 2026-11-06).
    - **A drain and a restart** (amended 2026-11-06): a drain waits for a sign-in or its check that
-     runs, and refuses to *start* one (`409 draining`, *This worker is updating; it will be back in a
-     minute*) — the running one's code and a paste are still taken. The local state carries the
+     runs, and an **update's** drain (`POST /internal/drain`, `via: worker_internal_drain`) refuses
+     to *start* one (`409 draining`, *This worker is updating; it will be back in a minute*) — the
+     running one's code and a paste are still taken. The owner's page *Drain* refuses no sign-in:
+     the setup screens offer no *Resume*, and no setup step may trap a person. The local state carries the
      process's `started_at`; a different one while the page was at this step, or a sign-in ran, is
      said here once (*This worker restarted (probably to update itself). Sign in again — it only
      takes a minute.*) until a sign-in starts; any other restart is silent.

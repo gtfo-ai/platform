@@ -44,9 +44,11 @@
  * finishes what runs and takes nothing new, and **its next start clears a drain's pause — only a
  * drain's**; an owner's *Pause* survives a restart. `POST /internal/drain` (the updater's) is the
  * same function. **A drain waits for a Claude sign-in** (or its token check) already running —
- * `/internal/state`'s `idle` is false meanwhile — **and refuses to start a new one** (`409
- * draining`), so a person who keeps starting sign-ins cannot postpone an update forever (BACKLOG
- * 1054); the running one's code and a pasted token are still taken. A drained worker **stays up,
+ * `/internal/state`'s `idle` is false meanwhile — and **an update's** drain (`POST /internal/drain`)
+ * **refuses to start a new one** (`409 draining`), so a person who keeps starting sign-ins cannot
+ * postpone an update forever (BACKLOG 1054); the running one's code and a pasted token are still
+ * taken. The owner's page *Drain* refuses no sign-in: the setup screens offer no *Resume*, and no
+ * setup step may trap a person (BACKLOG 1065). A drained worker **stays up,
  * idle**, rather than exiting: `compose.worker.yml`
  * restarts it `unless-stopped`, so an exit would be a restart, and the restart would clear the
  * drain's pause and claim again — stopping is the person's `docker compose stop` (stated in the PR
@@ -428,6 +430,11 @@ export const startRemoteWorker = async (
   let connection: WorkerConnection = 'logging_in';
   let stopping = false;
   let draining = false;
+  /**
+   * The drain is an update's — `POST /internal/drain`, the updater's (or an operator's) — not the
+   * owner's page *Drain*: only that one refuses a new Claude sign-in (BACKLOG 1054, 1065).
+   */
+  let updateDraining = false;
   /** This process's start — the page's start identity: another one is a restart (BACKLOG 1053). */
   const startedAt = new Date().toISOString();
   let credential: string | null = null;
@@ -922,6 +929,7 @@ export const startRemoteWorker = async (
       claimAbort?.abort();
     } else {
       draining = false;
+      updateDraining = false;
     }
     wakeClaims();
     loggerPort.info(
@@ -945,6 +953,7 @@ export const startRemoteWorker = async (
   const drain = async (via: DrainVia): Promise<void> => {
     const first = !draining;
     draining = true;
+    if (via === 'worker_internal_drain') updateDraining = true;
     claimAbort?.abort();
     wakeClaims();
     if (first) {
@@ -1269,13 +1278,15 @@ export const startRemoteWorker = async (
       signIn.cancel();
       return;
     }
-    // A drain waits for a sign-in in progress (`idle`); a new one would postpone it again, and a
-    // sequence of them forever (BACKLOG 1054). The one running, its code and a paste stay allowed.
-    if (draining) {
+    // An update's drain waits for a sign-in in progress (`idle`); a new one would postpone it
+    // again, and a sequence of them forever (BACKLOG 1054). The one running, its code and a paste
+    // stay allowed. An owner's page *Drain* refuses nothing here: no setup step may trap a person,
+    // and the setup screens offer no *Resume* (BACKLOG 1065).
+    if (updateDraining) {
       throw new LocalUiError(
         409,
         'draining',
-        'this worker is draining (an update, most likely): it starts no new Claude sign-in until it restarts; paste a token instead',
+        'this worker is draining for an update: it starts no new Claude sign-in until it restarts; paste a token instead',
       );
     }
     try {

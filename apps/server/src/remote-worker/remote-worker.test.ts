@@ -2325,7 +2325,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     }
   });
 
-  it('while draining refuses a new Claude sign-in 409 draining, finishes the one running, and takes a paste (BACKLOG 1054)', async () => {
+  it('while an update drains refuses a new Claude sign-in 409 draining, finishes the one running, and takes a paste — an owner’s Drain refuses none (BACKLOG 1054, 1065)', async () => {
     const stateDir = mkdtempSync(path.join(scratch, 'state-'));
     const core = fakeCore({});
     // The token check waits for the test, so the drain's wait for it is measured.
@@ -2370,16 +2370,19 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       const before = await localState(port);
       expect(Date.parse(before.started_at)).toBeLessThanOrEqual(Date.parse(before.server_time));
 
-      // A sign-in started before the drain …
+      // The owner's page Drain traps nobody at this step: a sign-in still starts (BACKLOG 1065) …
+      await worker.drain('worker_ui_drain');
+      expect(worker.state().draining).toBe(true);
       expect(await startSignIn()).toBe('200 ');
       await until(
         'the paste prompt',
         () => worker.localState().setup.sign_in.phase === 'waiting_for_code',
       );
       expect(signInsSpawned).toBe(1);
+      // … and then an update's drain, which waits for it.
       expect((await fetch(`${internal}/internal/drain`, { method: 'POST' })).status).toBe(202);
       expect(await internalState()).toMatchObject({ draining: true, idle: false });
-      // … is not replaced by a new one: starting is refused, and says why …
+      // It is not replaced by a new one: starting is refused, and says why …
       expect(await startSignIn()).toBe('409 draining');
       expect(worker.localState().setup.sign_in.phase).toBe('waiting_for_code');
       // … while its code is still taken, and the drain waits for its check.
