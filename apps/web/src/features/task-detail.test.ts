@@ -345,7 +345,7 @@ const routed = (over: Partial<TaskReviewers> = {}): TaskReviewers => ({
 describe('the required reviewers on the Checks panel', () => {
   it('distinguishes "not routed yet" from "routed and found nobody"', () => {
     expect(reviewersValueText(null)).toBe('not routed');
-    expect(reviewersBasisText(null)).toContain('has not routed');
+    expect(reviewersBasisText(null)).toContain('has not reached yet');
     const nobody = routed({ source: 'none', handles: [], assigned: [], unresolved: [] });
     expect(reviewersValueText(nobody)).toBe('none');
     expect(reviewersBasisText(nobody)).toContain('assigned to nobody');
@@ -354,11 +354,11 @@ describe('the required reviewers on the Checks panel', () => {
   it('counts what was assigned and names what could not be', () => {
     expect(reviewersValueText(routed())).toBe('1 of 2 assigned, 1 unresolved');
     expect(reviewersBasisText(routed())).toContain('@billing-team');
-    expect(reviewersBasisText(routed())).toContain('CODEOWNERS on the default branch');
+    expect(reviewersBasisText(routed())).toContain('the code owners file on the default branch');
     // Everything resolved: the count says so and nothing is named unresolved.
     const clean = routed({ assigned: ['4242', '7'], unresolved: [] });
     expect(reviewersValueText(clean)).toBe('2 of 2 assigned');
-    expect(reviewersBasisText(clean)).not.toContain('No account on this provider');
+    expect(reviewersBasisText(clean)).not.toContain('No account on the git host');
   });
 
   it('says which step of the precedence chose them', () => {
@@ -366,7 +366,7 @@ describe('the required reviewers on the Checks panel', () => {
       'the project’s reviewers setting',
     );
     expect(reviewersBasisText(routed({ source: 'requester' }))).toContain(
-      'the human who asked for the task',
+      'the person who asked for the task',
     );
   });
 });

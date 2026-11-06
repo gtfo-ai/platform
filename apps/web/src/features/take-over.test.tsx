@@ -553,7 +553,7 @@ describe('the run screen’s context pack (backlog 168 and 172)', () => {
         realtime: false,
       }).element,
     );
-    await user.click(await screen.findByRole('tab', { name: 'What the agent was given' }));
+    await user.click(await screen.findByRole('tab', { name: 'Knowledge given' }));
     await screen.findByText('Documents');
     return view;
   };

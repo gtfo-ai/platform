@@ -319,7 +319,7 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
       value: tamperValueText(ciGate, rebaseGate),
       status: tamperStatus(ciGate, rebaseGate),
       definition:
-        'Whether the change edits, deletes or renames files this project protects (tests and CI or lint configuration by default). A change the plan declared is allowed once the code review confirms it; anything else sends the task back to the developer, naming the files. Adding a new file is never flagged. A check made before the platform stored its result shows as not recorded, never as no unapproved changes.',
+        'Whether the change edits, deletes or renames files this project protects (tests and CI or lint configuration by default). A change the plan declared is allowed once the code review confirms it; anything else sends the task back to the developer, naming the files. Adding a new file is never flagged. A check made before the platform kept its result is never shown as passed.',
       required: true,
     },
     {

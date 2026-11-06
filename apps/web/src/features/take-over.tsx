@@ -272,7 +272,10 @@ export const HandBackForm = ({
         </Button>
       </div>
       {commands.handBack.isError ? (
-        <ErrorNotice title="The task could not be given back." error={commands.handBack.error} />
+        <ErrorNotice
+          title="Giving it back to the agent was refused."
+          error={commands.handBack.error}
+        />
       ) : null}
     </form>
   );
@@ -379,7 +382,7 @@ export const TakeOverForm = ({
         </div>
       </form>
       {commands.takeOver.isError ? (
-        <ErrorNotice title="The task could not be handed to you." error={commands.takeOver.error} />
+        <ErrorNotice title="Working on it yourself was refused." error={commands.takeOver.error} />
       ) : null}
     </>
   );

@@ -985,7 +985,7 @@ test('the run screen counts only admitted documents and marks the one that was n
 }) => {
   await page.goto(`/runs/${IDS.run}`);
   await expect(page.getByRole('heading', { name: 'implementation · developer' })).toBeVisible();
-  await page.getByRole('tab', { name: 'What the agent was given' }).click();
+  await page.getByRole('tab', { name: 'Knowledge given' }).click();
   // Tier 0 and the one validated tier-1 page: two, not three (PROGRESS backlog 168).
   await expect(
     page.getByText('Documents', { exact: true }).locator('xpath=following-sibling::*[1]'),

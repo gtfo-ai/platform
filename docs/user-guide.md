@@ -1141,7 +1141,7 @@ Then four tabs:
   into its workspace — and the CLI refuses any other.
 - **Prompt** — the exact system and user prompt that produced this run, each under its own heading
   (*System prompt*, *User prompt*).
-- **What the agent was given** — the knowledge pages retrieved and put in front of the model.
+- **Knowledge given** — what the agent was given: the knowledge pages retrieved and put in front of the model.
 - **Settings** — the project settings this run was planned with, frozen when the run was created
   and redacted then. The settings line under **Details** says whether they were the same as the
   task's previous run's.
@@ -1209,7 +1209,7 @@ worker* rather than *Cancelled*, because nothing confirmed the stop.
 Three tabs can refuse to show you a document, and that is deliberate: each is the record of what
 this run was given, and none is re-derived after the fact. A run started by this build shows all
 three. A run started before the platform recorded one does not, and never will — **Prompt** and
-**What the agent was given** say the document *could not be loaded* and why, with the server's own message under
+**Knowledge given** say the document *could not be loaded* and why, with the server's own message under
 *Technical details*, **Settings**
 says the run predates the record:
 
@@ -1217,7 +1217,7 @@ says the run predates the record:
   credentials the run was handed. An older prompt is not re-derivable: its delimiter is a fresh
   random value per prompt and its knowledge excerpts are a point-in-time read, so re-assembling one
   would show you a document that run never saw.
-- **What the agent was given** — recorded with the run since migration 0041, budget included. For an older run
+- **Knowledge given** — recorded with the run since migration 0041, budget included. For an older run
   only the retrieved rows exist, and summing them would publish "budget equals total" as a fact. A
   pack with nothing in it is not refused: it says *No knowledge pages were put in front of the
   model*, beside its token budget.

@@ -85,7 +85,9 @@ describe('createHistoryBootstrapGate', () => {
   it('publishes the refusal the command would make, for a project with the feature off', async () => {
     const answer = await gate({}, [{ id: 'x' }])(PROJECT, null);
     expect(answer.canStart).toBe(false);
-    expect(answer.blockedReason).toContain('features.history_bootstrap.enabled');
+    // S-25.5: the screen shows it as it is, so it names the setting in words, never its key.
+    expect(answer.blockedReason).toContain('turn it on in the project’s feature settings');
+    expect(answer.blockedReason).not.toContain('features.history_bootstrap.enabled');
   });
 
   it('publishes `no_git_binding` for a project with nothing to mine', async () => {
@@ -94,7 +96,7 @@ describe('createHistoryBootstrapGate', () => {
       [],
     )(PROJECT, null);
     expect(answer.canStart).toBe(false);
-    expect(answer.blockedReason).toContain('no git integration');
+    expect(answer.blockedReason).toContain('no git host connected');
   });
 
   it('answers the estimate for the project’s own N when the caller names none', async () => {

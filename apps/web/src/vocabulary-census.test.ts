@@ -26,7 +26,7 @@
  * | Risk classes | **Sensitive areas** |
  * | Gate, System step, advisory | **Automatic check**, **Automatic step**, *for information only* |
  * | "costs an iteration of the loop" | *uses one of the rounds* |
- * | Context pack, in no context pack | **What the agent was given**, *never given to agents* |
+ * | Context pack, in no context pack | **Knowledge given** (the run tab), *What the agent was given* (its heading), *never given to agents* |
  * | Steer | **Message the agent**, **Send** |
  * | Take over, Hand back, Taken over | **Work on it yourself**, **Give it back to the agent** |
  * | workpad | *the ticket's progress comment* |
@@ -71,7 +71,10 @@ export const RETIRED_WORDS: readonly { readonly pattern: RegExp; readonly use: s
   { pattern: /\bRisk classes\b/, use: 'Sensitive areas' },
   { pattern: /\bSystem step\b|word: 'Gate'|\(advisory:/, use: 'Automatic check / step' },
   { pattern: /\biteration of the loop\b/, use: 'one of the rounds' },
-  { pattern: /\bContext pack\b|\bin no context pack\b/, use: 'What the agent was given' },
+  {
+    pattern: /\bContext pack\b|\bin no context pack\b/,
+    use: 'Knowledge given / What the agent was given',
+  },
   { pattern: /\bSteer the agent\b|label="Steer"|'Steer'/, use: 'Message the agent' },
   {
     pattern: /\bTake over…|'Take over'|\bTaken over\b|\bHand back\b|\bHand the task back\b/,

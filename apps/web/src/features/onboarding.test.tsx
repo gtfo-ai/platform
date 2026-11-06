@@ -1097,7 +1097,7 @@ describe('the wizard’s step 4, How autonomous', () => {
     const { container } = render(createApp({ fetchImpl: recording, realtime: false }).element);
     const accept = await screen.findByRole('button', { name: 'Accept these classes' });
     // Nothing is applied yet: the configured set is empty while the offer is on the screen.
-    expect(container.textContent).toContain('No risk classes configured');
+    expect(container.textContent).toContain('No sensitive areas configured');
     expect(sent).toEqual([]);
 
     // WP-45: the `payments` class names a checklist the project has not written, and the schema

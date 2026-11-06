@@ -395,7 +395,9 @@ test('the flow canvas and its stage dialog open under the policy without a viola
     expect(right.x).toBeGreaterThan(left.x + left.width);
     expect(Math.abs(right.y + right.height / 2 - (left.y + left.height / 2))).toBeLessThan(2);
   }
-  await expect(template.locator('[data-loop-pill="code_review"]')).toHaveText('Review ≤3');
+  await expect(template.locator('[data-loop-pill="code_review"]')).toHaveText(
+    'Review rounds: up to 3',
+  );
   const lazyChunks = await page.evaluate(
     () =>
       performance

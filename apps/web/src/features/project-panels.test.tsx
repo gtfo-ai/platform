@@ -383,7 +383,7 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
     await user.click(await screen.findByRole('menuitem', { name: 'Reject…' }));
     // S-23.23: a reject asks first, says what it does, and sends the person's own reason — never
     // the canned "rejected from the UI" it used to.
-    const dialog = await screen.findByRole('dialog', { name: 'Reject this proposal?' });
+    const dialog = await screen.findByRole('dialog', { name: 'Reject this suggested edit?' });
     expect(dialog.textContent).toContain('the proposal is closed for good');
     expect(decisions).toHaveLength(1);
     await user.type(
@@ -412,7 +412,7 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
       within(list).getByRole('button', { name: 'More for technical/architecture.md' }),
     );
     await user.click(await screen.findByRole('menuitem', { name: 'Reject…' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Reject this proposal?' });
+    const dialog = await screen.findByRole('dialog', { name: 'Reject this suggested edit?' });
     await user.click(within(dialog).getByRole('button', { name: 'Keep it' }));
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();

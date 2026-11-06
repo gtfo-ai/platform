@@ -175,7 +175,9 @@ export const crossedBudgetCap = (run: Pick<RunRecord, 'status' | 'terminal_reaso
 export const TABS: readonly { readonly id: Tab; readonly label: string }[] = [
   { id: 'transcript', label: 'Transcript' },
   { id: 'prompt', label: 'Prompt' },
-  { id: 'context', label: 'What the agent was given' },
+  // S-25.5: the tab's short name (a 390 px tab row has no room for the heading's); the heading
+  // below says it in full.
+  { id: 'context', label: 'Knowledge given' },
   { id: 'settings', label: 'Settings' },
 ];
 

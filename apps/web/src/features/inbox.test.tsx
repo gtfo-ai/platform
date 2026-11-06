@@ -300,18 +300,26 @@ describe('the approval row', () => {
  * row just disappeared. Since S-23.11a it is one line and a *Learn more*.
  */
 describe('what the inbox says about an item that expired', () => {
-  it('leads with what the list is, then says an expired item leaves it (S-25.5, F16)', async () => {
+  // The title PROGRESS cites (frozen history); the line it opens with is S-25.5's, below.
+  it('says an expired item leaves the list and names where its task is retried', async () => {
+    inbox = { questions: [], approvals: [approval(DUE)] };
+    const container = await renderInbox(fakeServer().fetchImpl);
+    const note = container.querySelector('[data-inbox-expiry-note]');
+    expect(note?.textContent).toContain('expires leaves this list');
+    // The board column's name since S-23.2: TD-033's word for `needs_human`.
+    expect(note?.textContent).toContain('Needs you');
+    expect(note?.textContent).toContain('task page');
+    expect(note?.querySelector('details summary')?.textContent).toBe('Learn more');
+  });
+
+  it('leads with what the list is, before what an expired item does (S-25.5, F16)', async () => {
     inbox = { questions: [], approvals: [approval(DUE)] };
     const container = await renderInbox(fakeServer().fetchImpl);
     const note = container.querySelector('[data-inbox-expiry-note]');
     expect(note?.querySelector('p')?.textContent).toBe(
       'Questions and approvals waiting for a person, across all projects.',
     );
-    expect(note?.textContent).toContain('expires leaves this list');
-    // The board column's name since S-23.2: TD-033's word for `needs_human`.
-    expect(note?.textContent).toContain('Needs you');
-    expect(note?.textContent).toContain('task page');
-    expect(note?.querySelector('details summary')?.textContent).toBe('Learn more');
+    expect(note?.querySelector('p')?.textContent).not.toContain('expire');
   });
 
   it('says it on an empty inbox too, under an informational blankslate', async () => {

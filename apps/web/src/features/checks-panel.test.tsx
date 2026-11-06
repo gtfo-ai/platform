@@ -260,8 +260,8 @@ describe('the Checks panel against product/10:38', () => {
 
     expect(text).toContain('1 of 2 assigned, 1 unresolved');
     expect(text).toContain('@ana');
-    expect(text).toContain('CODEOWNERS on the default branch');
-    expect(text).toContain('No account on this provider for @billing-team');
+    expect(text).toContain('the code owners file on the default branch');
+    expect(text).toContain('No account on the git host for @billing-team');
   });
 
   it('renders a handle out of CODEOWNERS as text, markup and all (BD-022)', async () => {
