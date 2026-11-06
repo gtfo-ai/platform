@@ -7,6 +7,9 @@
  * - A `StateLabel` — its icon and its word from `ui/task-status.ts`' one rule, the board's column
  *   and card's (S-25.4) — and one meta line: the ticket and merge request links, the template, the
  *   stage in words, what it has cost so far and how long ago it was opened; then the `PhaseTrack`.
+ *   Its *Now* line says, for a task that went back (S-25.11, `./setback.ts`), the board card's
+ *   short form — "CI failed · fixing, round 2/3" while the agent is on it, "CI did not finish" when
+ *   it stopped — in place of the activity's sub-label.
  * - **One primary action, chosen by the state** ({@link taskPrimaryAction}): *Hand back…* while a
  *   take-over is in force, *Answer* for an open question (it moves focus into the callout's answer
  *   box), *Review plan* for a pending approval (it moves focus onto the callout's approval card,
@@ -59,6 +62,7 @@ import { DownloadLink, ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { approvalCardId } from './approval-card.js';
 import { reviewVerb } from './approval-text.js';
 import { liveStageRun } from './live-stage.js';
+import { setbackShort } from './setback.js';
 import { takeOverFinished } from './take-over.js';
 import { answerInputId } from './task-callout.js';
 import type { TaskDialog } from './task-dialogs.js';
@@ -172,6 +176,14 @@ export const TaskHeader = ({
     open_asks: openQuestions.length + pendingApprovals.length,
     now: nowMs,
   });
+  // S-25.11: why it went back, or why it stopped, in the board card's words.
+  const setback = setbackShort(
+    task,
+    stages,
+    detail.returns.at(-1) ?? null,
+    detail.stop,
+    detail.loop_limits,
+  );
   const currentStage = task.current_stage ?? null;
   // A task that has entered no stage has no strip to draw; the Overview says it has none.
   const phase = phaseStagesFor(null, stages, currentStage);
@@ -421,7 +433,7 @@ export const TaskHeader = ({
           {/* WP-182 ruling (c): the ticket claim and the human QA stage (BD-031 rulings 3 and 5). */}
           <TicketClaimAndQa task={task} />
           {phase.length === 0 ? null : (
-            <PhaseTrack stages={phase} activity={doing.activity} detail={doing.detail} />
+            <PhaseTrack stages={phase} activity={doing.activity} detail={setback ?? doing.detail} />
           )}
         </div>
       }

@@ -128,6 +128,9 @@ const TASK_DETAIL: TaskDetailResponse = {
   can_rework: true,
   can_decide_approval: true,
   gate_feedback: null,
+  returns: [],
+  stop: null,
+  loop_limits: null,
   human_time: {
     total_minutes: 0,
     by_kind: { review: 0, question: 0, approval: 0, steer: 0 },

@@ -77,12 +77,12 @@ Settings (org)             – auth, Claude provider mode, default models, globa
 back says why it went back, and what happens next.** A gate's failure (CI, the rebase, the dependency policy) or a
 reviewer's return sends the task to an earlier stage. Until that stage ends, the task header's *Now* line and the
 callout's slot carry one sentence. It names the cause, who acts, and how many tries are left:
-- **The agent is on it:** "CI failed on the merge request: the Developer is fixing it (try 2 of 3)." The failing job
+- **The agent is on it:** "CI failed on the merge request (job *unit*): the Developer is fixing it (round 2 of 3)." The failing job
   is linked by name (through `safeHref`). There is no action, because nothing is asked of the reader.
-- **It stopped:** when the tries are spent, or the same failure came back twice, the escalation says which one.
-  "CI failed the same way twice (job *unit*), so the agent stopped." The one next step follows it: look at the job,
+- **It stopped:** when the rounds are used up, or the same failure came back (three times in a row for CI, product/04
+  S4), the escalation says which one. "CI failed the same way three times in a row (job *unit*), so the agent stopped." The one next step follows it: look at the job,
   then *Retry* or *Take over*.
-- **The board card** shows the same fact in short form ("CI failed · fixing, try 2/3"). The stage timeline draws the
+- **The board card** shows the same fact in short form ("CI failed · fixing, round 2/3"). The stage timeline draws the
   return as a loop with its reason, as above.
 - A return whose reason was not recorded says so ("went back from CI; the reason was not recorded"). It never
   guesses.
@@ -100,6 +100,14 @@ callout's slot carry one sentence. It names the cause, who acts, and how many tr
 - **A timed-out wait says it timed out**, with the last read: "CI did not finish within 60 minutes: pipeline *n* was
   still held at the manual job *sentry-release-commit*." The next step is *Start the job in GitLab, then Retry*. The
   task page never reads as a failed check when nothing failed.
+
+*S-25.11's wording (2026-11-07).* The examples above say **round**, not *try*: the vocabulary census retires "try N" for
+*Attempt N* (S-23.23), and the board's loop badge already calls this counter a round ("CI fix round 2 of 3"). The
+repeated failure is **three** identical CI failures in a row, which is what the pipeline counts (product/04 S4,
+`ciConvergence`), not two. Until the platform records the failing job's URL, the pipeline's id and the CI timeout apart
+from the return's prose, the page links the merge request, and a timed-out check says it "did not finish in the time the
+platform waits for it" followed by the sentence the platform recorded (BACKLOG 1295). The waiting gate's own sentence
+waits for its pending read to be recorded (BACKLOG 1293).
 
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.

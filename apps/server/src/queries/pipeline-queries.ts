@@ -83,6 +83,7 @@ import {
   artifactBodyPath,
   contextPackRecordSchema,
   MAX_RUN_COMMANDS,
+  MAX_TASK_STOP_RECORDED_CHARS,
   pausedBudgetScopeSchema,
   promptsWithheldSchema,
   runSavedWorkSchema,
@@ -125,6 +126,7 @@ import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
 import { latestActivityFor, newestEntryPerRun, seatsFor } from './live-view-queries.js';
 import { frozenLimits } from './pipeline-graph.js';
+import { returnsOf, type SetbackStageRow, stopOf } from './task-setback.js';
 
 const {
   approvals,
@@ -1171,7 +1173,12 @@ const pausedReasonsFor = async (
 const stageRowsFor = async (
   database: Database,
   taskIds: readonly string[],
-): Promise<ReadonlyMap<string, TaskListItem['stages']>> => {
+): Promise<
+  ReadonlyMap<
+    string,
+    { readonly stages: TaskListItem['stages']; readonly setback: SetbackStageRow[] }
+  >
+> => {
   if (taskIds.length === 0) {
     return new Map();
   }
@@ -1182,23 +1189,57 @@ const stageRowsFor = async (
       attempt: taskStages.attempt,
       state: taskStages.state,
       enteredAt: taskStages.enteredAt,
+      exitedAt: taskStages.exitedAt,
+      outcome: taskStages.outcome,
+      returnedTo: taskStages.returnedTo,
+      signature: taskStages.signature,
+      // S-25.11: a CI return's reason is its jobs' logs, so the page reads a bounded head of it —
+      // one character past the stop's cap, which is how `stopOf` knows it was cut.
+      returnReason: sql<
+        string | null
+      >`left(${taskStages.returnReason}, ${MAX_TASK_STOP_RECORDED_CHARS + 1})`,
     })
     .from(taskStages)
     .where(inArray(taskStages.taskId, [...taskIds]))
     .orderBy(asc(taskStages.taskId), asc(taskStages.enteredAt), asc(taskStages.attempt));
-  const byTask = new Map<string, TaskListItem['stages'][number][]>();
+  const byTask = new Map<
+    string,
+    { stages: TaskListItem['stages'][number][]; setback: SetbackStageRow[] }
+  >();
   for (const row of rows) {
-    const list = byTask.get(row.taskId) ?? [];
-    list.push({
+    const entry = byTask.get(row.taskId) ?? { stages: [], setback: [] };
+    entry.stages.push({
       stage: row.stage,
       attempt: row.attempt,
       state: stageStateOf(row),
       entered_at: isoRequired(row.enteredAt),
     });
-    byTask.set(row.taskId, list);
+    entry.setback.push(setbackRowOf(row));
+    byTask.set(row.taskId, entry);
   }
   return byTask;
 };
+
+/** A `task_stages` row as `task-setback.ts` reads it (S-25.11). */
+const setbackRowOf = (row: {
+  readonly stage: string;
+  readonly attempt: number;
+  readonly state: string;
+  readonly outcome: string | null;
+  readonly exitedAt: Date | null;
+  readonly returnedTo: string | null;
+  readonly returnReason: string | null;
+  readonly signature: string | null;
+}): SetbackStageRow => ({
+  stage: row.stage,
+  attempt: row.attempt,
+  state: stageStateOf(row),
+  outcome: stageOutcomeOf(row.outcome),
+  exitedAt: iso(row.exitedAt),
+  returnedTo: row.returnedTo,
+  returnReason: row.returnReason,
+  signature: row.signature,
+});
 
 /**
  * How many of each page task's questions are `open` and approvals `pending` (S-23.9a) — the same
@@ -1754,6 +1795,7 @@ export const findTaskDetail = async (
       pausedReasonsFor(database, task.state === 'paused' ? [taskId] : []),
     ]);
 
+  const setbackRows = stageRows.map(setbackRowOf);
   return {
     task: toTaskRecord(
       task,
@@ -1765,6 +1807,10 @@ export const findTaskDetail = async (
     taken_over: takenOver,
     human_time: humanTime,
     gate_feedback: gateFeedbackOf(task, stageRows),
+    // S-25.11: the returns and the stop, off the same rows.
+    returns: returnsOf(setbackRows, compiledPipelineOf(task)),
+    stop: stopOf(task, setbackRows),
+    loop_limits: frozenLimits(task.iterationLimits),
     stages: stageRows.map((row) => ({
       stage: row.stage,
       attempt: row.attempt,
@@ -2043,7 +2089,11 @@ export const listProjectTasks = async (
         unmeasured.get(row.task.id) ?? 0,
         pausedReasons.get(row.task.id),
       ),
-      stages: stageRows.get(row.task.id) ?? [],
+      stages: stageRows.get(row.task.id)?.stages ?? [],
+      latest_return:
+        returnsOf(stageRows.get(row.task.id)?.setback ?? [], compiledPipelineOf(row.task)).at(-1) ??
+        null,
+      stop: stopOf(row.task, stageRows.get(row.task.id)?.setback ?? []),
       open_questions: asks.questions.get(row.task.id) ?? 0,
       pending_approvals: asks.approvals.get(row.task.id) ?? 0,
       loop_limits: frozenLimits(row.task.iterationLimits),

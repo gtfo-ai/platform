@@ -989,6 +989,46 @@ test('a taken-over task that escalated still shows the branch, the downloads and
   });
 });
 
+/**
+ * S-25.11 (product/10's Task detail amendment of 2026-11-07): a task CI sent back says why, who acts
+ * and the round, with no action, while the Developer is on it — and the timeline's returned attempt
+ * says where it went and why. A CI check that timed out (AUT-6655's shape) says it did not finish,
+ * never that it failed, with what the platform saw last and the next step.
+ */
+test('a task CI sent back says why and what happens next; a timed-out CI check never reads as failed (S-25.11)', async ({
+  page,
+}) => {
+  await page.goto(`/tasks/${IDS.taskCiFixing}`);
+  await expect(page.getByRole('heading', { level: 1, name: /Round VAT once/ })).toBeVisible();
+  const notice = page.getByRole('region', { name: 'What happens next' });
+  await expect(
+    notice.getByText(
+      'CI failed on the merge request (job unit): the Developer is fixing it (round 2 of 3).',
+    ),
+  ).toBeVisible();
+  await expect(notice.getByRole('button')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Needs you' })).toHaveCount(0);
+  // The header's Now line carries the short form.
+  await expect(page.getByText('Now: CI failed · fixing, round 2/3')).toBeVisible();
+  // The stage timeline's returned attempt names where it went and why.
+  await page.getByTestId('task-flow').getByRole('button', { name: 'List' }).click();
+  await expect(
+    page.getByText('Sent back to Implementation: CI failed on the merge request (job unit).'),
+  ).toBeVisible();
+
+  await page.goto(`/tasks/${IDS.taskCiTimedOut}`);
+  const needs = page.getByRole('region', { name: 'Needs you' });
+  await expect(
+    needs.getByText('CI did not finish in the time the platform waits for it. Nothing failed.'),
+  ).toBeVisible();
+  await expect(
+    needs.getByText(/What the platform saw last: .*sentry-release-commit/),
+  ).toBeVisible();
+  await expect(needs.getByText(/Start or finish it there, then retry the stage\./)).toBeVisible();
+  await expect(needs.getByRole('button', { name: 'Retry stage…' })).toBeVisible();
+  await expect(needs.getByText(/CI failed/)).toHaveCount(0);
+});
+
 test('the epic split’s breakdown panel accepts a chosen child with one request (WP-44)', async ({
   page,
   request,

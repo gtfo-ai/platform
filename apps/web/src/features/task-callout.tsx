@@ -19,7 +19,12 @@
  * - **a proposed breakdown waiting for a maintainer** — the epic split's panel, with its decision.
  *   A breakdown with nothing left to decide, or a caller who may not decide it, is on the Overview.
  *
- * None of it is shown for a task nothing waits on, so its absence is itself an answer.
+ * None of it is shown for a task nothing waits on, so its absence is itself an answer — except one
+ * sentence that asks nothing (S-25.11, product/10's 2026-11-07 amendment): while a task that went
+ * back is being worked on at the stage it went back to, the slot says why it went back, who acts and
+ * which round it is (`./setback.ts`), as information with no action. And a task that stopped after
+ * going back says which way it stopped — the rounds used up, the same failure again, or a check that
+ * got no answer (nothing failed; the sentence the platform recorded follows) — and the next step.
  */
 import type {
   ApprovalView,
@@ -32,9 +37,10 @@ import type { useTaskCommands } from '../app/queries.js';
 import { Flash } from '../ui/flash.js';
 import { APPROVAL_KIND_LABEL, QUESTION_STATUS_LABEL, stageLabel } from '../ui/humanize.js';
 import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd } from '../ui/kit.js';
-import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { ApprovalCard } from './approval-card.js';
 import { BreakdownPanel } from './breakdown-panel.js';
+import { openReturn, returnWords, stopWords } from './setback.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
 import { latestStageRow } from './task-checks-text.js';
 import type { TaskDialog } from './task-dialogs.js';
@@ -267,9 +273,27 @@ export const TaskCallout = ({
   });
   const [first] = reasons;
   if (first === undefined) {
-    return null;
+    const open = openReturn(task, stages, detail.returns.at(-1) ?? null);
+    if (open === null) {
+      return null;
+    }
+    // S-25.11: the agent is on it, so nothing is asked of the reader — information, no action.
+    const words = returnWords(open, task, detail.loop_limits);
+    return (
+      <section aria-label="What happens next" data-testid="setback-notice">
+        <Flash tone="info">
+          <p data-setback="fixing" data-setback-recorded={words.recorded ? 'yes' : 'no'}>
+            {/* Platform words around the job names the row recorded (provider text). */}
+            <UntrustedText value={words.sentence} />
+          </p>
+        </Flash>
+      </section>
+    );
   }
-  const reason = reasons.includes('escalation') ? escalationReason(task, stages) : null;
+  const stop = reasons.includes('escalation') ? detail.stop : null;
+  const reason =
+    reasons.includes('escalation') && stop === null ? escalationReason(task, stages) : null;
+  const stopped = stop === null ? null : stopWords(stop, detail.loop_limits);
   return (
     <section aria-label="Needs you" data-testid="needs-you-callout">
       <Flash tone="beacon" title={calloutTitle(first, openQuestions.length, pendingApprovals)}>
@@ -316,6 +340,39 @@ export const TaskCallout = ({
                 maySendBack={detail.can_return || detail.can_rework}
                 mayResume={detail.can_resume}
               />
+              {stop === null || stopped === null ? null : (
+                <div className="flex flex-col gap-1" data-stop={stop.cause}>
+                  <p data-stop-sentence="">
+                    <UntrustedText value={stopped.sentence} />
+                  </p>
+                  {stopped.recordedLead === null ? null : (
+                    <p data-stop-recorded="">
+                      {stopped.recordedLead}
+                      {stop.recorded === null ? null : (
+                        <>
+                          {' '}
+                          {/* The sentence the platform wrote, quoting provider text (BD-022). */}
+                          <UntrustedText value={stop.recorded} />
+                          {stop.recorded_cut ? ' (shortened)' : null}
+                        </>
+                      )}
+                    </p>
+                  )}
+                  <p data-stop-next="">
+                    {stopped.next}
+                    {task.mr_ref === null || task.mr_ref === undefined ? null : (
+                      <>
+                        {' '}
+                        <ExternalLink
+                          url={task.mr_ref.url}
+                          label="Open the merge request"
+                          className="text-link underline"
+                        />
+                      </>
+                    )}
+                  </p>
+                </div>
+              )}
               {reason === null ? null : (
                 <p data-escalation-reason="">
                   {/* The row's word through the platform's own table; still rendered as text. */}

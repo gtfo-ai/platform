@@ -1547,7 +1547,87 @@ export const listTasksQuerySchema = paginationQuerySchema.extend({
  *   `null` when the stored limits do not parse: the card then says the count alone rather than a
  *   ceiling it does not know.
  */
+/**
+ * The CI failure a `ci_gate` attempt recorded (S-25.11), read off `task_stages.signature` — the
+ * convergence rule's `ci:<status>:<failing jobs, sorted>@<head>` (`ciFailureSignature`), which the
+ * gate writes on the attempt that failed. `jobs` is the failing jobs' names **as the signature
+ * joined them** (comma-separated, provider text, BD-022) rather than a list: a job whose own name
+ * holds a comma cannot be told apart from two jobs, so the read does not split what it cannot split.
+ * An empty string is a failure that named no job. Nothing else of the pipeline is recorded in a
+ * shape a read can use — its id and the job's URL are only inside the return's text — so neither is
+ * published.
+ */
+export const taskCiFailureSchema = z.strictObject({
+  status: z.enum(['failed', 'canceled', 'skipped']),
+  jobs: z.string().max(4_000),
+});
+export type TaskCiFailure = z.infer<typeof taskCiFailureSchema>;
+
+/**
+ * One return the task made — a `task_stages` row closed `returned` (S-25.11, product/10's Task
+ * detail amendment of 2026-11-07). Every field is a column the pipeline already writes, or `null`:
+ *
+ * - `to_stage` is `returned_to`; `null` on a row written before it had a writer (WP-55);
+ * - `to_role` is the role of that stage in the task's **own** compiled pipeline — who acts — and
+ *   `null` when it is not an agent stage or the pipeline cannot be compiled;
+ * - `reason_recorded` is whether `return_reason` holds text (the text is not published here: on a CI
+ *   return it is the failing jobs' logs, provider output the page has no reason to render);
+ * - `ci_failure` is {@link taskCiFailureSchema}, `null` for a return that was not a CI failure or one
+ *   whose signature was never recorded;
+ * - `loop` is the bounded loop the edge spends (`returnLoopFor`), `null` when it spends none. The
+ *   round it is on is `task.iteration_counters[loop]`, its ceiling `loop_limits[loop]`.
+ */
+export const taskReturnSchema = z.strictObject({
+  from_stage: stageIdSchema,
+  attempt: z.int().positive(),
+  to_stage: stageIdSchema.nullable(),
+  to_role: agentRoleSchema.nullable(),
+  /** `task_stages.exited_at` — when it went back. */
+  at: isoDateTimeSchema,
+  outcome: taskStageOutcomeSchema.nullable(),
+  reason_recorded: z.boolean(),
+  ci_failure: taskCiFailureSchema.nullable(),
+  loop: slugSchema.nullable(),
+});
+export type TaskReturn = z.infer<typeof taskReturnSchema>;
+
+/** The longest recorded sentence a {@link taskStopSchema} carries before it is cut. */
+export const MAX_TASK_STOP_RECORDED_CHARS = 2_000;
+
+/**
+ * Why a task waiting for a person stopped, when the stage row says so in a shape the page can word
+ * (S-25.11). Published only while the task is `needs_human`, for its current stage's latest attempt:
+ *
+ * - `tries_spent` — the attempt was closed `returned` and the task did not move: its loop was spent
+ *   (BD-008). `loop` names it;
+ * - `same_failure` — closed `converged`: CI failed with the same jobs three times in a row
+ *   (product/04 S4), or a review repeated its findings;
+ * - `no_answer` — closed `undecided`: the check never got an answer in the time or the checks it is
+ *   allowed (the CI timeout on a poll-only binding, the five checks, a provider that did not answer).
+ *   Nothing failed. `recorded` is the sentence the platform wrote (`return_reason`) — platform text
+ *   that quotes provider text (a job's name), so it is rendered as untrusted text — cut at
+ *   {@link MAX_TASK_STOP_RECORDED_CHARS} with `recorded_cut` saying so; `null` when none was written.
+ *
+ * Every other ending is `null` here, and the page says the row's own word as before.
+ */
+export const taskStopSchema = z.strictObject({
+  stage: stageIdSchema,
+  attempt: z.int().positive(),
+  cause: z.enum(['tries_spent', 'same_failure', 'no_answer']),
+  loop: slugSchema.nullable(),
+  ci_failure: taskCiFailureSchema.nullable(),
+  recorded: z.string().max(MAX_TASK_STOP_RECORDED_CHARS).nullable(),
+  recorded_cut: z.boolean(),
+});
+export type TaskStop = z.infer<typeof taskStopSchema>;
+
+/**
+ * - `latest_return` / `stop` (S-25.11): the task's newest {@link taskReturnSchema} and its
+ *   {@link taskStopSchema} — what the card's short form says ("CI failed · fixing, round 2 of 3").
+ */
 export const taskListItemSchema = taskRecordSchema.extend({
+  latest_return: taskReturnSchema.nullable(),
+  stop: taskStopSchema.nullable(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,
@@ -1807,6 +1887,19 @@ export const taskDetailResponseSchema = z.strictObject({
       original_chars: z.int().positive().nullable(),
     })
     .nullable(),
+  /**
+   * Every return the task made, oldest first (S-25.11): {@link taskReturnSchema}. The newest is the
+   * one the header and the callout word while its target stage is open; the stage timeline draws
+   * each with its cause.
+   */
+  returns: z.array(taskReturnSchema),
+  /** Why the task stopped for a person, when the row says so: {@link taskStopSchema}. */
+  stop: taskStopSchema.nullable(),
+  /**
+   * The task's frozen iteration limits over the defaults — the board's {@link taskListItemSchema}
+   * `loop_limits`, so the page can say *round 2 of 3*. `null` when the stored limits do not parse.
+   */
+  loop_limits: z.record(slugSchema, z.int().nonnegative()).nullable(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,

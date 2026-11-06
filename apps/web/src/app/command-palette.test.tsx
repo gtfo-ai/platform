@@ -82,6 +82,8 @@ const task = (n: number, key: string, title: string | null, projectId = ACME.id)
     open_questions: 0,
     pending_approvals: 0,
     loop_limits: null,
+    latest_return: null,
+    stop: null,
   }) as TaskListItem;
 
 const TASKS = [task(1, 'ACME-21', HOSTILE_TITLE), task(2, 'ACME-22', null)];
