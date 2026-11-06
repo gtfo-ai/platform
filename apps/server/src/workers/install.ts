@@ -12,7 +12,10 @@
  *
  * What a script does with the bundle (never move a worker's images on a re-run, never write the
  * updater's `.env`, always install a bundle that has its updater) is stated in each file's header
- * and held by `install-script.test.ts`, which runs `install.sh` against a stub `docker` and `curl`.
+ * and held by `install-script.test.ts`, which runs `install.sh` against a stub `docker` and `curl`,
+ * and by `scripts/worker-install-check.mjs` (a Docker check, backlog 1021), which pipes the script a
+ * real core serves into `sh` on a real daemon: install, a re-run that recreates nothing, and
+ * `--uninstall --purge`.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

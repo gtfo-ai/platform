@@ -2,12 +2,13 @@
 /**
  * The Docker checks CI runs, and when — `.github/workflows/docker-checks.yml`'s one table.
  *
- * Twelve `scripts/*-check.mjs` need a Docker daemon, so none is a `verify` target (a `verify` step is
+ * Thirteen `scripts/*-check.mjs` need a Docker daemon, so none is a `verify` target (a `verify` step is
  * a step of CI's lint or unit job, which have no daemon — `scripts/verify-targets.ts`). Five already
  * ran in CI: `runlet-container-check` in `ci.yml`'s first e2e part, and the four compose checks in
  * `image.yml`'s `build` job on both architectures (`scripts/release.test.ts` holds those). The other
  * seven ran only when somebody ran them by hand, on a developer's daemon — and the owner's daemon is
- * also the one their live worker runs on. This table gives each of the seven a place in CI:
+ * also the one their live worker runs on. This table gives each of the seven a place in CI, and an
+ * eighth that was written for it (`worker-install-check`, backlog 1021):
  *
  *  - **`always`** — on every pull request and every push to `main`. The check is short (seconds to
  *    half a minute when measured by hand) and guards the run image or the run plane, whose inputs are
@@ -175,6 +176,21 @@ export const DOCKER_CHECKS = [
       'apps/server/src/updater/',
     ],
     why: 'four attested builds of every image and three updates of a live worker',
+  },
+  {
+    name: 'worker-install-check',
+    when: 'paths',
+    paths: [
+      'docker/',
+      'scripts/build-images.mjs',
+      'pnpm-lock.yaml',
+      ...WORKER,
+      'scripts/worker-install-check.mjs',
+      // The scripts the core serves are `apps/server/src/workers/install/` (in WORKER); the updater
+      // is what the install must leave running and healthy.
+      'apps/server/src/updater/',
+    ],
+    why: 'a core serving install.sh; the piped line installs, re-runs and purges a worker',
   },
 ];
 

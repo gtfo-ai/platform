@@ -3,7 +3,7 @@ name: docker checks
 # The `scripts/*-check.mjs` that need a Docker daemon and were run only by hand: CI runs them now, so
 # a change no longer depends on a developer's daemon (technical/11 § Docker checks in CI). Which run
 # when is **one table**, `scripts/docker-checks.mjs`: four on every pull request and push to `main`,
-# three only when a path they guard changed, and all seven every night and on a dispatch.
+# four only when a path they guard changed, and all eight every night and on a dispatch.
 #
 # **One build, handed to every check.** The `images` job builds the five images once (amd64), saves
 # them as one zstd archive and uploads it; each check job loads it and runs one check, all in

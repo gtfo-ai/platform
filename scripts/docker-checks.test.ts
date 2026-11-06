@@ -69,6 +69,19 @@ describe('which Docker checks a change runs', () => {
     expect(planChecks(['apps/server/src/updater/apply.ts'])).toEqual([
       ...ALWAYS,
       'worker-update-check',
+      'worker-install-check',
+    ]);
+    // The served installer and the module that renders it select the install check (backlog 1021).
+    for (const path of [
+      'apps/server/src/workers/install/install.sh',
+      'apps/server/src/workers/install/install.ps1',
+      'apps/server/src/workers/install.ts',
+    ]) {
+      expect(planChecks([path]), path).toContain('worker-install-check');
+    }
+    expect(planChecks(['scripts/worker-install-check.mjs'])).toEqual([
+      ...ALWAYS,
+      'worker-install-check',
     ]);
     expect(planChecks(['scripts/launcher-control-plane-check.mjs'])).toEqual([
       ...ALWAYS,
@@ -364,7 +377,9 @@ describe('the plan command', () => {
       writeFileSync(changed, 'apps/server/src/updater/apply.ts\n');
       const printed = plan(['--changed', changed]);
       expect(printed.status, printed.stderr).toBe(0);
-      expect(printed.stdout).toBe(`checks=${JSON.stringify([...ALWAYS, 'worker-update-check'])}\n`);
+      expect(printed.stdout).toBe(
+        `checks=${JSON.stringify([...ALWAYS, 'worker-update-check', 'worker-install-check'])}\n`,
+      );
 
       const output = join(directory, 'output');
       writeFileSync(output, '');
@@ -400,8 +415,8 @@ describe('every Docker check is run by some workflow', () => {
     const scripts = censusPaths(repositoryRoot, { pathspecs: ['scripts/*-check.mjs'] })
       .filter((path) => existsSync(join(repositoryRoot, path)))
       .map((path) => path.replace(/^scripts\//, '').replace(/\.mjs$/, ''));
-    // Not vacuous: the twelve daemon checks the table and the two older workflows share.
-    expect(scripts.length).toBeGreaterThanOrEqual(12);
+    // Not vacuous: the thirteen daemon checks the table and the two older workflows share.
+    expect(scripts.length).toBeGreaterThanOrEqual(13);
     const elsewhere = Object.keys(RUN_ELSEWHERE);
     expect(
       ALL.filter((name) => elsewhere.includes(name)),
