@@ -86,6 +86,20 @@ callout's slot carry one sentence. It names the cause, who acts, and how many tr
   return as a loop with its reason, as above.
 - A return whose reason was not recorded says so ("went back from CI; the reason was not recorded"). It never
   guesses.
+- **While a gate waits, it says what it is waiting for, from the first read.** The case that prompted this is
+  AUT-6655. GitLab held its pipeline at a manual job, the platform waited 60 minutes twice, and the page showed only
+  "CI" and *Needs you*. The waiting gate's last read is shown on the task header, the callout and the board card while
+  it waits, not only after the timeout:
+  - a pipeline held at a manual job: "CI is waiting for someone to start the manual job *sentry-release-commit* in
+    GitLab. Start it there and the task continues." The job and pipeline are linked through `safeHref`. When the
+    platform keeps the merge request a draft and the project's CI rules hold jobs for drafts, it adds a link to the
+    readiness panel's CI-rules warning;
+  - a pipeline still running: "CI is running (pipeline *n*, 12 min so far; the task gives up after 60)".
+  This is *Needs you* the moment a person's action is the only way forward (a held manual job is that), with the one
+  next step. It is not *Needs you* after the timeout.
+- **A timed-out wait says it timed out**, with the last read: "CI did not finish within 60 minutes: pipeline *n* was
+  still held at the manual job *sentry-release-commit*." The next step is *Start the job in GitLab, then Retry*. The
+  task page never reads as a failed check when nothing failed.
 
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.
