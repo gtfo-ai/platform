@@ -2,6 +2,12 @@
 
 Goal: someone who has never used the platform understands within a minute what is happening, what it costs, and how to intervene. The UI is a **control tower**, not a chat.
 
+> **Amendment 2026-11-06 (product owner, research/21, M25).** *Every screen answers one question, and a decision is
+> made with its evidence on screen.* Each screen states who it is for, the one question it answers, its primary action
+> and what happens after it. research/21 § 2 is the intent card per screen, and it is authoritative for M25. Nobody
+> approves, accepts or rejects anything they cannot see from where the button is. A state word says what it means for
+> the reader, not where the state sits on an internal ladder.
+
 Decision: [BD-015 UI is a first-class product surface](../decisions/business/BD-015-ui-first-class.md). Visual design language is a Round 2 topic; this document fixes the information architecture and key interactions.
 
 ## Information architecture
@@ -26,20 +32,51 @@ Audit log (org)            – filterable event stream (config, human actions, i
 Settings (org)             – auth, Claude provider mode, default models, global budgets, users & roles, feature flags
 ```
 
+> **Amendment 2026-11-06 (Q-UX-1, Q-UX-3, M25).**
+> - **Top row.** The top row holds the five daily screens: Home, Projects, Inbox, Agents and Statistics. Integrations,
+>   Workers and the Audit log are an *Admin* section of org Settings, and their URLs keep resolving.
+> - **Run pages** sit inside their project's frame.
+> - **Shadow** is shown as **Trial** ("a trial run on tickets you already shipped"). Its tab appears only before the
+>   project's first live task or while a trial exists; otherwise it lives under project Settings.
+> - **Budgets** is where a project's cap is both read and set, with the per-stage breakdown and the top tasks.
+> - **Home** leads with *Needs you* for everyone. Background failures (stuck events, failed jobs) appear there as rows
+>   that only an administrator sees. The setup list hides once a ticket has run, unless something is missing; then it
+>   says what is missing and what that costs.
+
 ## Key screens
 
 ### Board (project)
 - Columns = stages (from the project's pipeline template) plus `Queued`, `Needs human`, `Done (7d)`.
 - Card: ticket key + title, template icon (feature/bug/chore/spike), running-agent pulse, cost so far, time in stage, iteration counter (e.g. "review 2/3"), question badge.
 - Drag is *not* supported (state is owned by the pipeline); actions are on the card menu: pause, cancel, return to stage, open ticket, open MR.
+- *Amended 2026-11-06 (M25).* The *Needs you* column, the card's badge and the task header's state read **one** rule: a
+  task with an open question, a pending approval, or the `needs_human` state needs you, whatever its stage. Loop
+  counters read as rounds ("Review round 2 of 3").
 
 ### Task detail
 - Left: vertical **stage timeline** with status, duration, cost per stage, returns drawn as loops with reason.
 - Centre: **artifacts** tab (Refined Spec, Plan, RCA, Review Verdicts, Retro) rendered markdown with version history; **runs** tab; **questions** tab; **events** tab (raw).
 - Right: **Checks** panel — merge-readiness at a glance: acceptance criteria met, CI green, rebase status, review threads open/resolved, business verdict, tamper check, coverage delta, dependency status, risk classes and required reviewers, budget vs estimate, questions pending (research/01: Conductor); cost breakdown donut (per stage), budget bar, links (ticket, MR, Slack thread), actions.
 
+*Amended 2026-11-06 (BD-006 amendment, M25).*
+- **Approvals.** A pending approval is shown **with its subject**: the plan itself, open (summary, size, files, risks),
+  or the budget figures, the rework's reason or the knowledge change. It also says:
+  - **why it was asked**, as the reasons the platform recorded (probation task *n* of *N*, the size threshold, a risk
+    class, a project that always asks);
+  - **what each answer does next** (*Approve*: Implementation starts; *Reject*: back to Architecture with your
+    reason);
+  - **how to stop being asked** for that reason, linked to the setting that retires it.
+
+  Approvals are meant to become rarer as trust grows: the card is where that trade-off is visible. Home and the Inbox
+  never approve in one click. Their verb is *Review plan*, and it opens the card.
+- **Header.** The ticket and merge request links sit next to the ticket key.
+- **Stages.** The stage timeline is the list mode of the Flow canvas, not a second section.
+- **Checks.** The panel counts checks; questions and approvals are the callout's.
+
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.
+- *Amended 2026-11-06 (M25).* While a run is live, watching is the job: *Cancel run* is a danger secondary, never the
+  page's amber primary. When the run waits on a person, the page links to what it waits for.
 - **Transcript** (live via stream): assistant text (markdown), tool calls as collapsible cards (name, input, output, duration; diffs rendered as diffs; shell output as terminal), thinking blocks collapsed by default, sub-agent runs nested, compaction boundaries shown. Search within transcript. Follow-tail toggle.
 - **Prompt** tab: exact system prompt and user prompt, context pack (list of KB docs included, with token counts), skills/MCP loaded.
 - **Settings** tab: effective configuration snapshot with "changed from default" markers.
@@ -52,6 +89,8 @@ Settings (org)             – auth, Claude provider mode, default models, globa
 - Tree of the vault (`business/`, `technical/`, `decisions/`, `lessons/`, `rules/`, `research/`), markdown editor with preview, backlinks, "used by N runs in last 30 days" per document.
 - **Proposals** queue: diffs proposed by Retrospective/Feedback with provenance; approve (commits), edit-then-approve, reject with reason (which the Librarian learns from).
 - Completeness checklist (from onboarding) and stale-document warnings.
+- *Amended 2026-11-06 (M25).* The proposals waiting for the reader come first. A proposal is approved with its change
+  open on screen, never collapsed under the button.
 
 ### Ask the task
 - A thread on the task page (and mirrored in the ticket thread) where anyone with access can ask "why did you choose X?"; answered from the audit trail and artifacts with links to the exact run and prompt.
@@ -70,3 +109,6 @@ Settings (org)             – auth, Claude provider mode, default models, globa
   > theme and no theme switch.
 - Live updates everywhere (no refresh), but with a "paused updates" indicator when scrolling a transcript.
 - Language: English UI; user content shown as-is.
+- *Amended 2026-11-06 (M25).* **Plain words.** An internal term (gate, loop, tamper check, binding, slot, context pack,
+  dead letter, readiness level numbers) either has a plain-words replacement on screen, or carries its definition one
+  hover or one keypress away. research/21 § 4 is the census.

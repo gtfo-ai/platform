@@ -1602,6 +1602,38 @@ defect, not the app's. Slices reserve WP-330–WP-339, and backlog findings take
 
 **Docker rows:** S-24.W, S-24.2 and S-24.3. **Real-machine rows:** S-24.0, S-24.3, S-24.6 and S-24.7.
 
+## Milestone M25 — every screen with a clear intent: decide with the evidence on screen (orchestrator, session 23)
+
+On 2026-11-06 the product owner asked for a product-level UX round on the SPA's flow: what each kind of user wants on
+each screen, which operations belong there, and whether every screen states its intent and next step in plain words.
+The owner's own example was a blind plan approval on Autix. They also said: *"the goal of the whole platform is to
+avoid plan approval … but maybe that is exactly what the plan approval is for."* The answer is BD-006's 2026-11-06
+amendment:
+- an approval shows its subject;
+- it says why it was asked;
+- it says what would make it unnecessary next time.
+
+The review, the intent card per screen and the jargon census are **research/21**. The owner accepted its four
+recommendations (Q-UX-1 to Q-UX-4) the same day. Slices are S-25.x and backlog findings take 1200–1299. The worker
+session owns `apps/web/src/worker/*`, `apps/server/src/{remote-worker,updater}/*`, the installers and
+`packages/contracts/src/worker-local.ts`. No M25 slice edits them. A slice's PR updates the user guide's sections for
+the screens it changes. **No test runs locally** (owner rule): an implementer runs typecheck, biome and
+`bundle:check`, and CI is the verdict.
+
+| Slice | Title | Depends | Decision(s) | Acceptance | Risk |
+|---|---|---|---|---|---|
+| **S-25.1** | Approvals show what they approve, why, and how to stop being asked | — | BD-006 2026-11-06 amendment; research/21 F1 | (1) The approval decision returns its **reasons** (empty = no approval). A domain unit test per reason, plus a property test that a non-empty list ⇔ the old boolean. (2) An approval is stored with its **subject** (the plan artifact and its version; the budget figures) and its reasons, through an additive migration. Old rows read *not recorded* and nothing is invented (an integration test). (3) The task page's approval card shows the plan inline and open, the reasons in words, what *Approve* and *Reject* do next, and a *To stop being asked…* line per reason with a link to the setting. The header's *Approve…* opens the same card (ui test). (4) Home and the Inbox say *Review plan* and name the subject (size, files); no row approves in one click. (5) The knowledge proposal's *Approve* is shown with its change open (F2). (6) `client-census` and `no-html.test.ts` stay green. | high (who decides what) |
+| **S-25.2** | Readiness says what it means for you | — | product/17 2026-11-06 amendment; Q-UX-2 | (1) The badge names what agents may do at that level ("Plans need your OK", …), in a neutral tone at level 0 and with no ✕. (2) A popover, opened by click and by keyboard, gives the level's name, what it means now, the next level and the top missing criterion with its how-to, and links to *Discovery & readiness*. (3) It applies on the project header, Projects and Home. (4) A ui test per level, and the contrast test holds. | low |
+| **S-25.3** | Integrations: who they are, whether they work now, who uses them | — | product/08 2026-11-06 amendment | (1) An icon per provider, `ui/provider-icon.tsx`: an Octicons glyph for the provider's role with its name as text, never a brand logo (research/21 § 8). The trademark line is on the screen and in the user guide. (2) Rows grouped by role. (3) "Used by *Autix*", with links. (4) Health from traffic (the last outbound call or inbound delivery) with its age; a probe older than the stale bound reads *Not checked recently* and offers *Test again* in the row (server unit + integration test). (5) The detail page drops raw config keys and names each project's use. (6) The client census stays green. | medium |
+| **S-25.4** | One "needs you", and the task and run pages in order | — | product/10 2026-11-06 amendment | (1) The board column, the card badge and the task header pill read one `needsYou` rule (unit test over every state × pending item). (2) Ticket and MR links are in the task header. (3) The stage timeline is the Flow canvas's list mode, not a second section. (4) An absent *Ask the task* thread is the empty state. (5) The Checks header counts checks, not the callout's items. (6) On the run page, *Cancel run* is a danger secondary and the run stays inside its project frame; "Needs you" links to the waiting item. | low |
+| **S-25.5** | Plain words | S-25.4 (shared files) | research/21 § 4 | (1) Every row of research/21's census either uses its plain word or carries a definition (popover or `title`). (2) The vocabulary census adds the retired terms. (3) The server's user-facing-copy census covers the server fields research/21 § 4 lists (F18). | low |
+| **S-25.6** | Navigation and Home per person | S-25.2 | product/10 2026-11-06 amendment; Q-UX-1 | (1) The top row is Home, Projects, Inbox, Agents and Statistics. Integrations, Workers and Audit log move to Settings' *Admin* section, and their old URLs still resolve (the nav census changes once). **`/workers/approve?code=…` (the device-flow link installed workers display) and `/workers/new?step=ready` keep resolving forever, query string preserved, and the URL the core issues in the device flow is unchanged** (the worker session's requirement, 2026-11-06; a routing test holds both). (2) Home's setup list hides once a ticket has run unless a piece is missing, and then says what is missing. (3) Background failures appear as an admin-only row in *Needs you*. (4) Settings lands on the first section the role may change. (5) The Agents page has no primary of its own. | medium |
+| **S-25.7** | Budgets, Trial, Knowledge, Statistics, Audit | S-25.5 | product/10 2026-11-06 amendment; Q-UX-3 | (1) The project's cap is edited on *Budgets*, which shows spend per stage and its top tasks. (2) *Shadow* becomes *Trial*: one state at a time, and the tab is shown only before the first live task or while a trial exists (otherwise it lives under Settings). (3) Knowledge puts the waiting proposals first. (4) Statistics gives each metric a reading direction; the audit names projects and filters by one. | low |
+| **S-25.8** | A new project starts from its repository | — | product/06 2026-11-06 amendment | Step 1 asks for the repository URL first and proposes the name, key and default branch from it, all editable (ui test). | low |
+
+**Order.** S-25.1 and S-25.3 run in parallel first: their files don't overlap. Then S-25.2 ∥ S-25.4, then S-25.5,
+then S-25.6 ∥ S-25.8, then S-25.7. When the round is on `main`, the worker session deploys it to Autix.
+
 ## Suggested agent team for the orchestrator
 - **Architect (this role, read-only)** for questions about decisions; **Backend developer** (domain/application/infrastructure), **Integrations developer** (providers + contract tests), **Runner/security developer** (SDK runner, launcher, isolation), **Frontend developer** (SPA), **Prompt engineer** (roles, evals), **Reviewer** (fresh context, security checklist), **Docs writer**. Sequence M1 WPs by dependencies; WP-13 early because the whole runner path depends on it.
 

@@ -47,6 +47,17 @@ Levels only *suggest* stricter or looser defaults; maintainers can override any 
 
 ## Where it shows up
 
+> **Amendment 2026-11-06 (Q-UX-2, M25).** A level is shown by **what it means for the people using the project**, not
+> by its number.
+> - Level 0 reads *Plans need your OK*. Levels 1–2 read *Big plans need your OK*. Level 3 reads *Agents plan on their
+>   own*. Level 4 reads *Ready for more autonomy*.
+> - The ladder's name and number (*Unverified*, L0) are in the badge's popover. So are what the level means now, the
+>   next level, its cheapest missing criterion with the how-to, and a link to *Discovery & readiness*.
+> - Level 0 is the normal start of most projects, so it is drawn in a **neutral** tone without a ✕. It is never red. The
+>   board header's "red badge" below is superseded.
+> - Where an approval was asked *because of* readiness (level 0 keeps probation on), the approval card says so and
+>   names the criterion that would retire it (BD-006's 2026-11-06 amendment).
+
 - **Project page:** level badge, criteria checklist with pass/fail/not checked and "what this unlocks", trend over time.
 - **Board:** badge on the project header; tooltip with the top two missing criteria.
 - **Retrospectives:** each return or escalation is tagged with the readiness criterion that would have prevented it ("2 of 3 CI returns were flaky reruns → R4"). Aggregated in statistics: *returns attributable to readiness gaps* per month, which turns readiness into a cost argument ("R4 cost $41 last month").

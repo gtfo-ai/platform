@@ -60,6 +60,14 @@ Every provider declares: `type`, `config_schema` (with secret fields marked), `c
 
 - **Setup UX:** each provider renders a form from its config schema, has *Test connection*, shows required scopes and a copy-paste setup guide (Jira webhook JQL, GitLab webhook URL + secret, Slack manifest, Sentry integration scopes).
 - **Health:** last event received, last action succeeded, token expiry warnings (GitLab tokens ≤ 400 days, Jira API tokens, Claude OAuth tokens).
+- **Health, amended 2026-11-06 (M25).** Health is read from **traffic**: the last outbound call that succeeded or
+  failed, and the last inbound delivery, each with its age. The *Test connection* probe is one more data point.
+  "Healthy" is never shown on a probe older than the stale bound alone: the row then reads *Not checked recently* and
+  offers *Test again* in place.
+- **Identity, amended 2026-11-06 (M25).** Each provider has an icon. The list is grouped by what an integration does
+  for a project: *Tickets*, *Code & merge requests*, *Chat*, *Errors*, *Logs*. A row names the projects that use it and
+  links to them. The detail page says what each project uses it for (for example "tickets from AUT with the label
+  `agentic`"). Raw configuration keys are not shown. The icon is a neutral glyph for the provider's role, with the provider's name beside it, never a brand logo, because the brands' own terms refuse or constrain that use (research/21 § 8). The screen carries a one-line trademark statement.
 - **Idempotency:** every inbound event has a dedup key (Jira webhook identifier, GitLab event + object id + updated_at); every outbound action is idempotent (comment with marker, transition only if not already in status).
 - **Rate limits:** back off on 429 with `Retry-After`; per-provider concurrency caps.
 - **Audit:** every inbound event and outbound action stored (product/09).

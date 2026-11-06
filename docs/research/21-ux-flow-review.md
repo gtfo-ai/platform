@@ -323,7 +323,18 @@ Order: F1 first, alone. Then slices that touch different files run two at a time
 | **S-25.7** Budgets, Trial, Knowledge, Stats | F2, F7, F8, F15 | `project-panels.tsx`, `shadow.tsx`, the budgets panel, `statistics.tsx`, `audit.tsx` | low |
 | **S-25.8** New project starts from the repository | F11 | `onboarding.tsx`, `onboarding-connect.tsx` | low |
 
-## 7. Questions for the owner
+## 7. Questions for the owner — answered 2026-11-06
+
+The owner accepted all four recommendations (*"accept your recommendations based on reasoning"*). On F1 they added:
+*"the goal of the whole platform is to avoid plan approval because the refinement and proposals should be that good — but
+maybe that is exactly what the plan approval is for."*
+
+Both readings hold. BD-006 already rejected "always approve plans" because *humans stop reading*: an approval is
+meant to be the exception, and it should retire itself as trust grows (probation ends, readiness rises, the size
+threshold moves). The platform decides it in `requiresPlanApproval` (`packages/domain/src/policies/autonomy.ts:241`),
+which returns only a yes or a no, so nobody can see why they are asked or how to stop being asked. S-25.1 therefore
+shows three things on the card: the **subject**, the **reasons**, and **how to retire each reason** (BD-006's
+2026-11-06 amendment). A blind approval is a defect. An unexplained approval is the reason approvals never go away.
 
 - **Q-UX-1** (IA): move Integrations, Workers and Audit log out of the top row into an *Admin* group? Recommended: yes, as
   a NavList section of Settings, so the top row is the five daily screens.
@@ -333,3 +344,33 @@ Order: F1 first, alone. Then slices that touch different files run two at a time
   Recommended: yes.
 - **Q-UX-4** (approvals): should *Approve* stay disabled until the plan was opened, or is showing the plan inline (open by
   default) enough? Recommended: inline and open is enough; a disabled button reads as broken.
+
+## 8. Provider icons — sources and brand terms (retrieved 2026-11-06)
+
+The owner asked for an icon per provider. Each brand's own terms were read before choosing a source.
+
+| Provider | Simple Icons 16.36.0 (CC0 paths) | The brand's terms for a logo inside a third-party UI |
+|---|---|---|
+| GitLab | present (`gitlab`) | "Use of the Logos is not permitted under these Guidelines". UI and integration requests are "generally refused". The name may be used with the trademark statement (handbook.gitlab.com … /trademark-guidelines/, revised 2026-10-28). |
+| Jira | present (`jira`) | Allowed only unmodified, from Atlassian's own files, resized at most. A re-drawn or recoloured path does not qualify (atlassian.design/foundations/logos). |
+| Slack | **removed** (Salesforce brands, PR #13503, 2025-11-29) | "Most uses require a specific written license"; "don't use different colors" (slack.com/media-kit). |
+| Sentry | present (`sentry`) | No published third-party rules were found (sentry.io/branding). Unverified. |
+| Loki | **absent** (request #12138 open) | Grafana Labs: no colour changes; covers its own projects only; a non-affiliation statement is required (grafana.com/trademark-policy). |
+
+**Decision (S-25.3).** Every provider gets an **Octicons glyph for its role**, with the provider's **name as text** beside
+it:
+- GitLab: `GitMergeIcon`;
+- Jira: `IssueOpenedIcon`;
+- Slack: `CommentDiscussionIcon`;
+- Sentry: `BugIcon`;
+- Loki: `LogIcon`.
+
+These glyphs are `@primer/octicons-react` (MIT), already a dependency and already in `THIRD_PARTY_NOTICES.md`, so the
+notices are unchanged and nothing is vendored. The integrations screen and the user guide carry one line: *"GitLab,
+Jira, Slack, Sentry and Loki are trademarks of their respective owners; this project is not affiliated with or endorsed
+by them."*
+
+Two alternatives were rejected:
+- **Brand logos.** They are refused by GitLab and Slack and constrained by Grafana and Atlassian, and a monochrome
+  re-colour is exactly the "colour change" three of them forbid.
+- **Jira's real logo alone.** One brand mark among four glyphs reads as inconsistent.

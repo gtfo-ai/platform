@@ -14,6 +14,9 @@ Populate the project's knowledge base with the context a senior colleague would 
 > stays resumable and revisitable.
 
 ### Step 1 — Connect (required)
+*Amended 2026-11-06 (M25).* The step asks for the **repository first**, and proposes the project's name, key and default
+branch from it. Each proposal stays editable. The key's hint then explains a default rather than asking a riddle.
+
 Repository, task-management binding (Jira project + pick-up rule), Slack channel, observability bindings. The platform clones the repository and validates access.
 
 *Amended 2026-10-08 (BD-031).* Once the task-management binding is connected, this step loads the tracker's statuses, each with its category, and offers the **ticket lifecycle slots** as pick lists:
