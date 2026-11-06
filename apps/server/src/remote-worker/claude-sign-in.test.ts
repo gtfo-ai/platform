@@ -423,7 +423,7 @@ describe('never trapped at “Checking with Claude” (the owner’s report, 202
   const TOKEN_A = `sk-ant-oat01-${'A'.repeat(95)}`;
   const TOKEN_B = `sk-ant-oat01-${'B'.repeat(95)}`;
 
-  const begin = () => {
+  const begin = (store: (token: string) => Promise<void> = async () => undefined) => {
     const lines: string[] = [];
     const secrets: string[] = [];
     const stored: string[] = [];
@@ -440,6 +440,7 @@ describe('never trapped at “Checking with Claude” (the owner’s report, 202
       ),
       onSecret: (_name, value) => secrets.push(value),
       onToken: async (token) => {
+        await store(token);
         stored.push(token);
       },
     });
@@ -494,6 +495,42 @@ describe('never trapped at “Checking with Claude” (the owner’s report, 202
     checks[0]?.answer('accepted');
     await closing;
     expect(stored).toEqual([TOKEN_B]);
+    expect(session.status()).toEqual({ phase: 'idle', url: null, failure: null });
+  });
+
+  it('is in progress from the moment start() is called, before its session exists', async () => {
+    const { session } = begin();
+    const starting = session.start();
+    expect(session.inProgress()).toBe(true);
+    await expect(session.start()).rejects.toThrow(SignInBusyError);
+    await starting;
+    expect(session.inProgress()).toBe(true);
+    session.cancel();
+    expect(session.inProgress()).toBe(false);
+  });
+
+  it('a check superseded while its token is stored leaves the newer sign-in’s phase alone', async () => {
+    let releaseStore: () => void = () => undefined;
+    const storeGate = new Promise<void>((resolve) => {
+      releaseStore = resolve;
+    });
+    const { session, checks, stored } = begin(async (token) => {
+      if (token === TOKEN_A) await storeGate;
+    });
+    session.acceptToken(TOKEN_A);
+    await until('the first check', () => checks.length === 1);
+    checks[0]?.answer('accepted');
+    // A's verdict is in and its store is under way when the person cancels and pastes B.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    session.cancel();
+    session.acceptToken(TOKEN_B);
+    await until('the second check', () => checks.length === 2);
+    releaseStore();
+    await until('A is stored', () => stored.includes(TOKEN_A));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.status().phase).toBe('checking');
+    checks[1]?.answer('accepted');
+    await until('B is stored', () => stored.includes(TOKEN_B));
     expect(session.status()).toEqual({ phase: 'idle', url: null, failure: null });
   });
 

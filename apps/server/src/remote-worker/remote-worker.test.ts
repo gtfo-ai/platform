@@ -2188,16 +2188,33 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       },
     });
     const probed = probe(['http://host.docker.internal:8080', 'https://core.example.test']);
-    const { worker, lines } = await start({
+    // The token check waits for the test, so what the worker answers while it runs is measured.
+    let releaseCheck: () => void = () => undefined;
+    const checkGate = new Promise<void>((resolve) => {
+      releaseCheck = resolve;
+    });
+    let checksStarted = 0;
+    const gatedClaude: ClaudeCliLauncher = {
+      setupToken: fakeClaude.setupToken,
+      run: async (args, env, timeoutMs) => {
+        checksStarted += 1;
+        await checkGate;
+        return fakeClaude.run(args, env, timeoutMs);
+      },
+    };
+    const { worker, lines, internal } = await start({
       stateDir,
       core,
       auth: 'none',
       coreUrl: null,
       claudeToken: null,
-      claudeCli: fakeClaude,
+      claudeCli: gatedClaude,
       probeFetch: probed.fetch,
       sleep: yielding,
     });
+    /** `/internal/state`'s `idle` — what an update's drain waits for. */
+    const internalIdle = async (): Promise<unknown> =>
+      ((await (await fetch(`${internal}/internal/state`)).json()) as { idle?: unknown }).idle;
     const answers: string[] = [];
     const ask = async (verb: string, body: unknown) => {
       const answer = await post(port, verb, body);
@@ -2248,8 +2265,20 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
         () => worker.localState().setup.sign_in.phase === 'waiting_for_code',
       );
       expect(new URL((await read()).setup.sign_in.url as string).hostname).toBe('claude.com');
+      // A sign-in half done is not idle: an update's drain waits rather than restart the worker.
+      expect(await internalIdle()).toBe(false);
       expect((await ask('claude/code', { code: SIGN_IN_FIXTURE.good_code })).status).toBe(200);
+      await until('the token check', () => checksStarted === 1);
+      expect(await internalIdle()).toBe(false);
+      // A second paste while the sign-in's own check runs is refused, and says why.
+      const second = await ask('claude/token', { token: SIGN_IN_FIXTURE.token });
+      expect(`${second.status} ${JSON.parse(second.text).error.code}`).toBe(
+        '409 token_check_running',
+      );
+      releaseCheck();
       await until('the approval step', () => worker.localState().connection === 'logging_in');
+      expect(checksStarted).toBe(1);
+      expect(await internalIdle()).toBe(true);
       const tokenFile = path.join(stateDir, 'claude-token');
       expect(statSync(tokenFile).mode & 0o777).toBe(0o600);
       expect(readFileSync(tokenFile, 'utf8')).toBe(`${SIGN_IN_FIXTURE.token}\n`);
