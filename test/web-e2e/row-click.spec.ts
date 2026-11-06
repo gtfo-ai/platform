@@ -22,8 +22,32 @@ test.beforeEach(async ({ page, request }) => {
   ).toBeVisible();
 });
 
+/**
+ * Waits until `target` has stopped moving: nothing on the page is still loading, and two reads of
+ * its box in a row agree. Home's boxes load side by side, so a box above that fills in late pushes
+ * the one below down. A coordinate press, unlike `locator.click()`, does not re-aim, and the first
+ * CI run of this file (PR #64) pressed the Projects row's counts and navigated nowhere — read as
+ * the row having moved, not measured; the calibration beside each press says what was under it.
+ */
+const settle = async (page: Page, target: Locator): Promise<void> => {
+  await expect(page.locator('[data-skeleton-bar]')).toHaveCount(0);
+  let previous = '';
+  await expect
+    .poll(
+      async () => {
+        const box = JSON.stringify(await target.boundingBox());
+        const still = box === previous && box !== 'null';
+        previous = box;
+        return still;
+      },
+      { message: 'the target never stopped moving' },
+    )
+    .toBe(true);
+};
+
 /** Presses the mouse at the centre of `target`, wherever the browser's hit-testing sends it. */
 const pressAtCentre = async (page: Page, target: Locator): Promise<void> => {
+  await settle(page, target);
   const box = await target.boundingBox();
   if (box === null) {
     throw new Error('the target has no box: it is not rendered');
@@ -32,14 +56,16 @@ const pressAtCentre = async (page: Page, target: Locator): Promise<void> => {
 };
 
 /** What the browser says is under the centre of `target` — the element a press there reaches. */
-const hitAtCentre = (target: Locator): Promise<string> =>
-  target.evaluate((element) => {
+const hitAtCentre = async (page: Page, target: Locator): Promise<string> => {
+  await settle(page, target);
+  return target.evaluate((element) => {
     const box = element.getBoundingClientRect();
     const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
     return hit === null
       ? 'nothing'
       : `${hit.tagName.toLowerCase()} ${hit.getAttribute('href') ?? ''}`;
   });
+};
 
 test('Home: a press on a Running now row’s meta line opens the run', async ({ page }) => {
   const row = page
@@ -48,7 +74,7 @@ test('Home: a press on a Running now row’s meta line opens the run', async ({ 
     .filter({ has: page.getByRole('link', { name: 'Implementation · Developer' }) });
   const meta = row.locator('[data-row-meta]');
   // Calibration: the meta line is under the run's link, not a target of its own.
-  expect(await hitAtCentre(meta)).toBe(`a /runs/${IDS.run}`);
+  expect(await hitAtCentre(page, meta)).toBe(`a /runs/${IDS.run}`);
   await pressAtCentre(page, meta);
   await expect(page).toHaveURL(`/runs/${IDS.run}`);
 });
@@ -95,7 +121,10 @@ test('Home: a press on a project’s counts opens the project', async ({ page })
     .getByRole('list', { name: 'Projects' })
     .getByRole('listitem')
     .filter({ has: page.getByRole('link', { name: /Demo service/ }) });
-  await pressAtCentre(page, row.locator('[data-row-trailing]'));
+  const counts = row.locator('[data-row-trailing]');
+  // Calibration: the counts are under the project's link, not a target of their own.
+  expect(await hitAtCentre(page, counts)).toBe(`a /projects/${PROJECT_KEY}`);
+  await pressAtCentre(page, counts);
   await expect(page).toHaveURL(`/projects/${PROJECT_KEY}`);
 });
 
@@ -106,7 +135,7 @@ test('a row’s menu keeps its own click above the row link, and the row still o
   const row = page.locator(`[data-board-row="${IDS.taskFeature}"]`);
   const menu = row.getByRole('button', { name: 'Actions for DEMO-1' });
   // The menu is lifted: the browser sends a press there to the button, not to the row's link.
-  expect(await hitAtCentre(menu)).toMatch(/^(button|svg|path) /);
+  expect(await hitAtCentre(page, menu)).toMatch(/^(button|svg|path) /);
   await pressAtCentre(page, menu);
   await expect(page.getByRole('menu')).toBeVisible();
   await expect(page).toHaveURL(`/projects/${PROJECT_KEY}?view=list`);
