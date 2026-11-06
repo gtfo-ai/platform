@@ -23,14 +23,15 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 /**
- * Waits until `target` has stopped moving: nothing on the page is still loading, and two reads of
- * its box in a row agree. Home's boxes load side by side, so a box above that fills in late pushes
- * the one below down. A coordinate press, unlike `locator.click()`, does not re-aim, and the first
- * CI run of this file (PR #64) pressed the Projects row's counts and navigated nowhere — read as
- * the row having moved, not measured; the calibration beside each press says what was under it.
+ * Brings `target` into the viewport and waits until it has stopped moving: nothing on the page is
+ * still loading, and two reads of its box in a row agree. A coordinate press, unlike
+ * `locator.click()`, neither scrolls nor re-aims — measured on PR #64's CI: Home's Projects box sits
+ * below the fold at 1280 × 720, so the press at its measured centre reached nothing
+ * (`elementFromPoint` answered `null`).
  */
 const settle = async (page: Page, target: Locator): Promise<void> => {
   await expect(page.locator('[data-skeleton-bar]')).toHaveCount(0);
+  await target.scrollIntoViewIfNeeded();
   let previous = '';
   await expect
     .poll(
