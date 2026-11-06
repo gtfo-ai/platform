@@ -128,3 +128,40 @@ survives a second team's habits.
   person's own assignment. Q118 asks whether to require a dedicated account.
 - Work: `technical/13-implementation-plan.md` § "Milestone M10", WP-170…WP-183, ahead of WP-163…WP-169
   by the product owner's priority.
+
+## Amendment (2026-11-06, architect, owner-delegated) — a task has an owner, and the claim never takes a ticket from a member
+
+**Context.** The owner (2026-11-06): *"the ticket is always owned by some developer so we need to introduce
+that user ownership/assignment of tasks"*. Under ruling 5, a ticket assigned to a developer is skipped at
+intake. With *take tickets already assigned to someone* on, the claim re-assigns it to the platform's
+account and the developer loses it. On a tracker where every ticket has an assignee, that is either
+nothing runs or the platform takes every ticket from its developer.
+
+**Decision.**
+1. **Every task may have an owner**: one platform user who is a member (or above) of the project. The
+   owner follows the ticket's assignee when that assignee is a linked member, and a person can take, assign
+   or unassign on the platform. A member may take an unowned task or give back their own. A maintainer may
+   assign anyone's. **The latest change wins**: a change in the tracker overrides a platform assignment
+   made before it, and the reverse also holds. The owner is shown on the task, the board can filter
+   *Mine*, and a waiting run says whose machine it waits for.
+2. **Ruling 5 is narrowed.** A ticket assigned to a **linked member of the project** is taken at intake,
+   and no claim, first or later, takes it from that member (no re-assignment, no *assigned elsewhere*). It still moves to
+   `in_progress`. *Take tickets already assigned to someone* now means someone who is **not** a linked
+   member; everything else about the claim is unchanged.
+3. **Writing the owner back to the tracker is opt-in** per tracker binding (*assign the owner in the
+   tracker*, default off). Releasing ownership never unassigns a person in the tracker.
+4. **A person links their own tracker or git account** by writing a one-time code as a comment from that
+   account. The provider proves the author; an email match or a typed id never does. The person then confirms
+   the account the provider names, and a code that two accounts used links nobody. Admins keep their mapping for
+   bots.
+
+**Rationale.** The intake label or status is the team's statement that the agent may work on the ticket,
+and the assignee says whose it is. Keeping the developer as assignee keeps the tracker truthful, and it is
+what routes the run to that developer's own machine (BD-032's amendment).
+
+**Rejected.** Keep skipping assigned tickets: nothing runs on a team that assigns everything. Take the
+ticket for the platform's account: this hides who is responsible and fights the developer for the field.
+
+**Consequences.** A broad intake rule (*every To Do ticket*) now takes members' assigned tickets, so a team
+narrows intake by label. Technical design: TD-031's 2026-11-06 amendment. Product text: product/04
+§ "Ticket lifecycle" and product/06 step 2, amended the same day. Work: plan § "Milestone M26".
