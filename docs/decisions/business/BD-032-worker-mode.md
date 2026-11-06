@@ -117,3 +117,31 @@ one lease, so "never the same work twice" is a property of a row, not of coordin
 - New product surfaces: a *Workers* screen (mine; all for an administrator), worker approval page, a
   per-project *Execution* setting, the run page's *executed by*, the *paused* state, and an *Updates*
   panel for administrators of a self-managed core. Delivered by plan § "Milestone M22".
+
+## Amendment (2026-11-06, architect, owner-delegated) — decision 5: the assignee is the task's owner, and a person chooses what their machine takes
+
+**Context.** The owner (2026-11-06): a worker should run in an *assigned mode*, an *auto-mode*, or a
+*handpick* mode, and *"the user should be able to control what his worker will work on"*. Decision 5's head
+start never reached a stage, because the platform kept no assignee (backlog 730).
+
+**Decision.**
+1. Decision 5's *"a run whose ticket is assigned to a developer"* now reads **a run whose task is owned by a
+   developer** (BD-031's 2026-11-06 amendment). The head start goes to the owner's machine.
+2. **Each machine has a claim policy**, set only by its owner on the machine's page or on the Workers screen
+   (an admin reads it):
+   - *My tasks and unassigned ones* (the default for a new machine);
+   - *Only my tasks* (the owner's "assigned mode");
+   - *Everything* (what every machine connected before this amendment keeps);
+   - *Only what I pick*.
+
+   The project list still narrows each of them. Rationale: a personal subscription should not run a
+   colleague's ticket unless its owner chose that.
+3. **Picking an unowned task makes the picker its owner.** A pick never takes someone else's task; a
+   maintainer reassigns it on the task page.
+4. **The server's runner still takes anything** its project's execution mode allows (decision 3), so an
+   owned task whose owner's machine is offline still runs. A project switch for "the server takes only
+   unowned tasks" is deferred.
+
+**Consequences.** On a workers-only core where every machine takes only its owner's tasks, a task owned by
+nobody (or by an unlinked assignee) waits, and the task page says so. The offer timeout escalates it. The
+technical design is TD-031's 2026-11-06 amendment.
