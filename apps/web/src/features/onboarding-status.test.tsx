@@ -645,9 +645,12 @@ describe('the discovery step reads the discovery task back (WP-155 (c), backlog 
     await waitFor(() => {
       expect(status.getAttribute('data-discovery-phase')).toBe('needs_human');
     });
+    // S-25.7: the step says why in the brief's words; the reason code is not shown.
     await waitFor(() => {
-      expect(status.textContent).toContain('run_failed');
+      expect(status.textContent).toContain('It is waiting for a person since');
     });
+    expect(status.textContent).toContain('exit 1');
+    expect(status.textContent).not.toContain('run_failed');
   });
 });
 

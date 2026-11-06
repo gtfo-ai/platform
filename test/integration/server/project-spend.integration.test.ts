@@ -70,9 +70,9 @@ const seedTask = async (
 ): Promise<{ taskId: string; runId: string }> => {
   const task = await one<{ id: string }>(
     `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state, mode,
-                        ticket_snapshot)
+                        ticket_snapshot, ticket_snapshot_at)
      values ($1, 'fake-jira', $2, 'https://jira.example.test/browse/' || $2, 'feature', 'active',
-             $3, $4::jsonb) returning id`,
+             $3, $4::jsonb, case when $4::jsonb is null then null else now() end) returning id`,
     [project, key, mode, snapshot === null ? null : JSON.stringify(snapshot)],
   );
   const run = await one<{ id: string }>(

@@ -443,8 +443,10 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
     });
     // Document order: the queue precedes the health panel.
     expect(list.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The list's own rows: each row nests its evidence lines as list items of their own.
     const paths = within(list)
       .getAllByRole('listitem')
+      .filter((row) => row.parentElement === list)
       .map((row) => (row.textContent?.includes('waiting.md') ? 'waiting' : 'decided'));
     expect(paths).toEqual(['waiting', 'decided']);
   });

@@ -654,7 +654,10 @@ test('the project panels render the knowledge base, the suggested edits and the 
 
   await page.goto(`/projects/${PROJECT_KEY}/budgets`);
   await expect(page.getByLabel('Cap used')).toBeVisible();
-  await expect(page.getByText('$100.00')).toBeVisible();
+  // The meter's own figure; the cap field below repeats it in its hint (spent … of … this window).
+  await expect(
+    page.getByRole('list', { name: 'Budgets', exact: true }).getByText('$100.00', { exact: true }),
+  ).toBeVisible();
   // S-25.7 (research/21 F8): where the month's money went, and the cap set on the same page.
   await expect(
     page.getByRole('list', { name: 'By stage' }).getByText('Implementation'),
