@@ -65,7 +65,7 @@ import { domainEventTypeSchema } from './events.js';
 import { liveDomainEventSchema, liveDomainEventTypeSchema } from './live-events.js';
 import { taskStageOutcomeSchema, taskStageStateSchema } from './pipeline.js';
 import {
-  approvalRecordSchema,
+  approvalViewSchema,
   autonomyPoliciesSchema,
   budgetRecordSchema,
   configSourceSchema,
@@ -1820,7 +1820,8 @@ export const taskDetailResponseSchema = z.strictObject({
   ),
   artifacts: z.array(artifactRefSchema),
   questions: z.array(questionRecordSchema),
-  approvals: z.array(approvalRecordSchema),
+  /** Each with its subject and reasons (TD-035); `null` on either is "not recorded". */
+  approvals: z.array(approvalViewSchema),
   runs: z.array(runRecordSchema),
 });
 
@@ -2044,9 +2045,20 @@ export const answerQuestionRequestSchema = z.strictObject({
   option: nonEmptyStringSchema.optional(),
 });
 
+/**
+ * `POST /api/tasks/:task_id/approvals/:approval_id/decide`.
+ *
+ * `subject_artifact_id` is the plan the person was **shown** (TD-035 decision 6): optional in the
+ * schema, because a reject and a budget approval need none, and **required by the command to
+ * approve a plan** — an approve whose echo is absent or names another artifact is refused
+ * `409 approval_subject_mismatch`, one whose subject is no longer the task's latest plan
+ * `409 approval_subject_superseded`, and one whose subject was never recorded
+ * `409 approval_subject_unrecorded`. A click can only approve what was on screen.
+ */
 export const decideApprovalRequestSchema = z.strictObject({
   decision: z.enum(['approve', 'reject']),
   reason: commandTextSchema.optional(),
+  subject_artifact_id: idSchema.optional(),
 });
 
 export const submitFeedbackRequestSchema = z.strictObject({
@@ -2904,7 +2916,8 @@ export const projectPipelineQuerySchema = z.strictObject({
 
 export const inboxResponseSchema = z.strictObject({
   questions: z.array(questionRecordSchema),
-  approvals: z.array(approvalRecordSchema),
+  /** The task read's shape (TD-035): Home and the Inbox name the subject an approval is about. */
+  approvals: z.array(approvalViewSchema),
 });
 
 // `putBudgetRequestSchema` lived here from WP-01 until WP-30, unused, one key different from the

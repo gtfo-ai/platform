@@ -940,10 +940,15 @@ export const useTaskCommands = (taskId: string) => {
         approvalId: string;
         decision: 'approve' | 'reject';
         reason?: string;
+        /** TD-035: the plan the card showed, so a plan is approved only as that plan. */
+        subjectArtifactId?: string;
       }) =>
         endpoints.decideApproval(taskId, input.approvalId, {
           decision: input.decision,
           ...(input.reason === undefined ? {} : { reason: input.reason }),
+          ...(input.subjectArtifactId === undefined
+            ? {}
+            : { subject_artifact_id: input.subjectArtifactId }),
         }),
       onSuccess: invalidate,
     }),

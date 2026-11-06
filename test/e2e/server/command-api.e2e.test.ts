@@ -585,6 +585,10 @@ describe('answering a question and deciding an approval', () => {
     expect(approval?.kind).toBe('plan');
     expect(approval?.status).toBe('pending');
     const approvalId = approval?.id as string;
+    // TD-035: the plan the gate asked about, recorded on the approval, is what an approve echoes.
+    expect(approval?.subject).toMatchObject({ kind: 'plan', basis: 'recorded', attempt: 1 });
+    expect(approval?.reasons?.length ?? 0).toBeGreaterThan(0);
+    const shownPlan = approval?.subject?.kind === 'plan' ? approval.subject.artifact_id : '';
 
     // `task.approve_plan` is `maintainer`, so a member may not decide (BD-006).
     const member = await signInAs(admin, pipeline.instance.baseUrl, 'member');
@@ -596,10 +600,20 @@ describe('answering a question and deciding an approval', () => {
     );
     expect(refused.status).toBe(403);
 
-    const decided = await send(
+    // Without the plan it was shown, an approve is refused and decides nothing (TD-035).
+    const blind = await send(
       admin,
       `/api/tasks/${waiting.id}/approvals/${approvalId}/decide`,
       { decision: 'approve' },
+      'decide-blind-1',
+    );
+    expect(blind.status).toBe(409);
+    expect(blind.body.error?.code).toBe('approval_subject_mismatch');
+
+    const decided = await send(
+      admin,
+      `/api/tasks/${waiting.id}/approvals/${approvalId}/decide`,
+      { decision: 'approve', subject_artifact_id: shownPlan },
       'decide-1',
     );
     expect(decided.status, JSON.stringify(decided.body)).toBe(200);

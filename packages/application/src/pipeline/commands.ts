@@ -87,6 +87,7 @@ import type {
   LockedRun,
   PipelineStore,
   RunCommandInstruction,
+  StoredApproval,
   StoredRun,
   StoredTask,
 } from './store.js';
@@ -233,11 +234,82 @@ export const expireTaskQuestion = async (
     return EXPIRED;
   });
 
+/** Why an approve was refused for its subject (TD-035 decision 6) — each a typed 409 at the route. */
+export type ApprovalSubjectRefusal =
+  | 'approval_subject_mismatch'
+  | 'approval_subject_superseded'
+  | 'approval_subject_unrecorded';
+
+/**
+ * A plan approve that is not an approval **of what the person was shown** (TD-035 decision 6,
+ * BD-006's 2026-11-06 amendment). `code` is the route's 409 code, one per case:
+ *
+ * - `approval_subject_unrecorded` — the approval names no plan (asked before migration 0103, and
+ *   the read could not derive one): it can only be rejected, which asks for a fresh plan;
+ * - `approval_subject_mismatch` — the request echoed no plan, or another one than the subject;
+ * - `approval_subject_superseded` — the subject is no longer the task's latest plan.
+ *
+ * A reject is never refused for its subject: rejecting what you did not see costs a round, and
+ * approving it is the defect this guards against.
+ */
+export class ApprovalSubjectRefusedError extends Error {
+  override readonly name = 'ApprovalSubjectRefusedError';
+  readonly code: ApprovalSubjectRefusal;
+
+  constructor(code: ApprovalSubjectRefusal, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+/**
+ * The plan-approve guard (TD-035 decision 6), asked inside the decision's transaction, after the
+ * aggregate has said the decision is legal — so a member, or a second decision, is refused for that
+ * rather than for an echo they could not have known.
+ */
+const assertApprovesItsSubject = async (
+  deps: TaskCommandDependencies,
+  tx: Transaction,
+  stored: StoredApproval,
+  echoed: Id | undefined,
+): Promise<void> => {
+  const subject = await deps.store.approvals.planSubject(tx, stored.approval.id);
+  if (subject === null) {
+    throw new ApprovalSubjectRefusedError(
+      'approval_subject_unrecorded',
+      `approval ${stored.approval.id} names no plan it was asked about, so it cannot be approved — reject it to ask for a fresh plan`,
+    );
+  }
+  if (echoed !== subject.artifactId) {
+    throw new ApprovalSubjectRefusedError(
+      'approval_subject_mismatch',
+      echoed === undefined
+        ? `approving a plan names the plan you were shown: send subject_artifact_id ${subject.artifactId}`
+        : `approval ${stored.approval.id} is about plan ${subject.artifactId}, not ${echoed}`,
+    );
+  }
+  const latest = await deps.store.artifacts.latest(
+    tx,
+    stored.approval.taskId,
+    'ImplementationPlan',
+  );
+  if (latest?.id !== subject.artifactId) {
+    throw new ApprovalSubjectRefusedError(
+      'approval_subject_superseded',
+      `plan ${subject.artifactId} is no longer this task's latest plan, so approving it would approve something else — reject it, and the newer plan is asked for on its own`,
+    );
+  }
+};
+
 /**
  * BD-006: only a mapped maintainer decides, which `decideApproval` enforces through `can()`.
  *
  * The reason is stored on the approval and published in `task.approval.decided`, so it is redacted
  * here like every other piece of free text a command writes (see `redactor`).
+ *
+ * **A plan is approved only as the plan the person was shown** (TD-035 decision 6):
+ * `subjectArtifactId` is the request's echo, required to approve a plan and checked by
+ * {@link assertApprovesItsSubject}. A reject and a budget approval need none.
  */
 export const decideTaskApproval = async (
   deps: TaskCommandDependencies,
@@ -247,6 +319,8 @@ export const decideTaskApproval = async (
     readonly userId: Id;
     readonly role: UserRole;
     readonly reason?: string;
+    /** The plan the person approved, as shown to them (TD-035): `subject_artifact_id`. */
+    readonly subjectArtifactId?: Id;
   },
 ): Promise<void> => {
   await deps.unitOfWork.transaction(async (scope) => {
@@ -266,6 +340,9 @@ export const decideTaskApproval = async (
       },
       deps.context(stored.approval.taskId),
     );
+    if (stored.approval.kind === 'plan' && input.decision === 'approved') {
+      await assertApprovesItsSubject(deps, scope.tx, stored, input.subjectArtifactId);
+    }
     await deps.store.approvals.save(scope.tx, { ...stored, approval: decision.aggregate });
     await scope.events.append(decision.events);
   });

@@ -110,9 +110,12 @@ test('Home: a press on a Needs you row’s meta line opens the task, and so does
   const approval = page
     .getByRole('list', { name: 'Needs you' })
     .getByRole('listitem')
-    .filter({ hasText: 'Plan approval is waiting for you' });
+    .filter({ hasText: 'Plan approval · the plan it is about was not recorded' });
   // The title text, which is not a link of its own, is covered by the row's.
-  await pressAtCentre(page, approval.getByText('Plan approval is waiting for you'));
+  await pressAtCentre(
+    page,
+    approval.getByText('Plan approval · the plan it is about was not recorded'),
+  );
   await expect(page).toHaveURL(`/tasks/${IDS.taskFeature}`);
 
   await page.goBack();
@@ -121,8 +124,8 @@ test('Home: a press on a Needs you row’s meta line opens the task, and so does
     page
       .getByRole('list', { name: 'Needs you' })
       .getByRole('listitem')
-      .filter({ hasText: 'Plan approval is waiting for you' })
-      .getByRole('link', { name: /^Approve/ }),
+      .filter({ hasText: 'Plan approval · the plan it is about was not recorded' })
+      .getByRole('link', { name: /^Review plan/ }),
   );
   await expect(page).toHaveURL(`/tasks/${IDS.taskFeature}`);
 });

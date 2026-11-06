@@ -19,6 +19,7 @@
  *   {@link toApiError} keeps answering `500 internal_error` for everyone else.
  */
 import {
+  ApprovalSubjectRefusedError,
   BreakdownRefusedError,
   CommandsUnavailableError,
   IterationLimitReachedError,
@@ -209,6 +210,11 @@ export const commandRefusal = (error: unknown): HttpError | null => {
     // WP-40: the task is not an epic split, or nothing the caller named is still waiting — both are
     // *"you asked for something the resource's state does not allow"*, which is this family's 409.
     return new HttpError(409, 'breakdown_refused', error.message);
+  }
+  if (error instanceof ApprovalSubjectRefusedError) {
+    // TD-035 decision 6: a plan is approved only as the plan the person was shown — mismatch,
+    // superseded or unrecorded, each its own code so the page can say which.
+    return new HttpError(409, error.code, error.message);
   }
   if (error instanceof UnknownAggregateError) {
     return new HttpError(404, 'not_found', error.message);

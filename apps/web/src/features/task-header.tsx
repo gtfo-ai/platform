@@ -8,7 +8,9 @@
  *   how long ago it was opened; then the `PhaseTrack`.
  * - **One primary action, chosen by the state** ({@link taskPrimaryAction}): *Hand back…* while a
  *   take-over is in force, *Answer* for an open question (it moves focus into the callout's answer
- *   box), *Approve…* for a pending approval, *Raise this task's cap…* for a task its own cap paused
+ *   box), *Review plan* for a pending approval (it moves focus onto the callout's approval card,
+ *   where the plan is shown open beside *Approve* and *Reject…* — S-25.1; there is no second,
+ *   subject-less approve dialog), *Raise this task's cap…* for a task its own cap paused
  *   when the caller may raise it, *Resume* for a paused or escalated task — or none.
  *   Everything else is in the `···` menu, and a command with fields or no undo opens a dialog
  *   (`./task-dialogs.tsx`).
@@ -53,6 +55,8 @@ import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
 import { StateLabel } from '../ui/status.js';
 import { taskStatus } from '../ui/task-status.js';
 import { DownloadLink, UntrustedText } from '../ui/untrusted.js';
+import { approvalCardId } from './approval-card.js';
+import { reviewVerb } from './approval-text.js';
 import { liveStageRun } from './live-stage.js';
 import { takeOverFinished } from './take-over.js';
 import { answerInputId } from './task-callout.js';
@@ -213,10 +217,17 @@ export const TaskHeader = ({
       <Button
         tone="primary"
         onClick={() => {
-          onOpen('approve');
+          // The same card the callout draws (S-25.1): the plan is there, open, beside its buttons —
+          // so this moves the reader to it rather than deciding from a dialog that shows nothing.
+          const [first] = pendingApprovals;
+          if (first !== undefined) {
+            const card = document.getElementById(approvalCardId(first.id));
+            card?.scrollIntoView({ block: 'start' });
+            card?.focus();
+          }
         }}
       >
-        Approve…
+        {reviewVerb(pendingApprovals[0]?.kind ?? 'plan')}
       </Button>
     ) : primary === 'raise_budget' ? (
       <Button

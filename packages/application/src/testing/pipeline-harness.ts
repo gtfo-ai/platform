@@ -2294,6 +2294,21 @@ const scriptFor = (
   return { key, scripted: scripts.get(key) };
 };
 
+/**
+ * The plan a plan approval is about — what the task page shows, and what a test must echo to
+ * approve it (TD-035 decision 6: a plan is approved only as the plan the person was shown).
+ * Throws for an approval that names none, so a test cannot approve "whatever" by accident.
+ */
+export const shownPlanOf = async (harness: PipelineHarness, approvalId: Id): Promise<Id> => {
+  const subject = await harness.memory.transaction(async (scope) =>
+    harness.store.approvals.planSubject(scope.tx, approvalId),
+  );
+  if (subject === null) {
+    throw new Error(`approval ${approvalId} names no plan to approve`);
+  }
+  return subject.artifactId;
+};
+
 export const harnessScriptKey = (spec: RunSpec): string => {
   if (spec.stage !== null) {
     return spec.stage;

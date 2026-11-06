@@ -29,7 +29,10 @@ test('Home: needs you, running now, the projects, the rail and the unfinished se
   const needs = page.getByRole('list', { name: 'Needs you' });
   // The agent's question, first line, as text; its row's action opens the task.
   await expect(needs.getByText(/^Should the retry budget be 3 or 5\?/)).toBeVisible();
-  await expect(needs.getByText('Plan approval is waiting for you')).toBeVisible();
+  // An approval names what it is about (S-25.1); the fixture's was asked before that was recorded.
+  await expect(
+    needs.getByText('Plan approval · the plan it is about was not recorded'),
+  ).toBeVisible();
   await expect(needs.getByRole('link', { name: /^Answer/ })).toHaveAttribute(
     'href',
     `/tasks/${IDS.taskFeature}`,
@@ -266,7 +269,7 @@ test('answering a question sends the command and the question leaves the inbox',
   // disappearing is evidence the POST arrived — with its CSRF header, which the fake enforces.
   await expect(answerBox).toHaveCount(0);
   // The pending approval is untouched, so the screen did not simply empty itself.
-  await expect(page.getByRole('link', { name: 'Decide on the task' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Review plan' })).toBeVisible();
 });
 
 test('the agents list shows every live run and opens one’s dialog with a link to the run', async ({

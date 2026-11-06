@@ -6,7 +6,7 @@
  * PostgreSQL with the real fake-Claude runner; this tier is where the branches live, because a
  * branch is cheap to reach here and expensive to reach there.
  */
-import type { DomainEvent, IsoDateTime, Slug } from '@platform/contracts';
+import type { DomainEvent, Id, IsoDateTime, Slug } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import type { CompiledPipeline } from '@platform/domain';
 import {
@@ -30,6 +30,7 @@ import {
   createPipelineHarness,
   type HarnessOptions,
   type PipelineHarness,
+  shownPlanOf,
 } from '../testing/pipeline-harness.js';
 import {
   answerTaskQuestion,
@@ -1410,6 +1411,7 @@ describe('the dial reaches the pipeline (WP-62)', () => {
         decision: 'approved',
         userId: USER,
         role: 'maintainer',
+        subjectArtifactId: await shownPlanOf(harness, requested.payload.approval.id),
       });
       await harness.drain();
     };
@@ -1568,6 +1570,7 @@ describe('plan approval (product/04 S2, BD-006)', () => {
       decision: 'approved',
       userId: '00000000-0000-4000-8000-0000000000c1',
       role: 'maintainer',
+      subjectArtifactId: await shownPlanOf(harness, requested.payload.approval.id),
     });
     await harness.drain();
 
@@ -1575,6 +1578,154 @@ describe('plan approval (product/04 S2, BD-006)', () => {
     expect(harness.specs.map((spec) => spec.stage)).toContain('implementation');
     // The approval is not asked for twice on the way through.
     expect(harness.types().filter((type) => type === 'task.approval.requested')).toHaveLength(1);
+  });
+
+  /**
+   * TD-035 decisions 2 and 4: the gate stores **the plan it loaded** and **every reason** it found,
+   * and the `task.approval.requested` payload is unchanged — an older build reading the event
+   * during an additive rollback would refuse a key it does not know.
+   */
+  it('records the plan it loaded and the reasons it asked for, and leaves the event as it was', async () => {
+    const harness = large();
+    await harness.publish([ticketMatched()]);
+    const requested = harness
+      .events()
+      .find((entry) => entry.type === 'task.approval.requested') as Extract<
+      DomainEvent,
+      { type: 'task.approval.requested' }
+    >;
+    const taskId = taskOf(harness).task.id;
+    const stored = await harness.memory.transaction(async (scope) =>
+      harness.store.approvals.load(scope.tx, requested.payload.approval.id),
+    );
+    const plan = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.latest(scope.tx, taskId, 'ImplementationPlan'),
+    );
+    expect(plan).not.toBeNull();
+    expect(stored?.subjectArtifactId).toBe(plan?.id);
+    expect(stored?.reasons).toContainEqual(
+      expect.objectContaining({ code: 'size_at_or_above', size: 'XL' }),
+    );
+    expect(Object.keys(requested.payload.approval)).not.toContain('subject');
+    expect(Object.keys(requested.payload.approval)).not.toContain('reasons');
+  });
+
+  /**
+   * TD-035 decision 6: a click can only approve the plan it was shown. Each refusal is named, none
+   * decides anything, and a reject needs no echo. Probed from JavaScript rather than through the
+   * types (rule 2): the echo is optional on the input, so only the command can require it.
+   */
+  it('approves a plan only as the plan the person was shown', async () => {
+    const harness = large();
+    await harness.publish([ticketMatched()]);
+    const approvalId = (
+      harness.events().find((entry) => entry.type === 'task.approval.requested') as Extract<
+        DomainEvent,
+        { type: 'task.approval.requested' }
+      >
+    ).payload.approval.id;
+    const shown = await shownPlanOf(harness, approvalId);
+    const decide = (subjectArtifactId?: Id) =>
+      decideTaskApproval(harness.commands, {
+        approvalId,
+        decision: 'approved',
+        userId: '00000000-0000-4000-8000-0000000000c1' as Id,
+        role: 'maintainer',
+        ...(subjectArtifactId === undefined ? {} : { subjectArtifactId }),
+      });
+
+    await expect(decide()).rejects.toMatchObject({ code: 'approval_subject_mismatch' });
+    await expect(decide(harness.ids.next())).rejects.toMatchObject({
+      code: 'approval_subject_mismatch',
+    });
+    expect(harness.types()).not.toContain('task.approval.decided');
+
+    // A newer plan than the one asked about: approving the old one would approve something else.
+    const taskId = taskOf(harness).task.id;
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.artifacts.insert(scope.tx, {
+        id: harness.ids.next(),
+        taskId,
+        type: 'ImplementationPlan',
+        version: 2,
+        markdown: null,
+        data: { ...PLAN, estimated_size: 'S' },
+        schemaVersion: '1',
+        producedByRunId: null,
+        redactionCount: 0,
+        createdAt: harness.clock.now(),
+      });
+    });
+    await expect(decide(shown)).rejects.toMatchObject({ code: 'approval_subject_superseded' });
+    expect(harness.types()).not.toContain('task.approval.decided');
+    const still = await harness.memory.transaction(async (scope) =>
+      harness.store.approvals.load(scope.tx, approvalId),
+    );
+    expect(still?.approval.status).toBe('pending');
+
+    // …and the reject is never refused for its subject.
+    await decideTaskApproval(harness.commands, {
+      approvalId,
+      decision: 'rejected',
+      userId: '00000000-0000-4000-8000-0000000000c1' as Id,
+      role: 'maintainer',
+    });
+    expect(harness.types()).toContain('task.approval.decided');
+  });
+
+  it('refuses to approve a plan approval that recorded no plan, and still lets it be rejected', async () => {
+    const harness = large();
+    await harness.publish([ticketMatched()]);
+    const stored = taskOf(harness);
+    // A row as a pre-0103 build wrote it: no subject, no reasons (the memory store derives none).
+    const unrecordedId = harness.ids.next();
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.approvals.insert(scope.tx, {
+        approval: {
+          id: unrecordedId,
+          taskId: stored.task.id,
+          projectId: stored.task.projectId,
+          kind: 'plan',
+          status: 'pending',
+          requestedAt: harness.clock.now(),
+          deadlineAt: null,
+          decidedByUserId: null,
+          decidedAt: null,
+          reason: null,
+          remindersSent: 0,
+          sequence: 1,
+        },
+        stage: 'architecture' as Slug,
+        attempt: 1,
+      });
+    });
+    await expect(
+      decideTaskApproval(harness.commands, {
+        approvalId: unrecordedId,
+        decision: 'approved',
+        userId: '00000000-0000-4000-8000-0000000000c1' as Id,
+        role: 'maintainer',
+        subjectArtifactId: await shownPlanOf(
+          harness,
+          (
+            harness.events().find((entry) => entry.type === 'task.approval.requested') as Extract<
+              DomainEvent,
+              { type: 'task.approval.requested' }
+            >
+          ).payload.approval.id,
+        ),
+      }),
+    ).rejects.toMatchObject({ code: 'approval_subject_unrecorded' });
+    await decideTaskApproval(harness.commands, {
+      approvalId: unrecordedId,
+      decision: 'rejected',
+      userId: '00000000-0000-4000-8000-0000000000c1' as Id,
+      role: 'maintainer',
+    });
+    const decided = await harness.memory.transaction(async (scope) =>
+      harness.store.approvals.load(scope.tx, unrecordedId),
+    );
+    expect(decided?.approval.status).toBe('rejected');
   });
 
   it('sends a rejected plan back to architecture, counting the round', async () => {

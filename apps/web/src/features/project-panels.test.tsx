@@ -338,6 +338,34 @@ describe('the knowledge screen’s files, document and decisions (S-23.11b)', ()
     ).toBe('true');
   });
 
+  /**
+   * S-25.1 (research/21 F2): *Approve* sits beside the change, so the change is **open** on a row a
+   * maintainer still decides — and collapsed once it is decided (the other side, rule 42).
+   */
+  it('shows a waiting proposal’s change open beside its Approve, and a decided one collapsed', async () => {
+    proposals = {
+      items: [
+        proposal({}),
+        proposal({
+          id: '00000000-0000-4000-8000-0000000000c3',
+          target_path: 'decided.md',
+          status: 'applied',
+          applied_commit_sha: 'a'.repeat(40),
+        }),
+      ],
+      next_cursor: null,
+    };
+    await renderScreen();
+    const list = await screen.findByRole('list', { name: 'Knowledge proposals' });
+    const rows = within(list).getAllByRole('listitem');
+    const waiting = rows.find((row) => row.textContent?.includes('conventions.md')) as HTMLElement;
+    const decided = rows.find((row) => row.textContent?.includes('decided.md')) as HTMLElement;
+    expect(within(waiting).getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(waiting.querySelector('details')?.open).toBe(true);
+    expect(waiting.textContent).toContain('Rounding happens once, at the boundary.');
+    expect(decided.querySelector('details')?.open).toBe(false);
+  });
+
   it('approves a proposal from its row and rejects one from the row’s menu', async () => {
     await renderScreen();
     const list = await screen.findByRole('list', { name: 'Knowledge proposals' });

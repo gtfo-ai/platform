@@ -147,6 +147,8 @@ export interface TaskCommands {
     readonly userId: string;
     readonly role: UserRole;
     readonly reason?: string;
+    /** TD-035: the plan the person was shown, required to approve a plan. */
+    readonly subjectArtifactId?: string;
   }): Promise<void>;
   retryRun(input: {
     readonly runId: string;
@@ -345,6 +347,9 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
         userId: id(input.userId),
         role: input.role,
         ...(input.reason === undefined ? {} : { reason: input.reason }),
+        ...(input.subjectArtifactId === undefined
+          ? {}
+          : { subjectArtifactId: id(input.subjectArtifactId) }),
       }),
     retryRun: async (input) =>
       retryRunCommand(deps, {

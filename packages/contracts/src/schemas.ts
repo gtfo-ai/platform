@@ -65,7 +65,10 @@ import { stabiliseDefs } from './json-schema-defs.js';
 import { customStageSchema, pipelineFileSchema, stageSchema } from './pipeline.js';
 import {
   answerChannelSchema,
+  approvalReasonSchema,
   approvalRecordSchema,
+  approvalSubjectSchema,
+  approvalViewSchema,
   budgetScopeSchema,
   budgetWindowSchema,
   ciStatusSchema,
@@ -97,7 +100,10 @@ const SCHEMA_IDS: Readonly<Record<string, z.ZodType>> = {
   Actor: actorSchema,
   AgentRole: agentRoleSchema,
   AnswerChannel: answerChannelSchema,
+  ApprovalReason: approvalReasonSchema,
   ApprovalRecord: approvalRecordSchema,
+  ApprovalSubject: approvalSubjectSchema,
+  ApprovalView: approvalViewSchema,
   ArtifactQuestion: artifactQuestionSchema,
   ArtifactRef: artifactRefSchema,
   ArtifactType: artifactTypeSchema,

@@ -1,5 +1,6 @@
 import type { Id, IsoDateTime } from '@platform/contracts';
 import {
+  approvalReasonSchema,
   autonomyLevelSchema,
   autonomyPoliciesSchema,
   materialisedAutonomySchema,
@@ -16,6 +17,7 @@ import {
   applyAutonomyPreset,
   autonomyOverridesFromConfig,
   autonomyRank,
+  budgetApprovalReasons,
   capAutonomy,
   capMaterialisedAutonomy,
   describePresetOverrides,
@@ -23,8 +25,10 @@ import {
   fromWireAutonomyPolicies,
   isCustomAutonomy,
   materialiseAutonomy,
+  type PlanApprovalInput,
+  type PlanApprovalPolicy,
+  planApprovalReasons,
   requiresBudgetApproval,
-  requiresPlanApproval,
   suggestedAutonomyCap,
   toWireAutonomyPolicies,
 } from './autonomy.js';
@@ -147,57 +151,183 @@ describe('overrides show the dial as Custom (BD-027)', () => {
   });
 });
 
-describe('requiresPlanApproval (BD-006, BD-030)', () => {
-  const preset = AUTONOMY_PRESETS.supervised;
+/**
+ * The boolean `planApprovalReasons` replaced (TD-035 decision 1), kept here verbatim as the
+ * **oracle** for the property below: a non-empty list must be exactly the old `true`. It is the
+ * pre-S-25.1 `requiresPlanApproval`, short-circuit and all.
+ */
+const oldRequiresPlanApproval = (input: PlanApprovalInput): boolean => {
+  if (input.preset.planApprovalForRiskClasses && input.riskClassesRequiringApproval.length > 0) {
+    return true;
+  }
+  if (input.preset.probation && input.tasksCompleted < input.preset.probationTasks) {
+    return true;
+  }
+  switch (input.preset.planApproval) {
+    case 'always':
+      return true;
+    case 'never':
+      return false;
+    case 'above_size': {
+      const threshold = input.preset.planApprovalSizeThreshold;
+      if (threshold === null || input.size === null) {
+        return false;
+      }
+      const order = ['S', 'M', 'L', 'XL'];
+      return order.indexOf(input.size) >= order.indexOf(threshold);
+    }
+  }
+};
 
-  it('requires approval during probation, whatever the size', () => {
+describe('planApprovalReasons (BD-006, BD-030, TD-035)', () => {
+  const preset = AUTONOMY_PRESETS.supervised;
+  const past = { tasksCompleted: 100, riskClassesRequiringApproval: [] as string[] };
+
+  it('names probation with the count and the bound, whatever the size', () => {
     expect(
-      requiresPlanApproval({
+      planApprovalReasons({
         preset,
         size: 'S',
         tasksCompleted: 4,
         riskClassesRequiringApproval: [],
       }),
-    ).toBe(true);
-  });
-
-  it('requires approval at or above the size threshold once probation is over', () => {
-    const after = { preset, tasksCompleted: 5, riskClassesRequiringApproval: [] };
-    expect(requiresPlanApproval({ ...after, size: 'M' })).toBe(false);
-    expect(requiresPlanApproval({ ...after, size: 'L' })).toBe(true);
-    expect(requiresPlanApproval({ ...after, size: 'XL' })).toBe(true);
-    expect(requiresPlanApproval({ ...after, size: null })).toBe(false);
-  });
-
-  it('always requires it in Assist and never in Autonomous', () => {
+    ).toEqual([{ code: 'probation', completed: 4, of: 5 }]);
+    // The boundary from the other side (rule 42): the fifth completed task ends probation.
     expect(
-      requiresPlanApproval({
-        preset: AUTONOMY_PRESETS.assist,
+      planApprovalReasons({
+        preset,
         size: 'S',
-        tasksCompleted: 100,
+        tasksCompleted: 5,
         riskClassesRequiringApproval: [],
       }),
-    ).toBe(true);
+    ).toEqual([]);
+  });
+
+  it('names the size and the threshold at or above it, and nothing below', () => {
+    expect(planApprovalReasons({ preset, ...past, size: 'M' })).toEqual([]);
+    expect(planApprovalReasons({ preset, ...past, size: 'L' })).toEqual([
+      { code: 'size_at_or_above', size: 'L', threshold: 'L', source: 'dial' },
+    ]);
+    expect(planApprovalReasons({ preset, ...past, size: 'XL' })).toEqual([
+      { code: 'size_at_or_above', size: 'XL', threshold: 'L', source: 'dial' },
+    ]);
+    // A plan with no size cannot cross a threshold.
+    expect(planApprovalReasons({ preset, ...past, size: null })).toEqual([]);
+  });
+
+  it('says the threshold came from a stage override when the caller says it did', () => {
     expect(
-      requiresPlanApproval({
+      planApprovalReasons({
+        preset: { ...preset, planApprovalSizeThreshold: 'M' },
+        ...past,
+        size: 'M',
+        overridden: { planApprovalSizeThreshold: true },
+      }),
+    ).toEqual([{ code: 'size_at_or_above', size: 'M', threshold: 'M', source: 'stage_override' }]);
+  });
+
+  it('names an always policy and where it came from', () => {
+    expect(planApprovalReasons({ preset: AUTONOMY_PRESETS.assist, ...past, size: 'S' })).toEqual([
+      { code: 'policy_always', source: 'dial' },
+    ]);
+    expect(
+      planApprovalReasons({
+        preset: { ...AUTONOMY_PRESETS.autonomous, planApproval: 'always' },
+        ...past,
+        size: 'S',
+        overridden: { planApproval: true },
+      }),
+    ).toEqual([{ code: 'policy_always', source: 'stage_override' }]);
+  });
+
+  it('asks for nothing in Autonomous, and still names a risk class there, sorted', () => {
+    expect(
+      planApprovalReasons({ preset: AUTONOMY_PRESETS.autonomous, ...past, size: 'XL' }),
+    ).toEqual([]);
+    expect(
+      planApprovalReasons({
         preset: AUTONOMY_PRESETS.autonomous,
+        size: 'S',
+        tasksCompleted: 100,
+        riskClassesRequiringApproval: ['payments', 'auth', 'payments'],
+      }),
+    ).toEqual([{ code: 'risk_class', classes: ['auth', 'payments'] }]);
+  });
+
+  it('names every reason that applies, in a fixed order — no short-circuit', () => {
+    expect(
+      planApprovalReasons({
+        preset,
         size: 'XL',
-        tasksCompleted: 100,
-        riskClassesRequiringApproval: [],
-      }),
-    ).toBe(false);
-  });
-
-  it('still requires it for a risk-classed change in Autonomous', () => {
-    expect(
-      requiresPlanApproval({
-        preset: AUTONOMY_PRESETS.autonomous,
-        size: 'S',
-        tasksCompleted: 100,
+        tasksCompleted: 1,
         riskClassesRequiringApproval: ['auth'],
       }),
-    ).toBe(true);
+    ).toEqual([
+      { code: 'risk_class', classes: ['auth'] },
+      { code: 'probation', completed: 1, of: 5 },
+      { code: 'size_at_or_above', size: 'XL', threshold: 'L', source: 'dial' },
+    ]);
   });
+
+  it('only answers reasons the wire vocabulary accepts', () => {
+    for (const reason of planApprovalReasons({
+      preset: AUTONOMY_PRESETS.assist,
+      size: 'XL',
+      tasksCompleted: 0,
+      riskClassesRequiringApproval: ['auth'],
+    })) {
+      expect(approvalReasonSchema.parse(reason)).toEqual(reason);
+    }
+  });
+
+  it(
+    'is non-empty exactly when the old boolean said yes, over every input',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...AUTONOMY_ORDER),
+          fc.constantFrom('never', 'above_size', 'always') as fc.Arbitrary<PlanApprovalPolicy>,
+          fc.option(fc.constantFrom(...sizeSchema.options), { nil: null }),
+          fc.option(fc.constantFrom(...sizeSchema.options), { nil: null }),
+          fc.boolean(),
+          fc.boolean(),
+          fc.nat({ max: 10 }),
+          fc.nat({ max: 12 }),
+          fc.subarray(['auth', 'payments', 'migrations']),
+          fc.record({ planApproval: fc.boolean(), planApprovalSizeThreshold: fc.boolean() }),
+          (
+            level,
+            planApproval,
+            threshold,
+            size,
+            forRiskClasses,
+            probation,
+            probationTasks,
+            tasksCompleted,
+            riskClasses,
+            overridden,
+          ) => {
+            const input: PlanApprovalInput = {
+              preset: {
+                ...AUTONOMY_PRESETS[level],
+                planApproval,
+                planApprovalSizeThreshold: threshold,
+                planApprovalForRiskClasses: forRiskClasses,
+                probation,
+                probationTasks,
+              },
+              size,
+              tasksCompleted,
+              riskClassesRequiringApproval: riskClasses,
+              overridden,
+            };
+            expect(planApprovalReasons(input).length > 0).toBe(oldRequiresPlanApproval(input));
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 
   it(
     'never asks for less than the preset does, for any size',
@@ -207,13 +337,13 @@ describe('requiresPlanApproval (BD-006, BD-030)', () => {
           fc.constantFrom(...sizeSchema.options),
           fc.nat({ max: 20 }),
           (size, tasksCompleted) => {
-            const assist = requiresPlanApproval({
+            const assist = planApprovalReasons({
               preset: AUTONOMY_PRESETS.assist,
               size,
               tasksCompleted,
               riskClassesRequiringApproval: [],
             });
-            expect(assist).toBe(true);
+            expect(assist.length).toBeGreaterThan(0);
           },
         ),
       );
@@ -231,6 +361,19 @@ describe('requiresBudgetApproval (product/18)', () => {
 
   it('is off when the level sets no threshold', () => {
     expect(requiresBudgetApproval(AUTONOMY_PRESETS.autonomous, 10_000)).toBe(false);
+  });
+
+  it('names the crossing with both figures, and nothing at or below the threshold (TD-035)', () => {
+    expect(budgetApprovalReasons(AUTONOMY_PRESETS.supervised, 51)).toEqual([
+      { code: 'estimate_above_threshold', estimate_usd: 51, threshold_usd: 50 },
+    ]);
+    expect(budgetApprovalReasons(AUTONOMY_PRESETS.supervised, 50)).toEqual([]);
+    expect(budgetApprovalReasons(AUTONOMY_PRESETS.autonomous, 10_000)).toEqual([]);
+    for (const estimate of [0, 49.99, 50, 50.01, 1_000]) {
+      expect(budgetApprovalReasons(AUTONOMY_PRESETS.supervised, estimate).length > 0).toBe(
+        requiresBudgetApproval(AUTONOMY_PRESETS.supervised, estimate),
+      );
+    }
   });
 });
 

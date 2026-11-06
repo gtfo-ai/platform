@@ -12,7 +12,7 @@
  * dashboard this replaces.
  */
 import type {
-  ApprovalRecord,
+  ApprovalView,
   IntegrationSummary,
   QuestionRecord,
   RunRecord,
@@ -179,7 +179,9 @@ const question = (n: number, text: string, askedMinutesAgo: number): QuestionRec
   answered_at: null,
 });
 
-const approval = (n: number, requestedMinutesAgo: number): ApprovalRecord => ({
+const PLAN_ARTIFACT = '00000000-0000-4000-8000-000000000701';
+
+const approval = (n: number, requestedMinutesAgo: number): ApprovalView => ({
   id: `00000000-0000-4000-8000-0000000005${String(n).padStart(2, '0')}`,
   task_id: TASK(n),
   kind: 'plan',
@@ -234,7 +236,7 @@ interface World {
   integrations: IntegrationSummary[];
   projects: ReturnType<typeof project>[];
   questions: QuestionRecord[];
-  approvals: ApprovalRecord[];
+  approvals: ApprovalView[];
   /** Every project's tasks; the fake filters by `state` the way the server does. */
   tasks: TaskRecord[];
   runs: RunRecord[];
@@ -318,6 +320,26 @@ const fetchFor = (world: World) =>
     }
     if (path === '/api/org/inbox') {
       return json({ questions: world.questions, approvals: world.approvals });
+    }
+    if (path === `/api/artifacts/${PLAN_ARTIFACT}`) {
+      return json({
+        id: PLAN_ARTIFACT,
+        task_id: TASK(4),
+        artifact_type: 'ImplementationPlan',
+        version: 3,
+        schema_version: '1',
+        produced_by_run_id: null,
+        created_at: minutesAgo(130),
+        redaction_count: 0,
+        markdown: null,
+        data: {
+          estimated_size: 'M',
+          files_to_change: [
+            { path: 'src/a.ts', change: 'edit' },
+            { path: 'src/b.ts', change: 'edit' },
+          ],
+        },
+      });
     }
     if (path === '/api/org/budgets') {
       return json({
@@ -490,6 +512,35 @@ describe('the greeting', () => {
 });
 
 describe('Home, needs you first', () => {
+  it('names the plan an approval is about — version, size, files — and its verb is Review plan', async () => {
+    const world = newWorld({
+      approvals: [
+        {
+          ...approval(4, 120),
+          subject: {
+            kind: 'plan',
+            artifact_id: PLAN_ARTIFACT,
+            artifact_version: 3,
+            stage: 'architecture',
+            attempt: 2,
+            basis: 'recorded',
+          },
+          reasons: [{ code: 'probation', completed: 1, of: 5 }],
+        },
+      ],
+    });
+    start(world);
+    const needs = await screen.findByRole('list', { name: 'Needs you' });
+    await waitFor(() => {
+      expect(needs.textContent).toContain('Plan v3 · size M · 2 files');
+    });
+    const link = within(needs).getByRole('link');
+    expect(link.textContent).toContain('Review plan');
+    expect(link.getAttribute('href')).toBe(`/tasks/${TASK(4)}`);
+    // The row opens the task; it never approves (S-25.1).
+    expect(within(needs).queryByRole('button', { name: /approve/i })).toBeNull();
+  });
+
   it('lists questions, approvals and escalated tasks, oldest first, each with its action', async () => {
     const world = newWorld({
       questions: [question(3, 'Which retry budget, 3 or 5?\nThe ticket does not say.', 30)],
@@ -512,7 +563,8 @@ describe('Home, needs you first', () => {
     });
     const rows = within(needs).getAllByRole('listitem');
     // Oldest first: the approval (2 h), the escalation (1 h), the question (30 min).
-    expect(rows[0]?.textContent).toContain('Plan approval is waiting for you');
+    // The approval names what it is about (S-25.1); this one was asked before that was recorded.
+    expect(rows[0]?.textContent).toContain('Plan approval · the plan it is about was not recorded');
     expect(rows[1]?.textContent).toContain('Budget cap hit');
     expect(rows[2]?.textContent).toContain('Which retry budget, 3 or 5?');
     // Only the question's first line.
@@ -527,10 +579,13 @@ describe('Home, needs you first', () => {
     expect(rows[1]?.textContent).toContain('Implementation');
     const actions = rows.map((row) => within(row).getByRole('link'));
     expect(actions.map((link) => link.textContent?.split(' ')[0])).toEqual([
-      'Approve',
+      'Review',
       'Open',
       'Answer',
     ]);
+    // *Review plan*, into the task — never *Approve*: no row approves in one click (S-25.1).
+    expect(actions[0]?.textContent).toContain('Review plan');
+    expect(actions[0]?.getAttribute('href')).toBe(`/tasks/${TASK(4)}`);
     expect(actions[2]?.getAttribute('href')).toBe(`/tasks/${TASK(3)}`);
     // S-23.26: the title is text, so each row's stretched link — what a click anywhere on the row
     // presses — is its action, into the task, and it is the only one.

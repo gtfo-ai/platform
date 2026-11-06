@@ -25,7 +25,9 @@ import type {
   AcceptanceCriterion,
   Actor,
   AgentRole,
+  ApprovalReason,
   ArtifactType,
+  BudgetApprovalSubjectDetail,
   ContextPackRecord,
   EstimateBasis,
   HistorySample,
@@ -2589,6 +2591,30 @@ export interface StoredApproval {
   readonly approval: Approval;
   readonly stage: Slug | null;
   readonly attempt: number | null;
+  /**
+   * What was asked about and why (TD-035, migration 0103) — written **once, by `insert`**, and never
+   * by {@link ApprovalRepository.save}, so a decision cannot rewrite what was asked. Absent or
+   * `null` is *not recorded*: every row written before 0103.
+   *
+   * `subjectArtifactId` is the plan gate's `ImplementationPlan`; `subjectDetail` the budget gate's
+   * figures; `reasons` every reason the gate asked for, in TD-035's closed vocabulary.
+   */
+  readonly subjectArtifactId?: Id | null;
+  readonly subjectDetail?: BudgetApprovalSubjectDetail | null;
+  readonly reasons?: readonly ApprovalReason[] | null;
+}
+
+/**
+ * The plan a plan approval is about, as {@link ApprovalRepository.planSubject} answers it.
+ *
+ * `recorded` is the gate's own `subject_artifact_id`; `derived` is TD-035 decision 5's one exact
+ * chain for a row written before migration 0103 — `artifacts.produced_by_run_id → runs.task_stage_id
+ * → task_stages(task, stage, attempt)` of the approval, with exactly one `ImplementationPlan` at its
+ * end. The task read publishes the same answer, with the same label.
+ */
+export interface ApprovalPlanSubject {
+  readonly artifactId: Id;
+  readonly basis: 'recorded' | 'derived';
 }
 
 export interface ApprovalRepository {
@@ -2643,6 +2669,13 @@ export interface ApprovalRepository {
     tx: Transaction,
     query: { readonly taskId: Id; readonly kind: string },
   ): Promise<StoredApproval | null>;
+  /**
+   * The plan this **plan** approval is about — recorded, or derived for a pre-0103 row by TD-035
+   * decision 5's exact chain — or `null` when neither pins one (not a plan approval, no stage
+   * attempt, no plan or more than one at the chain's end). The decide command's subject (TD-035
+   * decision 6); never a guess, and never "the task's latest plan".
+   */
+  planSubject(tx: Transaction, approvalId: Id): Promise<ApprovalPlanSubject | null>;
 }
 
 /**

@@ -133,7 +133,7 @@ key chord with ⌘ or Ctrl cannot be typed by accident.
 
 **A row that opens something opens from anywhere on it**, not only from its title: a project, a
 run, an integration, a task on the board (its card too), a *Needs you* item — which opens its task,
-so **Approve** and **Answer** are always decided on the task page, never by a click on the row. A
+so an approval (**Review plan**) and a question (**Answer**) are always decided on the task page, never by a click on the row. A
 row's own buttons and menus (`···`, *Open task*, a problem's repair) keep their own click. The row
 is still an ordinary link, so ⌘-click or a middle click opens it in a new tab and right-click copies
 it. A row with nowhere to go — a worker, an audit entry, a knowledge proposal — does not light up
@@ -524,8 +524,11 @@ answers three questions in this order: what needs you, what is moving, and where
 - **Needs you (N)** comes first: every open question and pending approval in the organisation, and
   every task that was escalated to a person (*Needs you* on its board) and has no question or
   approval of its own. Each row names the project, the ticket and the stage, the question's first
-  line (an agent's words, shown as plain text), how long it has waited, and the action — **Answer**,
-  **Approve** or **Open** — which opens the task. The oldest waits at the top; the box shows five
+  line (an agent's words, shown as plain text) or **what the approval is about** (*Plan v2 · size L ·
+  6 files*, a budget's estimate and threshold, or *the plan it is about was not recorded* for one
+  asked before approvals recorded their plan), how long it has waited, and the action — **Answer**,
+  **Review plan** or **Open** — which opens the task. No row approves in one click: the plan is read
+  on the task page, beside its buttons. The oldest waits at the top; the box shows five
   and **View inbox →** has the rest. When nothing waits it says *Nothing needs you right now.*
 - **Running now (N)**: every run that is running — its stage and role (the link to the run), the
   project, the ticket, the model, how long it has run, what it has cost so far and the latest
@@ -726,7 +729,8 @@ live on that task's topic.
   the phase strip — one glyph per stage, the current one pulsing — names the stage and what the agent
   is doing now. On the right is **one button, chosen by what the task is waiting for**: *Hand back…*
   while you hold it (below), *Answer* when an agent asked a question (it takes you to the answer
-  box), *Approve…* when a plan or a budget waits for a maintainer, *Raise this task's cap…* when the
+  box), *Review plan* when a plan or a budget waits for a maintainer (it takes you to the approval in
+  the needs-you box, where the plan is shown), *Raise this task's cap…* when the
   task's own cap paused it and you may raise budgets, *Resume* when the task is paused or waiting
   for a person — and none when nothing waits on you. Resume is never offered past an open question
   or a pending approval: answer or decide it instead. Everything else is in the **`···`**
@@ -738,7 +742,8 @@ live on that task's topic.
   Pause and Take over on a queued task, Take over on a task somebody paused, Cancel once the task
   is merged or in its retrospective.
 - **The needs-you box**, under the header, appears only when something waits on a person: each open
-  question with its answer box, each pending approval with *Approve* and *Reject*, an escalation
+  question with its answer box, each pending approval with *Approve* and *Reject…* (see *Deciding an
+  approval* below), an escalation
   with the word its stage was closed with (*"Needs you: the gate could not decide in its allotted
   checks."*) and *Return to stage…*, *Rework…* and *Retry stage…*, a budget pause with whose cap is
   spent and where it is raised, and an epic's proposed breakdown
@@ -815,9 +820,30 @@ The commands in the table below — the header's one button and the `···` men
 **The page offers only what your role may do**: the *Who* column is checked by the server for each
 of you, so a member sees no *Cancel task…*, *Return to stage…* or *Rework…*, and where an approval
 waits the needs-you box says *A maintainer decides this* instead of offering Approve and Reject; a
-viewer is offered no *Pause* or *Resume* either. **Reject** asks first — in the needs-you box as in
-the header's *Approve…* dialog — saying what rejecting does, with an optional reason recorded with
-the decision.
+viewer is offered no *Pause* or *Resume* either. **Reject** asks first, saying what rejecting does,
+with an optional reason recorded with the decision.
+
+**Deciding an approval.** An approval shows what it approves, why it was asked, and how to stop being
+asked — so you never approve blind:
+
+- **The plan itself, open**: its approach, its size, the files it changes and its risks, then **Read
+  the whole plan** (open as well) with the alternatives, data and API changes, the test plan and the
+  rest. It is *the* plan the approval was asked about — its version and stage attempt are named — not
+  whatever plan is newest. A budget approval shows the estimate and the threshold it crossed.
+- **Why you are asked**: every reason the platform recorded — the project is on probation (*2 of its
+  first 5 tasks are done*), the plan touches a risk class (named), its size reached the threshold, the
+  autonomy dial or a stage override asks for every plan, or the estimate is above the budget threshold.
+- **How to stop being asked**, under each reason, with a link to the setting that retires it: the
+  autonomy dial or the size threshold (*Settings → Policies & WIP*), a stage override
+  (*Repository configuration*), the risk-class rule (keeping it is recommended), or probation, which
+  ends by itself after its tasks are done or when a maintainer ends it. The platform names the lever;
+  it never pulls it. Approvals are meant to become rarer as trust grows.
+- **What happens next**: *Approve* — Implementation starts on this plan; *Reject* — the plan goes back
+  to Architecture with your reason (a budget's reject stops the task for a person).
+
+*Approve* approves exactly the plan on screen. An approval asked before approvals recorded their plan
+says *not recorded*, and — like one whose plan has since been replaced by a newer one — it can only
+be rejected, which asks for a fresh plan. A Slack button still approves without showing the plan.
 Each is an operation the task aggregate either performs or **refuses by name** — a refusal comes back as an
 error naming the transition, not as a silent no-op — and each accepted one leaves a row in the audit.
 
@@ -1168,10 +1194,12 @@ computed from whatever two samples the browser happened to see is a number with 
 **Inbox** in the top navigation: everything pending for you, across every project, answerable in
 place — laid out like GitHub's notifications. The left column filters the list: **All**,
 **Questions**, **Approvals**, or one project, each with its count. Each row starts with the
-*needs you* bell, then the question's first line (or *Plan approval is waiting for you*), and under it
+*needs you* bell, then the question's first line (or what the approval is about — *Plan v2 · size L ·
+6 files*), and under it
 where it is — project · ticket · stage — how long ago it was asked and when it is due. Click a
 question's line and the row opens in place: the whole question, a **Your answer** box and **Answer**.
-An approval's row links to the task, where it is decided (**Decide on the task**). With nothing
+An approval's row links to the task, where it is decided with the plan on screen (**Review plan**);
+no row approves in one click. With nothing
 pending the page says *Nothing needs you*.
 
 A question the agent asks may also arrive in Slack, and all channels are equivalent — **the first
@@ -1247,7 +1275,9 @@ repository, grouped by folder; click one to read it beside the list. Above the d
 
 and below it the **proposals**, one row each: the page it would change, its type and kind, where it
 came from (*mined from merged history*, *drafted at project setup*, *from a task* …) and its
-significance; **The change and its evidence** under a row holds the change itself and what it cites.
+significance; **The change and its evidence** under a row holds the change itself and what it cites,
+and it is **open** on every row still waiting for a decision, so *Approve* is never pressed with the
+change collapsed.
 **Approve** is on the row and **Reject** is in its `···` menu; a decision the server refuses says so
 under the list.
 
