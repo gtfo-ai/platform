@@ -591,8 +591,8 @@ const EffectiveConfiguration = ({
             {config.data.status_mapping_superseded ? (
               <div className="flex flex-col gap-1 pt-2" data-status-mapping="superseded">
                 <p className="text-xs">
-                  The project’s ticket lifecycle maps a step other than <em>Pick up from</em>, so
-                  the older status mapping is not applied at all. The steps are on the project
+                  The project’s ticket lifecycle maps a moment other than <em>Pick up from</em>, so
+                  the older status mapping is not applied at all. The moments are on the project
                   settings page.
                 </p>
                 <ForAdministrators note="status_mapping" />

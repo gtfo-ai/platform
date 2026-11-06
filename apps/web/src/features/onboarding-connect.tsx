@@ -241,10 +241,10 @@ const BindIntegrations = ({ project }: { readonly project: ProjectSummary }): Re
         }),
       ) ? (
         <p className="text-xs text-fg-muted" data-lifecycle="wizard-default">
-          Connecting a ticket tracker here also saves its ticket lifecycle with no step mapped and
+          Connecting a ticket tracker here also saves its ticket lifecycle with no moment mapped and
           the claim on: before a task’s first run the platform assigns the ticket to the tracker
-          integration’s own account. Choose a status for each step, or switch the claim off, in the
-          ticket lifecycle form below.
+          integration’s own account. Choose a status for each moment, or switch the claim off, in
+          the ticket lifecycle form below.
         </p>
       ) : null}
       {selection.ready && stored.length > 0 ? (
@@ -293,7 +293,7 @@ export const ConnectStep = ({
     </Section>
     <Section
       title="Ticket lifecycle"
-      purpose="Which of your tracker’s statuses the platform moves a ticket to. Every step may stay unmapped; the claim is on by default."
+      purpose="Which of your tracker’s statuses the platform moves a ticket to. Every moment may stay unmapped; the claim is on by default."
     >
       {project === null ? (
         <p className="text-sm text-fg-muted">Available once a ticket tracker is bound.</p>

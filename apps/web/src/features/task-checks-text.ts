@@ -415,7 +415,9 @@ export const tamperValueText = (ci: StageRow | null, rebase: StageRow | null = n
     case 'protected_paths_awaiting_review':
       return settledConfirmationText(ci, rebase);
     case 'protected_paths_clean':
-      return 'untouched';
+      // Not *untouched*: `judgeTamper` is also clean when protected files did change and every
+      // change was declared and confirmed by the review (review of PR #84).
+      return 'no unapproved changes';
     case 'pass':
       return TAMPER_NOT_RECORDED;
     default:

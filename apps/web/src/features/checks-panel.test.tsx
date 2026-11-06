@@ -30,6 +30,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { tamperValueText } from './task-checks-text.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -419,7 +420,7 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
           stage('ci_gate', 1, 'returned', 'protected_paths_changed'),
           stage('ci_gate', 2, 'completed', 'protected_paths_clean'),
         ],
-        'untouched',
+        'no unapproved changes',
       ],
       [[stage('ci_gate', 1, 'running', null)], 'checking'],
       [[], 'not reached'],
@@ -441,10 +442,14 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
    */
   it('reads clean only off the recorded outcome, and not recorded off a row that has none (backlog 280)', async () => {
     const cases: readonly [TaskDetailResponse['stages'], string, string][] = [
-      [[stage('ci_gate', 1, 'completed', 'protected_paths_clean')], 'untouched', 'CI statusgreen'],
+      [
+        [stage('ci_gate', 1, 'completed', 'protected_paths_clean')],
+        'no unapproved changes',
+        'CI statusgreen',
+      ],
       [
         [stage('ci_gate', 1, 'returned', 'protected_paths_clean')],
-        'untouched',
+        'no unapproved changes',
         'CI statusred, sent back',
       ],
       [[stage('ci_gate', 1, 'completed', 'pass')], 'not recorded', 'CI statusgreen'],
@@ -455,8 +460,8 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
       await waitFor(() => expect(view.text()).toContain('Protected files'));
       expect(view.text(), expected).toContain(`Protected files${expected}`);
       expect(view.text(), ci).toContain(ci);
-      if (expected !== 'untouched') {
-        expect(view.text(), expected).not.toContain('Protected filesuntouched');
+      if (expected !== 'no unapproved changes') {
+        expect(view.text(), expected).not.toContain('Protected filesno unapproved changes');
       }
       cleanup();
     }
@@ -525,6 +530,42 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
       expect(view.text(), rebase).toContain(rebase);
       cleanup();
     }
+  });
+
+  /**
+   * **Clean is not untouched** (review of PR #84): `judgeTamper` answers clean when no protected
+   * file changed **and** when every protected change was declared and confirmed — which a CI gate
+   * re-entered after the review (a hand-back, a retry) settles. The row's word holds both readings.
+   */
+  it('says a declared-and-confirmed change is no unapproved change, never untouched', async () => {
+    const at = (row: TaskDetailResponse['stages'][number], iso: string) => ({
+      ...row,
+      entered_at: iso,
+      exited_at: row.exited_at === null ? null : iso,
+    });
+    const view = await render$(
+      detailWith({
+        stages: [
+          at(
+            stage('ci_gate', 1, 'completed', 'protected_paths_awaiting_review'),
+            '2026-09-12T10:00:00.000Z',
+          ),
+          at(
+            stage('rebase_gate', 1, 'completed', 'protected_paths_confirmed'),
+            '2026-09-12T10:30:00.000Z',
+          ),
+          // The task was handed back and CI ran again: the declared, confirmed change is still in it.
+          at(stage('ci_gate', 2, 'completed', 'protected_paths_clean'), '2026-09-12T11:00:00.000Z'),
+        ],
+        artifacts: [],
+      }),
+    );
+    await waitFor(() => expect(view.text()).toContain('Protected files'));
+    expect(view.text()).toContain('Protected filesno unapproved changes');
+    expect(view.text()).not.toContain('untouched');
+    expect(tamperValueText(stage('ci_gate', 1, 'completed', 'protected_paths_clean'))).toBe(
+      'no unapproved changes',
+    );
   });
 
   it('does not call an escalated gate a person sent the task back from red (backlog 483)', async () => {

@@ -319,7 +319,7 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
       value: tamperValueText(ciGate, rebaseGate),
       status: tamperStatus(ciGate, rebaseGate),
       definition:
-        'Whether the change edits, deletes or renames files this project protects (tests and CI or lint configuration by default). A change the plan declared is allowed once the code review confirms it; anything else sends the task back to the developer, naming the files. Adding a new file is never flagged. A check made before the platform stored its result shows as not recorded, never as untouched.',
+        'Whether the change edits, deletes or renames files this project protects (tests and CI or lint configuration by default). A change the plan declared is allowed once the code review confirms it; anything else sends the task back to the developer, naming the files. Adding a new file is never flagged. A check made before the platform stored its result shows as not recorded, never as no unapproved changes.',
       required: true,
     },
     {
@@ -328,7 +328,7 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
       value: gateValueText(rebaseGate, { pass: 'yes', fail: 'conflicts' }),
       status: gateStatus(rebaseGate),
       definition:
-        'Whether the merge request merges cleanly onto the default branch (usually main) as it is now. It is checked again every time the default branch moves while the task waits for its merge, and whenever a person brings the task back to Ready.',
+        'Whether the merge request merges cleanly onto the project’s default branch as it is now. It is checked again every time the default branch moves while the task waits for its merge, and whenever a person brings the task back to Ready.',
       basis: gateBasisText(rebaseGate, 'rebase_gate'),
       required: true,
     },

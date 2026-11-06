@@ -33,7 +33,7 @@
  * | N redactions | *N secrets hidden* |
  * | local provider mode | *on a Claude subscription, cost is estimated* |
  * | vault, significance 0.72 | **knowledge base**; the score is dropped |
- * | pickup rule, WIP limits, lifecycle slot, bindings | **start rule**, **Parallel tasks**, *step*, **connections** |
+ * | pickup rule, WIP limits, lifecycle slot, bindings | **start rule**, **Parallel tasks**, *moment*, **connections** |
  * | probation | *extra checks on the first N tasks* |
  * | Re-queue | **Try again** |
  * | a raw role or integration type | the label maps in `ui/humanize.ts` |
@@ -83,7 +83,11 @@ export const RETIRED_WORDS: readonly { readonly pattern: RegExp; readonly use: s
   { pattern: /\b[Tt]he vault\b|\bsignificance \$\{/, use: 'knowledge base; no score' },
   { pattern: /\b[Pp]ickup rules?\b/, use: 'start rule' },
   { pattern: /\bWIP limits\b/, use: 'Parallel tasks' },
-  { pattern: /\bMap the slots\b|\blifecycle slots?\b|\bslots? empty\b/, use: 'step' },
+  // A lifecycle slot is a *moment* (the form's own word), never *step*, the pipeline's (review of PR #84).
+  {
+    pattern: /\bMap the slots\b|\blifecycle slots?\b|\bslots? empty\b|\bstep (?:unmapped|mapped)\b/,
+    use: 'moment',
+  },
   { pattern: /\bbindings (?:could|were) not\b|\bBound: /, use: 'connections' },
   { pattern: /\bon probation\b|\bProbation ends\b/, use: 'extra checks on the first N tasks' },
   { pattern: /\bRe-queue\b/, use: 'Try again' },
@@ -130,6 +134,7 @@ describe('the vocabulary scanner', () => {
     ['a stage kind', "gate: { icon: ShieldCheckIcon, word: 'Gate' },"],
     ['a significance score', '`· significance ${score}`'],
     ['a raw role', '{`Role: ${user.role}`}'],
+    ['a lifecycle slot called a step', "'None selected leaves the step unmapped.'"],
     ['a raw integration type', '<Badge>{integration.type}</Badge>'],
   ])('finds a retired word in %s', (_name, source) => {
     expect(retiredWords(source)).not.toEqual([]);

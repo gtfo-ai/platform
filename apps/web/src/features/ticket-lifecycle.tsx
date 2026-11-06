@@ -365,7 +365,7 @@ const ReturnedRow = ({
         ))}
       </select>
       <p id={`${id}-hint`} className="text-xs text-fg-muted">
-        {SLOT_COPY.returned.hint} None selected leaves the step unmapped.
+        {SLOT_COPY.returned.hint} None selected leaves the moment unmapped.
       </p>
       {(refusal ?? []).map((message) => (
         <p key={message} role="alert" className="text-xs text-danger">
@@ -383,7 +383,7 @@ const ReturnedRow = ({
 const statusesFailure = (error: unknown): { title: string; detail?: string } => {
   if (error instanceof ApiError && error.code === 'lifecycle_statuses_unavailable') {
     return {
-      title: 'The tracker’s statuses could not be loaded, so the steps cannot be mapped yet.',
+      title: 'The tracker’s statuses could not be loaded, so the moments cannot be mapped yet.',
     };
   }
   if (error instanceof ApiError && error.status === 403) {
@@ -454,8 +454,8 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
   if (trackers.length === 0) {
     return (
       <p className="text-xs text-fg-muted">
-        Add a ticket tracker to this project’s connections first: each step of the lifecycle is one
-        of that tracker’s own statuses.
+        Add a ticket tracker to this project’s connections first: each moment of the lifecycle is
+        one of that tracker’s own statuses.
       </p>
     );
   }
@@ -502,21 +502,21 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
     <div className="flex flex-col gap-3" data-ticket-lifecycle={tracker.integration_id}>
       <p className="text-xs text-fg-muted">
         Map the platform’s moments to <UntrustedText value={tracker.name} />
-        ’s own statuses. Every step may be left unmapped: an unmapped step means the ticket is not
-        moved at that point, and the stage still runs.
+        ’s own statuses. Every moment may be left unmapped: an unmapped moment means the ticket is
+        not moved at that point, and the stage still runs.
       </p>
       {hasStoredBlock ? null : (
         <p className="text-xs text-fg-muted" data-lifecycle="not-saved">
           No lifecycle is saved for this tracker, so the platform does not claim its tickets — a
           tracker connected before the lifecycle existed, or outside the wizard. Saving this form,
-          even with no step mapped, starts the claim unless you switch it off.
+          even with no moment mapped, starts the claim unless you switch it off.
         </p>
       )}
       {config.data?.status_mapping_superseded === true ? (
         <div className="flex flex-col gap-1" data-lifecycle="status-mapping-superseded">
           <p className="text-xs">
-            <Badge tone="warning">Note</Badge> A step other than <em>Pick up from</em> is mapped, so
-            the configuration’s older status mapping is not applied at all.
+            <Badge tone="warning">Note</Badge> A moment other than <em>Pick up from</em> is mapped,
+            so the configuration’s older status mapping is not applied at all.
           </p>
           <ForAdministrators note="status_mapping" />
         </div>
@@ -601,8 +601,8 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
       ) : null}
       {error instanceof ApiError && error.code === 'lifecycle_status_unknown' ? (
         <ErrorNotice
-          title="Nothing was saved: a step names a status the tracker does not list."
-          detail="The marked steps are refused; pick them again from the list."
+          title="Nothing was saved: a moment names a status the tracker does not list."
+          detail="The marked moments are refused; pick them again from the list."
         />
       ) : error instanceof ApiError && error.code === 'lifecycle_statuses_unavailable' ? (
         <ErrorNotice

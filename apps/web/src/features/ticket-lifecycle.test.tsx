@@ -327,7 +327,9 @@ describe('the ticket lifecycle pick lists (WP-182 criterion (1))', () => {
       expect(slotSelect(card, label).getAttribute('aria-invalid'), label).toBeNull();
     }
     expect(
-      within(card).getByText('Nothing was saved: a step names a status the tracker does not list.'),
+      within(card).getByText(
+        'Nothing was saved: a moment names a status the tracker does not list.',
+      ),
     ).toBeTruthy();
   });
 
@@ -385,7 +387,7 @@ describe('the ticket lifecycle pick lists (WP-182 criterion (1))', () => {
     renderSettings(state);
     expect(
       await screen.findByText(
-        'The tracker’s statuses could not be loaded, so the steps cannot be mapped yet.',
+        'The tracker’s statuses could not be loaded, so the moments cannot be mapped yet.',
       ),
     ).toBeTruthy();
     expect(document.querySelector('[data-ticket-lifecycle]')).toBeNull();

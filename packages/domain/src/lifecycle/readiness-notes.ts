@@ -63,7 +63,7 @@ const CONSEQUENCE: Readonly<Record<LifecycleNoteSlot, string>> = {
 
 /** The not-configured note's message (product/17: "neither claims tickets nor moves them"). */
 export const LIFECYCLE_NOT_CONFIGURED_MESSAGE =
-  'The ticket tracker connection has no ticket lifecycle: the platform neither claims tickets nor moves them, and new tasks have no QA stage. Choose a status for each step in the project settings to change that.';
+  'The ticket tracker connection has no ticket lifecycle: the platform neither claims tickets nor moves them, and new tasks have no QA stage. Choose a status for each moment in the project settings to change that.';
 
 /**
  * Q118, answered by its recommendation (a) (orchestrator, session 15): a task-management binding

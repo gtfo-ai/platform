@@ -1010,7 +1010,7 @@ The product defines eleven merge-readiness checks, and the box shows **all eleve
   the review has not judged the change yet — the up-to-date check, just before Ready, reads the code
   review's confirmation, so neither review runs twice; then *declared changes confirmed by the code
   review*, or *declared changes not confirmed, sent back* (the developer is told which paths, as
-  for an undeclared change); *untouched* when the check ran and found nothing; *checking*; or *not
+  for an undeclared change); *no unapproved changes* when the check ran and found no protected file changed, or found only changes the plan declared and the code review confirmed; *checking*; or *not
   reached*. A CI gate whose row carries no record of the check reads *not recorded*: one that
   settled before WP-105 recorded what its check found (before WP-81 no check was made at all, and
   from WP-81 on a clean check closed its row with the same word), or one a person returned from
