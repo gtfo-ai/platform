@@ -298,9 +298,11 @@ describe('a path-selected check lists every path its scripts name', () => {
     const missing: string[] = [];
     const unresolved: string[] = [];
     const named: Record<string, string[]> = {};
+    const sources: Record<string, string[]> = {};
     for (const check of PATH_CHECKS) {
       const census = censusOf(check.name);
       named[check.name] = census.named;
+      sources[check.name] = census.sources;
       unresolved.push(...census.unresolved);
       for (const path of census.named) {
         if (!existsSync(join(repositoryRoot, path)))
@@ -326,8 +328,22 @@ describe('a path-selected check lists every path its scripts name', () => {
         'packages/contracts/',
         'packages/domain/',
         'packages/infrastructure/',
-        'scripts/worker-check/core-entry.mjs',
+        'scripts/worker-check/',
         'apps/server/src/runtime.ts',
+      ]),
+    );
+    // The mounted directory brings its helpers in as sources: the core entry is read, not only named.
+    expect(sources['worker-compose-check']).toEqual(
+      expect.arrayContaining([
+        'scripts/worker-check/core-entry.mjs',
+        'scripts/worker-check/fake-claude-stage.mjs',
+      ]),
+    );
+    expect(sources['launcher-control-plane-check']).toEqual(
+      expect.arrayContaining([
+        'scripts/launcher-control-plane-runner.mjs',
+        'scripts/launcher-control-plane-launcher.mjs',
+        'scripts/ts-source-resolver.mjs',
       ]),
     );
   });
