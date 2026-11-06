@@ -522,6 +522,13 @@ export const approvals = pgTable('approvals', {
   /** The stage attempt this approval decides; a later plan needs its own (migration 0012). */
   stage: text('stage'),
   attempt: integer('attempt'),
+  /**
+   * TD-035, migration 0103: what was asked about and why — written once at insert, never by `save`.
+   * The plan gate's `ImplementationPlan`; the budget gate's snapshot; the closed reason vocabulary.
+   */
+  subjectArtifactId: uuid('subject_artifact_id'),
+  subjectDetail: jsonb('subject_detail'),
+  reasons: jsonb('reasons'),
 });
 
 export const workspaces = pgTable('workspaces', {

@@ -2,9 +2,12 @@
  * Run detail — the "click and watch" requirement (product/10 § "Run detail"), drawn as a GitHub
  * Actions job page (research/19 § 5.2 "Run", S-23.10).
  *
+ * - **The frame**: the run's project's header and tabs (S-25.4, `app/run-frame.ts`), with the URL
+ *   unchanged; the links back to the task stay in that project.
  * - **The header**: back to the task (its key and title, the provider's text), the run's status icon
  *   and *Implementation · Developer · attempt 3*, and the actions — **Cancel run** (the outline
- *   danger button, the only coloured action while the run is live, behind a confirming dialog),
+ *   danger secondary behind a confirming dialog — never the amber primary: while a run is live,
+ *   watching is the job and the page has no primary at all, product/10's Run detail amendment),
  *   **Re-run ▾** (a menu: re-run as configured, or with another model or effort in a dialog holding
  *   the retry fields — the primary action once a run failed) and `···` (*Take over…* in a dialog,
  *   *Download transcript*).
@@ -12,7 +15,8 @@
  *   (`run-jobs.ts`), this one current, and under it *Details* — the settings hash and whether it
  *   moved since the task's previous run (WP-112), the saved work (backlog 467), the prompt version.
  * - **The main column**: a summary strip (status, model, effort, cost, elapsed, turns, tokens); while
- *   the run is live a *Now:* line from the one activity vocabulary (`ui/activity.ts`) and the newest
+ *   the run is live a *Now:* line from the one activity vocabulary (`ui/activity.ts`) — linking, when
+ *   it says *Needs you*, to what the task waits for (`waitingItemOf`) — and the newest
  *   rows of the stage dialog's *Live activity* list (`viz/flow/activity-list.tsx`); then four tabs —
  *   the transcript as **log steps** (`transcript/view.tsx`) in a pane of its own sized to the
  *   viewport, the exact prompt, the context pack, and the settings it was planned with
@@ -29,7 +33,13 @@
  * not paid for it.
  */
 
-import type { ContextPackRecord, RunReadResponse, RunRecord, RunSeat } from '@platform/contracts';
+import type {
+  ContextPackRecord,
+  RunReadResponse,
+  RunRecord,
+  RunSeat,
+  TaskDetailResponse,
+} from '@platform/contracts';
 import { ArrowLeftIcon } from '@primer/octicons-react/ArrowLeftIcon';
 import { TriangleDownIcon } from '@primer/octicons-react/TriangleDownIcon';
 import { Link } from '@tanstack/react-router';
@@ -75,11 +85,14 @@ import {
 import { NavList } from '../ui/nav-list.js';
 import { PageHeader } from '../ui/page-header.js';
 import { StatusIcon } from '../ui/status.js';
+import { needsYou } from '../ui/task-status.js';
 import { CodeText, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { usagePauseWords } from '../ui/usage-pause.js';
 import { ActivityList } from '../viz/flow/activity-list.js';
 import { activityRows } from '../viz/flow/activity-rows.js';
+import { approvalCardId } from './approval-card.js';
+import { reviewVerb } from './approval-text.js';
 import { FeedbackForm } from './feedback.js';
 import { PromptsWithheldExplanation } from './prompts-withheld.js';
 import { RunCommandLog } from './run-command-log.js';
@@ -95,6 +108,7 @@ import {
 import { RunSavedWorkLine } from './run-saved-work.js';
 import { RunSettingsLine, RunSettingsPanel } from './run-settings.js';
 import { TakeOverPanel } from './take-over.js';
+import { answerInputId } from './task-callout.js';
 
 type Tab = 'transcript' | 'prompt' | 'context' | 'settings';
 
@@ -196,16 +210,34 @@ export const executedByOf = (
       ? { kind: 'server' }
       : { kind: 'worker', name: seat.worker_name, user: seat.user_name ?? null };
 
+/**
+ * What *Runs on* says for a run with **no seat** (S-25.4, research/21 F13) — from the run's own
+ * status, because "not claimed yet" beside *Status: Running* contradicted it. The read answers no
+ * seat for a run whose offer is still open (nobody has taken it) **and** for one whose offer is
+ * settled or was never written (the seat is no longer recorded): only the first is "waiting", and
+ * the second is said as what it is rather than guessed at.
+ */
+export const seatlessWords = (record: Pick<RunRecord, 'status' | 'started_at'>): string =>
+  record.status === 'created'
+    ? 'waiting to be picked up'
+    : record.status === 'starting' || record.status === 'running'
+      ? 'not recorded'
+      : record.started_at === null || record.started_at === undefined
+        ? 'never picked up'
+        : 'not recorded';
+
 const ExecutedBy = ({
   seat,
+  record,
   nowMs,
 }: {
   readonly seat: RunSeat | null | undefined;
+  readonly record: Pick<RunRecord, 'status' | 'started_at'>;
   readonly nowMs: number;
 }): ReactElement => {
   const executed = executedByOf(seat);
   if (executed === null) {
-    return <span className="text-base text-fg-muted">not claimed yet</span>;
+    return <span className="text-base text-fg-muted">{seatlessWords(record)}</span>;
   }
   if (executed.kind === 'server') {
     return <span className="text-base">the platform server</span>;
@@ -263,8 +295,8 @@ const RunSummary = ({
       )}
       <Metric
         label="Runs on"
-        value={<ExecutedBy seat={record.seat} nowMs={nowMs} />}
-        definition="Where this run ran: the platform's own server, or a developer's worker named by its owner."
+        value={<ExecutedBy seat={record.seat} record={record} nowMs={nowMs} />}
+        definition="Where this run ran: the platform's own server, or a developer's worker named by its owner. Waiting to be picked up while nobody has taken it yet; not recorded when the platform no longer holds who ran it."
       />
       <Metric
         label="Model"
@@ -451,18 +483,93 @@ const CancelDialog = ({
   />
 );
 
+/** What the run's task waits on a person for, and where on the task's page it is answered. */
+export interface WaitingItem {
+  /** The verb the task page's own button says: *Answer*, *Review plan*, *See what it needs*. */
+  readonly label: string;
+  /** The element on the task page the item is, as the header's primary moves to it. */
+  readonly hash: string | null;
+}
+
+/**
+ * The item a run's *Now: Needs you* links to (S-25.4, product/10's Run detail amendment): the
+ * task's first open question, else its first pending approval — the order the task header's primary
+ * follows — else the task's needs-you box for a task waiting on a person with nothing open (an
+ * escalation, a budget pause). `null` when the task waits on nobody.
+ */
+export const waitingItemOf = (detail: TaskDetailResponse | undefined): WaitingItem | null => {
+  if (detail === undefined) {
+    return null;
+  }
+  const question = detail.questions.find((entry) => entry.status === 'open');
+  if (question !== undefined) {
+    return { label: 'Answer the question', hash: answerInputId(question.id) };
+  }
+  const approval = detail.approvals.find((entry) => entry.status === 'pending');
+  if (approval !== undefined) {
+    return { label: reviewVerb(approval.kind), hash: approvalCardId(approval.id) };
+  }
+  return needsYou({
+    state: detail.task.state,
+    paused_reason: detail.task.paused_reason,
+    open_asks: 0,
+    taken_over: detail.taken_over !== null,
+  })
+    ? { label: 'See what it needs', hash: null }
+    : null;
+};
+
+/** A link to the run's task — inside its project's frame when the project is known. */
+const TaskLink = ({
+  taskId,
+  projectKey,
+  hash,
+  className,
+  children,
+}: {
+  readonly taskId: string;
+  readonly projectKey: string | null;
+  readonly hash?: string | null;
+  readonly className: string;
+  readonly children: ReactNode;
+}): ReactElement =>
+  projectKey === null ? (
+    <Link
+      to="/tasks/$taskId"
+      params={{ taskId }}
+      {...(hash === null || hash === undefined ? {} : { hash })}
+      className={className}
+    >
+      {children}
+    </Link>
+  ) : (
+    <Link
+      to="/projects/$key/tasks/$taskId"
+      params={{ key: projectKey, taskId }}
+      {...(hash === null || hash === undefined ? {} : { hash })}
+      className={className}
+    >
+      {children}
+    </Link>
+  );
+
 /** The run's live state in the one vocabulary: *Now: Reading files*, and the newest rows. */
 const LiveNow = ({
   record,
   blocks,
   taskState,
   openAsks,
+  waiting,
+  projectKey,
   nowMs,
 }: {
   readonly record: RunRecord;
   readonly blocks: Parameters<typeof activityRows>[0];
   readonly taskState: Parameters<typeof activityOf>[0]['task_state'];
   readonly openAsks: number;
+  /** What the task waits on a person for: *Now: Needs you* links to it. */
+  readonly waiting: WaitingItem | null;
+  readonly projectKey: string | null;
   readonly nowMs: number;
 }): ReactElement => {
   const now = activityOf({
@@ -477,9 +584,22 @@ const LiveNow = ({
   const rows = activityRows(blocks, { live: true }).slice(-LIVE_ACTIVITY_ROWS);
   return (
     <section aria-label="What the agent is doing" className="flex flex-col gap-2">
-      <p data-run-now={now.activity} className="flex items-center gap-2 text-sm font-medium">
+      <p
+        data-run-now={now.activity}
+        className="flex flex-wrap items-center gap-2 text-sm font-medium"
+      >
         <StatusIcon status={meta.icon} decorative />
         {`Now: ${now.detail ?? meta.label}`}
+        {now.activity === 'needs_you' && waiting !== null ? (
+          <TaskLink
+            taskId={record.task_id}
+            projectKey={projectKey}
+            hash={waiting.hash}
+            className={cx('rounded-sm font-normal text-link underline', FOCUS_RING)}
+          >
+            {`${waiting.label} →`}
+          </TaskLink>
+        ) : null}
       </p>
       <ActivityList rows={rows} className="pl-6" />
     </section>
@@ -488,16 +608,18 @@ const LiveNow = ({
 
 const BackToTask = ({
   taskId,
+  projectKey,
   ticketKey,
   title,
 }: {
   readonly taskId: string;
+  readonly projectKey: string | null;
   readonly ticketKey: string | null;
   readonly title: string | null;
 }): ReactElement => (
-  <Link
-    to="/tasks/$taskId"
-    params={{ taskId }}
+  <TaskLink
+    taskId={taskId}
+    projectKey={projectKey}
     className={cx(
       'inline-flex max-w-full items-center gap-1.5 rounded-sm hover:text-fg',
       FOCUS_RING,
@@ -519,10 +641,17 @@ const BackToTask = ({
         {title === null ? null : <UntrustedText value={title} className="min-w-0 truncate" />}
       </>
     )}
-  </Link>
+  </TaskLink>
 );
 
-export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactElement => {
+export const RunDetailScreen = ({
+  runId,
+  projectKey = null,
+}: {
+  readonly runId: string;
+  /** The run's project's key once the frame resolved it (`app/run-frame.ts`): links stay in it. */
+  readonly projectKey?: string | null;
+}): ReactElement => {
   useTopics([`run:${runId}`]);
   const { transcripts, now } = useServices();
   const run = useRun(runId);
@@ -591,7 +720,8 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
 
   const actions: ReactNode = (
     <>
-      {/* The only coloured action while the run is live (research/19 § 5.2), and it asks first. */}
+      {/* A danger secondary, never the amber primary (S-25.4, product/10's Run detail amendment):
+          while the run is live the page has no primary — watching is the job — and it asks first. */}
       {live ? (
         <Button
           tone="danger"
@@ -660,6 +790,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
         back={
           <BackToTask
             taskId={record.task_id}
+            projectKey={projectKey}
             ticketKey={detail?.task.ticket.key ?? null}
             title={detail?.task.ticket_title ?? null}
           />
@@ -759,6 +890,8 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
               blocks={snapshot.blocks}
               taskState={detail?.task.state ?? null}
               openAsks={openAsks}
+              waiting={waitingItemOf(detail)}
+              projectKey={projectKey}
               nowMs={nowMs}
             />
           ) : null}

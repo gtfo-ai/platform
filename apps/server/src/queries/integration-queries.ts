@@ -47,25 +47,68 @@
  * `{}`, and the published enum has a spelling for exactly that: `status: 'unknown'` with
  * `checked_at: null` says *nobody has checked*, which is true. A stored value that is not the
  * published shape is refused by name rather than coerced.
+ *
+ * ## Health is read from traffic, and the probe is one data point (S-25.3)
+ *
+ * The probe alone made a row read "Healthy · checked 32 d ago": a month-old opinion. Since S-25.3
+ * the row also carries `activity` — the newest outbound call that **reached the provider**
+ * (`integration_actions`, `ok` or `failed`) and the newest **verified** inbound delivery (`inbox`)
+ * — and `current_health`, which {@link currentHealthOf} derives from both and the probe against
+ * `INTEGRATION_HEALTH_STALE_AFTER_HOURS`. Nothing newer than the bound is `not_checked_recently`,
+ * never `working`. No table is added: {@link readIntegrationTraffic} is one statement over existing
+ * rows, three `lateral` probes per listed integration, each bounded by an index and a window —
+ * `integration_actions_integration_idx (integration_id, created_at desc)` for the newest call (a
+ * backward scan of the last {@link LAST_CALL_LOOKBACK_DAYS} days only, so an integration whose rows
+ * are all shadow `would_have` scans those days' partitions and no older ones, stopped at the first
+ * `ok`/`failed` row) and for the window's newest success and failure (a range scan of the last
+ * 24 hours only), and `inbox_verified_integration_idx` (migration 0102) for the newest delivery:
+ * before it, `inbox` had no index that led with `integration_id` but the partial one over
+ * refusals. A call older than the lookback is published as none — it could only ever have read
+ * `not_checked_recently`, which the probe or a delivery still says when there is one.
+ *
+ * **The probe's own calls are not traffic** (review of PR #75). `createIntegrationProber` records
+ * every *Test connection* through the executor, and a probe the provider answered `ok: false` is
+ * an `ok` row — a successful test reporting a failed connection — written a moment after
+ * `integrations.health.checked_at`. Counted, it would be a newer outbound success than the failed
+ * probe, and a failing integration would read `working`. So both outbound laterals leave out
+ * `PROBE_ACTIONS` (declared beside the prober, which names every call through it), and the probe's
+ * verdict is read from `integrations.health` alone.
+ *
+ * **A residual, stated.** `integration_actions` stores no error code, so a `failed` row is any
+ * provider call that failed after its retries — a ticket that is not there (`not_found`) as much as
+ * a revoked token (`unauthorised`). One request's fault after a success therefore reads `degraded`
+ * rather than `failing`, and the next successful call clears it (BACKLOG 1220).
  */
 
 import { REFUSED_DELIVERY_REASONS } from '@platform/application';
 import type {
   Id,
+  IntegrationCurrentHealth,
   IntegrationSummary,
   IntegrationType,
+  IntegrationUser,
   IsoDateTime,
   JsonObject,
   RefusedDelivery,
 } from '@platform/contracts';
-import { integrationSummarySchema, MAX_REFUSED_DELIVERIES } from '@platform/contracts';
-import { db as dbAdapters } from '@platform/infrastructure';
+import {
+  INTEGRATION_HEALTH_STALE_AFTER_HOURS,
+  integrationSummarySchema,
+  MAX_REFUSED_DELIVERIES,
+} from '@platform/contracts';
+import { db as dbAdapters, secrets as secretAdapters } from '@platform/infrastructure';
 import type { ConfigIssue, ProviderCatalogueEntry } from '@platform/integrations';
-import { configIssuesOf } from '@platform/integrations';
-import { and, asc, desc, eq, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import {
+  accountOnlyFieldsOf,
+  configIssuesOf,
+  findShippedProvider,
+  PROBE_ACTIONS,
+  usesOf,
+} from '@platform/integrations';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { UnprojectableRowError } from './pipeline-queries.js';
 
-const { inbox, integrations } = dbAdapters.schema;
+const { bindings, inbox, integrations, projects } = dbAdapters.schema;
 
 export type Database = dbAdapters.Database;
 
@@ -218,10 +261,14 @@ export const ORGANISATION_ACCOUNT_UNREADABLE_CONSEQUENCE =
  */
 export type OrganisationCredentialStates = ReadonlyMap<string, boolean> | null;
 
+/** What {@link readIntegrationFacts} adds to a row: its traffic, its health now, its projects. */
+export type IntegrationFacts = Pick<IntegrationSummary, 'activity' | 'current_health' | 'used_by'>;
+
 export const toIntegrationSummary = (
   row: IntegrationRow,
   provider: ProviderCatalogueEntry | undefined,
   credentials: OrganisationCredentialStates,
+  facts: IntegrationFacts,
 ): IntegrationSummary => {
   // A retired row is never read by the loader (its credentials are destroyed), so it is unchecked.
   const readable = row.retiredAt === null ? (credentials?.get(row.id) ?? null) : null;
@@ -230,13 +277,347 @@ export const toIntegrationSummary = (
     credentials_readable: readable,
     credentials_consequence:
       readable === false ? ORGANISATION_ACCOUNT_UNREADABLE_CONSEQUENCE : null,
+    ...facts,
   };
+};
+
+/**
+ * Every listed row as the API publishes it — the projection plus {@link readIntegrationFacts} —
+ * for the list read and for every command that answers with the row it changed, so a command's
+ * answer carries the same health and projects the list would (S-25.3).
+ */
+export const integrationSummaries = async (
+  database: Database,
+  rows: readonly IntegrationRow[],
+  credentials: OrganisationCredentialStates,
+  now: Date,
+): Promise<IntegrationSummary[]> => {
+  const facts = await readIntegrationFacts(database, rows, now);
+  return rows.map((row) =>
+    toIntegrationSummary(
+      row,
+      findShippedProvider(row.provider),
+      credentials,
+      facts.get(row.id) ?? factsOf(row, NO_TRAFFIC, [], now.getTime()),
+    ),
+  );
+};
+
+/** One row as {@link integrationSummaries} publishes it — a command's answer. */
+export const integrationSummaryOf = async (
+  database: Database,
+  row: IntegrationRow,
+  credentials: OrganisationCredentialStates,
+  now: Date,
+): Promise<IntegrationSummary> => {
+  const facts = await readIntegrationFacts(database, [row], now);
+  return toIntegrationSummary(
+    row,
+    findShippedProvider(row.provider),
+    credentials,
+    facts.get(row.id) ?? factsOf(row, NO_TRAFFIC, [], now.getTime()),
+  );
+};
+
+// ── Health from traffic (S-25.3) ─────────────────────────────────────────────
+
+const STALE_AFTER_MS = INTEGRATION_HEALTH_STALE_AFTER_HOURS * 3_600_000;
+
+/**
+ * How far back the newest-call read looks (review of PR #75): 90 days, about three monthly
+ * partitions of `integration_actions`. A bound rather than "ever", so a shadow-only integration —
+ * every row `would_have`, none of them evidence — costs those days' rows and not the table's.
+ */
+export const LAST_CALL_LOOKBACK_DAYS = 90;
+
+/** One integration's traffic, as {@link readIntegrationTraffic} reads it; instants in epoch ms. */
+export interface IntegrationTraffic {
+  /** The newest outbound call that reached the provider, of any age. */
+  readonly lastCall: { readonly atMs: number; readonly ok: boolean } | null;
+  /** Inside the stale bound only: the newest `ok` call and the newest `failed` one. */
+  readonly lastOkInWindowMs: number | null;
+  readonly lastFailedInWindowMs: number | null;
+  /** The newest verified inbound delivery, of any age. */
+  readonly lastDeliveryMs: number | null;
+}
+
+export const NO_TRAFFIC: IntegrationTraffic = {
+  lastCall: null,
+  lastOkInWindowMs: null,
+  lastFailedInWindowMs: null,
+  lastDeliveryMs: null,
+};
+
+interface Evidence {
+  readonly basis: NonNullable<IntegrationCurrentHealth['basis']>;
+  readonly atMs: number;
+}
+
+const newest = (items: readonly (Evidence | null)[]): Evidence | null =>
+  items.reduce<Evidence | null>(
+    (best, item) => (item !== null && (best === null || item.atMs > best.atMs) ? item : best),
+    null,
+  );
+
+const evidence = (basis: Evidence['basis'], atMs: number | null): Evidence | null =>
+  atMs === null || !Number.isFinite(atMs) ? null : { basis, atMs };
+
+const iso = (atMs: number): IsoDateTime => new Date(atMs).toISOString() as IsoDateTime;
+
+/**
+ * The integration's health **now** (S-25.3, product/08's 2026-11-06 amendment) — pure, so every
+ * branch is a unit case. The rules, in order:
+ *
+ * 1. Only evidence newer than `now − INTEGRATION_HEALTH_STALE_AFTER_HOURS` decides a verdict.
+ * 2. **Outbound first.** If the newest outbound evidence inside the bound — a call or a probe — is a
+ *    failure, the integration is `failing`, or `degraded` when an outbound success inside the bound
+ *    came before it. A webhook that still arrives does not hide a token the provider refuses: the
+ *    two directions are different credentials and different doors.
+ * 3. Otherwise any success inside the bound — an outbound call, a probe, a verified delivery — is
+ *    `working`, its basis the newest of them.
+ * 4. Otherwise anything at all on record is `not_checked_recently`, at the newest of it; nothing is
+ *    `never_checked`. A month-old *passed* probe is the first of these, never `working`.
+ *
+ * A probe that reads `down` is a failure; `degraded` — *Passed with warnings* on the page — is a
+ * pass, so it never reads failing on the row while the page says it passed; `unknown` is no
+ * evidence.
+ */
+export const currentHealthOf = (
+  probe: IntegrationSummary['health'],
+  traffic: IntegrationTraffic,
+  nowMs: number,
+): IntegrationCurrentHealth => {
+  const since = nowMs - STALE_AFTER_MS;
+  const recent = (item: Evidence | null): Evidence | null =>
+    item !== null && item.atMs > since ? item : null;
+  const probed =
+    probe.status === 'unknown' || probe.checked_at === null
+      ? null
+      : evidence('probe', Date.parse(probe.checked_at));
+  const probeOk = probe.status === 'ok' || probe.status === 'degraded' ? probed : null;
+  const probeFailed = probe.status === 'down' ? probed : null;
+
+  const outboundSuccess = newest([
+    recent(evidence('call', traffic.lastOkInWindowMs)),
+    recent(probeOk),
+  ]);
+  const outboundFailure = newest([
+    recent(evidence('call', traffic.lastFailedInWindowMs)),
+    recent(probeFailed),
+  ]);
+  if (
+    outboundFailure !== null &&
+    (outboundSuccess === null || outboundFailure.atMs > outboundSuccess.atMs)
+  ) {
+    return {
+      status: outboundSuccess === null ? 'failing' : 'degraded',
+      basis: outboundFailure.basis,
+      at: iso(outboundFailure.atMs),
+    };
+  }
+  const success = newest([outboundSuccess, recent(evidence('delivery', traffic.lastDeliveryMs))]);
+  if (success !== null) {
+    return { status: 'working', basis: success.basis, at: iso(success.atMs) };
+  }
+  const anything = newest([
+    traffic.lastCall === null ? null : evidence('call', traffic.lastCall.atMs),
+    evidence('delivery', traffic.lastDeliveryMs),
+    probed,
+  ]);
+  return anything === null
+    ? { status: 'never_checked', basis: null, at: null }
+    : { status: 'not_checked_recently', basis: anything.basis, at: iso(anything.atMs) };
+};
+
+/** One row's {@link IntegrationFacts} out of its traffic and its projects. */
+export const factsOf = (
+  row: IntegrationRow,
+  traffic: IntegrationTraffic,
+  users: IntegrationUser[],
+  nowMs: number,
+): IntegrationFacts => ({
+  activity: {
+    last_call:
+      traffic.lastCall === null
+        ? null
+        : { at: iso(traffic.lastCall.atMs), ok: traffic.lastCall.ok },
+    last_delivery_at: traffic.lastDeliveryMs === null ? null : iso(traffic.lastDeliveryMs),
+  },
+  current_health: currentHealthOf(healthOf(row), traffic, nowMs),
+  used_by: users,
+});
+
+/** A `float8` epoch-milliseconds column as a number, `null` kept (pg may hand a string back). */
+const msOf = (value: unknown): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+/**
+ * Each listed integration's traffic, read in **one** statement (S-25.3).
+ *
+ * Instants are selected as epoch milliseconds rather than as `timestamptz`: on the raw `execute`
+ * path drizzle hands a timestamp back unparsed (`identity-queries.ts` measured it), and a number
+ * needs no second parser. The three `lateral` probes and the index each one rides are this
+ * module's docblock.
+ */
+export const readIntegrationTraffic = async (
+  database: Pick<Database, 'execute'>,
+  integrationIds: readonly string[],
+  now: Date,
+): Promise<ReadonlyMap<string, IntegrationTraffic>> => {
+  if (integrationIds.length === 0) {
+    return new Map();
+  }
+  const since = new Date(now.getTime() - STALE_AFTER_MS).toISOString();
+  const lookback = new Date(now.getTime() - LAST_CALL_LOOKBACK_DAYS * 86_400_000).toISOString();
+  const probeActions = sql.param([...PROBE_ACTIONS]);
+  const result = await database.execute<{
+    integration_id: string;
+    last_call_ms: unknown;
+    last_call_status: string | null;
+    ok_ms: unknown;
+    failed_ms: unknown;
+    delivery_ms: unknown;
+  }>(sql`
+    select i.id as integration_id,
+           (extract(epoch from c.created_at) * 1000)::float8 as last_call_ms,
+           c.status as last_call_status,
+           (extract(epoch from w.ok_at) * 1000)::float8 as ok_ms,
+           (extract(epoch from w.failed_at) * 1000)::float8 as failed_ms,
+           (extract(epoch from d.received_at) * 1000)::float8 as delivery_ms
+      from integrations i
+      left join lateral (
+        select a.created_at, a.status
+          from integration_actions a
+         where a.integration_id = i.id
+           and a.direction = 'out'
+           and a.status in ('ok', 'failed')
+           and a.created_at > ${lookback}::timestamptz
+           and a.action <> all(${probeActions}::text[])
+         order by a.created_at desc
+         limit 1
+      ) c on true
+      left join lateral (
+        select max(a.created_at) filter (where a.status = 'ok') as ok_at,
+               max(a.created_at) filter (where a.status = 'failed') as failed_at
+          from integration_actions a
+         where a.integration_id = i.id
+           and a.direction = 'out'
+           and a.created_at > ${since}::timestamptz
+           and a.action <> all(${probeActions}::text[])
+      ) w on true
+      left join lateral (
+        select b.received_at
+          from inbox b
+         where b.integration_id = i.id
+           and b.verified
+         order by b.received_at desc
+         limit 1
+      ) d on true
+     where i.id = any(${sql.param([...integrationIds])}::uuid[])`);
+  return new Map(
+    result.rows.map((row) => {
+      const lastCallMs = msOf(row.last_call_ms);
+      return [
+        row.integration_id,
+        {
+          lastCall:
+            lastCallMs === null ? null : { atMs: lastCallMs, ok: row.last_call_status === 'ok' },
+          lastOkInWindowMs: msOf(row.ok_ms),
+          lastFailedInWindowMs: msOf(row.failed_ms),
+          lastDeliveryMs: msOf(row.delivery_ms),
+        },
+      ] as const;
+    }),
+  );
+};
+
+/**
+ * The projects that bind each listed integration, by key, with what each uses it for (S-25.3) —
+ * the binding's **effective** configuration (the account's document with the binding's overlay,
+ * account-only keys dropped, as the loader reads it: `overlayBindingConfig`) through the
+ * catalogue's {@link usesOf}. `bindings_integration_id_idx` serves the read.
+ */
+export const readIntegrationUsers = async (
+  database: Database,
+  rows: readonly IntegrationRow[],
+): Promise<ReadonlyMap<string, IntegrationUser[]>> => {
+  if (rows.length === 0) {
+    return new Map();
+  }
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const bound = await database
+    .select({
+      integrationId: bindings.integrationId,
+      projectId: projects.id,
+      key: projects.key,
+      name: projects.name,
+      config: bindings.config,
+    })
+    .from(bindings)
+    .innerJoin(projects, eq(projects.id, bindings.projectId))
+    .where(inArray(bindings.integrationId, [...byId.keys()]))
+    .orderBy(asc(projects.key));
+  const users = new Map<string, IntegrationUser[]>();
+  for (const binding of bound) {
+    const row = byId.get(binding.integrationId);
+    if (row === undefined) {
+      continue;
+    }
+    const effective = secretAdapters.overlayBindingConfig(
+      row.config,
+      binding.config,
+      accountOnlyFieldsOf(row.provider),
+    );
+    users.set(row.id, [
+      ...(users.get(row.id) ?? []),
+      {
+        project_id: binding.projectId as Id,
+        project_key: binding.key,
+        project_name: binding.name,
+        uses: [...usesOf(findShippedProvider(row.provider), effective)],
+      },
+    ]);
+  }
+  return users;
+};
+
+/** {@link IntegrationFacts} for every listed row: its traffic and its projects, two reads. */
+export const readIntegrationFacts = async (
+  database: Database,
+  rows: readonly IntegrationRow[],
+  now: Date,
+): Promise<ReadonlyMap<string, IntegrationFacts>> => {
+  const [traffic, users] = await Promise.all([
+    readIntegrationTraffic(
+      database,
+      rows.map((row) => row.id),
+      now,
+    ),
+    readIntegrationUsers(database, rows),
+  ]);
+  return new Map(
+    rows.map(
+      (row) =>
+        [
+          row.id,
+          factsOf(row, traffic.get(row.id) ?? NO_TRAFFIC, users.get(row.id) ?? [], now.getTime()),
+        ] as const,
+    ),
+  );
 };
 
 const summaryOf = (
   row: IntegrationRow,
   provider: ProviderCatalogueEntry | undefined,
-): Omit<IntegrationSummary, 'credentials_readable' | 'credentials_consequence'> => ({
+): Omit<
+  IntegrationSummary,
+  'credentials_readable' | 'credentials_consequence' | keyof IntegrationFacts
+> => ({
   id: row.id as Id,
   type: row.type,
   provider: row.provider,

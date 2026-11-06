@@ -110,9 +110,12 @@ test('Home: a press on a Needs you row’s meta line opens the task, and so does
   const approval = page
     .getByRole('list', { name: 'Needs you' })
     .getByRole('listitem')
-    .filter({ hasText: 'Plan approval is waiting for you' });
+    .filter({ hasText: 'Plan approval · the plan it is about was not recorded' });
   // The title text, which is not a link of its own, is covered by the row's.
-  await pressAtCentre(page, approval.getByText('Plan approval is waiting for you'));
+  await pressAtCentre(
+    page,
+    approval.getByText('Plan approval · the plan it is about was not recorded'),
+  );
   await expect(page).toHaveURL(`/tasks/${IDS.taskFeature}`);
 
   await page.goBack();
@@ -121,8 +124,8 @@ test('Home: a press on a Needs you row’s meta line opens the task, and so does
     page
       .getByRole('list', { name: 'Needs you' })
       .getByRole('listitem')
-      .filter({ hasText: 'Plan approval is waiting for you' })
-      .getByRole('link', { name: /^Approve/ }),
+      .filter({ hasText: 'Plan approval · the plan it is about was not recorded' })
+      .getByRole('link', { name: /^Review plan/ }),
   );
   await expect(page).toHaveURL(`/tasks/${IDS.taskFeature}`);
 });
@@ -144,6 +147,31 @@ test('Home: a press on a project’s meta line opens it, and its counts keep the
     const fact = row.locator(`[title="${definition}"]`);
     expect(await onTopAtCentre(page, fact), definition).toBe(true);
   }
+  // S-25.2: the readiness badge is a button over the row link, so a press on it opens the level's
+  // definition rather than the project.
+  expect(await onTopAtCentre(page, row.getByRole('button', { name: /^Readiness: / }))).toBe(true);
+  const meta = row.locator('[data-row-meta]');
+  // Calibration: the meta line is under the project's link, not a target of its own.
+  expect(await hitAtCentre(page, meta)).toBe(`a /projects/${PROJECT_KEY}`);
+  await pressAtCentre(page, meta);
+  await expect(page).toHaveURL(`/projects/${PROJECT_KEY}`);
+});
+
+test('the Projects list: the readiness badge opens its definition in place, the meta opens the project', async ({
+  page,
+}) => {
+  await page.goto('/projects');
+  const row = page
+    .getByRole('list', { name: 'Projects' })
+    .getByRole('listitem')
+    .filter({ has: page.getByRole('link', { name: /Demo service/ }) });
+  // S-25.2: the badge is a button over the row link, so a press on it opens the popover, not the row.
+  const badge = row.getByRole('button', { name: /^Readiness: / });
+  expect(await onTopAtCentre(page, badge)).toBe(true);
+  await pressAtCentre(page, badge);
+  await expect(page.getByRole('dialog', { name: 'Level 3 · Agent-ready' })).toBeVisible();
+  await expect(page).toHaveURL('/projects');
+  await page.keyboard.press('Escape');
   const meta = row.locator('[data-row-meta]');
   // Calibration: the meta line is under the project's link, not a target of its own.
   expect(await hitAtCentre(page, meta)).toBe(`a /projects/${PROJECT_KEY}`);

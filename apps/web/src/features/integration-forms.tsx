@@ -45,8 +45,8 @@ import { Dialog } from '../ui/dialog.js';
 import {
   choiceLabel,
   configFieldLabel,
-  INTEGRATION_HEALTH_LABEL,
-  type IntegrationHealth,
+  INTEGRATION_CURRENT_HEALTH_LABEL,
+  type IntegrationCurrentHealthStatus,
 } from '../ui/humanize.js';
 import { ErrorNotice, Field, formatDateTime } from '../ui/kit.js';
 import { ListBox, ListRow } from '../ui/list-box.js';
@@ -59,21 +59,25 @@ export type ConfigField = IntegrationProvider['config_fields'][number];
 
 // ── Health ───────────────────────────────────────────────────────────────────
 
-const HEALTH_STATUS: Readonly<Record<IntegrationHealth, Status>> = {
-  ok: 'success',
+const HEALTH_STATUS: Readonly<Record<IntegrationCurrentHealthStatus, Status>> = {
+  working: 'success',
   degraded: 'waiting',
-  down: 'failure',
-  unknown: 'queued',
+  failing: 'failure',
+  not_checked_recently: 'idle',
+  never_checked: 'queued',
 };
 
-/** The status icon and its word for a row: its health, or *Retired*. */
+/**
+ * The status icon and its word for a row: its health **now** — read by the server from its traffic
+ * and the last probe against the stale bound (S-25.3), never the probe alone — or *Retired*.
+ */
 export const integrationStatus = (
   integration: IntegrationSummary,
 ): { readonly status: Status; readonly word: string } =>
   integration.retired_at === null
     ? {
-        status: HEALTH_STATUS[integration.health.status],
-        word: INTEGRATION_HEALTH_LABEL[integration.health.status],
+        status: HEALTH_STATUS[integration.current_health.status],
+        word: INTEGRATION_CURRENT_HEALTH_LABEL[integration.current_health.status],
       }
     : { status: 'cancelled', word: 'Retired' };
 
@@ -616,7 +620,8 @@ export const IntegrationActions = ({
 // ── Refused deliveries ───────────────────────────────────────────────────────
 
 /**
- * What this integration's inbound half refused, and why (WP-44, PROGRESS backlog 198) — refusals
+ * What this integration's inbound half refused, and why (WP-44, PROGRESS backlog 198) — titled
+ * *Rejected webhooks* since S-25.3 (research/21 S10), the words a person reads it in — refusals
  * only since WP-73b (backlog 206): an ordinary ignore is filtered out by the server on its code.
  *
  * A chat click refused as `unmapped_identity` or `decision_refused: not_permitted` used to be
@@ -632,22 +637,20 @@ export const RefusedDeliveries = ({
 }): ReactElement => {
   const refused = useRefusedDeliveries(integrationId, true);
   if (refused.isPending) {
-    return <Skeleton label="Loading refused deliveries…" lines={2} />;
+    return <Skeleton label="Loading rejected webhooks…" lines={2} />;
   }
   if (refused.isError) {
-    return (
-      <ErrorNotice title="The refused deliveries could not be loaded." error={refused.error} />
-    );
+    return <ErrorNotice title="The rejected webhooks could not be loaded." error={refused.error} />;
   }
   if (refused.data.items.length === 0) {
     return (
       <p className="text-sm text-fg-muted" data-refused-deliveries="none">
-        Nothing this integration delivered was refused.
+        Nothing this integration delivered was rejected.
       </p>
     );
   }
   return (
-    <ListBox label="Refused deliveries">
+    <ListBox label="Rejected webhooks">
       {refused.data.items.map((delivery) => (
         <ListRow
           key={delivery.delivery_id}

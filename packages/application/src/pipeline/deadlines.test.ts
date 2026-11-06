@@ -26,6 +26,7 @@ import {
   createPipelineHarness,
   type HarnessOptions,
   type PipelineHarness,
+  shownPlanOf,
 } from '../testing/pipeline-harness.js';
 import {
   answerTaskQuestion,
@@ -569,6 +570,7 @@ describe('an approval’s deadline (BD-006’s Q95 amendment, PROGRESS backlog 7
       decision: 'approved',
       userId: USER,
       role: 'maintainer',
+      subjectArtifactId: await shownPlanOf(harness, approval.id),
     });
     await harness.drain();
 
@@ -754,6 +756,7 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
       decision: 'approved',
       userId: USER,
       role: 'maintainer',
+      subjectArtifactId: await shownPlanOf(harness, approval.id),
     });
     await harness.drain();
 

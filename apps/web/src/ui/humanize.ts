@@ -294,6 +294,32 @@ export const LOOP_LABEL: Readonly<Record<string, string>> = {
 export const loopLabel = (slug: string): string =>
   Object.hasOwn(LOOP_LABEL, slug) ? (LOOP_LABEL[slug] as string) : titleCase(slug);
 
+/**
+ * What one round of each loop is called on the board's loop badge (S-25.4, product/10's Board
+ * amendment: *"Review round 2 of 3"*, never *"Review 2/3"*). A noun in the singular, because the
+ * badge counts one round at a time; `humanize.test.ts` holds it to the same domain list as
+ * {@link LOOP_LABEL}.
+ */
+export const LOOP_ROUND_LABEL: Readonly<Record<string, string>> = {
+  code_review: 'Review',
+  business_review: 'Acceptance',
+  ci_fix: 'CI fix',
+  human_rounds: 'Human review',
+  refinement_questions: 'Question',
+  architecture_revisions: 'Plan revision',
+  rebase: 'Conflict fix',
+  rebase_rechecks: 'Re-check',
+  dependency_policy: 'Dependency check',
+};
+
+/** *Review round 2 of 3*, or *Review round 2* when the loop's limit is not known. */
+export const loopRoundLabel = (slug: string, count: number, limit?: number): string => {
+  const noun = Object.hasOwn(LOOP_ROUND_LABEL, slug)
+    ? (LOOP_ROUND_LABEL[slug] as string)
+    : titleCase(slug);
+  return `${noun} round ${count}${limit === undefined ? '' : ` of ${limit}`}`;
+};
+
 /** 1 → "1st", 2 → "2nd", 11 → "11th", 23 → "23rd". */
 export const ordinal = (value: number): string => {
   const tens = value % 100;
@@ -332,12 +358,48 @@ export const INTEGRATION_TYPE_PURPOSE: Readonly<Record<IntegrationType, string>>
 
 export type IntegrationHealth = IntegrationSummary['health']['status'];
 
-/** `integrations.health.status`; `unknown` is a connection nobody has tested yet. */
+/**
+ * `integrations.health.status` — the last *Test connection*'s verdict, and only that: since S-25.3 an
+ * integration's health is `current_health` (read from its traffic), and this is one dated fact on
+ * its page. So the words are a test's — *Passed*, *Failed* — never *Healthy*, which a month-old
+ * probe once claimed on the row. `unknown` is a connection nobody has tested.
+ */
 export const INTEGRATION_HEALTH_LABEL: Readonly<Record<IntegrationHealth, string>> = {
-  ok: 'Healthy',
-  degraded: 'Degraded',
-  down: 'Down',
-  unknown: 'Not checked',
+  ok: 'Passed',
+  degraded: 'Passed with warnings',
+  down: 'Failed',
+  unknown: 'Never tested',
+};
+
+/**
+ * The integrations list's groups, in the order product/08's 2026-11-06 amendment gives them: what
+ * an integration does for a project (S-25.3). Every type appears exactly once (`humanize.test.ts`).
+ */
+export const INTEGRATION_ROLE_GROUPS: readonly {
+  readonly type: IntegrationType;
+  readonly label: string;
+}[] = [
+  { type: 'task_management', label: 'Tickets' },
+  { type: 'git', label: 'Code & merge requests' },
+  { type: 'communication', label: 'Chat' },
+  { type: 'errors', label: 'Errors' },
+  { type: 'logs', label: 'Logs' },
+];
+
+export type IntegrationCurrentHealthStatus = IntegrationSummary['current_health']['status'];
+
+/**
+ * `current_health.status` — what the platform knows about an integration **now**, from its traffic
+ * (S-25.3). Never *Healthy* on a stale probe: that is *Not checked recently*.
+ */
+export const INTEGRATION_CURRENT_HEALTH_LABEL: Readonly<
+  Record<IntegrationCurrentHealthStatus, string>
+> = {
+  working: 'Working',
+  degraded: 'Some calls failing',
+  failing: 'Failing',
+  not_checked_recently: 'Not checked recently',
+  never_checked: 'Never checked',
 };
 
 /** Words the field names use that are spelled as initialisms in a sentence. */

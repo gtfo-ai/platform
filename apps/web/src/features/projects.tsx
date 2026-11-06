@@ -114,7 +114,7 @@ export const ProjectsScreen = (): ReactElement => {
               }
               trailing={
                 <>
-                  <ReadinessLabel level={project.readiness_level} />
+                  <ReadinessLabel level={project.readiness_level} project={project} />
                   <span title="Tasks in this project that are not done or cancelled.">
                     {`${formatInteger(project.open_tasks)} open`}
                   </span>

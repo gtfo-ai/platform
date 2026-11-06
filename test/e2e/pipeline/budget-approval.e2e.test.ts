@@ -333,6 +333,22 @@ describe('the budget-approval gate, end to end', () => {
     expect(detail.body.task.cost_actual_usd).toBeCloseTo(LATER_STAGE_USD, 6);
     expect(detail.body.task.estimate_accuracy).toBeCloseTo(LATER_STAGE_USD / HISTORY_TOTAL_USD, 6);
     expect(detail.body.approvals.map((approval) => approval.kind)).toEqual(['budget']);
+    // TD-035: the approval carries the figures it was asked about and the crossing as its reason.
+    const threshold = AUTONOMY_PRESETS.assist.budgetApprovalThresholdUsd as number;
+    expect(detail.body.approvals[0]?.subject).toEqual({
+      kind: 'budget',
+      estimate_usd: detail.body.task.estimate_usd,
+      threshold_usd: threshold,
+      estimate_basis: 'project_history',
+      estimate_samples: 1,
+    });
+    expect(detail.body.approvals[0]?.reasons).toEqual([
+      {
+        code: 'estimate_above_threshold',
+        estimate_usd: detail.body.task.estimate_usd,
+        threshold_usd: threshold,
+      },
+    ]);
 
     // ── 4. Approved: the task carries on, and the replay performs nothing twice ───────────────
     const approvalId = gatedApprovals[0]?.id as string;

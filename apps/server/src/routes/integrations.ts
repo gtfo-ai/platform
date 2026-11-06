@@ -68,10 +68,10 @@ import type { Database } from '../queries/identity-queries.js';
 import { findProjectRole } from '../queries/identity-queries.js';
 import {
   findIntegrationRow,
+  integrationSummaries,
   listIntegrationRows,
   listRefusedDeliveries,
   type OrganisationCredentialStates,
-  toIntegrationSummary,
 } from '../queries/integration-queries.js';
 
 export interface IntegrationRoutesOptions {
@@ -111,7 +111,7 @@ export const registerIntegrationRoutes = async (
       schema: {
         summary: 'The organisation’s integrations',
         description:
-          'Non-secret configuration only: the provider’s declared credential fields are removed here, and an integration whose provider this build does not ship publishes an empty `config` because the platform cannot tell its configuration from its credentials. `health.status` is `unknown` for a row nothing has probed; `POST /api/integrations/:id/test` (WP-21) is what writes `integrations.health`, so a tested integration publishes `ok` or `down` with the instant it was checked. `config_refusal` names the key paths of a stored configuration the provider’s schema refuses (a row written before WP-100 made the create parse it), with the `PATCH /api/integrations/:id` that repairs it; `null` when it parses. `retired_at` is when `DELETE /api/integrations/:id` retired it (its credentials destroyed, kept for the audit), `null` while live (WP-114). `credentials_readable` is whether a live organisation communication account’s sealed credentials decrypt — `false` withholds the prompt files of every project, which `credentials_consequence` says — and `null` for every other row, which this read does not check; it never carries a value (WP-157).',
+          'Non-secret configuration only: the provider’s declared credential fields are removed here, and an integration whose provider this build does not ship publishes an empty `config` because the platform cannot tell its configuration from its credentials. `health.status` is `unknown` for a row nothing has probed; `POST /api/integrations/:id/test` (WP-21) is what writes `integrations.health`, so a tested integration publishes `ok` or `down` with the instant it was checked — the last probe alone. `activity` is its traffic (S-25.3): the newest outbound call that reached the provider (`ok` or `failed`; shadow and replayed rows reached nobody) and the newest verified inbound delivery, each `null` when there is none; `current_health` is derived from both and the probe against `INTEGRATION_HEALTH_STALE_AFTER_HOURS` (24): `working`, `degraded`, `failing`, `not_checked_recently` (nothing inside the bound — a passed probe older than it included) or `never_checked`, with the `basis` and instant that decided it. `used_by` lists the projects that bind it by key, each with its `uses` — the provider’s identifying settings for that project, labelled in words, never a credential. `config_refusal` names the key paths of a stored configuration the provider’s schema refuses (a row written before WP-100 made the create parse it), with the `PATCH /api/integrations/:id` that repairs it; `null` when it parses. `retired_at` is when `DELETE /api/integrations/:id` retired it (its credentials destroyed, kept for the audit), `null` while live (WP-114). `credentials_readable` is whether a live organisation communication account’s sealed credentials decrypt — `false` withholds the prompt files of every project, which `credentials_consequence` says — and `null` for every other row, which this read does not check; it never carries a value (WP-157).',
         tags: ['org'],
         response: { 200: integrationsResponseSchema },
       },
@@ -140,9 +140,8 @@ export const registerIntegrationRoutes = async (
             );
       const role = request.effectiveRole;
       return {
-        items: rows.map((row) =>
-          toIntegrationSummary(row, findShippedProvider(row.provider), credentials),
-        ),
+        // S-25.3: the read's own instant — "recently" is a question about now.
+        items: await integrationSummaries(options.database, rows, credentials, new Date()),
         // S-23.23: whether this caller may write integrations — the write routes' own capability
         // (`integration.write`, `routes/onboarding.ts`) over the organisation role this guard
         // resolved, so the screens offer New, Edit, Replace credentials and Retire only to someone

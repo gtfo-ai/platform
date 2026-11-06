@@ -49,6 +49,9 @@ const JIRA: IntegrationSummary = {
   retired_at: null,
   credentials_readable: null,
   credentials_consequence: null,
+  activity: { last_call: null, last_delivery_at: null },
+  current_health: { status: 'never_checked', basis: null, at: null },
+  used_by: [],
 };
 
 const INTEGRATIONS: IntegrationsResponse = { items: [JIRA], can_write: true };
@@ -86,6 +89,17 @@ const PROJECT_ROW = {
   spent_usd_30d: 0,
 };
 
+/** The project a bound integration names in its `used_by` — the binding's use, as the server words it. */
+const ACME_USER: IntegrationSummary['used_by'][number] = {
+  project_id: PROJECT,
+  project_key: 'acme',
+  project_name: 'Acme service',
+  uses: [
+    { label: 'Tickets from', value: 'AUT' },
+    { label: 'Picked up with label', value: 'agentic' },
+  ],
+};
+
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -106,7 +120,10 @@ interface World {
 
 const recorder = (world: World = {}) => {
   const sent: Sent[] = [];
-  const items = world.items ?? INTEGRATIONS.items;
+  // S-25.3: the list read names the projects that use each integration (`used_by`).
+  const items = (world.items ?? INTEGRATIONS.items).map((item) =>
+    (world.bound ?? []).includes(item.id) ? { ...item, used_by: [ACME_USER] } : item,
+  );
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -208,7 +225,7 @@ describe('the integrations list', () => {
   it('offers a caller who may not write no create, test, edit, credentials or retire', async () => {
     const user = userEvent.setup();
     const { container } = renderApp(recorder({ canWrite: false }).fetchImpl);
-    await screen.findByRole('list', { name: 'Integrations' });
+    await screen.findByRole('list', { name: 'Tickets' });
     expect(screen.queryByRole('link', { name: 'New integration' })).toBeNull();
     expect(container.querySelector('[data-may-not-write]')?.textContent).toBe(
       'Administrators add and change integrations.',
@@ -231,18 +248,26 @@ describe('the integrations list', () => {
 
   it('lists a row with its health, provider, kind, last check and bindings, under one primary', async () => {
     const { container } = renderApp(recorder({ bound: [INTEGRATION] }).fetchImpl);
-    const list = await screen.findByRole('list', { name: 'Integrations' });
+    // S-25.3: under its role's group, the provider's role glyph beside its name — never a logo.
+    const list = await screen.findByRole('list', { name: 'Tickets' });
+    expect(screen.getByRole('heading', { level: 2, name: 'Tickets' })).toBeTruthy();
     const row = within(list).getByRole('link', { name: 'ACME Jira' }).closest('li');
-    expect(row?.textContent).toContain('Jira Cloud');
-    expect(row?.textContent).toContain('Ticket tracker');
-    expect(row?.textContent).toContain('never checked');
+    expect(row?.querySelector('[data-provider-icon]')?.textContent).toBe('Jira Cloud');
+    expect(row?.querySelector('[data-provider-glyph="task_management"] svg')).not.toBeNull();
+    expect(row?.querySelector('img')).toBeNull();
+    expect(row?.textContent).toContain('no calls or deliveries yet');
     // Words, never the raw enum.
-    expect(row?.textContent).toContain('Not checked');
+    expect(row?.textContent).toContain('Never checked');
     expect(row?.textContent).not.toContain('task_management');
-    expect(row?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Not checked');
-    await waitFor(() => {
-      expect(row?.textContent).toContain('Used by 1 project');
-    });
+    expect(row?.textContent).not.toContain('never_checked');
+    expect(row?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Never checked');
+    // "Used by Acme service", the project named and linked to its board.
+    expect(row?.querySelector('[data-used-by]')?.textContent).toBe('Used by Acme service');
+    expect(
+      within(row as HTMLElement)
+        .getByRole('link', { name: 'Acme service' })
+        .getAttribute('href'),
+    ).toBe('/projects/acme');
     // The row is the way into its own page.
     expect(within(list).getByRole('link', { name: 'ACME Jira' }).getAttribute('href')).toBe(
       `/integrations/${INTEGRATION}`,
@@ -259,15 +284,15 @@ describe('the integrations list', () => {
     const checked: IntegrationSummary = {
       ...JIRA,
       health: { status: 'ok', checked_at: '2026-10-01T09:00:00.000Z', detail: null },
+      activity: { last_call: { at: '2026-10-01T09:00:00.000Z', ok: true }, last_delivery_at: null },
+      current_health: { status: 'working', basis: 'call', at: '2026-10-01T09:00:00.000Z' },
     };
     renderApp(recorder({ items: [checked] }).fetchImpl);
-    const list = await screen.findByRole('list', { name: 'Integrations' });
-    expect(list.textContent).toContain('checked 5 m ago');
-    expect(list.textContent).toContain('Healthy');
-    // No project read answered with a project, so it is bound to none.
-    await waitFor(() => {
-      expect(list.textContent).toContain('Not used by a project');
-    });
+    const list = await screen.findByRole('list', { name: 'Tickets' });
+    expect(list.textContent).toContain('last call 5 m ago');
+    expect(list.textContent).toContain('Working');
+    // The server named no project, so it is used by none.
+    expect(list.textContent).toContain('Not used by a project');
   });
 
   it('tests a connection from the row’s menu and draws the provider’s words under the row', async () => {
@@ -304,6 +329,9 @@ describe('the integrations list', () => {
       credentials_readable: readable,
       credentials_consequence:
         readable === false ? 'the prompt files of every project are withheld' : null,
+      activity: { last_call: null, last_delivery_at: null },
+      current_health: { status: 'never_checked', basis: null, at: null },
+      used_by: [],
     });
     renderApp(
       recorder({
@@ -554,10 +582,8 @@ describe('the integrations list', () => {
       return base(input, init);
     }) as typeof fetch;
     renderApp(fetchImpl);
-    const list = await screen.findByRole('list', { name: 'Integrations' });
-    await waitFor(() => {
-      expect(list.textContent).toContain('Used by 1 project');
-    });
+    const list = await screen.findByRole('list', { name: 'Tickets' });
+    expect(list.textContent).toContain('Used by Acme service');
     const user = userEvent.setup();
     await choose(user, 'ACME Jira', 'Retire');
     const dialog = await screen.findByRole('dialog', { name: 'Retire ACME Jira?' });
@@ -612,6 +638,204 @@ describe('the integrations list', () => {
     expect(container.querySelector('[data-blankslate="actionable"] a')?.getAttribute('href')).toBe(
       '/integrations/new',
     );
+  });
+});
+
+/**
+ * S-25.3 (research/21 S09, product/08's 2026-11-06 amendment): who an integration is, whether it
+ * works now, and who uses it.
+ */
+describe('the integrations list — identity, health now and use (S-25.3)', () => {
+  const NOW_ISO = new Date(NOW).toISOString();
+  const DAYS_32 = new Date(NOW - 32 * 86_400_000).toISOString();
+  const of = (
+    id: string,
+    type: IntegrationSummary['type'],
+    provider: string,
+    name: string,
+    over: Partial<IntegrationSummary> = {},
+  ): IntegrationSummary => ({ ...JIRA, id, type, provider, name, config: {}, ...over });
+  const user = (n: number, name: string): IntegrationSummary['used_by'][number] => ({
+    project_id: `00000000-0000-4000-8000-0000000001${String(n).padStart(2, '0')}`,
+    project_key: `p${n}`,
+    project_name: name,
+    uses: [],
+  });
+
+  it('groups the rows by what they do for a project, in product/08’s order, each with its role glyph', async () => {
+    const { container } = renderApp(
+      recorder({
+        // Deliberately out of order: the screen orders the groups, not the read.
+        items: [
+          of('00000000-0000-4000-8000-0000000000c5', 'logs', 'loki', 'ACME Loki'),
+          of('00000000-0000-4000-8000-0000000000c3', 'communication', 'slack', 'ACME Slack'),
+          of('00000000-0000-4000-8000-0000000000c2', 'git', 'gitlab', 'ACME GitLab'),
+          of('00000000-0000-4000-8000-0000000000c4', 'errors', 'sentry', 'ACME Sentry'),
+          JIRA,
+        ],
+      }).fetchImpl,
+    );
+    await screen.findByRole('list', { name: 'Logs' });
+    expect(
+      [...container.querySelectorAll('[data-integration-group] h2')].map((h) => h.textContent),
+    ).toEqual(['Tickets', 'Code & merge requests', 'Chat', 'Errors', 'Logs']);
+    const glyphOf = (list: string) =>
+      screen
+        .getByRole('list', { name: list })
+        .querySelector('[data-provider-glyph]')
+        ?.getAttribute('data-provider-glyph');
+    expect(glyphOf('Tickets')).toBe('task_management');
+    expect(glyphOf('Code & merge requests')).toBe('git');
+    expect(glyphOf('Chat')).toBe('communication');
+    expect(glyphOf('Errors')).toBe('errors');
+    expect(glyphOf('Logs')).toBe('logs');
+    // A glyph per role and the provider's own name as text — never an <img> of a brand mark.
+    expect(container.querySelector('main img')).toBeNull();
+    expect(
+      screen
+        .getByRole('list', { name: 'Code & merge requests' })
+        .querySelector('[data-provider-icon]')?.textContent,
+    ).toBe('GitLab (gitlab.com and self-managed)');
+  });
+
+  it('carries the trademark line on the list and on an integration’s page', async () => {
+    const { container, unmount } = renderApp(recorder().fetchImpl);
+    await screen.findByRole('list', { name: 'Tickets' });
+    expect(container.querySelector('[data-trademark-notice]')?.textContent).toBe(
+      'GitLab, Jira, Slack, Sentry and Loki are trademarks of their respective owners; this project is not affiliated with or endorsed by them.',
+    );
+    unmount();
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
+    const page = renderApp(recorder().fetchImpl);
+    expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
+    expect(page.container.querySelector('[data-trademark-notice]')?.textContent).toContain(
+      'are trademarks of their respective owners',
+    );
+  });
+
+  it('names two projects and counts the rest: "Used by Alpha, Beta +2", each named one a link', async () => {
+    const used: IntegrationSummary = {
+      ...JIRA,
+      used_by: [user(1, 'Alpha'), user(2, 'Beta'), user(3, 'Gamma'), user(4, '<b>Delta</b>')],
+    };
+    renderApp(recorder({ items: [used] }).fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Tickets' });
+    const usedBy = list.querySelector('[data-used-by]') as HTMLElement;
+    expect(usedBy.textContent).toBe('Used by Alpha, Beta +2');
+    expect(
+      within(usedBy)
+        .getAllByRole('link')
+        .map((link) => link.getAttribute('href')),
+    ).toEqual(['/projects/p1', '/projects/p2']);
+    // The rest are named in the count's tooltip, as text.
+    const rest = usedBy.querySelector('[data-used-by-rest]');
+    expect(rest?.getAttribute('title')).toBe('Gamma, <b>Delta</b>');
+    expect(usedBy.querySelector('b')).toBeNull();
+    // Two projects are both named, with no count.
+    cleanup();
+    renderApp(
+      recorder({ items: [{ ...JIRA, used_by: [user(1, 'Alpha'), user(2, 'Beta')] }] }).fetchImpl,
+    );
+    const two = await screen.findByRole('list', { name: 'Tickets' });
+    expect(two.querySelector('[data-used-by]')?.textContent).toBe('Used by Alpha, Beta');
+  });
+
+  it('never reads a month-old passed test as healthy: Not checked recently, with Test again in the row', async () => {
+    const stale: IntegrationSummary = {
+      ...JIRA,
+      health: { status: 'ok', checked_at: DAYS_32, detail: null },
+      current_health: { status: 'not_checked_recently', basis: 'probe', at: DAYS_32 },
+    };
+    const { sent, fetchImpl } = recorder({ items: [stale] });
+    renderApp(fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Tickets' });
+    const row = within(list).getByRole('link', { name: 'ACME Jira' }).closest('li') as HTMLElement;
+    expect(row.textContent).toContain('Not checked recently · tested 32 d ago');
+    expect(row.textContent).not.toContain('Healthy');
+    expect(row.textContent).not.toContain('Working');
+    // A row command: the row keeps its stretched link, and the button is a control of its own.
+    expect(within(row).getByRole('link', { name: 'ACME Jira' }).hasAttribute('data-row-link')).toBe(
+      true,
+    );
+    const again = within(row).getByRole('button', { name: 'Test again' });
+    expect(again.closest('a')).toBeNull();
+    // Not a second primary on the screen.
+    expect(again.className).not.toContain('border-primary-line');
+    await userEvent.setup().click(again);
+    await waitFor(() => {
+      expect(
+        sent.filter((each) => each.url.endsWith(`/api/integrations/${INTEGRATION}/test`)),
+      ).toHaveLength(1);
+    });
+    expect(await screen.findByText('Last test: passed')).toBeTruthy();
+  });
+
+  it('offers Test again only on a stale row, and only to someone who may test', async () => {
+    const stale: IntegrationSummary = {
+      ...JIRA,
+      current_health: { status: 'not_checked_recently', basis: 'call', at: DAYS_32 },
+      activity: { last_call: { at: DAYS_32, ok: true }, last_delivery_at: null },
+    };
+    const working: IntegrationSummary = {
+      ...JIRA,
+      id: '00000000-0000-4000-8000-0000000000d2',
+      name: 'Fresh Jira',
+      current_health: { status: 'working', basis: 'delivery', at: NOW_ISO },
+      activity: { last_call: null, last_delivery_at: NOW_ISO },
+    };
+    renderApp(recorder({ items: [stale, working] }).fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Tickets' });
+    expect(
+      [...list.querySelectorAll('[data-test-again]')].map((b) => b.getAttribute('data-test-again')),
+    ).toEqual([INTEGRATION]);
+    expect(list.textContent).toContain('Working · last delivery just now');
+    cleanup();
+    renderApp(recorder({ items: [stale], canWrite: false }).fetchImpl);
+    const maintainer = await screen.findByRole('list', { name: 'Tickets' });
+    expect(maintainer.textContent).toContain('Not checked recently');
+    expect(within(maintainer).queryByRole('button', { name: 'Test again' })).toBeNull();
+  });
+
+  it('reads a probe that passed with warnings as a pass on the row and on the page', async () => {
+    // Review of PR #75: one meaning in both places — *Passed with warnings*, never Failing.
+    const at = new Date(NOW - 2 * 3_600_000).toISOString();
+    const warned: IntegrationSummary = {
+      ...JIRA,
+      health: { status: 'degraded', checked_at: at, detail: null },
+      current_health: { status: 'working', basis: 'probe', at },
+    };
+    const { unmount } = renderApp(recorder({ items: [warned] }).fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Tickets' });
+    expect(list.textContent).toContain('Working · tested with warnings 2 h ago');
+    expect(list.textContent).not.toContain('failed');
+    expect(list.textContent).not.toContain('Failing');
+    unmount();
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
+    const page = renderApp(recorder({ items: [warned] }).fetchImpl);
+    expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
+    expect(page.container.querySelector('[data-health-fact="probe"]')?.textContent).toBe(
+      'Passed with warnings 2 h ago',
+    );
+    expect(page.container.textContent).not.toContain('test failed');
+  });
+
+  it('says a failing call in words, from the server’s verdict', async () => {
+    const failing: IntegrationSummary = {
+      ...JIRA,
+      activity: {
+        last_call: { at: new Date(NOW - 2 * 3_600_000).toISOString(), ok: false },
+        last_delivery_at: null,
+      },
+      current_health: {
+        status: 'failing',
+        basis: 'call',
+        at: new Date(NOW - 2 * 3_600_000).toISOString(),
+      },
+    };
+    renderApp(recorder({ items: [failing] }).fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Tickets' });
+    expect(list.textContent).toContain('Failing · last call failed 2 h ago');
+    expect(list.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Failing');
   });
 });
 
@@ -671,16 +895,25 @@ describe('an integration’s page', () => {
     expect(container.querySelector('[data-copyable-url]')).toBeNull();
   });
 
-  it('shows the overview: human labels with their keys, the binding projects, and one primary', async () => {
+  it('shows the overview: human labels only, each project’s use, and one primary', async () => {
     window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
     const { sent, fetchImpl } = recorder({ bound: [INTEGRATION] });
     const { container } = renderApp(fetchImpl);
     expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
     expect(screen.getByText('Site URL')).toBeTruthy();
-    expect(screen.getByText('site_url')).toBeTruthy();
+    // S-25.3 (research/21 S10): the raw key is not on the page, beside its label or anywhere.
+    expect(screen.queryByText('site_url')).toBeNull();
+    expect(container.textContent).not.toContain('site_url');
+    expect(container.textContent).toContain('Secrets are stored encrypted and never shown.');
+    expect(container.textContent).not.toContain('sealed');
     expect(screen.getByText('https://acme.atlassian.example.test')).toBeTruthy();
-    expect((await screen.findByRole('link', { name: 'Acme service' })).getAttribute('href')).toBe(
+    const projects = screen.getByRole('list', { name: 'Projects that use it' });
+    expect(within(projects).getByRole('link', { name: 'Acme service' }).getAttribute('href')).toBe(
       '/projects/acme/settings',
+    );
+    // What the project uses it for, in the server's words and values.
+    expect(projects.querySelector('[data-integration-user="acme"]')?.textContent).toBe(
+      'Acme service · Tickets from AUT · Picked up with label agentic',
     );
     const primaries = [...container.querySelectorAll('a, button')].filter((element) =>
       element.className.includes('border-primary-line'),
@@ -716,7 +949,8 @@ describe('an integration’s page', () => {
     expect(container.querySelector('[data-config-undeclared="legacy_token"]')?.textContent).toBe(
       'Not a field this provider declares; value hidden.',
     );
-    expect(screen.getByText('legacy_token')).toBeTruthy();
+    // Its label, not its raw key (S-25.3), and never its value.
+    expect(screen.getByText('Legacy token')).toBeTruthy();
     expect(container.querySelector('[data-config-undeclared="host"]')).not.toBeNull();
     expect(document.body.innerHTML).not.toContain(PLANTED);
     expect(document.body.innerHTML).not.toContain('old.example.test');
@@ -725,7 +959,9 @@ describe('an integration’s page', () => {
   it('lists the refused deliveries in their tab, the provider’s words as text', async () => {
     window.history.pushState({}, '', `/integrations/${INTEGRATION}?tab=refused-deliveries`);
     const { container } = renderApp(recorder().fetchImpl);
-    const list = await screen.findByRole('list', { name: 'Refused deliveries' });
+    // S-25.3: the tab and its list read "Rejected webhooks"; the address is unchanged.
+    expect(await screen.findByRole('link', { name: 'Rejected webhooks' })).toBeTruthy();
+    const list = await screen.findByRole('list', { name: 'Rejected webhooks' });
     expect(list.textContent).toContain('unmapped_identity: <b>U123</b>');
     expect(list.querySelector('b')).toBeNull();
     expect(list.textContent).toContain('slack:U123');
@@ -736,6 +972,57 @@ describe('an integration’s page', () => {
     window.history.pushState({}, '', '/integrations/00000000-0000-4000-8000-0000000000ff');
     renderApp(recorder().fetchImpl);
     expect(await screen.findByText('No such integration')).toBeTruthy();
+  });
+
+  it('shows the evidence its health was read from, each with its age (S-25.3)', async () => {
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
+    const read: IntegrationSummary = {
+      ...JIRA,
+      health: {
+        status: 'ok',
+        checked_at: new Date(NOW - 32 * 86_400_000).toISOString(),
+        detail: null,
+      },
+      activity: {
+        last_call: { at: new Date(NOW - 10 * 60_000).toISOString(), ok: false },
+        last_delivery_at: new Date(NOW - 3 * 3_600_000).toISOString(),
+      },
+      current_health: {
+        status: 'degraded',
+        basis: 'call',
+        at: new Date(NOW - 10 * 60_000).toISOString(),
+      },
+    };
+    const { container } = renderApp(recorder({ items: [read] }).fetchImpl);
+    expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
+    const fact = (name: string) =>
+      container.querySelector(`[data-health-fact="${name}"]`)?.textContent;
+    expect(fact('call')).toBe('Failed 10 m ago');
+    expect(fact('delivery')).toBe('Received 3 h ago');
+    expect(fact('probe')).toBe('Passed 32 d ago');
+    expect(container.textContent).not.toContain('Healthy');
+    expect(container.textContent).toContain('Some calls failing');
+    expect(container.querySelector('[data-health-stale]')).toBeNull();
+  });
+
+  it('says a stale integration’s health is not known now, naming the bound', async () => {
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
+    const stale: IntegrationSummary = {
+      ...JIRA,
+      current_health: {
+        status: 'not_checked_recently',
+        basis: 'call',
+        at: '2026-09-01T09:00:00.000Z',
+      },
+      activity: { last_call: { at: '2026-09-01T09:00:00.000Z', ok: true }, last_delivery_at: null },
+    };
+    const { container } = renderApp(recorder({ items: [stale] }).fetchImpl);
+    expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
+    expect(container.querySelector('[data-health-stale]')?.textContent).toContain(
+      'in the last 24 hours',
+    );
+    expect(container.querySelector('[data-health-fact="delivery"]')?.textContent).toBe('None yet');
+    expect(container.querySelector('[data-health-fact="probe"]')?.textContent).toBe('Never tested');
   });
 
   it('offers no write on a retired integration’s page', async () => {

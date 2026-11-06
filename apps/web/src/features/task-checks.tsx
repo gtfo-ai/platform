@@ -1,6 +1,7 @@
 /**
  * The task page's right rail (S-23.9b, research/19 § 5.2 "Task"): **Checks** as a GitHub merge box,
- * then the cost against the task's cap, then the links.
+ * then the cost against the task's cap. The ticket and merge request links are the header's since
+ * S-25.4 (product/10's Header amendment), beside the key.
  *
  * **What the Checks box shows, and what it cannot.** product/10:38 lists **eleven** merge-readiness
  * checks — acceptance criteria met, CI green, rebase status, review threads open/resolved, business
@@ -19,7 +20,10 @@
  *
  * **The summary line** counts what the rows say and nothing else (`checksSummary`): a row that
  * needs a person, or — when none does — whether every required row passed. *Not reached*, *not
- * recorded* and *unavailable* are never a pass.
+ * recorded* and *unavailable* are never a pass. **It counts checks, not the callout's items**
+ * (S-25.4, product/10's Checks amendment): *Questions pending* and *Approvals pending* stay rows —
+ * product/10:38 lists them — but they are the needs-you callout's, so the line leaves them out of
+ * its count and says they are above instead of reading "3 checks need you" for one question.
  */
 import type { TaskDetailResponse, TaskRecord } from '@platform/contracts';
 import { acceptanceVerdictDataSchema, reviewVerdictDataSchema } from '@platform/contracts';
@@ -77,7 +81,12 @@ export interface CheckRowData {
   readonly basis?: ReactNode;
   /** Whether the summary's *"All required checks pass"* waits on it. */
   readonly required: boolean;
+  /** A question or an approval: the callout's item, never counted as a check (S-25.4). */
+  readonly callout?: boolean;
 }
+
+/** A callout item's row value: the count, and where it is answered when there is one. */
+const calloutItemValue = (count: number): string => (count === 0 ? '0' : `${count} · see above`);
 
 /**
  * A row: icon, label, value — the label next to the value with nothing between them, so a reader
@@ -353,18 +362,22 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
     {
       id: 'questions',
       label: 'Questions pending',
-      value: String(openQuestions),
+      value: calloutItemValue(openQuestions),
       status: openQuestions > 0 ? 'needs_you' : 'success',
-      definition: 'Open questions blocking or accompanying this task.',
+      definition:
+        'Open questions blocking or accompanying this task. Each one is answered in the box above, under the header.',
       required: true,
+      callout: true,
     },
     {
       id: 'approvals',
       label: 'Approvals pending',
-      value: String(pendingApprovals),
+      value: calloutItemValue(pendingApprovals),
       status: pendingApprovals > 0 ? 'needs_you' : 'success',
-      definition: 'Plan, budget, knowledge or rework approvals awaiting a maintainer.',
+      definition:
+        'Plan, budget, knowledge or rework approvals awaiting a maintainer. Each one is decided in the box above, under the header.',
       required: true,
+      callout: true,
     },
     {
       id: 'coverage',
@@ -448,6 +461,11 @@ const ChecksBox = ({ detail }: { readonly detail: TaskDetailResponse }): ReactEl
           <StatusIcon status={summary.status} decorative />
           <span>{summary.text}</span>
         </p>
+        {summary.callout === null ? null : (
+          <p data-checks-callout="" className="text-xs text-fg-muted">
+            {summary.callout}
+          </p>
+        )}
       </div>
       <ul aria-label="Merge-readiness checks" className="divide-y divide-line">
         {rows.map((row) => (
@@ -534,16 +552,6 @@ const CostBox = ({ detail }: { readonly detail: TaskDetailResponse }): ReactElem
   );
 };
 
-/** The ticket and the merge request: provider-supplied URLs, through `ExternalLink` (`safeHref`). */
-const LinksBox = ({ task }: { readonly task: TaskRecord }): ReactElement => (
-  <Card className="flex flex-col gap-2 text-sm">
-    <ExternalLink url={task.ticket.url} label="Ticket" className="text-link underline" />
-    {task.mr_ref === null || task.mr_ref === undefined ? null : (
-      <ExternalLink url={task.mr_ref.url} label="Merge request" className="text-link underline" />
-    )}
-  </Card>
-);
-
 export const TaskChecksRail = ({
   detail,
 }: {
@@ -552,6 +560,5 @@ export const TaskChecksRail = ({
   <aside aria-label="Checks and cost" className="flex min-w-0 flex-col gap-3">
     <ChecksBox detail={detail} />
     <CostBox detail={detail} />
-    <LinksBox task={detail.task} />
   </aside>
 );

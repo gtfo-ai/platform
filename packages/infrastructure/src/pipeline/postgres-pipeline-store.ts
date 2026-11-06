@@ -70,7 +70,9 @@ import type {
 } from '@platform/contracts';
 import {
   acceptanceCriterionSchema,
+  approvalReasonsSchema,
   artifactTypeSchema,
+  budgetApprovalSubjectDetailSchema,
   contextPackRecordSchema,
   mergeRequestRefSchema,
   pausedBudgetScopeSchema,
@@ -2199,8 +2201,9 @@ export const createPostgresPipelineStore = (
   const approvals: ApprovalRepository = {
     insert: async (tx, stored) => {
       await sqlOf(tx).query(
-        `insert into approvals (id, task_id, kind, status, requested_at, deadline_at, stage, attempt)
-         values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        `insert into approvals (id, task_id, kind, status, requested_at, deadline_at, stage, attempt,
+                                subject_artifact_id, subject_detail, reasons)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb)`,
         [
           stored.approval.id,
           stored.approval.taskId,
@@ -2210,6 +2213,15 @@ export const createPostgresPipelineStore = (
           stored.approval.deadlineAt,
           stored.stage,
           stored.attempt,
+          // TD-035: what was asked about and why, written here once and never by `save`. Parsed on
+          // the way in as on the way out, so the column only ever holds the closed vocabulary.
+          stored.subjectArtifactId ?? null,
+          stored.subjectDetail === undefined || stored.subjectDetail === null
+            ? null
+            : JSON.stringify(budgetApprovalSubjectDetailSchema.parse(stored.subjectDetail)),
+          stored.reasons === undefined || stored.reasons === null
+            ? null
+            : JSON.stringify(approvalReasonsSchema.parse(stored.reasons)),
         ],
       );
     },
@@ -2266,6 +2278,39 @@ export const createPostgresPipelineStore = (
       );
       const row = rows[0];
       return row === undefined ? null : toStoredApproval(row);
+    },
+    planSubject: async (tx, approvalId) => {
+      // TD-035 decisions 5 and 6: the recorded plan, else the one exact chain for a pre-0103 row —
+      // `artifacts.produced_by_run_id → runs.task_stage_id → task_stages(task, stage, attempt)` of
+      // the approval, with exactly one `ImplementationPlan` at its end. The task read
+      // (`apps/server/src/queries/pipeline-queries.ts`, `approvalViewsFor`) derives the same way, and
+      // `test/integration/server/approval-subject.integration.test.ts` holds the two to one answer.
+      const { rows } = await sqlOf(tx).query<{
+        recorded: string | null;
+        derived: string | null;
+      }>(
+        `select a.subject_artifact_id as recorded,
+                (select case when count(*) = 1 then min(ar.id::text) end
+                   from artifacts ar
+                   join runs r on r.id = ar.produced_by_run_id
+                   join task_stages ts on ts.id = r.task_stage_id
+                  where ar.task_id = a.task_id
+                    and ar.type = 'ImplementationPlan'
+                    and ts.task_id = a.task_id
+                    and ts.stage = a.stage
+                    and ts.attempt = a.attempt) as derived
+           from approvals a
+          where a.id = $1 and a.kind = 'plan'`,
+        [approvalId],
+      );
+      const row = rows[0];
+      if (row === undefined) {
+        return null;
+      }
+      if (row.recorded !== null) {
+        return { artifactId: row.recorded as Id, basis: 'recorded' };
+      }
+      return row.derived === null ? null : { artifactId: row.derived as Id, basis: 'derived' };
     },
   };
 
@@ -2838,7 +2883,8 @@ const toQuestion = (row: QuestionRow): Question => ({
 });
 
 const APPROVAL_SELECT = `select a.id, a.task_id, a.kind, a.status, a.requested_at, a.deadline_at,
-    a.decided_by_user_id, a.decided_at, a.reason, a.stage, a.attempt, a.reminders_sent, t.project_id
+    a.decided_by_user_id, a.decided_at, a.reason, a.stage, a.attempt, a.reminders_sent, t.project_id,
+    a.subject_artifact_id, a.subject_detail, a.reasons
   from approvals a join tasks t on t.id = a.task_id`;
 
 interface ApprovalRow extends Record<string, unknown> {
@@ -2855,6 +2901,9 @@ interface ApprovalRow extends Record<string, unknown> {
   stage: string | null;
   attempt: number | null;
   reminders_sent: number;
+  subject_artifact_id: string | null;
+  subject_detail: unknown;
+  reasons: unknown;
 }
 
 const toStoredApproval = (row: ApprovalRow): StoredApproval => ({
@@ -2874,6 +2923,13 @@ const toStoredApproval = (row: ApprovalRow): StoredApproval => ({
   },
   stage: row.stage,
   attempt: row.attempt,
+  // Refused rather than defaulted: a value outside the vocabulary is a row this build did not write.
+  subjectArtifactId: row.subject_artifact_id as Id | null,
+  subjectDetail:
+    row.subject_detail === null
+      ? null
+      : budgetApprovalSubjectDetailSchema.parse(row.subject_detail),
+  reasons: row.reasons === null ? null : approvalReasonsSchema.parse(row.reasons),
 });
 
 /** Run statuses that hold a slot against `max_parallel_runs`, for a caller that needs the list. */

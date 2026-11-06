@@ -25,7 +25,7 @@ import { boundProjectReader } from '../../../apps/server/src/onboarding.js';
 import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
 import {
   findIntegrationRow,
-  toIntegrationSummary,
+  integrationSummaryOf,
 } from '../../../apps/server/src/queries/integration-queries.js';
 import {
   createIntegration,
@@ -191,7 +191,7 @@ describe('declaring a static run credential (WP-137, TD-028 decision 13)', () =>
     );
     const row = await findIntegrationRow(db, id);
     if (row === undefined) throw new Error('the integration row exists');
-    const summary = toIntegrationSummary(row, gitlab, null);
+    const summary = await integrationSummaryOf(db, row, null, new Date());
     expect(summary.config).toMatchObject({ run_credential: 'static' });
     expect(JSON.stringify(summary)).not.toContain(RUN_TOKEN);
     expect(JSON.stringify(summary)).not.toContain('run_token"');

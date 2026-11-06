@@ -433,7 +433,11 @@ describe('the project layout route', () => {
     start({ projects: [project(1, { readiness_level: 3 })], canStart: true }, '/projects/p1');
     const heading = await screen.findByRole('heading', { level: 1 });
     expect(heading.textContent).toBe('Project 1p1');
-    expect(screen.getByText('L3 Agent-ready')).toBeTruthy();
+    // product/17's 2026-11-06 amendment: the header's badge says what agents may do, and opens the
+    // level's definition (S-25.2).
+    expect(
+      screen.getByRole('button', { name: 'Readiness: Agents plan on their own' }).textContent,
+    ).toBe('Agents plan on their own');
     const tabs = screen.getByRole('navigation', { name: 'Project' });
     const links = within(tabs).getAllByRole('link');
     expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
@@ -548,7 +552,11 @@ describe('the projects list', () => {
       '/projects/p1',
     );
     expect(first.textContent).toContain('p1');
-    expect(first.textContent).toContain('L0 Unverified');
+    expect(
+      within(first)
+        .getByRole('button', { name: 'Readiness: Plans need your OK' })
+        .getAttribute('data-readiness-tone'),
+    ).toBe('neutral');
     expect(first.textContent).toContain('4 open');
     expect(first.textContent).toContain('$12.50');
     expect((rows[1] as HTMLElement).textContent).toContain('paused');

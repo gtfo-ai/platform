@@ -820,7 +820,7 @@ export const registerCommandRoutes = async (
       schema: {
         summary: 'Approve or reject a gate the pipeline is waiting on',
         description:
-          'BD-006’s plan approval today; the budget approval of WP-28 flows through the same route, and the approval’s kind decides which capability the aggregate requires. An approval that has already been decided answers 409.',
+          'BD-006’s plan approval today; the budget approval of WP-28 flows through the same route, and the approval’s kind decides which capability the aggregate requires. An approval that has already been decided answers 409. Approving a **plan** requires `subject_artifact_id`, the plan the person was shown (TD-035): an absent or different one answers 409 `approval_subject_mismatch`, a plan that is no longer the task’s latest 409 `approval_subject_superseded`, and an approval that recorded no plan 409 `approval_subject_unrecorded` (it can still be rejected).',
         tags: ['tasks'],
         params: approvalParamsSchema,
         body: decideApprovalRequestSchema,
@@ -858,6 +858,9 @@ export const registerCommandRoutes = async (
             userId,
             role: request.effectiveRole ?? 'viewer',
             ...(body.reason === undefined ? {} : { reason: body.reason }),
+            ...(body.subject_artifact_id === undefined
+              ? {}
+              : { subjectArtifactId: body.subject_artifact_id }),
           });
         },
         answer: async ({ performed }) => ({ ...(await positionOf(taskId)), performed }),

@@ -16,6 +16,7 @@
  * refreshes the boxes without a reload. Every string a person or an agent wrote — a question, a
  * progress line, a ticket title, a project name, a model id — renders through `ui/untrusted.tsx`.
  */
+import type { ApprovalView } from '@platform/contracts';
 import { RepoIcon } from '@primer/octicons-react/RepoIcon';
 import { Link } from '@tanstack/react-router';
 import { Fragment, type ReactElement, type ReactNode } from 'react';
@@ -65,6 +66,8 @@ import { StatusIcon } from '../ui/status.js';
 import { type Step, Stepper } from '../ui/stepper.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { ApprovalSummary } from './approval-summary.js';
+import { reviewVerb } from './approval-text.js';
 import {
   type BlockedWorker,
   PLATFORM_TICKET_PROVIDER,
@@ -258,6 +261,8 @@ const Where = ({
 interface NeedsYouItem {
   readonly id: string;
   readonly kind: 'question' | 'approval' | 'task';
+  /** For an approval row: the approval, so the row names its subject and its verb (S-25.1). */
+  readonly approval?: ApprovalView;
   readonly taskId: string;
   readonly projectId: string | null;
   readonly ticket: string | null;
@@ -267,11 +272,16 @@ interface NeedsYouItem {
   readonly at: string;
 }
 
-const ACTION_WORD: Readonly<Record<NeedsYouItem['kind'], string>> = {
-  question: 'Answer',
-  approval: 'Approve',
-  task: 'Open',
-};
+/**
+ * The row's verb. An approval's is *Review plan* (S-25.1, BD-006's 2026-11-06 amendment): the row
+ * opens the task, where the plan is on screen beside *Approve* — it never approves in one click.
+ */
+const actionWord = (item: NeedsYouItem): string =>
+  item.kind === 'question'
+    ? 'Answer'
+    : item.kind === 'approval'
+      ? reviewVerb(item.approval?.kind ?? 'plan')
+      : 'Open';
 
 const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }) => {
   const inbox = useInbox();
@@ -302,6 +312,7 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
       (approval): NeedsYouItem => ({
         id: `a:${approval.id}`,
         kind: 'approval',
+        approval,
         taskId: approval.task_id,
         projectId: null,
         ticket: null,
@@ -384,7 +395,13 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
             <ListRow
               key={item.id}
               leading={<StatusIcon status="needs_you" />}
-              title={<UntrustedText value={item.text} className="line-clamp-2" />}
+              title={
+                item.approval === undefined ? (
+                  <UntrustedText value={item.text} className="line-clamp-2" />
+                ) : (
+                  <ApprovalSummary approval={item.approval} className="line-clamp-2" />
+                )
+              }
               meta={
                 <span className="inline-flex flex-wrap items-center gap-1.5">
                   <Where project={projectKey} ticket={ticket} stage={item.stage} />
@@ -400,7 +417,7 @@ const NeedsYouBox = ({ projects }: { readonly projects: readonly ProjectItem[] }
                   params={{ taskId: item.taskId }}
                   {...rowLink(buttonClassName('default', 'sm'))}
                 >
-                  {ACTION_WORD[item.kind]}
+                  {actionWord(item)}
                   {/* Plain text, not `UntrustedText`: its links would nest inside this one. */}
                   <span className="sr-only">{` ${sanitiseUntrusted(ticket ?? 'this task')}`}</span>
                 </Link>
@@ -585,7 +602,7 @@ const ProjectsBox = ({
             }
             trailing={
               <>
-                <ReadinessLabel level={project.readiness_level} />
+                <ReadinessLabel level={project.readiness_level} project={project} />
                 <span title="Tasks in this project that are not done or cancelled.">
                   {`${formatInteger(project.open_tasks)} open`}
                 </span>

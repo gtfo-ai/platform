@@ -20,16 +20,11 @@
  * so each submit button is disabled until its own contract is satisfiable. A dialog closes when its
  * command was **accepted**; a refusal stays in the dialog, beside the fields that caused it.
  */
-import type {
-  ApprovalRecord,
-  RetryStageResponse,
-  TakenOver,
-  TaskDetailResponse,
-} from '@platform/contracts';
+import type { RetryStageResponse, TakenOver, TaskDetailResponse } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
 import type { useTakeOverCommands, useTaskCommands } from '../app/queries.js';
 import { Dialog } from '../ui/dialog.js';
-import { APPROVAL_KIND_LABEL, stageLabel } from '../ui/humanize.js';
+import { stageLabel } from '../ui/humanize.js';
 import { Button, ErrorNotice, Field, formatUsd } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { HandBackForm, TakeOverForm } from './take-over.js';
@@ -42,8 +37,7 @@ export type TaskDialog =
   | 'cancel'
   | 'take_over'
   | 'hand_back'
-  | 'raise_budget'
-  | 'approve';
+  | 'raise_budget';
 
 type TaskCommands = ReturnType<typeof useTaskCommands>;
 type TakeOverCommands = ReturnType<typeof useTakeOverCommands>;
@@ -263,65 +257,6 @@ const RaiseTaskCap = ({
   );
 };
 
-/** Approve or reject the first pending approval, with an optional reason (the header's primary). */
-const ApprovalDecision = ({
-  approval,
-  commands,
-  onDone,
-}: {
-  readonly approval: ApprovalRecord;
-  readonly commands: TaskCommands;
-  readonly onDone: () => void;
-}): ReactElement => {
-  const [reason, setReason] = useState('');
-  const decide = (decision: 'approve' | 'reject'): void => {
-    commands.decide.mutate(
-      {
-        approvalId: approval.id,
-        decision,
-        ...(reason.trim() === '' ? {} : { reason: reason.trim() }),
-      },
-      { onSuccess: onDone },
-    );
-  };
-  return (
-    <div className="flex flex-col gap-2">
-      <input
-        aria-label="Decision reason (optional)"
-        value={reason}
-        onChange={(event) => {
-          setReason(event.target.value);
-        }}
-        placeholder="Why (optional, recorded with the decision)"
-        className={INPUT}
-      />
-      <div className="flex justify-end gap-2">
-        <Button
-          tone="danger"
-          disabled={commands.decide.isPending}
-          onClick={() => {
-            decide('reject');
-          }}
-        >
-          Reject
-        </Button>
-        <Button
-          tone="primary"
-          disabled={commands.decide.isPending}
-          onClick={() => {
-            decide('approve');
-          }}
-        >
-          Approve
-        </Button>
-      </div>
-      {commands.decide.isError ? (
-        <ErrorNotice title="That decision was refused." error={commands.decide.error} />
-      ) : null}
-    </div>
-  );
-};
-
 export const TaskDialogs = ({
   open,
   onOpenChange,
@@ -329,7 +264,6 @@ export const TaskDialogs = ({
   capUsd,
   takenOver,
   merged,
-  approval,
   form,
   commands,
   takeOverCommands,
@@ -340,8 +274,6 @@ export const TaskDialogs = ({
   readonly capUsd: number;
   readonly takenOver: TakenOver | null;
   readonly merged: boolean;
-  /** The pending approval the header's *Approve…* decides — the oldest one. */
-  readonly approval: ApprovalRecord | null;
   readonly form: StageCommandForm;
   readonly commands: TaskCommands;
   readonly takeOverCommands: TakeOverCommands;
@@ -516,12 +448,6 @@ export const TaskDialogs = ({
       <Dialog {...shown('raise_budget')} title="Raise this task's cap">
         <RaiseTaskCap capUsd={capUsd} commands={commands} onDone={close} />
       </Dialog>
-
-      {approval === null ? null : (
-        <Dialog {...shown('approve')} title={APPROVAL_KIND_LABEL[approval.kind]}>
-          <ApprovalDecision approval={approval} commands={commands} onDone={close} />
-        </Dialog>
-      )}
     </>
   );
 };

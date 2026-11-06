@@ -393,6 +393,9 @@ const pickerIntegrations = {
       retired_at: null,
       credentials_readable: null,
       credentials_consequence: null,
+      activity: { last_call: null, last_delivery_at: null },
+      current_health: { status: 'never_checked', basis: null, at: null },
+      used_by: [],
     },
     {
       id: '00000000-0000-4000-8000-0000000000f2',
@@ -405,6 +408,9 @@ const pickerIntegrations = {
       retired_at: '2026-09-30T09:00:00.000Z',
       credentials_readable: null,
       credentials_consequence: null,
+      activity: { last_call: null, last_delivery_at: null },
+      current_health: { status: 'never_checked', basis: null, at: null },
+      used_by: [],
     },
   ],
 };
@@ -760,7 +766,7 @@ describe('the New project wizard', () => {
     await waitFor(() => {
       expect(set.textContent).toContain('Acme Jira, Acme GitLab');
     });
-    expect(set.textContent).toContain('Level 1 — L1 Basic');
+    expect(set.textContent).toContain('Big plans need your OK (level 1, Basic)');
     expect(set.textContent).toContain('Supervised');
     expect(set.textContent).toContain('1 drafted page');
     expect(set.textContent).toContain('Skipped — it can be answered later from the settings');

@@ -19,6 +19,7 @@
  * `pauseTaskCommand` once, with this task and this user, and wrote one audit row" is this file's.
  */
 import {
+  ApprovalSubjectRefusedError,
   CommandsUnavailableError,
   IterationLimitReachedError,
   ModelNotListedError,
@@ -690,6 +691,41 @@ describe('a return out of needs_human (backlog 483)', () => {
   }
 });
 
+describe('a plan approve carries the plan it was shown (TD-035)', () => {
+  const PLAN = '00000000-0000-4000-8000-0000000000d7';
+
+  it('hands the echoed plan to the command, and nothing when the body names none', async () => {
+    const echoed = await post(
+      world,
+      `/api/tasks/${TASK}/approvals/${APPROVAL}/decide`,
+      { decision: 'approve', subject_artifact_id: PLAN },
+      'decide-echo-1',
+    );
+    expect(echoed.status, JSON.stringify(echoed.body)).toBe(200);
+    const rejected = await post(
+      world,
+      `/api/tasks/${TASK}/approvals/${APPROVAL}/decide`,
+      { decision: 'reject' },
+      'decide-echo-2',
+    );
+    expect(rejected.status, JSON.stringify(rejected.body)).toBe(200);
+    const decides = world.calls.filter((call) => call.name === 'decide');
+    expect(decides.map((call) => call.input.subjectArtifactId)).toEqual([PLAN, undefined]);
+    expect(Object.hasOwn(decides[1]?.input ?? {}, 'subjectArtifactId')).toBe(false);
+  });
+
+  it('refuses an echo that is not an id, before anything performs', async () => {
+    const reply = await post(
+      world,
+      `/api/tasks/${TASK}/approvals/${APPROVAL}/decide`,
+      { decision: 'approve', subject_artifact_id: 'the latest plan' },
+      'decide-echo-3',
+    );
+    expect(reply.status).toBe(400);
+    expect(world.calls).toEqual([]);
+  });
+});
+
 describe('what each refusal maps to', () => {
   const cases: readonly {
     readonly error: Error;
@@ -784,6 +820,18 @@ describe('what each refusal maps to', () => {
       status: 409,
       code: 'model_not_listed',
     },
+    // TD-035 decision 6: a plan is approved only as the plan the person was shown, each case named.
+    ...(
+      [
+        'approval_subject_mismatch',
+        'approval_subject_superseded',
+        'approval_subject_unrecorded',
+      ] as const
+    ).map((code) => ({
+      error: new ApprovalSubjectRefusedError(code, `refused: ${code}`),
+      status: 409,
+      code,
+    })),
   ];
 
   for (const entry of cases) {

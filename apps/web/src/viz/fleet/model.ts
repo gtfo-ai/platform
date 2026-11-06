@@ -35,6 +35,7 @@
 import type {
   AgentRole,
   AgentsResponse,
+  ApprovalKind,
   InboxResponse,
   RunRecord,
   TaskState,
@@ -159,6 +160,8 @@ export interface FleetNeed {
   readonly at: string;
   readonly ticketKey: string | null;
   readonly projectKey: string | null;
+  /** An approval's kind, so the row says *Review plan* rather than a one-click verb (S-25.1). */
+  readonly approvalKind?: ApprovalKind;
 }
 
 export interface FleetCounts {
@@ -431,6 +434,7 @@ export const fleetOf = (input: FleetInput): Fleet => {
         (approval): FleetNeed => ({
           id: `approval:${approval.id}`,
           kind: 'approval',
+          approvalKind: approval.kind,
           taskId: approval.task_id,
           runId: null,
           stage: null,

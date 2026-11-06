@@ -338,6 +338,104 @@ export const humanTimeKindSchema = z.enum(['review', 'question', 'approval', 'st
  */
 export const estimateBasisSchema = z.enum(['project_history', 'org_history', 'unknown']);
 
+// ── What an approval approves, and why it was asked (TD-035, BD-006's 2026-11-06 amendment) ──
+
+/** Where a plan-approval policy came from: the project's dial, or a stage's own override. */
+export const approvalPolicySourceSchema = z.enum(['dial', 'stage_override']);
+
+/**
+ * One reason an approval was asked — a **closed vocabulary** the UI words and links (TD-035
+ * decision 1 and 7). No server-written prose: a free-text reason could be neither worded nor linked
+ * to the setting that retires it.
+ *
+ * - `risk_class` — the plan touches these risk classes (sorted), and the dial asks for them;
+ * - `probation` — the project is on probation: `completed` of its first `of` tasks are done;
+ * - `policy_always` — the plan-approval policy is `always`, set by the dial or a stage override;
+ * - `size_at_or_above` — the plan's size reached the threshold; `source` is `stage_override` when a
+ *   stage override set the threshold or turned `above_size` on for the stage (that is what has to
+ *   change), `dial` otherwise;
+ * - `estimate_above_threshold` — the budget gate's: the estimate is above the project's threshold.
+ */
+export const approvalReasonSchema = z.discriminatedUnion('code', [
+  z.strictObject({
+    code: z.literal('risk_class'),
+    classes: z.array(nonEmptyStringSchema).min(1),
+  }),
+  z.strictObject({
+    code: z.literal('probation'),
+    completed: z.int().nonnegative(),
+    of: z.int().nonnegative(),
+  }),
+  z.strictObject({
+    code: z.literal('policy_always'),
+    source: approvalPolicySourceSchema,
+  }),
+  z.strictObject({
+    code: z.literal('size_at_or_above'),
+    size: sizeSchema,
+    threshold: sizeSchema,
+    source: approvalPolicySourceSchema,
+  }),
+  z.strictObject({
+    code: z.literal('estimate_above_threshold'),
+    estimate_usd: usdSchema,
+    threshold_usd: usdSchema,
+  }),
+]);
+
+/** The reasons an approval stores: a non-empty list (an empty one would mean "no approval"). */
+export const approvalReasonsSchema = z.array(approvalReasonSchema).min(1);
+
+/**
+ * The budget gate's subject, fixed when it asked (TD-035 decision 2): the estimate, the threshold it
+ * crossed, and what the estimate rests on. Stored as `approvals.subject_detail`.
+ */
+export const budgetApprovalSubjectDetailSchema = z.strictObject({
+  estimate_usd: usdSchema,
+  threshold_usd: usdSchema,
+  estimate_basis: estimateBasisSchema.nullable(),
+  estimate_samples: z.int().nonnegative().nullable(),
+});
+
+/**
+ * What an approval approves, as the task and inbox reads publish it (TD-035 decision 4).
+ *
+ * A **plan** is the `ImplementationPlan` artifact the gate loaded — artifacts are immutable, so its
+ * version is a fact — with the stage attempt that asked. `basis` says how the read knows:
+ * `recorded` when the gate stored it (migration 0103 on), `derived` when the read pinned it for an
+ * older row through the one exact chain TD-035 decision 5 allows. A **budget** is the snapshot of
+ * the figures. A subject the read cannot state is `null` on the approval, never a guess.
+ */
+export const approvalSubjectSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('plan'),
+    artifact_id: idSchema,
+    artifact_version: z.int().positive(),
+    stage: stageIdSchema,
+    attempt: z.int().positive(),
+    basis: z.enum(['recorded', 'derived']),
+  }),
+  z.strictObject({
+    kind: z.literal('budget'),
+    ...budgetApprovalSubjectDetailSchema.shape,
+  }),
+]);
+
+/**
+ * An approval as the **task** and **inbox** reads publish it: the event's record plus its subject
+ * and reasons (TD-035 decision 4). `null` on either means *not recorded* — an approval asked before
+ * migration 0103 — and the UI says so.
+ *
+ * A schema of its own rather than two fields on {@link approvalRecordSchema}, because that record is
+ * also the `task.approval.requested` payload, which stays unchanged in this slice: payload schemas
+ * are strict, and an older build reading a newer event during an additive rollback would refuse it.
+ */
+export const approvalViewSchema = z.strictObject({
+  ...approvalRecordSchema.shape,
+  subject: approvalSubjectSchema.nullish(),
+  reasons: approvalReasonsSchema.nullish(),
+});
+
 /**
  * What the project's CI said about this task's coverage, and about the branch it will merge into —
  * `tasks.coverage` (WP-39, migration 0027), product/18:38 and product/10:38's *"coverage delta"*.
@@ -953,6 +1051,11 @@ export type JsonObject = z.infer<typeof jsonObjectSchema>;
 export type AnswerChannel = z.infer<typeof answerChannelSchema>;
 export type QuestionRecord = z.infer<typeof questionRecordSchema>;
 export type ApprovalRecord = z.infer<typeof approvalRecordSchema>;
+export type ApprovalPolicySource = z.infer<typeof approvalPolicySourceSchema>;
+export type ApprovalReason = z.infer<typeof approvalReasonSchema>;
+export type BudgetApprovalSubjectDetail = z.infer<typeof budgetApprovalSubjectDetailSchema>;
+export type ApprovalSubject = z.infer<typeof approvalSubjectSchema>;
+export type ApprovalView = z.infer<typeof approvalViewSchema>;
 export type WorkspaceRecord = z.infer<typeof workspaceRecordSchema>;
 export type FeedbackRecord = z.infer<typeof feedbackRecordSchema>;
 export type KnowledgeProposalRecord = z.infer<typeof knowledgeProposalRecordSchema>;

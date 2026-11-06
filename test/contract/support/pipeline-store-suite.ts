@@ -4987,6 +4987,118 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
+       * TD-035 (migration 0103): the subject and the reasons are written **once, by the insert**, and
+       * `save` — the decision's write — never names them, so a decision cannot rewrite what was
+       * asked. Both halves (rule 42): a row inserted with them reads them back, a row inserted
+       * without them reads *not recorded*, and neither moves through a save.
+       */
+      it('records the subject and the reasons at insert, and never through save (TD-035)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const planId = nextId();
+        await store.artifacts.insert(tx, {
+          id: planId,
+          taskId: stored.task.id,
+          type: 'ImplementationPlan',
+          version: 1,
+          markdown: null,
+          data: { estimated_size: 'L' },
+          schemaVersion: '1',
+          producedByRunId: null,
+          redactionCount: 0,
+          createdAt: '2026-06-01T09:00:00.000Z',
+        });
+        const approvalOf = (id: Id, kind: 'plan' | 'budget') => ({
+          id,
+          taskId: stored.task.id,
+          projectId,
+          kind,
+          status: 'pending' as const,
+          requestedAt: '2026-06-01T09:30:00.000Z' as IsoDateTime,
+          deadlineAt: null,
+          decidedByUserId: null,
+          decidedAt: null,
+          reason: null,
+          remindersSent: 0,
+          sequence: 1,
+        });
+        const reasons = [
+          { code: 'risk_class' as const, classes: ['auth'] },
+          {
+            code: 'size_at_or_above' as const,
+            size: 'L' as const,
+            threshold: 'L' as const,
+            source: 'dial' as const,
+          },
+        ];
+        const planApprovalId = nextId();
+        await store.approvals.insert(tx, {
+          approval: approvalOf(planApprovalId, 'plan'),
+          stage: 'architecture',
+          attempt: 1,
+          subjectArtifactId: planId,
+          reasons,
+        });
+        const budgetApprovalId = nextId();
+        const detail = {
+          estimate_usd: 61.5,
+          threshold_usd: 50,
+          estimate_basis: 'project_history' as const,
+          estimate_samples: 7,
+        };
+        await store.approvals.insert(tx, {
+          approval: approvalOf(budgetApprovalId, 'budget'),
+          stage: 'refinement',
+          attempt: 1,
+          subjectDetail: detail,
+          reasons: [{ code: 'estimate_above_threshold', estimate_usd: 61.5, threshold_usd: 50 }],
+        });
+        const unrecordedId = nextId();
+        await store.approvals.insert(tx, {
+          approval: approvalOf(unrecordedId, 'plan'),
+          stage: 'architecture',
+          attempt: 2,
+        });
+
+        const plan = await store.approvals.load(tx, planApprovalId);
+        expect(plan?.subjectArtifactId).toBe(planId);
+        expect(plan?.reasons).toEqual(reasons);
+        expect(plan?.subjectDetail ?? null).toBeNull();
+        const budget = await store.approvals.load(tx, budgetApprovalId);
+        expect(budget?.subjectDetail).toEqual(detail);
+        expect(budget?.subjectArtifactId ?? null).toBeNull();
+        const unrecorded = await store.approvals.load(tx, unrecordedId);
+        expect(unrecorded?.subjectArtifactId ?? null).toBeNull();
+        expect(unrecorded?.reasons ?? null).toBeNull();
+
+        expect(await store.approvals.planSubject(tx, planApprovalId)).toEqual({
+          artifactId: planId,
+          basis: 'recorded',
+        });
+        // Not a plan approval, and a plan approval nothing pins: no subject, never a guess.
+        expect(await store.approvals.planSubject(tx, budgetApprovalId)).toBeNull();
+        expect(await store.approvals.planSubject(tx, unrecordedId)).toBeNull();
+
+        // A save that names other values — the decision's own write — moves none of them.
+        await store.approvals.save(tx, {
+          approval: {
+            ...approvalOf(planApprovalId, 'plan'),
+            status: 'approved',
+            decidedByUserId: userId,
+            decidedAt: '2026-06-01T10:00:00.000Z' as IsoDateTime,
+          },
+          stage: 'architecture',
+          attempt: 1,
+          subjectArtifactId: null,
+          reasons: [{ code: 'policy_always', source: 'dial' }],
+        });
+        const decided = await store.approvals.load(tx, planApprovalId);
+        expect(decided?.approval.status).toBe('approved');
+        expect(decided?.subjectArtifactId).toBe(planId);
+        expect(decided?.reasons).toEqual(reasons);
+      });
+
+      /**
        * `latestOfKind` — the **budget** gate's lookup (WP-28).
        *
        * It answers the opposite question from `forStageAttempt` on purpose, and the difference is

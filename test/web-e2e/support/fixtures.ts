@@ -1122,6 +1122,17 @@ export const integrations = {
       retired_at: null,
       credentials_readable: null,
       credentials_consequence: null,
+      // S-25.3: health from traffic, and who uses it.
+      activity: { last_call: { at: now, ok: true }, last_delivery_at: null },
+      current_health: { status: 'working', basis: 'call', at: now },
+      used_by: [
+        {
+          project_id: IDS.project,
+          project_key: PROJECT_KEY,
+          project_name: 'Demo service',
+          uses: [{ label: 'Tickets from', value: 'DEMO' }],
+        },
+      ],
     }),
   ],
   // S-23.23: the fake signs in an administrator, who may write integrations.

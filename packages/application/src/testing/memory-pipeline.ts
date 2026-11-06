@@ -2245,7 +2245,16 @@ export const createMemoryPipelineStore = (
 
   const approvalRepository: ApprovalRepository = {
     insert: async (_tx, stored) => {
-      approvals.set(stored.approval.id, clone(stored));
+      // The SQL's three nullable columns: an absent subject or reason list is stored as `null`.
+      approvals.set(
+        stored.approval.id,
+        clone({
+          ...stored,
+          subjectArtifactId: stored.subjectArtifactId ?? null,
+          subjectDetail: stored.subjectDetail ?? null,
+          reasons: stored.reasons ?? null,
+        }),
+      );
     },
     load: async (_tx, approvalId) => {
       const stored = approvals.get(approvalId);
@@ -2256,14 +2265,32 @@ export const createMemoryPipelineStore = (
       if (current === undefined) {
         throw new PipelineStoreError(`approval ${stored.approval.id} does not exist`);
       }
-      // `reminders_sent` is not `save`'s column (WP-84), as for a question.
+      // `reminders_sent` is not `save`'s column (WP-84), as for a question — and neither are the
+      // subject and the reasons (TD-035): they are what was asked, written once by the insert.
       approvals.set(
         stored.approval.id,
         clone({
           ...stored,
           approval: { ...stored.approval, remindersSent: current.approval.remindersSent },
+          subjectArtifactId: current.subjectArtifactId ?? null,
+          subjectDetail: current.subjectDetail ?? null,
+          reasons: current.reasons ?? null,
         }),
       );
+    },
+    /**
+     * **Recorded only** — the stricter half of the adapter (rule 1): PostgreSQL also derives a
+     * subject for a row written before migration 0103 (TD-035 decision 5), and this store holds no
+     * such row, so it never derives one and answers `null` where the adapter might pin a plan.
+     */
+    planSubject: async (_tx, approvalId) => {
+      const stored = approvals.get(approvalId);
+      return stored === undefined ||
+        stored.approval.kind !== 'plan' ||
+        stored.subjectArtifactId === undefined ||
+        stored.subjectArtifactId === null
+        ? null
+        : { artifactId: stored.subjectArtifactId, basis: 'recorded' };
     },
     recordReminder: async (_tx, input) => {
       const current = approvals.get(input.id);

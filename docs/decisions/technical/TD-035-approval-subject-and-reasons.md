@@ -28,7 +28,7 @@ neither (`saga.ts:1281-1290`). So the task page can only say "Plan approval · r
    through the FK (artifacts are immutable). Budget: a snapshot `{estimate_usd, threshold_usd, estimate_basis,
    estimate_samples}`. Knowledge would be its `kb_proposals` id; rework is **not decided** — the first writer of
    either kind amends this record before writing one.
-3. **Storage — migration `0102_approval_subject_and_reasons.sql`, `-- migration-class: additive`:** nullable
+3. **Storage — migration `0103_approval_subject_and_reasons.sql`, `-- migration-class: additive`:** nullable
    `approvals.subject_artifact_id uuid` (FK to `artifacts`, added `not valid` then validated), nullable
    `subject_detail jsonb` (the budget snapshot), nullable `reasons jsonb` (a non-empty array when present; check
    added `not valid` then validated). Written **once, at insert**; `ApprovalRepository.save` never names them
@@ -61,7 +61,13 @@ neither (`saga.ts:1281-1290`). So the task page can only say "Plan approval · r
 
 ## Consequences / residuals
 
-- A pre-0102 plan approval whose plan cannot be derived can only be rejected, which spends one
+- A pre-0103 plan approval whose plan cannot be derived can only be rejected, which spends one
   `architecture_revisions` round (BD-006 2026-10-06). Accepted: few rows, and the alternative is a blind approve.
 - Approvals-per-reason over time is now countable (*are we getting asked less?*); no metric is built here.
 - technical/03's `approvals` line and technical/02's approval paragraph are updated by the slice that lands this.
+- **As built (S-25.1).** Decision 3's check is `check (reasons <> '[]')`: TD-032's amendment C admits a `not valid`
+  check on an existing table only as column-versus-literal atoms, so `jsonb_typeof(reasons) = 'array'` cannot be
+  stated there. The column refuses an empty list; that it is an array of known reasons, and that `subject_detail` is
+  the budget snapshot, is held by the one writer's strict zod schemas and by the reader, which parses the same
+  schemas and refuses a row that does not. A chat (Slack) button still decides through the aggregate without an
+  echo — decision 6 guards the HTTP command only (BACKLOG 1200).

@@ -31,7 +31,6 @@ import {
   pipeline as pipelineAdapters,
   runner,
 } from '@platform/infrastructure';
-import { findShippedProvider } from '@platform/integrations';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -39,8 +38,8 @@ import { toApiError } from '../../../apps/server/src/errors.js';
 import { createProjectSettingsPort } from '../../../apps/server/src/pipeline.js';
 import {
   findIntegrationRow,
+  integrationSummaries,
   listIntegrationRows,
-  toIntegrationSummary,
 } from '../../../apps/server/src/queries/integration-queries.js';
 import { findKbHealth } from '../../../apps/server/src/queries/knowledge-queries.js';
 import {
@@ -1796,9 +1795,7 @@ describe('the list projections', () => {
     );
 
     const rows = await listIntegrationRows(drizzled);
-    const summaries = rows.map((row) =>
-      toIntegrationSummary(row, findShippedProvider(row.provider), null),
-    );
+    const summaries = await integrationSummaries(drizzled, rows, null, new Date());
     const gitlab = summaries.find((summary) => summary.provider === 'gitlab');
     const other = summaries.find((summary) => summary.provider === 'unshipped-forge');
 

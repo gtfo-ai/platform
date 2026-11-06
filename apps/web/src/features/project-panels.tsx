@@ -230,7 +230,14 @@ const ProposalRow = ({
             <UntrustedText value={proposal.apply_deferred_reason} />
           </span>
         )}
-        <DetailsDisclosure summary="The change and its evidence">
+        {/*
+          Open while a maintainer still decides it (S-25.1, research/21 F2): *Approve* sits beside
+          the change, so the change is on screen when it is pressed — never approved collapsed.
+        */}
+        <DetailsDisclosure
+          summary="The change and its evidence"
+          defaultOpen={isDecidable(proposal)}
+        >
           <div className="flex flex-col gap-2">
             <CodeText value={proposal.delta} />
             <ul className="flex flex-col gap-0.5 text-xs text-fg-muted">

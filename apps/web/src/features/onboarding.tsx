@@ -88,7 +88,7 @@ import {
   type WizardStepId,
 } from './onboarding-steps.js';
 import { AUTONOMY_CHOICES, OperatingMode } from './operating-mode.js';
-import { readinessWord } from './readiness-label.js';
+import { readinessNameAndWord, readinessSummary } from './readiness-label.js';
 import { ReadinessNotices } from './readiness-notices.js';
 import { StepActionToneContext, useStepActionTone } from './step-action-tone.js';
 
@@ -200,7 +200,8 @@ const ReadinessPanel = ({ readiness }: { readonly readiness: ReadinessResponse }
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="text-base font-semibold">Readiness level {readiness.level}</span>
         <span className="text-sm text-fg-muted">
-          {readinessWord(readiness.level)} · evaluated {formatDateTime(readiness.evaluated_at)}
+          {readinessNameAndWord(readiness.level)} · evaluated{' '}
+          {formatDateTime(readiness.evaluated_at)}
         </span>
       </div>
       {/* A native <meter>, as the budgets screen's: the element carries the value and the range. */}
@@ -345,7 +346,7 @@ const FinishStep = ({
         </Fact>
         <Fact label="Readiness">
           {reads.readiness.isSuccess
-            ? `Level ${reads.readiness.data.level} — ${readinessWord(reads.readiness.data.level)}`
+            ? readinessSummary(reads.readiness.data.level)
             : 'Not evaluated yet'}
         </Fact>
         <Fact label="Business context">
@@ -413,7 +414,7 @@ const FinishStep = ({
 const purposeOf = (step: WizardStepId, reads: WizardReads | null): string => {
   switch (step) {
     case 'connect':
-      return 'Name the project, point it at its repository and bind the integrations it uses. A few minutes; nothing is charged.';
+      return 'Point the project at its repository, name it and bind the integrations it uses. A few minutes; nothing is charged.';
     case 'discovery':
       return `An agent reads your repository and reports how ready it is for agents. It is one agent run, usually some minutes long, and costs ${
         reads?.ceilingUsd === null || reads === null

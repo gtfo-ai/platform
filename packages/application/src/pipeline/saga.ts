@@ -52,6 +52,7 @@ import type {
 } from '@platform/domain';
 import {
   amendEscalation,
+  budgetApprovalReasons,
   compilePipeline,
   createApproval,
   createTask,
@@ -64,12 +65,11 @@ import {
   markQuestionEscalated,
   opensWithPlatformCommentMarker,
   orderQueue,
+  planApprovalReasons,
   QA_STAGE_ID,
   queueTask,
   READY_FOR_MERGE_STAGE,
   requestApproval,
-  requiresBudgetApproval,
-  requiresPlanApproval,
   returnLoopFor,
   riskClassesRequiringPlanApproval,
   stageOf,
@@ -1031,7 +1031,7 @@ const planPaths = (data: unknown): readonly string[] => {
  * ## Where the policy comes from, in one sentence per source
  *
  * The project's **materialised** preset (BD-027:14) decides, through the domain's
- * `requiresPlanApproval` — so `planApproval`, `planApprovalSizeThreshold`, `probation`,
+ * `planApprovalReasons` (TD-035: every reason, stored on the approval) — so `planApproval`, `planApprovalSizeThreshold`, `probation`,
  * `probationTasks` and `planApprovalForRiskClasses` are all read, rather than only the first two.
  * A project's `pipeline.template_overrides.<template>.stages.<stage>` entry is **finer grained than
  * the dial** and therefore wins over it, but only over the two fields it can express: an explicit
@@ -1122,9 +1122,15 @@ const planApprovalGate = async (
       ? {}
       : { planApprovalSizeThreshold: override.size_threshold }),
   };
-  const needsApproval = requiresPlanApproval({
+  const reasons = planApprovalReasons({
     preset,
     size,
+    // TD-035: which of the two fields the stage override supplied, so a reason's `source` is a
+    // fact — it is what the card links to when it says how to stop being asked.
+    overridden: {
+      planApproval: override?.plan_approval !== undefined,
+      planApprovalSizeThreshold: override?.size_threshold !== undefined,
+    },
     // Probation is "the first N tasks" of the project, so it is a count over the project and not
     // over this task. Asked only when the preset actually has probation on: a project past its
     // probation still pays the query otherwise, on every plan, for an answer nothing reads.
@@ -1140,7 +1146,7 @@ const planApprovalGate = async (
       planPaths(plan?.data),
     ),
   });
-  if (!needsApproval) {
+  if (reasons.length === 0) {
     return false;
   }
 
@@ -1156,7 +1162,16 @@ const planApprovalGate = async (
     },
     commandContext,
   );
-  await options.store.approvals.insert(context.scope.tx, { approval, stage, attempt });
+  // TD-035 decision 2: the plan this gate loaded **is** the subject — the one a click may approve —
+  // and the reasons it found are stored beside it, once. The task's latest plan at a later read is
+  // a different question (`approval_subject_superseded`).
+  await options.store.approvals.insert(context.scope.tx, {
+    approval,
+    stage,
+    attempt,
+    subjectArtifactId: plan?.id ?? null,
+    reasons,
+  });
   const requested = requestApproval(
     stored.task,
     { approval: toApprovalRecord(approval) },
@@ -1194,7 +1209,8 @@ export const spendIsStillAhead = (pipeline: CompiledPipeline, stage: Slug): bool
 
 /**
  * product/09: *"an optional per-project threshold routes expensive tasks to budget approval by a
- * maintainer before Implementation"* — WP-28, and the gate `requiresBudgetApproval` was written for.
+ * maintainer before Implementation"* — WP-28, and the gate `requiresBudgetApproval` was written for
+ * (answered since TD-035 as `budgetApprovalReasons`, so the crossing is stored as the reason).
  *
  * It is `planApprovalGate`'s sibling in every mechanical respect and differs in three decided ones.
  *
@@ -1265,10 +1281,11 @@ const budgetApprovalGate = async (
     // rather than a substituted preset, for the reason {@link UNMATERIALISED_PLAN_APPROVAL} gives.
     return false;
   }
-  // The one place the threshold is read, and the only guard: `requiresBudgetApproval` answers false
+  // The one place the threshold is read, and the only guard: `budgetApprovalReasons` answers none
   // for a `null` threshold, so a second check for it here would be an inner layer the outer one
   // makes unreachable — untestable by construction (standing rule 22).
-  if (!requiresBudgetApproval(preset, estimateUsd)) {
+  const [crossing] = budgetApprovalReasons(preset, estimateUsd);
+  if (crossing === undefined) {
     return false;
   }
   (options.logger ?? silentLogger).info(
@@ -1297,8 +1314,20 @@ const budgetApprovalGate = async (
   );
   // The stage and attempt are recorded truthfully even though the lookup above does not use them:
   // they are what `approvalHandler` resumes from, and what an audit reads to say where the task was
-  // when the spend was questioned.
-  await options.store.approvals.insert(context.scope.tx, { approval, stage, attempt });
+  // when the spend was questioned. The figures are the subject and the crossing is the reason
+  // (TD-035 decision 2), stored once — the log line above was all that kept them before.
+  await options.store.approvals.insert(context.scope.tx, {
+    approval,
+    stage,
+    attempt,
+    subjectDetail: {
+      estimate_usd: crossing.estimate_usd,
+      threshold_usd: crossing.threshold_usd,
+      estimate_basis: stored.estimateBasis,
+      estimate_samples: stored.estimateSamples,
+    },
+    reasons: [crossing],
+  });
   const requested = requestApproval(
     stored.task,
     { approval: toApprovalRecord(approval) },

@@ -120,6 +120,7 @@ import {
   sum,
 } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
+import { approvalViewsFor } from './approval-views.js';
 import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
 import { latestActivityFor, newestEntryPerRun, seatsFor } from './live-view-queries.js';
@@ -1783,17 +1784,8 @@ export const findTaskDetail = async (
       url: artifactBodyPath(row.id),
     })),
     questions: questionRows.map(toQuestionRecord),
-    approvals: approvalRows.map((row) => ({
-      id: row.id as Id,
-      task_id: row.taskId as Id,
-      kind: row.kind,
-      status: row.status,
-      requested_at: isoRequired(row.requestedAt),
-      deadline_at: iso(row.deadlineAt),
-      decided_by_user_id: row.decidedByUserId as Id | null,
-      decided_at: iso(row.decidedAt),
-      reason: row.reason,
-    })),
+    // TD-035: each with what it approves and why — recorded, derived by the one exact chain, or null.
+    approvals: await approvalViewsFor(database, approvalRows),
     runs: runRows.map((row) =>
       toRunRecord(row, usage.get(row.id) ?? [], progress.get(row.id) ?? null),
     ),
@@ -1902,17 +1894,8 @@ export const listInbox = async (database: Database): Promise<InboxResponse> => {
   ]);
   return {
     questions: questionRows.map(toQuestionRecord),
-    approvals: approvalRows.map((row) => ({
-      id: row.id as Id,
-      task_id: row.taskId as Id,
-      kind: row.kind,
-      status: row.status,
-      requested_at: isoRequired(row.requestedAt),
-      deadline_at: iso(row.deadlineAt),
-      decided_by_user_id: row.decidedByUserId as Id | null,
-      decided_at: iso(row.decidedAt),
-      reason: row.reason,
-    })),
+    // The task read's shape (TD-035), so Home and the Inbox name the plan an approval is about.
+    approvals: await approvalViewsFor(database, approvalRows),
   };
 };
 

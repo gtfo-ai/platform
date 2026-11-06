@@ -21,6 +21,8 @@
  * asserted rather than assumed. A probe is the product's only HTTP-triggered outbound call; without
  * the executor it writes no row and takes no budget, and nothing else in any tier would notice.
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type {
   BindingRepository,
   IntegrationAccount,
@@ -47,7 +49,12 @@ import * as z from 'zod';
 import type { AnyProviderRegistration } from '../registry.js';
 import { createIntegrationRegistry } from '../registry.js';
 import { BindingLoadError } from './loader.js';
-import { type BoundProject, createIntegrationProber } from './prober.js';
+import {
+  type BoundProject,
+  createIntegrationProber,
+  PROBE_ACTION,
+  PROBE_ACTIONS,
+} from './prober.js';
 
 const INTEGRATION = '00000000-0000-4000-8000-0000000000d1' as Id;
 
@@ -285,6 +292,29 @@ describe('createIntegrationProber', () => {
     }).test(INTEGRATION);
     expect(auditLog.entries[0]?.status).toBe('ok');
     expect(auditLog.entries[0]?.result).toEqual({ ok: false });
+    // S-25.3 (review of PR #75): so the row is no evidence the integration works — it is recorded
+    // under an action the integrations list's health read excludes (`PROBE_ACTIONS`).
+    expect(PROBE_ACTIONS).toContain(auditLog.entries[0]?.action);
+  });
+
+  it('names every action it records through PROBE_ACTION, so the health read excludes them all', () => {
+    // S-25.3: a literal action in this file would be a probe row the health read counts as traffic.
+    const source = readFileSync(fileURLToPath(new URL('./prober.ts', import.meta.url)), 'utf8');
+    expect(source.match(/\baction:\s*['"`]/g) ?? []).toEqual([]);
+    const used = new Set(
+      [...source.matchAll(/\baction:\s*PROBE_ACTION\.(\w+)/g)].map((match) => match[1]),
+    );
+    // Both directions: every declared action is used, and every use is declared.
+    expect([...used].sort()).toEqual(Object.keys(PROBE_ACTION).sort());
+    expect([...PROBE_ACTIONS].sort()).toEqual(
+      [
+        'check_default_branch_protection',
+        'check_deploy_key',
+        'check_run_credential_member',
+        'check_run_token_scope',
+        'test_connection',
+      ].sort(),
+    );
   });
 
   it('takes the integration’s rate limit, so a burst waits instead of being forwarded', async () => {

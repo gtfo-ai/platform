@@ -31,13 +31,17 @@ import {
   claimBlockerLines,
   configFieldLabel,
   GATE_LABEL,
+  INTEGRATION_CURRENT_HEALTH_LABEL,
   INTEGRATION_HEALTH_LABEL,
+  INTEGRATION_ROLE_GROUPS,
   INTEGRATION_TYPE_LABEL,
   INTEGRATION_TYPE_PURPOSE,
   isUpdating,
   LOOP_LABEL,
+  LOOP_ROUND_LABEL,
   leadingClaimBlocker,
   loopLabel,
+  loopRoundLabel,
   ordinal,
   QUESTION_STATUS_LABEL,
   READINESS_CRITERION_LABEL,
@@ -76,7 +80,27 @@ const VOCABULARIES = [
     INTEGRATION_HEALTH_LABEL,
   ],
   ['worker pause reason', workerPauseReasonSchema.options, WORKER_PAUSE_REASON_LABEL],
+  [
+    'integration health now',
+    integrationSummarySchema.shape.current_health.shape.status.options,
+    INTEGRATION_CURRENT_HEALTH_LABEL,
+  ],
 ] as const;
+
+describe('the integrations list’s groups (S-25.3)', () => {
+  it('names every integration type once, in product/08’s order', () => {
+    expect(INTEGRATION_ROLE_GROUPS.map((group) => group.label)).toEqual([
+      'Tickets',
+      'Code & merge requests',
+      'Chat',
+      'Errors',
+      'Logs',
+    ]);
+    expect(INTEGRATION_ROLE_GROUPS.map((group) => group.type).sort()).toEqual(
+      [...integrationTypeSchema.options].sort(),
+    );
+  });
+});
 
 describe('humanize', () => {
   it.each(VOCABULARIES)(
@@ -230,6 +254,15 @@ describe('the loop words and ordinals (S-23.5)', () => {
     expect(loopLabel('custom_loop')).toBe('Custom Loop');
     // An inherited property name is a slug like any other, not a lookup hit.
     expect(loopLabel('constructor')).toBe('Constructor');
+  });
+
+  it('counts a loop in rounds, of its limit when known (S-25.4)', () => {
+    expect(Object.keys(LOOP_ROUND_LABEL).sort()).toEqual([...ITERATION_LOOPS].sort());
+    expect(loopRoundLabel('code_review', 1, 3)).toBe('Review round 1 of 3');
+    expect(loopRoundLabel('rebase_rechecks', 2, 3)).toBe('Re-check round 2 of 3');
+    expect(loopRoundLabel('code_review', 2)).toBe('Review round 2');
+    expect(loopRoundLabel('house_loop', 2, 5)).toBe('House Loop round 2 of 5');
+    expect(loopRoundLabel('constructor', 1)).toBe('Constructor round 1');
   });
 
   it('spells ordinals, the teens included', () => {

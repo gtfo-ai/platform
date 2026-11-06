@@ -6,9 +6,10 @@
  *
  * - **open questions** — each answered here, with the same `answer` command the inbox sends; the
  *   agent wrote the question, so it is rendered as text (BD-022);
- * - **pending approvals** — approved here, or rejected through a confirmation with a reason
- *   (`decide`), by a caller who may decide them (`can_decide_approval`); anyone else is told a
- *   maintainer decides;
+ * - **pending approvals** — each **with what it approves** (S-25.1, `./approval-card.tsx`): the
+ *   plan shown open, the reasons it was asked, what each answer does next and how to stop being
+ *   asked; approved here, or rejected through a confirmation with a reason (`decide`), by a caller
+ *   who may decide them (`can_decide_approval`); anyone else is told a maintainer decides;
  * - **the task waiting for a person** (`needs_human`) — what stopped it, as the stage row's own
  *   outcome sentence, and the three ways out (return, rework, retry), which open the same dialogs as
  *   the header's `···` menu. The sentence is the escalated attempt's recorded word, not the
@@ -21,19 +22,18 @@
  * None of it is shown for a task nothing waits on, so its absence is itself an answer.
  */
 import type {
-  ApprovalRecord,
+  ApprovalView,
   QuestionRecord,
   TaskDetailResponse,
   TaskRecord,
 } from '@platform/contracts';
-import { MAX_COMMAND_TEXT_CHARS } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
 import type { useTaskCommands } from '../app/queries.js';
-import { ConfirmDialog } from '../ui/confirm-dialog.js';
 import { Flash } from '../ui/flash.js';
 import { APPROVAL_KIND_LABEL, QUESTION_STATUS_LABEL, stageLabel } from '../ui/humanize.js';
 import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd } from '../ui/kit.js';
 import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { ApprovalCard } from './approval-card.js';
 import { BreakdownPanel } from './breakdown-panel.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
 import { latestStageRow } from './task-checks-text.js';
@@ -112,95 +112,6 @@ const QuestionCard = ({
               <UntrustedText value={question.answer} />
             </>
           )}
-        </p>
-      )}
-    </Card>
-  );
-};
-
-/** What rejecting an approval of this kind does, in one sentence (the saga's own branches). */
-export const rejectConsequence = (kind: ApprovalRecord['kind']): string =>
-  kind === 'plan'
-    ? 'The plan goes back to Architecture with your reason, which costs another run of that stage. A rejection cannot be undone.'
-    : kind === 'budget'
-      ? 'The task stops and waits for a person; nothing more is spent on it until someone hands it back. A rejection cannot be undone.'
-      : 'The task does not go on with what was asked; your reason is recorded with the decision. A rejection cannot be undone.';
-
-/**
- * One pending approval. *Approve* decides at once; *Reject* asks first (S-23.23, the UX audit's item
- * 8 — the header's *Approve…* already opened a dialog, so the two paths now agree), with a reason
- * recorded beside the decision. A caller who may not decide approvals (`can_decide_approval`) is
- * told who may instead of being offered two buttons the route would refuse.
- */
-const ApprovalCard = ({
-  approval,
-  mayDecide,
-  commands,
-}: {
-  readonly approval: ApprovalRecord;
-  readonly mayDecide: boolean;
-  readonly commands: TaskCommands;
-}): ReactElement => {
-  const [confirming, setConfirming] = useState(false);
-  const pending = commands.decide.isPending;
-  const kind = APPROVAL_KIND_LABEL[approval.kind].toLowerCase();
-  return (
-    <Card className="flex flex-wrap items-center gap-2">
-      <Badge tone="accent">{APPROVAL_KIND_LABEL[approval.kind]}</Badge>
-      <span className="text-xs text-fg-muted">{`requested ${formatDateTime(approval.requested_at)}`}</span>
-      {mayDecide ? (
-        <div className="ml-auto flex gap-2">
-          <Button
-            disabled={pending}
-            onClick={() => {
-              commands.decide.mutate({ approvalId: approval.id, decision: 'approve' });
-            }}
-          >
-            Approve
-          </Button>
-          <Button
-            tone="danger"
-            disabled={pending}
-            onClick={() => {
-              commands.decide.reset();
-              setConfirming(true);
-            }}
-          >
-            Reject…
-          </Button>
-          <ConfirmDialog
-            open={confirming}
-            onOpenChange={setConfirming}
-            title={`Reject the ${kind}?`}
-            consequence={rejectConsequence(approval.kind)}
-            confirmLabel="Reject"
-            reason={{
-              label: 'Reason (recorded with the decision)',
-              placeholder: 'Why (optional)',
-              maxLength: MAX_COMMAND_TEXT_CHARS,
-            }}
-            pending={pending}
-            error={commands.decide.error}
-            errorTitle="That decision was refused."
-            onConfirm={(reason) => {
-              commands.decide.mutate(
-                {
-                  approvalId: approval.id,
-                  decision: 'reject',
-                  ...(reason === '' ? {} : { reason }),
-                },
-                {
-                  onSuccess: () => {
-                    setConfirming(false);
-                  },
-                },
-              );
-            }}
-          />
-        </div>
-      ) : (
-        <p data-may-not-decide="" className="ml-auto text-xs text-fg-muted">
-          A maintainer decides this.
         </p>
       )}
     </Card>
@@ -303,7 +214,7 @@ export const calloutReasons = (input: {
 const calloutTitle = (
   first: ReturnType<typeof calloutReasons>[number],
   questions: number,
-  approvals: readonly ApprovalRecord[],
+  approvals: readonly ApprovalView[],
 ): string => {
   switch (first) {
     case 'question':
@@ -327,6 +238,7 @@ const calloutTitle = (
 
 export const TaskCallout = ({
   detail,
+  projectKey,
   merged,
   hasStages,
   breakdownWaiting,
@@ -334,6 +246,8 @@ export const TaskCallout = ({
   onOpen,
 }: {
   readonly detail: TaskDetailResponse;
+  /** The board's key, when the projects read has it: a reason's *how to stop being asked* links. */
+  readonly projectKey: string | null;
   readonly merged: boolean;
   /** Whether the stage commands have a stage to address (the task's own history). */
   readonly hasStages: boolean;
@@ -383,6 +297,9 @@ export const TaskCallout = ({
                 <ApprovalCard
                   key={approval.id}
                   approval={approval}
+                  taskId={task.id}
+                  artifacts={detail.artifacts}
+                  projectKey={projectKey}
                   mayDecide={detail.can_decide_approval}
                   commands={commands}
                 />

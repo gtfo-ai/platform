@@ -101,8 +101,6 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
     breakdown.data?.can_decide === true &&
     breakdown.data.items.some((item) => item.status === 'queued');
   const answered = takeOverCommands.takeOver.data;
-  const pendingApproval =
-    detail.data.approvals.find((approval) => approval.status === 'pending') ?? null;
   const counts: Partial<Record<(typeof TASK_TABS)[number], number>> = {
     artifacts: artifacts.length,
     runs: runs.length,
@@ -134,6 +132,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
 
       <TaskCallout
         detail={detail.data}
+        projectKey={projectKey}
         merged={merged}
         hasStages={form.options.length > 0}
         breakdownWaiting={breakdownWaiting}
@@ -224,7 +223,6 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
         capUsd={task.budget_cap_usd}
         takenOver={takenOver}
         merged={merged}
-        approval={pendingApproval}
         form={form}
         commands={commands}
         takeOverCommands={takeOverCommands}

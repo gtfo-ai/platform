@@ -31,6 +31,7 @@ import {
   readSetupGuide,
   SHIPPED_PROVIDERS,
   toIntegrationProvider,
+  usesOf,
 } from './catalogue.js';
 import { gitlabProviderRegistration } from './providers/gitlab/index.js';
 import { createJiraCloudRegistration } from './providers/jira-cloud/registration.js';
@@ -369,5 +370,61 @@ describe('a configuration field’s declared kind', () => {
       choices: [],
     });
     expect(fieldKindOf(z.number().optional())).toEqual({ kind: 'number', choices: [] });
+  });
+});
+
+describe('what a project uses a provider for (S-25.3)', () => {
+  const entry = (id: string): ProviderCatalogueEntry =>
+    findShippedProvider(id) as ProviderCatalogueEntry;
+
+  it('declares a use for every shipped provider, only over its non-credential fields', () => {
+    for (const provider of SHIPPED_PROVIDERS) {
+      expect(provider.usageFields.length, provider.id).toBeGreaterThan(0);
+      const configuration = new Set(provider.configFields.map((field) => field.name));
+      for (const usage of provider.usageFields) {
+        expect(configuration.has(usage.field), `${provider.id}.${usage.field}`).toBe(true);
+        expect(provider.secretFields.includes(usage.field), usage.field).toBe(false);
+        if (usage.unless !== undefined) {
+          expect(configuration.has(usage.unless), `${provider.id}.${usage.unless}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('names Jira’s project keys and its default label, the status winning over the label', () => {
+    const jira = entry('jira-cloud');
+    expect(usesOf(jira, { project_keys: ['AUT', 'OPS'] })).toEqual([
+      { label: 'Tickets from', value: 'AUT, OPS' },
+      // Nobody wrote it: the schema's default is what the loader would read.
+      { label: 'Picked up with label', value: 'agentic' },
+    ]);
+    expect(usesOf(jira, { project_keys: ['AUT'], pickup_status: 'Ready for agent' })).toEqual([
+      { label: 'Tickets from', value: 'AUT' },
+      { label: 'Picked up at status', value: 'Ready for agent' },
+    ]);
+    // An empty list and an empty string are not a use.
+    expect(usesOf(jira, { project_keys: [], pickup_label: '' })).toEqual([]);
+  });
+
+  it('names GitLab’s repository and Slack’s channels, and nothing for an unknown provider', () => {
+    expect(
+      usesOf(entry('gitlab'), { base_url: 'https://gitlab.example.test', project: 'acme/api' }),
+    ).toEqual([{ label: 'Repository', value: 'acme/api' }]);
+    expect(usesOf(entry('slack'), { channel: '#agentic', digest_channel: null })).toEqual([
+      { label: 'Channel', value: '#agentic' },
+    ]);
+    expect(usesOf(undefined, { project: 'acme/api' })).toEqual([]);
+  });
+
+  it('never reads a credential field, whatever the declaration says', () => {
+    const gitlab = entry('gitlab');
+    const planted = 'glpat-FAKE-s253-token-in-a-usage-field';
+    const lying: ProviderCatalogueEntry = {
+      ...gitlab,
+      usageFields: [{ field: 'token', label: 'Token' }, ...gitlab.usageFields],
+    };
+    const uses = usesOf(lying, { token: planted, project: 'acme/api' });
+    expect(JSON.stringify(uses)).not.toContain(planted);
+    expect(uses).toEqual([{ label: 'Repository', value: 'acme/api' }]);
   });
 });

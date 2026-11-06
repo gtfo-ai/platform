@@ -69,6 +69,7 @@ import { CommandLayer } from './keyboard.js';
 import { isCurrentSection, NAV } from './nav.js';
 import { pageWidth, requestStartTicket, START_TICKET_ANCHOR } from './project-frame.js';
 import { useAgents, useInbox, useProjects, useProjectTasks, useSession } from './queries.js';
+import { useRunFrame } from './run-frame.js';
 import { useServices } from './services.js';
 
 export { isCurrentSection, NAV } from './nav.js';
@@ -520,8 +521,16 @@ export const AppShell = (): ReactElement => {
   useTopics(['org']);
   const counts = useFrameCounts();
   const projects = useProjects();
-  // Inside a project the route has a `$key`; the switcher names the project it resolves to.
-  const key = useParams({ strict: false, select: (params) => params.key });
+  // Inside a project the route has a `$key`; the switcher names the project it resolves to. A
+  // run's page has none in its URL and sits in its run's project's frame (S-25.4).
+  const routeKey = useParams({ strict: false, select: (params) => params.key });
+  const runFrame = useRunFrame();
+  const key = routeKey ?? (runFrame.kind === 'framed' ? runFrame.project.key : undefined);
+  // A run's page draws its own width and, once its project is known, its project's bands; while
+  // that is being asked it draws no navigation row at all, rather than the organisation's row it
+  // would take back a moment later (review of PR #80).
+  const orgRow = key === undefined && runFrame.kind !== 'pending';
+  const routeOwnsWidth = key !== undefined || runFrame.kind !== 'none';
   const project =
     key === undefined
       ? null
@@ -580,7 +589,7 @@ export const AppShell = (): ReactElement => {
           </div>
         </div>
       </header>
-      {key === undefined ? (
+      {orgRow ? (
         <UnderlineNav
           label="Primary"
           items={orgItems}
@@ -597,15 +606,13 @@ export const AppShell = (): ReactElement => {
           cannot see. `ui/error-boundary.tsx` records the measurement behind that split.
 
           Inside a project the project's layout (`app/project-frame.tsx`) draws its own header band
-          and widths; everywhere else the shell centres the screen. */}
+          and widths, as a run's page does (`routes/run-route.tsx`); everywhere else the shell
+          centres the screen. The `<Outlet/>` is always inside the same `<div>` — only its class
+          changes — so a page whose frame arrives late is never remounted (review of PR #80). */}
       <main className="min-h-0 flex-1">
-        {key === undefined ? (
-          <div className={cx(pageWidth(fullWidth), 'py-6')}>
-            <Outlet />
-          </div>
-        ) : (
+        <div className={routeOwnsWidth ? undefined : cx(pageWidth(fullWidth), 'py-6')}>
           <Outlet />
-        )}
+        </div>
       </main>
     </div>
   );

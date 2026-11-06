@@ -491,11 +491,15 @@ const projectSettingsSectionRoute = createRoute({
   }, ProjectSettingsScreen),
 });
 
-/** The run's log takes the full width, as an Actions job's does. */
+/**
+ * The run's log takes the full width, as an Actions job's does. The URL stays at the top level, and
+ * the page is drawn inside its run's project's frame (S-25.4, `app/run-frame.ts`): a task's run is
+ * the Board's, and the run page has its own `<h1>`.
+ */
 const runRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/runs/$runId',
-  staticData: { fullWidth: true },
+  staticData: { tab: 'board', fullWidth: true, ownsHeading: true },
   component: lazyRouteComponent(() => import('./run-route.js'), 'RunRoute'),
 });
 

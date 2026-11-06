@@ -11,6 +11,7 @@
  * preset')." So a project stores the *materialised* preset plus its overrides, not the level alone.
  */
 import type {
+  ApprovalReason,
   AutonomyLevel,
   AutonomyPolicies,
   Id,
@@ -235,29 +236,82 @@ export interface PlanApprovalInput {
   readonly tasksCompleted: number;
   /** Risk classes matched by the task's touched paths (product/19 §14). */
   readonly riskClassesRequiringApproval: readonly string[];
+  /**
+   * Which of the preset's two plan-approval fields a **stage override** supplied rather than the
+   * dial (`pipeline.template_overrides.<template>.stages.<stage>`). The caller merged them, so only
+   * the caller knows — and it is what makes a reason's `source` a fact rather than a guess
+   * (TD-035 decision 1). Absent means both came from the dial.
+   */
+  readonly overridden?: {
+    readonly planApproval?: boolean;
+    readonly planApprovalSizeThreshold?: boolean;
+  };
 }
 
-/** Does this task need a maintainer's plan approval before Implementation (BD-006, BD-030)? */
-export const requiresPlanApproval = (input: PlanApprovalInput): boolean => {
+/** A plan approval's reasons: the TD-035 vocabulary less the budget gate's own. */
+export type PlanApprovalReason = Exclude<ApprovalReason, { code: 'estimate_above_threshold' }>;
+
+/**
+ * **Why** this task needs a maintainer's plan approval before Implementation (BD-006, BD-030,
+ * TD-035 decision 1) — every reason, in a fixed order, and the empty list when none applies.
+ *
+ * It replaced `requiresPlanApproval`, which answered a boolean and short-circuited on the first
+ * cause, so the screen could say neither why it asked nor how to stop being asked. Every rule is
+ * evaluated: a plan touching `auth` during probation names both, because ending probation alone
+ * would not stop the ask. The order is the rule order the boolean had — risk class, probation,
+ * then the policy — and a non-empty answer is exactly the boolean's `true`
+ * (`autonomy.test.ts` holds that as a property over the whole input space).
+ *
+ * `never` contributes nothing and does **not** silence the first two: a risk class is a statement
+ * about the change, and probation about the project, neither about the stage (product/19 §14).
+ */
+export const planApprovalReasons = (input: PlanApprovalInput): readonly PlanApprovalReason[] => {
+  const reasons: PlanApprovalReason[] = [];
   if (input.preset.planApprovalForRiskClasses && input.riskClassesRequiringApproval.length > 0) {
-    return true;
+    reasons.push({
+      code: 'risk_class',
+      classes: [...new Set(input.riskClassesRequiringApproval)].sort(),
+    });
   }
   if (input.preset.probation && input.tasksCompleted < input.preset.probationTasks) {
-    return true;
+    reasons.push({
+      code: 'probation',
+      completed: input.tasksCompleted,
+      of: input.preset.probationTasks,
+    });
   }
+  const policySource = input.overridden?.planApproval === true ? 'stage_override' : 'dial';
   switch (input.preset.planApproval) {
     case 'always':
-      return true;
+      reasons.push({ code: 'policy_always', source: policySource });
+      break;
     case 'never':
-      return false;
+      break;
     case 'above_size': {
       const threshold = input.preset.planApprovalSizeThreshold;
-      if (threshold === null || input.size === null) {
-        return false;
+      if (
+        threshold !== null &&
+        input.size !== null &&
+        SIZE_ORDER.indexOf(input.size) >= SIZE_ORDER.indexOf(threshold)
+      ) {
+        reasons.push({
+          code: 'size_at_or_above',
+          size: input.size,
+          threshold,
+          // Where the rule that asked lives: a stage override that set the threshold **or** turned
+          // `above_size` on for this stage is what has to change — raising the dial's threshold
+          // would not stop an ask the override makes (review of PR #76).
+          source:
+            input.overridden?.planApprovalSizeThreshold === true ||
+            input.overridden?.planApproval === true
+              ? 'stage_override'
+              : 'dial',
+        });
       }
-      return SIZE_ORDER.indexOf(input.size) >= SIZE_ORDER.indexOf(threshold);
+      break;
     }
   }
+  return reasons;
 };
 
 /**
@@ -278,6 +332,24 @@ export const requiresPlanApproval = (input: PlanApprovalInput): boolean => {
  */
 export const requiresBudgetApproval = (preset: AutonomyPreset, estimateUsd: number): boolean =>
   preset.budgetApprovalThresholdUsd !== null && estimateUsd > preset.budgetApprovalThresholdUsd;
+
+/** The budget gate's one reason (TD-035): the estimate and the threshold it is above. */
+export type BudgetApprovalReason = Extract<ApprovalReason, { code: 'estimate_above_threshold' }>;
+
+/**
+ * {@link requiresBudgetApproval}, answered as TD-035's reasons: the crossing with both figures, or
+ * the empty list when there is none — so the gate stores the threshold it compared against from
+ * the same expression that decided, rather than reading the preset a second time.
+ */
+export const budgetApprovalReasons = (
+  preset: AutonomyPreset,
+  estimateUsd: number,
+): readonly BudgetApprovalReason[] => {
+  const threshold = preset.budgetApprovalThresholdUsd;
+  return threshold !== null && estimateUsd > threshold
+    ? [{ code: 'estimate_above_threshold', estimate_usd: estimateUsd, threshold_usd: threshold }]
+    : [];
+};
 
 // ── Materialisation (BD-027:14) ──────────────────────────────────────────────
 

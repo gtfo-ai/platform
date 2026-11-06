@@ -5,9 +5,10 @@
  * Everything pending for the signed-in user across every project: the open questions and the
  * pending approvals. A left NavList filters them — all, questions, approvals, or one project — with
  * a count on each; the list box has one row per item, the needs-you icon first, then the question's
- * first line (or the approval's kind), where it is (`PROJ · KEY · Stage`), how old it is and when it
- * is due. A question row **expands in place** to the whole question and its answer box; an approval
- * row links to the task, which is where it is decided. product/10 is explicit that "all channels are
+ * first line (or what the approval approves — "Plan v2 · size L · 6 files", S-25.1), where it is
+ * (`PROJ · KEY · Stage`), how old it is and when it is due. A question row **expands in place** to
+ * the whole question and its answer box; an approval row's verb is *Review plan* and it links to the
+ * task, which is where it is decided with the plan on screen — no row approves in one click. product/10 is explicit that "all channels are
  * equivalent; first answer wins", so the rows link to the task rather than pretending to be the only
  * way in.
  *
@@ -30,7 +31,7 @@ import { Blankslate } from '../ui/blankslate.js';
 import { Button, buttonClassName } from '../ui/button.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { DetailsDisclosure } from '../ui/details.js';
-import { APPROVAL_KIND_LABEL, stageLabel } from '../ui/humanize.js';
+import { stageLabel } from '../ui/humanize.js';
 import { ErrorNotice, formatDateTime, formatInteger } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { NavList } from '../ui/nav-list.js';
@@ -41,6 +42,8 @@ import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { ApprovalSummary } from './approval-summary.js';
+import { reviewVerb } from './approval-text.js';
 
 type Inbox = NonNullable<ReturnType<typeof useInbox>['data']>;
 type Question = Inbox['questions'][number];
@@ -257,9 +260,10 @@ const ApprovalRow = ({
 }): ReactElement => (
   <ListRow
     leading={<StatusIcon status="needs_you" label="Approval" />}
-    // Plain text: the row's one link is its *Decide on the task*, so a keyboard meets it once — and
-    // it is the row's stretched link (S-23.26): a click anywhere opens the task, never decides.
-    title={`${APPROVAL_KIND_LABEL[approval.kind]} is waiting for you`}
+    // What it approves (S-25.1): "Plan v2 · size L · 6 files", as text — the row's one link is its
+    // *Review plan*, so a keyboard meets it once, and it is the row's stretched link (S-23.26): a
+    // click anywhere opens the task, where the plan is shown open. No row approves in one click.
+    title={<ApprovalSummary approval={approval} />}
     meta={
       <span className="inline-flex flex-wrap items-center gap-1.5">
         <WhereLine where={where} stage={null} />
@@ -273,7 +277,7 @@ const ApprovalRow = ({
         params={{ taskId: approval.task_id }}
         {...rowLink(buttonClassName('default', 'sm'))}
       >
-        Decide on the task
+        {reviewVerb(approval.kind)}
       </Link>
     }
   />

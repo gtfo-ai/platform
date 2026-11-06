@@ -123,9 +123,7 @@ const useFrameMatch = (): FrameMatch =>
 
 export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
   const { project, isPending, isError, error } = useProjectByKey(projectKey);
-  const tasks = useProjectTasks(project?.id ?? null);
   const frame = useFrameMatch();
-  useTopics(project === null ? [] : [`project:${project.id}`]);
 
   if (isPending) {
     return (
@@ -157,6 +155,29 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
     );
   }
 
+  return (
+    <div className="flex flex-col">
+      <ProjectBands project={project} />
+      <div data-project-page="" className={cx(pageWidth(frame.fullWidth), 'py-6')}>
+        <Outlet />
+      </div>
+    </div>
+  );
+};
+
+/**
+ * The project's header band and its tab row — the frame without the page under it. `ProjectFrame`
+ * draws it above the `<Outlet/>`; a run's page (`/runs/$runId`, S-25.4) draws it above its own
+ * screen once `app/run-frame.ts` names the run's project, and keeps the screen where it was.
+ */
+export const ProjectBands = ({
+  project,
+}: {
+  readonly project: NonNullable<ReturnType<typeof useProjectByKey>['project']>;
+}): ReactElement => {
+  const tasks = useProjectTasks(project.id);
+  const frame = useFrameMatch();
+  useTopics([`project:${project.id}`]);
   const items: NavItem[] = PROJECT_TABS.map(({ tab, label, icon: Glyph }) => ({
     id: tab,
     label,
@@ -170,7 +191,7 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
     tasks.data?.can_start_task === true && frame.tab === 'board' && !frame.ownsHeading;
 
   return (
-    <div className="flex flex-col">
+    <>
       <div data-project-frame="" className="bg-canvas">
         <div className="w-full px-4 pt-4 sm:px-6">
           <PageHeader
@@ -186,7 +207,7 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
             }
             state={
               <>
-                <ReadinessLabel level={project.readiness_level} />
+                <ReadinessLabel level={project.readiness_level} project={project} />
                 {project.status === 'active' ? null : (
                   <Badge tone="neutral">{project.status}</Badge>
                 )}
@@ -221,9 +242,6 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
       >
         <UnderlineNav label="Project" items={items} bordered={false} />
       </div>
-      <div data-project-page="" className={cx(pageWidth(frame.fullWidth), 'py-6')}>
-        <Outlet />
-      </div>
-    </div>
+    </>
   );
 };

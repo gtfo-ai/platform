@@ -128,9 +128,11 @@ const detail = (record: TaskRecord): TaskDetailResponse => ({
 });
 
 /** The task reads answer only for the tasks named; any other answers 404, "not known yet". */
+const PLAN_ARTIFACT = '00000000-0000-4000-8000-0000000000d1';
+
 const fakeServer = (
   tasks: Readonly<Record<string, string>> = {},
-  options: { readonly refuseAnswers?: boolean } = {},
+  options: { readonly refuseAnswers?: boolean; readonly plan?: boolean } = {},
 ) => {
   const sent: Sent[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -153,6 +155,26 @@ const fakeServer = (
     }
     if (url.includes('/api/auth/get-session')) return json(SESSION);
     if (url.endsWith('/api/org/inbox')) return json(inbox);
+    if (options.plan === true && url.endsWith(`/api/artifacts/${PLAN_ARTIFACT}`)) {
+      return json({
+        id: PLAN_ARTIFACT,
+        task_id: TASK,
+        artifact_type: 'ImplementationPlan',
+        version: 2,
+        schema_version: '1',
+        produced_by_run_id: null,
+        created_at: '2026-09-29T08:30:00.000Z',
+        redaction_count: 0,
+        markdown: null,
+        data: {
+          estimated_size: 'L',
+          files_to_change: Array.from({ length: 6 }, (_, index) => ({
+            path: `src/file-${index}.ts`,
+            change: 'edit',
+          })),
+        },
+      });
+    }
     if (url.endsWith('/api/projects')) return json({ items: [PROJECT_ROW] });
     for (const [taskId, key] of Object.entries(tasks)) {
       if (url.endsWith(`/api/tasks/${taskId}`)) return json(detail(taskRecord(taskId, key)));
@@ -226,22 +248,48 @@ describe('the approval row', () => {
     expect(container.textContent).not.toContain(' · due ');
   });
 
-  it('links to the task, where it is decided, and names the kind in words', async () => {
+  it('links to the task with Review plan, and says the plan was not recorded when it was not', async () => {
     inbox = { questions: [], approvals: [approval(DUE)] };
     await renderInbox(fakeServer().fetchImpl);
-    expect(screen.getByRole('link', { name: 'Decide on the task' }).getAttribute('href')).toBe(
+    expect(screen.getByRole('link', { name: 'Review plan' }).getAttribute('href')).toBe(
       `/tasks/${TASK}`,
     );
-    expect(screen.getByText('Plan approval is waiting for you')).toBeTruthy();
+    // An approval asked before approvals recorded their plan: said, never guessed (TD-035).
+    expect(screen.getByText('Plan approval · the plan it is about was not recorded')).toBeTruthy();
     // One link per approval row, not a title link and a button to the same task.
     expect(
       screen.getAllByRole('link').filter((link) => link.getAttribute('href') === `/tasks/${TASK}`),
     ).toHaveLength(1);
     // S-23.26: that one link is the row's stretched link, so a click anywhere on the row opens the
-    // task — where the approval is decided; the row itself decides nothing.
-    expect(
-      screen.getByRole('link', { name: 'Decide on the task' }).hasAttribute(ROW_LINK_ATTRIBUTE),
-    ).toBe(true);
+    // task — where the approval is decided with the plan on screen; the row decides nothing.
+    expect(screen.getByRole('link', { name: 'Review plan' }).hasAttribute(ROW_LINK_ATTRIBUTE)).toBe(
+      true,
+    );
+    // No row approves in one click (S-25.1).
+    expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
+  });
+
+  it('names the plan it is about — version, size and files — read off the plan itself', async () => {
+    inbox = {
+      questions: [],
+      approvals: [
+        {
+          ...approval(DUE),
+          subject: {
+            kind: 'plan',
+            artifact_id: PLAN_ARTIFACT,
+            artifact_version: 2,
+            stage: 'architecture',
+            attempt: 1,
+            basis: 'recorded',
+          },
+          reasons: [{ code: 'size_at_or_above', size: 'L', threshold: 'L', source: 'dial' }],
+        },
+      ],
+    };
+    await renderInbox(fakeServer({}, { plan: true }).fetchImpl);
+    expect(await screen.findByText('Plan v2 · size L · 6 files')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Review plan' })).toBeTruthy();
   });
 });
 
@@ -298,11 +346,11 @@ describe('the filters', () => {
     await user.click(button(/^Approvals/));
     expect(button(/^Approvals/).getAttribute('aria-pressed')).toBe('true');
     expect(screen.queryByText('Should the retry budget be three or five?')).toBeNull();
-    expect(screen.getByText('Plan approval is waiting for you')).toBeTruthy();
+    expect(screen.getByText('Plan approval · the plan it is about was not recorded')).toBeTruthy();
 
     await user.click(project);
     expect(screen.getByText('Should the retry budget be three or five?')).toBeTruthy();
-    expect(screen.queryByText('Plan approval is waiting for you')).toBeNull();
+    expect(screen.queryByText('Plan approval · the plan it is about was not recorded')).toBeNull();
   });
 });
 

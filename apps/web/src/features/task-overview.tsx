@@ -1,7 +1,12 @@
 /**
  * The task page's **Overview** tab (S-23.9b, research/19 § 5.2 "Task"): the pipeline as a live
- * graph (S-23.5's `TaskFlow`), the stage that is running now, the stage timeline, then *Ask the
- * task* and the feedback form.
+ * graph (S-23.5's `TaskFlow`) whose list mode is the stage timeline, the stage that is running now,
+ * then *Ask the task* and the feedback form.
+ *
+ * **The stage timeline is the Flow's list mode** (S-25.4, product/10's Stages amendment): *List*
+ * — and a screen narrower than the canvas — shows it in the canvas's place, so the page draws the
+ * pipeline once rather than a canvas with a second drawing of it stacked underneath. An entry's
+ * stage name opens the same stage dialog a canvas card does.
  *
  * **The stage timeline** lists the newest attempt first, each leading to its latest run (WP-154 (a)
  * and (b), `./stage-timeline.ts`), and says for each how long it took, what its runs cost and —
@@ -15,6 +20,7 @@ import { UndoIcon } from '@primer/octicons-react/UndoIcon';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import type { useTaskCommands } from '../app/queries.js';
+import { cx, FOCUS_RING } from '../ui/cx.js';
 import { STAGE_STATE_LABEL, stageLabel } from '../ui/humanize.js';
 import {
   Badge,
@@ -23,7 +29,6 @@ import {
   formatElapsed,
   formatUsd,
   NOT_MEASURED,
-  SectionHeading,
 } from '../ui/kit.js';
 import { type Status, StatusIcon } from '../ui/status.js';
 import { Timeline, TimelineItem } from '../ui/timeline.js';
@@ -99,13 +104,15 @@ const StageTimeline = ({
   stages,
   runs,
   nowMs,
+  openerFor,
 }: {
   readonly stages: TaskDetailResponse['stages'];
   readonly runs: readonly RunRecord[];
   readonly nowMs: number;
+  /** The stage dialog's opener for a stage the flow has a card for (`FlowListMode`). */
+  readonly openerFor: (stageId: string) => (() => void) | null;
 }): ReactElement => (
-  <div className="flex flex-col gap-2">
-    <SectionHeading>Stage timeline</SectionHeading>
+  <div data-stage-timeline="" className="flex flex-col gap-2">
     {stages.length === 0 ? (
       <EmptyState
         title="No stages yet"
@@ -116,6 +123,7 @@ const StageTimeline = ({
       <Timeline label="Timeline, newest first">
         {timelineEntries(stages, runs).map(({ stage, link }) => {
           const cost = stageCostText(stage, runs);
+          const open = openerFor(stage.stage);
           return (
             <TimelineItem
               key={`${stage.stage}:${stage.attempt}`}
@@ -139,7 +147,20 @@ const StageTimeline = ({
               }
             >
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{stageLabel(stage.stage)}</span>
+                {open === null ? (
+                  <span className="font-medium">{stageLabel(stage.stage)}</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={open}
+                    className={cx(
+                      'rounded-sm font-medium hover:text-link hover:underline',
+                      FOCUS_RING,
+                    )}
+                  >
+                    {stageLabel(stage.stage)}
+                  </button>
+                )}
                 <Badge
                   tone={
                     stage.state === 'completed'
@@ -196,8 +217,13 @@ export const TaskOverview = ({
   const finished = task.state === 'done' || task.state === 'cancelled';
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      {/* S-23.5: the task's pipeline as a live graph. */}
-      <TaskFlow taskId={task.id} />
+      {/* S-23.5: the task's pipeline as a live graph; S-25.4: its list mode is the timeline. */}
+      <TaskFlow
+        taskId={task.id}
+        listMode={(openerFor) => (
+          <StageTimeline stages={stages} runs={runs} nowMs={nowMs} openerFor={openerFor} />
+        )}
+      />
       {/* Backlogs 455 (1) and 496: the live stage, its elapsed time and its latest progress line. */}
       {liveRun === null ? null : <LiveStagePanel key={liveRun.id} run={liveRun} />}
       {/*
@@ -207,7 +233,6 @@ export const TaskOverview = ({
       {merged && takenOver === null && !finished ? (
         <p className="text-xs text-fg-muted">{MERGED_NO_TAKE_OVER}</p>
       ) : null}
-      <StageTimeline stages={stages} runs={runs} nowMs={nowMs} />
       {task.template === EPIC_SPLIT_TEMPLATE && breakdownRead && !breakdownWaiting ? (
         <BreakdownPanel taskId={task.id} enabled />
       ) : null}

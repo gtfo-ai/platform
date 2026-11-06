@@ -3,9 +3,10 @@
  * real router, query client and published parsers are in the path:
  *
  * - the task page's Flow section: the canvas on a wide screen with the ordered list beside it for
- *   screen readers; the list instead of the canvas below 768 px or when *List* is pressed; a card
- *   opens the stage dialog — live activity, the log (untrusted text kept as text), the watch-only
- *   note, *Open run* — and a live `run:<id>` frame moves both;
+ *   screen readers; the stage timeline — the task page's list mode (S-25.4) — instead of the canvas
+ *   below 768 px or when *List* is pressed, never both; a card or a timeline entry opens the stage
+ *   dialog — live activity, the log (untrusted text kept as text), the watch-only note, *Open run* —
+ *   and a live `run:<id>` frame moves both;
  * - the Pipeline tab: the template picker, a stage's configuration in the dialog, the effective
  *   configuration folded below.
  *
@@ -237,6 +238,12 @@ const json = (body: unknown, status = 200): Response =>
 
 const BUG_GRAPH = { ...FEATURE_GRAPH, template: 'bug' };
 
+/**
+ * Holds the run's transcript page back until a test releases it, so a test that asserts what the
+ * card says **before** the transcript arrives does not race the read (`null`: answered at once).
+ */
+let transcriptGate: Promise<void> | null = null;
+
 const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   const url = String(input);
   if (url.includes('/api/auth/get-session')) return json(SESSION);
@@ -244,7 +251,10 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   if (url.endsWith(`/api/tasks/${TASK}/asks`)) return json({ items: [] });
   if (url.endsWith(`/api/tasks/${TASK}/audit`)) return json({ items: [] });
   if (url.endsWith(`/api/tasks/${TASK}`)) return json(detail);
-  if (url.includes(`/api/runs/${RUN}/messages`)) return json({ items: messages, next_seq: null });
+  if (url.includes(`/api/runs/${RUN}/messages`)) {
+    await transcriptGate;
+    return json({ items: messages, next_seq: null });
+  }
   if (url.endsWith('/api/org/agents')) return json(agents);
   if (url.endsWith(`/api/projects/${PROJECT}/pipeline`)) {
     return json({ items: [FEATURE_GRAPH, BUG_GRAPH] });
@@ -274,6 +284,7 @@ const start = (path: string) => {
 };
 
 afterEach(() => {
+  transcriptGate = null;
   cleanup();
   vi.restoreAllMocks();
 });
@@ -283,19 +294,49 @@ beforeEach(() => {
 });
 
 describe('the task page’s Flow section', () => {
-  it('shows the list instead of the canvas below 768 px, with each stage’s state', async () => {
+  it('shows the stage timeline instead of the canvas below 768 px, and never both (S-25.4)', async () => {
     viewport(600);
     start(`/tasks/${TASK}`);
-    const list = await screen.findByRole('list', { name: 'Feature pipeline as a list' });
-    expect(list.getAttribute('data-flow-list')).toBe('shown');
+    const user = userEvent.setup();
+    // The task page's list mode is its timeline: the attempts newest first, with their runs.
+    const timeline = await screen.findByRole('list', { name: 'Timeline, newest first' });
     expect(screen.queryByTestId('flow-canvas-frame')).toBeNull();
+    // The pipeline is drawn once: no stage-card list beside the timeline.
+    expect(screen.queryByRole('list', { name: 'Feature pipeline as a list' })).toBeNull();
+    expect(document.querySelectorAll('[data-stage-timeline]')).toHaveLength(1);
     // No List toggle where there is no canvas to toggle from.
     expect(screen.queryByRole('button', { name: 'List' })).toBeNull();
+    // An entry's stage name opens the same stage dialog a card does.
+    await user.click(within(timeline).getByRole('button', { name: 'Implementation' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Implementation' });
+    expect(within(dialog).getByRole('link', { name: 'Open run' }).getAttribute('href')).toBe(
+      `/runs/${RUN}`,
+    );
+  });
+
+  it('says each stage’s state on the cards, the list a screen reader reads beside the canvas', async () => {
+    viewport(1280);
+    // The transcript page is held back: until it answers, the card can only be the agents read's.
+    let releaseTranscript: () => void = () => undefined;
+    transcriptGate = new Promise<void>((resolve) => {
+      releaseTranscript = resolve;
+    });
+    start(`/tasks/${TASK}`);
+    const list = await screen.findByRole('list', { name: 'Feature pipeline as a list' });
+    expect(list.getAttribute('data-flow-list')).toBe('screen-reader');
     // The current card says what the agent is doing — the agents read's newest entry, until the
     // transcript has delivered anything.
-    await within(list).findByRole('button', {
-      name: 'Implementation, Developer, Working, Now: Reading files, claude-test · high',
+    const reading = 'Implementation, Developer, Working, Now: Reading files, claude-test · high';
+    await within(list).findByRole('button', { name: reading });
+    // …and once the transcript has delivered, the card reads it instead (its last entry is six
+    // minutes before the fixture's clock, so the agents read's word is gone).
+    releaseTranscript();
+    await waitFor(() => {
+      expect(within(list).queryByRole('button', { name: reading })).toBeNull();
     });
+    expect(
+      within(list).getByRole('button', { name: /^Implementation, Developer, / }),
+    ).toBeDefined();
     expect(
       within(list).getByRole('button', { name: /^Refinement, Product manager, Done, / }),
     ).toBeDefined();
@@ -307,7 +348,7 @@ describe('the task page’s Flow section', () => {
   });
 
   it('opens a stage’s run: live activity, the log as text, the seat, and follows the stream', async () => {
-    viewport(600);
+    viewport(1280);
     const app = start(`/tasks/${TASK}`);
     const user = userEvent.setup();
     const list = await screen.findByRole('list', { name: 'Feature pipeline as a list' });
@@ -424,23 +465,21 @@ describe('the task page’s Flow section', () => {
     expect(copies.length).toBe(FEATURE_GRAPH.nodes.length);
     expect(copies.every((button) => button.getAttribute('tabindex') === '-1')).toBe(true);
 
+    // Beside the canvas, the timeline is not drawn a second time (S-25.4).
+    expect(screen.queryByRole('list', { name: 'Timeline, newest first' })).toBeNull();
+
     const toggle = screen.getByRole('button', { name: 'List' });
     expect(toggle.getAttribute('aria-pressed')).toBe('false');
     await user.click(toggle);
     expect(toggle.getAttribute('aria-pressed')).toBe('true');
     expect(screen.queryByTestId('flow-canvas-frame')).toBeNull();
-    expect(
-      screen
-        .getByRole('list', { name: 'Feature pipeline as a list' })
-        .getAttribute('data-flow-list'),
-    ).toBe('shown');
-    expect(
-      screen
-        .getAllByRole('button', { name: /^Implementation, / })
-        .every((button) => button.getAttribute('tabindex') === null),
-    ).toBe(true);
+    // The task page's list mode is its stage timeline, in the canvas's place.
+    const timeline = screen.getByRole('list', { name: 'Timeline, newest first' });
+    expect(within(timeline).getAllByTestId('timeline-entry')).toHaveLength(2);
+    expect(screen.queryByRole('list', { name: 'Feature pipeline as a list' })).toBeNull();
     await user.click(toggle);
     expect(await screen.findByTestId('flow-canvas-frame')).toBeDefined();
+    expect(screen.queryByRole('list', { name: 'Timeline, newest first' })).toBeNull();
   });
 
   it('expands to the full screen and back, Escape included', async () => {

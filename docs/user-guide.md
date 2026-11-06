@@ -60,10 +60,11 @@ shows only its number. There is no
 
 **Inside a project the row becomes the project's own tabs** — **Board**, **Knowledge**,
 **Pipeline**, **Budgets**, **Shadow** and **Settings** — under a header with the project's name, its
-key, its readiness level and — on the board, if you may start a ticket in it — a **Start a ticket**
-button. A task's page sits under its project's header too, on the Board tab, when opened from its
-board; from the inbox or Agents it does not yet. Every address is the one it always was:
-`/projects/ACME` is the board, `/projects/ACME/knowledge` its knowledge, and so on.
+key, its readiness (what agents may do there, below under *Projects*) and — on the board, if you may
+start a ticket in it — a **Start a ticket** button. A task's page sits under its project's header
+too, on the Board tab, when opened from its board; from the inbox or Agents it does not yet. Every
+address is the one it always was: `/projects/ACME` is the board, `/projects/ACME/knowledge` its
+knowledge, and so on.
 
 **The top bar and the row under it stay at the top while you scroll** — inside a project only the tabs
 do, and the project's name scrolls away; on a phone only the top bar stays, so the page keeps the screen.
@@ -133,7 +134,7 @@ key chord with ⌘ or Ctrl cannot be typed by accident.
 
 **A row that opens something opens from anywhere on it**, not only from its title: a project, a
 run, an integration, a task on the board (its card too), a *Needs you* item — which opens its task,
-so **Approve** and **Answer** are always decided on the task page, never by a click on the row. A
+so an approval (**Review plan**) and a question (**Answer**) are always decided on the task page, never by a click on the row. A
 row's own buttons and menus (`···`, *Open task*, a problem's repair) keep their own click. The row
 is still an ordinary link, so ⌘-click or a middle click opens it in a new tab and right-click copies
 it. A row with nowhere to go — a worker, an audit entry, a knowledge proposal — does not light up
@@ -175,8 +176,13 @@ Every step is also on the project's **Settings** page, so nothing is reachable o
 
 ### Step 1 — Connect
 
-Three sections on one page. **Project details**: give the project a **key**, a name, a repository
-URL and its **default branch** — *Create project* creates it and keeps you on this step. Then
+Three sections on one page. **Project details** starts from the **repository URL**: paste it, and
+the **name** and the **key** are proposed from it — `https://gitlab.com/autix/autix-core.git` (or
+`git@gitlab.com:autix/autix-core.git`) proposes the name *autix-core* and the key `autix_core`. Both
+stay editable: a field you typed into is yours, and changing the URL afterwards leaves it alone;
+while you have not touched the key, it follows the name you type. Then the **default branch**, which
+is **not** proposed — a URL does not say which branch is the default, and nothing has asked the git
+provider yet. *Create project* creates the project and keeps you on this step. Then
 **Integrations**: the ones it uses. Then **Ticket lifecycle** (below).
 
 The default branch is required (WP-139): it is the branch every run checks out, every merge request
@@ -524,14 +530,17 @@ answers three questions in this order: what needs you, what is moving, and where
 - **Needs you (N)** comes first: every open question and pending approval in the organisation, and
   every task that was escalated to a person (*Needs you* on its board) and has no question or
   approval of its own. Each row names the project, the ticket and the stage, the question's first
-  line (an agent's words, shown as plain text), how long it has waited, and the action — **Answer**,
-  **Approve** or **Open** — which opens the task. The oldest waits at the top; the box shows five
+  line (an agent's words, shown as plain text) or **what the approval is about** (*Plan v2 · size L ·
+  6 files*, a budget's estimate and threshold, or *the plan it is about was not recorded* for one
+  asked before approvals recorded their plan), how long it has waited, and the action — **Answer**,
+  **Review plan** or **Open** — which opens the task. No row approves in one click: the plan is read
+  on the task page, beside its buttons. The oldest waits at the top; the box shows five
   and **View inbox →** has the rest. When nothing waits it says *Nothing needs you right now.*
 - **Running now (N)**: every run that is running — its stage and role (the link to the run), the
   project, the ticket, the model, how long it has run, what it has cost so far and the latest
   progress line the agent reported. **Agents →** has the whole list.
 - **Projects**: one row per project — its name (the way into its board), its key, its readiness
-  level, its open tasks and its spend over the last 30 days — and, for an admin, **New project**,
+  (what agents may do there, as on the Projects page), its open tasks and its spend over the last 30 days — and, for an admin, **New project**,
   which opens the wizard.
 - On the right, **Spend** — *Against the monthly cap*, the organisation's monthly cap as
   *$412 of $1,000* with a meter, when one is set (the month so far), and *Spend, last 30 days*
@@ -569,11 +578,20 @@ replaced or the integration is retired. **Fix it** opens that integration, whose
 ### Projects
 
 **Projects** in the top navigation: every project you can read, one row each — its name (the way
-into its board), its key, its **readiness** level with the level's name (*L0 Unverified* in red;
-*L1 Basic* and *L2 Reliable*; *L3 Agent-ready* and up in green), its open tasks and its spend over
-the last 30 days. **New project** at the top right opens the wizard; with no project yet, the page
+into its board), its key, its **readiness**, its open tasks and its spend over the last 30 days. **New project** at the top right opens the wizard; with no project yet, the page
 says what a project is and offers the same. How many things wait for you is not shown per project
 yet — the inbox's count in the top bar is the total.
+
+**Readiness says what agents may do in the project**, not the ladder's number
+([product/17](product/17-repository-readiness.md)): *Plans need your OK* at level 0 — the normal
+start, drawn in a neutral grey, never red — *Big plans need your OK* at levels 1 and 2, *Agents plan
+on their own* at level 3 and *Ready for more autonomy* at level 4, the last two in green. The same
+badge is on the project's header and on Home. **Press it** (or focus it and press Enter) for its
+definition: the level's name and number (*Level 0 · Unverified*), what the level means now, the next
+level and what it needs, the first criterion it is missing with how to fix it, and a link to the
+project's *Discovery & readiness* settings. The missing criterion is read from the project's latest
+readiness evaluation when you open it; a project discovery has not evaluated yet says nothing is
+known to be missing.
 
 ### Agents
 
@@ -637,9 +655,13 @@ are still shown, on a seat named from the run); and an escalated task with no qu
 
 **A project → Board**, the project's first tab. Five columns — **Queued**, **Active**, **Needs you**,
 **Ready to merge** and **Done** — each headed by its name and how many tasks it holds; *Needs you*
-is lit amber, because that is where your work is. Two placements to know: **a task paused by hand
-sits in Needs you** too (without the ◆, because a pause a person made waits on nobody), and **a
-merged task, and one in its retrospective, stays under Ready to merge** until it is done. On a
+is lit amber, because that is where your work is. **A task sits in Needs you whenever something
+waits on a person** — an open question, a pending approval, a task that needs a human, one its
+budget paused or one somebody took over — whatever stage it is in (a done or cancelled task never
+does, whatever it left open), so the column, the card's ◆ and the task page's state always say the
+same thing. Two placements to know: **a task paused by hand
+sits in Active** (a pause a person made waits on nobody; its card says *Paused*), and **a merged
+task, and one in its retrospective, stays under Ready to merge** until it is done. On a
 narrow screen the columns scroll sideways, one column at a time, rather than wrapping, so the
 pipeline still reads left to right.
 
@@ -660,7 +682,8 @@ pipeline still reads left to right.
 - a **◆** when the task waits on a person — a question, an approval, a task that needs a human, a
   task its budget paused or one somebody took over — with the number of open questions and pending
   approvals beside it (a task paused by hand is somebody's choice, and has none);
-- a badge per loop the task has gone round, against its limit: *Review 2/3* (two review rounds of three);
+- a badge per loop the task has gone round, in rounds against its limit: *Review round 2 of 3*
+  (*Review round 2* when the limit is not known);
 - *touches ACME-12 · 3 files* when the rebase gate found that another active task changes the same
   files (the comparison runs at the rebase gate, so no badge means *not compared yet*).
 
@@ -721,12 +744,15 @@ The task page reads like a pull request: what the task is, where it is, and what
 live on that task's topic.
 
 - **The header** is the ticket's title with its key after it in grey (the key alone when the
-  platform never read the title), the task's state as a label with its icon, and one line: the
-  template, the stage it is in, what it has cost so far and how long ago it was opened. Under it,
+  platform never read the title), the task's state as a label with its icon — *Needs you* whenever
+  something waits on a person, by the same rule as the board's column — and one line: links to the
+  **Ticket** and the **Merge request** (once there is one), the template, the stage it is in, what it
+  has cost so far and how long ago it was opened. Under it,
   the phase strip — one glyph per stage, the current one pulsing — names the stage and what the agent
   is doing now. On the right is **one button, chosen by what the task is waiting for**: *Hand back…*
   while you hold it (below), *Answer* when an agent asked a question (it takes you to the answer
-  box), *Approve…* when a plan or a budget waits for a maintainer, *Raise this task's cap…* when the
+  box), *Review plan* when a plan or a budget waits for a maintainer (it takes you to the approval in
+  the needs-you box, where the plan is shown), *Raise this task's cap…* when the
   task's own cap paused it and you may raise budgets, *Resume* when the task is paused or waiting
   for a person — and none when nothing waits on you. Resume is never offered past an open question
   or a pending approval: answer or decide it instead. Everything else is in the **`···`**
@@ -738,17 +764,17 @@ live on that task's topic.
   Pause and Take over on a queued task, Take over on a task somebody paused, Cancel once the task
   is merged or in its retrospective.
 - **The needs-you box**, under the header, appears only when something waits on a person: each open
-  question with its answer box, each pending approval with *Approve* and *Reject*, an escalation
+  question with its answer box, each pending approval with *Approve* and *Reject…* (see *Deciding an
+  approval* below), an escalation
   with the word its stage was closed with (*"Needs you: the gate could not decide in its allotted
   checks."*) and *Return to stage…*, *Rework…* and *Retry stage…*, a budget pause with whose cap is
   spent and where it is raised, and an epic's proposed breakdown
   while a maintainer has something left to decide on it.
-- **Four tabs**: *Overview* (the flow, the running stage, the stage timeline, Ask the task and
-  feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status,
+- **Four tabs**: *Overview* (the flow — the graph, or its list: the stage timeline — the running
+  stage, Ask the task and feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status,
   model, cost and duration) and *Activity* (who did what). The tab is in the address (`?tab=runs`),
   so a link opens the same tab; a link to an artifact opens the Artifacts tab on it.
-- **On the right, Checks** — the merge box (below) — then the cost against the task's cap, then the
-  ticket and the merge request.
+- **On the right, Checks** — the merge box (below) — then the cost against the task's cap.
 
 **The Flow, at the top of the Overview**, is the task's own pipeline as a graph, the way it was frozen
 when the task started. Each card says where the task is: *Done* with how long the stage took and what
@@ -764,10 +790,12 @@ of thinking or writing) beside a **Log** that follows the end of the run until y
 the end* resumes), both updating as the agent works. It is watch-only and says where the agent runs
 (the platform's server or a named worker); *Open run* goes to the run page, where you can steer or
 stop it, and *Open artifact* opens what the stage wrote on this page. A stage no agent runs (a gate,
-Ready to merge) shows its configuration instead. **List**, **Full screen** and the narrow-screen list
-work as on the Pipeline tab (section 8).
+Ready to merge) shows its configuration instead. **Full screen** works as on the Pipeline tab
+(section 8). **List** — and a screen too narrow for the graph — shows the **stage timeline** in the
+graph's place, so the pipeline is drawn once, never as a graph with a second drawing under it.
 
-**The stage timeline lists the newest stage first**, and each entry opens the run of that stage
+**The stage timeline lists the newest stage first**; a stage's name opens the same panel a card of
+the graph does, and each entry opens the run of that stage
 attempt: *Open the run* (*Open the run (live)* while it is running) goes to its transcript, and when
 the attempt ran more than once — a retry of the same attempt, say — to the latest run. *Why the run
 did not start* goes to the run page of a run that never reached its agent, which says why instead of
@@ -815,9 +843,30 @@ The commands in the table below — the header's one button and the `···` men
 **The page offers only what your role may do**: the *Who* column is checked by the server for each
 of you, so a member sees no *Cancel task…*, *Return to stage…* or *Rework…*, and where an approval
 waits the needs-you box says *A maintainer decides this* instead of offering Approve and Reject; a
-viewer is offered no *Pause* or *Resume* either. **Reject** asks first — in the needs-you box as in
-the header's *Approve…* dialog — saying what rejecting does, with an optional reason recorded with
-the decision.
+viewer is offered no *Pause* or *Resume* either. **Reject** asks first, saying what rejecting does,
+with an optional reason recorded with the decision.
+
+**Deciding an approval.** An approval shows what it approves, why it was asked, and how to stop being
+asked — so you never approve blind:
+
+- **The plan itself, open**: its approach, its size, the files it changes and its risks, then **Read
+  the whole plan** (open as well) with the alternatives, data and API changes, the test plan and the
+  rest. It is *the* plan the approval was asked about — its version and stage attempt are named — not
+  whatever plan is newest. A budget approval shows the estimate and the threshold it crossed.
+- **Why you are asked**: every reason the platform recorded — the project is on probation (*2 of its
+  first 5 tasks are done*), the plan touches a risk class (named), its size reached the threshold, the
+  autonomy dial or a stage override asks for every plan, or the estimate is above the budget threshold.
+- **How to stop being asked**, under each reason, with a link to the setting that retires it: the
+  autonomy dial or the size threshold (*Settings → Policies & WIP*), a stage override
+  (*Repository configuration*), the risk-class rule (keeping it is recommended), or probation, which
+  ends by itself after its tasks are done or when a maintainer ends it. The platform names the lever;
+  it never pulls it. Approvals are meant to become rarer as trust grows.
+- **What happens next**: *Approve* — Implementation starts on this plan; *Reject* — the plan goes back
+  to Architecture with your reason (a budget's reject stops the task for a person).
+
+*Approve* approves exactly the plan on screen. An approval asked before approvals recorded their plan
+says *not recorded*, and — like one whose plan has since been replaced by a newer one — it can only
+be rejected, which asks for a fresh plan. A Slack button still approves without showing the plan.
 Each is an operation the task aggregate either performs or **refuses by name** — a refusal comes back as an
 error naming the transition, not as a silent no-op — and each accepted one leaves a row in the audit.
 
@@ -916,8 +965,11 @@ not to obey. A shadow task posts none of this: each write is recorded as what it
 ### The checks panel
 
 The checks are a **merge box**, as on a pull request: one line on top — *All required checks pass*,
-*2 checks need you* (something failed, or waits on a person), or *3 required checks are not
-decided yet* — and one row per check with a status icon, its name and its value. Point at (or tab to)
+*2 checks need you* (a check failed, or a gate stopped for a person), or *3 required checks are not
+decided yet* — and one row per check with a status icon, its name and its value. **The line counts
+checks only**: an open question or a pending approval is the needs-you box's, above, so it is not
+counted as a check; while one waits, a second line says so (*Questions and approvals waiting for a
+person are in the box above*), and their rows read *1 · see above*. Point at (or tab to)
 a name for its definition; open a row for the sentence its value rests on — which attempt of a gate,
 what the estimate was computed from, which base the coverage was measured against, which packages and
 licences, which reviewers and why. A check that has not been made, or whose record cannot say what it
@@ -1021,7 +1073,7 @@ such, and so are the failing jobs past the fifth.
   accepted later), then keeps the row with your reason. Only a maintainer sees the checkboxes; everybody who can read the task can read
   the queue. The feature is off until a project turns on **Epic split** in its operating-mode
   features.
-- **Ask the task** (member) is a thread on the Overview, under the stage timeline: ask *"why did you choose X?"* and
+- **Ask the task** (member) is a thread on the Overview, under the Flow: ask *"why did you choose X?"* and
   the answer is written from the task's audit trail and artifacts, citing the exact run, artifact or
   action it rests on — each citation is a link into this application, never a link the model wrote.
   An ask starts a run and spends the project's money, which is why it needs a member rather than a
@@ -1031,13 +1083,15 @@ such, and so are the failing jobs past the fifth.
 ## 5. Run detail and the transcript
 
 Click a run — in the task's run list, under *Running now* on Home, or on the Agents screen. The page
-is laid out like a GitHub Actions job:
+sits inside its project, under the project's header and tab row (its address stays `/runs/<id>`), and is
+laid out like a GitHub Actions job:
 
-- **The header** leads back to the task, by its ticket key and title, and names the run: its status
-  icon, the stage, the role and the attempt (*Implementation · Developer · attempt 3*). The actions
-  are on the right. **Cancel run** is there while the run is live — the only coloured button then
-  (the steer box's *Steer* and the transcript's *Following* toggle are plain), and it asks before it
-  cancels. **Re-run ▾** is offered once the run has ended — the server refuses a re-run of a live
+- **The header** leads back to the task in its project, by its ticket key and title, and names the
+  run: its status icon, the stage, the role and the attempt (*Implementation · Developer · attempt
+  3*). The actions are on the right. **Cancel run** is there while the run is live — a red-outlined
+  button, never the amber one: while a run is live, watching is the job, so the page has no primary
+  button at all (the steer box's *Steer* and the transcript's *Following* toggle are plain), and it
+  asks before it cancels. **Re-run ▾** is offered once the run has ended — the server refuses a re-run of a live
   one — and becomes the primary button once a run has failed. The
   **···** menu holds **Take over…** (**Taken over: resume / hand back…** while the task is taken over), which opens the
   same take-over form and hand-back the task page has, and **Download transcript**, the run's
@@ -1047,7 +1101,9 @@ is laid out like a GitHub Actions job:
   (described under *Settings* below), where an unsuccessful run's unfinished work was saved, and the
   version of the role prompt the run was given.
 - **The summary strip** gives the status, where it runs (*Runs on* the platform server,
-  or a developer's remote worker by the name its owner gave it), once the run has ended **Ended
+  or a developer's remote worker by the name its owner gave it; *waiting to be picked up* while
+  nobody has taken the run yet, and *not recorded* when the platform no longer holds who ran it),
+  once the run has ended **Ended
   because** (*Succeeded*, *Ran out of turns*, *Hit its budget*, *Lost its worker*, …), the model, the
   effort, the cost (marked *est.* when the
   platform estimated it), the elapsed time, the turns and the tokens (in, out, and read from the prompt cache). Hover or focus a label for
@@ -1055,7 +1111,9 @@ is laid out like a GitHub Actions job:
   same words.
 - **While the run is live**, a *Now:* line says what the agent is doing, in the words the board and
   the Agents screen use (*Reading files*, *Running a command*, *No activity for 6 min*), with its
-  last few steps listed under it (a list a screen reader names *Live activity*).
+  last few steps listed under it (a list a screen reader names *Live activity*). When it says *Now:
+  Needs you*, it links to what the task waits for — *Answer the question →* onto the answer box,
+  *Review plan →* onto the approval, or *See what it needs →* — on the task's page.
 
 Then four tabs:
 
@@ -1168,10 +1226,12 @@ computed from whatever two samples the browser happened to see is a number with 
 **Inbox** in the top navigation: everything pending for you, across every project, answerable in
 place — laid out like GitHub's notifications. The left column filters the list: **All**,
 **Questions**, **Approvals**, or one project, each with its count. Each row starts with the
-*needs you* bell, then the question's first line (or *Plan approval is waiting for you*), and under it
+*needs you* bell, then the question's first line (or what the approval is about — *Plan v2 · size L ·
+6 files*), and under it
 where it is — project · ticket · stage — how long ago it was asked and when it is due. Click a
 question's line and the row opens in place: the whole question, a **Your answer** box and **Answer**.
-An approval's row links to the task, where it is decided (**Decide on the task**). With nothing
+An approval's row links to the task, where it is decided with the plan on screen (**Review plan**);
+no row approves in one click. With nothing
 pending the page says *Nothing needs you*.
 
 A question the agent asks may also arrive in Slack, and all channels are equivalent — **the first
@@ -1247,7 +1307,9 @@ repository, grouped by folder; click one to read it beside the list. Above the d
 
 and below it the **proposals**, one row each: the page it would change, its type and kind, where it
 came from (*mined from merged history*, *drafted at project setup*, *from a task* …) and its
-significance; **The change and its evidence** under a row holds the change itself and what it cites.
+significance; **The change and its evidence** under a row holds the change itself and what it cites,
+and it is **open** on every row still waiting for a decision, so *Approve* is never pressed with the
+change collapsed.
 **Approve** is on the row and **Reject** is in its `···` menu; a decision the server refuses says so
 under the list.
 
@@ -1368,21 +1430,41 @@ the launch candidates and every ticket with its similarity — or the reason it 
 
 ## 9. Integrations
 
-**Integrations** lists the organisation's connected systems — ticket tracker, git host, chat, logs,
-error tracker — one row each: its health (*Healthy*, *Degraded*, *Down*, *Not checked*, or
-*Retired*) as an icon and a word, its name, its provider and kind, when it was last checked
-(*checked 5 m ago*), and how many projects bind it. Each row's **`···`** menu has **Test connection**
-(the answer appears under the row), **Setup guide**, **Edit configuration**, **Replace credentials**
-and **Retire**. Click a name to open the integration's own page, with three tabs:
+**Integrations** lists the organisation's connected systems, grouped by what each does for a project
+— **Tickets**, **Code & merge requests**, **Chat**, **Errors**, **Logs** — one row each: its health
+**now** as an icon and a word, its name, its provider (a small glyph for its role — a merge for a git
+host, an open issue for a ticket tracker — and the provider's name; never the provider's logo),
+what the health was read from and how long ago (*last call 5 m ago*, *last delivery 1 h ago*, *tested
+3 h ago*), and the projects that use it, linked (*Used by Autix*; past two, *Used by Autix, Demo +2*,
+the rest named when you hover the count).
 
-- **Overview** — anything wrong with it, its configuration (each setting under its name in words,
-  with the key beside it, `site_url`), and the projects that bind it. **Test connection** is the
-  page's button, and the `···` beside it holds the rest.
+The health is read from the integration's **traffic**, not only from the last test: the last call the
+platform made to the provider, and the last webhook (or poll) delivery it received and verified, with
+the last **Test connection** as one more fact. *Working* means something succeeded in the last
+24 hours; *Some calls failing* means the newest call failed after one that worked; *Failing* means
+calls failed and none worked; *Not checked recently* means nothing happened in the last 24 hours — a
+test that passed a month ago does not make an integration *Working* — and an administrator gets a
+**Test again** button on that row; *Never checked* means nothing has happened at all; and *Retired*.
+A failed call can be one request's fault (a ticket that no longer exists), which is why one failure
+after a success reads *Some calls failing* and the next successful call clears it.
+
+Each row's **`···`** menu has **Test connection** (the answer appears under the row), **Setup guide**,
+**Edit configuration**, **Replace credentials** and **Retire**. Click anywhere on a row to open the
+integration's own page, with three tabs:
+
+- **Overview** — anything wrong with it; its **health** with the facts it was read from (the last call
+  and whether it succeeded, the last delivery, the last connection test), each with its age; the
+  **projects** that use it, each with what for (*Autix · Tickets from AUT · Picked up with label
+  agentic*); and its configuration, each setting under its name in words. **Test connection** is the
+  page's button, and the `···` beside it holds the rest. Secrets are stored encrypted and never shown.
 - **Setup guide** — the provider's own guide, written for the provider's screens and the same text
   the operator reads. For a provider with an inbound webhook it shows the webhook URL to paste into
   the provider, with a **Copy** button; a provider with no inbound half says it has none.
-- **Refused deliveries** — what the provider sent that the platform refused, and why (an unmapped
+- **Rejected webhooks** — what the provider sent that the platform refused, and why (an unmapped
   chat account, a decision the clicker may not make).
+
+GitLab, Jira, Slack, Sentry and Loki are trademarks of their respective owners; this project is not
+affiliated with or endorsed by them. The screens carry the same line.
 
 Nothing on these screens is a credential: the server strips every field a provider declares to be a
 secret before publishing an integration's configuration, and publishes nothing at all for a provider

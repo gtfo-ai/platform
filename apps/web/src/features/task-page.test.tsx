@@ -13,7 +13,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { checksSummary, dependencyStatus, gateStatus, tamperStatus } from './task-checks-text.js';
+import {
+  CHECKS_CALLOUT_POINTER,
+  checksSummary,
+  dependencyStatus,
+  gateStatus,
+  tamperStatus,
+} from './task-checks-text.js';
 import { taskPrimaryAction } from './task-header.js';
 import { currentTaskTab, taskSearchSchema, taskTabSearch } from './task-tab.js';
 
@@ -135,6 +141,37 @@ const QUESTION_ROW: TaskDetailResponse['questions'][number] = {
   answer: null,
 };
 
+/** The plan the approval is about (S-25.1): model output, hostile text in its fields (BD-022). */
+const PLAN = '00000000-0000-4000-8000-0000000000d2';
+const PLAN_DATA = {
+  approach: `Add a VAT column ${HOSTILE} and round once, at the boundary.`,
+  alternatives_considered: [{ option: 'compute VAT on read', why_not: 'slow on large invoices' }],
+  affected_modules: ['invoices'],
+  files_to_change: [
+    { path: 'src/invoice.ts', change: `round once ${HOSTILE}` },
+    { path: 'src/vat.ts', change: 'the rate table' },
+  ],
+  data_changes: ['add invoices.vat_cents'],
+  api_changes: [],
+  validation_contract: [],
+  test_plan: ['a rounding property test'],
+  rollout_notes: '',
+  risks: ['rounding drift on old invoices'],
+  estimated_size: 'L',
+  split_proposal: null,
+  decisions_to_record: [],
+  protected_path_changes: [],
+};
+
+const PLAN_SUBJECT = {
+  kind: 'plan' as const,
+  artifact_id: PLAN,
+  artifact_version: 2,
+  stage: 'architecture',
+  attempt: 1,
+  basis: 'recorded' as const,
+};
+
 const APPROVAL_ROW: TaskDetailResponse['approvals'][number] = {
   id: APPROVAL,
   task_id: TASK,
@@ -143,6 +180,30 @@ const APPROVAL_ROW: TaskDetailResponse['approvals'][number] = {
   requested_at: AT,
   decided_at: null,
   reason: null,
+  subject: PLAN_SUBJECT,
+  reasons: [
+    { code: 'probation', completed: 2, of: 5 },
+    { code: 'size_at_or_above', size: 'L', threshold: 'L', source: 'dial' },
+  ],
+};
+
+const PLAN_REF = { id: PLAN, artifact_type: 'ImplementationPlan' as const, version: 2, url: null };
+
+const PROJECT_ROW = {
+  id: PROJECT,
+  key: 'acme',
+  name: 'Acme',
+  repo_url: 'https://git.example.invalid/acme/acme.git',
+  default_branch: 'main',
+  agentic_dir: '.agentic',
+  knowledge_dir: 'knowledge',
+  autonomy_level: 'supervised',
+  readiness_level: 2,
+  status: 'active',
+  created_at: AT,
+  updated_at: AT,
+  open_tasks: 1,
+  spent_usd_30d: 1,
 };
 
 const json = (body: unknown, status = 200): Response =>
@@ -153,12 +214,20 @@ interface Sent {
   readonly body: unknown;
 }
 
-const start = (task: TaskDetailResponse, at = `/tasks/${TASK}`) => {
+const start = (
+  task: TaskDetailResponse,
+  at = `/tasks/${TASK}`,
+  projects: readonly unknown[] = [],
+  /** A read answered differently, by its path. */
+  answers: Readonly<Record<string, () => Response>> = {},
+) => {
   const sent: Sent[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     const path = new URL(url, 'http://localhost').pathname;
     if (url.includes('/api/auth/get-session')) return json(SESSION);
+    const answer = init?.method === 'POST' ? undefined : answers[path];
+    if (answer !== undefined) return answer();
     if (init?.method === 'POST') {
       sent.push({ path, body: JSON.parse(String(init.body ?? '{}')) });
       return json({
@@ -166,6 +235,20 @@ const start = (task: TaskDetailResponse, at = `/tasks/${TASK}`) => {
         state: 'active',
         current_stage: 'implementation',
         performed: true,
+      });
+    }
+    if (path === `/api/artifacts/${PLAN}`) {
+      return json({
+        id: PLAN,
+        task_id: TASK,
+        artifact_type: 'ImplementationPlan',
+        version: 2,
+        schema_version: '1',
+        produced_by_run_id: null,
+        created_at: AT,
+        redaction_count: 0,
+        markdown: null,
+        data: PLAN_DATA,
       });
     }
     if (path === `/api/artifacts/${ARTIFACT}`) {
@@ -183,7 +266,7 @@ const start = (task: TaskDetailResponse, at = `/tasks/${TASK}`) => {
       });
     }
     if (path === `/api/tasks/${TASK}`) return json(task);
-    if (path === '/api/projects') return json({ items: [] });
+    if (path === '/api/projects') return json({ items: projects });
     // A command refreshes the inbox too; answered, so the next command is not held behind retries.
     if (path === '/api/org/inbox') return json({ questions: [], approvals: [] });
     // Every read a command's refresh re-asks is answered (never left to retry), so a second command
@@ -232,6 +315,44 @@ describe('the header', () => {
     expect(within(main).getByRole('list', { name: 'Pipeline stages' })).toBeTruthy();
   });
 
+  it('reads Needs you, not Active, for an active task with an open question and an approval (S-25.4)', async () => {
+    start(detail({ questions: [QUESTION_ROW], approvals: [APPROVAL_ROW] }, { state: 'active' }));
+    await screen.findByRole('heading', { level: 1 });
+    await waitFor(() => {
+      expect(document.querySelector('[data-state-label="needs_you"]')?.textContent).toBe(
+        'Needs you',
+      );
+    });
+    expect(document.querySelector('[data-state-label="running"]')).toBeNull();
+  });
+
+  it('puts the ticket and merge request links in the header, beside the key (S-25.4)', async () => {
+    start(
+      detail(
+        {},
+        {
+          mr_ref: {
+            provider: 'gitlab',
+            project_path: 'acme/api',
+            iid: 7,
+            url: 'https://git.example.invalid/acme/api/-/merge_requests/7',
+          },
+        },
+      ),
+    );
+    await screen.findByRole('heading', { level: 1 });
+    const links = document.querySelector('[data-task-links]') as HTMLElement;
+    expect(within(links).getByRole('link', { name: 'Ticket' }).getAttribute('href')).toBe(
+      TASK_ROW.ticket.url,
+    );
+    expect(within(links).getByRole('link', { name: 'Merge request' }).getAttribute('href')).toBe(
+      'https://git.example.invalid/acme/api/-/merge_requests/7',
+    );
+    // Once: the right rail no longer repeats them at its bottom.
+    expect(screen.getAllByRole('link', { name: 'Ticket' })).toHaveLength(1);
+    expect(screen.getAllByRole('link', { name: 'Merge request' })).toHaveLength(1);
+  });
+
   it('shows the key alone when the ticket’s title was never read', async () => {
     start(detail({}, { ticket_title: null }));
     const heading = await screen.findByRole('heading', { level: 1 });
@@ -251,7 +372,7 @@ describe('one primary action per state', () => {
     [
       'a pending approval',
       detail({ approvals: [APPROVAL_ROW] }, { state: 'waiting_approval' }),
-      ['Approve…'],
+      ['Review plan'],
     ],
     ['a paused task', detail({}, { state: 'paused', paused_reason: 'manual' }), ['Resume']],
     [
@@ -331,31 +452,109 @@ describe('the needs-you callout', () => {
     expect(sent[0]?.body).toEqual({ answer: 'per country' });
   });
 
-  it('decides an approval inline, and through the header’s dialog with a reason', async () => {
+  /**
+   * S-25.1 (research/21 F1, BD-006's 2026-11-06 amendment): the card shows **the plan it is about**,
+   * open, beside the buttons; the reasons in words, each with how to stop being asked and a link to
+   * the setting; what each answer does next. *Approve* echoes the plan it showed (TD-035).
+   */
+  it('shows the plan it approves, open, with why it was asked and what each answer does', async () => {
     const user = userEvent.setup();
-    const { sent } = start(detail({ approvals: [APPROVAL_ROW] }, { state: 'waiting_approval' }));
+    const { sent } = start(
+      detail({ approvals: [APPROVAL_ROW], artifacts: [PLAN_REF] }, { state: 'waiting_approval' }),
+      `/tasks/${TASK}`,
+      [PROJECT_ROW],
+    );
     const callout = await screen.findByRole('region', { name: 'Needs you' });
     expect(callout.textContent).toContain('The plan approval is waiting for you');
-    await user.click(within(callout).getByRole('button', { name: 'Approve' }));
+    const card = within(callout).getByRole('region', { name: 'Plan approval' });
+    // The plan, read by the id the approval names, shown open — its hostile text as text (BD-022).
+    await waitFor(() => {
+      expect(card.querySelector('[data-approval-plan="parsed"]')).not.toBeNull();
+    });
+    expect(card.textContent).toContain(`Add a VAT column ${HOSTILE}`);
+    expect(card.textContent).toContain('Size L');
+    expect(card.textContent).toContain('2 files to change');
+    expect(card.textContent).toContain('src/invoice.ts');
+    expect(card.textContent).toContain('rounding drift on old invoices');
+    expect(card.querySelector('img')).toBeNull();
+    expect(card.textContent).toContain('Plan v2 · Architecture, attempt 1');
+    const whole = within(card).getByText('Read the whole plan').closest('details');
+    expect(whole?.open).toBe(true);
+    expect(whole?.textContent).toContain('a rounding property test');
+    // Why it was asked — every reason — and per reason how to stop being asked, linked.
+    expect(card.querySelector('[data-approval-reason="probation"]')?.textContent).toContain(
+      '2 of its first 5 tasks are done',
+    );
+    expect(card.querySelector('[data-approval-retire="probation"]')?.textContent).toContain(
+      'Probation ends by itself after 5 completed tasks (3 to go)',
+    );
+    expect(card.querySelector('[data-approval-reason="size_at_or_above"]')?.textContent).toContain(
+      'The plan’s size is L, at or above the project’s threshold of L.',
+    );
+    const links = within(card).getAllByRole('link', { name: 'Autonomy dial' });
+    expect(links).toHaveLength(2);
+    expect(links[0]?.getAttribute('href')).toBe('/projects/acme/settings/policies');
+    // What each answer does next.
+    const next = card.querySelector('[data-approval-next]')?.textContent ?? '';
+    expect(next).toContain('Approve: Implementation starts on this plan.');
+    expect(next).toContain('Reject: the plan goes back to Architecture with your reason.');
+    // Not the page's beacon: the header's *Review plan* is its one primary.
+    expect(primaries()).toEqual(['Review plan']);
+
+    await user.click(within(card).getByRole('button', { name: 'Approve' }));
     await waitFor(() => {
       expect(sent).toHaveLength(1);
     });
     expect(sent[0]).toEqual({
       path: `/api/tasks/${TASK}/approvals/${APPROVAL}/decide`,
-      body: { decision: 'approve' },
+      body: { decision: 'approve', subject_artifact_id: PLAN },
     });
+  });
 
-    await user.click(screen.getByRole('button', { name: 'Approve…' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Plan approval' });
-    await user.type(within(dialog).getByLabelText('Decision reason (optional)'), 'too wide');
-    await user.click(within(dialog).getByRole('button', { name: 'Reject' }));
-    await waitFor(() => {
-      expect(sent).toHaveLength(2);
-    });
-    expect(sent[1]?.body).toEqual({ decision: 'reject', reason: 'too wide' });
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog')).toBeNull();
-    });
+  it('opens the same card from the header’s Review plan, and has no second approve dialog', async () => {
+    const user = userEvent.setup();
+    start(detail({ approvals: [APPROVAL_ROW] }, { state: 'waiting_approval' }));
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    const card = within(callout).getByRole('region', { name: 'Plan approval' });
+    const actions = document.querySelector('[data-page-actions]') as HTMLElement;
+    await user.click(within(actions).getByRole('button', { name: 'Review plan' }));
+    expect(document.activeElement).toBe(card);
+    // It moved the reader to the plan; it opened nothing that could approve without it.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(within(actions).queryByRole('button', { name: 'Approve…' })).toBeNull();
+  });
+
+  it('offers only a reject for a plan approval whose plan was not recorded, and says so', async () => {
+    const { subject: _plan, reasons: _reasons, ...unrecorded } = APPROVAL_ROW;
+    start(detail({ approvals: [unrecorded] }, { state: 'waiting_approval' }));
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    const card = within(callout).getByRole('region', { name: 'Plan approval' });
+    expect(card.querySelector('[data-approval-subject="not-recorded"]')?.textContent).toContain(
+      'was not recorded',
+    );
+    expect(card.querySelector('[data-approval-reasons="not-recorded"]')).not.toBeNull();
+    expect(within(card).queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(within(card).getByRole('button', { name: 'Reject…' })).toBeTruthy();
+    expect(card.querySelector('[data-approval-next]')?.textContent).not.toContain('Approve:');
+  });
+
+  it('offers only a reject when a newer plan than the one asked about exists', async () => {
+    start(
+      detail(
+        {
+          approvals: [APPROVAL_ROW],
+          artifacts: [PLAN_REF, { ...PLAN_REF, id: ARTIFACT, version: 3 }],
+        },
+        { state: 'waiting_approval' },
+      ),
+    );
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    const card = within(callout).getByRole('region', { name: 'Plan approval' });
+    expect(card.querySelector('[data-approval-superseded]')?.textContent).toContain(
+      'A newer plan (v3) exists',
+    );
+    expect(within(card).queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(within(card).getByRole('button', { name: 'Reject…' })).toBeTruthy();
   });
 
   it('says what stopped an escalated task, in the row’s own recorded word', async () => {
@@ -560,8 +759,8 @@ describe('only what the caller may do', () => {
     );
     expect(within(callout).queryByRole('button', { name: 'Approve' })).toBeNull();
     expect(within(callout).queryByRole('button', { name: 'Reject…' })).toBeNull();
-    // …and *Approve…* is not the header's primary for them.
-    expect(primaries()).not.toContain('Approve…');
+    // …and *Review plan* is not the header's primary for them.
+    expect(primaries()).not.toContain('Review plan');
   });
 
   it('offers a member who handles an escalation only the retry, and says who sends it back', async () => {
@@ -614,6 +813,34 @@ describe('the feedback toggles', () => {
   });
 });
 
+/**
+ * S-25.4 (research/21 S04): a task nobody has asked anything is *Ask the task*'s empty state. The
+ * server answers that with `200 { items: [] }` (`apps/server/src/routes/asks.ts`), and only that is
+ * empty: a refusal — a task that is gone, a role the read refuses — stays an error, by name.
+ */
+describe('Ask the task', () => {
+  const ASKS = `/api/tasks/${TASK}/asks`;
+
+  it('shows the empty state for a thread with no question, and no error', async () => {
+    start(detail(), `/tasks/${TASK}`, [], { [ASKS]: () => json({ items: [] }) });
+    expect(await screen.findByText('No questions yet')).toBeTruthy();
+    expect(screen.queryByText('The thread could not be loaded.')).toBeNull();
+  });
+
+  it.each([
+    [404, 'not_found'],
+    [403, 'forbidden'],
+  ])('keeps a %i refusal an error, never the empty state', async (status, code) => {
+    start(detail(), `/tasks/${TASK}`, [], {
+      [ASKS]: () => json({ error: { code, message: 'refused by the fake' } }, status),
+    });
+    expect(
+      await screen.findByText('The thread could not be loaded.', {}, { timeout: 4_000 }),
+    ).toBeTruthy();
+    expect(screen.queryByText('No questions yet')).toBeNull();
+  });
+});
+
 describe('the tabs', () => {
   const tabs = () => screen.getByRole('navigation', { name: 'Task' });
   const current = () =>
@@ -629,7 +856,7 @@ describe('the tabs', () => {
     start(WITH_ARTIFACT);
     await screen.findByRole('navigation', { name: 'Task' });
     expect(current()).toBe('Overview');
-    expect(screen.getByText('Stage timeline')).toBeTruthy();
+    expect(screen.getByTestId('task-flow')).toBeTruthy();
     // The counts are the task's own.
     expect(within(tabs()).getByRole('link', { name: /Artifacts/ }).textContent).toBe('Artifacts1');
 
@@ -639,7 +866,7 @@ describe('the tabs', () => {
     });
     expect(current()).toBe('Activity');
     expect(await screen.findByText('Who did what')).toBeTruthy();
-    expect(screen.queryByText('Stage timeline')).toBeNull();
+    expect(screen.queryByTestId('task-flow')).toBeNull();
   });
 
   it('selects Artifacts for ?artifact=, renders the body as text with the raw JSON behind Details', async () => {
@@ -721,11 +948,33 @@ describe('the merge box', () => {
     expect(screen.getByRole('list', { name: 'Merge-readiness checks' }).children).toHaveLength(13);
   });
 
-  it('counts what needs a person first', async () => {
+  it('counts what needs a person first — checks only, the callout’s items pointed at (S-25.4)', async () => {
     start(
       detail({ questions: [QUESTION_ROW], stages: [stage('ci_gate', 1, 'returned', 'returned')] }),
     );
-    expect((await screen.findByText(/need you/)).textContent).toBe('2 checks need you');
+    // The returned CI gate is the one check; the open question is the callout's, not a second.
+    await waitFor(() => {
+      expect(document.querySelector('[data-checks-summary]')?.textContent).toBe(
+        '1 check needs you',
+      );
+    });
+    expect(document.querySelector('[data-checks-callout]')?.textContent).toBe(
+      CHECKS_CALLOUT_POINTER,
+    );
+    // The row stays (product/10:38 lists it), and says where it is answered.
+    expect(document.querySelector('[data-check="questions"]')?.textContent).toContain(
+      '1 · see above',
+    );
+  });
+
+  it('says nothing about the callout when nothing waits there', async () => {
+    start(detail({ stages: [stage('ci_gate', 1, 'returned', 'returned')] }));
+    await waitFor(() => {
+      expect(document.querySelector('[data-checks-summary]')?.textContent).toBe(
+        '1 check needs you',
+      );
+    });
+    expect(document.querySelector('[data-checks-callout]')).toBeNull();
   });
 
   it('draws the cost against the cap as a meter, with no inline style', async () => {
@@ -763,15 +1012,32 @@ describe('the merge box', () => {
         { status: 'success', required: true },
         { status: 'skipped', required: true },
       ]),
-    ).toEqual({ status: 'waiting', text: '1 required check is not decided yet' });
+    ).toEqual({ status: 'waiting', text: '1 required check is not decided yet', callout: null });
     expect(
       checksSummary([
         { status: 'success', required: true },
         { status: 'queued', required: false },
       ]),
-    ).toEqual({ status: 'success', text: 'All required checks pass' });
+    ).toEqual({ status: 'success', text: 'All required checks pass', callout: null });
     expect(checksSummary([{ status: 'needs_you', required: false }]).text).toBe(
       '1 check needs you',
     );
+    // S-25.4: a callout item is never a check — not counted, and not a required row left open.
+    expect(
+      checksSummary([
+        { status: 'success', required: true },
+        { status: 'needs_you', required: true, callout: true },
+      ]),
+    ).toEqual({
+      status: 'success',
+      text: 'All required checks pass',
+      callout: CHECKS_CALLOUT_POINTER,
+    });
+    expect(
+      checksSummary([
+        { status: 'success', required: true },
+        { status: 'success', required: true, callout: true },
+      ]).callout,
+    ).toBeNull();
   });
 });

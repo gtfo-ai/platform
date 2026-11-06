@@ -482,11 +482,13 @@ export const useTaskAudit = (taskId: string) => {
   });
 };
 
-export const useRun = (runId: string) => {
+/** `enabled: false` reads nothing: the shell asks only on a run's page (S-25.4, `app/run-frame.ts`). */
+export const useRun = (runId: string, enabled = true) => {
   const { endpoints } = useServices();
   return useQuery({
     queryKey: queryKeys.run(runId),
     queryFn: () => endpoints.run(runId),
+    enabled,
     ...FOREVER,
   });
 };
@@ -801,48 +803,6 @@ export const useIntegrationSetupGuide = (integrationId: string, enabled: boolean
   });
 };
 
-interface BoundProject {
-  readonly id: string;
-  readonly key: string;
-  readonly name: string;
-}
-
-/**
- * Which projects bind each integration — the Integrations list's "bound to N projects" and the
- * detail page's list (S-23.11a). There is no read that answers it directly, so it is every
- * project's own bindings read, under the same keys the project settings use (a binding saved there
- * refreshes this). `null` until every read has answered, and for an integration whose count could
- * not be read completely — a failed read means the count would be a guess, so none is shown.
- */
-export const useProjectsByIntegration = (
-  /** The project list, or `undefined` while it has not answered. */
-  projects: readonly BoundProject[] | undefined,
-): ReadonlyMap<string, readonly BoundProject[]> | null => {
-  const { endpoints } = useServices();
-  const reads = useQueries({
-    queries: (projects ?? []).map((project) => ({
-      queryKey: queryKeys.projectBindings(project.id),
-      queryFn: () => endpoints.projectBindings(project.id),
-      retry: false,
-      ...FOREVER,
-    })),
-  });
-  if (projects === undefined || reads.some((read) => !read.isSuccess)) {
-    return null;
-  }
-  const bound = new Map<string, BoundProject[]>();
-  reads.forEach((read, index) => {
-    const project = projects[index];
-    if (project === undefined) {
-      return;
-    }
-    for (const binding of read.data?.items ?? []) {
-      bound.set(binding.integration_id, [...(bound.get(binding.integration_id) ?? []), project]);
-    }
-  });
-  return bound;
-};
-
 export const useOrgUsers = () => {
   const { endpoints } = useServices();
   return useQuery({
@@ -982,10 +942,15 @@ export const useTaskCommands = (taskId: string) => {
         approvalId: string;
         decision: 'approve' | 'reject';
         reason?: string;
+        /** TD-035: the plan the card showed, so a plan is approved only as that plan. */
+        subjectArtifactId?: string;
       }) =>
         endpoints.decideApproval(taskId, input.approvalId, {
           decision: input.decision,
           ...(input.reason === undefined ? {} : { reason: input.reason }),
+          ...(input.subjectArtifactId === undefined
+            ? {}
+            : { subject_artifact_id: input.subjectArtifactId }),
         }),
       onSuccess: invalidate,
     }),
@@ -1345,6 +1310,8 @@ export const useOnboardingCommands = (mint?: MintKey) => {
         await queryClient.invalidateQueries({
           queryKey: queryKeys.projectConfig(input.projectId),
         });
+        // S-25.3: the integrations list names the projects that use each one (`used_by`).
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] });
       },
     }),
     writeConfig: useMutation({

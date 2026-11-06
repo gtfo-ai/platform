@@ -7,6 +7,12 @@
  * *List*, the same stages as an ordered list (`FlowList`). Beside the canvas the list is still
  * rendered for screen readers (`sr-only`). A card opens the `StageDialog`.
  *
+ * **A screen may bring its own list mode** (`listMode`, S-25.4, product/10's Stages amendment): the task
+ * page's is its **stage timeline** — the attempts newest first, each with its time, its cost and its
+ * run — so the page draws the pipeline once, as the canvas or as the timeline, never both stacked.
+ * The screen's list is handed an opener per stage id, so a timeline entry opens the same
+ * `StageDialog` a card does; the screen-reader copy beside the canvas stays `FlowList`.
+ *
  * `TaskFlow` is self-contained on purpose (S-23.9 moves the task page into tabs and takes it as a
  * piece): it reads the task, its frozen graph and the agents list itself — the first two are the
  * task page's own queries, so the page pays nothing twice — and retains the live run's `run:<id>`
@@ -74,14 +80,23 @@ export const useWideViewport = (): boolean =>
 
 type DialogExtras = Omit<Parameters<typeof StageDialog>[0], 'graph' | 'open' | 'node' | 'onClose'>;
 
+/**
+ * A screen's own list mode: given the opener of a stage's dialog — `null` for a stage id the graph
+ * has no card for — it draws what *List* shows instead of {@link FlowList}.
+ */
+export type FlowListMode = (openerFor: (stageId: string) => (() => void) | null) => ReactNode;
+
 export const FlowView = ({
   graph,
   label,
   toolbar,
   dialog,
   canvasClassName = 'h-[380px]',
+  listMode,
 }: {
   readonly graph: FlowGraph;
+  /** What *List* (and a narrow screen) shows instead of the stage cards. */
+  readonly listMode?: FlowListMode;
   /** The canvas's and the list's accessible name ("Feature pipeline"). */
   readonly label: string;
   /** What the screen puts before the view's own buttons (a template picker). */
@@ -166,7 +181,17 @@ export const FlowView = ({
           </Suspense>
         </div>
       ) : null}
-      <FlowList graph={graph} onOpen={onOpen} label={`${label} as a list`} hidden={showCanvas} />
+      {listMode === undefined || showCanvas ? (
+        <FlowList graph={graph} onOpen={onOpen} label={`${label} as a list`} hidden={showCanvas} />
+      ) : (
+        listMode((stageId) =>
+          graph.nodes.some((node) => node.id === stageId)
+            ? () => {
+                onOpen(stageId);
+              }
+            : null,
+        )
+      )}
       <StageDialog
         graph={graph}
         open={openId !== null}
@@ -237,8 +262,18 @@ const latestOf = (activity: RunActivity | null | undefined): LatestEntry | null 
     ? null
     : { kind: activity.kind, tool_name: activity.tool_name, at: activity.at };
 
-/** The task page's Flow section: the task's frozen graph and its progress, live. */
-export const TaskFlow = ({ taskId }: { readonly taskId: string }): ReactElement => {
+/**
+ * The task page's Flow section: the task's frozen graph and its progress, live — and, as its list
+ * mode, the screen's `listMode` (the stage timeline). A graph that could not be read still shows the
+ * list under the refusal, with no stage to open, so the attempts and their runs stay reachable.
+ */
+export const TaskFlow = ({
+  taskId,
+  listMode,
+}: {
+  readonly taskId: string;
+  readonly listMode?: FlowListMode;
+}): ReactElement => {
   const detail = useTask(taskId);
   const pipeline = useTaskPipeline(taskId);
   const agents = useAgents();
@@ -283,7 +318,10 @@ export const TaskFlow = ({ taskId }: { readonly taskId: string }): ReactElement 
     >
       {graph === null ? heading : null}
       {pipeline.isError ? (
-        <ErrorNotice title="The task’s pipeline could not be drawn." error={pipeline.error} />
+        <>
+          <ErrorNotice title="The task’s pipeline could not be drawn." error={pipeline.error} />
+          {listMode?.(() => null)}
+        </>
       ) : graph === null ? (
         detail.isError ? null : (
           <Loading label="Loading the flow…" />
@@ -298,6 +336,7 @@ export const TaskFlow = ({ taskId }: { readonly taskId: string }): ReactElement 
             // `undefined` when the agents read has no row for the run: the note then names no seat.
             ...(agent === undefined ? {} : { seat: agent.seat }),
           }}
+          {...(listMode === undefined ? {} : { listMode })}
         />
       )}
     </section>

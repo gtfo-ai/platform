@@ -711,28 +711,46 @@ export const criteriaStatus = (verdict: AcceptanceVerdictData): Status => {
 export interface CheckOutcome {
   readonly status: Status;
   readonly required: boolean;
+  /** A question or an approval — the needs-you callout's item, not a check (S-25.4). */
+  readonly callout?: boolean;
 }
 
 const NEEDS_ATTENTION: ReadonlySet<Status> = new Set<Status>(['failure', 'needs_you']);
 
+/** The line under the summary while a callout item waits: where it is, never a count of checks. */
+export const CHECKS_CALLOUT_POINTER =
+  'Questions and approvals waiting for a person are in the box above, not counted here.';
+
 /**
- * The merge box's one line (GitHub's *"All checks have passed"*): how many rows need a person, or —
- * when none does — whether every **required** row passed. A required row that is pending, not
- * reached or not recorded is not a pass, so the line never says *pass* for a check nobody made.
+ * The merge box's one line (GitHub's *"All checks have passed"*): how many **checks** need a
+ * person, or — when none does — whether every **required** check passed. A required check that is
+ * pending, not reached or not recorded is not a pass, so the line never says *pass* for a check
+ * nobody made.
+ *
+ * A row marked `callout` (questions and approvals pending) is the needs-you callout's item and is
+ * **not** counted (S-25.4, product/10's Checks amendment): before, one open question read "1 check
+ * needs you" with a red ✕ beside the callout that already asked for the answer. While one waits,
+ * `callout` is {@link CHECKS_CALLOUT_POINTER}; otherwise `null`. So *"All required checks pass"*
+ * can stand beside a pending approval — the checks pass, and the approval is above.
  */
 export const checksSummary = (
   rows: readonly CheckOutcome[],
-): { readonly status: Status; readonly text: string } => {
-  const attention = rows.filter((row) => NEEDS_ATTENTION.has(row.status)).length;
+): { readonly status: Status; readonly text: string; readonly callout: string | null } => {
+  const checks = rows.filter((row) => row.callout !== true);
+  const callout = rows.some((row) => row.callout === true && row.status !== 'success')
+    ? CHECKS_CALLOUT_POINTER
+    : null;
+  const attention = checks.filter((row) => NEEDS_ATTENTION.has(row.status)).length;
   if (attention > 0) {
     return {
       status: 'failure',
       text: attention === 1 ? '1 check needs you' : `${attention} checks need you`,
+      callout,
     };
   }
-  const open = rows.filter((row) => row.required && row.status !== 'success').length;
+  const open = checks.filter((row) => row.required && row.status !== 'success').length;
   if (open === 0) {
-    return { status: 'success', text: 'All required checks pass' };
+    return { status: 'success', text: 'All required checks pass', callout };
   }
   return {
     status: 'waiting',
@@ -740,5 +758,6 @@ export const checksSummary = (
       open === 1
         ? '1 required check is not decided yet'
         : `${open} required checks are not decided yet`,
+    callout,
   };
 };

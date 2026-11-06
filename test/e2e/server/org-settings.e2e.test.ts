@@ -117,16 +117,17 @@ const stagesRun = async (pipeline: PipelineE2E, taskId: string): Promise<string[
 };
 
 const approvePlan = async (pipeline: PipelineE2E, client: Client, taskId: string, key: string) => {
-  const approvals = await pipeline.query<{ id: string }>(
-    "select id from approvals where task_id = $1 and status = 'pending'",
+  const approvals = await pipeline.query<{ id: string; subject_artifact_id: string | null }>(
+    "select id, subject_artifact_id from approvals where task_id = $1 and status = 'pending'",
     [taskId],
   );
   expect(approvals).toHaveLength(1);
+  // TD-035: a plan is approved as the plan it was asked about, which the gate recorded.
   const decided = await send(
     client,
     'POST',
     `/api/tasks/${taskId}/approvals/${approvals[0]?.id}/decide`,
-    { decision: 'approve' },
+    { decision: 'approve', subject_artifact_id: approvals[0]?.subject_artifact_id },
     key,
   );
   expect(decided.status, JSON.stringify(decided.body)).toBe(200);
