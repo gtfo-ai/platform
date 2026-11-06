@@ -420,6 +420,30 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > and code, never its message — called it a stage that had *"never started"*. Code:
 > `packages/application/src/pipeline/gate-outage.ts`.
 >
+> **Amended 2026-11-07 (backlog 1078): the CI gate's pending read is recorded, and a Retry on an
+> unchanged held pipeline does not wait again.** AUT-6655's pipeline was held at a manual job on a
+> draft merge request; `ci_gate` waited out its sixty-minute timeout, the person pressed Retry, and
+> the second attempt waited another sixty minutes on the **same** pipeline. Two changes, no new
+> state and no new words in any existing reason or brief:
+>
+> - **every pending read of the head pipeline** — one neither passed nor failed, on a poll-only
+>   binding and on one a webhook reaches — is written on the open `ci_gate` attempt as
+>   `task_stages.ci_pending_read` (technical/03): the pipeline's id and page, the live head it was
+>   read for, its status, the held manual job's name and page (only for a pipeline whose own status
+>   is `manual`; redacted, then cut at 100 characters), the draft flag, the read's instant and the
+>   CI timeout bounding the wait (`null` on a webhook binding). A pending read that found no
+>   pipeline writes `null`; a closed attempt keeps its last read. `GET /api/tasks/:id` serves the
+>   open attempt's as `gate_wait` (technical/08). A pending read never parks a task by itself;
+> - **a retry nobody acted on escalates at once**: when an attempt's **first** read (its first
+>   check; a provider outage before it is not a check) shows the same pipeline, on the same head,
+>   still `manual`, as the previous `ci_gate` attempt's last read, the task is escalated `undecided`
+>   immediately with a brief saying the pipeline is still held at that job — start the job on the
+>   provider, or change the job's rule, then Retry. Any other status (the person started the job,
+>   so it is `running`), another pipeline or another head waits as before.
+>
+> Code: `packages/application/src/pipeline/ci-pending-read.ts`, applied in `jobs.ts`
+> (`recordCiRead`).
+>
 > **`retro → retro` was added at WP-18b**, when the librarian stage went back into the shipped
 > templates (technical/12's example has always carried it). The retrospective phase now has **two**
 > stages — the facilitator's report and the Librarian's curation of the proposals it produced — and

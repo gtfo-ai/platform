@@ -74,6 +74,7 @@ import {
   DEFAULT_CI_TIMEOUT_MINUTES,
   isBuiltinGateStageId,
   MAX_CI_TIMEOUT_MINUTES,
+  MAX_GATE_WAIT_HELD_JOB_CHARS,
   MIN_CI_TIMEOUT_MINUTES,
 } from '@platform/contracts';
 import type { CompiledPipeline, PipelineStage } from '@platform/domain';
@@ -92,6 +93,7 @@ import {
   failingJobs,
   readFailingJobLogs,
 } from './ci-log.js';
+import { type CiPipelineRead, ciPipelineReadOf, heldManualJob } from './ci-pending-read.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
 import { type TransientProviderCode, transientProviderFailure } from './gate-outage.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
@@ -147,9 +149,15 @@ export type GateResult =
   /**
    * The answer is not available yet; the job asks again. `ciWait` is present exactly when the CI
    * gate is waiting on a **poll-only** git binding (WP-136): the job then bounds the wait by time
-   * rather than by {@link MAX_GATE_CHECKS} (`ci-wait.ts`).
+   * rather than by {@link MAX_GATE_CHECKS} (`ci-wait.ts`). `ciRead` is present on **every** pending
+   * answer of the CI gate, whatever the binding (backlog 1078): the job records it on the attempt.
    */
-  | { readonly kind: 'pending'; readonly detail: string; readonly ciWait?: CiWait }
+  | {
+      readonly kind: 'pending';
+      readonly detail: string;
+      readonly ciWait?: CiWait;
+      readonly ciRead?: CiGateRead;
+    }
   /** The platform cannot evaluate this gate at all; the task escalates. */
   | { readonly kind: 'unsupported'; readonly detail: string };
 
@@ -248,6 +256,19 @@ export interface CiWait {
   readonly provider: string;
   /** The head pipeline the gate read, or `null` when none has started for the head commit. */
   readonly pipeline: { readonly id: string; readonly status: string } | null;
+}
+
+/**
+ * **What a pending CI read saw** (backlog 1078, `ci-pending-read.ts`): the head pipeline the gate is
+ * waiting on — one neither passed nor failed — or `null` when the read found none to wait on (no
+ * head yet, no pipeline yet, a passed pipeline whose tamper check cannot be made yet, or an id the
+ * read cannot record). The job writes `pipeline` on the open attempt, `null` included, so a read
+ * about an older head never outlives it.
+ */
+export interface CiGateRead {
+  /** The git binding's provider id, named in a retry's brief (`gitlab`). */
+  readonly provider: string;
+  readonly pipeline: CiPipelineRead | null;
 }
 
 /**
@@ -652,9 +673,6 @@ const withCiWait = async (
 const CI_TERMINAL_PASS = new Set(['success']);
 const CI_TERMINAL_FAIL = new Set(['failed', 'canceled', 'skipped']);
 
-/** How much of a held job's name (provider text) the pending detail quotes. */
-const MAX_HELD_JOB_NAME_CHARS = 100;
-
 /**
  * The CI gate's pending detail for a pipeline that is neither green nor red — and, for one **held
  * at a manual job**, a plain sentence about why (backlog 486). The merge request stays a draft
@@ -671,11 +689,12 @@ export const pendingPipelineDetail = (
   if (status.status !== 'manual') {
     return `pipeline ${status.id} is ${status.status}`;
   }
-  const job = status.jobs.find((entry) => entry.status === 'manual');
+  // The same job the recorded read names as `held_job` (backlog 1078, `heldManualJob`).
+  const job = heldManualJob(status);
   const held =
     job === undefined
       ? 'a manual job'
-      : `manual job ${JSON.stringify(job.name.slice(0, MAX_HELD_JOB_NAME_CHARS))}`;
+      : `manual job ${JSON.stringify(job.name.slice(0, MAX_GATE_WAIT_HELD_JOB_CHARS))}`;
   return draft
     ? `the merge request is a draft and pipeline ${status.id} is held at ${held} — the project's CI rules may skip or hold jobs for drafts, and the platform keeps its merge request a draft until Ready; see the readiness panel's CI-rules warning`
     : `pipeline ${status.id} is held at ${held}: nothing runs until somebody starts it on the provider`;
@@ -766,6 +785,8 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
         if (stage.id === 'ci_gate') {
           // WP-136: the head pipeline the read saw, for a poll-only binding's brief.
           let seenPipeline: CiWait['pipeline'] = null;
+          // Backlog 1078: the pending pipeline the read saw, recorded on the attempt by the job.
+          let pendingRead: CiPipelineRead | null = null;
           const read = async (): Promise<GateResult> => {
             /**
              * **The live head, not the recorded one** (WP-60 review round 2). `tasks.mr_ref.head_sha`
@@ -827,11 +848,22 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
                     : `pipeline ${status.id} ${status.status}: ${failed.join(', ')}`,
               });
             }
+            pendingRead = ciPipelineReadOf(status, {
+              headSha,
+              draft: live?.draft === true,
+              redact: (text) => binding.redactor.redactText(text).value,
+            });
             return { kind: 'pending', detail: pendingPipelineDetail(status, live?.draft === true) };
           };
           const result = await read();
           return result.kind === 'pending'
-            ? withCiWait(options, bindings, stored, result, seenPipeline)
+            ? withCiWait(
+                options,
+                bindings,
+                stored,
+                { ...result, ciRead: { provider: binding.ref.provider, pipeline: pendingRead } },
+                seenPipeline,
+              )
             : result;
         }
 

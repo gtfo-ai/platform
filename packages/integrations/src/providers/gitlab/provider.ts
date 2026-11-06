@@ -1381,6 +1381,9 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
           // Every GitLab job has a trace endpoint; whether it holds anything is a 404 at read time.
           log_ref: String(job.id),
           allow_failure: job.allow_failure ?? false,
+          // The job's own page ("List pipeline jobs" publishes `web_url`; backlog 1078): where a
+          // person starts a held manual job. Absent on an older payload, which reads as none.
+          web_url: job.web_url ?? null,
         })),
         coverage_pct: full.coverage ?? null,
         finished_at: toIsoDateTimeOrNull(full.finished_at, 'get_pipeline_status'),

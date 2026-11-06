@@ -191,6 +191,23 @@ const job = (
   allow_failure: allowFailure,
 });
 
+/**
+ * Backlog 1078: the read a pending CI answer carries for the job to record — the running
+ * `pipeline-1` on the live head, from `fake-git`, with no page and no held job.
+ */
+const runningRead = (headSha = HEAD_SHA, draft = false) => ({
+  provider: 'fake-git',
+  pipeline: {
+    pipeline_id: 'pipeline-1',
+    pipeline_url: null,
+    head_sha: headSha,
+    status: 'running',
+    held_job: null,
+    held_job_url: null,
+    draft,
+  },
+});
+
 const storedTask = (mr: StoredTask['mr']): StoredTask => ({
   task: {
     id: TASK,
@@ -892,7 +909,11 @@ describe('the CI gate', () => {
     const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
       getPipelineStatus: async () => pipelineStatus('running'),
     });
-    expect(result).toEqual({ kind: 'pending', detail: 'pipeline pipeline-1 is running' });
+    expect(result).toEqual({
+      kind: 'pending',
+      detail: 'pipeline pipeline-1 is running',
+      ciRead: runningRead(),
+    });
   });
 
   /**
@@ -927,7 +948,20 @@ describe('the CI gate', () => {
       getPipelineStatus: async () =>
         pipelineStatus('running', [job('test', 'running'), job('deploy', 'manual')]),
     });
-    expect(running).toEqual({ kind: 'pending', detail: 'pipeline pipeline-1 is running' });
+    expect(running).toEqual({
+      kind: 'pending',
+      detail: 'pipeline pipeline-1 is running',
+      ciRead: runningRead(HEAD_SHA, true),
+    });
+    // Backlog 1078: the held pipeline's read names the job the detail names, and the draft.
+    expect((draft as { ciRead?: unknown }).ciRead).toEqual({
+      provider: 'fake-git',
+      pipeline: {
+        ...runningRead(HEAD_SHA, true).pipeline,
+        status: 'manual',
+        held_job: 'build_composer',
+      },
+    });
   });
 
   it('waits — rather than passing — while the merge request has no head commit', async () => {
@@ -939,7 +973,12 @@ describe('the CI gate', () => {
         }) as never,
       getPipelineStatus: async () => pipelineStatus('success'),
     });
-    expect(result).toEqual({ kind: 'pending', detail: 'the merge request has no head commit yet' });
+    // Backlog 1078: a read that found no pipeline to wait on carries `null`, which clears the row.
+    expect(result).toEqual({
+      kind: 'pending',
+      detail: 'the merge request has no head commit yet',
+      ciRead: { provider: 'fake-git', pipeline: null },
+    });
   });
 
   /**
@@ -958,7 +997,11 @@ describe('the CI gate', () => {
       },
     });
     expect(asked).toEqual(['c'.repeat(40)]);
-    expect(result).toEqual({ kind: 'pending', detail: 'pipeline pipeline-1 is running' });
+    expect(result).toEqual({
+      kind: 'pending',
+      detail: 'pipeline pipeline-1 is running',
+      ciRead: runningRead('c'.repeat(40)),
+    });
   });
 });
 
@@ -1421,6 +1464,7 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
     expect(running).toEqual({
       kind: 'pending',
       detail: 'pipeline pipeline-1 is running',
+      ciRead: runningRead(),
       ciWait: {
         timeoutMinutes: 90,
         provider: 'fake-git',
@@ -1445,9 +1489,11 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
         pollPlan: () => plan,
         getPipelineStatus: async () => pipelineStatus('running'),
       });
+      // No `ciWait` — but the read is carried on every binding (backlog 1078).
       expect(result, JSON.stringify(plan)).toEqual({
         kind: 'pending',
         detail: 'pipeline pipeline-1 is running',
+        ciRead: runningRead(),
       });
     }
     const rebase = await evaluate(templateStage('rebase_gate'), storedTask(MR), {

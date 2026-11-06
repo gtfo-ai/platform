@@ -29,6 +29,7 @@ import {
   executionModeSchema,
   executionPreferenceSchema,
   gitBranchNameSchema,
+  httpUrlSchema,
   idSchema,
   integrationTypeSchema,
   isoDateSchema,
@@ -69,6 +70,7 @@ import {
   autonomyPoliciesSchema,
   budgetRecordSchema,
   budgetWindowSchema,
+  ciPipelineStatusSchema,
   configSourceSchema,
   contextPackRecordSchema,
   humanTimeKindSchema,
@@ -1783,6 +1785,45 @@ const taskCallerFactsMask = Object.fromEntries(
   TASK_CALLER_FACT_KEYS.map((key) => [key, true] as const),
 ) as { readonly [K in TaskCallerFactKey]: true };
 
+/**
+ * The longest held-job name `gate_wait` carries, in characters — the CI gate's own bound on that
+ * provider text (`pendingPipelineDetail` quotes the same 100).
+ */
+export const MAX_GATE_WAIT_HELD_JOB_CHARS = 100;
+
+/**
+ * **What the CI gate is waiting on** (backlog 1078): the open `ci_gate` attempt's last pending read
+ * of the head pipeline — one that was neither passed nor failed — on either kind of git binding.
+ * `null` when the task's current stage has no open CI wait: another stage, an attempt that is
+ * closed (the task was parked, moved on or settled), or an attempt whose last read found no
+ * pipeline at all.
+ *
+ * Every string but the instants is the **provider's** text (BD-022), stored redacted:
+ *  - `pipeline_url`, `held_job_url` — the pipeline's and the held job's own pages, `http(s)` only;
+ *    `null` when the provider gave none or gave something else (a reader renders them through
+ *    `safeHref` regardless);
+ *  - `held_job` — the first `manual` job of a pipeline whose own status is `manual`, cut at
+ *    {@link MAX_GATE_WAIT_HELD_JOB_CHARS}; `null` for a pipeline that is not held, or one held with
+ *    no job named.
+ *
+ * `status` is the git port's vocabulary — in practice `pending`, `running` or `manual`, the
+ * statuses the gate waits on. `draft` is the merge request's draft flag at that read. `checked_at`
+ * is the read's instant, `waiting_since` the attempt's entry (`task_stages.entered_at`, which the
+ * CI timeout counts from), and `timeout_minutes` the CI timeout that bounds this wait — `null` on a
+ * binding a webhook reaches, whose wait is bounded by a count of checks instead.
+ */
+export const gateWaitSchema = z.strictObject({
+  pipeline_id: nonEmptyStringSchema,
+  pipeline_url: httpUrlSchema.nullable(),
+  status: ciPipelineStatusSchema,
+  held_job: nonEmptyStringSchema.max(MAX_GATE_WAIT_HELD_JOB_CHARS).nullable(),
+  held_job_url: httpUrlSchema.nullable(),
+  draft: z.boolean(),
+  checked_at: isoDateTimeSchema,
+  waiting_since: isoDateTimeSchema,
+  timeout_minutes: z.int().positive().nullable(),
+});
+
 export const taskDetailResponseSchema = z.strictObject({
   task: taskRecordSchema,
   ...taskCallerFactsShape,
@@ -1807,6 +1848,12 @@ export const taskDetailResponseSchema = z.strictObject({
       original_chars: z.int().positive().nullable(),
     })
     .nullable(),
+  /**
+   * The current stage's open CI wait (backlog 1078) — see {@link gateWaitSchema}; `null` when there
+   * is none. The server always sends it; the key is optional only so the web app's fixtures, which
+   * S-25.11 rewrites, need not name it before then (`BACKLOG.md` 1087 makes it required).
+   */
+  gate_wait: gateWaitSchema.nullable().optional(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,
@@ -3474,6 +3521,7 @@ export type TasksResponse = z.infer<typeof tasksResponseSchema>;
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
 export type StartTaskResponse = z.infer<typeof startTaskResponseSchema>;
 export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
+export type GateWait = z.infer<typeof gateWaitSchema>;
 /** The task read before the route adds what it says about the caller. */
 export type TaskDetailRecord = Omit<TaskDetailResponse, TaskCallerFactKey>;
 export type TakenOver = z.infer<typeof takenOverSchema>;

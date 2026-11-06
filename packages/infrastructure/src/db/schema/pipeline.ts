@@ -284,6 +284,12 @@ export const taskStages = pgTable('task_stages', {
    */
   usageLimitedRuns: integer('usage_limited_runs').notNull().default(0),
   /**
+   * The CI gate attempt's last pending read of the head pipeline (backlog 1078, migration 0107):
+   * `ciPendingReadSchema`'s object, written by `recordCiPendingRead` while the row is open, null when
+   * none was recorded. Typed `unknown` here because every reader parses it with that schema.
+   */
+  ciPendingRead: jsonb('ci_pending_read').$type<unknown>(),
+  /**
    * The ticket's status when the human-return window first read it during this entry into a human
    * stage (WP-178 review, migration 0089, TD-029 decision 7's amendment (a)). Null on every other
    * row. Written once (`coalesce`) by `observeHumanStageStatus`.

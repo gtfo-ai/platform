@@ -60,6 +60,12 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import {
+  type CiPendingRead,
+  heldRetryBrief,
+  heldRetryReason,
+  isUnchangedHeldRetry,
+} from './ci-pending-read.js';
 import { ciWaitBrief, ciWaitReason, decideCiWait } from './ci-wait.js';
 import {
   decideGateOutage,
@@ -70,6 +76,7 @@ import {
 } from './gate-outage.js';
 import {
   CI_GATE_STAGE,
+  type CiGateRead,
   type CiWait,
   createGateEvaluator,
   type GateProviderOutage,
@@ -899,6 +906,14 @@ export const stageExecuteHandler = (
     const checks = (data.gate_checks ?? 0) + 1;
 
     if (result.kind === 'pending') {
+      // Backlog 1078: the CI gate's read is recorded on its attempt on every binding, and a retry
+      // whose first read finds the previous attempt's held pipeline unchanged escalates at once.
+      if (
+        result.ciRead !== undefined &&
+        (await recordCiRead(options, request, result.ciRead, result.ciWait, checks))
+      ) {
+        return;
+      }
       // WP-136: the CI gate on a poll-only binding is bounded by time, not by the five checks —
       // unless its attempt has no row to time it from, which keeps the five checks below.
       if (
@@ -1040,6 +1055,80 @@ export const gateSettlementOf = (
     ? {}
     : { detailOriginalChars: result.detailOriginalChars }),
 });
+
+/**
+ * **A pending CI read, recorded** (backlog 1078, `ci-pending-read.ts`): the read is written on the
+ * attempt's open `task_stages` row — on a poll-only binding and on one a webhook reaches, `null`
+ * for a read that found no pipeline — in a transaction of its own, after the provider reads and
+ * before the wait's own decision, so the timeout's last read is the one the closed attempt keeps.
+ *
+ * Answers whether it **decided**, which only one case does: this attempt's first check
+ * (`checks === 1`; a provider outage before it is not a check) reads the same pipeline, on the
+ * same head, still `manual`, as the previous attempt's last read — a Retry nobody acted on — and
+ * the task escalates at once rather than waiting the CI timeout out a second time (AUT-6655). Every
+ * other read, and a write that found the row closed (a job of an attempt somebody left), answers
+ * `false` and the gate's own bound applies as before; a pending read never parks a task by itself
+ * otherwise.
+ */
+const recordCiRead = async (
+  options: PipelineJobOptions,
+  request: StageExecutionJob,
+  ciRead: CiGateRead,
+  wait: CiWait | undefined,
+  checks: number,
+): Promise<boolean> => {
+  const logger: Logger = options.logger ?? silentLogger;
+  const pipeline = ciRead.pipeline;
+  const record: CiPendingRead | null =
+    pipeline === null
+      ? null
+      : {
+          ...pipeline,
+          checked_at: options.clock.now(),
+          timeout_minutes: wait?.timeoutMinutes ?? null,
+        };
+  const entry = { taskId: request.taskId, stage: request.stage, attempt: request.attempt };
+  const firstHeldRead = checks === 1 && pipeline?.status === 'manual';
+  const { written, previous } = await options.unitOfWork.transaction(async (scope) => {
+    const wrote = await options.store.tasks.recordCiPendingRead(scope.tx, entry, record);
+    return {
+      written: wrote,
+      previous:
+        wrote && firstHeldRead
+          ? await options.store.tasks.previousCiPendingRead(
+              scope.tx,
+              request.taskId,
+              request.stage,
+              request.attempt,
+            )
+          : null,
+    };
+  });
+  if (
+    !written ||
+    pipeline === null ||
+    !firstHeldRead ||
+    !isUnchangedHeldRetry(previous, pipeline)
+  ) {
+    return false;
+  }
+  logger.info(
+    {
+      task_id: request.taskId,
+      stage: request.stage,
+      attempt: request.attempt,
+      pipeline_id: pipeline.pipeline_id,
+    },
+    'a CI gate retry found the previous attempt’s held pipeline unchanged; the task is parked',
+  );
+  await settle(options, request, {
+    kind: 'escalate',
+    outcome: 'undecided',
+    reason: heldRetryReason(pipeline),
+    blockerBrief: heldRetryBrief(pipeline, ciRead.provider),
+  });
+  return true;
+};
 
 /**
  * **A pending CI read on a poll-only binding** (WP-136, `ci-wait.ts`): re-check on the cadence,

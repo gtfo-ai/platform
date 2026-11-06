@@ -49,7 +49,12 @@
  * the client never sees.
  */
 
-import { TAKE_OVER_BOUNDARY_EVENTS } from '@platform/application';
+import {
+  CI_GATE_STAGE,
+  ciPendingReadSchema,
+  TAKE_OVER_BOUNDARY_EVENTS,
+  toGateWait,
+} from '@platform/application';
 import type {
   AgentsResponse,
   ArtifactBodyResponse,
@@ -1694,6 +1699,50 @@ const gateFeedbackOf = (
   };
 };
 
+/**
+ * **What the CI gate is waiting on** (backlog 1078): the open `ci_gate` attempt's last pending read,
+ * when the task's current stage is `ci_gate` — `null` for any other stage, a closed attempt (a
+ * parked, settled or superseded one keeps its read for the next attempt's comparison, and is not a
+ * wait), or an attempt whose last read found no pipeline. The stored value is parsed with the
+ * writer's strict schema and a value that does not match is **refused** by name
+ * ({@link UnprojectableRowError}), never served as `null`. `waiting_since` is the attempt's own
+ * `entered_at`, which the CI timeout counts from — read off the row, not copied into the value.
+ */
+export const gateWaitOf = (
+  task: { readonly currentStage: string | null },
+  stageRows: readonly (typeof taskStages.$inferSelect)[],
+): TaskDetailResponse['gate_wait'] => {
+  if (task.currentStage !== CI_GATE_STAGE) {
+    return null;
+  }
+  const latest = stageRows
+    .filter((row) => row.stage === CI_GATE_STAGE)
+    .reduce<(typeof stageRows)[number] | null>(
+      (newest, row) => (newest === null || row.attempt > newest.attempt ? row : newest),
+      null,
+    );
+  if (
+    latest === null ||
+    latest.state !== 'running' ||
+    latest.exitedAt !== null ||
+    latest.ciPendingRead === null ||
+    latest.ciPendingRead === undefined
+  ) {
+    return null;
+  }
+  const parsed = ciPendingReadSchema.safeParse(latest.ciPendingRead);
+  if (!parsed.success) {
+    const paths = parsed.error.issues
+      .map((issue) => (issue.path.length === 0 ? '(root)' : issue.path.join('.')))
+      .join(', ');
+    throw new UnprojectableRowError(
+      `task ${latest.taskId}`,
+      `the CI gate's recorded read (\`task_stages.ci_pending_read\`, attempt ${latest.attempt}) does not parse at ${paths}`,
+    );
+  }
+  return toGateWait(parsed.data, isoRequired(latest.enteredAt));
+};
+
 /** `GET /api/tasks/:task_id` — the task with its stages, artifacts, questions, approvals and runs. */
 export const findTaskDetail = async (
   database: Database,
@@ -1765,6 +1814,7 @@ export const findTaskDetail = async (
     taken_over: takenOver,
     human_time: humanTime,
     gate_feedback: gateFeedbackOf(task, stageRows),
+    gate_wait: gateWaitOf(task, stageRows),
     stages: stageRows.map((row) => ({
       stage: row.stage,
       attempt: row.attempt,

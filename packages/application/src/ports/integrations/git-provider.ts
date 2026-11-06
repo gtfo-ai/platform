@@ -12,7 +12,7 @@
  * that must never be persisted, logged or put in an audit payload.
  */
 import {
-  ciStatusSchema,
+  ciPipelineStatusSchema,
   coveragePctSchema,
   type DiffStats,
   diffStatsSchema,
@@ -142,13 +142,12 @@ export const fileDiffSchema = z.strictObject({
 
 export type FileDiff = z.infer<typeof fileDiffSchema>;
 
-/** Terminal statuses come from `ciStatusSchema`; a pipeline can also still be in flight. */
-export const pipelineStatusValueSchema = z.enum([
-  ...ciStatusSchema.options,
-  'pending',
-  'running',
-  'manual',
-]);
+/**
+ * Terminal statuses come from `ciStatusSchema`; a pipeline can also still be in flight. The one
+ * definition is `@platform/contracts`' `ciPipelineStatusSchema`, which the task-detail DTO's
+ * `gate_wait` publishes (backlog 1078).
+ */
+export const pipelineStatusValueSchema = ciPipelineStatusSchema;
 
 export const pipelineJobSchema = z.strictObject({
   id: nonEmptyStringSchema,
@@ -157,6 +156,13 @@ export const pipelineJobSchema = z.strictObject({
   /** Opaque handle for `getJobLog`; `null` when the provider keeps no log for this job. */
   log_ref: nonEmptyStringSchema.nullish(),
   allow_failure: z.boolean(),
+  /**
+   * The job's own page on the provider, or `null`/absent when the provider gives none (backlog
+   * 1078): the CI gate publishes a **held** manual job's page as `gate_wait.held_job_url`, so a
+   * person can start it there. Provider text like `url` — a reader keeps it only as an http(s) URL
+   * (`ci-pending-read.ts`' `safeProviderUrl`).
+   */
+  web_url: urlSchema.nullish(),
 });
 
 export const pipelineStatusSchema = z.strictObject({

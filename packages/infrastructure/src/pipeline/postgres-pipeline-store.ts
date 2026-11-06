@@ -39,6 +39,7 @@ import type {
   Transaction,
 } from '@platform/application';
 import {
+  ciPendingReadSchema,
   DefaultBranchChangedError,
   LeaseLostError,
   silentLogger,
@@ -1349,6 +1350,30 @@ export const createPostgresPipelineStore = (
             open: row.open,
             enteredAt: new Date(row.entered_at).toISOString() as IsoDateTime,
           };
+    },
+
+    // Backlog 1078: the one writer of `ci_pending_read`, open rows only (the port's docblock).
+    // The value is parsed before it is written, so the column holds nothing the readers refuse.
+    recordCiPendingRead: async (tx, entry, read) => {
+      const value = read === null ? null : JSON.stringify(ciPendingReadSchema.parse(read));
+      const { rowCount } = await sqlOf(tx).query(
+        `update task_stages set ci_pending_read = $4::jsonb
+          where task_id = $1 and stage = $2 and attempt = $3
+            and state = 'running' and exited_at is null`,
+        [entry.taskId, entry.stage, entry.attempt, value],
+      );
+      return (rowCount ?? 0) > 0;
+    },
+
+    previousCiPendingRead: async (tx, taskId, stage, attempt) => {
+      const { rows } = await sqlOf(tx).query<{ ci_pending_read: unknown }>(
+        `select ci_pending_read from task_stages
+          where task_id = $1 and stage = $2 and attempt < $3
+          order by attempt desc limit 1`,
+        [taskId, stage, attempt],
+      );
+      const value = rows[0]?.ci_pending_read ?? null;
+      return value === null ? null : ciPendingReadSchema.parse(value);
     },
 
     recentStageSignatures: async (tx, taskId, stage, limit) => {
