@@ -485,8 +485,11 @@ describe('the integrations list', () => {
       'allow',
       'deny',
     ]);
-    // The residual sits beside the switch, as text, and on no other field.
-    const residual = control?.parentElement?.querySelector('[data-config-residual]');
+    // The residual sits beside the switch, as text, and on no other field. S-25.10: the switch is
+    // the brand's `Select`, so the field is the parent of its wrapper.
+    const residual = control
+      ?.closest('[data-select]')
+      ?.parentElement?.querySelector('[data-config-residual]');
     expect(residual?.textContent).toMatch(/90 days/);
     expect(residual?.textContent).toMatch(/every project the key is enabled on/);
     expect(residual?.textContent).toMatch(/Default: deny/);
