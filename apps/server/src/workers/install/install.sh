@@ -19,8 +19,10 @@
 #
 # The worker keeps itself up to date. Its `updater` service follows the core and verifies each build
 # before it applies it. Running this script again is a repair, never an upgrade. It never changes the
-# images a worker runs, never writes the `.env` file the updater manages, and never touches a volume
-# (except `--uninstall --purge`, which removes them).
+# images an approved worker runs, never writes the `.env` file the updater manages, and never touches
+# a volume (except `--uninstall --purge`, which removes them). A worker that is not set up yet (its
+# page waits for a platform, its Claude sign-in or its approval) runs nothing worth keeping, so a
+# re-run installs the core's build over it.
 #
 # Exit status: 0 done, 1 a prerequisite or a step failed, 2 a usage error, 3 refused (to protect
 # something that already exists).
@@ -335,6 +337,20 @@ page_port() {
   say "$port"
 }
 
+# Whether the running worker holds no credential yet, read off its page's state: its `connection`
+# waits for a platform, its Claude sign-in or its device approval. Any other word, a page that does
+# not answer, or one that asks for a token (APP_WORKER_UI_AUTH=token) reads as set up, and the caller
+# keeps the cautious path. Only that one word is read, and nothing of the answer is printed.
+not_set_up() {
+  answer=$(curl -fsS --max-time 3 "http://127.0.0.1:$(page_port)/api/local/state" 2>/dev/null) ||
+    return 1
+  connection=$(printf '%s\n' "$answer" | grep -o '"connection":"[a-z_]*"' | head -n 1)
+  case $connection in
+    '"connection":"needs_platform"' | '"connection":"needs_claude"' | '"connection":"logging_in"') return 0 ;;
+  esac
+  return 1
+}
+
 page_answers() {
   curl -fsS -o /dev/null --max-time 3 "$page" >/dev/null 2>&1
 }
@@ -409,6 +425,11 @@ install_worker() {
     mv -f "$dir/$DOWNLOAD" "$dir/$BUNDLE"
     say "The worker is already installed in $dir; starting what is stopped and adding what is missing (nothing is recreated) ..."
     compose up -d --no-recreate || die 1 "docker compose up failed (see above)."
+  elif [ -n "$existing" ] && [ -z "$(pins_of_block "$dir/.env")" ] && not_set_up; then
+    # Another build, never updated (no managed block), and not approved yet: nothing is lost.
+    mv -f "$dir/$DOWNLOAD" "$dir/$BUNDLE"
+    say "This worker runs another build than the core serves now and is not set up yet, so updating it loses nothing: installing the core's build in $dir ..."
+    compose up -d || die 1 "docker compose up failed (see above). Fix what it names and run this again."
   elif [ -n "$existing" ]; then
     rm -f "$dir/$DOWNLOAD"
     say 'This worker runs another build than the core serves now. Its updater moves it there after verifying the build;'

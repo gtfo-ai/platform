@@ -233,7 +233,8 @@ exit 64
 `;
 
 const CURL_STUB = String.raw`#!/bin/sh
-# A stub curl: the core's compose.yml from $STUB_BUNDLE, the local page from $STUB_PAGE.
+# A stub curl: the core's compose.yml from $STUB_BUNDLE, the local page from $STUB_PAGE, and the
+# page's state from $STUB_PAGE_STATE (unset: the page answers it with an error).
 printf 'curl %s\n' "$*" >> "$STUB_LOG"
 out=''
 url=''
@@ -248,6 +249,10 @@ case "$url" in
   */api/worker/v1/compose.yml)
     [ -n "${'${STUB_BUNDLE_FAIL:-}'}" ] && exit 22
     cp "$STUB_BUNDLE" "$out"
+    ;;
+  http://127.0.0.1:*/api/local/state)
+    [ -n "${'${STUB_PAGE_STATE:-}'}" ] || exit 22
+    printf '%s' "$STUB_PAGE_STATE"
     ;;
   http://127.0.0.1:*) [ "${'${STUB_PAGE:-up}'}" = up ] || exit 7 ;;
   *) exit 6 ;;
@@ -372,6 +377,13 @@ const run = (
 
 const read = (file: string): string | null =>
   existsSync(file) ? readFileSync(file, 'utf8') : null;
+/**
+ * What the worker's page answers at `/api/local/state`, cut to the keys the installer may read (the
+ * real answer is `workerLocalStateSchema`'s, in that key order): `logLine` lands in the log tail.
+ */
+const pageState = (connection: string, logLine = 'started'): string =>
+  `{"worker_id":null,"worker_name":"dev \\"laptop\\"","connection":"${connection}","protocol":3,"logs":["${logLine}"]}`;
+
 /** An env file the updater has written: a person's line, then its managed block. */
 const updaterEnvFile = (hex: string): string =>
   `CLAUDE_CODE_OAUTH_TOKEN_FILE_HINT=kept\n\n${managedBlock(referencesOf(hex))}\n`;
@@ -458,6 +470,56 @@ describe.each(SHELLS)(
         expect(read(path.join(s.dir, '.env'))).toBe(updaterEnvFile(running));
         expect(read(path.join(s.dir, 'compose.yaml'))).toBe(bundleBefore);
         expect(existsSync(path.join(s.dir, '.compose.yaml.download'))).toBe(false);
+      },
+    );
+
+    it.each(['needs_claude', 'logging_in', 'needs_platform'])(
+      'installs the served build over a worker that is not set up yet (its page reads %s): nothing of it is lost',
+      (connection) => {
+        const s = stage();
+        expect(run(shell, s).status).toBe(0);
+        writeFileSync(s.bundle, servedBundle('b'));
+        const r = run(shell, s, [], { STUB_PAGE_STATE: pageState(connection) });
+        expect(r.status).toBe(0);
+        expect(r.out).toContain('is not set up yet, so updating it loses nothing');
+        expect(r.composeCalls).toEqual([
+          'docker compose --project-name agentic-worker up -d',
+          'docker compose --project-name agentic-worker up -d',
+        ]);
+        expect(read(path.join(s.dir, 'compose.yaml'))).toBe(servedBundle('b'));
+        expect(existsSync(path.join(s.dir, '.compose.yaml.download'))).toBe(false);
+        // Still no env file: the installer never writes the updater's.
+        expect(existsSync(path.join(s.dir, '.env'))).toBe(false);
+        expect(r.calls).toContain('curl -fsS --max-time 3 http://127.0.0.1:7357/api/local/state');
+        // Nothing of the page's answer is printed.
+        expect(r.out).not.toContain('worker_name');
+      },
+    );
+
+    it.each([
+      ['an approved worker (connected)', pageState('connected'), false],
+      ['an approved worker the core cannot reach', pageState('core_unreachable'), false],
+      ['a page that cannot be read (APP_WORKER_UI_AUTH=token, or down)', undefined, false],
+      [
+        'a page whose log tail quotes a needs_claude line',
+        pageState('connected', '\\"connection\\":\\"needs_claude\\"'),
+        false,
+      ],
+      ['a worker the updater has already moved (a managed block)', pageState('needs_claude'), true],
+    ])(
+      'keeps today’s path for %s: the images stay and it only starts what is stopped',
+      (_case, state, block) => {
+        const s = stage();
+        expect(run(shell, s).status).toBe(0);
+        if (block) writeFileSync(path.join(s.dir, '.env'), updaterEnvFile('a'));
+        const bundleBefore = read(path.join(s.dir, 'compose.yaml'));
+        writeFileSync(s.bundle, servedBundle('b'));
+        const r = run(shell, s, [], state === undefined ? {} : { STUB_PAGE_STATE: state });
+        expect(r.status).toBe(0);
+        expect(r.out).toContain('this installer never changes the images a worker runs');
+        expect(r.out).not.toContain('not set up yet');
+        expect(r.composeCalls.at(-1)).toBe('docker compose --project-name agentic-worker start');
+        expect(read(path.join(s.dir, 'compose.yaml'))).toBe(bundleBefore);
       },
     );
 

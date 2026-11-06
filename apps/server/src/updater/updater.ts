@@ -5,7 +5,14 @@
  * recovery), then every {@link UpdaterConfig.pollMs} (a minute, TD-032's 2026-11-06 amendment to
  * decision 6) — and at once when the worker reports a `426` (its `/internal/state` reads
  * `upgrade_required`, looked at every 15 s) — it asks the core's `GET release` with the worker's
- * credential. A poll that **failed** (the core did not answer, refused the credential, or a
+ * credential, or **with none while the worker holds none**: the verb is public since WP-294, and a
+ * worker gets its credential only at the device approval, after the Claude sign-in — so a worker
+ * installed one build behind its core, and stuck before that step, still follows the core's release
+ * (2026-11-06: before this, such a worker never received the fix to the very step it was stuck at).
+ * The update is the same either way; only what **reports** to the core — `update-report` for a
+ * refusal or an apply's result — waits for a credential, skipped by name until there is one and
+ * reported once at the first poll that has one (the liveness file is local and needs none). A poll
+ * that **failed** (the core did not answer, refused the credential, or a
  * registry or Sigstore's trust root did not answer) **backs off**: the next waits twice as long,
  * up to {@link MAX_POLL_BACKOFF_MS}, and the first poll that works resets it
  * ({@link nextPollDelayMs}). When the advertised digests differ from the four this worker runs:
@@ -37,7 +44,8 @@
  *
  * At start it reads `updates/state.json`: a non-terminal state with no apply container running is a
  * crashed apply, and it starts one in `rollback` mode from **its own** (the previous) image; a
- * terminal result the core was never told is reported.
+ * terminal result the core was never told is reported — then, or, for a worker that held no
+ * credential then, at the first poll that holds one (once per update per process).
  *
  * **Its Docker access is root-equivalent on this machine** (TD-032 §4, TD-021's residual): the proxy
  * filters by API path only. What keeps it to the worker's project is this code: the project's name is
@@ -50,9 +58,8 @@ import path from 'node:path';
 import type { Logger } from '@platform/application';
 import { type CoreImageDigests, WORKER_PROTOCOL_VERSION } from '@platform/contracts';
 import { CoreCallError, createCoreClient } from '../remote-worker/core-client.js';
-import { readStoredCredential } from '../remote-worker/credential.js';
 import { readStoredCoreUrl } from '../remote-worker/setup-files.js';
-import { reportResult } from './apply.js';
+import { reportResult, storedCredentialFor } from './apply.js';
 import {
   AttestationRefusedError,
   type AttestationVerifier,
@@ -75,6 +82,7 @@ import {
   PREVIOUS_TEMPLATE_FILE,
   readState,
   type UpdatePlan,
+  type UpdateState,
   updatePlanSchema,
   writeState,
 } from './plan.js';
@@ -84,6 +92,9 @@ import { parseImageRepositoryName } from './registry.js';
 export const WORKER_STATE_POLL_MS = 15_000;
 /** The longest a failed poll's back-off waits (TD-032's 2026-11-06 amendment): five minutes. */
 export const MAX_POLL_BACKOFF_MS = 300_000;
+
+/** One `update-report` body (`apply.ts`'s `reportResult`). */
+type UpdateReport = Parameters<typeof reportResult>[2];
 
 /** What one poll came to: `failed` is a poll to be asked again later, and backs the next one off. */
 export type PollOutcome = 'ok' | 'failed';
@@ -321,6 +332,14 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
   } | null = null;
   /** Advertised sets this updater will not try again: refused, rolled back or failed. */
   const settled = new Set<string>();
+  /**
+   * The last refusal made while this worker held no credential: reported, once, at the first poll
+   * that has one (an earlier one is superseded — the core is told what this worker refuses now).
+   */
+  let unreportedRefusal: UpdateReport | null = null;
+  /** The `state.json` update whose result this process has tried to report with a credential. */
+  let reportTriedFor: string | null = null;
+  const reportDeps = { ...deps, workerStateDir: config.workerStateDir };
   let stopped = false;
   let self: SelfContainer | null = null;
   let wake: (() => void) | null = null;
@@ -336,8 +355,8 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
    * The worker credential — its first line only, and only when it was recorded for `coreUrl`'s
    * origin (WP-294: the file's second line names the core it belongs to).
    */
-  const credential = async (coreUrl: string): Promise<string | null> =>
-    readStoredCredential(config.workerStateDir, new URL(coreUrl).origin).catch(() => null);
+  const credential = (coreUrl: string): Promise<string | null> =>
+    storedCredentialFor(config.workerStateDir, coreUrl);
 
   const workerState = async (): Promise<{
     readonly connection?: string;
@@ -354,7 +373,10 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     }
   };
 
-  /** Refused for good (until the core advertises another set): logged, and reported once. */
+  /**
+   * Refused for good (until the core advertises another set): logged, and reported once — at once
+   * with a credential, else at the first poll that has one.
+   */
   const refuse = async (
     running: CoreImageDigests,
     advertised: CoreImageDigests,
@@ -364,16 +386,50 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     if (settled.has(key)) return;
     settled.add(key);
     logger.error({ advertised, why }, `this worker refuses the update its core advertises: ${why}`);
-    await reportResult(
-      { ...deps, workerStateDir: config.workerStateDir },
-      (await effectiveCoreUrl()) ?? '',
-      {
-        from: running,
-        to: advertised,
-        result: 'failed',
-        detail: why,
-      },
-    );
+    const report: UpdateReport = { from: running, to: advertised, result: 'failed', detail: why };
+    const coreUrl = await effectiveCoreUrl();
+    if (coreUrl === null || (await credential(coreUrl)) === null) {
+      unreportedRefusal = report;
+      logger.info(
+        {},
+        'this worker holds no credential yet, so the refusal is not reported now: it is reported once the worker is approved',
+      );
+      return;
+    }
+    await reportResult(reportDeps, coreUrl, report);
+  };
+
+  /**
+   * A terminal `state.json` result the core was never told, reported with the credential for
+   * `coreUrl` — tried **once per update per process** (start-up's recovery, or the first poll that
+   * holds a credential), and skipped by name while there is none.
+   */
+  const reportTerminal = async (coreUrl: string, state: UpdateState): Promise<void> => {
+    if (state.reported || reportTriedFor === state.id) return;
+    if ((await credential(coreUrl)) === null) {
+      logger.info(
+        { update_id: state.id, result: state.result },
+        'this worker holds no credential yet, so how its last update ended is reported once it is approved',
+      );
+      return;
+    }
+    reportTriedFor = state.id;
+    const reported = await reportResult(reportDeps, coreUrl, {
+      from: state.from_digests,
+      to: state.to_digests,
+      result: state.result ?? 'failed',
+      detail: state.detail,
+    });
+    await writeState(config.stateDir, { ...state, reported });
+  };
+
+  /** What waited for a credential, reported now that there is one (each once). */
+  const reportPending = async (coreUrl: string): Promise<void> => {
+    const refusal = unreportedRefusal;
+    unreportedRefusal = null;
+    if (refusal !== null) await reportResult(reportDeps, coreUrl, refusal);
+    const state = await readState(config.stateDir).catch(() => null);
+    if (state !== null && isTerminal(state)) await reportTerminal(coreUrl, state);
   };
 
   /** Starts the apply and waits for it: `true` only when `state.json` reads `succeeded` for `plan`. */
@@ -475,17 +531,29 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
       baseUrl: coreUrl,
       fetch: (url, init) => deps.fetch(url, init),
     });
+    // No credential yet (the device approval comes after the Claude step): the release is public
+    // since WP-294, so it is asked without one and followed exactly as with one — only what reports
+    // to the core waits for the credential.
     const token = await credential(coreUrl);
     if (token === null) {
-      logger.debug({}, 'this worker is not logged in yet; there is nothing to follow');
-      return 'ok';
+      logger.debug(
+        {},
+        'this worker holds no credential yet: its core’s release is asked without one, and nothing is reported until it is approved',
+      );
+    } else {
+      await reportPending(coreUrl);
     }
     let answer: Awaited<ReturnType<typeof core.release>>;
     try {
       answer = await core.release(token);
     } catch (error) {
       if (error instanceof CoreCallError && error.kind === 'unauthenticated') {
-        logger.warn({}, 'the core refuses this worker’s credential; nothing to follow');
+        logger.warn(
+          {},
+          token === null
+            ? 'the core answers its release only with a credential (a core before WP-294); this worker follows it once approved'
+            : 'the core refuses this worker’s credential; nothing to follow',
+        );
       } else {
         logger.warn({ err: error }, 'the core’s release could not be read; asked again later');
       }
@@ -634,19 +702,7 @@ export const createUpdater = (deps: UpdaterDeps): Updater => {
     if (state === null) return;
     if (isTerminal(state)) {
       if (state.result !== 'succeeded') settled.add(digestsKey(state.to_digests));
-      if (!state.reported) {
-        const reported = await reportResult(
-          { ...deps, workerStateDir: config.workerStateDir },
-          coreUrl,
-          {
-            from: state.from_digests,
-            to: state.to_digests,
-            result: state.result ?? 'failed',
-            detail: state.detail,
-          },
-        );
-        await writeState(config.stateDir, { ...state, reported });
-      }
+      await reportTerminal(coreUrl, state);
       return;
     }
     const me = await selfContainer();

@@ -178,7 +178,8 @@ so the updater needs no database credential. Settings → *Updates* (admin) rend
 ### 6. Worker mode: the sequence
 
 The worker's updater polls the core's `release` every 5 minutes *(amended 2026-11-06: at start, then every
-minute, backing off on failure — see the amendment at the end)* and on every `426` the worker
+minute, backing off on failure — see the amendment at the end; and, amended the same day, with no
+credential while the worker holds none, its reports deferred until it does)* and on every `426` the worker
 reports. A different set of digests, each verified (decision 3) → it asks the worker process (local `POST /internal/drain` on the
 worker's own compose network, never published) to stop claiming, waits until it reports **idle** (no run
 held), then the apply container (from the verified new image, carrying its own template): pull the verified images (including the run and egress images, so the
@@ -515,3 +516,43 @@ never reached an existing install.
 
 As built: `carriedEnvironment` and `variablesWithoutDefault` in `apps/server/src/updater/apply.ts`, the
 tests in `apps/server/src/updater/update-apply.test.ts`.
+
+## Amendment (2026-11-06, orchestrator-authorised, production incident) — decision 6: a worker with no credential follows its core too
+
+**Why.** Workers installed on 2026-11-06 got stuck at the local page's Claude sign-in ("Checking with
+Claude…"). The fix shipped (#65), but those workers never received it: the updater asked `release` only
+with the worker credential, and a worker gets its credential only at the device approval, which comes
+*after* the Claude step. A re-run of the installer only started the worker again, so the only way out
+was `--uninstall --purge` and a new install.
+
+1. **`release` without a credential.** `GET /api/worker/v1/release` is public since WP-294. With no
+   credential stored for the core's origin, the updater asks it with no `Authorization` header (the
+   protocol header stays) and updates exactly as with one: the attestations, the downgrade bound, the
+   pull, the drain (which already waits while a Claude sign-in runs) and the apply.
+2. **Only reporting waits for the credential.** `update-report` — a refusal or an apply's result — is
+   skipped by name while there is none. The apply leaves `reported: false` in `updates/state.json`, and
+   the updater reports it at the first poll that holds a credential, once per update per process (as
+   well as at start-up, as before); the last refusal made without a credential is kept in memory and
+   reported the same way. The updater's liveness is a local file and needs none.
+3. **The apply's check for a worker not approved yet.** Such a worker cannot hand-shake until a person
+   acts, so `/readyz` answers `503`. When the apply finds no credential for the plan's core, a
+   `core_handshake` of `needs_claude` or `logging_in` — waiting for the sign-in or the approval, as
+   before the update — is good, `launcher: ok` still required; `needs_platform`, `core_unreachable` and
+   anything else roll back as before. A worker that holds a credential must read `core_handshake: ok`,
+   unchanged.
+4. **The installer moves a worker that is not set up yet.** When the containers exist and run another
+   build than the core serves, the folder's `.env` has no managed block (the updater never applied an
+   update to it), and the worker's page (`http://127.0.0.1:<APP_WORKER_UI_PORT>/api/local/state`) reads
+   `connection` `needs_platform`, `needs_claude` or `logging_in`, `install.sh`/`install.ps1` install the
+   served bundle (`compose up -d`) and say why in one line. Only that one field is read and nothing of
+   the answer is printed. A page that does not answer, one that asks for a token
+   (`APP_WORKER_UI_AUTH=token`), or any other connection keeps the previous behaviour (`compose start`).
+   **Residual, stated:** an approved worker whose Claude sign-in was removed also reads `needs_claude`;
+   the installer then installs the served build over it without the updater's attestation check — the
+   trust a first install takes — and loses nothing (its approval and sign-in are in its volumes).
+
+As built: `tick`, `refuse`, `reportTerminal` and `reportPending` in `apps/server/src/updater/updater.ts`,
+`storedCredentialFor`, `NOT_APPROVED_CONNECTIONS` and `waitForHandshake` in `apply.ts`, `release(null)`
+in `apps/server/src/remote-worker/core-client.ts`, `not_set_up` in `install.sh` and `Test-NotSetUp` in
+`install.ps1`; the tests in `updater.test.ts`, `update-apply.test.ts`, `install-script.test.ts` and
+`scripts/worker-install-ps1-check.ps1`.

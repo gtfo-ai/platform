@@ -187,9 +187,11 @@ export interface CoreClient {
   forRun(runId: string, runToken: string): RunScopedClient;
   /**
    * `GET release` (TD-032 §3): the core's digests and the protocols it accepts. A `426` is not an
-   * error here — its body names the same two (TD-031 §9), which is what the updater follows.
+   * error here — its body names the same two (TD-031 §9), which is what the updater follows. The
+   * verb is public since WP-294: `null` asks it with no `Authorization` header (a worker that is not
+   * approved yet still follows its core's release).
    */
-  release(credential: string): Promise<CoreReleaseAnswer>;
+  release(credential: string | null): Promise<CoreReleaseAnswer>;
   /** `POST update-report` (TD-032 §6): how this worker's update ended. Answers nothing (`204`). */
   updateReport(credential: string, body: unknown): Promise<void>;
 }

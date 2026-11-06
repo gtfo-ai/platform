@@ -128,11 +128,17 @@ const world = async (options: {
   readonly configFiles?: string;
   /** The env file's name in the folder (default `.env`; the owner's clone uses `.env.worker`). */
   readonly envFileName?: string;
+  /** `false`: no worker credential in `worker-state` — a worker not approved yet. */
+  readonly credential?: boolean;
+  /** `/readyz`'s `core_handshake` once the new build is up (default `ok`) and its `launcher`. */
+  readonly readyzAs?: { readonly coreHandshake: string; readonly launcher?: string };
 }) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'apply-'));
   const stateDir = await mkdtemp(path.join(tmpdir(), 'apply-state-'));
   const workerStateDir = await mkdtemp(path.join(tmpdir(), 'apply-worker-state-'));
-  await writeFile(path.join(workerStateDir, 'credential'), `${CREDENTIAL}\n`);
+  if (options.credential !== false) {
+    await writeFile(path.join(workerStateDir, 'credential'), `${CREDENTIAL}\n`);
+  }
   const envFile = path.join(directory, options.envFileName ?? '.env');
   if (options.envFile !== null) {
     await writeFile(envFile, options.envFile ?? 'LOG_LEVEL=debug\n');
@@ -210,6 +216,14 @@ const world = async (options: {
   const reports: unknown[] = [];
   let clock = Date.parse('2026-11-05T12:00:00Z');
   const fetch = async (url: string, init?: RequestInit): Promise<Response> => {
+    if (url.endsWith('/readyz') && options.readyzAs !== undefined) {
+      const { coreHandshake, launcher } = options.readyzAs;
+      const ready = coreHandshake === 'ok' && (launcher ?? 'ok') === 'ok';
+      return new Response(
+        JSON.stringify({ checks: { core_handshake: coreHandshake, launcher: launcher ?? 'ok' } }),
+        { status: ready ? 200 : 503 },
+      );
+    }
     if (url.endsWith('/readyz')) {
       const ok = (options.readyAfterUp ?? (() => true))(workerImage);
       return new Response(
@@ -399,6 +413,42 @@ describe('an update that does not come up', () => {
   });
 });
 
+describe('an update of a worker that holds no credential yet (2026-11-06)', () => {
+  it('is good while the new build waits for its Claude sign-in or its approval — not reported, left for the updater', async () => {
+    for (const coreHandshake of ['needs_claude', 'logging_in']) {
+      const w = await world({ credential: false, readyzAs: { coreHandshake } });
+      const state = await runApply(w.plan, w.deps);
+      expect(state, coreHandshake).toMatchObject({ result: 'succeeded', reported: false });
+      // No update-report call at all: there is no credential to make it with.
+      expect(w.reports).toEqual([]);
+      expect(composeCalls(w.calls).map(verb).at(-1)).toBe('up -d --no-deps updater');
+      expect(await readState(w.stateDir)).toMatchObject({ result: 'succeeded', reported: false });
+    }
+  });
+
+  it('still rolls back a new build whose launcher does not answer, or that lost its platform', async () => {
+    for (const readyzAs of [
+      { coreHandshake: 'needs_claude', launcher: 'unreachable' },
+      { coreHandshake: 'needs_platform' },
+      { coreHandshake: 'core_unreachable' },
+    ]) {
+      const w = await world({ credential: false, readyzAs });
+      const state = await runApply(w.plan, w.deps);
+      expect(state.result, JSON.stringify(readyzAs)).not.toBe('succeeded');
+      expect(state.detail).toContain('needs_claude or logging_in');
+      expect(w.reports).toEqual([]);
+    }
+  });
+
+  it('an approved worker that reads needs_claude is not done: it must hand-shake, as before', async () => {
+    const w = await world({ readyzAs: { coreHandshake: 'needs_claude' } });
+    const state = await runApply(w.plan, w.deps);
+    expect(state.result).not.toBe('succeeded');
+    expect(state.detail).not.toContain('needs_claude or logging_in');
+    expect(w.reports).toEqual([expect.objectContaining({ result: state.result })]);
+  });
+});
+
 describe('the apply’s check waits for the worker’s launcher too (backlog 980)', () => {
   /** A worker whose `/readyz` answers each body of `answers` in turn, the last one for ever. */
   const readyz = (answers: readonly { status: number; checks: Record<string, string> }[]) => {
@@ -439,6 +489,32 @@ describe('the apply’s check waits for the worker’s launcher too (backlog 980
     ]);
     const result = await waitForHandshake(worker.deps, 'http://remote-worker:8080', 10);
     expect(result).toEqual({ ok: false, last: '200 core_handshake=ok launcher=unreachable' });
+  });
+
+  it('accepts needs_claude or logging_in only for a worker that holds no credential', async () => {
+    for (const handshake of ['needs_claude', 'logging_in']) {
+      const waiting = readyz([
+        { status: 503, checks: { core_handshake: handshake, launcher: 'ok' } },
+      ]);
+      expect(
+        await waitForHandshake(waiting.deps, 'http://remote-worker:8080', 10, {
+          notApproved: true,
+        }),
+      ).toEqual({ ok: true, last: `503 core_handshake=${handshake} launcher=ok` });
+      const approved = readyz([
+        { status: 503, checks: { core_handshake: handshake, launcher: 'ok' } },
+      ]);
+      expect((await waitForHandshake(approved.deps, 'http://remote-worker:8080', 10)).ok).toBe(
+        false,
+      );
+    }
+    const unknown = readyz([
+      { status: 503, checks: { core_handshake: 'needs_claude', launcher: 'unknown' } },
+    ]);
+    expect(
+      (await waitForHandshake(unknown.deps, 'http://remote-worker:8080', 10, { notApproved: true }))
+        .ok,
+    ).toBe(false);
   });
 
   it('accepts a worker build that reports no launcher check (a rollback to one before it)', async () => {

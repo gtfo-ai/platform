@@ -81,8 +81,11 @@ const world = async (options: {
   readonly verifier?: boolean;
   readonly idleAfter?: number;
   readonly coreUrl?: string | null;
-  /** The credential file's text (default: the bare credential, as written before WP-294). */
-  readonly credentialFile?: string;
+  /**
+   * The credential file's text (default: the bare credential, as written before WP-294); `null`:
+   * no file — a worker not approved yet.
+   */
+  readonly credentialFile?: string | null;
   /** `core-url` in `worker-state`: a platform chosen on the worker's page (WP-294). */
   readonly storedCoreUrl?: string;
   /**
@@ -119,7 +122,9 @@ const world = async (options: {
   let stopRun: (() => void) | null = null;
   const stateDir = await mkdtemp(path.join(tmpdir(), 'updater-state-'));
   const workerStateDir = await mkdtemp(path.join(tmpdir(), 'updater-worker-'));
-  await writeFile(path.join(workerStateDir, 'credential'), options.credentialFile ?? CREDENTIAL);
+  if (options.credentialFile !== null) {
+    await writeFile(path.join(workerStateDir, 'credential'), options.credentialFile ?? CREDENTIAL);
+  }
   if (options.storedCoreUrl !== undefined) {
     await writeFile(path.join(workerStateDir, 'core-url'), `${options.storedCoreUrl}\n`);
   }
@@ -159,6 +164,7 @@ const world = async (options: {
       });
     }
     if (url.endsWith('/api/worker/v1/update-report')) {
+      events.push('report');
       reports.push(JSON.parse(String(init?.body)));
       return new Response(null, { status: 204 });
     }
@@ -306,6 +312,7 @@ const world = async (options: {
     calls,
     verified,
     stateDir,
+    workerStateDir,
     templatePath,
     logLines,
     authorizations,
@@ -408,7 +415,7 @@ describe('the updater’s poll', () => {
     const w = await world({ advertised: digests('b'), refuse: 'carries no build attestation' });
     await w.updater.tick();
     await w.updater.tick();
-    expect(w.events.filter((event) => event !== 'release')).toEqual([]);
+    expect(w.events.filter((event) => event !== 'release' && event !== 'report')).toEqual([]);
     expect(w.reports).toEqual([
       {
         from: digests('a'),
@@ -424,7 +431,7 @@ describe('the updater’s poll', () => {
     await w.updater.tick();
     await w.updater.tick();
     // No pull and no drain: before S-22.20 the refusal came after the drain, every poll.
-    expect(w.events).toEqual(['release', 'release']);
+    expect(w.events).toEqual(['release', 'report', 'release']);
     expect(w.calls.some((args) => args[1] === 'create')).toBe(false);
     expect(w.reports).toEqual([
       expect.objectContaining({ result: 'failed', from: digests('a'), to: digests('b') }),
@@ -436,7 +443,7 @@ describe('the updater’s poll', () => {
     const w = await world({ advertised: digests('e') });
     await w.updater.tick();
     await w.updater.tick();
-    expect(w.events).toEqual(['release', 'release']);
+    expect(w.events).toEqual(['release', 'report', 'release']);
     expect(w.reports).toEqual([expect.objectContaining({ result: 'failed', to: digests('e') })]);
     expect(JSON.stringify(w.reports)).toContain('downgrade is refused');
   });
@@ -445,7 +452,7 @@ describe('the updater’s poll', () => {
     const mixed = { ...digests('a'), platform_launcher: digests('e').platform_launcher };
     const w = await world({ advertised: mixed });
     await w.updater.tick();
-    expect(w.events).toEqual(['release']);
+    expect(w.events).toEqual(['release', 'report']);
     expect(w.reports).toEqual([expect.objectContaining({ result: 'failed', to: mixed })]);
     expect(JSON.stringify(w.reports)).toContain('do not name one commit');
   });
@@ -489,13 +496,16 @@ describe('the updater’s poll', () => {
     expect(refused.reports).toHaveLength(1);
     expect(refused.authorizations.every((value) => value === `Bearer ${CREDENTIAL}`)).toBe(true);
     for (const line of [...w.logLines, ...refused.logLines]) expect(line).not.toContain(CREDENTIAL);
-    // A credential recorded for another core is not this core's: nothing is asked with it.
+    // A credential recorded for another core is not this core's: nothing is asked with it — the
+    // release is asked without one, as for a worker not approved yet, and nothing is reported.
     const other = await world({
       advertised: digests('b'),
       credentialFile: `${CREDENTIAL}\nhttps://other.example.test\n`,
     });
     await other.updater.tick();
-    expect(other.events).toEqual([]);
+    expect(other.events[0]).toBe('release');
+    expect(other.authorizations).toEqual([]);
+    expect(other.reports).toEqual([]);
   });
 
   it('follows the platform chosen on the worker’s page when APP_CORE_URL is empty (review of PR #42)', async () => {
@@ -530,7 +540,7 @@ describe('the updater’s poll', () => {
     const w = await world({ advertised: digests('b'), verifier: false });
     await w.updater.tick();
     expect(w.verified).toEqual([]);
-    expect(w.events).toEqual(['release']);
+    expect(w.events).toEqual(['release', 'report']);
     expect(JSON.stringify(w.reports)).toContain('APP_TRUSTED_BUILDER is unset');
   });
 
@@ -557,6 +567,86 @@ describe('the updater’s poll', () => {
     expect(w.verified).toHaveLength(8);
     expect(w.events).toContain('start apply');
     expect(w.reports).toEqual([]);
+  });
+});
+
+describe('a worker that holds no credential yet follows its core all the same (2026-11-06)', () => {
+  /** The `GET release` calls' headers, as the fake core received them. */
+  const releaseHeaders = (w: Awaited<ReturnType<typeof world>>) =>
+    w.authorizations.length === 0 ? 'no authorization header' : w.authorizations;
+
+  it('asks the release without an authorization header and applies an advertised other set — verified, pulled, drained — reporting nothing', async () => {
+    const w = await world({ advertised: digests('b'), credentialFile: null, idleAfter: 1 });
+    expect(await w.updater.tick()).toBe('ok');
+    expect(releaseHeaders(w)).toBe('no authorization header');
+    expect(w.verified).toHaveLength(8);
+    expect(w.events).toEqual([
+      'release',
+      ...Object.values(refsOf('b')).map((ref) => `pull ${ref}`),
+      'drain',
+      'create apply',
+      'start apply',
+    ]);
+    expect(w.reports).toEqual([]);
+    expect((await readState(w.stateDir))?.to_digests).toEqual(digests('b'));
+  });
+
+  it('still refuses a downgrade and an unverified set — and reports the refusal only once a credential exists, once', async () => {
+    const w = await world({ advertised: digests('e'), credentialFile: null });
+    await w.updater.tick();
+    await w.updater.tick();
+    // Refused (nothing pulled, nothing drained) and not reported: there is no credential to report with.
+    expect(w.events).toEqual(['release', 'release']);
+    expect(w.reports).toEqual([]);
+    expect(w.logLines.join('\n')).toContain('the refusal is not reported now');
+    // Approved: the next poll reports it, with the credential, and no later poll again.
+    await writeFile(path.join(w.workerStateDir, 'credential'), CREDENTIAL);
+    await w.updater.tick();
+    await w.updater.tick();
+    expect(w.reports).toEqual([expect.objectContaining({ result: 'failed', to: digests('e') })]);
+    expect(JSON.stringify(w.reports)).toContain('downgrade is refused');
+    expect(w.authorizations.every((value) => value === `Bearer ${CREDENTIAL}`)).toBe(true);
+    expect(w.authorizations.length).toBeGreaterThan(0);
+  });
+
+  it('reports a terminal result the core was never told once the worker is approved — not at start-up without a credential, and only once', async () => {
+    // The core advertises what runs, so no poll starts another apply over this state.
+    const w = await world({ advertised: digests('a'), credentialFile: null });
+    // What a succeeded apply leaves for a worker with no credential: `reported: false`.
+    await writeFile(
+      statePathOf(w.stateDir),
+      JSON.stringify({
+        id: '00000000-0000-4000-8000-000000000007',
+        mode: 'update',
+        step: 'done',
+        result: 'succeeded',
+        detail: null,
+        from_digests: digests('a'),
+        to_digests: digests('b'),
+        from: refsOf('a'),
+        to: refsOf('b'),
+        started_at: '2026-11-05T11:00:00.000Z',
+        finished_at: '2026-11-05T11:05:00.000Z',
+        reported: false,
+      }),
+    );
+    await w.updater.recover();
+    await w.updater.tick();
+    expect(w.reports).toEqual([]);
+    expect((await readState(w.stateDir))?.reported).toBe(false);
+    await writeFile(path.join(w.workerStateDir, 'credential'), CREDENTIAL);
+    await w.updater.tick();
+    await w.updater.tick();
+    expect(w.reports).toEqual([
+      { from: digests('a'), to: digests('b'), result: 'succeeded', detail: null },
+    ]);
+    expect((await readState(w.stateDir))?.reported).toBe(true);
+  });
+
+  it('with a credential, asks the release with it exactly as before', async () => {
+    const w = await world({ advertised: digests('a') });
+    await w.updater.tick();
+    expect(w.authorizations).toEqual([`Bearer ${CREDENTIAL}`]);
   });
 });
 

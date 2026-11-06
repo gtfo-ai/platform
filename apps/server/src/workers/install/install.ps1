@@ -19,9 +19,11 @@ What it changes on this machine, and nothing else:
 It needs no administrator rights, installs no service and edits no PATH or profile.
 
 The worker's 'updater' service follows the core and verifies each build before it applies it.
-Running this script again is a repair, never an upgrade. It never changes the images a worker runs,
-never writes the .env file the updater manages, and never touches a volume (except
--Uninstall -Purge, which removes them).
+Running this script again is a repair, never an upgrade. It never changes the images an approved
+worker runs, never writes the .env file the updater manages, and never touches a volume (except
+-Uninstall -Purge, which removes them). A worker that is not set up yet (its page waits for a
+platform, its Claude sign-in or its approval) runs nothing worth keeping, so a re-run installs the
+core's build over it.
 
 Options: -Dir DIR, -Core URL, -NoOpen, -Uninstall, -Purge (with -Uninstall). With irm | iex, pass
 them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Uninstall
@@ -298,6 +300,23 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     }
   }
 
+  # Whether the running worker holds no credential yet, read off its page's state: its `connection`
+  # waits for a platform, its Claude sign-in or its device approval. Any other word, a page that does
+  # not answer, or one that asks for a token (APP_WORKER_UI_AUTH=token) reads as set up, and the
+  # caller keeps the cautious path. Only that one field is read, and nothing of the answer is printed.
+  function Test-NotSetUp {
+    try {
+      $answer = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$(Get-PagePort)/api/local/state" -TimeoutSec 3
+      # PowerShell 7 answers a body it does not take for text as bytes.
+      $content = $answer.Content
+      if ($content -is [byte[]]) { $content = [Text.Encoding]::UTF8.GetString($content) }
+      $connection = [string]($content | ConvertFrom-Json).connection
+    } catch {
+      return $false
+    }
+    return @('needs_platform', 'needs_claude', 'logging_in') -contains $connection
+  }
+
   function Wait-Worker {
     param([string]$Page)
     Write-Line "Waiting for the worker, its updater and its page (up to $WaitLimit s) ..."
@@ -354,6 +373,11 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
       Move-Item -LiteralPath $downloaded -Destination $bundlePath -Force
       Write-Line "The worker is already installed in $WorkerDir; starting what is stopped and adding what is missing (nothing is recreated) ..."
       if ((Invoke-Compose @('up', '-d', '--no-recreate')).Code -ne 0) { Exit-Installer 1 'docker compose up failed (see above).' }
+    } elseif ($existing -and (Get-BlockPin (Join-Path $WorkerDir '.env')) -eq '' -and (Test-NotSetUp)) {
+      # Another build, never updated (no managed block), and not approved yet: nothing is lost.
+      Move-Item -LiteralPath $downloaded -Destination $bundlePath -Force
+      Write-Line "This worker runs another build than the core serves now and is not set up yet, so updating it loses nothing: installing the core's build in $WorkerDir ..."
+      if ((Invoke-Compose @('up', '-d')).Code -ne 0) { Exit-Installer 1 'docker compose up failed (see above). Fix what it names and run this again.' }
     } elseif ($existing) {
       Remove-Item -LiteralPath $downloaded -Force
       Write-Line 'This worker runs another build than the core serves now. Its updater moves it there after verifying the build;'

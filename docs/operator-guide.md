@@ -439,7 +439,10 @@ user).
 
 **The worker updates itself** (WP-287, TD-032 decisions 3, 4 and 6). The `updater` service follows the
 core: when it starts, then every minute (`APP_UPDATE_POLL_SECONDS`, default `60`), and at once when the
-worker meets a `426`, it reads the core's `GET /api/worker/v1/release` — a poll that fails (the core
+worker meets a `426`, it reads the core's `GET /api/worker/v1/release` — with the worker credential,
+or with none while the worker has none yet (the credential comes at the device approval, after the
+Claude sign-in; the verb is public), so a worker that is not set up yet still gets its core's build;
+only its reports to the core wait until it is approved, and are sent then — a poll that fails (the core
 does not answer or refuses the credential, a registry or Sigstore does not answer) waits twice as long
 before the next, up to 5 minutes, and the first that works goes back to every minute — and, when the
 four digests there differ from the ones it runs (a set that verified is not verified again while the
@@ -466,6 +469,7 @@ core keeps advertising it):
    folder's `.env` (your own lines kept; the previous file kept as `.env.previous`, the previous
    compose file in the `updates` volume). It brings the worker up from that folder, so a
    `docker compose up -d` of your own there always runs what the updater last applied, and checks that `/readyz` reads `core_handshake: ok`
+   (for a worker not approved yet, `needs_claude` or `logging_in`: it waits for a person, as before)
    and `launcher: ok` within 120 s. If it does not, it puts the previous compose file and env file back, brings the old
    build up again and restarts the worker (a drain's hold ends with the process; your own *Pause*
    does not). It then reports the result and recreates the updater last.
@@ -519,7 +523,11 @@ there — it replaces `compose.yaml` and runs `docker compose up -d --no-recreat
 is stopped and creates what is missing (a removed `updater` included) and recreates nothing. When
 they differ, the move is the updater's, after it verifies the build: with containers it only runs
 `docker compose start`, and with none it refuses (exit 3) rather than install the core's images
-unverified. It never
+unverified. **One exception:** a worker that is not set up yet — its page
+(`http://127.0.0.1:7357/api/local/state`) reads `needs_platform`, `needs_claude` or `logging_in`, and
+the updater never applied an update to its `.env` — runs nothing worth keeping, so the installer
+installs the served build over it (`docker compose up -d`) and says so; a page it cannot read (or one
+behind `APP_WORKER_UI_AUTH=token`) keeps the rule above. It never
 writes `.env` or touches a volume (except `--purge`), and it refuses while an update is being
 applied.
 

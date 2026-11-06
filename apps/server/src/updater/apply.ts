@@ -23,9 +23,14 @@
  *  5. **check**: the worker's `/readyz` reads `core_handshake: ok` (and `launcher: ok`, backlog 980)
  *     within the same bound, from a `remote-worker` container running the new `platform` reference.
  *     `up --wait` waits for the launcher's healthcheck too, and a worker that started before its
- *     launcher listened asks it again with backoff, so the check reads `launcher: ok` once it answers;
- *  6. **report** `succeeded` (`POST update-report`), and **recreate the updater last**: its
- *     replacement is the new build's.
+ *     launcher listened asks it again with backoff, so the check reads `launcher: ok` once it answers.
+ *     A worker that holds **no credential** for the plan's core (not approved yet — the updater
+ *     follows the release without one) cannot hand-shake until a person acts, so for it
+ *     `core_handshake` reading one of {@link NOT_APPROVED_CONNECTIONS} — waiting for its Claude
+ *     sign-in or its device approval, as before the update — is good too, `launcher: ok` still asked;
+ *  6. **report** `succeeded` (`POST update-report`) — skipped by name with no credential, and left
+ *     `reported: false` for the updater to report once the worker is approved — and **recreate the
+ *     updater last**: its replacement is the new build's.
  *
  * A failure at 4 or 5 **rolls back**: the folder's previous compose file and env file byte for byte
  * (or, when nothing of the folder was rewritten, the env file and the previous image's template the old
@@ -241,14 +246,25 @@ const referencesEnvironment = (references: ImageReferences): Record<string, stri
   Object.fromEntries(IMAGE_KEYS.map((key) => [WORKER_IMAGE_VARIABLE[key], references[key]]));
 
 /**
+ * What `/readyz`'s `core_handshake` reads for a worker that holds no credential and waits for a
+ * person: its Claude sign-in (`needs_claude`) or its device approval (`logging_in`, which has reached
+ * the core). `needs_platform` is not one: the rendered file names the core, so a worker that lost it
+ * lost something.
+ */
+export const NOT_APPROVED_CONNECTIONS: readonly string[] = ['needs_claude', 'logging_in'];
+
+/**
  * Waits for the worker's `/readyz` to read `core_handshake: ok` — and `launcher: ok` where the worker
  * reports one (backlog 980; a build before it does not, and a rollback may bring one up) — within
  * `seconds`. An update whose worker cannot reach its launcher claims nothing, so it is no success.
+ * With `notApproved` (the worker holds no credential) a `core_handshake` of
+ * {@link NOT_APPROVED_CONNECTIONS} is good too: such a worker answers `503` until a person acts.
  */
 export const waitForHandshake = async (
   deps: Pick<ApplyDeps, 'fetch' | 'sleep' | 'now'>,
   workerUrl: string,
   seconds: number,
+  options: { readonly notApproved?: boolean } = {},
 ): Promise<{ readonly ok: boolean; readonly last: string }> => {
   const deadline = deps.now().getTime() + seconds * 1000;
   let last = 'no answer';
@@ -262,9 +278,13 @@ export const waitForHandshake = async (
       } | null;
       const launcher = body?.checks?.launcher;
       last = `${response.status} core_handshake=${String(body?.checks?.core_handshake ?? 'absent')} launcher=${String(launcher ?? 'absent')}`;
+      const handshake = body?.checks?.core_handshake;
+      const waitsForAPerson =
+        options.notApproved === true &&
+        typeof handshake === 'string' &&
+        NOT_APPROVED_CONNECTIONS.includes(handshake);
       if (
-        response.status === 200 &&
-        body?.checks?.core_handshake === 'ok' &&
+        ((response.status === 200 && handshake === 'ok') || waitsForAPerson) &&
         (launcher === undefined || launcher === 'ok')
       ) {
         return { ok: true, last };
@@ -277,7 +297,27 @@ export const waitForHandshake = async (
   return { ok: false, last };
 };
 
-/** Reports how the update ended; `false` when the core could not be told (the next start retries). */
+/**
+ * The worker credential stored for `coreUrl` — its first line only, and only when it was recorded
+ * for that core (WP-294: the second line names its core); `null` when there is none.
+ */
+export const storedCredentialFor = async (
+  workerStateDir: string,
+  coreUrl: string,
+): Promise<string | null> => {
+  let origin: string;
+  try {
+    origin = new URL(coreUrl).origin;
+  } catch {
+    return null;
+  }
+  return readStoredCredential(workerStateDir, origin).catch(() => null);
+};
+
+/**
+ * Reports how the update ended; `false` when the core could not be told — with no credential, by
+ * name and without a call (the updater reports it once the worker is approved).
+ */
 export const reportResult = async (
   deps: Pick<ApplyDeps, 'fetch' | 'workerStateDir' | 'sleep' | 'logger'>,
   coreUrl: string,
@@ -288,19 +328,12 @@ export const reportResult = async (
     readonly detail: string | null;
   },
 ): Promise<boolean> => {
-  // The first line only, and only for this core (WP-294: the second line names its core).
-  let origin: string | undefined;
-  try {
-    origin = new URL(coreUrl).origin;
-  } catch {
-    origin = undefined;
-  }
-  const credential =
-    origin === undefined
-      ? null
-      : await readStoredCredential(deps.workerStateDir, origin).catch(() => null);
+  const credential = await storedCredentialFor(deps.workerStateDir, coreUrl);
   if (credential === null) {
-    deps.logger.warn({}, 'this worker has no credential yet, so the update is not reported');
+    deps.logger.info(
+      {},
+      'this worker holds no credential yet, so how the update ended is not reported now: the updater reports it once the worker is approved',
+    );
     return false;
   }
   const core = createCoreClient({ baseUrl: coreUrl, fetch: (url, init) => deps.fetch(url, init) });
@@ -527,12 +560,17 @@ export const runApply = async (plan: UpdatePlan, deps: ApplyDeps): Promise<Updat
     } catch (error) {
       return { ok: false, detail: `up failed: ${(error as Error).message}` };
     }
-    const handshake = await waitForHandshake(deps, plan.worker_url, plan.check_seconds);
+    // A worker not approved yet cannot hand-shake until a person acts (it followed the release
+    // without a credential): waiting for its Claude sign-in or its approval is good for it.
+    const notApproved = (await storedCredentialFor(deps.workerStateDir, plan.core_url)) === null;
+    const handshake = await waitForHandshake(deps, plan.worker_url, plan.check_seconds, {
+      notApproved,
+    });
     const image = await workerImageOf(docker, plan.project).catch(() => null);
     if (!handshake.ok) {
       return {
         ok: false,
-        detail: `the worker's /readyz did not read core_handshake and launcher: ok within ${plan.check_seconds} s (${handshake.last})`,
+        detail: `the worker's /readyz did not read core_handshake${notApproved ? ' (or, holding no credential, needs_claude or logging_in)' : ''} and launcher: ok within ${plan.check_seconds} s (${handshake.last})`,
       };
     }
     if (image !== expectedPlatform) {

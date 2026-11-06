@@ -6,7 +6,9 @@ where install.ps1 is executed; install-script.test.ts holds its text.
 
 Asserted: a first install downloads the core's bundle verbatim, marks the folder, runs
 `docker compose up -d` there with none of the variables that would re-pin the images or change what
-the updater trusts; a re-run starts what exists and recreates nothing; an `irm | iex`-style run
+the updater trusts; a re-run starts what exists and recreates nothing; a re-run against another
+served build only starts an approved worker (or one whose page cannot be read) and installs the
+served build over one that is not set up yet (its page reads needs_claude); an `irm | iex`-style run
 leaves the caller's session alive with no installer function behind; `-Uninstall -Purge` removes
 the volumes and the folder. Prints PASS or FAIL and exits 0 or 1.
 #>
@@ -24,7 +26,7 @@ $bin = Join-Path $root 'bin'
 $state = Join-Path $root 'state'
 $site = Join-Path $root 'site'
 $workerDir = Join-Path $root 'agentic-worker'
-foreach ($folder in @($bin, $state, (Join-Path $site 'api\worker\v1'))) { $null = New-Item -ItemType Directory -Force -Path $folder }
+foreach ($folder in @($bin, $state, (Join-Path $site 'api\worker\v1'), (Join-Path $site 'api\local'))) { $null = New-Item -ItemType Directory -Force -Path $folder }
 $log = Join-Path $root 'calls.log'
 Set-Content -LiteralPath $log -Value ''
 
@@ -91,6 +93,30 @@ try {
   Test-That ($LASTEXITCODE -eq 0) "a re-run exits 0 (it exited $LASTEXITCODE)"
   $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
   Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker up -d --no-recreate') "a re-run adds what is missing and recreates nothing (last: $($calls[-1]))"
+
+  # The core serves another build now. The worker's page (the same stand-in server) answers its state
+  # at /api/local/state: absent (it cannot be read), approved, then not set up yet.
+  $bundleB = $bundle.Replace(('a' * 64), ('b' * 64))
+  [IO.File]::WriteAllText((Join-Path $site 'api\worker\v1\compose.yml'), $bundleB)
+  $pageState = Join-Path $site 'api\local\state'
+  foreach ($case in @(@{ What = 'a page that cannot be read'; State = $null }, @{ What = 'an approved worker'; State = 'connected' })) {
+    if ($null -eq $case.State) { Remove-Item -LiteralPath $pageState -Force -ErrorAction SilentlyContinue } else {
+      [IO.File]::WriteAllText($pageState, "{`"worker_id`":`"w1`",`"worker_name`":`"dev`",`"connection`":`"$($case.State)`",`"protocol`":3}")
+    }
+    & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
+    Test-That ($LASTEXITCODE -eq 0) "another served build, $($case.What): exits 0 (it exited $LASTEXITCODE)"
+    $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
+    Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker start') "another served build, $($case.What): only starts what is stopped (last: $($calls[-1]))"
+    Test-That ([IO.File]::ReadAllText((Join-Path $workerDir 'compose.yaml')) -eq $bundle) "another served build, $($case.What): compose.yaml is unchanged"
+  }
+  [IO.File]::WriteAllText($pageState, '{"worker_id":null,"worker_name":null,"connection":"needs_claude","protocol":3}')
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
+  Test-That ($LASTEXITCODE -eq 0) "another served build, a worker not set up yet: exits 0 (it exited $LASTEXITCODE)"
+  $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
+  Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker up -d') "another served build, a worker not set up yet: installs it with up -d (last: $($calls[-1]))"
+  Test-That ([IO.File]::ReadAllText((Join-Path $workerDir 'compose.yaml')) -eq $bundleB) 'another served build, a worker not set up yet: compose.yaml is the served bundle'
+  Test-That (-not (Test-Path -LiteralPath (Join-Path $workerDir '.env'))) 'another served build, a worker not set up yet: still no .env'
+  Remove-Item -LiteralPath $pageState -Force
 
   # After the updater's first update Compose's label names its mount path (S-22.21): the installer
   # still knows its own install, by its mark.
