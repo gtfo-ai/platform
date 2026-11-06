@@ -269,6 +269,15 @@ export const SIGN_IN_FAILURE_WORDS: Readonly<Record<WorkerLocalSignInFailure, st
     'Claude’s sign-in did not hand this worker a token within a minute of the code. Paste a token instead: run claude setup-token in a terminal and paste the token it prints.',
 };
 
+/**
+ * The shape of a token `claude setup-token` prints, and a paste with every whitespace removed — the
+ * contract's `CLAUDE_OAUTH_TOKEN_SHAPE` and `normaliseClaudeToken`, copied because a value import
+ * of `@platform/contracts` brings zod into this page's 120 kB bundle; `model.test.ts` holds them
+ * equal.
+ */
+export const PASTED_TOKEN_SHAPE = /^sk-ant-oat01-[A-Za-z0-9_-]{40,400}$/;
+export const normalisePastedToken = (pasted: string): string => pasted.replace(/\s+/g, '');
+
 /** A pasted token the page refuses before anything runs (the worker refuses it too, `400`). */
 export const TOKEN_SHAPE_WORDS =
   'That isn’t a Claude token: it starts with sk-ant-oat01-. Copy the whole line claude setup-token printed.';
