@@ -73,6 +73,20 @@ Settings (org)             – auth, Claude provider mode, default models, globa
 - **Stages.** The stage timeline is the list mode of the Flow canvas, not a second section.
 - **Checks.** The panel counts checks; questions and approvals are the callout's.
 
+*Amended 2026-11-07 (product owner, after a CI failure on an agent's merge request, M25 S-25.11).* **A task that went
+back says why it went back, and what happens next.** A gate's failure (CI, the rebase, the dependency policy) or a
+reviewer's return sends the task to an earlier stage. Until that stage ends, the task header's *Now* line and the
+callout's slot carry one sentence. It names the cause, who acts, and how many tries are left:
+- **The agent is on it:** "CI failed on the merge request: the Developer is fixing it (try 2 of 3)." The failing job
+  is linked by name (through `safeHref`). There is no action, because nothing is asked of the reader.
+- **It stopped:** when the tries are spent, or the same failure came back twice, the escalation says which one.
+  "CI failed the same way twice (job *unit*), so the agent stopped." The one next step follows it: look at the job,
+  then *Retry* or *Take over*.
+- **The board card** shows the same fact in short form ("CI failed · fixing, try 2/3"). The stage timeline draws the
+  return as a loop with its reason, as above.
+- A return whose reason was not recorded says so ("went back from CI; the reason was not recorded"). It never
+  guesses.
+
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.
 - *Amended 2026-11-06 (M25).* While a run is live, watching is the job: *Cancel run* is a danger secondary, never the
