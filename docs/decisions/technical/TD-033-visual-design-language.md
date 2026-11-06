@@ -178,3 +178,27 @@ Decision 2 changes as follows:
 - Decision 2's light-theme bullet and "`system` and `light` remain choosable" are superseded. The office
   view was always dark, so nothing changes there.
 
+
+## Amendment 2026-11-06 — a list row is clicked anywhere, not on its title (product owner)
+
+The product owner, on Home's *Needs you* list: rows "need to just click on the title or CTA — it would be
+good to have default action clicking on the whole row … I need to click precisely on a title".
+
+Decision: every list row, card or board item that **has a destination** opens it from anywhere on the row,
+by GitHub's **stretched link** (S-23.26, `apps/web/src/ui/row-link.ts`, `styles.css` "Whole-row click
+targets"):
+- **One real link per row.** The row's primary control carries the stretch (its `::after` covers the row).
+  There is no `onClick` on a `<li>`, `<div>` or `<tr>`, so the tab order, ⌘/Ctrl- and middle-click into a new
+  tab, *Copy link* and a screen reader's list of links stay the browser's.
+- **A row click only navigates or opens.** It never performs a mutation. A row whose only control is a
+  command (*Take this one*, *Re-queue*) gets no stretch and no hover.
+- **Everything else in the row stays its own.**
+  - Other controls (buttons, menus, copy, secondary links) sit above the stretch.
+  - So does any element with a native `title=`, so a count's or a cost's definition still shows (product/10:
+    "every number shown has a tooltip").
+  - So does free text a person may want to select (`ROW_LINK_LIFT`).
+- **The row says it is clickable.** It gets the hover ground `--bg-subtle`, and the focus ring goes round the
+  whole row when its link has keyboard focus.
+- **It is held by tests.** `row-link-census.test.ts` refuses a row that renders a title link without the
+  primitive. `test/web-e2e/row-click.spec.ts` clicks a row's meta text with a real mouse. BACKLOG 949 lists
+  the rows deliberately left as they are.
