@@ -56,12 +56,23 @@
  * — and `current_health`, which {@link currentHealthOf} derives from both and the probe against
  * `INTEGRATION_HEALTH_STALE_AFTER_HOURS`. Nothing newer than the bound is `not_checked_recently`,
  * never `working`. No table is added: {@link readIntegrationTraffic} is one statement over existing
- * rows, three `lateral` probes per listed integration, each bounded by an index —
- * `integration_actions_integration_idx (integration_id, created_at desc)` on every partition for
- * the newest call (a backward scan stopped at the first `ok`/`failed` row) and for the window's
- * newest success and failure (a range scan of the last 24 hours only), and
- * `inbox_verified_integration_idx` (migration 0103) for the newest delivery: before it, `inbox` had
- * no index that led with `integration_id` but the partial one over refusals.
+ * rows, three `lateral` probes per listed integration, each bounded by an index and a window —
+ * `integration_actions_integration_idx (integration_id, created_at desc)` for the newest call (a
+ * backward scan of the last {@link LAST_CALL_LOOKBACK_DAYS} days only, so an integration whose rows
+ * are all shadow `would_have` scans those days' partitions and no older ones, stopped at the first
+ * `ok`/`failed` row) and for the window's newest success and failure (a range scan of the last
+ * 24 hours only), and `inbox_verified_integration_idx` (migration 0102) for the newest delivery:
+ * before it, `inbox` had no index that led with `integration_id` but the partial one over
+ * refusals. A call older than the lookback is published as none — it could only ever have read
+ * `not_checked_recently`, which the probe or a delivery still says when there is one.
+ *
+ * **The probe's own calls are not traffic** (review of PR #75). `createIntegrationProber` records
+ * every *Test connection* through the executor, and a probe the provider answered `ok: false` is
+ * an `ok` row — a successful test reporting a failed connection — written a moment after
+ * `integrations.health.checked_at`. Counted, it would be a newer outbound success than the failed
+ * probe, and a failing integration would read `working`. So both outbound laterals leave out
+ * `PROBE_ACTIONS` (declared beside the prober, which names every call through it), and the probe's
+ * verdict is read from `integrations.health` alone.
  *
  * **A residual, stated.** `integration_actions` stores no error code, so a `failed` row is any
  * provider call that failed after its retries — a ticket that is not there (`not_found`) as much as
@@ -91,6 +102,7 @@ import {
   accountOnlyFieldsOf,
   configIssuesOf,
   findShippedProvider,
+  PROBE_ACTIONS,
   usesOf,
 } from '@platform/integrations';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
@@ -311,6 +323,13 @@ export const integrationSummaryOf = async (
 
 const STALE_AFTER_MS = INTEGRATION_HEALTH_STALE_AFTER_HOURS * 3_600_000;
 
+/**
+ * How far back the newest-call read looks (review of PR #75): 90 days, about three monthly
+ * partitions of `integration_actions`. A bound rather than "ever", so a shadow-only integration —
+ * every row `would_have`, none of them evidence — costs those days' rows and not the table's.
+ */
+export const LAST_CALL_LOOKBACK_DAYS = 90;
+
 /** One integration's traffic, as {@link readIntegrationTraffic} reads it; instants in epoch ms. */
 export interface IntegrationTraffic {
   /** The newest outbound call that reached the provider, of any age. */
@@ -359,7 +378,9 @@ const iso = (atMs: number): IsoDateTime => new Date(atMs).toISOString() as IsoDa
  * 4. Otherwise anything at all on record is `not_checked_recently`, at the newest of it; nothing is
  *    `never_checked`. A month-old *passed* probe is the first of these, never `working`.
  *
- * A probe that reads `degraded` or `down` is a failure; `unknown` is no evidence.
+ * A probe that reads `down` is a failure; `degraded` — *Passed with warnings* on the page — is a
+ * pass, so it never reads failing on the row while the page says it passed; `unknown` is no
+ * evidence.
  */
 export const currentHealthOf = (
   probe: IntegrationSummary['health'],
@@ -373,8 +394,8 @@ export const currentHealthOf = (
     probe.status === 'unknown' || probe.checked_at === null
       ? null
       : evidence('probe', Date.parse(probe.checked_at));
-  const probeOk = probe.status === 'ok' ? probed : null;
-  const probeFailed = probe.status === 'degraded' || probe.status === 'down' ? probed : null;
+  const probeOk = probe.status === 'ok' || probe.status === 'degraded' ? probed : null;
+  const probeFailed = probe.status === 'down' ? probed : null;
 
   const outboundSuccess = newest([
     recent(evidence('call', traffic.lastOkInWindowMs)),
@@ -452,6 +473,8 @@ export const readIntegrationTraffic = async (
     return new Map();
   }
   const since = new Date(now.getTime() - STALE_AFTER_MS).toISOString();
+  const lookback = new Date(now.getTime() - LAST_CALL_LOOKBACK_DAYS * 86_400_000).toISOString();
+  const probeActions = sql.param([...PROBE_ACTIONS]);
   const result = await database.execute<{
     integration_id: string;
     last_call_ms: unknown;
@@ -473,6 +496,8 @@ export const readIntegrationTraffic = async (
          where a.integration_id = i.id
            and a.direction = 'out'
            and a.status in ('ok', 'failed')
+           and a.created_at > ${lookback}::timestamptz
+           and a.action <> all(${probeActions}::text[])
          order by a.created_at desc
          limit 1
       ) c on true
@@ -483,6 +508,7 @@ export const readIntegrationTraffic = async (
          where a.integration_id = i.id
            and a.direction = 'out'
            and a.created_at > ${since}::timestamptz
+           and a.action <> all(${probeActions}::text[])
       ) w on true
       left join lateral (
         select b.received_at

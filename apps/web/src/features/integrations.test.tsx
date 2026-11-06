@@ -796,6 +796,29 @@ describe('the integrations list — identity, health now and use (S-25.3)', () =
     expect(within(maintainer).queryByRole('button', { name: 'Test again' })).toBeNull();
   });
 
+  it('reads a probe that passed with warnings as a pass on the row and on the page', async () => {
+    // Review of PR #75: one meaning in both places — *Passed with warnings*, never Failing.
+    const at = new Date(NOW - 2 * 3_600_000).toISOString();
+    const warned: IntegrationSummary = {
+      ...JIRA,
+      health: { status: 'degraded', checked_at: at, detail: null },
+      current_health: { status: 'working', basis: 'probe', at },
+    };
+    const { unmount } = renderApp(recorder({ items: [warned] }).fetchImpl);
+    const list = await screen.findByRole('list', { name: 'Tickets' });
+    expect(list.textContent).toContain('Working · tested with warnings 2 h ago');
+    expect(list.textContent).not.toContain('failed');
+    expect(list.textContent).not.toContain('Failing');
+    unmount();
+    window.history.pushState({}, '', `/integrations/${INTEGRATION}`);
+    const page = renderApp(recorder({ items: [warned] }).fetchImpl);
+    expect(await screen.findByRole('heading', { level: 1, name: 'ACME Jira' })).toBeTruthy();
+    expect(page.container.querySelector('[data-health-fact="probe"]')?.textContent).toBe(
+      'Passed with warnings 2 h ago',
+    );
+    expect(page.container.textContent).not.toContain('test failed');
+  });
+
   it('says a failing call in words, from the server’s verdict', async () => {
     const failing: IntegrationSummary = {
       ...JIRA,

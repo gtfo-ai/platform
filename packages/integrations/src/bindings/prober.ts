@@ -106,6 +106,29 @@ export interface IntegrationProbeCheck {
 }
 
 /** `<provider>:<integrationId>:<field>` — the naming both other loaders use. */
+/**
+ * The `integration_actions.action` of every call **this prober** makes (S-25.3, review of PR #75).
+ *
+ * A probe's call is recorded `ok` whenever the provider *answered*, including a `testConnection`
+ * that answered `ok: false` — "a successful *test* reporting a failed *connection*", this module's
+ * own rule — so its row is no evidence that the integration works, and it lands a moment after
+ * `integrations.health.checked_at`. The integrations list's health read
+ * (`apps/server/src/queries/integration-queries.ts`) therefore leaves these actions out of its
+ * traffic and reads the probe's verdict from `integrations.health` alone. Every call below names its
+ * action through this table, and `prober.test.ts` refuses a literal action in this file, so a sixth
+ * check cannot be recorded under a name the health read does not exclude.
+ */
+export const PROBE_ACTION = {
+  connection: 'test_connection',
+  runCredentialMember: 'check_run_credential_member',
+  runTokenScope: 'check_run_token_scope',
+  defaultBranchProtection: 'check_default_branch_protection',
+  deployKey: 'check_deploy_key',
+} as const;
+
+/** {@link PROBE_ACTION}'s values: the actions a health read must not count as traffic. */
+export const PROBE_ACTIONS: readonly string[] = Object.values(PROBE_ACTION);
+
 const secretName = (account: IntegrationAccount, field: string): string =>
   `${account.provider}:${account.integrationId}:${field}`;
 
@@ -251,7 +274,7 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
       }
       const outcome = await options.executor.execute<HealthProbe>({
         integration: ref,
-        action: 'test_connection',
+        action: PROBE_ACTION.connection,
         // The account's own configuration, never its credentials: `secrets` is merged into the
         // adapter's config above and is deliberately not in what the audit row records.
         payload: { name: account.name },
@@ -377,7 +400,7 @@ const checkStaticRunCredential = async (input: {
   const access = (
     await input.options.executor.execute<ProjectMemberAccess>({
       integration: input.ref,
-      action: 'check_run_credential_member',
+      action: PROBE_ACTION.runCredentialMember,
       // Names only: the user and the project, never a credential.
       payload: { username: input.username, project },
       projectId: null,
@@ -502,7 +525,7 @@ const scopeProof = async (
   const answer = (
     await input.options.executor.execute<RunTokenApiAccess>({
       integration: input.ref,
-      action: 'check_run_token_scope',
+      action: PROBE_ACTION.runTokenScope,
       // Names only — never the token, which is the one thing this call carries.
       payload: { project: bound?.path ?? null, owner: 'operator' },
       projectId: null,
@@ -595,7 +618,7 @@ const protectionCheck = async (
       (
         await input.options.executor.execute<BranchPushProtection>({
           integration: input.ref,
-          action: 'check_default_branch_protection',
+          action: PROBE_ACTION.defaultBranchProtection,
           payload: { project: bound.path, branch: bound.defaultBranch },
           projectId: null,
           taskId: null,
@@ -682,7 +705,7 @@ const checkDeployKey = async (input: {
       (
         await input.options.executor.execute<DeployKeyAccess>({
           integration: input.ref,
-          action: 'check_deploy_key',
+          action: PROBE_ACTION.deployKey,
           // The project and the key's public half only — never the private key.
           payload: { project: bound.path },
           projectId: null,
@@ -707,7 +730,7 @@ const checkDeployKey = async (input: {
       (
         await input.options.executor.execute<BranchPushProtection>({
           integration: input.ref,
-          action: 'check_default_branch_protection',
+          action: PROBE_ACTION.defaultBranchProtection,
           payload: { project: bound.path, branch: bound.defaultBranch },
           projectId: null,
           taskId: null,

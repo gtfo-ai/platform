@@ -266,13 +266,22 @@ describe('currentHealthOf', () => {
     ).toEqual({ status: 'working', basis: 'call', at: isoAgo(1) });
   });
 
-  it('counts a recent failed probe as an outbound failure, and a degraded probe too', () => {
+  it('counts a recent failed probe as an outbound failure, and a degraded probe as a pass', () => {
     expect(currentHealthOf(probe('down', 1), NO_TRAFFIC, NOW)).toEqual({
       status: 'failing',
       basis: 'probe',
       at: isoAgo(1),
     });
-    expect(currentHealthOf(probe('degraded', 1), NO_TRAFFIC, NOW).status).toBe('failing');
+    // Review of PR #75: *Passed with warnings* on the page is a pass on the row, never Failing.
+    expect(currentHealthOf(probe('degraded', 1), NO_TRAFFIC, NOW)).toEqual({
+      status: 'working',
+      basis: 'probe',
+      at: isoAgo(1),
+    });
+    expect(
+      currentHealthOf(probe('degraded', 0.5), traffic({ lastFailedInWindowMs: ago(2) }), NOW)
+        .status,
+    ).toBe('working');
     // A passed probe after the failed call is the newest outbound evidence.
     expect(
       currentHealthOf(probe('ok', 0.5), traffic({ lastFailedInWindowMs: ago(2) }), NOW),

@@ -12,9 +12,12 @@
  * - *Old probe*: a passed *Test connection* two days ago and nothing since — `not_checked_recently`,
  *   never `working`.
  * - *Flaky*: a success three hours ago and a failure one hour ago — `degraded`.
+ * - *Failed probe*: `integrations.health` reads `down` at T and the prober's own `test_connection`
+ *   row is `ok` at T + 1 s (a provider answering `ok: false` is a successful *test*) — `failing`,
+ *   because the probe's actions are not traffic (review of PR #75).
  * - *Quiet*: nothing at all — `never_checked`, used by nobody.
  *
- * The last case holds the delivery read to its index (migration 0103): with sequential scans
+ * The last case holds the delivery read to its index (migration 0102): with sequential scans
  * switched off for one transaction, the plan of the probe the projection runs names
  * `inbox_verified_integration_idx`, so dropping the migration fails here by name.
  */
@@ -22,6 +25,7 @@ import { createRequire } from 'node:module';
 import type { IntegrationSummary } from '@platform/contracts';
 import { integrationsResponseSchema } from '@platform/contracts';
 import { db } from '@platform/infrastructure';
+import { PROBE_ACTION } from '@platform/integrations';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -44,11 +48,12 @@ const { serializerCompiler, validatorCompiler } = fromServer('fastify-type-provi
 let database: MigratedDatabase;
 let pool: pg.Pool;
 let app: App;
-const ids: Record<'jira' | 'probe' | 'flaky' | 'quiet', string> = {
+const ids: Record<'jira' | 'probe' | 'flaky' | 'quiet' | 'failedProbe', string> = {
   jira: '',
   probe: '',
   flaky: '',
   quiet: '',
+  failedProbe: '',
 };
 
 const insertIntegration = async (
@@ -68,14 +73,19 @@ const insertIntegration = async (
 };
 
 /** One audit row, `hours` before the database's now. */
-const call = async (integrationId: string, status: string, hours: number): Promise<void> => {
+const call = async (
+  integrationId: string,
+  status: string,
+  hours: number,
+  action = 'read_ticket',
+): Promise<void> => {
   await pool.query(
     `insert into integration_actions
        (integration_id, direction, action, payload, result, status, attempts, redaction_count,
         created_at)
-     values ($1, 'out', 'read_ticket', '{}'::jsonb, '{}'::jsonb, $2, 1, 0,
+     values ($1, 'out', $4, '{}'::jsonb, '{}'::jsonb, $2, 1, 0,
              now() - make_interval(secs => $3::float8 * 3600))`,
-    [integrationId, status, hours],
+    [integrationId, status, hours, action],
   );
 };
 
@@ -148,6 +158,23 @@ beforeAll(async () => {
   });
   await call(ids.flaky, 'ok', 3);
   await call(ids.flaky, 'failed', 1);
+  // Review of PR #75: a probe the provider answered `ok: false` — `integrations.health` reads
+  // `down` at T, and the prober's own audit row is `ok` at T + 1 s (a successful *test*).
+  const probedAt = Date.now() - 3_600_000;
+  ids.failedProbe = await insertIntegration(
+    orgId,
+    'git',
+    'gitlab',
+    'Failed probe',
+    { base_url: 'https://gitlab.example.test' },
+    { status: 'down', checked_at: new Date(probedAt).toISOString(), detail: '401 Unauthorized' },
+  );
+  await call(
+    ids.failedProbe,
+    'ok',
+    (Date.now() - probedAt - 1_000) / 3_600_000,
+    PROBE_ACTION.connection,
+  );
   ids.quiet = await insertIntegration(orgId, 'communication', 'slack', 'Quiet', {
     channel: '#agentic',
   });
@@ -216,6 +243,14 @@ describe('GET /api/integrations — health from traffic (S-25.3)', () => {
     expect(flaky?.activity.last_call?.ok).toBe(false);
   });
 
+  it('reads a failed probe as failing, though the probe’s own audit row is a later ok (review of PR #75)', async () => {
+    const failed = (await listed()).get(ids.failedProbe);
+    expect(failed?.health.status).toBe('down');
+    expect(failed?.current_health).toMatchObject({ status: 'failing', basis: 'probe' });
+    // The probe's row is not traffic: no call is published for it.
+    expect(failed?.activity.last_call).toBeNull();
+  });
+
   it('reads an integration with no traffic and no probe as never checked, used by nobody', async () => {
     const quiet = (await listed()).get(ids.quiet);
     expect(quiet?.current_health).toEqual({ status: 'never_checked', basis: null, at: null });
@@ -247,7 +282,7 @@ describe('GET /api/integrations — who uses it (S-25.3)', () => {
   });
 });
 
-describe('the newest-delivery probe and its index (migration 0103)', () => {
+describe('the newest-delivery probe and its index (migration 0102)', () => {
   it('is answered from inbox_verified_integration_idx', async () => {
     const client = await pool.connect();
     try {

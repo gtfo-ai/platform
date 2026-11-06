@@ -118,7 +118,8 @@ export const providerName = (
 
 /**
  * What decided the row's health, and how long ago (S-25.3): "last call 5 m ago", "last call failed
- * 2 h ago", "last delivery 1 h ago", "tested 32 d ago", "test failed 3 h ago" — or "no calls or
+ * 2 h ago", "last delivery 1 h ago", "tested 32 d ago", "tested with warnings 2 h ago" (a pass, as
+ * the page's *Passed with warnings*), "test failed 3 h ago" — or "no calls or
  * deliveries yet", or "retired 1 Oct 2026, 09:00". Every word is the server's evidence: the basis
  * and the instant are `current_health`'s, and whether a call failed is `activity.last_call`'s.
  */
@@ -137,9 +138,12 @@ export const healthText = (integration: IntegrationSummary, nowMs: number): stri
         : 'last call'
       : basis === 'delivery'
         ? 'last delivery'
-        : integration.health.status === 'down' || integration.health.status === 'degraded'
+        : integration.health.status === 'down'
           ? 'test failed'
-          : 'tested';
+          : // One meaning on the row and the page (review of PR #75): *Passed with warnings*.
+            integration.health.status === 'degraded'
+            ? 'tested with warnings'
+            : 'tested';
   const ago = formatAgo(at, nowMs);
   return `${what} ${ago ?? formatDateTime(at)}`;
 };

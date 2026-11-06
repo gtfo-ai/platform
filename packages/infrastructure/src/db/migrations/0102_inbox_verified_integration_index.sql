@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0103 — the index behind an integration's newest verified delivery (S-25.3, product/08's
+-- 0102 — the index behind an integration's newest verified delivery (S-25.3, product/08's
 -- 2026-11-06 amendment: health is read from traffic).
 --
 -- `GET /api/integrations` publishes, for every integration, the newest `inbox` row it delivered
