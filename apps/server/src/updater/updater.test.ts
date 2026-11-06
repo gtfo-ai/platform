@@ -576,7 +576,12 @@ describe('a worker that holds no credential yet follows its core all the same (2
     w.authorizations.length === 0 ? 'no authorization header' : w.authorizations;
 
   it('asks the release without an authorization header and applies an advertised other set — verified, pulled, drained — reporting nothing', async () => {
-    const w = await world({ advertised: digests('b'), credentialFile: null, idleAfter: 1 });
+    const w = await world({
+      advertised: digests('b'),
+      credentialFile: null,
+      idleAfter: 1,
+      applyEnds: 'succeeded',
+    });
     expect(await w.updater.tick()).toBe('ok');
     expect(releaseHeaders(w)).toBe('no authorization header');
     expect(w.verified).toHaveLength(8);
