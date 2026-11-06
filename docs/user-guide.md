@@ -1083,7 +1083,7 @@ such, and so are the failing jobs past the fifth.
 ## 5. Run detail and the transcript
 
 Click a run — in the task's run list, under *Running now* on Home, or on the Agents screen. The page
-sits inside its project, under the project's header and tabs (its address stays `/runs/<id>`), and is
+sits inside its project, under the project's header and tab row (its address stays `/runs/<id>`), and is
 laid out like a GitHub Actions job:
 
 - **The header** leads back to the task in its project, by its ticket key and title, and names the

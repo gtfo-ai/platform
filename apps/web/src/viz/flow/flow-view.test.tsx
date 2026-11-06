@@ -309,10 +309,13 @@ describe('the task page’s Flow section', () => {
     start(`/tasks/${TASK}`);
     const list = await screen.findByRole('list', { name: 'Feature pipeline as a list' });
     expect(list.getAttribute('data-flow-list')).toBe('screen-reader');
-    // The current card says what the agent is doing — the agents read's newest entry, until the
-    // transcript has delivered anything.
+    // The current card says what the agent is doing — the agents read's newest entry (*Reading
+    // files*) until the transcript has delivered anything, then the transcript's (*Running a
+    // command*, the fixture's Bash call). Which one this read lands on is the live stage panel's
+    // transcript page racing the lazily loaded canvas, so both are the right answer here; the
+    // hand-over itself is the dialog test's below.
     await within(list).findByRole('button', {
-      name: 'Implementation, Developer, Working, Now: Reading files, claude-test · high',
+      name: /^Implementation, Developer, Working, Now: (Reading files|Running a command), claude-test · high$/,
     });
     expect(
       within(list).getByRole('button', { name: /^Refinement, Product manager, Done, / }),
