@@ -8,12 +8,14 @@
  * the route tree puts those routes under one pathless layout that draws this: the settings NavList
  * on the left, with the screen's Admin entry current, and the screen itself on the right, unchanged
  * — it keeps its own `<h1>`. The reader sees they are in *Settings → Admin*, and every other
- * section is one press away.
+ * section is one press away. The two wizards (`/integrations/new`, `/workers/new`) are the
+ * exception: they declare `staticData.bare` and are drawn alone, because their own Stepper column
+ * beside this NavList left too little for the step itself.
  *
  * In the initial graph, as the project's layout is (`routes/tree.tsx` says why it is not a chunk);
  * the screens inside it stay lazy.
  */
-import { Link, Outlet, useLocation } from '@tanstack/react-router';
+import { Link, Outlet, useLocation, useMatches } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import { isCurrentSection } from '../app/nav.js';
 import { useSession } from '../app/queries.js';
@@ -28,6 +30,14 @@ export const adminEntryOf = (pathname: string): OrgAdminLinkId | null =>
 export const AdminFrame = (): ReactElement => {
   const session = useSession();
   const pathname = useLocation({ select: (location) => location.pathname });
+  // A wizard (`staticData.bare`) has its own Stepper column: two left columns left it ~208 px of
+  // content at 768 px (review of #83), so it is drawn alone, at the URL it always had.
+  const bare = useMatches({
+    select: (matches) => matches.some((match) => match.staticData?.bare === true),
+  });
+  if (bare) {
+    return <Outlet />;
+  }
   return (
     <SettingsFrame
       label="Settings"

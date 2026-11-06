@@ -23,7 +23,7 @@ import { useSyncExternalStore } from 'react';
 import { ROW_LINK_ATTRIBUTE } from '../ui/row-link.js';
 
 /** Where a `g` chord goes. `board` needs a project; the listener ignores it outside one. */
-export type JumpTarget = 'home' | 'projects' | 'inbox' | 'agents' | 'board';
+export type JumpTarget = 'home' | 'projects' | 'inbox' | 'agents' | 'settings' | 'board';
 
 /** The second key of a `g` chord → where it goes. */
 export const JUMPS: Readonly<Record<string, JumpTarget>> = {
@@ -31,6 +31,8 @@ export const JUMPS: Readonly<Record<string, JumpTarget>> = {
   p: 'projects',
   i: 'inbox',
   a: 'agents',
+  // S-25.6: Settings left the top row, and its Admin screens with it — one chord away.
+  s: 'settings',
   b: 'board',
 };
 
@@ -68,6 +70,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: ['g', 'p'], does: 'Projects' },
       { keys: ['g', 'i'], does: 'Inbox' },
       { keys: ['g', 'a'], does: 'Agents' },
+      { keys: ['g', 's'], does: 'Settings' },
       { keys: ['g', 'b'], does: 'The board, inside a project' },
     ],
   },

@@ -33,8 +33,9 @@
  * **Settings' Admin screens are a pathless layout** (S-25.6, product/10's 2026-11-06 IA amendment):
  * Integrations, Workers and the Audit log left the top row for org Settings' *Admin* group, and the
  * routes under `/integrations`, `/workers` and `/audit` are children of `adminRoute`, which draws the
- * settings NavList around them (`features/admin-frame.tsx`). **No path and no search schema
- * changed**: `/workers/approve?code=…` — the device flow's `verification_uri`, which installed
+ * settings NavList around them (`features/admin-frame.tsx`) — except the two wizards
+ * (`/integrations/new`, `/workers/new`), which say `staticData.bare` and keep the whole width for
+ * their own Stepper column. **No path and no search schema changed**: `/workers/approve?code=…` — the device flow's `verification_uri`, which installed
  * workers print — and `/workers/new?step=ready` resolve as they always did, query string and all
  * (`routes/admin-routes.test.tsx` holds both). */
 
@@ -185,6 +186,8 @@ const integrationWizardRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: '/integrations/new',
   validateSearch: integrationWizardSearchSchema,
+  // A wizard has its own Stepper column: the Admin frame draws no NavList beside it (review of #83).
+  staticData: { bare: true },
   component: withPreload(function IntegrationWizard() {
     const { step, id } = integrationWizardRoute.useSearch();
     return <IntegrationWizardScreen step={step} id={id} />;
@@ -295,6 +298,7 @@ const workerWizardRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: '/workers/new',
   validateSearch: workerWizardSearchSchema,
+  staticData: { bare: true },
   component: withPreload(function WorkerWizard() {
     const search = workerWizardRoute.useSearch();
     return (
@@ -630,5 +634,10 @@ declare module '@tanstack/react-router' {
     readonly fullWidth?: boolean;
     /** The page has its own `<h1>`, so the project's name above it is not one. */
     readonly ownsHeading?: boolean;
+    /**
+     * An Admin page that takes the frame's whole width — a wizard, with a Stepper column of its own —
+     * so `features/admin-frame.tsx` draws no settings NavList beside it (S-25.6, review of #83).
+     */
+    readonly bare?: boolean;
   }
 }

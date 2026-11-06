@@ -251,7 +251,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** One section of the settings (S-23.11b: a page per section); *Policies & WIP* by default. */
+/** One section of the settings (S-23.11b: a page per section); *Rules & limits* by default. */
 const openSection = (section: string): void => {
   window.history.pushState({}, '', `/projects/acme_api/settings/${section}`);
 };
@@ -739,7 +739,7 @@ describe('the project settings page', () => {
       ['History', ['History']],
       ['Knowledge', ['Knowledge']],
       [
-        'Policies & WIP',
+        'Rules & limits',
         [
           'How much agents do alone',
           'Features',

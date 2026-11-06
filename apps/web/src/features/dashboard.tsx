@@ -304,17 +304,27 @@ interface BackgroundRow {
 
 /**
  * The background failures, from the two Operations reads' `total` (admin only; `enabled` false asks
- * nothing). A read that failed or has not answered gives no row — an unknown is not a zero, and it
- * is not a failure to report either; the section itself says what its read answered.
+ * nothing). A read that has not answered gives no row yet (`settled` is false meanwhile); a read
+ * that **failed** gives no row either, and says so (`unchecked`): an unknown is not a zero, so the
+ * box then claims neither *Nothing needs you* nor a count it cannot know (review of #83).
  */
 const useBackgroundRows = (
   admin: boolean,
-): { readonly rows: readonly BackgroundRow[]; readonly settled: boolean } => {
+): {
+  readonly rows: readonly BackgroundRow[];
+  readonly settled: boolean;
+  readonly unchecked: boolean;
+} => {
   const letters = useDeadLetters(admin);
   const jobs = useFailedJobs(admin);
   if (!admin) {
-    return { rows: [], settled: true };
+    return { rows: [], settled: true, unchecked: false };
   }
+  // `?? 0` is never a zero invented for an unknown: it is reached only while a read is pending
+  // (then `settled` is false and no count or quiet line is drawn) or after it failed (then
+  // `unchecked` is true and the box says the failures could not be checked). A read that answered
+  // always carries its `total` (`deadLettersResponseSchema`/`failedJobsResponseSchema`), and the
+  // first page is the one the reads ask for (no *Show older* on Home).
   const stuck = letters.data?.pages[0]?.total ?? 0;
   const failed = jobs.data?.pages[0]?.total ?? 0;
   const rows: BackgroundRow[] = [];
@@ -335,7 +345,11 @@ const useBackgroundRows = (
       meta: 'Each failed on every retry its queue allows.',
     });
   }
-  return { rows, settled: !letters.isPending && !jobs.isPending };
+  return {
+    rows,
+    settled: !letters.isPending && !jobs.isPending,
+    unchecked: letters.isError || jobs.isError,
+  };
 };
 
 const NeedsYouBox = ({
@@ -428,7 +442,7 @@ const NeedsYouBox = ({
           >
             <BoxTitle
               title="Needs you"
-              {...(settled
+              {...(settled && !background.unchecked
                 ? {
                     count,
                     countLabel: `${formatInteger(count)} waiting for you`,
@@ -448,7 +462,9 @@ const NeedsYouBox = ({
             <ErrorNotice title="What needs you could not be loaded." error={inbox.error} />
           </li>
         ) : null}
-        {settled && count === 0 ? <QuietLine>Nothing needs you right now.</QuietLine> : null}
+        {settled && count === 0 && !background.unchecked ? (
+          <QuietLine>Nothing needs you right now.</QuietLine>
+        ) : null}
         {shown.map((item) => {
           const known = keys.get(item.taskId);
           const projectKey =
@@ -495,6 +511,11 @@ const NeedsYouBox = ({
         ) : null}
         {/* After the people's rows and never cut by `HOME_ROWS`: a queue of questions must not
             hide that the platform itself is stuck. */}
+        {background.unchecked ? (
+          <li data-home-background-unchecked="" className="px-4 py-3 text-sm text-fg-muted">
+            Background failures could not be checked.
+          </li>
+        ) : null}
         {background.rows.map((row) => (
           <ListRow
             key={row.section}

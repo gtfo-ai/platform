@@ -137,6 +137,15 @@ describe('g jumps', () => {
     await user.keyboard('gp');
     await at('/projects');
   });
+
+  it('g s goes to Settings, at the first section a member may change (S-25.6)', async () => {
+    const user = userEvent.setup();
+    start('/');
+    await screen.findByRole('banner');
+    await at('/');
+    await user.keyboard('gs');
+    await at('/settings/keyboard');
+  });
 });
 
 describe('? and the sheet', () => {

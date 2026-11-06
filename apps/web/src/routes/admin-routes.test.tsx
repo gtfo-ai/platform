@@ -13,7 +13,8 @@
  *  - `/workers/new?step=ready`, the wizard's *Ready to work* step that a worker's own page links to.
  *
  * Driven through `createApp` with a fake server, so the real router resolves every path. Each old
- * URL must render at the same pathname, inside the Settings NavList with its Admin entry current,
+ * URL must render at the same pathname, inside the Settings NavList with its Admin entry current —
+ * except the two wizards, which take the whole width for their own Stepper (`staticData.bare`) —
  * and `/settings/<admin id>` goes to the screen's own URL.
  */
 import { readFileSync } from 'node:fs';
@@ -111,10 +112,8 @@ beforeEach(() => {
 describe('the Admin screens keep every URL they had', () => {
   it.each([
     ['/integrations', 'Integrations'],
-    ['/integrations/new', 'Integrations'],
     [`/integrations/${INTEGRATION}`, 'Integrations'],
     ['/workers', 'Workers'],
-    ['/workers/new', 'Workers'],
     ['/workers/approve', 'Workers'],
     ['/audit', 'Audit log'],
   ])('%s resolves where it was, inside Settings → Admin → %s', async (path, entry) => {
@@ -126,6 +125,19 @@ describe('the Admin screens keep every URL they had', () => {
     // Not the not-found screen: a route matched.
     expect(screen.queryByText('This page does not exist')).toBeNull();
   });
+
+  it.each(['/integrations/new', '/workers/new'])(
+    '%s, a wizard, resolves where it was and is drawn alone, with no Settings list beside its steps',
+    async (path) => {
+      open(path);
+      // A wizard step is on screen: the route matched and the wizard rendered.
+      await waitFor(() => {
+        expect(document.querySelector('[data-wizard-step]')).not.toBeNull();
+      });
+      expect(window.location.pathname).toBe(path);
+      expect(screen.queryByRole('navigation', { name: 'Settings' })).toBeNull();
+    },
+  );
 
   it('opens the device flow’s own URL, as the core issues it, with the code still in the query', async () => {
     const page = serverApprovePage();
@@ -150,7 +162,8 @@ describe('the Admin screens keep every URL they had', () => {
     });
     expect(window.location.pathname).toBe('/workers/new');
     expect(new URLSearchParams(window.location.search).get('step')).toBe('ready');
-    expect((await settingsNav()).current).toBe('Workers');
+    // A wizard: no Settings list beside its own Stepper (review of #83).
+    expect(screen.queryByRole('navigation', { name: 'Settings' })).toBeNull();
   });
 
   it('sends a settings path named after an Admin entry to the screen’s own URL', async () => {

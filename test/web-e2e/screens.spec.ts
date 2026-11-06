@@ -440,7 +440,7 @@ test('the project settings page mirrors every wizard step', async ({ page }) => 
     await nav.getByRole('link', { name: link }).click();
     await expect(section.getByRole('heading', { name: heading, exact: true })).toBeVisible();
   }
-  await nav.getByRole('link', { name: 'Policies & WIP' }).click();
+  await nav.getByRole('link', { name: 'Rules & limits' }).click();
   for (const heading of [
     'How much agents do alone',
     'Features',

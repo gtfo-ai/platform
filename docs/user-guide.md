@@ -57,11 +57,13 @@ move into a **More navigation** (`···`) menu at the end of the row, and the r
 its number. There is no *Onboarding* entry: a project is set up once, so the wizard is **New
 project** — in the top bar's **+** menu and on the **Projects** page.
 
-**Settings** is in the account menu (your avatar, top right). The screens you open weekly rather than
+**Settings** is the **gear** in the top bar, between the inbox and your avatar (on a phone, the
+account menu's *Settings*; `g` `s` from the keyboard). The screens you open weekly rather than
 daily — **Integrations**, **Workers** and the **Audit log** — are its **Admin** section (section 11).
 Their addresses are the ones they always had (`/integrations`, `/workers`, `/workers/approve`,
 `/audit`, and so on), so a bookmark or the link a worker shows you still opens them; they now open
-beside the Settings list, with their entry marked, and the search finds them by name.
+beside the Settings list, with their entry marked — except the two wizards, *New integration* and
+*Add a worker*, which keep the page to themselves — and the search finds them by name.
 
 **Inside a project the row becomes the project's own tabs** — **Board**, **Knowledge**,
 **Pipeline**, **Budgets**, **Shadow** and **Settings** — under a header with the project's name, its
@@ -128,6 +130,7 @@ The shortcuts — `?` lists them all:
 | `g` `p` | Projects |
 | `g` `i` | Inbox |
 | `g` `a` | Agents |
+| `g` `s` | Settings |
 | `g` `b` | The board, inside a project |
 | `j` | Next row |
 | `k` | Previous row |
@@ -878,7 +881,7 @@ asked — so you never approve blind:
   sensitive area (named), its size reached the threshold, **How much agents do alone** or a stage
   override asks for every plan, or the estimate is above the budget threshold.
 - **How to stop being asked**, under each reason, with a link to the setting that retires it: **How
-  much agents do alone** or the size threshold (*Settings → Policies & WIP*), a stage override
+  much agents do alone** or the size threshold (*Settings → Rules & limits*), a stage override
   (*Repository configuration*), the sensitive-area rule (keeping it is recommended), or the extra
   checks, which end by themselves after their tasks are done or when a maintainer ends them. The platform names the lever;
   it never pulls it. Approvals are meant to become rarer as trust grows.
@@ -1397,7 +1400,7 @@ not built.
 
 **A project → Budgets** shows each budget as a meter: its window (*Per month*), what has been spent
 of its limit (*$3.25 of $40.00*), and the share at which you are notified; a cap is set in the
-project's settings, under *Policies & WIP*. A budget stops a *new* run from starting: the check
+project's settings, under *Rules & limits*. A budget stops a *new* run from starting: the check
 happens when a run is admitted, so a run already under way finishes and is accounted for. There are
 three levels — organisation, project and per-task — and the window rolls over on the organisation's
 own timezone without anything scheduled.
@@ -1556,7 +1559,7 @@ on that task's *Activity* tab. A *refused* command records nothing.
 
 ## 11. Settings
 
-**Settings** — in the account menu, top right — is one page per section, picked from the list on the
+**Settings** — the gear in the top bar, also in the account menu — is one page per section, picked from the list on the
 left (on a phone, a one-line menu above the section that names the one you are on) — **Policies ·
 Notifications · Budgets · Users · Linked accounts · Integrations · Workers · Audit log · Stuck
 events · Failed background jobs · Instance · Session · Keyboard shortcuts** — grouped as
@@ -1572,7 +1575,8 @@ administrator; anybody else who opens one of their addresses lands where *Settin
 
 **The Admin section is three screens with addresses of their own** — **Integrations** (section 9),
 **Workers** (section 12, *Workers*) and the **Audit log** (section 10). They open at `/integrations`,
-`/workers` and `/audit` as they always did, beside this list with their entry marked;
+`/workers` and `/audit` as they always did, beside this list with their entry marked (the
+*New integration* and *Add a worker* wizards take the whole page for their own steps);
 `/settings/integrations` and the like take you there too.
 
 - **Session** — who is signed in, and with which role.
@@ -1601,7 +1605,7 @@ administrator may save. *Policies* holds the maximums every project is held to:
 - the **autonomy maximum** — the highest dial position a project may choose. A project above it runs
   at the maximum from its next task (the project's own setting is kept, so raising the maximum
   restores it), and a task that is already running keeps the dial it started with;
-- the **WIP maximum** — a project may allow fewer tasks at once, never more.
+- the **parallel tasks maximum** — a project may allow fewer tasks at once, never more.
 
 *Notifications* holds the organisation's **quiet hours** and **digest time** — an organisation budget
 crossing its threshold at night waits for the morning digest, and a spent budget is still posted at
@@ -1615,11 +1619,12 @@ mode (an environment setting) and feature flags (a project's own) are not organi
 project's features are switched on its own settings page.
 
 **A project's Settings tab** has the same shape, one page per section — **Connections · Execution ·
-Default branch · Discovery & readiness · Business context · History · Policies & WIP · Repository
+Default branch · Discovery & readiness · Business context · History · Rules & limits · Repository
 configuration · Prompt files · Knowledge** — and mirrors every step of the setup wizard, so nothing
 is only reachable while a project is being set up; opening the tab opens *Connections*. The wizard's
 own controls keep their own buttons there (How much agents do alone, the ticket lifecycle, the project
-budgets), because each is one decision with its own save. *Policies & WIP* holds the operating mode —
+budgets), because each is one decision with its own save. *Rules & limits* (*Policies & WIP*
+before) holds the operating mode —
 **How much agents do alone**, the features, the **Sensitive areas**, the project budgets, the
 notifications and who changed what — with the verification mode (*Checks run by: agents* or *CI*)
 and **Parallel tasks**, the limits in force. Unlike an organisation
@@ -1633,7 +1638,7 @@ list of the tracker's own statuses, every slot allowed to stay empty, the two cl
 same check against the tracker when you save. Change it there at any time; a new *QA* mapping
 applies to tasks created afterwards.
 
-**Verification** is a project's own setting, under *Policies & WIP*: *Agents run the checks* (the
+**Verification** is a project's own setting, under *Rules & limits*: *Agents run the checks* (the
 default) or *CI runs the checks*. Choose CI when the project's pipeline already runs the tests and
 static analysis on every merge request and the agents' workspace (2 CPUs, 4 GiB) is too small for
 them — no agent then runs the test suite, a linter, a build or a dependency install (they are

@@ -272,7 +272,7 @@ const DiscoveryAndReadiness = ({ project }: { readonly project: Project }): Reac
   );
 };
 
-// ── Policies & WIP ───────────────────────────────────────────────────────────
+// ── Rules & limits (Policies & WIP until S-25.6) ─────────────────────────────
 
 /**
  * product/10:21 lists **WIP limits** and **policies** on this page. The WIP limits are read-only here
@@ -286,7 +286,7 @@ const PoliciesAndWip = ({ project }: { readonly project: Project }): ReactElemen
   return (
     <>
       <SettingsSectionHeader
-        title="Policies & WIP"
+        title="Rules & limits"
         description="How autonomous the agents are, which features are on, the risk classes, budgets and notifications — and how much work may run at once."
       />
       <OperatingMode projectId={project.id} audit />

@@ -135,7 +135,7 @@ export const PROJECT_SETTINGS_GROUPS = [
   {
     label: 'Configuration',
     sections: [
-      { id: 'policies', label: 'Policies & WIP' },
+      { id: 'policies', label: 'Rules & limits' },
       { id: 'repository', label: 'Repository configuration' },
       { id: 'prompts', label: 'Prompt files' },
       { id: 'knowledge', label: 'Knowledge' },

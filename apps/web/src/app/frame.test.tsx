@@ -448,6 +448,36 @@ describe('the organisation navigation', () => {
   });
 });
 
+describe('the Settings gear (S-25.6, review of #83)', () => {
+  it('links the top bar to Settings, and is current there and on every Admin screen', async () => {
+    start({ projects: [project(1)] }, '/');
+    const gear = await within(await banner()).findByRole('link', { name: 'Settings' });
+    expect(gear.getAttribute('href')).toBe('/settings');
+    expect(gear.hasAttribute('aria-current')).toBe(false);
+    // Between the inbox and the avatar.
+    const order = [
+      within(await banner()).getByRole('link', { name: /^Open the inbox/ }),
+      gear,
+      within(await banner()).getByRole('button', { name: 'Account menu' }),
+    ];
+    for (const [index, element] of order.slice(1).entries()) {
+      expect(
+        (order[index] as HTMLElement).compareDocumentPosition(element) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+    cleanup();
+    for (const path of ['/settings/keyboard', '/workers', '/workers/approve']) {
+      start({ projects: [project(1)] }, path);
+      const current = await within(await banner()).findByRole('link', { name: 'Settings' });
+      await waitFor(() => {
+        expect(current.getAttribute('aria-current'), path).toBe('page');
+      });
+      cleanup();
+    }
+  });
+});
+
 describe('the account menu', () => {
   it('holds Settings, which the top row no longer does (S-25.6)', async () => {
     const user = userEvent.setup();

@@ -248,9 +248,9 @@ interface World {
   /** S-23.20: the execution read's `server_claimant`; absent, the read answers 404. */
   serverClaimant?: 'running' | 'none';
   workers: WorkerSummary[];
-  /** S-25.6: the Operations reads' `total`s; absent, the read answers 404. */
-  stuckEvents?: number;
-  failedJobs?: number;
+  /** S-25.6: the Operations reads' `total`s; `null`, the read answers 500. */
+  stuckEvents: number | null;
+  failedJobs: number | null;
   asked: string[];
 }
 
@@ -267,6 +267,8 @@ const newWorld = (over: Partial<World> = {}): World => ({
   materialised: new Set([PROJECT(1)]),
   monthCap: null,
   workers: [],
+  stuckEvents: 0,
+  failedJobs: 0,
   asked: [],
   ...over,
 });
@@ -325,15 +327,17 @@ const fetchFor = (world: World) =>
       return json({ questions: world.questions, approvals: world.approvals });
     }
     // The server refuses both below admin (`org.dead_letters.manage`); the fake does too.
-    if (path === '/api/org/dead-letters' && world.stuckEvents !== undefined) {
-      return world.role === 'admin'
-        ? json({ items: [], total: world.stuckEvents, next_cursor: null })
-        : json({ error: { code: 'forbidden', message: 'admin only' } }, 403);
-    }
-    if (path === '/api/org/failed-jobs' && world.failedJobs !== undefined) {
-      return world.role === 'admin'
-        ? json({ items: [], total: world.failedJobs, next_cursor: null })
-        : json({ error: { code: 'forbidden', message: 'admin only' } }, 403);
+    for (const [read, total] of [
+      ['/api/org/dead-letters', world.stuckEvents],
+      ['/api/org/failed-jobs', world.failedJobs],
+    ] as const) {
+      if (path !== read) continue;
+      if (world.role !== 'admin') {
+        return json({ error: { code: 'forbidden', message: 'admin only' } }, 403);
+      }
+      return total === null
+        ? json({ error: { code: 'internal', message: 'the read failed' } }, 500)
+        : json({ items: [], total, next_cursor: null });
     }
     if (path === `/api/artifacts/${PLAN_ARTIFACT}`) {
       return json({
@@ -975,24 +979,41 @@ describe('Home: background failures in Needs you, for an administrator (S-25.6, 
     expect(rows[0]?.textContent).toContain('Which currency?');
   });
 
-  it('draws no row for a count of zero, nor for a read that failed', async () => {
-    let world = newWorld({ stuckEvents: 0, failedJobs: 0 });
+  it('draws no row for a count of zero', async () => {
+    const world = newWorld({ stuckEvents: 0, failedJobs: 0 });
     start(world);
     expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
     expect(document.querySelector('[data-home-background]')).toBeNull();
     expect(world.asked).toContain('/api/org/dead-letters');
     expect(world.asked).toContain('/api/org/failed-jobs');
-    cleanup();
-    // Absent counts: the fake answers 404, which is no row — never a claim that nothing failed
-    // beyond the box's own quiet line.
-    world = newWorld();
-    start(world);
-    expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
-    expect(document.querySelector('[data-home-background]')).toBeNull();
   });
+
+  it.each([
+    ['the stuck events', { stuckEvents: null, failedJobs: 0 }],
+    ['the failed jobs', { stuckEvents: 0, failedJobs: null }],
+  ] as const)(
+    'says the failures could not be checked when %s read fails, and claims no count or calm (review of #83)',
+    async (_what, counts) => {
+      const world = newWorld(counts);
+      start(world);
+      const needs = box('Needs you');
+      expect(
+        await within(needs).findByText('Background failures could not be checked.'),
+      ).toBeTruthy();
+      // Calibrated: the box is settled (the inbox answered), yet it says neither "Nothing needs you"
+      // nor "0 waiting": an unknown is not a zero.
+      await waitFor(() => {
+        expect(world.asked).toContain('/api/org/inbox');
+      });
+      expect(within(needs).queryByText('Nothing needs you right now.')).toBeNull();
+      expect(within(needs).queryByText(/waiting for you$/)).toBeNull();
+      expect(needs.querySelector('[data-home-background]')).toBeNull();
+    },
+  );
 
   it('is not asked for, nor shown, below administrator', async () => {
     const world = newWorld({ role: 'maintainer', stuckEvents: 3, failedJobs: 1 });
+    // (Asked anyway, the fake would refuse a maintainer with 403, as the server does.)
     start(world);
     await screen.findByRole('link', { name: 'Project 1' });
     expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();

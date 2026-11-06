@@ -3,7 +3,7 @@
  * of sections (`features/settings-sections.ts`) and one section per page at `/settings/<section>`,
  * each with one Save where it writes anything (research/19 § 5.2):
  *
- *  - **Organisation** — *Policies* (the command, autonomy and WIP maximums) and *Notifications*
+ *  - **Organisation** — *Policies* (the command, autonomy and parallel tasks maximums) and *Notifications*
  *    (quiet hours, digest, the default chat account), the two halves of the organisation settings
  *    document (`features/org-settings.tsx`, `GET/PATCH /api/org`, WP-93), and *Budgets* — BD-010's
  *    organisation caps, `GET/PUT /api/org/budgets` (WP-30);

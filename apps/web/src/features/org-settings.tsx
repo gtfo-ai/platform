@@ -7,7 +7,8 @@
  *    - the **command maximum** (BD-025 §2) — every run's command policy is intersected with it;
  *    - the **autonomy maximum** — the highest dial position a project may select; a project already
  *      above a lowered maximum runs at it from the next read, and a task keeps the dial it froze;
- *    - the **WIP maximum** — a project's `pipeline.wip` may state less, never more;
+ *    - the **parallel tasks maximum** (*WIP maximum* until S-25.6) — a project's `pipeline.wip` may
+ *      state less, never more;
  *  - **Notifications** — the organisation's quiet hours, digest time and **default chat account**
  *    (Q103 (c)).
  *
@@ -292,7 +293,7 @@ const PolicyForm = ({
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="font-semibold">WIP maximum</legend>
+        <legend className="font-semibold">Parallel tasks maximum</legend>
         <div className="flex flex-wrap items-end gap-2">
           <Field
             label="Parallel tasks"
