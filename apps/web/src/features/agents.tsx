@@ -139,6 +139,9 @@ export const queueWaitOf = (
   };
 };
 
+/** A sentence's full stop — none after a reason that already ends in "…" (*updating now…*). */
+export const endStop = (reason: string | null): string => (reason?.endsWith('…') ? '' : '.');
+
 const NothingRuns = ({
   inOffice = false,
   wait,
@@ -154,7 +157,7 @@ const NothingRuns = ({
       title="No worker can take work"
       hint={`Nothing on the platform server runs this project’s agents, and no worker you can see can take work now${
         reason === null ? '' : `: ${reason}`
-      }.`}
+      }${endStop(reason)}`}
       action={
         <Link to="/workers" className={buttonClassName('default')}>
           See why
@@ -276,7 +279,7 @@ export const AgentsScreen = (): ReactElement => {
           <p data-nobody-takes="">
             {`${fleet.queue.length === 1 ? '1 run is' : `${fleet.queue.length} runs are`} waiting and no worker can take them${
               reason === null ? '' : `: ${reason}`
-            }. `}
+            }${endStop(reason)} `}
             <Link to="/workers" className="text-link underline">
               See why
             </Link>

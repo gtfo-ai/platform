@@ -579,9 +579,28 @@ describe('the Workers screen', () => {
       [...why.querySelectorAll('[data-updating]')].map((li) => li.getAttribute('data-blocker')),
     ).toEqual(['draining', 'images_outdated']);
     expect(why.textContent).toContain(UPDATER_FIX);
+    expect(why.getAttribute('aria-label')).toBe('What it is doing');
     // The drain's own fix (resume, restart) would undo the update: it is not offered.
     expect(why.textContent).not.toContain(WORKER_CLAIM_BLOCKER_WORDS.draining.fix);
     expect(screen.getByText('0 ready · 1 updating')).toBeTruthy();
+  });
+
+  it('says a worker draining with nothing outdated can’t take work, with the Resume fix (S-23.27)', async () => {
+    const draining = worker({ claim_blockers: ['draining'], can_claim: false });
+    const { fetchImpl } = fetchFor('missing', [draining]);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelector(`[data-worker="${draining.id}"] [data-why]`)).not.toBeNull();
+    });
+    const state = container.querySelector(`[data-worker="${draining.id}"] [data-worker-state]`);
+    expect(state?.textContent).toBe(`Can’t take work: ${WORKER_CLAIM_BLOCKER_WORDS.draining.word}`);
+    expect(state?.getAttribute('data-worker-state')).toBe('needs_you');
+    const why = container.querySelector(`[data-worker="${draining.id}"] [data-why]`) as HTMLElement;
+    expect(why.getAttribute('aria-label')).toBe('Why it can’t take work');
+    expect(why.querySelector('[data-updating]')).toBeNull();
+    expect(why.textContent).toContain(WORKER_CLAIM_BLOCKER_WORDS.draining.fix);
+    expect(why.textContent).not.toContain('Updating now…');
+    expect(screen.getByText('0 ready · 1 can’t take work')).toBeTruthy();
   });
 
   it('says a pick-only worker takes only what its owner picks, not that it is broken', async () => {

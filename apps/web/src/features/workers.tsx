@@ -218,25 +218,34 @@ export const claimScopeWords = (worker: WorkerSummary): string => {
 };
 
 /** Every blocker the server named, each with what to do about it, in the vocabulary's order. */
-const WhyList = ({ worker }: { readonly worker: WorkerSummary }): ReactElement => (
-  <DetailsDisclosure summary="Why?" className="text-xs">
-    <ul aria-label="Why it can’t take work" className="flex flex-col gap-2" data-why="">
-      {claimBlockerLines(workerReadinessOf(worker).claim_blockers).map((line) => (
-        <li
-          key={line.blocker}
-          data-blocker={line.blocker}
-          data-updating={line.updating ? '' : undefined}
-          className="flex flex-col gap-0.5"
-        >
-          <span className={line.updating ? 'font-medium text-running' : 'font-medium text-fg'}>
-            {line.word}
-          </span>
-          <span className="text-fg-muted">{line.fix}</span>
-        </li>
-      ))}
-    </ul>
-  </DetailsDisclosure>
-);
+const WhyList = ({ worker }: { readonly worker: WorkerSummary }): ReactElement => {
+  const blockers = workerReadinessOf(worker).claim_blockers;
+  // An update in progress is something it is doing, not a reason it is broken (S-23.27).
+  const updating = leadingClaimBlocker(blockers)?.updating === true;
+  return (
+    <DetailsDisclosure summary="Why?" className="text-xs">
+      <ul
+        aria-label={updating ? 'What it is doing' : 'Why it can’t take work'}
+        className="flex flex-col gap-2"
+        data-why=""
+      >
+        {claimBlockerLines(blockers).map((line) => (
+          <li
+            key={line.blocker}
+            data-blocker={line.blocker}
+            data-updating={line.updating ? '' : undefined}
+            className="flex flex-col gap-0.5"
+          >
+            <span className={line.updating ? 'font-medium text-running' : 'font-medium text-fg'}>
+              {line.word}
+            </span>
+            <span className="text-fg-muted">{line.fix}</span>
+          </li>
+        ))}
+      </ul>
+    </DetailsDisclosure>
+  );
+};
 
 const WorkerRow = ({
   worker,

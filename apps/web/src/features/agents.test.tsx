@@ -30,7 +30,7 @@ import {
   workerSeat,
 } from '../viz/fleet/fleet.test-fixture.js';
 import { FLEET_LIVE_UPDATE_MS } from '../viz/fleet/use-fleet.js';
-import { queueWaitOf } from './agents.js';
+import { endStop, queueWaitOf } from './agents.js';
 import { FLEET_VIEW_STORAGE_KEY } from './agents-view.js';
 
 /** A string that would be an element if anything here rendered markup (BD-022). */
@@ -689,6 +689,10 @@ describe('on a platform with no server runner (S-23.20, S-23.24)', () => {
       wait: 'nobody',
       reason: 'jan-mbp: updating now…',
     });
+    // The sentence around it adds no second stop after the ellipsis.
+    expect(endStop('jan-mbp: updating now…')).toBe('');
+    expect(endStop('jan-mbp: not connected to the platform')).toBe('.');
+    expect(endStop(null)).toBe('.');
   });
 
   it('waits for a worker, with the way to add one, when no worker is registered', async () => {
