@@ -346,12 +346,16 @@ describe('slack adapter, beyond the shared suite', () => {
         taskId: context.taskId,
         body: { markdown: 'Picked up **TASK-1**' },
       });
+      expect(thread.thread_id, 'the thread the approval is posted into').toBe(THREAD_TS);
+      // The recorded `Approve the plan?` exchange: the replay answers only a request it holds, and
+      // what this case is about is the Block Kit the adapter builds around the text. The plan's own
+      // words through the converter are `notification-links.test.ts`'s, driven to the request.
       await context.port.postApproval(thread, approvalWith(context, PLAN), {
-        markdown:
-          '**TASK-1 is waiting for an approval**\n**Plan v1** · size M · 1 file to change\nRisks: <!channel> none',
+        markdown: 'Approve the plan?',
       });
 
       const body = context.replay.requests.at(-1)?.body as { text: string; blocks: unknown };
+      expect(body.text, 'the text the platform wrote, unchanged').toBe('Approve the plan?');
       const elements = elementsOf(body);
       expect(elements.map((element) => element.action_id)).toEqual([
         'agentic_approve',
@@ -361,9 +365,6 @@ describe('slack adapter, beyond the shared suite', () => {
       expect(JSON.parse(elements[0]?.value ?? '')).toMatchObject({ s: PLAN, d: 'approved' });
       expect(JSON.parse(elements[1]?.value ?? '')).not.toHaveProperty('s');
       expect(elements[2]?.url).toBe(REVIEW);
-      expect(body.text).toContain('*Plan v1* · size M');
-      // The plan's words went through the converter: a broadcast in them is inert.
-      expect(JSON.stringify(body)).not.toContain('<!channel>');
     });
 
     it('posts no Approve when the message shows no plan', async () => {
@@ -373,8 +374,9 @@ describe('slack adapter, beyond the shared suite', () => {
         taskId: context.taskId,
         body: { markdown: 'Picked up **TASK-1**' },
       });
+      expect(thread.thread_id, 'the thread the approval is posted into').toBe(THREAD_TS);
       await context.port.postApproval(thread, approvalWith(context, null), {
-        markdown: 'The plan this approval is about was not recorded.',
+        markdown: 'Approve the plan?',
       });
 
       const elements = elementsOf(context.replay.requests.at(-1)?.body);
