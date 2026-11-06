@@ -1,8 +1,9 @@
 /**
  * Backlog 1078: the pure half of the CI gate's recorded pending read — what a read keeps of the
- * provider's text, and when a retry is one nobody acted on. The job's use of it is driven through
- * the saga harness (`saga.test.ts` › "the recorded pending read"), the store's write by the
- * pipeline-store contract suite and the projection by `apps/server`'s `pipeline-queries.test.ts`.
+ * provider's text, and when a retry is one nobody acted on. The job's use of it is driven
+ * through the saga harness (`saga.test.ts` › "the recorded pending read (backlog 1078)"), the
+ * store's write by the pipeline-store contract suite and the projection by `apps/server`'s
+ * `pipeline-queries.test.ts`.
  */
 import { MAX_GATE_WAIT_HELD_JOB_CHARS } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
