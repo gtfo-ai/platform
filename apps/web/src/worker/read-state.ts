@@ -109,6 +109,7 @@ export const SIGN_IN_FAILURES = [
   'token_rejected',
   'check_failed',
   'timed_out',
+  'no_token_after_code',
 ] as const;
 export const UI_AUTHS = ['none', 'token'] as const;
 export const PHASES = ['provisioning', 'running', 'finishing', 'ended'] as const;

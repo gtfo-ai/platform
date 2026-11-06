@@ -304,18 +304,25 @@ export const WorkerApp = ({
   const [error, setError] = useState<string | null>(null);
   const [unauthorised, setUnauthorised] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** The error shown is a failed read: the next good read clears it (a worker that restarted). */
+  const readFailed = useRef(false);
   const reduced = useReducedMotion();
 
   const refresh = useCallback(async (): Promise<boolean> => {
     if (client === null) return false;
     try {
       setState(await client.state());
+      if (readFailed.current) {
+        readFailed.current = false;
+        setError(null);
+      }
       return true;
     } catch (caught) {
       if (caught instanceof LocalCallError && caught.status === 401) {
         setUnauthorised(true);
         return false;
       }
+      readFailed.current = true;
       setError((caught as Error).message);
       return true;
     }
@@ -369,8 +376,11 @@ export const WorkerApp = ({
     setBusy(true);
     try {
       setState(await action());
+      readFailed.current = false;
       setError(null);
     } catch (caught) {
+      // A refused action stays until the next action: a poll two seconds later is no answer to it.
+      readFailed.current = false;
       setError(sentence((caught as Error).message));
     } finally {
       setBusy(false);

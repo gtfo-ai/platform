@@ -262,8 +262,22 @@ export const SIGN_IN_FAILURE_WORDS: Readonly<Record<WorkerLocalSignInFailure, st
   cli_ended: 'Claude’s sign-in stopped before it finished. Start it again.',
   code_refused: 'Claude did not accept that code. Start again and paste the newest code.',
   token_rejected: 'Claude did not accept this sign-in. Sign in again.',
-  check_failed: 'The sign-in could not be checked with Claude. Try again in a moment.',
+  check_failed:
+    'The sign-in could not be checked with Claude. Check that this machine reaches api.anthropic.com, then paste the token again.',
   timed_out: 'The sign-in took longer than ten minutes. Start it again.',
+  no_token_after_code:
+    'Claude’s sign-in did not hand this worker a token within a minute of the code. Paste a token instead: run claude setup-token in a terminal and paste the token it prints.',
+};
+
+/** A pasted token the page refuses before anything runs (the worker refuses it too, `400`). */
+export const TOKEN_SHAPE_WORDS =
+  'That isn’t a Claude token: it starts with sk-ant-oat01-. Copy the whole line claude setup-token printed.';
+
+/** Why the worker refused a pasted token, by its answer's code. */
+export const TOKEN_REFUSAL_WORDS: Readonly<Record<string, string>> = {
+  invalid_token: TOKEN_SHAPE_WORDS,
+  token_check_running:
+    'Claude is still checking a token. Wait for it, or cancel the sign-in and paste again.',
 };
 
 export interface WizardView {

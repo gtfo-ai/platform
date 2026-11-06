@@ -16,6 +16,7 @@
  */
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { CLAUDE_OAUTH_TOKEN_SHAPE } from '@platform/contracts';
 import { errorReporting } from '@platform/infrastructure';
 import { coreOriginOf } from './config.js';
 
@@ -28,7 +29,7 @@ export const SENTRY_DSN_FILE = 'sentry-dsn';
  * characters as the owner's run printed it). Bounded generously on both sides: the check that
  * matters is Claude's own (`claude-sign-in.ts`'s `checkClaudeToken`).
  */
-export const CLAUDE_TOKEN_SHAPE = /^sk-ant-oat01-[A-Za-z0-9_-]{40,400}$/;
+export const CLAUDE_TOKEN_SHAPE: RegExp = CLAUDE_OAUTH_TOKEN_SHAPE;
 
 const readText = async (file: string): Promise<string | null> => {
   try {

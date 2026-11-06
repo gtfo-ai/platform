@@ -3,7 +3,7 @@
 The live backlog of the lean loop (technical/14): one line per open finding, nothing else.
 `PROGRESS.md` is frozen history, and each entry's full text, evidence and "done" criteria stay there;
 the # column is the entry's original number, so cite it as `PROGRESS #NNN`. To add an item, append one
-line with the next free number (the highest is 1052, so the next is **1053**), its grade
+line with the next free number (the highest is 1053, so the next is **1054**), its grade
 (blocker/major/minor/nit) and its owner (a slice or WP, or "—"), in the same PR as the slice that found it.
 To close one, move its line to "Closed" below with the merge sha or PR, or delete it and say so in that
 slice's LEDGER line.
@@ -139,6 +139,7 @@ Sorted by grade (major, minor, nit, then ungraded), then by number. "?" means th
 | 1050 | minor | — | The updater's write-back skips a git checkout by looking for `.git` in the install folder itself; a folder nested inside a repository (its parents are outside the mount) is still rewritten, tracked files included |
 | 1051 | minor | — | A crash-recovery rollback (`mode: 'rollback'`) restores the folder's `.env.previous` even when the crashed apply never pinned, so it can put back a stale file from an earlier update (pre-existing since WP-287) |
 | 1052 | minor | — | `updates/previous-bundle/<update id>/` copies are never pruned; keep all but the last few (the rollback reads only its own) |
+| 1053 | minor | — | The worker page cannot tell that its worker restarted (an update, or `docker compose up -d`) mid-sign-in: the local state carries no process start id, so a person at step 2 sees a fresh *Sign in with Claude* with no *This worker restarted; sign in again* — needs a `started_at`-style field in `workerLocalStateSchema` and the page's guard (found in fix/worker-sign-in-trap; the drain now waits for a sign-in, so an update no longer causes it) |
 | 713 | nit | — | worker_device_codes rows are never deleted; bounded by the 200-pending limit per ten minutes, but grow with use; add a sweep of consumed/expired rows |
 | 874 | nit | — | A run that leaves the agents list is read once (`GET /api/runs/:id`) to cheer or slump at its desk for 20 s; a run that started and ended between two agents reads, or ended while the page was closed, never shows — a `run.finished`/`run.failed` frame carrying its ending would make it exact |
 | 367 | nit | — | Lost-reminder recovery reads at most 50 never-reminded rows per kind, so not-yet-due rows can hold a due reminder back |
