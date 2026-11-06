@@ -59,4 +59,15 @@ describe('DetailsDisclosure', () => {
     );
     expect(container.querySelector('details')?.open).toBe(true);
   });
+
+  it('draws its box on the card ground, not the page colour (S-25.10)', () => {
+    render(
+      <DetailsDisclosure summary="JSON" defaultOpen>
+        <code>{'{}'}</code>
+      </DetailsDisclosure>,
+    );
+    const box = screen.getByText('{}').parentElement as HTMLElement;
+    expect(box.className.split(' ')).toContain('bg-default');
+    expect(box.className.split(' ')).not.toContain('bg-inset');
+  });
 });

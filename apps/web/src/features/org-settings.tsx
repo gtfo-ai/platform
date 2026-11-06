@@ -29,6 +29,7 @@ import { useBindableIntegrations, useOrgSettings, useSettingsCommands } from '..
 import { Button } from '../ui/button.js';
 import { AUTONOMY_LEVEL_LABEL } from '../ui/humanize.js';
 import { ErrorNotice, Field, formatDateTime, Loading } from '../ui/kit.js';
+import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 
 const LEVELS = ['observe', 'assist', 'supervised', 'autonomous'] as const;
@@ -276,9 +277,8 @@ const PolicyForm = ({
         </p>
         <label className="flex w-fit flex-col gap-1 text-sm">
           Maximum
-          <select
+          <Select
             aria-label="Organisation autonomy maximum"
-            className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
             value={drafts.maximum}
             onChange={(event) => setDrafts({ ...drafts, maximum: event.target.value })}
           >
@@ -288,7 +288,7 @@ const PolicyForm = ({
                 {AUTONOMY_LEVEL_LABEL[level]}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       </fieldset>
 
@@ -434,9 +434,8 @@ const NotificationForm = ({
       </div>
       <label className="flex w-fit flex-col gap-1 text-sm">
         Default chat account
-        <select
+        <Select
           aria-label="Organisation default chat account"
-          className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
           value={drafts.defaultAccount}
           onChange={(event) => setDrafts({ ...drafts, defaultAccount: event.target.value })}
         >
@@ -446,7 +445,7 @@ const NotificationForm = ({
               {account.name}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
       {drafts.defaultAccount === '' ? null : (
         <p className="text-xs text-fg-muted">

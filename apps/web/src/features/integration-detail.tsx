@@ -134,7 +134,7 @@ const HealthFacts = ({
         </p>
       ) : null}
       <dl
-        className="grid grid-cols-[minmax(10rem,auto)_1fr] gap-x-4 gap-y-2 rounded-md border border-line p-4 text-sm"
+        className="grid grid-cols-[minmax(10rem,auto)_1fr] gap-x-4 gap-y-2 rounded-md border border-line bg-default p-4 text-sm"
         data-health-facts=""
       >
         <dt className="text-fg-muted">Last call</dt>
@@ -244,7 +244,7 @@ const Overview = ({
         {entries.length === 0 ? (
           <p className="text-sm text-fg-muted">Nothing is configured beyond the credentials.</p>
         ) : (
-          <dl className="grid grid-cols-[minmax(10rem,auto)_1fr] gap-x-4 gap-y-2 rounded-md border border-line p-4 text-sm">
+          <dl className="grid grid-cols-[minmax(10rem,auto)_1fr] gap-x-4 gap-y-2 rounded-md border border-line bg-default p-4 text-sm">
             {entries.map(([key, value]) => (
               <div key={key} className="contents">
                 <dt className="text-fg-muted">{configFieldLabel(key)}</dt>

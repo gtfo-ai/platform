@@ -54,6 +54,7 @@ import {
   formatDateTime,
   SectionHeading,
 } from '../ui/kit.js';
+import { Select } from '../ui/select.js';
 import { CodeText, DownloadLink, UntrustedText } from '../ui/untrusted.js';
 
 /** States in which there is nothing left to take over. */
@@ -238,20 +239,19 @@ export const HandBackForm = ({
     >
       <label className="flex items-center gap-2 text-xs text-fg-muted" htmlFor="hand-back-stage">
         Resume at
-        <select
+        <Select
           id="hand-back-stage"
           value={selected}
           onChange={(event) => {
             setStage(event.target.value);
           }}
-          className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm text-fg"
         >
           {options.map((option) => (
             <option key={option} value={option}>
               {stageLabel(option)}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
       <textarea
         aria-label="What you did"

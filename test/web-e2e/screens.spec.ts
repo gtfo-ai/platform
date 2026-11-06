@@ -577,7 +577,7 @@ test('the wizard’s step 1 maps the ticket lifecycle from the tracker’s own s
   request,
 }) => {
   // BD-031 ruling 7: the slots are pick lists loaded from the tracker. Against the built bundle, so
-  // this is the tier that shows the selects, the multi-select and the save work in a browser.
+  // this is the tier that shows the selects, the *Returned* checkboxes and the save work in a browser.
   await page.goto(`/onboarding?project=${PROJECT_KEY}&step=connect`);
   const card = page.locator(`[data-ticket-lifecycle="${IDS.integration}"]`);
   const qa = card.getByLabel('QA', { exact: true });
@@ -592,7 +592,10 @@ test('the wizard’s step 1 maps the ticket lifecycle from the tracker’s own s
   ]);
   await card.getByLabel('In review', { exact: true }).selectOption('Waiting for review');
   await qa.selectOption('Testing');
-  await card.getByLabel('Returned', { exact: true }).selectOption(['Sent back']);
+  // *Returned* is a checkbox list since S-25.10 (a native multi-select needed Cmd/Ctrl-click).
+  const returned = card.getByRole('group', { name: 'Returned' });
+  await returned.getByRole('checkbox', { name: 'Sent back (to do)' }).check();
+  await expect(returned.getByText('1 selected of at most 10')).toBeVisible();
   await card.getByRole('button', { name: 'Save the ticket lifecycle' }).click();
   // Waited on what the page writes last, then the log read as what it implies (rule 87).
   await expect(card.getByText('The ticket lifecycle was saved.')).toBeVisible();

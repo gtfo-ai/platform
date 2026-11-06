@@ -33,7 +33,7 @@ export const Blankslate = (props: BlankslateProps): ReactElement => {
     <div
       data-blankslate={props.informational === true ? 'informational' : 'actionable'}
       className={cx(
-        'flex flex-col items-center gap-2 rounded-md border border-line text-center',
+        'flex flex-col items-center gap-2 rounded-md border border-line bg-default text-center',
         size === 'spacious' ? 'px-6 py-16' : 'px-6 py-8',
         className,
       )}

@@ -249,7 +249,7 @@ moved at that point, and the stage still runs.
 | **In review** | Moved here when the agent's code review starts. |
 | **Approved** | Moved here when the agent's own review has passed and its findings are fixed. |
 | **QA** | Mapped, tasks created from then on get a human **QA** stage before Ready for merge, and the ticket is moved here when the task enters it. |
-| **Returned** | One or more statuses, never set by the platform: a person moving the ticket into one of them returns the task to the agent. |
+| **Returned** | One or more statuses, never set by the platform: a person moving the ticket into one of them returns the task to the agent. A checkbox per status, with a count of how many are ticked; at most ten. |
 | **Done** | Moved here when the merge request is merged. |
 
 Two switches sit under the slots. **Claim the ticket before the first run** (on unless you switch it

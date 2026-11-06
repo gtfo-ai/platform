@@ -44,6 +44,7 @@ import {
   wordInSentence,
 } from '../ui/humanize.js';
 import { Button, ErrorNotice, Field } from '../ui/kit.js';
+import { Select } from '../ui/select.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 
@@ -119,8 +120,6 @@ interface Draft {
 
 const whole = (value: string): number | null => (/^\d+$/.test(value.trim()) ? Number(value) : null);
 
-const selectClass = 'rounded-md border border-line-input bg-inset px-2 py-1 text-sm';
-
 const CUSTOM = 'custom';
 
 /**
@@ -153,9 +152,8 @@ const DurationField = ({
         {label}
       </label>
       <div className="flex flex-wrap items-center gap-2">
-        <select
+        <Select
           id={id}
-          className={selectClass}
           value={selected}
           aria-describedby={`${id}-hint`}
           onChange={(event) => {
@@ -174,7 +172,7 @@ const DurationField = ({
             </option>
           ))}
           <option value={CUSTOM}>Custom…</option>
-        </select>
+        </Select>
       </div>
       {custom ? (
         <Field
@@ -199,7 +197,7 @@ const CredentialNotice = ({ projectId }: { readonly projectId: string }): ReactE
     <div
       role="status"
       data-testid="execution-credential-notice"
-      className="flex flex-col gap-1 rounded-md border border-line p-3 text-sm"
+      className="flex flex-col gap-1 rounded-md border border-line bg-default p-3 text-sm"
     >
       <p className="flex items-start gap-2">
         <span className="pt-0.5">
@@ -294,7 +292,7 @@ const WhoWouldTake = ({ data }: { readonly data: ProjectExecutionResponse }): Re
   <section
     aria-label="Who would take this project’s work"
     data-testid="execution-workers"
-    className="flex flex-col gap-2 rounded-md border border-line p-3 text-sm"
+    className="flex flex-col gap-2 rounded-md border border-line bg-default p-3 text-sm"
   >
     <h3 className="font-semibold">Would take this project’s work</h3>
     {data.workers.length === 0 ? (
@@ -438,9 +436,9 @@ export const ExecutionSettings = ({ projectId }: { readonly projectId: string })
           <label htmlFor={choiceId} className="text-sm font-medium">
             Who runs this project’s agents
           </label>
-          <select
+          <Select
             id={choiceId}
-            className={`${selectClass} self-start`}
+            className="self-start"
             value={form.choice}
             aria-describedby={`${choiceId}-means`}
             onChange={(event) => set({ choice: event.target.value as ExecutionChoice })}
@@ -450,7 +448,7 @@ export const ExecutionSettings = ({ projectId }: { readonly projectId: string })
                 {EXECUTION_CHOICES[choice].label}
               </option>
             ))}
-          </select>
+          </Select>
           <p
             id={`${choiceId}-means`}
             className="text-xs text-fg-muted"

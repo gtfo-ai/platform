@@ -84,6 +84,7 @@ import {
 } from '../ui/kit.js';
 import { NavList } from '../ui/nav-list.js';
 import { PageHeader } from '../ui/page-header.js';
+import { Select } from '../ui/select.js';
 import { StatusIcon } from '../ui/status.js';
 import { needsYou } from '../ui/task-status.js';
 import { CodeText, UntrustedText } from '../ui/untrusted.js';
@@ -433,19 +434,18 @@ const RetryDialog = ({
             choice={model}
             onChange={setModel}
           />
-          <select
+          <Select
             aria-label="Retry with effort"
             value={effort}
             onChange={(event) => {
               setEffort(event.target.value as Effort);
             }}
-            className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm text-fg"
           >
             <option value="">{configuredLabel(record.retry_defaults?.effort ?? null)}</option>
             <option value="low">low</option>
             <option value="medium">medium</option>
             <option value="high">high</option>
-          </select>
+          </Select>
         </div>
         {error === null ? null : <ErrorNotice title="That retry was refused." error={error} />}
       </div>

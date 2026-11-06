@@ -41,7 +41,6 @@ import { useOnboardingCommands, useRefusedDeliveries } from '../app/queries.js';
 import { ActionMenu, ActionMenuItem, ActionMenuSeparator } from '../ui/action-menu.js';
 import { ForAdministrators } from '../ui/admin-notes.js';
 import { Button, IconButton } from '../ui/button.js';
-import { cx, FOCUS_RING } from '../ui/cx.js';
 import { Dialog } from '../ui/dialog.js';
 import {
   choiceLabel,
@@ -51,6 +50,7 @@ import {
 } from '../ui/humanize.js';
 import { ErrorNotice, Field, formatDateTime } from '../ui/kit.js';
 import { ListBox, ListRow } from '../ui/list-box.js';
+import { Select } from '../ui/select.js';
 import { Skeleton } from '../ui/skeleton.js';
 import type { Status } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
@@ -174,11 +174,6 @@ export const typedValues = (
 
 // ── Controls ─────────────────────────────────────────────────────────────────
 
-const SELECT = cx(
-  'h-8 rounded-md border border-line-input bg-inset px-2 text-sm text-fg',
-  FOCUS_RING,
-);
-
 /**
  * What switching a field costs, said beside its control (WP-282): a field whose value is a trust
  * decision carries the residual the decision accepts, in platform text, so the administrator reads
@@ -226,14 +221,13 @@ export const ConfigFieldControl = ({
         <label htmlFor={id} className="text-sm font-medium">
           {label}
         </label>
-        <select
+        <Select
           id={id}
           aria-describedby={`${id}-hint`}
           data-config-kind={field.kind}
           data-config-key={field.name}
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className={SELECT}
         >
           <option value="">{field.required ? 'Choose a value' : 'Provider default'}</option>
           {options.map((option) => (
@@ -241,7 +235,7 @@ export const ConfigFieldControl = ({
               {option.label}
             </option>
           ))}
-        </select>
+        </Select>
         <p id={`${id}-hint`} className="text-xs text-fg-muted">
           {hint}
         </p>

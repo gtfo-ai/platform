@@ -453,7 +453,10 @@ const ChecksBox = ({ detail }: { readonly detail: TaskDetailResponse }): ReactEl
   const rows = useCheckRows(detail);
   const summary = checksSummary(rows);
   return (
-    <section aria-labelledby="task-checks-heading" className="rounded-md border border-line">
+    <section
+      aria-labelledby="task-checks-heading"
+      className="rounded-md border border-line bg-default"
+    >
       <div className="flex flex-col gap-1 border-b border-line bg-subtle px-3 py-2">
         <h2 id="task-checks-heading" className="text-sm font-semibold">
           Checks

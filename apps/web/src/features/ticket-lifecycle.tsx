@@ -16,7 +16,8 @@
  *   (`jiraCloudConfigSchema`): empty, it is sent absent — or `null` when the integration's own
  *   configuration sets one, because an absent overlay key would let the account's value through
  *   (`overlayBindingConfig` is a shallow merge) and the slot the person emptied would not be empty.
- * - **`returned` is a multi-select**, at most {@link MAX_LIFECYCLE_RETURNED_STATUSES} names.
+ * - **`returned` is a checkbox list** (S-25.10: never a native multi-select, which needs Cmd/Ctrl-click),
+ *   at most {@link MAX_LIFECYCLE_RETURNED_STATUSES} names, the next one refused at the press.
  * - **The `claim` and `take_assigned_tickets` switches** are the block's own keys. `claim` is seeded
  *   from the stored block, or **on** when there is none, because that is what the block means once
  *   it is saved (`ticketLifecycleSchema`'s docblock): the switch shows what saving puts in force.
@@ -28,8 +29,8 @@
  *   lifecycle_statuses_unavailable` says the statuses could not be loaded and nothing was saved, and
  *   **keeps the form**: nothing here resets the draft on a failure.
  *
- * Status names are provider text (BD-022). They are rendered as React text — in an `<option>`, which
- * can hold nothing else, through `sanitiseUntrusted`; everywhere else through `UntrustedText`.
+ * Status names are provider text (BD-022). They are rendered as React text — in an `<option>` or a
+ * checkbox's label, through `sanitiseUntrusted`; everywhere else through `UntrustedText`.
  */
 
 import {
@@ -50,7 +51,9 @@ import {
   useTicketStatuses,
 } from '../app/queries.js';
 import { ForAdministrators } from '../ui/admin-notes.js';
+import { CheckboxList } from '../ui/checkbox-list.js';
 import { Badge, Button, ErrorNotice, Loading } from '../ui/kit.js';
+import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { bindingConfigOf } from './operating-mode.js';
@@ -299,13 +302,10 @@ const SlotRow = ({
       <label htmlFor={id} className="text-sm font-medium">
         {SLOT_COPY[slot].label}
       </label>
-      <select
+      <Select
         id={id}
-        aria-invalid={refusal === undefined ? undefined : true}
+        invalid={refusal !== undefined}
         aria-describedby={`${id}-hint`}
-        className={`rounded-md border bg-inset px-2 py-1 text-sm ${
-          refusal === undefined ? 'border-line-input' : 'border-danger'
-        }`}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
@@ -315,7 +315,7 @@ const SlotRow = ({
             {optionText(status)}
           </option>
         ))}
-      </select>
+      </Select>
       <p id={`${id}-hint`} className="text-xs text-fg-muted">
         {SLOT_COPY[slot].hint}
       </p>
@@ -328,6 +328,10 @@ const SlotRow = ({
   );
 };
 
+/**
+ * *Returned* is a multiple choice, so it is a `CheckboxList` (S-25.10): one press per status, the
+ * count beside it, and the eleventh refused at the press with a message.
+ */
 const ReturnedRow = ({
   statuses,
   value,
@@ -338,43 +342,24 @@ const ReturnedRow = ({
   readonly value: readonly string[];
   readonly refusal: readonly string[] | undefined;
   readonly onChange: (names: readonly string[]) => void;
-}): ReactElement => {
-  const id = useId();
-  return (
-    <div className="flex flex-col gap-1" data-lifecycle-slot="returned">
-      <label htmlFor={id} className="text-sm font-medium">
-        {SLOT_COPY.returned.label}
-      </label>
-      <select
-        id={id}
-        multiple
-        aria-invalid={refusal === undefined ? undefined : true}
-        aria-describedby={`${id}-hint`}
-        className={`rounded-md border bg-inset px-2 py-1 text-sm ${
-          refusal === undefined ? 'border-line-input' : 'border-danger'
-        }`}
-        value={[...value]}
-        onChange={(event) =>
-          onChange(Array.from(event.target.selectedOptions, (option) => option.value))
-        }
-      >
-        {statuses.map((status) => (
-          <option key={status.id} value={status.name}>
-            {optionText(status)}
-          </option>
-        ))}
-      </select>
-      <p id={`${id}-hint`} className="text-xs text-fg-muted">
-        {SLOT_COPY.returned.hint} None selected leaves the moment unmapped.
+}): ReactElement => (
+  <CheckboxList
+    legend={SLOT_COPY.returned.label}
+    data={{ 'data-lifecycle-slot': 'returned' }}
+    options={statuses.map((status) => ({ value: status.name, label: optionText(status) }))}
+    value={value}
+    max={MAX_LIFECYCLE_RETURNED_STATUSES}
+    invalid={refusal !== undefined}
+    hint={`${SLOT_COPY.returned.hint} None selected leaves the moment unmapped.`}
+    onChange={onChange}
+  >
+    {(refusal ?? []).map((message) => (
+      <p key={message} role="alert" className="text-xs text-danger">
+        <UntrustedText value={message} />
       </p>
-      {(refusal ?? []).map((message) => (
-        <p key={message} role="alert" className="text-xs text-danger">
-          <UntrustedText value={message} />
-        </p>
-      ))}
-    </div>
-  );
-};
+    ))}
+  </CheckboxList>
+);
 
 /**
  * The statuses read's failure, in the person's words. The server's message is `ErrorNotice`'s to

@@ -43,6 +43,11 @@
  * Projects list by a click and by Enter, positioned under its badge, closed by Escape with the
  * focus back, with no violation.
  *
+ * Since S-25.10, the **Select** primitive (the native `<select>` with its OS arrow removed and an
+ * Octicon chevron over it) and the **checkbox list**: the ticket lifecycle's fields drawn on the card
+ * ground with no inline style and no data-URI arrow, an option chosen, and a lavender checkbox
+ * checked from the keyboard, with no violation.
+ *
  * Since S-23.6, the **Agents page's three views**: the fleet map (a second lazy canvas chunk), the
  * pixel office (a lazy chunk of SVG text grids, always the dark room) and the list, each over the
  * fixtures' three runs, two workers and hostile titles — drawn, opened and switched under the
@@ -251,6 +256,64 @@ test('Base UI opens a popover under the policy without a violation (S-25.2)', as
   // And from the keyboard.
   await page.keyboard.press('Enter');
   await expect(popover).toBeVisible();
+
+  expect(await violations(page)).toEqual([]);
+});
+
+test('the Select and the checkbox list are drawn in the brand under the policy (S-25.10)', async ({
+  page,
+}) => {
+  await signIn(page);
+  await expect(
+    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
+  // The ticket lifecycle on the wizard's step 1: six Selects and *Returned*'s checkbox list.
+  await page.goto(`/onboarding?project=${PROJECT_KEY}&step=connect`);
+  const card = page.locator(`[data-ticket-lifecycle="${IDS.integration}"]`);
+  const qa = card.getByRole('combobox', { name: 'QA' });
+  await expect(qa).toBeVisible();
+  // The native element, its OS arrow gone, on the card ground inside the input edge — with no
+  // inline style and no data-URI arrow, which `style-src`/`img-src 'self'` would refuse.
+  const drawn = await qa.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const wrapper = element.closest('[data-select]');
+    const chevron = wrapper?.querySelector('[data-select-chevron] svg');
+    return {
+      tag: element.tagName,
+      appearance: style.appearance,
+      background: style.backgroundColor,
+      image: style.backgroundImage,
+      edge: style.borderTopColor,
+      styled: element.hasAttribute('style') || (wrapper?.hasAttribute('style') ?? true),
+      chevron:
+        chevron === null || chevron === undefined ? 0 : chevron.getBoundingClientRect().width,
+      through: chevron?.parentElement ? getComputedStyle(chevron.parentElement).pointerEvents : '',
+    };
+  });
+  expect(drawn).toEqual({
+    tag: 'SELECT',
+    appearance: 'none',
+    background: 'rgb(21, 19, 43)',
+    image: 'none',
+    edge: 'rgb(118, 113, 176)',
+    styled: false,
+    chevron: 16,
+    through: 'none',
+  });
+  await qa.selectOption('Testing');
+  await expect(qa).toHaveValue('Testing');
+
+  // *Returned*: a checkbox per status in the brand's lavender, checked from the keyboard.
+  const returned = card.getByRole('group', { name: 'Returned' });
+  const box = returned.getByRole('checkbox', { name: 'Sent back (to do)' });
+  expect(await box.evaluate((element) => getComputedStyle(element).accentColor)).toBe(
+    'rgb(179, 168, 255)',
+  );
+  await box.focus();
+  await page.keyboard.press('Space');
+  await expect(box).toBeChecked();
+  await expect(returned.getByText('1 selected of at most 10')).toBeVisible();
+  await expect(card.locator('select[multiple]')).toHaveCount(0);
 
   expect(await violations(page)).toEqual([]);
 });

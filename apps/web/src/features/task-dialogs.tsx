@@ -26,6 +26,7 @@ import type { useTakeOverCommands, useTaskCommands } from '../app/queries.js';
 import { Dialog } from '../ui/dialog.js';
 import { stageLabel } from '../ui/humanize.js';
 import { Button, ErrorNotice, Field, formatUsd } from '../ui/kit.js';
+import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { HandBackForm, TakeOverForm } from './take-over.js';
 
@@ -142,20 +143,19 @@ const StagePicker = ({
   // The label beside the select rather than around it, so its name is "Stage" and not the options.
   <div className="flex items-center gap-2 text-xs text-fg-muted">
     <label htmlFor="stage-command">Stage</label>
-    <select
+    <Select
       id="stage-command"
       value={value}
       onChange={(event) => {
         form.setStage(event.target.value);
       }}
-      className={`${INPUT} text-fg`}
     >
       {form.options.map((option) => (
         <option key={option} value={option}>
           {stageLabel(option)}
         </option>
       ))}
-    </select>
+    </Select>
   </div>
 );
 

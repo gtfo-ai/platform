@@ -58,6 +58,7 @@ import { loopRoundLabel, stageLabel, titleCase } from '../ui/humanize.js';
 import { Badge, Button, ErrorNotice, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
 import { ROW_LINK_HOST, rowLink } from '../ui/row-link.js';
+import { Select } from '../ui/select.js';
 import { StatusIcon } from '../ui/status.js';
 import { needsYou as needsYouOf, taskStateLabel } from '../ui/task-status.js';
 import { UntrustedText } from '../ui/untrusted.js';
@@ -632,20 +633,19 @@ const ReturnDialog = ({
           <label htmlFor={stageId} className="text-sm font-medium">
             Stage
           </label>
-          <select
+          <Select
             id={stageId}
             value={stage}
             onChange={(event) => {
               setStage(event.target.value);
             }}
-            className="h-8 rounded-md border border-line-input bg-inset px-2 text-sm text-fg"
           >
             {stages.map((option) => (
               <option key={option} value={option}>
                 {stageLabel(option)}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
         <div className="flex flex-col gap-1">
           <label htmlFor={reasonId} className="text-sm font-medium">

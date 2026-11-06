@@ -14,6 +14,15 @@ afterEach(() => {
 });
 
 describe('Blankslate', () => {
+  it('sits on the card ground, one step lighter than the page (S-25.10)', () => {
+    const { container } = render(
+      <Blankslate title="No budget yet" hint="Set one to stop runs at a cap." informational />,
+    );
+    const classes = (container.querySelector('[data-blankslate]')?.className ?? '').split(' ');
+    expect(classes).toContain('bg-default');
+    expect(classes).not.toContain('bg-canvas');
+  });
+
   it('says what is missing, what will appear, and offers the next step', () => {
     const { container } = render(
       <Blankslate

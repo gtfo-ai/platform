@@ -48,6 +48,7 @@ import { stageLabel } from '../ui/humanize.js';
 import { ErrorNotice, formatInteger, Metric } from '../ui/kit.js';
 import { ListBox, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
+import { Select } from '../ui/select.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { Sparkline } from '../ui/sparkline.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
@@ -78,8 +79,6 @@ const BUCKET_LABEL: Readonly<Record<(typeof BUCKETS)[number], string>> = {
   week: 'By week',
   month: 'By month',
 };
-
-const SELECT_CLASS = 'rounded-md border border-line-input bg-inset px-2 py-1 text-sm';
 
 /**
  * One metric card: the value large, the label with its definition, one muted line, a sparkline.
@@ -204,8 +203,7 @@ export const StatisticsScreen = (): ReactElement => {
         }
         actions={
           <>
-            <select
-              className={SELECT_CLASS}
+            <Select
               value={range}
               onChange={(event) => setRange(event.target.value as (typeof RANGES)[number])}
               aria-label="Range"
@@ -215,9 +213,8 @@ export const StatisticsScreen = (): ReactElement => {
                   {RANGE_LABEL[option]}
                 </option>
               ))}
-            </select>
-            <select
-              className={SELECT_CLASS}
+            </Select>
+            <Select
               value={bucket}
               onChange={(event) => setBucket(event.target.value as (typeof BUCKETS)[number])}
               aria-label="Granularity"
@@ -227,7 +224,7 @@ export const StatisticsScreen = (): ReactElement => {
                   {BUCKET_LABEL[option]}
                 </option>
               ))}
-            </select>
+            </Select>
             <ExternalLink
               url={`${window.location.origin}${csvPath}`}
               label="Download CSV"

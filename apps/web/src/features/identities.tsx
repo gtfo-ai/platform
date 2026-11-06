@@ -49,6 +49,7 @@ import {
   Loading,
   SectionHeading,
 } from '../ui/kit.js';
+import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 
 /** The providers whose normaliser resolves an author through this table on this build. */
@@ -205,18 +206,17 @@ export const IdentityMappings = (): ReactElement => {
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-sm font-medium">
               Provider
-              <select
+              <Select
                 aria-label="Provider"
                 value={provider}
                 onChange={(event) => setProvider(event.target.value)}
-                className="rounded-md border border-line-input bg-inset px-2 py-1.5 text-sm"
               >
                 {IDENTITY_PROVIDERS.map((id) => (
                   <option key={id} value={id}>
                     {id}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <Field
               label="Account id in the provider"
@@ -254,11 +254,10 @@ export const IdentityMappings = (): ReactElement => {
             {kind === 'person' ? (
               <label className="flex items-center gap-2">
                 Platform user
-                <select
+                <Select
                   aria-label="Platform user"
                   value={userId}
                   onChange={(event) => setUserId(event.target.value)}
-                  className="rounded-md border border-line-input bg-inset px-2 py-1 text-sm"
                 >
                   <option value="">Choose…</option>
                   {userItems.map((user) => (
@@ -266,7 +265,7 @@ export const IdentityMappings = (): ReactElement => {
                       {user.email}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             ) : null}
           </fieldset>
