@@ -35,19 +35,21 @@ describe('Select', () => {
     expect(onChange).toHaveBeenCalledWith('30d');
   });
 
-  it('draws the brand box: no OS arrow, the card ground, the input edge and the focus ring', () => {
+  it('draws the brand box: no OS arrow, the field ground, the input edge and the focus ring', () => {
     const { field } = renderRange();
     const classes = field.className.split(' ');
     expect(classes).toEqual(
       expect.arrayContaining([
         'appearance-none',
-        'bg-default',
+        'bg-inset',
         'border',
         'border-line-input',
         'rounded-md',
         'focus-visible:outline-focus',
       ]),
     );
+    // One field ground in a form (the review of #85): never the card's, beside an inset `Field`.
+    expect(classes).not.toContain('bg-default');
     // Never the divider, and no inline style (the production policy is `style-src 'self'`).
     expect(classes).not.toContain('border-line');
     expect(field.hasAttribute('style')).toBe(false);

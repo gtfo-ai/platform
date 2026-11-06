@@ -82,6 +82,11 @@ export const CARD_GROUND_EXCEPTIONS: readonly Exception[] = [
     why: 'the flow canvas’s frame: its dotted ground is the page colour (technical/09)',
   },
   {
+    path: 'apps/web/src/ui/checkbox-list.tsx',
+    fragment: 'overflow-y-auto',
+    why: 'a field, not a box: the checkbox list takes the field ground (`bg-inset`) every field has',
+  },
+  {
     path: 'apps/web/src/viz/fleet/fleet-canvas.tsx',
     fragment: 'data-fleet-node="slot"',
     why: 'an empty slot on the fleet map, drawn hollow (dashed, no ground) on purpose',

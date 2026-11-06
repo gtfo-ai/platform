@@ -272,7 +272,7 @@ test('the Select and the checkbox list are drawn in the brand under the policy (
   const card = page.locator(`[data-ticket-lifecycle="${IDS.integration}"]`);
   const qa = card.getByRole('combobox', { name: 'QA' });
   await expect(qa).toBeVisible();
-  // The native element, its OS arrow gone, on the card ground inside the input edge — with no
+  // The native element, its OS arrow gone, on the field ground inside the input edge — with no
   // inline style and no data-URI arrow, which `style-src`/`img-src 'self'` would refuse.
   const drawn = await qa.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -293,7 +293,7 @@ test('the Select and the checkbox list are drawn in the brand under the policy (
   expect(drawn).toEqual({
     tag: 'SELECT',
     appearance: 'none',
-    background: 'rgb(21, 19, 43)',
+    background: 'rgb(15, 13, 34)',
     image: 'none',
     edge: 'rgb(118, 113, 176)',
     styled: false,

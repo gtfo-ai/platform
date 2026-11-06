@@ -6,8 +6,9 @@
  * semantics (role `combobox`, the options' names), the picker a phone opens and the type-to-find
  * are all native — and only its box is ours:
  *
- * - `appearance-none` removes the operating system's arrow and bevel, so the field takes the card
- *   ground (`bg-default`), the input edge (`border-line-input`, held to 3:1 by `contrast.test.ts`
+ * - `appearance-none` removes the operating system's arrow and bevel, so the field takes the field
+ *   ground every field has (`bg-inset`, sunk into its card — `Field`, a textarea and `CopyField`
+ *   use the same, so one form never mixes two grounds), the input edge (`border-line-input`, held to 3:1 by `contrast.test.ts`
  *   and `form-edge-census.test.ts`), the 6 px radius and the one `FOCUS_RING`;
  * - the arrow is an Octicon (`ChevronDownIcon`, already in `ui/` for the NavList, so it costs the
  *   worker entry nothing) placed over the right padding with `pointer-events: none`, so a press on
@@ -41,7 +42,7 @@ const SIZES: Record<SelectSize, string> = {
 
 /** The field's own classes, exported for the census and the test (the one place they are written). */
 export const SELECT_FIELD = cx(
-  'w-full min-w-0 appearance-none rounded-md border bg-default py-0 pr-8 pl-2 text-fg',
+  'w-full min-w-0 appearance-none rounded-md border bg-inset py-0 pr-8 pl-2 text-fg',
   'disabled:cursor-not-allowed',
   FOCUS_RING,
 );

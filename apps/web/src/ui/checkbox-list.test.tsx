@@ -115,6 +115,15 @@ describe('CheckboxList', () => {
     expect(screen.getByRole('alert').textContent).toMatch(/^At most 2 can be selected/);
   });
 
+  it('draws its list on the field ground inside the input edge, as every field is', () => {
+    render(<CheckboxList legend="Returned" options={OPTIONS} value={[]} onChange={vi.fn()} />);
+    const list = screen.getAllByRole('checkbox')[0]?.closest('label')?.parentElement as HTMLElement;
+    expect(list.className.split(' ')).toEqual(
+      expect.arrayContaining(['bg-inset', 'border', 'border-line-input', 'rounded-md']),
+    );
+    expect(list.className.split(' ')).not.toContain('bg-default');
+  });
+
   it('marks every box aria-invalid when refused, and none otherwise', () => {
     render(
       <CheckboxList legend="Returned" options={OPTIONS} value={[]} onChange={vi.fn()} invalid />,

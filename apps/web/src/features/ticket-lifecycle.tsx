@@ -551,11 +551,6 @@ export const TicketLifecycle = ({ projectId }: { readonly projectId: string }): 
         />
         Also start tickets already assigned to a person (only while claiming)
       </label>
-      {draft.returned.length > MAX_LIFECYCLE_RETURNED_STATUSES ? (
-        <p role="alert" className="text-xs text-danger">
-          Returned holds at most {MAX_LIFECYCLE_RETURNED_STATUSES} statuses.
-        </p>
-      ) : null}
       <div>
         <Button
           tone={actionTone}

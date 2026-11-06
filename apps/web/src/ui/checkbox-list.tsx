@@ -18,7 +18,7 @@
  * - `invalid` marks every box `aria-invalid` (a `group` may not carry the attribute; a `checkbox`
  *   may) and draws the danger edge.
  *
- * The box is drawn as a `Select` is — the card ground (`bg-default`) inside the input edge — and the
+ * The box is drawn as every field is — the field ground (`bg-inset`) inside the input edge — and the
  * checkboxes take the brand accent from `styles.css` (`accent-color`).
  */
 import { type ReactElement, type ReactNode, useId, useState } from 'react';
@@ -95,7 +95,7 @@ export const CheckboxList = ({
       <legend className="text-sm font-medium">{legend}</legend>
       <div
         className={cx(
-          'flex max-h-48 flex-col gap-0.5 overflow-y-auto rounded-md border bg-default px-2 py-1.5',
+          'flex max-h-48 flex-col gap-0.5 overflow-y-auto rounded-md border bg-inset px-2 py-1.5',
           invalid ? 'border-danger' : 'border-line-input',
         )}
       >
@@ -131,7 +131,7 @@ export const CheckboxList = ({
           {hint}
         </p>
       )}
-      {refused || over ? (
+      {max !== undefined && (refused || over) ? (
         <p role="alert" className="text-xs text-danger">
           {`At most ${max} can be selected. Clear one to select another.`}
         </p>
