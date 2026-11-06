@@ -4,6 +4,9 @@
  * The back link and the actions are slots, so `ui/` never knows the router. The title is the
  * page's `<h1>`. The state (a `StateLabel`) and the meta line sit under the title, as on a GitHub
  * issue or workflow run.
+ *
+ * `data-page-header` marks it as chrome for the Settings card census (S-25.10b,
+ * `test/web-e2e/settings-cards.spec.ts`): its meta line is the page's, not a content block.
  */
 import type { ReactElement, ReactNode } from 'react';
 import { cx } from './cx.js';
@@ -35,6 +38,7 @@ export const PageHeader = ({
   const Title = titleAs;
   return (
     <div
+      data-page-header=""
       className={cx(
         'flex flex-col gap-2',
         divider ? 'border-b border-line pb-4' : 'pb-1',

@@ -197,10 +197,11 @@ export const IdentityMappings = (): ReactElement => {
         </div>
       ) : null}
 
+      {/* The form on the card ground (S-25.10b): a form is a box, the page is the canvas. */}
       {identities.isError ? null : (
         <form
           aria-label="Map a provider account"
-          className="mt-3 flex flex-col gap-2"
+          className="mt-3 flex flex-col gap-2 rounded-lg border border-line bg-default p-4"
           onSubmit={submit}
         >
           <div className="flex flex-wrap items-end gap-3">

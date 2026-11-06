@@ -7,6 +7,13 @@
  * Each section is a page with its own title and, where it writes anything, **one** Save at its foot.
  * A section is never a long scroll of other sections' controls.
  *
+ * **Everything a section shows sits on a card** (S-25.10b, TD-033's 2026-11-05 amendment): the page
+ * is the canvas, and a form, a field, a definition list or a block of facts is a box on the card
+ * ground (`Card`, `ListBox`, `Blankslate`, a notice's tint) — as Budgets' form always was. Only the
+ * section's header, its headings and a line of prose stand on the canvas.
+ * `test/web-e2e/settings-cards.spec.ts` holds every org section and Admin screen to it in a browser,
+ * against the fixture backend's data.
+ *
  * An entry with a `to` (the org settings' Admin group, S-25.6) is a screen at its own URL: it is
  * linked there, whatever the caller's `link` would make of its id.
  */

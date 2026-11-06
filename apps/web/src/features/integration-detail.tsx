@@ -88,7 +88,11 @@ const SetupGuide = ({ integrationId }: { readonly integrationId: string }): Reac
     return <ErrorNotice title="That setup guide could not be loaded." error={guide.error} />;
   }
   return (
-    <div className="flex flex-col gap-3" data-setup-guide={integrationId}>
+    // On the card ground (S-25.10b): the guide is a document in a box, as a README is.
+    <div
+      className="flex flex-col gap-3 rounded-md border border-line bg-default p-4"
+      data-setup-guide={integrationId}
+    >
       <h2 className="text-base font-semibold">
         <UntrustedText value={guide.data.title} />
       </h2>
@@ -214,7 +218,10 @@ const Overview = ({
             under Connections.
           </p>
         ) : (
-          <ul className="flex flex-col gap-1 text-sm" aria-label="Projects that use it">
+          <ul
+            className="flex flex-col gap-1 rounded-md border border-line bg-default p-4 text-sm"
+            aria-label="Projects that use it"
+          >
             {integration.used_by.map((user) => (
               <li key={user.project_id} data-integration-user={user.project_key}>
                 <Link
