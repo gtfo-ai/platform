@@ -11,7 +11,13 @@ import { fileURLToPath } from 'node:url';
 import { silentLogger } from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { renderWorkerCompose } from '../workers/compose.js';
-import { carriedEnvironment, runApply, servicesToUp, waitForHandshake } from './apply.js';
+import {
+  carriedEnvironment,
+  runApply,
+  servicesToUp,
+  variablesWithoutDefault,
+  waitForHandshake,
+} from './apply.js';
 import type { DockerRun } from './docker.js';
 import { managedReferencesOf, previousOf } from './env-file.js';
 import { HOST_BUNDLE_MOUNT, PREVIOUS_TEMPLATE_FILE, readState, type UpdatePlan } from './plan.js';
@@ -269,9 +275,10 @@ describe('an update that comes up healthy', () => {
     expect(up?.env).toMatchObject({
       CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
       APP_CORE_URL: 'https://core.example.test',
-      APP_WORKER_CONCURRENCY: '2',
-      APP_WORKER_CONTROL_VOLUME: 'my-ctl',
     });
+    // A setting the template has a default for follows the template, whatever the container held.
+    expect(up?.env.APP_WORKER_CONCURRENCY).toBeUndefined();
+    expect(up?.env.APP_WORKER_CONTROL_VOLUME).toBeUndefined();
     // LOG_LEVEL is the env file's: the file wins over what the container had.
     expect(up?.env.LOG_LEVEL).toBeUndefined();
     for (const call of w.calls) {
@@ -591,5 +598,104 @@ describe('the pure pieces', () => {
     expect(carriedEnvironment(MODEL, running, new Set(['APP_CORE_URL']))).toEqual({
       CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
     });
+  });
+
+  /** One service's environment, uninterpolated, as `compose config --no-interpolate` answers it. */
+  const modelOf = (environment: Record<string, string>) => ({
+    services: { updater: { restart: 'unless-stopped', environment } },
+  });
+  const runningAs = (environment: Record<string, string>) =>
+    new Map([['updater', new Map(Object.entries(environment))]]);
+
+  it('never carries a variable the template has a non-empty default for, whatever the container holds', () => {
+    const model = modelOf({
+      APP_UPDATE_POLL_SECONDS: ref('APP_UPDATE_POLL_SECONDS:-60'),
+      APP_UPDATE_CHECK_SECONDS: ref('APP_UPDATE_CHECK_SECONDS-120'),
+    });
+    // The 2026-11-06 defect: an older template's default, `300`, baked in as if a person chose it.
+    const running = runningAs({ APP_UPDATE_POLL_SECONDS: '300', APP_UPDATE_CHECK_SECONDS: '90' });
+    expect(carriedEnvironment(model, running, new Set())).toEqual({});
+  });
+
+  it('carries a variable the template declares with no default — the shell’s token', () => {
+    const model = modelOf({
+      CLAUDE_CODE_OAUTH_TOKEN: ref('CLAUDE_CODE_OAUTH_TOKEN'),
+      APP_CORE_URL: ref('APP_CORE_URL:?set APP_CORE_URL'),
+      APP_WORKER_CORE_CANDIDATES: ref('APP_WORKER_CORE_CANDIDATES?set it'),
+    });
+    const running = runningAs({
+      CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
+      APP_CORE_URL: 'https://core.example.test',
+      APP_WORKER_CORE_CANDIDATES: 'https://a.example.test',
+    });
+    expect(carriedEnvironment(model, running, new Set())).toEqual({
+      CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
+      APP_CORE_URL: 'https://core.example.test',
+      APP_WORKER_CORE_CANDIDATES: 'https://a.example.test',
+    });
+  });
+
+  it('carries an empty default, `:-` and `-`, as no default', () => {
+    const model = modelOf({
+      CLAUDE_CODE_OAUTH_TOKEN: ref('CLAUDE_CODE_OAUTH_TOKEN:-'),
+      SENTRY_DSN: ref('SENTRY_DSN-'),
+    });
+    const running = runningAs({
+      CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
+      SENTRY_DSN: 'https://sentry.example.test/1',
+    });
+    expect(carriedEnvironment(model, running, new Set())).toEqual({
+      CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
+      SENTRY_DSN: 'https://sentry.example.test/1',
+    });
+  });
+
+  it('carries a variable used twice, once with a default and once without — from the use with none', () => {
+    const model = {
+      services: {
+        launcher: {
+          restart: 'unless-stopped',
+          environment: { APP_WORKSPACE_CONTROL_VOLUME: ref('APP_WORKER_CONTROL_VOLUME:-ctl') },
+        },
+        updater: {
+          restart: 'unless-stopped',
+          environment: { CONTROL_VOLUME: ref('APP_WORKER_CONTROL_VOLUME') },
+        },
+      },
+    };
+    const running = new Map([
+      ['launcher', new Map([['APP_WORKSPACE_CONTROL_VOLUME', 'from-the-defaulted-use']])],
+      ['updater', new Map([['CONTROL_VOLUME', 'my-ctl']])],
+    ]);
+    expect(carriedEnvironment(model, running, new Set())).toEqual({
+      APP_WORKER_CONTROL_VOLUME: 'my-ctl',
+    });
+    // A use inside a longer value counts as a use too, though it is no source.
+    const embedded = modelOf({
+      APP_UPDATE_POLL_SECONDS: ref('APP_UPDATE_POLL_SECONDS:-60'),
+      NOTE: `every ${ref('APP_UPDATE_POLL_SECONDS')} s, $$HOME stays literal`,
+    });
+    expect(variablesWithoutDefault(embedded)).toEqual(new Set(['APP_UPDATE_POLL_SECONDS']));
+    expect(
+      carriedEnvironment(embedded, runningAs({ APP_UPDATE_POLL_SECONDS: '300' }), new Set()),
+    ).toEqual({ APP_UPDATE_POLL_SECONDS: '300' });
+  });
+
+  it('never carries a variable the env file sets, defaulted or not', () => {
+    const model = modelOf({
+      CLAUDE_CODE_OAUTH_TOKEN: ref('CLAUDE_CODE_OAUTH_TOKEN:-'),
+      APP_UPDATE_POLL_SECONDS: ref('APP_UPDATE_POLL_SECONDS:-60'),
+    });
+    const running = runningAs({
+      CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
+      APP_UPDATE_POLL_SECONDS: '300',
+    });
+    expect(
+      carriedEnvironment(
+        model,
+        running,
+        new Set(['CLAUDE_CODE_OAUTH_TOKEN', 'APP_UPDATE_POLL_SECONDS']),
+      ),
+    ).toEqual({});
   });
 });

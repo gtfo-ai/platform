@@ -402,6 +402,8 @@ took where decisions 3, 4 and 6 left a choice, so a reviewer can refuse it by na
    project directory, which the apply container mounts **at its host path**. Values the first `up` took
    from the shell (the Claude token) are carried from the running containers' environment into
    `docker compose`'s process environment — never a file or an argument. `.env.previous` is `0600`.
+   *(Amended 2026-11-06: only a variable the template declares with no non-empty default is carried —
+   see the carried-values amendment at the end.)*
 6. **Order**: verify all four → one commit → downgrade bound → pull the four (a failure drains nothing)
    → drain → wait for idle with no deadline → the apply. The updater writes its own template to the
    `updates` volume as the rollback's. The apply brings up every long-running service except `updater`
@@ -485,3 +487,26 @@ update finished 08:54) before its updater applied the update. The owner: updates
 As built: `apps/server/src/updater/updater.ts` (`nextPollDelayMs`, `MAX_POLL_BACKOFF_MS`, the loop in
 `run`), `config.ts` (`DEFAULT_UPDATE_POLL_SECONDS = 60`), `compose.worker.yml`'s default, and the tests in
 `apps/server/src/updater/updater.test.ts`.
+
+## Amendment (2026-11-06, orchestrator-authorised) — As built §5: carry only the values the template has no default for
+
+**Why.** After `compose.worker.yml`'s default became `APP_UPDATE_POLL_SECONDS: ${APP_UPDATE_POLL_SECONDS:-60}`
+(was `:-300`), an updated worker's updater still ran with `300`, though its `.env` did not set it: the
+apply carried every `${VAR…}` a service's environment interpolates from the running container, so an
+older template's **default** was carried as if a person had chosen it, and a template's new default
+never reached an existing install.
+
+1. **Carried:** a variable the template declares with **no non-empty default** — `${VAR}`,
+   `${VAR:?…}`, `${VAR?…}`, `${VAR:-}`, `${VAR-}` — that neither the env file nor the managed block
+   sets. These are the values a first install passes on the shell (`CLAUDE_CODE_OAUTH_TOKEN`).
+2. **Never carried:** a variable with a non-empty default (`${VAR:-x}`, `${VAR-x}`). It follows the
+   template being rendered; a person who wants their own value sets it in the folder's `.env`, which
+   Compose reads as before.
+3. The defaults are read off the model of the template being brought up. A variable used more than
+   once is carried when **any** of its uses has no non-empty default (the conservative reading), and
+   its value is read from such a use first.
+4. **When it lands.** The update that deploys this rule is applied by the previous updater, which still
+   carries the old values; a worker already holding an old default un-sticks on the update after that.
+
+As built: `carriedEnvironment` and `variablesWithoutDefault` in `apps/server/src/updater/apply.ts`, the
+tests in `apps/server/src/updater/update-apply.test.ts`.

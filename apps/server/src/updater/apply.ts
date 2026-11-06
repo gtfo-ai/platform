@@ -35,12 +35,25 @@
  * (`mode: 'rollback'`, run from the updater's own — the old — image).
  *
  * **Carried values.** A first install passes `CLAUDE_CODE_OAUTH_TOKEN` (and maybe more) on the shell,
- * not in the env file, so an `up` from here would lose it. So every variable the template interpolates
- * as a service's whole environment value, and that neither the env file nor the managed block sets,
- * is carried over **from the running container's own environment** — through `docker compose`'s
- * process environment only (`docker.ts`): never a file, never an argument, never a log line. A value
- * a person set in the folder's `.env` needs no carriage: Compose reads that file, here as in their own
- * `docker compose up` — a setting a newer template reads for the first time included. The one value
+ * not in the env file, so an `up` from here would lose it. So a variable the template interpolates as a
+ * service's whole environment value, that neither the env file nor the managed block sets, **and that
+ * the template declares with no non-empty default** — `${VAR}`, `${VAR:?…}`, `${VAR?…}`, `${VAR:-}`,
+ * `${VAR-}` — is carried over **from the running container's own environment**, through
+ * `docker compose`'s process environment only (`docker.ts`): never a file, never an argument, never a
+ * log line. A variable with a non-empty default (`${VAR:-x}`, `${VAR-x}`) is **never** carried: the
+ * running container cannot tell a person's choice from an older template's default, and carrying it
+ * baked the old default in (2026-11-06: `APP_UPDATE_POLL_SECONDS` stayed `300` after the template's
+ * default became `60`), so a setting with a default follows the template being rendered, and a person
+ * who wants their own puts it in the folder's `.env`. The defaults are read off the model of the
+ * template being brought up, across every use in the services' environments; a variable used more than
+ * once is carried when **any** use has no non-empty default (the conservative reading: a use that
+ * would otherwise read empty must not lose the value), and its value is taken from such a use first.
+ * A `${VAR:+…}`/`${VAR+…}` use is no source (the container holds the alternative, not `VAR`) and no
+ * reason to carry. A worker already holding an old default un-sticks on its first update *applied by
+ * an updater with this rule*: the update that deploys it is applied by the previous updater, so the
+ * effect lands one update later. A value a person set in the folder's `.env` needs no carriage:
+ * Compose reads that file, here as in their own `docker compose up` — a setting a newer template reads
+ * for the first time included. The one value
  * passed besides is {@link BUNDLE_SOURCE_VARIABLE}: from the folder as project directory, the
  * template's `${APP_WORKER_BUNDLE_DIR:-.}` would name the container's path, so the source Docker
  * reports for the updater's own mount of the folder is handed back to it.
@@ -97,7 +110,7 @@ export interface ApplyDeps {
 }
 
 /** A compose variable reference that is a whole value: `${NAME}`, `${NAME:-x}`, `${NAME:?x}`, … */
-const WHOLE_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(?::?[-?+])[^}]*)?\}$/;
+const WHOLE_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?+])([^}]*))?\}$/;
 
 interface ComposeModel {
   readonly services: Readonly<
@@ -137,8 +150,40 @@ export const keysOfEnvFile = (text: string): Set<string> => {
 };
 
 /**
+ * Every variable reference in a compose value — `$$` (an escaped dollar), `${NAME}`, `${NAME<op><word>}`
+ * with `<op>` one of `:-` `-` `:?` `?` `:+` `+`, or a bare `$NAME`.
+ */
+const REFERENCE =
+  /\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?+])([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
+
+/**
+ * True when one use leaves its variable with **no non-empty default**: `${V}`, `$V`, `${V:?…}`,
+ * `${V?…}`, `${V:-}`, `${V-}`. `${V:-x}`/`${V-x}` have one; `${V:+…}`/`${V+…}` never read `V`'s value.
+ */
+const hasNoDefault = (operator: string | undefined, word: string): boolean =>
+  operator === undefined || operator.endsWith('?') || (operator.endsWith('-') && word === '');
+
+/** The variables some use in the services' environments declares with no non-empty default. */
+export const variablesWithoutDefault = (model: ComposeModel): Set<string> => {
+  const names = new Set<string>();
+  for (const definition of Object.values(model.services)) {
+    for (const value of Object.values(definition.environment ?? {})) {
+      if (typeof value !== 'string') continue;
+      for (const match of value.matchAll(REFERENCE)) {
+        if (match[0] === '$$') continue;
+        const name = (match[1] ?? match[4]) as string;
+        if (hasNoDefault(match[2], match[3] ?? '')) names.add(name);
+      }
+    }
+  }
+  return names;
+};
+
+/**
  * The values to carry over: for each `KEY: ${VAR…}` of each service, `VAR` ← the running container's
- * `KEY`, unless the env file or the managed block sets `VAR`.
+ * `KEY` — only for a `VAR` some use declares with no non-empty default ({@link variablesWithoutDefault}),
+ * and unless the env file or the managed block sets `VAR`. A use with no default is read first, so a
+ * defaulted use's value (possibly the default itself) is the source only when no other use answers.
  */
 export const carriedEnvironment = (
   model: ComposeModel,
@@ -146,16 +191,30 @@ export const carriedEnvironment = (
   envFileKeys: ReadonlySet<string>,
 ): Record<string, string> => {
   const managed = new Set<string>(IMAGE_KEYS.map((key) => WORKER_IMAGE_VARIABLE[key]));
-  const carried: Record<string, string> = {};
+  const withoutDefault = variablesWithoutDefault(model);
+  const sources: { variable: string; value: string; noDefault: boolean }[] = [];
   for (const [service, definition] of Object.entries(model.services)) {
     const env = running.get(service);
     if (env === undefined) continue;
     for (const [key, value] of Object.entries(definition.environment ?? {})) {
-      const variable = typeof value === 'string' ? WHOLE_REFERENCE.exec(value)?.[1] : undefined;
+      const whole = typeof value === 'string' ? WHOLE_REFERENCE.exec(value) : null;
+      const variable = whole?.[1];
       if (variable === undefined || managed.has(variable) || envFileKeys.has(variable)) continue;
-      if (Object.hasOwn(carried, variable)) continue;
+      if (!withoutDefault.has(variable)) continue;
       const current = env.get(key);
-      if (current !== undefined) carried[variable] = current;
+      if (current === undefined) continue;
+      sources.push({
+        variable,
+        value: current,
+        noDefault: hasNoDefault(whole?.[2], whole?.[3] ?? ''),
+      });
+    }
+  }
+  const carried: Record<string, string> = {};
+  for (const preferred of [true, false]) {
+    for (const source of sources) {
+      if (source.noDefault !== preferred || Object.hasOwn(carried, source.variable)) continue;
+      carried[source.variable] = source.value;
     }
   }
   return carried;

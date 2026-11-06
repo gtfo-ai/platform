@@ -474,14 +474,17 @@ The Workers screen shows each worker's last update — *Updated*, *Update rolled
 applied* — with the updater's own words in the row's details; `updates/state.json` in the worker's
 `updates` volume names the step a crashed apply reached, and the next updater start rolls it back.
 Values your first `up` took from the shell (the Claude token among them) are carried over from the
-running containers through the apply's process environment, never written to a file. The updater is
+running containers through the apply's process environment, never written to a file — but only a value
+the template has no default for: a setting with a default in the template follows the template; set it
+in `.env` to keep your own. The updater is
 **root-equivalent on the machine**, as the launcher is: it reaches Docker through its own socket proxy
 (`updater-docker-proxy`), which filters by API path and not by project, so keeping to the worker's own
 compose project is its code's property — every Compose call names the project. To update by hand
 instead, remove the `updater` and `updater-docker-proxy` services, download the compose file again and
 `docker compose up -d`. A second worker on one machine sets its own project name,
 `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and
-`APP_WORKER_UI_PORT`.
+`APP_WORKER_UI_PORT` — in its folder's `.env`, because each has a default in the template and a value
+given only on the shell goes back to it at the next update.
 
 #### One-command install (S-22.20)
 
