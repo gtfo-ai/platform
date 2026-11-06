@@ -8,6 +8,13 @@
  * same read the task page's card makes, so opening the row reads nothing twice. Both are model
  * output (BD-022): the line is rendered as text, and a value that is not the shape it should be is
  * left out rather than guessed.
+ *
+ * **Each plan approval's row reads its plan's body** (`GET /api/artifacts/:id`), one request per row
+ * the first time, because the inbox read names the plan and not its size or file count. That is
+ * accepted rather than a wider inbox DTO (TD-035 fixes the subject's fields): an artifact is written
+ * once, so `useArtifactBody` caches it for ever (`FOREVER`) under the key the task page's card uses —
+ * opening the row reads nothing again — and the rows are few: pending plan approvals, of which Home
+ * shows at most five. A failed or pending read only leaves the line at *Plan vN*, never wrong.
  */
 import type { ApprovalView } from '@platform/contracts';
 import type { ReactElement } from 'react';

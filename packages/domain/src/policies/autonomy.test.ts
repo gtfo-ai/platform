@@ -226,6 +226,22 @@ describe('planApprovalReasons (BD-006, BD-030, TD-035)', () => {
     ).toEqual([{ code: 'size_at_or_above', size: 'M', threshold: 'M', source: 'stage_override' }]);
   });
 
+  it('names the stage override when it turned above_size on, though the threshold is the dial’s', () => {
+    // Raising the dial's threshold would not stop an ask the override makes (review of PR #76).
+    expect(
+      planApprovalReasons({
+        preset: {
+          ...AUTONOMY_PRESETS.autonomous,
+          planApproval: 'above_size',
+          planApprovalSizeThreshold: 'L',
+        },
+        ...past,
+        size: 'L',
+        overridden: { planApproval: true },
+      }),
+    ).toEqual([{ code: 'size_at_or_above', size: 'L', threshold: 'L', source: 'stage_override' }]);
+  });
+
   it('names an always policy and where it came from', () => {
     expect(planApprovalReasons({ preset: AUTONOMY_PRESETS.assist, ...past, size: 'S' })).toEqual([
       { code: 'policy_always', source: 'dial' },

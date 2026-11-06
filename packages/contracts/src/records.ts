@@ -351,8 +351,9 @@ export const approvalPolicySourceSchema = z.enum(['dial', 'stage_override']);
  * - `risk_class` — the plan touches these risk classes (sorted), and the dial asks for them;
  * - `probation` — the project is on probation: `completed` of its first `of` tasks are done;
  * - `policy_always` — the plan-approval policy is `always`, set by the dial or a stage override;
- * - `size_at_or_above` — the plan's size reached the threshold; `source` is where the threshold
- *   came from;
+ * - `size_at_or_above` — the plan's size reached the threshold; `source` is `stage_override` when a
+ *   stage override set the threshold or turned `above_size` on for the stage (that is what has to
+ *   change), `dial` otherwise;
  * - `estimate_above_threshold` — the budget gate's: the estimate is above the project's threshold.
  */
 export const approvalReasonSchema = z.discriminatedUnion('code', [

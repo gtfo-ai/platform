@@ -14,6 +14,7 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
 import { useRunCommands } from '../../app/queries.js';
+import { reviewVerb } from '../../features/approval-text.js';
 import { ActionMenu, ActionMenuItem, ActionMenuSeparator } from '../../ui/action-menu.js';
 import { Avatar } from '../../ui/avatar.js';
 import { Button, buttonClassName } from '../../ui/button.js';
@@ -187,11 +188,16 @@ const RunRow = ({
   );
 };
 
-const NEED_ACTION: Readonly<Record<FleetNeed['kind'], string>> = {
-  question: 'Answer',
-  approval: 'Approve',
-  permission: 'Open',
-};
+/**
+ * The row's verb. An approval's is *Review plan*, as on Home and in the Inbox (S-25.1): the row
+ * opens the task, where the plan is on screen beside *Approve* — it never approves in one click.
+ */
+const needAction = (need: FleetNeed): string =>
+  need.kind === 'question'
+    ? 'Answer'
+    : need.kind === 'approval'
+      ? reviewVerb(need.approvalKind ?? 'plan')
+      : 'Open';
 
 const seatOf = (fleet: Fleet, id: string | null): FleetSeat | null =>
   id === null ? null : (fleet.seats.find((seat) => seat.id === id) ?? null);
@@ -278,7 +284,7 @@ export const FleetList = ({
                   // The row's link (S-23.26): the title is text, so a click anywhere opens the task.
                   {...rowLink(buttonClassName('default', 'sm'))}
                 >
-                  {NEED_ACTION[need.kind]}
+                  {needAction(need)}
                   <span className="sr-only">{` ${need.ticketKey === null ? 'this task' : sanitiseUntrusted(need.ticketKey)}`}</span>
                 </Link>
               }

@@ -298,8 +298,14 @@ export const planApprovalReasons = (input: PlanApprovalInput): readonly PlanAppr
           code: 'size_at_or_above',
           size: input.size,
           threshold,
-          // Where the threshold came from: that is the number a person raises to stop the ask.
-          source: input.overridden?.planApprovalSizeThreshold === true ? 'stage_override' : 'dial',
+          // Where the rule that asked lives: a stage override that set the threshold **or** turned
+          // `above_size` on for this stage is what has to change — raising the dial's threshold
+          // would not stop an ask the override makes (review of PR #76).
+          source:
+            input.overridden?.planApprovalSizeThreshold === true ||
+            input.overridden?.planApproval === true
+              ? 'stage_override'
+              : 'dial',
         });
       }
       break;

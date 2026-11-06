@@ -654,6 +654,33 @@ describe('the list', () => {
     await within(runs).findByText(/^Cancel accepted/);
   });
 
+  /** S-25.1 (review of PR #76): the Agents list says *Review plan*, as Home and the Inbox do. */
+  it('says Review plan for an approval, and opens its task — never a one-click approve', async () => {
+    media(1280);
+    const inbox = {
+      questions: [],
+      approvals: [
+        {
+          id: uuid(1101),
+          task_id: uuid(1001),
+          kind: 'plan' as const,
+          status: 'pending' as const,
+          requested_at: at(60_000),
+          deadline_at: null,
+          decided_by_user_id: null,
+          decided_at: null,
+          reason: null,
+        },
+      ],
+    } as unknown as typeof INBOX;
+    start('/agents?view=list', backend(AGENTS, inbox));
+    const needs = await screen.findByRole('list', { name: 'Needs you' });
+    const link = await within(needs).findByRole('link', { name: /^Review plan/ });
+    expect(link.getAttribute('href')).toBe(`/tasks/${uuid(1001)}`);
+    expect(within(needs).queryByRole('link', { name: /^Approve/ })).toBeNull();
+    expect(within(needs).queryByRole('button', { name: /approve/i })).toBeNull();
+  });
+
   it('opens the run’s dialog from a row', async () => {
     media(1280);
     start('/agents?view=list');

@@ -72,8 +72,10 @@ export const reasonCopy = (reason: ApprovalReason): ReasonCopy => {
     case 'size_at_or_above':
       return reason.source === 'stage_override'
         ? {
-            why: `The plan’s size is ${reason.size}, at or above this stage’s threshold of ${reason.threshold}.`,
-            stop: 'To be asked less, raise this stage’s size_threshold in .agentic/config.yml.',
+            why: `The plan’s size is ${reason.size}, at or above the threshold of ${reason.threshold} this stage’s override asks at.`,
+            // The override asks, whether it set the threshold or only turned `above_size` on, so the
+            // override is the lever — the dial's threshold alone would not stop it (review of PR #76).
+            stop: 'To be asked less, raise size_threshold or change plan_approval in this stage’s override in .agentic/config.yml.',
             section: 'repository',
             link: 'Repository configuration',
           }

@@ -72,6 +72,10 @@ describe('reasonCopy', () => {
     });
     expect(size.section).toBe('repository');
     expect(size.stop).toContain('size_threshold');
+    // The override may only have turned above_size on: its plan_approval is named too, and the
+    // dial — which would not stop that ask — is not (review of PR #76).
+    expect(size.stop).toContain('plan_approval');
+    expect(size.stop).not.toContain('autonomy dial');
   });
 
   it('names both budget figures', () => {
