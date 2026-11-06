@@ -131,7 +131,8 @@ start never reached a stage, because the platform kept no assignee (backlog 730)
    (an admin reads it):
    - *My tasks and unassigned ones* (the default for a new machine);
    - *Only my tasks* (the owner's "assigned mode");
-   - *Everything* (what every machine connected before this amendment keeps);
+   - *Everything* (what a machine connected before this amendment keeps, unless it was set to *pick only*, which
+     keeps *Only what I pick*);
    - *Only what I pick*.
 
    The project list still narrows each of them. Rationale: a personal subscription should not run a

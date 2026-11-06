@@ -145,14 +145,15 @@ nothing runs or the platform takes every ticket from its developer.
    made before it, and the reverse also holds. The owner is shown on the task, the board can filter
    *Mine*, and a waiting run says whose machine it waits for.
 2. **Ruling 5 is narrowed.** A ticket assigned to a **linked member of the project** is taken at intake,
-   and the claim leaves it with that member (no re-assignment, no *assigned elsewhere*). It still moves to
+   and no claim, first or later, takes it from that member (no re-assignment, no *assigned elsewhere*). It still moves to
    `in_progress`. *Take tickets already assigned to someone* now means someone who is **not** a linked
    member; everything else about the claim is unchanged.
 3. **Writing the owner back to the tracker is opt-in** per tracker binding (*assign the owner in the
    tracker*, default off). Releasing ownership never unassigns a person in the tracker.
 4. **A person links their own tracker or git account** by writing a one-time code as a comment from that
-   account. The provider proves the author; an email match or a typed id never does. Admins keep their
-   mapping for bots.
+   account. The provider proves the author; an email match or a typed id never does. The person then confirms
+   the account the provider names, and a code that two accounts used links nobody. Admins keep their mapping for
+   bots.
 
 **Rationale.** The intake label or status is the team's statement that the agent may work on the ticket,
 and the assignee says whose it is. Keeping the developer as assignee keeps the tracker truthful, and it is

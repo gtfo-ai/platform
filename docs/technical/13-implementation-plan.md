@@ -1649,7 +1649,7 @@ product/04 and product/06 carry amendment blocks.
 - A PR fixes the docs it makes false: technical/02, 03 (and `data-model:check`), 08, the user guide, and the operator
   guide where it applies.
 - Backlog findings take **1080–1099**.
-- **Migrations are reserved** (0102 and 0103 are M25's, PRs #75 and #76): **0104** S-26.1, **0105** S-26.6, **0106**
+- **Migrations are reserved** (0102 and 0103 are already on `main`, from #75 and the approvals change): **0104** S-26.1, **0105** S-26.6, **0106**
   S-26.4. A slice that lands before a lower-numbered reservation takes the next free number at its rebase. Every file
   is `additive` (TD-032, with its amendment B's `on delete` rule).
 - Risk **high** means the reviewer's security checklist applies.
@@ -1682,7 +1682,8 @@ new task writer, intake) · migration **0104** · TD-031 amendment items 1–3 a
      sync changes the owner only when the read assignee differs from `ticket_assignee`, and that the claim's own
      assign is never a change.
   3. `POST /api/tasks/:id/owner` follows the permission matrix:
-     - a member may take an unowned task or release their own; a maintainer+ may set anyone or nobody;
+     - a member may take an **unassigned** task (no owner and not held elsewhere, the pick's rule) or release their
+       own; a maintainer+ may set anyone or nobody, on any task;
      - refusals: `403 owner_change_not_permitted`, `422 owner_not_project_member`, `409` on a terminal task;
      - it takes an `Idempotency-Key` and writes one `human_actions` row per accepted request;
      - proved through the real router (`commands.test.ts`); the task DTO's `can_take`/`can_assign`/`can_unassign` are
@@ -1702,8 +1703,10 @@ migration · TD-031 amendment item 5, BD-031 amendment 2.
 - Acceptance:
   1. Intake takes a ticket whose assignee is a linked `member`+ even with `take_assigned_tickets: false`. An unlinked
      person or a non-member is still skipped (unit, over the matrix).
-  2. A member-held ticket's first claim makes **no** assign write (the fake counts zero), records
-     `held_by: 'member'`, and still moves to `in_progress`.
+  2. A member-held ticket's claim makes **no** assign write (the fake counts zero), records `held_by: 'member'`, and
+     still moves to `in_progress`. This holds for the first claim **and for a re-claim** after a human return, which
+     today skips the pre-read and re-assigns (`ticket-claim.ts:290-313`). The test runs a return then a re-claim on a
+     ticket a linked member holds.
   3. An unlinked or non-member holder keeps `ticket_assigned_elsewhere` and its comment. `take_assigned_tickets: true`
      re-assigns only those.
   4. `assignToSelf` sets `ticket_assignee` in the claim's transaction, and the next `owner_sync`, which reads the
@@ -1723,12 +1726,16 @@ medium (an outbound write to a person's ticket) · no migration · TD-031 amendm
 - Acceptance:
   1. With the switch off (the default), a platform assignment makes no provider call.
   2. With it on, one `assignTo` goes through `IntegrationActionExecutor` with the owner's `person` identity; shadow
-     mode gives `would_have`; `ticket_assignee` is updated and the next sync changes nothing.
-  3. An owner with no identity for the provider gets no call and one logged reason, and `owner_writes_back` is false
+     mode gives `would_have`. `ticket_assignee` is set to the intended identity **before** the call, and the next sync
+     changes nothing. A terminal refusal puts the previous value back.
+  3. **The race**: a platform assignment to Bob, then a tracker change to Carol before the duty fires, writes nothing
+     (the duty re-checks `owner_user_id` and `owner_changed_at` against its event, TD-004). An application test covers
+     it.
+  4. An owner with no identity for the provider gets no call and one logged reason, and `owner_writes_back` is false
      for that task.
-  4. The contract suite runs `assignTo` against the fake and against Jira, with fixture provenance.
-  5. Releasing ownership writes nothing to the tracker.
-  6. The config schema stays strict, and the setup guide names the permission the write needs.
+  5. The contract suite runs `assignTo` against the fake and against Jira, with fixture provenance.
+  6. Releasing ownership writes nothing to the tracker. The config schema stays strict, and the setup guide names the
+     permission the write needs.
 
 **S-26.4 — A machine's claim policy, and a pick that assigns (protocol 4)** · depends S-26.1 · risk **high** (the
 claim SQL, a protocol bump: not in the push right after another bump) · migration **0106** · TD-031 amendment
@@ -1742,19 +1749,27 @@ items 6–7.
   - Worker side (protocol fields only, worker session's files): `contracts/src/worker-local.ts`,
     `remote-worker/core-client.ts`.
 - Acceptance:
-  1. An integration matrix of policy × {mine, another's, unowned, unlinked assignee, an ask I asked or another asked}
-     gives the automatic claim's answer. No policy admits what the eligibility refuses, and a reassignment applies to
-     an open offer.
+  1. An integration matrix gives the automatic claim's answer for each policy × task case:
+     - cases: mine, another's, unowned, **released by a linked member** (owner `null`, still theirs in the tracker:
+       unassigned), held by an unlinked person or a non-member, an ask I asked, an ask another person asked;
+     - no policy admits what the eligibility refuses;
+     - a reassignment applies to an open offer;
+     - the *held elsewhere* fragment is the one the pick, the command and S-26.5 use.
   2. Policy storage and writes:
      - a `null` policy reads as `everything`, or `pick_only` when the projects are `'{}'`;
+     - a legacy `'{}'` narrows **nothing** (its pick list is every eligible project);
+     - a v3 `PUT claim-scope` with `[]` is stored as `pick_only` with the project list `null`;
      - a new worker is written `mine_and_unassigned`;
-     - `'{}'` is refused with `422`;
+     - a v4 `'{}'` is refused with `422`;
      - only the worker's user may write it (an admin gets `403`); one `human_actions` row per change, none for a
        repeat.
   3. The online assignee is the owner only when the owner's worker policy is not `pick_only` and its scope takes the
-     project (integration).
+     project (integration). A reassignment leaves the open offer's head start with the previous owner (bounded by
+     `assignee_window`), and the previous owner's `mine` machine still cannot claim it (integration).
   4. Picks:
-     - picking an unowned **stage** offer sets the owner in the claim's transaction (`via: pick`);
+     - picking an unassigned **stage** offer sets the owner in the claim's transaction (`via: pick`), with one
+       `human_actions` row `task.owner {via: pick}`;
+     - picking a task held by an unlinked person or a non-member claims it **without** assigning;
      - picking someone else's task answers `409 task_taken_by_another` or `task_owned_by_another` by the body's
        `as_of`;
      - picking an ask assigns nothing;
@@ -1769,7 +1784,8 @@ migration · TD-031 amendment item 8.
 - Acceptance:
   1. A fixture produces each reason (`owner_worker_offline` with last seen, `owner_worker_paused`, `owner_no_worker`,
      `owner_pick_only`, `no_taker`, `assignee_not_linked`), and `null` when the server or a taking worker can claim
-     now (integration).
+     now (integration). A task a linked member released reads as unassigned (`no_taker` or `null`), never
+     `assignee_not_linked`: the same *held elsewhere* fragment as the claim.
   2. A PostgreSQL parity test: a `null` reason ⇔ some claimant's predicates admit the offer now.
   3. The task DTO and the Agents/Home rows carry `waiting {reason, user, last_seen_at}`, and `client-census` stays
      green.
@@ -1778,29 +1794,37 @@ migration · TD-031 amendment item 8.
      machine) takes **unassigned** tasks automatically, without naming the machines. The UX spec §1's consequence
      line reads it, because a member sees only their own workers.
 
-**S-26.6 — Link your own tracker and git account, proven by the provider** · depends — (its last bullet uses S-26.1's
-adoption hook; rebase after it) · risk **high** (a link gains authority to answer and approve) · migration **0105** ·
-TD-031 amendment item 9.
-- Files: `db/migrations/0105_identity_link_codes.sql`, `application/src/identity/link-codes.ts` (new), the inbound path
-  (`integrations/inbound.ts`), `apps/server/src/routes/me-identities.ts` (new), `queries/identity-queries.ts`
-  (candidates), `contracts`.
+**S-26.6 — Link your own tracker and git account, proven by the provider and confirmed by its person** · depends —
+(its adoption bullet uses S-26.1's hook; rebase after it) · risk **high** (a link gains authority to answer and approve;
+the reviewer's security checklist) · migration **0105** · TD-031 amendment item 9.
+- Files: `db/migrations/0105_identity_link_codes.sql` (`identity_link_codes`, `identity_link_matches`),
+  `application/src/identity/link-codes.ts` (new), the inbound path (`integrations/inbound.ts`), the Jira webhook's
+  comment schema (`providers/jira-cloud/webhook.ts`: `updateAuthor`, `created`, `updated`), the GitLab note payload,
+  `apps/server/src/routes/me-identities.ts` (new), `queries/identity-queries.ts` (candidates), `contracts`.
 - Acceptance:
   1. The code has 50 bits from a CSPRNG and is hashed at rest. It expires after 30 min, is single use, one is live per
      user, and at most 5 are issued per hour (unit + integration).
-  2. A **verified** Jira `comment_created` or GitLab MR note carrying the code links its author. These link nothing:
+  2. **(a) A match is not a link.** A verified Jira `comment_created` or GitLab MR note carrying the code records a
+     match and writes no `user_identities` row. Only the person's confirmation of *that* account writes the link, and a
+     match left unconfirmed expires with the code (integration).
+  3. These record no match (inbound integration test with fixture payloads, one case each):
+     - **(b)** a second distinct author with the same code voids the code and every match, so a later confirmation is
+       refused;
+     - **(c)** an edited comment, or one whose `updateAuthor` ≠ `author` (the *Edit All Comments* case);
      - an unverified delivery;
      - a binding's own account;
      - a `machine` identity;
-     - a comment with a platform marker.
+     - a comment with a platform marker;
+     - an author linked to someone else (`identity_linked_elsewhere`, the code voided).
 
-     Proved by the inbound integration test with fixture payloads.
-  3. An author linked to someone else is refused with `identity_linked_elsewhere` (the code is consumed). Five misses
-     in 24 h make the author ignored for the day, with an audit row.
-  4. *I wrote it on …* (a ticket key or an MR) reads that thread through the executor and links the same way (fake
-     provider).
-  5. Linking adopts the owner on live tasks naming the identity (`via: link`). Unlink works for the person and for an
-     admin, with `human_actions` rows, and the candidates list includes unlinked assignees.
-  6. Nothing of the comment is stored but its id; the code regex is the only reader of its text (BD-022).
+     Five misses in 24 h make the author ignored for the day, with an audit row.
+  4. **(d)** *I wrote it on …* is offered and accepted only for a ticket or MR in a project where the person is
+     `member`+ (`403` otherwise). It reads that thread through the executor and applies 2–3 to it (fake provider).
+  5. A confirmed link adopts the owner on live tasks naming the identity (`via: link`). Unlink works for the person and
+     for an admin, with `human_actions` rows, and the candidates list includes unlinked assignees.
+  6. Nothing of the comment is stored but its id and author; the code regex is the only reader of its text (BD-022).
+     The threat model's actors (a JSM customer, a guest, a comment editor, the platform's own account) each appear in a
+     named test.
 
 **S-26.7 — The worker page: what this machine takes, and picks that assign** (SPA, the worker session's) · depends
 S-26.4 · risk low · no migration.
@@ -1824,7 +1848,8 @@ S-26.6, S-26.3 · risk low · no migration.
   1. Per the M26 UX spec §1 and §5.
   2. Only the machine's owner sees *Change*; an admin sees the sentence read-only (ui test per role), and the server's
      `403` is mapped.
-  3. *Your accounts* shows the code, updates when the link lands, and offers unlink.
+  3. *Your accounts* shows the code, asks the person to confirm the account it matched (with the provider and the
+     account id), and offers unlink.
   4. *Assign the owner in the tracker* sits beside the lifecycle's two switches (product/06's amendment).
 
 **S-26.8b — The owner on the task page and the board, and the waiting words** (SPA) · depends S-26.1, S-26.5, and
@@ -1837,7 +1862,7 @@ after it lands; **the last S-26 slice to start** · risk low · no migration.
   - owner: `owner.unassigned`, `owner.assigned_in_tracker_unlinked`, `owner.took`, `owner.assigned`,
     `owner.unassigned_done`.
 
-  `waiting.assignee_not_linked` is the decision's sixth reason; the UI session words it.
+  `waiting.assignee_not_linked` is worded in the UX spec §4.
 - Acceptance:
   1. Per the M26 UX spec §2, §3 and §4.
   2. Each action is offered only when its `can_*` flag allows it (ui test per role), and the owner control is
@@ -1935,13 +1960,13 @@ Principles, as in M25:
 - `waiting.owner_no_worker`: "Waiting for Vojtěch. They have no machine that takes this project."
 - `waiting.owner_pick_only`: "Waiting for Vojtěch to pick it on their machine."
 - `waiting.no_taker`: "Waiting: no machine takes unassigned tasks in Autix."
+- `waiting.assignee_not_linked`: "Waiting for a machine that takes everyone's tasks. It's assigned in Jira to *Jan
+  Novák*, who isn't linked to a platform account." The name is UntrustedText. Next steps: for a maintainer, *Link
+  account…* (opens Settings → Linked accounts, prefilled) and *Assign…*; for anyone allowed, *Take it*. Short form for
+  Agents/Home rows: "Waiting · assigned to Jan Novák (not linked)".
 - **Next step:** each one offers *Take it* or *Assign…* to the people allowed to, plus *Open Workers* for the machine-side
   ones. These go in the task callout and on Agents/Home rows.
 - *Machine* is the user-facing word, as on the Workers screen. Never say *claim*, *offer* or *seat*.
-
-`[architect: TD-031's amendment item 8 adds a sixth reason, `waiting.assignee_not_linked`, for a ticket assigned in the
-tracker to a person not linked to a platform account. No *mine* machine takes it, so it waits for an *Everything* machine
-or the server. The UI session words it.]`
 
 **5. Linking your own tracker and git accounts**
 - **Where:** a new section, *Settings → Your accounts* (personal). The worker's setup also links to it from its last step
@@ -1957,6 +1982,9 @@ or the server. The UI session words it.]`
      also offers *I wrote it on …*: the person names the ticket or merge request, and the core reads that thread through
      the binding. The author still comes from the provider's API.]`
   3. The page updates live: "Linked: Jira account *Jan Novák*." The comment can then be deleted, and the page says so.
+     `[architect: the review of PR #81 put a confirmation before the link (TD-031's amendment item 9 (a)). The page first
+     asks *Link Jira account Jan Novák?* and shows the provider and the account id beside the untrusted name. Only
+     *Confirm* links. If a second account used the code, the page says so and offers a new code instead.]`
 
   GitLab works the same way, with a comment on any merge request or issue. `[architect: merge requests only. GitLab issue
   notes are not normalised (`gitlab/inbound.ts:296`), and GitLab is a git binding here, not a tracker.]`

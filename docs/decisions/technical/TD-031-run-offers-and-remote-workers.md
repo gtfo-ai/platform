@@ -1349,11 +1349,12 @@ no comments (`ticket-poll.ts:97`), and GitLab notes are normalised only on merge
    non-member, a machine, the binding's own account unless it maps to a person). A platform assignment does not touch
    `ticket_assignee`, so the next sync keeps it until somebody changes the tracker. The claim's own `assignToSelf`
    writes `ticket_assignee` in the claim's transaction, so the platform's write never reads back as a change. A link
-   made later (6) adopts the owner of every live task whose `ticket_assignee` names the newly linked identity and has no
+   made later (item 9) adopts the owner of every live task whose `ticket_assignee` names the newly linked identity and has no
    owner, with no provider call.
 3. **The command** `POST /api/tasks/:id/owner {user_id | null}` (`Idempotency-Key`, `human_actions` `task.owner`,
-   refusals translated as WP-15i's). A member may set *themselves* on an unowned task or `null` on their own. A
-   maintainer+ may set any `member`+ of the project or `null`. Otherwise the answer is `403 owner_change_not_permitted`;
+   refusals translated as WP-15i's). A member may set *themselves* on an **unassigned** task (item 6's predicate: no
+   owner and not held elsewhere, the same rule a pick assigns by, item 7) or `null` on their own. A maintainer+ may set
+   any `member`+ of the project or `null`, on any task. Otherwise the answer is `403 owner_change_not_permitted`;
    a target below `member` is `422 owner_not_project_member`; a terminal task is `409`. The task DTO carries `owner`,
    `owner_source`, the unlinked assignee's display name, `owner_writes_back`, and `can_take`, `can_assign`,
    `can_unassign` (S-23.23's pattern, from the same rule the route uses).
@@ -1361,41 +1362,61 @@ no comments (`ticket-poll.ts:97`), and GitLab notes are normalised only on merge
    `task.owner.changed` with `source: platform` and a non-null owner enqueues the duty `ticket_owner_assign`. That duty
    calls a new port verb `assignTo(ticket, identity)` through `IntegrationActionExecutor` (shadow → `would_have`;
    Jira's J4 `PUT issue/{key}/assignee`, `test/fixtures/http/jira-cloud/SOURCES.md:111`) with the owner's `person`
-   identity for that provider, and then sets `ticket_assignee`. An owner with no identity for the provider means no
-   write and a logged reason. Releasing ownership writes nothing to the tracker: the platform never unassigns a person
+   identity for that provider. **The duty re-validates on fire** (TD-004: a job cannot be cancelled): it calls only
+   while the task's `owner_user_id` and `owner_changed_at` still equal its event's, and otherwise it skips with a logged
+   reason. So a platform assignment to Bob followed by a tracker change to Carol never writes Bob. Before the call it
+   writes `ticket_assignee` := the intended identity (compare-and-set on the value it read), so a sync racing the call
+   reads no change. On a terminal refusal it puts the previous value back if the column still holds the intended one;
+   the owner is kept and the reason logged. An owner with no identity for the provider means no write and a logged
+   reason. Releasing ownership writes nothing to the tracker: the platform never unassigns a person
    (TD-029 decision 5).
-5. **The claim keeps a member's ticket** (amends TD-029 decision 5): intake does not skip, and the first claim does
-   not refuse or re-assign, a ticket whose assignee maps to a `member`+ person of the project. The claim records it
+5. **The claim keeps a member's ticket** (amends TD-029 decision 5): intake does not skip, and **no claim, first or
+   re-claim**, refuses or re-assigns a ticket whose assignee maps to a `member`+ person of the project. Today a re-claim
+   skips the pre-read and re-assigns on purpose (`ticket-claim.ts:290-313`: "the person who returned it may well hold
+   it"). From now on every claim reads the assignee first, and a linked member holding the ticket gets no assign write. The claim records it
    `held` (`ticket_claim.held_by: 'member'`, an optional key) and still moves the status to `in_progress`. Unmapped
    persons and non-members keep today's rule (`take_assigned_tickets`, `ticket_assigned_elsewhere`).
 6. **A worker's claim policy** (migration **0106**, additive): `workers.claim_policy text` (`everything` |
    `mine_and_unassigned` | `mine` | `pick_only`, check `not valid` + validate). The column is nullable with no default:
    `null` reads as `pick_only` when `claim_project_ids = '{}'` and otherwise as `everything`, so existing workers keep
    their meaning without a data rewrite. The worker insert (`worker-queries.ts:654`) writes `mine_and_unassigned`. The
-   policy is **orthogonal to `claim_project_ids`**, which stays the project axis; the new write never stores `'{}'`
-   (`422`, *use `pick_only`*). An **automatic** claim adds a conjunct beside `workerScopeTakesSql`, read live from the
+   policy is **orthogonal to `claim_project_ids`**, which stays the project axis. **A legacy `'{}'` means *pick only,
+   no project narrowing***: wherever the project list narrows (the automatic claim, the pick list of item 7) `'{}'`
+   reads as `null`. The new write never stores `'{}'` (`422`, *use `pick_only`*). A v3 worker's `PUT claim-scope` with
+   `[]` is mapped to `policy: pick_only` with the project list `null`. An **automatic** claim adds a conjunct beside `workerScopeTakesSql`, read live from the
    offer's task, so a reassignment applies to open offers at once:
    - `mine`: `t.owner_user_id = w.user_id`.
-   - `mine_and_unassigned`: the same, or no owner and `ticket_assignee` null or `platform`.
+   - `mine_and_unassigned`: the same, or the task is **unassigned**: no owner and **not held elsewhere**. *Held
+     elsewhere* means `ticket_assignee` names a person (not `platform`) who is not a linked `member`+ of the project,
+     read live through `user_identities` and `userMayRunInProjectSql`. A task a linked member released (owner `null`,
+     the ticket still theirs in the tracker) is therefore unassigned. It is one SQL fragment, used by the claim, the
+     pick (item 7), the command (item 3) and the waiting read (item 8).
    - `everything`: true.
    - `pick_only`: false.
    - An **ask** offer's "mine" is its asker (`task_asks.asked_by_user_id`), never the task's owner.
 
    The **online assignee** of §8 is the task's owner (this closes 730). The owner's worker qualifies only when its
-   policy is not `pick_only` and its scope takes the project. The server claimant is unchanged: it takes anything its
+   policy is not `pick_only` and its scope takes the project. The head start is fixed at offer time
+   (`assignee_user_id`), and a reassignment does **not** re-route an open offer. The old owner keeps the window, at most
+   `assignee_window` (120 s by default), and inside it their machine still claims only what its policy admits: a
+   `mine` machine stops at once, because the policy reads the owner live. The next stage's offer names the new owner. The server claimant is unchanged: it takes anything its
    `server_from` admits (BD-032 decision 3). The policy is set only by the worker's owner: `PUT claim-scope` gains
    `policy` (worker credential), and the core adds `PUT /api/workers/:id/claim-policy` (session, the worker's user only;
    an admin reads it). Each change writes one `human_actions` row `worker.claim_policy`. **No new blocker**: a `mine`
    worker with nothing of its own is idle by choice, not blocked, and calling it a blocker would turn its status amber
    for a setting. `GET /api/workers` and the local state carry `policy_skipped_offers` (open offers its eligibility
    admits and its policy refuses) instead.
-7. **A pick assigns.** Picking a **stage** offer whose task is unowned (and not held by an unlinked person) sets the
-   picker as owner (`via: pick`, `source: platform`) in the claim's transaction. A pick never takes another person's
+7. **A pick assigns.** Picking a **stage** offer whose task is unassigned (item 6's predicate) sets the picker as owner
+   (`via: pick`, `source: platform`) in the claim's transaction, with one `human_actions` row `task.owner {via: pick}`
+   beside `worker.take_offer`. A task **held elsewhere** (an unlinked or non-member assignee, which the project admitted
+   through `take_assigned_tickets`) is claimed **without assigning**. The platform cannot map that assignee, and
+   writing a platform owner over them would make the two records disagree silently; a person who wants it uses *Take
+   it* on the task page, which is maintainer-only for such a task (item 3). A pick never takes another person's
    task, a maintainer's included: reassigning happens on the task page. The pick body carries the list's `as_of`. A
    task owned by someone else refuses with `409 task_taken_by_another` when `owner_changed_at > as_of`, and otherwise
    with `409 task_owned_by_another`, both naming the owner. This narrows the claim-scope amendment's
    *one answer reveals no reason*: the owner is already visible to every member on the board. `GET offers` entries gain
-   `owner` and `mine`, and the list is narrowed by the project list. The pick verb still ignores the project list,
+   `owner` and `mine`, and the list is narrowed by the project list (`'{}'` narrows nothing, item 6). The pick verb still ignores the project list,
    as the claim-scope amendment decided. **Protocol 4**, accepted `[3, 4]`. A v3 worker gets `offer_not_claimable` for both refusals, and
    its `PUT claim-scope` leaves the policy as it was.
 8. **Why an offer waits** is a read-model field `waiting` on the task and Agents/Home rows. It is computed from the open
@@ -1403,26 +1424,54 @@ no comments (`ticket-poll.ts:97`), and GitLab notes are normalised only on merge
    `owner_worker_offline` (with the last seen time), `owner_worker_paused`, `owner_no_worker`, `owner_pick_only`,
    `no_taker`, `assignee_not_linked`, or `null` when someone can take it now. A PostgreSQL parity test holds it to the
    claim's predicates, the way S-22.19 did.
-9. **A person links their own account, proven by the provider** (migration **0105**, `identity_link_codes`). A linked
-   identity gains authority: it answers questions and approves plans (BD-006, BD-022, Q10). So a link is made only from
-   an **authenticated author** the provider names, never from a typed id or an email match.
+9. **A person links their own account, proven by the provider** (migration **0105**, `identity_link_codes` and
+   `identity_link_matches`). A linked identity gains authority: it answers questions and approves plans (BD-006,
+   BD-022, Q10). So a link is made only from an **authenticated author** the provider names, never from a typed id or
+   an email match, and **never without the person's confirmation**.
+   - **Threat model.** The code is posted where others can read it, and anyone who can comment there can copy it:
+     - Jira Service Management **customers**, **guests** and other external collaborators;
+     - any member of the site;
+     - a GitLab user with comment access to the MR;
+     - a holder of Jira's *Edit All Comments*, who can put the code into *another person's* comment while the
+       comment's `author` stays the original writer;
+     - the platform itself, which posts agent-written text as the binding's account.
+
+     Each of them must fail to link their own account to the code's owner.
    - **The code.** `POST /api/me/identity-links` issues `agentic-link-` + 10 Crockford base32 chars (50 bits, CSPRNG),
      stored as a SHA-256 hash with its user. It is valid 30 min and single use, and one live code per user (a new one
      replaces it); at most 5 issued per user per hour.
    - **Where it is read.** The code is matched by a strict regex in comment text from a **verified** inbound delivery
-     only: Jira `ticket.comment.added`, and GitLab merge-request notes. Because polls carry no comments, the page also
-     offers *I wrote it on …*: the person names a ticket key or MR, and the core reads that thread's comments through
-     the binding (`IntegrationActionExecutor`). The author's account id comes from the provider's API, which is still
-     provider-proven.
-   - **What it refuses.** An author already linked to another user (`identity_linked_elsewhere`; the code is consumed);
-     a `machine` identity; any binding's own account; a comment carrying a platform marker. The last two exist because
-     the platform posts agent-written text as that account, so an attacker who planted a guess in a ticket could get
-     the platform to "author" it. An author whose comments carried 5 non-matching codes in 24 h is ignored for the day,
-     with an audit line.
-   - **What it records.** A link writes `user_identities` (`kind: person`) through the existing upsert, records
+     only: Jira `comment_created`, and GitLab merge-request notes. Because polls carry no comments, the page also
+     offers *I wrote it on …*: the person names a ticket key or MR **in a project where they are `member`+**, and the
+     core reads that thread's comments through the binding (`IntegrationActionExecutor`). The author's account id comes
+     from the provider's API.
+   - **A match is not a link.** A match records `(code, provider, external_id, display_name, comment_id)` in
+     `identity_link_matches` and nothing else.
+     - **(a) Confirmation.** The person's page shows *Link Jira account <display name>?*, and only their confirmation
+       (session, `Idempotency-Key`) writes the link. An unconfirmed match links nothing and expires with the code.
+     - **(b) Two authors void it.** A second **distinct** author matched to the same code voids the code (and every
+       match of it) before or at the confirmation, which re-checks. The page then says that someone else used the
+       code.
+     - **(c) Edited comments are refused.** That means a comment that was edited (Jira: `updated` ≠ `created`;
+       GitLab: `updated_at` ≠ `created_at`, `[unverified]`, docs/TODO.md), or whose `updateAuthor` ≠ `author`
+       (Jira's comment carries both, `jira-cloud/mapping.ts:105`; the webhook's comment schema, `webhook.ts:223-227`,
+       gains them).
+     - **(d) Membership.** The read path is offered only in a project where the person is `member`+.
+   - **What it refuses.**
+     - An author already linked to another user (`identity_linked_elsewhere`; the code is voided).
+     - A `machine` identity.
+     - Any binding's own account.
+     - A comment carrying a platform marker.
+
+     The last two exist because the platform posts agent-written text as that account, so an attacker who planted a
+     code in a ticket could get the platform to "author" it. An author whose comments carried 5 non-matching codes in
+     24 h is ignored for the day, with an audit line.
+   - **What it records.** A confirmed link writes `user_identities` (`kind: person`) through the existing upsert, records
      `human_actions` `identity.link {provider, external_id, via: link_code}`, and stores nothing of the comment but its
      id. The person or an admin may unlink (`DELETE /api/me/identities/…`). The admin mapping stays, for bots and for
      anyone who cannot comment. Unlinked assignees seen on live tasks join the identity candidates list.
+   - **Residual.** A person who confirms the wrong name links the wrong account. The display name is untrusted text
+     (BD-022), so the page shows it with the provider and the account id, and unlinking is one click (BACKLOG 1086).
 
 **Rejected.**
 - *Owner = the ticket assignee only, with no platform assignment*: this fails the owner's "handpick", and
@@ -1438,6 +1487,8 @@ no comments (`ticket-poll.ts:97`), and GitLab notes are normalised only on merge
 - *OAuth with the tracker*: a new auth flow per provider (TD-022 ships passwords) to answer one question that a comment
   answers.
 - *A 4-character code*: 20 bits is guessable through a few thousand comments within its 30 minutes.
+- *Linking on the first match, with no confirmation*: a customer or guest who copies a code posted on a shared ticket
+  would own the code's user (the review of PR #81).
 - *A project setting "the server takes only unowned tasks"*: deferred (BACKLOG 1080).
 
 **Residuals.**
