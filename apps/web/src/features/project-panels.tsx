@@ -62,6 +62,7 @@ import {
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { NavList, type NavListGroup } from '../ui/nav-list.js';
 import { rowLink } from '../ui/row-link.js';
+import { Select } from '../ui/select.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { CodeText, JsonView, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
@@ -465,8 +466,6 @@ const SPEND_WINDOW_WORDS: Readonly<Record<BudgetWindow, string>> = {
   total: 'in total',
 };
 
-const SELECT_CLASS = 'rounded-md border border-line-input bg-inset px-2 py-1 text-sm';
-
 /** `$1.85`, with the part the platform priced said beside it — an estimate is labelled one. */
 const spendWords = (line: { readonly usd: number; readonly estimated_usd: number }): string =>
   line.estimated_usd > 0
@@ -497,8 +496,7 @@ const SpendBreakdown = ({
             ? `Spent ${words}`
             : `Spent ${words}: ${spendWords(spend.data)}`}
         </h2>
-        <select
-          className={SELECT_CLASS}
+        <Select
           value={window}
           onChange={(event) => setWindow(event.target.value as BudgetWindow)}
           aria-label="Window"
@@ -508,7 +506,7 @@ const SpendBreakdown = ({
               {BUDGET_WINDOW_LABEL[option]}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
       {spend.isPending ? <Skeleton label="Loading the spend…" lines={3} /> : null}
       {spend.isError ? (
