@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import { primaryLabels } from '../ui/primary-census.js';
+import { seatlessWords, waitingItemOf } from './run-detail.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -221,7 +222,30 @@ const asRead = (record: RunRecord): RunReadResponse => ({
   retry_defaults: { model: record.model, effort: record.effort },
 });
 
-const fetchFor = (task: TaskDetailResponse, shown: RunRecord, messages: TranscriptEvent[]) =>
+/** The run's project, as the projects read lists it: the run page is framed by it (S-25.4). */
+const PROJECT_ROW = {
+  id: PROJECT,
+  key: 'acme',
+  name: 'Acme',
+  repo_url: 'https://git.example.invalid/acme/acme.git',
+  default_branch: 'main',
+  agentic_dir: '.agentic',
+  knowledge_dir: 'knowledge',
+  autonomy_level: 'supervised',
+  readiness_level: 2,
+  status: 'active',
+  created_at: '2026-11-05T07:00:00.000Z',
+  updated_at: '2026-11-05T07:00:00.000Z',
+  open_tasks: 1,
+  spent_usd_30d: 1,
+};
+
+const fetchFor = (
+  task: TaskDetailResponse,
+  shown: RunRecord,
+  messages: TranscriptEvent[],
+  projects: readonly unknown[] = [],
+) =>
   (async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
     const path = new URL(url, 'http://localhost').pathname;
@@ -230,7 +254,7 @@ const fetchFor = (task: TaskDetailResponse, shown: RunRecord, messages: Transcri
     if (path === `/api/runs/${shown.id}/commands`) return json({ items: [] });
     if (path === `/api/runs/${shown.id}`) return json(asRead(shown));
     if (path === `/api/tasks/${TASK}`) return json(task);
-    if (path === '/api/projects') return json({ items: [] });
+    if (path === '/api/projects') return json({ items: projects });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
 
@@ -239,11 +263,16 @@ const NOW = Date.parse('2026-11-05T10:03:04.000Z');
 /** A usage limit's reset later the same day (WP-285). */
 const USAGE_RESET = '2026-11-05T14:00:00.000Z';
 
-const open = (shown: RunRecord = LIVE, task = detail(), messages = MESSAGES) => {
+const open = (
+  shown: RunRecord = LIVE,
+  task = detail(),
+  messages = MESSAGES,
+  projects: readonly unknown[] = [],
+) => {
   window.history.pushState({}, '', `/runs/${shown.id}`);
   return render(
     createApp({
-      fetchImpl: fetchFor(task, shown, messages),
+      fetchImpl: fetchFor(task, shown, messages, projects),
       realtime: false,
       // The run started at 10:00; "now" is 3 m 4 s later, the Bash call inside its stuck bound.
       now: () => NOW,
@@ -270,6 +299,32 @@ describe('the run page’s header', () => {
     expect(
       screen.getByRole('heading', { level: 1, name: 'Implementation · Developer · attempt 2' }),
     ).toBeTruthy();
+  });
+
+  it('sits inside its project’s frame, with the URL unchanged and the way back in the project (S-25.4)', async () => {
+    open(LIVE, detail(), MESSAGES, [PROJECT_ROW]);
+    // The project's tabs, the Board's current, and the breadcrumb that names the project.
+    const tabs = await screen.findByRole('navigation', { name: 'Project' });
+    expect(
+      within(tabs)
+        .getAllByRole('link')
+        .find((link) => link.getAttribute('aria-current') === 'page')?.textContent,
+    ).toBe('Board');
+    expect(screen.getByRole('navigation', { name: 'Breadcrumb' }).textContent).toContain('Acme');
+    // The organisation's row gives way to the project's, as on every page of a project.
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
+    expect(window.location.pathname).toBe(`/runs/${IMPL_2}`);
+    const back = await screen.findByRole('link', { name: /ACME-12/ });
+    expect(back.getAttribute('href')).toBe(`/projects/acme/tasks/${TASK}`);
+    // One `<h1>`: the run's; the project's name above it is not a heading.
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
+  it('keeps the organisation’s frame for a run whose project the caller cannot list', async () => {
+    open();
+    await screen.findByRole('link', { name: /ACME-12/ });
+    expect(document.querySelector('[data-project-frame]')).toBeNull();
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBeTruthy();
   });
 
   it('keeps Take over… and Download transcript in the run actions menu', async () => {
@@ -361,7 +416,8 @@ describe('the summary strip and what the agent is doing now', () => {
       'Runs onalice-laptop (Alice’s worker)',
     ],
     [{ kind: 'server', worker_id: null, worker_name: null }, 'Runs onthe platform server'],
-    [null, 'Runs onnot claimed yet'],
+    // S-25.4: a running run with no seat is not "not claimed yet" beside *Running*.
+    [null, 'Runs onnot recorded'],
     // WP-285: the worker is paused by its usage limit — the Workers screen's own sentence.
     [
       {
@@ -459,6 +515,38 @@ describe('the summary strip and what the agent is doing now', () => {
     ]);
   });
 
+  it('links Now: Needs you to what the task waits for (S-25.4)', async () => {
+    const question = {
+      id: '00000000-0000-4000-8000-0000000000f1',
+      task_id: TASK,
+      stage: 'implementation',
+      text: 'Round per line or per invoice?',
+      options: null,
+      blocking: true,
+      status: 'open' as const,
+      asked_at: '2026-11-05T10:01:00.000Z',
+      reminders_sent: 0,
+      answered_at: null,
+      answer: null,
+    };
+    const view = open(LIVE, detail({ questions: [question] }), MESSAGES, [PROJECT_ROW]);
+    const link = await screen.findByRole('link', { name: 'Answer the question →' });
+    expect(view.container.querySelector('[data-run-now]')?.getAttribute('data-run-now')).toBe(
+      'needs_you',
+    );
+    // Inside the project, onto the answer box the task page's *Answer* moves to.
+    expect(link.getAttribute('href')).toBe(`/projects/acme/tasks/${TASK}#answer-${question.id}`);
+  });
+
+  it('names no waiting item for a task nothing waits on', () => {
+    expect(waitingItemOf(detail())).toBeNull();
+    expect(waitingItemOf(undefined)).toBeNull();
+    expect(waitingItemOf(detail({ task: { ...detail().task, state: 'needs_human' } }))).toEqual({
+      label: 'See what it needs',
+      hash: null,
+    });
+  });
+
   it('shows neither for a run that has ended, nor the steer box', async () => {
     const ended = RUNS[1] as RunRecord;
     const view = open(ended, detail(), []);
@@ -480,8 +568,20 @@ describe('one primary action at most', () => {
     // The toggle says its state with `aria-pressed`, not with the beacon's colour.
     expect(screen.getByRole('button', { name: /^Follow/ }).hasAttribute('aria-pressed')).toBe(true);
     expect(primaryLabels()).toEqual([]);
-    expect(screen.getByRole('button', { name: 'Cancel run' })).toBeTruthy();
+    // S-25.4 (product/10's Run detail amendment): a danger secondary — red outline — never amber.
+    const cancel = screen.getByRole('button', { name: 'Cancel run' });
+    expect(cancel.className).toContain('text-danger');
+    expect(cancel.className).not.toContain('border-primary-line');
     expect(screen.queryByRole('button', { name: 'Re-run' })).toBeNull();
+  });
+
+  it('draws none inside the project frame either', async () => {
+    open(LIVE, detail(), MESSAGES, [PROJECT_ROW]);
+    await waitFor(() => {
+      expect(document.querySelector('[data-project-frame]')).not.toBeNull();
+    });
+    await screen.findByRole('textbox', { name: 'Steer the agent' });
+    expect(primaryLabels()).toEqual([]);
   });
 
   it('draws none on a completed run, whose Following toggle is not an action', async () => {
@@ -515,9 +615,25 @@ describe('the transcript as log steps', () => {
 
   it('offers no steer box to a run still waiting for a seat, which the server would refuse', async () => {
     const created: RunRecord = { ...LIVE, status: 'created', started_at: null };
-    open(created, detail(), []);
+    const view = open(created, detail(), []);
     expect(await screen.findByRole('button', { name: 'Cancel run' })).toBeTruthy();
     await screen.findByTestId('transcript-scroller');
     expect(screen.queryByRole('textbox', { name: 'Steer the agent' })).toBeNull();
+    // S-25.4: only a run nobody has taken yet is "waiting to be picked up".
+    expect(view.container.querySelector('[data-run-summary]')?.textContent).toContain(
+      'Runs onwaiting to be picked up',
+    );
+  });
+
+  it('words a seatless run from its own status (S-25.4)', () => {
+    expect(seatlessWords({ status: 'created', started_at: null })).toBe('waiting to be picked up');
+    expect(seatlessWords({ status: 'running', started_at: '2026-11-05T10:00:00.000Z' })).toBe(
+      'not recorded',
+    );
+    expect(seatlessWords({ status: 'starting', started_at: null })).toBe('not recorded');
+    expect(seatlessWords({ status: 'cancelled', started_at: null })).toBe('never picked up');
+    expect(seatlessWords({ status: 'completed', started_at: '2026-11-05T10:00:00.000Z' })).toBe(
+      'not recorded',
+    );
   });
 });

@@ -167,7 +167,9 @@ test.describe('on a laptop the top bar and the row under it stick', () => {
       element.scrollIntoView({ block: 'start' });
     });
     expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-    const frameBottom = await expectStuck(page, page.getByRole('navigation', { name: 'Primary' }));
+    // S-25.4: the run sits in its project's frame, so the row that sticks is the project's tabs.
+    const frameBottom = await expectStuck(page, page.locator('[data-project-tabs]'));
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
     const pane = await boxOf(scroller);
     const steer = await boxOf(page.getByLabel('Steer the agent'));
     expect(pane.top).toBeGreaterThanOrEqual(frameBottom);

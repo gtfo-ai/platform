@@ -482,11 +482,13 @@ export const useTaskAudit = (taskId: string) => {
   });
 };
 
-export const useRun = (runId: string) => {
+/** `enabled: false` reads nothing: the shell asks only on a run's page (S-25.4, `app/run-frame.ts`). */
+export const useRun = (runId: string, enabled = true) => {
   const { endpoints } = useServices();
   return useQuery({
     queryKey: queryKeys.run(runId),
     queryFn: () => endpoints.run(runId),
+    enabled,
     ...FOREVER,
   });
 };

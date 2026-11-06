@@ -43,22 +43,39 @@ import {
   TaskRow,
 } from './board-card.js';
 
-/** The columns, in pipeline order. Every state appears exactly once, so no task can be invisible. */
+/**
+ * The columns, in pipeline order, and the column each state belongs to when nothing waits on a
+ * person. Every state appears exactly once, so no task can be invisible. A paused task is *Active*
+ * by its state: a pause somebody chose waits on nobody, and a pause only a person ends (a budget, a
+ * take-over) is moved to *Needs you* by {@link boardColumnOf}, as every other waiting task is.
+ */
 export const BOARD_COLUMNS = [
   { id: 'queued', title: 'Queued', states: ['queued'] },
-  { id: 'active', title: 'Active', states: ['active', 'returned'] },
+  { id: 'active', title: 'Active', states: ['active', 'returned', 'paused'] },
   {
     id: 'waiting',
     title: 'Needs you',
-    states: ['waiting_answers', 'waiting_approval', 'needs_human', 'paused'],
+    states: ['waiting_answers', 'waiting_approval', 'needs_human'],
   },
   { id: 'review', title: 'Ready to merge', states: ['ready_for_merge', 'merged', 'retro'] },
   { id: 'done', title: 'Done', states: ['done', 'cancelled'] },
 ] as const;
 
+/** The column a state belongs to by itself; a state this build has not heard of is *Active*. */
 export const columnFor = (state: string): string =>
   BOARD_COLUMNS.find((column) => (column.states as readonly string[]).includes(state))?.id ??
   'active';
+
+/** The *Needs you* column's id. */
+export const NEEDS_YOU_COLUMN = 'waiting';
+
+/**
+ * The column a task is drawn in (S-25.4, product/10's 2026-11-06 Board amendment): *Needs you*
+ * whenever `ui/task-status.ts`' `needsYou` says so — the rule the card's ◆ and the task header read
+ * — whatever its stage; its state's column otherwise.
+ */
+export const boardColumnOf = (task: TaskListItem): string =>
+  needsYou(task) ? NEEDS_YOU_COLUMN : columnFor(task.state);
 
 /** Every published state, in the columns' order — the list view's state filter. */
 const STATES_IN_ORDER: readonly TaskState[] = BOARD_COLUMNS.flatMap((column) => [...column.states]);
@@ -292,8 +309,8 @@ const Columns = ({ items, projectKey, projectId, may, agents, nowMs }: ViewProps
     className="relative flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 xl:grid xl:grid-cols-5 xl:overflow-visible"
   >
     {BOARD_COLUMNS.map((column) => {
-      const tasks = items.filter((task) => columnFor(task.state) === column.id);
-      const beacon = column.id === 'waiting';
+      const tasks = items.filter((task) => boardColumnOf(task) === column.id);
+      const beacon = column.id === NEEDS_YOU_COLUMN;
       return (
         <section
           key={column.id}

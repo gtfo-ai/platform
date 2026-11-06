@@ -24,7 +24,7 @@ import { GearIcon } from '@primer/octicons-react/GearIcon';
 import { ProjectIcon } from '@primer/octicons-react/ProjectIcon';
 import { WorkflowIcon } from '@primer/octicons-react/WorkflowIcon';
 import { Link, Outlet, useMatches } from '@tanstack/react-router';
-import { type ReactElement, useSyncExternalStore } from 'react';
+import { type ReactElement, type ReactNode, useSyncExternalStore } from 'react';
 import { ReadinessLabel } from '../features/readiness-label.js';
 import { useTopics } from '../realtime/provider.js';
 import { buttonClassName } from '../ui/button.js';
@@ -121,7 +121,14 @@ const useFrameMatch = (): FrameMatch =>
     structuralSharing: true,
   });
 
-export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
+export const ProjectFrame = ({
+  projectKey,
+  children,
+}: {
+  readonly projectKey: string;
+  /** The page, for a route outside `/projects/$key` framed by its project (a run, S-25.4). */
+  readonly children?: ReactNode;
+}): ReactElement => {
   const { project, isPending, isError, error } = useProjectByKey(projectKey);
   const tasks = useProjectTasks(project?.id ?? null);
   const frame = useFrameMatch();
@@ -222,7 +229,7 @@ export const ProjectFrame = ({ projectKey }: { readonly projectKey: string }): R
         <UnderlineNav label="Project" items={items} bordered={false} />
       </div>
       <div data-project-page="" className={cx(pageWidth(frame.fullWidth), 'py-6')}>
-        <Outlet />
+        {children ?? <Outlet />}
       </div>
     </div>
   );

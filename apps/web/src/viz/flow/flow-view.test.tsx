@@ -3,9 +3,10 @@
  * real router, query client and published parsers are in the path:
  *
  * - the task page's Flow section: the canvas on a wide screen with the ordered list beside it for
- *   screen readers; the list instead of the canvas below 768 px or when *List* is pressed; a card
- *   opens the stage dialog — live activity, the log (untrusted text kept as text), the watch-only
- *   note, *Open run* — and a live `run:<id>` frame moves both;
+ *   screen readers; the stage timeline — the task page's list mode (S-25.4) — instead of the canvas
+ *   below 768 px or when *List* is pressed, never both; a card or a timeline entry opens the stage
+ *   dialog — live activity, the log (untrusted text kept as text), the watch-only note, *Open run* —
+ *   and a live `run:<id>` frame moves both;
  * - the Pipeline tab: the template picker, a stage's configuration in the dialog, the effective
  *   configuration folded below.
  *
@@ -283,14 +284,31 @@ beforeEach(() => {
 });
 
 describe('the task page’s Flow section', () => {
-  it('shows the list instead of the canvas below 768 px, with each stage’s state', async () => {
+  it('shows the stage timeline instead of the canvas below 768 px, and never both (S-25.4)', async () => {
     viewport(600);
     start(`/tasks/${TASK}`);
-    const list = await screen.findByRole('list', { name: 'Feature pipeline as a list' });
-    expect(list.getAttribute('data-flow-list')).toBe('shown');
+    const user = userEvent.setup();
+    // The task page's list mode is its timeline: the attempts newest first, with their runs.
+    const timeline = await screen.findByRole('list', { name: 'Timeline, newest first' });
     expect(screen.queryByTestId('flow-canvas-frame')).toBeNull();
+    // The pipeline is drawn once: no stage-card list beside the timeline.
+    expect(screen.queryByRole('list', { name: 'Feature pipeline as a list' })).toBeNull();
+    expect(document.querySelectorAll('[data-stage-timeline]')).toHaveLength(1);
     // No List toggle where there is no canvas to toggle from.
     expect(screen.queryByRole('button', { name: 'List' })).toBeNull();
+    // An entry's stage name opens the same stage dialog a card does.
+    await user.click(within(timeline).getByRole('button', { name: 'Implementation' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Implementation' });
+    expect(within(dialog).getByRole('link', { name: 'Open run' }).getAttribute('href')).toBe(
+      `/runs/${RUN}`,
+    );
+  });
+
+  it('says each stage’s state on the cards, the list a screen reader reads beside the canvas', async () => {
+    viewport(1280);
+    start(`/tasks/${TASK}`);
+    const list = await screen.findByRole('list', { name: 'Feature pipeline as a list' });
+    expect(list.getAttribute('data-flow-list')).toBe('screen-reader');
     // The current card says what the agent is doing — the agents read's newest entry, until the
     // transcript has delivered anything.
     await within(list).findByRole('button', {
@@ -307,7 +325,7 @@ describe('the task page’s Flow section', () => {
   });
 
   it('opens a stage’s run: live activity, the log as text, the seat, and follows the stream', async () => {
-    viewport(600);
+    viewport(1280);
     const app = start(`/tasks/${TASK}`);
     const user = userEvent.setup();
     const list = await screen.findByRole('list', { name: 'Feature pipeline as a list' });
@@ -424,23 +442,21 @@ describe('the task page’s Flow section', () => {
     expect(copies.length).toBe(FEATURE_GRAPH.nodes.length);
     expect(copies.every((button) => button.getAttribute('tabindex') === '-1')).toBe(true);
 
+    // Beside the canvas, the timeline is not drawn a second time (S-25.4).
+    expect(screen.queryByRole('list', { name: 'Timeline, newest first' })).toBeNull();
+
     const toggle = screen.getByRole('button', { name: 'List' });
     expect(toggle.getAttribute('aria-pressed')).toBe('false');
     await user.click(toggle);
     expect(toggle.getAttribute('aria-pressed')).toBe('true');
     expect(screen.queryByTestId('flow-canvas-frame')).toBeNull();
-    expect(
-      screen
-        .getByRole('list', { name: 'Feature pipeline as a list' })
-        .getAttribute('data-flow-list'),
-    ).toBe('shown');
-    expect(
-      screen
-        .getAllByRole('button', { name: /^Implementation, / })
-        .every((button) => button.getAttribute('tabindex') === null),
-    ).toBe(true);
+    // The task page's list mode is its stage timeline, in the canvas's place.
+    const timeline = screen.getByRole('list', { name: 'Timeline, newest first' });
+    expect(within(timeline).getAllByTestId('timeline-entry')).toHaveLength(2);
+    expect(screen.queryByRole('list', { name: 'Feature pipeline as a list' })).toBeNull();
     await user.click(toggle);
     expect(await screen.findByTestId('flow-canvas-frame')).toBeDefined();
+    expect(screen.queryByRole('list', { name: 'Timeline, newest first' })).toBeNull();
   });
 
   it('expands to the full screen and back, Escape included', async () => {

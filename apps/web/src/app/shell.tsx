@@ -69,6 +69,7 @@ import { CommandLayer } from './keyboard.js';
 import { isCurrentSection, NAV } from './nav.js';
 import { pageWidth, requestStartTicket, START_TICKET_ANCHOR } from './project-frame.js';
 import { useAgents, useInbox, useProjects, useProjectTasks, useSession } from './queries.js';
+import { useRunProjectKey } from './run-frame.js';
 import { useServices } from './services.js';
 
 export { isCurrentSection, NAV } from './nav.js';
@@ -520,8 +521,11 @@ export const AppShell = (): ReactElement => {
   useTopics(['org']);
   const counts = useFrameCounts();
   const projects = useProjects();
-  // Inside a project the route has a `$key`; the switcher names the project it resolves to.
-  const key = useParams({ strict: false, select: (params) => params.key });
+  // Inside a project the route has a `$key`; the switcher names the project it resolves to. A
+  // run's page has none in its URL and sits in its run's project's frame (S-25.4).
+  const routeKey = useParams({ strict: false, select: (params) => params.key });
+  const runKey = useRunProjectKey();
+  const key = routeKey ?? runKey ?? undefined;
   const project =
     key === undefined
       ? null

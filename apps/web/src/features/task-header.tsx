@@ -4,8 +4,9 @@
  *
  * - The title is the ticket's own title (untrusted, BD-022) with the key after it in muted text, as
  *   GitHub shows `#573`; a task whose ticket title was never read shows its key alone.
- * - A `StateLabel` and one meta line: the template, the stage in words, what it has cost so far and
- *   how long ago it was opened; then the `PhaseTrack`.
+ * - A `StateLabel` — its icon and its word from `ui/task-status.ts`' one rule, the board's column
+ *   and card's (S-25.4) — and one meta line: the ticket and merge request links, the template, the
+ *   stage in words, what it has cost so far and how long ago it was opened; then the `PhaseTrack`.
  * - **One primary action, chosen by the state** ({@link taskPrimaryAction}): *Hand back…* while a
  *   take-over is in force, *Answer* for an open question (it moves focus into the callout's answer
  *   box), *Review plan* for a pending approval (it moves focus onto the callout's approval card,
@@ -48,13 +49,13 @@ import {
   ActionMenuSeparator,
 } from '../ui/action-menu.js';
 import { activityOf } from '../ui/activity.js';
-import { stageLabel, TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
+import { stageLabel, titleCase } from '../ui/humanize.js';
 import { Badge, Button, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PageHeader } from '../ui/page-header.js';
 import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
 import { StateLabel } from '../ui/status.js';
-import { taskStatus } from '../ui/task-status.js';
-import { DownloadLink, UntrustedText } from '../ui/untrusted.js';
+import { taskStateLabel, taskStatus } from '../ui/task-status.js';
+import { DownloadLink, ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { approvalCardId } from './approval-card.js';
 import { reviewVerb } from './approval-text.js';
 import { liveStageRun } from './live-stage.js';
@@ -157,6 +158,12 @@ export const TaskHeader = ({
     canDecide: detail.can_decide_approval,
     canResume: detail.can_resume,
   });
+  const needsYouInput = {
+    state: task.state,
+    paused_reason: task.paused_reason,
+    open_asks: openQuestions.length + pendingApprovals.length,
+    taken_over: takenOver !== null,
+  };
   const liveRun = liveStageRun(runs);
   const doing = activityOf({
     run: liveRun,
@@ -384,21 +391,28 @@ export const TaskHeader = ({
         </>
       }
       state={
-        <StateLabel
-          status={taskStatus({
-            state: task.state,
-            paused_reason: task.paused_reason,
-            open_asks: openQuestions.length + pendingApprovals.length,
-            taken_over: takenOver !== null,
-          })}
-        >
-          {TASK_STATE_LABEL[task.state]}
-        </StateLabel>
+        // S-25.4: the icon and the word from the one rule the board's column and card read.
+        <StateLabel status={taskStatus(needsYouInput)}>{taskStateLabel(needsYouInput)}</StateLabel>
       }
       meta={
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-            <span>{titleCase(task.template)}</span>
+            {/*
+              S-25.4 (product/10's Header amendment): the ticket and the merge request beside the
+              key, rather than at the bottom of the right rail. Provider URLs, through
+              `ExternalLink` (`safeHref`): a link that is not http(s) is shown struck through.
+            */}
+            <span data-task-links="" className="inline-flex flex-wrap items-center gap-x-2">
+              <ExternalLink url={task.ticket.url} label="Ticket" className="text-link underline" />
+              {task.mr_ref === null || task.mr_ref === undefined ? null : (
+                <ExternalLink
+                  url={task.mr_ref.url}
+                  label="Merge request"
+                  className="text-link underline"
+                />
+              )}
+            </span>
+            <span>{`· ${titleCase(task.template)}`}</span>
             {currentStage === null ? null : <span>{`· ${stageLabel(currentStage)}`}</span>}
             <span>{`· ${formatUsd(task.cost_actual_usd)} so far`}</span>
             <span>{`· opened ${formatElapsed(task.created_at, nowMs)} ago`}</span>

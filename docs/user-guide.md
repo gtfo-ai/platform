@@ -655,9 +655,12 @@ are still shown, on a seat named from the run); and an escalated task with no qu
 
 **A project → Board**, the project's first tab. Five columns — **Queued**, **Active**, **Needs you**,
 **Ready to merge** and **Done** — each headed by its name and how many tasks it holds; *Needs you*
-is lit amber, because that is where your work is. Two placements to know: **a task paused by hand
-sits in Needs you** too (without the ◆, because a pause a person made waits on nobody), and **a
-merged task, and one in its retrospective, stays under Ready to merge** until it is done. On a
+is lit amber, because that is where your work is. **A task sits in Needs you whenever something
+waits on a person** — an open question, a pending approval, a task that needs a human, one its
+budget paused or one somebody took over — whatever stage it is in, so the column, the card's ◆ and
+the task page's state always say the same thing. Two placements to know: **a task paused by hand
+sits in Active** (a pause a person made waits on nobody; its card says *Paused*), and **a merged
+task, and one in its retrospective, stays under Ready to merge** until it is done. On a
 narrow screen the columns scroll sideways, one column at a time, rather than wrapping, so the
 pipeline still reads left to right.
 
@@ -678,7 +681,8 @@ pipeline still reads left to right.
 - a **◆** when the task waits on a person — a question, an approval, a task that needs a human, a
   task its budget paused or one somebody took over — with the number of open questions and pending
   approvals beside it (a task paused by hand is somebody's choice, and has none);
-- a badge per loop the task has gone round, against its limit: *Review 2/3* (two review rounds of three);
+- a badge per loop the task has gone round, in rounds against its limit: *Review round 2 of 3*
+  (*Review round 2* when the limit is not known);
 - *touches ACME-12 · 3 files* when the rebase gate found that another active task changes the same
   files (the comparison runs at the rebase gate, so no badge means *not compared yet*).
 
@@ -739,8 +743,10 @@ The task page reads like a pull request: what the task is, where it is, and what
 live on that task's topic.
 
 - **The header** is the ticket's title with its key after it in grey (the key alone when the
-  platform never read the title), the task's state as a label with its icon, and one line: the
-  template, the stage it is in, what it has cost so far and how long ago it was opened. Under it,
+  platform never read the title), the task's state as a label with its icon — *Needs you* whenever
+  something waits on a person, by the same rule as the board's column — and one line: links to the
+  **Ticket** and the **Merge request** (once there is one), the template, the stage it is in, what it
+  has cost so far and how long ago it was opened. Under it,
   the phase strip — one glyph per stage, the current one pulsing — names the stage and what the agent
   is doing now. On the right is **one button, chosen by what the task is waiting for**: *Hand back…*
   while you hold it (below), *Answer* when an agent asked a question (it takes you to the answer
@@ -763,12 +769,11 @@ live on that task's topic.
   checks."*) and *Return to stage…*, *Rework…* and *Retry stage…*, a budget pause with whose cap is
   spent and where it is raised, and an epic's proposed breakdown
   while a maintainer has something left to decide on it.
-- **Four tabs**: *Overview* (the flow, the running stage, the stage timeline, Ask the task and
-  feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status,
+- **Four tabs**: *Overview* (the flow — the graph, or its list: the stage timeline — the running
+  stage, Ask the task and feedback), *Artifacts* (the documents, by type and version), *Runs* (every run, with its status,
   model, cost and duration) and *Activity* (who did what). The tab is in the address (`?tab=runs`),
   so a link opens the same tab; a link to an artifact opens the Artifacts tab on it.
-- **On the right, Checks** — the merge box (below) — then the cost against the task's cap, then the
-  ticket and the merge request.
+- **On the right, Checks** — the merge box (below) — then the cost against the task's cap.
 
 **The Flow, at the top of the Overview**, is the task's own pipeline as a graph, the way it was frozen
 when the task started. Each card says where the task is: *Done* with how long the stage took and what
@@ -784,10 +789,12 @@ of thinking or writing) beside a **Log** that follows the end of the run until y
 the end* resumes), both updating as the agent works. It is watch-only and says where the agent runs
 (the platform's server or a named worker); *Open run* goes to the run page, where you can steer or
 stop it, and *Open artifact* opens what the stage wrote on this page. A stage no agent runs (a gate,
-Ready to merge) shows its configuration instead. **List**, **Full screen** and the narrow-screen list
-work as on the Pipeline tab (section 8).
+Ready to merge) shows its configuration instead. **Full screen** works as on the Pipeline tab
+(section 8). **List** — and a screen too narrow for the graph — shows the **stage timeline** in the
+graph's place, so the pipeline is drawn once, never as a graph with a second drawing under it.
 
-**The stage timeline lists the newest stage first**, and each entry opens the run of that stage
+**The stage timeline lists the newest stage first**; a stage's name opens the same panel a card of
+the graph does, and each entry opens the run of that stage
 attempt: *Open the run* (*Open the run (live)* while it is running) goes to its transcript, and when
 the attempt ran more than once — a retry of the same attempt, say — to the latest run. *Why the run
 did not start* goes to the run page of a run that never reached its agent, which says why instead of
@@ -957,8 +964,11 @@ not to obey. A shadow task posts none of this: each write is recorded as what it
 ### The checks panel
 
 The checks are a **merge box**, as on a pull request: one line on top — *All required checks pass*,
-*2 checks need you* (something failed, or waits on a person), or *3 required checks are not
-decided yet* — and one row per check with a status icon, its name and its value. Point at (or tab to)
+*2 checks need you* (a check failed, or a gate stopped for a person), or *3 required checks are not
+decided yet* — and one row per check with a status icon, its name and its value. **The line counts
+checks only**: an open question or a pending approval is the needs-you box's, above, so it is not
+counted as a check; while one waits, a second line says so (*Questions and approvals waiting for a
+person are in the box above*), and their rows read *1 · see above*. Point at (or tab to)
 a name for its definition; open a row for the sentence its value rests on — which attempt of a gate,
 what the estimate was computed from, which base the coverage was measured against, which packages and
 licences, which reviewers and why. A check that has not been made, or whose record cannot say what it
@@ -1062,7 +1072,7 @@ such, and so are the failing jobs past the fifth.
   accepted later), then keeps the row with your reason. Only a maintainer sees the checkboxes; everybody who can read the task can read
   the queue. The feature is off until a project turns on **Epic split** in its operating-mode
   features.
-- **Ask the task** (member) is a thread on the Overview, under the stage timeline: ask *"why did you choose X?"* and
+- **Ask the task** (member) is a thread on the Overview, under the Flow: ask *"why did you choose X?"* and
   the answer is written from the task's audit trail and artifacts, citing the exact run, artifact or
   action it rests on — each citation is a link into this application, never a link the model wrote.
   An ask starts a run and spends the project's money, which is why it needs a member rather than a
@@ -1072,13 +1082,15 @@ such, and so are the failing jobs past the fifth.
 ## 5. Run detail and the transcript
 
 Click a run — in the task's run list, under *Running now* on Home, or on the Agents screen. The page
-is laid out like a GitHub Actions job:
+sits inside its project, under the project's header and tabs (its address stays `/runs/<id>`), and is
+laid out like a GitHub Actions job:
 
-- **The header** leads back to the task, by its ticket key and title, and names the run: its status
-  icon, the stage, the role and the attempt (*Implementation · Developer · attempt 3*). The actions
-  are on the right. **Cancel run** is there while the run is live — the only coloured button then
-  (the steer box's *Steer* and the transcript's *Following* toggle are plain), and it asks before it
-  cancels. **Re-run ▾** is offered once the run has ended — the server refuses a re-run of a live
+- **The header** leads back to the task in its project, by its ticket key and title, and names the
+  run: its status icon, the stage, the role and the attempt (*Implementation · Developer · attempt
+  3*). The actions are on the right. **Cancel run** is there while the run is live — a red-outlined
+  button, never the amber one: while a run is live, watching is the job, so the page has no primary
+  button at all (the steer box's *Steer* and the transcript's *Following* toggle are plain), and it
+  asks before it cancels. **Re-run ▾** is offered once the run has ended — the server refuses a re-run of a live
   one — and becomes the primary button once a run has failed. The
   **···** menu holds **Take over…** (**Taken over: resume / hand back…** while the task is taken over), which opens the
   same take-over form and hand-back the task page has, and **Download transcript**, the run's
@@ -1088,7 +1100,9 @@ is laid out like a GitHub Actions job:
   (described under *Settings* below), where an unsuccessful run's unfinished work was saved, and the
   version of the role prompt the run was given.
 - **The summary strip** gives the status, where it runs (*Runs on* the platform server,
-  or a developer's remote worker by the name its owner gave it), once the run has ended **Ended
+  or a developer's remote worker by the name its owner gave it; *waiting to be picked up* while
+  nobody has taken the run yet, and *not recorded* when the platform no longer holds who ran it),
+  once the run has ended **Ended
   because** (*Succeeded*, *Ran out of turns*, *Hit its budget*, *Lost its worker*, …), the model, the
   effort, the cost (marked *est.* when the
   platform estimated it), the elapsed time, the turns and the tokens (in, out, and read from the prompt cache). Hover or focus a label for
@@ -1096,7 +1110,9 @@ is laid out like a GitHub Actions job:
   same words.
 - **While the run is live**, a *Now:* line says what the agent is doing, in the words the board and
   the Agents screen use (*Reading files*, *Running a command*, *No activity for 6 min*), with its
-  last few steps listed under it (a list a screen reader names *Live activity*).
+  last few steps listed under it (a list a screen reader names *Live activity*). When it says *Now:
+  Needs you*, it links to what the task waits for — *Answer the question →* onto the answer box,
+  *Review plan →* onto the approval, or *See what it needs →* — on the task's page.
 
 Then four tabs:
 

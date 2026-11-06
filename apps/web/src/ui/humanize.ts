@@ -294,6 +294,32 @@ export const LOOP_LABEL: Readonly<Record<string, string>> = {
 export const loopLabel = (slug: string): string =>
   Object.hasOwn(LOOP_LABEL, slug) ? (LOOP_LABEL[slug] as string) : titleCase(slug);
 
+/**
+ * What one round of each loop is called on the board's loop badge (S-25.4, product/10's Board
+ * amendment: *"Review round 2 of 3"*, never *"Review 2/3"*). A noun in the singular, because the
+ * badge counts one round at a time; `humanize.test.ts` holds it to the same domain list as
+ * {@link LOOP_LABEL}.
+ */
+export const LOOP_ROUND_LABEL: Readonly<Record<string, string>> = {
+  code_review: 'Review',
+  business_review: 'Acceptance',
+  ci_fix: 'CI fix',
+  human_rounds: 'Human review',
+  refinement_questions: 'Question',
+  architecture_revisions: 'Plan revision',
+  rebase: 'Conflict fix',
+  rebase_rechecks: 'Re-check',
+  dependency_policy: 'Dependency check',
+};
+
+/** *Review round 2 of 3*, or *Review round 2* when the loop's limit is not known. */
+export const loopRoundLabel = (slug: string, count: number, limit?: number): string => {
+  const noun = Object.hasOwn(LOOP_ROUND_LABEL, slug)
+    ? (LOOP_ROUND_LABEL[slug] as string)
+    : titleCase(slug);
+  return `${noun} round ${count}${limit === undefined ? '' : ` of ${limit}`}`;
+};
+
 /** 1 → "1st", 2 → "2nd", 11 → "11th", 23 → "23rd". */
 export const ordinal = (value: number): string => {
   const tens = value % 100;

@@ -110,8 +110,11 @@ test('the board puts each task in the column its state belongs to', async ({ pag
   // TD-033's word for the waiting column (S-23.2): `needs_human` reads "Needs you".
   const waiting = page.getByRole('region', { name: 'Needs you' });
   // A card is an article named by its ticket key (S-23.9a); the title is its link into the task.
-  const demo1 = active.getByRole('article', { name: 'DEMO-1' });
+  // S-25.4: DEMO-1 is `active` by state but has an open question and a pending approval, so the
+  // one needs-you rule puts it under Needs you — the column, its ◆ and its header agree.
+  const demo1 = waiting.getByRole('article', { name: 'DEMO-1' });
   await expect(demo1).toBeVisible();
+  await expect(active.getByRole('article', { name: 'DEMO-1' })).toHaveCount(0);
   await expect(waiting.getByRole('article', { name: 'DEMO-2' })).toBeVisible();
   // The stage's human name (TD-033), not its id, under the card's phase strip — whose current
   // stage is the one marked as the step.
@@ -120,9 +123,9 @@ test('the board puts each task in the column its state belongs to', async ({ pag
     'title',
     'Implementation: current',
   );
-  // The iteration counter product/10 asks for ("review 2/3" in its example; this fixture's loop
-  // has no frozen limit, so the count alone).
-  await expect(demo1.getByText('Review 1', { exact: true })).toBeVisible();
+  // The iteration counter product/10 asks for, as rounds (S-25.4: "Review round 2 of 3" in its
+  // example; this fixture's loop has no frozen limit, so the round alone).
+  await expect(demo1.getByText('Review round 1', { exact: true })).toBeVisible();
   // DEMO-1 has an open question and a pending approval: the needs-you ◆ and their count.
   await expect(demo1.locator('[data-needs-you] [data-asks="2"]')).toBeVisible();
   // The columns scroll sideways below `xl` rather than wrapping.
@@ -149,6 +152,15 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
 
   await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
+  // S-25.4: the ticket and merge request links are in the header, beside the key.
+  await expect(
+    page.locator('[data-task-links]').getByText('Ticket', { exact: true }),
+  ).toBeVisible();
+  // S-25.4: the timeline is the Flow's list mode, not a second section under the canvas.
+  await expect(page.getByTestId('flow-canvas-frame')).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Timeline, newest first' })).toHaveCount(0);
+  await page.getByTestId('task-flow').getByRole('button', { name: 'List' }).click();
+  await expect(page.getByTestId('flow-canvas-frame')).toHaveCount(0);
   // Scoped to the timeline: the flow's cards and the phase strip name the stage too. The timeline
   // names the stage in words (TD-033), on the Overview tab the page opens on (S-23.9b).
   // S-23.5: the flow's list of stages is an `<ol>` too, so the timeline is named.
@@ -159,6 +171,9 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   ).toBeVisible();
   // The stage's outcome word, through the word→sentence table (WP-73, backlog 213).
   await expect(page.getByText('Verdict: approve.')).toBeVisible();
+  // S-25.4: a task nobody has asked anything is *Ask the task*'s empty state, not an error.
+  await expect(page.getByText('No questions yet')).toBeVisible();
+  await expect(page.getByText('The thread could not be loaded.')).toHaveCount(0);
   // The runs are the Runs tab since S-23.9b; the rail beside it stays.
   await page.getByRole('navigation', { name: 'Task' }).getByRole('link', { name: /^Runs/ }).click();
   await expect(
@@ -761,6 +776,16 @@ test('the run screen retries with a model and an effort, and sends stage-scoped 
 }) => {
   await page.goto(`/runs/${IDS.run}`);
   await expect(page.getByRole('heading', { name: 'implementation · developer' })).toBeVisible();
+  // S-25.4: the run sits inside its project's frame with its URL unchanged, and its *Now: Needs
+  // you* (DEMO-1 has an open question) links to the answer box on the task's page in the project.
+  await expect(
+    page.getByRole('navigation', { name: 'Project' }).getByRole('link', { name: 'Board' }),
+  ).toHaveAttribute('aria-current', 'page');
+  await expect(page).toHaveURL(`/runs/${IDS.run}`);
+  await expect(page.getByRole('link', { name: 'Answer the question →' })).toHaveAttribute(
+    'href',
+    new RegExp(`^/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}#answer-`),
+  );
 
   // WP-85: what became of each steer, read from the command log and said in words.
   const sent = page.getByRole('region', { name: 'Commands sent to this run' });
@@ -859,7 +884,9 @@ test('a queued task says there is no stage to act on rather than offering a brok
 }) => {
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskBug}`);
   await expect(page.getByRole('heading', { name: 'DEMO-2' })).toBeVisible();
-  // S-23.9b: the timeline says there is none, and the menu offers no stage command at all.
+  // S-23.9b: the timeline says there is none, and the menu offers no stage command at all. The
+  // timeline is the Flow's list mode since S-25.4.
+  await page.getByTestId('task-flow').getByRole('button', { name: 'List' }).click();
   await expect(page.getByText('No stages yet')).toBeVisible();
   await page.getByRole('button', { name: 'Task actions' }).click();
   await expect(page.getByRole('menuitem', { name: 'Cancel task…' })).toBeVisible();

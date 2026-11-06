@@ -13,7 +13,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { checksSummary, dependencyStatus, gateStatus, tamperStatus } from './task-checks-text.js';
+import {
+  CHECKS_CALLOUT_POINTER,
+  checksSummary,
+  dependencyStatus,
+  gateStatus,
+  tamperStatus,
+} from './task-checks-text.js';
 import { taskPrimaryAction } from './task-header.js';
 import { currentTaskTab, taskSearchSchema, taskTabSearch } from './task-tab.js';
 
@@ -212,12 +218,16 @@ const start = (
   task: TaskDetailResponse,
   at = `/tasks/${TASK}`,
   projects: readonly unknown[] = [],
+  /** A read answered differently, by its path. */
+  answers: Readonly<Record<string, () => Response>> = {},
 ) => {
   const sent: Sent[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     const path = new URL(url, 'http://localhost').pathname;
     if (url.includes('/api/auth/get-session')) return json(SESSION);
+    const answer = init?.method === 'POST' ? undefined : answers[path];
+    if (answer !== undefined) return answer();
     if (init?.method === 'POST') {
       sent.push({ path, body: JSON.parse(String(init.body ?? '{}')) });
       return json({
@@ -303,6 +313,44 @@ describe('the header', () => {
     expect(main.textContent).toContain('· Implementation');
     expect(main.textContent).toContain('· $1.20 so far');
     expect(within(main).getByRole('list', { name: 'Pipeline stages' })).toBeTruthy();
+  });
+
+  it('reads Needs you, not Active, for an active task with an open question and an approval (S-25.4)', async () => {
+    start(detail({ questions: [QUESTION_ROW], approvals: [APPROVAL_ROW] }, { state: 'active' }));
+    await screen.findByRole('heading', { level: 1 });
+    await waitFor(() => {
+      expect(document.querySelector('[data-state-label="needs_you"]')?.textContent).toBe(
+        'Needs you',
+      );
+    });
+    expect(document.querySelector('[data-state-label="running"]')).toBeNull();
+  });
+
+  it('puts the ticket and merge request links in the header, beside the key (S-25.4)', async () => {
+    start(
+      detail(
+        {},
+        {
+          mr_ref: {
+            provider: 'gitlab',
+            project_path: 'acme/api',
+            iid: 7,
+            url: 'https://git.example.invalid/acme/api/-/merge_requests/7',
+          },
+        },
+      ),
+    );
+    await screen.findByRole('heading', { level: 1 });
+    const links = document.querySelector('[data-task-links]') as HTMLElement;
+    expect(within(links).getByRole('link', { name: 'Ticket' }).getAttribute('href')).toBe(
+      TASK_ROW.ticket.url,
+    );
+    expect(within(links).getByRole('link', { name: 'Merge request' }).getAttribute('href')).toBe(
+      'https://git.example.invalid/acme/api/-/merge_requests/7',
+    );
+    // Once: the right rail no longer repeats them at its bottom.
+    expect(screen.getAllByRole('link', { name: 'Ticket' })).toHaveLength(1);
+    expect(screen.getAllByRole('link', { name: 'Merge request' })).toHaveLength(1);
   });
 
   it('shows the key alone when the ticket’s title was never read', async () => {
@@ -765,6 +813,34 @@ describe('the feedback toggles', () => {
   });
 });
 
+/**
+ * S-25.4 (research/21 S04): a task nobody has asked anything is *Ask the task*'s empty state. The
+ * server answers that with `200 { items: [] }` (`apps/server/src/routes/asks.ts`), and only that is
+ * empty: a refusal — a task that is gone, a role the read refuses — stays an error, by name.
+ */
+describe('Ask the task', () => {
+  const ASKS = `/api/tasks/${TASK}/asks`;
+
+  it('shows the empty state for a thread with no question, and no error', async () => {
+    start(detail(), `/tasks/${TASK}`, [], { [ASKS]: () => json({ items: [] }) });
+    expect(await screen.findByText('No questions yet')).toBeTruthy();
+    expect(screen.queryByText('The thread could not be loaded.')).toBeNull();
+  });
+
+  it.each([
+    [404, 'not_found'],
+    [403, 'forbidden'],
+  ])('keeps a %i refusal an error, never the empty state', async (status, code) => {
+    start(detail(), `/tasks/${TASK}`, [], {
+      [ASKS]: () => json({ error: { code, message: 'refused by the fake' } }, status),
+    });
+    expect(
+      await screen.findByText('The thread could not be loaded.', {}, { timeout: 4_000 }),
+    ).toBeTruthy();
+    expect(screen.queryByText('No questions yet')).toBeNull();
+  });
+});
+
 describe('the tabs', () => {
   const tabs = () => screen.getByRole('navigation', { name: 'Task' });
   const current = () =>
@@ -780,7 +856,7 @@ describe('the tabs', () => {
     start(WITH_ARTIFACT);
     await screen.findByRole('navigation', { name: 'Task' });
     expect(current()).toBe('Overview');
-    expect(screen.getByText('Stage timeline')).toBeTruthy();
+    expect(screen.getByTestId('task-flow')).toBeTruthy();
     // The counts are the task's own.
     expect(within(tabs()).getByRole('link', { name: /Artifacts/ }).textContent).toBe('Artifacts1');
 
@@ -790,7 +866,7 @@ describe('the tabs', () => {
     });
     expect(current()).toBe('Activity');
     expect(await screen.findByText('Who did what')).toBeTruthy();
-    expect(screen.queryByText('Stage timeline')).toBeNull();
+    expect(screen.queryByTestId('task-flow')).toBeNull();
   });
 
   it('selects Artifacts for ?artifact=, renders the body as text with the raw JSON behind Details', async () => {
@@ -872,11 +948,33 @@ describe('the merge box', () => {
     expect(screen.getByRole('list', { name: 'Merge-readiness checks' }).children).toHaveLength(13);
   });
 
-  it('counts what needs a person first', async () => {
+  it('counts what needs a person first — checks only, the callout’s items pointed at (S-25.4)', async () => {
     start(
       detail({ questions: [QUESTION_ROW], stages: [stage('ci_gate', 1, 'returned', 'returned')] }),
     );
-    expect((await screen.findByText(/need you/)).textContent).toBe('2 checks need you');
+    // The returned CI gate is the one check; the open question is the callout's, not a second.
+    await waitFor(() => {
+      expect(document.querySelector('[data-checks-summary]')?.textContent).toBe(
+        '1 check needs you',
+      );
+    });
+    expect(document.querySelector('[data-checks-callout]')?.textContent).toBe(
+      CHECKS_CALLOUT_POINTER,
+    );
+    // The row stays (product/10:38 lists it), and says where it is answered.
+    expect(document.querySelector('[data-check="questions"]')?.textContent).toContain(
+      '1 · see above',
+    );
+  });
+
+  it('says nothing about the callout when nothing waits there', async () => {
+    start(detail({ stages: [stage('ci_gate', 1, 'returned', 'returned')] }));
+    await waitFor(() => {
+      expect(document.querySelector('[data-checks-summary]')?.textContent).toBe(
+        '1 check needs you',
+      );
+    });
+    expect(document.querySelector('[data-checks-callout]')).toBeNull();
   });
 
   it('draws the cost against the cap as a meter, with no inline style', async () => {
@@ -914,15 +1012,32 @@ describe('the merge box', () => {
         { status: 'success', required: true },
         { status: 'skipped', required: true },
       ]),
-    ).toEqual({ status: 'waiting', text: '1 required check is not decided yet' });
+    ).toEqual({ status: 'waiting', text: '1 required check is not decided yet', callout: null });
     expect(
       checksSummary([
         { status: 'success', required: true },
         { status: 'queued', required: false },
       ]),
-    ).toEqual({ status: 'success', text: 'All required checks pass' });
+    ).toEqual({ status: 'success', text: 'All required checks pass', callout: null });
     expect(checksSummary([{ status: 'needs_you', required: false }]).text).toBe(
       '1 check needs you',
     );
+    // S-25.4: a callout item is never a check — not counted, and not a required row left open.
+    expect(
+      checksSummary([
+        { status: 'success', required: true },
+        { status: 'needs_you', required: true, callout: true },
+      ]),
+    ).toEqual({
+      status: 'success',
+      text: 'All required checks pass',
+      callout: CHECKS_CALLOUT_POINTER,
+    });
+    expect(
+      checksSummary([
+        { status: 'success', required: true },
+        { status: 'success', required: true, callout: true },
+      ]).callout,
+    ).toBeNull();
   });
 });

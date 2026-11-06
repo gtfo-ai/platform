@@ -758,6 +758,11 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       // S-23.5: each task's frozen graph, and the project's enabled templates.
       for (const [taskId, graph] of Object.entries(fixtures.taskPipelines)) {
         routes[`/api/tasks/${taskId}/pipeline`] = graph;
+        // S-25.4: what the server answers a task with no ask and no audit row — an empty page,
+        // never a 404 (`apps/server/src/routes/asks.ts`). The fake answered 404, and the task
+        // page's *Ask the task* showed "The thread could not be loaded — not found" for it.
+        routes[`/api/tasks/${taskId}/asks`] = { items: [] };
+        routes[`/api/tasks/${taskId}/audit`] = { items: [] };
       }
       routes[`/api/projects/${fixtures.IDS.project}/pipeline`] = fixtures.projectPipelines;
       const body = routes[path];

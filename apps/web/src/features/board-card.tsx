@@ -10,7 +10,7 @@
  *    activity's sub-label from the agents read; otherwise the state's word beside its status icon;
  *  - time in the current stage · the measured cost (and the runs it leaves out);
  *  - the needs-you ◆ and the count of what waits (open questions, pending approvals), the amber
- *    pulse while an agent is working, the loop badges (*Review 2/3*), the conflict badge.
+ *    pulse while an agent is working, the loop badges (*Review round 2 of 3*), the conflict badge.
  *
  * The menu's commands are the task page's, through the same `useTaskCommands` hook, so each sends
  * the same body with the same `Idempotency-Key` semantics: *Pause*, *Resume* and *Cancel* with the
@@ -54,12 +54,12 @@ import {
 import { Counter } from '../ui/counter.js';
 import { cx } from '../ui/cx.js';
 import { Dialog } from '../ui/dialog.js';
-import { loopLabel, stageLabel, TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
+import { loopRoundLabel, stageLabel, titleCase } from '../ui/humanize.js';
 import { Badge, Button, ErrorNotice, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
 import { ROW_LINK_HOST, rowLink } from '../ui/row-link.js';
 import { StatusIcon } from '../ui/status.js';
-import { needsYou as needsYouOf } from '../ui/task-status.js';
+import { needsYou as needsYouOf, taskStateLabel } from '../ui/task-status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 // A tooltip is text the browser renders, not markup — but it is still provider text, and
 // `sanitiseUntrusted` is what strips the bidi overrides and control characters that make a line
@@ -81,6 +81,10 @@ export const asksOf = (task: TaskListItem): number => task.open_questions + task
  */
 export const needsYou = (task: TaskListItem): boolean =>
   needsYouOf({ state: task.state, paused_reason: task.paused_reason, open_asks: asksOf(task) });
+
+/** The state's word on the card and the row — the task header's, from the same rule. */
+export const cardStateLabel = (task: TaskListItem): string =>
+  taskStateLabel({ state: task.state, paused_reason: task.paused_reason, open_asks: asksOf(task) });
 
 /** "2 open questions and 1 approval waiting" — the count badge's reading. */
 export const asksLabel = (task: TaskListItem): string => {
@@ -112,20 +116,17 @@ export const stageEnteredAt = (task: TaskListItem): string | null => {
 };
 
 /**
- * The loop badges: *Review 2/3* when the task's frozen limit is known, the count alone when it
- * is not (`loop_limits: null`, or a loop the limits do not name). A loop not yet gone round is not
- * shown.
+ * The loop badges, as rounds (S-25.4, product/10's Board amendment): *Review round 2 of 3* when the
+ * task's frozen limit is known, *Review round 2* when it is not (`loop_limits: null`, or a loop the
+ * limits do not name). A loop not yet gone round is not shown.
  */
 export const loopBadges = (task: TaskListItem): readonly { loop: string; text: string }[] =>
   Object.entries(task.iteration_counters)
     .filter(([, count]) => count > 0)
-    .map(([loop, count]) => {
-      const limit = task.loop_limits?.[loop];
-      return {
-        loop,
-        text: `${loopLabel(loop)} ${count}${limit === undefined ? '' : `/${limit}`}`,
-      };
-    });
+    .map(([loop, count]) => ({
+      loop,
+      text: loopRoundLabel(loop, count, task.loop_limits?.[loop]),
+    }));
 
 /** The live run's newest entry, in `activityOf`'s words. */
 const latestOf = (agent: AgentEntry): LatestEntry | null =>
@@ -397,7 +398,7 @@ export const Phase = ({
       {live ? null : (
         <span data-task-state={task.state} className="inline-flex items-center gap-1 text-xs">
           <StatusIcon status={ACTIVITY_META[activity.activity].icon} decorative size={12} />
-          <span className="text-fg-muted">{TASK_STATE_LABEL[task.state]}</span>
+          <span className="text-fg-muted">{cardStateLabel(task)}</span>
         </span>
       )}
     </div>
@@ -751,8 +752,8 @@ export const TaskRow = ({ task, projectKey, projectId, may, agent, nowMs }: Task
           <KeyLine task={task} />
           <span className="text-xs text-fg-muted">
             {task.current_stage === null || task.current_stage === undefined
-              ? TASK_STATE_LABEL[task.state]
-              : `${stageLabel(task.current_stage)} · ${TASK_STATE_LABEL[task.state]}`}
+              ? cardStateLabel(task)
+              : `${stageLabel(task.current_stage)} · ${cardStateLabel(task)}`}
           </span>
           <MetaLine task={task} nowMs={nowMs} />
         </span>
