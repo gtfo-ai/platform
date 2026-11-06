@@ -1142,7 +1142,10 @@ empty, because the server claims within `fallback_after`. A tampered worker can 
      - an environment scrubbed of every token variable;
      - a fresh temporary `HOME`/`CLAUDE_CONFIG_DIR`, deleted afterwards;
      - a wide terminal;
-     - one session at a time, a 10 min cap, and *Cancel*.
+     - one session at a time, a 10 min cap, and *Cancel* in every phase — `checking` included.
+       After the code, a token must appear within 60 s, or the session ends `no_token_after_code`
+       and the page says to paste a token (amended 2026-11-06, the owner's report of a person
+       stuck at *Checking with Claude…*).
    - **What it reads**, and nothing else:
      - the sign-in URL: a primary *Open Claude sign-in* through `safeHref`, only if it is `https:` on the Anthropic host list the slice measures;
      - the paste prompt: a field, *Paste the code Claude shows you*;
@@ -1150,6 +1153,9 @@ empty, because the server claims within `fallback_after`. A tampered worker can 
    - **The localhost callback cannot complete**, because the CLI listens inside the container on an unpublished port. Pasting the code is the route (V-WM10).
    - **Never logged.** CLI output enters no log line or tail. The code and the token join the exact redactor at once.
    - **Fallback, always visible:** *Paste a token instead*, with `claude setup-token` in a `CopyField`.
+     A paste **always wins** over a browser sign-in in progress: that session is ended and the
+     pasted token checked. Whitespace inside a paste is removed (a terminal wraps it), and another
+     shape is refused on the page and by the worker (`400`) before any check (amended 2026-11-06).
    - **Check and store.** The token is checked once with the cheapest call the pinned CLI offers (V-WM10; at most one no-tool, one-turn `claude -p`). It is stored as `claude-token`: 0600, atomic, read at each run start, and in no request to any core (WP-283 (2)'s capture test extended).
    - **Sign out / change Claude account** (idle only, *Drain* first) deletes the file. It does not revoke the token at Anthropic, and the page says so.
 5. **(c) Approve this machine.**

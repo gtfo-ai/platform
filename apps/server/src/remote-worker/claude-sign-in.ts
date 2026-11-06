@@ -9,7 +9,8 @@
  *  - an environment **scrubbed** of every token variable: `PATH`, a fresh temporary `HOME` and
  *    `CLAUDE_CONFIG_DIR` (deleted afterwards), `TERM`, a locale — nothing of the worker's own;
  *  - a **wide terminal** (500 columns), so the token is printed on one line;
- *  - **one session at a time**, a ten-minute cap, and *Cancel*.
+ *  - **one session at a time**, a ten-minute cap, a minute from the code to the token, and
+ *    *Cancel* in every phase — and a pasted token always ends a session (it wins over it).
  *
  * What it reads off the screen, and nothing else (the screen text is not a contract — the measured
  * transcript is replayed by `claude-sign-in.test.ts` and re-measured at every CLI pin bump, and
@@ -18,7 +19,8 @@
  *  - the **sign-in address**, offered only when it is `https:` on {@link CLAUDE_SIGN_IN_HOSTS};
  *  - the **paste prompt** (*Paste code here if prompted*): the container's localhost callback can
  *    never complete, so pasting the code is the route;
- *  - the **token**, by shape (`sk-ant-oat01-…`), joined across a wrapped line if a terminal wrapped it.
+ *  - the **token**, by shape (`sk-ant-oat01-…`), joined across a wrapped line if a terminal wrapped it
+ *    — and, failing that, read whitespace-insensitively to its measured length ({@link looseTokenOf}).
  *
  * **Nothing the CLI prints is logged**, and the pasted code and the token are handed to the
  * worker's exact-value redactor (`onSecret`) the moment they are known. The token is then **checked
@@ -32,7 +34,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Logger } from '@platform/application';
-import type { WorkerLocalSignInFailure, WorkerLocalSignInPhase } from '@platform/contracts';
+import {
+  CLAUDE_OAUTH_TOKEN_SHAPE,
+  normaliseClaudeToken,
+  type WorkerLocalSignInFailure,
+  type WorkerLocalSignInPhase,
+} from '@platform/contracts';
 
 /**
  * The hosts a sign-in address may name (V-WM10, measured 2026-11-05 with CLI 2.1.267: the CLI
@@ -53,6 +60,11 @@ export const CLAUDE_TOKEN_LENGTH = 108;
 
 /** One sign-in's cap (TD-031's first-run amendment §4). */
 export const SIGN_IN_TIMEOUT_MS = 10 * 60_000;
+/**
+ * How long a token may take to appear after the code is written to the CLI. The measured CLI
+ * prints it within seconds; past this the screen is one this worker does not read.
+ */
+export const AFTER_CODE_TIMEOUT_MS = 60_000;
 /** The token check's cap: one turn, no tools. */
 export const TOKEN_CHECK_TIMEOUT_MS = 120_000;
 /** How much of the CLI's screen output is kept to read — the tail, which is where the token is. */
@@ -144,6 +156,26 @@ export const tokenOf = (text: string): string | null => {
     '\n',
   );
   return /\S/.test(rest) && !/^[A-Za-z0-9_-]/.test(rest) ? token : null;
+};
+
+/**
+ * The token read **whitespace-insensitively**, for a screen {@link tokenOf} does not read: from the
+ * last prefix, the token's characters with every whitespace between them skipped — Ink's cursor
+ * moves render as spaces and a wrap as a line break, indented or not — stopping at anything else.
+ * Taken only once {@link CLAUDE_TOKEN_LENGTH} characters are there, never before: a join that is
+ * wrong is refused by Claude at the check (`token_rejected`), so it can end a sign-in, never hang it.
+ */
+export const looseTokenOf = (text: string): string | null => {
+  const start = text.lastIndexOf(CLAUDE_TOKEN_PREFIX);
+  if (start < 0) return null;
+  let token = '';
+  for (const char of text.slice(start)) {
+    if (token.length >= CLAUDE_TOKEN_LENGTH) break;
+    if (/\s/.test(char)) continue;
+    if (!/[A-Za-z0-9_-]/.test(char)) break;
+    token += char;
+  }
+  return token.length >= CLAUDE_TOKEN_LENGTH ? token : null;
 };
 
 /** The check's verdict (V-WM10): Claude accepted it, refused it, or could not be asked. */
@@ -287,25 +319,60 @@ export interface ClaudeSignInOptions {
   /** A token Claude accepted: store it and use it (`runtime.ts`). */
   readonly onToken: (token: string) => Promise<void>;
   readonly timeoutMs?: number;
+  /** How long after the code a token may take to appear ({@link AFTER_CODE_TIMEOUT_MS}). */
+  readonly afterCodeTimeoutMs?: number;
 }
 
+/** Refused because something of the current sign-in runs (a session, or a token check). */
 export class SignInBusyError extends Error {
   override readonly name = 'SignInBusyError';
 }
 
+/** A pasted token that is not the shape `claude setup-token` prints — refused before any check. */
+export class InvalidClaudeTokenError extends Error {
+  override readonly name = 'InvalidClaudeTokenError';
+}
+
 export interface ClaudeSignIn {
   status(): ClaudeSignInStatus;
-  /** Starts `claude setup-token`; refused while one runs or a check is in flight. */
+  /** Starts `claude setup-token`; refused while one runs or the current check is in flight. */
   start(): Promise<void>;
-  /** Ends the session (or forgets a failure). */
+  /** Ends the session or the check, in any phase (a check's verdict is then discarded). */
   cancel(): void;
   /** Writes the code Claude's page showed to the CLI; refused unless it asked for one. */
   submitCode(code: string): void;
-  /** Checks a pasted token, in the background; refused while a session or a check runs. */
+  /**
+   * Checks a pasted token, in the background. **A paste always wins over a browser sign-in** —
+   * starting, waiting for the code, or waiting for the token after it: that session is ended.
+   * Refused only while a token check of the current sign-in runs ({@link SignInBusyError}), and
+   * a token of another shape before anything runs ({@link InvalidClaudeTokenError}). Whitespace
+   * inside the paste is removed first ({@link normaliseClaudeToken}).
+   */
   acceptToken(token: string): void;
-  /** Ends whatever runs and waits for its files to be removed. */
+  /**
+   * A session or the current check runs — the worker is then not idle for an update's drain, so
+   * an update never interrupts a sign-in (bounded by the session cap, the after-code minute and
+   * the check's cap).
+   */
+  inProgress(): boolean;
+  /** Ends whatever runs and waits for its files to be removed — every check included. */
   close(): Promise<void>;
 }
+
+/** Whether `claude -p --output-format json` printed a result line at all (logged, never its text). */
+const resultLineSeen = (stdout: string): boolean =>
+  stdout.split('\n').some((line) => {
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      return (
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        (parsed as { type?: unknown }).type === 'result'
+      );
+    } catch {
+      return false;
+    }
+  });
 
 export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn => {
   let phase: WorkerLocalSignInPhase = 'idle';
@@ -319,8 +386,13 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
     done: boolean;
     readonly finished: Promise<void>;
     readonly timer: ReturnType<typeof setTimeout>;
+    /** The after-code bound, armed by `submitCode`. */
+    codeTimer: ReturnType<typeof setTimeout> | null;
   } | null = null;
-  let checking: Promise<void> | null = null;
+  /** Every check still running — a superseded one included, so `close()` awaits it. */
+  const checks = new Set<Promise<void>>();
+  /** The generation of the check whose verdict still counts, while it runs. */
+  let checkingGeneration: number | null = null;
   let generation = 0;
 
   const fail = (why: WorkerLocalSignInFailure): void => {
@@ -335,17 +407,24 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
     session = null;
     current.done = true;
     clearTimeout(current.timer);
+    if (current.codeTimer !== null) clearTimeout(current.codeTimer);
     current.cli.kill();
   };
+
+  /** Only the current sign-in's check blocks; a superseded one runs on and is discarded. */
+  const checkRunning = (): boolean => checkingGeneration === generation;
 
   const check = (token: string): void => {
     phase = 'checking';
     failure = null;
     url = null;
     const mine = generation;
-    checking = (async () => {
+    checkingGeneration = mine;
+    const running: Promise<void> = (async () => {
       const home = await mkdtemp(path.join(tmpdir(), 'claude-check-'));
       let verdict: TokenCheck = 'unknown';
+      let exitCode: number | null = null;
+      let resultSeen = false;
       try {
         const answer = await options.launcher.run(
           [
@@ -362,6 +441,8 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
           TOKEN_CHECK_TIMEOUT_MS,
         );
         verdict = tokenCheckOf(answer.stdout);
+        exitCode = answer.code;
+        resultSeen = resultLineSeen(answer.stdout);
       } catch {
         verdict = 'unknown';
       } finally {
@@ -380,16 +461,19 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
         }
         return;
       }
+      // The exit code and whether a result line came — never a byte of what the CLI printed.
       options.logger.warn(
-        { verdict },
+        { verdict, exit_code: exitCode, result_line_seen: resultSeen },
         verdict === 'rejected'
           ? 'Claude did not accept the token; nothing is stored'
           : 'the Claude token could not be checked; nothing is stored',
       );
       fail(verdict === 'rejected' ? 'token_rejected' : 'check_failed');
     })().finally(() => {
-      checking = null;
+      checks.delete(running);
+      if (checkingGeneration === mine) checkingGeneration = null;
     });
+    checks.add(running);
   };
 
   const read = (): void => {
@@ -402,7 +486,7 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
       return;
     }
     const after = renderTerminalText(current.output.slice(current.codeAt));
-    const token = tokenOf(after);
+    const token = tokenOf(after) ?? looseTokenOf(after);
     if (token !== null) {
       options.onSecret('claude_code_oauth_token_signed_in', token);
       endSession();
@@ -415,17 +499,24 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
     }
   };
 
-  const busy = (): boolean => session !== null || checking !== null;
+  const busy = (): boolean => session !== null || checkRunning();
 
   return {
     status: () => ({ phase, url, failure }),
+    inProgress: busy,
     start: async () => {
       if (busy()) throw new SignInBusyError('a sign-in is already running');
       generation += 1;
       phase = 'starting';
       failure = null;
       url = null;
+      const mine = generation;
       const home = await mkdtemp(path.join(tmpdir(), 'claude-sign-in-'));
+      if (mine !== generation) {
+        // Cancelled, or a token pasted, while the home was made: this session never starts.
+        await rm(home, { recursive: true, force: true }).catch(() => undefined);
+        return;
+      }
       let cli: LaunchedCli;
       try {
         cli = options.launcher.setupToken(scrubbedCliEnvironment(home));
@@ -451,6 +542,7 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
             fail('timed_out');
           }
         }, options.timeoutMs ?? SIGN_IN_TIMEOUT_MS),
+        codeTimer: null as ReturnType<typeof setTimeout> | null,
       };
       session = current;
       const take = (chunk: Buffer | string): void => {
@@ -470,6 +562,7 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
         if (session === current) {
           session = null;
           clearTimeout(current.timer);
+          if (current.codeTimer !== null) clearTimeout(current.codeTimer);
           fail(spawnFailed ? 'cli_unavailable' : 'cli_ended');
         }
         void rm(home, { recursive: true, force: true })
@@ -495,11 +588,37 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
       options.onSecret('claude_sign_in_code', trimmed);
       current.codeAt = current.output.length;
       phase = 'checking';
+      // The screen is not a contract: a CLI that never prints a token we read ends here, not at
+      // the ten-minute cap — and the page says to paste a token instead.
+      current.codeTimer = setTimeout(() => {
+        if (session !== current || current.codeAt === null) return;
+        const after = renderTerminalText(current.output.slice(current.codeAt));
+        options.logger.warn(
+          {
+            chars_after_code: current.output.length - current.codeAt,
+            token_prefix_seen: after.includes(CLAUDE_TOKEN_PREFIX),
+          },
+          'Claude’s sign-in showed no token after the code; the sign-in is ended',
+        );
+        endSession();
+        fail('no_token_after_code');
+      }, options.afterCodeTimeoutMs ?? AFTER_CODE_TIMEOUT_MS);
       current.cli.child.stdin?.write(`${trimmed}\r`);
     },
-    acceptToken: (token) => {
-      if (busy()) throw new SignInBusyError('a sign-in is already running');
+    acceptToken: (pasted) => {
+      const token = normaliseClaudeToken(pasted);
+      // Never echoed: a malformed paste may still be most of a secret.
+      if (!CLAUDE_OAUTH_TOKEN_SHAPE.test(token)) {
+        throw new InvalidClaudeTokenError(
+          'that is not a token from claude setup-token (it starts sk-ant-oat01-)',
+        );
+      }
+      if (checkRunning()) {
+        throw new SignInBusyError('Claude is checking a token now');
+      }
       generation += 1;
+      // A browser sign-in in progress yields to the paste.
+      endSession();
       options.onSecret('claude_code_oauth_token_pasted', token);
       check(token);
     },
@@ -508,7 +627,7 @@ export const createClaudeSignIn = (options: ClaudeSignInOptions): ClaudeSignIn =
       const current = session;
       endSession();
       await current?.finished;
-      await checking;
+      await Promise.all([...checks]);
     },
   };
 };

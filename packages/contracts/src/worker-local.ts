@@ -134,6 +134,11 @@ export const workerLocalSignInFailureSchema = z.enum([
   'check_failed',
   /** Ten minutes passed. */
   'timed_out',
+  /**
+   * A minute passed after the code was written to the CLI and its screen showed no token this
+   * worker reads — *Paste a token instead* is the way on (the screen text is not a contract).
+   */
+  'no_token_after_code',
 ]);
 export type WorkerLocalSignInFailure = z.infer<typeof workerLocalSignInFailureSchema>;
 
@@ -367,7 +372,19 @@ export const workerLocalClaudeCodeRequestSchema = z.strictObject({
     .regex(/^[A-Za-z0-9#_-]+$/, 'expected the code Claude shows'),
 });
 
-/** `POST /api/local/claude/token` `{ token }`: a token from `claude setup-token`, pasted. */
+/** The shape of a token `claude setup-token` prints — the page's check and the worker's. */
+export const CLAUDE_OAUTH_TOKEN_SHAPE = /^sk-ant-oat01-[A-Za-z0-9_-]{40,400}$/;
+
+/**
+ * A pasted token with **every** whitespace character removed: a token copied from a terminal
+ * arrives wrapped over two lines, sometimes indented, and a token has no whitespace of its own.
+ */
+export const normaliseClaudeToken = (pasted: string): string => pasted.replace(/\s+/g, '');
+
+/**
+ * `POST /api/local/claude/token` `{ token }`: a token from `claude setup-token`, pasted — as
+ * pasted; the worker normalises it ({@link normaliseClaudeToken}) and refuses another shape `400`.
+ */
 export const workerLocalClaudeTokenRequestSchema = z.strictObject({
   token: z.string().min(1).max(1_024),
 });

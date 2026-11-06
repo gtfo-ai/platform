@@ -19,9 +19,14 @@
  * shows is read off the answer (`wizardOf`), so nothing here navigates. Every word is a `Record` in
  * `model.ts`. Every value from elsewhere — a platform's version, an address — is rendered as text.
  */
-import type { WorkerLocalCoreCheckResponse, WorkerLocalState } from '@platform/contracts';
+import {
+  CLAUDE_OAUTH_TOKEN_SHAPE,
+  normaliseClaudeToken,
+  type WorkerLocalCoreCheckResponse,
+  type WorkerLocalState,
+} from '@platform/contracts';
 import { CopyIcon } from '@primer/octicons-react/CopyIcon';
-import { type ReactElement, useId, useState } from 'react';
+import { type ReactElement, useEffect, useId, useState } from 'react';
 import { Button, buttonClassName } from '../ui/button.js';
 import { CopyField } from '../ui/copy-field.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
@@ -38,6 +43,8 @@ import {
   SIGN_IN_FAILURE_WORDS,
   SIGN_IN_PHASE_WORDS,
   secondsUntil,
+  TOKEN_REFUSAL_WORDS,
+  TOKEN_SHAPE_WORDS,
   WIZARD_STEP_WORDS,
   type WizardView,
   wizardOf,
@@ -212,7 +219,29 @@ const PlatformStep = ({
   );
 };
 
-/** Step 2: Claude's own sign-in, run by the worker — or a token pasted. */
+/** Whole seconds since `active` last became true, ticking each second; 0 while it is false. */
+const useSecondsWhile = (active: boolean): number => {
+  const [since, setSince] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) {
+      setSince(null);
+      return;
+    }
+    const started = Date.now();
+    setSince(started);
+    setNow(started);
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return since === null ? 0 : Math.max(0, Math.floor((now - since) / 1_000));
+};
+
+/**
+ * Step 2: Claude's own sign-in, run by the worker — or a token pasted. **Never a trap**: *Cancel*
+ * is there in every phase but idle and failed, and *Use this token* is enabled whenever the field
+ * has something in it and nothing is in flight — a paste ends a browser sign-in in progress.
+ */
 const ClaudeStep = ({
   state,
   client,
@@ -226,7 +255,9 @@ const ClaudeStep = ({
 }): ReactElement => {
   const [code, setCode] = useState('');
   const [token, setToken] = useState('');
+  const [tokenProblem, setTokenProblem] = useState<string | null>(null);
   const { sign_in: signIn } = state.setup;
+  const checkingFor = useSecondsWhile(signIn.phase === 'checking');
   if (state.setup.claude_source === 'environment') {
     return (
       <Flash tone="danger" title="Claude no longer accepts this worker’s sign-in">
@@ -235,7 +266,35 @@ const ClaudeStep = ({
       </Flash>
     );
   }
-  const running = signIn.phase === 'starting' || signIn.phase === 'waiting_for_code';
+  const showsCode = signIn.phase === 'starting' || signIn.phase === 'waiting_for_code';
+  const running = showsCode || signIn.phase === 'checking';
+  const submitToken = (): void => {
+    const pasted = normaliseClaudeToken(token);
+    if (pasted === '') return;
+    if (!CLAUDE_OAUTH_TOKEN_SHAPE.test(pasted)) {
+      setTokenProblem(TOKEN_SHAPE_WORDS);
+      return;
+    }
+    setTokenProblem(null);
+    void act(async () => {
+      try {
+        const next = await client.claudeToken(pasted);
+        setToken('');
+        return next;
+      } catch (error) {
+        // A refusal of the paste is said beside the field, and the page reads the worker again.
+        const words =
+          error instanceof LocalCallError && Object.hasOwn(TOKEN_REFUSAL_WORDS, error.code)
+            ? TOKEN_REFUSAL_WORDS[error.code]
+            : undefined;
+        if (words !== undefined) {
+          setTokenProblem(words);
+          return await client.state();
+        }
+        throw error;
+      }
+    });
+  };
   return (
     <div className="flex flex-col gap-5">
       {state.setup.claude_rejected ? (
@@ -268,7 +327,7 @@ const ClaudeStep = ({
           {SIGN_IN_PHASE_WORDS.starting}
         </p>
       ) : null}
-      {running && signIn.url !== null ? (
+      {showsCode && signIn.url !== null ? (
         <ol className="flex list-decimal flex-col gap-4 pl-5 text-sm text-fg" data-sign-in="">
           <li className="flex flex-col gap-2">
             <span>Open Claude’s sign-in and sign in with your Claude account.</span>
@@ -313,6 +372,8 @@ const ClaudeStep = ({
       {signIn.phase === 'checking' ? (
         <p className="text-sm text-fg" aria-live="polite" data-sign-in-checking="">
           {SIGN_IN_PHASE_WORDS.checking}
+          {/* The count ticks each second: shown, not announced each second. */}
+          <span aria-hidden="true">{` (${checkingFor} s)`}</span>
         </p>
       ) : null}
       {running ? (
@@ -335,18 +396,25 @@ const ClaudeStep = ({
             className="flex flex-col gap-2"
             onSubmit={(event) => {
               event.preventDefault();
-              const pasted = token.trim();
-              if (pasted === '') return;
-              setToken('');
-              void act(() => client.claudeToken(pasted));
+              submitToken();
             }}
           >
-            <TextField label="Token" value={token} onChange={setToken} secret />
+            <TextField
+              label="Token"
+              value={token}
+              onChange={(value) => {
+                setToken(value);
+                setTokenProblem(null);
+              }}
+              secret
+            />
+            {tokenProblem === null ? null : (
+              <p className="text-sm text-danger" role="alert" data-token-problem="">
+                {tokenProblem}
+              </p>
+            )}
             <div>
-              <Button
-                type="submit"
-                disabled={busy || token.trim() === '' || signIn.phase === 'checking'}
-              >
+              <Button type="submit" disabled={busy || token.trim() === ''}>
                 Use this token
               </Button>
             </div>

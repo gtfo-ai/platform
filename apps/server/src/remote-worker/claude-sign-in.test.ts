@@ -9,19 +9,25 @@
  * with `claude -p` and handed on only when accepted — in an environment with no token variable of
  * the worker's, a temporary `HOME` that is gone afterwards, and nothing of the screen in any log.
  */
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { normaliseClaudeToken } from '@platform/contracts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { asLoggerPort, createLogger } from '../logging.js';
 import {
+  AFTER_CODE_TIMEOUT_MS,
   asksForCode,
   type ClaudeCliLauncher,
   type ClaudeSignIn,
   createClaudeSignIn,
+  InvalidClaudeTokenError,
+  looseTokenOf,
   refusedCode,
   renderTerminalText,
   runBounded,
+  SignInBusyError,
   scrubbedCliEnvironment,
   signInUrlOf,
   tokenCheckOf,
@@ -105,6 +111,35 @@ describe('reading the CLI’s screen (V-WM10)', () => {
     const short = `sk-ant-oat01-${'Q'.repeat(60)}`;
     expect(tokenOf(`${short}`)).toBeNull();
     expect(tokenOf(`${short}\n\nStore this token securely.`)).toBe(short);
+  });
+
+  it('reads a token whitespace-insensitively when tokenOf cannot: split by spaces, by a cursor move, by an indented wrap', () => {
+    const token = fixture.token;
+    // A space Ink drew inside it: the first piece is too short for tokenOf.
+    const spaced = `Your OAuth token: ${token.slice(0, 30)} ${token.slice(30, 70)}  ${token.slice(70)}\n`;
+    expect(tokenOf(spaced)).toBeNull();
+    expect(looseTokenOf(spaced)).toBe(token);
+    // A cursor move to the right, rendered as a space.
+    const moved = renderTerminalText(`${token.slice(0, 25)}\x1b[1C${token.slice(25)}\r\n`);
+    expect(tokenOf(moved)).toBeNull();
+    expect(looseTokenOf(moved)).toBe(token);
+    // A wrap whose continuation is indented, with a space inside the first line.
+    const wrapped = `${token.slice(0, 20)} ${token.slice(20, 79)}\n      ${token.slice(79)}\n\nStore it.`;
+    expect(looseTokenOf(wrapped)).toBe(token);
+    // Never before the measured length is on the screen, and never past it.
+    expect(looseTokenOf(`${token.slice(0, 25)} ${token.slice(25, 100)}`)).toBeNull();
+    expect(looseTokenOf(`${token} Store`)).toBe(token);
+    // It stops at anything that is neither the token nor whitespace.
+    expect(looseTokenOf(`${token.slice(0, 50)}│${token.slice(50)}`)).toBeNull();
+    expect(looseTokenOf('no token here')).toBeNull();
+  });
+
+  it('normalises a pasted token: every whitespace inside it removed', () => {
+    const token = fixture.token;
+    expect(normaliseClaudeToken(`  ${token.slice(0, 79)}\r\n\t   ${token.slice(79)}\n`)).toBe(
+      token,
+    );
+    expect(normaliseClaudeToken(' \n ')).toBe('');
   });
 
   it('reads the check’s verdict as the CLI states it', () => {
@@ -267,7 +302,6 @@ describe('the sign-in against a fake claude replaying V-WM10 (WP-294 (4))', () =
     expect(() => session.submitCode('early')).toThrow(/not waiting for a code/);
     await session.start();
     await expect(session.start()).rejects.toThrow(/already running/);
-    expect(() => session.acceptToken(fixture.token)).toThrow(/already running/);
     await until('the paste prompt', () => session.status().phase === 'waiting_for_code');
     session.cancel();
     expect(session.status()).toEqual({ phase: 'idle', url: null, failure: null });
@@ -319,5 +353,234 @@ describe('the sign-in against a fake claude replaying V-WM10 (WP-294 (4))', () =
     await signIn.start();
     await until('the failure', () => signIn?.status().phase === 'failed');
     expect(signIn.status().failure).toBe('cli_unavailable');
+  });
+});
+
+/**
+ * A `claude` that is not a process: its screen is emitted by the test, its stdin recorded, and each
+ * check answers only when the test says — so the order of a paste, a cancel and a verdict is the
+ * test's, not a scheduler's.
+ */
+const stubLauncher = () => {
+  const clis: {
+    readonly emit: (text: string) => void;
+    readonly written: string[];
+    killed: boolean;
+  }[] = [];
+  const checks: {
+    readonly token: string;
+    readonly answer: (verdict: 'accepted' | 'rejected') => void;
+  }[] = [];
+  const launcher: ClaudeCliLauncher = {
+    setupToken: () => {
+      const child = new EventEmitter();
+      const stdout = new EventEmitter();
+      const written: string[] = [];
+      const stdin = Object.assign(new EventEmitter(), {
+        write: (text: string) => {
+          written.push(text);
+          return true;
+        },
+      });
+      Object.assign(child, { stdout, stderr: new EventEmitter(), stdin });
+      const cli = { emit: (text: string) => stdout.emit('data', text), written, killed: false };
+      clis.push(cli);
+      return {
+        child: child as unknown as ChildProcess,
+        kill: () => {
+          if (cli.killed) return;
+          cli.killed = true;
+          queueMicrotask(() => child.emit('close', null));
+        },
+      };
+    },
+    run: (_args, env) =>
+      new Promise<{ readonly stdout: string; readonly code: number | null }>((resolve) => {
+        checks.push({
+          token: env.CLAUDE_CODE_OAUTH_TOKEN ?? '',
+          answer: (verdict) =>
+            resolve({
+              stdout:
+                verdict === 'accepted'
+                  ? '{"type":"result","is_error":false,"result":"OK"}\n'
+                  : '{"type":"result","is_error":true,"api_error_status":401}\n',
+              code: verdict === 'accepted' ? 0 : 1,
+            }),
+        });
+      }),
+  };
+  return { launcher, clis, checks };
+};
+
+describe('never trapped at “Checking with Claude” (the owner’s report, 2026-11-06)', () => {
+  let signIn: ClaudeSignIn | null = null;
+  afterEach(async () => {
+    vi.useRealTimers();
+    await signIn?.close();
+    signIn = null;
+  });
+
+  const TOKEN_A = `sk-ant-oat01-${'A'.repeat(95)}`;
+  const TOKEN_B = `sk-ant-oat01-${'B'.repeat(95)}`;
+
+  const begin = () => {
+    const lines: string[] = [];
+    const secrets: string[] = [];
+    const stored: string[] = [];
+    const stub = stubLauncher();
+    signIn = createClaudeSignIn({
+      launcher: stub.launcher,
+      logger: asLoggerPort(
+        createLogger({
+          level: 'debug',
+          format: 'json',
+          role: 'remote-worker',
+          destination: { write: (line: string) => lines.push(line) },
+        }),
+      ),
+      onSecret: (_name, value) => secrets.push(value),
+      onToken: async (token) => {
+        stored.push(token);
+      },
+    });
+    return { session: signIn, lines, secrets, stored, ...stub };
+  };
+
+  it.each(['starting', 'waiting_for_code', 'checking'] as const)(
+    'a pasted token wins over a browser sign-in that is %s',
+    async (at) => {
+      const { session, clis, checks, stored } = begin();
+      await session.start();
+      if (at !== 'starting') clis[0]?.emit(fixture.screen);
+      if (at === 'checking') session.submitCode(fixture.good_code);
+      expect(session.status().phase).toBe(at);
+      expect(session.inProgress()).toBe(true);
+      session.acceptToken(fixture.token);
+      // The session yields: its CLI is ended, and its ending is no failure.
+      expect(clis[0]?.killed).toBe(true);
+      expect(session.status().phase).toBe('checking');
+      await until('the check', () => checks.length === 1);
+      expect(checks[0]?.token).toBe(fixture.token);
+      checks[0]?.answer('accepted');
+      await until('the token is stored', () => stored.length === 1);
+      expect(stored).toEqual([fixture.token]);
+      expect(session.status()).toEqual({ phase: 'idle', url: null, failure: null });
+      expect(session.inProgress()).toBe(false);
+    },
+  );
+
+  it('cancel, then paste: the superseded check blocks nothing, its verdict is discarded, and close() awaits it', async () => {
+    const { session, checks, stored } = begin();
+    session.acceptToken(TOKEN_A);
+    await until('the first check', () => checks.length === 1);
+    // Only a paste during the current sign-in's own check is refused, and it says why.
+    expect(() => session.acceptToken(TOKEN_B)).toThrow(SignInBusyError);
+    session.cancel();
+    expect(session.status()).toEqual({ phase: 'idle', url: null, failure: null });
+    expect(session.inProgress()).toBe(false);
+    session.acceptToken(TOKEN_B);
+    await until('the second check', () => checks.length === 2);
+    expect(checks[1]?.token).toBe(TOKEN_B);
+    checks[1]?.answer('accepted');
+    await until('the second token is stored', () => stored.length === 1);
+    expect(stored).toEqual([TOKEN_B]);
+    // The first check still runs: close() waits for it, and its verdict changes nothing.
+    let closed = false;
+    const closing = session.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(closed).toBe(false);
+    checks[0]?.answer('accepted');
+    await closing;
+    expect(stored).toEqual([TOKEN_B]);
+    expect(session.status()).toEqual({ phase: 'idle', url: null, failure: null });
+  });
+
+  it('checks a token pasted wrapped and indented, as one token', async () => {
+    const { session, checks, secrets } = begin();
+    session.acceptToken(`  ${fixture.token.slice(0, 79)}\r\n     ${fixture.token.slice(79)}\n`);
+    await until('the check', () => checks.length === 1);
+    expect(checks[0]?.token).toBe(fixture.token);
+    expect(secrets).toEqual([fixture.token]);
+    checks[0]?.answer('rejected');
+  });
+
+  it('refuses a paste of another shape before any check runs, without its value in the refusal', async () => {
+    const { session, checks, secrets, clis } = begin();
+    await session.start();
+    clis[0]?.emit(fixture.screen);
+    for (const pasted of [
+      'sk-ant-api03-FAKE-planted-value-of-another-kind-000000000000000000',
+      `sk-ant-oat01-${'S'.repeat(20)}`,
+      'hello',
+      `sk-ant-oat01-${'Q'.repeat(60)}!`,
+    ]) {
+      let refusal: unknown = null;
+      try {
+        session.acceptToken(pasted);
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal, pasted).toBeInstanceOf(InvalidClaudeTokenError);
+      expect((refusal as Error).message).not.toContain('planted');
+    }
+    // Nothing ran, nothing was taken for a secret, and the browser sign-in carries on.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(checks).toEqual([]);
+    expect(secrets).toEqual([]);
+    expect(clis[0]?.killed).toBe(false);
+    expect(session.status().phase).toBe('waiting_for_code');
+  });
+
+  it('reads a token split by a cursor move after the code, and checks it', async () => {
+    const { session, clis, checks } = begin();
+    await session.start();
+    clis[0]?.emit(fixture.screen);
+    session.submitCode(fixture.good_code);
+    expect(clis[0]?.written).toEqual([`${fixture.good_code}\r`]);
+    const token = fixture.token;
+    clis[0]?.emit(`\r\nYour OAuth token:\r\n${token.slice(0, 25)}\x1b[1C${token.slice(25)}\r\n`);
+    await until('the check', () => checks.length === 1);
+    expect(checks[0]?.token).toBe(token);
+    checks[0]?.answer('accepted');
+  });
+
+  it(`ends the sign-in ${AFTER_CODE_TIMEOUT_MS / 1_000} s after the code when no token appears, says to paste one, and logs no screen`, async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { session, clis, lines, checks } = begin();
+    await session.start();
+    clis[0]?.emit(fixture.screen);
+    session.submitCode(fixture.good_code);
+    const shown = '\r\nSomething this worker does not read sk-ant-oat01-';
+    clis[0]?.emit(shown);
+    vi.advanceTimersByTime(AFTER_CODE_TIMEOUT_MS - 1);
+    expect(session.status().phase).toBe('checking');
+    expect(session.inProgress()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(session.status()).toEqual({
+      phase: 'failed',
+      url: null,
+      failure: 'no_token_after_code',
+    });
+    expect(clis[0]?.killed).toBe(true);
+    expect(checks).toEqual([]);
+    expect(session.inProgress()).toBe(false);
+    const diagnostic = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((line) => line.chars_after_code !== undefined);
+    expect(diagnostic).toMatchObject({ chars_after_code: shown.length, token_prefix_seen: true });
+    const log = lines.join('\n');
+    for (const planted of [fixture.good_code, 'does not read', 'Paste code here']) {
+      expect(log).not.toContain(planted);
+    }
+    // A paste works at once afterwards.
+    session.acceptToken(fixture.token);
+    expect(session.status().phase).toBe('checking');
+    vi.useRealTimers();
+    await until('the check', () => checks.length === 1);
+    checks[0]?.answer('rejected');
+    await until('the verdict', () => session.status().phase === 'failed');
+    expect(session.status().failure).toBe('token_rejected');
   });
 });

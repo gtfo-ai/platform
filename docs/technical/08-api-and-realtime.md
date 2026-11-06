@@ -582,7 +582,9 @@ it); the logs are redacted the same way. A take-over of a remote run exports the
 branch and **no tarball** — the core records it so (`tarball: false` on the `run_commands` row) and the
 worker asks its launcher for none (TD-031 §14, backlog 688). Its local listener — `GET /healthz`,
 `GET /readyz` (`core_handshake` and `launcher`, ready only with both — backlog 980), `POST /internal/drain`, `GET /internal/state` — is on the worker's
-compose network only. `GET /api/runs/:run_id` gains `seat` (the agents list's `{kind, worker_id,
+compose network only. `/internal/state`'s `idle`, which an update's drain waits for, is false while a
+run is in flight **or a Claude sign-in session or its token check runs** (so an update never interrupts
+step 2; bounded by the sign-in's own caps). `GET /api/runs/:run_id` gains `seat` (the agents list's `{kind, worker_id,
 worker_name}`) so the run page can say who executed a run (WP-283 (5)).
 
 **Protocol 2 — the worker's local page (WP-292, TD-031's 2026-11-04 worker-UI amendment).** Two verbs,
@@ -630,8 +632,9 @@ parsed fields `{url, host, version, protocol_fit}` or `422` with the class as it
 (`address_refused`, `no_answer`, `not_a_platform`, `certificate`, `needs_other_version`); `POST core
 {url}` checks and stores `core-url`, `{url: null}` is *Change platform* (idle only, `409 not_idle`; deletes
 the credential and, under `none`, `claude-token`); `POST claude/sign-in {action: start|cancel}`, `POST
-claude/code {code}` (`409 not_waiting_for_code`), `POST claude/token {token}` (`400 invalid_token`,
-never echoed) and `POST claude/sign-out` (idle only); `POST connect-again` (only when revoked) and `POST
+claude/code {code}` (`409 not_waiting_for_code`), `POST claude/token {token}` (whitespace inside it
+removed first; `400 invalid_token`, never echoed; a paste **ends** a browser sign-in in progress, and
+only a paste while that sign-in's own token check runs is `409 token_check_running`) and `POST claude/sign-out` (idle only); `POST connect-again` (only when revoked) and `POST
 retry` (not when connected). Each answers the state; a value from the environment answers `409
 set_in_environment`; no answer carries the token, the code or the credential.
 

@@ -545,6 +545,108 @@ describe('the first-run wizard (WP-294)', () => {
     expect(screen.getByRole('button', { name: 'Sign in again' })).toBeTruthy();
   });
 
+  /** An obviously fake token of the measured shape (`sk-ant-oat01-` + 95). */
+  const FAKE_TOKEN = `sk-ant-oat01-${'F'.repeat(95)}`;
+  const checking = () =>
+    unconnected('needs_claude', {
+      claude_source: null,
+      sign_in: { phase: 'checking', url: null, failure: null },
+    });
+  const openPaste = async (): Promise<HTMLElement> => {
+    await userEvent.click(await screen.findByText('Paste a token instead'));
+    return screen.getByLabelText('Token');
+  };
+
+  it('never traps the Claude step at “Checking with Claude”: seconds shown, Cancel there, and Enter sends a wrapped token joined', async () => {
+    const client = fakeClient(checking());
+    const { container } = renderPage(client);
+    await waitFor(() =>
+      expect(container.querySelector('[data-sign-in-checking]')?.textContent).toMatch(
+        /^Checking with Claude… \(\d+ s\)$/,
+      ),
+    );
+    // Cancel is offered while checking, too.
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel the sign-in' }));
+    expect(client.signIn).toHaveBeenCalledWith('cancel');
+    const field = await openPaste();
+    const use = screen.getByRole('button', { name: 'Use this token' }) as HTMLButtonElement;
+    expect(use.disabled).toBe(true);
+    // Copied from a terminal: wrapped over two lines, the second one indented.
+    await userEvent.click(field);
+    await userEvent.paste(`  ${FAKE_TOKEN.slice(0, 79)}\n    ${FAKE_TOKEN.slice(79)} `);
+    // Enabled while the worker is still checking: a paste wins over the browser sign-in.
+    await waitFor(() => expect(use.disabled).toBe(false));
+    await userEvent.type(field, '{Enter}');
+    await waitFor(() => expect(client.claudeToken).toHaveBeenCalledWith(FAKE_TOKEN));
+  });
+
+  it('says a pasted value is not a Claude token before anything is sent', async () => {
+    const client = fakeClient(checking());
+    renderPage(client);
+    const field = await openPaste();
+    await userEvent.click(field);
+    await userEvent.paste('sk-ant-api03-not-a-subscription-token');
+    await userEvent.click(screen.getByRole('button', { name: 'Use this token' }));
+    expect(
+      await screen.findByText(
+        'That isn’t a Claude token: it starts with sk-ant-oat01-. Copy the whole line claude setup-token printed.',
+      ),
+    ).toBeTruthy();
+    expect(client.claudeToken).not.toHaveBeenCalled();
+  });
+
+  it('says the worker’s refusal of a paste beside the field, never as silence', async () => {
+    const client = fakeClient(checking());
+    client.claudeToken.mockRejectedValueOnce(
+      new LocalCallError(409, 'token_check_running', 'Claude is checking a token now'),
+    );
+    renderPage(client);
+    const field = await openPaste();
+    await userEvent.click(field);
+    await userEvent.paste(FAKE_TOKEN);
+    await userEvent.type(field, '{Enter}');
+    expect(
+      await screen.findByText(
+        'Claude is still checking a token. Wait for it, or cancel the sign-in and paste again.',
+      ),
+    ).toBeTruthy();
+    expect(client.claudeToken).toHaveBeenCalledWith(FAKE_TOKEN);
+  });
+
+  it('says what to do when the sign-in showed no token after the code, or could not be checked', async () => {
+    for (const [failure, words] of [
+      ['no_token_after_code', /Paste a token instead: run claude setup-token/],
+      ['check_failed', /reaches api\.anthropic\.com, then paste the token again/],
+    ] as const) {
+      const { unmount } = renderPage(
+        fakeClient(
+          unconnected('needs_claude', {
+            claude_source: null,
+            sign_in: { phase: 'failed', url: null, failure },
+          }),
+        ),
+      );
+      expect(await screen.findByText(words)).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it('clears a failed read’s error on the next good poll — a worker that restarted', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const client = fakeClient(unconnected('needs_claude', { claude_source: null }));
+      render(<WorkerApp client={client} now={() => NOW} pollMs={2_000} newKey={() => 'key-1'} />);
+      await screen.findByRole('button', { name: 'Sign in with Claude' });
+      client.state.mockRejectedValueOnce(new Error('fetch failed'));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await screen.findByText('That did not work')).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(screen.queryByText('That did not work')).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('makes the approval code the dominant element: large monospace, Copy, the prefilled link, a countdown', async () => {
     const copied: string[] = [];
     Object.defineProperty(navigator, 'clipboard', {

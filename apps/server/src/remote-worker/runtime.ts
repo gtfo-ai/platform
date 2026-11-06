@@ -107,6 +107,7 @@ import { BUNDLED_WEB_ROOT, resolveBundleRoot } from '../web/bundle.js';
 import {
   type ClaudeCliLauncher,
   createClaudeSignIn,
+  InvalidClaudeTokenError,
   SignInBusyError,
   scriptCliLauncher,
 } from './claude-sign-in.js';
@@ -136,7 +137,6 @@ import {
 } from './run-session.js';
 import {
   CLAUDE_TOKEN_FILE,
-  CLAUDE_TOKEN_SHAPE,
   CORE_URL_FILE,
   readStoredClaudeToken,
   readStoredCoreUrl,
@@ -1282,22 +1282,17 @@ export const startRemoteWorker = async (
     }
   };
 
+  /** A paste wins over a browser sign-in; whitespace inside it is removed (`claude-sign-in.ts`). */
   const acceptToken = (token: string): void => {
     refuseFromEnvironment('claude');
-    const trimmed = token.trim();
-    if (!CLAUDE_TOKEN_SHAPE.test(trimmed)) {
-      // Never echoed: a malformed paste may still be most of a secret.
-      throw new LocalUiError(
-        400,
-        'invalid_token',
-        'that is not a token from claude setup-token (it starts sk-ant-oat01-)',
-      );
-    }
     try {
-      signIn.acceptToken(trimmed);
+      signIn.acceptToken(token);
     } catch (error) {
+      // Never echoed: a malformed paste may still be most of a secret.
+      if (error instanceof InvalidClaudeTokenError)
+        throw new LocalUiError(400, 'invalid_token', error.message);
       if (error instanceof SignInBusyError)
-        throw new LocalUiError(409, 'sign_in_busy', error.message);
+        throw new LocalUiError(409, 'token_check_running', error.message);
       throw error;
     }
   };
@@ -1576,7 +1571,9 @@ export const startRemoteWorker = async (
     core_digests: coreDigests,
     last_handshake_at: lastHandshakeAt,
     draining,
-    idle: sessions.size === 0,
+    // An update's drain waits for this: no run, and no Claude sign-in half done (a restart
+    // mid-sign-in leaves the person at step 2 with nothing to show for it).
+    idle: sessions.size === 0 && !signIn.inProgress(),
     concurrency: config.concurrency,
     runs: [...sessions.values()].map((session) => ({
       run_id: session.state.runId,
