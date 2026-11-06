@@ -244,7 +244,8 @@ const fetchFor = (
   task: TaskDetailResponse,
   shown: RunRecord,
   messages: TranscriptEvent[],
-  projects: readonly unknown[] = [],
+  /** A promise holds the projects read back until the test resolves it. */
+  projects: readonly unknown[] | Promise<readonly unknown[]> = [],
 ) =>
   (async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
@@ -254,7 +255,7 @@ const fetchFor = (
     if (path === `/api/runs/${shown.id}/commands`) return json({ items: [] });
     if (path === `/api/runs/${shown.id}`) return json(asRead(shown));
     if (path === `/api/tasks/${TASK}`) return json(task);
-    if (path === '/api/projects') return json({ items: projects });
+    if (path === '/api/projects') return json({ items: await projects });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
 
@@ -267,7 +268,7 @@ const open = (
   shown: RunRecord = LIVE,
   task = detail(),
   messages = MESSAGES,
-  projects: readonly unknown[] = [],
+  projects: readonly unknown[] | Promise<readonly unknown[]> = [],
 ) => {
   window.history.pushState({}, '', `/runs/${shown.id}`);
   return render(
@@ -318,6 +319,30 @@ describe('the run page’s header', () => {
     expect(back.getAttribute('href')).toBe(`/projects/acme/tasks/${TASK}`);
     // One `<h1>`: the run's; the project's name above it is not a heading.
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
+  it('never remounts the screen when the frame arrives late: a steer being typed survives (review of PR #80)', async () => {
+    const user = userEvent.setup();
+    let release: (items: readonly unknown[]) => void = () => undefined;
+    const projects = new Promise<readonly unknown[]>((resolve) => {
+      release = resolve;
+    });
+    open(LIVE, detail(), MESSAGES, projects);
+    const box = (await screen.findByRole('textbox', {
+      name: 'Steer the agent',
+    })) as HTMLInputElement;
+    // While the projects read is out, neither row is drawn: no organisation row to take back.
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Project' })).toBeNull();
+    await user.type(box, 'also check the rounding');
+
+    release([PROJECT_ROW]);
+    await screen.findByRole('navigation', { name: 'Project' });
+    // The same element, with what was typed in it: the screen was not remounted.
+    const after = screen.getByRole('textbox', { name: 'Steer the agent' }) as HTMLInputElement;
+    expect(after).toBe(box);
+    expect(after.value).toBe('also check the rounding');
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
   });
 
   it('keeps the organisation’s frame for a run whose project the caller cannot list', async () => {

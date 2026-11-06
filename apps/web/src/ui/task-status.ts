@@ -49,17 +49,23 @@ export interface NeedsYouInput {
   readonly taken_over?: boolean;
 }
 
+/** The states a task never leaves: nothing that is left open on one can move it again. */
+const TERMINAL: ReadonlySet<TaskState> = new Set<TaskState>(['done', 'cancelled']);
+
 /**
  * Whether the task waits on a person: a waiting state, anything open in its inbox, a take-over in
  * force, or a pause only a person ends — a budget pause (somebody raises the cap) or a take-over
- * (the person hands it back). A manual pause is somebody's choice and waits on nobody.
+ * (the person hands it back). A manual pause is somebody's choice and waits on nobody, and a
+ * **done or cancelled** task never needs you, whatever is left open on it (review of PR #80): an
+ * answer to a question it left behind would move nothing.
  */
 export const needsYou = (task: NeedsYouInput): boolean =>
-  WAITING_ON_A_PERSON.has(task.state) ||
-  task.open_asks > 0 ||
-  task.taken_over === true ||
-  (task.state === 'paused' &&
-    (task.paused_reason === 'budget' || task.paused_reason === 'taken_over'));
+  !TERMINAL.has(task.state) &&
+  (WAITING_ON_A_PERSON.has(task.state) ||
+    task.open_asks > 0 ||
+    task.taken_over === true ||
+    (task.state === 'paused' &&
+      (task.paused_reason === 'budget' || task.paused_reason === 'taken_over')));
 
 /** The status a task is drawn with: `needs_you` whenever it waits on a person, its state's otherwise. */
 export const taskStatus = (task: NeedsYouInput): Status =>

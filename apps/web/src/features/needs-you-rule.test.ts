@@ -6,7 +6,8 @@
  *
  * Parameterised over the set the code branches on (checklist 6): every published task state ×
  * {nothing open, an open question, a pending approval}, and for `paused` every pause reason — and
- * `needs_human` is one of those states. Each case asks all three readers and the expected answer
+ * `needs_human` is one of those states. A done or cancelled task never needs you, whatever it left
+ * open. Each case asks all three readers and the expected answer
  * written out independently, so a reader that drifts from the rule fails here by name.
  */
 import { type TaskListItem, type TaskState, taskStateSchema } from '@platform/contracts';
@@ -28,10 +29,14 @@ const WAITING_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
   'needs_human',
 ]);
 
+/** A task that has ended never needs you, whatever it left open (review of PR #80). */
+const TERMINAL_STATES: ReadonlySet<TaskState> = new Set<TaskState>(['done', 'cancelled']);
+
 const expected = (state: TaskState, reason: PausedReason, item: Item): boolean =>
-  item !== 'none' ||
-  WAITING_STATES.has(state) ||
-  (state === 'paused' && (reason === 'budget' || reason === 'taken_over'));
+  !TERMINAL_STATES.has(state) &&
+  (item !== 'none' ||
+    WAITING_STATES.has(state) ||
+    (state === 'paused' && (reason === 'budget' || reason === 'taken_over')));
 
 /** Only the fields the three readers look at; the rest of the row is irrelevant to the rule. */
 const listItem = (state: TaskState, reason: PausedReason, item: Item): TaskListItem =>
@@ -80,6 +85,17 @@ describe('one needs-you rule for the column, the card and the header', () => {
       if (!want) {
         expect(word).not.toBe(NEEDS_YOU_LABEL);
       }
+    },
+  );
+
+  it.each(['done', 'cancelled'] as const)(
+    'never puts a %s task in Needs you, even with a question and an approval left open',
+    (state) => {
+      const row = { ...listItem(state, null, 'none'), open_questions: 1, pending_approvals: 1 };
+      expect(cardNeedsYou(row)).toBe(false);
+      expect(boardColumnOf(row)).toBe('done');
+      expect(needsYou({ state, paused_reason: null, open_asks: 2, taken_over: true })).toBe(false);
+      expect(cardStateLabel(row)).not.toBe(NEEDS_YOU_LABEL);
     },
   );
 
