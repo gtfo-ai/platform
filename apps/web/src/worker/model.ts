@@ -335,6 +335,43 @@ export const wizardOf = (state: WorkerLocalState): WizardView | null => {
   };
 };
 
+/** The sign-in phases in which Claude's sign-in, or its token check, is running. */
+const SIGN_IN_RUNNING: ReadonlySet<WorkerLocalSignInPhase> = new Set([
+  'starting',
+  'waiting_for_code',
+  'checking',
+]);
+
+/** Said at the Claude step when the worker restarted mid-sign-in (BACKLOG 1053). */
+export const RESTARTED_WORDS =
+  'This worker restarted (probably to update itself). Sign in again — it only takes a minute.';
+
+/** Why the worker refused to start a sign-in, by its answer's code (BACKLOG 1054). */
+export const SIGN_IN_REFUSAL_WORDS: Readonly<Record<string, string>> = {
+  draining: 'This worker is updating; it will be back in a minute.',
+};
+
+/**
+ * Whether the Claude step says *This worker restarted* (BACKLOG 1053), from the state the page saw
+ * last, the one it reads now, and whether it says so already. The worker's `started_at` is its
+ * process's start: a different one is a restart, and it is said only when the page was at the
+ * Claude step or a sign-in (or its check) was running — any other restart, and the page's first
+ * read, are silent. Once said, it stays until a sign-in runs again on the new process.
+ */
+export const restartNoticeOf = (
+  previous: WorkerLocalState | null,
+  next: WorkerLocalState,
+  shown: boolean,
+): boolean => {
+  if (previous === null) return false;
+  if (previous.started_at !== next.started_at) {
+    return (
+      SIGN_IN_RUNNING.has(previous.setup.sign_in.phase) || wizardOf(previous)?.current === 'claude'
+    );
+  }
+  return shown && !SIGN_IN_RUNNING.has(next.setup.sign_in.phase);
+};
+
 /** Whole seconds until `iso`, never negative. */
 export const secondsUntil = (iso: string, nowMs: number): number =>
   Math.max(0, Math.ceil((Date.parse(iso) - nowMs) / 1000));

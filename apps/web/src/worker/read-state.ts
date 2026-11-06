@@ -296,6 +296,7 @@ export const STATE: Spec = object({
     source: nullable({ t: 'enum', values: SOURCES }),
     host: nullable(str({ max: 253 })),
   }),
+  started_at: datetime,
   server_time: datetime,
 });
 

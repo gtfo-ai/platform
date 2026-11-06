@@ -81,6 +81,7 @@ const state = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalState => (
   setup: setup(),
   claim_blockers: [],
   error_reporting: { source: null, host: null },
+  started_at: '2026-11-05T09:00:00.000Z',
   server_time: '2026-11-05T10:05:00.000Z',
   ...overrides,
 });
@@ -751,6 +752,143 @@ describe('the first-run wizard (WP-294)', () => {
     // A run in flight: neither undo is offered.
     expect(screen.queryByRole('button', { name: 'Change platform' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Sign out of Claude' })).toBeNull();
+  });
+});
+
+describe('a restart mid-sign-in, and a drain (BACKLOG 1053, 1054)', () => {
+  const RESTARTED =
+    'This worker restarted (probably to update itself). Sign in again — it only takes a minute.';
+  const FIRST_BOOT = '2026-11-05T09:00:00.000Z';
+  const SECOND_BOOT = '2026-11-05T10:04:30.000Z';
+  const at = (value: WorkerLocalState, startedAt: string): WorkerLocalState => ({
+    ...value,
+    started_at: startedAt,
+  });
+  const claudeStep = (phase: WorkerLocalState['setup']['sign_in']['phase']): WorkerLocalState =>
+    unconnected('needs_claude', {
+      claude_source: null,
+      sign_in: {
+        phase,
+        url:
+          phase === 'waiting_for_code'
+            ? 'https://claude.com/cai/oauth/authorize?code=true&state=abc'
+            : null,
+        failure: null,
+      },
+    });
+  const notice = () => screen.queryByText(RESTARTED);
+
+  /** Renders the page over `first`, then answers each of `then` on one poll each. */
+  const polls = async (first: WorkerLocalState, ...then: WorkerLocalState[]) => {
+    const client = fakeClient(first);
+    render(<WorkerApp client={client} now={() => NOW} pollMs={2_000} newKey={() => 'key-1'} />);
+    await waitFor(() => expect(client.state).toHaveBeenCalledTimes(1));
+    for (const [index, next] of then.entries()) {
+      client.advance(next);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(client.state).toHaveBeenCalledTimes(index + 2));
+    }
+    // The last answer is taken before anything is asserted about it.
+    await vi.advanceTimersByTimeAsync(0);
+    return client;
+  };
+
+  it('says it at the Claude step after the worker restarted mid-sign-in, until a sign-in starts', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const client = await polls(
+        at(claudeStep('waiting_for_code'), FIRST_BOOT),
+        at(claudeStep('waiting_for_code'), FIRST_BOOT),
+      );
+      await screen.findByRole('link', { name: 'Open Claude sign-in' });
+      // The same process: nothing to say.
+      expect(notice()).toBeNull();
+      // Read failures while the worker restarts, then the new process at a fresh Claude step.
+      client.state.mockRejectedValueOnce(new Error('fetch failed'));
+      await vi.advanceTimersByTimeAsync(2_000);
+      client.advance(at(claudeStep('idle'), SECOND_BOOT));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await screen.findByText(RESTARTED)).toBeTruthy();
+      // It stays on the next poll of the same process …
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(notice()).not.toBeNull();
+      // … and goes once a sign-in starts on it.
+      client.signIn.mockImplementationOnce(async () => {
+        const started = at(claudeStep('starting'), SECOND_BOOT);
+        client.advance(started);
+        return started;
+      });
+      await userEvent.click(screen.getByRole('button', { name: 'Sign in with Claude' }));
+      expect(client.signIn).toHaveBeenCalledWith('start');
+      await waitFor(() => expect(notice()).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says it after a restart during the token check, too', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await polls(at(claudeStep('checking'), FIRST_BOOT), at(claudeStep('idle'), SECOND_BOOT));
+      expect(await screen.findByText(RESTARTED)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  const SILENT: readonly (readonly [string, WorkerLocalState, readonly WorkerLocalState[]])[] = [
+    ['the page’s first read', at(claudeStep('idle'), SECOND_BOOT), []],
+    [
+      'a sign-in that ended on the same process',
+      at(claudeStep('checking'), FIRST_BOOT),
+      [at(claudeStep('idle'), FIRST_BOOT)],
+    ],
+    [
+      'a restart while approving the machine',
+      at(unconnected('logging_in', { device: DEVICE }), FIRST_BOOT),
+      [
+        at(unconnected('logging_in', { device: DEVICE }), SECOND_BOOT),
+        at(claudeStep('idle'), SECOND_BOOT),
+      ],
+    ],
+    ['a restart of a connected worker', at(state(), FIRST_BOOT), [at(state(), SECOND_BOOT)]],
+  ];
+
+  it.each(SILENT)('says nothing after %s', async (_what, first, then) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await polls(first, ...then);
+      expect(notice()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says a drain’s refusal of a new sign-in in plain words, and the paste still works', async () => {
+    const client = fakeClient({ ...claudeStep('idle'), draining: true });
+    client.signIn.mockRejectedValueOnce(
+      new LocalCallError(409, 'draining', 'this worker is draining: it starts no new sign-in'),
+    );
+    const { container } = renderPage(client);
+    await userEvent.click(await screen.findByRole('button', { name: 'Sign in with Claude' }));
+    expect(client.signIn).toHaveBeenCalledWith('start');
+    expect(
+      await screen.findByText('This worker is updating; it will be back in a minute.'),
+    ).toBeTruthy();
+    // Said in the page's words, never the worker's.
+    expect(container.textContent).not.toContain('starts no new sign-in');
+    expect(screen.queryByText('That did not work')).toBeNull();
+    // The paste field stays usable.
+    await userEvent.click(screen.getByText('Paste a token instead'));
+    const field = screen.getByLabelText('Token');
+    await userEvent.click(field);
+    await userEvent.paste(`sk-ant-oat01-${'F'.repeat(95)}`);
+    const use = screen.getByRole('button', { name: 'Use this token' }) as HTMLButtonElement;
+    expect(use.disabled).toBe(false);
+    await userEvent.click(use);
+    await waitFor(() =>
+      expect(client.claudeToken).toHaveBeenCalledWith(`sk-ant-oat01-${'F'.repeat(95)}`),
+    );
   });
 });
 

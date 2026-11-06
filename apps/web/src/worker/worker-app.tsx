@@ -33,6 +33,8 @@
  * **Until the worker is connected the page is the first-run wizard** (`wizard.tsx`, WP-294) and
  * not the room: no mode chip, no *Pause*, *Drain* or *Cancel*. Once connected, the room's *This
  * machine* section offers *Change platform* and *Sign out of Claude* — only while nothing runs.
+ * The page remembers the worker's `started_at`: a restart while the person was at the Claude step
+ * is said there once, until a sign-in runs again (`restartNoticeOf`, BACKLOG 1053).
  *
  * **Why it takes nothing is said, not implied** (S-22.19, the worker UX review): *Taking work* only
  * when the worker's `claim_blockers` are empty; otherwise one sentence in the shared vocabulary's
@@ -77,6 +79,7 @@ import {
   hostOf,
   logLineWords,
   platformWizardUrl,
+  restartNoticeOf,
   slotsWords,
   spendWords,
   tailLinesOf,
@@ -306,12 +309,21 @@ export const WorkerApp = ({
   const [busy, setBusy] = useState(false);
   /** The error shown is a failed read: the next good read clears it (a worker that restarted). */
   const readFailed = useRef(false);
+  /** The last state read, and whether the Claude step says the worker restarted (BACKLOG 1053). */
+  const last = useRef<WorkerLocalState | null>(null);
+  const [restarted, setRestarted] = useState(false);
+  const take = useCallback((next: WorkerLocalState): void => {
+    const previous = last.current;
+    last.current = next;
+    setRestarted((shown) => restartNoticeOf(previous, next, shown));
+    setState(next);
+  }, []);
   const reduced = useReducedMotion();
 
   const refresh = useCallback(async (): Promise<boolean> => {
     if (client === null) return false;
     try {
-      setState(await client.state());
+      take(await client.state());
       if (readFailed.current) {
         readFailed.current = false;
         setError(null);
@@ -326,7 +338,7 @@ export const WorkerApp = ({
       setError((caught as Error).message);
       return true;
     }
-  }, [client]);
+  }, [client, take]);
 
   useEffect(() => {
     let stopped = false;
@@ -375,7 +387,7 @@ export const WorkerApp = ({
   const control = async (action: () => Promise<WorkerLocalState>): Promise<void> => {
     setBusy(true);
     try {
-      setState(await action());
+      take(await action());
       readFailed.current = false;
       setError(null);
     } catch (caught) {
@@ -387,7 +399,16 @@ export const WorkerApp = ({
     }
   };
   if (wizardOf(state) !== null) {
-    return <Wizard state={state} client={client} act={control} busy={busy} error={error} />;
+    return (
+      <Wizard
+        state={state}
+        client={client}
+        act={control}
+        busy={busy}
+        error={error}
+        restarted={restarted}
+      />
+    );
   }
   const name = state.worker_name ?? 'This worker';
 

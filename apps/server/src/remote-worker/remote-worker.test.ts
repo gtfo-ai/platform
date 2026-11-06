@@ -2325,6 +2325,89 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     }
   });
 
+  it('while draining refuses a new Claude sign-in 409 draining, finishes the one running, and takes a paste (BACKLOG 1054)', async () => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    const core = fakeCore({});
+    // The token check waits for the test, so the drain's wait for it is measured.
+    let releaseCheck: () => void = () => undefined;
+    const checkGate = new Promise<void>((resolve) => {
+      releaseCheck = resolve;
+    });
+    let checksStarted = 0;
+    let signInsSpawned = 0;
+    const gatedClaude: ClaudeCliLauncher = {
+      setupToken: (env) => {
+        signInsSpawned += 1;
+        return fakeClaude.setupToken(env);
+      },
+      run: async (args, env, timeoutMs) => {
+        checksStarted += 1;
+        await checkGate;
+        return fakeClaude.run(args, env, timeoutMs);
+      },
+    };
+    const { worker, internal } = await start({
+      stateDir,
+      core,
+      auth: 'none',
+      claudeToken: null,
+      claudeCli: gatedClaude,
+      sleep: yielding,
+    });
+    const internalState = async () =>
+      (await (await fetch(`${internal}/internal/state`)).json()) as {
+        draining: boolean;
+        idle: boolean;
+      };
+    const port = portOf(worker.uiAddress());
+    const startSignIn = async () => {
+      const answer = await post(port, 'claude/sign-in', { action: 'start' });
+      return `${answer.status} ${answer.status === 200 ? '' : JSON.parse(answer.text).error.code}`;
+    };
+    try {
+      await until('the Claude step', () => worker.localState().connection === 'needs_claude');
+      // The process's start identity is one value for the life of the process (BACKLOG 1053).
+      const before = await localState(port);
+      expect(Date.parse(before.started_at)).toBeLessThanOrEqual(Date.parse(before.server_time));
+
+      // A sign-in started before the drain …
+      expect(await startSignIn()).toBe('200 ');
+      await until(
+        'the paste prompt',
+        () => worker.localState().setup.sign_in.phase === 'waiting_for_code',
+      );
+      expect(signInsSpawned).toBe(1);
+      expect((await fetch(`${internal}/internal/drain`, { method: 'POST' })).status).toBe(202);
+      expect(await internalState()).toMatchObject({ draining: true, idle: false });
+      // … is not replaced by a new one: starting is refused, and says why …
+      expect(await startSignIn()).toBe('409 draining');
+      expect(worker.localState().setup.sign_in.phase).toBe('waiting_for_code');
+      // … while its code is still taken, and the drain waits for its check.
+      expect((await post(port, 'claude/code', { code: SIGN_IN_FIXTURE.good_code })).status).toBe(
+        200,
+      );
+      await until('the token check', () => checksStarted === 1);
+      expect((await internalState()).idle).toBe(false);
+      releaseCheck();
+      await until('the sign-in stored', () => worker.localState().setup.claude_source === 'file');
+      await until('idle again', () => worker.state().idle);
+      expect(readFileSync(path.join(stateDir, 'claude-token'), 'utf8')).toBe(
+        `${SIGN_IN_FIXTURE.token}\n`,
+      );
+
+      // Still draining: a new sign-in is refused and spawns nothing; a pasted token is taken.
+      expect(worker.state().draining).toBe(true);
+      expect(await startSignIn()).toBe('409 draining');
+      expect(signInsSpawned).toBe(1);
+      expect((await post(port, 'claude/token', { token: SIGN_IN_FIXTURE.token })).status).toBe(200);
+      await until('the paste checked', () => checksStarted === 2 && worker.state().idle);
+      expect(worker.localState().setup.sign_in.failure).toBeNull();
+      expect((await localState(port)).started_at).toBe(before.started_at);
+    } finally {
+      await worker.stop();
+    }
+  });
+
   it('Change platform: idle only; deletes the credential and, under none, the Claude sign-in; 409 with an environment token (WP-294 (3), (6))', async () => {
     for (const auth of ['none', 'token'] as const) {
       const stateDir = stateDirWithCredential();

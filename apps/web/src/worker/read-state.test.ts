@@ -232,6 +232,7 @@ const STATE = {
   },
   claim_blockers: ['not_set_up'],
   error_reporting: { source: 'file', host: 'o1.ingest.sentry.io' },
+  started_at: '2026-11-05T09:00:00.000Z',
   server_time: '2026-11-05T10:05:00.000Z',
 };
 

@@ -356,6 +356,9 @@ each step skipped when its value is already there, each moving on by itself:
    the page offers Claude's sign-in page and a field for the code Claude shows. The token is checked
    once with Claude and kept as `claude-token` (`0600`) in `worker-state`; *Paste a token instead*
    takes the output of `claude setup-token` run anywhere. Nothing of the CLI's screen is logged.
+   While the worker drains for an update it starts no new sign-in (the page says *This worker is
+   updating; it will be back in a minute*); a sign-in already running finishes and a pasted token is
+   still taken. A worker that restarted while you were at this step says so here: sign in again.
 3. **Approve this machine.** The device code, large, with *Copy* and **Open the approval page**,
    which opens the core's `/workers/approve?code=…` — the code filled in, every warning and the
    explicit *Approve* unchanged. A new code appears by itself when one expires or is denied. The
@@ -461,7 +464,8 @@ core keeps advertising it):
 2. **refuses a downgrade** to a build attested before the one it runs, unless the core no longer
    serves its protocol;
 3. pulls the four images, **drains** the worker (`via: worker_internal_drain`) and waits until it holds
-   no run — however long the run in flight takes;
+   no run and no Claude sign-in (or its check) is half done — however long the run in flight takes;
+   a draining worker starts no new sign-in, so the wait ends;
 4. starts a one-shot `update-apply` container **from the new image**, which writes the new build back
    into your install folder — mounted into the updater at `/var/lib/platform/host-bundle`, so a
    Windows folder works too (S-22.21) — your compose file rendered from the template **the new image

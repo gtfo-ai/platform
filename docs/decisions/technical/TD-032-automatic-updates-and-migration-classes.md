@@ -182,7 +182,8 @@ minute, backing off on failure — see the amendment at the end; and, amended th
 credential while the worker holds none, its reports deferred until it does)* and on every `426` the worker
 reports. A different set of digests, each verified (decision 3) → it asks the worker process (local `POST /internal/drain` on the
 worker's own compose network, never published) to stop claiming, waits until it reports **idle** (no run
-held), then the apply container (from the verified new image, carrying its own template): pull the verified images (including the run and egress images, so the
+held — *amended 2026-11-06:* and no Claude sign-in or its token check running; a draining worker refuses
+to start a new sign-in, `409 draining`, so a sequence of them cannot postpone the update), then the apply container (from the verified new image, carrying its own template): pull the verified images (including the run and egress images, so the
 launcher never pulls at create), rewrite the managed `.env` block, `up -d --wait --wait-timeout 120`,
 and check: the worker's `/readyz` reports `core_handshake: ok` within ~120 s. Failure → previous block,
 `up -d`, report `rolled_back` via `POST update-report`. A worker holds no durable state (BD-032 decision

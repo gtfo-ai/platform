@@ -46,6 +46,7 @@ const stateWith = (error_reporting: WorkerLocalErrorReporting): WorkerLocalState
   },
   claim_blockers: [],
   error_reporting,
+  started_at: '2026-11-05T09:00:00.000Z',
   server_time: '2026-11-05T10:00:00.000Z',
 });
 

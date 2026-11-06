@@ -25,7 +25,9 @@
  *    page walks *Connect to a platform* (`core-probe.ts`, stored `core-url`) → *Sign in to Claude*
  *    (`claude-sign-in.ts`, stored `claude-token`) → *Approve this machine* (the device code on the
  *    page, `credential.ts`). Each step is skipped when its value is there — environment first, then
- *    the `worker-state` file — and each advances by itself.
+ *    the `worker-state` file — and each advances by itself. The page's state carries this
+ *    process's `started_at`, so the page can tell a restart mid-sign-in from a sign-in that ended
+ *    (BACKLOG 1053).
  *
  * ## The cycle
  *
@@ -41,7 +43,11 @@
  * reverse. *Drain* is the same hold plus a marker file (`drain-pause`) in `worker-state`: the worker
  * finishes what runs and takes nothing new, and **its next start clears a drain's pause — only a
  * drain's**; an owner's *Pause* survives a restart. `POST /internal/drain` (the updater's) is the
- * same function. A drained worker **stays up, idle**, rather than exiting: `compose.worker.yml`
+ * same function. **A drain waits for a Claude sign-in** (or its token check) already running —
+ * `/internal/state`'s `idle` is false meanwhile — **and refuses to start a new one** (`409
+ * draining`), so a person who keeps starting sign-ins cannot postpone an update forever (BACKLOG
+ * 1054); the running one's code and a pasted token are still taken. A drained worker **stays up,
+ * idle**, rather than exiting: `compose.worker.yml`
  * restarts it `unless-stopped`, so an exit would be a restart, and the restart would clear the
  * drain's pause and claim again — stopping is the person's `docker compose stop` (stated in the PR
  * and BACKLOG). *Cancel run* is the core's `run.cancel` (`runs/:id/cancel`), whose stop this
@@ -422,6 +428,8 @@ export const startRemoteWorker = async (
   let connection: WorkerConnection = 'logging_in';
   let stopping = false;
   let draining = false;
+  /** This process's start — the page's start identity: another one is a restart (BACKLOG 1053). */
+  const startedAt = new Date().toISOString();
   let credential: string | null = null;
   let workerId: string | null = null;
   let workerName: string | null = null;
@@ -1261,6 +1269,15 @@ export const startRemoteWorker = async (
       signIn.cancel();
       return;
     }
+    // A drain waits for a sign-in in progress (`idle`); a new one would postpone it again, and a
+    // sequence of them forever (BACKLOG 1054). The one running, its code and a paste stay allowed.
+    if (draining) {
+      throw new LocalUiError(
+        409,
+        'draining',
+        'this worker is draining (an update, most likely): it starts no new Claude sign-in until it restarts; paste a token instead',
+      );
+    }
     try {
       await signIn.start();
     } catch (error) {
@@ -1487,6 +1504,7 @@ export const startRemoteWorker = async (
         source: dsn === null ? null : sentryFromEnvironment ? 'environment' : 'file',
         host: dsn === null ? null : new URL(dsn).host,
       }))(errorReporter.dsn()),
+      started_at: startedAt,
       server_time: new Date(now).toISOString(),
     };
     return workerLocalStateSchema.parse(redactKeysAndValues(pageRedactor(), value));

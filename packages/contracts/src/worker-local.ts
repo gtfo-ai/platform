@@ -287,6 +287,12 @@ export const workerLocalStateSchema = z.strictObject({
   claim_blockers: z.array(workerClaimBlockerSchema).max(WORKER_CLAIM_BLOCKERS.length),
   /** The *Error reporting* setting (WP-295). */
   error_reporting: workerLocalErrorReportingSchema,
+  /**
+   * When this worker **process** started — its start identity (BACKLOG 1053): the page remembers
+   * the first it saw, and a different one means the worker restarted (an update, or `docker
+   * compose up -d`). A restart while the page was at the Claude step is said there, once.
+   */
+  started_at: isoDateTimeSchema,
   server_time: isoDateTimeSchema,
 });
 export type WorkerLocalState = z.infer<typeof workerLocalStateSchema>;

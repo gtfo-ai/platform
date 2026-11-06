@@ -9,7 +9,9 @@
  *    or an address the worker checks before it keeps it (the browser never probes: its CSP allows
  *    only this page's own origin).
  * 2. **Sign in to Claude** — Claude's own sign-in, run by the worker (`claude setup-token`): open
- *    Claude's page, paste the code it shows. *Paste a token instead* is always there.
+ *    Claude's page, paste the code it shows. *Paste a token instead* is always there — also while
+ *    the worker drains for an update, which refuses a new sign-in (BACKLOG 1054) — and a restart
+ *    while the person was here is said here once (BACKLOG 1053).
  * 3. **Approve this machine** — the code is the page's **dominant element**: large monospace
  *    letters with *Copy*; the primary button opens the platform's approval page with the code
  *    filled in (only when the link is on the platform's own origin); a countdown to the code's
@@ -37,8 +39,10 @@ import {
   hostOf,
   normalisePastedToken,
   PASTED_TOKEN_SHAPE,
+  RESTARTED_WORDS,
   SIGN_IN_FAILURE_WORDS,
   SIGN_IN_PHASE_WORDS,
+  SIGN_IN_REFUSAL_WORDS,
   secondsUntil,
   TOKEN_REFUSAL_WORDS,
   TOKEN_SHAPE_WORDS,
@@ -249,13 +253,17 @@ const ClaudeStep = ({
   client,
   act,
   busy,
+  restarted,
 }: {
   readonly state: WorkerLocalState;
   readonly client: LocalClient;
   readonly act: Act;
   readonly busy: boolean;
+  readonly restarted: boolean;
 }): ReactElement => {
   const [code, setCode] = useState('');
+  /** Why the worker would not start a sign-in now (a drain, BACKLOG 1054), until the next press. */
+  const [startProblem, setStartProblem] = useState<string | null>(null);
   const [token, setToken] = useState('');
   const [tokenProblem, setTokenProblem] = useState<string | null>(null);
   /** Pastes the worker took: a paste that supersedes a running check starts the count again. */
@@ -271,6 +279,25 @@ const ClaudeStep = ({
     );
   }
   const showsCode = signIn.phase === 'starting' || signIn.phase === 'waiting_for_code';
+  const startSignIn = (): void => {
+    setStartProblem(null);
+    void act(async () => {
+      try {
+        return await client.signIn('start');
+      } catch (error) {
+        // A drain refuses a new sign-in: said beside the button; the paste below still works.
+        const words =
+          error instanceof LocalCallError && Object.hasOwn(SIGN_IN_REFUSAL_WORDS, error.code)
+            ? SIGN_IN_REFUSAL_WORDS[error.code]
+            : undefined;
+        if (words !== undefined) {
+          setStartProblem(words);
+          return await client.state();
+        }
+        throw error;
+      }
+    });
+  };
   const running = showsCode || signIn.phase === 'checking';
   const submitToken = (): void => {
     const pasted = normalisePastedToken(token);
@@ -302,6 +329,11 @@ const ClaudeStep = ({
   };
   return (
     <div className="flex flex-col gap-5">
+      {restarted ? (
+        <Flash tone="warning" live="status" data-testid="worker-restarted">
+          {RESTARTED_WORDS}
+        </Flash>
+      ) : null}
       {state.setup.claude_rejected ? (
         <Flash tone="warning" title="Claude no longer accepts this sign-in">
           This worker takes no work until you sign in again.
@@ -318,13 +350,15 @@ const ClaudeStep = ({
       ) : null}
       {signIn.phase === 'idle' || signIn.phase === 'failed' ? (
         <div>
-          <Button
-            tone="primary"
-            disabled={busy}
-            onClick={() => void act(() => client.signIn('start'))}
-          >
+          <Button tone="primary" disabled={busy} onClick={startSignIn}>
             {signIn.phase === 'failed' ? 'Sign in again' : 'Sign in with Claude'}
           </Button>
+          {/* Said while the drain lasts: the worker's restart ends it (and says so above). */}
+          {startProblem === null || !state.draining ? null : (
+            <p className="mt-2 text-sm text-fg" role="status" data-sign-in-refused="">
+              {startProblem}
+            </p>
+          )}
         </div>
       ) : null}
       {signIn.phase === 'starting' && signIn.url === null ? (
@@ -617,6 +651,8 @@ export interface WizardProps {
   readonly act: Act;
   readonly busy: boolean;
   readonly error: string | null;
+  /** The worker restarted while the person was at the Claude step (`restartNoticeOf`). */
+  readonly restarted?: boolean;
   readonly writeText?: (text: string) => Promise<void>;
 }
 
@@ -627,6 +663,7 @@ export const Wizard = ({
   act,
   busy,
   error,
+  restarted = false,
   writeText = defaultWriteText,
 }: WizardProps): ReactElement => {
   const view = wizardOf(state) as WizardView;
@@ -658,7 +695,7 @@ export const Wizard = ({
           {view.current === 'platform' ? (
             <PlatformStep state={state} client={client} act={act} busy={busy} />
           ) : view.current === 'claude' ? (
-            <ClaudeStep state={state} client={client} act={act} busy={busy} />
+            <ClaudeStep state={state} client={client} act={act} busy={busy} restarted={restarted} />
           ) : (
             <ApproveStep
               state={state}
