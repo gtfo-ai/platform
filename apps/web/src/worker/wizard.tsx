@@ -19,12 +19,7 @@
  * shows is read off the answer (`wizardOf`), so nothing here navigates. Every word is a `Record` in
  * `model.ts`. Every value from elsewhere — a platform's version, an address — is rendered as text.
  */
-import {
-  CLAUDE_OAUTH_TOKEN_SHAPE,
-  normaliseClaudeToken,
-  type WorkerLocalCoreCheckResponse,
-  type WorkerLocalState,
-} from '@platform/contracts';
+import type { WorkerLocalCoreCheckResponse, WorkerLocalState } from '@platform/contracts';
 import { CopyIcon } from '@primer/octicons-react/CopyIcon';
 import { type ReactElement, useEffect, useId, useState } from 'react';
 import { Button, buttonClassName } from '../ui/button.js';
@@ -40,6 +35,8 @@ import {
   CORE_FAILURE_WORDS,
   countdownWords,
   hostOf,
+  normalisePastedToken,
+  PASTED_TOKEN_SHAPE,
   SIGN_IN_FAILURE_WORDS,
   SIGN_IN_PHASE_WORDS,
   secondsUntil,
@@ -269,9 +266,9 @@ const ClaudeStep = ({
   const showsCode = signIn.phase === 'starting' || signIn.phase === 'waiting_for_code';
   const running = showsCode || signIn.phase === 'checking';
   const submitToken = (): void => {
-    const pasted = normaliseClaudeToken(token);
+    const pasted = normalisePastedToken(token);
     if (pasted === '') return;
-    if (!CLAUDE_OAUTH_TOKEN_SHAPE.test(pasted)) {
+    if (!PASTED_TOKEN_SHAPE.test(pasted)) {
       setTokenProblem(TOKEN_SHAPE_WORDS);
       return;
     }
