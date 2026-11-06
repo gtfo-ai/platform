@@ -1,6 +1,7 @@
 /**
  * The *Add a worker* wizard (S-23.20) in the built bundle, against the fake backend: entered from the
- * top bar's `+` menu, its one-line installer and its by-hand commands carry this page's origin,
+ * top bar's `+` menu, its one-line installers (macOS/Linux and Windows, the browser's platform's
+ * first) and its by-hand commands carry this page's origin,
  * Install continues on the person's word, Start points at the worker's page and keeps the hand-made Claude
  * sign-in and its troubleshooting as fallbacks, Approve is done by a worker of this
  * person created since the wizard opened, and Ready lists what stops that worker in words.
@@ -31,12 +32,18 @@ test('Add a worker: from the + menu through Install and Start, with this platfor
   await expect(page).toHaveURL(/[?&]since=/);
 
   const origin = new URL(baseURL ?? '').origin;
-  // The core serves the one-line installer (S-22.20, `INSTALLER_AVAILABLE`): macOS/Linux only for
-  // now, with the by-hand setup behind a disclosure.
+  // The core serves the one-line installers (S-22.20, S-22.21, `INSTALLER_AVAILABLE`): both shown,
+  // macOS/Linux first on this Linux browser, with the by-hand setup behind a disclosure.
+  await expect(page.locator('[data-installer]')).toHaveCount(2);
+  await expect(page.locator('[data-installer]').first()).toHaveAttribute('data-installer', 'unix');
   await expect(page.getByLabel('macOS or Linux (Terminal)', { exact: true })).toHaveValue(
     `curl -fsSL '${origin}/api/worker/v1/install.sh' | sh`,
   );
-  await expect(page.getByText('Windows: coming next.')).toBeVisible();
+  await expect(page.getByLabel('Windows (PowerShell)', { exact: true })).toHaveValue(
+    `powershell -ExecutionPolicy ByPass -c "irm '${origin}/api/worker/v1/install.ps1' | iex"`,
+  );
+  await expect(page.getByRole('link', { name: 'Read the script first' })).toHaveCount(2);
+  await expect(page.getByText(/coming next/)).toHaveCount(0);
   await page.getByText('Set it up by hand', { exact: true }).click();
   await expect(page.getByLabel('Download the worker’s compose file', { exact: true })).toHaveValue(
     `curl -fsSo compose.worker.yml ${origin}/api/worker/v1/compose.yml`,
@@ -73,6 +80,35 @@ test('Add a worker: from the + menu through Install and Start, with this platfor
   // No worker of this person was created since the wizard opened.
   await expect(page.getByText(/Waiting for your new worker to appear/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Continue to Ready to work' })).toBeDisabled();
+});
+
+test('Add a worker: a browser on Windows sees the PowerShell line first', async ({
+  page,
+  baseURL,
+}) => {
+  // What a Windows Chromium reports: the client hint and the older property.
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'Win32' });
+    Object.defineProperty(Navigator.prototype, 'userAgentData', {
+      get: () => ({ platform: 'Windows' }),
+    });
+  });
+  await page.goto('/workers/new?step=install');
+  await expect(page.getByRole('heading', { level: 2, name: 'Install' })).toBeVisible();
+  const origin = new URL(baseURL ?? '').origin;
+  const installers = page.locator('[data-installer]');
+  await expect(installers).toHaveCount(2);
+  await expect(installers.first()).toHaveAttribute('data-installer', 'windows');
+  await expect(installers.first().getByLabel('Windows (PowerShell)', { exact: true })).toHaveValue(
+    `powershell -ExecutionPolicy ByPass -c "irm '${origin}/api/worker/v1/install.ps1' | iex"`,
+  );
+  await installers.first().getByText('Or download it, read it, then run it').click();
+  await expect(page.getByLabel('Download it and open it in Notepad', { exact: true })).toHaveValue(
+    `irm '${origin}/api/worker/v1/install.ps1' -OutFile install.ps1; notepad install.ps1`,
+  );
+  await expect(page.getByLabel('Then run it', { exact: true })).toHaveValue(
+    'powershell -ExecutionPolicy ByPass -File install.ps1',
+  );
 });
 
 test('Add a worker: a worker of this person since the wizard opened is approved, and Ready says why it takes nothing', async ({

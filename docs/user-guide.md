@@ -1606,11 +1606,22 @@ the top right. The step is in the address, so a link (or Home's checklist) opens
 off.
 
 1. **Install.** What a worker is, what you need (Docker on that computer and a Claude
-   subscription), and one line to copy for macOS or Linux, built from this platform's own address:
-   `curl -fsSL '<platform>/api/worker/v1/install.sh' | sh`, with **Read the script first**. The
-   script checks Docker, puts the worker in `~/agentic-worker`, starts it for this platform and
-   opens http://127.0.0.1:7357, the worker's own page. Windows is *coming next*. **Set it up by
-   hand** holds the three lines instead: the `curl` that downloads `compose.worker.yml`, the
+   subscription), and one line to copy per system, built from this platform's own address — the
+   one for the system your browser runs on first:
+   - **macOS or Linux (Terminal):** `curl -fsSL '<platform>/api/worker/v1/install.sh' | sh`;
+   - **Windows (PowerShell):**
+     `powershell -ExecutionPolicy ByPass -c "irm '<platform>/api/worker/v1/install.ps1' | iex"`, in
+     Windows PowerShell 5.1 or PowerShell 7 (a bare `irm … | iex` is refused under Windows' default
+     execution policy). It needs Docker Desktop for Windows installed and running in Linux
+     containers mode (Windows containers are refused) and the Docker Compose v2 that ships with it;
+     it needs no administrator rights, installs into `$HOME\agentic-worker`, and adds no service and
+     no PATH change. **Or download it, read it, then run it** gives
+     `irm '<platform>/api/worker/v1/install.ps1' -OutFile install.ps1; notepad install.ps1` and then
+     `powershell -ExecutionPolicy ByPass -File install.ps1`.
+
+   Each has **Read the script first**. The script checks Docker, puts the worker in
+   `~/agentic-worker`, starts it for this platform and opens http://127.0.0.1:7357, the worker's own
+   page. **Set it up by hand** holds the three lines instead: the `curl` that downloads `compose.worker.yml`, the
    `APP_CORE_URL=…` line for a `.env.worker` file beside it, and
    `docker compose --env-file .env.worker -f compose.worker.yml up -d`; then open
    http://127.0.0.1:7357 on that computer.

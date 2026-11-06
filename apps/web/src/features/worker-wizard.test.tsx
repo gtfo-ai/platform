@@ -120,6 +120,12 @@ const stepStates = () =>
     .getAllByRole('listitem')
     .map((item) => item.getAttribute('data-step-state'));
 
+/** The installers in the order the Install step shows them. */
+const installerOrder = () =>
+  [...document.querySelectorAll('[data-installer]')].map((element) =>
+    element.getAttribute('data-installer'),
+  );
+
 const continueButton = (name: RegExp) => screen.getByRole('button', { name }) as HTMLButtonElement;
 
 afterEach(() => {
@@ -133,6 +139,22 @@ beforeEach(() => {
 });
 
 describe('Add a worker: Install', () => {
+  it('shows the Windows PowerShell line first on a browser that says it runs on Windows', async () => {
+    Object.defineProperty(window.navigator, 'platform', { configurable: true, get: () => 'Win32' });
+    try {
+      start(newWorld(), wizardUrl('install'));
+      await screen.findByRole('heading', { level: 2, name: 'Install' });
+      expect(installerOrder()).toEqual(['windows', 'unix']);
+      expect((screen.getByLabelText('Windows (PowerShell)') as HTMLInputElement).value).toBe(
+        `powershell -ExecutionPolicy ByPass -c "irm '${window.location.origin}/api/worker/v1/install.ps1' | iex"`,
+      );
+      expect(screen.getAllByRole('link', { name: 'Read the script first' })).toHaveLength(2);
+      expect(primaries()).toHaveLength(1);
+    } finally {
+      // Back to happy-dom's own getter on Navigator.prototype.
+      Reflect.deleteProperty(window.navigator, 'platform');
+    }
+  });
   it('lists every step, shows the commands with this platform’s origin and continues only on the person’s word', async () => {
     start(newWorld(), '/workers/new');
     expect(await screen.findByRole('heading', { level: 2, name: 'Install' })).toBeTruthy();
@@ -153,8 +175,10 @@ describe('Add a worker: Install', () => {
     ]);
 
     const origin = window.location.origin;
-    // INSTALLER_AVAILABLE (S-23.24): the macOS/Linux one-liner leads, with its script to read; no
-    // Windows line yet (BACKLOG 984), and the by-hand setup is behind *Set it up by hand*.
+    // INSTALLER_AVAILABLE (S-23.24): both one-liners, each with its script to read — macOS/Linux
+    // first on a browser that does not say Windows (happy-dom's is Linux; BACKLOG 984) — and the
+    // by-hand setup behind *Set it up by hand*.
+    expect(installerOrder()).toEqual(['unix', 'windows']);
     const installer = document.querySelector('[data-installer="unix"]') as HTMLElement;
     expect(installer.closest('details')).toBeNull();
     expect(
@@ -163,9 +187,29 @@ describe('Add a worker: Install', () => {
     expect(
       within(installer).getByRole('link', { name: 'Read the script first' }).getAttribute('href'),
     ).toBe(`${origin}/api/worker/v1/install.sh`);
-    expect(screen.getByText('Windows: coming next.')).toBeTruthy();
-    expect(document.querySelector('[data-installer="windows"]')).toBeNull();
-    expect(screen.queryByText(/install\.ps1|iex/)).toBeNull();
+    const windows = document.querySelector('[data-installer="windows"]') as HTMLElement;
+    expect(windows.closest('details')).toBeNull();
+    expect((within(windows).getByLabelText('Windows (PowerShell)') as HTMLInputElement).value).toBe(
+      `powershell -ExecutionPolicy ByPass -c "irm '${origin}/api/worker/v1/install.ps1' | iex"`,
+    );
+    expect(
+      within(windows).getByRole('link', { name: 'Read the script first' }).getAttribute('href'),
+    ).toBe(`${origin}/api/worker/v1/install.ps1`);
+    const windowsNote = within(windows).getByText(/Linux containers mode/).textContent ?? '';
+    expect(windowsNote).toMatch(/Docker Desktop for Windows installed and running/);
+    expect(windowsNote).toMatch(/No administrator rights needed/);
+    const readFirst = windows.querySelector('[data-windows-read-first]') as HTMLElement;
+    expect(readFirst.closest('details')?.querySelector('summary')?.textContent).toBe(
+      'Or download it, read it, then run it',
+    );
+    expect(
+      (within(readFirst).getByLabelText('Download it and open it in Notepad') as HTMLInputElement)
+        .value,
+    ).toBe(`irm '${origin}/api/worker/v1/install.ps1' -OutFile install.ps1; notepad install.ps1`);
+    expect((within(readFirst).getByLabelText('Then run it') as HTMLInputElement).value).toBe(
+      'powershell -ExecutionPolicy ByPass -File install.ps1',
+    );
+    expect(screen.queryByText(/coming next/)).toBeNull();
 
     const byHand = document.querySelector('[data-by-hand]') as HTMLElement;
     expect(byHand.closest('details')?.querySelector('summary')?.textContent).toBe(

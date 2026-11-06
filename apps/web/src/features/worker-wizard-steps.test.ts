@@ -8,7 +8,9 @@ import { describe, expect, it } from 'vitest';
 import { NOW, USER_ID, workerFixture } from './worker.test-fixture.js';
 import {
   blockingWorkerStepOf,
+  browserPlatformOf,
   INSTALLER_AVAILABLE,
+  preferredInstallOs,
   projectTakesWorkers,
   resumeWorkerStepOf,
   WORKER_INSTALL_PATHS,
@@ -147,17 +149,49 @@ describe('workerInstallCommands', () => {
       'APP_CORE_URL=https://agentic.example.test:8443',
     );
   });
-  it('runs the core’s shell installer in one line, from the paths in one constant', () => {
-    const { installer } = workerInstallCommands('https://agentic.example.test/');
+  it('runs the core’s shell and PowerShell installers in one line each, from the paths in one constant (BACKLOG 984)', () => {
+    const { installer } = workerInstallCommands('https://agentic.example.test/some/path?x=1');
     expect(installer).toEqual({
-      url: 'https://agentic.example.test/api/worker/v1/install.sh',
-      run: "curl -fsSL 'https://agentic.example.test/api/worker/v1/install.sh' | sh",
+      unix: {
+        url: 'https://agentic.example.test/api/worker/v1/install.sh',
+        run: "curl -fsSL 'https://agentic.example.test/api/worker/v1/install.sh' | sh",
+      },
+      windows: {
+        url: 'https://agentic.example.test/api/worker/v1/install.ps1',
+        // Through `-ExecutionPolicy ByPass`: a bare `irm | iex` is refused under Windows' default.
+        run: `powershell -ExecutionPolicy ByPass -c "irm 'https://agentic.example.test/api/worker/v1/install.ps1' | iex"`,
+        download:
+          "irm 'https://agentic.example.test/api/worker/v1/install.ps1' -OutFile install.ps1; notepad install.ps1",
+        runFile: 'powershell -ExecutionPolicy ByPass -File install.ps1',
+      },
     });
-    // The PowerShell path is kept for S-22.21 (BACKLOG 984); no line runs it yet.
-    expect(WORKER_INSTALL_PATHS.windows).toBe('/api/worker/v1/install.ps1');
-    expect(JSON.stringify(workerInstallCommands('https://agentic.example.test/'))).not.toContain(
-      'install.ps1',
-    );
+    expect(WORKER_INSTALL_PATHS).toEqual({
+      unix: '/api/worker/v1/install.sh',
+      windows: '/api/worker/v1/install.ps1',
+    });
+  });
+  it('shows the Windows installer first only on a browser that says it runs on Windows', () => {
+    expect(preferredInstallOs('Windows')).toBe('windows');
+    expect(preferredInstallOs('Win32')).toBe('windows');
+    expect(preferredInstallOs('Win64')).toBe('windows');
+    // `Darwin` contains `win`; a bare match would send a Mac to PowerShell.
+    expect(preferredInstallOs('Darwin')).toBe('unix');
+    expect(preferredInstallOs('MacIntel')).toBe('unix');
+    expect(preferredInstallOs('macOS')).toBe('unix');
+    expect(preferredInstallOs('Linux x86_64')).toBe('unix');
+    expect(preferredInstallOs('')).toBe('unix');
+  });
+  it('reads the browser’s platform defensively: the client hint first, then navigator.platform, else nothing', () => {
+    expect(
+      browserPlatformOf({ userAgentData: { platform: 'Windows' }, platform: 'MacIntel' }),
+    ).toBe('Windows');
+    expect(browserPlatformOf({ userAgentData: { platform: '' }, platform: 'Win32' })).toBe('Win32');
+    expect(browserPlatformOf({ userAgentData: null, platform: 'Win32' })).toBe('Win32');
+    expect(browserPlatformOf({ userAgentData: { platform: 7 }, platform: 'Linux' })).toBe('Linux');
+    expect(browserPlatformOf({ platform: 42 })).toBe('');
+    expect(browserPlatformOf({})).toBe('');
+    expect(browserPlatformOf(undefined)).toBe('');
+    expect(browserPlatformOf(null)).toBe('');
   });
   it('shows the installer, since the core serves it (S-22.20; BACKLOG 927 closed)', () => {
     expect(INSTALLER_AVAILABLE).toBe(true);

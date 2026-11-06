@@ -27,11 +27,12 @@
  *
  * ## The commands
  *
- * Install is **one command** — the core's shell installer ({@link WORKER_INSTALL_PATHS}, S-22.20),
- * which checks Docker, puts the bundle in {@link WORKER_INSTALL_DIR}, starts it and opens the
- * worker's own page — with the compose file and `.env.worker` lines behind *Set it up by hand*
- * while {@link INSTALLER_AVAILABLE} says the core serves it. Windows' PowerShell line comes with
- * S-22.21 (BACKLOG 984).
+ * Install is **one command** — the core's installer ({@link WORKER_INSTALL_PATHS}, S-22.20): the
+ * shell one for macOS and Linux, the PowerShell one for Windows (S-22.21, BACKLOG 984), both shown,
+ * the browser's own platform's first ({@link preferredInstallOs}). Each checks Docker, puts the
+ * bundle in {@link WORKER_INSTALL_DIR}, starts it and opens the worker's own page — with the
+ * compose file and `.env.worker` lines behind *Set it up by hand* while {@link INSTALLER_AVAILABLE}
+ * says the core serves them.
  * Start is then the worker's own page, which signs in to Claude; the hand-made sign-in
  * (`claude setup-token`) stays as that step's fallback.
  */
@@ -196,19 +197,75 @@ export const INSTALLER_AVAILABLE: boolean = true;
 
 /**
  * The one-command installer's paths on the core (S-22.20), one constant so a changed path is one
- * edit. Only the shell installer is shown for now: the PowerShell one (`windows`) is kept here for
- * when S-22.21 serves it (BACKLOG 984).
+ * edit: the shell installer (macOS and Linux) and the PowerShell one (Windows, S-22.21). Both are
+ * shown.
  */
 export const WORKER_INSTALL_PATHS = {
   unix: `${WORKER_API_PREFIX}/install.sh`,
   windows: `${WORKER_API_PREFIX}/install.ps1`,
 } as const;
 
+/** Which installer: the shell one (macOS and Linux) or the PowerShell one (Windows). */
+export type InstallOs = keyof typeof WORKER_INSTALL_PATHS;
+
+/**
+ * The installer to show first, from what the browser says it runs on — a guess about the computer
+ * the person is reading on, which is usually the one they install on; the other one is right below
+ * it. Anything that does not name Windows, an empty string included, is macOS/Linux.
+ */
+export const preferredInstallOs = (platform: string): InstallOs =>
+  // `Windows`/`Win32`/`Win64` — never a bare `win`, which `Darwin` contains.
+  /\bWin(?:dows|32|64)\b/.test(platform) ? 'windows' : 'unix';
+
+/**
+ * What the browser says it runs on: `navigator.userAgentData.platform` (`Windows`, `macOS`,
+ * `Linux`; Chromium only) and else the older `navigator.platform` (`Win32`, `MacIntel`, …), read
+ * defensively — either may be missing, and neither is typed the same in every browser — and `''`
+ * when neither is a string.
+ */
+export const browserPlatformOf = (navigator: unknown): string => {
+  if (typeof navigator !== 'object' || navigator === null) {
+    return '';
+  }
+  const { userAgentData, platform } = navigator as {
+    readonly userAgentData?: unknown;
+    readonly platform?: unknown;
+  };
+  const hinted =
+    typeof userAgentData === 'object' && userAgentData !== null
+      ? (userAgentData as { readonly platform?: unknown }).platform
+      : undefined;
+  if (typeof hinted === 'string' && hinted !== '') {
+    return hinted;
+  }
+  return typeof platform === 'string' ? platform : '';
+};
+
+/** What each installer is called on screen; also its field's label. */
+export const INSTALL_OS_LABEL: Readonly<Record<InstallOs, string>> = {
+  unix: 'macOS or Linux (Terminal)',
+  windows: 'Windows (PowerShell)',
+};
+
+/** An installer's URL and the one line that runs it. */
+export interface InstallerLine {
+  readonly url: string;
+  readonly run: string;
+}
+
 /** The commands the wizard shows, built from this platform's own origin. */
 export interface WorkerInstallCommands {
   readonly origin: string;
-  /** The shell installer's URL and the line that runs it (macOS and Linux). */
-  readonly installer: { readonly url: string; readonly run: string };
+  /** Each installer's URL and the line that runs it. */
+  readonly installer: {
+    readonly unix: InstallerLine;
+    /**
+     * Through `powershell -ExecutionPolicy ByPass`, as `install.ps1`'s own header says: a bare
+     * `irm | iex` is refused under Windows' default execution policy. `download` and `runFile` are
+     * the same header's way to read the script before running it.
+     */
+    readonly windows: InstallerLine & { readonly download: string; readonly runFile: string };
+  };
   readonly download: string;
   readonly coreUrlLine: string;
   readonly signIn: string;
@@ -230,8 +287,16 @@ export const workerInstallCommands = (pageOrigin: string): WorkerInstallCommands
   return {
     origin,
     installer: {
-      url: `${origin}${WORKER_INSTALL_PATHS.unix}`,
-      run: `curl -fsSL '${origin}${WORKER_INSTALL_PATHS.unix}' | sh`,
+      unix: {
+        url: `${origin}${WORKER_INSTALL_PATHS.unix}`,
+        run: `curl -fsSL '${origin}${WORKER_INSTALL_PATHS.unix}' | sh`,
+      },
+      windows: {
+        url: `${origin}${WORKER_INSTALL_PATHS.windows}`,
+        run: `powershell -ExecutionPolicy ByPass -c "irm '${origin}${WORKER_INSTALL_PATHS.windows}' | iex"`,
+        download: `irm '${origin}${WORKER_INSTALL_PATHS.windows}' -OutFile install.ps1; notepad install.ps1`,
+        runFile: 'powershell -ExecutionPolicy ByPass -File install.ps1',
+      },
     },
     download: `curl -fsSo compose.worker.yml ${origin}${WORKER_API_PREFIX}/${WORKER_PATHS.composeFile}`,
     coreUrlLine: `APP_CORE_URL=${origin}`,

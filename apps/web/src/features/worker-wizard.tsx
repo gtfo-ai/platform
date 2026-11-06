@@ -52,9 +52,13 @@ import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { isReadyToWork, type WorkerClaimBlocker, workerReadinessOf } from './worker-readiness.js';
 import {
   blockingWorkerStepOf,
+  browserPlatformOf,
   credentialKeepsWorkersOff,
+  INSTALL_OS_LABEL,
   INSTALLER_AVAILABLE,
+  type InstallOs,
   nextWorkerStep,
+  preferredInstallOs,
   previousWorkerStep,
   projectTakesWorkers,
   resumeWorkerStepOf,
@@ -152,20 +156,43 @@ const CheckLine = ({
 
 // ── The steps ────────────────────────────────────────────────────────────────
 
-/** The shell installer: the line to paste and the script itself, to read before running it. */
-const Installer = ({ commands }: { readonly commands: WorkerInstallCommands }): ReactElement => (
-  <div className="flex flex-col gap-1" data-installer="unix">
-    <CopyField label="macOS or Linux (Terminal)" value={commands.installer.run} />
+/** One OS's installer: the line to paste and the script itself, to read before running it. */
+const Installer = ({
+  os,
+  commands,
+}: {
+  readonly os: InstallOs;
+  readonly commands: WorkerInstallCommands;
+}): ReactElement => (
+  <div className="flex flex-col gap-1" data-installer={os}>
+    <CopyField label={INSTALL_OS_LABEL[os]} value={commands.installer[os].run} />
+    {os === 'windows' ? (
+      // What `install.ps1` itself checks and states (apps/server/src/workers/install/install.ps1).
+      <p className="max-w-prose text-xs text-fg-muted" data-windows-note="">
+        Paste it into PowerShell (Windows PowerShell 5.1 or PowerShell 7). It needs Docker Desktop
+        for Windows installed and running in Linux containers mode (Windows containers are refused),
+        with the Docker Compose v2 that ships with it. No administrator rights needed: it installs
+        into <code>$HOME\agentic-worker</code>, with no service and no PATH change.
+      </p>
+    ) : null}
     <p className="text-xs">
       <ExternalLink
-        url={commands.installer.url}
+        url={commands.installer[os].url}
         label="Read the script first"
         className="text-link underline"
       />
     </p>
-    <p className="text-xs text-fg-muted" data-windows-installer="">
-      Windows: coming next.
-    </p>
+    {os === 'windows' ? (
+      <DetailsDisclosure summary="Or download it, read it, then run it">
+        <div className="flex flex-col gap-2" data-windows-read-first="">
+          <CopyField
+            label="Download it and open it in Notepad"
+            value={commands.installer.windows.download}
+          />
+          <CopyField label="Then run it" value={commands.installer.windows.runFile} />
+        </div>
+      </DetailsDisclosure>
+    ) : null}
   </div>
 );
 
@@ -192,11 +219,14 @@ const ByHand = ({ commands }: { readonly commands: WorkerInstallCommands }): Rea
 
 const InstallStep = ({
   commands,
+  firstOs,
   installerAvailable,
   installed,
   onInstalled,
 }: {
   readonly commands: WorkerInstallCommands;
+  /** The installer the browser's platform suggests: shown first, the other right below it. */
+  readonly firstOs: InstallOs;
   /** {@link INSTALLER_AVAILABLE}: the one-line installer is served, so it is the way shown first. */
   readonly installerAvailable: boolean;
   readonly installed: boolean;
@@ -219,13 +249,17 @@ const InstallStep = ({
       {installerAvailable ? (
         <>
           <div className="flex flex-col gap-3">
-            <p className="text-sm">On the computer that will run agent work, run this one line:</p>
-            <Installer commands={commands} />
+            <p className="text-sm">
+              On the computer that will run agent work, run the one line for its system:
+            </p>
+            <Installer os={firstOs} commands={commands} />
+            <Installer os={firstOs === 'unix' ? 'windows' : 'unix'} commands={commands} />
             <p className="max-w-prose text-xs text-fg-muted">
               The script checks that Docker runs, puts the worker in{' '}
-              <code>{WORKER_INSTALL_DIR}</code>, starts it for <code>{commands.origin}</code> and
-              opens <code>{WORKER_LOCAL_PAGE}</code>, the worker’s own page, which guides the next
-              two steps.
+              <code>{WORKER_INSTALL_DIR}</code> (<code>$HOME\agentic-worker</code> on Windows),
+              starts it for <code>{commands.origin}</code> and opens{' '}
+              <code>{WORKER_LOCAL_PAGE}</code>, the worker’s own page, which guides the next two
+              steps.
             </p>
           </div>
           <DetailsDisclosure summary="Set it up by hand">
@@ -744,6 +778,7 @@ const Wizard = ({ place }: { readonly place: WizardPlace }): ReactElement => {
     ) : current === 'install' ? (
       <InstallStep
         commands={commands}
+        firstOs={preferredInstallOs(browserPlatformOf(globalThis.navigator))}
         installerAvailable={INSTALLER_AVAILABLE}
         installed={place.installed}
         onInstalled={(installed) => {
