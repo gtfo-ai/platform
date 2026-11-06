@@ -141,27 +141,19 @@ export const ReadinessPopover = ({
   project,
   trigger,
   triggerId,
-  defaultOpen,
 }: {
   readonly level: number;
   readonly project: { readonly id: string; readonly key: string };
   /** The badge, drawn by `readiness-label.tsx` exactly as its plain button was. */
   readonly trigger: ReactElement;
-  /** The plain button's id, kept, so the focus and the anchor survive the swap. */
+  /** The plain button's id, kept, so the focus survives the swap. */
   readonly triggerId: string;
-  /** The badge was pressed before this chunk arrived. */
-  readonly defaultOpen: boolean;
 }): ReactElement => {
   const look = levelLook(level);
   const next = levelLook(level + 1);
   const needs = READINESS_RUNG_REQUIREMENTS[level];
   return (
-    <Popover
-      title={readinessLadderName(level)}
-      trigger={trigger}
-      triggerId={triggerId}
-      defaultOpen={defaultOpen}
-    >
+    <Popover title={readinessLadderName(level)} trigger={trigger} triggerId={triggerId}>
       <p>
         {READINESS_LEVEL_MEANINGS[level] ??
           `This version of the platform does not name level ${level}.`}

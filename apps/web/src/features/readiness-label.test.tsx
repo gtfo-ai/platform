@@ -183,24 +183,33 @@ describe('the readiness badge, per level', () => {
 });
 
 describe('the readiness popover', () => {
-  it('is a lazy chunk: the badge is a plain button until it is approached, and the swap keeps the focus (S-25.6)', async () => {
+  it('is a lazy chunk: the badge is a plain button until it is pressed, and the swap keeps the focus (S-25.6)', async () => {
+    const user = userEvent.setup();
     render(createApp({ fetchImpl: fetchFor(0), realtime: false }).element);
     const plain = await badge('Plans need your OK');
     // The popover trigger's own attributes, before its module has arrived.
     expect(plain.getAttribute('aria-haspopup')).toBe('dialog');
     expect(plain.getAttribute('aria-expanded')).toBe('false');
+    // Hover and focus only fetch the chunk ahead: the element under the pointer stays the same, so
+    // a press on its way is not lost to a swap (CI on #83).
+    await user.hover(plain);
     plain.focus();
-    // Focus imports the chunk; the popover's trigger replaces the button — a new element with the
-    // same id and name — and the focus moves with it rather than falling to the body.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Readiness: Plans need your OK' })).not.toBe(plain);
-    });
-    const swapped = screen.getByRole('button', { name: 'Readiness: Plans need your OK' });
-    expect(swapped.id).toBe(plain.id);
-    expect(document.activeElement).toBe(swapped);
+    await new Promise((settle) => setTimeout(settle, 50));
+    expect(screen.getByRole('button', { name: 'Readiness: Plans need your OK' })).toBe(plain);
     expect(screen.queryByRole('dialog')).toBeNull();
-    // Nothing was read: approaching the badge is not opening it.
     expect(readinessReads).toBe(0);
+    // A press swaps it: the popover's trigger — a new element, the same id and name — opens at once.
+    await user.keyboard('{Enter}');
+    expect(await screen.findByRole('dialog', { name: 'Level 0 · Unverified' })).toBeTruthy();
+    const swapped = screen.getByRole('button', { name: 'Readiness: Plans need your OK' });
+    expect(swapped).not.toBe(plain);
+    expect(swapped.id).toBe(plain.id);
+    // …and the focus comes back to it, not to the body, when the popover closes.
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(document.activeElement).toBe(swapped);
   });
 
   it('opens from the keyboard and gives the focus back on Escape', async () => {

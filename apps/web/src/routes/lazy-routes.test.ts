@@ -31,7 +31,11 @@ const rendering = (Object.values(router.routesById) as AnyRoute[]).filter(
 const isLazy = (route: AnyRoute): boolean =>
   typeof (route.options.component as Preloadable).preload === 'function';
 
-/** The frame (root, shell, project layout), the sign-in page, Home and the not-found screen. */
+/**
+ * The frame (root, shell, project layout and, since S-25.6, the Admin screens' layout — eager by
+ * measurement: as a chunk it split a module shared with the worker's page, `routes/tree.tsx`), the
+ * sign-in page, Home and the not-found screen.
+ */
 const EAGER = [
   '/authenticated/$',
   '__root__',
@@ -39,6 +43,7 @@ const EAGER = [
   '/authenticated',
   '/authenticated/',
   '/authenticated/projects/$key',
+  '/authenticated/admin',
 ];
 
 describe('the lazy screens', () => {
@@ -62,6 +67,8 @@ describe('the lazy screens', () => {
     const lazy = rendering.filter(isLazy);
     expect(lazy.map((route) => route.id)).toContain('/authenticated/projects');
     expect(lazy.map((route) => route.id)).toContain('/authenticated/projects/$key/');
+    // The Admin screens under the eager layout stay chunks of their own (S-25.6).
+    expect(lazy.map((route) => route.id)).toContain('/authenticated/admin/workers/approve');
     // The preload resolves: the chunk's module loads and its export is there to render.
     await Promise.all(lazy.map((route) => (route.options.component as Preloadable).preload?.()));
   });

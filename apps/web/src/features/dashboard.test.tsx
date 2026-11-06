@@ -960,7 +960,7 @@ describe('Home: background failures in Needs you, for an administrator (S-25.6, 
       failedJobs: 1,
     });
     start(world);
-    const needs = box('Needs you');
+    const needs = await screen.findByRole('region', { name: 'Needs you' });
     const stuck = await within(needs).findByRole('link', { name: 'Review 3 events are stuck' });
     expect(stuck.getAttribute('href')).toBe('/settings/dead-letters');
     expect(
@@ -996,7 +996,7 @@ describe('Home: background failures in Needs you, for an administrator (S-25.6, 
     async (_what, counts) => {
       const world = newWorld(counts);
       start(world);
-      const needs = box('Needs you');
+      const needs = await screen.findByRole('region', { name: 'Needs you' });
       expect(
         await within(needs).findByText('Background failures could not be checked.'),
       ).toBeTruthy();

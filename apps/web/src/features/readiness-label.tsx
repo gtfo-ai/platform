@@ -23,11 +23,12 @@
  * on Home, both in the initial graph, and Base UI's Popover with its positioning code is several
  * kB of TD-013's 300 kB budget that a first paint never uses. So the badge is a plain `<button>`
  * with the trigger's own name and attributes, and `readiness-popover.tsx` (Popover, its content and
- * the readiness read) is imported the first time the pointer rests on it, it takes the focus, or it
- * is pressed. Once the chunk is there the popover's own trigger replaces the button — the same
- * element, classes and id — and the focus is put back on it if the button had it; a press made
- * before the chunk arrived opens the popover the moment it does (`defaultOpen`). A failed load is
- * forgotten, so the next press tries again, and the button says so in its title meanwhile.
+ * the readiness read) is fetched ahead the first time the pointer rests on it or it takes the focus.
+ * **Only a press swaps it**: the popover's own trigger then replaces the button — the same classes
+ * and id — the focus is put back on it if the button had it, and the press is handed on to it (a
+ * `click()` on the new trigger), so the popover opens, focuses and closes by Base UI's own path. Swapping on hover or focus would replace the element under a press
+ * already on its way (CI on #83: the click landed on the detached button and opened nothing). A
+ * failed load is forgotten, so the next press tries again, and the button says so in its title.
  */
 import { PersonIcon } from '@primer/octicons-react/PersonIcon';
 import { RocketIcon } from '@primer/octicons-react/RocketIcon';
@@ -36,8 +37,8 @@ import type { Icon } from '@primer/octicons-react/types';
 import {
   type ButtonHTMLAttributes,
   type ReactElement,
+  useEffect,
   useId,
-  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
@@ -88,22 +89,36 @@ export const ReadinessLabel = ({
 }): ReactElement => {
   const triggerId = useId();
   // Every badge starts as the plain button, even once the chunk is cached: one shape on first
-  // paint, and the swap — immediate then — happens only where somebody approaches it.
+  // paint, and the swap — immediate then — happens only where somebody presses it.
   const [loaded, setLoaded] = useState<PopoverModule | null>(null);
   // Pressed before the chunk arrived: the popover opens as soon as it does.
   const [pressed, setPressed] = useState(false);
   const [failed, setFailed] = useState(false);
   const refocus = useRef(false);
-  useLayoutEffect(() => {
-    if (loaded !== null && refocus.current) {
-      refocus.current = false;
-      document.getElementById(triggerId)?.focus();
-    }
-  }, [loaded, triggerId]);
-  const ensure = (): void => {
-    if (loaded !== null) {
+  // Once the popover's trigger has replaced the button: the focus back on it, and the press that
+  // asked for it handed on — Base UI's own click opens it, against that trigger. After mount
+  // (`useEffect`), so the trigger's own handlers are attached.
+  const handedOn = useRef(false);
+  useEffect(() => {
+    if (loaded === null || handedOn.current) {
       return;
     }
+    handedOn.current = true;
+    const trigger = document.getElementById(triggerId);
+    if (refocus.current) {
+      refocus.current = false;
+      trigger?.focus();
+    }
+    if (pressed) {
+      trigger?.click();
+    }
+  }, [loaded, pressed, triggerId]);
+  // Hover and focus fetch the chunk ahead, and nothing else: a failure there is the press's to say,
+  // which tries again (`loadPopover` forgets a failed import).
+  const warm = (): void => {
+    loadPopover().catch(() => undefined);
+  };
+  const open = (): void => {
     void loadPopover().then(
       (module) => {
         // The popover's own trigger replaces this button: the focus stays on the badge.
@@ -147,12 +162,12 @@ export const ReadinessLabel = ({
       id: triggerId,
       'aria-haspopup': 'dialog',
       'aria-expanded': pressed,
-      onPointerEnter: ensure,
-      onFocus: ensure,
+      onPointerEnter: warm,
+      onFocus: warm,
       onClick: () => {
         setFailed(false);
         setPressed((was) => !was);
-        ensure();
+        open();
       },
       ...(failed
         ? { title: 'The level’s definition could not be loaded. Press again to try once more.' }
@@ -164,7 +179,6 @@ export const ReadinessLabel = ({
       level={level}
       project={project}
       triggerId={triggerId}
-      defaultOpen={pressed}
       trigger={badge({})}
     />
   );
