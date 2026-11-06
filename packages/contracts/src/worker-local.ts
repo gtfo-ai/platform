@@ -290,7 +290,7 @@ export const workerLocalStateSchema = z.strictObject({
   /**
    * When this worker **process** started — its start identity (BACKLOG 1053): the page remembers
    * the first it saw, and a different one means the worker restarted (an update, or `docker
-   * compose up -d`). A restart while the page was at the Claude step is said there, once.
+   * compose up -d`). A restart while a sign-in or its check ran is said at the Claude step.
    */
   started_at: isoDateTimeSchema,
   server_time: isoDateTimeSchema,

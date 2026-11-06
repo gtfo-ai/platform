@@ -1318,12 +1318,16 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     readonly sleep?: (ms: number) => Promise<void>;
     /** The launcher's health check (default: it answers, holding the run and egress images). */
     readonly health?: () => Promise<unknown>;
+    readonly updateDrainSignInHoldMs?: number;
   }) => {
     const lines: string[] = [];
     const launcher = fakeLauncher(options.core.events);
     const worker = await startRemoteWorker({
       ...(options.claudeCli === undefined ? {} : { claudeCli: options.claudeCli }),
       ...(options.probeFetch === undefined ? {} : { probeFetch: options.probeFetch }),
+      ...(options.updateDrainSignInHoldMs === undefined
+        ? {}
+        : { updateDrainSignInHoldMs: options.updateDrainSignInHoldMs }),
       config: {
         coreUrl: options.coreUrl === undefined ? 'https://core.example.test' : options.coreUrl,
         claudeToken: options.claudeToken === undefined ? CLAUDE_TOKEN : options.claudeToken,
@@ -2325,7 +2329,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
     }
   });
 
-  it('while an update drains refuses a new Claude sign-in 409 draining, finishes the one running, and takes a paste — an owner’s Drain refuses none (BACKLOG 1054, 1065)', async () => {
+  it('while an update drains refuses a new Claude sign-in 409 draining, finishes the one running, and takes a paste — an owner’s Drain refuses none (BACKLOG 1054; no setup step traps a person)', async () => {
     const stateDir = mkdtempSync(path.join(scratch, 'state-'));
     const core = fakeCore({});
     // The token check waits for the test, so the drain's wait for it is measured.
@@ -2370,7 +2374,7 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       const before = await localState(port);
       expect(Date.parse(before.started_at)).toBeLessThanOrEqual(Date.parse(before.server_time));
 
-      // The owner's page Drain traps nobody at this step: a sign-in still starts (BACKLOG 1065) …
+      // The owner's page Drain traps nobody at this step (the owner's rule): a sign-in starts …
       await worker.drain('worker_ui_drain');
       expect(worker.state().draining).toBe(true);
       expect(await startSignIn()).toBe('200 ');
@@ -2406,6 +2410,45 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       await until('the paste checked', () => checksStarted === 2 && worker.state().idle);
       expect(worker.localState().setup.sign_in.failure).toBeNull();
       expect((await localState(port)).started_at).toBe(before.started_at);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('stops refusing a sign-in once the updater stops asking: an update that gave up traps nobody', async () => {
+    const stateDir = mkdtempSync(path.join(scratch, 'state-'));
+    const HOLD_MS = 1_000;
+    const { worker, internal } = await start({
+      stateDir,
+      core: fakeCore({}),
+      auth: 'none',
+      claudeToken: null,
+      claudeCli: fakeClaude,
+      sleep: yielding,
+      updateDrainSignInHoldMs: HOLD_MS,
+    });
+    const port = portOf(worker.uiAddress());
+    const startSignIn = async () => {
+      const answer = await post(port, 'claude/sign-in', { action: 'start' });
+      return `${answer.status} ${answer.status === 200 ? '' : JSON.parse(answer.text).error.code}`;
+    };
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    try {
+      await until('the Claude step', () => worker.localState().connection === 'needs_claude');
+      expect((await fetch(`${internal}/internal/drain`, { method: 'POST' })).status).toBe(202);
+      // The updater waiting for idle reads the state every few seconds: each read holds the refusal.
+      for (let read = 0; read < 3; read += 1) {
+        await wait(HOLD_MS * 0.4);
+        expect((await fetch(`${internal}/internal/state`)).status).toBe(200);
+      }
+      // 1.2 × the hold since the drain, but 0.4 × since the last read: still refused.
+      expect(await startSignIn()).toBe('409 draining');
+      // No read for longer than the hold — an updater that gave up: the sign-in starts.
+      await wait(HOLD_MS * 1.3);
+      expect(worker.state().draining).toBe(true);
+      expect(await startSignIn()).toBe('200 ');
+      await until('the sign-in running', () => worker.localState().setup.sign_in.phase !== 'idle');
+      expect((await post(port, 'claude/sign-in', { action: 'cancel' })).status).toBe(200);
     } finally {
       await worker.stop();
     }

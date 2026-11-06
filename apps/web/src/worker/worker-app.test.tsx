@@ -826,6 +826,28 @@ describe('a restart mid-sign-in, and a drain (BACKLOG 1053, 1054)', () => {
     }
   });
 
+  it('never says it off the Claude step: leaving the step ends it, and coming back does not bring it back', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const client = await polls(
+        at(claudeStep('waiting_for_code'), FIRST_BOOT),
+        at(claudeStep('idle'), SECOND_BOOT),
+      );
+      expect(await screen.findByText(RESTARTED)).toBeTruthy();
+      // A token pasted elsewhere (another tab): the worker moves to the approval step.
+      client.advance(at(unconnected('logging_in', { device: DEVICE }), SECOND_BOOT));
+      await vi.advanceTimersByTimeAsync(2_000);
+      await screen.findByRole('button', { name: 'Copy code' });
+      expect(notice()).toBeNull();
+      client.advance(at(claudeStep('idle'), SECOND_BOOT));
+      await vi.advanceTimersByTimeAsync(2_000);
+      await screen.findByRole('button', { name: 'Sign in with Claude' });
+      expect(notice()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('says it after a restart during the token check, too', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
@@ -852,6 +874,11 @@ describe('a restart mid-sign-in, and a drain (BACKLOG 1053, 1054)', () => {
       ],
     ],
     ['a restart of a connected worker', at(state(), FIRST_BOOT), [at(state(), SECOND_BOOT)]],
+    [
+      'a restart while the page sat at the Claude step, nothing running',
+      at(claudeStep('idle'), FIRST_BOOT),
+      [at(claudeStep('idle'), SECOND_BOOT)],
+    ],
   ];
 
   it.each(SILENT)('says nothing after %s', async (_what, first, then) => {
@@ -889,6 +916,46 @@ describe('a restart mid-sign-in, and a drain (BACKLOG 1053, 1054)', () => {
     await waitFor(() =>
       expect(client.claudeToken).toHaveBeenCalledWith(`sk-ant-oat01-${'F'.repeat(95)}`),
     );
+  });
+
+  const UPDATING = 'This worker is updating; it will be back in a minute.';
+  const refusedOnce = (client: ReturnType<typeof fakeClient>): void => {
+    client.signIn.mockRejectedValueOnce(
+      new LocalCallError(409, 'draining', 'this worker is draining for an update'),
+    );
+  };
+
+  it('stops saying it is updating once a poll reads the drain over', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const client = fakeClient({ ...claudeStep('idle'), draining: true });
+      refusedOnce(client);
+      render(<WorkerApp client={client} now={() => NOW} pollMs={2_000} newKey={() => 'key-1'} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Sign in with Claude' }));
+      expect(await screen.findByText(UPDATING)).toBeTruthy();
+      client.advance({ ...claudeStep('idle'), draining: false });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(screen.queryByText(UPDATING)).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops saying it once the worker takes a sign-in again — a drain the updater gave up on', async () => {
+    const client = fakeClient({ ...claudeStep('idle'), draining: true });
+    refusedOnce(client);
+    renderPage(client);
+    await userEvent.click(await screen.findByRole('button', { name: 'Sign in with Claude' }));
+    expect(await screen.findByText(UPDATING)).toBeTruthy();
+    // Still draining, but past the hold: the worker starts the sign-in.
+    client.signIn.mockImplementationOnce(async () => {
+      const started = { ...claudeStep('starting'), draining: true };
+      client.advance(started);
+      return started;
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in with Claude' }));
+    await waitFor(() => expect(screen.queryByText(UPDATING)).toBeNull());
+    expect(client.signIn).toHaveBeenCalledTimes(2);
   });
 });
 

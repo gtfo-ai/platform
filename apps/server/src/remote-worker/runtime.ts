@@ -47,8 +47,10 @@
  * `/internal/state`'s `idle` is false meanwhile — and **an update's** drain (`POST /internal/drain`)
  * **refuses to start a new one** (`409 draining`), so a person who keeps starting sign-ins cannot
  * postpone an update forever (BACKLOG 1054); the running one's code and a pasted token are still
- * taken. The owner's page *Drain* refuses no sign-in: the setup screens offer no *Resume*, and no
- * setup step may trap a person (BACKLOG 1065). A drained worker **stays up,
+ * taken — and only while the updater still waits ({@link UPDATE_DRAIN_SIGN_IN_HOLD_MS} after its last
+ * drain or state read), because the owner's rule is that no setup step may trap a person and an
+ * updater that gave up sends nothing more. The owner's page *Drain* refuses no sign-in: the setup
+ * screens offer no *Resume*. A drained worker **stays up,
  * idle**, rather than exiting: `compose.worker.yml`
  * restarts it `unless-stopped`, so an exit would be a restart, and the restart would clear the
  * drain's pause and claim again — stopping is the person's `docker compose stop` (stated in the PR
@@ -191,7 +193,22 @@ export interface StartRemoteWorkerOptions {
   readonly probeFetch?: CoreFetch;
   /** Test seam: how the error reporter sends an envelope (default the SDK's HTTP transport). */
   readonly errorReportingTransport?: ReportingTransport;
+  /** Test seam: {@link UPDATE_DRAIN_SIGN_IN_HOLD_MS}. */
+  readonly updateDrainSignInHoldMs?: number;
 }
+
+/**
+ * How long an update's drain refuses a new Claude sign-in **after the last sign that an update is
+ * still waiting** — `POST /internal/drain`, or the updater's `GET /internal/state` while it waits
+ * for idle (every few seconds, however long a run takes). Once the worker is idle the updater
+ * stops asking and starts the apply, which restarts this worker within a few minutes (the images
+ * are pulled before the drain, and `up --wait` is bounded at 120 s, a rollback's again). An
+ * updater that gave up — a failed apply create or start, a failed restart of the drained worker,
+ * an updater stopped mid-wait — sends no further sign, so the refusal ends within this window
+ * rather than at the next restart: the owner's rule is that no setup step may trap a person. The
+ * failure paths that restart the drained worker (`apply.ts`'s `restartDrained`) end it at once.
+ */
+export const UPDATE_DRAIN_SIGN_IN_HOLD_MS = 10 * 60_000;
 
 /** How long *Send a test error* waits for the event to be sent before it answers. */
 export const ERROR_REPORTING_TEST_FLUSH_MS = 5_000;
@@ -431,10 +448,17 @@ export const startRemoteWorker = async (
   let stopping = false;
   let draining = false;
   /**
-   * The drain is an update's — `POST /internal/drain`, the updater's (or an operator's) — not the
-   * owner's page *Drain*: only that one refuses a new Claude sign-in (BACKLOG 1054, 1065).
+   * When the last sign came that an update's drain — `POST /internal/drain`, the updater's (or an
+   * operator's), never the owner's page *Drain* — is still waiting: `null` for no update's drain.
+   * Only that drain refuses a new Claude sign-in, and only for {@link UPDATE_DRAIN_SIGN_IN_HOLD_MS}
+   * after it (BACKLOG 1054; the owner's rule that no setup step may trap a person).
    */
-  let updateDraining = false;
+  let updateDrainSignalAt: number | null = null;
+  const updateDrainSignInHoldMs = options.updateDrainSignInHoldMs ?? UPDATE_DRAIN_SIGN_IN_HOLD_MS;
+  const updateDrainRefusesSignIn = (): boolean =>
+    draining &&
+    updateDrainSignalAt !== null &&
+    Date.now() - updateDrainSignalAt < updateDrainSignInHoldMs;
   /** This process's start — the page's start identity: another one is a restart (BACKLOG 1053). */
   const startedAt = new Date().toISOString();
   let credential: string | null = null;
@@ -929,7 +953,7 @@ export const startRemoteWorker = async (
       claimAbort?.abort();
     } else {
       draining = false;
-      updateDraining = false;
+      updateDrainSignalAt = null;
     }
     wakeClaims();
     loggerPort.info(
@@ -953,7 +977,7 @@ export const startRemoteWorker = async (
   const drain = async (via: DrainVia): Promise<void> => {
     const first = !draining;
     draining = true;
-    if (via === 'worker_internal_drain') updateDraining = true;
+    if (via === 'worker_internal_drain') updateDrainSignalAt = Date.now();
     claimAbort?.abort();
     wakeClaims();
     if (first) {
@@ -1280,9 +1304,10 @@ export const startRemoteWorker = async (
     }
     // An update's drain waits for a sign-in in progress (`idle`); a new one would postpone it
     // again, and a sequence of them forever (BACKLOG 1054). The one running, its code and a paste
-    // stay allowed. An owner's page *Drain* refuses nothing here: no setup step may trap a person,
-    // and the setup screens offer no *Resume* (BACKLOG 1065).
-    if (updateDraining) {
+    // stay allowed. An owner's page *Drain* refuses nothing here, and an update's only while the
+    // updater still waits: the setup screens offer no *Resume*, and the owner's rule is that no
+    // setup step may trap a person.
+    if (updateDrainRefusesSignIn()) {
       throw new LocalUiError(
         409,
         'draining',
@@ -1636,6 +1661,8 @@ export const startRemoteWorker = async (
       return;
     }
     if (request.method === 'GET' && path === '/internal/state') {
+      // The updater waiting for idle reads this: its update's drain still holds (see the hold).
+      if (draining && updateDrainSignalAt !== null) updateDrainSignalAt = Date.now();
       send(response, 200, state());
       return;
     }

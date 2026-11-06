@@ -11,7 +11,7 @@
  * 2. **Sign in to Claude** — Claude's own sign-in, run by the worker (`claude setup-token`): open
  *    Claude's page, paste the code it shows. *Paste a token instead* is always there — also while
  *    the worker drains for an update, which refuses a new sign-in (BACKLOG 1054) — and a restart
- *    while the person was here is said here once (BACKLOG 1053).
+ *    while a sign-in or its check ran is said here (BACKLOG 1053).
  * 3. **Approve this machine** — the code is the page's **dominant element**: large monospace
  *    letters with *Copy*; the primary button opens the platform's approval page with the code
  *    filled in (only when the link is on the platform's own origin); a countdown to the code's
@@ -651,7 +651,7 @@ export interface WizardProps {
   readonly act: Act;
   readonly busy: boolean;
   readonly error: string | null;
-  /** The worker restarted while the person was at the Claude step (`restartNoticeOf`). */
+  /** The worker restarted while a sign-in or its check ran (`restartNoticeOf`). */
   readonly restarted?: boolean;
   readonly writeText?: (text: string) => Promise<void>;
 }

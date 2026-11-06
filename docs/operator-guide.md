@@ -357,8 +357,9 @@ each step skipped when its value is already there, each moving on by itself:
    once with Claude and kept as `claude-token` (`0600`) in `worker-state`; *Paste a token instead*
    takes the output of `claude setup-token` run anywhere. Nothing of the CLI's screen is logged.
    While the worker drains for an update (`POST /internal/drain`) it starts no new sign-in (the page
-   says *This worker is updating; it will be back in a minute*); a sign-in already running finishes
-   and a pasted token is still taken. Your own *Drain* from the page refuses no sign-in. A worker that restarted while you were at this step says so here: sign in again.
+   says *This worker is updating; it will be back in a minute*) — for at most 10 minutes after the
+   updater last asked, so an update that gave up traps nobody; a sign-in already running finishes
+   and a pasted token is still taken. Your own *Drain* from the page refuses no sign-in. A worker that restarted while you were signing in says so here: sign in again.
 3. **Approve this machine.** The device code, large, with *Copy* and **Open the approval page**,
    which opens the core's `/workers/approve?code=…` — the code filled in, every warning and the
    explicit *Approve* unchanged. A new code appears by itself when one expires or is denied. The

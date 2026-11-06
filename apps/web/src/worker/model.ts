@@ -354,9 +354,10 @@ export const SIGN_IN_REFUSAL_WORDS: Readonly<Record<string, string>> = {
 /**
  * Whether the Claude step says *This worker restarted* (BACKLOG 1053), from the state the page saw
  * last, the one it reads now, and whether it says so already. The worker's `started_at` is its
- * process's start: a different one is a restart, and it is said only when the page was at the
- * Claude step or a sign-in (or its check) was running — any other restart, and the page's first
- * read, are silent. Once said, it stays until a sign-in runs again on the new process.
+ * process's start: a different one is a restart, and it is said only when a sign-in (or its token
+ * check) was running on the old process — any other restart, and the page's first read, are
+ * silent. It is said only while the page is at the Claude step with no sign-in running, so it
+ * cannot outlive the step it is about: once a sign-in runs again, or the step is left, it is gone.
  */
 export const restartNoticeOf = (
   previous: WorkerLocalState | null,
@@ -364,12 +365,15 @@ export const restartNoticeOf = (
   shown: boolean,
 ): boolean => {
   if (previous === null) return false;
-  if (previous.started_at !== next.started_at) {
-    return (
-      SIGN_IN_RUNNING.has(previous.setup.sign_in.phase) || wizardOf(previous)?.current === 'claude'
-    );
-  }
-  return shown && !SIGN_IN_RUNNING.has(next.setup.sign_in.phase);
+  const restarted =
+    previous.started_at !== next.started_at
+      ? SIGN_IN_RUNNING.has(previous.setup.sign_in.phase)
+      : shown;
+  return (
+    restarted &&
+    wizardOf(next)?.current === 'claude' &&
+    !SIGN_IN_RUNNING.has(next.setup.sign_in.phase)
+  );
 };
 
 /** Whole seconds until `iso`, never negative. */

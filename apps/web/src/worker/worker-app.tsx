@@ -33,8 +33,8 @@
  * **Until the worker is connected the page is the first-run wizard** (`wizard.tsx`, WP-294) and
  * not the room: no mode chip, no *Pause*, *Drain* or *Cancel*. Once connected, the room's *This
  * machine* section offers *Change platform* and *Sign out of Claude* — only while nothing runs.
- * The page remembers the worker's `started_at`: a restart while the person was at the Claude step
- * is said there once, until a sign-in runs again (`restartNoticeOf`, BACKLOG 1053).
+ * The page remembers the worker's `started_at`: a restart while a sign-in or its check ran is
+ * said at the Claude step, while no sign-in runs (`restartNoticeOf`, BACKLOG 1053).
  *
  * **Why it takes nothing is said, not implied** (S-22.19, the worker UX review): *Taking work* only
  * when the worker's `claim_blockers` are empty; otherwise one sentence in the shared vocabulary's
