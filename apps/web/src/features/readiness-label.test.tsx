@@ -23,6 +23,7 @@ import {
   READINESS_HOW_TO,
   READINESS_LEVELS,
   READINESS_RUNG_REQUIREMENTS,
+  READINESS_UNLOCKS,
   readinessBadgeWord,
   readinessLadderName,
   readinessNameAndWord,
@@ -63,7 +64,13 @@ const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 /** The first missing criterion of the next rung, as `nextReadinessImprovements` would name it. */
-const FIRST_MISSING: Readonly<Record<number, string>> = { 0: 'R3', 1: 'R4', 2: 'R8', 3: 'R13' };
+const FIRST_MISSING: Readonly<Record<number, string>> = { 0: 'R3', 1: 'R9', 2: 'R8', 3: 'R11' };
+
+/** The read's `unlocks` is the domain's text, which carries spec references (R9's names BD-007). */
+const DOMAIN_UNLOCKS = 'Human merge guarantee (BD-007); Investigation stage has evidence';
+
+/** What a person must never be shown: a decision, slice or question id, or a spec page (F18). */
+const SPEC_REFERENCE = /\b(?:BD|TD|WP|Q)-?\d+\b|product\/\d+|technical\/\d+/;
 
 let readinessReads: number;
 
@@ -88,7 +95,7 @@ const fetchFor = (level: number, readiness: 'evaluated' | 'not_evaluated' = 'eva
         next_improvements:
           missing === undefined
             ? []
-            : [{ id: missing, title: 'the criterion', unlocks: 'what it buys the project' }],
+            : [{ id: missing, title: 'the criterion', unlocks: DOMAIN_UNLOCKS }],
       });
     }
     if (url.endsWith('/api/projects')) return json({ items: [projectRow(level)] });
@@ -157,7 +164,8 @@ describe('the readiness badge, per level', () => {
           expect(popover.querySelector(`[data-readiness-missing="${missing}"]`)).not.toBeNull();
         });
         expect(popover.textContent).toContain(READINESS_HOW_TO[missing] ?? '∅');
-        expect(popover.textContent).toContain('It unlocks: what it buys the project');
+        expect(popover.textContent).toContain(`It unlocks: ${READINESS_UNLOCKS[missing] ?? '∅'}`);
+        expect(popover.textContent).not.toContain(DOMAIN_UNLOCKS);
         expect(readinessReads).toBe(1);
       } else if (level === 4) {
         expect(popover.textContent).toContain('the top of the readiness ladder');
@@ -165,6 +173,8 @@ describe('the readiness badge, per level', () => {
       expect(
         within(popover).getByRole('link', { name: 'Discovery & readiness' }).getAttribute('href'),
       ).toBe('/projects/acme_api/settings/discovery');
+      // Plain words only: no spec reference reaches the screen, whatever the read carried.
+      expect(popover.textContent ?? '').not.toMatch(SPEC_REFERENCE);
     },
   );
 });
@@ -216,8 +226,16 @@ describe('the client’s readiness tables', () => {
     expect(READINESS_RUNG_REQUIREMENTS).toEqual(READINESS_LEVEL_REQUIREMENTS);
     expect(READINESS_LEVELS).toHaveLength(READINESS_LEVEL_REQUIREMENTS.length + 1);
     expect(Object.keys(READINESS_HOW_TO)).toEqual([...READINESS_CRITERION_IDS]);
+    expect(Object.keys(READINESS_UNLOCKS)).toEqual([...READINESS_CRITERION_IDS]);
     for (const id of READINESS_CRITERION_IDS) {
       expect(READINESS_HOW_TO[id], id).toMatch(/^[A-Z].*\.$/);
+      expect(READINESS_UNLOCKS[id], id).toMatch(/^[A-Z].*\.$/);
+      for (const text of [READINESS_HOW_TO[id], READINESS_UNLOCKS[id]]) {
+        expect(text, id).not.toMatch(SPEC_REFERENCE);
+      }
+    }
+    for (const level of READINESS_LEVELS) {
+      expect(level.meaning).not.toMatch(SPEC_REFERENCE);
     }
   });
 });

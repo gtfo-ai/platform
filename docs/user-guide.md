@@ -61,9 +61,10 @@ shows only its number. There is no
 **Inside a project the row becomes the project's own tabs** — **Board**, **Knowledge**,
 **Pipeline**, **Budgets**, **Shadow** and **Settings** — under a header with the project's name, its
 key, its readiness (what agents may do there, below under *Projects*) and — on the board, if you may
-start a ticket in it — a **Start a ticket** button. A task's page sits under its project's header too, on the Board tab, when opened from its
-board; from the inbox or Agents it does not yet. Every address is the one it always was:
-`/projects/ACME` is the board, `/projects/ACME/knowledge` its knowledge, and so on.
+start a ticket in it — a **Start a ticket** button. A task's page sits under its project's header
+too, on the Board tab, when opened from its board; from the inbox or Agents it does not yet. Every
+address is the one it always was: `/projects/ACME` is the board, `/projects/ACME/knowledge` its
+knowledge, and so on.
 
 **The top bar and the row under it stay at the top while you scroll** — inside a project only the tabs
 do, and the project's name scrolls away; on a phone only the top bar stays, so the page keeps the screen.

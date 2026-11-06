@@ -157,6 +157,28 @@ test('Home: a press on a project’s meta line opens it, and its counts keep the
   await expect(page).toHaveURL(`/projects/${PROJECT_KEY}`);
 });
 
+test('the Projects list: the readiness badge opens its definition in place, the meta opens the project', async ({
+  page,
+}) => {
+  await page.goto('/projects');
+  const row = page
+    .getByRole('list', { name: 'Projects' })
+    .getByRole('listitem')
+    .filter({ has: page.getByRole('link', { name: /Demo service/ }) });
+  // S-25.2: the badge is a button over the row link, so a press on it opens the popover, not the row.
+  const badge = row.getByRole('button', { name: /^Readiness: / });
+  expect(await onTopAtCentre(page, badge)).toBe(true);
+  await pressAtCentre(page, badge);
+  await expect(page.getByRole('dialog', { name: 'Level 3 · Agent-ready' })).toBeVisible();
+  await expect(page).toHaveURL('/projects');
+  await page.keyboard.press('Escape');
+  const meta = row.locator('[data-row-meta]');
+  // Calibration: the meta line is under the project's link, not a target of its own.
+  expect(await hitAtCentre(page, meta)).toBe(`a /projects/${PROJECT_KEY}`);
+  await pressAtCentre(page, meta);
+  await expect(page).toHaveURL(`/projects/${PROJECT_KEY}`);
+});
+
 test('a row’s menu keeps its own click above the row link, and the row still opens', async ({
   page,
 }) => {
