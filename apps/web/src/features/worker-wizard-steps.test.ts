@@ -158,7 +158,7 @@ describe('workerInstallCommands', () => {
       },
       windows: {
         url: 'https://agentic.example.test/api/worker/v1/install.ps1',
-        // Through `-ExecutionPolicy ByPass`: a bare `irm | iex` is refused under Windows' default.
+        // The line install.ps1's own header documents.
         run: `powershell -ExecutionPolicy ByPass -c "irm 'https://agentic.example.test/api/worker/v1/install.ps1' | iex"`,
         download:
           "irm 'https://agentic.example.test/api/worker/v1/install.ps1' -OutFile install.ps1; notepad install.ps1",

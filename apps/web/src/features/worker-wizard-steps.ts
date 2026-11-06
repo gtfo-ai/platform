@@ -260,9 +260,9 @@ export interface WorkerInstallCommands {
   readonly installer: {
     readonly unix: InstallerLine;
     /**
-     * Through `powershell -ExecutionPolicy ByPass`, as `install.ps1`'s own header says: a bare
-     * `irm | iex` is refused under Windows' default execution policy. `download` and `runFile` are
-     * the same header's way to read the script before running it.
+     * The line `install.ps1`'s own header documents (`powershell -ExecutionPolicy ByPass -c "irm
+     * … | iex"`); `download` and `runFile` are the same header's way to read the script before
+     * running it.
      */
     readonly windows: InstallerLine & { readonly download: string; readonly runFile: string };
   };

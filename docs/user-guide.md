@@ -1611,9 +1611,9 @@ off.
    - **macOS or Linux (Terminal):** `curl -fsSL '<platform>/api/worker/v1/install.sh' | sh`;
    - **Windows (PowerShell):**
      `powershell -ExecutionPolicy ByPass -c "irm '<platform>/api/worker/v1/install.ps1' | iex"`, in
-     Windows PowerShell 5.1 or PowerShell 7 (a bare `irm … | iex` is refused under Windows' default
-     execution policy). It needs Docker Desktop for Windows installed and running in Linux
-     containers mode (Windows containers are refused) and the Docker Compose v2 that ships with it;
+     Windows PowerShell 5.1 or PowerShell 7 — the line the installer's own header documents. It
+     needs Docker Desktop for Windows installed and running in Linux containers mode (Windows
+     containers are refused) and the Docker Compose v2 that ships with it;
      it needs no administrator rights, installs into `$HOME\agentic-worker`, and adds no service and
      no PATH change. **Or download it, read it, then run it** gives
      `irm '<platform>/api/worker/v1/install.ps1' -OutFile install.ps1; notepad install.ps1` and then
