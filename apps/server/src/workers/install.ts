@@ -10,8 +10,9 @@
  * of {@link SAFE_CORE_URL}'s characters: no credential, query, fragment, quote or space. No secret
  * is in either file.
  *
- * What a script does with the bundle (never move a worker's images on a re-run, never write the
- * updater's `.env`, always install a bundle that has its updater) is stated in each file's header
+ * What a script does with the bundle (never move a worker's images on a re-run, never write inside
+ * the updater's block of `.env` — only a person's shell-given defaulted settings outside it, BACKLOG
+ * 1055 — always install a bundle that has its updater) is stated in each file's header
  * and held by `install-script.test.ts`, which runs `install.sh` against a stub `docker` and `curl`,
  * and by `scripts/worker-install-check.mjs` (a Docker check, backlog 1021), which pipes the script a
  * real core serves into `sh` on a real daemon: install, a re-run that recreates nothing, and

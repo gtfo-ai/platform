@@ -20,10 +20,16 @@ It needs no administrator rights, installs no service and edits no PATH or profi
 
 The worker's 'updater' service follows the core and verifies each build before it applies it.
 Running this script again is a repair, never an upgrade. It never changes the images an approved
-worker runs, never writes the .env file the updater manages, and never touches a volume (except
--Uninstall -Purge, which removes them). A worker that is not set up yet (its page waits for a
-platform, its Claude sign-in or its approval) runs nothing worth keeping, so a re-run installs the
+worker runs, never writes inside the block of .env the updater manages, and never touches a volume
+(except -Uninstall -Purge, which removes them). A worker that is not set up yet (its page waits for
+a platform, its Claude sign-in or its approval) runs nothing worth keeping, so a re-run installs the
 core's build over it.
+
+A setting the bundle declares with a default (APP_WORKER_UI_PORT, LOG_LEVEL, ...) that is set in
+this session ($env:NAME) is saved into the folder's .env, outside the updater's block, before the
+first 'docker compose up': the updater carries into a new build only values with no default, so one
+given in the session alone would go back to its default at the next update. Secret-looking names,
+the image and trust variables, and anything the bundle does not declare are never written.
 
 Options: -Dir DIR, -Core URL, -NoOpen, -Uninstall, -Purge (with -Uninstall). With irm | iex, pass
 them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Uninstall
@@ -57,6 +63,14 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
   $UpdaterFolder = '/var/lib/platform/host-bundle'
   # Removed from Compose's environment: they would change which images run, where the bundle comes
   # from or what the updater trusts. They are the updater's to set, or the bundle's defaults.
+  # Declared with a default in the bundle but never saved into .env: the four images and the git
+  # image (the bundle's pins, which a saved line would hold past every update), what the updater
+  # trusts, the core's address, and the folder the updater mounts (the updater answers it itself).
+  # Held to the template by install-script.test.ts.
+  $NotSaved = @('PLATFORM_IMAGE', 'PLATFORM_LAUNCHER_IMAGE', 'PLATFORM_RUNTIME_IMAGE', 'PLATFORM_EGRESS_IMAGE', 'APP_WORKSPACE_GIT_IMAGE', 'APP_TRUSTED_IMAGE_REPOSITORY', 'APP_TRUSTED_BUILDER', 'APP_CORE_URL', 'APP_WORKER_BUNDLE_DIR')
+  # The label the launcher puts on the volumes it creates: the control volume of the launcher that
+  # made it (packages/application/src/ports/workspace.ts, WORKSPACE_LABELS.instance).
+  $InstanceLabel = 'com.agentic.instance'
   $Scrubbed = @('COMPOSE_FILE', 'COMPOSE_PROJECT_NAME', 'COMPOSE_PROFILES', 'COMPOSE_ENV_FILES', 'APP_CORE_URL') + $ImageVariables + @('APP_TRUSTED_IMAGE_REPOSITORY', 'APP_TRUSTED_BUILDER')
 
   # Exit status: 0 done, 1 a prerequisite or a step failed, 2 a usage error, 3 refused (to protect
@@ -165,6 +179,11 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     if ($containers.Count -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $WorkerDir $Mark))) {
       Exit-Installer 3 "a worker bundle named $Project already exists on this machine, and $WorkerDir is not this installer's (it has no $Mark). This installer will not take it over: run it with -Dir pointing at that bundle's folder, or remove that bundle first."
     }
+    Assert-NotApplying
+  }
+
+  # The updater's one-shot apply container is running: it rewrites this folder's files.
+  function Assert-NotApplying {
     $applying = Invoke-Native -File 'docker' -Arguments @('ps', '--quiet', '--filter', "label=$ApplyLabel=$Project") -Capture
     if ($applying.Code -ne 0) { Exit-Installer 1 'docker ps failed' }
     if ($applying.Output.Trim() -ne '') {
@@ -262,16 +281,176 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     return ''
   }
 
-  function Get-PagePort {
-    $port = [Environment]::GetEnvironmentVariable('APP_WORKER_UI_PORT', 'Process')
-    if ([string]::IsNullOrEmpty($port)) {
-      $envText = Read-Text (Join-Path $WorkerDir '.env')
-      if ($null -ne $envText) {
-        $found = [regex]::Matches($envText, '(?m)^APP_WORKER_UI_PORT=(\d+)\r?$')
-        if ($found.Count -gt 0) { $port = $found[$found.Count - 1].Groups[1].Value }
+  # --- Settings given in this session (BACKLOG 1055) ---
+
+  # Every variable a bundle text declares with a non-empty default (`${VAR:-x}`), comments aside.
+  function Get-DefaultedVariable {
+    param([string]$Text)
+    $names = @()
+    foreach ($line in ($Text -split "`r?`n")) {
+      if ($line -match '^\s*#') { continue }
+      foreach ($found in [regex]::Matches($line, '\$\{([A-Z][A-Z0-9_]*):-[^}]')) { $names += $found.Groups[1].Value }
+    }
+    return @($names | Sort-Object -Unique)
+  }
+
+  # The value .env sets for a variable outside the updater's block (the last line wins), or '':
+  # `NAME=value`, `export NAME=value`, with the value bare, 'single' or "double" quoted.
+  function Get-EnvFileValue {
+    param([string]$Name)
+    $text = Read-Text (Join-Path $WorkerDir '.env')
+    if ($null -eq $text) { return '' }
+    $inside = $false
+    $value = ''
+    foreach ($line in ($text -split "`r?`n")) {
+      if ($inside) {
+        if ($line.StartsWith($BlockEnd)) { $inside = $false }
+        continue
+      }
+      if ($line.StartsWith($BlockBegin)) { $inside = $true; continue }
+      $found = [regex]::Match($line, '^\s*(?:export\s+)?' + [regex]::Escape($Name) + '\s*=\s*(.*?)\s*\z')
+      if ($found.Success) { $value = $found.Groups[1].Value }
+    }
+    if ($value -match '^''(.*)''\z' -or $value -match '^"(.*)"\z') { $value = $Matches[1] }
+    return $value
+  }
+
+  # The name a variable resolves to for Compose: this session, else .env, else the bundle's default.
+  function Get-ResolvedValue {
+    param([string]$Name, [string]$BundleText)
+    $value = [Environment]::GetEnvironmentVariable($Name, 'Process')
+    if ([string]::IsNullOrEmpty($value)) { $value = Get-EnvFileValue $Name }
+    if ([string]::IsNullOrEmpty($value)) { $value = Get-DefaultPin $BundleText $Name }
+    return $value
+  }
+
+  # Writes the settings of this session into .env (BACKLOG 1055), before the first
+  # `docker compose up`: an earlier line of the same name outside the updater's block is replaced
+  # where it stands (a later duplicate dropped), a new one appended; the updater's block is copied as
+  # it is. Says in one line what it saved.
+  function Save-ShellSetting {
+    $names = @()
+    foreach ($variable in (Get-DefaultedVariable (Read-Text (Join-Path $WorkerDir $Download)))) {
+      if ($NotSaved -ccontains $variable) { continue }
+      if ($variable -cmatch 'TOKEN|SECRET|PASSWORD|PASSWD|KEY|DSN|CREDENTIAL|PRIVATE') { continue }
+      $value = [Environment]::GetEnvironmentVariable($variable, 'Process')
+      if ([string]::IsNullOrEmpty($value)) { continue }
+      if ($value -cnotmatch '^[A-Za-z0-9_.:/@%+,=-]+\z') {
+        $Host.UI.WriteErrorLine("agentic-worker: did not save ${variable}: its value has a character this installer does not write into .env; add it to $WorkerDir\.env yourself, or it goes back to its default at the next update.")
+        continue
+      }
+      $names += $variable
+    }
+    if ($names.Count -eq 0) { return }
+    # The updater rewrites .env when it applies an update, so the file is read only now, with no
+    # apply running, and the write is refused when it changed (or an apply started) meanwhile: moving
+    # a stale copy into place would put back the managed block it had just replaced.
+    Assert-NotApplying
+    $path = Join-Path $WorkerDir '.env'
+    $text = Read-Text $path
+    $lines = New-Object System.Collections.Generic.List[string]
+    $written = @{}
+    if (-not [string]::IsNullOrEmpty($text)) {
+      $inside = $false
+      foreach ($line in (($text -replace '\r?\n$', '') -split '\r?\n')) {
+        if ($inside) {
+          $lines.Add($line)
+          if ($line.StartsWith($BlockEnd)) { $inside = $false }
+          continue
+        }
+        if ($line.StartsWith($BlockBegin)) { $inside = $true; $lines.Add($line); continue }
+        if ($line -cmatch '^\s*(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=' -and $names -ccontains $Matches[2]) {
+          $name = $Matches[2]
+          if (-not $written.ContainsKey($name)) {
+            $lines.Add("$name=$([Environment]::GetEnvironmentVariable($name, 'Process'))")
+            $written[$name] = $true
+          }
+          continue
+        }
+        $lines.Add($line)
       }
     }
-    if ($port -notmatch '^\d+$') { $port = '7357' }
+    foreach ($name in $names) {
+      if (-not $written.ContainsKey($name)) { $lines.Add("$name=$([Environment]::GetEnvironmentVariable($name, 'Process'))") }
+    }
+    $next = Join-Path $WorkerDir '.env.installer'
+    [IO.File]::WriteAllText($next, (($lines -join "`n") + "`n"))
+    if ((Read-Text $path) -cne $text) {
+      Remove-Item -LiteralPath $next -Force
+      Exit-Installer 3 "$path changed while this installer was saving settings into it (the updater applying an update?). Run this again."
+    }
+    try { Assert-NotApplying } catch { Remove-Item -LiteralPath $next -Force; throw }
+    Move-Item -LiteralPath $next -Destination $path -Force
+    $note = ''
+    if (@(Get-ProjectContainer).Count -gt 0) { $note = ' (a worker already running takes a changed one at its next update)' }
+    Write-Line "Saved in $path, so its updates keep them: $($names -join ' ')$note"
+  }
+
+  # --- Another worker's names (BACKLOG 1056) ---
+
+  # One label of a Docker volume or network, read off `{{json .Labels}}`; '' when the object does not
+  # exist (or Docker does not answer) or has no such label.
+  function Get-ObjectLabel {
+    param([string]$Kind, [string]$Name, [string]$Label)
+    if ($Name -eq '') { return '' }
+    $inspected = Invoke-Native -File 'docker' -Arguments @($Kind, 'inspect', '--format', '{{json .Labels}}', $Name) -Capture
+    if ($inspected.Code -ne 0 -or $inspected.Output.Trim() -eq '') { return '' }
+    try { $labels = $inspected.Output | ConvertFrom-Json } catch { return '' }
+    if ($null -eq $labels) { return '' }
+    $property = $labels.PSObject.Properties[$Label]
+    if ($null -eq $property) { return '' }
+    return [string]$property.Value
+  }
+
+  # Refuses, before anything is created, a worker whose control volume, run network or repository
+  # cache resolves to a name another worker on this machine already holds: Compose labels the volume
+  # and the network with the project that created them, and the launcher labels the cache with its own
+  # control volume. What it cannot see: an object of that name nobody labelled, and a cache another
+  # worker is configured with but has not created yet (no run yet).
+  function Assert-NoSharedName {
+    param([bool]$MadeDir)
+    $bundleText = Read-Text (Join-Path $WorkerDir $Download)
+    $control = Get-ResolvedValue 'APP_WORKER_CONTROL_VOLUME' $bundleText
+    $network = Get-ResolvedValue 'APP_WORKER_RUN_NETWORK' $bundleText
+    $cache = Get-ResolvedValue 'APP_WORKER_CACHE_VOLUME' $bundleText
+    $shared = ''
+    $owner = Get-ObjectLabel 'volume' $control 'com.docker.compose.project'
+    if ($owner -ne '' -and $owner -ne $Project) {
+      $shared = "the compose project $owner already uses the volume $control, so set APP_WORKER_CONTROL_VOLUME"
+    }
+    $owner = Get-ObjectLabel 'network' $network 'com.docker.compose.project'
+    if ($shared -eq '' -and $owner -ne '' -and $owner -ne $Project) {
+      $shared = "the compose project $owner already uses the network $network, so set APP_WORKER_RUN_NETWORK"
+    }
+    $maker = Get-ObjectLabel 'volume' $cache $InstanceLabel
+    if ($shared -eq '' -and $maker -ne '' -and $maker -ne $control) {
+      $shared = "the worker whose control volume is $maker already uses the repository cache $cache, so set APP_WORKER_CACHE_VOLUME"
+    }
+    if ($shared -eq '') { return }
+    Remove-Item -LiteralPath (Join-Path $WorkerDir $Download) -Force -ErrorAction SilentlyContinue
+    if ($MadeDir -and @(Get-ChildItem -LiteralPath $WorkerDir -Force).Count -eq 0) { Remove-Item -LiteralPath $WorkerDir -Force }
+    Exit-Installer 3 "another worker runs on this machine: $shared to a name of its own in this session (the installer saves it in .env) and run this again."
+  }
+
+  # The host port the running remote-worker publishes its page on, or '' (not running yet). A
+  # setting saved into .env by a re-run reaches the container only at its next update, so this, not
+  # the setting, is where the page is.
+  function Get-PublishedPort {
+    $container = @(Get-ProjectContainer | Where-Object { (Get-Label $_ 'com.docker.compose.service') -eq 'remote-worker' -and [string]$_.State.Status -eq 'running' }) | Select-Object -First 1
+    if ($null -eq $container -or $null -eq $container.NetworkSettings -or $null -eq $container.NetworkSettings.Ports) { return '' }
+    $binding = $container.NetworkSettings.Ports.PSObject.Properties['7357/tcp']
+    if ($null -eq $binding -or $null -eq $binding.Value) { return '' }
+    $port = [string](@($binding.Value)[0].HostPort)
+    if ($port -match '^\d+\z') { return $port }
+    return ''
+  }
+
+  # The page's port: what the running worker publishes, else this session, else .env, else the default.
+  function Get-PagePort {
+    $port = Get-PublishedPort
+    if ([string]::IsNullOrEmpty($port)) { $port = [Environment]::GetEnvironmentVariable('APP_WORKER_UI_PORT', 'Process') }
+    if ([string]::IsNullOrEmpty($port)) { $port = Get-EnvFileValue 'APP_WORKER_UI_PORT' }
+    if ($port -notmatch '^\d+\z') { $port = '7357' }
     return $port
   }
 
@@ -279,14 +458,8 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
   # the bundle's default.
   function Get-CacheVolume {
     $volume = [Environment]::GetEnvironmentVariable('APP_WORKER_CACHE_VOLUME', 'Process')
-    if ([string]::IsNullOrEmpty($volume)) {
-      $envText = Read-Text (Join-Path $WorkerDir '.env')
-      if ($null -ne $envText) {
-        $found = [regex]::Matches($envText, '(?m)^APP_WORKER_CACHE_VOLUME=(.*?)\r?$')
-        if ($found.Count -gt 0) { $volume = $found[$found.Count - 1].Groups[1].Value }
-      }
-    }
-    if ($volume -notmatch '^[A-Za-z0-9_.-]+$') { $volume = 'agentic-worker-repo-cache' }
+    if ([string]::IsNullOrEmpty($volume)) { $volume = Get-EnvFileValue 'APP_WORKER_CACHE_VOLUME' }
+    if ($volume -notmatch '^[A-Za-z0-9_.-]+\z') { $volume = 'agentic-worker-repo-cache' }
     return $volume
   }
 
@@ -366,9 +539,12 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     }
     Assert-NothingForeignOrBusy
 
+    $madeDir = -not (Test-Path -LiteralPath $WorkerDir -PathType Container)
     $null = New-Item -ItemType Directory -Force -Path $WorkerDir
     Get-Bundle
+    Assert-NoSharedName $madeDir
     [IO.File]::WriteAllText($markPath, "# Written by the Agentic platform worker installer (install.ps1, S-22.20). Do not edit.`ncore=$CoreAddress`n")
+    Save-ShellSetting
     $downloaded = Join-Path $WorkerDir $Download
     $bundlePath = Join-Path $WorkerDir $Bundle
     $served = Get-BundlePin $downloaded

@@ -19,10 +19,16 @@
 #
 # The worker keeps itself up to date. Its `updater` service follows the core and verifies each build
 # before it applies it. Running this script again is a repair, never an upgrade. It never changes the
-# images an approved worker runs, never writes the `.env` file the updater manages, and never touches
-# a volume (except `--uninstall --purge`, which removes them). A worker that is not set up yet (its
-# page waits for a platform, its Claude sign-in or its approval) runs nothing worth keeping, so a
-# re-run installs the core's build over it.
+# images an approved worker runs, never writes inside the block of `.env` the updater manages, and
+# never touches a volume (except `--uninstall --purge`, which removes them). A worker that is not set
+# up yet (its page waits for a platform, its Claude sign-in or its approval) runs nothing worth
+# keeping, so a re-run installs the core's build over it.
+#
+# A setting the bundle declares with a default (`${VAR:-default}`: APP_WORKER_UI_PORT, LOG_LEVEL, ...)
+# that is set in this shell is saved into the folder's `.env`, outside the updater's block, before the
+# first `docker compose up`: the updater carries into a new build only values with no default, so one
+# given on the shell alone would go back to its default at the next update. Secret-looking names, the
+# image and trust variables, and anything the bundle does not declare are never written.
 #
 # Exit status: 0 done, 1 a prerequisite or a step failed, 2 a usage error, 3 refused (to protect
 # something that already exists).
@@ -40,6 +46,14 @@ BLOCK_END='# <<< agentic-platform updater'
 IMAGE_VARIABLES='PLATFORM_IMAGE PLATFORM_LAUNCHER_IMAGE PLATFORM_RUNTIME_IMAGE PLATFORM_EGRESS_IMAGE'
 # The label the updater puts on its one-shot apply container (apps/server/src/updater/updater.ts).
 APPLY_LABEL=org.platform.update-apply
+# Declared with a default in the bundle but never saved into .env: the four images and the git image
+# (the bundle's pins, which a saved line would hold past every update), what the updater trusts, the
+# core's address, and the folder the updater mounts (the updater answers it itself). Held to the
+# template by install-script.test.ts.
+NOT_SAVED='PLATFORM_IMAGE PLATFORM_LAUNCHER_IMAGE PLATFORM_RUNTIME_IMAGE PLATFORM_EGRESS_IMAGE APP_WORKSPACE_GIT_IMAGE APP_TRUSTED_IMAGE_REPOSITORY APP_TRUSTED_BUILDER APP_CORE_URL APP_WORKER_BUNDLE_DIR'
+# The label the launcher puts on the volumes it creates: the control volume of the launcher that made
+# it (packages/application/src/ports/workspace.ts, WORKSPACE_LABELS.instance).
+INSTANCE_LABEL=com.agentic.instance
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'agentic-worker: %s\n' "$*" >&2; }
@@ -227,6 +241,11 @@ refuse_foreign_and_busy() {
       die 3 "a worker bundle named $PROJECT already exists on this machine, and $dir is not this installer's (it has no $MARK). This installer will not take it over: run it with --dir pointing at that bundle's folder, or remove that bundle first."
     fi
   fi
+  refuse_applying
+}
+
+# The updater's one-shot apply container is running: it rewrites this folder's files.
+refuse_applying() {
   applying=$(docker ps --quiet --filter "label=$APPLY_LABEL=$PROJECT") || die 1 'docker ps failed'
   if [ -n "$applying" ]; then
     die 3 "this worker is applying an update right now. Run this again when it has finished (cd '$dir' && docker compose logs updater)."
@@ -324,13 +343,209 @@ marked_core() {
   sed -n 's/^core=//p' "$dir/$MARK" | head -n 1
 }
 
+# --- Settings given on the shell (BACKLOG 1055) ---
+
+# Every variable a bundle file declares with a non-empty default (`${VAR:-x}`), one per line.
+defaulted_variables() {
+  grep -v '^[[:space:]]*#' "$1" | grep -o '[$][{][A-Z][A-Z0-9_]*:-[^}]' |
+    sed 's/^[$][{]\([A-Z0-9_]*\):-.*/\1/' | sort -u
+}
+
+# The value .env sets for a variable outside the updater's block (the last line wins), or nothing:
+# `NAME=value`, `export NAME=value`, with the value bare, 'single' or "double" quoted.
+env_value() {
+  [ -f "$dir/.env" ] || return 0
+  sed "/^$BLOCK_BEGIN/,/^$BLOCK_END/d" "$dir/.env" |
+    sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1[[:space:]]*=[[:space:]]*//p" |
+    tail -n 1 | sed -e "s/^'\(.*\)'\$/\1/" -e 's/^"\(.*\)"$/\1/'
+}
+
+# The name a variable resolves to for Compose: this shell, else .env, else the downloaded bundle's
+# default.
+resolved_value() {
+  eval "value=\${$1:-}"
+  [ -n "$value" ] || value=$(env_value "$1")
+  [ -n "$value" ] || value=$(default_pin "$dir/$DOWNLOAD" "$1")
+  say "$value"
+}
+
+# The variable a line of an env file assigns (`NAME=...`, `export NAME=...`), or nothing.
+assigned_name() {
+  printf '%s\n' "$1" |
+    sed -n 's/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p'
+}
+
+# `NAME=value` for a setting of this shell.
+setting_line() {
+  eval "value=\${$1:-}"
+  printf '%s=%s\n' "$1" "$value"
+}
+
+# The settings to save: each variable the downloaded bundle declares with a default, set (non-empty)
+# in this shell, that is not in NOT_SAVED and does not look like a secret, one name per line. A value
+# with a character a plain .env line cannot hold is named and left out.
+settings_to_save() {
+  for variable in $(defaulted_variables "$dir/$DOWNLOAD"); do
+    case " $NOT_SAVED " in *" $variable "*) continue ;; esac
+    case $variable in
+      *TOKEN* | *SECRET* | *PASSWORD* | *PASSWD* | *KEY* | *DSN* | *CREDENTIAL* | *PRIVATE*) continue ;;
+    esac
+    eval "value=\${$variable:-}"
+    [ -n "$value" ] || continue
+    case $value in
+      *[!A-Za-z0-9_.:/@%+,=-]*)
+        warn "did not save $variable: its value has a character this installer does not write into .env; add it to $dir/.env yourself, or it goes back to its default at the next update."
+        continue
+        ;;
+    esac
+    say "$variable"
+  done
+}
+
+# Writes the settings of this shell into .env (BACKLOG 1055), before the first `docker compose up`:
+# an earlier line of the same name outside the updater's block is replaced where it stands (a later
+# duplicate dropped), a new one appended; the updater's block is copied byte for byte. A new file is
+# private (0600); an existing one keeps its mode. Says in one line what it saved.
+#
+# The updater rewrites .env when it applies an update, so the file is read only now, with no apply
+# running, and the write is refused when the file changed (or an apply started) while it was being
+# built: a rename of a stale copy would put back the managed block it had just replaced. What is
+# left is the moment between that last check and the rename.
+save_settings() {
+  names=$(settings_to_save | tr '\n' ' ')
+  names=${names% }
+  [ -n "$names" ] || return 0
+  refuse_applying
+  file=$dir/.env
+  next=$dir/.env.installer-$$
+  read_copy=$dir/.env.installer-read-$$
+  rm -f "$next" "$read_copy"
+  if [ -f "$file" ]; then
+    cp -p "$file" "$read_copy"
+    cp -p "$file" "$next"
+  else
+    (umask 077 && : >"$next")
+  fi
+  {
+    inside=0
+    written=' '
+    if [ -f "$read_copy" ]; then
+      while IFS= read -r line || [ -n "$line" ]; do
+        if [ "$inside" -eq 1 ]; then
+          case $line in "$BLOCK_END"*) inside=0 ;; esac
+          printf '%s\n' "$line"
+          continue
+        fi
+        case $line in
+          "$BLOCK_BEGIN"*)
+            inside=1
+            printf '%s\n' "$line"
+            continue
+            ;;
+        esac
+        name=$(assigned_name "$line")
+        case " $names " in
+          *" ${name:-.} "*)
+            case $written in
+              *" $name "*) ;;
+              *)
+                setting_line "$name"
+                written="$written$name "
+                ;;
+            esac
+            continue
+            ;;
+        esac
+        printf '%s\n' "$line"
+      done <"$read_copy"
+    fi
+    for name in $names; do
+      case $written in *" $name "*) continue ;; esac
+      setting_line "$name"
+    done
+  } >"$next"
+  unchanged=1
+  if [ -f "$read_copy" ]; then
+    cmp -s "$file" "$read_copy" || unchanged=0
+  elif [ -e "$file" ]; then
+    unchanged=0
+  fi
+  rm -f "$read_copy"
+  if [ "$unchanged" -eq 0 ]; then
+    rm -f "$next"
+    die 3 "$file changed while this installer was saving settings into it (the updater applying an update?). Run this again."
+  fi
+  if ! (refuse_applying); then
+    rm -f "$next"
+    exit 3
+  fi
+  mv -f "$next" "$file"
+  note=''
+  if [ -n "$(project_containers)" ]; then
+    note=" (a worker already running takes a changed one at its next update)"
+  fi
+  say "Saved in $dir/.env, so its updates keep them: $names$note"
+}
+
+# --- Another worker's names (BACKLOG 1056) ---
+
+# One label of a Docker volume or network, read off `{{json .Labels}}`; nothing when the object does
+# not exist (or Docker does not answer) or has no such label.
+label_of() {
+  [ -n "$2" ] || return 0
+  labels=$(docker "$1" inspect --format '{{json .Labels}}' "$2" 2>/dev/null) || return 0
+  key=$(printf '%s' "$3" | sed 's/[.]/[.]/g')
+  printf '%s\n' "$labels" | sed -n "s/.*\"$key\":\"\([^\"]*\)\".*/\1/p"
+}
+
+# Refuses, before anything is created, a worker whose control volume, run network or repository cache
+# resolves to a name another worker on this machine already holds: Compose labels the volume and the
+# network with the project that created them, and the launcher labels the cache with its own control
+# volume. What it cannot see: an object of that name nobody labelled, and a cache another worker is
+# configured with but has not created yet (no run yet).
+refuse_shared_names() {
+  control=$(resolved_value APP_WORKER_CONTROL_VOLUME)
+  network=$(resolved_value APP_WORKER_RUN_NETWORK)
+  cache=$(resolved_value APP_WORKER_CACHE_VOLUME)
+  shared=''
+  owner=$(label_of volume "$control" com.docker.compose.project)
+  if [ -n "$owner" ] && [ "$owner" != "$PROJECT" ]; then
+    shared="the compose project $owner already uses the volume $control, so set APP_WORKER_CONTROL_VOLUME"
+  fi
+  owner=$(label_of network "$network" com.docker.compose.project)
+  if [ -z "$shared" ] && [ -n "$owner" ] && [ "$owner" != "$PROJECT" ]; then
+    shared="the compose project $owner already uses the network $network, so set APP_WORKER_RUN_NETWORK"
+  fi
+  maker=$(label_of volume "$cache" "$INSTANCE_LABEL")
+  if [ -z "$shared" ] && [ -n "$maker" ] && [ "$maker" != "$control" ]; then
+    shared="the worker whose control volume is $maker already uses the repository cache $cache, so set APP_WORKER_CACHE_VOLUME"
+  fi
+  [ -n "$shared" ] || return 0
+  rm -f "$dir/$DOWNLOAD"
+  [ "$made_dir" -eq 0 ] || rmdir "$dir" 2>/dev/null || :
+  die 3 "another worker runs on this machine: $shared to a name of its own in this shell (the installer saves it in .env) and run this again."
+}
+
 # --- Waiting for the worker ---
 
+# The host port the running remote-worker publishes its page on, or nothing (not running yet). A
+# setting saved into .env by a re-run reaches the container only at its next update, so this, not
+# the setting, is where the page is.
+published_port() {
+  id=$(docker ps --quiet --filter "label=com.docker.compose.project=$PROJECT" \
+    --filter "label=com.docker.compose.service=remote-worker" 2>/dev/null | head -n 1) || id=''
+  [ -n "$id" ] || return 0
+  line=$(docker port "$id" 7357/tcp 2>/dev/null | head -n 1) || line=''
+  port=${line##*:}
+  case $port in '' | *[!0-9]*) return 0 ;; esac
+  say "$port"
+}
+
+# The page's port: what the running worker publishes, else this shell, else .env, else the default.
 page_port() {
-  port=${APP_WORKER_UI_PORT:-}
-  if [ -z "$port" ] && [ -f "$dir/.env" ]; then
-    port=$(sed -n 's/^APP_WORKER_UI_PORT=//p' "$dir/.env" | tail -n 1)
-  fi
+  port=$(published_port)
+  [ -n "$port" ] || port=${APP_WORKER_UI_PORT:-}
+  [ -n "$port" ] || port=$(env_value APP_WORKER_UI_PORT)
   case $port in
     '' | *[!0-9]*) port=7357 ;;
   esac
@@ -421,9 +636,13 @@ install_worker() {
   fi
   refuse_foreign_and_busy
 
+  made_dir=0
+  [ -d "$dir" ] || made_dir=1
   mkdir -p "$dir"
   download_bundle
+  refuse_shared_names
   write_mark
+  save_settings
   served=$(pins_of_bundle "$dir/$DOWNLOAD")
   current=$(pins_of_block "$dir/.env")
   [ -n "$current" ] || current=$(pins_of_bundle "$dir/$BUNDLE")
@@ -503,9 +722,7 @@ install_worker() {
 # bundle's default.
 cache_volume() {
   volume=${APP_WORKER_CACHE_VOLUME:-}
-  if [ -z "$volume" ] && [ -f "$dir/.env" ]; then
-    volume=$(sed -n 's/^APP_WORKER_CACHE_VOLUME=//p' "$dir/.env" | tail -n 1)
-  fi
+  [ -n "$volume" ] || volume=$(env_value APP_WORKER_CACHE_VOLUME)
   case $volume in
     '' | *[!A-Za-z0-9_.-]*) volume=agentic-worker-repo-cache ;;
   esac

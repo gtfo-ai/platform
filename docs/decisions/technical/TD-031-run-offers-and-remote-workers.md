@@ -1286,3 +1286,20 @@ membership at `member` or above, so `worker.register: viewer` still grants nothi
    file already there). Otherwise it restarts what exists and leaves the move to the updater, which
    verifies first. It never writes the env file or a volume. TD-032 §3 holds: a person runs the
    script, and no updater applies anything the core served.
+
+
+## Amendment (2026-11-06, orchestrator-authorised, BACKLOG 1055/1056) — decision 9 item 2: the installer writes a person's settings into `.env`, outside the updater's block
+
+Item 2's "it never writes the env file" is narrowed to **it never writes inside the updater's managed
+block** (TD-032 decision 4). Since the updater carries into a new build only values the template
+declares with no default (PR #69), a defaulted setting given to the installer only on the shell went
+back to its default at the next update. So each variable the downloaded bundle declares as
+`${VAR:-default}` and that is set in the installer's environment is written into the folder's `.env`
+before the first `docker compose up` — an earlier line of the same name replaced, the block copied as
+it is, one line saying what was saved — except the images, what the updater trusts, `APP_CORE_URL`,
+`APP_WORKER_BUNDLE_DIR`, a secret-looking name and a value a plain line cannot hold
+(`install-script.test.ts` holds the list to the template). And a worker whose control volume, run
+network or repository cache resolves to a name another worker on the machine holds — read off the
+Compose project label of the volume and network, and the launcher's `com.agentic.instance` label of the
+cache — is refused before anything is created, naming the variable to set. It still never touches a
+volume or moves an image.

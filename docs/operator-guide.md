@@ -489,7 +489,8 @@ instead, remove the `updater` and `updater-docker-proxy` services, download the 
 `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_CACHE_VOLUME`, `APP_WORKER_RUN_NETWORK` and
 `APP_WORKER_UI_PORT` — **in its folder's `.env`**, never only on the shell: each has a default in the
 template, and a value given only on the shell goes back to it at the next update, so a second worker
-would then share the first worker's control volume, cache volume and run network.
+would then share the first worker's control volume, cache volume and run network. (The installers
+below write a shell-given one into `.env` for you, and refuse a second worker that would share.)
 
 #### One-command install (S-22.20)
 
@@ -530,8 +531,40 @@ installs the served build over it (`docker compose up -d`) and says so. A stoppe
 answers nothing, so the installer starts it first and reads the page again once it answers; a page
 that refuses the read (`APP_WORKER_UI_AUTH=token`) keeps the rule above. A worker stuck before this
 build runs an updater that needs the approval to follow its core, so this re-run is what moves it. It never
-writes `.env` or touches a volume (except `--purge`), and it refuses while an update is being
-applied.
+writes inside the updater's block of `.env` or touches a volume (except `--purge`), and it refuses
+while an update is being applied.
+
+**It keeps the settings you give it** (BACKLOG 1055). A variable the bundle declares with a default
+(`${VAR:-default}`) and that is set in the installer's shell — `APP_WORKER_UI_PORT=7400 sh install.sh`,
+or `$env:LOG_LEVEL = 'debug'` before the PowerShell one — is written into the folder's `.env` before
+the first `docker compose up`, and the installer says in one line which it saved: the updater carries
+into a new build only values the template has **no** default for, so one given on the shell alone would
+go back to its default at the next update. A line of the same name already in `.env` is replaced where
+it stands; the updater's managed block is copied as it is, and the write is refused (exit 3, run it
+again) if `.env` changed or an update started applying meanwhile; a new `.env` that `install.sh` writes
+is private (0600). On a re-run nothing is recreated, so a changed setting reaches a running worker at
+its next update, and the installer says so and waits on the page port the running worker publishes. The list is
+read off the bundle the installer downloaded, so it is exactly what that bundle declares — today
+`APP_UPDATE_CHECK_SECONDS`, `APP_UPDATE_POLL_SECONDS`, `APP_WORKER_CACHE_VOLUME`,
+`APP_WORKER_CONCURRENCY`, `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_RUN_NETWORK`, `APP_WORKER_UI`,
+`APP_WORKER_UI_AUTH`, `APP_WORKER_UI_PORT`, `APP_WORKER_USAGE_PAUSE_DEFAULT`,
+`APP_WORKSPACE_MIRROR_MEMORY_MB` and `LOG_LEVEL` — and never the images (`PLATFORM_*_IMAGE`,
+`APP_WORKSPACE_GIT_IMAGE`), what the updater trusts (`APP_TRUSTED_*`), `APP_CORE_URL`,
+`APP_WORKER_BUNDLE_DIR`, a secret-looking name (one containing `TOKEN`, `SECRET`, `PASSWORD`,
+`PASSWD`, `KEY`, `DSN`, `CREDENTIAL` or `PRIVATE`), or a variable the bundle does not declare. A value
+with a character other than letters, digits and `_ . : / @ % + , = -` is named and not saved: put it in
+`.env` yourself. The token and the DSN have no default, so the updater carries them already.
+
+**It refuses a second worker that would share the first's names** (BACKLOG 1056). Before it writes
+anything, it resolves `APP_WORKER_CONTROL_VOLUME`, `APP_WORKER_RUN_NETWORK` and
+`APP_WORKER_CACHE_VOLUME` (the shell, else `.env`, else the bundle's default) and asks Docker for the
+labels of what already has those names: a control volume or run network Compose created for another
+project, or a repository cache another worker's launcher created (its `com.agentic.instance` label names
+that launcher's control volume), refuses (exit 3) with one sentence naming the variable to set — set it
+in the shell, and the installer saves it. What it cannot see: an object of that name with no such label
+(created by hand), and a cache volume another worker is configured with but has not created yet
+(before its first run). A second worker also needs its own `APP_WORKER_UI_PORT`; Compose's port
+conflict says so.
 
 **Its install is its mark.** An installer knows its own folder by the `.agentic-worker-install` it
 wrote, never by Compose's `working_dir` label, which names the updater's mount path

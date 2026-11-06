@@ -6,18 +6,27 @@ where install.ps1 is executed; install-script.test.ts holds its text.
 
 Asserted: a first install downloads the core's bundle verbatim, marks the folder, runs
 `docker compose up -d` there with none of the variables that would re-pin the images or change what
-the updater trusts; a re-run starts what exists and recreates nothing; a re-run against another
-served build only starts an approved worker (or one whose page cannot be read) and installs the
-served build over one that is not set up yet (its page reads needs_claude) - a stopped one too,
-whose page answers only once it was started; an `irm | iex`-style run
-leaves the caller's session alive with no installer function behind; `-Uninstall -Purge` removes
-the volumes and the folder. Prints PASS or FAIL and exits 0 or 1.
+the updater trusts, after saving the session's defaulted settings into .env (never a secret-looking
+or undeclared one, never inside the updater's block, an earlier line replaced); a re-run starts what
+exists and recreates nothing; a re-run against another served build only starts an approved worker
+(or one whose page cannot be read) and installs the served build over one that is not set up yet
+(its page reads needs_claude) - a stopped one too, whose page answers only once it was started; an
+`irm | iex`-style run leaves the caller's session alive with no installer function behind;
+`-Uninstall -Purge` removes the volumes and the folder; a second worker that would share another's
+control volume is refused until it names its own. Prints PASS or FAIL and exits 0 or 1.
 #>
 $ErrorActionPreference = 'Stop'
 $failures = New-Object System.Collections.Generic.List[string]
 function Test-That {
   param([bool]$Condition, [string]$What)
   if ($Condition) { Write-Host "ok   $What" } else { Write-Host "FAIL $What"; $failures.Add($What) }
+}
+
+# A file's text with CRLF read as LF ('' when it does not exist).
+function Read-EnvText {
+  param([string]$Path)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '' }
+  return ([IO.File]::ReadAllText($Path) -replace "`r`n", "`n")
 }
 
 $repository = Split-Path -Parent $PSScriptRoot
@@ -44,8 +53,18 @@ $bundle = @(
   'services:',
   '  remote-worker:',
   "    image: `${PLATFORM_IMAGE:-ghcr.io/acme/platform@$sha}",
+  '    environment:',
+  '      APP_WORKER_CONCURRENCY: ${APP_WORKER_CONCURRENCY:-1}',
+  '      APP_WORKER_FAKE_TOKEN: ${APP_WORKER_FAKE_TOKEN:-none}',
+  '      LOG_LEVEL: ${LOG_LEVEL:-info}',
+  '      APP_WORKER_UI_PORT: ${APP_WORKER_UI_PORT:-7357}',
+  '      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}',
   '  launcher:',
   "    image: `${PLATFORM_LAUNCHER_IMAGE:-ghcr.io/acme/platform-launcher@$sha}",
+  '    environment:',
+  '      APP_WORKSPACE_CONTROL_VOLUME: ${APP_WORKER_CONTROL_VOLUME:-agentic-worker-ctl}',
+  '      APP_WORKSPACE_CACHE_VOLUME: ${APP_WORKER_CACHE_VOLUME:-agentic-worker-repo-cache}',
+  '      APP_WORKSPACE_EGRESS_NETWORK: ${APP_WORKER_RUN_NETWORK:-agentic-worker-run-egress}',
   '  pull-runtime-image:',
   "    image: `${PLATFORM_RUNTIME_IMAGE:-ghcr.io/acme/platform-runtime@$sha}",
   '  pull-egress-image:',
@@ -77,12 +96,22 @@ try {
   $env:APP_TRUSTED_BUILDER = ''
   $env:APP_TRUSTED_IMAGE_REPOSITORY = 'ghcr.io/evil/platform'
   $env:COMPOSE_PROFILES = 'none'
+  # Settings given in the session: the two the bundle declares with a default are saved into .env;
+  # a secret-looking one, a token with no default and an undeclared one never are.
+  $env:LOG_LEVEL = 'debug'
+  $env:APP_WORKER_CONCURRENCY = '3'
+  $env:APP_WORKER_FAKE_TOKEN = 'fake-value-for-tests'
+  $env:CLAUDE_CODE_OAUTH_TOKEN = 'fake-oauth-token-for-tests'
+  $env:APP_WORKER_NOT_DECLARED = 'x'
 
   & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
   Test-That ($LASTEXITCODE -eq 0) "a first install exits 0 (it exited $LASTEXITCODE)"
   Test-That ([IO.File]::ReadAllText((Join-Path $workerDir 'compose.yaml')) -eq $bundle) 'compose.yaml is the core''s bundle, byte for byte'
   Test-That ([IO.File]::ReadAllText((Join-Path $workerDir '.agentic-worker-install')) -match "(?m)^core=$([regex]::Escape($core))$") 'the folder is marked with its core'
-  Test-That (-not (Test-Path -LiteralPath (Join-Path $workerDir '.env'))) 'the installer writes no .env'
+  $envPath = Join-Path $workerDir '.env'
+  $savedText = Read-EnvText $envPath
+  Test-That ($savedText -eq "APP_WORKER_CONCURRENCY=3`nLOG_LEVEL=debug`n") ".env holds the session's two defaulted settings and nothing else (it holds: $savedText)"
+  Test-That ((Read-EnvText (Join-Path $state 'env-at-up')) -eq $savedText) 'the settings were in .env when Compose first read it'
   $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
   Test-That (($calls -join '|') -eq 'docker compose --project-name agentic-worker up -d') "Compose was asked to up -d once (asked: $($calls -join ' | '))"
   Test-That ((Get-Content -LiteralPath (Join-Path $state 'wd') -Raw).Trim() -eq $workerDir) 'Compose ran in the worker''s folder'
@@ -90,10 +119,40 @@ try {
   Test-That ($leaked -eq '') "no re-pinning or trust variable reached Compose (reached: $leaked)"
   Test-That ($env:PLATFORM_IMAGE -eq 'ghcr.io/evil/platform:latest') 'the caller''s environment is put back'
 
+  foreach ($name in @('LOG_LEVEL', 'APP_WORKER_CONCURRENCY', 'APP_WORKER_FAKE_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'APP_WORKER_NOT_DECLARED')) {
+    Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+  }
+
   & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
   Test-That ($LASTEXITCODE -eq 0) "a re-run exits 0 (it exited $LASTEXITCODE)"
   $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
   Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker up -d --no-recreate') "a re-run adds what is missing and recreates nothing (last: $($calls[-1]))"
+  Test-That ((Read-EnvText $envPath) -eq $savedText) 'a re-run without the settings keeps them in .env'
+
+  # A same-build re-run with a new page port saves it for the next update and recreates nothing, so
+  # the wait reads the port the running worker publishes (7357, where the stand-in page answers).
+  $env:APP_WORKER_UI_PORT = '7400'
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
+  Remove-Item -LiteralPath 'Env:APP_WORKER_UI_PORT' -ErrorAction SilentlyContinue
+  Test-That ($LASTEXITCODE -eq 0) "a re-run with a new page port waits on the published one (it exited $LASTEXITCODE)"
+  Test-That ((Read-EnvText $envPath) -eq "$($savedText)APP_WORKER_UI_PORT=7400`n") 'and saves the new port for the next update'
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
+  Test-That ($LASTEXITCODE -eq 0) "a later re-run still finds the page (it exited $LASTEXITCODE)"
+  [IO.File]::WriteAllText($envPath, $savedText)
+
+  # Around the updater's block, never inside it: an earlier line is replaced where it stands, a
+  # later duplicate dropped, a new setting appended.
+  $block = "# >>> agentic-platform updater - managed block`nPLATFORM_IMAGE=ghcr.io/acme/platform@$sha`nPLATFORM_LAUNCHER_IMAGE=ghcr.io/acme/platform-launcher@$sha`nPLATFORM_RUNTIME_IMAGE=ghcr.io/acme/platform-runtime@$sha`nPLATFORM_EGRESS_IMAGE=ghcr.io/acme/platform-egress@$sha`n# <<< agentic-platform updater"
+  [IO.File]::WriteAllText($envPath, "export LOG_LEVEL=info`n# mine`n`n$block`nLOG_LEVEL=error`n")
+  $env:LOG_LEVEL = 'warn'
+  $env:APP_WORKER_CONTROL_VOLUME = 'agentic-worker-1-ctl'
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
+  Remove-Item -LiteralPath 'Env:LOG_LEVEL', 'Env:APP_WORKER_CONTROL_VOLUME' -ErrorAction SilentlyContinue
+  Test-That ($LASTEXITCODE -eq 0) "a re-run with a managed block exits 0 (it exited $LASTEXITCODE)"
+  $expected = "LOG_LEVEL=warn`n# mine`n`n$block`nAPP_WORKER_CONTROL_VOLUME=agentic-worker-1-ctl`n"
+  $got = Read-EnvText $envPath
+  Test-That ($got -eq $expected) ".env keeps the block as it was and replaces the earlier line (it holds: $got)"
+  [IO.File]::WriteAllText($envPath, $savedText)
 
   # The core serves another build now. The worker's page (the same stand-in server) answers its state
   # at /api/local/state: absent (it cannot be read), approved, then not set up yet.
@@ -116,7 +175,7 @@ try {
   $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
   Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker up -d') "another served build, a worker not set up yet: installs it with up -d (last: $($calls[-1]))"
   Test-That ([IO.File]::ReadAllText((Join-Path $workerDir 'compose.yaml')) -eq $bundleB) 'another served build, a worker not set up yet: compose.yaml is the served bundle'
-  Test-That (-not (Test-Path -LiteralPath (Join-Path $workerDir '.env'))) 'another served build, a worker not set up yet: still no .env'
+  Test-That ((Read-EnvText (Join-Path $workerDir '.env')) -eq $savedText) 'another served build, a worker not set up yet: .env is as it was'
   Remove-Item -LiteralPath $pageState -Force
 
   # A stopped worker: its page (another port here) answers nothing until `docker compose start`
@@ -127,6 +186,8 @@ try {
   $null = New-Item -ItemType Directory -Force -Path (Join-Path $stoppedSite 'api\local')
   [IO.File]::WriteAllText((Join-Path $stoppedSite 'index.html'), '<!doctype html><title>worker</title>')
   [IO.File]::WriteAllText((Join-Path $stoppedSite 'api\local\state'), '{"worker_id":null,"worker_name":null,"connection":"needs_claude","protocol":3}')
+  # Stopped, the container publishes no port, so the page is looked for where the setting says.
+  Remove-Item -LiteralPath (Join-Path $state 'published-port') -Force -ErrorAction SilentlyContinue
   $env:APP_WORKER_UI_PORT = '7358'
   $env:STUB_START_PAGE_PORT = '7358'
   $env:STUB_START_PAGE_SITE = $stoppedSite
@@ -138,6 +199,9 @@ try {
   Remove-Item -LiteralPath Env:APP_WORKER_UI_PORT, Env:STUB_START_PAGE_PORT, Env:STUB_START_PAGE_SITE
   $pagePid = Join-Path $state 'page.pid'
   if (Test-Path -LiteralPath $pagePid) { Stop-Process -Id ([int](Get-Content -LiteralPath $pagePid -Raw).Trim()) -Force -ErrorAction SilentlyContinue }
+  # The steps below run a worker whose page is the stand-in's again: its .env and published port.
+  [IO.File]::WriteAllText($envPath, $savedText)
+  Set-Content -LiteralPath (Join-Path $state 'published-port') -Value '7357'
 
   # After the updater's first update Compose's label names its mount path (S-22.21): the installer
   # still knows its own install, by its mark.
@@ -169,12 +233,26 @@ try {
   Test-That ($LASTEXITCODE -eq 0) "-Uninstall -Purge exits 0 (it exited $LASTEXITCODE)"
   $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
   Test-That ($calls[-1] -eq 'docker compose --project-name agentic-worker down --volumes --remove-orphans') "-Purge removes the volumes (last: $($calls[-1]))"
-  $volumeCalls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker volume *' })
+  $volumeCalls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker volume *' -and $_ -notlike '*--format*' })
   Test-That (($volumeCalls -join '|') -eq 'docker volume inspect agentic-worker-repo-cache|docker volume rm agentic-worker-repo-cache') "-Purge removes the launcher's repository cache (asked: $($volumeCalls -join ' | '))"
   Test-That (-not (Test-Path -LiteralPath $workerDir)) '-Purge removes the folder it made'
 
   & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -Purge
   Test-That ($LASTEXITCODE -eq 2) "-Purge without -Uninstall is a usage error (it exited $LASTEXITCODE)"
+
+  # A second worker whose control volume resolves to one another compose project created is refused
+  # before anything is created; with a name of its own it installs, and the name is kept in .env.
+  Set-Content -LiteralPath (Join-Path $state 'labels-volume-agentic-worker-ctl') -Value '{"com.docker.compose.project":"agentic-worker-dev"}'
+  $second = Join-Path $root 'second'
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $second -NoOpen
+  Test-That ($LASTEXITCODE -eq 3) "a worker sharing another's control volume is refused (it exited $LASTEXITCODE)"
+  Test-That (-not (Test-Path -LiteralPath $second)) 'the refused worker leaves no folder behind'
+  $env:APP_WORKER_CONTROL_VOLUME = 'agentic-worker-2-ctl'
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $second -NoOpen
+  Remove-Item -LiteralPath 'Env:APP_WORKER_CONTROL_VOLUME' -ErrorAction SilentlyContinue
+  Test-That ($LASTEXITCODE -eq 0) "with a control volume of its own it installs (it exited $LASTEXITCODE)"
+  $secondEnv = Read-EnvText (Join-Path $second '.env')
+  Test-That ($secondEnv -eq "APP_WORKER_CONTROL_VOLUME=agentic-worker-2-ctl`n") "and its name is kept in .env (it holds: $secondEnv)"
 } finally {
   Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
   $pagePid = Join-Path $state 'page.pid'

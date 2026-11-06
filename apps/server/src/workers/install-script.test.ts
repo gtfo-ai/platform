@@ -5,8 +5,10 @@
  *
  * The owner's requirement is **autoupdate always**: a bundle the installer starts runs its
  * `updater` with the shipped trust defaults, and a re-run never moves the images a worker runs,
- * never rewrites the env file the updater manages and never touches a volume. Each of those is a
- * test below. `install.ps1` gets the same structural checks here; it runs on a Windows runner
+ * never writes inside the env file's block the updater manages and never touches a volume. Each of
+ * those is a test below — and so is what it does write there (BACKLOG 1055): the defaulted settings
+ * given on the shell, outside the block, so an update keeps them; and what it refuses (BACKLOG
+ * 1056): a second worker that would share another's control volume, run network or cache. `install.ps1` gets the same structural checks here; it runs on a Windows runner
  * (`.github/workflows/worker-install.yml`), because no tier of this repository has PowerShell.
  */
 import { spawnSync } from 'node:child_process';
@@ -18,6 +20,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -179,6 +182,77 @@ describe('the bundle the core serves, and the one the installer writes, update t
   });
 });
 
+// ── The settings the installers save into .env (BACKLOG 1055) ───────────────────────────────────
+
+/** Every variable a bundle text declares with a non-empty default, whole-line comments aside. */
+const defaultedVariables = (text: string): string[] => {
+  const names = new Set<string>();
+  for (const line of text.split('\n')) {
+    if (/^\s*#/.test(line)) continue;
+    for (const match of line.matchAll(/\$\{([A-Z][A-Z0-9_]*):-[^}]/g))
+      names.add(match[1] as string);
+  }
+  return [...names].sort();
+};
+
+/**
+ * What the installers save from a served bundle today. The scripts derive it at run time (every
+ * defaulted variable of the bundle they downloaded, but `NOT_SAVED` and a secret-looking name), so
+ * this list is the decision record: a variable the template gains with a default fails the census
+ * below until somebody decides whether a value given on the shell is kept across updates.
+ */
+const SAVED_SETTINGS = [
+  'APP_UPDATE_CHECK_SECONDS',
+  'APP_UPDATE_POLL_SECONDS',
+  'APP_WORKER_CACHE_VOLUME',
+  'APP_WORKER_CONCURRENCY',
+  'APP_WORKER_CONTROL_VOLUME',
+  'APP_WORKER_RUN_NETWORK',
+  'APP_WORKER_UI',
+  'APP_WORKER_UI_AUTH',
+  'APP_WORKER_UI_PORT',
+  'APP_WORKER_USAGE_PAUSE_DEFAULT',
+  'APP_WORKSPACE_MIRROR_MEMORY_MB',
+  'LOG_LEVEL',
+];
+const SECRET_WORDS = [
+  'TOKEN',
+  'SECRET',
+  'PASSWORD',
+  'PASSWD',
+  'KEY',
+  'DSN',
+  'CREDENTIAL',
+  'PRIVATE',
+];
+const looksSecret = (name: string): boolean => SECRET_WORDS.some((word) => name.includes(word));
+
+describe('the settings the installers save into .env', () => {
+  it('are every variable the served template declares with a default but NOT_SAVED, held both ways', () => {
+    const declared = defaultedVariables(servedBundle('a'));
+    const notSaved = (/^NOT_SAVED='([^']*)'$/m.exec(SH)?.[1] ?? '').split(' ');
+    const notSavedPs1 = [
+      ...(/\$NotSaved = @\(([^)]*)\)/.exec(PS1)?.[1] ?? '').matchAll(/'([A-Z0-9_]+)'/g),
+    ].map((match) => match[1]);
+    expect(notSaved.length).toBeGreaterThan(5);
+    expect(notSavedPs1).toEqual(notSaved);
+    // No stale exclusion: each names a variable the template declares with a default.
+    for (const name of notSaved) expect(declared, name).toContain(name);
+    // The images and the trust are never a saved setting.
+    for (const variable of Object.values(WORKER_IMAGE_VARIABLE))
+      expect(notSaved).toContain(variable);
+    expect(notSaved).toEqual(
+      expect.arrayContaining(['APP_TRUSTED_IMAGE_REPOSITORY', 'APP_TRUSTED_BUILDER']),
+    );
+    expect(declared.filter((name) => !notSaved.includes(name) && !looksSecret(name))).toEqual(
+      SAVED_SETTINGS,
+    );
+    // The two scripts refuse the same secret-looking names.
+    expect(SH).toContain(SECRET_WORDS.map((word) => `*${word}*`).join(' | '));
+    expect(PS1).toContain(`'${SECRET_WORDS.join('|')}'`);
+  });
+});
+
 // ── install.sh against stubs ─────────────────────────────────────────────────────────────────────
 
 const DOCKER_STUB = String.raw`#!/bin/sh
@@ -200,6 +274,7 @@ case "$1" in
       *com.docker.compose.service=*)
         service=$(printf '%s\n' "$*" | sed -n 's/.*com\.docker\.compose\.service=\([a-z-]*\).*/\1/p')
         [ -f "$STUB_STATE/up" ] || exit 0
+        case "$*" in *--quiet*) printf 'c0ffee-%s\n' "$service"; exit 0 ;; esac
         if [ -f "$STUB_STATE/state-$service" ]; then cat "$STUB_STATE/state-$service"; else printf 'running|Up 3 seconds\n'; fi
         exit 0
         ;;
@@ -215,6 +290,17 @@ case "$1" in
       *' up '* | *' up')
         pwd > "$STUB_STATE/wd"
         : > "$STUB_STATE/up"
+        # The page's host port: what a created container publishes (this env, else .env, else the
+        # default); --no-recreate leaves a container that exists as it is.
+        case "$*" in *--no-recreate*) [ -f "$STUB_STATE/published-port" ] || recreate=1 ;; *) recreate=1 ;; esac
+        if [ -n "$recreate" ]; then
+          published="$APP_WORKER_UI_PORT"
+          [ -n "$published" ] || published=$([ -f .env ] && sed -n 's/^APP_WORKER_UI_PORT=//p' .env | tail -n 1)
+          [ -n "$published" ] || published=7357
+          printf '%s\n' "$published" > "$STUB_STATE/published-port"
+        fi
+        # The folder's .env as Compose read it at this up (nothing: no file).
+        if [ -f .env ]; then cp .env "$STUB_STATE/env-at-up"; else rm -f "$STUB_STATE/env-at-up"; fi
         env | grep -E '^(PLATFORM_|APP_TRUSTED_|APP_CORE_URL|COMPOSE_|CLAUDE_CODE_OAUTH_TOKEN)' | sort > "$STUB_STATE/up-env"
         exit "${'${STUB_UP_EXIT:-0}'}"
         ;;
@@ -222,7 +308,20 @@ case "$1" in
       *' down'*) rm -f "$STUB_STATE/up"; exit 0 ;;
     esac
     ;;
-  volume)
+  port)
+    # docker port <container> 7357/tcp: the published page port while the project is up.
+    [ -f "$STUB_STATE/up" ] && [ -f "$STUB_STATE/published-port" ] || exit 1
+    printf '127.0.0.1:%s\n' "$(cat "$STUB_STATE/published-port")"
+    exit 0
+    ;;
+  volume | network)
+    # {{json .Labels}} of a volume or network: $STUB_STATE/labels-<volume|network>-<name>, else none.
+    if [ "$2" = inspect ] && [ "$3" = --format ]; then
+      [ -f "$STUB_STATE/labels-$1-$5" ] || exit 1
+      cat "$STUB_STATE/labels-$1-$5"
+      exit 0
+    fi
+    [ "$1" = volume ] || exit 64
     # The launcher's repository cache: present unless STUB_NO_CACHE is set; removal is recorded.
     [ "$2" = inspect ] && { [ -z "${'${STUB_NO_CACHE:-}'}" ]; exit $?; }
     exit 0
@@ -233,9 +332,10 @@ exit 64
 `;
 
 const CURL_STUB = String.raw`#!/bin/sh
-# A stub curl: the core's compose.yml from $STUB_BUNDLE, the local page from $STUB_PAGE, and the
-# page's state from $STUB_PAGE_STATE (unset: the page answers it with an HTTP error; 'down': nothing
-# answers) or, once 'docker compose start' ran, from $STUB_PAGE_STATE_AFTER_START (nothing before).
+# A stub curl: the core's compose.yml from $STUB_BUNDLE, the local page from $STUB_PAGE (on the
+# published port only), and the page's state from $STUB_PAGE_STATE (unset: the page answers it
+# with an HTTP error; 'down': nothing answers) or, once 'docker compose start' ran, from
+# $STUB_PAGE_STATE_AFTER_START (nothing before).
 printf 'curl %s\n' "$*" >> "$STUB_LOG"
 out=''
 url=''
@@ -261,7 +361,14 @@ case "$url" in
     [ -n "${'${STUB_PAGE_STATE:-}'}" ] || exit 22
     printf '%s' "$STUB_PAGE_STATE"
     ;;
-  http://127.0.0.1:*) [ "${'${STUB_PAGE:-up}'}" = up ] || exit 7 ;;
+  http://127.0.0.1:*)
+    [ "${'${STUB_PAGE:-up}'}" = up ] || exit 7
+    # Only the port the worker's container publishes answers.
+    if [ -f "$STUB_STATE/published-port" ] &&
+      [ "$(printf '%s' "$url" | sed 's|^http://127.0.0.1:\([0-9]*\).*|\1|')" != "$(cat "$STUB_STATE/published-port")" ]; then
+      exit 7
+    fi
+    ;;
   *) exit 6 ;;
 esac
 `;
@@ -294,6 +401,7 @@ interface Stage {
 /** What `install.sh` and the stubs run besides the stubs (shell builtins aside). */
 const SYSTEM_TOOLS = [
   'cat',
+  'cmp',
   'cp',
   'env',
   'grep',
@@ -307,6 +415,7 @@ const SYSTEM_TOOLS = [
   'sleep',
   'sort',
   'tail',
+  'tr',
 ];
 
 const stage = (options: { readonly docker?: boolean } = {}): Stage => {
@@ -416,7 +525,7 @@ describe.each(SHELLS)(
       expect(written).toBe(servedBundle('a'));
       expectSelfUpdating(written as string);
       expect(read(path.join(s.dir, '.agentic-worker-install'))).toContain(`core=${CORE}\n`);
-      // The installer never writes the env file: it is the updater's.
+      // No setting was given on the shell, so there is no env file: its block is the updater's.
       expect(existsSync(path.join(s.dir, '.env'))).toBe(false);
       expect(r.composeCalls).toEqual(['docker compose --project-name agentic-worker up -d']);
       expect(read(path.join(s.state, 'wd'))?.trim()).toBe(s.dir);
@@ -458,6 +567,198 @@ describe.each(SHELLS)(
       expect(read(path.join(s.dir, '.env'))).toBe(updaterEnvFile('a'));
     });
 
+    it('saves the defaulted settings given on the shell into .env before the first up, and a re-run keeps them', () => {
+      const s = stage();
+      const r = run(shell, s, ['--no-open'], {
+        APP_WORKER_CONCURRENCY: '3',
+        APP_WORKER_CONTROL_VOLUME: 'agentic-worker-2-ctl',
+        APP_WORKER_UI_PORT: '7400',
+        LOG_LEVEL: 'debug',
+        // Never saved: a token and a DSN (no default: the updater carries them), a name the bundle
+        // does not declare, the images, the trust and the folder the updater answers itself.
+        CLAUDE_CODE_OAUTH_TOKEN: 'fake-oauth-token-for-tests',
+        SENTRY_DSN: 'https://fake@sentry.example.test/1',
+        APP_WORKER_NOT_DECLARED: 'x',
+        PLATFORM_IMAGE: 'ghcr.io/evil/platform:latest',
+        APP_WORKSPACE_GIT_IMAGE: 'ghcr.io/evil/git:latest',
+        APP_TRUSTED_IMAGE_REPOSITORY: 'ghcr.io/evil/platform',
+        APP_WORKER_BUNDLE_DIR: '/elsewhere',
+      });
+      expect(r.status).toBe(0);
+      const saved = [
+        'APP_WORKER_CONCURRENCY=3',
+        'APP_WORKER_CONTROL_VOLUME=agentic-worker-2-ctl',
+        'APP_WORKER_UI_PORT=7400',
+        'LOG_LEVEL=debug',
+      ];
+      const envFile = path.join(s.dir, '.env');
+      const text = read(envFile) as string;
+      expect(text.endsWith('\n')).toBe(true);
+      expect(text.split('\n').filter(Boolean).sort()).toEqual(saved);
+      // Private, and already there when Compose first read the folder.
+      expect(statSync(envFile).mode & 0o777).toBe(0o600);
+      expect(read(path.join(s.state, 'env-at-up'))).toBe(text);
+      expect(r.out).toContain(
+        `Saved in ${s.dir}/.env, so its updates keep them: ${saved.map((line) => line.split('=')[0]).join(' ')}`,
+      );
+      expect(r.out).toContain('http://127.0.0.1:7400');
+      // A re-run without them keeps them; one with a new value replaces the line where it stands.
+      expect(run(shell, s, ['--no-open']).status).toBe(0);
+      expect(read(envFile)).toBe(text);
+      const again = run(shell, s, ['--no-open'], { LOG_LEVEL: 'warn' });
+      expect(again.status).toBe(0);
+      expect(read(envFile)).toBe(text.replace('LOG_LEVEL=debug\n', 'LOG_LEVEL=warn\n'));
+      expect(again.out).toContain('so its updates keep them: LOG_LEVEL');
+    });
+
+    it('waits on the port the running worker publishes, not a setting a re-run saved for its next update', () => {
+      const s = stage();
+      expect(run(shell, s, ['--no-open']).status).toBe(0);
+      // A same-build re-run with a new port saves it and recreates nothing: the page stays on 7357.
+      const r = run(shell, s, ['--no-open'], { APP_WORKER_UI_PORT: '7400' });
+      expect(r.status).toBe(0);
+      expect(r.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker up -d --no-recreate',
+      );
+      expect(read(path.join(s.dir, '.env'))).toBe('APP_WORKER_UI_PORT=7400\n');
+      expect(r.out).toContain('a worker already running takes a changed one at its next update');
+      expect(r.out).toContain('http://127.0.0.1:7357 (open it in a browser)');
+      // And every later run too: the setting is in .env, the container still publishes 7357.
+      const later = run(shell, s, ['--no-open']);
+      expect(later.status).toBe(0);
+      expect(later.out).toContain('http://127.0.0.1:7357 (open it in a browser)');
+    });
+
+    it('reads a setting .env exports or quotes', () => {
+      const s = stage();
+      expect(run(shell, s).status).toBe(0);
+      writeFileSync(
+        path.join(s.dir, '.env'),
+        `export APP_WORKER_CONTROL_VOLUME="mine-ctl"\nAPP_WORKER_CACHE_VOLUME='mine-cache'\n`,
+      );
+      writeFileSync(
+        path.join(s.state, 'labels-volume-mine-ctl'),
+        '{"com.docker.compose.project":"by-hand"}\n',
+      );
+      const r = run(shell, s);
+      expect(r.status).toBe(3);
+      expect(r.out).toContain('the compose project by-hand already uses the volume mine-ctl');
+      rmSync(path.join(s.state, 'labels-volume-mine-ctl'));
+      expect(run(shell, s, ['--uninstall', '--purge']).calls).toContain(
+        'docker volume rm mine-cache',
+      );
+    });
+
+    it('writes around the updater’s managed block, never inside it, replacing an earlier line of the same name', () => {
+      const s = stage();
+      expect(run(shell, s).status).toBe(0);
+      const block = managedBlock(referencesOf('a'));
+      const envFile = path.join(s.dir, '.env');
+      writeFileSync(
+        envFile,
+        `export LOG_LEVEL=info\n# mine\nAPP_WORKER_CONCURRENCY=1\n\n${block}\nAPP_WORKER_CONCURRENCY=2\n`,
+      );
+      const r = run(shell, s, [], {
+        LOG_LEVEL: 'debug',
+        APP_WORKER_CONCURRENCY: '4',
+        APP_WORKER_UI_AUTH: 'token',
+      });
+      expect(r.status).toBe(0);
+      expect(read(envFile)).toBe(
+        `LOG_LEVEL=debug\n# mine\nAPP_WORKER_CONCURRENCY=4\n\n${block}\nAPP_WORKER_UI_AUTH=token\n`,
+      );
+      expect(r.composeCalls.at(-1)).toBe(
+        'docker compose --project-name agentic-worker up -d --no-recreate',
+      );
+    });
+
+    it('never writes a secret-looking name, even one the bundle declares with a default, nor a value a plain line cannot hold', () => {
+      const s = stage();
+      const concurrency = '      APP_WORKER_CONCURRENCY: ${APP_WORKER_CONCURRENCY:-1}\n';
+      const bundle = servedBundle('a').replace(
+        concurrency,
+        `${concurrency}      APP_WORKER_FAKE_TOKEN: \${APP_WORKER_FAKE_TOKEN:-none}\n`,
+      );
+      expect(bundle).toContain('${APP_WORKER_FAKE_TOKEN:-none}');
+      writeFileSync(s.bundle, bundle);
+      const r = run(shell, s, [], {
+        APP_WORKER_FAKE_TOKEN: 'fake-value-for-tests',
+        LOG_LEVEL: 'de bug',
+        APP_WORKER_CONCURRENCY: '2',
+      });
+      expect(r.status).toBe(0);
+      expect(read(path.join(s.dir, '.env'))).toBe('APP_WORKER_CONCURRENCY=2\n');
+      expect(r.out).toContain('did not save LOG_LEVEL');
+      expect(r.out).not.toContain('fake-value-for-tests');
+    });
+
+    it.each([
+      [
+        'volume',
+        'agentic-worker-ctl',
+        '{"com.docker.compose.project":"agentic-worker-dev","com.docker.compose.volume":"ctl"}',
+        'APP_WORKER_CONTROL_VOLUME',
+        'the compose project agentic-worker-dev already uses the volume agentic-worker-ctl',
+      ],
+      [
+        'network',
+        'agentic-worker-run-egress',
+        '{"com.docker.compose.network":"run-egress","com.docker.compose.project":"by-hand"}',
+        'APP_WORKER_RUN_NETWORK',
+        'the compose project by-hand already uses the network agentic-worker-run-egress',
+      ],
+      [
+        'volume',
+        'agentic-worker-repo-cache',
+        '{"com.agentic.instance":"by-hand-ctl","com.agentic.role":"shared"}',
+        'APP_WORKER_CACHE_VOLUME',
+        'the worker whose control volume is by-hand-ctl already uses the repository cache agentic-worker-repo-cache',
+      ],
+    ])(
+      'refuses a second worker that would share another’s %s %s, before anything is created, naming the variable',
+      (kind, name, labels, variable, said) => {
+        const s = stage();
+        writeFileSync(path.join(s.state, `labels-${kind}-${name}`), `${labels}\n`);
+        const r = run(shell, s);
+        expect(r.status).toBe(3);
+        expect(r.out).toContain(said);
+        expect(r.out).toContain(`set ${variable} to a name of its own`);
+        expect(r.composeCalls).toEqual([]);
+        expect(existsSync(s.dir)).toBe(false);
+        // Set to a name of its own on the shell, it installs — and the name is kept in .env.
+        const ok = run(shell, s, [], { [variable]: 'agentic-worker-2-own' });
+        expect(ok.status).toBe(0);
+        expect(read(path.join(s.dir, '.env'))).toBe(`${variable}=agentic-worker-2-own\n`);
+      },
+    );
+
+    it('does not count its own objects as another worker’s', () => {
+      const s = stage();
+      writeFileSync(
+        path.join(s.state, 'labels-volume-agentic-worker-ctl'),
+        '{"com.docker.compose.project":"agentic-worker","com.docker.compose.volume":"ctl"}\n',
+      );
+      writeFileSync(
+        path.join(s.state, 'labels-network-agentic-worker-run-egress'),
+        '{"com.docker.compose.project":"agentic-worker"}\n',
+      );
+      writeFileSync(
+        path.join(s.state, 'labels-volume-agentic-worker-repo-cache'),
+        '{"com.agentic.instance":"agentic-worker-ctl","com.agentic.role":"shared"}\n',
+      );
+      writeFileSync(path.join(s.state, 'labels-volume-unlabelled'), 'null\n');
+      const r = run(shell, s, [], { APP_WORKER_CACHE_VOLUME: 'unlabelled' });
+      expect(r.status).toBe(0);
+      expect(r.out).not.toContain('another worker');
+      // A cache volume made by its own launcher under the default name is ours too.
+      const t = stage();
+      writeFileSync(
+        path.join(t.state, 'labels-volume-agentic-worker-repo-cache'),
+        '{"com.agentic.instance":"agentic-worker-ctl"}\n',
+      );
+      expect(run(shell, t).status).toBe(0);
+    });
+
     it.each([
       ['the updater has moved it ahead of what the core serves', 'b', 'a'],
       ['the core serves a build the updater has not applied yet', 'a', 'b'],
@@ -495,7 +796,7 @@ describe.each(SHELLS)(
         ]);
         expect(read(path.join(s.dir, 'compose.yaml'))).toBe(servedBundle('b'));
         expect(existsSync(path.join(s.dir, '.compose.yaml.download'))).toBe(false);
-        // Still no env file: the installer never writes the updater's.
+        // Still no env file: no setting was given on the shell, and the block is the updater's.
         expect(existsSync(path.join(s.dir, '.env'))).toBe(false);
         expect(r.calls).toContain('curl -fsS --max-time 3 http://127.0.0.1:7357/api/local/state');
         // Nothing of the page's answer is printed.
@@ -773,14 +1074,21 @@ describe.each(SHELLS)(
       expect(read(path.join(s.dir, '.env'))).toBe(updaterEnvFile('a'));
       // The advice agrees with the refusal a moved core gets: start it with Compose, as it was.
       expect(kept.out).toContain(`cd '${s.dir}' && docker compose up -d`);
-      expect(kept.calls.some((call) => call.startsWith('docker volume'))).toBe(false);
+      // No volume is touched (an install's label reads, `docker volume inspect --format …`, aside).
+      expect(
+        kept.calls.some((call) => call.startsWith('docker volume') && !call.includes('--format')),
+      ).toBe(false);
       const purged = run(shell, s, ['--uninstall', '--purge']);
       expect(purged.status).toBe(0);
       expect(purged.composeCalls.at(-1)).toBe(
         'docker compose --project-name agentic-worker down --volumes --remove-orphans',
       );
       // The launcher's repository cache (cloned source) goes too; Compose does not own it.
-      expect(purged.calls.filter((call) => call.startsWith('docker volume'))).toEqual([
+      // (An install's label reads, `docker volume inspect --format …`, aside.)
+      const volumeCalls = purged.calls.filter(
+        (call) => call.startsWith('docker volume') && !call.includes('--format'),
+      );
+      expect(volumeCalls).toEqual([
         'docker volume inspect agentic-worker-repo-cache',
         'docker volume rm agentic-worker-repo-cache',
       ]);
