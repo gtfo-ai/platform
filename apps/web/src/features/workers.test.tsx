@@ -15,7 +15,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import { UPDATER_FIX, WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 import {
   APPROVE_WATCH_INTERVAL_MS,
   APPROVE_WATCH_LIMIT_MS,
@@ -560,6 +560,30 @@ describe('the Workers screen', () => {
     ).toBeNull();
   });
 
+  it('says a draining outdated worker is updating now, in progress rather than blocked (S-23.27)', async () => {
+    const updating = worker({
+      claim_blockers: ['draining', 'images_outdated'],
+      can_claim: false,
+    });
+    const { fetchImpl } = fetchFor('missing', [updating]);
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelector(`[data-worker="${updating.id}"] [data-why]`)).not.toBeNull();
+    });
+    const state = container.querySelector(`[data-worker="${updating.id}"] [data-worker-state]`);
+    expect(state?.textContent).toBe('Updating now…');
+    expect(state?.getAttribute('data-worker-state')).toBe('running');
+    expect(container.textContent).not.toContain('Can’t take work');
+    const why = container.querySelector(`[data-worker="${updating.id}"] [data-why]`) as HTMLElement;
+    expect(
+      [...why.querySelectorAll('[data-updating]')].map((li) => li.getAttribute('data-blocker')),
+    ).toEqual(['draining', 'images_outdated']);
+    expect(why.textContent).toContain(UPDATER_FIX);
+    // The drain's own fix (resume, restart) would undo the update: it is not offered.
+    expect(why.textContent).not.toContain(WORKER_CLAIM_BLOCKER_WORDS.draining.fix);
+    expect(screen.getByText('0 ready · 1 updating')).toBeTruthy();
+  });
+
   it('says a pick-only worker takes only what its owner picks, not that it is broken', async () => {
     const pickOnly = worker({
       claim_projects: [],
@@ -758,6 +782,14 @@ describe('the page’s pure helpers', () => {
       ]),
     ).toBe('1 ready · 1 can’t take work · 1 revoked');
     expect(workersCountText([worker()])).toBe('1 ready');
+    // An update in progress is counted as one, not as a worker that can't take work (S-23.27).
+    expect(
+      workersCountText([
+        worker(),
+        worker({ claim_blockers: ['draining', 'images_outdated'], can_claim: false }),
+        worker({ claim_blockers: ['draining'], can_claim: false }),
+      ]),
+    ).toBe('1 ready · 1 updating · 1 can’t take work');
   });
 
   it('normalises a typed code and refuses a partial or foreign one', () => {

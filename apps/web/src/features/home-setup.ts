@@ -19,7 +19,8 @@
  * - **worker** (S-23.20) — **only on a platform that needs one**: the setup project's execution
  *   read says nothing on the server would run it (`worker-need.ts`). Then it is done when an active
  *   worker takes work (`worker-readiness.ts`, over the server's `claim_blockers`), and while one
- *   exists that does not, the step names it with its first blocker's words and fix; on a platform whose
+ *   exists that does not, the step names it with its first blocker's words and fix — or says it is
+ *   updating itself (S-23.27), which needs nobody; on a platform whose
  *   server runs agent work the step is **absent**, not optional — an optional step on a checklist
  *   that disappears when complete would hold it open forever;
  * - **ticket** — the setup project's task list holds a task whose ticket is a provider's, not one
@@ -62,6 +63,8 @@ export interface BlockedWorker {
   readonly reason: string;
   /** What to do about it, in the same table's words. */
   readonly fix: string;
+  /** It is updating itself (`leadingClaimBlocker`, S-23.27): said as in progress, not as a fault. */
+  readonly updating?: boolean;
   readonly createdAt: string;
 }
 
@@ -160,9 +163,11 @@ export const setupChecklist = (
     const needsProject = id === 'discovery' || id === 'autonomy' || id === 'ticket';
     const fact = needsProject && setupProjectKey === null ? 'todo' : given;
     const hint =
-      id === 'worker' && fact !== 'done' && blockedWorker !== null
-        ? `${blockedWorker.name} can’t take work yet: ${wordInSentence(blockedWorker.reason)}. ${blockedWorker.fix}`
-        : LABELS[id].hint;
+      id !== 'worker' || fact === 'done' || blockedWorker === null
+        ? LABELS[id].hint
+        : blockedWorker.updating === true
+          ? `${blockedWorker.name} is updating now. ${blockedWorker.fix}`
+          : `${blockedWorker.name} can’t take work yet: ${wordInSentence(blockedWorker.reason)}. ${blockedWorker.fix}`;
     return [{ id, label: LABELS[id].label, hint, fact, destination: destination(id) }];
   });
   const next = steps.find((step) => step.fact !== 'done') ?? null;

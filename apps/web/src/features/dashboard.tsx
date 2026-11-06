@@ -45,9 +45,9 @@ import { cx, FOCUS_RING } from '../ui/cx.js';
 import { Flash } from '../ui/flash.js';
 import {
   APPROVAL_KIND_LABEL,
+  leadingClaimBlocker,
   runSubject,
   stageLabel,
-  WORKER_CLAIM_BLOCKER_WORDS,
 } from '../ui/humanize.js';
 import {
   Badge,
@@ -879,14 +879,17 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
         : latest,
     null,
   );
-  const blocker = newest === null ? undefined : workerReadinessOf(newest).claim_blockers[0];
+  // Its first blocker — or that it is updating itself (S-23.27).
+  const blocker =
+    newest === null ? undefined : leadingClaimBlocker(workerReadinessOf(newest).claim_blockers);
   const blockedWorker: BlockedWorker | null =
     worker !== 'todo' || newest === null || blocker === undefined
       ? null
       : {
           name: sanitiseUntrusted(newest.name),
-          reason: WORKER_CLAIM_BLOCKER_WORDS[blocker].word,
-          fix: WORKER_CLAIM_BLOCKER_WORDS[blocker].fix,
+          reason: blocker.word,
+          fix: blocker.fix,
+          updating: blocker.updating,
           createdAt: newest.created_at,
         };
 

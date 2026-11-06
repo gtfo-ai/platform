@@ -30,6 +30,7 @@ import {
   workerSeat,
 } from '../viz/fleet/fleet.test-fixture.js';
 import { FLEET_LIVE_UPDATE_MS } from '../viz/fleet/use-fleet.js';
+import { queueWaitOf } from './agents.js';
 import { FLEET_VIEW_STORAGE_KEY } from './agents-view.js';
 
 /** A string that would be an element if anything here rendered markup (BD-022). */
@@ -675,6 +676,20 @@ describe('on a platform with no server runner (S-23.20, S-23.24)', () => {
       can_claim: false,
     })),
   };
+
+  it('names a worker that is updating itself as updating, not as blocked (S-23.27)', () => {
+    const [jan] = WORKERS.items;
+    if (jan === undefined) throw new Error('fixture');
+    const updating = {
+      ...jan,
+      claim_blockers: ['draining' as const, 'images_outdated' as const],
+      can_claim: false,
+    };
+    expect(queueWaitOf(true, [updating])).toEqual({
+      wait: 'nobody',
+      reason: 'jan-mbp: updating now…',
+    });
+  });
 
   it('waits for a worker, with the way to add one, when no worker is registered', async () => {
     media(1280);

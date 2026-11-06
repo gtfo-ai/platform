@@ -37,10 +37,10 @@ import { useProjectBindings, useProjectExecution, useSettingsCommands } from '..
 import { buttonClassName } from '../ui/button.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import {
+  leadingClaimBlocker,
   PROJECT_WORKER_REASON_WORDS,
   WAITING_CLOSED_REASON_WORDS,
   type WaitingClosedReason,
-  WORKER_CLAIM_BLOCKER_WORDS,
   wordInSentence,
 } from '../ui/humanize.js';
 import { Button, ErrorNotice, Field } from '../ui/kit.js';
@@ -232,14 +232,17 @@ const CredentialNotice = ({ projectId }: { readonly projectId: string }): ReactE
   );
 };
 
-/** One worker's line: ✓ by itself, *picked only*, or ✗ and why — its own blocker first. */
+/**
+ * One worker's line: ✓ by itself, *picked only*, *updating now* (in progress, S-23.27), or ✗ and
+ * why — its own blocker first.
+ */
 export const executionWorkerWords = (
   worker: ProjectExecutionWorker,
-): { readonly status: 'success' | 'idle' | 'failure'; readonly words: string } => {
-  const first = worker.blockers[0];
+): { readonly status: 'success' | 'idle' | 'running' | 'failure'; readonly words: string } => {
+  const first = leadingClaimBlocker(worker.blockers);
   const reason =
     first !== undefined
-      ? WORKER_CLAIM_BLOCKER_WORDS[first].word
+      ? first.word
       : worker.project_reason === null
         ? null
         : PROJECT_WORKER_REASON_WORDS[worker.project_reason].word;
@@ -252,7 +255,9 @@ export const executionWorkerWords = (
         words: `Only runs its owner picks${reason === null ? '' : ` — ${wordInSentence(reason)}`}`,
       };
     case 'no':
-      return { status: 'failure', words: reason ?? 'Can’t take its runs' };
+      return first?.updating === true
+        ? { status: 'running', words: `${first.word} ${first.fix}` }
+        : { status: 'failure', words: reason ?? 'Can’t take its runs' };
   }
 };
 
@@ -319,7 +324,9 @@ const WhoWouldTake = ({ data }: { readonly data: ProjectExecutionResponse }): Re
                       ? 'Takes it'
                       : worker.takes === 'picked_only'
                         ? 'Only when picked'
-                        : 'Doesn’t take it'
+                        : line.status === 'running'
+                          ? 'Updating'
+                          : 'Doesn’t take it'
                   }
                 />
               </span>

@@ -548,8 +548,8 @@ your first ticket* — and, on a platform whose server runs no agent work (the p
 settings say so), **Connect a worker** before the ticket, because nothing runs until a developer's
 computer does. That step is ticked once a worker takes work — by itself, or only the runs its owner
 picks; a worker that exists but cannot is named with the platform's reason and what to do (*jan-mbp
-can't take work yet: it has an older build than this platform. Its updater fixes this within 5
-minutes…*), and *Continue setup* opens the
+can't take work yet: not connected to the platform. Start the worker on that computer…*) — or, while
+it updates itself, *jan-mbp is updating now*, which needs nobody — and *Continue setup* opens the
 **Add a worker** wizard at *Ready to work* for it. On a platform whose server runs agent work the
 step is not there at all. Each step is ticked from what the platform already knows (an integration of
 each kind exists, a project exists, its readiness was evaluated, its operating mode was applied, it
@@ -1596,7 +1596,11 @@ to the platform — last seen 3 h ago*, *Paused by its owner*, *Paused — usage
 has an older build than this platform*, *It has no run images*, *Needs an update*, *No project gives it
 work* — and **Why?** lists every reason with what to do about it, the most fundamental first. A machine
 whose owner chose *only the runs I pick* says *Takes only runs its owner picks*: it claims nothing by
-itself, and a run picked on its page still starts. Then its owner, *Last took work 5 m ago* (or *Has
+itself, and a run picked on its page still starts. A machine that is **updating itself** — draining
+because it has an older build or speaks an older version — says *Updating now…* as work in progress,
+not as a fault: its updater brings it up to date by itself, usually within a minute or two, and there
+is nothing to do (re-running the installer is a repair and changes no images). The header counts it
+as *updating*, and Home, the wizard's *Ready to work* and a project's execution settings say the same. Then its owner, *Last took work 5 m ago* (or *Has
 not taken work yet*), what it takes by itself (*Takes runs of every project*, *Takes only runs its
 owner picks* or the projects' keys), and how many of its run slots are busy (*1 of 2 busy*);
 **Details** holds when it was registered and last seen, its worker version and the image digests it
@@ -1651,7 +1655,8 @@ off.
 4. **Ready to work.** Whether that worker can take work now, line by line, as the platform decides
    it: connected, speaks this platform's version, not paused, not draining, not held by a Claude
    usage limit, has its run images, has this platform's current images, a project gives it work —
-   each one it fails says what to do, and any other reason the platform names (its owner's account
+   each one it fails says what to do (a worker draining for an update says *Updating now…*, in
+   progress, with nothing to do), and any other reason the platform names (its owner's account
    disabled, the platform unable to name its own images) is listed too. A last line says whether it
    has taken its first run; that is not needed to continue. A worker that takes only the runs its
    owner picks may continue.

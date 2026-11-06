@@ -771,6 +771,28 @@ describe('Home on a new instance: the setup checklist', () => {
     );
   });
 
+  it('says a worker that is updating itself is updating, not that it can’t take work (S-23.27)', async () => {
+    const world = newWorld({
+      tasks: [],
+      serverClaimant: 'none',
+      workers: [
+        workerFixture({
+          name: 'jan-mbp',
+          created_at: minutesAgo(30),
+          last_seen_at: minutesAgo(0),
+          claim_blockers: ['draining', 'images_outdated'],
+          can_claim: false,
+        }),
+      ],
+    });
+    start(world);
+    await screen.findByRole('region', { name: 'Set up' });
+    await screen.findByText(
+      'jan-mbp is updating now. Its updater is bringing it up to date. Nothing to do; this usually takes a minute or two.',
+    );
+    expect(screen.queryByText(/jan-mbp can’t take work yet/)).toBeNull();
+  });
+
   it('ticks Connect a worker once a worker can take work', async () => {
     const world = newWorld({
       tasks: [],

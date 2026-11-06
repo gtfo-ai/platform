@@ -16,8 +16,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
-import { formatSeconds, waitingLines } from './execution-settings.js';
+import { UPDATER_FIX, WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import { executionWorkerWords, formatSeconds, waitingLines } from './execution-settings.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000027c1';
 
@@ -339,6 +339,32 @@ describe('who would take this project’s work (S-23.24)', () => {
       'Its git connection’s token may not go to a developer’s computer',
     );
     expect(panel.getByText('No run is waiting for anybody to start it.')).toBeTruthy();
+  });
+
+  it('says a draining outdated worker is updating, in progress rather than failed (S-23.27)', () => {
+    const line = (blockers: ('draining' | 'images_outdated' | 'protocol_outdated')[]) =>
+      executionWorkerWords({
+        worker_id: '00000000-0000-4000-8000-0000000027d5',
+        name: 'ivo-mbp',
+        owner,
+        takes: 'no',
+        blockers,
+        project_reason: null,
+      });
+    expect(line(['draining', 'images_outdated'])).toEqual({
+      status: 'running',
+      words: `Updating now… ${UPDATER_FIX}`,
+    });
+    expect(line(['protocol_outdated', 'draining']).status).toBe('running');
+    // Outdated and not draining yet, or draining for another reason: as it is.
+    expect(line(['images_outdated'])).toEqual({
+      status: 'failure',
+      words: WORKER_CLAIM_BLOCKER_WORDS.images_outdated.word,
+    });
+    expect(line(['draining'])).toEqual({
+      status: 'failure',
+      words: WORKER_CLAIM_BLOCKER_WORDS.draining.word,
+    });
   });
 
   it('says how many runs wait and why some can’t go to workers', async () => {

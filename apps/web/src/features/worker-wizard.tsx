@@ -41,7 +41,11 @@ import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
 import { CopyField } from '../ui/copy-field.js';
 import { DetailsDisclosure } from '../ui/details.js';
-import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import {
+  claimBlockerLines,
+  leadingClaimBlocker,
+  WORKER_CLAIM_BLOCKER_WORDS,
+} from '../ui/humanize.js';
 import { ErrorNotice } from '../ui/kit.js';
 import { PageHeader } from '../ui/page-header.js';
 import { formatAgo } from '../ui/relative-time.js';
@@ -136,18 +140,23 @@ const CheckLine = ({
   ok,
   children,
 }: {
-  /** `'info'`: not done, and not needed — said, never blocking. */
-  readonly ok: boolean | 'info';
+  /**
+   * `'info'`: not done, and not needed — said, never blocking. `'updating'`: not done yet, and
+   * happening by itself (an update in progress, S-23.27) — said as in progress, never failed.
+   */
+  readonly ok: boolean | 'info' | 'updating';
   readonly children: ReactNode;
 }): ReactElement => (
   <li
     className="flex items-start gap-2 text-sm"
-    data-check={ok === 'info' ? 'info' : ok ? 'ok' : 'blocked'}
+    data-check={ok === 'info' || ok === 'updating' ? ok : ok ? 'ok' : 'blocked'}
   >
     <span className="pt-0.5">
       <StatusIcon
-        status={ok === 'info' ? 'idle' : ok ? 'success' : 'failure'}
-        label={ok === 'info' ? 'Not needed' : ok ? 'Done' : 'Not yet'}
+        status={ok === 'info' ? 'idle' : ok === 'updating' ? 'running' : ok ? 'success' : 'failure'}
+        label={
+          ok === 'info' ? 'Not needed' : ok === 'updating' ? 'In progress' : ok ? 'Done' : 'Not yet'
+        }
       />
     </span>
     <div className="flex min-w-0 flex-col gap-0.5">{children}</div>
@@ -437,6 +446,10 @@ const ReadyStep = ({
 }): ReactElement => {
   const readiness = workerReadinessOf(worker);
   const others = readiness.claim_blockers.filter((blocker) => !CHECKED_BLOCKERS.includes(blocker));
+  // An update in progress (S-23.27): its drain and its outdated line are said as in progress.
+  const lines = new Map(claimBlockerLines(readiness.claim_blockers).map((l) => [l.blocker, l]));
+  // The headline says so only when nothing more fundamental (not connected, removed) comes first.
+  const updating = leadingClaimBlocker(readiness.claim_blockers)?.updating === true;
   const firstRun =
     readiness.last_claimed_at === null ? null : formatAgo(readiness.last_claimed_at, nowMs);
   return (
@@ -452,16 +465,27 @@ const ReadyStep = ({
           ? ' can take work.'
           : readiness.takes === 'picked_only'
             ? ' can take work: it takes only the runs its owner picks on its page.'
-            : ' can’t take work yet.'}
+            : updating
+              ? ' is updating now; it takes work again once the update is done.'
+              : ' can’t take work yet.'}
       </p>
       <ul aria-label="What the worker needs" className="flex flex-col gap-2">
         {[...CHECKED_BLOCKERS, ...others].map((blocker) => {
-          const blocked = readiness.claim_blockers.includes(blocker);
-          const words = WORKER_CLAIM_BLOCKER_WORDS[blocker];
+          const line = lines.get(blocker);
+          const blocked = line !== undefined;
+          const words = line ?? WORKER_CLAIM_BLOCKER_WORDS[blocker];
           return (
             <CheckLine
               key={blocker}
-              ok={!blocked ? true : blocker === 'pick_only' ? 'info' : false}
+              ok={
+                !blocked
+                  ? true
+                  : blocker === 'pick_only'
+                    ? 'info'
+                    : line.updating
+                      ? 'updating'
+                      : false
+              }
             >
               <span data-blocker={blocker}>
                 {blocked ? words.word : (OK_WORDS[blocker] ?? words.word)}

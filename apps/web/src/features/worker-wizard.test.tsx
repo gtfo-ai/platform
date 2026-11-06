@@ -15,7 +15,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import { UPDATER_FIX, WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 import { NOW, USER_ID, workerFixture } from './worker.test-fixture.js';
 import { WATCH_INTERVAL_MS } from './worker-wizard.js';
 
@@ -396,6 +396,33 @@ describe('Add a worker: Ready to work', () => {
     expect(screen.getByText(/can’t take work yet/)).toBeTruthy();
     expect(continueButton(/Continue to Choose projects/).disabled).toBe(true);
     expect(primaries()).toHaveLength(1);
+  });
+
+  it('says a draining outdated worker is updating, in progress rather than failed (S-23.27)', async () => {
+    const world = newWorld({
+      workers: [
+        workerFixture({
+          created_at: new Date(NOW - 30_000).toISOString(),
+          claim_blockers: ['draining', 'images_outdated'],
+          can_claim: false,
+        }),
+      ],
+    });
+    start(world, wizardUrl('ready'));
+    await screen.findByRole('heading', { level: 2, name: 'Ready to work' });
+    expect(await screen.findByText(/is updating now/)).toBeTruthy();
+    expect(screen.queryByText(/can’t take work yet/)).toBeNull();
+    const list = within(screen.getByRole('list', { name: 'What the worker needs' }));
+    const draining = list.getByText('Updating now…').closest('li');
+    expect(draining?.getAttribute('data-check')).toBe('updating');
+    const outdated = list.getByText(WORKER_CLAIM_BLOCKER_WORDS.images_outdated.word).closest('li');
+    expect(outdated?.getAttribute('data-check')).toBe('updating');
+    expect(within(outdated as HTMLElement).getByText(UPDATER_FIX)).toBeTruthy();
+    // Neither reads as a failure, and the drain's resume-or-restart advice is not offered.
+    expect(list.queryByText(WORKER_CLAIM_BLOCKER_WORDS.draining.fix)).toBeNull();
+    expect(list.queryAllByRole('img', { name: 'Not yet' })).toHaveLength(0);
+    expect(list.getAllByRole('img', { name: 'In progress' })).toHaveLength(2);
+    expect(continueButton(/Continue to Choose projects/).disabled).toBe(true);
   });
 
   it('lists a blocker outside the checked lines too, such as the platform’s own images', async () => {

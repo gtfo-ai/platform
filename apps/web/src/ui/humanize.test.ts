@@ -28,12 +28,15 @@ import {
   APPROVAL_STATUS_LABEL,
   ARTIFACT_TYPE_LABEL,
   choiceLabel,
+  claimBlockerLines,
   configFieldLabel,
   GATE_LABEL,
   INTEGRATION_HEALTH_LABEL,
   INTEGRATION_TYPE_LABEL,
   INTEGRATION_TYPE_PURPOSE,
+  isUpdating,
   LOOP_LABEL,
+  leadingClaimBlocker,
   loopLabel,
   ordinal,
   QUESTION_STATUS_LABEL,
@@ -48,6 +51,8 @@ import {
   TASK_STATE_LABEL,
   TERMINAL_REASON_LABEL,
   titleCase,
+  UPDATER_FIX,
+  UPDATING_WORDS,
   WORKER_CLAIM_BLOCKER_WORDS,
   WORKER_PAUSE_REASON_LABEL,
 } from './humanize.js';
@@ -101,6 +106,57 @@ describe('humanize', () => {
     }
     const words = Object.values(WORKER_CLAIM_BLOCKER_WORDS).map((entry) => entry.word);
     expect(new Set(words).size).toBe(WORKER_CLAIM_BLOCKERS.length);
+  });
+
+  it('tells an outdated worker’s owner that its updater does it, never to reinstall (S-23.27)', () => {
+    expect(UPDATER_FIX).toBe(
+      'Its updater is bringing it up to date. Nothing to do; this usually takes a minute or two.',
+    );
+    expect(WORKER_CLAIM_BLOCKER_WORDS.images_outdated.fix).toBe(UPDATER_FIX);
+    expect(WORKER_CLAIM_BLOCKER_WORDS.protocol_outdated.fix).toBe(
+      `It speaks an older version than this platform accepts. ${UPDATER_FIX}`,
+    );
+    for (const blocker of ['images_outdated', 'protocol_outdated'] as const) {
+      const { fix } = WORKER_CLAIM_BLOCKER_WORDS[blocker];
+      expect(fix, blocker).not.toMatch(/compose|docker|within 5 minutes|download/i);
+    }
+  });
+
+  it('reads a draining outdated worker as updating, and anything else as it is (S-23.27)', () => {
+    expect(isUpdating(['draining', 'images_outdated'])).toBe(true);
+    expect(isUpdating(['protocol_outdated', 'draining'])).toBe(true);
+    expect(isUpdating(['draining'])).toBe(false);
+    expect(isUpdating(['images_outdated'])).toBe(false);
+    expect(isUpdating(['paused', 'images_outdated'])).toBe(false);
+
+    const lines = claimBlockerLines(['draining', 'images_outdated', 'no_eligible_project']);
+    expect(lines.map((line) => [line.blocker, line.word, line.updating])).toEqual([
+      ['draining', 'Updating now…', true],
+      ['images_outdated', WORKER_CLAIM_BLOCKER_WORDS.images_outdated.word, true],
+      ['no_eligible_project', WORKER_CLAIM_BLOCKER_WORDS.no_eligible_project.word, false],
+    ]);
+    // The drain's own fix (resume, restart) would undo the update: it is not offered.
+    expect(lines[0]?.fix).not.toBe(WORKER_CLAIM_BLOCKER_WORDS.draining.fix);
+    expect(lines[1]?.fix).toBe(UPDATER_FIX);
+    // A drain alone is a drain, with its own words.
+    expect(claimBlockerLines(['draining'])[0]).toEqual({
+      blocker: 'draining',
+      ...WORKER_CLAIM_BLOCKER_WORDS.draining,
+      updating: false,
+    });
+
+    expect(leadingClaimBlocker(['protocol_outdated', 'draining'])).toEqual({
+      blocker: 'protocol_outdated',
+      ...UPDATING_WORDS,
+      updating: true,
+    });
+    // Something more fundamental still comes first.
+    expect(leadingClaimBlocker(['offline', 'draining', 'images_outdated'])).toEqual({
+      blocker: 'offline',
+      ...WORKER_CLAIM_BLOCKER_WORDS.offline,
+      updating: false,
+    });
+    expect(leadingClaimBlocker([])).toBeUndefined();
   });
 
   it('names every stage the shipped templates declare, not only the ticket flow’s', () => {

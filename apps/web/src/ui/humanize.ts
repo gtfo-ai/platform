@@ -407,6 +407,15 @@ export interface ClaimBlockerWords {
 }
 
 /**
+ * What an outdated worker's owner does: nothing. Its updater checks when it starts and every minute
+ * after, drains the worker and brings it up to date by itself. Re-running the installer is a repair
+ * that never changes images, and a hand-edited compose file skips the updater's verification, so
+ * neither is advice (S-23.27).
+ */
+export const UPDATER_FIX =
+  'Its updater is bringing it up to date. Nothing to do; this usually takes a minute or two.';
+
+/**
  * **Why a worker takes no work**, in one set of words for the Workers screen, a project's execution
  * panel and the worker's own local page (TD-031's 2026-11-05 blocker-vocabulary amendment, S-22.19).
  * Each sentence names *the worker* or *it*, so it reads the same on the platform and on the machine.
@@ -430,7 +439,7 @@ export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, Cla
   },
   protocol_outdated: {
     word: 'Needs an update',
-    fix: 'It speaks an older version than this platform accepts. Its updater fixes this within 5 minutes; to do it now, download the compose file again and run “docker compose up -d”.',
+    fix: `It speaks an older version than this platform accepts. ${UPDATER_FIX}`,
   },
   platform_images_unresolved: {
     word: 'The platform can’t name its run images',
@@ -462,7 +471,7 @@ export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, Cla
   },
   images_outdated: {
     word: 'It has an older build than this platform',
-    fix: 'Its updater fixes this within 5 minutes. To do it now, download the compose file again and run “docker compose up -d”.',
+    fix: UPDATER_FIX,
   },
   no_eligible_project: {
     word: 'No project gives it work',
@@ -472,6 +481,61 @@ export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, Cla
     word: 'Takes only runs its owner picks',
     fix: 'Its owner chooses on the worker’s page which projects it takes by itself; a run picked there still starts.',
   },
+};
+
+/** The two blockers an update clears: an older protocol, an older build. */
+const OUTDATED_BLOCKERS: readonly WorkerClaimBlocker[] = ['protocol_outdated', 'images_outdated'];
+
+/**
+ * **The worker is updating itself** (S-23.27): it is draining *and* outdated. The updater drains a
+ * worker before it replaces it, so the drain is the update in progress, not a second fault — a
+ * screen says *Updating now…* as an in-progress state rather than two failures.
+ */
+export const isUpdating = (blockers: readonly WorkerClaimBlocker[]): boolean =>
+  blockers.includes('draining') && blockers.some((blocker) => OUTDATED_BLOCKERS.includes(blocker));
+
+/** One blocker of a worker's list, read with the rest of that list. */
+export interface ClaimBlockerLine extends ClaimBlockerWords {
+  readonly blocker: WorkerClaimBlocker;
+  /** Part of an update in progress ({@link isUpdating}): said as in progress, never as failed. */
+  readonly updating: boolean;
+}
+
+/** The headline of an updating worker: what a row, a step or a line says first. */
+export const UPDATING_WORDS: ClaimBlockerWords = { word: 'Updating now…', fix: UPDATER_FIX };
+
+/** The drain's line while it is the update: what the drain does, not how to undo it. */
+const UPDATE_DRAIN_WORDS: ClaimBlockerWords = {
+  word: 'Updating now…',
+  fix: 'It finishes the runs it holds and takes nothing new until the update is done.',
+};
+
+/**
+ * Every blocker of a worker with its words, in the list's order — the drain of an updating worker
+ * reads *Updating now…* and the outdated line keeps its own word, both marked `updating`.
+ */
+export const claimBlockerLines = (
+  blockers: readonly WorkerClaimBlocker[],
+): readonly ClaimBlockerLine[] => {
+  const updating = isUpdating(blockers);
+  return blockers.map((blocker) => {
+    const part = updating && (blocker === 'draining' || OUTDATED_BLOCKERS.includes(blocker));
+    const words =
+      part && blocker === 'draining' ? UPDATE_DRAIN_WORDS : WORKER_CLAIM_BLOCKER_WORDS[blocker];
+    return { blocker, word: words.word, fix: words.fix, updating: part };
+  });
+};
+
+/**
+ * What a worker's one-line state names: its first blocker — or, when that blocker is part of an
+ * update in progress, {@link UPDATING_WORDS}. A more fundamental blocker (not connected, removed)
+ * still comes first. `undefined` when nothing blocks it.
+ */
+export const leadingClaimBlocker = (
+  blockers: readonly WorkerClaimBlocker[],
+): ClaimBlockerLine | undefined => {
+  const first = claimBlockerLines(blockers)[0];
+  return first === undefined || !first.updating ? first : { ...first, ...UPDATING_WORDS };
 };
 
 /**

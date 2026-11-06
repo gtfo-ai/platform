@@ -6,6 +6,7 @@
  * stored by the client, so the table is the whole of the decision.
  */
 import { describe, expect, it } from 'vitest';
+import { leadingClaimBlocker, UPDATER_FIX } from '../ui/humanize.js';
 import { type SetupFacts, setupChecklist, setupProjectOf } from './home-setup.js';
 
 const facts = (over: Partial<SetupFacts> = {}): SetupFacts => ({
@@ -168,12 +169,12 @@ describe('setupChecklist’s worker step (S-23.20)', () => {
   it('names a worker that exists but cannot take work, with the fix, and resumes the wizard at Ready for it', () => {
     const checklist = setupChecklist({ ...upToWorker, worker: 'todo' }, 'acme', {
       name: 'jan-mbp',
-      reason: 'It has an older build than this platform',
-      fix: 'Its updater fixes this within 5 minutes.',
+      reason: 'Not connected to the platform',
+      fix: 'Start the worker on that computer.',
       createdAt: '2026-11-05T09:00:00.000Z',
     });
     expect(checklist.next?.hint).toBe(
-      'jan-mbp can’t take work yet: it has an older build than this platform. Its updater fixes this within 5 minutes.',
+      'jan-mbp can’t take work yet: not connected to the platform. Start the worker on that computer.',
     );
     // A name stays as it is in the middle of the sentence.
     const claude = setupChecklist({ ...upToWorker, worker: 'todo' }, 'acme', {
@@ -185,6 +186,25 @@ describe('setupChecklist’s worker step (S-23.20)', () => {
     expect(claude.next?.hint).toBe(
       'jan-mbp can’t take work yet: Claude refused its sign-in. Sign in to Claude again on the worker’s page.',
     );
+    expect(checklist.next?.destination).toEqual({
+      to: '/workers/new',
+      step: 'ready',
+      since: '2026-11-05T09:00:00.000Z',
+    });
+  });
+
+  it('says a worker that is updating itself is updating, not that it can’t take work (S-23.27)', () => {
+    const blocker = leadingClaimBlocker(['draining', 'images_outdated']);
+    expect(blocker?.updating).toBe(true);
+    const checklist = setupChecklist({ ...upToWorker, worker: 'todo' }, 'acme', {
+      name: 'jan-mbp',
+      reason: blocker?.word ?? '',
+      fix: blocker?.fix ?? '',
+      updating: true,
+      createdAt: '2026-11-05T09:00:00.000Z',
+    });
+    expect(checklist.next?.hint).toBe(`jan-mbp is updating now. ${UPDATER_FIX}`);
+    expect(checklist.next?.hint).not.toMatch(/can’t take work|compose|download/);
     expect(checklist.next?.destination).toEqual({
       to: '/workers/new',
       step: 'ready',

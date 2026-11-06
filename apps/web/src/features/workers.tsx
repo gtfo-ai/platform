@@ -11,7 +11,9 @@
  * **Can't take work** with the first blocker's words and a *Why?* disclosure listing every blocker
  * with its fix, in the vocabulary's order (`WORKER_CLAIM_BLOCKER_WORDS`, the worker's own page's
  * words too). A *pick only* worker — whose only blocker is its owner's choice — says so instead,
- * because a run picked on its page still starts. Then its owner, when it last took work, how many of
+ * because a run picked on its page still starts. A worker that is **updating itself** — draining
+ * because it is outdated (`isUpdating`, S-23.27) — reads *Updating now…* as in progress, not as a
+ * failure. Then its owner, when it last took work, how many of
  * its slots are busy; its version, image digests and dates are behind *Details*. *Revoke* opens a
  * dialog that says what it does before the press.
  *
@@ -53,7 +55,12 @@ import { buttonClassName } from '../ui/button.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { Dialog } from '../ui/dialog.js';
 import { Flash } from '../ui/flash.js';
-import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import {
+  claimBlockerLines,
+  leadingClaimBlocker,
+  UPDATING_WORDS,
+  WORKER_CLAIM_BLOCKER_WORDS,
+} from '../ui/humanize.js';
 import {
   Button,
   Card,
@@ -102,7 +109,7 @@ export const WORKERS_REFRESH_MS = 15_000;
 /** What a row says first: the state's icon and word, and the blocker it names (if any). */
 export interface WorkerRowState {
   readonly status: Status;
-  /** *Ready*, *Can't take work*, *Takes only runs its owner picks* or *Revoked*. */
+  /** *Ready*, *Updating now…*, *Can't take work*, *Takes only runs its owner picks* or *Revoked*. */
   readonly word: string;
   /** The first blocker, in a person's words — with when, for a usage limit or an absence. */
   readonly reason: string | null;
@@ -128,6 +135,9 @@ export const workerRowState = (
   }
   if (readiness.takes === 'picked_only') {
     return { status: 'idle', word: WORKER_CLAIM_BLOCKER_WORDS.pick_only.word, reason: null };
+  }
+  if (leadingClaimBlocker(readiness.claim_blockers)?.updating === true) {
+    return { status: 'running', word: UPDATING_WORDS.word, reason: null };
   }
   const first = readiness.claim_blockers[0];
   return {
@@ -211,10 +221,17 @@ export const claimScopeWords = (worker: WorkerSummary): string => {
 const WhyList = ({ worker }: { readonly worker: WorkerSummary }): ReactElement => (
   <DetailsDisclosure summary="Why?" className="text-xs">
     <ul aria-label="Why it can’t take work" className="flex flex-col gap-2" data-why="">
-      {workerReadinessOf(worker).claim_blockers.map((blocker) => (
-        <li key={blocker} data-blocker={blocker} className="flex flex-col gap-0.5">
-          <span className="font-medium text-fg">{WORKER_CLAIM_BLOCKER_WORDS[blocker].word}</span>
-          <span className="text-fg-muted">{WORKER_CLAIM_BLOCKER_WORDS[blocker].fix}</span>
+      {claimBlockerLines(workerReadinessOf(worker).claim_blockers).map((line) => (
+        <li
+          key={line.blocker}
+          data-blocker={line.blocker}
+          data-updating={line.updating ? '' : undefined}
+          className="flex flex-col gap-0.5"
+        >
+          <span className={line.updating ? 'font-medium text-running' : 'font-medium text-fg'}>
+            {line.word}
+          </span>
+          <span className="text-fg-muted">{line.fix}</span>
         </li>
       ))}
     </ul>
@@ -367,12 +384,21 @@ const WorkerRow = ({
   );
 };
 
-/** "2 ready · 1 can't take work · 1 revoked", in the rows' own words (the review's W9). */
+/**
+ * "2 ready · 1 updating · 1 can't take work · 1 revoked", in the rows' own words (the review's W9;
+ * *updating*, S-23.27).
+ */
 export const workersCountText = (items: readonly WorkerSummary[]): string => {
   const active = items.filter((worker) => worker.state === 'active');
-  const ready = active.filter((worker) => workerReadinessOf(worker).takes !== 'no').length;
+  const readiness = active.map(workerReadinessOf);
+  const ready = readiness.filter((one) => one.takes !== 'no').length;
+  const updating = readiness.filter(
+    (one) => one.takes === 'no' && leadingClaimBlocker(one.claim_blockers)?.updating === true,
+  ).length;
+  const blocked = active.length - ready - updating;
   const parts = [`${formatInteger(ready)} ready`];
-  if (active.length > ready) parts.push(`${formatInteger(active.length - ready)} can’t take work`);
+  if (updating > 0) parts.push(`${formatInteger(updating)} updating`);
+  if (blocked > 0) parts.push(`${formatInteger(blocked)} can’t take work`);
   if (items.length > active.length) {
     parts.push(`${formatInteger(items.length - active.length)} revoked`);
   }

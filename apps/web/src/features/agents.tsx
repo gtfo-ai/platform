@@ -35,7 +35,7 @@ import { useProjects } from '../app/queries.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { buttonClassName } from '../ui/button.js';
 import { Flash } from '../ui/flash.js';
-import { WORKER_CLAIM_BLOCKER_WORDS, wordInSentence } from '../ui/humanize.js';
+import { leadingClaimBlocker, wordInSentence } from '../ui/humanize.js';
 import { ErrorNotice } from '../ui/kit.js';
 import type { NavItem } from '../ui/nav-item.js';
 import { PageHeader } from '../ui/page-header.js';
@@ -124,14 +124,16 @@ export const queueWaitOf = (
     return { wait: 'seat', reason: null };
   }
   const [first] = active;
-  const blocker = first === undefined ? undefined : workerReadinessOf(first).claim_blockers[0];
+  // Its first blocker — or *updating now…* when that is an update in progress (S-23.27).
+  const blocker =
+    first === undefined ? undefined : leadingClaimBlocker(workerReadinessOf(first).claim_blockers);
   if (first === undefined || blocker === undefined) {
     return { wait: 'nobody', reason: null };
   }
   const more = active.length - 1;
   return {
     wait: 'nobody',
-    reason: `${sanitiseUntrusted(first.name)}: ${wordInSentence(WORKER_CLAIM_BLOCKER_WORDS[blocker].word)}${
+    reason: `${sanitiseUntrusted(first.name)}: ${wordInSentence(blocker.word)}${
       more === 0 ? '' : more === 1 ? ', and 1 more worker' : `, and ${more} more workers`
     }`,
   };
