@@ -657,8 +657,9 @@ are still shown, on a seat named from the run); and an escalated task with no qu
 **Ready to merge** and **Done** — each headed by its name and how many tasks it holds; *Needs you*
 is lit amber, because that is where your work is. **A task sits in Needs you whenever something
 waits on a person** — an open question, a pending approval, a task that needs a human, one its
-budget paused or one somebody took over — whatever stage it is in, so the column, the card's ◆ and
-the task page's state always say the same thing. Two placements to know: **a task paused by hand
+budget paused or one somebody took over — whatever stage it is in (a done or cancelled task never
+does, whatever it left open), so the column, the card's ◆ and the task page's state always say the
+same thing. Two placements to know: **a task paused by hand
 sits in Active** (a pause a person made waits on nobody; its card says *Paused*), and **a merged
 task, and one in its retrospective, stays under Ready to merge** until it is done. On a
 narrow screen the columns scroll sideways, one column at a time, rather than wrapping, so the
