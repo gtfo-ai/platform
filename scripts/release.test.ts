@@ -675,10 +675,19 @@ describe("image.yml's concurrency and the merge step's head check (backlog 747)"
     ]);
   });
 
-  it('fails, publishing nothing, when main’s head cannot be read', () => {
+  // Review of PR #88: failing the step would lose this commit's image, which is backlog 747 itself.
+  it('publishes sha-<7> alone, with a warning, when main’s head cannot be read', () => {
     const outcome = drive({ GITHUB_REF: 'refs/heads/main', STUB_GH_API_EXIT: '1' });
-    expect(outcome.status).not.toBe(0);
-    expect(creates(outcome.calls)).toEqual([]);
+    expect(outcome.status).toBe(0);
+    expect(outcome.calls).toContain('gh api repos/Acme/platform/commits/main --jq .sha');
+    expect(creates(outcome.calls)).toEqual([
+      `docker buildx imagetools create -t ${repo}:sha-aaaaaaa ` +
+        `${repo}:sha-aaaaaaa-amd64 ${repo}:sha-aaaaaaa-arm64`,
+    ]);
+    expect(outcome.stdout).toContain(
+      "::warning::main's head is unreadable; publishing sha-aaaaaaa only",
+    );
+    expect(outcome.stdout).not.toContain('main is at');
   });
 });
 

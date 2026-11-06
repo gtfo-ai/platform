@@ -338,7 +338,9 @@ jobs:
       # same check refuses what used to be a stated residual: a re-run or a dispatch at an older
       # `main` commit no longer moves `latest` backwards (a re-run of the head still republishes
       # it, which is the registry-transient recovery this project's log has needed). A head that
-      # cannot be read fails the step rather than guess. **Residual, stated**: when the newest
+      # cannot be read publishes `sha-<7>` alone with a warning and leaves `edge` and `latest`
+      # where they are — failing the step would lose this commit's image, which is the defect
+      # this change exists for (review of PR #88). **Residual, stated**: when the newest
       # push's run fails, `latest` stays where the last run that *was* the head left it — possibly
       # two commits back — until a later push or a re-run of the head.
       - id: merge
@@ -354,11 +356,14 @@ jobs:
           tags="sha-${short}"
           head=""
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-            head=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+            head=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha) || {
+              echo "::warning::main's head is unreadable; publishing sha-${short} only"
+              head=""
+            }
           fi
           if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "${head}" = "${GITHUB_SHA}" ]; then
             tags="${tags} edge latest"
-          elif [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+          elif [ "${GITHUB_REF}" = "refs/heads/main" ] && [ -n "${head}" ]; then
             echo "main is at ${head}, not ${GITHUB_SHA}: publishing sha-${short} only; the newer run moves edge and latest"
           fi
           refs=""
