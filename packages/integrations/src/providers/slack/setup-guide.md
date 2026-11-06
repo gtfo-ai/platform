@@ -125,7 +125,12 @@ Subscriptions* the request URL `https://<your instance>/webhooks/slack/<integrat
   announced in Slack: the person sees no reply, and the question stays open on the task page.
 - **An approval is Approve / Request changes**, posted with its buttons when a click can reach the
   platform — Socket Mode with the app-level token and the signing secret, or HTTP with the signing
-  secret — and as text naming the task page otherwise. A decision from chat is a *human decision*
+  secret — and as text naming the task page otherwise. The message shows what it asks about: for a
+  plan, its version, size, files and risks, every reason it was asked, and a **Review plan** link to
+  the task page. **Approve approves only the plan that message showed**: pressed on an older message,
+  or after the plan was replaced, it approves nothing and the bot answers in the thread with the
+  reason and the link; a plan approval whose plan was not recorded is posted without Approve. A
+  decision from chat is a *human decision*
   (BD-006): it is decided by the approval itself, so the person who clicks must be **mapped** and
   must hold a role that may decide it (a maintainer, for a plan). Anything else is recorded on the
   delivery and changes nothing. An accepted decision — an approval or an answer — appears in the
@@ -156,7 +161,7 @@ four (BD-002, BD-025).
 | `not_found` on the first post | `channel` is wrong, or it is a private channel the bot cannot see. |
 | `forbidden` mentioning `/invite` | The channel exists and the bot is not in it (step 3). |
 | `forbidden` on identity mapping | The `users:read.email` scope is missing (step 1). Reinstall after changing scopes. |
-| Buttons do nothing | Read the delivery's `inbox.error` (no screen shows it yet; the API process also logs `held-connection delivery handled` per click): `unmapped_identity` — the clicker is not mapped on **Settings → Provider identities**; `decision_refused: not_permitted` — they are mapped but their role may not decide this approval; `decision_refused: already_decided` — somebody decided first. With no row at all, see the next line. Interactivity off, or an app installed from an older manifest, also silences them: re-apply the manifest and reinstall. |
+| Buttons do nothing | Read the delivery's `inbox.error` (no screen shows it yet; the API process also logs `held-connection delivery handled` per click): `unmapped_identity` — the clicker is not mapped on **Settings → Provider identities**; `decision_refused: not_permitted` — they are mapped but their role may not decide this approval; `decision_refused: already_decided` — somebody decided first; `decision_refused: approval_subject_…` — the button named another plan than the approval's (answered in the thread). With no row at all, see the next line. Interactivity off, or an app installed from an older manifest, also silences them: re-apply the manifest and reinstall. |
 | A reply in a thread does not answer the question | Read the delivery's `inbox.error`: `unmapped_identity` — the author is not mapped; `decision_refused: already_decided` — the question was answered first; `… open questions names none of them` — several questions were open, so answer with the buttons or on the task page; `reply in a thread this binding did not open` — the reply was not in the question's task thread (a question raised in quiet hours reaches the digest instead, not a thread). A reply that answered nothing because no question was open is recorded as feedback. With no row at all, the app is not receiving `message` events: check the `channels:history` scope and the event subscriptions from the manifest. |
 | Every decision is `unmapped_identity` | The Slack account is not mapped to a platform user on **Settings → Provider identities**. |
 | No approval is posted, only text saying to decide on the task page | The binding cannot receive a click: the signing secret is missing, or Socket Mode is on and the app-level token is missing. |

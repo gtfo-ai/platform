@@ -39,6 +39,7 @@
  */
 import type { Id } from '@platform/contracts';
 import { type AskMirrorOptions, runAskMirror } from '../ask/mirror.js';
+import { runApprovalRefused } from '../notify/approval-refused.js';
 import { runApprovalSettled } from '../notify/approval-settled.js';
 import { runNotification } from '../notify/duty.js';
 import type { NotifyOptions } from '../notify/options.js';
@@ -216,6 +217,11 @@ const dispatchOutbound =
       // WP-79: a human's way into Ready, judged by the branch head — a payload of its own, narrowed
       // here like the organisation's.
       await runReadyHeadCheck(options, data);
+      return;
+    }
+    if (data.duty === 'approval_refused') {
+      // S-25.9: a refused chat Approve answered in its thread — a payload of its own (no event).
+      await runApprovalRefused(options, data);
       return;
     }
     switch (data.duty) {

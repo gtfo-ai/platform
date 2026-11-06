@@ -103,6 +103,12 @@ export interface CommunicationContractContext {
    * into the button, and nothing the harness remembered on the port's behalf.
    */
   emitPostedApproval(authorId: string, decision: 'approved' | 'rejected'): WebhookDelivery;
+  /**
+   * An **Approve** whose control carries the plan its message showed (S-25.9, TD-035 decision 6) —
+   * in the provider's own spelling (Slack's button `s`). The suite asserts the normaliser hands the
+   * plan over beside the payload, which stays the catalogue's strict one.
+   */
+  emitShownApproval(authorId: string, subjectArtifactId: Id): WebhookDelivery;
   /** A delivery signed with the empty credential — the signature an attacker can compute. */
   signedWithNoCredential(): WebhookDelivery;
   /**
@@ -413,6 +419,36 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
         );
         expect(payload.task_id).toBe(context.taskId);
         expect(payload.approval_id).toBe(context.approvalId);
+      });
+
+      /**
+       * S-25.9 (TD-035 decision 6, standing rule 23): a provider that drops the plan an Approve
+       * showed makes every chat approval of a plan a refusal; one that put it into the payload
+       * would fail the catalogue's strict parse. Both directions, the plain click as the control.
+       */
+      it('hands the plan an Approve showed to the decision, beside the catalogue payload', async () => {
+        const plan = '00000000-0000-4000-8000-0000000005a9' as Id;
+        const shown = await context.freshPort.inbound.normalise(
+          context.emitShownApproval(context.mappedAuthor.providerUserId, plan),
+          inboundContext(userId),
+        );
+        expect(shown.ignored).toEqual([]);
+        const [event] = shown.events;
+        const { payload } = expectCatalogueEvent(
+          event as NonNullable<typeof event>,
+          'task.approval.decided',
+        );
+        expect(payload.decision).toBe('approved');
+        expect(event?.subjectArtifactId).toBe(plan);
+
+        const plain = await context.freshPort.inbound.normalise(
+          context.emitPostedApproval(context.mappedAuthor.providerUserId, 'approved'),
+          inboundContext(userId),
+        );
+        expect(
+          plain.events[0]?.subjectArtifactId,
+          'control: a click naming no plan',
+        ).toBeUndefined();
       });
 
       it('refuses an approval from an unmapped user', async () => {

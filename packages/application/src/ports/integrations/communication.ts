@@ -54,7 +54,26 @@ export type ThreadRef = z.infer<typeof threadRefSchema>;
 export type MessageRef = z.infer<typeof messageRefSchema>;
 export type DigestItem = z.infer<typeof digestItemSchema>;
 export type QuestionPost = z.infer<typeof questionRecordSchema>;
-export type ApprovalPost = z.infer<typeof approvalRecordSchema>;
+/**
+ * An approval as `postApproval` posts it: the record, plus what its *Approve* may echo (S-25.9,
+ * TD-035 decision 6, BD-006's 2026-11-06 amendment).
+ *
+ * - `subject_artifact_id` — the plan the message **shows**, which the Approve control carries back
+ *   so the decision is checked against it. For a **plan** approval, `null` or absent means the
+ *   message shows no plan (the subject was not recorded, or is no longer the task's latest plan, or
+ *   could not be read): the provider then posts **no Approve control**, only the way to the task
+ *   page and Request changes — a click could approve nothing the person saw, and the platform would
+ *   refuse it anyway. Other kinds need no echo and keep their Approve.
+ * - `review_url` — the task page, built from the platform's own `APP_BASE_URL`, never provider
+ *   text; a provider renders it as a link (*Review plan*) and nothing else.
+ *
+ * Both are optional so a caller that predates them fails **closed** (no Approve on a plan), never
+ * open.
+ */
+export type ApprovalPost = z.infer<typeof approvalRecordSchema> & {
+  readonly subject_artifact_id?: Id | null;
+  readonly review_url?: string | null;
+};
 
 /**
  * The message body.

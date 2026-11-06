@@ -266,14 +266,19 @@ export class ApprovalSubjectRefusedError extends Error {
  * The plan-approve guard (TD-035 decision 6), asked inside the decision's transaction, after the
  * aggregate has said the decision is legal — so a member, or a second decision, is refused for that
  * rather than for an echo they could not have known.
+ *
+ * **One guard for every door** (S-25.9, BACKLOG 1200): the task page's decide command and a chat
+ * button's decision (`integrations/inbound-decisions.ts`) both ask this function, with the echo
+ * each door carries — the request's `subject_artifact_id`, the button's `s`. It takes the two
+ * repositories it reads rather than a command's dependencies so the chat door can hand it its own.
  */
-const assertApprovesItsSubject = async (
-  deps: TaskCommandDependencies,
+export const assertApprovesItsSubject = async (
+  store: Pick<PipelineStore, 'approvals' | 'artifacts'>,
   tx: Transaction,
   stored: StoredApproval,
   echoed: Id | undefined,
 ): Promise<void> => {
-  const subject = await deps.store.approvals.planSubject(tx, stored.approval.id);
+  const subject = await store.approvals.planSubject(tx, stored.approval.id);
   if (subject === null) {
     throw new ApprovalSubjectRefusedError(
       'approval_subject_unrecorded',
@@ -288,11 +293,7 @@ const assertApprovesItsSubject = async (
         : `approval ${stored.approval.id} is about plan ${subject.artifactId}, not ${echoed}`,
     );
   }
-  const latest = await deps.store.artifacts.latest(
-    tx,
-    stored.approval.taskId,
-    'ImplementationPlan',
-  );
+  const latest = await store.artifacts.latest(tx, stored.approval.taskId, 'ImplementationPlan');
   if (latest?.id !== subject.artifactId) {
     throw new ApprovalSubjectRefusedError(
       'approval_subject_superseded',
@@ -341,7 +342,7 @@ export const decideTaskApproval = async (
       deps.context(stored.approval.taskId),
     );
     if (stored.approval.kind === 'plan' && input.decision === 'approved') {
-      await assertApprovesItsSubject(deps, scope.tx, stored, input.subjectArtifactId);
+      await assertApprovesItsSubject(deps.store, scope.tx, stored, input.subjectArtifactId);
     }
     await deps.store.approvals.save(scope.tx, { ...stored, approval: decision.aggregate });
     await scope.events.append(decision.events);

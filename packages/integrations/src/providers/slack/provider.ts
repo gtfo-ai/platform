@@ -520,6 +520,10 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
             approvalId: approval.id,
             taskId: approval.task_id,
             markdown: redacted.markdown,
+            // S-25.9: the plan the message shows (its Approve echoes it) and the task page.
+            kind: approval.kind,
+            subjectArtifactId: approval.subject_artifact_id ?? null,
+            reviewUrl: approval.review_url ?? null,
           }),
         action: 'post_approval',
       }),

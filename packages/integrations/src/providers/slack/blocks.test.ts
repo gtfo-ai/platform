@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ANSWER_ACTION_ID,
+  APPROVAL_NO_SUBJECT_NOTE,
   APPROVAL_REPLY_NOTE,
   APPROVE_ACTION_ID,
   approvalBlockId,
@@ -22,10 +23,12 @@ import {
   questionBlocks,
   REJECT_ACTION_ID,
   REPLY_TO_ANSWER,
+  REVIEW_ACTION_ID,
 } from './blocks.js';
 
 const QUESTION_ID = '00000000-0000-4000-8000-00000000d001';
 const APPROVAL_ID = '00000000-0000-4000-8000-00000000e001';
+const PLAN_ID = '00000000-0000-4000-8000-00000000f001';
 const TASK_ID = '00000000-0000-4000-8000-00000000c001';
 
 const section = (text: string): unknown => ({ type: 'section', text: { type: 'mrkdwn', text } });
@@ -139,7 +142,13 @@ describe('what a message says a thread reply does (WP-88, backlog 299, review ro
 
   it('tells an approval’s reader a reply never decides it, and no longer invites a reason', () => {
     const text = JSON.stringify(
-      approvalBlocks({ approvalId: APPROVAL_ID, taskId: TASK_ID, markdown: 'Approve the plan?' }),
+      approvalBlocks({
+        approvalId: APPROVAL_ID,
+        taskId: TASK_ID,
+        markdown: 'Approve the plan?',
+        kind: 'plan',
+        subjectArtifactId: PLAN_ID,
+      }),
     );
     expect(text).toContain(APPROVAL_REPLY_NOTE);
     expect(text).toContain('never approves or requests changes');
@@ -148,33 +157,134 @@ describe('what a message says a thread reply does (WP-88, backlog 299, review ro
 });
 
 describe('approvalBlocks', () => {
-  it('renders exactly two decisions, styled and identified', () => {
+  const REVIEW_URL = `https://agentic.example.test/tasks/${TASK_ID}`;
+  const elementsOf = (blocks: readonly { type: string; elements?: readonly unknown[] }[]) =>
+    (blocks.find((block) => block.type === 'actions')?.elements ?? []) as {
+      action_id: string;
+      style?: string;
+      value?: string;
+      url?: string;
+      text: { text: string };
+    }[];
+
+  it('renders exactly two decisions and the task page, styled and identified', () => {
     const blocks = approvalBlocks({
       approvalId: APPROVAL_ID,
       taskId: TASK_ID,
       markdown: 'Approve the plan?',
+      kind: 'plan',
+      subjectArtifactId: PLAN_ID,
+      reviewUrl: REVIEW_URL,
     });
     assertBlockKit(blocks, 'test');
     const actions = blocks.find((block) => block.type === 'actions');
     expect(actions?.block_id).toBe(approvalBlockId(APPROVAL_ID));
-    const elements = (actions?.elements ?? []) as { action_id: string; style?: string }[];
+    const elements = elementsOf(blocks);
     expect(elements.map((element) => element.action_id)).toEqual([
       APPROVE_ACTION_ID,
       REJECT_ACTION_ID,
+      REVIEW_ACTION_ID,
     ]);
-    expect(elements.map((element) => element.style)).toEqual(['primary', 'danger']);
+    expect(elements.map((element) => element.style)).toEqual(['primary', 'danger', undefined]);
+    // The link is a link: it carries the platform's URL and no value a click could decide with.
+    expect(elements[2]).toMatchObject({ url: REVIEW_URL, text: { text: 'Review plan' } });
+    expect(elements[2]?.value).toBeUndefined();
   });
 
-  it('names the task in each value, so a click resolves without the adapter’s memory (WP-43)', () => {
-    const blocks = approvalBlocks({ approvalId: APPROVAL_ID, taskId: TASK_ID, markdown: 'x' });
-    const actions = blocks.find((block) => block.type === 'actions');
-    const values = ((actions?.elements ?? []) as { value: string }[]).map(
-      (element) => JSON.parse(element.value) as unknown,
-    );
+  it('names the task in each value, and the plan it shows on the Approve only (WP-43, S-25.9)', () => {
+    const blocks = approvalBlocks({
+      approvalId: APPROVAL_ID,
+      taskId: TASK_ID,
+      markdown: 'x',
+      kind: 'plan',
+      subjectArtifactId: PLAN_ID,
+    });
+    const values = elementsOf(blocks).map((element) => JSON.parse(element.value ?? '') as unknown);
     expect(values).toEqual([
-      { a: APPROVAL_ID, d: 'approved', t: TASK_ID },
+      { a: APPROVAL_ID, d: 'approved', t: TASK_ID, s: PLAN_ID },
       { a: APPROVAL_ID, d: 'rejected', t: TASK_ID },
     ]);
+  });
+
+  /**
+   * BD-006's 2026-11-06 amendment on this door (S-25.9): a plan approval whose message cannot show
+   * the plan gets no Approve — only *Review plan* and *Request changes* — and says why. Absent and
+   * `null` are the same, so a caller that predates the field fails closed.
+   */
+  it.each([
+    { case: 'null', input: { subjectArtifactId: null } },
+    { case: 'absent', input: {} },
+  ])('posts no Approve for a plan whose subject is $case', ({ input }) => {
+    const blocks = approvalBlocks({
+      approvalId: APPROVAL_ID,
+      taskId: TASK_ID,
+      markdown: 'x',
+      reviewUrl: REVIEW_URL,
+      ...input,
+    });
+    assertBlockKit(blocks, 'test');
+    expect(elementsOf(blocks).map((element) => element.action_id)).toEqual([
+      REJECT_ACTION_ID,
+      REVIEW_ACTION_ID,
+    ]);
+    expect(JSON.stringify(blocks)).toContain(APPROVAL_NO_SUBJECT_NOTE);
+    expect(JSON.stringify(blocks)).not.toContain(APPROVE_ACTION_ID);
+  });
+
+  it('keeps the Approve of a kind that needs no echo, and carries no plan on it', () => {
+    const blocks = approvalBlocks({
+      approvalId: APPROVAL_ID,
+      taskId: TASK_ID,
+      markdown: 'x',
+      kind: 'budget',
+      subjectArtifactId: null,
+      reviewUrl: REVIEW_URL,
+    });
+    const elements = elementsOf(blocks);
+    expect(elements.map((element) => element.action_id)).toEqual([
+      APPROVE_ACTION_ID,
+      REJECT_ACTION_ID,
+      REVIEW_ACTION_ID,
+    ]);
+    expect(JSON.parse(elements[0]?.value ?? '')).toEqual({
+      a: APPROVAL_ID,
+      d: 'approved',
+      t: TASK_ID,
+    });
+    expect(elements[2]?.text.text).toBe('Review budget');
+  });
+
+  it.each([
+    'javascript:alert(1)',
+    `https://agentic.example.test/${'x'.repeat(BLOCK_LIMITS.buttonUrl)}`,
+  ])('drops a review link Slack may not be handed (%#)', (reviewUrl) => {
+    const blocks = approvalBlocks({
+      approvalId: APPROVAL_ID,
+      taskId: TASK_ID,
+      markdown: 'x',
+      kind: 'plan',
+      subjectArtifactId: PLAN_ID,
+      reviewUrl,
+    });
+    assertBlockKit(blocks, 'test');
+    expect(elementsOf(blocks).map((element) => element.action_id)).toEqual([
+      APPROVE_ACTION_ID,
+      REJECT_ACTION_ID,
+    ]);
+  });
+
+  it('refuses a button url over Slack’s limit, and accepts one at it', () => {
+    const at = `https://a.example/${'x'.repeat(BLOCK_LIMITS.buttonUrl - 'https://a.example/'.length)}`;
+    const blocksWith = (url: string) => [
+      {
+        type: 'actions',
+        elements: [
+          { type: 'button', action_id: 'a', text: { type: 'plain_text', text: 'Go' }, url },
+        ],
+      },
+    ];
+    expect(() => assertBlockKit(blocksWith(at), 'test')).not.toThrow();
+    expect(() => assertBlockKit(blocksWith(`${at}x`), 'test')).toThrow(/url exceeds 3000/);
   });
 });
 

@@ -393,6 +393,17 @@ export type NormalisedEvent<TType extends DomainEventType = DomainEventType> =
         readonly type: TType;
         readonly payload: EventPayload<TType>;
         readonly actor: Actor;
+        /**
+         * A `task.approval.decided` approve from a button only (S-25.9, TD-035 decision 6): the plan
+         * artifact the message showed, as the button echoed it — a pointer the decision is checked
+         * against (`inbound-decisions.ts`), never an authority.
+         *
+         * **Beside the payload, never in it.** The payload is the catalogue's and strict, and the
+         * event the Approval aggregate appends carries no subject (BACKLOG 1201): putting the echo
+         * into the catalogue would declare a field no appended event holds, and a later writer of
+         * it would be refused by an older build during an additive rollback (TD-032 §2).
+         */
+        readonly subjectArtifactId?: Id;
       }
     : never;
 

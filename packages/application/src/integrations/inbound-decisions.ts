@@ -45,6 +45,20 @@
  * route's rule (*"A refused command writes no `human_actions` row"*, `routes/commands.ts`). No free
  * text is in it: an approval from chat carries no reason, and an answer's words are the question's
  * own column, as they are for the route.
+ *
+ * ## A chat Approve approves only the plan its message showed (S-25.9, TD-035 decision 6)
+ *
+ * BACKLOG 1200: until S-25.9 a Slack *Approve* decided a plan approval with no echo, so it approved
+ * a plan nobody was shown on that door — against BD-006's 2026-11-06 amendment, which the task
+ * page's decide command already enforced. The button now carries the plan artifact its message
+ * showed, the normaliser hands it over beside the payload ({@link InboundDecisionDraft}'s
+ * `subjectArtifactId`), and this module asks **the same guard the command asks**
+ * (`assertApprovesItsSubject`, `pipeline/commands.ts`) — never a second copy. Its three refusals
+ * (`approval_subject_mismatch`, `_superseded`, `_unrecorded`) are values here like every other
+ * refusal: recorded on the inbox row, no `human_actions` row, nothing decided. Each also carries a
+ * {@link InboundDecisionReply}, which the ingress turns — after its commit — into a reply in the
+ * approval's thread naming the reason and the task page, because a person who pressed a button and
+ * saw nothing happen would otherwise press it again. A reject is never refused for its subject.
  */
 import type { Actor, DomainEvent, Id, JsonObject, UserRole } from '@platform/contracts';
 import { answerChannelSchema, MAX_COMMAND_TEXT_CHARS } from '@platform/contracts';
@@ -55,6 +69,11 @@ import {
   IllegalTransitionError,
   PermissionDeniedError,
 } from '@platform/domain';
+import {
+  type ApprovalSubjectRefusal,
+  ApprovalSubjectRefusedError,
+  assertApprovesItsSubject,
+} from '../pipeline/commands.js';
 import type { PipelineStore } from '../pipeline/store.js';
 import type { Transaction } from '../ports/transaction.js';
 
@@ -71,6 +90,12 @@ export interface InboundDecisionDraft {
   readonly type: InboundDecisionType;
   readonly payload: unknown;
   readonly actor: Actor;
+  /**
+   * An approve only: the plan artifact the message showed, as the button echoed it (S-25.9). Absent
+   * when the button carried none — an old message, or a provider that echoes nothing — and a plan
+   * approve without it is then refused `approval_subject_mismatch`, as the route refuses one.
+   */
+  readonly subjectArtifactId?: Id;
 }
 
 /** Why a decision performed nothing. Recorded on the inbox row, never thrown. */
@@ -86,7 +111,22 @@ export type InboundDecisionRefusal =
   /** Somebody decided first — the SPA, another channel, or the deadline (first answer wins). */
   | 'already_decided'
   /** The payload is not the shape the catalogue gives the event. */
-  | 'malformed_decision';
+  | 'malformed_decision'
+  /**
+   * A plan approve that does not approve what the message showed (TD-035 decision 6, S-25.9) —
+   * the route's own three codes, from the route's own guard.
+   */
+  | ApprovalSubjectRefusal;
+
+/**
+ * What the ingress answers in the approval's thread once the refusal has committed (S-25.9): which
+ * approval, on which task, and why — platform ids and a closed code, never provider text.
+ */
+export interface InboundDecisionReply {
+  readonly taskId: Id;
+  readonly approvalId: Id;
+  readonly refusal: ApprovalSubjectRefusal;
+}
 
 export type InboundDecisionOutcome =
   | { readonly kind: 'applied'; readonly events: readonly DomainEvent[] }
@@ -94,6 +134,8 @@ export type InboundDecisionOutcome =
       readonly kind: 'refused';
       readonly reason: InboundDecisionRefusal;
       readonly detail: string;
+      /** Set for a subject refusal only: the thread reply the ingress enqueues after its commit. */
+      readonly reply?: InboundDecisionReply;
     };
 
 /** Which door a decision came through — what its `human_actions` row names (WP-88). */
@@ -154,7 +196,8 @@ export interface InboundDeciderRoles {
 }
 
 export interface InboundDecisionApplierOptions {
-  readonly store: Pick<PipelineStore, 'approvals' | 'questions' | 'tasks'>;
+  /** `artifacts` since S-25.9: the subject guard reads the task's latest plan. */
+  readonly store: Pick<PipelineStore, 'approvals' | 'artifacts' | 'questions' | 'tasks'>;
   readonly roles: InboundDeciderRoles;
   /** WP-88: the audit row an accepted decision leaves. Required (rule 31). */
   readonly actions: InboundHumanActionLog;
@@ -270,6 +313,10 @@ export const createInboundDecisionApplier = (
         { decision, userId, role, ...(reason === null ? {} : { reason }) },
         contextFor(approval.taskId, draft.actor),
       );
+      // After the aggregate said the decision is legal, as the route asks it (S-25.9).
+      if (approval.kind === 'plan' && decision === 'approved') {
+        await assertApprovesItsSubject(options.store, tx, stored, draft.subjectArtifactId);
+      }
       await options.store.approvals.save(tx, { ...stored, approval: decided.aggregate });
       await audit(tx, {
         type: draft.type,
@@ -285,6 +332,14 @@ export const createInboundDecisionApplier = (
       });
       return { kind: 'applied', events: decided.events };
     } catch (error) {
+      if (error instanceof ApprovalSubjectRefusedError) {
+        return {
+          kind: 'refused',
+          reason: error.code,
+          detail: error.message,
+          reply: { taskId: approval.taskId, approvalId, refusal: error.code },
+        };
+      }
       const refusal = refusalOf(error);
       if (refusal === null) {
         throw error;

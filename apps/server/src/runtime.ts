@@ -1214,6 +1214,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             secretKey: config.secretKey,
             stack,
             logger: loggerPort,
+            // S-25.9: a refused chat Approve is answered in its thread by a `pipeline.outbound` job.
+            jobs,
             // Q60 (WP-87): the HTTP door's per-integration bucket, counted on `/metrics`.
             rateLimit: {
               policy: DEFAULT_WEBHOOK_RATE_LIMIT_POLICY,

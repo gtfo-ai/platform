@@ -51,6 +51,14 @@ runCommunicationContract({
       freshPort,
       emitPostedApproval: (authorId, decision) =>
         port.emitApproval({ taskId: TASK_ID, approvalId: APPROVAL_ID, authorId, decision }),
+      emitShownApproval: (authorId, subjectArtifactId) =>
+        port.emitApproval({
+          taskId: TASK_ID,
+          approvalId: APPROVAL_ID,
+          authorId,
+          decision: 'approved',
+          subjectArtifactId,
+        }),
       emitUnknownEvent: () => port.emitUnknownEvent(),
       signedWithNoCredential: () =>
         unverifiablePort.emitAnswer({

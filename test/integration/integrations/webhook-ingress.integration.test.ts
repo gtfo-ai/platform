@@ -83,6 +83,8 @@ const legacyDelivery = (iid: number, token = WEBHOOK_SECRET_TOKEN) => ({
 const ingressFor = () =>
   createWebhookIngress({
     rateLimit: null,
+    // S-25.9: no refused chat approval is answered in a thread from this test's ingress.
+    jobs: null,
     loader: createInboundIntegrationLoader({
       repository: secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf),
       secrets: secretAdapters.createPostgresSecretStore({

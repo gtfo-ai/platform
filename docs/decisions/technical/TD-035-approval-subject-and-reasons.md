@@ -69,5 +69,14 @@ neither (`saga.ts:1281-1290`). So the task page can only say "Plan approval · r
   check on an existing table only as column-versus-literal atoms, so `jsonb_typeof(reasons) = 'array'` cannot be
   stated there. The column refuses an empty list; that it is an array of known reasons, and that `subject_detail` is
   the budget snapshot, is held by the one writer's strict zod schemas and by the reader, which parses the same
-  schemas and refuses a row that does not. A chat (Slack) button still decides through the aggregate without an
-  echo — decision 6 guards the HTTP command only (BACKLOG 1200).
+  schemas and refuses a row that does not.
+- **As built (S-25.9, BACKLOG 1200).** Decision 6 holds on the chat door too. The Slack plan-approval message
+  shows the subject and the reasons (worded server-side from the same closed vocabulary, by
+  `packages/application/src/notify/approval-text.ts`, held to the codes by its test) and a *Review plan* link
+  built from `APP_BASE_URL`; its *Approve* button's value carries the plan artifact id the message showed (`s`).
+  The normaliser hands that echo to the decision **beside** the strict `task.approval.decided` payload (the
+  catalogue is unchanged, for decision 4's rollback reason), and `inbound-decisions.ts` asks the command's own
+  guard, `assertApprovesItsSubject` — never a second copy. Its three refusals are recorded on the `inbox` row,
+  write no `human_actions` row, and are answered in the approval's thread by the `pipeline.outbound` duty
+  `approval_refused`, enqueued after the delivery commits. A plan approval whose subject is unrecorded, no
+  longer the latest plan, or unreadable is posted with no *Approve* — only *Review plan* and *Request changes*.

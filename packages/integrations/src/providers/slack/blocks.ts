@@ -49,6 +49,7 @@ export const BLOCK_LIMITS = {
   actionsElements: 25,
   buttonText: 75,
   buttonValue: 2000,
+  buttonUrl: 3000,
   actionId: 255,
   contextElements: 10,
   /** `chat.postMessage`'s fallback `text`, not a block. */
@@ -58,6 +59,12 @@ export const BLOCK_LIMITS = {
 export const ANSWER_ACTION_ID = 'agentic_answer';
 export const APPROVE_ACTION_ID = 'agentic_approve';
 export const REJECT_ACTION_ID = 'agentic_reject';
+/**
+ * The *Review plan* link button (S-25.9). Slack still sends an interaction payload when a URL button
+ * is pressed; the normaliser recognises only Approve and Request changes, so this one decides
+ * nothing and is recorded as `unsupported_event`.
+ */
+export const REVIEW_ACTION_ID = 'agentic_review';
 
 const QUESTION_BLOCK_PREFIX = 'agentic:question:';
 const APPROVAL_BLOCK_PREFIX = 'agentic:approval:';
@@ -129,7 +136,8 @@ export const answerButtonValue = (questionId: Id, option: string, taskId: Id): s
 const button = (input: {
   actionId: string;
   text: string;
-  value: string;
+  value?: string;
+  url?: string;
   style?: 'primary' | 'danger';
 }): Record<string, unknown> => ({
   type: 'button',
@@ -140,7 +148,8 @@ const button = (input: {
     type: 'plain_text',
     text: truncate(escapeSlackText(input.text), BLOCK_LIMITS.buttonText),
   },
-  value: input.value,
+  ...(input.value === undefined ? {} : { value: input.value }),
+  ...(input.url === undefined ? {} : { url: input.url }),
   ...(input.style === undefined ? {} : { style: input.style }),
 });
 
@@ -212,41 +221,98 @@ export const approvalButtonValue = (
   approvalId: Id,
   decision: 'approved' | 'rejected',
   taskId: Id,
-): string => JSON.stringify({ a: approvalId, d: decision, t: taskId });
+  /**
+   * `s`, the plan the message showed (S-25.9, TD-035 decision 6) — on the **Approve** of a plan
+   * approval only, and checked by the decision against the approval's recorded subject, exactly as
+   * the task page's `subject_artifact_id` is. Like `t`, a pointer and never an authority.
+   */
+  subjectArtifactId?: Id,
+): string =>
+  JSON.stringify({
+    a: approvalId,
+    d: decision,
+    t: taskId,
+    ...(subjectArtifactId === undefined ? {} : { s: subjectArtifactId }),
+  });
 
-/** An approval: Approve / Request changes, and nothing that could be mistaken for either. */
+/** What the link to the task page says, per kind — the verb the task page and Inbox use. */
+const reviewLabel = (kind: string): string =>
+  kind === 'plan' ? 'Review plan' : kind === 'budget' ? 'Review budget' : 'Open task';
+
+/**
+ * An approval: Approve / Request changes, the link to the task page, and nothing that could be
+ * mistaken for either.
+ *
+ * **A plan's Approve exists only when the message shows the plan** (S-25.9, BD-006's 2026-11-06
+ * amendment): `subjectArtifactId` is the plan artifact the message's text describes, and the Approve
+ * carries it back. A plan approval with none — not recorded, superseded, unreadable — gets no
+ * Approve at all, only *Review plan* and *Request changes*: rejecting is always allowed (TD-035
+ * decision 6), approving what nobody was shown is the defect. Other kinds need no echo.
+ *
+ * `reviewUrl` is the platform's own task-page URL; it is rendered as a link button only when it is
+ * a scheme Slack may be handed and within the documented length, and dropped otherwise.
+ */
 export const approvalBlocks = (input: {
   readonly approvalId: Id;
   readonly taskId: Id;
   readonly markdown: string;
-}): readonly SlackBlock[] => [
-  mrkdwnSection(input.markdown),
-  {
-    type: 'actions',
-    block_id: approvalBlockId(input.approvalId),
-    elements: [
+  readonly kind?: string;
+  readonly subjectArtifactId?: Id | null;
+  readonly reviewUrl?: string | null;
+}): readonly SlackBlock[] => {
+  const kind = input.kind ?? 'plan';
+  const subject = input.subjectArtifactId ?? null;
+  const mayApprove = kind !== 'plan' || subject !== null;
+  const review =
+    input.reviewUrl !== undefined &&
+    input.reviewUrl !== null &&
+    input.reviewUrl.length <= BLOCK_LIMITS.buttonUrl &&
+    isLinkableUrl(input.reviewUrl)
+      ? input.reviewUrl
+      : null;
+  const elements: Record<string, unknown>[] = [];
+  if (mayApprove) {
+    elements.push(
       button({
         actionId: APPROVE_ACTION_ID,
         text: 'Approve',
-        value: approvalButtonValue(input.approvalId, 'approved', input.taskId),
+        value: approvalButtonValue(
+          input.approvalId,
+          'approved',
+          input.taskId,
+          kind === 'plan' && subject !== null ? subject : undefined,
+        ),
         style: 'primary',
       }),
-      button({
-        actionId: REJECT_ACTION_ID,
-        text: 'Request changes',
-        value: approvalButtonValue(input.approvalId, 'rejected', input.taskId),
-        style: 'danger',
-      }),
-    ],
-  },
-  // WP-88 (backlog 299): a thread reply is never this approval's reason; it is feedback, unless a
-  // question is open in the thread, which it then answers (review round 1: the line is qualified).
-  context(APPROVAL_REPLY_NOTE),
-];
+    );
+  }
+  elements.push(
+    button({
+      actionId: REJECT_ACTION_ID,
+      text: 'Request changes',
+      value: approvalButtonValue(input.approvalId, 'rejected', input.taskId),
+      style: 'danger',
+    }),
+  );
+  if (review !== null) {
+    elements.push(button({ actionId: REVIEW_ACTION_ID, text: reviewLabel(kind), url: review }));
+  }
+  return [
+    mrkdwnSection(input.markdown),
+    { type: 'actions', block_id: approvalBlockId(input.approvalId), elements },
+    // WP-88 (backlog 299): a thread reply is never this approval's reason; it is feedback, unless a
+    // question is open in the thread, which it then answers (review round 1: the line is qualified).
+    context(mayApprove ? APPROVAL_REPLY_NOTE : APPROVAL_NO_SUBJECT_NOTE),
+  ];
+};
 
 /** What a thread reply under an approval does (WP-88, backlog 299, review round 1). */
 export const APPROVAL_REPLY_NOTE =
   'Decide with the buttons. A reply in this thread never approves or requests changes: it is feedback, or the answer to the one question open here.';
+
+/** The same note for a plan approval posted with no Approve (S-25.9): why it is missing. */
+export const APPROVAL_NO_SUBJECT_NOTE =
+  'This message cannot show the plan this approval is about, so it cannot be approved here: review it on the task page. Request changes is always allowed. A reply in this thread never decides it.';
 
 export interface DigestLine {
   readonly title: string;
@@ -351,6 +417,9 @@ const checkButton = (where: string, element: Record<string, unknown>, action: st
   }
   if (typeof element.value === 'string' && element.value.length > BLOCK_LIMITS.buttonValue) {
     throw invalid(action, `${where} value exceeds ${BLOCK_LIMITS.buttonValue} characters`);
+  }
+  if (typeof element.url === 'string' && element.url.length > BLOCK_LIMITS.buttonUrl) {
+    throw invalid(action, `${where} url exceeds ${BLOCK_LIMITS.buttonUrl} characters`);
   }
   if (element.style !== undefined && element.style !== 'primary' && element.style !== 'danger') {
     throw invalid(action, `${where} style must be "primary" or "danger"`);

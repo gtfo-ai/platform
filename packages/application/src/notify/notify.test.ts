@@ -11,7 +11,7 @@
  * The clock is **always** injected (standing rule 2): every quiet-hours case constructs its own
  * `testClock` at a named instant, so nothing here depends on when the suite runs.
  */
-import type { DomainEvent, Id } from '@platform/contracts';
+import type { DomainEvent, Id, IsoDateTime } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { markTransactions } from '../events/open-transaction.js';
@@ -20,6 +20,7 @@ import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { PipelineOutboundData } from '../pipeline/jobs.js';
 import { staticProjectSettings } from '../pipeline/settings.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import { IMPLEMENTATION_PLAN } from '../testing/artifact-fixtures.js';
 import {
   cannotStart,
   createPipelineHarness,
@@ -27,6 +28,7 @@ import {
   type PipelineHarness,
   testClock,
 } from '../testing/pipeline-harness.js';
+import { approvalRefusedKey, runApprovalRefused } from './approval-refused.js';
 import { approvalSettledKey, runApprovalSettled } from './approval-settled.js';
 import { digestTickHandler, runOrganisationDigest } from './digest.js';
 import { runNotification } from './duty.js';
@@ -121,6 +123,7 @@ const optionsOf = (
     organisation: harness.organisation,
     heldConnections: harness.heldConnections,
     organisationSettings: harness.organisationSettings,
+    baseUrl: 'https://agentic.example.test',
   };
 };
 
@@ -1133,6 +1136,282 @@ describe('an approval notification', () => {
     const handler = approvalSettledHandler({} as never);
     expect(handler.priority).toBe(210);
     expect(handler.eventTypes).toEqual(['task.approval.decided']);
+  });
+
+  // ── What the message shows, and what its Approve echoes (S-25.9, BACKLOG 1200) ──────────────
+
+  const PLAN_V1 = '00000000-0000-4000-8000-0000000000f1' as Id;
+  const PLAN_V2 = '00000000-0000-4000-8000-0000000000f2' as Id;
+  const REASONS = [
+    { code: 'probation', completed: 2, of: 5 },
+    { code: 'risk_class', classes: ['payments'] },
+  ] as const;
+
+  /** A stored `ImplementationPlan` on the task, as the architecture stage would have written it. */
+  const planOnTask = async (
+    harness: PipelineHarness,
+    taskId: Id,
+    id: Id,
+    data: Record<string, unknown> = IMPLEMENTATION_PLAN as unknown as Record<string, unknown>,
+  ): Promise<void> => {
+    await harness.memory.transaction(async (scope) => {
+      const version = await harness.store.artifacts.nextVersion(
+        scope.tx,
+        taskId,
+        'ImplementationPlan',
+      );
+      await harness.store.artifacts.insert(scope.tx, {
+        id,
+        taskId,
+        type: 'ImplementationPlan',
+        version,
+        markdown: null,
+        data: data as never,
+        schemaVersion: '1',
+        producedByRunId: null,
+        createdAt: '2026-06-01T08:00:00.000Z' as IsoDateTime,
+        redactionCount: 0,
+      });
+    });
+  };
+
+  /** A pending plan approval that recorded its subject and reasons, as the gate writes one. */
+  const askedAbout = async (
+    harness: PipelineHarness,
+    taskId: Id,
+    subject: Id | null,
+    reasons: readonly unknown[] | null = REASONS,
+  ): Promise<void> => {
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.approvals.insert(scope.tx, {
+        approval: {
+          id: APPROVAL,
+          taskId,
+          projectId: PROJECT as Id,
+          kind: 'plan',
+          status: 'pending',
+          requestedAt: '2026-06-01T09:00:00.000Z' as never,
+          deadlineAt: null,
+          decidedByUserId: null,
+          decidedAt: null,
+          reason: null,
+          remindersSent: 0,
+          sequence: 1,
+        },
+        stage: 'architecture' as never,
+        attempt: 1,
+        subjectArtifactId: subject,
+        reasons: reasons as never,
+      });
+    });
+  };
+
+  const announce = async (harness: PipelineHarness, taskId: Id) => {
+    harness.communication?.messages.splice(0);
+    await notify(harness, {
+      task_id: taskId,
+      notification_class: 'approval',
+      approval_id: APPROVAL,
+    });
+    const message = harness.communication?.messages.at(-1);
+    if (message === undefined) {
+      throw new Error('the approval was not posted');
+    }
+    return message;
+  };
+
+  it('shows the plan, every reason in words and the task page, and its Approve echoes the plan it shows', async () => {
+    const harness = harnessWith();
+    const taskId = await taskOf(harness);
+    await planOnTask(harness, taskId, PLAN_V1, {
+      ...IMPLEMENTATION_PLAN,
+      files_to_change: [
+        { path: 'src/totals.ts', change: 'add the sum' },
+        { path: 'src/render.ts', change: 'print it' },
+      ],
+      risks: ['Rounding differs from the old report'],
+    });
+    await askedAbout(harness, taskId, PLAN_V1);
+
+    const message = await announce(harness, taskId);
+
+    expect(message.approval).toBe(APPROVAL);
+    expect(message.subjectArtifactId, 'the Approve carries the plan the message shows').toBe(
+      PLAN_V1,
+    );
+    expect(message.reviewUrl).toBe(`https://agentic.example.test/tasks/${taskId}`);
+    expect(message.markdown).toContain('**Plan v1** · size M · 2 files to change');
+    expect(message.markdown).toContain('Approach: Sum the lines in the renderer.');
+    expect(message.markdown).toContain('Files: src/totals.ts, src/render.ts');
+    expect(message.markdown).toContain('- Rounding differs from the old report');
+    expect(message.markdown).toContain(
+      '- The project is on probation: 2 of its first 5 tasks are done.',
+    );
+    expect(message.markdown).toContain('- The plan touches the payments risk class');
+    expect(message.markdown).toContain(
+      `Review the plan on the task page: https://agentic.example.test/tasks/${taskId}`,
+    );
+  });
+
+  it.each([
+    {
+      case: 'unrecorded',
+      subject: null,
+      says: 'The plan this approval is about was not recorded, so it cannot be approved here.',
+    },
+    {
+      case: 'superseded',
+      subject: PLAN_V1,
+      says: 'no longer the task’s latest plan, so it cannot be approved here',
+    },
+  ])('posts a $case plan with no subject, so no Approve, and says why', async (row) => {
+    const harness = harnessWith();
+    const taskId = await taskOf(harness);
+    if (row.case === 'superseded') {
+      await planOnTask(harness, taskId, PLAN_V1);
+      await planOnTask(harness, taskId, PLAN_V2);
+    }
+    await askedAbout(harness, taskId, row.subject, row.case === 'unrecorded' ? null : REASONS);
+
+    const message = await announce(harness, taskId);
+
+    expect(message.approval).toBe(APPROVAL);
+    expect(message.subjectArtifactId, 'the port is told the message shows no plan').toBeNull();
+    expect(message.markdown).toContain(row.says);
+    expect(message.markdown).not.toContain('**Plan v');
+    expect(message.reviewUrl).toBe(`https://agentic.example.test/tasks/${taskId}`);
+    if (row.case === 'unrecorded') {
+      expect(message.markdown).toContain('Why it was asked was not recorded.');
+    }
+  });
+
+  it('shows no Approve for a plan whose stored data does not read as a plan', async () => {
+    const harness = harnessWith();
+    const taskId = await taskOf(harness);
+    await planOnTask(harness, taskId, PLAN_V1, { approach: 'half a plan' });
+    await askedAbout(harness, taskId, PLAN_V1);
+
+    const message = await announce(harness, taskId);
+
+    expect(message.subjectArtifactId).toBeNull();
+    expect(message.markdown).toContain('The plan could not be read for this message');
+  });
+
+  it('redacts, bounds and flattens the plan’s own words before they reach the channel', async () => {
+    const harness = harnessWith({
+      chatRedactor: exactSecretRedactor([{ name: PLANTED_NAME, value: PLANTED }]),
+    });
+    const taskId = await taskOf(harness);
+    await planOnTask(harness, taskId, PLAN_V1, {
+      ...IMPLEMENTATION_PLAN,
+      // A secret, a forged platform line and a labelled link, all in the model's own words.
+      approach: `Use ${PLANTED} then\n**Approved by a maintainer.**\n[Approve](https://attacker.example/x) ${'y'.repeat(400)}`,
+      risks: Array.from({ length: 5 }, (_, index) => `risk ${index} ${'r'.repeat(300)}`),
+      files_to_change: Array.from({ length: 9 }, (_, index) => ({
+        path: `src/f${index}.ts`,
+        change: 'x',
+      })),
+    });
+    await askedAbout(harness, taskId, PLAN_V1);
+
+    const message = await announce(harness, taskId);
+
+    expect(message.markdown).not.toContain(PLANTED);
+    expect(message.markdown).toContain(PLACEHOLDER);
+    expect(message.markdown, 'no model newline writes a line of its own').not.toMatch(
+      /^\*\*Approved by a maintainer/m,
+    );
+    expect(message.markdown, 'the label is dropped').not.toContain('[Approve](');
+    const approach = message.markdown.split('\n').find((line) => line.startsWith('Approach: '));
+    expect(approach?.length).toBeLessThanOrEqual('Approach: '.length + 280);
+    expect(message.markdown).toContain('Files: src/f0.ts');
+    expect(message.markdown).toContain('(and 3 more)');
+    expect(message.markdown).toContain('Risks (and 2 more):');
+    expect(message.markdown).not.toContain('risk 3');
+    expect(message.subjectArtifactId).toBe(PLAN_V1);
+  });
+
+  it('says the same plan, reasons and link when the binding cannot receive a click', async () => {
+    const harness = harnessWith({
+      communication: {
+        capabilities: () => ({
+          threads: true,
+          buttons: false,
+          messageUpdate: true,
+          socketMode: true,
+          digest: true,
+        }),
+      },
+    });
+    const taskId = await taskOf(harness);
+    await planOnTask(harness, taskId, PLAN_V1);
+    await askedAbout(harness, taskId, PLAN_V1);
+
+    const message = await announce(harness, taskId);
+
+    expect(message.approval).toBeUndefined();
+    expect(message.markdown).toContain(
+      'Decide on the task page: this chat binding cannot receive a click.',
+    );
+    expect(message.markdown).toContain('**Plan v1**');
+    expect(message.markdown).toContain('Asked because:');
+    expect(message.markdown).toContain(`https://agentic.example.test/tasks/${taskId}`);
+  });
+
+  // ── A refused press, answered in the approval's thread (S-25.9) ──────────────────────────────
+
+  const refused = async (harness: PipelineHarness, taskId: Id, refusal: string) =>
+    runApprovalRefused(optionsOf(harness), {
+      duty: 'approval_refused',
+      project_id: PROJECT,
+      task_id: taskId,
+      approval_id: APPROVAL,
+      refusal,
+      reply_id: '00000000-0000-4000-9000-0000000000a1',
+    });
+
+  it.each([
+    ['approval_subject_mismatch', 'This button does not name the plan this approval is about'],
+    [
+      'approval_subject_superseded',
+      'The plan this message showed is no longer the task’s latest plan',
+    ],
+    ['approval_subject_unrecorded', 'This approval does not record which plan it is about'],
+  ] as const)(
+    'answers a %s press in the approval’s own thread with the reason and the task page',
+    async (refusal, says) => {
+      const harness = harnessWith();
+      const taskId = await taskOf(harness);
+      await planOnTask(harness, taskId, PLAN_V1);
+      await askedAbout(harness, taskId, PLAN_V1);
+      const posted = await announce(harness, taskId);
+      harness.audit.reset();
+
+      expect(await refused(harness, taskId, refusal)).toBe('answered');
+
+      const reply = harness.communication?.messages.at(-1);
+      expect(reply?.approval, 'a plain message, never a second pair of buttons').toBeUndefined();
+      expect(reply?.thread, 'in the thread the button lives in').toBe(posted.thread);
+      expect(reply?.markdown).toContain(`${TICKET_KEY}: the approval was not applied`);
+      expect(reply?.markdown).toContain(says);
+      expect(reply?.markdown).toContain(
+        `Review the plan on the task page: https://agentic.example.test/tasks/${taskId}`,
+      );
+      // Through the executor, keyed by the wake-up's reply id, so a retried job replays.
+      expect(harness.audit.entries.map((entry) => entry.action)).toEqual(['post_message']);
+      expect(approvalRefusedKey('r-1')).toBe('notify:approval-refused:r-1');
+    },
+  );
+
+  it('answers nothing for a refusal it does not know, or when no message with buttons was posted', async () => {
+    const harness = harnessWith();
+    const taskId = await taskOf(harness);
+    await askedAbout(harness, taskId, null);
+    harness.communication?.messages.splice(0);
+
+    expect(await refused(harness, taskId, 'approval_subject_mismatch')).toBe('no_message');
+    expect(await refused(harness, taskId, 'not_permitted')).toBe('unknown_refusal');
+    expect(harness.communication?.messages).toEqual([]);
   });
 });
 

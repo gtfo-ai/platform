@@ -371,6 +371,10 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
     shape: 'notification_shaped',
     why: 'resolves the Reviewer’s own finding threads a re-review confirmed fixed: nothing waits on it, and a thread left open is one a person resolves by hand; since WP-184 it runs under the task’s duty lease and, finding the lease held past a 2 s wait, throws into its retry rather than holding the one outbound worker, and the retry replays what the holder recorded',
   },
+  approval_refused: {
+    shape: 'notification_shaped',
+    why: 'answers a refused chat approval in its thread (S-25.9); the refusal is on the inbox row and the approval is still pending on the task page, so a lost answer is a button that seemed to do nothing',
+  },
   ready_head_check: {
     shape: 'bound_and_escalate',
     why: 'a person’s resume, hand-back or retry waits on it, and the task stays where the command found it with nothing saying why',

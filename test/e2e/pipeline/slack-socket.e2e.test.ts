@@ -258,6 +258,98 @@ describe('an approval button pressed in Slack', () => {
   );
 });
 
+/**
+ * **S-25.9 (BACKLOG 1200, BD-006's 2026-11-06 amendment, TD-035 decision 6): the Slack message
+ * shows the plan it asks about, and its Approve approves only that plan.** Production code end to
+ * end except Slack's two network edges: the notify band reads the approval's recorded subject and
+ * reasons, the adapter posts them with the plan id on the Approve, a press whose value names
+ * another plan is refused by the decide command's own guard in the ingress transaction — no
+ * `human_actions` row, the approval still pending — and answered in the thread by the
+ * `approval_refused` duty; the button as posted then decides it.
+ */
+describe('a chat approval shows what it approves (S-25.9)', () => {
+  it('posts the plan and its reasons, refuses a press naming another plan in the thread, and approves the plan shown', async () => {
+    const { pipeline, slack } = await startSlack('slack-subject');
+    const button = await toTheGate(pipeline, slack);
+    const pending = await approval(pipeline);
+    const [plan] = await pipeline.query<{ id: string; version: number }>(
+      "select id, version from artifacts where type = 'ImplementationPlan' order by version desc limit 1",
+    );
+    if (plan === undefined) {
+      throw new Error('the architecture stage stored no plan');
+    }
+    const taskId = (await pipeline.task()).id;
+
+    // (1) The message carries the plan, the reasons in words and the task page; (2) the Approve
+    // carries the plan it shows.
+    const message = slack.posted.find((posted) => posted.ts === button.messageTs);
+    expect(message?.text).toContain(`*Plan v${plan.version}*`);
+    expect(message?.text).toContain('Asked because:');
+    expect(message?.text).toContain(`/tasks/${taskId}`);
+    expect(JSON.parse(button.value)).toEqual({
+      a: pending.id,
+      d: 'approved',
+      t: taskId,
+      s: plan.id,
+    });
+    expect(JSON.stringify(message?.blocks)).toContain('"action_id":"agentic_review"');
+
+    await pipeline.query(
+      `insert into user_identities (provider, external_id, user_id, display_name)
+       values ('slack', $1, $2, 'decider')`,
+      [DECIDER, pipeline.userId],
+    );
+    await pipeline.query("update users set role = 'maintainer' where id = $1", [pipeline.userId]);
+
+    // (2) A maintainer's press whose value names another plan: refused, nothing decided.
+    const forged = {
+      ...button,
+      value: JSON.stringify({
+        a: pending.id,
+        d: 'approved',
+        t: taskId,
+        s: '00000000-0000-4000-8000-0000000005a7',
+      }),
+    };
+    await press('http', pipeline, slack, blockActionsFor(forged, DECIDER), 'env-forged');
+    await pipeline.waitFor('the forged press to be refused', async () =>
+      (await inboxErrors(pipeline)).some((error) =>
+        error.includes('decision_refused: approval_subject_mismatch'),
+      ),
+    );
+    expect((await approval(pipeline)).status).toBe('pending');
+    expect(
+      await pipeline.query('select 1 from human_actions'),
+      'a refused decision leaves no human_actions row',
+    ).toEqual([]);
+
+    // …and answered in the approval's thread with the reason and the task page.
+    await pipeline.waitFor('the refusal to be answered in the thread', async () =>
+      slack.posted.some(
+        (posted) =>
+          posted.threadTs === button.threadTs &&
+          posted.text.includes('the approval was not applied'),
+      ),
+    );
+    const reply = slack.posted.find((posted) =>
+      posted.text.includes('the approval was not applied'),
+    );
+    expect(reply?.text).toContain('does not name the plan this approval is about');
+    expect(reply?.text).toContain(`/tasks/${taskId}`);
+    expect(JSON.stringify(reply?.blocks ?? [])).not.toContain('agentic_approve');
+
+    // The button as posted decides it: the plan the person was shown.
+    await press('http', pipeline, slack, blockActionsFor(button, DECIDER), 'env-shown');
+    await pipeline.waitFor(
+      'the approval to be decided',
+      async () => (await approval(pipeline)).status === 'approved',
+    );
+    expect(await pipeline.query('select action from human_actions')).toEqual([
+      { action: 'task.approval.decide' },
+    ]);
+  }, 240_000);
+});
+
 describe('the Socket Mode connection', () => {
   it('opens through the executor, deduplicates across transports, and closes at shutdown', async () => {
     const { pipeline, slack } = await startSlack('slack-lifecycle');

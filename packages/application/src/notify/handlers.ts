@@ -187,8 +187,9 @@ export const decideNotification = (event: DomainEvent): Decided | null => {
         projectId: event.payload.project_id,
         taskId: event.payload.task_id,
         subject: null,
-        // Platform text keyed by the approval's kind, never the plan's own words: the plan is an
-        // artifact on the task page, and a channel is not where a model's output is reviewed.
+        // Platform text keyed by the approval's kind: the stored row's detail. The plan's summary
+        // and the reasons are read by the duty when it posts (S-25.9) — from the approval's own
+        // recorded subject, redacted and bounded there — and are never stored on this row.
         detail: APPROVAL_DETAIL[event.payload.approval.kind],
         approvalId: event.payload.approval.id,
       };

@@ -277,6 +277,18 @@ An answer or an approval is emitted **only** for an author who maps to a platfor
 > task page otherwise), and the `question_settled` duty edits its message through `updateMessage`
 > once it is answered or expires, as WP-65's `approval_settled` does for an approval.
 
+> **As built at S-25.9 (BACKLOG 1200, TD-035 decision 6): a chat approval shows what it approves.**
+> `postApproval`'s `ApprovalPost` carries `subject_artifact_id` — the plan the message shows, read by
+> the notify duty from the approval's recorded subject while it is still the task's latest plan — and
+> `review_url`, the task page built from `APP_BASE_URL`. The body is platform text plus the plan's
+> summary (size, files, risks, approach), redacted with the binding's redactor and then bounded, and
+> the reasons worded from TD-035's closed vocabulary. A provider puts the subject on its **Approve**
+> control and hands it back as `NormalisedEvent.subjectArtifactId`, beside the strict payload (the
+> shared contract suite holds every communication provider to that); a plan approval posted with no
+> subject has **no Approve control**. The decision asks the decide command's own guard
+> (`assertApprovesItsSubject`); a refusal is answered in the approval's thread by the
+> `approval_refused` duty, which the ingress enqueues after its commit.
+
 ### ObservabilityErrors
 ```
 getIssue(ref) ; getLatestEvent(ref) -> {stackTrace, breadcrumbs, tags, release, firstSeen, lastSeen, count}

@@ -41,4 +41,9 @@ export interface NotifyOptions extends PipelineSagaOptions {
    * composed without it would post an organisation budget at 03:00 whatever the organisation said.
    */
   readonly organisationSettings: OrganisationSettingsPort;
+  /**
+   * `APP_BASE_URL` — the task page an approval message and a refused press point at (S-25.9). The
+   * platform's own configured origin, validated as `http(s)` at startup; never a provider's text.
+   */
+  readonly baseUrl: string;
 }

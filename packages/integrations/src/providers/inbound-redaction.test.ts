@@ -362,6 +362,8 @@ const deliverThrough = async (testCase: InboundCase): Promise<Delivered> => {
   let nextId = 0;
   const ingress = createWebhookIngress({
     rateLimit: null,
+    // S-25.9: no refused chat approval is answered in a thread from this test's ingress.
+    jobs: null,
     loader: eagerInboundLoader(async () => resolved),
     inbox,
     audit: auditLog,
