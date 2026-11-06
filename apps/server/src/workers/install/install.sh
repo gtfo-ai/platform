@@ -337,18 +337,32 @@ page_port() {
   say "$port"
 }
 
-# Whether the running worker holds no credential yet, read off its page's state: its `connection`
-# waits for a platform, its Claude sign-in or its device approval. Any other word, a page that does
-# not answer, or one that asks for a token (APP_WORKER_UI_AUTH=token) reads as set up, and the caller
-# keeps the cautious path. Only that one word is read, and nothing of the answer is printed.
-not_set_up() {
-  answer=$(curl -fsS --max-time 3 "http://127.0.0.1:$(page_port)/api/local/state" 2>/dev/null) ||
-    return 1
+# Whether the worker holds a credential yet, read off its page's state. `not_set_up`: its
+# `connection` waits for a platform, its Claude sign-in or its device approval. `unknown`: the page
+# does not answer at all (a stopped worker). `set_up`: anything else, an HTTP refusal included (a
+# token, APP_WORKER_UI_AUTH=token), so the caller keeps the cautious path. Only that one word is
+# read, and nothing of the answer is printed.
+setup_state() {
+  answer=$(curl -fsS --max-time 3 "http://127.0.0.1:$(page_port)/api/local/state" 2>/dev/null) &&
+    code=0 || code=$?
+  # curl's 22 is an HTTP error: the page answered and refused.
+  case $code in
+    0) ;;
+    22) say set_up && return 0 ;;
+    *) say unknown && return 0 ;;
+  esac
   connection=$(printf '%s\n' "$answer" | grep -o '"connection":"[a-z_]*"' | head -n 1)
   case $connection in
-    '"connection":"needs_platform"' | '"connection":"needs_claude"' | '"connection":"logging_in"') return 0 ;;
+    '"connection":"needs_platform"' | '"connection":"needs_claude"' | '"connection":"logging_in"') say not_set_up ;;
+    *) say set_up ;;
   esac
-  return 1
+}
+
+# The served bundle over a worker that is not set up yet: it runs nothing worth keeping.
+install_served() {
+  mv -f "$dir/$DOWNLOAD" "$dir/$BUNDLE"
+  say "This worker runs another build than the core serves now and is not set up yet, so updating it loses nothing: installing the core's build in $dir ..."
+  compose up -d || die 1 "docker compose up failed (see above). Fix what it names and run this again."
 }
 
 page_answers() {
@@ -414,6 +428,11 @@ install_worker() {
   current=$(pins_of_block "$dir/.env")
   [ -n "$current" ] || current=$(pins_of_bundle "$dir/$BUNDLE")
   existing=$(project_containers) || die 1 'docker ps failed'
+  # Asked only of a worker on another build that the updater never moved (no managed block).
+  setup=set_up
+  if [ -n "$existing" ] && [ "$current" != "$served" ] && [ -z "$(pins_of_block "$dir/.env")" ]; then
+    setup=$(setup_state)
+  fi
 
   if [ -z "$existing" ] && { [ -z "$current" ] || [ "$current" = "$served" ]; }; then
     mv -f "$dir/$DOWNLOAD" "$dir/$BUNDLE"
@@ -425,18 +444,38 @@ install_worker() {
     mv -f "$dir/$DOWNLOAD" "$dir/$BUNDLE"
     say "The worker is already installed in $dir; starting what is stopped and adding what is missing (nothing is recreated) ..."
     compose up -d --no-recreate || die 1 "docker compose up failed (see above)."
-  elif [ -n "$existing" ] && [ -z "$(pins_of_block "$dir/.env")" ] && not_set_up; then
-    # Another build, never updated (no managed block), and not approved yet: nothing is lost.
-    mv -f "$dir/$DOWNLOAD" "$dir/$BUNDLE"
-    say "This worker runs another build than the core serves now and is not set up yet, so updating it loses nothing: installing the core's build in $dir ..."
-    compose up -d || die 1 "docker compose up failed (see above). Fix what it names and run this again."
+  elif [ "$setup" = not_set_up ]; then
+    install_served
   elif [ -n "$existing" ]; then
-    rm -f "$dir/$DOWNLOAD"
-    say 'This worker runs another build than the core serves now. Its updater moves it there after verifying the build;'
-    say 'this installer never changes the images a worker runs.'
-    [ -f "$dir/$BUNDLE" ] || die 3 "$dir/$BUNDLE is missing, so this installer cannot restart the worker; see: docker ps --all --filter label=com.docker.compose.project=$PROJECT"
-    say "Starting whatever of it is stopped (nothing is recreated) ..."
-    compose start || die 1 "docker compose start failed (see above)."
+    started=0
+    if [ "$setup" = unknown ] && [ -f "$dir/$BUNDLE" ]; then
+      # A stopped worker's page answers nothing: start it, and ask again once the page answers.
+      say "Starting whatever of it is stopped (nothing is recreated) ..."
+      compose start || {
+        rm -f "$dir/$DOWNLOAD"
+        die 1 "docker compose start failed (see above)."
+      }
+      started=1
+      waited=0
+      while :; do
+        setup=$(setup_state)
+        if [ "$setup" != unknown ] || [ "$waited" -ge "$wait_limit" ]; then break; fi
+        sleep 2
+        waited=$((waited + 2))
+      done
+    fi
+    if [ "$setup" = not_set_up ]; then
+      install_served
+    else
+      rm -f "$dir/$DOWNLOAD"
+      say 'This worker runs another build than the core serves now. Its updater moves it there after verifying the build;'
+      say 'this installer never changes the images a worker runs.'
+      if [ "$started" -eq 0 ]; then
+        [ -f "$dir/$BUNDLE" ] || die 3 "$dir/$BUNDLE is missing, so this installer cannot restart the worker; see: docker ps --all --filter label=com.docker.compose.project=$PROJECT"
+        say "Starting whatever of it is stopped (nothing is recreated) ..."
+        compose start || die 1 "docker compose start failed (see above)."
+      fi
+    fi
   else
     rm -f "$dir/$DOWNLOAD"
     die 3 "nothing of this worker is in Docker, and its folder pins another build than the core serves now. Installing the core's would bypass the updater's checks. Start it as it was (cd '$dir' && docker compose up -d) and its updater moves it forward, or remove it (--uninstall --purge) and install again."

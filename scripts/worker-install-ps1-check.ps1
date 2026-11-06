@@ -8,7 +8,8 @@ Asserted: a first install downloads the core's bundle verbatim, marks the folder
 `docker compose up -d` there with none of the variables that would re-pin the images or change what
 the updater trusts; a re-run starts what exists and recreates nothing; a re-run against another
 served build only starts an approved worker (or one whose page cannot be read) and installs the
-served build over one that is not set up yet (its page reads needs_claude); an `irm | iex`-style run
+served build over one that is not set up yet (its page reads needs_claude) - a stopped one too,
+whose page answers only once it was started; an `irm | iex`-style run
 leaves the caller's session alive with no installer function behind; `-Uninstall -Purge` removes
 the volumes and the folder. Prints PASS or FAIL and exits 0 or 1.
 #>
@@ -118,6 +119,26 @@ try {
   Test-That (-not (Test-Path -LiteralPath (Join-Path $workerDir '.env'))) 'another served build, a worker not set up yet: still no .env'
   Remove-Item -LiteralPath $pageState -Force
 
+  # A stopped worker: its page (another port here) answers nothing until `docker compose start`
+  # serves it, and then reads needs_claude, so the same run installs the served build.
+  $bundleC = $bundle.Replace(('a' * 64), ('c' * 64))
+  [IO.File]::WriteAllText((Join-Path $site 'api\worker\v1\compose.yml'), $bundleC)
+  $stoppedSite = Join-Path $root 'stopped-page'
+  $null = New-Item -ItemType Directory -Force -Path (Join-Path $stoppedSite 'api\local')
+  [IO.File]::WriteAllText((Join-Path $stoppedSite 'index.html'), '<!doctype html><title>worker</title>')
+  [IO.File]::WriteAllText((Join-Path $stoppedSite 'api\local\state'), '{"worker_id":null,"worker_name":null,"connection":"needs_claude","protocol":3}')
+  $env:APP_WORKER_UI_PORT = '7358'
+  $env:STUB_START_PAGE_PORT = '7358'
+  $env:STUB_START_PAGE_SITE = $stoppedSite
+  & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Dir $workerDir -NoOpen
+  Test-That ($LASTEXITCODE -eq 0) "a stopped worker not set up yet: exits 0 (it exited $LASTEXITCODE)"
+  $calls = @(Get-Content -LiteralPath $log | Where-Object { $_ -like 'docker compose --project-name*' })
+  Test-That (($calls[-2..-1] -join '|') -eq 'docker compose --project-name agentic-worker start|docker compose --project-name agentic-worker up -d') "a stopped worker not set up yet: started, then installed in the same run (last two: $($calls[-2..-1] -join ' | '))"
+  Test-That ([IO.File]::ReadAllText((Join-Path $workerDir 'compose.yaml')) -eq $bundleC) 'a stopped worker not set up yet: compose.yaml is the served bundle'
+  Remove-Item -LiteralPath Env:APP_WORKER_UI_PORT, Env:STUB_START_PAGE_PORT, Env:STUB_START_PAGE_SITE
+  $pagePid = Join-Path $state 'page.pid'
+  if (Test-Path -LiteralPath $pagePid) { Stop-Process -Id ([int](Get-Content -LiteralPath $pagePid -Raw).Trim()) -Force -ErrorAction SilentlyContinue }
+
   # After the updater's first update Compose's label names its mount path (S-22.21): the installer
   # still knows its own install, by its mark.
   Set-Content -LiteralPath (Join-Path $state 'wd') -Value '/var/lib/platform/host-bundle'
@@ -156,6 +177,8 @@ try {
   Test-That ($LASTEXITCODE -eq 2) "-Purge without -Uninstall is a usage error (it exited $LASTEXITCODE)"
 } finally {
   Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+  $pagePid = Join-Path $state 'page.pid'
+  if (Test-Path -LiteralPath $pagePid) { Stop-Process -Id ([int](Get-Content -LiteralPath $pagePid -Raw).Trim()) -Force -ErrorAction SilentlyContinue }
 }
 
 if ($failures.Count -gt 0) { Write-Host "FAIL: worker-install-ps1 ($($failures.Count))"; exit 1 }

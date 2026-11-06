@@ -469,7 +469,7 @@ core keeps advertising it):
    folder's `.env` (your own lines kept; the previous file kept as `.env.previous`, the previous
    compose file in the `updates` volume). It brings the worker up from that folder, so a
    `docker compose up -d` of your own there always runs what the updater last applied, and checks that `/readyz` reads `core_handshake: ok`
-   (for a worker not approved yet, `needs_claude` or `logging_in`: it waits for a person, as before)
+   (for a worker not approved yet, `needs_claude` or `logging_in` for 5 s: it waits for a person, as before)
    and `launcher: ok` within 120 s. If it does not, it puts the previous compose file and env file back, brings the old
    build up again and restarts the worker (a drain's hold ends with the process; your own *Pause*
    does not). It then reports the result and recreates the updater last.
@@ -526,8 +526,10 @@ they differ, the move is the updater's, after it verifies the build: with contai
 unverified. **One exception:** a worker that is not set up yet — its page
 (`http://127.0.0.1:7357/api/local/state`) reads `needs_platform`, `needs_claude` or `logging_in`, and
 the updater never applied an update to its `.env` — runs nothing worth keeping, so the installer
-installs the served build over it (`docker compose up -d`) and says so; a page it cannot read (or one
-behind `APP_WORKER_UI_AUTH=token`) keeps the rule above. It never
+installs the served build over it (`docker compose up -d`) and says so. A stopped worker's page
+answers nothing, so the installer starts it first and reads the page again once it answers; a page
+that refuses the read (`APP_WORKER_UI_AUTH=token`) keeps the rule above. A worker stuck before this
+build runs an updater that needs the approval to follow its core, so this re-run is what moves it. It never
 writes `.env` or touches a volume (except `--purge`), and it refuses while an update is being
 applied.
 

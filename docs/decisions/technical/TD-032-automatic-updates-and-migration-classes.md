@@ -528,7 +528,10 @@ was `--uninstall --purge` and a new install.
 1. **`release` without a credential.** `GET /api/worker/v1/release` is public since WP-294. With no
    credential stored for the core's origin, the updater asks it with no `Authorization` header (the
    protocol header stays) and updates exactly as with one: the attestations, the downgrade bound, the
-   pull, the drain (which already waits while a Claude sign-in runs) and the apply.
+   pull, the drain (which already waits while a Claude sign-in runs) and the apply. **This reaches
+   only workers that already run this build.** A worker stuck before this fix runs the old updater,
+   which needs a credential and so never asks: only a re-run of the installer (4) reaches it, and from
+   then on its own updater follows the core.
 2. **Only reporting waits for the credential.** `update-report` — a refusal or an apply's result — is
    skipped by name while there is none. The apply leaves `reported: false` in `updates/state.json`, and
    the updater reports it at the first poll that holds a credential, once per update per process (as
@@ -537,7 +540,8 @@ was `--uninstall --purge` and a new install.
 3. **The apply's check for a worker not approved yet.** Such a worker cannot hand-shake until a person
    acts, so `/readyz` answers `503`. When the apply finds no credential for the plan's core, a
    `core_handshake` of `needs_claude` or `logging_in` — waiting for the sign-in or the approval, as
-   before the update — is good, `launcher: ok` still required; `needs_platform`, `core_unreachable` and
+   before the update — is good once every read has said so for 5 s (`NOT_APPROVED_STEADY_MS`: a build
+   that starts and then crash-loops answers once, then nothing), `launcher: ok` still required; `needs_platform`, `core_unreachable` and
    anything else roll back as before. A worker that holds a credential must read `core_handshake: ok`,
    unchanged.
 4. **The installer moves a worker that is not set up yet.** When the containers exist and run another
@@ -547,12 +551,15 @@ was `--uninstall --purge` and a new install.
    served bundle (`compose up -d`) and say why in one line. Only that one field is read and nothing of
    the answer is printed. A page that does not answer, one that asks for a token
    (`APP_WORKER_UI_AUTH=token`), or any other connection keeps the previous behaviour (`compose start`).
+   A page that does not answer at all is a **stopped** worker: the installer starts it, reads the page
+   again once it answers (bounded by `AGENTIC_INSTALL_WAIT_SECONDS`), and installs the served build in
+   the same run when it is not set up yet.
    **Residual, stated:** an approved worker whose Claude sign-in was removed also reads `needs_claude`;
    the installer then installs the served build over it without the updater's attestation check — the
    trust a first install takes — and loses nothing (its approval and sign-in are in its volumes).
 
 As built: `tick`, `refuse`, `reportTerminal` and `reportPending` in `apps/server/src/updater/updater.ts`,
-`storedCredentialFor`, `NOT_APPROVED_CONNECTIONS` and `waitForHandshake` in `apply.ts`, `release(null)`
-in `apps/server/src/remote-worker/core-client.ts`, `not_set_up` in `install.sh` and `Test-NotSetUp` in
-`install.ps1`; the tests in `updater.test.ts`, `update-apply.test.ts`, `install-script.test.ts` and
+`storedCredentialFor`, `NOT_APPROVED_CONNECTIONS`, `NOT_APPROVED_STEADY_MS` and `waitForHandshake` in
+`apply.ts`, `release(null)` in `apps/server/src/remote-worker/core-client.ts`, `setup_state` in
+`install.sh` and `Get-SetUpState` in `install.ps1`; the tests in `updater.test.ts`, `update-apply.test.ts`, `install-script.test.ts` and
 `scripts/worker-install-ps1-check.ps1`.

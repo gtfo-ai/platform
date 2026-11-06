@@ -300,11 +300,12 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     }
   }
 
-  # Whether the running worker holds no credential yet, read off its page's state: its `connection`
-  # waits for a platform, its Claude sign-in or its device approval. Any other word, a page that does
-  # not answer, or one that asks for a token (APP_WORKER_UI_AUTH=token) reads as set up, and the
-  # caller keeps the cautious path. Only that one field is read, and nothing of the answer is printed.
-  function Test-NotSetUp {
+  # Whether the worker holds a credential yet, read off its page's state. 'not_set_up': its
+  # `connection` waits for a platform, its Claude sign-in or its device approval. 'unknown': the page
+  # does not answer at all (a stopped worker). 'set_up': anything else, an HTTP refusal included (a
+  # token, APP_WORKER_UI_AUTH=token), so the caller keeps the cautious path. Only that one field is
+  # read, and nothing of the answer is printed.
+  function Get-SetUpState {
     try {
       $answer = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$(Get-PagePort)/api/local/state" -TimeoutSec 3
       # PowerShell 7 answers a body it does not take for text as bytes.
@@ -312,9 +313,21 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
       if ($content -is [byte[]]) { $content = [Text.Encoding]::UTF8.GetString($content) }
       $connection = [string]($content | ConvertFrom-Json).connection
     } catch {
-      return $false
+      # An HTTP answer (a refusal) carries a response; a page that does not answer carries none.
+      $response = $_.Exception.PSObject.Properties['Response']
+      if ($null -ne $response -and $null -ne $response.Value) { return 'set_up' }
+      return 'unknown'
     }
-    return @('needs_platform', 'needs_claude', 'logging_in') -contains $connection
+    if (@('needs_platform', 'needs_claude', 'logging_in') -contains $connection) { return 'not_set_up' }
+    return 'set_up'
+  }
+
+  # The served bundle over a worker that is not set up yet: it runs nothing worth keeping.
+  function Install-Served {
+    param([string]$Downloaded, [string]$BundlePath)
+    Move-Item -LiteralPath $Downloaded -Destination $BundlePath -Force
+    Write-Line "This worker runs another build than the core serves now and is not set up yet, so updating it loses nothing: installing the core's build in $WorkerDir ..."
+    if ((Invoke-Compose @('up', '-d')).Code -ne 0) { Exit-Installer 1 'docker compose up failed (see above). Fix what it names and run this again.' }
   }
 
   function Wait-Worker {
@@ -362,6 +375,9 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
     $current = Get-BlockPin (Join-Path $WorkerDir '.env')
     if ($current -eq '') { $current = Get-BundlePin $bundlePath }
     $existing = @(Get-ProjectContainer).Count -gt 0
+    # Asked only of a worker on another build that the updater never moved (no managed block).
+    $setup = 'set_up'
+    if ($existing -and $current -ne $served -and (Get-BlockPin (Join-Path $WorkerDir '.env')) -eq '') { $setup = Get-SetUpState }
 
     if (-not $existing -and ($current -eq '' -or $current -eq $served)) {
       Move-Item -LiteralPath $downloaded -Destination $bundlePath -Force
@@ -373,18 +389,38 @@ them as: & ([scriptblock]::Create((irm '<core>/api/worker/v1/install.ps1'))) -Un
       Move-Item -LiteralPath $downloaded -Destination $bundlePath -Force
       Write-Line "The worker is already installed in $WorkerDir; starting what is stopped and adding what is missing (nothing is recreated) ..."
       if ((Invoke-Compose @('up', '-d', '--no-recreate')).Code -ne 0) { Exit-Installer 1 'docker compose up failed (see above).' }
-    } elseif ($existing -and (Get-BlockPin (Join-Path $WorkerDir '.env')) -eq '' -and (Test-NotSetUp)) {
-      # Another build, never updated (no managed block), and not approved yet: nothing is lost.
-      Move-Item -LiteralPath $downloaded -Destination $bundlePath -Force
-      Write-Line "This worker runs another build than the core serves now and is not set up yet, so updating it loses nothing: installing the core's build in $WorkerDir ..."
-      if ((Invoke-Compose @('up', '-d')).Code -ne 0) { Exit-Installer 1 'docker compose up failed (see above). Fix what it names and run this again.' }
+    } elseif ($setup -eq 'not_set_up') {
+      Install-Served $downloaded $bundlePath
     } elseif ($existing) {
-      Remove-Item -LiteralPath $downloaded -Force
-      Write-Line 'This worker runs another build than the core serves now. Its updater moves it there after verifying the build;'
-      Write-Line 'this installer never changes the images a worker runs.'
-      if (-not (Test-Path -LiteralPath $bundlePath)) { Exit-Installer 3 "$bundlePath is missing, so this installer cannot restart the worker." }
-      Write-Line 'Starting whatever of it is stopped (nothing is recreated) ...'
-      if ((Invoke-Compose @('start')).Code -ne 0) { Exit-Installer 1 'docker compose start failed (see above).' }
+      $started = $false
+      if ($setup -eq 'unknown' -and (Test-Path -LiteralPath $bundlePath)) {
+        # A stopped worker's page answers nothing: start it, and ask again once the page answers.
+        Write-Line 'Starting whatever of it is stopped (nothing is recreated) ...'
+        if ((Invoke-Compose @('start')).Code -ne 0) {
+          Remove-Item -LiteralPath $downloaded -Force
+          Exit-Installer 1 'docker compose start failed (see above).'
+        }
+        $started = $true
+        $waited = 0
+        while ($true) {
+          $setup = Get-SetUpState
+          if ($setup -ne 'unknown' -or $waited -ge $WaitLimit) { break }
+          Start-Sleep -Seconds 2
+          $waited += 2
+        }
+      }
+      if ($setup -eq 'not_set_up') {
+        Install-Served $downloaded $bundlePath
+      } else {
+        Remove-Item -LiteralPath $downloaded -Force
+        Write-Line 'This worker runs another build than the core serves now. Its updater moves it there after verifying the build;'
+        Write-Line 'this installer never changes the images a worker runs.'
+        if (-not $started) {
+          if (-not (Test-Path -LiteralPath $bundlePath)) { Exit-Installer 3 "$bundlePath is missing, so this installer cannot restart the worker." }
+          Write-Line 'Starting whatever of it is stopped (nothing is recreated) ...'
+          if ((Invoke-Compose @('start')).Code -ne 0) { Exit-Installer 1 'docker compose start failed (see above).' }
+        }
+      }
     } else {
       Remove-Item -LiteralPath $downloaded -Force
       Exit-Installer 3 "nothing of this worker is in Docker, and its folder pins another build than the core serves now. Installing the core's would bypass the updater's checks. Start it as it was (cd '$WorkerDir'; docker compose up -d) and its updater moves it forward, or remove it (-Uninstall -Purge) and install again."

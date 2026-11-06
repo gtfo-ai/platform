@@ -27,7 +27,9 @@
  *     A worker that holds **no credential** for the plan's core (not approved yet — the updater
  *     follows the release without one) cannot hand-shake until a person acts, so for it
  *     `core_handshake` reading one of {@link NOT_APPROVED_CONNECTIONS} — waiting for its Claude
- *     sign-in or its device approval, as before the update — is good too, `launcher: ok` still asked;
+ *     sign-in or its device approval, as before the update — is good too once it has read so for
+ *     {@link NOT_APPROVED_STEADY_MS} (a build that starts and then crash-loops does not), `launcher:
+ *     ok` still asked;
  *  6. **report** `succeeded` (`POST update-report`) — skipped by name with no credential, and left
  *     `reported: false` for the updater to report once the worker is approved — and **recreate the
  *     updater last**: its replacement is the new build's.
@@ -254,11 +256,19 @@ const referencesEnvironment = (references: ImageReferences): Record<string, stri
 export const NOT_APPROVED_CONNECTIONS: readonly string[] = ['needs_claude', 'logging_in'];
 
 /**
+ * How long a worker not approved yet must keep reading {@link NOT_APPROVED_CONNECTIONS} — every read
+ * between the first and the last — before the check takes it: a build that starts and then
+ * crash-loops answers once and then nothing, and is not taken for a good one.
+ */
+export const NOT_APPROVED_STEADY_MS = 5_000;
+
+/**
  * Waits for the worker's `/readyz` to read `core_handshake: ok` — and `launcher: ok` where the worker
  * reports one (backlog 980; a build before it does not, and a rollback may bring one up) — within
  * `seconds`. An update whose worker cannot reach its launcher claims nothing, so it is no success.
  * With `notApproved` (the worker holds no credential) a `core_handshake` of
- * {@link NOT_APPROVED_CONNECTIONS} is good too: such a worker answers `503` until a person acts.
+ * {@link NOT_APPROVED_CONNECTIONS} is good too — such a worker answers `503` until a person acts —
+ * once it has read so, read after read, for {@link NOT_APPROVED_STEADY_MS}.
  */
 export const waitForHandshake = async (
   deps: Pick<ApplyDeps, 'fetch' | 'sleep' | 'now'>,
@@ -268,7 +278,10 @@ export const waitForHandshake = async (
 ): Promise<{ readonly ok: boolean; readonly last: string }> => {
   const deadline = deps.now().getTime() + seconds * 1000;
   let last = 'no answer';
+  /** When the current unbroken run of "waits for a person" reads began; `null` outside one. */
+  let waitingSince: number | null = null;
   while (deps.now().getTime() < deadline) {
+    let waiting = false;
     try {
       const response = await deps.fetch(`${workerUrl}/readyz`, {
         signal: AbortSignal.timeout(5_000),
@@ -283,15 +296,21 @@ export const waitForHandshake = async (
         options.notApproved === true &&
         typeof handshake === 'string' &&
         NOT_APPROVED_CONNECTIONS.includes(handshake);
-      if (
-        ((response.status === 200 && handshake === 'ok') || waitsForAPerson) &&
-        (launcher === undefined || launcher === 'ok')
-      ) {
+      const launcherOk = launcher === undefined || launcher === 'ok';
+      if (response.status === 200 && handshake === 'ok' && launcherOk) {
         return { ok: true, last };
+      }
+      if (waitsForAPerson && launcherOk) {
+        waiting = true;
+        const now = deps.now().getTime();
+        waitingSince ??= now;
+        if (now - waitingSince >= NOT_APPROVED_STEADY_MS) return { ok: true, last };
       }
     } catch (error) {
       last = (error as Error).message;
     }
+    // Any other read — no answer, another state — breaks the run.
+    if (!waiting) waitingSince = null;
     await deps.sleep(2_000);
   }
   return { ok: false, last };

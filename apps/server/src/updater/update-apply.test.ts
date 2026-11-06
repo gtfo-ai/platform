@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { renderWorkerCompose } from '../workers/compose.js';
 import {
   carriedEnvironment,
+  NOT_APPROVED_STEADY_MS,
   runApply,
   servicesToUp,
   variablesWithoutDefault,
@@ -417,7 +418,8 @@ describe('an update of a worker that holds no credential yet (2026-11-06)', () =
   it('is good while the new build waits for its Claude sign-in or its approval — not reported, left for the updater', async () => {
     for (const coreHandshake of ['needs_claude', 'logging_in']) {
       const w = await world({ credential: false, readyzAs: { coreHandshake } });
-      const state = await runApply(w.plan, w.deps);
+      // Room for the steady reads the check asks of such a worker (NOT_APPROVED_STEADY_MS).
+      const state = await runApply({ ...w.plan, check_seconds: 30 }, w.deps);
       expect(state, coreHandshake).toMatchObject({ result: 'succeeded', reported: false });
       // No update-report call at all: there is no credential to make it with.
       expect(w.reports).toEqual([]);
@@ -433,7 +435,7 @@ describe('an update of a worker that holds no credential yet (2026-11-06)', () =
       { coreHandshake: 'core_unreachable' },
     ]) {
       const w = await world({ credential: false, readyzAs });
-      const state = await runApply(w.plan, w.deps);
+      const state = await runApply({ ...w.plan, check_seconds: 30 }, w.deps);
       expect(state.result, JSON.stringify(readyzAs)).not.toBe('succeeded');
       expect(state.detail).toContain('needs_claude or logging_in');
       expect(w.reports).toEqual([]);
@@ -515,6 +517,40 @@ describe('the apply’s check waits for the worker’s launcher too (backlog 980
       (await waitForHandshake(unknown.deps, 'http://remote-worker:8080', 10, { notApproved: true }))
         .ok,
     ).toBe(false);
+  });
+
+  it('does not take a not-approved build that answers once and then crash-loops', async () => {
+    let calls = 0;
+    let clock = 0;
+    const deps = {
+      fetch: async () => {
+        calls += 1;
+        // Up, then gone, then up again — never steady for NOT_APPROVED_STEADY_MS.
+        if (calls % 2 === 0) throw new Error('connect ECONNREFUSED remote-worker:8080');
+        return new Response(
+          JSON.stringify({ checks: { core_handshake: 'needs_claude', launcher: 'ok' } }),
+          { status: 503 },
+        );
+      },
+      sleep: async () => {
+        clock += 2_000;
+      },
+      now: () => new Date(clock),
+    };
+    const result = await waitForHandshake(deps, 'http://remote-worker:8080', 30, {
+      notApproved: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(calls).toBeGreaterThan(10);
+    // Steady from the first read: taken once NOT_APPROVED_STEADY_MS has passed, not before.
+    const steady = readyz([
+      { status: 503, checks: { core_handshake: 'needs_claude', launcher: 'ok' } },
+    ]);
+    expect(
+      (await waitForHandshake(steady.deps, 'http://remote-worker:8080', 30, { notApproved: true }))
+        .ok,
+    ).toBe(true);
+    expect(steady.calls()).toBe(Math.ceil(NOT_APPROVED_STEADY_MS / 2_000) + 1);
   });
 
   it('accepts a worker build that reports no launcher check (a rollback to one before it)', async () => {

@@ -218,7 +218,7 @@ case "$1" in
         env | grep -E '^(PLATFORM_|APP_TRUSTED_|APP_CORE_URL|COMPOSE_|CLAUDE_CODE_OAUTH_TOKEN)' | sort > "$STUB_STATE/up-env"
         exit "${'${STUB_UP_EXIT:-0}'}"
         ;;
-      *' start'*) : > "$STUB_STATE/up"; exit 0 ;;
+      *' start'*) : > "$STUB_STATE/up"; : > "$STUB_STATE/started"; exit 0 ;;
       *' down'*) rm -f "$STUB_STATE/up"; exit 0 ;;
     esac
     ;;
@@ -234,7 +234,8 @@ exit 64
 
 const CURL_STUB = String.raw`#!/bin/sh
 # A stub curl: the core's compose.yml from $STUB_BUNDLE, the local page from $STUB_PAGE, and the
-# page's state from $STUB_PAGE_STATE (unset: the page answers it with an error).
+# page's state from $STUB_PAGE_STATE (unset: the page answers it with an HTTP error; 'down': nothing
+# answers) or, once 'docker compose start' ran, from $STUB_PAGE_STATE_AFTER_START (nothing before).
 printf 'curl %s\n' "$*" >> "$STUB_LOG"
 out=''
 url=''
@@ -251,6 +252,12 @@ case "$url" in
     cp "$STUB_BUNDLE" "$out"
     ;;
   http://127.0.0.1:*/api/local/state)
+    if [ -n "${'${STUB_PAGE_STATE_AFTER_START:-}'}" ]; then
+      [ -f "$STUB_STATE/started" ] || exit 7
+      printf '%s' "$STUB_PAGE_STATE_AFTER_START"
+      exit 0
+    fi
+    [ "${'${STUB_PAGE_STATE:-}'}" = down ] && exit 7
     [ -n "${'${STUB_PAGE_STATE:-}'}" ] || exit 22
     printf '%s' "$STUB_PAGE_STATE"
     ;;
@@ -499,7 +506,8 @@ describe.each(SHELLS)(
     it.each([
       ['an approved worker (connected)', pageState('connected'), false],
       ['an approved worker the core cannot reach', pageState('core_unreachable'), false],
-      ['a page that cannot be read (APP_WORKER_UI_AUTH=token, or down)', undefined, false],
+      ['a page that refuses the read (APP_WORKER_UI_AUTH=token)', undefined, false],
+      ['a page that does not answer, even after the start', 'down', false],
       [
         'a page whose log tail quotes a needs_claude line',
         pageState('connected', '\\"connection\\":\\"needs_claude\\"'),
@@ -507,7 +515,7 @@ describe.each(SHELLS)(
       ],
       ['a worker the updater has already moved (a managed block)', pageState('needs_claude'), true],
     ])(
-      'keeps today’s path for %s: the images stay and it only starts what is stopped',
+      'keeps today’s path for %s: the images stay and it only starts what is stopped, once',
       (_case, state, block) => {
         const s = stage();
         expect(run(shell, s).status).toBe(0);
@@ -518,10 +526,44 @@ describe.each(SHELLS)(
         expect(r.status).toBe(0);
         expect(r.out).toContain('this installer never changes the images a worker runs');
         expect(r.out).not.toContain('not set up yet');
-        expect(r.composeCalls.at(-1)).toBe('docker compose --project-name agentic-worker start');
+        expect(r.composeCalls.slice(1)).toEqual([
+          'docker compose --project-name agentic-worker start',
+        ]);
         expect(read(path.join(s.dir, 'compose.yaml'))).toBe(bundleBefore);
+        expect(existsSync(path.join(s.dir, '.compose.yaml.download'))).toBe(false);
       },
     );
+
+    it('starts a stopped worker whose page answered nothing, reads the page again, and installs the served build when it is not set up yet', () => {
+      const s = stage();
+      expect(run(shell, s).status).toBe(0);
+      writeFileSync(s.bundle, servedBundle('b'));
+      const r = run(shell, s, [], { STUB_PAGE_STATE_AFTER_START: pageState('needs_claude') });
+      expect(r.status).toBe(0);
+      expect(r.composeCalls).toEqual([
+        'docker compose --project-name agentic-worker up -d',
+        'docker compose --project-name agentic-worker start',
+        'docker compose --project-name agentic-worker up -d',
+      ]);
+      expect(r.out).toContain('is not set up yet, so updating it loses nothing');
+      expect(r.out).not.toContain('this installer never changes the images a worker runs');
+      expect(read(path.join(s.dir, 'compose.yaml'))).toBe(servedBundle('b'));
+      // The same, approved: started once, and its images stay.
+      const approved = stage();
+      expect(run(shell, approved).status).toBe(0);
+      const before = read(path.join(approved.dir, 'compose.yaml'));
+      writeFileSync(approved.bundle, servedBundle('b'));
+      const kept = run(shell, approved, [], {
+        STUB_PAGE_STATE_AFTER_START: pageState('connected'),
+      });
+      expect(kept.status).toBe(0);
+      expect(kept.composeCalls.slice(1)).toEqual([
+        'docker compose --project-name agentic-worker start',
+      ]);
+      expect(kept.out).toContain('this installer never changes the images a worker runs');
+      expect(read(path.join(approved.dir, 'compose.yaml'))).toBe(before);
+      expect(existsSync(path.join(approved.dir, '.compose.yaml.download'))).toBe(false);
+    });
 
     it('refuses when nothing of the worker is in Docker and its folder pins another build than the core serves', () => {
       const s = stage();

@@ -648,6 +648,27 @@ describe('a worker that holds no credential yet follows its core all the same (2
     expect((await readState(w.stateDir))?.reported).toBe(true);
   });
 
+  it('the core client’s release(null) sends the protocol header and no authorization at all', async () => {
+    const seen: Headers[] = [];
+    const core = createCoreClient({
+      baseUrl: 'https://core.example.test',
+      fetch: async (_url, init) => {
+        seen.push(new Headers(init?.headers));
+        return Response.json({
+          protocol: { current: WORKER_PROTOCOL_VERSION, accepted: [WORKER_PROTOCOL_VERSION] },
+          digests: digests('a'),
+        });
+      },
+    });
+    expect((await core.release(null)).digests).toEqual(digests('a'));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.get('x-worker-protocol')).toBe(String(WORKER_PROTOCOL_VERSION));
+    expect(seen[0]?.has('authorization')).toBe(false);
+    // With a credential, the same request carries it.
+    await core.release(CREDENTIAL);
+    expect(seen[1]?.get('authorization')).toBe(`Bearer ${CREDENTIAL}`);
+  });
+
   it('with a credential, asks the release with it exactly as before', async () => {
     const w = await world({ advertised: digests('a') });
     await w.updater.tick();

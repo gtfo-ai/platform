@@ -7,7 +7,9 @@ beside it on PATH. It records each call in $env:STUB_LOG and answers from $env:S
   docker ps ... --quiet ...              one id while the project is up; nothing for the apply label
   docker inspect --format {{json .}} ... remote-worker and updater, running, labelled with the folder
   docker compose ... up -d               the project is up; the folder and Compose's environment kept
-  docker compose ... start / down        up / not up
+  docker compose ... start / down        up / not up; a start also serves $env:STUB_START_PAGE_SITE
+                                         on $env:STUB_START_PAGE_PORT when set (the worker's page,
+                                         answering only once the worker started; its pid in page.pid)
   docker volume inspect / rm ...         recorded, answered 0
 #>
 $ErrorActionPreference = 'Stop'
@@ -47,7 +49,14 @@ if ($args[0] -eq 'compose') {
     Set-Content -LiteralPath (Join-Path $env:STUB_STATE 'up-env') -Value ($names -join ',')
     exit 0
   }
-  if ($args -contains 'start') { Set-Content -LiteralPath $upFile -Value ''; exit 0 }
+  if ($args -contains 'start') {
+    Set-Content -LiteralPath $upFile -Value ''
+    if ($env:STUB_START_PAGE_SITE) {
+      $page = Start-Process -FilePath 'python' -ArgumentList @('-m', 'http.server', $env:STUB_START_PAGE_PORT, '--bind', '127.0.0.1', '--directory', $env:STUB_START_PAGE_SITE) -PassThru -WindowStyle Hidden
+      Set-Content -LiteralPath (Join-Path $env:STUB_STATE 'page.pid') -Value $page.Id
+    }
+    exit 0
+  }
   if ($args -contains 'down') { Remove-Item -LiteralPath $upFile -Force -ErrorAction SilentlyContinue; exit 0 }
 }
 [Console]::Error.WriteLine("stub docker: unexpected: $line")
