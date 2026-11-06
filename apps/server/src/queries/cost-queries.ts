@@ -266,8 +266,19 @@ const sum = (value: string | number | null): number => (value === null ? 0 : Num
  * the truth the other two are projections of (technical/03), and they are the only place a figure
  * carries its stage and whether the platform priced it (`is_estimate`). A run the ledger could not
  * price has no row, so it is in no line here — the screen says the breakdown is what was booked.
- * `created_at >= windowStart` is the same boundary `budget_windows` is keyed by, and the partition
- * key, so a month's read prunes the other months.
+ *
+ * **The boundary is near the budget's, not the same one.** The ledger charges a budget window at the
+ * charge's `occurred_at` (the run's ending event), while `cost_entries.created_at` is when the row
+ * was written — the handler's transaction, usually milliseconds later, but later still for a
+ * redelivered event or a late cost (`cost/late.ts`). So a run that ended just before a window
+ * turned and was booked just after it is in the budget's previous window and in this read's new
+ * one. `created_at` is used because it is the partition key (a month's read prunes the others) and
+ * the only time the row carries; the screen calls the figures what the ledger booked in the
+ * window, never the budget's own spend.
+ *
+ * **A run outside a stage** — an ask, the only run with no stage — is booked with the ledger's
+ * placeholder stage `'(none)'` (`cost/ledger.ts`), which is not a stage id; it is published as
+ * `stage: null` and the screen names it.
  */
 export const projectSpend = async (
   database: Database,
@@ -276,7 +287,8 @@ export const projectSpend = async (
 ): Promise<{
   readonly usd: number;
   readonly estimated_usd: number;
-  readonly stages: readonly { stage: string; usd: number; estimated_usd: number }[];
+  /** `stage: null` is spend outside a stage — an ask (the ledger's `'(none)'`). */
+  readonly stages: readonly { stage: string | null; usd: number; estimated_usd: number }[];
   readonly top_tasks: readonly {
     task_id: Id;
     ticket_key: string;
@@ -287,18 +299,18 @@ export const projectSpend = async (
   }[];
 }> => {
   const stageRows = await database.execute<{
-    stage: string;
+    stage: string | null;
     usd: string | null;
     estimated_usd: string | null;
   }>(sql`
-    select c.stage as stage,
+    select nullif(c.stage, '(none)') as stage,
            sum(c.usd) as usd,
            sum(case when c.is_estimate then c.usd else 0 end) as estimated_usd
       from cost_entries c
      where c.project_id = ${projectId}::uuid
        and c.created_at >= ${windowStart}::timestamptz
-     group by c.stage
-     order by sum(c.usd) desc, c.stage
+     group by 1
+     order by sum(c.usd) desc, 1 nulls last
   `);
   const taskRows = await database.execute<{
     task_id: string;

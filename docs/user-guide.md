@@ -1409,7 +1409,7 @@ not built.
 meter: its window (*Per month*), what has been spent of its limit (*$3.25 of $40.00*), and the share
 at which you are notified. Below that, **where the money went**: pick a window (*Per day*, *Per
 week*, *Per month* — the default — or *In total*) and the page lists what the cost ledger booked in
-it **by stage**, most first, and the **top tasks**, each linking to its task (a trial's task says
+it **by stage**, most first (a question asked of a task, which runs outside the pipeline, is the line *Questions to an agent*), and the **top tasks**, each linking to its task (a trial's task says
 *Trial run*). Where part of a figure is the platform's own price for a run whose provider reported
 no cost, it says so (*$2.50 ($0.25 estimated)*); a run nothing could price is in no figure. Last on
 the page is the editor, **Project budgets**: a field per window, an empty field is no cap, and
@@ -1572,8 +1572,8 @@ it is a project's settings (*changed the settings of Payments: Autonomy level*),
 **Details** under a row holds the raw change and the id of what was changed; a secret in it appears
 as the literal string `"changed"` — that is the server's doing, not the screen's. Two filter menus
 sit in the list's header. **Project** keeps one project's settings changes: the server filters by
-kind only, so it asks for project changes and keeps that project's among the entries loaded so far
-(the page says so; **Load older entries** looks further back), and a change to a project's
+kind only, so it asks for project changes and keeps that project's among those **on this page** (the
+page says so; **Load older entries** shows the page before it), and a change to a project's
 connections or a budget, which does not name its project, is not among them. The other shows the
 changes to one kind of thing (*Organisation*, *Project*, *Integration*, *Connections*, *Budget* or
 *Person*) or to all of them, and **Load older entries** pages back.

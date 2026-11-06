@@ -16,7 +16,8 @@
  * `entity_id` is the project's id, looked up in the project list the caller may read — and the
  * *Project* filter keeps the rows of one project. `GET /api/org/audit` filters by type only, so the
  * project filter asks the server for type `project` and keeps that project's rows **on the client**,
- * over the pages loaded so far; the screen says so, and *Load older entries* reaches further back.
+ * on the page on screen — *Load older entries* replaces the page rather than appending to it, so the
+ * filter covers one page at a time, and the screen says so (review of PR #86).
  * A row of another type (a connection, a budget) carries no project the screen can name, and is not
  * guessed at.
  *
@@ -191,7 +192,7 @@ export const AuditScreen = (): ReactElement => {
               icon={<LogIcon size={24} />}
               title={
                 projectFilter !== ALL
-                  ? 'No changes to this project on these pages'
+                  ? 'No changes to this project on this page'
                   : entityType === ALL
                     ? 'No audit entries'
                     : 'No changes of this type'
@@ -256,8 +257,8 @@ export const AuditScreen = (): ReactElement => {
 
       {projectFilter === ALL ? null : (
         <p className="text-xs text-fg-muted" data-audit-project-filter="">
-          The project filter keeps this project’s settings changes among the entries loaded so far.
-          {nextCursor === null ? '' : ' Load older entries to look further back.'}
+          The project filter keeps this project’s settings changes on this page.
+          {nextCursor === null ? '' : ' Load older entries to look at the page before it.'}
         </p>
       )}
 

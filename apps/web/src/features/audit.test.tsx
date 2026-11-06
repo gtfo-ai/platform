@@ -7,7 +7,7 @@
  * parsers are what is asserted. The diff and the keys are opaque text from the server (BD-022): a
  * planted element must reach the page as characters. Since S-25.7 (research/21 F15) a project's row
  * names the project and the *Project* filter keeps one project's rows — over the loaded pages, on the
- * client, because the read filters by type only.
+ * client, over the page on screen, because the read filters by type only.
  */
 import type { OrgAuditResponse } from '@platform/contracts';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
@@ -193,8 +193,9 @@ describe('the audit log (S-23.11b)', () => {
     expect(list.textContent).not.toContain('ACME');
     expect(list.textContent).not.toContain('Retention Policy');
     // The filter says it is over the loaded entries, not the whole log.
+    // *Load older entries* replaces the page, so the filter covers the page on screen (review of #86).
     expect(document.querySelector('[data-audit-project-filter]')?.textContent).toContain(
-      'among the entries loaded so far',
+      'on this page',
     );
   });
 });

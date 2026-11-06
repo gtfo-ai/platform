@@ -58,7 +58,8 @@ export const STAT_READING: Readonly<Record<StatMetricId, 'higher' | 'lower' | nu
   human_intervention_rate: 'lower',
   returns_per_delivered_task: 'lower',
   cycle_time_hours: 'lower',
-  agent_time_hours: null,
+  // An average per delivered task, not a total: less agent time for the same delivery is better.
+  agent_time_hours: 'lower',
   cost_total: null,
   cost_per_delivered_task: 'lower',
   // The part the platform had to price itself: lower means more of the spend was reported.
@@ -71,7 +72,8 @@ export const STAT_READING: Readonly<Record<StatMetricId, 'higher' | 'lower' | nu
   human_minutes: 'lower',
   kb_proposal_acceptance: 'higher',
   kb_usage: 'higher',
-  rebase_conflicts_resolved: 'higher',
+  // A count of conflicts: more resolved also means more conflicts happened.
+  rebase_conflicts_resolved: null,
   rebase_conflicts_escalated: 'lower',
   concurrent_task_overlaps: 'lower',
   review_findings_accepted: 'higher',
@@ -84,7 +86,8 @@ export const STAT_READING: Readonly<Record<StatMetricId, 'higher' | 'lower' | nu
   loc_changed: null,
   defect_escape: 'lower',
   queue_wait_minutes: 'lower',
-  total_cost_of_delivery: 'lower',
+  // A total, like `cost_total`.
+  total_cost_of_delivery: null,
 };
 
 /** The card's reading line: *"Higher is better"*, *"Lower is better"*, or that it is a volume. */

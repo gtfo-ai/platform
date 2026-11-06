@@ -92,6 +92,15 @@ describe('the reading direction (S-25.7, research/21 F15)', () => {
     expect(statReadingWords('cost_total')).toBe('A volume, not a score');
   });
 
+  it('reads a count and a total as volumes, and an average per delivered task as a score (review of #86)', () => {
+    // More conflicts resolved also means more conflicts; a total cost is how much, like `cost_total`.
+    expect(STAT_READING.rebase_conflicts_resolved).toBeNull();
+    expect(STAT_READING.total_cost_of_delivery).toBeNull();
+    expect(STAT_READING.cost_total).toBeNull();
+    // Agent time is an average per delivered task: less for the same delivery is better.
+    expect(STAT_READING.agent_time_hours).toBe('lower');
+  });
+
   it('reads a cost, a time and a rate of trouble as lower-is-better', () => {
     for (const id of [
       'cost_per_delivered_task',

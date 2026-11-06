@@ -532,9 +532,16 @@ const SpendBreakdown = ({
           >
             {spend.data.stages.map((line) => (
               <ListRow
-                key={line.stage}
-                // A stage id comes from the project's own pipeline file (BD-022).
-                title={<UntrustedText value={stageLabel(line.stage)} />}
+                key={line.stage ?? '(none)'}
+                // A stage id comes from the project's own pipeline file (BD-022); no stage is spend
+                // outside the pipeline — a question asked of a task.
+                title={
+                  line.stage === null ? (
+                    'Questions to an agent'
+                  ) : (
+                    <UntrustedText value={stageLabel(line.stage)} />
+                  )
+                }
                 trailing={<span className="tabular-nums">{spendWords(line)}</span>}
               />
             ))}

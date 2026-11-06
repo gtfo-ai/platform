@@ -166,11 +166,13 @@ let spendWindows: string[] = [];
 const SPEND = {
   window: 'month',
   window_start: '2026-09-01T00:00:00.000Z',
-  usd: 3.25,
+  usd: 3.3,
   estimated_usd: 0.25,
   stages: [
     { stage: 'implementation', usd: 2.5, estimated_usd: 0.25 },
     { stage: 'refinement', usd: 0.75, estimated_usd: 0 },
+    // Spend outside a stage — an ask — is published with no stage (review of PR #86).
+    { stage: null, usd: 0.05, estimated_usd: 0 },
   ],
   top_tasks: [
     {
@@ -566,14 +568,16 @@ describe('the budgets screen (S-23.11b)', () => {
     const stages = await screen.findByRole('list', { name: 'By stage' });
     expect(spendWindows).toEqual(['month']);
     const rows = within(stages).getAllByRole('listitem');
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     // Most first, each in words, the priced part said as an estimate and only where there is one.
     expect(rows[0]?.textContent).toContain('Implementation');
     expect(rows[0]?.textContent).toContain('$2.50 ($0.25 estimated)');
     expect(rows[1]?.textContent).toContain('Refinement');
     expect(rows[1]?.textContent).not.toContain('estimated');
+    expect(rows[2]?.textContent).toContain('Questions to an agent');
+    expect(rows[2]?.textContent).toContain('$0.05');
     expect(
-      screen.getByRole('heading', { name: 'Spent this month: $3.25 ($0.25 estimated)' }),
+      screen.getByRole('heading', { name: 'Spent this month: $3.30 ($0.25 estimated)' }),
     ).toBeTruthy();
     const tasks = screen.getByRole('list', { name: 'Top tasks' });
     const link = within(tasks).getByRole('link', { name: /ACME-7/ });

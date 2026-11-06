@@ -2965,7 +2965,11 @@ export const projectSpendResponseSchema = z.strictObject({
   window: budgetWindowSchema,
   window_start: isoDateTimeSchema,
   ...spendLineSchema,
-  stages: z.array(z.strictObject({ stage: stageIdSchema, ...spendLineSchema })),
+  /**
+   * `stage: null` is spend outside a pipeline stage — an ask of the task, which the ledger books
+   * under its placeholder `'(none)'`, not a stage id.
+   */
+  stages: z.array(z.strictObject({ stage: stageIdSchema.nullable(), ...spendLineSchema })),
   top_tasks: z
     .array(
       z.strictObject({
