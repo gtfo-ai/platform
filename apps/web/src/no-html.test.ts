@@ -374,7 +374,8 @@ describe('the web application', () => {
     expect(card).toContain('<ActionMenuLinkItem url={task.ticket.url}');
     expect(card).toContain('<ActionMenuLinkItem url={task.mr_ref.url}');
     const menu = stripBlockComments(
-      readFileSync(join(SOURCE_ROOT, 'ui', 'action-menu.tsx'), 'utf8'),
+      // The menu's Base UI half, a lazy chunk since S-25.13 (`ui/action-menu.tsx` loads it).
+      readFileSync(join(SOURCE_ROOT, 'ui', 'action-menu-base.tsx'), 'utf8'),
     );
     expect(menu).toContain('<ExternalAnchor url={url}');
   });

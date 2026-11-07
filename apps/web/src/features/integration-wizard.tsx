@@ -49,12 +49,12 @@ import { Button, buttonClassName } from '../ui/button.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { Flash } from '../ui/flash.js';
-import { INTEGRATION_TYPE_LABEL, INTEGRATION_TYPE_PURPOSE } from '../ui/humanize.js';
 import { ErrorNotice, Field } from '../ui/kit.js';
 import { PageHeader } from '../ui/page-header.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { type Step, Stepper } from '../ui/stepper.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { INTEGRATION_TYPE_LABEL, INTEGRATION_TYPE_PURPOSE } from '../ui/words/integrations.js';
 import { ConnectionTestResult } from './connection-test-result.js';
 import {
   ConfigFieldControl,

@@ -3,7 +3,7 @@
  * says it has a popup and whether it is open, `role="menu"` with `menuitem`/`menuitemradio`
  * children, arrow-key movement, Escape back to the trigger, and selection that reaches the caller.
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -132,5 +132,72 @@ describe('ActionMenu', () => {
     expect(both).toBeTruthy();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Account menu' }));
     expect(await screen.findByRole('menuitem', { name: 'Sign out' })).toBeTruthy();
+  });
+});
+
+/**
+ * The menu's Base UI half is a lazy chunk (S-25.13): `action-menu.tsx` draws a plain trigger when
+ * the module is not there yet, and swaps in Base UI's on a press, handing the press on. The ui
+ * tier's setup file loads the module before every test file (`test/support/web-lazy-chunks.ts`),
+ * so these reset the module registry to meet a menu that first rendered without it.
+ */
+describe('ActionMenu drawn before its menu module has loaded (S-25.13)', () => {
+  it('is already the closed menu button, and a press opens the menu by Base UI’s own path', async () => {
+    vi.resetModules();
+    const fresh = await import('./action-menu.js');
+    render(
+      <fresh.ActionMenu label="More actions">
+        <fresh.ActionMenuItem onSelect={() => undefined}>Rename</fresh.ActionMenuItem>
+      </fresh.ActionMenu>,
+    );
+    const plain = screen.getByRole('button', { name: 'More actions' });
+    expect(plain.getAttribute('aria-haspopup')).toBe('menu');
+    expect(plain.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    fireEvent.click(plain);
+    expect(await screen.findByRole('menu')).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeTruthy();
+    // Base UI's trigger replaced the plain one, and says the menu is open.
+    expect(screen.getByRole('button', { name: 'More actions' }).getAttribute('aria-expanded')).toBe(
+      'true',
+    );
+  });
+
+  it('runs a custom trigger’s own click handler once, on the press it hands on', async () => {
+    vi.resetModules();
+    const fresh = await import('./action-menu.js');
+    const onClick = vi.fn();
+    render(
+      <fresh.ActionMenu
+        trigger={
+          <button type="button" aria-label="Account menu" onClick={onClick}>
+            A
+          </button>
+        }
+      >
+        <fresh.ActionMenuItem>Sign out</fresh.ActionMenuItem>
+      </fresh.ActionMenu>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
+    expect(await screen.findByRole('menuitem', { name: 'Sign out' })).toBeTruthy();
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('draws Base UI’s Menu at once for a menu that renders after the module has arrived', async () => {
+    vi.resetModules();
+    const fresh = await import('./action-menu.js');
+    await fresh.loadActionMenu();
+    render(
+      <fresh.ActionMenu label="More actions">
+        <fresh.ActionMenuItem>Rename</fresh.ActionMenuItem>
+      </fresh.ActionMenu>,
+    );
+    const trigger = screen.getByRole('button', { name: 'More actions' });
+    await userEvent.setup().click(trigger);
+    expect(await screen.findByRole('menu')).toBeTruthy();
+    // The same element the test held: nothing was swapped.
+    expect(trigger.isConnected).toBe(true);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
   });
 });

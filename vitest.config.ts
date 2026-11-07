@@ -65,6 +65,13 @@ export const GIT_ENVIRONMENT_SETUP = 'test/support/git-environment.ts';
 const SETUP_FILES = [PROPERTY_SEED_SETUP, GIT_ENVIRONMENT_SETUP];
 
 /**
+ * The `ui` project's third setup file (S-25.13): it loads the SPA's lazily-loaded component modules
+ * — today Base UI's Menu behind `ui/action-menu.tsx` — before a test file renders, so a test meets
+ * them as it did when they were static imports. The file's docblock has the reasoning.
+ */
+export const WEB_LAZY_CHUNKS_SETUP = 'test/support/web-lazy-chunks.ts';
+
+/**
  * The suites that start **real processes** and wait on them structurally (WP-69, PROGRESS backlog
  * 25) — with {@link GIT_FIXTURE_ISOLATION_SUITE}, {@link COMMIT_HOOK_SUITE} and
  * {@link COLLECTION_WATCHDOG_SUITE}, the `process` project's whole membership.
@@ -464,7 +471,7 @@ export default defineConfig({
       {
         test: {
           name: 'ui',
-          setupFiles: SETUP_FILES,
+          setupFiles: [...SETUP_FILES, WEB_LAZY_CHUNKS_SETUP],
           environment: 'happy-dom',
           include: ['apps/web/src/**/*.test.ts', 'apps/web/src/**/*.test.tsx'],
           exclude: excludeEverywhere,

@@ -27,7 +27,8 @@
  * *Attempt N*, so the amendment's "try 2 of 3" is said "round 2 of 3".
  */
 import type { TaskReturn, TaskStageState, TaskState, TaskStop } from '@platform/contracts';
-import { CI_FAILURE_LABEL, ROLE_LABEL, stageLabel } from '../ui/humanize.js';
+import { ROLE_LABEL, stageLabel } from '../ui/humanize.js';
+import { CI_FAILURE_LABEL } from '../ui/words/loops.js';
 
 /** The task's columns the sentences read. */
 export interface SetbackTask {

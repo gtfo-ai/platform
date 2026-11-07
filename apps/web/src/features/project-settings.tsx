@@ -61,7 +61,7 @@ import {
   useProjectReadiness,
 } from '../app/queries.js';
 import { ForAdministrators } from '../ui/admin-notes.js';
-import { INTEGRATION_TYPE_LABEL, REPOSITORY_STATUS_LABEL } from '../ui/humanize.js';
+import { REPOSITORY_STATUS_LABEL } from '../ui/humanize.js';
 import {
   Badge,
   Button,
@@ -73,6 +73,7 @@ import {
   Loading,
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
+import { INTEGRATION_TYPE_LABEL } from '../ui/words/integrations.js';
 import { SaveBindingsButton, useBindingSelection } from './binding-selection.js';
 import { BusinessInterview } from './business-interview.js';
 import { DefaultBranch, DefaultBranchMismatch } from './default-branch.js';

@@ -27,10 +27,10 @@ import type { CappedProject, OrganisationSettings } from '@platform/contracts';
 import { type ReactElement, type ReactNode, useId, useState } from 'react';
 import { useBindableIntegrations, useOrgSettings, useSettingsCommands } from '../app/queries.js';
 import { Button } from '../ui/button.js';
-import { AUTONOMY_LEVEL_LABEL } from '../ui/humanize.js';
 import { Card, ErrorNotice, Field, formatDateTime, Loading } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { AUTONOMY_LEVEL_LABEL } from '../ui/words/settings.js';
 
 const LEVELS = ['observe', 'assist', 'supervised', 'autonomous'] as const;
 const LIST_KINDS = ['allow', 'ask', 'block'] as const;

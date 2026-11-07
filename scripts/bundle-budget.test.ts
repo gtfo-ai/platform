@@ -158,6 +158,30 @@ describe('the bundle budget guard', () => {
     expect(admitted.stdout).toContain('PASS: bundle:check');
   });
 
+  it('refuses Base UI’s Menu in an initial asset and admits it in a lazy chunk (S-25.13)', () => {
+    // The marker is the `menubar` parent type the Menu's root and positioner compare against.
+    const leaked = buildDist({
+      entry: 'a'.repeat(500),
+      styles: 'b'.repeat(200),
+      preload: 'const t = n.type === `menubar`;',
+    });
+    const refused = run(['--dist', leaked.path, '--budget-bytes', '300000']);
+    expect(refused.status).toBe(1);
+    expect(refused.stdout).toContain('FAIL: bundle:check');
+    expect(refused.stderr).toContain(
+      "@base-ui/react's Menu is in the initial graph (/assets/preload.js)",
+    );
+
+    const lazy = buildDist({
+      entry: 'a'.repeat(500),
+      styles: 'b'.repeat(200),
+      lazy: 'const t = n.type === `menubar`;',
+    });
+    const admitted = run(['--dist', lazy.path, '--budget-bytes', '300000']);
+    expect(admitted.status).toBe(0);
+    expect(admitted.stdout).toContain('PASS: bundle:check');
+  });
+
   it('fails over budget, names the overage and does not suggest raising the number', () => {
     const dist = buildDist({ entry: 'a'.repeat(5000), styles: 'b'.repeat(2000) });
 

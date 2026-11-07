@@ -69,7 +69,7 @@ import { Avatar } from '../ui/avatar.js';
 import { Counter } from '../ui/counter.js';
 import { cx } from '../ui/cx.js';
 import { Dialog } from '../ui/dialog.js';
-import { loopRoundLabel, OWNER_WORDS, stageLabel, titleCase } from '../ui/humanize.js';
+import { OWNER_WORDS, stageLabel, titleCase } from '../ui/humanize.js';
 import { Badge, Button, ErrorNotice, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
 import { ROW_LINK_HOST, rowLink } from '../ui/row-link.js';
@@ -81,6 +81,7 @@ import { UntrustedText } from '../ui/untrusted.js';
 // `sanitiseUntrusted` is what strips the bidi overrides and control characters that make a line
 // read backwards (CVE-2021-42574). `ExternalLink`'s own refusal tooltip does the same.
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { loopRoundLabel } from '../ui/words/loops.js';
 import { BOARD_COST_TITLE, unmeasuredRunsShortText, unmeasuredRunsText } from './cost-text.js';
 import { CI_HELD_SHORT } from './gate-wait-words.js';
 import { openReturn, setbackShort } from './setback.js';

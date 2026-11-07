@@ -21,8 +21,8 @@ import type { ReactElement } from 'react';
 import { ApiError } from '../api/http.js';
 import { useProjectReadiness } from '../app/queries.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
-import { readinessCriterionLabel } from '../ui/humanize.js';
 import { Popover } from '../ui/popover.js';
+import { readinessCriterionLabel } from '../ui/words/readiness-criteria.js';
 import { levelLook, readinessLadderName } from './readiness-words.js';
 
 /**

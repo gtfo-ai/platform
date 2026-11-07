@@ -41,7 +41,6 @@ import { Blankslate } from '../ui/blankslate.js';
 import { Button, buttonClassName } from '../ui/button.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { DetailsDisclosure } from '../ui/details.js';
-import { INTEGRATION_ROLE_GROUPS } from '../ui/humanize.js';
 import { ErrorNotice, formatDateTime, formatInteger } from '../ui/kit.js';
 import { ListBox, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
@@ -52,6 +51,7 @@ import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { INTEGRATION_ROLE_GROUPS } from '../ui/words/integrations.js';
 import { ConnectionTestResult } from './connection-test-result.js';
 import {
   currentHealthStatus,

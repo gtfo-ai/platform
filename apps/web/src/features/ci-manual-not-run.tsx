@@ -15,7 +15,7 @@
  */
 import type { CiManualNotRun, TaskDetailResponse } from '@platform/contracts';
 import { Fragment, type ReactElement } from 'react';
-import { manualNotRunWords, readyBlockedWords } from '../ui/humanize.js';
+import { manualNotRunWords, readyBlockedWords } from '../ui/words/ci-manual-jobs.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { providerName } from './gate-wait.js';
 

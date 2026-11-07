@@ -1,19 +1,78 @@
 /**
- * ActionMenu, on Base UI's Menu (TD-033 § 5): the `···` overflow of a header or a row, and the
- * avatar menu in the top bar.
+ * ActionMenu (TD-033 § 5): the `···` overflow of a header or a row, and the avatar menu in the top
+ * bar — the API every screen imports.
  *
- * Base UI gives it the APG menu-button behaviour — `aria-haspopup`/`aria-expanded` on the trigger,
- * `role="menu"` with roving focus on the arrow keys, typeahead, Escape returns focus to the
- * trigger — so nothing of it is hand-written. Items are `role="menuitem"` (or `menuitemradio`),
- * which the pointer-cursor rule in `styles.css` covers.
+ * **The menu is a lazy chunk; the trigger is not** (S-25.13). Base UI's Menu — with the focus
+ * manager, the list navigation and the typeahead under it — was the largest single contributor to
+ * the SPA's initial graph (21.4 kB of the 297.3 kB TD-013 budgets, `bundle:check`, measured), and
+ * no first paint opens a menu. So the menu lives in `action-menu-base.tsx`, loaded with `import()`,
+ * and this module decides which of two shapes a menu has, once, when it first renders:
+ *
+ * - **the module is already there** — every menu a screen draws after the first paint, since the
+ *   frame's menus fetch it as they mount: Base UI's Menu, exactly as when the import was static;
+ * - **it is not** — the frame's own menus on the first paint: a plain trigger, **the same element**
+ *   (the `···` {@link IconButton} or the caller's own) with the closed menu button's
+ *   `aria-haspopup="menu"` and `aria-expanded="false"`, which fetches the module as it mounts and
+ *   swaps only when it is **pressed**: Base UI's trigger then replaces it, the focus is put back on
+ *   it if the button had it, and the press is handed on as a `click()` on the new trigger — the path
+ *   a keyboard's Enter takes — so the menu opens, focuses and closes by Base UI's own code. Never a
+ *   swap when the module merely arrives: that would replace the element under a press already on
+ *   its way, the defect `features/readiness-label.tsx` measured on CI for its popover (#83), whose
+ *   pattern this is. A caller's own `onClick` runs once, on the handed-on press.
+ *
+ * Items render only inside an open menu, so they meet a loaded module. A failed load is forgotten,
+ * so the next press tries again, and the trigger says so in its title. `loadActionMenu` is exported
+ * for the ui tier's setup file (`test/support/web-lazy-chunks.ts`), which loads the module before a
+ * test file renders, so a test meets Base UI's Menu as it did when the import was static.
  */
-import { Menu } from '@base-ui/react/menu';
-import { CheckIcon } from '@primer/octicons-react/CheckIcon';
 import { KebabHorizontalIcon } from '@primer/octicons-react/KebabHorizontalIcon';
-import type { ReactElement, ReactNode } from 'react';
+import {
+  cloneElement,
+  type MouseEvent,
+  type ReactElement,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import type * as Base from './action-menu-base.js';
 import { IconButton } from './button.js';
-import { cx } from './cx.js';
-import { ExternalAnchor } from './untrusted.js';
+
+type MenuModule = typeof Base;
+
+let menuModule: MenuModule | null = null;
+let loading: Promise<MenuModule> | null = null;
+const listeners = new Set<() => void>();
+
+/** The menu's module, imported once; a failed import is forgotten so the next caller retries. */
+export const loadActionMenu = (): Promise<MenuModule> => {
+  loading ??= import('./action-menu-base.js').then(
+    (loaded) => {
+      menuModule = loaded;
+      for (const listener of listeners) listener();
+      return loaded;
+    },
+    (error: unknown) => {
+      loading = null;
+      throw error;
+    },
+  );
+  return loading;
+};
+
+const subscribe = (listener: () => void): (() => void) => {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+};
+
+const currentModule = (): MenuModule | null => menuModule;
+
+/** For the items, which render only inside an open menu: the module, once it is there. */
+const useMenuModule = (): MenuModule | null =>
+  useSyncExternalStore(subscribe, currentModule, currentModule);
 
 /**
  * Either the default `···` trigger, named by `label`, or the caller's own `trigger`, which carries
@@ -31,156 +90,116 @@ export type ActionMenuProps = {
     }
 );
 
-export const ActionMenu = (props: ActionMenuProps): ReactElement => (
-  <Menu.Root>
-    <Menu.Trigger
-      render={
-        props.trigger === undefined ? (
-          <IconButton
-            aria-label={props.label}
-            icon={<KebabHorizontalIcon size={16} />}
-            tone="invisible"
-          />
-        ) : (
-          props.trigger
-        )
-      }
-    />
-    <Menu.Portal>
-      <Menu.Positioner sideOffset={6} align={props.align ?? 'end'} className="z-50 outline-none">
-        <Menu.Popup className="min-w-52 rounded-lg border border-line bg-default py-1 text-sm text-fg shadow-overlay outline-none transition-opacity duration-100 data-ending-style:opacity-0 data-starting-style:opacity-0">
-          {props.children}
-        </Menu.Popup>
-      </Menu.Positioner>
-    </Menu.Portal>
-  </Menu.Root>
-);
+export const ActionMenu = (props: ActionMenuProps): ReactElement => {
+  // The module when this menu first rendered, or the one a press asked for — never a swap of its own.
+  const [menu, setMenu] = useState<MenuModule | null>(currentModule);
+  const [failed, setFailed] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  // A press the plain trigger took, to hand on once Base UI's trigger has replaced it.
+  const handOn = useRef<{ readonly refocus: boolean } | null>(null);
+  const plain = menu === null;
+  useEffect(() => {
+    if (plain) {
+      // Fetched ahead, and nothing else: a failure here is the press's to say, which tries again.
+      loadActionMenu().catch(() => undefined);
+    }
+  }, [plain]);
+  useEffect(() => {
+    const press = handOn.current;
+    if (menu === null || press === null) {
+      return;
+    }
+    handOn.current = null;
+    const trigger = triggerRef.current;
+    if (press.refocus) {
+      trigger?.focus();
+    }
+    trigger?.click();
+  }, [menu]);
 
-const ITEM =
-  'mx-1 flex items-center gap-2 rounded-md px-2 py-1.5 outline-none select-none data-disabled:opacity-50 data-highlighted:bg-muted';
+  const trigger =
+    props.trigger ??
+    ((
+      <IconButton
+        aria-label={props.label}
+        icon={<KebabHorizontalIcon size={16} />}
+        tone="invisible"
+      />
+    ) as ReactElement);
+  if (menu !== null) {
+    return (
+      <menu.ActionMenu trigger={trigger} align={props.align ?? 'end'} triggerRef={triggerRef}>
+        {props.children}
+      </menu.ActionMenu>
+    );
+  }
+  // Base UI's closed trigger's own attributes, so nothing a reader or a test sees changes on arrival.
+  return cloneElement(trigger as ReactElement<Record<string, unknown>>, {
+    'aria-haspopup': 'menu',
+    'aria-expanded': false,
+    onClick: (event: MouseEvent<HTMLElement>) => {
+      const refocus = document.activeElement === event.currentTarget;
+      setFailed(false);
+      loadActionMenu().then(
+        (loaded) => {
+          handOn.current = { refocus };
+          setMenu(loaded);
+        },
+        () => {
+          setFailed(true);
+        },
+      );
+    },
+    ...(failed ? { title: 'The menu could not be loaded. Press again to try once more.' } : {}),
+  });
+};
 
-export const ActionMenuItem = ({
-  children,
-  onSelect,
-  leadingIcon,
-  tone = 'default',
-  disabled,
-}: {
-  readonly children: ReactNode;
-  readonly onSelect?: () => void;
-  readonly leadingIcon?: ReactNode;
-  readonly tone?: 'default' | 'danger';
-  readonly disabled?: boolean;
-}): ReactElement => (
-  <Menu.Item
-    className={cx(ITEM, tone === 'danger' ? 'text-danger' : null)}
-    {...(disabled === undefined ? {} : { disabled })}
-    {...(onSelect === undefined
-      ? {}
-      : {
-          onClick: () => {
-            onSelect();
-          },
-        })}
-  >
-    {leadingIcon === undefined ? null : (
-      <span aria-hidden="true" className="inline-flex w-4 text-fg-muted">
-        {leadingIcon}
-      </span>
-    )}
-    {children}
-  </Menu.Item>
-);
+type ItemProps = Parameters<MenuModule['ActionMenuItem']>[0];
+type LinkItemProps = Parameters<MenuModule['ActionMenuLinkItem']>[0];
+type DownloadItemProps = Parameters<MenuModule['ActionMenuDownloadItem']>[0];
+type RadioItemProps = Parameters<MenuModule['ActionMenuRadioItem']>[0];
 
-/**
- * An item that is a link to a URL a provider sent (*Open ticket*, *Open MR*): Base UI's link item
- * rendered as `untrusted.tsx`'s {@link ExternalAnchor}, so the `href` is `safeHref`'s and a refused
- * URL stays in the menu as its struck-through label. It opens in a new tab and closes the menu.
- */
-export const ActionMenuLinkItem = ({
-  url,
-  label,
-}: {
-  readonly url: string;
-  readonly label: string;
-}): ReactElement => (
-  <Menu.LinkItem
-    className={ITEM}
-    closeOnClick
-    label={label}
-    render={<ExternalAnchor url={url} label={label} />}
-  />
-);
+export const ActionMenuItem = (props: ItemProps): ReactElement | null => {
+  const menu = useMenuModule();
+  return menu === null ? null : <menu.ActionMenuItem {...props} />;
+};
 
 /**
- * An item that is a same-origin download: Base UI's `Menu.LinkItem` drawn **as the caller's element**, which must
- * spread props and accept a ref — `ui/untrusted.tsx`'s `DownloadLink`, so the one module that may
- * write a URL attribute still writes this one (`no-html.test.ts`). The task page's *Download JSON*.
+ * An item that is a link to a URL a provider sent (*Open ticket*, *Open MR*): the menu's link item
+ * drawn as `untrusted.tsx`'s `ExternalAnchor` (`action-menu-base.tsx`), so the `href` is
+ * `safeHref`'s.
  */
-export const ActionMenuDownloadItem = ({
-  render,
-}: {
-  readonly render: ReactElement<Record<string, unknown>>;
-}): ReactElement => <Menu.LinkItem render={render} className={ITEM} closeOnClick />;
+export const ActionMenuLinkItem = (props: LinkItemProps): ReactElement | null => {
+  const menu = useMenuModule();
+  return menu === null ? null : <menu.ActionMenuLinkItem {...props} />;
+};
+
+/** A same-origin download drawn as the caller's element (`action-menu-base.tsx`). */
+export const ActionMenuDownloadItem = (props: DownloadItemProps): ReactElement | null => {
+  const menu = useMenuModule();
+  return menu === null ? null : <menu.ActionMenuDownloadItem {...props} />;
+};
 
 /** A labelled radio group of items (the project switcher's). */
-export const ActionMenuRadioGroup = <Value extends string>({
-  label,
-  value,
-  onValueChange,
-  children,
-}: {
+export const ActionMenuRadioGroup = <Value extends string>(props: {
   readonly label: string;
   readonly value: Value;
   readonly onValueChange: (value: Value) => void;
   readonly children: ReactNode;
-}): ReactElement => (
-  <Menu.RadioGroup
-    value={value}
-    onValueChange={(next: unknown) => {
-      onValueChange(next as Value);
-    }}
-  >
-    <Menu.GroupLabel className="px-3 pt-1.5 pb-1 text-xs font-semibold text-fg-muted">
-      {label}
-    </Menu.GroupLabel>
-    {children}
-  </Menu.RadioGroup>
-);
+}): ReactElement | null => {
+  const menu = useMenuModule();
+  return menu === null ? null : <menu.ActionMenuRadioGroup<Value> {...props} />;
+};
 
-export const ActionMenuRadioItem = ({
-  value,
-  children,
-  leadingIcon,
-  closeOnClick = false,
-}: {
-  readonly value: string;
-  readonly children: ReactNode;
-  readonly leadingIcon?: ReactNode;
-  /**
-   * `false` (the default) keeps the menu open, so a choice can be tried on; `true` for a choice that
-   * leaves the page, as the project switcher's does.
-   */
-  readonly closeOnClick?: boolean;
-}): ReactElement => (
-  <Menu.RadioItem value={value} closeOnClick={closeOnClick} className={ITEM}>
-    <span aria-hidden="true" className="inline-flex w-4 text-link">
-      <Menu.RadioItemIndicator className="inline-flex">
-        <CheckIcon size={16} />
-      </Menu.RadioItemIndicator>
-    </span>
-    {leadingIcon === undefined ? null : (
-      <span aria-hidden="true" className="inline-flex w-4 text-fg-muted">
-        {leadingIcon}
-      </span>
-    )}
-    {children}
-  </Menu.RadioItem>
-);
+export const ActionMenuRadioItem = (props: RadioItemProps): ReactElement | null => {
+  const menu = useMenuModule();
+  return menu === null ? null : <menu.ActionMenuRadioItem {...props} />;
+};
 
-export const ActionMenuSeparator = (): ReactElement => (
-  <Menu.Separator className="my-1 h-px bg-line" />
-);
+export const ActionMenuSeparator = (): ReactElement | null => {
+  const menu = useMenuModule();
+  return menu === null ? null : <menu.ActionMenuSeparator />;
+};
 
 /** Non-interactive text at the top of a menu ("Signed in as …"). */
 export const ActionMenuHeader = ({ children }: { readonly children: ReactNode }): ReactElement => (

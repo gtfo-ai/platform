@@ -76,6 +76,27 @@ the split and 260 557 B after it, frame included (`pnpm bundle:check`; BACKLOG 8
 towards 250 kB). zod and `zod-jitless.ts` share a chunk of their own (`vite.config.ts`),
 so the JIT is off before a shared chunk builds any schema.
 
+**What the first paint does not load, below the route level (S-25.13).** By S-25.12 the graph had
+grown back to 297 288 B of TD-013's 300 000 with every screen already a chunk, and the owner's rule
+is to cut rather than raise the number. Two things in the frame were there for screens that had not
+been opened. **Base UI's Menu** — with its focus manager, list navigation and typeahead, 21.4 kB
+gzipped of the graph, measured — is a chunk of its own, `ui/action-menu-base.tsx`, loaded with
+`import()`; `ui/action-menu.tsx`, the API every screen imports, decides a menu's shape once, when it
+first renders. A menu drawn after the module has arrived — every screen's, since the frame's menus
+fetch it as they mount — is Base UI's Menu as before. The frame's own menus on the first paint are a
+plain trigger, the same element with the closed menu button's `aria-haspopup`/`aria-expanded`, which
+swaps **only on a press**, `features/readiness-label.tsx`'s pattern for its popover (S-25.6): Base
+UI's trigger replaces it, the focus is put back if the button had it, and the press is handed on as a
+`click()` — the path a keyboard's Enter takes — so the menu opens by Base UI's own code; never a
+swap when the module merely arrives, which would replace the element under a press on its way. A
+failed load is forgotten and the trigger's title says to press again. The ui tier loads the module
+before each test file (`test/support/web-lazy-chunks.ts`), and `bundle:check` refuses the Menu in
+any initial asset by a marker (`LAZY_ONLY`). **The word maps only
+lazy screens show** left `ui/humanize.ts`, which the frame imports, for `ui/words/*` modules of
+their own that `humanize.ts` does not re-export (`readiness-criteria`, `loops`, `integrations`,
+`project-execution`, `settings`): a module's statements sit in one chunk, so a map in `humanize.ts`
+was in the initial graph whichever screen used it. The graph after both is 275 318 B (−21 970 B).
+
 The account menu in the top bar (`app/shell.tsx`) is the first screen use of Base UI: who is signed
 in, with which role, and **Sign out** (no theme choice: one dark theme, TD-033's 2026-11-05 amendment). `app/app.tsx` wraps the tree in
 Base UI's `<CSPProvider disableStyleElements>`, because the production policy has no nonce for the
@@ -283,7 +304,7 @@ A render that throws must cost one region, never the tab. Two boundaries, becaus
 The fallback names the area, shows the error's message **sanitised and bounded** (an error message can quote a provider's string, so BD-022 applies to it), and offers *Try again* plus *Reload the page*; a boundary also clears itself when the route changes, so navigating away is a recovery. The fallback is deliberately poor in dependencies: a fallback that throws is caught only by the next boundary out, and the application-level one has none.
 
 ## Accessibility, theming, i18n
-Base UI APG behaviours (menu, dialog, tooltip, popover — `ui/action-menu.tsx`, `ui/dialog.tsx`, `ui/tooltip.tsx`, `ui/popover.tsx`); every enabled clickable control shows a pointer (Tailwind v4's Preflight resets buttons to `cursor: default`; `styles.css` restores it in the base layer for buttons, `role="button"`, Base UI's `role="menuitem"`/`menuitemradio`/`menuitemcheckbox`/`tab`, submit/button/reset inputs, selects and `summary`, held by `cursor.test.ts`); `aria-live="polite"` for status changes; reduced-motion (the running pulse and the skeleton shimmer stop on their first frame); Shiki in its dark theme (there is one theme); the keyboard shortcuts and their `?` sheet (`/`, ⌘K, `g h/p/i/a/b`, `j/k`; § "The frame, the keyboard and the lazy chunks"); English-only strings with `Intl.*` formatting; Lingui later if needed.
+Base UI APG behaviours (menu, dialog, tooltip, popover — `ui/action-menu.tsx` with its lazy Base UI half `ui/action-menu-base.tsx`, `ui/dialog.tsx`, `ui/tooltip.tsx`, `ui/popover.tsx`); every enabled clickable control shows a pointer (Tailwind v4's Preflight resets buttons to `cursor: default`; `styles.css` restores it in the base layer for buttons, `role="button"`, Base UI's `role="menuitem"`/`menuitemradio`/`menuitemcheckbox`/`tab`, submit/button/reset inputs, selects and `summary`, held by `cursor.test.ts`); `aria-live="polite"` for status changes; reduced-motion (the running pulse and the skeleton shimmer stop on their first frame); Shiki in its dark theme (there is one theme); the keyboard shortcuts and their `?` sheet (`/`, ⌘K, `g h/p/i/a/b`, `j/k`; § "The frame, the keyboard and the lazy chunks"); English-only strings with `Intl.*` formatting; Lingui later if needed.
 
 The visual language itself — tokens, the one dark theme, contrast, type, icons and words — is § "Visual design language (TD-033)" above.
 

@@ -60,7 +60,6 @@ import {
 } from '../app/queries.js';
 import { type AdminNote, ForAdministrators } from '../ui/admin-notes.js';
 import { ConfirmDialog } from '../ui/confirm-dialog.js';
-import { AUTONOMY_LEVEL_LABEL, BUDGET_WINDOW_LABEL } from '../ui/humanize.js';
 import {
   Badge,
   type BadgeTone,
@@ -75,6 +74,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { AUTONOMY_LEVEL_LABEL, BUDGET_WINDOW_LABEL } from '../ui/words/settings.js';
 import { useStepActionTone } from './step-action-tone.js';
 
 /**

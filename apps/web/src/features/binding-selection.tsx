@@ -22,10 +22,10 @@ import type { IntegrationType, ProjectBindingSummary } from '@platform/contracts
 import { type ReactElement, useState } from 'react';
 import { useProjectBindings } from '../app/queries.js';
 import { Dialog } from '../ui/dialog.js';
-import { INTEGRATION_TYPE_LABEL } from '../ui/humanize.js';
 import { Button } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { INTEGRATION_TYPE_LABEL } from '../ui/words/integrations.js';
 
 /** What stops when a binding of this kind is removed — said in the confirmation. */
 export const BINDING_REMOVAL_CONSEQUENCE: Readonly<Record<IntegrationType, string>> = {
