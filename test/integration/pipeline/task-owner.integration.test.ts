@@ -243,6 +243,27 @@ describe('who a tracker assignee is (TaskOwnerDirectory, migration 0104)', () =>
     }));
     expect(may).toEqual({ alice: true, admin: true, carol: false, erin: true });
   });
+
+  it('refuses a disabled user: no owner, and the identity reads as a person (review of #92)', async () => {
+    const ask = () =>
+      within(async (tx) => ({
+        may: await store.owners.mayOwn(tx, { projectId, userId: users.alice }),
+        assignee: await store.owners.classifyAssignee(tx, {
+          projectId,
+          provider: 'jira-cloud',
+          externalId: 'acct-alice',
+        }),
+      }));
+    // Calibrated against the same user enabled, before and after.
+    expect(await ask()).toEqual({ may: true, assignee: { kind: 'member', userId: users.alice } });
+    await query("update users set status = 'disabled' where id = $1", [users.alice]);
+    try {
+      expect(await ask()).toEqual({ may: false, assignee: { kind: 'person' } });
+    } finally {
+      await query("update users set status = 'active' where id = $1", [users.alice]);
+    }
+    expect((await ask()).may).toBe(true);
+  });
 });
 
 describe('intake’s sync on the real store, and held elsewhere in two spellings', () => {
@@ -392,6 +413,14 @@ describe('a stage offer names the owner (criterion 5, backlog 730)', () => {
       workerId,
       projectId,
     ]);
+    expect((await route(owner)).assigneeUserId).toBe(users.alice);
+    // A disabled owner holds no window: the claim would refuse their machine anyway.
+    await query("update users set status = 'disabled' where id = $1", [users.alice]);
+    try {
+      expect((await route(owner)).assigneeUserId).toBeNull();
+    } finally {
+      await query("update users set status = 'active' where id = $1", [users.alice]);
+    }
     expect((await route(owner)).assigneeUserId).toBe(users.alice);
     await query("update workers set last_seen_at = now() - interval '61 seconds' where id = $1", [
       workerId,

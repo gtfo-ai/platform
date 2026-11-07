@@ -474,6 +474,11 @@ export const registerCommandRoutes = async (
      * a route that has nothing to add simply omits this.
      */
     readonly auditResult?: (result: TResult) => JsonObject;
+    /**
+     * The statuses this route answers beyond the shared map's — `403` and `422` for the owner
+     * command's own refusals (S-26.1), so the published contract names what the route answers.
+     */
+    readonly refusals?: readonly (403 | 422)[];
     readonly perform: (input: {
       readonly deps: TaskCommands;
       readonly body: z.output<TBody>;
@@ -498,6 +503,11 @@ export const registerCommandRoutes = async (
             400: apiErrorSchema,
             409: apiErrorSchema,
             503: apiErrorSchema,
+            // Error statuses only, thrown and never returned, so they add nothing to the handler's
+            // reply type — the cast keeps the provider's inference over the four above.
+            ...(Object.fromEntries(
+              (route.refusals ?? []).map((status) => [status, apiErrorSchema]),
+            ) as Record<never, never>),
           },
         },
       },
@@ -604,6 +614,7 @@ export const registerCommandRoutes = async (
     description:
       'A member may take an **unassigned** task — no owner, and the tracker assignee is not a person the platform cannot map (not held elsewhere) — or give back their own (`user_id: null`). A maintainer or above may set any member of the project, or nobody, on any task. The tracker assignee is not changed and the next tracker read keeps the platform’s owner until somebody changes the tracker; nothing is written to the tracker in this build. `403 owner_change_not_permitted` for a change the caller may not make, `422 owner_not_project_member` for a user who is not a member (or above) of the project, `409 task_finished` for a done or cancelled task. A change to the owner the task already has is accepted and changes nothing.',
     params: (body) => ({ user_id: body.user_id }),
+    refusals: [403, 422],
     auditResult: (result: { readonly changed: boolean; readonly ownerUserId: string | null }) => ({
       changed: result.changed,
       owner_user_id: result.ownerUserId,

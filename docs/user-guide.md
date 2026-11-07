@@ -776,8 +776,9 @@ live on that task's topic.
 follows the ticket's assignee when that assignee is a tracker account linked to a member of the
 project (*Settings → Linked accounts*, an administrator's mapping); an assignee the platform cannot link —
 an unlinked account, or a linked person below member — is kept as *assigned elsewhere* and the task
-has no owner, and the platform's own account or a machine account is nobody. **The latest change
-wins**: a change of assignee in the tracker replaces an owner set on the platform, and an owner set
+has no owner, and the platform's own account or a machine account is nobody — it never takes a
+task from the person who owns it, so the platform claiming the ticket keeps its owner. A disabled
+account owns nothing. **The latest change wins**: a change of assignee in the tracker replaces an owner set on the platform, and an owner set
 on the platform stays until somebody changes the tracker. A member may take a task nobody owns (and
 nobody holds elsewhere) or give back their own; a maintainer may give any task to any member, or to
 nobody. Nothing is written to the tracker. The owner's computer gets the head start on the task's

@@ -10,7 +10,9 @@
  * - **An online assignee** (TD-031 §8): a worker of the user that is `active`, not paused (or paused
  *   until a past instant), seen in the last {@link ASSIGNEE_ONLINE_SECONDS} on the database's clock,
  *   and the user's **effective** project role — the higher of the organisation role and a project
- *   membership, `rbac.ts`'s rule (backlog 886) — `member` or above — and whose **claim scope takes
+ *   membership, `rbac.ts`'s rule (backlog 886) — `member` or above, on an account that is not
+ *   disabled (`userMayOwnInProjectSql`, S-26.1: an owner's window is never held for a user the claim
+ *   would refuse) — and whose **claim scope takes
  *   the project automatically** (`null`, or naming it; WP-293, TD-031's claim-scope amendment §5),
  *   so a pick-only worker holds no offer for `assignee_window` for nothing. `last_seen_at` is written by every
  *   authenticated worker protocol call (WP-281, `WorkerStore.recordContact`).
@@ -24,7 +26,7 @@ import type { ExecutionRoutingRepository, Transaction } from '@platform/applicat
 import type { ExecutionMode, ExecutionPreference } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
-import { userMayRunInProjectSql } from './running-role.js';
+import { userMayOwnInProjectSql } from './running-role.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
@@ -66,7 +68,7 @@ export const createPostgresExecutionRoutingRepository = (): ExecutionRoutingRepo
             and w.manually_paused_at is null
             and (w.claim_project_ids is null or $1::uuid = any(w.claim_project_ids))
             and w.last_seen_at > now() - make_interval(secs => $4::float8)
-            and ${userMayRunInProjectSql('w.user_id', '$1::uuid')}
+            and ${userMayOwnInProjectSql('w.user_id', '$1::uuid')}
        ) as online`,
       [input.projectId, input.userId, input.now, ASSIGNEE_ONLINE_SECONDS],
     );

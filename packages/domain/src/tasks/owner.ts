@@ -12,7 +12,12 @@
  *    platform assignment made after a read survives every later read that names the same assignee,
  *    and a tracker change made after a platform assignment replaces it. A read that names the
  *    identity already stored — including the claim's own `assignToSelf`, which writes the binding's
- *    account into `ticket_assignee` in its transaction (S-26.2) — is never a change.
+ *    account into `ticket_assignee` in its transaction (S-26.2) — is never a change. **A read that
+ *    names a platform assignee** (the binding's own account, a machine) replaces the stored
+ *    assignee and **never changes the owner** (the review of PR #92): it is the claim's own assign
+ *    read back, which S-26.1 ships before S-26.2 stops making it, and an owner a person set must
+ *    survive it. TD-031's amendment item 2 reads such an assignee as *nobody*; that is what it
+ *    still means for a task with no owner, and only an owner already held is kept.
  * 2. **An owner is a `member` or above of the project.** The caller answers that question
  *    (`classifyAssignee`, `mayOwn`) and hands the answer in; a mapped person below `member` is shown
  *    as an assignee and is never an owner.
@@ -35,6 +40,7 @@ import type {
   UserRole,
 } from '@platform/contracts';
 import { TICKET_ASSIGNEE_NAME_MAX_CHARS } from '@platform/contracts';
+import { TERMINAL_TASK_STATES } from '../aggregates/task-state-machine.js';
 import { can } from '../permissions.js';
 
 /** The four ownership columns of a task (migration 0104). */
@@ -175,6 +181,14 @@ export const syncOwnerFromTracker = (
   if (sameTicketAssignee(current.ticketAssignee, read.assignee)) {
     return { kind: 'unchanged' };
   }
+  if (read.assigneeClass?.kind === 'platform' || read.assignee?.platform === true) {
+    // **A platform assignee is never an owner change** (the review of PR #92): the binding's own
+    // account or a machine in the tracker is the claim's `assignToSelf` read back — until S-26.2
+    // stops that re-assignment, a task a person took before its first claim would otherwise lose
+    // its owner at the next read. The stored assignee is replaced so the next read compares
+    // against it; the owner, its source and its instant stay as they were.
+    return { kind: 'write', next: { ...current, ticketAssignee: read.assignee }, change: null };
+  }
   const owner = read.assigneeClass?.kind === 'member' ? read.assigneeClass.userId : null;
   if (owner === current.ownerUserId) {
     // The assignee moved and the owner it maps to did not: the stored assignee is replaced (so the
@@ -288,7 +302,7 @@ export const ownerChangePermitted = (input: {
 };
 
 /** The states from which no owner change is made: a finished task is nobody's work any more. */
-const FINISHED_STATES: ReadonlySet<TaskState> = new Set<TaskState>(['done', 'cancelled']);
+const FINISHED_STATES: ReadonlySet<TaskState> = new Set<TaskState>(TERMINAL_TASK_STATES);
 
 /** Why a command was refused — each a status of its own at the route. */
 export type OwnerCommandRefusal =

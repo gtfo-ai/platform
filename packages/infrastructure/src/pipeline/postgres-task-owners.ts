@@ -4,8 +4,8 @@
  * `packages/application/src/pipeline/store.ts`).
  *
  * Read in the caller's transaction and live: `user_identities` (migration 0003, `kind` since 0045),
- * the effective project role ({@link userMayRunInProjectSql}: the higher of the organisation role
- * and a membership, backlog 886) and the project's bindings' own accounts
+ * the effective project role of an account that is not disabled ({@link userMayOwnInProjectSql}:
+ * the higher of the organisation role and a membership, backlog 886) and the project's bindings' own accounts
  * (`bindings.account_identity`, migration 0090). Only by the provider-issued account id: never an
  * email, never a display name (BD-022, Q10).
  *
@@ -17,7 +17,7 @@ import type { TaskOwnerDirectory, Transaction } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
-import { userMayRunInProjectSql } from './running-role.js';
+import { userMayOwnInProjectSql } from './running-role.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
@@ -26,7 +26,7 @@ const CLASSIFY_SQL = `select
       where ui.provider = $2 and ui.external_id = $3) as kind,
     (select ui.user_id from user_identities ui
       where ui.provider = $2 and ui.external_id = $3 and ui.kind = 'person'
-        and ${userMayRunInProjectSql('ui.user_id', '$1::uuid')}) as member_user_id,
+        and ${userMayOwnInProjectSql('ui.user_id', '$1::uuid')}) as member_user_id,
     exists (select 1 from bindings b
              where b.project_id = $1::uuid
                and b.account_identity ->> 'provider' = $2
@@ -50,7 +50,7 @@ export const createPostgresTaskOwnerDirectory = (): TaskOwnerDirectory => ({
   },
   mayOwn: async (tx, input) => {
     const { rows } = await sqlOf(tx).query<{ may: boolean }>(
-      `select ${userMayRunInProjectSql('$2::uuid', '$1::uuid')} as may`,
+      `select ${userMayOwnInProjectSql('$2::uuid', '$1::uuid')} as may`,
       [input.projectId, input.userId],
     );
     return rows[0]?.may === true;

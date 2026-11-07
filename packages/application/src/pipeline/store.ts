@@ -2948,7 +2948,8 @@ export interface TaskOwnerDirectory {
   /**
    * `member` when `(provider, externalId)` is a `person` identity linked to a user whose effective
    * role in the project (the higher of the organisation role and a membership,
-   * `userMayRunInProjectSql`) is `member` or above; `platform` when it is a `machine` identity, or
+   * `userMayRunInProjectSql`) is `member` or above and who is not disabled; `platform` when it is a
+   * `machine` identity, or
    * the account of one of the project's bindings (`bindings.account_identity`, migration 0090) that
    * maps to no such member; `person` otherwise — unlinked, or linked below `member`.
    */
@@ -2956,7 +2957,10 @@ export interface TaskOwnerDirectory {
     tx: Transaction,
     input: { readonly projectId: Id; readonly provider: string; readonly externalId: string },
   ): Promise<AssigneeClass>;
-  /** Whether `userId`'s effective role in the project is `member` or above — who may own a task. */
+  /**
+   * Whether `userId`'s effective role in the project is `member` or above and the account is not
+   * disabled (`users.status`) — who may own a task.
+   */
   mayOwn(tx: Transaction, input: { readonly projectId: Id; readonly userId: Id }): Promise<boolean>;
 }
 

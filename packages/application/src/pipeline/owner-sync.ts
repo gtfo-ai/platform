@@ -32,8 +32,13 @@
  * Outside the task's own transactions (the duty, a stage's re-read, the command, the adoption) the
  * event is appended only after `bumpVersion` — the row lock first, so the sequence read is the
  * committed one, and every in-flight `save` over a snapshot read before it is refused and retried
- * (`bumpVersion`'s docblock). The version moves only when an owner change is recorded: a read that
- * changes nothing, or only the stored assignee, takes no lock and refuses nobody.
+ * (`bumpVersion`'s docblock). The version moves only when the decision writes: a read that changes
+ * nothing takes no lock and refuses nobody, and one that replaces only the stored assignee takes
+ * it too, so a concurrent owner command is serialised behind it rather than failing it.
+ *
+ * **A platform assignee is never an owner change** (the domain's `syncOwnerFromTracker`, the review
+ * of PR #92): until S-26.2 stops the claim's `assignToSelf`, every read after a first claim names
+ * the binding's own account, and the owner a person set before the claim is kept.
  */
 import type { DomainEvent, ExternalIdentity, Id, IsoDateTime, UserRole } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
@@ -239,8 +244,9 @@ const writeDecision = async (
 
 /**
  * One decision applied **from outside the task's own transactions** (the module's § The stream):
- * decide over a plain read; when it records a change, take the row lock (`bumpVersion`), read and
- * decide again under it, write, and append at the committed sequence. Answers the change recorded.
+ * decide over a plain read; when it writes anything, take the row lock (`bumpVersion`), read and
+ * decide again under it, write, and append at the committed sequence when it records a change.
+ * Answers the change recorded.
  */
 const applyOnTaskStream = async (
   options: OwnerSyncOptions,
@@ -256,7 +262,10 @@ const applyOnTaskStream = async (
   const { store } = options;
   let current = await store.tasks.ownership(scope.tx, input.taskId);
   let decision = await input.decide(current);
-  if (decision.kind === 'write' && decision.change !== null) {
+  if (decision.kind === 'write') {
+    // Any write takes the row lock — an assignee-only one too (the review of PR #92): a concurrent
+    // owner command then waits and decides over this write, rather than this compare-and-set
+    // losing to it and failing the stage job's or the duty's try.
     await store.tasks.bumpVersion(scope.tx, input.taskId);
     current = await store.tasks.ownership(scope.tx, input.taskId);
     decision = await input.decide(current);
@@ -529,7 +538,9 @@ export const setTaskOwnerCommand = async (
 /**
  * **The hook S-26.6 calls when a person's tracker identity is linked** (TD-031's amendment item 2's
  * last sentence): every live task nobody owns whose stored assignee is that identity gets the
- * linked user as its owner — `via: link`, `source: tracker` — when they may own it in its project.
+ * linked user as its owner — `via: link`, `source: tracker` — when the directory says, at that
+ * moment, that the identity is a `person` linked to that very user and that they are a `member` or
+ * above of the task's project.
  * **No provider call**: the identity was read already; this asks only the rows. One transaction per
  * task, each on the conflict bound, so one busy task never holds back the rest. Answers the tasks
  * whose owner it set.
@@ -560,10 +571,15 @@ export const adoptOwnersOnLink = async (
       },
       async () =>
         deps.unitOfWork.transaction(async (scope) => {
-          const userMayOwn = await deps.store.owners.mayOwn(scope.tx, {
+          // The link is re-checked against the directory, not taken on the caller's word (the
+          // review of PR #92): the identity must map, now, to this very user as a `member` or above
+          // of the task's project.
+          const linked = await deps.store.owners.classifyAssignee(scope.tx, {
             projectId: candidate.projectId,
-            userId: link.userId,
+            provider: link.provider,
+            externalId: link.externalId,
           });
+          const userMayOwn = linked.kind === 'member' && linked.userId === link.userId;
           return applyOnTaskStream(options, scope, {
             projectId: candidate.projectId,
             taskId: candidate.taskId,

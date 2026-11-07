@@ -11,6 +11,8 @@
 import type { DomainEvent, ExternalIdentity, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { exactSecretRedactor, secretPlaceholder } from '../integrations/redaction.js';
+import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/task-management.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import {
@@ -39,8 +41,8 @@ const identity = (account: string): ExternalIdentity => ({
 });
 
 /** One ticket's assignee, and every read of it. */
-const tracker = (assignee: string | null) => {
-  const state = { assignee };
+const tracker = (assignee: string | null, displayName?: string) => {
+  const state = { assignee, displayName };
   let reads = 0;
   const port: Partial<TaskManagementPort> = {
     readTicket: async (ref: TicketRefInput) => {
@@ -58,7 +60,13 @@ const tracker = (assignee: string | null) => {
         epic: null,
         siblings: [],
         attachments_text: [],
-        assignee: state.assignee === null ? null : identity(state.assignee),
+        assignee:
+          state.assignee === null
+            ? null
+            : {
+                ...identity(state.assignee),
+                ...(state.displayName === undefined ? {} : { display_name: state.displayName }),
+              },
         reporter: null,
         updated_at: '2026-06-01T09:00:00.000Z',
       };
@@ -73,12 +81,17 @@ const tracker = (assignee: string | null) => {
  * only reads of the ticket are intake's and the duty's. Alice and Bob are linked members, Carol is
  * linked but only a viewer of the project, Dan is a machine and the binding acts as `acct-bot`.
  */
-const harnessFor = (ticket: ReturnType<typeof tracker>, runsAgents = false): PipelineHarness => {
+const harnessFor = (
+  ticket: ReturnType<typeof tracker>,
+  runsAgents = false,
+  ticketRedactor?: SecretRedactor,
+): PipelineHarness => {
   const harness = createPipelineHarness({
     projectId: PROJECT,
     runs: {},
     runsAgents,
     taskManagement: ticket.port,
+    ...(ticketRedactor === undefined ? {} : { ticketRedactor }),
   });
   harness.store.seedIdentity('fake-jira', 'acct-alice', ALICE);
   harness.store.seedIdentity('fake-jira', 'acct-bob', BOB);
@@ -230,6 +243,24 @@ describe('intake records the owner (S-26.1 criterion 1)', () => {
     },
   );
 
+  it('stores the assignee’s name through the binding’s redactor, never the secret in it (BD-022)', async () => {
+    // A credential a person pasted into their tracker display name: provider text, stored on the row.
+    const SECRET = 'jira-FAKE-notarealtokenatall';
+    const ticket = tracker('erin', `Erin ${SECRET}`);
+    const harness = harnessFor(
+      ticket,
+      false,
+      exactSecretRedactor([{ name: 'fake_jira_token', value: SECRET }]),
+    );
+    await harness.publish([ticketMatched()]);
+
+    const stored = harness.store.ownershipOf(taskIdOf(harness)).ticketAssignee;
+    expect(JSON.stringify(stored)).not.toContain(SECRET);
+    expect(stored?.display_name).toBe(`Erin ${secretPlaceholder('fake_jira_token')}`);
+    // The identity the mapping is keyed by is left alone: it is what a later link compares.
+    expect(stored?.external_id).toBe('acct-erin');
+  });
+
   it('stores nothing for an unassigned ticket', async () => {
     const harness = harnessFor(tracker(null));
     await harness.publish([ticketMatched()]);
@@ -335,6 +366,78 @@ describe('the owner_sync duty (S-26.1 criterion 4)', () => {
     });
   });
 
+  it('keeps a member’s owner when the claim’s own assign reads back, and follows a real change after it (review of #92)', async () => {
+    // The ticket is unassigned at intake; Alice takes the task on the platform before its first
+    // claim; the claim's `assignToSelf` then puts the binding's own account on the ticket, and the
+    // webhook says so. Until S-26.2 stops that re-assignment, this read must not cost Alice the task.
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket);
+    await harness.publish([ticketMatched()]);
+    const taskId = taskIdOf(harness);
+    await setTaskOwnerCommand(commandDeps(harness), {
+      taskId,
+      actorUserId: ALICE,
+      actorRole: 'member',
+      targetUserId: ALICE,
+    });
+    const taken = harness.store.ownershipOf(taskId);
+    expect(taken).toMatchObject({ ownerUserId: ALICE, ownerSource: 'platform' });
+
+    harness.clock.advance(60_000);
+    ticket.state.assignee = 'bot';
+    const reads = ticket.reads();
+    await harness.publish([ticketUpdated(harness.clock.now())]);
+    // The read happened, the assignee is stored, and the owner, its source and its instant stand.
+    expect(ticket.reads() - reads).toBe(1);
+    expect(harness.store.ownershipOf(taskId)).toEqual({
+      ...taken,
+      ticketAssignee: {
+        provider: 'fake-jira',
+        external_id: 'acct-bot',
+        display_name: 'Bot Example',
+        platform: true,
+      },
+    });
+    const recorded = ownerEvents(harness).length;
+
+    // A machine account is the same answer.
+    harness.clock.advance(60_000);
+    ticket.state.assignee = 'dan';
+    await harness.publish([ticketUpdated(harness.clock.now())]);
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({ ownerUserId: ALICE });
+    expect(ownerEvents(harness)).toHaveLength(recorded);
+
+    // …and a person changing the tracker after it is still the latest change, and wins.
+    harness.clock.advance(60_000);
+    ticket.state.assignee = 'bob';
+    await harness.publish([ticketUpdated(harness.clock.now())]);
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'tracker',
+    });
+    expect(ownerEvents(harness).at(-1)?.payload).toMatchObject({
+      owner_user_id: BOB,
+      previous_owner_user_id: ALICE,
+      via: 'tracker_sync',
+    });
+  });
+
+  it('keeps a tracker owner through the claim’s assign too', async () => {
+    const ticket = tracker('alice');
+    const harness = harnessFor(ticket);
+    await harness.publish([ticketMatched()]);
+    const taskId = taskIdOf(harness);
+    harness.clock.advance(60_000);
+    ticket.state.assignee = 'bot';
+    await harness.publish([ticketUpdated(harness.clock.now())]);
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: ALICE,
+      ownerSource: 'tracker',
+      ticketAssignee: { external_id: 'acct-bot', platform: true },
+    });
+    expect(ownerEvents(harness)).toHaveLength(1);
+  });
+
   it('reads nothing for a finished task', async () => {
     const ticket = tracker('alice');
     const harness = harnessFor(ticket);
@@ -397,6 +500,23 @@ describe('a link made later adopts the owner, with no provider call (the hook S-
         externalId: 'acct-erin',
       }),
     ).toEqual([]);
+  });
+
+  it('adopts nothing when the identity is linked to somebody else than the caller names', async () => {
+    const harness = harnessFor(tracker('erin'));
+    await harness.publish([ticketMatched()]);
+    const ERIN = '00000000-0000-4000-8000-0000000000e7' as Id;
+    // `acct-erin` is linked to Bob, a member; a hook that names Erin for it adopts nothing.
+    harness.store.seedIdentity('fake-jira', 'acct-erin', BOB);
+    harness.store.seedProjectMember(PROJECT, ERIN);
+    expect(
+      await adoptOwnersOnLink(commandDeps(harness), {
+        userId: ERIN,
+        provider: 'fake-jira',
+        externalId: 'acct-erin',
+      }),
+    ).toEqual([]);
+    expect(harness.store.ownershipOf(taskIdOf(harness)).ownerUserId).toBeNull();
   });
 
   it('adopts nothing for a linked user below member', async () => {

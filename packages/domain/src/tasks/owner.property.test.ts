@@ -4,12 +4,21 @@
  *
  * The model is the amendment's sentence, written without the decision functions: the owner is
  * whatever the **latest change** made it — a platform command's target, or the mapping of the
- * tracker's assignee at a read that saw a **different** assignee from the one last read. The claim's
- * `assignToSelf` writes the binding's account into the stored assignee in its own transaction
- * (S-26.2), so the next read sees no difference. Folded over the real decisions
- * (`syncOwnerFromTracker`, `decideOwnerCommand`) it must agree with the model after every step, a
- * read must change the owner only when the read assignee differs from the stored one, and the
- * claim's assign must never be a change.
+ * tracker's assignee at a read that saw a **different** assignee from the one last read — with one
+ * exception the review of PR #92 added: a read that names a **platform** assignee (the binding's
+ * own account) keeps the owner it finds. Folded over the real decisions (`syncOwnerFromTracker`,
+ * `decideOwnerCommand`) it must agree with the model after every step, and a read must change
+ * nothing when the read assignee is the stored one.
+ *
+ * The claim's assign comes in two shapes, and each proves one thing:
+ *
+ *  - `claim_assign` is **this build's** claim: `assignToSelf` moves the tracker to the binding's
+ *    account and stores nothing. It proves the guard — the next read sees a different, platform
+ *    assignee, and the owner a person set survives it.
+ *  - `claim_assign_recorded` is **S-26.2's** claim, which also writes the binding's account into
+ *    `ticket_assignee` in its transaction. The step writes the column directly, as that claim
+ *    will; what it proves is only that a read after such a write is no change at all, never that
+ *    the claim makes it.
  */
 import type { Id, IsoDateTime, TicketAssignee } from '@platform/contracts';
 import fc from 'fast-check';
@@ -59,7 +68,8 @@ type Step =
   | { readonly kind: 'tracker'; readonly account: Account | null }
   | { readonly kind: 'read' }
   | { readonly kind: 'command'; readonly target: Id | null }
-  | { readonly kind: 'claim_assign' };
+  | { readonly kind: 'claim_assign' }
+  | { readonly kind: 'claim_assign_recorded' };
 
 const steps = fc.array(
   fc.oneof(
@@ -73,6 +83,7 @@ const steps = fc.array(
       target: fc.constantFrom<Id | null>(ALICE, BOB, null),
     }),
     fc.constant({ kind: 'claim_assign' as const }),
+    fc.constant({ kind: 'claim_assign_recorded' as const }),
   ),
   { maxLength: 40 },
 );
@@ -117,7 +128,10 @@ describe('latest change wins (S-26.1 criterion 2)', () => {
                   }
                 }
                 if (differs) {
-                  modelOwner = mapped(tracker);
+                  // A platform assignee keeps the owner; any other change maps it.
+                  if (tracker === null || CLASS[tracker].kind !== 'platform') {
+                    modelOwner = mapped(tracker);
+                  }
                   modelLastRead = tracker;
                 }
                 break;
@@ -142,8 +156,12 @@ describe('latest change wins (S-26.1 criterion 2)', () => {
                 break;
               }
               case 'claim_assign': {
-                // S-26.2's `assignToSelf`: the tracker and the stored assignee move together, in
-                // the claim's transaction — no owner decision is made, so nothing can change.
+                // This build's claim: only the tracker moves; the next read meets the guard.
+                tracker = 'bot';
+                break;
+              }
+              case 'claim_assign_recorded': {
+                // S-26.2's claim, written directly: the tracker and the stored assignee together.
                 tracker = 'bot';
                 ownership = { ...ownership, ticketAssignee: stored('bot') };
                 modelLastRead = 'bot';
@@ -152,15 +170,22 @@ describe('latest change wins (S-26.1 criterion 2)', () => {
             }
             expect(ownership.ownerUserId).toBe(modelOwner);
           }
-          // …and the read right after the claim's assign is never a change.
-          if (sequence.at(-1)?.kind === 'claim_assign') {
-            expect(
-              syncOwnerFromTracker(ownership, {
-                assignee: stored('bot'),
-                assigneeClass: CLASS.bot,
-                at: AT,
-              }),
-            ).toEqual({ kind: 'unchanged' });
+          // …and the read right after either claim keeps the owner: no change at all after
+          // S-26.2's, and at most the stored assignee after this build's.
+          const last = sequence.at(-1)?.kind;
+          if (last === 'claim_assign' || last === 'claim_assign_recorded') {
+            const after = syncOwnerFromTracker(ownership, {
+              assignee: stored('bot'),
+              assigneeClass: CLASS.bot,
+              at: AT,
+            });
+            if (last === 'claim_assign_recorded') {
+              expect(after).toEqual({ kind: 'unchanged' });
+            }
+            expect(after.kind === 'write' ? after.change : null).toBeNull();
+            expect(after.kind === 'write' ? after.next.ownerUserId : ownership.ownerUserId).toBe(
+              ownership.ownerUserId,
+            );
           }
         }),
       );

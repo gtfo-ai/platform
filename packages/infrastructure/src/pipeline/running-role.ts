@@ -35,6 +35,23 @@ export const userMayRunInProjectSql = (userColumn: string, projectColumn: string
                   and rm.role::text = any(${ROLE_ARRAY})))`;
 
 /**
+ * **Who may own a task of the project, or hold its head start** (S-26.1, the review of PR #92):
+ * {@link userMayRunInProjectSql}, and the account is not disabled (`users.status`). An owner, a
+ * linked assignee and an online assignee answer through this one predicate, so an account an
+ * administrator disabled neither owns a task nor holds a window its claim would then refuse.
+ *
+ * A predicate of its own rather than a conjunct inside `userMayRunInProjectSql`: the claim already
+ * refuses a disabled user through `USER_MAY_ACT_SQL` (`worker-holder.ts`), and the S-22.19 reads
+ * that explain why a worker takes nothing count projects with `userMayRunInProjectSql` beside that
+ * check — folding it in there would report a disabled owner twice (`owner_disabled` and
+ * `no_eligible_project`), which the claim's parity case refuses.
+ */
+export const userMayOwnInProjectSql = (userColumn: string, projectColumn: string): string => `(
+       ${userMayRunInProjectSql(userColumn, projectColumn)}
+   and exists (select 1 from users ou
+                where ou.id = ${userColumn} and ou.status <> 'disabled'))`;
+
+/**
  * A predicate true when the project `projectColumn`'s **run credential keeps remote workers off its
  * runs** (WP-282, TD-031 decision 5, Q124 (a)): a live git binding whose integration gives runs a
  * static token or a deploy key without `remote_run_credential: allow`. **The claim's own clause**
@@ -55,7 +72,7 @@ export const remoteRunCredentialRefusedSql = (projectColumn: string): string => 
  * **Held elsewhere** (S-26.1, TD-031's 2026-11-06 amendment item 6) — true when the task `task`'s
  * stored tracker assignee (`tasks.ticket_assignee`, migration 0104) names a person, not the
  * platform's own account or a machine (`platform` false), who is **not** a `person` identity linked
- * to a user that may take the project's runs ({@link userMayRunInProjectSql}). Read **live** through
+ * to a user that may own the project's tasks ({@link userMayOwnInProjectSql}). Read **live** through
  * `user_identities`, so a link or a role change made since the read counts at once.
  *
  * The SQL spelling of the domain's `taskHeldElsewhere` (`packages/domain/src/tasks/owner.ts`) over
@@ -71,4 +88,4 @@ export const taskHeldElsewhereSql = (task: string): string => `(
                     where hi.provider = ${task}.ticket_assignee ->> 'provider'
                       and hi.external_id = ${task}.ticket_assignee ->> 'external_id'
                       and hi.kind = 'person'
-                      and ${userMayRunInProjectSql('hi.user_id', `${task}.project_id`)}))`;
+                      and ${userMayOwnInProjectSql('hi.user_id', `${task}.project_id`)}))`;

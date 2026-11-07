@@ -137,6 +137,32 @@ describe('the tracker sync (TD-031 item 2)', () => {
     });
   });
 
+  it('keeps the owner when the tracker moves to a platform assignee, and stores the assignee (review of #92)', () => {
+    // The claim's own `assignToSelf` read back: a person's owner, from either side, survives it.
+    for (const ownerSource of ['platform', 'tracker'] as const) {
+      const current: TaskOwnership = { ...owned(ME, person('dev')), ownerSource };
+      for (const read of [
+        { assignee: person('bot', true), assigneeClass: { kind: 'platform' } as const },
+        // A stored platform flag decides it too, whatever the class says.
+        { assignee: person('bot', true), assigneeClass: { kind: 'person' } as const },
+      ]) {
+        expect(syncOwnerFromTracker(current, { ...read, at: AT }), ownerSource).toEqual({
+          kind: 'write',
+          next: { ...current, ticketAssignee: person('bot', true) },
+          change: null,
+        });
+      }
+    }
+    // …and a real change after it still wins.
+    const claimed = owned(ME, person('bot', true));
+    const moved = syncOwnerFromTracker(claimed, {
+      assignee: person('other'),
+      assigneeClass: { kind: 'member', userId: OTHER },
+      at: AT,
+    });
+    expect(moved.kind === 'write' && moved.change?.ownerUserId).toBe(OTHER);
+  });
+
   it('bounds the stored name to the column, by whole code points', () => {
     const long = '😀'.repeat(TICKET_ASSIGNEE_NAME_MAX_CHARS);
     const stored = ticketAssigneeOf(
