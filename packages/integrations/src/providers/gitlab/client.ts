@@ -313,19 +313,19 @@ export interface GitLabClient {
   /** § "Retrieve a single pipeline" — the only place `coverage` appears. */
   pipeline(project: string, pipelineId: number): Promise<z.output<typeof gitlabPipelineSchema>>;
   /**
-   * <https://docs.gitlab.com/api/jobs/> § "List pipeline jobs".
-   *
-   * A cut list is kept: the pipeline's status is read from the pipeline itself, so a cut shortens
-   * only the job list and the log references it offers (WP-220). One reader decides from the jobs:
-   * `merge-request-ready.ts`'s `heldAtManual` asks for a new merge-request pipeline when a blocking
-   * manual job is listed. A cut can hide such a job, and the only cost is that no pipeline is asked
-   * for and the CI gate keeps reading the existing pipeline (a pipeline whose own status is
-   * `manual` is still caught, from the pipeline). That decision grants no access and hands no
-   * credential, so it is not a permission decision; the gate's status still comes from the pipeline.
+   * <https://docs.gitlab.com/api/jobs/> § "List pipeline jobs" — with `truncated` when the walk
+   * stopped at the binding's `max_pages` (WP-220). Since S-27.2 the CI gate passes a held pipeline
+   * on its **jobs** (a manual job nobody started is not a check unless it is a test), so a cut list
+   * could hide the manual test job that should keep it waiting: the adapter hands `truncated` to the
+   * port as `PipelineStatus.jobs_truncated`, and the gate's manual-job rule never passes on a cut
+   * list (BACKLOG 1490).
    *
    * Every page is read: a blocking manual job can be on any page (WP-234).
    */
-  pipelineJobs(project: string, pipelineId: number): Promise<z.output<typeof gitlabJobSchema>[]>;
+  pipelineJobs(
+    project: string,
+    pipelineId: number,
+  ): Promise<{ readonly jobs: z.output<typeof gitlabJobSchema>[]; readonly truncated: boolean }>;
   /** § "Retrieve a job log file" (`GET /projects/:id/jobs/:job_id/trace`). */
   jobTrace(project: string, jobId: number): Promise<string | null>;
   /** <https://docs.gitlab.com/api/repository_files/> § "Retrieve a raw file from a repository". */
@@ -742,21 +742,20 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         }),
       ),
 
-    pipelineJobs: async (project, pipelineId) =>
-      parse(
-        z.array(gitlabJobSchema),
-        (
-          await http.paginate(
-            {
-              method: 'GET',
-              path: `/projects/${encodeProjectId(project)}/pipelines/${pipelineId}/jobs`,
-              action: 'get_pipeline_status',
-            },
-            100,
-          )
-        ).items,
-        'get_pipeline_status',
-      ),
+    pipelineJobs: async (project, pipelineId) => {
+      const pages = await http.paginate(
+        {
+          method: 'GET',
+          path: `/projects/${encodeProjectId(project)}/pipelines/${pipelineId}/jobs`,
+          action: 'get_pipeline_status',
+        },
+        100,
+      );
+      return {
+        jobs: parse(z.array(gitlabJobSchema), pages.items, 'get_pipeline_status'),
+        truncated: pages.truncated,
+      };
+    },
 
     jobTrace: async (project, jobId) => {
       const response = await http.requestText({

@@ -13,6 +13,7 @@ import {
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  ManualNotRunLinks,
   ManualNotRunValue,
   ReadyBlockedNotice,
   readyBlockedPipeline,
@@ -38,12 +39,23 @@ afterEach(() => {
 });
 
 describe('the CI item when a pass left manual jobs nobody started', () => {
-  it('reads CI passed — the manual job sentry-release-commit was not run, the job linked', () => {
+  it('reads CI passed — the manual job sentry-release-commit was not run, the job linked in the basis', () => {
+    // The value sits inside the row's `<summary>`, so it links nothing (the UI review of #114).
     render(<ManualNotRunValue notRun={notRun()} />);
     const value = document.querySelector('[data-ci-manual-not-run]');
     expect(value?.textContent).toBe('CI passed — the manual job sentry-release-commit was not run');
+    expect(screen.queryByRole('link')).toBeNull();
+    cleanup();
+    render(<ManualNotRunLinks notRun={notRun()} />);
     const link = screen.getByRole('link', { name: 'sentry-release-commit' });
     expect(link.getAttribute('href')).toBe(JOB_URL);
+    cleanup();
+    const { container } = render(
+      <ManualNotRunLinks
+        notRun={notRun({ jobs: [{ name: 'sentry-release-commit', stage: null, url: null }] })}
+      />,
+    );
+    expect(container.textContent, 'no page, no line').toBe('');
   });
 
   it('names several jobs, and renders a hostile name as text, never as markup', () => {
@@ -77,6 +89,8 @@ describe('Ready over a pipeline the provider still shows blocked (TD-036 decisio
     expect(screen.getByRole('link', { name: 'pipeline 3038234623' }).getAttribute('href')).toBe(
       PIPELINE_URL,
     );
+    // The job is linked once in the sentence; its second mention is plain text (UI review of #114).
+    expect(screen.getAllByRole('link', { name: 'sentry-release-commit' })).toHaveLength(1);
   });
 
   it('says the provider generically when this build does not name it', () => {

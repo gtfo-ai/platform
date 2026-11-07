@@ -37,8 +37,9 @@
  * names replaces (d) with *exactly these must have run* — a named job still `manual` keeps the gate
  * waiting whatever its stage or `allow_failure`, even on a `success` pipeline, a named job that ran
  * and failed (or was canceled) fails it, and a name the pipeline does not contain is not waited for
- * (BACKLOG 1474). A named job the provider `skipped` did not run and will not: it is not waited for
- * either, for the same reason.
+ * (BACKLOG 1474). A named job the provider `skipped` did not run and will not: it **fails** the
+ * gate, saying the pipeline's rules skipped it (BACKLOG 1493). And a job list the provider cut
+ * (`jobs_truncated`, BACKLOG 1490) never passes on this rule: the gate waits as before.
  *
  * ## What it does not change
  *
@@ -54,7 +55,7 @@ import type { PipelineStatus } from '../ports/integrations/git-provider.js';
 import type { ProjectSettings } from './settings.js';
 
 type PipelineJob = PipelineStatus['jobs'][number];
-type JudgedPipeline = Pick<PipelineStatus, 'status' | 'jobs'>;
+type JudgedPipeline = Pick<PipelineStatus, 'status' | 'jobs' | 'jobs_truncated'>;
 
 /** `pipeline.ci.required_manual_jobs`, read (TD-036 decision 3). */
 export type ManualJobPolicy =
@@ -103,8 +104,10 @@ export const manualJobsHolding = (
   readonly jobs: readonly PipelineJob[];
   readonly unseen: boolean;
 } => {
+  // BACKLOG 1490: a job list the provider cut is a list that may hide what holds the pipeline.
   const unseen =
-    pipeline.status === 'manual' && !pipeline.jobs.some((job) => isBlockingManualJob(job));
+    pipeline.status === 'manual' &&
+    (pipeline.jobs_truncated === true || !pipeline.jobs.some((job) => isBlockingManualJob(job)));
   switch (policy.kind) {
     case 'none':
       return { holds: false, jobs: [], unseen };
@@ -135,7 +138,12 @@ export type CiWaitCause =
   /** An unstarted manual job the policy requires (a test job, by default). */
   | 'manual_required'
   /** The provider holds the pipeline at a manual job the read cannot see. */
-  | 'manual_unseen';
+  | 'manual_unseen'
+  /**
+   * The provider's job list was cut (`jobs_truncated`, BACKLOG 1490), so the rule cannot say that no
+   * unlisted job is one it requires: it never passes on a cut list and waits as before.
+   */
+  | 'jobs_unseen';
 
 export type CiPipelineJudgement =
   | {
@@ -152,6 +160,12 @@ export type CiPipelineJudgement =
       readonly failing: readonly PipelineJob[];
       /** A failure of a job the project named in `required_manual_jobs`, not the pipeline's own. */
       readonly required: boolean;
+      /**
+       * The named required jobs the provider reports `skipped` (BACKLOG 1493): the pipeline's
+       * rules mean they never run, so *exactly these must have run* cannot be met. Also in
+       * `failing`; listed apart so the reason can say they were skipped rather than failed.
+       */
+      readonly skipped: readonly PipelineJob[];
     }
   | {
       readonly kind: 'waiting';
@@ -188,6 +202,7 @@ export const judgeCiPipeline = (
       kind: 'failed',
       failing: jobs.filter((job) => job.status === 'failed' && !job.allow_failure),
       required: false,
+      skipped: [],
     };
   }
   if (pipeline.status === 'pending' || pipeline.status === 'running') {
@@ -199,14 +214,35 @@ export const judgeCiPipeline = (
       : [];
   // (b), on a `success` pipeline too: a provider that calls a pipeline green while a job it counts
   // failed is not believed. And a required job that ran and failed fails the gate (decision 3).
+  // BACKLOG 1493: a required job the pipeline's rules skipped never runs, so it is never satisfied.
+  const requiredSkipped =
+    policy.kind === 'named'
+      ? jobs.filter((job) => job.status === 'skipped' && policy.names.has(job.name))
+      : [];
   const disallowed = jobs.filter((job) => ranAndFailed(job) && !job.allow_failure);
-  if (disallowed.length > 0 || requiredFailed.length > 0) {
-    const failing = [...disallowed, ...requiredFailed.filter((job) => !disallowed.includes(job))];
-    return { kind: 'failed', failing, required: disallowed.length === 0 };
+  if (disallowed.length > 0 || requiredFailed.length > 0 || requiredSkipped.length > 0) {
+    const failing = [
+      ...disallowed,
+      ...[...requiredFailed, ...requiredSkipped].filter((job) => !disallowed.includes(job)),
+    ];
+    return {
+      kind: 'failed',
+      failing,
+      required: disallowed.length === 0,
+      skipped: requiredSkipped,
+    };
   }
   // (a), on a `success` pipeline too: nothing passes while a job is still queued or running.
   if (jobs.some((job) => job.status === 'pending' || job.status === 'running')) {
     return { kind: 'waiting', cause: 'in_flight', heldAt };
+  }
+  // BACKLOG 1490: on a cut job list the rule never passes — not a held pipeline, and not a green
+  // one a list of names is asked of (a named job may be among the unlisted).
+  if (
+    pipeline.jobs_truncated === true &&
+    (pipeline.status === 'manual' || policy.kind === 'named')
+  ) {
+    return { kind: 'waiting', cause: 'jobs_unseen', heldAt };
   }
   if (pipeline.status === 'manual') {
     // (c) — a `success` pipeline with no job listed passes as it always did.

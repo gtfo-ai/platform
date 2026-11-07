@@ -2164,10 +2164,10 @@ describe('which recorded row a retried wake-up still delivers', () => {
 describe('the manual-job sentences (S-27.2)', () => {
   it('says what the pass left unstarted, in the singular and the plural', () => {
     expect(manualNotRunSentence(['sentry-release-commit'])).toBe(
-      'CI passed — the manual job "sentry-release-commit" was not run',
+      'CI passed — the manual job sentry-release-commit was not run',
     );
     expect(manualNotRunSentence(['sentry-release-commit', 'deploy'])).toBe(
-      'CI passed — the manual jobs "sentry-release-commit", "deploy" were not run',
+      'CI passed — the manual jobs sentry-release-commit, deploy were not run',
     );
   });
 
@@ -2178,13 +2178,24 @@ describe('the manual-job sentences (S-27.2)', () => {
       jobs: ['sentry-release-commit'],
     });
     expect(sentence).toBe(
-      'GitLab shows pipeline 3038234623, the latest for this commit, as blocked at the manual job "sentry-release-commit". ' +
-        'If this project requires pipelines to succeed, GitLab won\'t merge it until "sentry-release-commit" has run: start it on GitLab.',
+      'GitLab shows pipeline 3038234623, the latest for this commit, as blocked at the manual job sentry-release-commit. ' +
+        'If this project requires pipelines to succeed, GitLab won’t merge it until sentry-release-commit has run: start it on GitLab.',
     );
     expect(sentence).not.toMatch(/can be merged/i);
     expect(
       readyBlockedSentence({ provider: 'GitLab', pipelineId: '1', jobs: ['a', 'b'] }),
-    ).toContain('until "a", "b" have run: start them on GitLab.');
+    ).toContain('until a, b have run: start them on GitLab.');
+  });
+
+  it('opens with the provider capitalised and keeps it lower-case mid-sentence', () => {
+    const sentence = readyBlockedSentence({
+      provider: 'the git provider',
+      pipelineId: '7',
+      jobs: ['deploy'],
+    });
+    expect(sentence.startsWith('The git provider shows pipeline 7')).toBe(true);
+    expect(sentence).toContain('the git provider won’t merge it until deploy has run');
+    expect(sentence.endsWith('start it on the git provider.')).toBe(true);
   });
 
   it('unlabels a markdown link planted in a job name or the pipeline id', () => {

@@ -37,6 +37,13 @@
  * read (before the worker session's #89) quotes the recorded sentence after *What the platform saw
  * last:*.
  *
+ * **At Ready, over a pipeline the provider still shows blocked** (S-27.2, TD-036 decision 7,
+ * `./ci-manual-not-run.tsx`): when the latest CI pass left blocking manual jobs nobody started and
+ * the record says the pipeline is still `manual`, the slot says, as information and never *Needs
+ * you*: "GitLab shows pipeline n, the latest for this commit, as blocked at the manual job X. If
+ * this project requires pipelines to succeed, GitLab won’t merge it until X has run: start it on
+ * GitLab." It never says the merge request can be merged (BD-007: a person merges).
+ *
  * **While its run waits for a machine nobody has** (S-26.8b part 2, the M26 UX spec § 4,
  * `./waiting-notice.tsx`): why, in the long form, and the next steps the reader may take — *Take
  * it* / *Assign…* through the header's owner control, *Open Workers* for the machine's owner,

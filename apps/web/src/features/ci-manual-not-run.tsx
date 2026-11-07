@@ -29,13 +29,23 @@ export const readyBlockedPipeline = (detail: TaskDetailResponse): CiManualNotRun
     : null;
 };
 
-/** The job names, each linked to its page when the provider gave one, joined by commas. */
-const JobNames = ({ notRun }: { readonly notRun: CiManualNotRun }): ReactElement => (
+/**
+ * The job names joined by commas — each linked to its page when the provider gave one and `linked`
+ * is set, else plain untrusted text (a sentence links a job once, and a value inside a row's
+ * `<summary>` links none: its links are in the row's basis).
+ */
+const JobNames = ({
+  notRun,
+  linked,
+}: {
+  readonly notRun: CiManualNotRun;
+  readonly linked: boolean;
+}): ReactElement => (
   <>
     {notRun.jobs.map((job, index) => (
       <Fragment key={`${job.name}:${String(index)}`}>
         {index === 0 ? null : ', '}
-        {job.url === null ? (
+        {!linked || job.url === null ? (
           <UntrustedText value={job.name} />
         ) : (
           <ExternalLink url={job.url} label={job.name} className={LINK} />
@@ -45,7 +55,7 @@ const JobNames = ({ notRun }: { readonly notRun: CiManualNotRun }): ReactElement
   </>
 );
 
-/** The CI item's value: *CI passed — the manual job X was not run*. */
+/** The CI item's value: *CI passed — the manual job X was not run*, the names as plain text. */
 export const ManualNotRunValue = ({
   notRun,
 }: {
@@ -54,10 +64,29 @@ export const ManualNotRunValue = ({
   const words = manualNotRunWords(notRun.jobs.length);
   return (
     <span data-ci-manual-not-run="">
-      {words.lead} <JobNames notRun={notRun} /> {words.tail}
+      {words.lead} <JobNames notRun={notRun} linked={false} /> {words.tail}
     </span>
   );
 };
+
+/**
+ * The CI item's basis line for the jobs a pass left unstarted: each job's page, where a person
+ * starts it, or `null` when the provider gave none.
+ */
+export const ManualNotRunLinks = ({
+  notRun,
+}: {
+  readonly notRun: CiManualNotRun;
+}): ReactElement | null =>
+  notRun.jobs.some((job) => job.url !== null) ? (
+    <span data-ci-manual-not-run-links="">
+      {manualNotRunWords(notRun.jobs.length).links}{' '}
+      <JobNames
+        notRun={{ ...notRun, jobs: notRun.jobs.filter((job) => job.url !== null) }}
+        linked
+      />
+    </span>
+  ) : null;
 
 /** TD-036 decision 7's sentence, for the Ready callout. */
 export const ReadyBlockedNotice = ({
@@ -78,8 +107,8 @@ export const ReadyBlockedNotice = ({
       ) : (
         <ExternalLink url={notRun.pipeline_url} label={pipeline} className={LINK} />
       )}
-      {words.blockedAt} <JobNames notRun={notRun} />
-      {words.requires} <JobNames notRun={notRun} /> {words.start}
+      {words.blockedAt} <JobNames notRun={notRun} linked />
+      {words.requires} <JobNames notRun={notRun} linked={false} /> {words.start}
     </p>
   );
 };

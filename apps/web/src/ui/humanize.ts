@@ -771,10 +771,14 @@ export const auditEntityLabel = (type: string): string =>
  */
 export const manualNotRunWords = (
   count: number,
-): { readonly lead: string; readonly tail: string } =>
+): { readonly lead: string; readonly tail: string; readonly links: string } =>
   count === 1
-    ? { lead: 'CI passed — the manual job', tail: 'was not run' }
-    : { lead: 'CI passed — the manual jobs', tail: 'were not run' };
+    ? { lead: 'CI passed — the manual job', tail: 'was not run', links: 'Start it on its page:' }
+    : {
+        lead: 'CI passed — the manual jobs',
+        tail: 'were not run',
+        links: 'Start them on their pages:',
+      };
 
 /**
  * **What Ready says about a pipeline the provider still shows blocked** (S-27.2, TD-036 decision 7):

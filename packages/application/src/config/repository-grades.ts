@@ -13,9 +13,16 @@
  *    **unions**, `policies.risk_classes` adds classes and adds paths and requirements to a class the
  *    settings define, `policies.review_checklists` adds items, `commands` narrow again after the
  *    settings (`runCommandPolicy`'s layers), `pipeline.wip` may lower a WIP limit and never
- *    raise it (WP-91), and `verification.mode` may move a project to `ci` and never back to `local`
+ *    raise it (WP-91), `verification.mode` may move a project to `ci` and never back to `local`
  *    (BD-025's 2026-10-05 amendment: `ci` only removes commands, which the file's own
- *    `commands.block` could already do). Whatever the file tried to remove or raise is **reported**.
+ *    `commands.block` could already do), and `pipeline.ci.required_manual_jobs` (S-27.2, the
+ *    coordinator's ruling on #114) may only require **more**: `all` is applied, a list of names is
+ *    a union with the settings' list (or with the settings' `[]`), and `[]` is never applied — the
+ *    file is written by the agent whose merge request the CI gate judges, so a file that says `[]`
+ *    would let that agent pass its own untested change; `[]` comes only from the project settings.
+ *    Over a silent setting (the default, which waits on every unstarted manual test job) a list is
+ *    not applied either, because a list replaces that rule rather than adding to it. Whatever the
+ *    file tried to remove or raise is **reported**.
  *  - **not applied** — dropped and **reported** in the reading's `not_applied`: the dial and every
  *    key that overrides one of its policies (`AUTONOMY_POLICY_OVERRIDE_KEYS`, Q78 — a test holds the
  *    two lists together), the other policies whose loosening turns a check off (the dependency
@@ -37,16 +44,12 @@
  *    `prompt_append` (WP-92): a project prompt reaches the model inside a data block, adds to the
  *    role prompt and never replaces it, and grants no tool, command or path — and the file it names
  *    is repository content that merge rights could already write under `.agentic/prompts/` anyway.
- *    `pipeline.ci` (S-27.2, TD-036 decision 3 — the key lives in this file by that decision) is
- *    operational for the same reason: `required_manual_jobs` names which of the project's **own**
- *    manual jobs the CI gate waits for, and the CI file that makes a job manual is repository
- *    content merge rights already control (the agent cannot change it: it is a protected path, and
- *    the tamper check fails a change to it). `[]` passes nothing the provider did not run green.
  *    A value that names a file outside that directory is dropped and reported
  *    (`projectPromptValueNotApplied`), so it cannot shadow a settings value that resolves.
  */
 
 import {
+  MAX_REQUIRED_MANUAL_JOBS,
   MAX_REVIEW_CHECKLIST_ITEMS,
   MAX_REVIEW_CHECKLISTS,
   MAX_ROUTED_REVIEWERS,
@@ -80,7 +83,7 @@ export const REPOSITORY_KEY_GRADES: Readonly<Record<string, RepositoryKeyGrade>>
   'pipeline.limits.ci_timeout_minutes': 'operational',
   'pipeline.limits.question_timeout': 'not_applied',
   'pipeline.wip': 'tighten_only',
-  'pipeline.ci': 'operational',
+  'pipeline.ci': 'tighten_only',
   'stages.*.model': 'operational',
   'stages.*.effort': 'operational',
   'stages.*.max_turns': 'operational',
@@ -185,6 +188,16 @@ export const withoutNotAppliedKeys = (
       notApplied.push({ key: removed, reason: reasonFor(path) });
     }
   }
+  // S-27.2 (the coordinator's ruling on #114): `required_manual_jobs: []` is never the file's to
+  // say, whatever the settings hold, so it is dropped here — where the refresh logs the key — and
+  // reported; `tightenRepositoryLayer` then decides the file's other values against the settings.
+  const pipeline = copy.pipeline;
+  const ci = isObject(pipeline) ? pipeline.ci : undefined;
+  const required = isObject(ci) ? ci.required_manual_jobs : undefined;
+  if (Array.isArray(required) && required.length === 0) {
+    removePath(copy, ['pipeline', 'ci', 'required_manual_jobs'], '');
+    notApplied.push({ key: REQUIRED_MANUAL_JOBS_KEY, reason: REQUIRED_NONE_REASON });
+  }
   // WP-92: a prompt key whose value names no file the platform reads is dropped, not merged — so
   // it cannot shadow a settings value that does — and reported with the reason.
   for (const item of projectPromptValueNotApplied(copy as ConfigValues)) {
@@ -195,6 +208,11 @@ export const withoutNotAppliedKeys = (
 };
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
+
+const REQUIRED_MANUAL_JOBS_KEY = 'pipeline.ci.required_manual_jobs';
+
+/** Why a file's `required_manual_jobs: []` is not applied (S-27.2). Platform text. */
+const REQUIRED_NONE_REASON = `${LOOSENING_REASON}; \`[]\` lets the CI gate pass a pipeline whose manual test jobs nobody started, and the repository file is written by the agent whose merge request the gate judges — only the project settings may say it`;
 
 const droppedNote = (key: string, kept: readonly string[]): RepositoryConfigNotApplied => ({
   key,
@@ -220,9 +238,9 @@ export const tightenRepositoryLayer = (
   const wip = tightenWip(project, repo, notApplied);
   const withWipOnly: ConfigValues =
     wip === undefined ? repo : { ...repo, pipeline: { ...repo.pipeline, wip } };
-  const withWip = tightenUnattended(
+  const withWip = tightenManualJobs(
     project,
-    tightenVerification(project, withWipOnly, notApplied),
+    tightenUnattended(project, tightenVerification(project, withWipOnly, notApplied), notApplied),
     notApplied,
   );
   const policies = repo.policies;
@@ -310,6 +328,58 @@ export const tightenRepositoryLayer = (
   }
 
   return { values: { ...withWip, policies: next }, notApplied };
+};
+
+/**
+ * `pipeline.ci.required_manual_jobs` from the file, **only ever requiring more** (S-27.2, the
+ * coordinator's ruling on #114). The order the policy reads is `[]` < the default (absent: every
+ * unstarted manual test job) < `all`, with a list beside them, and the file may only move up it:
+ *
+ *  - `all` is applied as written — it requires every manual job;
+ *  - `[]` never reaches here (`withoutNotAppliedKeys` dropped and reported it);
+ *  - a list over the settings' `[]` or the settings' list is applied as the **union**, so no name
+ *    the project settings require is ever removed, and the names the file left out are reported;
+ *  - a list over the settings' `all`, or over silent settings — whose default waits on every manual
+ *    test job, a rule a list would *replace* rather than add to — is not applied and is reported.
+ */
+const tightenManualJobs = (
+  project: ConfigValues,
+  repo: ConfigValues,
+  notApplied: RepositoryConfigNotApplied[],
+): ConfigValues => {
+  const declared = repo.pipeline?.ci?.required_manual_jobs;
+  if (declared === undefined || declared === 'all') return repo;
+  const settings = project.pipeline?.ci?.required_manual_jobs;
+  const withValue = (value: readonly string[] | undefined): ConfigValues => {
+    const { required_manual_jobs: _dropped, ...rest } = repo.pipeline?.ci ?? {};
+    return {
+      ...repo,
+      pipeline: {
+        ...repo.pipeline,
+        ci: value === undefined ? rest : { ...rest, required_manual_jobs: [...value] },
+      },
+    };
+  };
+  if (settings === 'all' || settings === undefined) {
+    notApplied.push({
+      key: REQUIRED_MANUAL_JOBS_KEY,
+      reason:
+        settings === 'all'
+          ? `${LOOSENING_REASON}; the project settings require every manual job (all), which is still in force`
+          : `${LOOSENING_REASON}; a list of names replaces the default rule, which waits on every unstarted manual test job — the default is still in force; state all, or set the list on the project settings page`,
+    });
+    return withValue(undefined);
+  }
+  const kept = settings.filter((name) => !declared.includes(name));
+  if (kept.length > 0) notApplied.push(droppedNote(REQUIRED_MANUAL_JOBS_KEY, kept));
+  const merged = unique([...settings, ...declared]);
+  if (merged.length > MAX_REQUIRED_MANUAL_JOBS) {
+    notApplied.push({
+      key: REQUIRED_MANUAL_JOBS_KEY,
+      reason: `at most ${MAX_REQUIRED_MANUAL_JOBS} names; the settings' names were kept first and the file's extra ones dropped`,
+    });
+  }
+  return withValue(merged.slice(0, MAX_REQUIRED_MANUAL_JOBS));
 };
 
 type WipKey = 'max_parallel_tasks' | 'max_tasks_in_pipeline';

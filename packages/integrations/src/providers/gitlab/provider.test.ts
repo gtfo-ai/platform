@@ -890,6 +890,39 @@ describe('CI', () => {
     ]);
   });
 
+  /**
+   * BACKLOG 1490: a job list cut at the binding's `max_pages` says so on the port, because the CI
+   * gate passes a held pipeline on its jobs and must not pass one on half a list; the whole list
+   * says nothing.
+   */
+  it('reports a job list cut at max_pages as jobs_truncated, and a whole one without it', async () => {
+    const script = (nextPage: string) => ({
+      [`GET /projects/${P}/pipelines?sha=${pipeline.sha}&order_by=id&sort=desc&per_page=1`]: {
+        status: 200,
+        body: [{ id: 900, sha: pipeline.sha, status: 'manual' }],
+      },
+      [`GET /projects/${P}/pipelines/900`]: {
+        status: 200,
+        body: { ...pipeline, status: 'manual', finished_at: null },
+      },
+      [`GET /projects/${P}/pipelines/900/jobs?per_page=100&page=1`]: {
+        status: 200,
+        body: [{ id: 9004, name: 'lint', stage: 'test', status: 'success', allow_failure: false }],
+        headers: { 'x-next-page': nextPage },
+      },
+    });
+    const cut = await build(script('2'), { config: { max_pages: 1 } }).port.getPipelineStatus(
+      PROJECT,
+      pipeline.sha,
+    );
+    expect(cut?.jobs_truncated).toBe(true);
+    const whole = await build(script(''), { config: { max_pages: 1 } }).port.getPipelineStatus(
+      PROJECT,
+      pipeline.sha,
+    );
+    expect(whole).not.toHaveProperty('jobs_truncated');
+  });
+
   it('rejects a log ref that is not a GitLab job id before making a request', async () => {
     const { port, calls } = build({});
     await expect(port.getJobLog(PROJECT, 'log:9002')).rejects.toBeInstanceOf(IntegrationError);

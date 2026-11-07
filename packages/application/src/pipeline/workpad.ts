@@ -223,7 +223,8 @@ export const renderWorkpad = (view: WorkpadView): string => {
       lines.push(
         '',
         readyBlockedSentence({
-          provider: view.gitProvider ?? 'The git provider',
+          // Mid-sentence form; the sentence capitalises it where it opens (UI review of #114).
+          provider: view.gitProvider ?? 'the git provider',
           pipelineId: notRun.pipeline_id,
           jobs,
         }),

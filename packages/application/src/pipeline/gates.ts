@@ -745,6 +745,36 @@ const passedWithManualDetail = (
 ): string =>
   `pipeline ${status.id} ${status.status === 'success' ? 'succeeded' : 'passed with every job that ran green'}; the manual ${notRun.length === 1 ? 'job' : 'jobs'} ${notRun.map((job) => JSON.stringify(boundedJobName(job.name, redact))).join(', ')} ${notRun.length === 1 ? 'was' : 'were'} not run, and the CI gate does not require ${notRun.length === 1 ? 'it' : 'them'} (BD-024, TD-036)`;
 
+/**
+ * The reason a required manual job fails the gate (TD-036 decision 3): the ones that ran and did
+ * not succeed, and — BACKLOG 1493 — the ones the pipeline's rules skipped, which never run, each
+ * said in plain words. Names redacted, then bounded.
+ */
+const requiredFailureDetail = (
+  status: Pick<PipelineStatus, 'id' | 'status'>,
+  judged: Extract<CiPipelineJudgement, { kind: 'failed' }>,
+  redact: (text: string) => string,
+): string => {
+  const named = (jobs: readonly PipelineStatus['jobs'][number][]): string =>
+    jobs.map((job) => boundedJobName(job.name, redact)).join(', ');
+  const ran = judged.failing.filter((job) => !judged.skipped.includes(job));
+  const parts = [
+    ...(judged.skipped.length === 0
+      ? []
+      : [
+          judged.skipped.length === 1
+            ? `the required manual job ${named(judged.skipped)} was skipped by the pipeline's rules`
+            : `the required manual jobs ${named(judged.skipped)} were skipped by the pipeline's rules`,
+        ]),
+    ...(ran.length === 0
+      ? []
+      : [
+          `a manual job the project requires (pipeline.ci.required_manual_jobs) ran and did not succeed: ${named(ran)}`,
+        ]),
+  ];
+  return `pipeline ${status.id} is ${status.status}, but ${parts.join('; and ')}`;
+};
+
 /** What {@link ciVerdictOf} answers: a reading the settlement judges, or the gate's wait. */
 export type CiVerdict =
   | { readonly kind: 'reading'; readonly reading: CiReading }
@@ -782,9 +812,12 @@ export const ciVerdictOf = (
         kind: 'failed',
         status: failingStatus,
         failingJobs: failed,
-        logJobs: judged.failing.map((job) => ({ name: job.name, logRef: job.log_ref ?? null })),
+        // A job the pipeline's rules skipped never ran, so it has no log to read (BACKLOG 1493).
+        logJobs: judged.failing
+          .filter((job) => !judged.skipped.includes(job))
+          .map((job) => ({ name: job.name, logRef: job.log_ref ?? null })),
         detail: judged.required
-          ? `pipeline ${status.id} is ${status.status}, but a manual job the project requires (pipeline.ci.required_manual_jobs) ran and did not succeed: ${names}`
+          ? requiredFailureDetail(status, judged, redact)
           : status.status === 'manual'
             ? `pipeline ${status.id} is held at a manual job and a job that is not allowed to fail did not succeed: ${names}`
             : failed.length === 0

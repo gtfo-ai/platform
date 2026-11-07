@@ -192,14 +192,14 @@ describe('renderWorkpad', () => {
       checked_at: '2026-11-07T09:00:00.000Z',
     };
 
-    it('reads CI passed — the manual job "sentry-release-commit" was not run', () => {
+    it('reads CI passed — the manual job sentry-release-commit was not run', () => {
       const markdown = renderWorkpad({
         ...view,
         currentStage: 'code_review',
         ciManualNotRun: notRun,
         gitProvider: 'GitLab',
       });
-      expect(markdown).toContain('CI passed — the manual job "sentry-release-commit" was not run');
+      expect(markdown).toContain('CI passed — the manual job sentry-release-commit was not run');
       expect(markdown, 'not at Ready yet').not.toContain('blocked');
     });
 
@@ -212,8 +212,8 @@ describe('renderWorkpad', () => {
         gitProvider: 'GitLab',
       });
       expect(markdown).toContain(
-        'GitLab shows pipeline 3038234623, the latest for this commit, as blocked at the manual job "sentry-release-commit". ' +
-          'If this project requires pipelines to succeed, GitLab won\'t merge it until "sentry-release-commit" has run: start it on GitLab.',
+        'GitLab shows pipeline 3038234623, the latest for this commit, as blocked at the manual job sentry-release-commit. ' +
+          'If this project requires pipelines to succeed, GitLab won’t merge it until sentry-release-commit has run: start it on GitLab.',
       );
       expect(markdown).not.toMatch(/can be merged/i);
       // A pipeline the provider no longer holds: the CI line, and no blocked sentence.
@@ -237,7 +237,18 @@ describe('renderWorkpad', () => {
         },
       });
       expect(markdown).not.toContain('[Approve]');
-      expect(markdown).toContain('"https://evil.example.test"');
+      expect(markdown).toContain('the manual job https://evil.example.test was not run');
+    });
+
+    it('opens the sentence with the git provider capitalised when the binding names none', () => {
+      const markdown = renderWorkpad({
+        ...view,
+        state: 'ready_for_merge',
+        currentStage: 'ready_for_merge',
+        ciManualNotRun: notRun,
+      });
+      expect(markdown).toContain('The git provider shows pipeline 3038234623');
+      expect(markdown).toContain('the git provider won’t merge it');
     });
 
     it('says nothing about manual jobs when the pass left none', () => {

@@ -491,7 +491,12 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 >   list too; `pending`/`running` wait and `failed`/`canceled`/`skipped` fail exactly as before.
 > - `pipeline.ci.required_manual_jobs` (technical/12) replaces (d): `[]` drops it, `all` waits on
 >   every held pipeline (before TD-036), a list of exact names waits for exactly those — still
->   `manual` waits even on a `success` pipeline, ran and failed fails, absent is not waited for.
+>   `manual` waits even on a `success` pipeline, ran and failed fails, **skipped by the pipeline's
+>   rules fails** ("the required manual job X was skipped by the pipeline's rules", BACKLOG 1493),
+>   absent is not waited for. From the repository file the key only tightens (technical/12).
+> - **A cut job list never passes on this rule** (BACKLOG 1490): GitLab's list stops at
+>   `max_pages` × 100 jobs and the port says so (`PipelineStatus.jobs_truncated`), so a held
+>   pipeline — or a green one asked for names — on a cut list waits as before.
 > - The pass is judged **before** the job's held-retry comparison (`recordCiRead` reads only a
 >   pending answer), so a passing read never reaches `ci_held_unchanged`, and it settles through
 >   `judgeCiSettlement` like a `success`, so the tamper check runs on it. A pass that left blocking

@@ -25,7 +25,7 @@
  * product/10:38 lists them — but they are the needs-you callout's, so the line leaves them out of
  * its count and says they are above instead of reading "3 checks need you" for one question.
  */
-import type { CiManualNotRun, TaskDetailResponse, TaskRecord } from '@platform/contracts';
+import type { TaskDetailResponse, TaskRecord } from '@platform/contracts';
 import { acceptanceVerdictDataSchema, reviewVerdictDataSchema } from '@platform/contracts';
 import { ChevronRightIcon } from '@primer/octicons-react/ChevronRightIcon';
 import { type ReactElement, type ReactNode, useId } from 'react';
@@ -36,7 +36,7 @@ import { Badge, Card, ErrorReason, formatMinutes, formatUsd, Metric } from '../u
 import { type Status, StatusIcon } from '../ui/status.js';
 import { Tooltip } from '../ui/tooltip.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
-import { ManualNotRunValue } from './ci-manual-not-run.js';
+import { ManualNotRunLinks, ManualNotRunValue } from './ci-manual-not-run.js';
 import { unmeasuredRunsText } from './cost-text.js';
 import {
   CRITERION_STATUS,
@@ -300,6 +300,12 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
   const [criteria, verdict] = useAcceptanceRows(task.id, artifacts);
   const checklists = useReviewChecklistLines(task.id, artifacts);
   const ciGate = latestStageRow(stages, 'ci_gate');
+  const ciValue = gateValueText(ciGate, { pass: 'green', fail: 'red' });
+  // S-27.2 (TD-036 decision 5): a pass that left manual jobs nobody started says which.
+  const notRun =
+    ciGate?.state === 'completed' && ciValue === 'green'
+      ? (detail.ci_manual_not_run ?? null)
+      : null;
   const rebaseGate = latestStageRow(stages, 'rebase_gate');
   const openQuestions = questions.filter((question) => question.status === 'open').length;
   const pendingApprovals = approvals.filter((approval) => approval.status === 'pending').length;
@@ -307,19 +313,19 @@ const useCheckRows = (detail: TaskDetailResponse): readonly CheckRowData[] => {
     {
       id: 'ci',
       label: 'CI status',
-      // S-27.2 (TD-036 decision 5): a pass that left manual jobs nobody started says which.
-      value:
-        ciGate?.state === 'completed' &&
-        gateValueText(ciGate, { pass: 'green', fail: 'red' }) === 'green' &&
-        (detail.ci_manual_not_run ?? null) !== null ? (
-          <ManualNotRunValue notRun={detail.ci_manual_not_run as CiManualNotRun} />
-        ) : (
-          gateValueText(ciGate, { pass: 'green', fail: 'red' })
-        ),
+      value: notRun === null ? ciValue : <ManualNotRunValue notRun={notRun} />,
       status: gateStatus(ciGate),
       definition:
         "The CI check's verdict on the merge request's latest commit, from the git host's own pipeline; when it needs you, it says why it could not decide.",
-      basis: gateBasisText(ciGate, 'ci_gate'),
+      // The jobs' pages are linked here, in the basis, never inside the row's `<summary>`.
+      basis:
+        notRun === null ? (
+          gateBasisText(ciGate, 'ci_gate')
+        ) : (
+          <>
+            {gateBasisText(ciGate, 'ci_gate')} <ManualNotRunLinks notRun={notRun} />
+          </>
+        ),
       required: true,
     },
     {

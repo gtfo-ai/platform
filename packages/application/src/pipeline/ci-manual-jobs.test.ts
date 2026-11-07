@@ -242,6 +242,49 @@ describe('judgeCiPipeline — the project’s rule (TD-036 decision 3)', () => {
   });
 });
 
+describe('what the rule cannot see, and what never runs (BACKLOG 1490, 1493)', () => {
+  it('never passes a held pipeline on a job list the provider cut, and waits as before', () => {
+    const cut = { ...AUT_6655, jobs_truncated: true };
+    expect(judgeCiPipeline(AUT_6655, DEFAULT_MANUAL_JOB_POLICY).kind).toBe('passed');
+    for (const policy of [DEFAULT_MANUAL_JOB_POLICY, { kind: 'none' } as const, NAMED('e2e')]) {
+      expect(judgeCiPipeline(cut, policy), policy.kind).toMatchObject({
+        kind: 'waiting',
+        cause: 'jobs_unseen',
+      });
+    }
+    // `mr_pipeline` reads the same hold: a cut list may hide a manual test job.
+    expect(manualJobsHolding(cut, DEFAULT_MANUAL_JOB_POLICY).holds).toBe(true);
+  });
+
+  it('waits on a cut list of a green pipeline only when it is asked for names', () => {
+    const green = {
+      ...pipeline('success', [job('unit', 'success', 'test')]),
+      jobs_truncated: true,
+    };
+    expect(judgeCiPipeline(green, DEFAULT_MANUAL_JOB_POLICY).kind).toBe('passed');
+    expect(judgeCiPipeline(green, NAMED('smoke'))).toMatchObject({
+      kind: 'waiting',
+      cause: 'jobs_unseen',
+    });
+  });
+
+  it('fails a required manual job the pipeline’s rules skipped: it never runs', () => {
+    const judged = judgeCiPipeline(
+      pipeline('success', [job('unit', 'success', 'test'), job('smoke', 'skipped', 'deploy')]),
+      NAMED('smoke'),
+    );
+    expect(judged).toMatchObject({ kind: 'failed', required: true });
+    expect(judged.kind === 'failed' && judged.skipped.map((each) => each.name)).toEqual(['smoke']);
+    // A skipped job nobody named is not the project's requirement: it passes as before.
+    expect(
+      judgeCiPipeline(
+        pipeline('success', [job('unit', 'success', 'test'), job('smoke', 'skipped', 'deploy')]),
+        DEFAULT_MANUAL_JOB_POLICY,
+      ).kind,
+    ).toBe('passed');
+  });
+});
+
 describe('manualJobsHolding — the question mr_pipeline shares (TD-036 decision 4)', () => {
   it('does not hold for a release step, holds for a test job, also inside a running pipeline', () => {
     expect(manualJobsHolding(AUT_6655, DEFAULT_MANUAL_JOB_POLICY).holds).toBe(false);
@@ -290,6 +333,7 @@ describe('the gate never passes what it must not', () => {
       'manual',
     ) as fc.Arbitrary<PipelineStatus['status']>,
     jobs: fc.array(jobArb, { maxLength: 8 }),
+    jobs_truncated: fc.boolean(),
   });
   const policyArb: fc.Arbitrary<ManualJobPolicy> = fc.oneof(
     fc.constant(DEFAULT_MANUAL_JOB_POLICY),
@@ -334,6 +378,16 @@ describe('the gate never passes what it must not', () => {
             (each.stage === 'test' || each.stage === null || !anyTestStage),
         );
         expect(heldTest).toBe(false);
+      }),
+      { numRuns: 2_000 },
+    );
+  });
+
+  it('never passes a held pipeline on a job list the provider cut (BACKLOG 1490)', () => {
+    fc.assert(
+      fc.property(pipelineArb, policyArb, (judgedPipeline, policy) => {
+        if (judgedPipeline.status !== 'manual' || !judgedPipeline.jobs_truncated) return;
+        expect(judgeCiPipeline(judgedPipeline, policy).kind).not.toBe('passed');
       }),
       { numRuns: 2_000 },
     );

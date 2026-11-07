@@ -161,7 +161,7 @@ getMergeRequestDiffStats(mr) -> {filesChanged, insertions, deletions} | null   #
 listDiscussions(mr) ; replyToDiscussion(mr, discussionId, markdown) ; resolveDiscussion(mr, discussionId)
 createDiscussion(mr, {path?, line?, markdown})         # review findings; both absent = a thread on the MR (WP-24's neutral summary)
 getMergeRequestDiff(mr, {limit}) -> [{oldPath, newPath, diff?, newFile, renamedFile, deletedFile, omitted}]  # review-only mode (WP-24)
-getPipelineStatus(headSha) -> {status, url, jobs[{name, status, stage, allowFailure, logRef}]}   # S-27.2 (TD-036 decision 1): `manual` = a person must start it; allowFailure false = counts toward the pipeline (a blocking manual job); stage = the provider's, or null when it has none (GitLab's jobs API `stage`); a pipeline `manual` = held at a blocking manual job
+getPipelineStatus(headSha) -> {status, url, jobs[{name, status, stage, allowFailure, logRef}], jobsTruncated?}   # jobsTruncated: the job list was cut (GitLab's max_pages), and the CI gate never passes on it (BACKLOG 1490). S-27.2 (TD-036 decision 1): `manual` = a person must start it; allowFailure false = counts toward the pipeline (a blocking manual job); stage = the provider's, or null when it has none (GitLab's jobs API `stage`); a pipeline `manual` = held at a blocking manual job
 getJobLog(jobId, {tailBytes}) -> string
 getBranchHead(project, branch) -> {branch, sha}   # WP-142: the branch is the caller's — always the stored `projects.default_branch` (was `getDefaultBranchHead(project)`, which also chose the branch). GitLab `GET /projects/:id/repository/branches/:branch`
 readCodeowners(project, ref) -> Rules

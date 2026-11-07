@@ -199,6 +199,13 @@ export const pipelineStatusSchema = z.strictObject({
   jobs: z.array(pipelineJobSchema),
   coverage_pct: coveragePctSchema.nullish(),
   finished_at: isoDateTimeSchema.nullish(),
+  /**
+   * `true` when the provider's job list was **cut** — GitLab's walk stopped at the binding's
+   * `max_pages` (BACKLOG 1490) — so `jobs` is not every job of the pipeline. The CI gate's
+   * manual-job rule never passes a held pipeline on a cut list (it cannot say no unlisted job is a
+   * manual test), and waits as before. Absent or `false`: `jobs` is the whole list.
+   */
+  jobs_truncated: z.boolean().optional(),
 });
 
 /** What {@link GitProviderPort.createMergeRequestPipeline} answers: the pipeline it started (WP-138). */

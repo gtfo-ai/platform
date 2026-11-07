@@ -1161,6 +1161,24 @@ describe('a manual job nobody started (S-27.2, TD-036)', () => {
     expect((result as { detail: string }).detail).toContain(`held at manual job "${heldJob}"`);
   });
 
+  /**
+   * BACKLOG 1490: GitLab's job list stops at `max_pages` × 100 jobs; a cut list may hide the manual
+   * test job that should keep the gate waiting, so the rule never passes on one.
+   */
+  it('waits — never passes — on AUT-6655’s shape when the provider cut the job list', async () => {
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getPipelineStatus: async () => ({
+        ...pipelineStatus('manual', AUT_6655),
+        finished_at: null,
+        jobs_truncated: true,
+      }),
+    });
+    expect(result.kind).toBe('pending');
+    expect((result as { ciRead?: { pipeline: { status: string } } }).ciRead?.pipeline.status).toBe(
+      'manual',
+    );
+  });
+
   it('names the test job it waits for, not the release step it is also held at', async () => {
     const result = await evaluate(
       templateStage('ci_gate'),
@@ -1275,6 +1293,29 @@ describe('a manual job nobody started (S-27.2, TD-036)', () => {
       expect(result).toMatchObject({ kind: 'settled', passed: false });
       expect(result.kind === 'settled' ? result.detail : '').toContain(
         'a manual job the project requires (pipeline.ci.required_manual_jobs) ran and did not succeed: smoke',
+      );
+    });
+
+    it('a named job the pipeline’s rules skipped fails the gate, in plain words (BACKLOG 1493)', async () => {
+      const result = await evaluate(
+        templateStage('ci_gate'),
+        storedTask(MR),
+        {
+          getPipelineStatus: async () =>
+            pipelineStatus('success', [
+              job('unit', 'success', false, 'test'),
+              job('smoke', 'skipped', false, 'deploy'),
+            ]),
+        },
+        { requiredManualJobs: ['smoke'] },
+      );
+      expect(result).toMatchObject({ kind: 'settled', passed: false });
+      expect(result.kind === 'settled' ? result.detail : '').toContain(
+        "the required manual job smoke was skipped by the pipeline's rules",
+      );
+      // A job that never ran has no log to read, and the reason does not pretend it failed.
+      expect(result.kind === 'settled' ? result.detail : '').not.toContain(
+        'Log of the failing job',
       );
     });
 

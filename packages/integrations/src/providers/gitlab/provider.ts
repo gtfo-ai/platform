@@ -1377,10 +1377,11 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       if (latest === null) {
         return null;
       }
-      const [full, jobs] = await Promise.all([
+      const [full, listed] = await Promise.all([
         client.pipeline(project, latest.id),
         client.pipelineJobs(project, latest.id),
       ]);
+      const jobs = listed.jobs;
       return {
         id: String(full.id),
         head_sha: full.sha,
@@ -1403,6 +1404,8 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         })),
         coverage_pct: full.coverage ?? null,
         finished_at: toIsoDateTimeOrNull(full.finished_at, 'get_pipeline_status'),
+        // BACKLOG 1490: a list cut at `max_pages` says so, and the CI gate does not pass on it.
+        ...(listed.truncated ? { jobs_truncated: true } : {}),
       };
     },
 
