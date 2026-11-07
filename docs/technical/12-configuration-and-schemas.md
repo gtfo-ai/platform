@@ -221,9 +221,11 @@ status_mapping:                  # stage id or task state -> the tracker's own s
 >   take_assigned_tickets: false        # intake skips a ticket assigned to someone else unless true
 >   assign_owner: false                 # S-26.3: write a platform-set owner back to the tracker (opt-in)
 > ```
-> `assign_owner` is not a slot (it neither claims nor supersedes `status_mapping`); it is the owner
-> write-back of TD-031's 2026-11-06 amendment item 4, default `false`, and only Jira Cloud declares the
-> `assignTo` member it needs (`TaskManagementCapabilities.assignOthers`).
+> `assign_owner` is the owner write-back of TD-031's 2026-11-06 amendment item 4, default `false`, and
+> only Jira Cloud declares the `assignTo` member it needs (`TaskManagementCapabilities.assignOthers`).
+> It is not a slot, so it does not supersede `status_mapping`; but it is a key of the block, and **a
+> block that exists claims** (`claim` defaults to true) — so a binding that wants the write-back
+> without the claim adds `claim: false` beside it, as the Jira setup guide says.
 > Every slot is optional, and the example's names are invented. At save, the single slots must be
 > pairwise distinct and distinct from `pickup_status`, and `returned` must be disjoint from them. Every
 > name must be in the provider's `listStatuses()`, compared case-insensitively:

@@ -1001,9 +1001,10 @@ const lifecycleStatusNameSchema = nonEmptyStringSchema
  * somebody else. `assign_owner` (S-26.3, TD-031's 2026-11-06 amendment item 4) is the opt-in
  * **write-back**: when it is `true`, a person the platform makes a task's owner (a command or a
  * pick) is assigned the ticket in the tracker too, through the `ticket_owner_assign` duty; it
- * defaults to **false**, block or no block, and it is not a slot, so it neither claims nor
- * supersedes `status_mapping`. None of them carries a `.default()`, because published schemas
- * carry none (the package convention) — the reader applies the default.
+ * defaults to **false**, block or no block. It is not a slot, so it does not supersede
+ * `status_mapping` — but a block that exists claims (`claim`'s default), so a binding that wants the
+ * write-back without the claim sets `claim: false` beside it. None of them carries a `.default()`,
+ * because published schemas carry none (the package convention) — the reader applies the default.
  */
 export const ticketLifecycleSchema = z
   .strictObject({

@@ -10,7 +10,9 @@
  *   never a release — the platform never unassigns a person, TD-029 decision 5), on a live task that
  *   names a provider ticket, when the project's task-management binding sets
  *   `lifecycle.assign_owner`. **With the switch off — the default — nothing is enqueued and no
- *   provider is called.**
+ *   provider is called.** An event with no `owner_changed_at` (one written before S-26.3) **fails
+ *   safe**: the instant the duty would re-validate against is unknown, so nothing is enqueued and
+ *   the reason is logged — a person's next assignment writes back.
  * - The duty, when it fires:
  *   1. **re-validates** (TD-004: a job cannot be cancelled). The task must be live, the switch still
  *      on, and the task's owner, its source and `owner_changed_at` still the event's
@@ -34,13 +36,19 @@
  *      unavailable or rate-limited past the executor's own retries is put back too and **thrown**,
  *      so the job's retry presets again from the restored value; every other refusal (a missing
  *      *Assign Issues* permission, an account the tracker does not know) ends the job.
+ *   6. **after a terminal refusal with nothing to restore** — the preset was already in place when
+ *      this try began, because a process died between an earlier try's preset and its restore —
+ *      it **reads the ticket** and writes the tracker's actual assignee into `ticket_assignee`
+ *      (still only while the column holds the preset). Otherwise the stale preset would make the
+ *      next sync read the tracker's real assignee as a change and drop the platform's owner. A read
+ *      that fails leaves the preset and logs it (the backlog 1420 case, closed here).
  *
  * **Residuals, stated.** Jira has no conditional assign: a person who changes the tracker between
  * the preset and the `PUT` is overwritten by it, and the next tracker read then follows the ticket
- * back to the platform's owner. A process that dies between the preset and the restore leaves the
- * preset in place; the retry finds it already set and so cannot restore what it replaced, and a
- * terminal refusal on that retry leaves `ticket_assignee` naming the owner while the tracker names
- * somebody else — until that somebody changes it again.
+ * back to the platform's owner (backlog 1421). A sync that **runs** between the preset and the `PUT`
+ * reads the tracker's old assignee, which differs from the preset, so it moves the owner — and the
+ * read after the `PUT` lands moves it back: TD-031's *"a sync racing the call reads no change"*
+ * holds only for reads made after the call (backlog 1422).
  */
 import type { ExternalIdentity, Id, IsoDateTime, TicketAssignee } from '@platform/contracts';
 import {
@@ -51,7 +59,9 @@ import {
   ownerWriteBackStillDue,
   presetTicketAssignee,
   restoreTicketAssignee,
+  sameTicketAssignee,
   type TaskOwnership,
+  ticketAssigneeOf,
 } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
 import { TransactionOpenError } from '../events/open-transaction.js';
@@ -70,6 +80,7 @@ import { TaskOwnerConflictError } from './owner-sync.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { PipelineStore } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
+import { readTicketForTask } from './ticket-snapshot.js';
 
 /** The handler's `handler_executions` key; renaming it re-runs it over the log. */
 export const OWNER_WRITE_BACK_HANDLER = 'pipeline.ticket.owner_assign';
@@ -86,8 +97,8 @@ export const ownerWriteBackKeyFor = (taskId: Id, causeEventId: Id): string =>
 /**
  * `task.owner.changed` → the `ticket_owner_assign` duty, when the module docblock's conditions
  * hold. The instant to re-validate against is the event's `owner_changed_at`; an event written
- * before S-26.3 has none, and the row's own instant stands in while the row still names this owner
- * as the platform's (otherwise a later change has its own wake-up, and this one asks for nothing).
+ * before S-26.3 has none and **fails safe** — nothing is enqueued and the reason is logged, rather
+ * than the row's instant standing in for one the event never named.
  */
 export const ownerWriteBackHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: OWNER_WRITE_BACK_HANDLER,
@@ -116,15 +127,17 @@ export const ownerWriteBackHandler = (options: PipelineSagaOptions): EventHandle
     if (!assignsOwner(settings)) {
       return;
     }
-    let changedAt = payload.owner_changed_at ?? null;
-    if (changedAt === null) {
-      const current = await options.store.tasks.ownership(tx, payload.task_id);
-      if (current.ownerUserId !== ownerUserId || current.ownerSource !== 'platform') {
-        return;
-      }
-      changedAt = current.ownerChangedAt;
-    }
-    if (changedAt === null) {
+    const changedAt = payload.owner_changed_at;
+    if (changedAt === undefined) {
+      (options.logger ?? silentLogger).info(
+        {
+          task_id: payload.task_id,
+          owner_user_id: ownerUserId,
+          event_id: event.id,
+          reason: 'event_without_owner_changed_at',
+        },
+        'ticket_owner_assign: the owner change names no instant to re-validate against (an event written before S-26.3), so it is not written back',
+      );
       return;
     }
     const data: PipelineOutboundData = {
@@ -282,6 +295,8 @@ export const runTicketOwnerAssign = async (
 
   // 3. The preset, under the same re-validation, on the conflict bound.
   let previous: TicketAssignee | null = intended;
+  /** The preset was already in place when this try began (an earlier try died before restoring). */
+  let presetFound = false;
   if (!shadow) {
     const preset = await retryOnTaskConflict(
       { taskId, what: 'presetting the ticket’s assignee for the owner write-back', logger },
@@ -306,6 +321,7 @@ export const runTicketOwnerAssign = async (
       return skip(preset.reason);
     }
     previous = preset.previous;
+    presetFound = sameTicketAssignee(previous, intended);
   }
 
   // 5. Put back what the preset replaced, while the column still holds what it wrote.
@@ -324,6 +340,54 @@ export const runTicketOwnerAssign = async (
             taskId,
             current,
             restoreTicketAssignee(current, { intended, previous }),
+          );
+        }),
+    );
+  };
+
+  // 6. Nothing to restore after a terminal refusal: the tracker's own assignee, read and written back.
+  const reconcileFromTracker = async (): Promise<void> => {
+    const read = await readTicketForTask(
+      options,
+      { projectId: stored.task.projectId, taskId, ticket },
+      integrations,
+    );
+    if (read === null) {
+      logger.warn(
+        { task_id: taskId, owner_user_id: ownerUserId },
+        'ticket_owner_assign: the ticket could not be read after a refused write-back, so its stored assignee still names the owner',
+      );
+      return;
+    }
+    await retryOnTaskConflict(
+      { taskId, what: 'storing the tracker’s assignee after a refused write-back', logger },
+      async () =>
+        options.unitOfWork.transaction(async (scope) => {
+          const assigneeClass =
+            read.assignee === null
+              ? null
+              : await options.store.owners.classifyAssignee(scope.tx, {
+                  projectId: stored.task.projectId,
+                  provider: read.assignee.provider,
+                  externalId: read.assignee.external_id,
+                });
+          const actual = ticketAssigneeOf(
+            read.assignee === null
+              ? null
+              : {
+                  provider: read.assignee.provider,
+                  externalId: read.assignee.external_id,
+                  redactedDisplayName: read.assigneeDisplayName,
+                },
+            assigneeClass,
+          );
+          const current = await options.store.tasks.ownership(scope.tx, taskId);
+          await writeOwnership(
+            options.store,
+            scope.tx,
+            taskId,
+            current,
+            restoreTicketAssignee(current, { intended, previous: actual }),
           );
         }),
     );
@@ -357,6 +421,9 @@ export const runTicketOwnerAssign = async (
       // A tracker outage — or a programming error, which is not a tracker's answer: the restored
       // value is what the retry presets from.
       throw error;
+    }
+    if (presetFound) {
+      await reconcileFromTracker();
     }
     const { code } = error;
     logger.warn(

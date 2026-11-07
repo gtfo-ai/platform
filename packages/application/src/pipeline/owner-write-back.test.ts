@@ -65,27 +65,31 @@ const tracker = (initial: string | null, declares = { assignOthers: true }) => {
     refuse: null,
   };
   const calls: AssignCall[] = [];
+  let reads = 0;
   let peekStored: () => TicketAssignee | null = () => null;
   const port: Partial<TaskManagementPort> = {
     capabilities: () =>
       ({ assignOthers: declares.assignOthers }) as ReturnType<TaskManagementPort['capabilities']>,
-    readTicket: async (ref: TicketRefInput) => ({
-      ref,
-      issue_type: 'Story',
-      title: 'Show the totals in the invoice footer',
-      description: 'The footer sums the visible rows rather than all of them.',
-      status: 'Ready for the agent',
-      priority: null,
-      labels: [],
-      comments: [],
-      links: [],
-      epic: null,
-      siblings: [],
-      attachments_text: [],
-      assignee: state.assignee === null ? null : identity(state.assignee),
-      reporter: null,
-      updated_at: '2026-06-01T09:00:00.000Z',
-    }),
+    readTicket: async (ref: TicketRefInput) => {
+      reads += 1;
+      return {
+        ref,
+        issue_type: 'Story',
+        title: 'Show the totals in the invoice footer',
+        description: 'The footer sums the visible rows rather than all of them.',
+        status: 'Ready for the agent',
+        priority: null,
+        labels: [],
+        comments: [],
+        links: [],
+        epic: null,
+        siblings: [],
+        attachments_text: [],
+        assignee: state.assignee === null ? null : identity(state.assignee),
+        reporter: null,
+        updated_at: '2026-06-01T09:00:00.000Z',
+      };
+    },
     assignTo: async (_ref: TicketRefInput, assignee: ExternalIdentity) => {
       calls.push({ account: assignee.external_id, storedAtCall: peekStored() });
       if (state.refuse !== null) {
@@ -100,6 +104,7 @@ const tracker = (initial: string | null, declares = { assignOthers: true }) => {
     state,
     port,
     calls,
+    reads: () => reads,
     watch: (peek: () => TicketAssignee | null) => {
       peekStored = peek;
     },
@@ -409,6 +414,109 @@ describe('with the switch on, one assignTo through the executor (criterion 2)', 
     await outbound?.({ id: 'retry', queue: JOB_QUEUES.pipelineOutbound, data: job?.data } as never);
     expect(ticket.state.assignee).toBe('bob');
     expect(harness.store.ownershipOf(taskId).ticketAssignee).toEqual(bobsAccount);
+  });
+});
+
+describe('after a crash between an earlier try’s preset and its restore (review of #97, backlog 1420)', () => {
+  it('reads the ticket on a terminal refusal and stores its real assignee, so the next sync keeps the owner', async () => {
+    const ticket = tracker('alice');
+    const harness = harnessFor(ticket, { assignOwner: true });
+    await harness.publish([ticketMatched()]);
+    const taskId = taskIdOf(harness);
+    harness.holdOutbound((data) => data.duty === 'ticket_owner_assign');
+    await assign(harness, BOB);
+    // The earlier try's preset is in place, and its restore never ran: the process died.
+    await harness.memory.transaction(async (scope) => {
+      const current = harness.store.ownershipOf(taskId);
+      expect(
+        await harness.store.tasks.saveOwner(scope.tx, taskId, {
+          expected: { ownerUserId: current.ownerUserId, ticketAssignee: current.ticketAssignee },
+          next: { ...current, ticketAssignee: bobsAccount },
+        }),
+      ).toBe(true);
+    });
+    ticket.state.refuse = new IntegrationError(
+      'forbidden',
+      'fake-jira',
+      'the binding’s account needs the Assign Issues permission',
+      { action: 'assign_to' },
+    );
+    const readsBefore = ticket.reads();
+
+    harness.holdOutbound(null);
+    await harness.drain();
+
+    expect(ticket.calls).toEqual([{ account: 'acct-bob', storedAtCall: bobsAccount }]);
+    expect(ticket.reads() - readsBefore, 'one read of the ticket after the refusal').toBe(1);
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'platform',
+      ticketAssignee: alicesAccount,
+    });
+
+    // The tracker still says Alice; a webhook arrives. With the stale preset this read would have
+    // been a change, and the owner would have become Alice's.
+    const changes = ownerEvents(harness).length;
+    harness.clock.advance(60_000);
+    await harness.publish([ticketUpdated(harness.clock.now())]);
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'platform',
+    });
+    expect(ownerEvents(harness)).toHaveLength(changes);
+  });
+
+  it('reads nothing when the refusal had a value to restore (the ordinary case)', async () => {
+    const ticket = tracker('alice');
+    const harness = harnessFor(ticket, { assignOwner: true });
+    await harness.publish([ticketMatched()]);
+    ticket.state.refuse = new IntegrationError('forbidden', 'fake-jira', 'refused', {
+      action: 'assign_to',
+    });
+    const readsBefore = ticket.reads();
+    await assign(harness, BOB);
+    expect(ticket.calls).toHaveLength(1);
+    expect(ticket.reads()).toBe(readsBefore);
+    expect(harness.store.ownershipOf(taskIdOf(harness)).ticketAssignee).toEqual(alicesAccount);
+  });
+});
+
+describe('an owner change recorded before S-26.3 (no owner_changed_at) fails safe (review of #97)', () => {
+  it('enqueues no write-back and logs why, even while the row names that owner as the platform’s', async () => {
+    const ticket = tracker('alice');
+    const { logger, lines } = recordingLogger();
+    const harness = harnessFor(ticket, { assignOwner: true, logger });
+    await harness.publish([ticketMatched()]);
+    const taskId = taskIdOf(harness);
+    harness.holdOutbound((data) => data.duty === 'ticket_owner_assign');
+    await assign(harness, BOB);
+    // The command's own event asked for one (the counter moves), and is held.
+    expect(writeBackJobs(harness)).toHaveLength(1);
+    const before = harness.jobs.history.length;
+
+    await harness.publish([
+      projectEvent(
+        'task.owner.changed',
+        {
+          project_id: PROJECT,
+          task_id: taskId,
+          owner_user_id: BOB,
+          previous_owner_user_id: ALICE,
+          source: 'platform',
+          via: 'command',
+        },
+        harness.clock.now(),
+      ),
+    ]);
+
+    expect(writeBackJobs(harness, before)).toEqual([]);
+    expect(
+      lines.filter(
+        (line) =>
+          line.message.includes('ticket_owner_assign') &&
+          (line.fields as { reason?: string }).reason === 'event_without_owner_changed_at',
+      ),
+    ).toHaveLength(1);
   });
 });
 

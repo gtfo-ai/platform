@@ -637,8 +637,9 @@ export const taskTicketRekeyedEvent = defineEvent('task.ticket.rekeyed', {
  * of this change on the row, which the write-back duty `ticket_owner_assign` compares on fire with
  * `owner_user_id` (TD-031's amendment item 4, TD-004: a job cannot be cancelled), so a later change,
  * even back to the same person, is never mistaken for this one. **Optional**: an event written
- * before S-26.3 has none, and a consumer then reads the row's own instant while it still names this
- * owner as the platform's. Its consumer is that duty's handler (`owner-write-back.ts`).
+ * before S-26.3 has none, and its consumer **fails safe** — it writes nothing back and logs why,
+ * because the row's instant may be a later change's. Its consumer is that duty's handler
+ * (`owner-write-back.ts`).
  */
 export const taskOwnerChangedEvent = defineEvent('task.owner.changed', {
   ...taskScoped,

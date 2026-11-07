@@ -203,8 +203,10 @@ the write-back without the claim. What it does and does not do:
 - **unassigning on the platform writes nothing** — the platform never unassigns a person in Jira;
 - an owner with **no linked Jira account** gets no write (the reason is logged), and the task page
   says nothing about Jira for that task;
-- if somebody changes the assignee in Jira before the write happens, the write is skipped — the latest
-  change wins, wherever it was made;
+- if somebody changes the assignee in Jira before the write happens, the write is skipped — but only
+  once the platform has **seen** that change (a webhook or a poll that arrived first); a change it has
+  not seen yet is overwritten by the write, and the platform then follows the ticket to the owner it
+  wrote;
 - in **shadow mode** the write is recorded as `would_have` and Jira is not touched;
 - if Jira refuses (a missing *Assign Issues*, an account it does not know), the platform's owner
   stands, the refusal is logged and audited, and nothing is retried until the next owner change.
