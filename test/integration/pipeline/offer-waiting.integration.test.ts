@@ -964,6 +964,24 @@ describe('the execution read: does anybody else take unassigned tasks (criterion
     expect((await unassignedTakersOf(drizzled, [], { workerId: asking.id })).size).toBe(0);
     await claimantPresent(false);
   });
+
+  it('one person, two machines (backlog 1456): asked for one, the other counts; asked for the person, neither does', async () => {
+    await claimantPresent(false);
+    const projectId = await project();
+    const owner = await member(projectId, 'Owner');
+    const laptop = await machine(owner, 'mine', 'connected');
+    const desktop = await machine(owner, 'mine_and_unassigned', 'offline');
+    const askedFor = async (exclude: { userId: string } | { workerId: string }) =>
+      (await unassignedTakersOf(drizzled, [projectId], exclude)).get(projectId);
+
+    // The laptop's card: the desktop takes unassigned work, so it has somewhere to run.
+    expect(await askedFor({ workerId: laptop.id })).toBe(true);
+    // The desktop's card: the laptop takes only its owner's tasks — nowhere else.
+    expect(await askedFor({ workerId: desktop.id })).toBe(false);
+    // The person (today's execution read without `worker_id`): both are theirs, so nobody else.
+    expect(await askedFor({ userId: owner })).toBe(false);
+    expect(await othersTakeUnassigned(drizzled, projectId, owner)).toBe(false);
+  });
 });
 
 describe('the CI wait on the board and the inbox (backlog 1300, 1301)', () => {

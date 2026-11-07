@@ -11,6 +11,7 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
+import type { UnassignedTakerExclusion } from '../queries/offer-waiting.js';
 import type { ProjectWorkerRow } from '../queries/worker-queries.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
 import {
@@ -47,7 +48,7 @@ interface World {
   offers: { open: number; never: number; later: number };
   /** S-26.5: the answer `othersTakeUnassigned` gives, and whom it was asked for. */
   others: boolean;
-  othersAskedFor: string[];
+  othersAskedFor: UnassignedTakerExclusion[];
 }
 
 const RUN_IMAGE = `sha256:${'a'.repeat(64)}`;
@@ -143,8 +144,8 @@ const build = async (): Promise<void> => {
         return world.workers.filter((row) => userId === null || row.userId === userId);
       },
       waitingOffers: async () => world.offers,
-      othersTakeUnassigned: async (_projectId, userId) => {
-        world.othersAskedFor.push(userId);
+      othersTakeUnassigned: async (_projectId, exclude) => {
+        world.othersAskedFor.push(exclude);
         return world.others;
       },
       coreDigests: () => ({ run: RUN_IMAGE, egress: EGRESS_IMAGE }),
@@ -200,11 +201,53 @@ describe('GET /api/projects/:id/execution', () => {
     world.others = true;
     const body = (await app.inject({ method: 'GET', url: URL })).json();
     expect(body.others_take_unassigned).toBe(true);
-    expect(world.othersAskedFor).toEqual([USER]);
+    expect(world.othersAskedFor).toEqual([{ userId: USER }]);
     expect(body.workers).toEqual([]);
     world.others = false;
     expect((await app.inject({ method: 'GET', url: URL })).json().others_take_unassigned).toBe(
       false,
+    );
+  });
+
+  /**
+   * BACKLOG 1456: the Workers screen's card for one machine asks for that machine, so its owner's
+   * other machines count; the id must be one this read lists to the reader.
+   */
+  it('asks for one machine with ?worker_id=, its owner’s other machines counted — only a machine the reader can see', async () => {
+    const LAPTOP = '00000000-0000-4000-8000-0000000027a1';
+    const DESKTOP = '00000000-0000-4000-8000-0000000027a2';
+    const BOBS = '00000000-0000-4000-8000-0000000027a3';
+    world.role = 'viewer';
+    world.workers = [
+      workerRow({ id: LAPTOP }),
+      workerRow({ id: DESKTOP, name: 'alice-desktop' }),
+      workerRow({ id: BOBS, name: 'bob-laptop', userId: OTHER_USER }),
+    ];
+    world.others = true;
+    const asked = await app.inject({ method: 'GET', url: `${URL}?worker_id=${LAPTOP}` });
+    expect(asked.statusCode).toBe(200);
+    expect(asked.json().others_take_unassigned).toBe(true);
+    expect(world.othersAskedFor).toEqual([{ workerId: LAPTOP }]);
+    // Absent: today's question, for the reader — every machine of theirs excluded.
+    await app.inject({ method: 'GET', url: URL });
+    expect(world.othersAskedFor.at(-1)).toEqual({ userId: USER });
+    // Another person's machine is not a member's to ask about, nor an id that names none: 404.
+    for (const id of [BOBS, '00000000-0000-4000-8000-0000000027ff']) {
+      const refused = await app.inject({ method: 'GET', url: `${URL}?worker_id=${id}` });
+      expect(refused.statusCode).toBe(404);
+    }
+    expect(world.othersAskedFor).toHaveLength(2);
+    // An administrator sees every machine, so may ask for Bob's.
+    world.orgRole = 'admin';
+    const admin = await app.inject({ method: 'GET', url: `${URL}?worker_id=${BOBS}` });
+    expect(admin.statusCode).toBe(200);
+    expect(world.othersAskedFor.at(-1)).toEqual({ workerId: BOBS });
+    // Not a uuid, or a key the read does not take: 400.
+    expect((await app.inject({ method: 'GET', url: `${URL}?worker_id=laptop` })).statusCode).toBe(
+      400,
+    );
+    expect((await app.inject({ method: 'GET', url: `${URL}?machine=${LAPTOP}` })).statusCode).toBe(
+      400,
     );
   });
 

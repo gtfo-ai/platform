@@ -743,7 +743,12 @@ the query and sends no field — unknown, so the page says nothing. The local pa
 earlier page, whose guard is strict, is never sent the key, and only then does the worker ask its core;
 the save's read-back (`POST /api/local/claim-scope`) never carries it and the page keeps the answer it
 last read. The card then says *Unassigned tasks in Autix have nowhere to run.* under *Only my tasks*
-for each selected project answered `false`.
+for each selected project answered `false`. The session's execution read takes the same question for one
+machine: `GET /api/projects/:id/execution?worker_id=<uuid>` asks `others_take_unassigned` with that
+machine excluded instead of the reader's every machine — the Workers screen's card for one machine, whose
+owner's other machines then count — through the same `unassignedTakersOf`. The id must be a worker the
+read lists to the reader (their own; every one for an administrator), else `404`; without it the answer
+is S-26.5's, unchanged; any other query key is `400`.
 
 **Why a run waits** (S-26.5, TD-031's 2026-11-06 amendment item 8). The task record (`GET /api/tasks/:id`'s
 `task` and every item of `GET /api/projects/:id/tasks`) and every `GET /api/org/agents` item carry

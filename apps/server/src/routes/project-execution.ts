@@ -27,6 +27,12 @@
  * **And whether anybody else takes unassigned tasks** (S-26.5, the M26 UX spec §1's consequence
  * line): `others_take_unassigned` — the server claimant, or another person's machine whose policy
  * admits an unassigned task — a yes or no, so a member learns it without seeing anyone's machine.
+ * With `?worker_id=` (BACKLOG 1456) the question is asked **for that machine** — the Workers
+ * screen's card for one machine: every machine but it counts, its owner's other machines included,
+ * which is the worker's own `GET claim-scope?fields=unassigned_has_taker` answer. The id must be one
+ * of the workers this read already lists to the reader (their own, or every one for an
+ * administrator); any other is `404`, so the parameter tells nobody anything about a machine they
+ * could not already see.
  */
 import {
   apiErrorSchema,
@@ -56,6 +62,7 @@ import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { ExecutionWrite } from '../queries/execution-queries.js';
+import type { UnassignedTakerExclusion } from '../queries/offer-waiting.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
 import type { ProjectWorkerRow } from '../queries/worker-queries.js';
 import {
@@ -98,10 +105,14 @@ export interface ProjectExecutionQueries {
   /** The core's current run and egress digests, or `null` (`routes/workers.ts`'s same option). */
   readonly coreDigests?: () => RunImageDigests | null;
   /**
-   * Whether the server or **another** user's machine takes this project's unassigned tasks by
-   * itself (S-26.5, `queries/offer-waiting.ts`'s `othersTakeUnassigned`). Absent answers `false`.
+   * Whether the server or a machine `exclude` does not name takes this project's unassigned tasks
+   * by itself (S-26.5; BACKLOG 1456's `{ workerId }`; `queries/offer-waiting.ts`'s
+   * `unassignedTakersOf`). Absent answers `false`.
    */
-  readonly othersTakeUnassigned?: (projectId: string, userId: string) => Promise<boolean>;
+  readonly othersTakeUnassigned?: (
+    projectId: string,
+    exclude: UnassignedTakerExclusion,
+  ) => Promise<boolean>;
 }
 
 /** What the read adds to the setting (S-22.19, N2): who would take the runs, and what waits. */
@@ -191,6 +202,13 @@ const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a
 
 const projectParamsSchema = z.strictObject({ project_id: z.uuid() });
 
+/**
+ * `GET …/execution?worker_id=` (BACKLOG 1456): ask `others_take_unassigned` for one machine the
+ * reader can see — every other machine counts. Absent: for the reader, every machine of theirs
+ * excluded (S-26.5, unchanged).
+ */
+const executionQuerySchema = z.strictObject({ worker_id: z.uuid().optional() });
+
 /** The settings on the wire (snake_case, whole seconds). */
 const wireOf = (settings: ExecutionSettings): JsonObject => ({
   mode: settings.mode,
@@ -252,6 +270,7 @@ export const registerProjectExecutionRoutes = async (
   const current = async (
     projectId: string,
     request: FastifyRequest,
+    workerId?: string,
   ): Promise<ProjectExecutionResponse> => {
     if (!(await queries.projectExists(projectId))) {
       throw new NotFoundError(`project ${projectId}`);
@@ -272,14 +291,19 @@ export const registerProjectExecutionRoutes = async (
       projectId,
       can(actor.role, 'org.workers.manage') ? null : actor.userId,
     );
+    // BACKLOG 1456: a machine the reader cannot see is not theirs to ask about.
+    if (workerId !== undefined && !rows.some((row) => row.id === workerId)) {
+      throw new NotFoundError(`worker ${workerId}`);
+    }
+    const exclude: UnassignedTakerExclusion =
+      workerId === undefined ? { userId: actor.userId } : { workerId };
     return executionDocument(stored, await queries.serverClaimantRunning(), refused, {
       workers: rows.map((row) =>
         projectWorkerOf(row, { projectId, settings, credentialRefused: refused, coreDigests, now }),
       ),
       waiting: waitingOf(await queries.waitingOffers(projectId), refused),
       // S-26.5: the consequence line's question, answered without naming anybody's machine.
-      othersTakeUnassigned:
-        (await queries.othersTakeUnassigned?.(projectId, actor.userId)) ?? false,
+      othersTakeUnassigned: (await queries.othersTakeUnassigned?.(projectId, exclude)) ?? false,
     });
   };
 
@@ -290,13 +314,14 @@ export const registerProjectExecutionRoutes = async (
       schema: {
         summary: 'Where this project’s agent runs execute',
         description:
-          'TD-031 decision 8. `stored: false` is the defaults (`hybrid`, the server preferred, a 120 s assignee window, a 24 h offer timeout); `fallback_after_seconds: null` is the preference’s default (15 s for the server, 300 s for workers), and `effective_fallback_after_seconds` is what it resolves to. `server_claimant` is whether **this instance** has a server runner claiming offers now; with `none`, `notice` says what that does to this project’s mode — a `hybrid` project opens its runs to workers at once, a `server_only` project’s runs wait. Never set by `.agentic/config.yml`. **Who would run it** (S-22.19): `workers` — every registered worker for an administrator, your own otherwise — each `automatically`, `picked_only` or `no`, with its own `blockers` and the project’s `project_reason`; `waiting` — the open offers, and how many no worker may take now and why. `others_take_unassigned` (S-26.5): whether the server claimant or another person’s machine takes this project’s unassigned tasks by itself, naming no machine.',
+          'TD-031 decision 8. `stored: false` is the defaults (`hybrid`, the server preferred, a 120 s assignee window, a 24 h offer timeout); `fallback_after_seconds: null` is the preference’s default (15 s for the server, 300 s for workers), and `effective_fallback_after_seconds` is what it resolves to. `server_claimant` is whether **this instance** has a server runner claiming offers now; with `none`, `notice` says what that does to this project’s mode — a `hybrid` project opens its runs to workers at once, a `server_only` project’s runs wait. Never set by `.agentic/config.yml`. **Who would run it** (S-22.19): `workers` — every registered worker for an administrator, your own otherwise — each `automatically`, `picked_only` or `no`, with its own `blockers` and the project’s `project_reason`; `waiting` — the open offers, and how many no worker may take now and why. `others_take_unassigned` (S-26.5): whether the server claimant or another person’s machine takes this project’s unassigned tasks by itself, naming no machine. With `?worker_id=` (BACKLOG 1456) it is asked for that machine instead — the server or any **other** machine, its owner’s others included — and the id must be a worker this read lists to you (`404` otherwise).',
         tags: ['projects'],
         params: projectParamsSchema,
-        response: { 200: projectExecutionResponseSchema, 404: apiErrorSchema },
+        querystring: executionQuerySchema,
+        response: { 200: projectExecutionResponseSchema, 400: apiErrorSchema, 404: apiErrorSchema },
       },
     },
-    async (request) => current(request.params.project_id, request),
+    async (request) => current(request.params.project_id, request, request.query.worker_id),
   );
 
   typed.put(

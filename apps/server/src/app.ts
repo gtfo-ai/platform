@@ -115,7 +115,7 @@ import {
   projectExists,
   upsertIdentityMapping,
 } from './queries/identity-queries.js';
-import { othersTakeUnassigned, unassignedTakersOf } from './queries/offer-waiting.js';
+import { unassignedTakersOf } from './queries/offer-waiting.js';
 import {
   assertBindingItemsWritable,
   findBindingAccounts,
@@ -844,8 +844,10 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         workersFor: async (projectId, userId) =>
           workerStore.listWorkersForProject(projectId, userId),
         waitingOffers: async (projectId) => waitingOffers(options.database, projectId),
-        othersTakeUnassigned: async (projectId, userId) =>
-          othersTakeUnassigned(options.database, projectId, userId),
+        // S-26.5, and BACKLOG 1456's `?worker_id=`: the worker's own claim-scope answer's statement.
+        othersTakeUnassigned: async (projectId, exclude) =>
+          (await unassignedTakersOf(options.database, [projectId], exclude)).get(projectId) ===
+          true,
         coreDigests: coreRunDigests,
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
         releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
