@@ -25,7 +25,7 @@ import { XCircleFillIcon } from '@primer/octicons-react/XCircleFillIcon';
 import type { ReactElement } from 'react';
 import { ACTIVITY_META, type Activity } from './activity.js';
 import { cx } from './cx.js';
-import { stageLabel } from './humanize.js';
+import { stageLabel } from './words/stages.js';
 
 export const PHASE_STATES = [
   'done',

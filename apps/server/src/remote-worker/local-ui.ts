@@ -55,17 +55,33 @@ export const WORKER_PAGE_FILE = 'worker.html';
 /** A request body past this is refused: every local verb's body is a handful of fields. */
 export const LOCAL_BODY_MAX_BYTES = 16 * 1024;
 
+/** The task's owner a refused pick names (S-26.7), as the envelope's `owner` carries it. */
+export interface LocalUiOwner {
+  readonly user_id: string;
+  readonly name: string;
+}
+
 /** A refusal the API answers with its envelope. */
 export class LocalUiError extends Error {
   override readonly name = 'LocalUiError';
   readonly status: number;
   readonly code: string;
-  constructor(status: number, code: string, message: string) {
+  /** S-26.7: the owner a refused pick names; the name is redacted when it is answered. */
+  readonly owner: LocalUiOwner | undefined;
+  constructor(status: number, code: string, message: string, owner?: LocalUiOwner) {
     super(message);
     this.status = status;
     this.code = code;
+    this.owner = owner;
   }
 }
+
+/**
+ * `GET /api/local/claim-scope?vocabulary=policy` (S-26.7): the page that speaks the claim policy
+ * reads the stored projects as they are; without it the worker answers an older cached page's
+ * vocabulary, where *pick only* is `[]` (`page-scope.ts`).
+ */
+export const CLAIM_SCOPE_POLICY_VOCABULARY = 'policy';
 
 /**
  * What the listener asks of the worker: the page's state, the three controls — and, since WP-293,
@@ -81,8 +97,12 @@ export interface LocalUiApi {
     readonly reason: string | undefined;
     readonly idempotencyKey: string;
   }): Promise<unknown>;
-  /** The claim scope and the projects it may name — the core's `GET claim-scope` (WP-293). */
-  claimScope(): Promise<unknown>;
+  /**
+   * The claim scope and the projects it may name — the core's `GET claim-scope` (WP-293). With
+   * `policyVocabulary` (S-26.7's page) the stored projects as they are; without it, a *pick only*
+   * machine reads as `[]` for an older cached page (`page-scope.ts`).
+   */
+  claimScope(policyVocabulary?: boolean): Promise<unknown>;
   /**
    * Set the claim scope — the core's `PUT claim-scope` — and answer it read back (WP-293); since
    * S-26.4 with the claim policy, absent leaving it as it was.
@@ -183,7 +203,18 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
   };
   const refuse = (response: ServerResponse, error: LocalUiError): void =>
     send(response, error.status, {
-      error: { code: error.code, message: options.redact(error.message).slice(0, 2_000) },
+      error: {
+        code: error.code,
+        message: options.redact(error.message).slice(0, 2_000),
+        ...(error.owner === undefined
+          ? {}
+          : {
+              owner: {
+                user_id: error.owner.user_id,
+                name: options.redact(error.owner.name).slice(0, 200),
+              },
+            }),
+      },
     });
 
   const serveFile = async (
@@ -229,7 +260,12 @@ export const createLocalUiServer = (options: LocalUiOptions): Server => {
       return;
     }
     if (request.method === 'GET' && verb === WORKER_LOCAL_PATHS.claimScope) {
-      send(response, 200, await options.api.claimScope());
+      const query = new URLSearchParams((request.url ?? '').split('?')[1] ?? '');
+      send(
+        response,
+        200,
+        await options.api.claimScope(query.get('vocabulary') === CLAIM_SCOPE_POLICY_VOCABULARY),
+      );
       return;
     }
     if (request.method === 'GET' && verb === WORKER_LOCAL_PATHS.offers) {

@@ -33,6 +33,7 @@ import {
   type RunPackage,
   runPackageSchema,
   WORKER_API_PREFIX,
+  WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
   WORKER_PATHS,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_VERSION,
@@ -73,16 +74,20 @@ export class CoreCallError extends Error {
   readonly status: number | null;
   /** The envelope's `error.code`, when the core sent one. */
   readonly code: string | null;
+  /** The envelope's `error.details`, when the core sent them (S-26.7: a refused pick's owner). */
+  readonly details: readonly { readonly path: string; readonly message: string }[];
   constructor(
     kind: CoreCallErrorKind,
     status: number | null,
     code: string | null,
     message: string,
+    details: readonly { readonly path: string; readonly message: string }[] = [],
   ) {
     super(message);
     this.kind = kind;
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -185,7 +190,8 @@ export interface CoreClient {
   ): Promise<z.output<typeof workerClaimScopeSetResponseSchema>>;
   /**
    * The open offers this worker could take now, in its projects (WP-293; S-26.4: each with its
-   * `owner` and `mine`, beside the list's `as_of` and `policy_skipped_offers`).
+   * `owner` and `mine`, beside the list's `as_of` and `policy_skipped_offers`; S-26.7: asked with
+   * `?fields=held_elsewhere`, so each says whether a pick would claim it without assigning).
    */
   offers(credential: string): Promise<z.output<typeof workerOffersResponseSchema>>;
   /**
@@ -242,6 +248,11 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
     /** @default `POST` — a `GET` sends no body. */
     readonly method?: 'GET' | 'POST' | 'PUT';
     readonly verb: string;
+    /**
+     * A query for the URL only (S-26.7's `fields=held_elsewhere`): every message names the bare
+     * `verb`, so a refusal reads `offers: …`, never the query.
+     */
+    readonly query?: string;
     readonly bearer: string | null;
     readonly body: unknown;
     readonly runScoped: boolean;
@@ -255,21 +266,24 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
     let response: Response;
     try {
       const method = input.method ?? 'POST';
-      response = await fetcher(url(input.verb), {
-        method,
-        headers: {
-          ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
-          [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL_VERSION),
-          ...(input.bearer === null ? {} : { authorization: `Bearer ${input.bearer}` }),
-          ...(input.idempotencyKey === undefined
-            ? {}
-            : { 'idempotency-key': input.idempotencyKey }),
+      response = await fetcher(
+        input.query === undefined ? url(input.verb) : `${url(input.verb)}?${input.query}`,
+        {
+          method,
+          headers: {
+            ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
+            [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL_VERSION),
+            ...(input.bearer === null ? {} : { authorization: `Bearer ${input.bearer}` }),
+            ...(input.idempotencyKey === undefined
+              ? {}
+              : { 'idempotency-key': input.idempotencyKey }),
+          },
+          ...(method === 'GET' ? {} : { body: JSON.stringify(input.body ?? {}) }),
+          signal: controller.signal,
+          // The request carries a credential: a redirect would hand it to wherever it points.
+          redirect: 'error',
         },
-        ...(method === 'GET' ? {} : { body: JSON.stringify(input.body ?? {}) }),
-        signal: controller.signal,
-        // The request carries a credential: a redirect would hand it to wherever it points.
-        redirect: 'error',
-      });
+      );
     } catch (error) {
       throw new CoreCallError(
         'transient',
@@ -327,6 +341,7 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
       answer.status,
       code,
       `${verb}: ${message}`,
+      parsed.success ? (parsed.data.error.details ?? []) : [],
     );
   };
 
@@ -478,6 +493,8 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
         {
           method: 'GET',
           verb: WORKER_PATHS.offers,
+          // S-26.7: each entry's `held_elsewhere`, by name — a core before it ignores the query.
+          query: WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
           bearer: credential,
           body: null,
           runScoped: false,

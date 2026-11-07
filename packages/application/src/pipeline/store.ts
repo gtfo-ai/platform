@@ -1852,6 +1852,12 @@ export interface ClaimableRunOffer {
   readonly owner: OfferOwner | null;
   /** A stage offer of a task the worker's user owns, or an ask they asked (S-26.4). */
   readonly mine: boolean;
+  /**
+   * The task's tracker assignee is a person the platform cannot match to a member of its project
+   * (S-26.1's *held elsewhere*, the claim's own fragment): a pick claims it without assigning
+   * (S-26.7 shows it).
+   */
+  readonly heldElsewhere: boolean;
 }
 
 /**

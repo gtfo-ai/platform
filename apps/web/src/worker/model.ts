@@ -16,6 +16,7 @@ import type {
   RunStatus,
   TranscriptEvent,
   WorkerClaimBlocker,
+  WorkerLocalClaimScope,
   WorkerLocalCoreFailure,
   WorkerLocalRun,
   WorkerLocalSignInFailure,
@@ -32,9 +33,12 @@ import {
   toolActivityLabel,
 } from '../ui/activity.js';
 import type { BotPhase } from '../ui/bot/bot.js';
-import { ROLE_LABEL, stageLabel, WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import type { ClaimPolicyValue } from '../ui/claim-policy-card.js';
 import type { Status } from '../ui/status.js';
 import { usagePauseWords } from '../ui/usage-pause.js';
+import { ROLE_LABEL } from '../ui/words/roles.js';
+import { stageLabel } from '../ui/words/stages.js';
+import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/words/worker-blockers.js';
 
 /**
  * The worker's own state, in a person's words. `blocked` (S-22.19) is a connected worker that is
@@ -598,3 +602,16 @@ export const logLineWords = (line: string): string => {
 /** The core's page for a run — steer and take-over live there (amendment §4). */
 export const coreRunUrl = (coreUrl: string | null, runId: string): string =>
   `${(coreUrl ?? '').replace(/\/+$/, '')}/runs/${encodeURIComponent(runId)}`;
+
+/**
+ * The stored setting as *What this machine takes* reads it (S-26.7). This worker always answers the
+ * policy (its core speaks protocol 4); an answer without one reads as S-26.4 stores it — `[]` is
+ * *pick only* over every project — so the page never says a policy nobody stored.
+ */
+export const storedClaimPolicyOf = (scope: WorkerLocalClaimScope): ClaimPolicyValue => {
+  const empty = scope.claim_project_ids?.length === 0;
+  return {
+    policy: scope.claim_policy ?? (empty ? 'pick_only' : 'everything'),
+    projectIds: empty ? null : scope.claim_project_ids,
+  };
+};

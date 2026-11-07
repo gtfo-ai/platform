@@ -481,7 +481,8 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
    * WP-293's list: the claim's own candidate predicate and {@link workerEligibleSql} — the same text,
    * numbered for this statement — **narrowed by the project list** (S-26.4, TD-031's amendment item
    * 7: a legacy `'{}'` narrows nothing), with the claim policy **read** (`automatic`) rather than
-   * asked, the task's owner and whether the run is the worker's user's (`mine`). No lock: a row
+   * asked, the task's owner, whether the run is the worker's user's (`mine`) and whether its task is
+   * held elsewhere (S-26.7, the one `taskHeldElsewhereSql`). No lock: a row
    * another claim holds is listed and then refused at the pick, which is the claim's own answer to a
    * race.
    */
@@ -498,11 +499,13 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
       owner_user_id: string | null;
       owner_name: string | null;
       mine: boolean;
+      held_elsewhere: boolean;
     }>(
       `select o.run_id, o.task_id, o.project_id, o.kind, o.stage, r.role, o.offered_at,
               ${workerPolicyTakesSql('$2')} as automatic,
               t.owner_user_id, coalesce(ou.name, '') as owner_name,
-              ${offerIsMineSql('(select mw.user_id from workers mw where mw.id = $2::uuid)')} as mine
+              ${offerIsMineSql('(select mw.user_id from workers mw where mw.id = $2::uuid)')} as mine,
+              ${taskHeldElsewhereSql('t')} as held_elsewhere
          from run_offers o
          join runs r on r.id = o.run_id
          join tasks t on t.id = o.task_id
@@ -537,6 +540,7 @@ export const createPostgresRunOfferRepository = (): RunOfferRepository => ({
           ? null
           : { userId: row.owner_user_id as Id, name: row.owner_name ?? '' },
       mine: row.mine === true,
+      heldElsewhere: row.held_elsewhere === true,
     }));
   },
   /**

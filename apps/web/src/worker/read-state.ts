@@ -26,7 +26,9 @@ import type {
   WorkerLocalState,
   WorkerLocalTakeResponse,
 } from '@platform/contracts';
-import { ROLE_LABEL, TERMINAL_REASON_LABEL, WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
+import { ROLE_LABEL } from '../ui/words/roles.js';
+import { TERMINAL_REASON_LABEL } from '../ui/words/terminal-reasons.js';
+import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/words/worker-blockers.js';
 
 /** The local verbs' prefix — `WORKER_LOCAL_API_PREFIX`, held equal by the test. */
 export const LOCAL_API_PREFIX = '/api/local';
@@ -345,6 +347,8 @@ export const OFFER: Spec = object({
   automatic: { t: 'boolean' },
   owner: nullish(object({ user_id: uuid, name: str() })),
   mine: { t: 'optional', of: { t: 'boolean' } },
+  // S-26.7: a pick of it claims without assigning; absent from a core that predates the field.
+  held_elsewhere: { t: 'optional', of: { t: 'boolean' } },
 });
 
 /** `GET /api/local/offers` — `workerLocalOffersSchema` (WP-293; S-26.4's keys). */
@@ -364,7 +368,12 @@ export const ERROR_REPORTING_TEST: Spec = object({
 });
 
 export const ERROR: Spec = object({
-  error: object({ code: str({ max: 64 }), message: str({ max: 2_000 }) }),
+  error: object({
+    code: str({ max: 64 }),
+    message: str({ max: 2_000 }),
+    // S-26.7: the owner a refused pick names (`task_taken_by_another`, `task_owned_by_another`).
+    owner: { t: 'optional', of: object({ user_id: uuid, name: str({ max: 200 }) }) },
+  }),
 });
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -472,5 +481,21 @@ export const readErrorReportingTest = (
   conforms(ERROR_REPORTING_TEST, value) ? (value as WorkerLocalErrorReportingTestResponse) : null;
 
 /** An error envelope's code and message, or `null`. */
-export const readError = (value: unknown): { code: string; message: string } | null =>
-  conforms(ERROR, value) ? (value as { error: { code: string; message: string } }).error : null;
+export const readError = (
+  value: unknown,
+): {
+  code: string;
+  message: string;
+  owner?: { readonly user_id: string; readonly name: string };
+} | null =>
+  conforms(ERROR, value)
+    ? (
+        value as {
+          error: {
+            code: string;
+            message: string;
+            owner?: { readonly user_id: string; readonly name: string };
+          };
+        }
+      ).error
+    : null;

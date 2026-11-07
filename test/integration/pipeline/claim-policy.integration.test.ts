@@ -826,6 +826,30 @@ describe('picks through RemoteRuns.claim (S-26.4, criterion 4)', () => {
 });
 
 describe('the list and the count (S-26.4, criterion 5)', () => {
+  it('says which listed task is held elsewhere — the one fragment, so a pick of it assigns nothing (S-26.7)', async () => {
+    for (const c of [
+      'unowned',
+      'released by a linked member',
+      'held by an unlinked person',
+      'held by a non-member',
+      'mine',
+    ] as const) {
+      const { me, taskId, runId } = await arrange(c);
+      const w = await worker(me, { policy: 'everything' });
+      const entry = (await listed(w)).find((offer) => offer.runId === runId);
+      expect(`${c}: ${entry?.heldElsewhere}`).toBe(`${c}: ${await heldElsewhere(taskId)}`);
+    }
+    // The two held cases are held, the released one is not (it is unassigned: a pick assigns it).
+    const held = async (c: TaskCase) => {
+      const { me, runId } = await arrange(c);
+      const w = await worker(me, { policy: 'everything' });
+      return (await listed(w)).find((offer) => offer.runId === runId)?.heldElsewhere;
+    };
+    expect(await held('held by an unlinked person')).toBe(true);
+    expect(await held('held by a non-member')).toBe(true);
+    expect(await held('released by a linked member')).toBe(false);
+  });
+
   it('names the owner and mine, and counts what the policy leaves for others', async () => {
     const projectId = await project('lc');
     const me = await user([projectId], 'Me');
