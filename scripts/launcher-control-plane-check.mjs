@@ -276,8 +276,17 @@ const LOCAL_CLI_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000133a';
 const FAKE_OAUTH_TOKEN = 'FAKE-wp133-oauth-token-not-a-credential';
 /** WP-127's run of the real `claude` whose sidecar is stopped before it starts (backlog 346). */
 const NO_ROUTE_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000346a';
-/** The shortened client bound for 286 (b), below the create's own duration on this machine. */
+/**
+ * The shortened client bound for 286 (b). It used to be the whole mechanism — "below the create's
+ * own duration on this machine" — and on a warm CI runner it was not: a create plus its release
+ * measured 1.9 s against this 1.5 s bound, so attempts two and three were answered and never
+ * abandoned (60/62 on five branches, 2026-11-06/07). The create is now **held** on the git host
+ * (`measureCreateOutlivingTimeout`), so this bound only has to be shorter than a hold that ends
+ * when the check says so.
+ */
 const SHORT_CLIENT_TIMEOUT_MS = 1_500;
+/** How long 286 (b) waits for the launcher to abandon all three held creates once released. */
+const ABANDON_DEADLINE_MS = 120_000;
 const ALL_286_RUN_IDS = [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, ...TIMEOUT_RUN_IDS];
 /** How long the real CLI may retry before the runner's wall clock stops it (WP-118). */
 const REAL_CLI_WALL_CLOCK_MS = 60_000;
@@ -730,26 +739,6 @@ const waitForRunNetwork = async (runId, timeoutMs) => {
   return null;
 };
 
-/** Polls until what the daemon holds for these runs has not changed for `quietMs`. */
-const waitUntilSettled = async (runIds, { quietMs, timeoutMs }) => {
-  const started = Date.now();
-  let last = '';
-  let lastChange = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const snapshot = JSON.stringify(
-      await Promise.all(runIds.map(async (runId) => runObjects(runId))),
-    );
-    if (snapshot !== last) {
-      last = snapshot;
-      lastChange = Date.now();
-    } else if (Date.now() - lastChange >= quietMs) {
-      return Date.now() - started;
-    }
-    await sleep(1_000);
-  }
-  return null;
-};
-
 /**
  * Stops (a bare `docker stop`: SIGTERM, then SIGKILL after the container's `StopTimeout`, which is
  * `compose.yml`'s `stop_grace_period` for the launcher — {@link LAUNCHER_STOP_GRACE_S}, WP-132) or
@@ -845,24 +834,57 @@ const measureRestartDuringCreate = async (runId, how) => {
 /**
  * PROGRESS backlog **286** (b), WP-103: a create that outlives the client's timeout with the
  * launcher alive, over the stage executor's three start attempts (three run ids, see the runner's
- * `timeout-attempts` phase). The launcher is left alone; the host waits until nothing changes on
- * the daemon for these runs and then counts what is left.
+ * `timeout-attempts` phase).
+ *
+ * **The create is held, not raced.** Until the flake fix it relied on a create taking longer than
+ * {@link SHORT_CLIENT_TIMEOUT_MS} by itself; a warm runner's create did not (attempts two and three
+ * answered `ok` at 1.9 s with the release, and only one of three was abandoned). Every create runs
+ * its project's mirror update against the fixture's `git daemon` (`updateMirror`, whose helper has
+ * no timeout of its own), so the check **pauses** that container for the attempts: each create
+ * stops at the mirror fetch — the shape a first mirror fetch of a large repository takes, which is
+ * what this case stands for — every client times out, and only then is the git host unpaused. The
+ * launcher then finishes the three creates, finds each requester gone, and abandons them. The host
+ * waits for **that event** — the three abandon lines in the launcher's log, bounded by
+ * {@link ABANDON_DEADLINE_MS} — instead of a quiet period on the daemon, and then counts what is
+ * left: `abandon` writes its line only after the workspace's end has resolved.
  */
 const measureCreateOutlivingTimeout = async () => {
-  const told = lastJsonLine(
-    await runRunner(
-      {
-        CHECK_PHASE: 'timeout-attempts',
-        CHECK_ATTEMPT_RUN_IDS: TIMEOUT_RUN_IDS.join(','),
-        CHECK_CLIENT_TIMEOUT_MS: String(SHORT_CLIENT_TIMEOUT_MS),
-      },
-      { name: 'agentic-wp103-runner-timeout' },
-    ),
-  );
-  const settledAfterMs = await waitUntilSettled(TIMEOUT_RUN_IDS, {
-    quietMs: 8_000,
-    timeoutMs: 180_000,
-  });
+  const abandonedLines = async () => {
+    const logged = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
+    return `${logged.stdout}\n${logged.stderr}`
+      .split('\n')
+      .filter((line) => TIMEOUT_RUN_IDS.some((runId) => line.includes(runId)));
+  };
+  await docker(['pause', fixture.repoContainer]);
+  let told;
+  try {
+    told = lastJsonLine(
+      await runRunner(
+        {
+          CHECK_PHASE: 'timeout-attempts',
+          CHECK_ATTEMPT_RUN_IDS: TIMEOUT_RUN_IDS.join(','),
+          CHECK_CLIENT_TIMEOUT_MS: String(SHORT_CLIENT_TIMEOUT_MS),
+        },
+        { name: 'agentic-wp103-runner-timeout' },
+      ),
+    );
+  } finally {
+    await docker(['unpause', fixture.repoContainer]);
+  }
+  const released = Date.now();
+  let abandonedAfterMs = null;
+  let launcherLog = [];
+  while (Date.now() - released < ABANDON_DEADLINE_MS) {
+    launcherLog = await abandonedLines();
+    const abandoned = TIMEOUT_RUN_IDS.filter((runId) =>
+      launcherLog.some((line) => line.includes(runId) && line.includes('a create request closed')),
+    );
+    if (abandoned.length === TIMEOUT_RUN_IDS.length) {
+      abandonedAfterMs = Date.now() - released;
+      break;
+    }
+    await sleep(500);
+  }
   const objects = {};
   for (const runId of TIMEOUT_RUN_IDS) {
     objects[runId] = await runObjectsFull(runId);
@@ -870,11 +892,7 @@ const measureCreateOutlivingTimeout = async () => {
   const runningRunContainers = TIMEOUT_RUN_IDS.filter((runId) =>
     objects[runId].containers.some((line) => line.startsWith(`ws-${runId} running`)),
   ).length;
-  const logged = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
-  const launcherLog = `${logged.stdout}\n${logged.stderr}`
-    .split('\n')
-    .filter((line) => TIMEOUT_RUN_IDS.some((runId) => line.includes(runId)));
-  return { told, settledAfterMs, objects, runningRunContainers, launcherLog };
+  return { told, abandonedAfterMs, objects, runningRunContainers, launcherLog };
 };
 
 /**
@@ -1924,7 +1942,7 @@ try {
   );
   record(
     'backlog 286 (b): the launcher abandoned every one, so no run container, network or control directory is left (WP-103)',
-    orphans.timeout.settledAfterMs !== null &&
+    orphans.timeout.abandonedAfterMs !== null &&
       orphans.timeout.runningRunContainers === 0 &&
       abandoned === TIMEOUT_RUN_IDS.length &&
       TIMEOUT_RUN_IDS.every(
@@ -1933,7 +1951,11 @@ try {
           orphans.timeout.objects[runId].networks.length === 0 &&
           !orphans.timeout.objects[runId].controlDirectory,
       ),
-    JSON.stringify({ abandoned, objects: orphans.timeout.objects }),
+    JSON.stringify({
+      abandoned,
+      abandoned_after_ms: orphans.timeout.abandonedAfterMs,
+      objects: orphans.timeout.objects,
+    }),
   );
   record(
     'backlog 286 (c): an unattached shim is still running when last looked at (observation)',

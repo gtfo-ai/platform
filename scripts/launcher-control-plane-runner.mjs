@@ -98,7 +98,9 @@ const token = required('CHECK_LAUNCHER_TOKEN');
 /**
  * `CHECK_CLIENT_TIMEOUT_MS` (WP-103, backlog 286 (b)): the client's outer bound, shortened so a
  * create outlives it with the launcher alive — the shape a first mirror fetch of a large repository
- * takes against the production default of ten minutes. Absent is the production default.
+ * takes against the production default of ten minutes. The host holds that fetch by pausing the git
+ * fixture while this phase runs, so the bound need not out-guess a warm create. Absent is the
+ * production default.
  */
 const clientTimeoutMs =
   process.env['CHECK_CLIENT_TIMEOUT_MS'] === undefined
