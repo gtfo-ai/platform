@@ -1052,9 +1052,9 @@ export const taskRecordSchema = z.strictObject({
    * #103), as the platform last read it (`tasks.ticket_assignee`), or `null` when the ticket is
    * unassigned there, was never read, or is assigned to the platform itself (the binding's own
    * account or a machine — `platform` true), so it never names the platform. Unlike
-   * `unlinked_assignee` it names a **linked** person too: after Vojtěch, written back, unassigns
-   * himself the task has no owner yet the tracker still shows him, and a take or an assignment
-   * that writes back replaces him there, which a confirmation must say.
+   * `unlinked_assignee` it names a **linked** person too: after Vojtěch, written back, gives the
+   * task up, it has no owner yet the tracker still shows Vojtěch, and a take or an assignment
+   * that writes back replaces that person there, which a confirmation must say.
    *
    * `user_id` is the user the identity resolves to **live** (`user_identities`, a `person` link,
    * and `userMayOwnInProjectSql` — so a disabled user or one below `member` in the project is
