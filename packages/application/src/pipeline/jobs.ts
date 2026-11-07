@@ -25,7 +25,14 @@
  * `coalesced` is a success, not an error: it means the window this comment belongs to is already
  * scheduled.
  */
-import type { DomainEvent, Id, Slug, TaskStageOutcome, TaskState } from '@platform/contracts';
+import type {
+  CiGateEnding,
+  DomainEvent,
+  Id,
+  Slug,
+  TaskStageOutcome,
+  TaskState,
+} from '@platform/contracts';
 import {
   domainEventSchemasByType,
   effortSchema,
@@ -910,7 +917,7 @@ export const stageExecuteHandler = (
       // whose first read finds the previous attempt's held pipeline unchanged escalates at once.
       if (
         result.ciRead !== undefined &&
-        (await recordCiRead(options, request, result.ciRead, result.ciWait, checks))
+        (await recordCiRead(options, request, result.ciRead, result.ciWait))
       ) {
         return;
       }
@@ -1032,6 +1039,12 @@ export type GateSettlement =
       readonly outcome: TaskStageOutcome;
       readonly reason: string;
       readonly blockerBrief: string;
+      /**
+       * How the CI gate's own wait ended the attempt (backlog 1078): recorded on the attempt's row
+       * as `task_stages.ci_ending` in the settling transaction, before the escalation closes it, so
+       * the task read can word the stop. The reason and the brief are unchanged by it.
+       */
+      readonly ciEnding?: CiGateEnding;
     };
 
 /**
@@ -1062,9 +1075,9 @@ export const gateSettlementOf = (
  * for a read that found no pipeline — in a transaction of its own, after the provider reads and
  * before the wait's own decision, so the timeout's last read is the one the closed attempt keeps.
  *
- * Answers whether it **decided**, which only one case does: this attempt's first check
- * (`checks === 1`; a provider outage before it is not a check) reads the same pipeline, on the
- * same head, still `manual`, as the previous attempt's last read — a Retry nobody acted on — and
+ * Answers whether it **decided**, which only one case does: this attempt's first read (it has no
+ * read recorded yet) shows the same pipeline, on the same head, still `manual` at the same job, as
+ * the previous attempt's last read — a Retry nobody acted on — and
  * the task escalates at once rather than waiting the CI timeout out a second time (AUT-6655). Every
  * other read, and a write that found the row closed (a job of an attempt somebody left), answers
  * `false` and the gate's own bound applies as before; a pending read never parks a task by itself
@@ -1075,7 +1088,6 @@ const recordCiRead = async (
   request: StageExecutionJob,
   ciRead: CiGateRead,
   wait: CiWait | undefined,
-  checks: number,
 ): Promise<boolean> => {
   const logger: Logger = options.logger ?? silentLogger;
   const pipeline = ciRead.pipeline;
@@ -1088,22 +1100,33 @@ const recordCiRead = async (
           timeout_minutes: wait?.timeoutMinutes ?? null,
         };
   const entry = { taskId: request.taskId, stage: request.stage, attempt: request.attempt };
-  const firstHeldRead = checks === 1 && pipeline?.status === 'manual';
-  const { written, previous } = await options.unitOfWork.transaction(async (scope) => {
-    const wrote = await options.store.tasks.recordCiPendingRead(scope.tx, entry, record);
-    return {
-      written: wrote,
-      previous:
-        wrote && firstHeldRead
-          ? await options.store.tasks.previousCiPendingRead(
-              scope.tx,
-              request.taskId,
-              request.stage,
-              request.attempt,
-            )
-          : null,
-    };
-  });
+  const { written, firstHeldRead, previous } = await options.unitOfWork.transaction(
+    async (scope) => {
+      // The attempt's **first** read is the one made while it has no read recorded yet — not its
+      // first check by count: a stranded-stage re-enqueue starts the count again (review of #89).
+      const own = await options.store.tasks.ciPendingReadOf(
+        scope.tx,
+        request.taskId,
+        request.stage,
+        request.attempt,
+      );
+      const first = own === null && pipeline?.status === 'manual';
+      const wrote = await options.store.tasks.recordCiPendingRead(scope.tx, entry, record);
+      return {
+        written: wrote,
+        firstHeldRead: first,
+        previous:
+          wrote && first
+            ? await options.store.tasks.previousCiPendingRead(
+                scope.tx,
+                request.taskId,
+                request.stage,
+                request.attempt,
+              )
+            : null,
+      };
+    },
+  );
   if (
     !written ||
     pipeline === null ||
@@ -1126,6 +1149,7 @@ const recordCiRead = async (
     outcome: 'undecided',
     reason: heldRetryReason(pipeline),
     blockerBrief: heldRetryBrief(pipeline, ciRead.provider),
+    ciEnding: 'ci_held_unchanged',
   });
   return true;
 };
@@ -1188,6 +1212,8 @@ const waitForPollOnlyCi = async (
     outcome: 'undecided',
     reason: `${ciWaitReason(wait, decision, checks)}; the last read: ${detail}`,
     blockerBrief: ciWaitBrief(wait, decision, checks),
+    // Backlog 1078: the timeout is the ending the page words; the backstop stays a plain no-answer.
+    ...(decision.kind === 'timed_out' ? { ciEnding: 'ci_timed_out' as const } : {}),
   });
   return true;
 };
@@ -1355,6 +1381,18 @@ const settle = async (
           'a gate settlement for an attempt that is no longer open does nothing',
         );
         return null;
+      }
+      // Backlog 1078: which of the CI gate's wait endings this escalation is, on the row it closes.
+      if (
+        signal.kind === 'escalate' &&
+        signal.ciEnding !== undefined &&
+        request.attempt !== undefined
+      ) {
+        await options.store.tasks.recordCiEnding(
+          scope.tx,
+          { taskId: request.taskId, stage: request.stage, attempt: request.attempt },
+          signal.ciEnding,
+        );
       }
       const pipeline = compilePipeline(
         stored.task.template,

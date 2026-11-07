@@ -58,7 +58,9 @@ import {
 import type {
   AgentsResponse,
   ArtifactBodyResponse,
+  CiGateEnding,
   ContextPackRecord,
+  GateWait,
   HumanTimeKind,
   HumanTimeSummary,
   Id,
@@ -86,6 +88,7 @@ import type {
 } from '@platform/contracts';
 import {
   artifactBodyPath,
+  ciGateEndingSchema,
   contextPackRecordSchema,
   MAX_RUN_COMMANDS,
   MAX_TASK_STOP_RECORDED_CHARS,
@@ -1198,6 +1201,7 @@ const stageRowsFor = async (
       outcome: taskStages.outcome,
       returnedTo: taskStages.returnedTo,
       signature: taskStages.signature,
+      ciEnding: taskStages.ciEnding,
       // S-25.11: a CI return's reason is its jobs' logs, so the page reads a bounded head of it —
       // one character past the stop's cap, which is how `stopOf` knows it was cut.
       returnReason: sql<
@@ -1235,6 +1239,7 @@ const setbackRowOf = (row: {
   readonly returnedTo: string | null;
   readonly returnReason: string | null;
   readonly signature: string | null;
+  readonly ciEnding: string | null;
 }): SetbackStageRow => ({
   stage: row.stage,
   attempt: row.attempt,
@@ -1244,7 +1249,30 @@ const setbackRowOf = (row: {
   returnedTo: row.returnedTo,
   returnReason: row.returnReason,
   signature: row.signature,
+  ciEnding: ciEndingOf(row),
 });
+
+/**
+ * `task_stages.ci_ending` in its vocabulary (backlog 1078) — a word the writer's schema does not
+ * admit is refused by name, never read as "no ending".
+ */
+const ciEndingOf = (row: {
+  readonly stage: string;
+  readonly attempt: number;
+  readonly ciEnding: string | null;
+}): CiGateEnding | null => {
+  if (row.ciEnding === null) {
+    return null;
+  }
+  const parsed = ciGateEndingSchema.safeParse(row.ciEnding);
+  if (!parsed.success) {
+    throw new UnprojectableRowError(
+      `the ${row.stage} attempt ${row.attempt}`,
+      `its recorded CI ending (\`task_stages.ci_ending\`) is ${JSON.stringify(row.ciEnding)}, which this build does not know`,
+    );
+  }
+  return parsed.data;
+};
 
 /**
  * How many of each page task's questions are `open` and approvals `pending` (S-23.9a) — the same
@@ -1740,48 +1768,86 @@ const gateFeedbackOf = (
   };
 };
 
-/**
- * **What the CI gate is waiting on** (backlog 1078): the open `ci_gate` attempt's last pending read,
- * when the task's current stage is `ci_gate` — `null` for any other stage, a closed attempt (a
- * parked, settled or superseded one keeps its read for the next attempt's comparison, and is not a
- * wait), or an attempt whose last read found no pipeline. The stored value is parsed with the
- * writer's strict schema and a value that does not match is **refused** by name
- * ({@link UnprojectableRowError}), never served as `null`. `waiting_since` is the attempt's own
- * `entered_at`, which the CI timeout counts from — read off the row, not copied into the value.
- */
-export const gateWaitOf = (
-  task: { readonly currentStage: string | null },
-  stageRows: readonly (typeof taskStages.$inferSelect)[],
-): TaskDetailResponse['gate_wait'] => {
-  if (task.currentStage !== CI_GATE_STAGE) {
-    return null;
-  }
-  const latest = stageRows
+type StageRowSelect = typeof taskStages.$inferSelect;
+
+/** The newest `ci_gate` attempt among a task's rows, or `null`. */
+const latestCiGateRow = (stageRows: readonly StageRowSelect[]): StageRowSelect | null =>
+  stageRows
     .filter((row) => row.stage === CI_GATE_STAGE)
-    .reduce<(typeof stageRows)[number] | null>(
+    .reduce<StageRowSelect | null>(
       (newest, row) => (newest === null || row.attempt > newest.attempt ? row : newest),
       null,
     );
-  if (
-    latest === null ||
-    latest.state !== 'running' ||
-    latest.exitedAt !== null ||
-    latest.ciPendingRead === null ||
-    latest.ciPendingRead === undefined
-  ) {
+
+/**
+ * A row's recorded CI read as the DTO's {@link gateWaitSchema} shape, or `null` when it has none. The
+ * stored value is parsed with the writer's strict schema and a value that does not match is
+ * **refused** by name ({@link UnprojectableRowError}), never served as `null`. `waiting_since` is the
+ * attempt's own `entered_at`, which the CI timeout counts from — read off the row, not copied into
+ * the value.
+ */
+const recordedGateWaitOf = (row: StageRowSelect): GateWait | null => {
+  if (row.ciPendingRead === null || row.ciPendingRead === undefined) {
     return null;
   }
-  const parsed = ciPendingReadSchema.safeParse(latest.ciPendingRead);
+  const parsed = ciPendingReadSchema.safeParse(row.ciPendingRead);
   if (!parsed.success) {
     const paths = parsed.error.issues
       .map((issue) => (issue.path.length === 0 ? '(root)' : issue.path.join('.')))
       .join(', ');
     throw new UnprojectableRowError(
-      `task ${latest.taskId}`,
-      `the CI gate's recorded read (\`task_stages.ci_pending_read\`, attempt ${latest.attempt}) does not parse at ${paths}`,
+      `task ${row.taskId}`,
+      `the CI gate's recorded read (\`task_stages.ci_pending_read\`, attempt ${row.attempt}) does not parse at ${paths}`,
     );
   }
-  return toGateWait(parsed.data, isoRequired(latest.enteredAt));
+  return toGateWait(parsed.data, isoRequired(row.enteredAt));
+};
+
+/**
+ * **What the CI gate is waiting on** (backlog 1078): the open `ci_gate` attempt's last pending read,
+ * when the task's current stage is `ci_gate` — `null` for any other stage, a closed attempt (a
+ * parked, settled or superseded one keeps its read; {@link lastGateWaitOf} serves a parked one), or
+ * an attempt whose last read found no pipeline.
+ */
+export const gateWaitOf = (
+  task: { readonly currentStage: string | null },
+  stageRows: readonly StageRowSelect[],
+): TaskDetailResponse['gate_wait'] => {
+  if (task.currentStage !== CI_GATE_STAGE) {
+    return null;
+  }
+  const latest = latestCiGateRow(stageRows);
+  return latest === null || latest.state !== 'running' || latest.exitedAt !== null
+    ? null
+    : recordedGateWaitOf(latest);
+};
+
+/**
+ * **The parked CI wait's last read** (backlog 1078's review; product/10's *"CI did not finish within
+ * 60 minutes: pipeline n was still held at the manual job X"*). Served exactly when:
+ *
+ *  1. the task is `needs_human` **and** its current stage is `ci_gate` — the state the gate's own
+ *     escalation leaves (an escalation parks the task at the stage it was at);
+ *  2. the newest `ci_gate` attempt is closed `failed` with outcome `undecided` — the one word every
+ *     no-answer ending of the gate writes (its CI timeout, its five checks or backstop, a provider
+ *     that did not answer, a Retry on the unchanged held pipeline); a `converged` or `unsupported`
+ *     ending, a person's return (`returned`) or a superseded attempt is not a wait that ended;
+ *  3. that attempt recorded a read (its last one found a pipeline).
+ *
+ * `null` otherwise — and always `null` while {@link gateWaitOf} is set, since that one needs the
+ * newest attempt open and this one needs it closed.
+ */
+export const lastGateWaitOf = (
+  task: { readonly state: string; readonly currentStage: string | null },
+  stageRows: readonly StageRowSelect[],
+): TaskDetailResponse['gate_wait'] => {
+  if (task.state !== 'needs_human' || task.currentStage !== CI_GATE_STAGE) {
+    return null;
+  }
+  const latest = latestCiGateRow(stageRows);
+  return latest === null || latest.state !== 'failed' || latest.outcome !== 'undecided'
+    ? null
+    : recordedGateWaitOf(latest);
 };
 
 /** `GET /api/tasks/:task_id` — the task with its stages, artifacts, questions, approvals and runs. */
@@ -1857,6 +1923,7 @@ export const findTaskDetail = async (
     human_time: humanTime,
     gate_feedback: gateFeedbackOf(task, stageRows),
     gate_wait: gateWaitOf(task, stageRows),
+    last_gate_wait: lastGateWaitOf(task, stageRows),
     // S-25.11: the returns and the stop, off the same rows.
     returns: returnsOf(setbackRows, compiledPipelineOf(task)),
     stop: stopOf(task, setbackRows),

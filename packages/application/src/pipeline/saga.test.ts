@@ -3542,6 +3542,10 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
       harness.store.stageRows
         .filter((row) => row.stage === 'ci_gate')
         .map((row) => [row.attempt, row.ciPendingRead ?? null]);
+    const ciEndings = (harness: PipelineHarness) =>
+      harness.store.stageRows
+        .filter((row) => row.stage === 'ci_gate')
+        .map((row) => [row.attempt, row.ciEnding ?? null]);
 
     it('records the read on the open attempt at every check, on a poll-only and a webhook binding', async () => {
       for (const [plan, timeout] of [
@@ -3634,6 +3638,8 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
       }
       const timedOut = lastEscalation(harness)?.payload.blocker_brief ?? '';
       expect(timedOut).toContain('was still manual after 10 minutes');
+      // The row says which ending it was, for the task read's stop (review of #89).
+      expect(ciEndings(harness)).toEqual([[1, 'ci_timed_out']]);
 
       await retryStageCommand(harness.humanCommands, {
         taskId: taskOf(harness).task.id,
@@ -3657,6 +3663,62 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
         'the CI gate\'s new attempt read pipeline pipeline-9 still held at the manual job "sentry-release-commit" on the same head commit as the previous attempt\'s last read, so it did not wait for it again',
       );
       expect(stageJobs(harness)).toEqual([]);
+      expect(ciEndings(harness)).toEqual([
+        [1, 'ci_timed_out'],
+        [2, 'ci_held_unchanged'],
+      ]);
+    });
+
+    it('records no ending for the five checks of a webhook binding, which is not a timeout', async () => {
+      const harness = waiting(() => held(), { plan: WEBHOOK });
+      await harness.publish([ticketMatched()]);
+      while (taskOf(harness).task.state === 'active') {
+        await nextCheck(harness);
+      }
+      expect(ciRows(harness)).toEqual([[1, 'failed', 'undecided']]);
+      expect(ciEndings(harness)).toEqual([[1, null]]);
+    });
+
+    /**
+     * Review of #89: "the attempt's first read" is the read made while it has none recorded — not
+     * check 1 by count, which a stranded-stage re-enqueue (no `gate_checks`) starts again.
+     */
+    it('does not take a re-enqueued check of an attempt that already has a read for its first', async () => {
+      let status: ReturnType<typeof pipeline> = held();
+      const harness = waiting(() => status, { timeoutMinutes: 10 });
+      await harness.publish([ticketMatched()]);
+      while (taskOf(harness).task.state === 'active') {
+        await nextCheck(harness);
+      }
+      status = pipeline('running');
+      await retryStageCommand(harness.humanCommands, {
+        taskId: taskOf(harness).task.id,
+        userId: USER,
+        stage: 'ci_gate' as Slug,
+      });
+      await harness.drain();
+      expect(ciReads(harness)[1]?.[1]).toMatchObject({ status: 'running' });
+      // The pipeline is held at the very job again, and recovery re-enqueues the entry's job with
+      // no check count: attempt 2 already has a read, so this is not its first and it waits.
+      status = held();
+      expect(harness.jobs.take(JOB_QUEUES.stageExecute)).toHaveLength(1);
+      await harness.jobs.enqueue({
+        queue: JOB_QUEUES.stageExecute,
+        singletonKey: `task:${taskOf(harness).task.id}`,
+        data: {
+          task_id: taskOf(harness).task.id,
+          project_id: PROJECT,
+          stage: 'ci_gate',
+          attempt: 2,
+        },
+      });
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('active');
+      expect(ciReads(harness)[1]?.[1]).toMatchObject({ status: 'manual' });
+      expect(ciEndings(harness)).toEqual([
+        [1, 'ci_timed_out'],
+        [2, null],
+      ]);
     });
 
     it('waits as normal on a Retry whose first read is running, or a different held pipeline', async () => {

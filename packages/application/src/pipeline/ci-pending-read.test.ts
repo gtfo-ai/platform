@@ -98,7 +98,7 @@ describe('ciPipelineReadOf', () => {
     expect(
       ciPipelineReadOf(running, { headSha: HEAD, draft: false, redact: identity }),
     ).toMatchObject({ status: 'running', held_job: null, held_job_url: null, draft: false });
-    expect(pendingPipelineDetail(running, false)).toBe('pipeline 3038234623 is running');
+    expect(pendingPipelineDetail(running, false, identity)).toBe('pipeline 3038234623 is running');
     // A manual pipeline with no manual job named: held, at no job the read can name.
     const unnamed = status({ jobs: [] });
     expect(
@@ -109,7 +109,7 @@ describe('ciPipelineReadOf', () => {
   it('picks the same held job the pending detail names', () => {
     const two = status({ jobs: [job({ name: 'first-manual' }), job({ name: 'second-manual' })] });
     expect(heldManualJob(two)?.name).toBe('first-manual');
-    expect(pendingPipelineDetail(two, false)).toContain('"first-manual"');
+    expect(pendingPipelineDetail(two, false, identity)).toContain('"first-manual"');
     expect(ciPipelineReadOf(two, { headSha: HEAD, draft: false, redact: identity })?.held_job).toBe(
       'first-manual',
     );
@@ -200,6 +200,9 @@ describe('isUnchangedHeldRetry (backlog 1078 criterion 3)', () => {
       ['the previous read was running', stored({ status: 'running' }), read()],
       ['a new pipeline', stored(), read({ pipeline_id: '3038234624' })],
       ['a new head', stored(), read({ head_sha: '2'.repeat(40) })],
+      // Review of #89: job A was started and the pipeline stopped at job B — something moved.
+      ['held at a later job', stored(), read({ held_job: 'deploy-production' })],
+      ['held at a job it now names', stored({ held_job: null }), read()],
     ];
     for (const [why, previous, current] of cases) {
       expect(isUnchangedHeldRetry(previous, current), why).toBe(false);
@@ -207,11 +210,11 @@ describe('isUnchangedHeldRetry (backlog 1078 criterion 3)', () => {
   });
 
   it('words the escalation: still held at that job, and what to do', () => {
-    expect(heldRetryBrief(read(), 'gitlab')).toBe(
+    expect(heldRetryBrief(read(), 'GitLab')).toBe(
       'The CI pipeline 3038234623 for this merge request is still held at the manual job "sentry-release-commit" — the same pipeline on the same head commit the previous attempt waited on, so the gate did not wait for it again. ' +
-        "Start the job on gitlab, or change the job's rule so it runs without a person, then Retry.",
+        "Start the job on GitLab, or change the job's rule so it runs without a person, then Retry.",
     );
-    expect(heldRetryBrief(read({ held_job: null }), 'gitlab')).toContain(
+    expect(heldRetryBrief(read({ held_job: null }), 'GitLab')).toContain(
       'still held at a manual job —',
     );
     expect(heldRetryReason(read())).toBe(

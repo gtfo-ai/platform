@@ -136,9 +136,10 @@ export const ciPipelineReadOf = (
 
 /**
  * **A retry nobody acted on** (backlog 1078 criterion 3): this attempt's first read shows the same
- * pipeline, on the same head, still `manual`, as the previous attempt's last read. Any other status
- * now — `running`, because the person started the job — or a different pipeline or head is a wait
- * like any other.
+ * pipeline, on the same head, still `manual` **at the same job**, as the previous attempt's last
+ * read. Any other status now — `running`, because the person started the job — a different
+ * pipeline or head, or the same pipeline now held at a later manual job (the person started job A
+ * and it stopped at job B: something moved) is a wait like any other.
  */
 export const isUnchangedHeldRetry = (
   previous: CiPendingRead | null,
@@ -148,7 +149,8 @@ export const isUnchangedHeldRetry = (
   previous.status === 'manual' &&
   current.status === 'manual' &&
   previous.pipeline_id === current.pipeline_id &&
-  previous.head_sha === current.head_sha;
+  previous.head_sha === current.head_sha &&
+  previous.held_job === current.held_job;
 
 const heldAt = (read: CiPipelineRead): string =>
   read.held_job === null ? 'a manual job' : `the manual job ${JSON.stringify(read.held_job)}`;
@@ -159,7 +161,8 @@ export const heldRetryReason = (read: CiPipelineRead): string =>
 
 /**
  * The brief a person reads for {@link isUnchangedHeldRetry}: the pipeline is still held at that job,
- * and what to do about it. `provider` is the git binding's provider id (BD-017: the pipeline does
+ * and what to do about it. `provider` is the provider's name as people know it (`GitLab`), which
+ * the binding carries from its registration (`GitBinding.providerName`; BD-017: the pipeline does
  * not know which provider it talks to).
  */
 export const heldRetryBrief = (read: CiPipelineRead, provider: string): string =>

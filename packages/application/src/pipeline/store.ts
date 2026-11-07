@@ -28,6 +28,7 @@ import type {
   ApprovalReason,
   ArtifactType,
   BudgetApprovalSubjectDetail,
+  CiGateEnding,
   ContextPackRecord,
   EstimateBasis,
   HistorySample,
@@ -1182,6 +1183,26 @@ export interface TaskRepository {
     tx: Transaction,
     entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
     read: CiPendingRead | null,
+  ): Promise<boolean>;
+  /**
+   * `stage`'s attempt `attempt`'s own last pending read, or `null` when it has none recorded (or
+   * no row) — what tells the gate whether a read is the attempt's first (backlog 1078).
+   */
+  ciPendingReadOf(
+    tx: Transaction,
+    taskId: Id,
+    stage: Slug,
+    attempt: number,
+  ): Promise<CiPendingRead | null>;
+  /**
+   * Records how the CI gate's own wait ended `stage`'s attempt `attempt` (`task_stages.ci_ending`,
+   * backlog 1078) — in the settling transaction, before the escalation closes the row, and **only
+   * while the row is open**; answers whether it wrote. The task read words the stop from it.
+   */
+  recordCiEnding(
+    tx: Transaction,
+    entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
+    ending: CiGateEnding,
   ): Promise<boolean>;
   /**
    * The last pending read of `stage`'s latest attempt **before** `attempt` — what a retry's first

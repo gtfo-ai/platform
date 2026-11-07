@@ -1892,6 +1892,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         const key = (attempt: number) => ({ taskId: stored.task.id, stage: 'ci_gate', attempt });
         // No row: nothing written, nothing to compare with.
         expect(await store.tasks.recordCiPendingRead(tx, key(1), read)).toBe(false);
+        expect(await store.tasks.ciPendingReadOf(tx, stored.task.id, 'ci_gate', 1)).toBeNull();
+        expect(await store.tasks.recordCiEnding(tx, key(1), 'ci_timed_out')).toBe(false);
         expect(
           await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 2),
         ).toBeNull();
@@ -1909,10 +1911,13 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await store.tasks.recordCiPendingRead(tx, key(1), read)).toBe(true);
         const later = { ...read, checked_at: '2026-11-06T20:27:30.000Z' };
         expect(await store.tasks.recordCiPendingRead(tx, key(1), later)).toBe(true);
-        // A read never answers for its own attempt, only for a later one.
+        // A read never answers for its own attempt, only for a later one: its own is ciPendingReadOf.
         expect(
           await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 1),
         ).toBeNull();
+        expect(await store.tasks.ciPendingReadOf(tx, stored.task.id, 'ci_gate', 1)).toEqual(later);
+        // The wait's ending is written while the row is open (the settlement, before it closes).
+        expect(await store.tasks.recordCiEnding(tx, key(1), 'ci_timed_out')).toBe(true);
         expect(await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 2)).toEqual(
           later,
         );
@@ -1928,6 +1933,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(
           await store.tasks.recordCiPendingRead(tx, key(1), { ...read, status: 'running' }),
         ).toBe(false);
+        expect(await store.tasks.recordCiEnding(tx, key(1), 'ci_held_unchanged')).toBe(false);
+        expect(await store.tasks.ciPendingReadOf(tx, stored.task.id, 'ci_gate', 1)).toEqual(later);
         await store.tasks.recordStageEntered(tx, {
           taskId: stored.task.id,
           stage: 'ci_gate',
@@ -1983,6 +1990,14 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(
           await store.tasks.previousCiPendingRead(tx, stored.task.id, 'ci_gate', 2),
         ).toBeNull();
+        // …nor an ending outside the vocabulary, which the task read would refuse.
+        await expect(
+          store.tasks.recordCiEnding(
+            tx,
+            { taskId: stored.task.id, stage: 'ci_gate', attempt: 1 },
+            'ci_gave_up' as never,
+          ),
+        ).rejects.toThrow();
       });
 
       it('has no signatures and no reason for a stage that has not run', async () => {

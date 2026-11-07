@@ -74,6 +74,7 @@ import {
   approvalReasonsSchema,
   artifactTypeSchema,
   budgetApprovalSubjectDetailSchema,
+  ciGateEndingSchema,
   contextPackRecordSchema,
   mergeRequestRefSchema,
   pausedBudgetScopeSchema,
@@ -1361,6 +1362,26 @@ export const createPostgresPipelineStore = (
           where task_id = $1 and stage = $2 and attempt = $3
             and state = 'running' and exited_at is null`,
         [entry.taskId, entry.stage, entry.attempt, value],
+      );
+      return (rowCount ?? 0) > 0;
+    },
+
+    ciPendingReadOf: async (tx, taskId, stage, attempt) => {
+      const { rows } = await sqlOf(tx).query<{ ci_pending_read: unknown }>(
+        `select ci_pending_read from task_stages
+          where task_id = $1 and stage = $2 and attempt = $3`,
+        [taskId, stage, attempt],
+      );
+      const value = rows[0]?.ci_pending_read ?? null;
+      return value === null ? null : ciPendingReadSchema.parse(value);
+    },
+
+    recordCiEnding: async (tx, entry, ending) => {
+      const { rowCount } = await sqlOf(tx).query(
+        `update task_stages set ci_ending = $4
+          where task_id = $1 and stage = $2 and attempt = $3
+            and state = 'running' and exited_at is null`,
+        [entry.taskId, entry.stage, entry.attempt, ciGateEndingSchema.parse(ending)],
       );
       return (rowCount ?? 0) > 0;
     },

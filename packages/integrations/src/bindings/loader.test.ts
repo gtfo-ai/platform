@@ -45,6 +45,7 @@ import {
   createOrganisationAccountCredentialCheck,
   createPipelineIntegrationsLoader,
   createProjectBindingSecrets,
+  providerNameOf,
 } from './loader.js';
 import { createPipelineProviderRegistry } from './shipped-registry.js';
 
@@ -287,6 +288,18 @@ describe('a git binding that loads', () => {
       host: 'git.example.test',
     });
     expect(integrations.git?.project).toBe('acme/api');
+  });
+
+  /**
+   * Backlog 1078's review: the CI gate's retry brief names the provider as people know it — the
+   * shipped GitLab registration's display name up to its parenthetical.
+   */
+  it('carries the provider’s name as a sentence says it', async () => {
+    const integrations = await loaderFor().forProject(PROJECT, outsideARun);
+    expect(integrations.git?.providerName).toBe('GitLab');
+    expect(providerNameOf('GitLab (gitlab.com and self-managed)')).toBe('GitLab');
+    expect(providerNameOf('Slack')).toBe('Slack');
+    expect(providerNameOf('(odd) name')).toBe('(odd) name');
   });
 
   /**

@@ -964,6 +964,37 @@ describe('the CI gate', () => {
     });
   });
 
+  /**
+   * Review of #89: a job's name is provider text on its way into the gate's own sentences — the
+   * pending detail (and so the timeout's reason), the failure detail and the recorded read — so a
+   * credential the binding knows, planted in a job's name, is redacted in every one, and the name
+   * is cut at 100 characters after the redaction.
+   */
+  it('redacts and bounds a job name carrying the binding’s credential, held or failing', async () => {
+    const planted = `deploy-${BINDING_TOKEN}-${'x'.repeat(120)}`;
+    const held = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getPipelineStatus: async () =>
+        pipelineStatus('manual', [job('lint', 'success'), job(planted, 'manual')]),
+    });
+    expect(held.kind).toBe('pending');
+    const heldDetail = (held as { detail: string }).detail;
+    expect(heldDetail).not.toContain(BINDING_TOKEN);
+    expect(heldDetail).toContain('held at manual job "deploy-[REDACTED');
+    const quoted = /manual job "([^"]*)"/.exec(heldDetail)?.[1] ?? '';
+    expect(quoted).toHaveLength(100);
+    const recorded = (held as { ciRead?: { pipeline: { held_job: string | null } | null } }).ciRead;
+    expect(recorded?.pipeline?.held_job).not.toContain(BINDING_TOKEN);
+    expect(recorded?.pipeline?.held_job).toBe(quoted);
+
+    const failed = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getPipelineStatus: async () => pipelineStatus('failed', [job(planted, 'failed')]),
+    });
+    expect(failed.kind).toBe('settled');
+    const failedDetail = (failed as { detail: string }).detail;
+    expect(failedDetail).not.toContain(BINDING_TOKEN);
+    expect(failedDetail).toContain('pipeline pipeline-1 failed: deploy-[REDACTED');
+  });
+
   it('waits — rather than passing — while the merge request has no head commit', async () => {
     const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
       getMergeRequest: async () =>

@@ -22,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CLOSED_TASK_STATES,
   gateWaitOf,
+  lastGateWaitOf,
   latestProgressOfRow,
   runStageOf,
   savedWorkOf,
@@ -340,6 +341,65 @@ describe('gate_wait on the task detail', () => {
     ).toBeNull();
     expect(gateWaitOf({ currentStage: 'ci_gate' }, [row({ ciPendingRead: null })])).toBeNull();
     expect(gateWaitOf({ currentStage: 'ci_gate' }, [row({ stage: 'rebase_gate' })])).toBeNull();
+  });
+
+  /**
+   * Review of #89 (A): the **parked** wait's last read — `needs_human` at `ci_gate`, the newest
+   * attempt closed `failed`/`undecided`, with a read — and `null` for every neighbouring shape.
+   */
+  it('serves a parked wait’s last read as last_gate_wait, and never beside gate_wait', () => {
+    const timedOut = row({
+      state: 'failed',
+      outcome: 'undecided',
+      exitedAt: new Date('2026-11-06T20:28:00.000Z'),
+    });
+    const parked = { state: 'needs_human', currentStage: 'ci_gate' } as const;
+    expect(lastGateWaitOf(parked, [timedOut])).toEqual({
+      pipeline_id: '3038234623',
+      pipeline_url: 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
+      status: 'manual',
+      held_job: 'sentry-release-commit',
+      held_job_url: 'https://gitlab.example.test/acme/api/-/jobs/9003',
+      draft: true,
+      checked_at: '2026-11-06T19:58:00.000Z',
+      waiting_since: '2026-11-06T19:28:00.000Z',
+      timeout_minutes: 60,
+    });
+    expect(gateWaitOf(parked, [timedOut])).toBeNull();
+    // The open wait is gate_wait's, never this one's.
+    expect(lastGateWaitOf({ state: 'active', currentStage: 'ci_gate' }, [row()])).toBeNull();
+    expect(lastGateWaitOf(parked, [row()])).toBeNull();
+  });
+
+  it('is null for last_gate_wait unless the task is parked at ci_gate by a no-answer ending with a read', () => {
+    const closed = (over: Partial<StageRow>) =>
+      row({ state: 'failed', exitedAt: new Date('2026-11-06T20:28:00.000Z'), ...over });
+    const parked = { state: 'needs_human', currentStage: 'ci_gate' } as const;
+    const cases: readonly [string, { state: string; currentStage: string | null }, StageRow[]][] = [
+      [
+        'not needs_human',
+        { state: 'active', currentStage: 'ci_gate' },
+        [closed({ outcome: 'undecided' })],
+      ],
+      [
+        'another stage',
+        { state: 'needs_human', currentStage: 'code_review' },
+        [closed({ outcome: 'undecided' })],
+      ],
+      ['a repeated failure', parked, [closed({ outcome: 'converged' })]],
+      ['an unsupported gate', parked, [closed({ outcome: 'unsupported' })]],
+      ['a person’s return', parked, [closed({ state: 'returned', outcome: 'returned' })]],
+      ['no read recorded', parked, [closed({ outcome: 'undecided', ciPendingRead: null })]],
+      [
+        'a newer attempt without one',
+        parked,
+        [closed({ outcome: 'undecided' }), closed({ attempt: 2, outcome: 'superseded' })],
+      ],
+      ['no ci_gate row', parked, []],
+    ];
+    for (const [why, task, rows] of cases) {
+      expect(lastGateWaitOf(task, rows), why).toBeNull();
+    }
   });
 
   it('refuses a stored read that does not parse, by name, never as null', () => {

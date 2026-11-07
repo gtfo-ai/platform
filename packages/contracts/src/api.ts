@@ -1571,6 +1571,18 @@ export const taskReturnSchema = z.strictObject({
 });
 export type TaskReturn = z.infer<typeof taskReturnSchema>;
 
+/**
+ * **How the CI gate's own wait ended the attempt** (backlog 1078), read off
+ * `task_stages.ci_ending` — the two endings of {@link taskStopSchema}'s `no_answer` at `ci_gate`
+ * that the page words on their own:
+ *
+ * - `ci_timed_out` — the wait on a poll-only binding reached `pipeline.limits.ci_timeout_minutes`;
+ * - `ci_held_unchanged` — a Retry's first read found the previous attempt's pipeline, on the same
+ *   head, still held at a manual job, so the gate escalated at once rather than wait again.
+ */
+export const ciGateEndingSchema = z.enum(['ci_timed_out', 'ci_held_unchanged']);
+export type CiGateEnding = z.infer<typeof ciGateEndingSchema>;
+
 /** The longest recorded sentence a {@link taskStopSchema} carries before it is cut. */
 export const MAX_TASK_STOP_RECORDED_CHARS = 2_000;
 
@@ -1598,6 +1610,14 @@ export const taskStopSchema = z.strictObject({
   ci_failure: taskCiFailureSchema.nullable(),
   recorded: z.string().max(MAX_TASK_STOP_RECORDED_CHARS).nullable(),
   recorded_cut: z.boolean(),
+  /**
+   * Which of the CI gate's own wait endings a `no_answer` at `ci_gate` was
+   * ({@link ciGateEndingSchema}, backlog 1078), `null` for every other stop. A field beside
+   * `cause` rather than two more causes, so a reader that switches over `cause` keeps compiling;
+   * optional on the schema only until the web app's fixtures name it (backlog 1099), and the server
+   * always sends it.
+   */
+  ci_ending: ciGateEndingSchema.nullable().optional(),
 });
 export type TaskStop = z.infer<typeof taskStopSchema>;
 
@@ -1942,9 +1962,18 @@ export const taskDetailResponseSchema = z.strictObject({
   /**
    * The current stage's open CI wait (backlog 1078) — see {@link gateWaitSchema}; `null` when there
    * is none. The server always sends it; the key is optional only so the web app's fixtures need
-   * not name it until a UI slice reads it (`BACKLOG.md` 1090 makes it required).
+   * not name it until a UI slice reads it (`BACKLOG.md` 1099 makes it required).
    */
   gate_wait: gateWaitSchema.nullable().optional(),
+  /**
+   * The **parked** CI wait's last read (backlog 1078) — {@link gateWaitSchema}'s shape, read off the
+   * latest `ci_gate` attempt when the task is `needs_human` at `ci_gate` and that attempt was closed
+   * `failed`/`undecided` (the gate's own no-answer escalation: its timeout, its checks or backstop,
+   * a provider that did not answer, or a Retry on the unchanged held pipeline), with a recorded
+   * read; `null` otherwise. `waiting_since` is that attempt's entry. Optional for the reason
+   * `gate_wait` is.
+   */
+  last_gate_wait: gateWaitSchema.nullable().optional(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,

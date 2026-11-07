@@ -26,6 +26,7 @@
 import type {
   AgentRole,
   ArtifactType,
+  CiGateEnding,
   ContextPackRecord,
   DomainEvent,
   EstimateBasis,
@@ -40,6 +41,7 @@ import type {
   TaskStageState,
 } from '@platform/contracts';
 import {
+  ciGateEndingSchema,
   mergeRequestRefSchema,
   storedTicketClaimSchema,
   taskCoverageSchema,
@@ -136,6 +138,8 @@ interface StageRow {
   usageLimitedRuns?: number;
   /** `task_stages.ci_pending_read` (migration 0107, backlog 1078): the CI gate's last pending read. */
   ciPendingRead?: CiPendingRead | null;
+  /** `task_stages.ci_ending` (migration 0107, backlog 1078): how the CI gate's wait ended it. */
+  ciEnding?: CiGateEnding | null;
   enteredAt: number;
   /**
    * The instant the row was entered, on {@link MemoryPipelineStoreOptions.now} — PostgreSQL's
@@ -1184,6 +1188,26 @@ export const createMemoryPipelineStore = (
       );
       if (row === undefined) return false;
       row.ciPendingRead = read === null ? null : clone(ciPendingReadSchema.parse(read));
+      return true;
+    },
+    ciPendingReadOf: async (_tx, taskId, stage, attempt) => {
+      const value =
+        stages.find(
+          (row) => row.taskId === taskId && row.stage === stage && row.attempt === attempt,
+        )?.ciPendingRead ?? null;
+      return value === null ? null : ciPendingReadSchema.parse(value);
+    },
+    recordCiEnding: async (_tx, entry, ending) => {
+      const row = stages.find(
+        (candidate) =>
+          candidate.taskId === entry.taskId &&
+          candidate.stage === entry.stage &&
+          candidate.attempt === entry.attempt &&
+          candidate.state === 'running' &&
+          candidate.exitedAt === null,
+      );
+      if (row === undefined) return false;
+      row.ciEnding = ciGateEndingSchema.parse(ending);
       return true;
     },
     previousCiPendingRead: async (_tx, taskId, stage, attempt) => {

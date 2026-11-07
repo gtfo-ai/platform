@@ -159,8 +159,10 @@ export const pipelineJobSchema = z.strictObject({
   /**
    * The job's own page on the provider, or `null`/absent when the provider gives none (backlog
    * 1078): the CI gate publishes a **held** manual job's page as `gate_wait.held_job_url`, so a
-   * person can start it there. Provider text like `url` — a reader keeps it only as an http(s) URL
-   * (`ci-pending-read.ts`' `safeProviderUrl`).
+   * person can start it there. Provider text like `url`, and **unchecked at the adapter**: GitLab's
+   * `web_url` is passed through as the payload carried it, and `urlSchema` admits any scheme. The
+   * one reader, `ci-pending-read.ts`' `safeProviderUrl`, filters it — an `http(s)` URL with no
+   * credentials that the binding's redactor leaves unchanged, or `null`.
    */
   web_url: urlSchema.nullish(),
 });

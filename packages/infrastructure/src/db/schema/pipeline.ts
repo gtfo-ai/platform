@@ -290,6 +290,11 @@ export const taskStages = pgTable('task_stages', {
    */
   ciPendingRead: jsonb('ci_pending_read').$type<unknown>(),
   /**
+   * How the CI gate's wait ended the attempt (backlog 1078, migration 0107): `ci_timed_out` or
+   * `ci_held_unchanged` (`ciGateEndingSchema`), written by `recordCiEnding`; null otherwise.
+   */
+  ciEnding: text('ci_ending'),
+  /**
    * The ticket's status when the human-return window first read it during this entry into a human
    * stage (WP-178 review, migration 0089, TD-029 decision 7's amendment (a)). Null on every other
    * row. Written once (`coalesce`) by `observeHumanStageStatus`.

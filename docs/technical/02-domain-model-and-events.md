@@ -434,12 +434,21 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 >   CI timeout bounding the wait (`null` on a webhook binding). A pending read that found no
 >   pipeline writes `null`; a closed attempt keeps its last read. `GET /api/tasks/:id` serves the
 >   open attempt's as `gate_wait` (technical/08). A pending read never parks a task by itself;
-> - **a retry nobody acted on escalates at once**: when an attempt's **first** read (its first
->   check; a provider outage before it is not a check) shows the same pipeline, on the same head,
->   still `manual`, as the previous `ci_gate` attempt's last read, the task is escalated `undecided`
->   immediately with a brief saying the pipeline is still held at that job — start the job on the
->   provider, or change the job's rule, then Retry. Any other status (the person started the job,
->   so it is `running`), another pipeline or another head waits as before.
+> - **a retry nobody acted on escalates at once**: when an attempt's **first** read (the one made
+>   while the attempt has no read recorded yet — not its first check by count, which a
+>   stranded-stage re-enqueue starts again) shows the same pipeline, on the same head, still
+>   `manual` at the same job, as the previous `ci_gate` attempt's last read, the task is escalated
+>   `undecided` immediately with a brief saying the pipeline is still held at that job — start the
+>   job on the provider (named as people know it, `GitLab`), or change the job's rule, then Retry.
+>   Any other status (the person started the job, so it is `running`), another pipeline, another
+>   head or another held job waits as before;
+> - **the two endings are marked on the row**: the poll-only timeout and the held retry record
+>   `task_stages.ci_ending` (`ci_timed_out`, `ci_held_unchanged`) in the settling transaction, so
+>   the task read words the stop (`stop.ci_ending`) and serves the parked attempt's last read
+>   (`last_gate_wait`) without parsing `return_reason`, whose words are unchanged;
+> - **job names in the gate's sentences are redacted**, then cut at 100 characters, as the
+>   recorded read's are: the held job in the pending detail, the failing jobs in the failure
+>   detail and its log labels (review of #89).
 >
 > Code: `packages/application/src/pipeline/ci-pending-read.ts`, applied in `jobs.ts`
 > (`recordCiRead`).

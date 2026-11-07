@@ -1,5 +1,5 @@
 -- migration-class: additive
--- 0107 — what the CI gate is waiting on (backlog 1078).
+-- 0107 — what the CI gate is waiting on, and how its wait ended (backlog 1078).
 --
 -- Until now the CI gate's pending read reached the database only as `return_reason` at its
 -- timeout: AUT-6655's pipeline was held at a manual job for two hours across two attempts, and no
@@ -27,5 +27,17 @@
 -- null-propagating.
 alter table task_stages add column ci_pending_read jsonb;
 
+-- **How the CI gate's own wait ended**, when it ended the attempt (backlog 1078): `ci_timed_out`
+-- (a poll-only wait reached `ci_timeout_minutes`) or `ci_held_unchanged` (a Retry's first read
+-- found the previous attempt's held pipeline unchanged). Both close the row `failed`/`undecided`
+-- with their reason text unchanged, so the row needs this word to tell the task read which of the
+-- gate's no-answer endings it was — a new `outcome` word would be a new member of the vocabulary
+-- every reader switches over. One writer, `TaskRepository.recordCiEnding`, in the settling
+-- transaction and only while the row is open; null on every other row. Additive like the column
+-- above; the two words are held by `ciGateEndingSchema` at the write and at the read.
+alter table task_stages add column ci_ending text;
+
 comment on column task_stages.ci_pending_read is
   'Backlog 1078: the CI gate attempt''s last pending read of the head pipeline (ciPendingReadSchema), redacted. Written while the attempt is open; null = no such read.';
+comment on column task_stages.ci_ending is
+  'Backlog 1078: how the CI gate''s wait ended the attempt (ci_timed_out | ci_held_unchanged); null = not one of those endings.';
