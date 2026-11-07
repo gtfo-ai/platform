@@ -34,6 +34,9 @@ const DOMAIN_TRANSITIONS: ReadonlyMap<string, boolean> = new Map([
   ['returnEscalatedTask', true],
   ['askQuestion', true],
   ['requestApproval', true],
+  // S-27.1 (BACKLOG 1480): out of `paused` or `needs_human` back into the approval wait — a stopped
+  // task holds no offer, and the wait asks for none.
+  ['resumeIntoApprovalWait', false],
   ['pauseTask', true],
   ['escalateTask', true],
   ['amendEscalation', false],

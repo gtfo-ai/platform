@@ -96,3 +96,31 @@ export const shiftedByPauses = (
     ? at
     : (advanceWorkingTime(calendar, new Date(at), minutes).toISOString() as IsoDateTime);
 };
+
+/** The task's approval still **pending**, of whichever kind, or `null` — the newest of each kind. */
+export const pendingApproval = async (
+  store: Pick<PipelineStore, 'approvals'>,
+  tx: Transaction,
+  taskId: Id,
+): Promise<StoredApproval | null> => {
+  for (const kind of approvalKindSchema.options) {
+    const latest = await store.approvals.latestOfKind(tx, { taskId, kind });
+    if (latest?.approval.status === 'pending') {
+      return latest;
+    }
+  }
+  return null;
+};
+
+/**
+ * The approval a resume of a stopped (`paused` or `needs_human`) task goes back to waiting for:
+ * the one its newest pause interrupted, pending or decided since ({@link interruptedApproval}), or
+ * else any approval still pending — a task escalated with one (a take-over that timed out, a
+ * conflict) keeps it, and only its decision may move the task on (the review of #113).
+ */
+export const approvalToResumeInto = async (
+  store: Pick<PipelineStore, 'tasks' | 'approvals'>,
+  tx: Transaction,
+  taskId: Id,
+): Promise<StoredApproval | null> =>
+  (await interruptedApproval(store, tx, taskId)) ?? (await pendingApproval(store, tx, taskId));

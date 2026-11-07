@@ -56,7 +56,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { reminderTimeOf, type WorkingCalendar } from '../scheduling/working-calendar.js';
-import { interruptedApproval } from './approval-wait.js';
+import { approvalToResumeInto } from './approval-wait.js';
 import {
   type DeadlineOutcome,
   expireTaskQuestion,
@@ -225,7 +225,7 @@ export const deadlineArmingHandler = (options: DeadlineArmingOptions): EventHand
         if (stored === null || stored.task.state !== 'waiting_approval') {
           return;
         }
-        const interrupted = await interruptedApproval(options.store, tx, stored.task.id);
+        const interrupted = await approvalToResumeInto(options.store, tx, stored.task.id);
         const approval = interrupted?.approval ?? null;
         if (
           approval === null ||

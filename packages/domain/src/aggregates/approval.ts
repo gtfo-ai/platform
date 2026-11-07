@@ -1,5 +1,6 @@
 /**
- * The Approval aggregate — technical/02: `pending → approved | rejected`, and `expired` for history.
+ * The Approval aggregate — technical/02: `pending → approved | rejected | expired` — `expired` for
+ * history, and for a cancelled task's withdrawn approval.
  *
  * **An approval waits until a person decides it** (BD-006's 2026-11-07 amendment, S-27.1): nothing
  * expires one. `expired` stays in the status and in the transition table because rows and
@@ -141,6 +142,45 @@ export const recordApprovalReminder = (approval: Approval): Approval => {
   return { ...approval, remindersSent: approval.remindersSent + 1 };
 };
 
+/** Why a withdrawn approval ended, as its row and its `task.approval.decided` record it. */
+export const APPROVAL_WITHDRAWN_REASON = 'the task was cancelled';
+
+/**
+ * **A cancelled task's pending approval is withdrawn** (S-27.1, the review of #113): it can no longer
+ * be decided, so it leaves the Inbox, and its chat message loses its buttons. Since an approval
+ * never expires (BD-006's 2026-11-07 amendment) one left `pending` would stay there for ever.
+ *
+ * Recorded as **`expired`** with no decider and the reason {@link APPROVAL_WITHDRAWN_REASON}, not as
+ * a status of its own: `approval_status` is a database enum, a new value is a migration this slice
+ * does not need, and `expired` already means *ended without a decision* to every reader — the saga
+ * (which ignores it on a finished task), the settled-message edit and the task page. The reason is
+ * what tells it from an earlier build's expiry. Nobody's permission is asked: the canceller decided
+ * the task, not the approval.
+ */
+export const withdrawApproval = (approval: Approval, context: CommandContext): ApprovalDecision => {
+  assertApprovalTransition(approval.status, 'expired');
+  const recorder = recorderFor(approval, context);
+  const decidedAt = recorder.occurredAt;
+  recorder.emit('task.approval.decided', {
+    project_id: approval.projectId,
+    task_id: approval.taskId,
+    approval_id: approval.id,
+    decision: 'expired',
+    decided_by_user_id: null,
+    reason: APPROVAL_WITHDRAWN_REASON,
+  });
+  return {
+    aggregate: {
+      ...approval,
+      status: 'expired',
+      decidedAt,
+      reason: APPROVAL_WITHDRAWN_REASON,
+      sequence: recorder.sequence,
+    },
+    events: recorder.events,
+  };
+};
+
 export const toApprovalRecord = (approval: Approval): ApprovalRecord => ({
   id: approval.id,
   task_id: approval.taskId,
@@ -196,20 +236,19 @@ export const decideApproval = (
 
 /**
  * **A human command never moves a task past a pending approval** (BD-006's 2026-11-07 amendment,
- * S-27.1, closing BACKLOG 854). `task.resume` is a `member` action and `RESUMABLE_TASK_STATES`
- * admits `waiting_approval`, so before this a member's resume entered the stage and skipped a
- * decision only a maintainer may take. Every human entry into a stage asks this first
- * (`humanEnter`, `packages/application/src/pipeline/commands.ts`): resume, retry-stage and
- * retry-run.
+ * S-27.1, closing BACKLOG 854 and 1480). `task.resume` is a `member` action and
+ * `RESUMABLE_TASK_STATES` admits `waiting_approval`, so before this a member's resume entered the
+ * stage and skipped a decision only a maintainer may take; a pause, a take-over and a hand-back —
+ * or a take-over left to time out into `needs_human` — went round it the same way. So **every**
+ * human entry into a stage asks this first, **in any state** (`humanEnter`,
+ * `packages/application/src/pipeline/commands.ts`): resume, retry-stage, retry-run and hand-back.
+ * The one way on that is not an entry is the resume **back into the wait**
+ * (`resumeIntoApprovalWait`), which the resume command takes instead of entering the stage.
  *
  * The refusal is the same for **every role**, so it takes none: a maintainer decides through the
- * approval, which records the decision and its subject (TD-035), rather than around it. A
- * `waiting_approval` task with **no** pending approval — its approval decided, and the saga's move
- * lost — is still resumable: that is the rescue `RESUMABLE_TASK_STATES` keeps the state for.
- *
- * **A `paused` task is asked too** (BACKLOG 1480): `pending` is then the approval the pause
- * interrupted, still pending, and a retry-stage or retry-run of it is refused the same way. A
- * *resume* of such a task is not refused — it goes back to the wait (`resumeIntoApprovalWait`).
+ * approval, which records the decision and its subject (TD-035), rather than around it. A task
+ * with **no** pending approval — its approval decided, and the saga's move lost — still enters:
+ * that is the rescue `RESUMABLE_TASK_STATES` keeps `waiting_approval` for.
  *
  * @throws {ApprovalPendingError} naming the approval.
  */
@@ -218,11 +257,7 @@ export const assertNoPendingApproval = (
   pending: Pick<Approval, 'id' | 'kind' | 'status'> | null,
   entry: { readonly stage: string; readonly move: string },
 ): void => {
-  if (
-    (task.state !== 'waiting_approval' && task.state !== 'paused') ||
-    pending === null ||
-    pending.status !== 'pending'
-  ) {
+  if (pending === null || pending.status !== 'pending') {
     return;
   }
   throw new ApprovalPendingError({

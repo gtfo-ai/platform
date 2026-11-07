@@ -15,6 +15,7 @@ import * as approvalModule from './approval.js';
 import {
   APPROVAL_REMINDER_LIMIT,
   APPROVAL_TRANSITIONS,
+  APPROVAL_WITHDRAWN_REASON,
   type Approval,
   assertNoPendingApproval,
   canTransitionApproval,
@@ -22,6 +23,7 @@ import {
   decideApproval,
   recordApprovalReminder,
   toApprovalRecord,
+  withdrawApproval,
 } from './approval.js';
 
 const APPROVAL_ID = '00000000-0000-4000-8000-0000000000d1';
@@ -221,26 +223,48 @@ describe('a human entry never moves a task past a pending approval (BACKLOG 854)
     expect(() => assertNoPendingApproval({ state: 'waiting_approval' }, null, entry)).not.toThrow();
   });
 
-  it('refuses a retry of a task paused out of the wait, naming the approval (BACKLOG 1480)', () => {
-    let refused: unknown;
-    try {
-      assertNoPendingApproval({ state: 'paused' }, pending(), {
-        stage: 'architecture',
-        move: 'retry-stage',
-      });
-    } catch (error) {
-      refused = error;
+  it('refuses an entry in any state while the approval is pending — a hand-back included (BACKLOG 1480)', () => {
+    for (const state of taskStateSchema.options) {
+      let refused: unknown;
+      try {
+        assertNoPendingApproval({ state }, pending(), {
+          stage: 'implementation',
+          move: 'hand-back',
+        });
+      } catch (error) {
+        refused = error;
+      }
+      expect(refused, state).toBeInstanceOf(ApprovalPendingError);
+      expect((refused as ApprovalPendingError).from).toBe(state);
+      expect((refused as Error).message).toContain(APPROVAL_ID);
     }
-    expect(refused).toBeInstanceOf(ApprovalPendingError);
-    expect((refused as ApprovalPendingError).from).toBe('paused');
-    expect((refused as Error).message).toContain(APPROVAL_ID);
+  });
+});
+
+describe('a cancelled task withdraws its pending approval (S-27.1, review of #113)', () => {
+  it('ends it expired, with no decider and the reason, on the approval stream', () => {
+    const shared = world();
+    const { aggregate, events } = withdrawApproval(pending(shared), context(shared));
+    expect(aggregate.status).toBe('expired');
+    expect(aggregate.decidedByUserId).toBeNull();
+    expect(aggregate.reason).toBe(APPROVAL_WITHDRAWN_REASON);
+    expect(events.map((event) => [event.type, event.stream_type])).toEqual([
+      ['task.approval.decided', 'approval'],
+    ]);
+    expect(events[0]?.payload).toMatchObject({
+      decision: 'expired',
+      decided_by_user_id: null,
+      reason: 'the task was cancelled',
+    });
   });
 
-  it('asks nothing of a task in any other state', () => {
-    for (const state of taskStateSchema.options.filter(
-      (state) => state !== 'waiting_approval' && state !== 'paused',
-    )) {
-      expect(() => assertNoPendingApproval({ state }, pending(), entry), state).not.toThrow();
-    }
+  it('cannot withdraw an approval that was decided', () => {
+    const shared = world();
+    const decided = decideApproval(
+      pending(shared),
+      { decision: 'approved', userId: USER_ID, role: 'maintainer' },
+      context(shared),
+    ).aggregate;
+    expect(() => withdrawApproval(decided, context(shared))).toThrow(IllegalTransitionError);
   });
 });

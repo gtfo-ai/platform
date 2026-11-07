@@ -547,12 +547,21 @@ export const askQuestion = (
   return { aggregate: { ...next, sequence: recorder.sequence }, events: recorder.events };
 };
 
-/** A gate needs a maintainer's decision (BD-006): plan, budget, knowledge or rework. */
+/**
+ * A gate needs a maintainer's decision (BD-006): plan, budget, knowledge or rework.
+ *
+ * Only from `active` — a gate asks of a running stage. The table's other ways into
+ * `waiting_approval` (`paused`, `needs_human`, S-27.1) belong to {@link resumeIntoApprovalWait}
+ * alone, so this refuses them by name rather than inheriting them.
+ */
 export const requestApproval = (
   task: Task,
   input: { readonly approval: ApprovalRecord },
   context: CommandContext,
 ): TaskDecision => {
+  if (task.state !== 'active') {
+    throw new IllegalTransitionError('Task', task.state, 'waiting_approval');
+  }
   const next = withState(task, 'waiting_approval');
   const recorder = recorderFor(task, context);
   recorder.emit('task.approval.requested', {
@@ -603,18 +612,21 @@ export const pauseTask = (
 };
 
 /**
- * **A resume back into the approval wait a pause interrupted** (S-27.1, BACKLOG 1480; BD-006's
- * 2026-11-07 amendment). A task paused while it waited for an approval does not proceed past that
- * approval when it is resumed: it goes back to `waiting_approval`, so only the approval's own
- * decision moves it on — and an approval decided while the task was paused is applied by the saga
- * on the `task.resumed` this appends. `paused → waiting_approval` is an edge for this command alone.
+ * **A resume back into the approval wait** (S-27.1, BACKLOG 1480; BD-006's 2026-11-07 amendment).
+ * A task that left its approval wait without a decision — paused, taken over, or escalated with
+ * the approval still pending (a take-over that timed out) — does not proceed past that approval
+ * when it is resumed: it goes back to `waiting_approval`, so only the approval's own decision moves
+ * it on, and an approval decided while it was away is applied by the saga on the `task.resumed`
+ * this appends. The edges it takes, `paused → waiting_approval` and `needs_human →
+ * waiting_approval`, are for this command alone: {@link requestApproval} refuses any state but
+ * `active`.
  */
 export const resumeIntoApprovalWait = (
   task: Task,
   input: { readonly approvalId: Id },
   context: CommandContext,
 ): TaskDecision => {
-  if (task.state !== 'paused') {
+  if (task.state !== 'paused' && task.state !== 'needs_human') {
     throw new IllegalTransitionError('Task', task.state, 'waiting_approval');
   }
   const next = withState(task, 'waiting_approval');

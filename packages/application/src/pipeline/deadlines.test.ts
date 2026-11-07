@@ -16,6 +16,7 @@ import type { DomainEvent, Id, IsoDateTime, Slug } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import {
   APPROVAL_REMINDER_LIMIT,
+  ApprovalPendingError,
   IllegalTransitionError,
   materialiseAutonomy,
 } from '@platform/domain';
@@ -1053,6 +1054,68 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
       expect(harness.specs.some((spec) => spec.stage === 'implementation')).toBe(true);
     });
 
+    /**
+     * The review of #113: a take-over of a waiting task and a hand-back at Implementation would
+     * have skipped the approval; so would a take-over left to time out into `needs_human`. Every
+     * human entry is refused while the approval is pending, and the resume goes back to the wait.
+     */
+    it('refuses a hand-back of a taken-over waiting task, naming the approval', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const taskId = taskOf(harness).task.id;
+      moveTo(harness, MONDAY_1000);
+      await takeOverTaskCommand(harness.humanCommands, {
+        taskId,
+        userId: USER,
+        authorName: 'Ada',
+        tarball: false,
+      });
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('paused');
+      const runsBefore = harness.specs.length;
+      const handedBack = handBackTaskCommand(harness.humanCommands, {
+        taskId,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        summary: 'I wrote the plan myself',
+      });
+      await expect(handedBack).rejects.toThrow(ApprovalPendingError);
+      await expect(handedBack).rejects.toThrow(approval.id);
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('paused');
+      expect(harness.specs.length).toBe(runsBefore);
+    });
+
+    it('refuses a hand-back after the take-over timed out into needs_human, and resumes into the wait', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const taskId = taskOf(harness).task.id;
+      moveTo(harness, MONDAY_1000);
+      await takeOverTaskCommand(harness.humanCommands, {
+        taskId,
+        userId: USER,
+        authorName: 'Ada',
+        tarball: false,
+      });
+      await harness.drain();
+      // Five working days with no command from the holder: the take-over escalates.
+      moveTo(harness, '2026-06-15T10:00:00.000Z');
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('needs_human');
+      expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
+        'pending',
+      );
+      await expect(
+        handBackTaskCommand(harness.humanCommands, {
+          taskId,
+          userId: USER,
+          stage: 'implementation' as Slug,
+          summary: 'carry on',
+        }),
+      ).rejects.toThrow(ApprovalPendingError);
+      await resumeTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('waiting_approval');
+    });
+
     it('refuses a retry of the stage while paused, naming the approval', async () => {
       const { harness, approval } = await planApprovalOnFriday();
       const task = taskOf(harness).task;
@@ -1869,24 +1932,42 @@ describe('a finished task owes nobody an answer (re-validation, round 2)', () =>
     expect(taskOf(harness).task.state).toBe('cancelled');
   });
 
-  it('decides nothing about an approval on a cancelled task either', async () => {
+  /**
+   * The review of #113: an approval the cancelled task still waited for is **withdrawn** — it can
+   * never be decided now, and since no approval expires it would sit in the Inbox for ever.
+   */
+  it('withdraws the approval of a task cancelled while it waited, so nothing is left pending', async () => {
     const { harness } = harnessWith({
+      communication: {},
       runs: { ...happyRuns(), architecture: completedRun(PLAN('XL')) },
     });
     moveTo(harness, FRIDAY_1600);
     await harness.publish([ticketMatched()]);
     const [requested] = eventsOf(harness, 'task.approval.requested');
+    const id = requested?.payload.approval.id as Id;
     await cancelTaskCommand(harness.humanCommands, {
       taskId: taskOf(harness).task.id,
       userId: USER,
     });
     moveTo(harness, MONDAY_1600);
     await harness.drain();
+    const stored = await harness.store.approvals.load({} as never, id);
+    expect(stored?.approval.status).toBe('expired');
+    expect(stored?.approval.reason).toBe('the task was cancelled');
+    expect(stored?.approval.decidedByUserId).toBeNull();
     expect(
-      (await harness.store.approvals.load({} as never, requested?.payload.approval.id as Id))
-        ?.approval.status,
-    ).toBe('pending');
-    expect(eventsOf(harness, 'task.approval.decided')).toHaveLength(0);
+      eventsOf(harness, 'task.approval.decided').map((event) => [
+        event.payload.approval_id,
+        event.payload.decision,
+        event.payload.reason,
+      ]),
+    ).toEqual([[id, 'expired', 'the task was cancelled']]);
+    // The task stays cancelled — the saga ignores a decision on a finished task — and nobody is
+    // reminded about it.
+    expect(taskOf(harness).task.state).toBe('cancelled');
+    expect(
+      harness.notifications.rows.filter((row) => row.notificationClass === 'reminder'),
+    ).toHaveLength(0);
   });
 });
 

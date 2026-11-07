@@ -3880,6 +3880,7 @@ describe('a human’s way into Ready (WP-79)', () => {
         'TaskMergedError', // a refusal (WP-152)
         'takeOverTask', // → paused
         'taskBranchName', // pure
+        'withdrawApproval', // Approval aggregate: a cancelled task's pending approval (S-27.1)
       ].sort(),
     );
     const body = source.slice(source.indexOf('const humanEnter = async'));

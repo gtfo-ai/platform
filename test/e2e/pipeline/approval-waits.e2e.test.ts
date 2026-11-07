@@ -9,18 +9,23 @@
  * ten calendar days ago, which is past three working days on any calendar, and a `deadline_at` a
  * week ago, which is what an earlier build would have written and expired the approval on.
  *
- * What the instance then does on its own — the recovery pass every second
- * (`APP_INTAKE_RECONCILE_INTERVAL_MS`) and the `deadline.sweep` worker — is the assertion:
+ * What the instance then does on its own is the assertion. The first reminder's timer, armed at the
+ * real request, still holds its singleton slot until the original instant — hours away — so the
+ * moved instants are acted on by the **recovery pass** (every second here,
+ * `APP_INTAKE_RECONCILE_INTERVAL_MS`): each pass finds the approval's next reminder a grace overdue
+ * and sends it, and a reminder's own arm of the next one is refused by the held slot, so the pass
+ * sends reminders one to five, one a pass:
  *
  * - the task is still `waiting_approval` and the approval still `pending`, its old deadline unread
  *   and unwritten;
- * - five reminders are recorded (`approvals.reminders_sent` = 5), the recovery row finding the first
- *   whose arm lay in the future and each reminder arming the next (all overdue here);
+ * - five reminders are recorded (`approvals.reminders_sent` = 5), each one notification with a cause
+ *   of its own (`reminder:approval:<id>`, then `…:<n>` — the `notify` duties on `pipeline.outbound`);
  * - the task read publishes the approval's `deadline_at` as `null` (criterion 4);
  * - and a resume of the waiting task is refused `409 approval_pending`, naming the approval
  *   (criterion 6, BACKLOG 854).
  */
-import type { TaskDetailResponse } from '@platform/contracts';
+import { reminderCauseId } from '@platform/application';
+import type { Id, TaskDetailResponse } from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import {
@@ -136,6 +141,16 @@ describe('an approval waits until a person decides it (S-27.1)', () => {
     );
     expect(after?.status).toBe('pending');
     expect(after?.reminders_sent).toBe(5);
+    // Five notifications, one per reminder, each with its own cause (a retry of one shares it).
+    const notified = await pipeline.query<{ cause: string }>(
+      `select distinct data ->> 'cause_event_id' as cause from pgboss.job
+        where name = 'pipeline.outbound' and data ->> 'duty' = 'notify'
+          and data ->> 'notification_class' = 'reminder' and data ->> 'reminder_of' = $1`,
+      [approvalId],
+    );
+    expect(notified.map((row) => row.cause).sort()).toEqual(
+      [1, 2, 3, 4, 5].map((n) => reminderCauseId('approval', approvalId as Id, n)).sort(),
+    );
     expect(after?.deadline_at?.toISOString()).toBe(oldDeadline.toISOString());
     expect((await pipeline.task()).state).toBe('waiting_approval');
     const events = await pipeline.events();

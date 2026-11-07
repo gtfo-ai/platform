@@ -84,7 +84,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { WorkingCalendar } from '../scheduling/working-calendar.js';
-import { interruptedApproval } from './approval-wait.js';
+import { approvalToResumeInto } from './approval-wait.js';
 import { escalateForConfigRefusalInHandler } from './config-refusal.js';
 import type { TaskDutyLeaseOptions } from './duty-lease.js';
 import { humanReturnStageOf } from './human-stage.js';
@@ -1715,7 +1715,7 @@ const approvalResumedHandler = (options: PipelineSagaOptions): EventHandler => (
     if (stored === null || stored.task.state !== 'waiting_approval') {
       return;
     }
-    const record = await interruptedApproval(options.store, context.scope.tx, stored.task.id);
+    const record = await approvalToResumeInto(options.store, context.scope.tx, stored.task.id);
     if (record === null || record.approval.status === 'pending') {
       return;
     }

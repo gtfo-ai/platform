@@ -66,8 +66,9 @@ const EXPECTED_TASK_EDGES = {
   paused: ['active', 'ready_for_merge', 'merged', 'needs_human', 'cancelled', 'waiting_approval'],
   // "needs_human ─► active | cancelled | retro" — the last since WP-152 (technical/02's M9
   // amendment, backlog 497): a task escalated after its merge finishes its retrospective. The
-  // aggregate narrows it to a merged task and a person's command.
-  needs_human: ['active', 'paused', 'cancelled', 'retro'],
+  // aggregate narrows it to a merged task and a person's command; "─► waiting_approval" since S-27.1
+  // (BACKLOG 1480): a resume of a task whose approval is still pending goes back to the wait.
+  needs_human: ['active', 'paused', 'cancelled', 'retro', 'waiting_approval'],
   // "ready_for_merge ─► merged" and "returned(stage) ◄─┘ (human comments / rework)".
   ready_for_merge: ['merged', 'returned', 'paused', 'needs_human', 'cancelled'],
   // "merged ─► retro"; a merged task can still escalate but can never be cancelled.
