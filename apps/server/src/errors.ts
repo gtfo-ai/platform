@@ -39,6 +39,7 @@ import {
 } from '@platform/application';
 import type { ApiError } from '@platform/contracts';
 import {
+  ApprovalPendingError,
   IllegalTransitionError,
   InvariantViolationError,
   PermissionDeniedError,
@@ -161,6 +162,13 @@ export const commandRefusal = (error: unknown): HttpError | null => {
   // Before its parent class: a merged task's refusal has its own fix (WP-152, backlog 497).
   if (error instanceof TaskMergedError) {
     return new HttpError(409, 'task_merged', error.message);
+  }
+  // Before its parent class too: the way on is the approval's decision, which it names (S-27.1,
+  // BACKLOG 854) — for every role, because the role check has already admitted the caller.
+  if (error instanceof ApprovalPendingError) {
+    return new HttpError(409, 'approval_pending', error.message, [
+      { path: 'approval_id', message: error.approvalId },
+    ]);
   }
   if (error instanceof IllegalTransitionError) {
     return new HttpError(409, 'illegal_transition', error.message);

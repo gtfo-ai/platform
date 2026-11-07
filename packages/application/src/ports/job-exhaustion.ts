@@ -118,7 +118,9 @@ export const JOB_EXHAUSTION: Readonly<Record<string, JobExhaustion>> = {
   [JOB_QUEUES.deadlineSweep]: {
     kind: 'relies_on_retries',
     shape: 'recovery_row',
-    loss: 'one expiry or reminder of a question, approval or take-over',
+    // S-27.1 (BD-006's 2026-11-07 amendment): no approval expires, so a lost approval job costs at
+    // most one of its reminders, which the `deadline_reminder` row finds by its *next* reminder.
+    loss: 'one expiry of a question or take-over, a question’s one reminder, or one of an approval’s at most five reminders — never an approval’s expiry, because an approval waits until a person decides it, and a queued approval_timeout an earlier build armed ends settled',
     recoveredBy: 'deadline, deadline_reminder',
   },
   [JOB_QUEUES.intakeReconcile]: {

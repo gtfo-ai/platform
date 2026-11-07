@@ -40,6 +40,30 @@ const chained = (id: string, version: number, attempt = 1) => ({
 });
 
 describe('assembleApprovalViews', () => {
+  it('publishes every approval’s deadline_at as null, a stored one included (S-27.1)', () => {
+    const views = assembleApprovalViews(
+      [
+        row(),
+        // An earlier build's row: its stored deadline is history, never a due time on the wire.
+        row({
+          id: '00000000-0000-4000-8000-0000000000c2',
+          deadlineAt: new Date('2026-11-07T09:00:00.000Z'),
+        }),
+        row({
+          id: '00000000-0000-4000-8000-0000000000c3',
+          kind: 'budget',
+          status: 'expired',
+          deadlineAt: new Date('2026-11-07T09:00:00.000Z'),
+        }),
+      ],
+      [],
+      [],
+    );
+    expect(views.map((view) => view.deadline_at)).toEqual([null, null, null]);
+    // The other instants are still read off the row.
+    expect(views[1]?.requested_at).toBe('2026-11-06T09:00:00.000Z');
+  });
+
   it('publishes a recorded plan with the version read through its id, and the stored reasons', () => {
     const reasons = [{ code: 'probation', completed: 1, of: 5 }];
     const [view] = assembleApprovalViews(

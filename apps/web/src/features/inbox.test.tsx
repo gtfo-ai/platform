@@ -2,10 +2,10 @@
  * The inbox (S-23.11a: GitHub's notifications), driven through `createApp` with a fake server so
  * the real router, query client and endpoint parsers are asserted.
  *
- * What it holds: each row says when its item is due (PROGRESS backlog 166, WP-73), in both
- * directions — a row that printed nothing would pass the null case, one that printed `due Invalid
- * Date` the present one (standing rule 42); the expiry note survives as a hint and a *Learn more*
- * (backlog 163, WP-95); the NavList filters by kind and by project with counts read off the items
+ * What it holds: a question row says when it is due (PROGRESS backlog 166, WP-73), and an approval
+ * row never does — it *waits for a maintainer* (S-27.1, BD-006's 2026-11-07 amendment), even when a
+ * read still carries a deadline — in both directions (standing rule 42); the expiry note survives as
+ * a hint and a *Learn more* (backlog 163, WP-95), and says an approval does not expire; the NavList filters by kind and by project with counts read off the items
  * and their tasks; a question row expands in place and its *Answer* sends the command; and an
  * agent's question renders as text.
  */
@@ -17,7 +17,7 @@ import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import { formatDateTime } from '../ui/kit.js';
 import { ROW_LINK_ATTRIBUTE } from '../ui/row-link.js';
-import { firstLine } from './inbox.js';
+import { firstLine, timeLine } from './inbox.js';
 
 const TASK = '00000000-0000-4000-8000-0000000000c1';
 const OTHER_TASK = '00000000-0000-4000-8000-0000000000c2';
@@ -250,18 +250,27 @@ const renderInbox = async (fetchImpl: typeof fetch): Promise<HTMLElement> => {
 };
 
 describe('the approval row', () => {
-  it('prints the approval’s due time, as the question row does', async () => {
+  it('says it waits for a maintainer and prints no due time, even when a read carries one (S-27.1)', async () => {
+    // An earlier server's read could still carry an approval's old deadline: it is not a due time.
     inbox = { questions: [], approvals: [approval(DUE)], ci_held: [] };
     const container = await renderInbox(fakeServer().fetchImpl);
-    expect(container.textContent).toContain(`· due ${formatDateTime(DUE)}`);
-    expect(container.textContent).toContain('requested 5 m ago');
+    expect(container.textContent).toContain('requested 5 m ago · waits for a maintainer');
+    expect(container.textContent).not.toContain(' · due ');
+    expect(container.textContent).not.toContain(formatDateTime(DUE));
   });
 
-  it('prints no due time for an approval that has none', async () => {
+  it('says the same for an approval with no deadline, which is every approval since S-27.1', async () => {
     inbox = { questions: [], approvals: [approval(null)], ci_held: [] };
     const container = await renderInbox(fakeServer().fetchImpl);
-    expect(container.textContent).toContain('requested 5 m ago');
+    expect(container.textContent).toContain('requested 5 m ago · waits for a maintainer');
     expect(container.textContent).not.toContain(' · due ');
+  });
+
+  it('still prints a question’s due time beside it (the control)', async () => {
+    inbox = { questions: [question()], approvals: [approval(null)], ci_held: [] };
+    const container = await renderInbox(fakeServer().fetchImpl);
+    expect(container.textContent).toContain(`· due ${formatDateTime(DUE)}`);
+    expect(container.textContent).toContain('requested 5 m ago · waits for a maintainer');
   });
 
   it('links to the task with Review plan, and says the plan was not recorded when it was not', async () => {
@@ -322,11 +331,20 @@ describe('what the inbox says about an item that expired', () => {
     inbox = { questions: [], approvals: [approval(DUE)], ci_held: [] };
     const container = await renderInbox(fakeServer().fetchImpl);
     const note = container.querySelector('[data-inbox-expiry-note]');
-    expect(note?.textContent).toContain('expires leaves this list');
+    expect(note?.textContent).toContain('A question that expires leaves this list');
     // The board column's name since S-23.2: TD-033's word for `needs_human`.
     expect(note?.textContent).toContain('Needs you');
     expect(note?.textContent).toContain('task page');
     expect(note?.querySelector('details summary')?.textContent).toBe('Learn more');
+  });
+
+  it('no longer says an approval expires: it waits for a maintainer (S-27.1)', async () => {
+    inbox = { questions: [], approvals: [approval(null)], ci_held: [] };
+    const container = await renderInbox(fakeServer().fetchImpl);
+    const note = container.querySelector('[data-inbox-expiry-note]');
+    expect(note?.textContent).toContain('An approval does not expire');
+    expect(note?.textContent).toContain('until a maintainer approves or rejects it');
+    expect(note?.textContent).not.toMatch(/question or approval that expires/);
   });
 
   it('leads with what the list is, before what an expired item does (S-25.5, F16)', async () => {
@@ -510,5 +528,33 @@ describe('a CI check held at a manual job', () => {
     expect(within(filters).getByRole('button', { name: /^All/ }).textContent).toContain('1');
     await userEvent.setup().click(within(filters).getByRole('button', { name: /^Questions/ }));
     expect(container.querySelector('[data-inbox-ci-held]')).toBeNull();
+  });
+});
+
+/**
+ * The shared helper both rows print their time with (S-27.1): a question's deadline is a due time,
+ * and an approval — passed no deadline — says who it waits for, with no *due*, *expires* or *until*
+ * clause.
+ */
+describe('timeLine', () => {
+  it('prints a question’s due time', () => {
+    const line = timeLine('asked', '2026-09-29T09:00:00.000Z', DUE, NOW);
+    expect(line).toBe(`asked 5 m ago · due ${formatDateTime(DUE)}`);
+  });
+
+  it('prints an approval with a null deadline as waiting for a maintainer, and nothing due', () => {
+    const line = timeLine(
+      'requested',
+      '2026-09-29T09:00:00.000Z',
+      null,
+      NOW,
+      'waits for a maintainer',
+    );
+    expect(line).toBe('requested 5 m ago · waits for a maintainer');
+    expect(line).not.toMatch(/due|expire|until/);
+  });
+
+  it('prints a question with no deadline with neither', () => {
+    expect(timeLine('asked', '2026-09-29T09:00:00.000Z', null, NOW)).toBe('asked 5 m ago');
   });
 });

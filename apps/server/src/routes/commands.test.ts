@@ -37,6 +37,7 @@ import {
 } from '@platform/application';
 import type { JsonObject, UserRole } from '@platform/contracts';
 import {
+  ApprovalPendingError,
   IllegalTransitionError,
   InvariantViolationError,
   type OwnerCommandRefusal,
@@ -1494,5 +1495,67 @@ describe('the routes’ own answers', () => {
     expect(response.statusCode).toBe(503);
     expect((response.json() as Reply['body']).error?.code).toBe('commands_unavailable');
     await app.close();
+  });
+});
+
+/**
+ * S-27.1 criterion 6, closing BACKLOG 854: `task.resume` of a `waiting_approval` task with a pending
+ * approval is refused for **every** role, as a 409 naming the approval, and nothing is audited. The
+ * refusal itself is the domain's (`assertNoPendingApproval`) and is raised inside the command
+ * (`human-commands.test.ts` drives it through the pipeline harness); this is the route's half — that
+ * no role turns it into anything but `409 approval_pending`, and that the role check, not the
+ * approval, is what stops a viewer first.
+ */
+describe('a resume never moves a task past its pending approval (S-27.1, BACKLOG 854)', () => {
+  const waitingWorld = async (): Promise<World> =>
+    build({
+      taskPosition: async () => ({ state: 'waiting_approval', currentStage: 'architecture' }),
+    });
+
+  for (const role of ['member', 'maintainer', 'admin'] as const) {
+    it(`answers 409 approval_pending naming the approval to a ${role}, and audits nothing`, async () => {
+      const waiting = await waitingWorld();
+      waiting.role = role;
+      waiting.throws = new ApprovalPendingError({
+        approvalId: APPROVAL,
+        approvalKind: 'plan',
+        stage: 'architecture',
+        move: 'resume',
+      });
+      const reply = await post(waiting, `/api/tasks/${TASK}/resume`, {}, `resume-pending-${role}`);
+      expect(`${reply.status} ${reply.body.error?.code ?? ''}`).toBe('409 approval_pending');
+      expect(reply.body.error?.message).toContain(APPROVAL);
+      expect(reply.body.error?.message).toContain('only that approval’s decision does');
+      expect(waiting.calls.map((call) => call.name)).toEqual(['resume']);
+      expect(waiting.actions).toEqual([]);
+    });
+  }
+
+  it('refuses a viewer before the command, by role', async () => {
+    const waiting = await waitingWorld();
+    waiting.role = 'viewer';
+    const reply = await post(waiting, `/api/tasks/${TASK}/resume`, {}, 'resume-pending-viewer');
+    expect(reply.status).toBe(403);
+    expect(waiting.calls).toEqual([]);
+    expect(waiting.actions).toEqual([]);
+  });
+
+  it('maps the refusal before its parent class, so it is never a bare illegal_transition', async () => {
+    const waiting = await waitingWorld();
+    waiting.role = 'member';
+    waiting.throws = new ApprovalPendingError({
+      approvalId: APPROVAL,
+      approvalKind: 'budget',
+      stage: 'refinement',
+      move: 'retry-stage',
+    });
+    const reply = await post(
+      waiting,
+      `/api/tasks/${TASK}/retry-stage`,
+      { stage: 'refinement' },
+      'retry-pending-1',
+    );
+    expect(`${reply.status} ${reply.body.error?.code ?? ''}`).toBe('409 approval_pending');
+    expect(reply.body.error?.message).toContain('budget approval');
   });
 });

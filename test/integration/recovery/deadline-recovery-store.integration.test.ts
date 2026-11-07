@@ -1,12 +1,14 @@
 /**
  * The deadline recovery's reads and its one write against PostgreSQL 18 — WP-56 round 2, PROGRESS
- * backlog **161** and **162**.
+ * backlog **161** and **162**; S-27.1 for approvals.
  *
  * The rules are asserted as countable effects in `packages/application/src/pipeline/deadlines.test.ts`
  * over the in-memory twin; this is the half that proves the SQL finds the same rows: an overdue
- * question and approval, **not** an answered one, **not** one on a cancelled task, an undated row,
- * a backfill that writes once, and a paused task whose newest take-over boundary is the take-over.
- * Each case runs in one transaction that is rolled back.
+ * question, **not** an answered one, **not** one on a cancelled task, an undated question, a
+ * backfill that writes once, a paused task whose newest take-over boundary is the take-over — and
+ * **no approval** in the expiry or backfill reads (an approval waits until a person decides it,
+ * BD-006's 2026-11-07 amendment), only in the reminder read. Each case runs in one transaction that
+ * is rolled back.
  */
 import { randomUUID } from 'node:crypto';
 import type { Transaction } from '@platform/application';
@@ -49,12 +51,30 @@ const seedQuestion = async (taskId: Id, status: string, deadlineAt: string | nul
   return id;
 };
 
-const seedApproval = async (taskId: Id, deadlineAt: string | null): Promise<Id> => {
+const seedApproval = async (
+  taskId: Id,
+  deadlineAt: string | null,
+  row: {
+    readonly status?: string;
+    readonly remindersSent?: number;
+    readonly requestedAt?: string;
+    readonly attempt?: number;
+  } = {},
+): Promise<Id> => {
   const id = randomUUID() as Id;
   await client.query(
-    `insert into approvals (id, task_id, kind, status, requested_at, deadline_at, stage, attempt)
-     values ($1, $2, 'plan', 'pending', '2026-06-05T16:00:00Z', $3, 'architecture', 1)`,
-    [id, taskId, deadlineAt],
+    `insert into approvals (id, task_id, kind, status, requested_at, deadline_at, stage, attempt,
+                            reminders_sent)
+     values ($1, $2, 'plan', $4::approval_status, $5, $3, 'architecture', $6, $7)`,
+    [
+      id,
+      taskId,
+      deadlineAt,
+      row.status ?? 'pending',
+      row.requestedAt ?? '2026-06-05T16:00:00Z',
+      row.attempt ?? 1,
+      row.remindersSent ?? 0,
+    ],
   );
   return id;
 };
@@ -114,42 +134,39 @@ afterEach(async () => {
 });
 
 describe('the deadline recovery store (WP-56, backlog 161 and 162)', () => {
-  it('finds the overdue open question and pending approval, and nothing answered, current or finished', async () => {
+  it('finds the overdue open question, and no approval, answered, current or finished row (S-27.1)', async () => {
     const waiting = await seedTask('waiting_answers');
     const overdue = await seedQuestion(waiting, 'open', '2026-06-08T16:00:00Z');
     await seedQuestion(waiting, 'open', '2026-06-09T16:00:00Z');
     await seedQuestion(waiting, 'answered', '2026-06-08T16:00:00Z');
     const cancelled = await seedTask('cancelled');
     await seedQuestion(cancelled, 'open', '2026-06-08T16:00:00Z');
+    // An approval an earlier build gave a deadline, long past: history, never an expiry.
     const approving = await seedTask('waiting_approval');
-    const approval = await seedApproval(approving, '2026-06-08T16:00:00Z');
+    await seedApproval(approving, '2026-06-08T16:00:00Z');
 
     const found = await store.overdue(tx, { dueBefore: '2026-06-08T16:01:00.000Z', limit: 50 });
-    expect(found.map((row) => [row.aggregate, row.id]).sort()).toEqual(
-      [
-        ['approval', approval],
-        ['question', overdue],
-      ].sort(),
-    );
-    expect(found.find((row) => row.id === overdue)).toEqual({
-      aggregate: 'question',
-      id: overdue,
-      projectId,
-      taskId: waiting,
-    });
+    expect(found).toEqual([
+      {
+        aggregate: 'question',
+        id: overdue,
+        projectId,
+        taskId: waiting,
+      },
+    ]);
   });
 
-  it('finds the undated rows, and backfills each exactly once', async () => {
+  it('finds the undated questions, never an undated approval, and backfills each exactly once', async () => {
     const waiting = await seedTask('waiting_answers');
     const question = await seedQuestion(waiting, 'open', null);
     const approving = await seedTask('waiting_approval');
-    const approval = await seedApproval(approving, null);
+    await seedApproval(approving, null);
     await seedQuestion(waiting, 'answered', null);
 
     const undated = await store.undated(tx, { limit: 50 });
-    expect(undated.map((row) => row.id).sort()).toEqual([approval, question].sort());
+    expect(undated.map((row) => [row.aggregate, row.id])).toEqual([['question', question]]);
 
-    const row = undated.find((entry) => entry.id === question) as (typeof undated)[number];
+    const row = undated[0] as (typeof undated)[number];
     const deadlineAt = '2026-06-11T10:00:00.000Z' as const;
     expect(await store.backfillDeadline(tx, { ...row, deadlineAt })).toBe(true);
     expect(
@@ -160,7 +177,7 @@ describe('the deadline recovery store (WP-56, backlog 161 and 162)', () => {
       [question],
     );
     expect(rows[0]?.deadline_at.toISOString()).toBe(deadlineAt);
-    expect((await store.undated(tx, { limit: 50 })).map((entry) => entry.id)).toEqual([approval]);
+    expect(await store.undated(tx, { limit: 50 })).toEqual([]);
   });
 
   it('finds a paused task still taken over, and not one handed back or merely paused', async () => {
@@ -234,7 +251,7 @@ describe('the deadline recovery store (WP-56, backlog 161 and 162)', () => {
     expect(row?.lastActivityAt).toBe('2026-06-10T11:00:00.000Z');
   });
 
-  it('finds the never-reminded rows whose deadline is ahead, and nothing reminded, overdue or finished (WP-108, backlog 291)', async () => {
+  it('finds the never-reminded questions whose deadline is ahead, and nothing reminded, overdue or finished (WP-108, backlog 291)', async () => {
     const waiting = await seedTask('waiting_answers');
     const due = await seedQuestion(waiting, 'open', '2026-06-08T16:00:00Z');
     const reminded = await seedQuestion(waiting, 'open', '2026-06-08T16:00:00Z');
@@ -245,28 +262,25 @@ describe('the deadline recovery store (WP-56, backlog 161 and 162)', () => {
     await seedQuestion(waiting, 'open', null);
     const cancelled = await seedTask('cancelled');
     await seedQuestion(cancelled, 'open', '2026-06-08T16:00:00Z');
+    // An approval is the other read's (S-27.1), whatever deadline an earlier build gave it.
     const approving = await seedTask('waiting_approval');
-    const approval = await seedApproval(approving, '2026-06-08T16:00:00Z');
+    await seedApproval(approving, '2026-06-08T16:00:00Z');
 
     const found = await store.unreminded(tx, {
       deadlineAfter: '2026-06-08T12:01:00.001Z',
       sinceBefore: '2026-06-08T12:00:00.001Z',
       limit: 50,
     });
-    expect(found.map((row) => [row.aggregate, row.id]).sort()).toEqual(
-      [
-        ['approval', approval],
-        ['question', due],
-      ].sort(),
-    );
-    expect(found.find((row) => row.id === due)).toEqual({
-      aggregate: 'question',
-      id: due,
-      projectId,
-      taskId: waiting,
-      since: '2026-06-05T16:00:00.000Z',
-      deadlineAt: '2026-06-08T16:00:00.000Z',
-    });
+    expect(found).toEqual([
+      {
+        aggregate: 'question',
+        id: due,
+        projectId,
+        taskId: waiting,
+        since: '2026-06-05T16:00:00.000Z',
+        deadlineAt: '2026-06-08T16:00:00.000Z',
+      },
+    ]);
     // A row asked after the bound has no reminder time behind it yet.
     expect(
       await store.unreminded(tx, {
@@ -275,5 +289,52 @@ describe('the deadline recovery store (WP-56, backlog 161 and 162)', () => {
         limit: 50,
       }),
     ).toEqual([]);
+  });
+
+  it('finds the pending approvals with reminders left, with or without a deadline, and nothing spent, decided, finished or too new (S-27.1)', async () => {
+    const approving = await seedTask('waiting_approval');
+    const undated = await seedApproval(approving, null, { remindersSent: 0 });
+    const dated = await seedApproval(approving, '2026-06-08T16:00:00Z', {
+      remindersSent: 4,
+      requestedAt: '2026-06-04T16:00:00Z',
+      attempt: 2,
+    });
+    await seedApproval(approving, null, { remindersSent: 5, attempt: 3 });
+    await seedApproval(approving, null, { status: 'approved', attempt: 4 });
+    await seedApproval(approving, null, { requestedAt: '2026-06-10T09:00:00Z', attempt: 5 });
+    const cancelled = await seedTask('cancelled');
+    await seedApproval(cancelled, null);
+
+    const found = await store.remindableApprovals(tx, {
+      requestedBefore: '2026-06-08T12:00:00.000Z',
+      limitSent: 5,
+      limit: 50,
+    });
+    // Oldest request first.
+    expect(found).toEqual([
+      {
+        aggregate: 'approval',
+        id: dated,
+        projectId,
+        taskId: approving,
+        requestedAt: '2026-06-04T16:00:00.000Z',
+        remindersSent: 4,
+      },
+      {
+        aggregate: 'approval',
+        id: undated,
+        projectId,
+        taskId: approving,
+        requestedAt: '2026-06-05T16:00:00.000Z',
+        remindersSent: 0,
+      },
+    ]);
+    expect(
+      await store.remindableApprovals(tx, {
+        requestedBefore: '2026-06-08T12:00:00.000Z',
+        limitSent: 5,
+        limit: 1,
+      }),
+    ).toHaveLength(1);
   });
 });

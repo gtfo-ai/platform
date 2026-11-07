@@ -119,8 +119,9 @@ export const runNotification = async (
 
   /**
    * An approval is announced only while it is still pending (WP-43). The wake-up is at-least-once
-   * and minutes late, and by then a person may have decided it on the task page or the deadline may
-   * have expired it: a message with buttons for a decided approval is the dead control WP-32
+   * and minutes late, and by then a person may have decided it on the task page (an earlier build's
+   * deadline may also have expired it; none does since S-27.1): a message with buttons for a
+   * decided approval is the dead control WP-32
    * refused to ship, so a settled one is not announced at all — no row, no message.
    */
   const approval =

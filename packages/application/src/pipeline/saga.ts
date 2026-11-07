@@ -85,7 +85,6 @@ import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { WorkingCalendar } from '../scheduling/working-calendar.js';
 import { escalateForConfigRefusalInHandler } from './config-refusal.js';
-import { questionDeadlineRule } from './deadline-rules.js';
 import type { TaskDutyLeaseOptions } from './duty-lease.js';
 import { humanReturnStageOf } from './human-stage.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
@@ -1198,8 +1197,7 @@ const planApprovalGate = async (
       taskId: stored.task.id,
       projectId: stored.task.projectId,
       kind: 'plan',
-      // WP-56, BD-006's Q95 amendment: an approval expires on the question calendar and limit.
-      deadlineFrom: questionDeadlineRule(options.calendar, settings),
+      // No deadline (BD-006's 2026-11-07 amendment): an approval waits until a person decides it.
     },
     commandContext,
   );
@@ -1348,8 +1346,7 @@ const budgetApprovalGate = async (
       taskId: stored.task.id,
       projectId: stored.task.projectId,
       kind: 'budget',
-      // The plan gate's expiry, for the reason WP-28 gave for sharing its decision shape.
-      deadlineFrom: questionDeadlineRule(options.calendar, settings),
+      // No deadline either: every approval waits for a person (BD-006's 2026-11-07 amendment).
     },
     commandContext,
   );
@@ -1644,6 +1641,9 @@ const approvalHandler = (options: PipelineSagaOptions): EventHandler => ({
       return;
     }
 
+    // `expired`: nothing on this build produces it (BD-006's 2026-11-07 amendment, S-27.1). The
+    // branch stays for an `expired` decision an earlier build appended and this one dispatches —
+    // an upgrade with one still queued, or a replay — whose task must still end where it said.
     const escalated = escalateTask(
       stored.task,
       {

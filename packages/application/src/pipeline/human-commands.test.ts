@@ -25,6 +25,7 @@
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { runFinishedEvent } from '@platform/contracts';
 import {
+  ApprovalPendingError,
   compilePipeline,
   handBackStages,
   IllegalTransitionError,
@@ -46,6 +47,7 @@ import {
   type HarnessScript,
   type PipelineHarness,
   type ScriptedRun,
+  shownPlanOf,
 } from '../testing/pipeline-harness.js';
 import { offerAndClaimForTest } from '../testing/run-offers.js';
 import {
@@ -512,6 +514,57 @@ describe('resume', () => {
     ).rejects.toThrow(CommandsUnavailableError);
     // The task is where it was: a command that cannot finish must not half-finish.
     expect(taskOf(harness).task.state).toBe('paused');
+  });
+
+  /**
+   * BACKLOG 854, BD-006's 2026-11-07 amendment: a member's resume (or retry) of a task waiting for
+   * a plan approval used to enter the stage and skip a decision only a maintainer may take. It is
+   * refused naming the approval, nothing is written, and the approval's own decision still moves
+   * the task.
+   */
+  it('never moves a task past its pending approval: only the decision does (S-27.1, BACKLOG 854)', async () => {
+    const harness = harnessWith({
+      runs: { architecture: ok({ ...PLAN, estimated_size: 'XL' }) },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+    const task = taskOf(harness).task;
+    const approvalId = payloadOf<{ approval: { id: Id } }>(harness, 'task.approval.requested')
+      .approval.id;
+    const since = harness.events().length;
+
+    const resumed = resumeTaskCommand(harness.humanCommands, { taskId: task.id, userId: USER });
+    await expect(resumed).rejects.toThrow(ApprovalPendingError);
+    await expect(resumed).rejects.toThrow(approvalId);
+    await expect(
+      retryStageCommand(harness.humanCommands, {
+        taskId: task.id,
+        userId: USER,
+        stage: task.currentStage as Slug,
+      }),
+    ).rejects.toThrow(ApprovalPendingError);
+    // Nothing was written: no event, and the task and its approval are where they were.
+    expect(harness.events().slice(since)).toEqual([]);
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+    expect(
+      (
+        await harness.memory.transaction(async (scope) =>
+          harness.store.approvals.load(scope.tx, approvalId),
+        )
+      )?.approval.status,
+    ).toBe('pending');
+
+    // The approval's own decision is what moves it.
+    harness.script('architecture', ok(PLAN));
+    await decideTaskApproval(harness.commands, {
+      approvalId,
+      decision: 'approved',
+      userId: USER,
+      role: 'maintainer',
+      subjectArtifactId: await shownPlanOf(harness, approvalId),
+    });
+    await harness.drain();
+    expect(taskOf(harness).task.state).not.toBe('waiting_approval');
   });
 });
 
@@ -3797,13 +3850,13 @@ describe('a human’s way into Ready (WP-79)', () => {
     ).toEqual(
       [
         'answerQuestion', // Question aggregate
+        'assertNoPendingApproval', // a refusal inside `humanEnter` (S-27.1, BACKLOG 854)
         'assertRunTransition', // a check
         'cancelTask', // → cancelled
         'canTransitionTask', // a check
         'compilePipeline', // pure
         'decideApproval', // Approval aggregate
         'evaluateIteration', // a check
-        'expireApproval', // Approval aggregate
         'expireQuestion', // Question aggregate
         'finishRun', // Run aggregate
         'handBackTask', // no state change; its entry is `humanEnter`

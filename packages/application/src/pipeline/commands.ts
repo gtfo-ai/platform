@@ -23,6 +23,7 @@ import type {
   TokenUsage,
   UserRole,
 } from '@platform/contracts';
+import { approvalKindSchema } from '@platform/contracts';
 import type {
   CommandContext,
   FeedbackScope,
@@ -32,13 +33,13 @@ import type {
 } from '@platform/domain';
 import {
   answerQuestion,
+  assertNoPendingApproval,
   assertRunTransition,
   cancelTask,
   canTransitionTask,
   compilePipeline,
   decideApproval,
   evaluateIteration,
-  expireApproval,
   expireQuestion,
   finishRun,
   handBackTask,
@@ -349,40 +350,6 @@ export const decideTaskApproval = async (
   });
 };
 
-/**
- * The `deadline.sweep` timer fired for an approval (WP-56, BD-006's Q95 amendment). The saga's
- * `approvalHandler` escalates on the `expired` decision this emits.
- *
- * Re-validates exactly as {@link expireTaskQuestion} does: a decided approval is `settled`, and one
- * whose deadline this process's clock has not reached is `not_due`. Until WP-56 this function had
- * **no caller at all**, production or test (PROGRESS backlog 76).
- */
-export const expireTaskApproval = async (
-  deps: TaskCommandDependencies,
-  approvalId: Id,
-): Promise<DeadlineOutcome> =>
-  deps.unitOfWork.transaction(async (scope) => {
-    const stored = await deps.store.approvals.load(scope.tx, approvalId);
-    if (
-      stored === null ||
-      stored.approval.status !== 'pending' ||
-      stored.approval.deadlineAt === null
-    ) {
-      return SETTLED;
-    }
-    if (await taskIsFinished(deps, scope.tx, stored.approval.taskId)) {
-      return SETTLED;
-    }
-    const context = deps.context(stored.approval.taskId);
-    if (isBefore(context.clock.now(), stored.approval.deadlineAt)) {
-      return { kind: 'not_due', dueAt: stored.approval.deadlineAt };
-    }
-    const decision = expireApproval(stored.approval, context);
-    await deps.store.approvals.save(scope.tx, { ...stored, approval: decision.aggregate });
-    await scope.events.append(decision.events);
-    return EXPIRED;
-  });
-
 // ── The human command surface (WP-15i) ───────────────────────────────────────
 
 /**
@@ -684,6 +651,24 @@ const writeTask = async <T>(
 };
 
 /**
+ * The task's **pending** approval, of whichever kind, or `null` — the newest of each kind, because a
+ * gate asks one approval at a time and a decided one is the history of an earlier wait.
+ */
+const pendingApprovalOf = async (
+  store: Pick<PipelineStore, 'approvals'>,
+  tx: Transaction,
+  taskId: Id,
+): Promise<StoredApproval['approval'] | null> => {
+  for (const kind of approvalKindSchema.options) {
+    const latest = await store.approvals.latestOfKind(tx, { taskId, kind });
+    if (latest?.approval.status === 'pending') {
+      return latest.approval;
+    }
+  }
+  return null;
+};
+
+/**
  * **The one way a human command enters a stage** (WP-79 review round 1) — and for
  * `ready_for_merge` it does not enter it at all.
  *
@@ -695,7 +680,8 @@ const writeTask = async <T>(
  * otherwise, so Ready is entered only by the rebase gate's settlement. Resume, retry-stage,
  * retry-run and hand-back all come through here; {@link applyHumanDecisionRecorded} refuses a Ready
  * entry that did not, so a new command that forgets is a 500 in its first test rather than a side
- * door.
+ * door. **Nor does any of them move a task past a pending approval** (S-27.1, BACKLOG 854):
+ * `assertNoPendingApproval` refuses it, for every role, naming the approval.
  */
 const humanEnter = async (
   deps: HumanCommandDependencies,
@@ -709,6 +695,15 @@ const humanEnter = async (
     readonly cause: string | null;
   },
 ): Promise<ScheduledWork | null> => {
+  // BD-006's 2026-11-07 amendment, BACKLOG 854: only an approval's own decision moves a task that
+  // waits for it — asked before anything else, so no entry (Ready included) goes round it.
+  if (stored.task.state === 'waiting_approval') {
+    assertNoPendingApproval(
+      stored.task,
+      await pendingApprovalOf(deps.store, scope.tx, stored.task.id),
+      { stage: entry.stage, move: entry.via.replaceAll('_', '-') },
+    );
+  }
   if (entry.stage === READY_FOR_MERGE_STAGE) {
     markReadyForMerge(stored.task, context);
     return { readyCheck: readyHeadCheckFor(stored, entry) };

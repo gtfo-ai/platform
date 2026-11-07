@@ -113,6 +113,11 @@ export const approvalRecordSchema = z.strictObject({
   kind: approvalKindSchema,
   status: approvalStatusSchema,
   requested_at: isoDateTimeSchema,
+  /**
+   * `null` for every approval from S-27.1 on (BD-006's 2026-11-07 amendment): an approval waits
+   * until a person decides it. Kept in the shape because events an earlier build appended carry a
+   * value, and a replay must still parse them; the API publishes `null` whatever the row holds.
+   */
   deadline_at: isoDateTimeSchema.nullish(),
   decided_by_user_id: idSchema.nullish(),
   decided_at: isoDateTimeSchema.nullish(),

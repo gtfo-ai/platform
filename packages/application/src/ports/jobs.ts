@@ -341,8 +341,9 @@ export const JOB_QUEUES = {
   stageExecute: 'stage.execute',
   /**
    * **Every deadline the platform holds a human to, on one queue** (WP-56) — a question nobody
-   * answered (BD-006), an approval nobody decided (BD-006's Q95 amendment) and a take-over nobody
-   * touched for five working days (product/19 §19).
+   * answered (BD-006) and a take-over nobody touched for five working days (product/19 §19); an
+   * approval nobody decided was a third until S-27.1 (BD-006's 2026-11-07 amendment: it never
+   * expires, and only its reminders ride this queue).
    *
    * A deliberate deviation from TD-004, which named **two** queues, `question.timeout` and
    * `question.reminder`, for the first of those; both names were declared here from WP-05 and

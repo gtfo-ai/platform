@@ -39,8 +39,9 @@
  * task is merged or in its retrospective (the change is in the default branch; what is left is the
  * record) — and Resume only for a task that is **paused** or **waiting for a person**. The server's
  * resume admits more than that (`RESUMABLE_TASK_STATES` includes `waiting_approval`), but resuming
- * past an open question or a pending approval would skip it, so the page never offers it (BACKLOG
- * 854 has the server half).
+ * past an open question or a pending approval would skip it, so the page never offers it; since
+ * S-27.1 the server refuses a resume past a pending approval too (`409 approval_pending`, BACKLOG
+ * 854).
  *
  * **The owner** (S-26.8b, the M26 UX spec § 2, `./task-owner.tsx`): beside the ticket's links, the
  * owner's avatar and name, *Unassigned*, or the tracker assignee the platform cannot link; and the

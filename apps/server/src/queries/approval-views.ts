@@ -1,6 +1,7 @@
 /**
  * An approval as the task and inbox reads publish it: the record, **its subject and its reasons**
- * (TD-035 decision 4, BD-006's 2026-11-06 amendment). One function for both reads, so the page that
+ * (TD-035 decision 4, BD-006's 2026-11-06 amendment), and **no deadline** (`deadline_at` is `null`
+ * for every approval since S-27.1, BD-006's 2026-11-07 amendment). One function for both reads, so the page that
  * decides and the list that points at it name the same plan.
  *
  * ## What it answers, and what it refuses to invent
@@ -180,7 +181,10 @@ export const assembleApprovalViews = (
     kind: row.kind,
     status: row.status,
     requested_at: iso(row.requestedAt) as string,
-    deadline_at: iso(row.deadlineAt),
+    // BD-006's 2026-11-07 amendment, item 3 (S-27.1): an approval waits until a person decides it,
+    // so the API publishes no deadline for any approval. A row an earlier build gave one keeps it as
+    // history in the table; read here it would be a due time that nothing acts on.
+    deadline_at: null,
     decided_by_user_id: row.decidedByUserId as Id | null,
     decided_at: iso(row.decidedAt),
     reason: row.reason,

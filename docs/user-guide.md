@@ -1414,16 +1414,17 @@ reminder**: halfway through the working time to the deadline, the project's chat
 message saying the question is still unanswered, which names the task page (it has no buttons). A
 question answered before then is not reminded about.
 
-Approvals are different: **an approval never expires** (BD-006's 2026-11-07 amendment, built by
-S-27.1; until that is deployed, an approval still expires like a question). The plan-approval gate is what
+Approvals are different: **an approval never expires** (BD-006's 2026-11-07 amendment). The plan-approval gate is what
 the **Supervised** autonomy level turns on above a certain task size, and any maintainer can decide
 it. A plan or budget approval waits until somebody approves or rejects it. Meanwhile the task reads
 *Waiting for approval*, is in *Needs you* and the inbox (*requested 3 h ago · waits for a
 maintainer*, with no due time), and the project's chat channel gets at most **five reminders**: the
 first halfway through the question timeout, then one per question timeout (half a working day after
 the request, then once a working day, by default). After that the chat goes quiet, but the item stays
-in *Needs you*. An approval that expired before the change stays expired, and its task is retried or
-handed back from the task page as before.
+in *Needs you*. Resuming or retrying the task does not get round a pending approval — whoever asks,
+the platform refuses it and names the approval, because only its decision moves the task. An approval
+that expired before the change stays expired, and its task is retried or handed back from the task page
+as before.
 
 Once an approval is decided — here, on the task page, or with a button — its Slack
 message is **edited**: the buttons are removed and the message says how it was settled (approved,

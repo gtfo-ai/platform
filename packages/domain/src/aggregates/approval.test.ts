@@ -1,17 +1,26 @@
-import { approvalKindSchema, approvalStatusSchema, type UserRole } from '@platform/contracts';
+import {
+  approvalKindSchema,
+  approvalStatusSchema,
+  taskStateSchema,
+  type UserRole,
+  userRoleSchema,
+} from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { type Clock, fixedClock } from '../clock.js';
-import { IllegalTransitionError, PermissionDeniedError } from '../errors.js';
+import { ApprovalPendingError, IllegalTransitionError, PermissionDeniedError } from '../errors.js';
 import { type CommandContext, FIRST_STREAM_SEQ } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
+import { can } from '../permissions.js';
+import * as approvalModule from './approval.js';
 import {
+  APPROVAL_REMINDER_LIMIT,
   APPROVAL_TRANSITIONS,
   type Approval,
+  assertNoPendingApproval,
   canTransitionApproval,
   createApproval,
   decideApproval,
-  expireApproval,
-  isApprovalOverdue,
+  recordApprovalReminder,
   toApprovalRecord,
 } from './approval.js';
 
@@ -38,7 +47,6 @@ const pending = (shared = world(), kind: Approval['kind'] = 'plan'): Approval =>
       taskId: TASK_ID,
       projectId: PROJECT_ID,
       kind,
-      deadlineFrom: () => '2026-09-10T09:00:00.000Z',
     },
     context(shared),
   );
@@ -49,6 +57,8 @@ describe('Approval transition table', () => {
       [...approvalStatusSchema.options].sort(),
     );
     expect(canTransitionApproval('approved', 'rejected')).toBe(false);
+    // Kept for history and replay (BD-006's 2026-11-07 amendment, item 4): rows and events an
+    // earlier build wrote say `expired`; nothing on this build produces it.
     expect(canTransitionApproval('pending', 'expired')).toBe(true);
   });
 });
@@ -65,45 +75,12 @@ describe('createApproval', () => {
       kind: 'plan',
       status: 'pending',
       requested_at: '2026-09-09T09:00:00.000Z',
-      deadline_at: '2026-09-10T09:00:00.000Z',
+      // BD-006's 2026-11-07 amendment: an approval waits until a person decides it.
+      deadline_at: null,
       decided_by_user_id: null,
       decided_at: null,
       reason: null,
     });
-  });
-
-  it('leaves the deadline open when there is none', () => {
-    const approval = createApproval(
-      {
-        id: APPROVAL_ID,
-        taskId: TASK_ID,
-        projectId: PROJECT_ID,
-        kind: 'budget',
-        deadlineFrom: () => null,
-      },
-      context(world()),
-    );
-    expect(approval.deadlineAt).toBeNull();
-    expect(isApprovalOverdue(approval, '2030-01-01T00:00:00.000Z')).toBe(false);
-  });
-
-  it('computes the deadline from the instant it stores as requestedAt', () => {
-    const seen: string[] = [];
-    const approval = createApproval(
-      {
-        id: APPROVAL_ID,
-        taskId: TASK_ID,
-        projectId: PROJECT_ID,
-        kind: 'plan',
-        deadlineFrom: (requestedAt) => {
-          seen.push(requestedAt);
-          return '2026-09-10T09:00:00.000Z';
-        },
-      },
-      context(world()),
-    );
-    expect(seen).toEqual([approval.requestedAt]);
-    expect(isApprovalOverdue(approval, '2026-09-10T09:00:00.001Z')).toBe(true);
   });
 });
 
@@ -174,29 +151,79 @@ describe('deciding', () => {
   });
 });
 
-describe('expiry', () => {
-  it('knows when the deadline has passed', () => {
-    const approval = pending();
-    expect(isApprovalOverdue(approval, '2026-09-09T10:00:00.000Z')).toBe(false);
-    expect(isApprovalOverdue(approval, '2026-09-11T00:00:00.000Z')).toBe(true);
+describe('an approval waits until a person decides it (BD-006, 2026-11-07, S-27.1)', () => {
+  it('is created with no deadline, whatever the kind', () => {
+    for (const kind of approvalKindSchema.options) {
+      expect(pending(world(), kind).deadlineAt, kind).toBeNull();
+    }
   });
 
-  it('records an expiry with no decider', () => {
-    const shared = world();
-    const { aggregate, events } = expireApproval(pending(shared), context(shared));
-    expect(aggregate.status).toBe('expired');
-    expect(aggregate.decidedByUserId).toBeNull();
-    expect(events[0]?.payload).toMatchObject({ decision: 'expired', decided_by_user_id: null });
+  it('has no expiry left to call: the command and its overdue predicate are deleted (item 4)', () => {
+    expect(approvalModule).not.toHaveProperty('expireApproval');
+    expect(approvalModule).not.toHaveProperty('isApprovalOverdue');
   });
 
-  it('cannot expire an approval that was decided', () => {
+  it('counts at most five reminders, and only while it is pending (item 2)', () => {
+    let approval = pending();
+    for (let sent = 0; sent < APPROVAL_REMINDER_LIMIT; sent += 1) {
+      approval = recordApprovalReminder(approval);
+    }
+    expect(APPROVAL_REMINDER_LIMIT).toBe(5);
+    expect(approval.remindersSent).toBe(5);
+    expect(() => recordApprovalReminder(approval)).toThrow(/at most 5 times/);
     const shared = world();
     const decided = decideApproval(
       pending(shared),
       { decision: 'approved', userId: USER_ID, role: 'maintainer' },
       context(shared),
     ).aggregate;
-    expect(() => expireApproval(decided, context(shared))).toThrow(IllegalTransitionError);
-    expect(isApprovalOverdue(decided, '2030-01-01T00:00:00.000Z')).toBe(false);
+    expect(() => recordApprovalReminder(decided)).toThrow(/only a pending approval/);
+  });
+});
+
+describe('a human entry never moves a task past a pending approval (BACKLOG 854)', () => {
+  const entry = { stage: 'architecture', move: 'resume' } as const;
+
+  it('refuses a resume of a waiting_approval task with a pending approval, naming it, for every role', () => {
+    const approval = pending();
+    for (const role of userRoleSchema.options) {
+      // The role check is not what refuses it: a member may resume (and `waiting_approval` is a
+      // resumable state), so the refusal has to come from the approval, the same for every role.
+      if (role !== 'viewer') {
+        expect(can(role, 'task.resume', { kind: 'task', state: 'waiting_approval' }), role).toBe(
+          true,
+        );
+      }
+      let refused: unknown;
+      try {
+        assertNoPendingApproval({ state: 'waiting_approval' }, approval, entry);
+      } catch (error) {
+        refused = error;
+      }
+      expect(refused, role).toBeInstanceOf(ApprovalPendingError);
+      expect(refused, role).toBeInstanceOf(IllegalTransitionError);
+      expect((refused as ApprovalPendingError).approvalId).toBe(APPROVAL_ID);
+      expect((refused as Error).message).toContain(APPROVAL_ID);
+      expect((refused as Error).message).toContain('plan approval');
+    }
+  });
+
+  it('lets the task move once the approval is decided, or when there is none (the rescue)', () => {
+    const shared = world();
+    const decided = decideApproval(
+      pending(shared),
+      { decision: 'approved', userId: USER_ID, role: 'maintainer' },
+      context(shared),
+    ).aggregate;
+    expect(() =>
+      assertNoPendingApproval({ state: 'waiting_approval' }, decided, entry),
+    ).not.toThrow();
+    expect(() => assertNoPendingApproval({ state: 'waiting_approval' }, null, entry)).not.toThrow();
+  });
+
+  it('asks nothing of a task in any other state', () => {
+    for (const state of taskStateSchema.options.filter((state) => state !== 'waiting_approval')) {
+      expect(() => assertNoPendingApproval({ state }, pending(), entry), state).not.toThrow();
+    }
   });
 });
