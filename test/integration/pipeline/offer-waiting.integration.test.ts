@@ -740,7 +740,7 @@ describe('the CI wait on the board and the inbox (backlog 1300, 1301)', () => {
       [running, 'running'],
       [paused, 'manual'],
     ] as const) {
-      const written = await store.stages.recordCiPendingRead(
+      const written = await store.tasks.recordCiPendingRead(
         poolTx(),
         { taskId, stage: 'ci_gate' as Slug, attempt: 1 },
         { ...READ, status, held_job: status === 'manual' ? READ.held_job : null },

@@ -717,6 +717,34 @@ worker reads back as `[]` — and its `POST
 /api/local/offers/:id/take` takes `as_of`. The project's execution read reports a `pick_only` policy as
 `picked_only` under `scope_excludes`.
 
+**Why a run waits** (S-26.5, TD-031's 2026-11-06 amendment item 8). The task record (`GET /api/tasks/:id`'s
+`task` and every item of `GET /api/projects/:id/tasks`) and every `GET /api/org/agents` item carry
+`waiting` — `{reason, user, last_seen_at, assignee_name}` for the run's **open** offer (the task's: its
+current stage's), `null` when nothing is offered (no live run, or it was claimed). It is optional in the
+schema only because the SPA's fixtures predate it (BACKLOG 1445); this build always sends it. `reason` is a
+**key**, never a sentence (the web app words `waiting.<reason>`): `null` exactly when some claimant's
+predicates admit the offer now — the server claimant (a fresh `server_claimants` row, and the claim's
+`serverEligibleSql`) or a **connected** machine (`last_seen_at` within 60 s) whose automatic claim's
+eligibility, project list and policy admit it, the claim's own fragments over the digests the row holds
+and the core's (`queries/offer-waiting.ts`, held to the claim by a PostgreSQL parity test). Otherwise,
+about the person the offer is *mine* of — the task's owner, or an ask's asker — and their machines that
+would take it (not revoked, their user able to run here, the project list taking it, the policy admitting
+it): `owner_pick_only` (none, and one that only picks), `owner_no_worker` (none — or the residual, a
+connected running one the claim still refuses, BACKLOG 1446), `owner_worker_offline` (none connected;
+`last_seen_at` is their newest contact), `owner_worker_paused` (every connected one paused); with nobody's
+name on it, `assignee_not_linked` for a task **held elsewhere** (`taskHeldElsewhereSql`; `assignee_name`
+is the tracker's redacted display name) and `no_taker` for any other — a task a linked member released
+included. `user` (`{user_id, name}`) is set for the four `owner_*` reasons only, `last_seen_at` for
+`owner_worker_offline` only, `assignee_name` for `assignee_not_linked` only. One statement per page. The
+execution read adds `others_take_unassigned`: whether the server claimant runs and the project's mode lets
+it claim, or **another person's** machine (not the reader's) not revoked, able to act and run here, its
+project list taking the project and its policy `everything` or `mine_and_unassigned`, with the mode and the
+run credential letting workers in — connected or not, a setting's answer; it names no machine. The same
+slice puts `gate_wait` (the task read's own projection) on each **board item**, and `GET /api/org/inbox`
+gains `ci_held` — `[{task_id, project_id, ticket, gate_wait}]`, the `active` tasks whose open CI wait is
+held at a manual job, oldest wait first (BACKLOG 1300); `gate_wait` is `null` unless the task is `active`,
+so a paused task is served no wait (BACKLOG 1301; `last_gate_wait` keeps its `needs_human` rule).
+
 **Why a worker takes nothing** (S-22.19, TD-031's 2026-11-05 blocker-vocabulary amendment): one
 vocabulary, `WORKER_CLAIM_BLOCKERS` (`packages/contracts/src/worker-claim-blockers.ts`), most fundamental
 first, worded once (`WORKER_CLAIM_BLOCKER_WORDS`, `apps/web/src/ui/humanize.ts`). `GET /api/workers`
