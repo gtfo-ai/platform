@@ -3352,19 +3352,25 @@ export const inboxCiHeldSchema = z.strictObject({
 });
 
 /**
+ * The most `escalated` rows `GET /api/org/inbox` serves — the API's page maximum
+ * (`paginationQuerySchema`): the oldest waits, as the list is a queue.
+ */
+export const MAX_INBOX_ESCALATED = 200;
+
+/**
  * A task **escalated to a person** (`needs_human`; backlog 1360, S-25.14): what the Inbox and Home
  * say about it at a glance — whose ticket it is, why it stopped, and who holds the ticket in the
  * tracker — beside the questions, approvals and held CI jobs. `reason` is the escalation's key, the
  * task read's `escalation.reason` (never its brief: a row is not the callout), or `null` when the
- * stream holds no escalation with both strings; `at` is that escalation's instant, else the task's
- * last update. `ticket_title`, `tracker_assignee` and `unlinked_assignee` are the task record's own
- * fields (untrusted provider text, redacted and bounded at the write).
+ * stream holds no escalation with both strings; `at` is the newest escalation's instant, else the
+ * task's last update. `ticket_title`, `tracker_assignee` and `unlinked_assignee` are the task
+ * record's own fields (untrusted provider text, redacted and bounded at the write).
  */
 export const inboxEscalatedSchema = z.strictObject({
   task_id: idSchema,
   project_id: idSchema,
   ticket: ticketRefSchema,
-  ticket_title: z.string().nullable(),
+  ticket_title: taskRecordSchema.shape.ticket_title,
   current_stage: stageIdSchema.nullable(),
   reason: nonEmptyStringSchema.nullable(),
   at: isoDateTimeSchema,
@@ -3382,11 +3388,12 @@ export const inboxResponseSchema = z.strictObject({
    */
   ci_held: z.array(inboxCiHeldSchema),
   /**
-   * Every task escalated to a person (backlog 1360), oldest escalation first. A task that also has
-   * an open question or a pending approval is listed here **and** there: the reader decides which
-   * row it shows (Home shows the question or approval).
+   * The tasks escalated to a person (backlog 1360), oldest escalation first, at most
+   * {@link MAX_INBOX_ESCALATED}. A task that also has an open question or a pending approval is
+   * listed here **and** there: the reader decides which row it shows (Home shows the question or
+   * approval).
    */
-  escalated: z.array(inboxEscalatedSchema),
+  escalated: z.array(inboxEscalatedSchema).max(MAX_INBOX_ESCALATED),
 });
 
 // `putBudgetRequestSchema` lived here from WP-01 until WP-30, unused, one key different from the

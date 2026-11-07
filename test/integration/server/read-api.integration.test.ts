@@ -22,6 +22,7 @@ import type { ContextPackRecord, Id, IsoDateTime, TranscriptEvent } from '@platf
 import {
   acceptanceVerdictDataSchema,
   inboxResponseSchema,
+  MAX_INBOX_ESCALATED,
   MAX_RUN_COMMANDS,
   MAX_TASK_STOP_RECORDED_CHARS,
   runRecordSchema,
@@ -51,6 +52,7 @@ import {
   findRunPrompt,
   findRunSettings,
   findTaskDetail,
+  listEscalatedTasks,
   listInbox,
   listProjectTasks,
   listRunCommands,
@@ -1115,6 +1117,12 @@ describe('the task projection', () => {
     };
 
     const held = await taskAt('ESR-1', 'needs_human', jane);
+    // The title the platform read, so one row's `ticket_title` is the snapshot's and not `null`.
+    await pool.query(
+      `update tasks set ticket_snapshot = jsonb_build_object('title', 'Log in with a passkey')
+        where id = $1`,
+      [held],
+    );
     await escalated(held, 1, '2026-11-05T13:00:00Z', {
       reason: 'run_failed',
       blocker_brief: 'The run failed.',
@@ -1168,12 +1176,8 @@ describe('the task projection', () => {
 
     const inbox = inboxResponseSchema.parse(await listInbox(drizzled));
     const ours = inbox.escalated.filter((row) => row.project_id === project.id);
-    // Oldest escalation first; the briefless one is ordered by the task's own update instead.
-    expect(ours.filter((row) => row.reason !== null).map((row) => row.ticket.key)).toEqual([
-      'ESR-2',
-      'ESR-1',
-    ]);
-    expect(ours.map((row) => row.ticket.key).sort()).toEqual(['ESR-1', 'ESR-2', 'ESR-4']);
+    // Oldest escalation first — the briefless one by its escalation's instant too.
+    expect(ours.map((row) => row.ticket.key)).toEqual(['ESR-2', 'ESR-1', 'ESR-4']);
     expect(ours.find((row) => row.task_id === held)).toEqual({
       task_id: held,
       project_id: project.id,
@@ -1182,7 +1186,7 @@ describe('the task projection', () => {
         key: 'ESR-1',
         url: 'https://jira.example.test/browse/ESR-1',
       },
-      ticket_title: null,
+      ticket_title: 'Log in with a passkey',
       current_stage: 'refinement',
       reason: 'ticket_assigned_elsewhere',
       at: '2026-11-05T14:00:00.000Z',
@@ -1194,7 +1198,20 @@ describe('the task projection', () => {
       tracker_assignee: null,
       unlinked_assignee: null,
     });
-    expect(ours.find((row) => row.task_id === briefless)?.reason).toBeNull();
+    expect(ours.find((row) => row.task_id === briefless)).toMatchObject({
+      reason: null,
+      ticket_title: null,
+      at: '2026-11-05T15:00:00.000Z',
+    });
+
+    // **Bounded** (the review of #117): at most `limit` rows, the oldest waits first, and the
+    // Inbox's own list is the read at its cap. Compared with the whole list rather than counted, so
+    // the other tests' `needs_human` tasks in this database cannot make it pass or fail.
+    const all = await listEscalatedTasks(drizzled, 10_000);
+    expect(all.length).toBeGreaterThan(2);
+    expect(await listEscalatedTasks(drizzled, 2)).toEqual(all.slice(0, 2));
+    expect(await listEscalatedTasks(drizzled, 1)).toEqual(all.slice(0, 1));
+    expect(inbox.escalated).toEqual(all.slice(0, MAX_INBOX_ESCALATED));
   });
 
   /**

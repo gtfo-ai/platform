@@ -714,6 +714,10 @@ export const taskTicketClaimSchema = z.strictObject({
   released_at: isoDateTimeSchema.nullable(),
 });
 
+/** Who a claim that assigned nothing left the ticket with — `storedTicketClaimSchema`'s `held_by`. */
+export const ticketClaimHeldBySchema = z.enum(['member', 'platform_owner']);
+export type TicketClaimHeldBy = z.infer<typeof ticketClaimHeldBySchema>;
+
 /**
  * `tasks.ticket_claim` as stored (migration 0088, technical/03's M10-head amendment, TD-029
  * decision 5) — written only by `TaskRepository.saveTicketClaim`, read back through this schema.
@@ -745,10 +749,6 @@ export const taskTicketClaimSchema = z.strictObject({
  *    nothing. Absent on a claim that assigned the ticket to the binding's own account, and on every
  *    claim written before S-26.2.
  */
-/** Who a claim that assigned nothing left the ticket with — `storedTicketClaimSchema`'s `held_by`. */
-export const ticketClaimHeldBySchema = z.enum(['member', 'platform_owner']);
-export type TicketClaimHeldBy = z.infer<typeof ticketClaimHeldBySchema>;
-
 export const storedTicketClaimSchema = z.strictObject({
   account_id: nonEmptyStringSchema.max(255),
   claimed_at: isoDateTimeSchema,

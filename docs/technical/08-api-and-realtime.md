@@ -807,11 +807,14 @@ place of the stop's *What the platform saw last:* line — never two headlines.
 statement (`escalationsFor`, a `distinct on` over the stream with the task read's order and its
 both-strings rule), `null` for any other task. Home's *Needs you* reads the project's `needs_human` page,
 so its task rows carry it too. `GET /api/org/inbox` gains `escalated` — `[{task_id, project_id, ticket,
-ticket_title, current_stage, reason, at, tracker_assignee, unlinked_assignee}]`, every `needs_human` task,
-oldest escalation first: `reason` the same key or `null`, `at` the escalation's instant (the task's last
-update when there is none), and the last two the task record's own fields (`ownerViewsFor`, so the row
-and the task page name one assignee). A task with an open question or a pending approval is listed in
-both lists; the reader shows one row. Three statements however many tasks. Both fields are required.
+ticket_title, current_stage, reason, at, tracker_assignee, unlinked_assignee}]`, the `needs_human` tasks,
+oldest escalation first and at most `MAX_INBOX_ESCALATED` (200, the API's page maximum; the schema
+refuses more): `reason` the same key or `null`, `at` the newest escalation's instant (the task's last
+update when there is none), and the last two the task record's own fields, off the same predicates
+(`taskHeldElsewhereSql`, `trackerAssigneeUserSql`), so the row and the task page name one assignee. One
+statement (`listEscalatedTasks`: the row's columns only, the newest escalation through a `lateral`).
+A task with an open question or a pending approval is listed in both lists; the reader shows one row.
+Both fields are required.
 
 **Why a worker takes nothing** (S-22.19, TD-031's 2026-11-05 blocker-vocabulary amendment): one
 vocabulary, `WORKER_CLAIM_BLOCKERS` (`packages/contracts/src/worker-claim-blockers.ts`), most fundamental

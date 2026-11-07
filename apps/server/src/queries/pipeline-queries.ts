@@ -94,6 +94,7 @@ import {
   artifactBodyPath,
   ciGateEndingSchema,
   contextPackRecordSchema,
+  MAX_INBOX_ESCALATED,
   MAX_RUN_COMMANDS,
   MAX_TASK_STOP_RECORDED_CHARS,
   pausedBudgetScopeSchema,
@@ -1556,6 +1557,31 @@ export const trackerAssigneeOf = (
     ? null
     : { display_name: assignee.display_name, user_id: (resolvedUserId ?? null) as Id | null };
 
+/**
+ * `tracker_assignee` and `unlinked_assignee` off a stored `tasks.ticket_assignee` and the two live
+ * predicates of its {@link OwnerView} — the task record's and the Inbox row's one spelling.
+ */
+const assigneeFieldsOf = (
+  taskId: string,
+  ticketAssignee: unknown,
+  view: Pick<OwnerView, 'heldElsewhere' | 'assigneeUserId'> | undefined,
+): Pick<TaskRecord, 'unlinked_assignee' | 'tracker_assignee'> => {
+  const assignee = ticketAssigneeSchema.nullable().safeParse(ticketAssignee ?? null);
+  if (!assignee.success) {
+    throw new UnprojectableRowError(
+      `task ${taskId}`,
+      'its recorded tracker assignee (`tasks.ticket_assignee`) does not parse',
+    );
+  }
+  return {
+    unlinked_assignee:
+      view?.heldElsewhere === true && assignee.data !== null
+        ? { display_name: assignee.data.display_name }
+        : null,
+    tracker_assignee: trackerAssigneeOf(assignee.data, view?.assigneeUserId ?? null),
+  };
+};
+
 /** The ownership fields of the task DTO, off the row and its {@link OwnerView}. */
 const ownerFieldsOf = (
   row: typeof tasks.$inferSelect,
@@ -1564,26 +1590,21 @@ const ownerFieldsOf = (
   TaskRecord,
   'owner' | 'owner_source' | 'unlinked_assignee' | 'owner_writes_back' | 'tracker_assignee'
 > => {
-  const assignee = ticketAssigneeSchema.nullable().safeParse(row.ticketAssignee ?? null);
-  if (!assignee.success) {
-    throw new UnprojectableRowError(
-      `task ${row.id}`,
-      'its recorded tracker assignee (`tasks.ticket_assignee`) does not parse',
-    );
-  }
+  const { unlinked_assignee, tracker_assignee } = assigneeFieldsOf(
+    row.id,
+    row.ticketAssignee,
+    view,
+  );
   return {
     owner:
       row.ownerUserId === null
         ? null
         : { user_id: row.ownerUserId as Id, name: view?.ownerName ?? '' },
     owner_source: row.ownerSource ?? null,
-    unlinked_assignee:
-      view?.heldElsewhere === true && assignee.data !== null
-        ? { display_name: assignee.data.display_name }
-        : null,
+    unlinked_assignee,
     // S-26.3: the binding's switch and the owner's account for the provider ({@link OwnerView}).
     owner_writes_back: row.ownerUserId !== null && view?.writesBack === true,
-    tracker_assignee: trackerAssigneeOf(assignee.data, view?.assigneeUserId ?? null),
+    tracker_assignee,
   };
 };
 
@@ -2457,7 +2478,7 @@ export const listInbox = async (database: Database): Promise<InboxResponse> => {
       .where(eq(approvals.status, 'pending'))
       .orderBy(asc(approvals.requestedAt)),
     listCiHeld(database),
-    listEscalated(database),
+    listEscalatedTasks(database),
   ]);
   return {
     questions: questionRows.map(toQuestionRecord),
@@ -2469,38 +2490,71 @@ export const listInbox = async (database: Database): Promise<InboxResponse> => {
 };
 
 /**
- * **The tasks escalated to a person** (backlog 1360, S-25.14): the inbox's `escalated`. Three
- * statements however many there are — the `needs_human` rows, their newest escalations
- * ({@link escalationsFor}) and their owner views (`ownerViewsFor`, which `tracker_assignee` and
- * `unlinked_assignee` are projected from exactly as on the task record) — oldest escalation first,
- * as the inbox is a queue.
+ * **The tasks escalated to a person** (backlog 1360, S-25.14): the inbox's `escalated`, which Home's
+ * *Needs you* and the Inbox read. **One statement, bounded**: the `needs_human` tasks with the
+ * columns a row needs and nothing else, each one's newest `task.escalated` (a `lateral` over the
+ * stream index, the task read's order — newest instant, then position), and the two owner
+ * predicates the task record's `tracker_assignee` and `unlinked_assignee` are projected from
+ * (`taskHeldElsewhereSql`, `trackerAssigneeUserSql`, as `ownerViewsFor` asks them). Oldest
+ * escalation first — the task's last update for one with none — as the inbox is a queue, and at
+ * most `limit` rows ({@link MAX_INBOX_ESCALATED}, the API's page maximum): the oldest waits are
+ * the ones served, and the schema refuses a longer list.
  */
-const listEscalated = async (
+export const listEscalatedTasks = async (
   database: Database,
-): Promise<NonNullable<InboxResponse['escalated']>> => {
-  const rows = await database.select().from(tasks).where(eq(tasks.state, 'needs_human'));
-  const ids = rows.map((row) => row.id);
-  const [escalations, owners] = await Promise.all([
-    escalationsFor(database, ids),
-    ownerViewsFor(database, ids),
-  ]);
-  return rows
-    .map((row) => {
-      const escalation = escalations.get(row.id) ?? null;
-      const owner = ownerFieldsOf(row, owners.get(row.id));
-      return {
-        task_id: row.id as Id,
-        project_id: row.projectId as Id,
-        ticket: { provider: row.ticketProvider, key: row.ticketKey, url: row.ticketUrl },
-        ticket_title: ticketTitleOf(row.ticketSnapshot),
-        current_stage: row.currentStage ?? null,
-        reason: escalation?.reason ?? null,
-        at: escalation?.at ?? isoRequired(row.updatedAt),
-        tracker_assignee: owner.tracker_assignee,
-        unlinked_assignee: owner.unlinked_assignee,
-      };
-    })
-    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.task_id.localeCompare(b.task_id));
+  limit: number = MAX_INBOX_ESCALATED,
+): Promise<InboxResponse['escalated']> => {
+  const { rows } = await database.execute<{
+    id: string;
+    project_id: string;
+    ticket_provider: string;
+    ticket_key: string;
+    ticket_url: string;
+    ticket_title: unknown;
+    current_stage: string | null;
+    updated_at: Date | string;
+    ticket_assignee: unknown;
+    held_elsewhere: boolean;
+    assignee_user_id: string | null;
+    escalated_at: Date | string | null;
+    payload: unknown;
+  }>(sql`
+    select t.id, t.project_id, t.ticket_provider, t.ticket_key, t.ticket_url,
+           t.ticket_snapshot -> 'title' as ticket_title, t.current_stage, t.updated_at,
+           t.ticket_assignee,
+           ${HELD_ELSEWHERE} as held_elsewhere,
+           ${TRACKER_ASSIGNEE_USER} as assignee_user_id,
+           e.occurred_at as escalated_at, e.payload
+      from tasks t
+      left join lateral (
+        select ev.occurred_at, ev.payload from events ev
+         where ev.stream_type = 'task' and ev.stream_id = t.id and ev.type = 'task.escalated'
+         order by ev.occurred_at desc, ev.position desc
+         limit 1
+      ) e on true
+     where t.state = 'needs_human'
+     order by coalesce(e.occurred_at, t.updated_at), t.id
+     limit ${limit}`);
+  return rows.map((row) => {
+    const escalation =
+      row.escalated_at === null
+        ? null
+        : escalationOfRow({ occurredAt: new Date(row.escalated_at), payload: row.payload });
+    const assignee = assigneeFieldsOf(row.id, row.ticket_assignee, {
+      heldElsewhere: row.held_elsewhere === true,
+      assigneeUserId: row.assignee_user_id ?? null,
+    });
+    return {
+      task_id: row.id as Id,
+      project_id: row.project_id as Id,
+      ticket: { provider: row.ticket_provider, key: row.ticket_key, url: row.ticket_url },
+      ticket_title: ticketTitleOf({ title: row.ticket_title }),
+      current_stage: row.current_stage ?? null,
+      reason: escalation?.reason ?? null,
+      at: new Date(row.escalated_at ?? row.updated_at).toISOString(),
+      ...assignee,
+    };
+  });
 };
 
 /**

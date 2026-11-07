@@ -17,6 +17,7 @@ import {
   kbHealthResponseSchema,
   lifecycleErrorCodeSchema,
   listTasksQuerySchema,
+  MAX_INBOX_ESCALATED,
   MAX_TASK_STOP_RECORDED_CHARS,
   MAX_TICKET_KEY_CHARS,
   orgAuditQuerySchema,
@@ -1342,5 +1343,9 @@ describe('the inbox lists escalated tasks', () => {
     expect(inboxResponseSchema.parse(inbox).escalated).toEqual([row]);
     const { escalated: _dropped, ...without } = inbox;
     expect(inboxResponseSchema.safeParse(without).success).toBe(false);
+    // Bounded at the API's page maximum, both sides of the boundary.
+    const many = (n: number) => ({ ...inbox, escalated: Array.from({ length: n }, () => row) });
+    expect(inboxResponseSchema.safeParse(many(MAX_INBOX_ESCALATED)).success).toBe(true);
+    expect(inboxResponseSchema.safeParse(many(MAX_INBOX_ESCALATED + 1)).success).toBe(false);
   });
 });
