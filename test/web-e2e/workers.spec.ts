@@ -16,13 +16,12 @@ import { expect, type Page, test } from '@playwright/test';
 import { HOSTILE, IDS } from './support/fixtures.js';
 import { commandLog, resetBackend, signIn } from './support/harness.js';
 
-test.beforeEach(async ({ page, request }) => {
+// The test signs in **at `/workers`** (the sign-in page redirects back there), so Home — whose
+// `useWorkerNeed` asks the project's execution without a machine — never renders and cannot put a
+// read in the page's log after the listener is attached (CI on #109: one such read, `none`).
+test.beforeEach(async ({ request }) => {
   await resetBackend(request);
   expect((await request.post('/__test__/workers-others')).ok()).toBe(true);
-  await signIn(page);
-  await expect(
-    page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening)/ }),
-  ).toBeVisible();
 });
 
 const PROJECT_NAME = `Demo service ${HOSTILE.image}`;
@@ -47,7 +46,7 @@ test('Workers: the owner changes what their machine takes, warned per machine; s
       executionReads.push(url.searchParams.get('worker_id') ?? 'none');
     }
   });
-  await page.goto('/workers');
+  await signIn(page, '/workers');
   await expect(page.getByRole('heading', { level: 1, name: 'Workers' })).toBeVisible();
   const mine = page.locator(`[data-worker="${IDS.worker}"] [data-worker-policy]`);
   const sentence = mine.locator('[data-claim-policy-sentence]');

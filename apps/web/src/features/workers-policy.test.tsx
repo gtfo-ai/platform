@@ -167,13 +167,17 @@ const renderWorkers = (state: World) => {
   return render(createApp({ fetchImpl: server(state), realtime: false }).element);
 };
 
-/** A row's *What this machine takes*, once its sentence is on screen. */
+/**
+ * A row's *What this machine takes*, once its sentence is on screen. Both lookups are asserted
+ * non-null: an optional chain over a missing row is `undefined`, which `not.toBeNull()` admits.
+ */
 const policyOf = async (workerId: string): Promise<HTMLElement> =>
   waitFor(() => {
     const found = document.querySelector<HTMLElement>(
       `[data-worker="${workerId}"] [data-worker-policy]`,
     );
-    expect(found?.querySelector('[data-claim-policy-sentence]')).not.toBeNull();
+    expect(found).not.toBeNull();
+    expect(found?.querySelector('[data-claim-policy-sentence]') ?? null).not.toBeNull();
     return found as HTMLElement;
   });
 
