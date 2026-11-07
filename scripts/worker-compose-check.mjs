@@ -866,7 +866,9 @@ const main = async () => {
 
     // 4. compose.yml, pinned by digest, its SHA-256 the handshake's bundle digest.
     const worker = new Client(coreUrl);
-    const headers = { 'x-worker-protocol': '2', authorization: `Bearer ${credential}` };
+    // The protocol this build's worker speaks (`WORKER_PROTOCOL_VERSION`, 4 since S-26.4): a
+    // literal, as this script reads no TypeScript; a stale one is a `426` here, by name.
+    const headers = { 'x-worker-protocol': '4', authorization: `Bearer ${credential}` };
     // Public, with no header at all (TD-031's 2026-11-05 amendment): a person's first-install download.
     const file = await worker.json('/api/worker/v1/compose.yml');
     const pinned = [...String(file.text).matchAll(/^\s*image:\s*(\S+)\s*$/gm)].map(
