@@ -28,16 +28,29 @@
 --
 -- Additive by TD-032's list: two nullable columns and one with a literal default, which the
 -- previous build never names — every existing row reads "owed, never tried". One writer per column
--- (`tasks-column-ownership.test.ts`). The partial index is the pass's query, so a drained
--- installation answers it from an empty index every interval.
+-- (`tasks-column-ownership.test.ts`).
+--
+-- The partial index's predicate is the pass's query's `where` minus its moving parts — the same
+-- four conditions, spelled exactly as `ownerBackfillDue` spells them, so the planner proves the
+-- query implies it: a live (`state <> all (array['done','cancelled'])`) `normal` task with no stored
+-- assignee whose backfill is unsettled. A finished or a shadow task never enters it — including
+-- every task finished before 0104, which would otherwise sit in it for ever — and a task leaves it
+-- when the backfill settles, an assignee is stored, or it finishes. On a drained installation it
+-- holds only the live tasks still owed: those inside the pass's grace, those waiting out a retry
+-- time, and those at the attempt cap whose last duty never ran (bounded by the cap).
 alter table tasks add column owner_backfill_at timestamptz;
 alter table tasks add column owner_backfill_attempts integer not null default 0;
 alter table tasks add column owner_backfill_retry_at timestamptz;
 
 create index tasks_owner_backfill_due_idx on tasks (updated_at)
-  where owner_backfill_at is null and ticket_assignee is null;
+  where owner_backfill_at is null
+    and ticket_assignee is null
+    and mode = 'normal'
+    and state <> all (array['done', 'cancelled']::task_state[]);
 
 comment on column tasks.owner_backfill_at is
   'When the owner backfill ended for this task (BACKLOG 1510/1511): a definitive read, or the last of three failed attempts. Null is owed. Written only by settleOwnerBackfill.';
 comment on column tasks.owner_backfill_attempts is
   'Owner-backfill attempts claimed, at most 3 (BACKLOG 1511). Written only by claimOwnerBackfillAttempt, with owner_backfill_retry_at.';
+comment on column tasks.owner_backfill_retry_at is
+  'Not before this instant may the next owner-backfill attempt be claimed (BACKLOG 1511): 15 minutes after the first, 2 hours after the second. Null is never tried. Written only by claimOwnerBackfillAttempt.';

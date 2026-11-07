@@ -806,7 +806,9 @@ export const createPostgresPipelineStore = (
       return rows.map((row) => ({ taskId: row.id as Id, projectId: row.project_id as Id }));
     },
 
-    // BACKLOG 1510/1511 (migration 0110): `tasks_owner_backfill_due_idx` is this predicate's index.
+    // BACKLOG 1510/1511 (migration 0110): `tasks_owner_backfill_due_idx` is this query's index. Its
+    // predicate is the first four conditions below, spelled the same, so the planner proves the
+    // query implies it — change one and the other together (`task-owner.integration.test.ts`).
     ownerBackfillDue: async (tx, query) => {
       const { rows } = await sqlOf(tx).query<{
         id: string;

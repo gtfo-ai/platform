@@ -672,12 +672,102 @@ describe('the owner backfill’s query, claim and settle (BACKLOG 1510, 1511, mi
     expect(await settle(nextId())).toBe(false);
   });
 
-  it('answers the query from the partial index migration 0110 created', async () => {
+  /**
+   * The review of #119: the index's predicate must be one the query **implies**, or the planner
+   * cannot use it. The store's own statement is run — captured through the transaction's client and
+   * prefixed with `explain` — with sequential scans switched off, so a predicate the query did not
+   * imply would leave the planner nothing but the (disabled) sequential scan.
+   */
+  it('plans the pass’s own query on the partial index migration 0110 created', async () => {
     const [index] = await query<{ indexdef: string }>(
       "select indexdef from pg_indexes where indexname = 'tasks_owner_backfill_due_idx'",
     );
-    expect(index?.indexdef).toMatch(
-      /WHERE \(\(owner_backfill_at IS NULL\) AND \(ticket_assignee IS NULL\)\)/,
+    for (const part of [
+      '(owner_backfill_at IS NULL)',
+      '(ticket_assignee IS NULL)',
+      "(mode = 'normal'::task_mode)",
+      "(state <> ALL (ARRAY['done'::task_state, 'cancelled'::task_state]))",
+    ]) {
+      expect(index?.indexdef).toContain(part);
+    }
+
+    const client = createTestClient(database.connectionString);
+    await client.connect();
+    const plans: unknown[] = [];
+    try {
+      await client.query('begin');
+      await client.query('set local enable_seqscan = off');
+      const explaining = {
+        query: async (text: string, values?: unknown[]) => {
+          const result = await client.query(`explain (format json) ${text}`, values);
+          plans.push(result.rows[0]?.['QUERY PLAN']);
+          return { rows: [], rowCount: 0 };
+        },
+      };
+      await store.tasks.ownerBackfillDue(
+        { adapter: 'postgres', client: explaining } as unknown as Transaction,
+        { olderThan: FUTURE, now: NOW, maxAttempts: 3, limit: 20 },
+      );
+    } finally {
+      await client.query('rollback');
+      await client.end();
+    }
+    expect(plans).toHaveLength(1);
+    expect(JSON.stringify(plans[0])).toContain('"Index Name":"tasks_owner_backfill_due_idx"');
+  });
+
+  /** Two passes' claims of one attempt from two connections: one wins, the other waits and loses. */
+  it('lets exactly one of two concurrent claims of the same attempt win', async () => {
+    const taskId = await committedTask();
+    const retryAt = '2026-11-07T09:15:00.000Z' as IsoDateTime;
+    const first = createTestClient(database.connectionString);
+    const second = createTestClient(database.connectionString);
+    await first.connect();
+    await second.connect();
+    const asTx = (client: typeof first) =>
+      ({ adapter: 'postgres', client }) as unknown as Transaction;
+    try {
+      // Asked before the claim: a connection blocked on a lock answers nothing else until it is free.
+      const secondPid = (await second.query<{ pid: number }>('select pg_backend_pid() as pid'))
+        .rows[0]?.pid;
+      expect(secondPid).toBeDefined();
+      await first.query('begin');
+      await second.query('begin');
+      const won = await store.tasks.claimOwnerBackfillAttempt(asTx(first), taskId, {
+        now: NOW,
+        expectedAttempts: 0,
+        retryAt,
+      });
+      expect(won).toBe(1);
+      // The second claim blocks on the first's row lock: wait for that, structurally, then commit.
+      const losing = store.tasks.claimOwnerBackfillAttempt(asTx(second), taskId, {
+        now: NOW,
+        expectedAttempts: 0,
+        retryAt,
+      });
+      // A failure below ends the clients under it; its rejection is the assertion's, not unhandled.
+      losing.catch(() => undefined);
+      let blocked = false;
+      for (let tries = 0; tries < 200 && !blocked; tries += 1) {
+        const [row] = await query<{ waiting: boolean }>(
+          "select coalesce(bool_or(wait_event_type = 'Lock'), false) as waiting from pg_stat_activity where pid = $1",
+          [secondPid],
+        );
+        blocked = row?.waiting === true;
+        if (!blocked) await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(blocked).toBe(true);
+      await first.query('commit');
+      expect(await losing).toBeNull();
+      await second.query('commit');
+    } finally {
+      await first.end();
+      await second.end();
+    }
+    const [row] = await query<{ owner_backfill_attempts: number }>(
+      'select owner_backfill_attempts from tasks where id = $1',
+      [taskId],
     );
+    expect(row?.owner_backfill_attempts).toBe(1);
   });
 });
