@@ -3,8 +3,10 @@
  *
  * Org settings and a project's settings are **sub-routes with a NavList**, GitHub's settings shape:
  * `/settings/<section>` and `/projects/$key/settings/<section>`. These two tables are the whole set —
- * the route tree validates a section against them (an unknown one is redirected to the section the
- * caller lands on, so a stale link is never a router error), the NavList draws them in this order,
+ * the route tree validates a section against them (an unknown org section is a *not found* page
+ * inside Settings since S-25.15 — never a silent Policies — a retired one and a project's unknown
+ * one are redirected to the section the caller lands on; neither is a router error), the NavList
+ * draws them in this order,
  * and `features/user-guide-census.test.ts` holds `docs/user-guide.md` § 11 to their labels.
  *
  * **The Admin group is three screens with URLs of their own** (product/10's 2026-11-06 IA amendment,
@@ -89,7 +91,7 @@ export const ORG_SETTINGS_GROUPS = [
   {
     label: 'Personal',
     // No Appearance: one dark theme (TD-033's 2026-11-05 amendment), so `/settings/appearance`
-    // is an unknown section and redirects like any other.
+    // is a retired section (`RETIRED_ORG_SECTIONS`) and redirects to the one `/settings` opens.
     sections: [
       { id: 'session', label: 'Session' },
       { id: 'keyboard', label: 'Keyboard shortcuts', changeableFrom: 'viewer' },
@@ -184,6 +186,22 @@ export const isOrgSectionFor = (
   role: UserRole | undefined,
 ): section is OrgSettingsSectionId =>
   shownTo(role).some(({ id, to }) => id === section && to === undefined);
+
+/**
+ * Sections that existed and are gone: a bookmark of one still lands on the section `/settings`
+ * opens (S-25.15). Every other unknown section is a *not found* page.
+ */
+export const RETIRED_ORG_SECTIONS: readonly string[] = ['appearance'];
+
+/**
+ * Whether `section` is a section of the org settings at all, whatever the caller's role — one the
+ * role is not shown redirects, while one that is no section is *not found* (S-25.15).
+ */
+export const isKnownOrgSection = (section: string): boolean =>
+  RETIRED_ORG_SECTIONS.includes(section) ||
+  ORG_SETTINGS_GROUPS.some((group: SettingsGroup) =>
+    group.sections.some(({ id }) => id === section),
+  );
 
 /** The Admin entry `section` names, if any — `/settings/integrations` goes to `/integrations`. */
 export const orgAdminPathOf = (section: string): OrgAdminPath | null =>

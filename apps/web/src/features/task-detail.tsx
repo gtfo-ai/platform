@@ -34,6 +34,7 @@ import { useTopics } from '../realtime/provider.js';
 import { Flash } from '../ui/flash.js';
 import { ErrorNotice, Loading } from '../ui/kit.js';
 import { UnderlineNav } from '../ui/underline-nav.js';
+import { taskPagePrimary } from './page-primary.js';
 import { HandBackForm, TakenOverDetails, TakeOverAnswer } from './take-over.js';
 import { TaskActivity } from './task-activity.js';
 import { TaskArtifacts } from './task-artifacts.js';
@@ -85,6 +86,12 @@ const TaskTop = ({
   readonly breakdownWaiting: boolean;
 }): ReactElement => {
   const owner = useOwnerControl(detail);
+  // S-25.15: the page's one primary, asked once — the header and the callout draw the same answer.
+  const primary = taskPagePrimary(detail, {
+    ownerOffers: owner.offers,
+    stageOptions,
+    merged,
+  });
   return (
     <>
       <TaskHeader
@@ -96,6 +103,7 @@ const TaskTop = ({
         commands={commands}
         onOpen={onOpen}
         owner={owner}
+        primary={primary}
       />
 
       {commands.pause.isError || commands.resume.isError ? (
@@ -122,6 +130,7 @@ const TaskTop = ({
         onOpen={onOpen}
         nowMs={nowMs}
         owner={owner}
+        primary={primary}
       />
     </>
   );

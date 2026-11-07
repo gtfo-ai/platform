@@ -39,6 +39,7 @@
  * was set up with, so the reads stay at three however many projects there are; a later project's
  * own steps are the wizard's to show (`/onboarding?project=<key>`), not Home's.
  */
+import type { WorkerClaimBlocker } from '@platform/contracts';
 import { wordInSentence } from '../ui/humanize.js';
 
 /** One fact: answered yes, answered no, not answered yet, or the read failed. */
@@ -74,6 +75,8 @@ export interface BlockedWorker {
   readonly fix: string;
   /** It is updating itself (`leadingClaimBlocker`, S-23.27): said as in progress, not as a fault. */
   readonly updating?: boolean;
+  /** The first blocker's id, which Home's count of several machines groups by (S-25.15). */
+  readonly blocker?: WorkerClaimBlocker;
   readonly createdAt: string;
 }
 
@@ -82,6 +85,7 @@ export type SetupDestination =
   | { readonly to: '/integrations' }
   | { readonly to: '/onboarding'; readonly project?: string }
   | { readonly to: '/workers/new'; readonly step?: 'ready'; readonly since?: string }
+  | { readonly to: '/workers' }
   | { readonly to: '/projects/$key'; readonly key: string; readonly hash: string };
 
 export interface SetupStep {
@@ -230,14 +234,82 @@ export interface MissingPiece {
 }
 
 /**
+ * Why a machine can't take work, as a count says it (S-25.15): "2 not connected, 1 needs an
+ * update" — the singular, and the plural where the verb changes. Short on purpose: the sentence
+ * names the reasons and the Workers screen says each machine's fix.
+ *
+ * **The second wording of `WORKER_CLAIM_BLOCKER_WORDS`** (`ui/words/worker-blockers.ts`), keyed by
+ * the same blockers — the type makes a blocker added there fail to compile here until it has its
+ * count form, and a reworded blocker there is reworded here too. It is not derived from that
+ * table's `word`: those are row headlines ("Not connected to the platform", "It has no run
+ * images") with no plural, and a `count` field on that table would put these words in the
+ * worker's local page, which loads it within its own 120 kB budget (BACKLOG 1455).
+ */
+const COUNT_WORDS: Readonly<
+  Record<WorkerClaimBlocker | 'updating', string | readonly [string, string]>
+> = {
+  not_set_up: 'not set up yet',
+  revoked: 'removed',
+  owner_disabled: ['with its owner’s account disabled', 'with their owners’ accounts disabled'],
+  offline: 'not connected',
+  protocol_outdated: ['needs an update', 'need an update'],
+  platform_images_unresolved: 'waiting for the platform’s run images',
+  claude_rejected: 'signed out of Claude',
+  paused: 'paused',
+  draining: 'draining',
+  usage_limited: 'at the Claude usage limit',
+  launcher_unreachable: ['with its launcher not answering', 'with their launchers not answering'],
+  images_missing: 'without run images',
+  images_outdated: ['needs an update', 'need an update'],
+  no_eligible_project: 'given no project',
+  pick_only: ['taking only runs its owner picks', 'taking only runs their owners pick'],
+  updating: 'updating now',
+};
+
+/** "2 not connected" — the count and its reason, agreeing in number. */
+const countPhrase = (count: number, worker: BlockedWorker): string => {
+  const key = worker.updating === true ? 'updating' : worker.blocker;
+  const words = key === undefined ? wordInSentence(worker.reason) : COUNT_WORDS[key];
+  return `${count} ${typeof words === 'string' ? words : count === 1 ? words[0] : words[1]}`;
+};
+
+/**
+ * Several machines that can't take work, in one sentence (S-25.15, the walk of 2026-11-07): how
+ * many, and why, grouped — the largest group first, ties in the order the machines were listed.
+ * "2 needs an update" and "1 needs an update" are one group even when one is the protocol and one
+ * the images: the words are the same, so the reader sees one reason.
+ */
+const severalBlocked = (workers: readonly BlockedWorker[]): string => {
+  const groups = new Map<string, { readonly first: BlockedWorker; count: number }>();
+  for (const worker of workers) {
+    const key = countPhrase(1, worker);
+    const group = groups.get(key);
+    if (group === undefined) {
+      groups.set(key, { first: worker, count: 1 });
+    } else {
+      group.count += 1;
+    }
+  }
+  const reasons = [...groups.values()]
+    .sort((left, right) => right.count - left.count)
+    .map((group) => countPhrase(group.count, group.first));
+  return `No machine can take this project’s tickets right now: ${workers.length} can’t take work (${reasons.join(', ')}).`;
+};
+
+/**
  * The pieces that are **answered missing** (`todo`), in the order they matter. A read that failed
  * or has not answered names nothing: an unknown is not a missing piece (rule 16), and a box that
  * claims one on a read error would send an administrator to fix what works.
+ *
+ * `blockedWorkers` is every machine that exists and can't take work, the newest first: one is
+ * named, with its fix and its setup; several are counted by reason, with the Workers screen
+ * (S-25.15: naming only the newest of three told an owner the wrong story).
  */
 export const missingPieces = (
   pieces: SetupPieces,
-  blockedWorker: BlockedWorker | null = null,
+  blockedWorkers: readonly BlockedWorker[] = [],
 ): MissingPiece[] => {
+  const [blockedWorker = null] = blockedWorkers;
   const missing: MissingPiece[] = [];
   if (pieces.tracker === 'todo') {
     missing.push({
@@ -255,7 +327,14 @@ export const missingPieces = (
       destination: { to: '/integrations' },
     });
   }
-  if (pieces.worker === 'todo') {
+  if (pieces.worker === 'todo' && blockedWorkers.length > 1) {
+    missing.push({
+      id: 'worker',
+      text: severalBlocked(blockedWorkers),
+      action: 'Open Workers',
+      destination: { to: '/workers' },
+    });
+  } else if (pieces.worker === 'todo') {
     missing.push(
       blockedWorker === null
         ? {

@@ -16,16 +16,18 @@
  *   its run waits for a machine nobody has (S-26.8b part 2, `./waiting-words.tsx`), why, in the
  *   long form: "Waiting for Vojtěch’s machine. It’s offline (last seen 2 h ago)." — the callout
  *   says it again with the next steps.
- * - **One primary action, chosen by the state** ({@link taskPrimaryAction}): *Hand back…* while a
- *   take-over is in force, *Answer* for an open question (it moves focus into the callout's answer
- *   box), *Review plan* for a pending approval (it moves focus onto the callout's approval card,
- *   where the plan is shown open beside *Approve* and *Reject…* — S-25.1; there is no second,
- *   subject-less approve dialog), *Raise this task's cap…* for a task its own cap paused
- *   when the caller may raise it, *Start the job in GitLab* — a link to the held job's page (or
- *   its pipeline's) — while the CI check waits on a manual job (S-25.12), *Resume* for a paused
- *   or escalated task — or none. A task stopped because its ticket is somebody else's (S-25.14)
- *   has no *Resume* here: the callout's *Take it* is the page's one primary when the reader may
- *   take it, and there is none otherwise (`./ticket-held-elsewhere.tsx`).
+ * - **One primary action, chosen by the state** — the page's, decided once by `./page-primary.ts`
+ *   and shared with the callout (S-25.15): *Hand back…* while a take-over is in force, *Answer*
+ *   for an open question (it moves focus into the callout's answer box), *Review plan* for a
+ *   pending approval (it moves focus onto the callout's approval card, where the plan is shown
+ *   open beside *Approve* and *Reject…* — S-25.1; there is no second, subject-less approve
+ *   dialog), *Raise this task's cap…* for a task its own cap paused when the caller may raise it,
+ *   *Start the job in GitLab* — a link to the held job's page (or its pipeline's) — while the CI
+ *   check waits on a manual job (S-25.12), *Resume* for a paused or escalated task — or none.
+ *   Two stops have no *Resume* here because the callout's own button is the page's primary: a
+ *   ticket somebody else holds (S-25.14, *Take it* when the reader may take it, nothing otherwise,
+ *   `./ticket-held-elsewhere.tsx`), and a structured stop whose next step is "retry the stage"
+ *   (S-25.15, the callout's *Retry stage…*); *Resume* is then in the `···` menu.
  *   Everything else is in the `···` menu, and a command with fields or no undo opens a dialog
  *   (`./task-dialogs.tsx`).
  *
@@ -88,76 +90,14 @@ import {
   providerName,
 } from './gate-wait.js';
 import { liveStageRun } from './live-stage.js';
+import type { TaskPrimaryAction } from './page-primary.js';
 import { setbackShort } from './setback.js';
 import { takeOverFinished } from './take-over.js';
 import { answerInputId } from './task-callout.js';
 import type { TaskDialog } from './task-dialogs.js';
 import { type OwnerControl, OwnerFeedback, OwnerLine, OwnerMenuItems } from './task-owner.js';
 import { TicketClaimAndQa } from './ticket-claim.js';
-import { heldElsewhereStop } from './ticket-held-words.js';
 import { waitingLong, waitingPlain } from './waiting-words.js';
-
-/** The header's one primary action. */
-export type TaskPrimaryAction =
-  | 'hand_back'
-  | 'answer'
-  | 'approve'
-  | 'raise_budget'
-  | 'start_job'
-  | 'resume'
-  | null;
-
-/**
- * Which action is primary, by what the task is waiting for: the person who holds it, then the
- * agent's question, then a maintainer's approval, then the cap that paused it, then a manual CI job
- * only a person can start, then a resume — the first that applies.
- */
-export const taskPrimaryAction = (input: {
-  readonly state: TaskState;
-  /** The take-over in force has a stage it can be handed back to. */
-  readonly canHandBack: boolean;
-  readonly openQuestions: number;
-  readonly pendingApprovals: number;
-  /** The task's own cap paused it and the caller may raise it. */
-  readonly canRaise?: boolean;
-  /**
-   * Whether the caller may decide an approval and resume the task (S-23.23, the read's
-   * `can_decide_approval` and `can_resume`). Left out, they are not consulted — the page always
-   * passes them; a caller who may not is never offered the action as the page's primary.
-   */
-  readonly canDecide?: boolean;
-  readonly canResume?: boolean;
-  /** The CI check waits on a held manual job whose page (or pipeline's) the page can link. */
-  readonly ciHeldLink?: boolean;
-  /**
-   * The task stopped because its ticket is somebody else's (S-25.14, `heldElsewhereStop`): a
-   * resume would only stop it again, so the header offers none as its primary — the callout's
-   * *Take it* is the one, when the reader may take it.
-   */
-  readonly heldElsewhere?: boolean;
-}): TaskPrimaryAction => {
-  if (input.canHandBack) {
-    return 'hand_back';
-  }
-  if (input.openQuestions > 0) {
-    return 'answer';
-  }
-  if (input.pendingApprovals > 0 && input.canDecide !== false) {
-    return 'approve';
-  }
-  if (input.canRaise === true) {
-    return 'raise_budget';
-  }
-  if (input.ciHeldLink === true) {
-    return 'start_job';
-  }
-  if (input.heldElsewhere === true) {
-    return null;
-  }
-  return input.canResume !== false && (input.state === 'paused' || input.state === 'needs_human')
-    ? 'resume'
-    : null;
-};
 
 /**
  * States the page offers a resume from — by choice, a subset of what the server admits: a resume
@@ -173,9 +113,15 @@ export const TaskHeader = ({
   commands,
   onOpen,
   owner,
+  primary,
   projectName = null,
 }: {
   readonly detail: TaskDetailResponse;
+  /**
+   * The page's one primary (`./page-primary.ts`' `taskPagePrimary`, asked once by the page and
+   * shared with the callout). `take` and `retry_stage` are the callout's buttons: none here.
+   */
+  readonly primary: TaskPrimaryAction;
   /** The board's key, when the projects read has it: the back link. */
   readonly projectKey: string | null;
   /** The page's one owner control (`./task-owner.tsx`), shared with the callout's next steps. */
@@ -215,17 +161,6 @@ export const TaskHeader = ({
     tracker: trackerName(task.ticket.provider),
   });
   const heldJobUrl = gateWait !== null && ciHeld ? gateWaitJobUrl(gateWait) : null;
-  const primary = taskPrimaryAction({
-    state: task.state,
-    canHandBack: takenOver !== null && takenOver.hand_back_stages.length > 0,
-    openQuestions: openQuestions.length,
-    pendingApprovals: pendingApprovals.length,
-    canRaise,
-    canDecide: detail.can_decide_approval,
-    canResume: detail.can_resume,
-    ciHeldLink: heldJobUrl !== null,
-    heldElsewhere: heldElsewhereStop(detail),
-  });
   const needsYouInput = {
     state: task.state,
     paused_reason: task.paused_reason,

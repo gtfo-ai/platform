@@ -23,6 +23,8 @@
  *
  * `/settings` opens the first section the caller's role may change (S-25.6, research/21 S13):
  * *Policies* for an administrator, *Budgets* for a maintainer, *Keyboard shortcuts* for anybody else.
+ * An address that is no section (`/settings/your-accounts`; the page is `/settings/accounts`) says
+ * so inside the NavList, with a link back to Settings (S-25.15).
  *
  * The budgets were the expensive absence once: `insert into budgets` occurred in exactly two files
  * and both were tests, so the organisation cap that is supposed to stop every new run everywhere was
@@ -47,6 +49,7 @@ import { displayName } from '../auth/session.js';
 import { ForAdministrators } from '../ui/admin-notes.js';
 import { Avatar } from '../ui/avatar.js';
 import { Blankslate } from '../ui/blankslate.js';
+import { buttonClassName } from '../ui/button.js';
 import { USER_ROLE_LABEL } from '../ui/humanize.js';
 import { Badge, Card, ErrorNotice, formatDateTime, Loading } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
@@ -300,13 +303,30 @@ const SECTION: Readonly<Record<OrgSettingsSectionId, () => ReactElement>> = {
   instance: Instance,
 };
 
+/**
+ * An address under `/settings/` that is no section (S-25.15): said, inside Settings, with the way
+ * back — before, the route redirected it to Policies, which read as the page the link meant.
+ */
+const NotFound = (): ReactElement => (
+  <Blankslate
+    title="There’s no settings page at this address."
+    hint="The link may be mistyped or out of date. Every settings page is listed beside this one."
+    action={
+      <Link to="/settings" className={buttonClassName('default')}>
+        Open Settings
+      </Link>
+    }
+  />
+);
+
 export const SettingsScreen = ({
   section,
 }: {
-  readonly section: OrgSettingsSectionId;
+  /** `null` for an address that is no section: the *not found* page, inside the NavList. */
+  readonly section: OrgSettingsSectionId | null;
 }): ReactElement => {
   const session = useSession();
-  const Section = SECTION[section];
+  const Section = section === null ? NotFound : SECTION[section];
   return (
     <div className="flex flex-col gap-4">
       <PageHeader title="Settings" />

@@ -34,7 +34,8 @@ export const SettingsFrame = <TId extends string>({
   /** The NavList's accessible name. */
   readonly label: string;
   readonly groups: readonly SettingsGroup<TId>[];
-  readonly current: TId;
+  /** The section shown; `null` for an address that is no section (S-25.15), with none current. */
+  readonly current: TId | null;
   readonly link: (section: TId, props: NavLinkProps) => ReactElement;
   readonly children: ReactNode;
 }): ReactElement => (
@@ -56,7 +57,7 @@ export const SettingsFrame = <TId extends string>({
         })),
       }))}
     />
-    <div data-settings-section={current} className="flex min-w-0 flex-col gap-4">
+    <div data-settings-section={current ?? 'not-found'} className="flex min-w-0 flex-col gap-4">
       {children}
     </div>
   </div>

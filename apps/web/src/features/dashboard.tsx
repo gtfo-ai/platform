@@ -960,6 +960,12 @@ const DestinationLink = ({
           {children}
         </Link>
       );
+    case '/workers':
+      return (
+        <Link to="/workers" className={className}>
+          {children}
+        </Link>
+      );
     case '/projects/$key':
       return (
         <Link
@@ -1127,27 +1133,30 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
           : workers.isError
             ? 'unknown'
             : 'pending';
-  // The newest worker that exists but cannot take work: the step says which, and why.
-  const newest = active.reduce<(typeof active)[number] | null>(
-    (latest, item) =>
-      latest === null || Date.parse(item.created_at) > Date.parse(latest.created_at)
-        ? item
-        : latest,
-    null,
-  );
-  // Its first blocker — or that it is updating itself (S-23.27).
-  const blocker =
-    newest === null ? undefined : leadingClaimBlocker(workerReadinessOf(newest).claim_blockers);
-  const blockedWorker: BlockedWorker | null =
-    worker !== 'todo' || newest === null || blocker === undefined
-      ? null
-      : {
-          name: sanitiseUntrusted(newest.name),
-          reason: blocker.word,
-          fix: blocker.fix,
-          updating: blocker.updating,
-          createdAt: newest.created_at,
-        };
+  // Every worker that exists but cannot take work, the newest first (S-25.15): the checklist's step
+  // names the newest, and Home's missing piece counts them all once there are several.
+  const blockedWorkers: readonly BlockedWorker[] =
+    worker !== 'todo'
+      ? []
+      : [...active]
+          .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
+          .flatMap((item): BlockedWorker[] => {
+            // Its first blocker — or that it is updating itself (S-23.27).
+            const blocker = leadingClaimBlocker(workerReadinessOf(item).claim_blockers);
+            return blocker === undefined
+              ? []
+              : [
+                  {
+                    name: sanitiseUntrusted(item.name),
+                    reason: blocker.word,
+                    fix: blocker.fix,
+                    updating: blocker.updating,
+                    blocker: blocker.blocker,
+                    createdAt: item.created_at,
+                  },
+                ];
+          });
+  const blockedWorker = blockedWorkers[0] ?? null;
 
   const checklist = setupChecklist(
     {
@@ -1165,7 +1174,7 @@ const useSetupChecklist = (projects: readonly ProjectItem[]) => {
     checklist,
     home: homeSetup(
       checklist,
-      missingPieces({ tracker, git, ...(worker === undefined ? {} : { worker }) }, blockedWorker),
+      missingPieces({ tracker, git, ...(worker === undefined ? {} : { worker }) }, blockedWorkers),
     ),
     noIntegration: integrations.isSuccess && integrations.items.length === 0,
   };

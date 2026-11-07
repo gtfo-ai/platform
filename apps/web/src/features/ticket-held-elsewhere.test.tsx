@@ -22,7 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import { primaryLabels } from '../ui/primary-census.js';
-import { taskPrimaryAction } from './task-header.js';
+import { taskPrimaryAction } from './page-primary.js';
 import { heldElsewhereStop, heldElsewhereWords, ticketHolder } from './ticket-held-words.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';

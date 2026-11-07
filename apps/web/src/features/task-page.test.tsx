@@ -13,14 +13,17 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { taskPrimaryAction } from './page-primary.js';
 import {
   CHECKS_CALLOUT_POINTER,
   checksSummary,
   dependencyStatus,
   gateStatus,
+  TAMPER_NOT_CHECKED,
+  TAMPER_NOT_CHECKED_YET,
   tamperStatus,
+  tamperValueText,
 } from './task-checks-text.js';
-import { taskPrimaryAction } from './task-header.js';
 import { currentTaskTab, taskSearchSchema, taskTabSearch } from './task-tab.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
@@ -176,6 +179,49 @@ const atCi = (wait: NonNullable<TaskDetailResponse['gate_wait']>) =>
       ],
     },
     { state: 'active', current_stage: 'ci_gate', mr_ref: GITLAB_MR },
+  );
+
+/**
+ * S-25.15: AUT-6655's stop — the CI check timed out on a poll-only binding (`no_answer`,
+ * `ci_ending: 'ci_timed_out'`), so the task waits for a person and the callout's next step is to
+ * retry the stage.
+ */
+const ciTimedOut = (over: Partial<TaskDetailResponse> = {}) =>
+  detail(
+    {
+      stop: {
+        stage: 'ci_gate',
+        attempt: 1,
+        cause: 'no_answer',
+        loop: null,
+        ci_failure: null,
+        recorded: 'pipeline 3038234623 was still held at the manual job sentry-release-commit',
+        recorded_cut: false,
+        ci_ending: 'ci_timed_out',
+      },
+      stages: [
+        stage('implementation', 1, 'completed', 'approve'),
+        stage('ci_gate', 1, 'failed', 'undecided'),
+      ],
+      ...over,
+    },
+    { state: 'needs_human', current_stage: 'ci_gate', mr_ref: GITLAB_MR },
+  );
+
+/** S-25.14's stop: the ticket is assigned to somebody else, nobody owns the task. */
+const heldElsewhereTask = (over: Partial<TaskDetailResponse> = {}) =>
+  detail(
+    {
+      can_take: true,
+      escalation: {
+        at: AT,
+        reason: 'ticket_assigned_elsewhere',
+        brief: 'ACME-12 is assigned to somebody else in Jira.',
+        brief_original_chars: null,
+      },
+      ...over,
+    },
+    { state: 'needs_human' },
   );
 
 const QUESTION_ROW: TaskDetailResponse['questions'][number] = {
@@ -443,7 +489,15 @@ describe('one primary action per state', () => {
       ),
       ['Resume'],
     ],
+    // A plain escalation, with no structured stop: Resume, as before S-25.15.
     ['an escalated task', detail({}, { state: 'needs_human' }), ['Resume']],
+    // S-25.15: the primary is the callout's own next step, never a Resume beside it.
+    ['a task stopped because CI did not finish (AUT-6655)', ciTimedOut(), ['Retry stage…']],
+    [
+      'a task whose ticket somebody else holds, for a reader who may take it',
+      heldElsewhereTask(),
+      ['Take it'],
+    ],
     ['a running task', detail(), []],
     // S-25.12: the one next step is the held job, a link to its page.
     ['a CI check held at a manual job', atCi(heldWait()), ['Start the job in GitLab']],
@@ -460,6 +514,68 @@ describe('one primary action per state', () => {
     await screen.findByText('Checks');
     await waitFor(() => {
       expect(primaries()).toEqual(expected);
+    });
+  });
+
+  it('makes the callout’s Retry stage… the primary on AUT-6655, with Resume in the menu (S-25.15)', async () => {
+    const user = userEvent.setup();
+    start(ciTimedOut());
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    await waitFor(() => {
+      expect(primaries()).toEqual(['Retry stage…']);
+    });
+    // The amber button is the callout's, the one beside the sentence that names it.
+    const retry = within(callout).getByRole('button', { name: 'Retry stage…' });
+    expect(retry.className).toContain('border-primary-line');
+    expect(callout.textContent).toContain('then retry the stage');
+    // No Resume button anywhere on the page; it is a plain item of the menu.
+    expect(within(screen.getByRole('main')).queryByRole('button', { name: 'Resume' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Task actions' }));
+    const resume = await screen.findByRole('menuitem', { name: 'Resume' });
+    expect(resume.className).not.toContain('border-primary-line');
+  });
+
+  it('draws no primary for a stop when the caller may neither resume nor retry', async () => {
+    start(ciTimedOut({ can_resume: false }));
+    await screen.findByRole('region', { name: 'Needs you' });
+    await screen.findByText('Checks');
+    await waitFor(() => {
+      expect(primaries()).toEqual([]);
+    });
+  });
+
+  it('decides a stop’s primary in one place: retry, then resume, never both', () => {
+    const stopped = {
+      state: 'needs_human' as const,
+      canHandBack: false,
+      openQuestions: 0,
+      pendingApprovals: 0,
+    };
+    expect(taskPrimaryAction(stopped)).toBe('resume');
+    expect(taskPrimaryAction({ ...stopped, stopRetry: true })).toBe('retry_stage');
+    // Only a task that waits for a person: a paused one with an old stop still resumes.
+    expect(taskPrimaryAction({ ...stopped, state: 'paused', stopRetry: true })).toBe('resume');
+    expect(taskPrimaryAction({ ...stopped, stopRetry: true, canResume: false })).toBeNull();
+    // A question still comes first, and the ticket held elsewhere is the box's Take it.
+    expect(taskPrimaryAction({ ...stopped, stopRetry: true, openQuestions: 1 })).toBe('answer');
+    expect(
+      taskPrimaryAction({ ...stopped, stopRetry: true, heldElsewhere: true, canTake: true }),
+    ).toBe('take');
+    expect(taskPrimaryAction({ ...stopped, heldElsewhere: true, canTake: false })).toBeNull();
+    // Review of #118: a pending approval comes before Retry. A reader who may decide it reviews
+    // it; anybody else keeps Resume (it re-enters the approval's wait), or nothing.
+    const pending = { ...stopped, stopRetry: true, pendingApprovals: 1 };
+    expect(taskPrimaryAction({ ...pending, canDecide: true })).toBe('approve');
+    expect(taskPrimaryAction({ ...pending, canDecide: false })).toBe('resume');
+    expect(taskPrimaryAction({ ...pending, canDecide: false, canResume: false })).toBeNull();
+  });
+
+  it('keeps Resume, not Retry stage…, for a stop beside an approval the reader may not decide (review of #118)', async () => {
+    start(ciTimedOut({ approvals: [APPROVAL_ROW], can_decide_approval: false }));
+    await screen.findByRole('region', { name: 'Needs you' });
+    await screen.findByText('Checks');
+    await waitFor(() => {
+      expect(primaries()).toEqual(['Resume']);
     });
   });
 
@@ -1403,6 +1519,47 @@ describe('the merge box', () => {
     expect(document.querySelector('[data-checks-callout]')).toBeNull();
   });
 
+  it('says Protected files was not checked when CI did not finish, and counts only CI (S-25.15)', async () => {
+    start(ciTimedOut());
+    await waitFor(() => {
+      expect(document.querySelector('[data-checks-summary]')?.textContent).toBe(
+        '1 check needs you',
+      );
+    });
+    const tamper = document.querySelector('[data-check="tamper"]')?.textContent ?? '';
+    expect(tamper).toContain(TAMPER_NOT_CHECKED);
+    expect(tamper).not.toContain('needs you');
+    // The CI item is the one that needs a person, and says why.
+    expect(document.querySelector('[data-check="ci"]')?.textContent).toContain(
+      'needs you: it could not decide',
+    );
+  });
+
+  it('says Protected files was not checked yet when the row cannot say CI was unfinished (review of #118)', async () => {
+    start(
+      detail(
+        {
+          stages: [
+            stage('implementation', 1, 'completed', 'approve'),
+            stage('ci_gate', 1, 'failed', 'undecided'),
+          ],
+        },
+        { state: 'needs_human', current_stage: 'ci_gate' },
+      ),
+    );
+    await waitFor(() => {
+      expect(document.querySelector('[data-checks-summary]')?.textContent).toBe(
+        '1 check needs you',
+      );
+    });
+    const tamper = document.querySelector('[data-check="tamper"]')?.textContent ?? '';
+    expect(tamper).toContain(TAMPER_NOT_CHECKED_YET);
+    expect(tamper).not.toContain('didn’t finish');
+    expect(document.querySelector('[data-check="tamper"]')?.getAttribute('data-check-status')).toBe(
+      'skipped',
+    );
+  });
+
   it('draws the cost against the cap as a meter, with no inline style', async () => {
     start(detail());
     await screen.findByText('Cost so far');
@@ -1420,6 +1577,39 @@ describe('the merge box', () => {
     expect(gateStatus(stage('ci_gate', 1, 'completed', 'fail'))).toBe('failure');
     expect(gateStatus(stage('ci_gate', 1, 'failed', 'undecided'))).toBe('needs_you');
     expect(gateStatus(stage('ci_gate', 1, 'returned', 'escalated'))).toBe('waiting');
+    // S-25.15: a CI gate that never settled made no tamper check — muted, never *needs you* — while
+    // one the platform could not evaluate (`unsupported`, which the tamper check also answers) does.
+    expect(tamperStatus(stage('ci_gate', 1, 'failed', 'undecided'))).toBe('skipped');
+    // Review of #118: only a stop whose `ci_ending` proves the pipeline unfinished, on this
+    // attempt, says CI didn't finish; any other `undecided` (a finished pipeline whose changed files
+    // were never listed, a silent provider) is *not checked yet*.
+    const undecided = stage('ci_gate', 2, 'failed', 'undecided');
+    const timedOut = {
+      stage: 'ci_gate',
+      attempt: 2,
+      cause: 'no_answer' as const,
+      loop: null,
+      ci_failure: null,
+      recorded: null,
+      recorded_cut: false,
+      ci_ending: 'ci_timed_out' as const,
+    };
+    expect(tamperValueText(undecided)).toBe(TAMPER_NOT_CHECKED_YET);
+    expect(tamperValueText(undecided, null, timedOut)).toBe(TAMPER_NOT_CHECKED);
+    expect(tamperValueText(undecided, null, { ...timedOut, ci_ending: 'ci_held_unchanged' })).toBe(
+      TAMPER_NOT_CHECKED,
+    );
+    expect(tamperValueText(undecided, null, { ...timedOut, ci_ending: null })).toBe(
+      TAMPER_NOT_CHECKED_YET,
+    );
+    // A stop recorded on an earlier attempt says nothing about this one.
+    expect(tamperValueText(undecided, null, { ...timedOut, attempt: 1 })).toBe(
+      TAMPER_NOT_CHECKED_YET,
+    );
+    expect(tamperStatus(stage('ci_gate', 1, 'failed', 'unsupported'))).toBe('needs_you');
+    expect(tamperValueText(stage('ci_gate', 1, 'failed', 'unsupported'))).toBe(
+      'needs you: it cannot be checked here',
+    );
     // *not recorded* is skipped, *clean* passes, a declared change waits for its confirmation.
     expect(tamperStatus(stage('ci_gate', 1, 'completed', 'pass'))).toBe('skipped');
     expect(tamperStatus(stage('ci_gate', 1, 'completed', 'protected_paths_clean'))).toBe('success');
