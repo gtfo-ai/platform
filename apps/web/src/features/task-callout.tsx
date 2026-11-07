@@ -14,7 +14,10 @@
  *   outcome sentence, and the three ways out (return, rework, retry), which open the same dialogs as
  *   the header's `···` menu. It leads with **the escalation's own brief** (the read's
  *   `escalation`, BACKLOG 850) — what stopped the task and the way out, as the platform wrote it
- *   when it stopped — and falls back to the escalated attempt's recorded word when there is none;
+ *   when it stopped — and falls back to the escalated attempt's recorded word when there is none.
+ *   A ticket somebody else holds (S-25.14, the escalation's reason key `ticket_assigned_elsewhere`)
+ *   is a structured stop of its own (`./ticket-held-elsewhere.tsx`): whose ticket it is, from the
+ *   task's `tracker_assignee`, leads, the ways out are in the box, and the brief is under *Details*;
  * - **a budget pause** — whose cap is spent, and where it is raised (the header's primary raises
  *   a task's own cap);
  * - **a proposed breakdown waiting for a maintainer** — the epic split's panel, with its decision.
@@ -71,6 +74,8 @@ import { stageOutcomeSentence } from './stage-outcome.js';
 import { latestStageRow } from './task-checks-text.js';
 import type { TaskDialog } from './task-dialogs.js';
 import type { OwnerControl } from './task-owner.js';
+import { HeldElsewhere } from './ticket-held-elsewhere.js';
+import { heldElsewhereStop } from './ticket-held-words.js';
 import { WaitingNotice } from './waiting-notice.js';
 import { waitingReason } from './waiting-words.js';
 
@@ -316,6 +321,7 @@ export const TaskCallout = (props: TaskCalloutProps): ReactElement => {
 const CalloutSlot = ({
   detail,
   projectKey,
+  owner,
   merged,
   hasStages,
   breakdownWaiting,
@@ -338,6 +344,8 @@ const CalloutSlot = ({
     ciHeld: gateWaitHeld(gateWait),
   });
   const [first] = reasons;
+  // S-25.14: the ticket is somebody else's — the callout says whose, with the ways out in the box.
+  const heldElsewhere = reasons.includes('escalation') && heldElsewhereStop(detail);
   if (first === undefined) {
     if (gateWait !== null) {
       // S-25.12: CI is still running — information, no action; nothing is asked of the reader.
@@ -455,7 +463,9 @@ const CalloutSlot = ({
               nowMs={nowMs}
             />
           ) : null}
-          {reasons.includes('escalation') ? (
+          {heldElsewhere ? (
+            <HeldElsewhere detail={detail} owner={owner} commands={commands} onOpen={onOpen} />
+          ) : reasons.includes('escalation') ? (
             <div className="flex flex-col gap-2">
               {!briefLeads || escalation === null ? null : (
                 <div data-escalation-brief="" className="flex flex-col gap-1">
