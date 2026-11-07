@@ -324,18 +324,17 @@ const ConfirmMatch = ({
   const provider = accountProviderName(match.provider);
   return (
     <div data-link-match={match.id} className="flex flex-col gap-2">
+      {/* One text node — the platform's words and the provider's name together, still rendered as
+          text by `UntrustedText` — so the heading's accessible name is exactly the question. With
+          the name in its own `<em>` between two text nodes, CI's ui tier found no heading by that
+          name (PR #99): dom-accessibility-api puts a space around a child element whose computed
+          display is not `inline`, and happy-dom's default table leaves `em` and `span` blank, which
+          would read "… Novák ?". Not measured locally (no local tests); this shape has no interior
+          boundary for either reading. */}
       <h3 className="text-base font-semibold">
-        {WORDS.confirmBefore(provider)}
-        {match.display_name === null ? (
-          <code className="font-mono">
-            <UntrustedText value={match.external_id} />
-          </code>
-        ) : (
-          <em>
-            <UntrustedText value={match.display_name} />
-          </em>
-        )}
-        {WORDS.confirmAfter}
+        <UntrustedText
+          value={`${WORDS.confirmBefore(provider)}${match.display_name ?? match.external_id}${WORDS.confirmAfter}`}
+        />
       </h3>
       <dl className="grid w-fit grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
         <dt className="text-fg-muted">{WORDS.accountId}</dt>

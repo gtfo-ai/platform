@@ -394,7 +394,11 @@ test('Settings → Your accounts: a code, the account the provider proved, the c
   await expect(page.getByRole('heading', { name: 'Your accounts' })).toBeVisible();
   await expect(page.getByText('No account is linked to you yet')).toBeVisible();
   await page.getByRole('button', { name: 'Link an account' }).click();
-  await expect(page.getByLabel('Your link code')).toHaveValue(identityLinkIssued.code);
+  // `exact`: the code's field is *Your link code*, and its copy button *Copy Your link code*
+  // (`ui/copy-field.tsx`), which Playwright's default substring match also finds.
+  await expect(page.getByLabel('Your link code', { exact: true })).toHaveValue(
+    identityLinkIssued.code,
+  );
   await expect(
     page.getByText(
       'Write this code as a comment on any ticket of a project you are in (Jira), from your own account.',
