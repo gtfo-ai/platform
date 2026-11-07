@@ -1424,6 +1424,15 @@ no comments (`ticket-poll.ts:97`), and GitLab notes are normalised only on merge
    `owner_worker_offline` (with the last seen time), `owner_worker_paused`, `owner_no_worker`, `owner_pick_only`,
    `no_taker`, `assignee_not_linked`, or `null` when someone can take it now. A PostgreSQL parity test holds it to the
    claim's predicates, the way S-22.19 did.
+   - **A seventh value, `owner_worker_cannot_take`** (orchestrator, 2026-11-07, on S-26.5's review, BACKLOG 1446). It
+     applies when the owner's machine is connected, not paused, and takes the project, but the claim still refuses
+     it. `main` releases on every push, so a machine with outdated images is common, and *owner_no_worker* would then
+     be false while the Workers screen shows the machine online. `waiting.blockers` carries the reason as S-22.19's
+     blocker keys, computed by the same function as the Workers screen's `claim_blockers`. Only six keys appear there:
+     `images_outdated`, `images_missing`, `protocol_outdated`, `draining`, `usage_limited` and
+     `platform_images_unresolved`. Every other blocker maps to its own reason (`offline`, `paused`, `pick_only`) or to
+     `owner_no_worker` (`no_eligible_project`, `owner_disabled`, `revoked`). For every other reason `blockers` is `[]`.
+     When the owner has several machines, the one closest to taking the run decides.
 9. **A person links their own account, proven by the provider** (migration **0105**, `identity_link_codes` and
    `identity_link_matches`). A linked identity gains authority: it answers questions and approves plans (BD-006,
    BD-022, Q10). So a link is made only from an **authenticated author** the provider names, never from a typed id or
