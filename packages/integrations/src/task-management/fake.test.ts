@@ -376,7 +376,7 @@ describe('the ticket lifecycle (WP-171, divergences 12–16)', () => {
     expect((await port.readTicket(REF)).assignee?.external_id).toBe('agentic-bot');
   });
 
-  it('assigns a person it holds, idempotently, and refuses one it does not (S-26.3, divergence 18)', async () => {
+  it('assigns a person it holds, idempotently, and refuses one it does not (S-26.3, divergence 19)', async () => {
     const port = lifecycle({
       identities: [{ providerUserId: 'user-1', email: 'dev@example.test', displayName: 'Dev One' }],
     });

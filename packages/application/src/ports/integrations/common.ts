@@ -454,6 +454,40 @@ export interface IgnoredDelivery {
 export interface NormalisedDelivery<TType extends DomainEventType = DomainEventType> {
   readonly events: readonly NormalisedEvent<TType>[];
   readonly ignored: readonly IgnoredDelivery[];
+  /**
+   * The comments of this delivery that carried a self-service **link code** (S-26.6, TD-031's
+   * 2026-11-06 amendment item 9), built by `linkCodeClaimOf` — the code's hashes and the comment's
+   * authenticated author, never its text. The ingress records them in the `inbox` row's
+   * transaction (`identity/identity-links.ts`); absent is none.
+   */
+  readonly linkClaims?: readonly LinkCodeClaim[];
+}
+
+/** Why a comment carrying a link code cannot link anyone, decided from the comment alone. */
+export type LinkClaimRefusal =
+  | 'no_author'
+  | 'unsafe_identifier'
+  | 'edit_state_unknown'
+  | 'edited'
+  | 'edited_by_another'
+  | 'platform_marker'
+  | 'binding_account'
+  | 'binding_account_unknown';
+
+/**
+ * One comment that carried at least one link code, as the recorder receives it (S-26.6). `refusal`
+ * is `null` for a comment the recorder may look up; otherwise it records nothing for it.
+ */
+export interface LinkCodeClaim {
+  readonly provider: string;
+  /** The comment's author — the provider's account id. Empty only with `refusal: 'no_author'`. */
+  readonly externalId: string;
+  /** Redacted by the caller and bounded by `linkCodeClaimOf`. */
+  readonly displayName: string | null;
+  readonly commentId: string;
+  /** The SHA-256 of each distinct code the comment carried; the code itself goes no further. */
+  readonly codeHashes: readonly string[];
+  readonly refusal: LinkClaimRefusal | null;
 }
 
 /**

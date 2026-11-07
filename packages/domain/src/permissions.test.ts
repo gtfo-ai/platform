@@ -85,6 +85,7 @@ const EXPECTED_ROLES: Record<PermissionAction, readonly UserRole[]> = {
   'discovery.run': MAINTAINER_UP,
 
   'worker.register': ALL,
+  'identity.link': ALL,
 };
 
 describe('can — exhaustive role × action', () => {

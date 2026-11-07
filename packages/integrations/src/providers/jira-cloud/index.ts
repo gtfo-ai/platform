@@ -1447,6 +1447,10 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     secret: config.webhook_secret ?? null,
     clock: options.clock,
     maxAgeMs: config.webhook_max_age_ms,
+    // S-26.6: a comment carrying a link code is checked against this binding's own account — the
+    // one `GET /myself` the workpad's author check already makes and remembers. Asked only for a
+    // comment that carries a code, inside `normalise` (the port's provider-I/O allowance).
+    bindingAccount: async () => requireSelfAccountId('link_code_author'),
   });
 
   return {

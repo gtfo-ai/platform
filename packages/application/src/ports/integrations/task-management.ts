@@ -54,6 +54,12 @@ export const ticketCommentSchema = z.strictObject({
   body: z.string(),
   created_at: isoDateTimeSchema,
   updated_at: isoDateTimeSchema.nullish(),
+  /**
+   * Who last edited the comment, when the provider says (Jira's `updateAuthor`, S-26.6). A link code
+   * in a comment another account edited proves nothing about its author (TD-031's amendment item 9
+   * (c), the *Edit All Comments* case); absent or `null` is "not stated".
+   */
+  update_author: externalIdentitySchema.nullish(),
   marker_id: nonEmptyStringSchema.nullish(),
   url: urlSchema.nullish(),
 });

@@ -857,6 +857,29 @@ the existing suite (BD-017).
     account, because those cannot be a platform user and mapping one would make anything that can
     post as that bot able to answer a question (BD-006, Q10).
 - Actor identity: every normalised event carries `{provider, providerUserId, email?, displayName}` resolved to a platform user when possible; unresolved identities are stored as `unmapped` (BD-022).
+- **A comment carrying a self-service link code** (S-26.6, TD-031's 2026-11-06 amendment item 9).
+  Jira's `comment_created` and GitLab's merge-request note normalisers hand such a comment over as a
+  `NormalisedDelivery.linkClaims` entry beside the event they already emit, built by
+  `linkCodeClaimOf` (`packages/application/src/identity/link-codes.ts`): the comment's
+  **authenticated author** (the comment's own `author` / `author_id`, never the envelope's actor),
+  its id, and the SHA-256 of each code — the code regex and the marker test are the only readers of
+  the text, and nothing of it leaves them. The adapter refuses there what the comment itself
+  disqualifies: an edit (Jira `updated` ≠ `created`; GitLab `updated_at` ≠ `created_at`,
+  `[unverified]`, docs/TODO.md), another account's edit (Jira `updateAuthor` ≠ `author`; GitLab a
+  hook `user` ≠ `author_id`), a platform marker anywhere in the body, and the binding's own account
+  (Jira's remembered `GET /myself`, GitLab's `GET /user`) — asked **only** for a comment that
+  carries a code, inside `normalise` (the port's provider-I/O allowance, as GitLab's note thread
+  lookup is), and failing closed when it cannot be answered. The ingress records the claims in the
+  `inbox` row's transaction, after the row lands (`identity/identity-links.ts`'s recorder): a
+  redelivery records nothing twice, an unverified delivery reaches no normaliser, and what needs the
+  database — a `machine` identity, an author linked to someone else, any binding's stored
+  `account_identity`, an author ignored for the day, a second distinct author — is decided there. A
+  match is never a link; the person's confirmation is (technical/08's *Your accounts* row). A poll
+  carries no comments, so the person may instead name a task's ticket or merge request and the core
+  reads that thread **through `IntegrationActionExecutor`** (`identity/link-thread.ts`), with the same
+  rules except one: a re-read records and counts no miss, which only a verified delivery does. Each
+  adapter remembers its own account once read (Jira's `/myself`, GitLab's `/user`). The port gained two optional read fields for it: `TicketComment.update_author` and
+  `DiscussionNote.updated_at`.
 
 ## Outbound: actions
 

@@ -14,7 +14,7 @@
  *     nothing.
  */
 import type { ExternalIdentity, InboundContext, WebhookDelivery } from '@platform/application';
-import { IntegrationError } from '@platform/application';
+import { hashLinkCode, IntegrationError } from '@platform/application';
 import { MAX_TICKET_UPDATED_FIELD_CHARS, MAX_TICKET_UPDATED_FIELDS } from '@platform/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -773,5 +773,153 @@ describe('jira-cloud: a moved issue (WP-134)', () => {
     const matched = result.events.find((event) => event.type === 'ticket.matched');
     // The key alone then decides, as it did before WP-134.
     expect((matched?.payload as { ticket?: object } | undefined)?.ticket).not.toHaveProperty('id');
+  });
+});
+
+/**
+ * S-26.6: a `comment_created` carrying a self-service link code becomes a **claim** beside its
+ * `ticket.comment.added` — the comment's own author, its id and the code's hash, never the text —
+ * and the comment-level refusals of TD-031's 2026-11-06 amendment item 9 are decided here, off the
+ * fixtures. What the database decides (a second author, a machine, a linked author) is
+ * `test/integration/identity/identity-links.integration.test.ts`'s.
+ */
+describe('a comment carrying a link code (S-26.6)', () => {
+  const CODE_HASH = hashLinkCode('agentic-link-7K3Q9VDM2X');
+  const BOT_ACCOUNT_ID = '557058:00000000-0000-4000-8000-0000000b0701';
+  const context: InboundContext = {
+    projectId: JIRA_PROJECT_ID,
+    integrationId: JIRA_INTEGRATION_ID,
+    defaultBranch: 'main',
+    resolveUser: () => null,
+    resolveThread: async () => null,
+  };
+  const myselfReads = (binding: JiraBinding): number =>
+    binding.replay.requests.filter((request) => request.path === 'myself').length;
+
+  it('claims a fresh comment for its own author, beside the comment event, and asks /myself once', async () => {
+    const binding = createJiraBinding();
+    const result = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-comment-link-code.json'),
+      context,
+    );
+    expect(result.events.map((event) => event.type)).toEqual(['ticket.comment.added']);
+    expect(result.linkClaims).toEqual([
+      {
+        provider: 'jira-cloud',
+        externalId: DEV_ACCOUNT_ID,
+        displayName: 'Dev One',
+        commentId: '10201',
+        codeHashes: [CODE_HASH],
+        refusal: null,
+      },
+    ]);
+    expect(JSON.stringify(result.linkClaims)).not.toContain('7K3Q9VDM2X');
+    expect(myselfReads(binding)).toBe(1);
+  });
+
+  it('asks nothing and claims nothing for a comment with no code', async () => {
+    const binding = createJiraBinding();
+    const result = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-comment-created.json'),
+      context,
+    );
+    expect(result.linkClaims).toBeUndefined();
+    expect(myselfReads(binding)).toBe(0);
+  });
+
+  it('(c) refuses an edited comment: updated ≠ created', async () => {
+    const binding = createJiraBinding();
+    const result = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-comment-link-code-edited.json'),
+      context,
+    );
+    expect(result.linkClaims?.[0]?.refusal).toBe('edited');
+  });
+
+  it('(c) refuses the comment editor — an Edit All Comments holder who put the code in', async () => {
+    const binding = createJiraBinding();
+    const edited = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-comment-link-code-edit-all.json'),
+      context,
+    );
+    // The claim names the comment's author, never the editor, and refuses it.
+    expect(edited.linkClaims?.[0]).toMatchObject({
+      externalId: DEV_ACCOUNT_ID,
+      refusal: 'edited',
+    });
+    // With the instants equal, `updateAuthor` ≠ `author` refuses it alone.
+    const masked = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-comment-link-code-edit-all.json', {
+        deliveryId: '00000000-0000-4000-8000-00000000d1f3',
+        patch: (body) => {
+          const comment = body.comment as { created: string; updated: string };
+          comment.updated = comment.created;
+        },
+      }),
+      context,
+    );
+    expect(masked.linkClaims?.[0]?.refusal).toBe('edited_by_another');
+  });
+
+  it('refuses the platform’s own account, which posts agent-written text', async () => {
+    const binding = createJiraBinding();
+    const bot = { accountId: BOT_ACCOUNT_ID, accountType: 'app', displayName: 'Agentic Platform' };
+    const result = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-comment-link-code.json', {
+        patch: (body) => {
+          const comment = body.comment as Record<string, unknown>;
+          comment.author = bot;
+          comment.updateAuthor = bot;
+        },
+      }),
+      context,
+    );
+    expect(result.linkClaims?.[0]).toMatchObject({
+      externalId: BOT_ACCOUNT_ID,
+      refusal: 'binding_account',
+    });
+  });
+
+  it('refuses a comment carrying a platform marker', async () => {
+    const binding = createJiraBinding();
+    const result = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-comment-link-code.json', {
+        patch: (body) => {
+          (body.comment as { body: unknown }).body = {
+            type: 'doc',
+            version: 1,
+            content: [
+              {
+                type: 'paragraph',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'agentic:task:00000000 the agent quoted agentic-link-7K3Q9VDM2X',
+                  },
+                ],
+              },
+            ],
+          };
+        },
+      }),
+      context,
+    );
+    expect(result.linkClaims?.[0]?.refusal).toBe('platform_marker');
+  });
+
+  it('claims a JSM customer’s comment like any author’s: the confirmation is what stops it', async () => {
+    // A customer who copied the code off a shared ticket, with a look-alike name. Nothing in the
+    // comment refuses it; the owner sees "Jira account qm:… (Dev One)" and the owner's own comment
+    // voids the code (the integration tier holds both).
+    const binding = createJiraBinding();
+    const result = await binding.port.inbound.normalise(
+      binding.replay.delivery('webhook-comment-link-code-customer.json'),
+      context,
+    );
+    expect(result.linkClaims?.[0]).toMatchObject({
+      externalId: 'qm:00000000-0000-4000-8000-00000000c0c1:00000000-0000-4000-8000-00000000c0c2',
+      displayName: 'Dev One',
+      refusal: null,
+    });
   });
 });

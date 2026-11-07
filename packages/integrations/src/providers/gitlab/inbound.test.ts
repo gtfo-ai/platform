@@ -12,6 +12,7 @@
  */
 import {
   type GitProviderInboundEvent,
+  hashLinkCode,
   type InboundContext,
   type NormalisedDelivery,
   noSecretsRedactor,
@@ -72,7 +73,7 @@ const normalise = async (
   body: unknown,
   options: {
     readonly ctx?: InboundContext;
-    readonly deps?: ReturnType<typeof deps>;
+    readonly deps?: Parameters<typeof normaliseGitLabDelivery>[2];
   } = {},
 ): Promise<NormalisedDelivery<GitProviderInboundEvent>> =>
   normaliseGitLabDelivery(
@@ -404,6 +405,98 @@ describe('note hooks', () => {
     const result = await normalise(noteHook({ noteable_type: 'Issue' }));
     expect(result.ignored[0]?.reason).toBe('unsupported_event');
     expect(result.ignored[0]?.detail).toContain('Issue');
+  });
+});
+
+/**
+ * S-26.6: a merge-request note carrying a self-service link code becomes a claim beside its
+ * `mr.review.comment`. GitLab's edit check — `updated_at` ≠ `created_at` — is `[unverified]` live
+ * (docs/TODO.md): a fresh note is assumed to carry one instant in both.
+ */
+describe('a note carrying a link code (S-26.6)', () => {
+  const CODE = 'agentic-link-7K3Q9VDM2X';
+  const BOT = '4242';
+  const withAccount = (account: () => Promise<string | null>) => ({
+    ...deps(),
+    bindingAccount: account,
+  });
+  const countingAccount = () => {
+    const asked = { count: 0 };
+    return {
+      asked,
+      deps: withAccount(async () => {
+        asked.count += 1;
+        return BOT;
+      }),
+    };
+  };
+
+  it('claims a fresh note for its author, beside the review comment', async () => {
+    const account = countingAccount();
+    const result = await normalise(noteHook({ note: `my link ${CODE}` }), { deps: account.deps });
+    expect(result.events.map((event) => event.type)).toEqual(['mr.review.comment']);
+    expect(result.linkClaims).toEqual([
+      {
+        provider: 'gitlab',
+        externalId: '77',
+        displayName: 'Dana Reviewer',
+        commentId: '1244',
+        codeHashes: [hashLinkCode(CODE)],
+        refusal: null,
+      },
+    ]);
+    expect(account.asked.count).toBe(1);
+  });
+
+  it('claims nothing and asks nobody for a note without a code', async () => {
+    const account = countingAccount();
+    const result = await normalise(noteHook(), { deps: account.deps });
+    expect(result.linkClaims).toBeUndefined();
+    expect(account.asked.count).toBe(0);
+  });
+
+  it('(c) refuses an edited note: updated_at ≠ created_at', async () => {
+    const result = await normalise(
+      noteHook({ note: CODE, updated_at: '2026-06-01 07:41:00 UTC' }),
+      { deps: countingAccount().deps },
+    );
+    expect(result.linkClaims?.[0]?.refusal).toBe('edited');
+  });
+
+  it('refuses a note whose delivering user is not its author — an edit by another', async () => {
+    const result = await normalise(noteHook({ note: CODE, author_id: 91 }), {
+      deps: countingAccount().deps,
+    });
+    expect(result.linkClaims?.[0]).toMatchObject({
+      externalId: '91',
+      refusal: 'edited_by_another',
+    });
+  });
+
+  it('refuses the platform’s own account, and fails closed when it cannot be named', async () => {
+    const own = await normalise(
+      { ...(noteHook({ note: CODE, author_id: 4242 }) as object), user: { id: 4242, name: 'Bot' } },
+      { deps: countingAccount().deps },
+    );
+    expect(own.linkClaims?.[0]?.refusal).toBe('binding_account');
+    const unknown = await normalise(noteHook({ note: CODE }), { deps: deps() });
+    expect(unknown.linkClaims?.[0]?.refusal).toBe('binding_account_unknown');
+  });
+
+  it('refuses a note that opens with a platform marker', async () => {
+    const result = await normalise(
+      noteHook({ note: `<!-- agentic:reply:00000000 -->\nquoted ${CODE}` }),
+      { deps: countingAccount().deps },
+    );
+    expect(result.linkClaims?.[0]?.refusal).toBe('platform_marker');
+  });
+
+  it('keeps the claim when the note’s thread cannot be found', async () => {
+    const result = await normalise(noteHook({ note: CODE }), {
+      deps: { ...countingAccount().deps, findThreadForNote: async () => null },
+    });
+    expect(result.ignored[0]?.reason).toBe('malformed_payload');
+    expect(result.linkClaims?.[0]?.refusal).toBeNull();
   });
 });
 

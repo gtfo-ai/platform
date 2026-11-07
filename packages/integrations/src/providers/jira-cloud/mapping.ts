@@ -321,6 +321,10 @@ export const toTicketComment = (
   body: adfToMarkdown(comment.body),
   created_at: comment.created,
   updated_at: comment.updated ?? null,
+  // S-26.6: who last edited it, so a link code in a comment another account edited proves nothing.
+  ...(identityOfUser(comment.updateAuthor) === null
+    ? {}
+    : { update_author: identityOfUser(comment.updateAuthor) }),
   marker_id: adfMarkerId(comment.body),
   url: commentUrl(context.siteUrl, context.issueKey, comment.id),
 });
