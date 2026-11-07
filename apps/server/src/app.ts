@@ -115,6 +115,7 @@ import {
   projectExists,
   upsertIdentityMapping,
 } from './queries/identity-queries.js';
+import { othersTakeUnassigned } from './queries/offer-waiting.js';
 import {
   assertBindingItemsWritable,
   findBindingAccounts,
@@ -634,7 +635,20 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     });
     // WP-291: public by design — the sign-in page reads it before a session exists.
     await registerSetupStateRoutes(app, { setupState: options.setupState });
+    // WP-281: the release a worker is held to; its digests are what a worker's claim compares with.
+    const workerRelease = options.workerProtocol?.release ?? (() => null);
+    /**
+     * The core's current run and egress images, what a worker's blockers compare with (S-22.19) —
+     * and, since S-26.5, the `waiting` reads (the Agents rows, the board, the task read).
+     */
+    const coreRunDigests = () => {
+      const release = workerRelease();
+      return release === null
+        ? null
+        : { run: release.digests.platform_runtime, egress: release.digests.platform_egress };
+    };
     await registerOrgRoutes(app, {
+      coreDigests: coreRunDigests,
       database: options.database,
       // The identity pair's four functions, bound to this process's database here so the route
       // module names none (`routes/org.ts`'s `IdentityQueries`). The four org **reads** beside
@@ -681,7 +695,6 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     const workerStore = options.workers ?? createPostgresWorkerStore(options.database);
     // WP-281: the protocol check (`426`, `no-store`) first, on every `/api/worker/v1/` verb — the
     // device flow's included (backlog 712) — then the device flow and the protocol's verbs.
-    const workerRelease = options.workerProtocol?.release ?? (() => null);
     registerWorkerProtocolCheck(app, { release: workerRelease, baseUrl: config.baseUrl });
     await registerWorkerDeviceRoutes(app, {
       store: workerStore,
@@ -690,13 +703,6 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       trustedClientIpHeader: config.trustedClientIpHeader,
       ...(options.workersNow === undefined ? {} : { now: options.workersNow }),
     });
-    /** The core's current run and egress images, what a worker's blockers compare with (S-22.19). */
-    const coreRunDigests = () => {
-      const release = workerRelease();
-      return release === null
-        ? null
-        : { run: release.digests.platform_runtime, egress: release.digests.platform_egress };
-    };
     await registerWorkerRoutes(app, {
       store: workerStore,
       projectRole: async (projectId, userId) =>
@@ -762,6 +768,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     }
     await registerProjectRoutes(app, {
       database: options.database,
+      coreDigests: coreRunDigests,
       // The `invalid_stored_config` refusal quotes `projects.config` back at the caller — text an
       // operator typed, which can carry a pasted credential (`describeConfigIssues`).
       redactor: redactionAdapters.patternRedactor(),
@@ -824,6 +831,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         workersFor: async (projectId, userId) =>
           workerStore.listWorkersForProject(projectId, userId),
         waitingOffers: async (projectId) => waitingOffers(options.database, projectId),
+        othersTakeUnassigned: async (projectId, userId) =>
+          othersTakeUnassigned(options.database, projectId, userId),
         coreDigests: coreRunDigests,
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
         releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
@@ -1062,7 +1071,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     });
     await registerTaskRoutes(app, {
       queries: {
-        taskDetail: async (taskId) => findTaskDetail(options.database, taskId),
+        taskDetail: async (taskId) =>
+          findTaskDetail(options.database, taskId, { coreDigests: coreRunDigests() }),
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),

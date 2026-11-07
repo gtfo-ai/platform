@@ -130,7 +130,7 @@ const toStoredOffer = (row: RunOfferRow): StoredRunOffer => ({
  *   integration declares `run_credential: static` or `deploy_key` **and** `remote_run_credential:
  *   allow` (absent is `deny`, the default: such a project is excluded).
  */
-const workerEligibleSql = (p: {
+export const workerEligibleSql = (p: {
   readonly now: string;
   readonly worker: string;
   readonly held: string;
@@ -224,7 +224,7 @@ export const workerPolicyTakesSql = (worker: string): string => `exists (
  * eligibility refuses. Since S-26.4 the legacy `'{}'` matches every project here; its *pick only*
  * is {@link workerPolicyTakesSql}'s.
  */
-const workerScopeTakesSql = (worker: string): string => `exists (
+export const workerScopeTakesSql = (worker: string): string => `exists (
            select 1 from workers ws
             where ws.id = ${worker}::uuid
               and ${projectListTakesSql('ws', 'o.project_id')})`;
@@ -270,6 +270,15 @@ export const policySkippedOffersSql = (p: {
      and ${workerScopeTakesSql(p.worker)}
      and not ${workerPolicyTakesSql(p.worker)})`;
 
+/**
+ * **The server claimant's eligibility for offer `o` at `now`** (WP-278, TD-031 decision 8):
+ * `server_from` reached — a `null` `server_from` is *never* (`workers_only`) — or an offer written
+ * before WP-278, which has neither `*_from` and is the server's at once. The claim's own conjunct
+ * ({@link CLAIM_SQL}), defined once so S-26.5's waiting read asks exactly what the claim asks.
+ */
+export const serverEligibleSql = (now: string): string => `(o.server_from <= ${now}::timestamptz
+            or (o.server_from is null and o.workers_from is null))`;
+
 /** The claim's parameters, as {@link CLAIM_SQL} numbers them. */
 const WORKER_ELIGIBLE_CLAIM = workerEligibleSql({
   now: '$4',
@@ -302,9 +311,7 @@ const CLAIM_SQL = `with candidate as (
      where o.state = 'open'
        and ($1::uuid is null or o.run_id = $1::uuid)
        and r.status = any($2::run_status[])
-       and ($3 <> 'server'
-            or o.server_from <= $4::timestamptz
-            or (o.server_from is null and o.workers_from is null))
+       and ($3 <> 'server' or ${serverEligibleSql('$4')})
        and ($3 <> 'worker' or ${WORKER_ELIGIBLE_CLAIM})
        and ($3 <> 'worker' or $12::boolean
             or (${workerScopeTakesSql('$7')} and ${workerPolicyTakesSql('$7')}))

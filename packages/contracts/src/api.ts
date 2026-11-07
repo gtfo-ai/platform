@@ -77,6 +77,7 @@ import {
   jsonObjectSchema,
   jsonValueSchema,
   knowledgeProposalRecordSchema,
+  offerWaitingSchema,
   projectRecordSchema,
   questionRecordSchema,
   runRecordSchema,
@@ -952,6 +953,17 @@ export const projectExecutionResponseSchema = putProjectExecutionRequestSchema.e
    */
   workers: z.array(projectExecutionWorkerSchema).max(PROJECT_EXECUTION_WORKERS_MAX),
   waiting: projectExecutionWaitingSchema,
+  /**
+   * **Whether anybody else takes this project's unassigned tasks by themselves** (S-26.5, the M26
+   * UX spec §1's consequence line): the server claimant is running and the project's mode lets it
+   * claim, or **another person's** machine — not revoked, its user able to act and to run here,
+   * its project list taking the project, its claim policy `everything` or `mine_and_unassigned`,
+   * the project's mode and run credential letting workers in. A setting-level answer: such a
+   * machine counts whether or not it is connected now. It names no machine — a member sees only
+   * their own (`workers`). Optional on the wire because the SPA's fixtures predate it; the server
+   * always sends it.
+   */
+  others_take_unassigned: z.boolean().optional(),
 });
 
 /**
@@ -1635,6 +1647,45 @@ export type TaskStop = z.infer<typeof taskStopSchema>;
  * and a client that parses it is reading a shape no contract fixes.
  */
 /**
+ * The longest held-job name `gate_wait` carries, in characters — the CI gate's own bound on that
+ * provider text (`pendingPipelineDetail` quotes the same 100).
+ */
+export const MAX_GATE_WAIT_HELD_JOB_CHARS = 100;
+
+/**
+ * **What the CI gate is waiting on** (backlog 1078): the open `ci_gate` attempt's last pending read
+ * of the head pipeline — one that was neither passed nor failed — on either kind of git binding.
+ * `null` when the task's current stage has no open CI wait: another stage, an attempt that is
+ * closed (the task was parked, moved on or settled), or an attempt whose last read found no
+ * pipeline at all.
+ *
+ * Every string but the instants is the **provider's** text (BD-022), stored redacted:
+ *  - `pipeline_url`, `held_job_url` — the pipeline's and the held job's own pages, `http(s)` only;
+ *    `null` when the provider gave none or gave something else (a reader renders them through
+ *    `safeHref` regardless);
+ *  - `held_job` — the first `manual` job of a pipeline whose own status is `manual`, cut at
+ *    {@link MAX_GATE_WAIT_HELD_JOB_CHARS}; `null` for a pipeline that is not held, or one held with
+ *    no job named.
+ *
+ * `status` is the git port's vocabulary — in practice `pending`, `running` or `manual`, the
+ * statuses the gate waits on. `draft` is the merge request's draft flag at that read. `checked_at`
+ * is the read's instant, `waiting_since` the attempt's entry (`task_stages.entered_at`, which the
+ * CI timeout counts from), and `timeout_minutes` the CI timeout that bounds this wait — `null` on a
+ * binding a webhook reaches, whose wait is bounded by a count of checks instead.
+ */
+export const gateWaitSchema = z.strictObject({
+  pipeline_id: nonEmptyStringSchema,
+  pipeline_url: httpUrlSchema.nullable(),
+  status: ciPipelineStatusSchema,
+  held_job: nonEmptyStringSchema.max(MAX_GATE_WAIT_HELD_JOB_CHARS).nullable(),
+  held_job_url: httpUrlSchema.nullable(),
+  draft: z.boolean(),
+  checked_at: isoDateTimeSchema,
+  waiting_since: isoDateTimeSchema,
+  timeout_minutes: z.int().positive().nullable(),
+});
+
+/**
  * One task of the board's page (S-23.9a): the {@link taskRecordSchema} record plus what a card says
  * at a glance — which phase, for how long, and whether it waits on a person. Read over the page's
  * ids and never over the project, as the conflict badge's read is.
@@ -1665,6 +1716,13 @@ export const taskListItemSchema = taskRecordSchema.extend({
   open_questions: z.int().nonnegative(),
   pending_approvals: z.int().nonnegative(),
   loop_limits: z.record(slugSchema, z.int().nonnegative()).nullable(),
+  /**
+   * The current stage's open CI wait (backlog 1300) — the task read's `gate_wait`, the same
+   * projection over the page's stage rows: `null` unless the task is `active` at `ci_gate` with an
+   * open attempt that recorded a read. Optional on the wire because the SPA's fixtures predate it;
+   * the board's page always sends it.
+   */
+  gate_wait: gateWaitSchema.nullable().optional(),
 });
 export type TaskListItem = z.infer<typeof taskListItemSchema>;
 
@@ -1920,45 +1978,6 @@ const taskCallerFactsMask = Object.fromEntries(
 ) as {
   readonly [K in TaskCallerFactKey | (typeof TASK_OWNER_CALLER_FACT_KEYS)[number]]: true;
 };
-
-/**
- * The longest held-job name `gate_wait` carries, in characters — the CI gate's own bound on that
- * provider text (`pendingPipelineDetail` quotes the same 100).
- */
-export const MAX_GATE_WAIT_HELD_JOB_CHARS = 100;
-
-/**
- * **What the CI gate is waiting on** (backlog 1078): the open `ci_gate` attempt's last pending read
- * of the head pipeline — one that was neither passed nor failed — on either kind of git binding.
- * `null` when the task's current stage has no open CI wait: another stage, an attempt that is
- * closed (the task was parked, moved on or settled), or an attempt whose last read found no
- * pipeline at all.
- *
- * Every string but the instants is the **provider's** text (BD-022), stored redacted:
- *  - `pipeline_url`, `held_job_url` — the pipeline's and the held job's own pages, `http(s)` only;
- *    `null` when the provider gave none or gave something else (a reader renders them through
- *    `safeHref` regardless);
- *  - `held_job` — the first `manual` job of a pipeline whose own status is `manual`, cut at
- *    {@link MAX_GATE_WAIT_HELD_JOB_CHARS}; `null` for a pipeline that is not held, or one held with
- *    no job named.
- *
- * `status` is the git port's vocabulary — in practice `pending`, `running` or `manual`, the
- * statuses the gate waits on. `draft` is the merge request's draft flag at that read. `checked_at`
- * is the read's instant, `waiting_since` the attempt's entry (`task_stages.entered_at`, which the
- * CI timeout counts from), and `timeout_minutes` the CI timeout that bounds this wait — `null` on a
- * binding a webhook reaches, whose wait is bounded by a count of checks instead.
- */
-export const gateWaitSchema = z.strictObject({
-  pipeline_id: nonEmptyStringSchema,
-  pipeline_url: httpUrlSchema.nullable(),
-  status: ciPipelineStatusSchema,
-  held_job: nonEmptyStringSchema.max(MAX_GATE_WAIT_HELD_JOB_CHARS).nullable(),
-  held_job_url: httpUrlSchema.nullable(),
-  draft: z.boolean(),
-  checked_at: isoDateTimeSchema,
-  waiting_since: isoDateTimeSchema,
-  timeout_minutes: z.int().positive().nullable(),
-});
 
 export const taskDetailResponseSchema = z.strictObject({
   task: taskRecordSchema,
@@ -3225,6 +3244,12 @@ export const agentsResponseSchema = z.strictObject({
       seat: runSeatSchema.nullable(),
       /** `null`: the run has written no transcript entry yet. */
       activity: runActivitySchema.nullable(),
+      /**
+       * **Why the run waits** (S-26.5): its open offer as {@link offerWaitingSchema} reads it, or
+       * `null` when it has none (it was claimed). Optional on the wire because the SPA's fixtures
+       * predate it; the server always sends it.
+       */
+      waiting: offerWaitingSchema.nullable().optional(),
     }),
   ),
 });
@@ -3288,10 +3313,27 @@ export const projectPipelineQuerySchema = z.strictObject({
 
 // ── Inbox, budgets, knowledge ────────────────────────────────────────────────
 
+/**
+ * A task whose CI pipeline is **held at a manual job** (backlog 1300): `active` at `ci_gate`, its
+ * open attempt's last read `manual` — a person must start the job, so it needs somebody now, as
+ * the task page's `ci_held` says. `gate_wait` is the task read's own projection.
+ */
+export const inboxCiHeldSchema = z.strictObject({
+  task_id: idSchema,
+  project_id: idSchema,
+  ticket: ticketRefSchema,
+  gate_wait: gateWaitSchema,
+});
+
 export const inboxResponseSchema = z.strictObject({
   questions: z.array(questionRecordSchema),
   /** The task read's shape (TD-035): Home and the Inbox name the subject an approval is about. */
   approvals: z.array(approvalViewSchema),
+  /**
+   * The tasks waiting for a person to start a held CI job (backlog 1300), oldest wait first.
+   * Optional on the wire because the SPA's fixtures predate it; the server always sends it.
+   */
+  ci_held: z.array(inboxCiHeldSchema).optional(),
 });
 
 // `putBudgetRequestSchema` lived here from WP-01 until WP-30, unused, one key different from the

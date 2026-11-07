@@ -73,6 +73,7 @@ import {
   mergeProjectConfig,
   PROPOSED_REVIEW_CHECKLISTS,
   PROPOSED_RISK_CLASSES,
+  type RunImageDigests,
   resolveWipLimits,
   SHIPPED_TEMPLATES,
   verificationModeOf,
@@ -113,6 +114,12 @@ export interface ProjectRoutesOptions {
    * `routes/settings.ts` is given.
    */
   readonly redactor: SecretRedactor;
+  /**
+   * The core's current run and egress digests (S-26.5): what the board items' `waiting` compares a
+   * machine's held images with — `routes/workers.ts`'s same option. Absent or `null`: no machine
+   * is counted as able to claim.
+   */
+  readonly coreDigests?: () => RunImageDigests | null;
 }
 
 const projectParamsSchema = z.strictObject({ project_id: z.uuid() });
@@ -694,20 +701,25 @@ export const registerProjectRoutes = async (
     async (request) => {
       const query = request.query;
       const limit = query.limit ?? DEFAULT_TASK_LIMIT;
-      const page = await listProjectTasks(options.database, request.params.project_id, {
-        limit,
-        ...(query.cursor === undefined ? {} : { before: decodeTaskCursor(query.cursor) }),
-        ...(query.state === undefined ? {} : { state: query.state }),
-        ...(query.template === undefined ? {} : { template: query.template }),
-        ...(query.mode === undefined ? {} : { mode: query.mode }),
-        ...(query.stage === undefined ? {} : { stage: query.stage }),
-        // S-26.1: `owner=me` is the caller — never an id a query could name for somebody else.
-        ...(query.owner === undefined
-          ? {}
-          : query.owner === 'none'
-            ? { owner: { kind: 'none' as const } }
-            : { owner: { kind: 'user' as const, userId: callerOf(request) } }),
-      });
+      const page = await listProjectTasks(
+        options.database,
+        request.params.project_id,
+        {
+          limit,
+          ...(query.cursor === undefined ? {} : { before: decodeTaskCursor(query.cursor) }),
+          ...(query.state === undefined ? {} : { state: query.state }),
+          ...(query.template === undefined ? {} : { template: query.template }),
+          ...(query.mode === undefined ? {} : { mode: query.mode }),
+          ...(query.stage === undefined ? {} : { stage: query.stage }),
+          // S-26.1: `owner=me` is the caller — never an id a query could name for somebody else.
+          ...(query.owner === undefined
+            ? {}
+            : query.owner === 'none'
+              ? { owner: { kind: 'none' as const } }
+              : { owner: { kind: 'user' as const, userId: callerOf(request) } }),
+        },
+        { coreDigests: options.coreDigests?.() ?? null },
+      );
       if (page === null) {
         // The same answer `/config`, `/budgets` and `/readiness` give for the same id: an empty page
         // and a project that does not exist are different facts, and only one of them is a 200.

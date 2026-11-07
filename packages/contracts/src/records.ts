@@ -791,6 +791,56 @@ export const taskOwnerViewSchema = z.strictObject({
   name: z.string(),
 });
 
+/**
+ * **Why a run waits** (S-26.5, TD-031's 2026-11-06 amendment item 8) — the reasons an open offer
+ * has nobody to take it now, as **keys**: the web app words each one (`humanize`'s
+ * `waiting.<reason>`), and the server never sends a sentence.
+ *
+ * - `owner_worker_offline` — the owner has a machine that takes this task, and none is connected;
+ * - `owner_worker_paused` — such a machine is connected, and every connected one is paused;
+ * - `owner_no_worker` — the owner has no machine that takes this project's runs **now** (none at
+ *   all, none whose project list takes the project, or — the residual — a connected, running one
+ *   the claim still refuses: its images, an exclusion, the project's mode or run credential, or a
+ *   routing head start; the Workers screen and the execution read name those);
+ * - `owner_pick_only` — the owner's only machines for the project take what they pick;
+ * - `no_taker` — nobody owns the task, and no machine or server takes it now;
+ * - `assignee_not_linked` — nobody owns the task and its tracker assignee is a person the platform
+ *   cannot map to a member (*held elsewhere*), so only a machine that takes everyone's tasks can.
+ *
+ * The "owner" of an **ask** run is its asker, as the claim's *mine* is (item 6).
+ */
+export const OFFER_WAITING_REASONS = [
+  'owner_worker_offline',
+  'owner_worker_paused',
+  'owner_no_worker',
+  'owner_pick_only',
+  'no_taker',
+  'assignee_not_linked',
+] as const;
+export const offerWaitingReasonSchema = z.enum(OFFER_WAITING_REASONS);
+export type OfferWaitingReason = z.infer<typeof offerWaitingReasonSchema>;
+
+/**
+ * A run's open offer, and why nobody takes it now (S-26.5). `reason` is `null` exactly when some
+ * claimant's predicates admit the offer now — the server claimant, or a connected machine — and
+ * otherwise one of {@link OFFER_WAITING_REASONS}.
+ *
+ * - `user` — the person the reason is about: the task's owner (an ask's asker) for the four
+ *   `owner_*` reasons, `null` otherwise;
+ * - `last_seen_at` — for `owner_worker_offline`, the newest contact of the owner's machines that
+ *   take the task (`null` when none ever connected); `null` for every other reason;
+ * - `assignee_name` — for `assignee_not_linked`, the tracker assignee's display name: untrusted
+ *   provider text (BD-022), redacted and bounded at the write (`tasks.ticket_assignee`), `null`
+ *   when the provider gave none and for every other reason.
+ */
+export const offerWaitingSchema = z.strictObject({
+  reason: offerWaitingReasonSchema.nullable(),
+  user: taskOwnerViewSchema.nullable(),
+  last_seen_at: isoDateTimeSchema.nullable(),
+  assignee_name: z.string().max(TICKET_ASSIGNEE_NAME_MAX_CHARS).nullable(),
+});
+export type OfferWaiting = z.infer<typeof offerWaitingSchema>;
+
 export const taskRecordSchema = z.strictObject({
   id: idSchema,
   project_id: idSchema,
@@ -979,6 +1029,13 @@ export const taskRecordSchema = z.strictObject({
    * the owner candidates' `writes_back`.
    */
   owner_writes_back: z.boolean().optional(),
+  /**
+   * **Why the task's run waits** (S-26.5): its current stage's open offer as
+   * {@link offerWaitingSchema} reads it, or `null` when the task has no open stage offer (nothing
+   * waits). Optional on the wire because the SPA's fixtures predate it (S-26.8b reads it); the
+   * task read and the board's page always send it.
+   */
+  waiting: offerWaitingSchema.nullable().optional(),
 });
 
 /** A `sha256` digest as lowercase hex — what `runs.settings_hash` stores (WP-91). */

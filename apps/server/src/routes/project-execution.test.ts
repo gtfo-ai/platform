@@ -45,6 +45,9 @@ interface World {
   /** Whose workers the route asked for: `null` every worker. */
   askedFor: (string | null)[];
   offers: { open: number; never: number; later: number };
+  /** S-26.5: the answer `othersTakeUnassigned` gives, and whom it was asked for. */
+  others: boolean;
+  othersAskedFor: string[];
 }
 
 const RUN_IMAGE = `sha256:${'a'.repeat(64)}`;
@@ -102,6 +105,8 @@ const build = async (): Promise<void> => {
     workers: [],
     askedFor: [],
     offers: { open: 0, never: 0, later: 0 },
+    others: false,
+    othersAskedFor: [],
   };
   app = fastify();
   app.setValidatorCompiler(validatorCompiler);
@@ -138,6 +143,10 @@ const build = async (): Promise<void> => {
         return world.workers.filter((row) => userId === null || row.userId === userId);
       },
       waitingOffers: async () => world.offers,
+      othersTakeUnassigned: async (_projectId, userId) => {
+        world.othersAskedFor.push(userId);
+        return world.others;
+      },
       coreDigests: () => ({ run: RUN_IMAGE, egress: EGRESS_IMAGE }),
       ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
@@ -177,7 +186,26 @@ describe('GET /api/projects/:id/execution', () => {
         open: 0,
         closed_to_workers: { credential_refused: 0, server_only: 0, server_first: 0 },
       },
+      others_take_unassigned: false,
     });
+  });
+
+  /**
+   * S-26.5 criterion 5: whether the server or another person's machine takes unassigned tasks by
+   * itself — a yes or no asked for the reader, so it names no machine (the integration tier holds
+   * the SQL, `offer-waiting.integration.test.ts`).
+   */
+  it('says whether anybody else takes unassigned tasks, asked for the reader, naming nobody', async () => {
+    world.role = 'viewer';
+    world.others = true;
+    const body = (await app.inject({ method: 'GET', url: URL })).json();
+    expect(body.others_take_unassigned).toBe(true);
+    expect(world.othersAskedFor).toEqual([USER]);
+    expect(body.workers).toEqual([]);
+    world.others = false;
+    expect((await app.inject({ method: 'GET', url: URL })).json().others_take_unassigned).toBe(
+      false,
+    );
   });
 
   it('is a viewer’s read', async () => {
