@@ -18,6 +18,12 @@
  * it is a high-entropy secret, so a slow hash buys nothing (TD-022's argument for the worker
  * credential).
  *
+ * **The code is never compared.** A comment's code is hashed and the hash is **looked up** through
+ * the unique index on `identity_link_codes.code_hash`; there is no second comparison in code. What
+ * the lookup's timing could reveal is how far a guessed code's SHA-256 agrees with a stored one's,
+ * which is no step toward a 50-bit random code — so the lookup is the whole check, and a
+ * constant-time re-comparison after it would always answer `true` and defend nothing.
+ *
  * ## The one reader of a comment's text
  *
  * {@link readLinkComment} is the only function on the link path that reads a comment's body. It
@@ -46,7 +52,7 @@
  * What needs the database — a `machine` identity, an author linked to someone else, any binding's
  * stored account, an author ignored for the day — is decided by the recorder.
  */
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { PLATFORM_COMMENT_MARKERS } from '@platform/domain';
 import type { LinkClaimRefusal, LinkCodeClaim } from '../ports/integrations/common.js';
 
@@ -104,13 +110,6 @@ export const generateLinkCode = (draw: (size: number) => Uint8Array = randomByte
 /** What is stored: the SHA-256 of the whole code, hex. */
 export const hashLinkCode = (code: string): string =>
   createHash('sha256').update(code, 'utf8').digest('hex');
-
-/** Two stored hashes compared in constant time; a wrong length is a plain `false`. */
-export const sameLinkCodeHash = (left: string, right: string): boolean => {
-  const a = Buffer.from(left, 'utf8');
-  const b = Buffer.from(right, 'utf8');
-  return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
-};
 
 /** What the one reader answers: the hashes of the codes it found, and whether a marker is there. */
 export interface LinkCommentReading {

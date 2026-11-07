@@ -65,7 +65,7 @@ export const createIdentityLinkCommands = (options: {
     confirm: async (userId, matchId) => links.confirm(userId as Id, matchId as Id),
     state: async (userId) => store.readState(userId as Id),
     // S-26.1's hook (acceptance 5): the same pipeline store and unit of work the owner command uses.
-    adoptOwners: async (input) =>
+    adoptOwners: async (input, onAdopted) =>
       adoptOwnersOnLink(
         {
           unitOfWork: options.unitOfWork,
@@ -75,6 +75,7 @@ export const createIdentityLinkCommands = (options: {
           logger: options.logger,
         },
         { userId: input.userId as Id, provider: input.provider, externalId: input.externalId },
+        onAdopted,
       ),
     readThread: async (projectId, target) => {
       if (options.integrations === null) {

@@ -82,11 +82,11 @@ export interface IdentityLinkCommands {
    * S-26.1's hook after a **performed** link (TD-031's amendment item 2): every live task nobody
    * owns whose stored assignee is this account becomes the person's (`via: link`). No provider call.
    */
-  readonly adoptOwners: (input: {
-    readonly userId: string;
-    readonly provider: string;
-    readonly externalId: string;
-  }) => Promise<readonly string[]>;
+  readonly adoptOwners: (
+    input: { readonly userId: string; readonly provider: string; readonly externalId: string },
+    /** Told each task as its adoption commits, so a later throw still leaves what was adopted. */
+    onAdopted: (taskId: string) => void,
+  ) => Promise<readonly string[]>;
   /**
    * Reads the thread and records its matches; `unavailable` when the provider or the binding could
    * not be read (the reason in the platform's words, redacted by the adapter).
@@ -439,20 +439,28 @@ export const registerMeIdentityRoutes = async (
         /**
          * Acceptance 5: the link adopts the owner on live tasks naming the identity — **after** the
          * link and its audit row, so the claim is complete whatever adoption does. A failure here
-         * is logged and the link stands: the tasks keep no owner until a sync or a person sets one
-         * (the person may also *Take it*), which is the state they were in before the link.
+         * is logged and the link stands: the answer names the tasks adopted before it, and the rest
+         * keep no owner until a sync or a person sets one (the person may also *Take it*), which is
+         * the state they were in before the link.
          */
-        let adopted: readonly string[] = [];
+        // Collected as each adoption commits, so a throw on a later task still answers the earlier
+        // ones (the security review of PR #93).
+        const adopted: string[] = [];
         try {
-          adopted = await commands.adoptOwners({
-            userId: actor.userId,
-            provider: outcome.provider,
-            externalId: outcome.externalId,
-          });
+          await commands.adoptOwners(
+            {
+              userId: actor.userId,
+              provider: outcome.provider,
+              externalId: outcome.externalId,
+            },
+            (taskId) => {
+              adopted.push(taskId);
+            },
+          );
         } catch (error) {
           request.log.warn(
-            { err: error, provider: outcome.provider },
-            'a confirmed link could not adopt the owner on its live tasks; the link stands',
+            { err: error, provider: outcome.provider, adopted: adopted.length },
+            'a confirmed link could not adopt the owner on all its live tasks; the link stands',
           );
         }
         return {

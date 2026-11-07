@@ -2555,7 +2555,8 @@ export const identityLinkConfirmedSchema = z.strictObject({
   /**
    * The live tasks whose stored tracker assignee is this account and that nobody owned, which the
    * link made the person's (`task.owner.changed`, `via: link`, S-26.1's `adoptOwnersOnLink`).
-   * Empty on a retry, and when adoption could not run (it is logged; the link stands).
+   * Empty on a retry. When adoption fails partway it names the tasks adopted before the failure
+   * (logged; the link stands).
    */
   adopted_task_ids: z.array(idSchema),
 });

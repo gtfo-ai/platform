@@ -127,10 +127,14 @@ const build = async (): Promise<World> => {
       return world.confirm;
     },
     state: async () => world.state,
-    adoptOwners: async (input) => {
+    adoptOwners: async (input, onAdopted) => {
       world.adoptions.push({ ...input });
-      if (world.adoptFails) {
-        throw new Error('the task stream is contended');
+      // The hook reports each task as its adoption commits; a failure comes after the first.
+      for (const taskId of world.adopted) {
+        onAdopted(taskId);
+        if (world.adoptFails) {
+          throw new Error('the task stream is contended');
+        }
       }
       return world.adopted;
     },
@@ -418,11 +422,18 @@ describe('POST /api/me/identity-links/matches/:match_id/confirm — (a)', () => 
     },
   );
 
-  it('keeps the link when adoption fails, and answers no adopted task', async () => {
+  it('keeps the link when adoption fails partway, and answers the tasks adopted before it', async () => {
+    world.adopted = [
+      '00000000-0000-4000-8000-0000000000f1',
+      '00000000-0000-4000-8000-0000000000f2',
+    ];
     world.adoptFails = true;
     const response = await confirm('confirm-adopt-fails');
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ performed: true, adopted_task_ids: [] });
+    expect(response.json()).toMatchObject({
+      performed: true,
+      adopted_task_ids: ['00000000-0000-4000-8000-0000000000f1'],
+    });
     expect(world.actions.map((action) => action.action)).toEqual(['identity.link']);
   });
 

@@ -610,6 +610,7 @@ export const recordNormalisedDelivery = async (
             links = await options.identityLinks.record(scope.tx, {
               integrationId: record.integrationId,
               claims,
+              source: 'delivery',
             });
           }
         }

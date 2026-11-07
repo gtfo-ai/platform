@@ -198,8 +198,8 @@ const harness = (options: { readonly codes?: readonly string[] } = {}) => {
     ...memory,
     links,
     claim,
-    record: (claims: readonly LinkCodeClaim[]) =>
-      links.recorder.record(TX, { integrationId: INTEGRATION, claims }),
+    record: (claims: readonly LinkCodeClaim[], source: 'delivery' | 'thread_read' = 'delivery') =>
+      links.recorder.record(TX, { integrationId: INTEGRATION, claims, source }),
     advance: (ms: number) => {
       now += ms;
     },
@@ -407,7 +407,23 @@ describe('recording a comment (acceptance 2 and 3)', () => {
     expect((await h.record([h.claim({ commentId: 'later' })])).refused).toEqual([]);
   });
 
-  it('does not count one comment’s misses twice when the thread is read again', async () => {
+  it('never counts a miss for a thread re-read: re-reading copied codes cannot get an author ignored', async () => {
+    const h = harness({ codes: ['7K3Q9VDM2X'] });
+    // A victim's old codes, copied into a thread and re-read as often as an attacker likes.
+    for (let index = 1; index <= 8; index += 1) {
+      const summary = await h.record(
+        [h.claim({ code: 'agentic-link-ZZZZZZZZZZ', commentId: `copied-${index}` })],
+        'thread_read',
+      );
+      expect(summary).toMatchObject({ missed: 1, ignored: [] });
+    }
+    expect(h.authorRows).toEqual([]);
+    // The author's own live code still matches afterwards, from a delivery or a re-read.
+    await h.links.issue(ALICE);
+    expect((await h.record([h.claim({ commentId: 'real' })], 'thread_read')).matched).toBe(1);
+  });
+
+  it('does not count one comment’s misses twice when the same delivery comment recurs', async () => {
     const h = harness();
     for (let index = 0; index < 6; index += 1) {
       await h.record([h.claim({ code: 'agentic-link-ZZZZZZZZZZ' })]);

@@ -36,7 +36,7 @@ import {
   type WebhookDelivery,
 } from '@platform/application';
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
-import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from '@platform/domain';
+import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES, UNOWNED } from '@platform/domain';
 import {
   db,
   eventing as eventingAdapters,
@@ -712,6 +712,56 @@ describe('I wrote it on … — the thread read through the executor (acceptance
     expect(actions).toContain('authenticated_user');
   });
 
+  it('counts no miss for a re-read, however often: copied codes cannot get an author ignored', async () => {
+    const created = new Date(now - 60_000).toISOString();
+    const tickets = createFakeTaskManagement({
+      integrationId: FAKE_TM_INTEGRATION,
+      tickets: [
+        {
+          key: 'AUT-3',
+          title: 'Copied codes',
+          // The victim's own old comments, carrying codes that are no longer live.
+          comments: [1, 2, 3, 4, 5, 6].map((index) => ({
+            authorId: 'victim-1',
+            body: `agentic-link-ZZZZZZZZZ${index}`,
+            createdAt: created,
+            updatedAt: created,
+            updateAuthorId: 'victim-1',
+          })),
+        },
+      ],
+    });
+    const { executor } = executorWith();
+    const integrations = staticPipelineIntegrations({
+      executor,
+      git: null,
+      taskManagement: { port: tickets, ref: tickets.ref, redactor: noSecretsRedactor() },
+      communication: null,
+    });
+    for (let read = 0; read < 6; read += 1) {
+      const outcome = await readLinkThread(
+        { integrations, recorder: links.recorder, unitOfWork: eventing.unitOfWork },
+        {
+          projectId,
+          target: {
+            kind: 'ticket',
+            ticket: {
+              provider: 'fake-task-management',
+              key: 'AUT-3',
+              url: 'https://tickets.example.test/AUT-3',
+            },
+          },
+        },
+      );
+      expect(outcome).toMatchObject({
+        kind: 'read',
+        claims: 6,
+        recorded: { missed: 6, ignored: [] },
+      });
+    }
+    expect((await rows()).matches).toEqual([]);
+  });
+
   it('answers no binding for a project whose binding of that kind is absent', async () => {
     const { executor } = executorWith();
     const outcome = await readLinkThread(
@@ -769,7 +819,8 @@ describe('a confirmed link adopts the owner, and unlinked assignees are candidat
         },
         template: 'feature',
         mode: 'normal',
-        state: 'active',
+        // The state is the fixture's, written by the insert (no second writer of `tasks.state`).
+        state,
         currentStage: 'implementation' as Slug,
         stageAttempts: { implementation: 1 },
         iterationCounters: {},
@@ -814,22 +865,27 @@ describe('a confirmed link adopts the owner, and unlinked assignees are candidat
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
     } as unknown as StoredTask;
-    await eventing.unitOfWork.transaction(async ({ tx }) =>
-      pipelineStore().tasks.insert(tx, stored),
-    );
-    await pool.query(
-      `update tasks set ticket_assignee = $2::jsonb, state = $3::task_state where id = $1`,
-      [
-        taskId,
-        JSON.stringify({
-          provider: 'jira-cloud',
-          external_id: assignee.externalId,
-          display_name: 'Dev One',
-          platform: assignee.platform ?? false,
-        }),
-        state,
-      ],
-    );
+    // The assignee as S-26.1's sync stores it, through the column's one writer (`saveOwner`, a
+    // compare-and-set from the unowned row) — never a second `update tasks`.
+    await eventing.unitOfWork.transaction(async ({ tx }) => {
+      const tasksStore = pipelineStore().tasks;
+      await tasksStore.insert(tx, stored);
+      const written = await tasksStore.saveOwner(tx, taskId, {
+        expected: { ownerUserId: null, ticketAssignee: null },
+        next: {
+          ...UNOWNED,
+          ticketAssignee: {
+            provider: 'jira-cloud',
+            external_id: assignee.externalId,
+            display_name: 'Dev One',
+            platform: assignee.platform ?? false,
+          },
+        },
+      });
+      if (!written) {
+        throw new Error('the fixture task already had an assignee');
+      }
+    });
     return taskId;
   };
 

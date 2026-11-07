@@ -17,8 +17,10 @@
  *    `gitReads(...).discussions`, and the binding's own account, asked only when a comment carries a
  *    code), outside every transaction, like every read the platform makes for a person.
  *  - **The same rules as a webhook** apply to each comment (`linkCodeClaimOf`), and the claims go
- *    to the same recorder in a transaction of their own. A thread read twice records nothing
- *    twice: a match is one per author per code and a miss one per author per comment.
+ *    to the same recorder in a transaction of their own — with one difference: a re-read records
+ *    and counts **no miss**, because a person can re-read a thread as often as they like over
+ *    comments anybody wrote, and the five-miss bound would then ignore whichever author the
+ *    re-reader chose. A thread read twice records nothing twice: a match is one per author per code.
  *
  * The display name is redacted with the binding's redactor before it is stored, because a read's
  * result is unredacted (`action-executor.ts` redacts the audit row, not the value it hands back).
@@ -173,7 +175,8 @@ export const readLinkThread = async (
     return { kind: 'read', comments, claims: 0, recorded: EMPTY_LINK_RECORD };
   }
   const recorded = await options.unitOfWork.transaction(async ({ tx }) =>
-    options.recorder.record(tx, { integrationId, claims }),
+    // A re-read counts no miss: only a verified delivery does (the recorder's `source`).
+    options.recorder.record(tx, { integrationId, claims, source: 'thread_read' }),
   );
   return { kind: 'read', comments, claims: claims.length, recorded };
 };

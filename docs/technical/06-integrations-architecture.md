@@ -858,7 +858,8 @@ the existing suite (BD-017).
   match is never a link; the person's confirmation is (technical/08's *Your accounts* row). A poll
   carries no comments, so the person may instead name a task's ticket or merge request and the core
   reads that thread **through `IntegrationActionExecutor`** (`identity/link-thread.ts`), with the same
-  rules. The port gained two optional read fields for it: `TicketComment.update_author` and
+  rules except one: a re-read records and counts no miss, which only a verified delivery does. Each
+  adapter remembers its own account once read (Jira's `/myself`, GitLab's `/user`). The port gained two optional read fields for it: `TicketComment.update_author` and
   `DiscussionNote.updated_at`.
 
 ## Outbound: actions

@@ -15,7 +15,6 @@ import {
   MAX_LINK_DISPLAY_NAME_CHARS,
   onceBindingAccount,
   readLinkComment,
-  sameLinkCodeHash,
   wasEdited,
 } from './link-codes.js';
 
@@ -76,14 +75,12 @@ describe('the link code (acceptance 1)', () => {
     }
   });
 
-  it('is stored as its SHA-256 and compared in constant time', () => {
+  it('is stored as its SHA-256, one hash per code', () => {
     const hash = hashLinkCode(CODE);
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(hash).not.toContain('7K3Q9VDM2X');
-    expect(sameLinkCodeHash(hash, hashLinkCode(CODE))).toBe(true);
-    expect(sameLinkCodeHash(hash, hashLinkCode(OTHER))).toBe(false);
-    expect(sameLinkCodeHash(hash, hash.slice(1))).toBe(false);
-    expect(sameLinkCodeHash('', '')).toBe(false);
+    expect(hashLinkCode(CODE)).toBe(hash);
+    expect(hashLinkCode(OTHER)).not.toBe(hash);
   });
 });
 

@@ -20,7 +20,8 @@
  *  3. a **`machine`** identity (an operator declared the account a bot, WP-61);
  *  4. **any** binding's stored own account (`bindings.account_identity`) — the adapter checked its
  *     own live, and this is the other half;
- *  5. per code: a code that is no live code is a **miss**; a live one whose author is linked to
+ *  5. per code: a code that is no live code is a **miss** — recorded and counted toward the five
+ *     only for a verified delivery, never for a person's thread re-read; a live one whose author is linked to
  *     **another** user voids the code (`identity_linked_elsewhere`); a live one already matched by a
  *     **different** author voids it (`second_author`, (b)) — two distinct authors means somebody
  *     copied a code posted where others can read it, and the code is no longer evidence of anyone.
@@ -55,7 +56,6 @@ import {
   LINK_CODES_PER_WINDOW,
   LINK_MISS_WINDOW_MS,
   LINK_MISSES_BEFORE_IGNORED,
-  sameLinkCodeHash,
 } from './link-codes.js';
 
 const at = (instant: number): IsoDateTime => new Date(instant).toISOString() as IsoDateTime;
@@ -120,7 +120,19 @@ export interface IdentityLinkRecorder {
   /** Records what the claims proved, in the caller's transaction. Never writes `user_identities`. */
   readonly record: (
     tx: Transaction,
-    input: { readonly integrationId: Id; readonly claims: readonly LinkCodeClaim[] },
+    input: {
+      readonly integrationId: Id;
+      readonly claims: readonly LinkCodeClaim[];
+      /**
+       * Which read met the comments. Only a **verified delivery** counts a miss against an
+       * author: a thread re-read (*I wrote it on …*) is asked for by a person, as often as they
+       * like, over comments anybody wrote — counting there would let someone who copied another
+       * person's old (replaced or voided) codes re-read a thread until that person's provider
+       * account is ignored for the day (the security review of PR #93). Required, so each caller
+       * says which it is.
+       */
+      readonly source: 'delivery' | 'thread_read';
+    },
   ) => Promise<LinkRecordSummary>;
 }
 
@@ -182,13 +194,12 @@ export const createIdentityLinkRecorder = (
         let newMiss = false;
         for (const hash of claim.codeHashes) {
           const code = await store.lockCodeByHash(tx, hash);
-          if (
-            code === null ||
-            !sameLinkCodeHash(code.codeHash, hash) ||
-            !isLiveLinkCode(code, now)
-          ) {
+          if (code === null || !isLiveLinkCode(code, now)) {
             missed += 1;
-            newMiss = (await store.insertMiss(tx, { ...entry, id: options.ids.next() })) || newMiss;
+            if (input.source === 'delivery') {
+              newMiss =
+                (await store.insertMiss(tx, { ...entry, id: options.ids.next() })) || newMiss;
+            }
             continue;
           }
           const decision = decideLiveCode({
