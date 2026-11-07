@@ -35,7 +35,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { SseFrame } from '@platform/contracts';
+import type { IdentityLinkState, MyIdentity, SseFrame } from '@platform/contracts';
 import {
   cancelRunRequestSchema,
   cancelTaskRequestSchema,
@@ -257,6 +257,13 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
   let setupState: boolean | 'fails' = false;
   /** `POST /__test__/wizard-open`: a git binding and a readiness evaluation are served. */
   let wizardOpen = false;
+  /**
+   * S-26.8a: *Your accounts* — the newest link code's state (`GET /api/me/identity-links`) and the
+   * operator's own linked accounts. Issuing a code records the fixture's match at once, as if the
+   * operator's comment had arrived; confirming it links the account.
+   */
+  let linkState: IdentityLinkState = { code: null, matches: [] };
+  let myIdentities: MyIdentity[] = [];
 
   const writeFrame = (stream: Stream, frame: SseFrame, event: string): void => {
     const lines: string[] = [];
@@ -395,6 +402,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       commands.length = 0;
       setupState = false;
       wizardOpen = false;
+      linkState = { code: null, matches: [] };
+      myIdentities = [];
       json(response, 200, { reset: true });
       return;
     }
@@ -604,6 +613,78 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       });
       return;
     }
+    // S-26.8a: Your accounts — issue, state, confirm (an `Idempotency-Key`, as the real route
+    // requires), the own list and its unlink, and the administrator's unlink. Each write is logged.
+    if (path === '/api/me/identity-links' && method === 'POST') {
+      await readBody(request);
+      commands.push({ path, body: {} });
+      linkState = {
+        code: {
+          id: fixtures.identityLinkIssued.id,
+          created_at: new Date().toISOString(),
+          expires_at: fixtures.identityLinkIssued.expires_at,
+          status: 'live',
+          void_reason: null,
+        },
+        matches: [fixtures.identityLinkMatch],
+      };
+      json(response, 201, fixtures.identityLinkIssued);
+      return;
+    }
+    if (path === '/api/me/identity-links' && method === 'GET') {
+      json(response, 200, linkState);
+      return;
+    }
+    const confirmLink = /^\/api\/me\/identity-links\/matches\/([^/]+)\/confirm$/.exec(path);
+    if (confirmLink !== null && method === 'POST') {
+      const key = request.headers['idempotency-key'];
+      if (typeof key !== 'string' || key.length === 0) {
+        problem(response, 400, 'idempotency_key_required', 'this command needs an Idempotency-Key');
+        return;
+      }
+      await readBody(request);
+      const match = linkState.matches.find((item) => item.id === confirmLink[1]);
+      if (linkState.code?.status !== 'live' || match === undefined) {
+        problem(response, 404, 'link_match_not_found', 'no match of your link code has this id');
+        return;
+      }
+      commands.push({ path, body: {} });
+      const at = new Date().toISOString();
+      linkState = {
+        code: { ...linkState.code, status: 'consumed' },
+        matches: linkState.matches.map((item) =>
+          item.id === match.id ? { ...item, confirmed_at: at } : item,
+        ),
+      };
+      myIdentities = [
+        {
+          provider: match.provider,
+          external_id: match.external_id,
+          display_name: match.display_name,
+          created_at: at,
+        },
+      ];
+      json(response, 200, fixtures.identityLinkConfirmed);
+      return;
+    }
+    if (path === '/api/me/identities' && method === 'GET') {
+      json(response, 200, { items: myIdentities });
+      return;
+    }
+    const unlinkAccount = /^\/api\/(me|org)\/identities\/([^/]+)\/([^/]+)$/.exec(path);
+    if (unlinkAccount !== null && method === 'DELETE') {
+      await readBody(request);
+      const provider = decodeURIComponent(unlinkAccount[2] ?? '');
+      const externalId = decodeURIComponent(unlinkAccount[3] ?? '');
+      commands.push({ path, body: {} });
+      if (unlinkAccount[1] === 'me') {
+        myIdentities = myIdentities.filter(
+          (item) => !(item.provider === provider && item.external_id === externalId),
+        );
+      }
+      json(response, 200, { provider, external_id: externalId });
+      return;
+    }
     // WP-93: `PATCH /api/org`, parsed with the published schema and logged like every command.
     if (path === '/api/org' && method === 'PATCH') {
       const parsed = patchOrgSettingsRequestSchema.safeParse(await readBody(request));
@@ -755,6 +836,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         '/api/org/budgets': fixtures.orgBudgets,
         '/api/org': fixtures.orgSettings,
         '/api/org/identities': fixtures.orgIdentities,
+        // S-26.8a: the candidates, with an unlinked assignee of live tasks (S-26.6).
+        '/api/org/identities/candidates': fixtures.identityCandidates,
         // WP-41. The CSV twin is **not** served here: it is a download the browser tier does not
         // click, and the screen's link is asserted by its `href` (`apps/web/src/features/
         // statistics.test.tsx` drives the JSON half against this same shape).

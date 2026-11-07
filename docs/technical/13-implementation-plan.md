@@ -1858,6 +1858,9 @@ S-26.6, S-26.3 · risk low · no migration.
   3. *Your accounts* shows the code, asks the person to confirm the account it matched (with the provider and the
      account id), and offers unlink.
   4. *Assign the owner in the tracker* sits beside the lifecycle's two switches (product/06's amendment).
+- **Split** (2026-11-07): part 1 is *Your accounts* and *Linked accounts*' Unlink and assignee counts (§ 5, acceptance
+  3); part 2 is the Workers screen's policy (§ 1, acceptance 2, after S-26.7's card) and the write-back switch
+  (acceptance 4, after S-26.3).
 
 **S-26.8b — The owner on the task page and the board, and the waiting words** (SPA) · depends S-26.1, S-26.5, and
 **S-25.4 on `main`** (it rewrites `task-header.tsx`, `board.tsx`, `board-card.tsx`, `task-overview.tsx`); branch

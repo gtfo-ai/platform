@@ -65,6 +65,7 @@ const READY: Readonly<
   instance: (section) => section.getByText('0.0.0-fake'),
   session: (section) => section.getByText('operator@example.invalid'),
   keyboard: (section) => section.getByRole('checkbox'),
+  accounts: (section) => section.getByRole('button', { name: 'Link an account' }),
 };
 
 /** What each project settings section shows once it has drawn. */

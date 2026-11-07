@@ -17,6 +17,13 @@ export const queryKeys = {
   refusedDeliveries: (integrationId: string) =>
     ['integrations', integrationId, 'refused-deliveries'] as const,
   orgIdentities: ['org', 'identities'] as const,
+  /**
+   * S-26.8a: the caller's own linked accounts and their newest link code's state — under `me`, a
+   * prefix no SSE topic maps onto, because no frame announces either (the code's state is polled
+   * while it is live, `useIdentityLinkState`).
+   */
+  myIdentities: ['me', 'identities'] as const,
+  identityLinkState: ['me', 'identity-links'] as const,
   audit: (filters: Readonly<Record<string, unknown>> = {}) => ['org', 'audit', filters] as const,
   agents: ['org', 'agents'] as const,
   /** WP-159: the model list, under the org prefix so an `org` frame refreshes it. */

@@ -26,10 +26,17 @@
  * Everything shown here came from somebody else — a provider's account id, a display name, an
  * email — so every string goes through `UntrustedText` (BD-022).
  *
- * The server holds both routes to `org.users.manage` (admin). A non-admin sees the refusal named
+ * **Since S-26.8a each row has *Unlink*** (`DELETE /api/org/identities/:provider/:external_id`,
+ * S-26.6), behind a confirmation that names the account and the person — or says it is a machine —
+ * whoever linked it: this form, or the person's own confirmed code (*Settings → Your accounts*). And
+ * the candidates include the **unlinked tracker assignees of live tasks** (S-26.6's
+ * `assigned_tasks`, with the tracker's display name), said as *assigned to 3 tasks*, so an
+ * administrator sees who the tracker gives work to that no person on the platform holds.
+ *
+ * The server holds every route to `org.users.manage` (admin). A non-admin sees the refusal named
  * rather than an empty list that would read as "nobody is mapped".
  */
-import type { IdentityMapping } from '@platform/contracts';
+import type { IdentityCandidate, IdentityMapping } from '@platform/contracts';
 import { type FormEvent, type ReactElement, useState } from 'react';
 import { readErrorDetail } from '../api/read-error.js';
 import {
@@ -38,6 +45,12 @@ import {
   useOrgUsers,
   useSettingsCommands,
 } from '../app/queries.js';
+import { ConfirmDialog } from '../ui/confirm-dialog.js';
+import {
+  accountProviderName,
+  LINKED_ACCOUNTS_WORDS,
+  linkRefusal,
+} from '../ui/humanize-accounts.js';
 import {
   Badge,
   Button,
@@ -51,6 +64,7 @@ import {
 } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 
 /** The providers whose normaliser resolves an author through this table on this build. */
 export const IDENTITY_PROVIDERS = ['slack', 'jira-cloud', 'gitlab'] as const;
@@ -67,6 +81,36 @@ const describeUser = (
   return emailOf(mapping.user_id) ?? mapping.user_id;
 };
 
+/** A candidate's facts: *assigned to 3 tasks · 2 refused · last …*, each only when it is so. */
+const candidateFacts = (candidate: IdentityCandidate): string =>
+  [
+    ...(candidate.assigned_tasks === undefined
+      ? []
+      : [LINKED_ACCOUNTS_WORDS.assignedTo(candidate.assigned_tasks)]),
+    ...(candidate.deliveries === 0 ? [] : [LINKED_ACCOUNTS_WORDS.refused(candidate.deliveries)]),
+    LINKED_ACCOUNTS_WORDS.lastSeen(formatDateTime(candidate.last_seen_at)),
+  ].join(' · ');
+
+/** The confirmation's words for unlinking `mapping` — the account, and the person or *machine*. */
+const unlinkWords = (
+  mapping: IdentityMapping,
+  personOf: (userId: string) => string | null,
+): { readonly title: string; readonly consequence: string } => {
+  const provider = accountProviderName(mapping.provider);
+  const account = sanitiseUntrusted(mapping.display_name ?? mapping.external_id);
+  if (mapping.kind === 'machine' || mapping.user_id === null) {
+    return {
+      title: LINKED_ACCOUNTS_WORDS.unlinkMachineTitle(provider, account),
+      consequence: LINKED_ACCOUNTS_WORDS.unlinkMachineConsequence,
+    };
+  }
+  const person = sanitiseUntrusted(personOf(mapping.user_id) ?? mapping.user_id);
+  return {
+    title: LINKED_ACCOUNTS_WORDS.unlinkPersonTitle(provider, account, person),
+    consequence: LINKED_ACCOUNTS_WORDS.unlinkPersonConsequence(person),
+  };
+};
+
 export const IdentityMappings = (): ReactElement => {
   const identities = useOrgIdentities();
   const users = useOrgUsers();
@@ -76,12 +120,23 @@ export const IdentityMappings = (): ReactElement => {
   const [kind, setKind] = useState<Kind>('person');
   const [userId, setUserId] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [unlinking, setUnlinking] = useState<IdentityMapping | null>(null);
   // Asked only once the admin-only list has answered, so a non-admin is not refused twice.
   const candidates = useIdentityCandidates(identities.isSuccess);
 
   const userItems = users.data?.items ?? [];
   const emailOf = (id: string): string | null =>
     userItems.find((user) => user.id === id)?.email ?? null;
+  /** The person a confirmation names: their name and email, else whichever they have. */
+  const personOf = (id: string): string | null => {
+    const user = userItems.find((item) => item.id === id);
+    return user === undefined
+      ? null
+      : user.name === null
+        ? user.email
+        : `${user.name} (${user.email})`;
+  };
+  const unlink = unlinking === null ? null : unlinkWords(unlinking, personOf);
 
   const canSubmit =
     externalId.trim() !== '' &&
@@ -156,6 +211,16 @@ export const IdentityMappings = (): ReactElement => {
               <span aria-hidden="true">→</span>
               <Badge tone={mapping.kind === 'machine' ? 'warning' : 'accent'}>{mapping.kind}</Badge>
               <UntrustedText value={describeUser(mapping, emailOf)} />
+              <Button
+                className="ml-auto"
+                size="sm"
+                onClick={() => {
+                  commands.unlinkIdentity.reset();
+                  setUnlinking(mapping);
+                }}
+              >
+                {LINKED_ACCOUNTS_WORDS.unlink}
+              </Button>
             </Card>
           </li>
         ))}
@@ -163,11 +228,8 @@ export const IdentityMappings = (): ReactElement => {
 
       {candidates.isSuccess && candidates.data.items.length > 0 ? (
         <div className="mt-3 flex flex-col gap-1">
-          <p className="text-xs font-semibold">Refused accounts nobody has mapped</p>
-          <p className="text-xs text-fg-muted">
-            The platform refused a decision from each of these because the account is not mapped.
-            Choosing one fills the form below; it maps nothing until you say who the account is.
-          </p>
+          <p className="text-xs font-semibold">{LINKED_ACCOUNTS_WORDS.candidatesTitle}</p>
+          <p className="text-xs text-fg-muted">{LINKED_ACCOUNTS_WORDS.candidatesHint}</p>
           <ul className="flex flex-col gap-1" aria-label="Unmapped provider accounts">
             {candidates.data.items.map((candidate) => (
               <li key={`${candidate.provider}:${candidate.external_id}`}>
@@ -178,14 +240,21 @@ export const IdentityMappings = (): ReactElement => {
                   <code className="font-mono text-xs">
                     <UntrustedText value={candidate.external_id} />
                   </code>
-                  <span className="text-xs text-fg-muted">
-                    {`${candidate.deliveries} refused · last ${formatDateTime(candidate.last_seen_at)}`}
-                  </span>
+                  {candidate.display_name === undefined ||
+                  candidate.display_name === null ? null : (
+                    <span className="text-fg-muted">
+                      <UntrustedText value={candidate.display_name} />
+                    </span>
+                  )}
+                  <span className="text-xs text-fg-muted">{candidateFacts(candidate)}</span>
                   <Button
                     className="ml-auto"
                     onClick={() => {
                       setProvider(candidate.provider);
                       setExternalId(candidate.external_id);
+                      if (candidate.display_name !== undefined && candidate.display_name !== null) {
+                        setDisplayName(candidate.display_name);
+                      }
                     }}
                   >
                     Use this account
@@ -280,6 +349,34 @@ export const IdentityMappings = (): ReactElement => {
           )}
         </form>
       )}
+      <ConfirmDialog
+        open={unlinking !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setUnlinking(null);
+          }
+        }}
+        title={unlink?.title ?? LINKED_ACCOUNTS_WORDS.unlink}
+        consequence={unlink?.consequence ?? ''}
+        confirmLabel={LINKED_ACCOUNTS_WORDS.unlink}
+        pending={commands.unlinkIdentity.isPending}
+        error={commands.unlinkIdentity.error}
+        errorTitle={LINKED_ACCOUNTS_WORDS.unlinkRefused}
+        errorDetail={linkRefusal(commands.unlinkIdentity.error)}
+        onConfirm={() => {
+          if (unlinking === null) {
+            return;
+          }
+          commands.unlinkIdentity.mutate(
+            { provider: unlinking.provider, externalId: unlinking.external_id },
+            {
+              onSuccess: () => {
+                setUnlinking(null);
+              },
+            },
+          );
+        }}
+      />
     </section>
   );
 };

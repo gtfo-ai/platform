@@ -108,14 +108,8 @@ const SERVED_BEFORE_ITS_CALLER: Readonly<Record<string, string>> = {
   // `/api/projects/{}/owner-candidates` left when S-26.8b's *Assign…* picker called it
   // (`ownerCandidates`).
   //
-  // S-26.6 serves a person's own account link before *Settings → Your accounts* exists; S-26.8a
-  // (the UI session's) gives every one of these its caller, and each entry must leave with it.
-  '/api/me/identity-links': 'S-26.8a — Settings → Your accounts: issue a code, read its state',
-  '/api/me/identity-links/read': 'S-26.8a — Your accounts: *I wrote it on …*',
-  '/api/me/identity-links/matches/{}/confirm': 'S-26.8a — Your accounts: *Link Jira account …?*',
-  '/api/me/identities': 'S-26.8a — Your accounts: the linked list',
-  '/api/me/identities/{}/{}': 'S-26.8a — Your accounts: *Unlink*',
-  '/api/org/identities/{}/{}': 'S-26.8a — Linked accounts (admin): *Unlink*',
+  // S-26.6's six account-link routes left when S-26.8a gave each its caller (*Settings → Your
+  // accounts* and *Linked accounts*' Unlink); the comparison above now holds them.
 };
 
 /**

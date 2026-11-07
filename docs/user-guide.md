@@ -785,7 +785,7 @@ live on that task's topic.
 
 **A task has an owner** (since S-26.1): one person of the project, a member or above. The owner
 follows the ticket's assignee when that assignee is a tracker account linked to a member of the
-project (*Settings → Linked accounts*, an administrator's mapping); an assignee the platform cannot link —
+project (*Settings → Linked accounts*, an administrator's mapping, or the person's own *Settings → Your accounts*); an assignee the platform cannot link —
 an unlinked account, or a linked person below member — is kept as *assigned elsewhere* and the task
 has no owner, and the platform's own account or a machine account is nobody — it never takes a
 task from the person who owns it, so the platform claiming the ticket keeps its owner. A ticket a
@@ -1673,7 +1673,7 @@ on that task's *Activity* tab. A *refused* command records nothing.
 **Settings** — the gear in the top bar, also in the account menu — is one page per section, picked from the list on the
 left (on a phone, a one-line menu above the section that names the one you are on) — **Policies ·
 Notifications · Budgets · Users · Linked accounts · Integrations · Workers · Audit log · Stuck
-events · Failed background jobs · Instance · Session · Keyboard shortcuts** — grouped as
+events · Failed background jobs · Instance · Session · Keyboard shortcuts · Your accounts** — grouped as
 *Organisation*, *People*, *Admin*, *Operations* and *Personal*. **Opening Settings opens the first
 section your role may change**: *Policies* for an administrator, *Budgets* for a maintainer,
 *Keyboard shortcuts* for everybody else. A section that changes something has **one Save** at its
@@ -1700,25 +1700,42 @@ administrator; anybody else who opens one of their addresses lands where *Settin
   window the server refuses says so under its own field.
 - **Users** — everybody with an account, with their role and whether they are active.
 - **Linked accounts** (*Provider identities* before) — which Slack, Jira or GitLab account is which
-  person, without which a decision made in those tools is refused as unmapped. An administrator can
-  also **unlink** an account here (the server half since S-26.6; the button comes with S-26.8a).
+  person, without which a decision made in those tools is refused as unmapped. Each account has
+  **Unlink**, which asks first and names the account and the person (or says it is a machine) — it
+  unlinks the account whoever linked it, this form or the person's own code. Below the list,
+  *Accounts nobody has linked* shows the accounts the platform refused a decision from and the
+  tracker assignees of tasks in progress that no person here holds (*assigned to 3 tasks*); *Use
+  this account* fills the form and links nothing until you say who it is.
+- **Your accounts** — your own Jira and GitLab accounts: the ones linked to you, each with
+  **Unlink** (it asks first; answers and approvals from that account stop counting as yours, and a
+  task you already own stays yours until the ticket's assignee changes), and **Link an account**,
+  below.
 
-**Linking your own Jira or GitLab account** (the server half since S-26.6; the *Your accounts*
-section of Settings is S-26.8a's, so today it is the API, technical/08's *Your accounts* row). A
+**Linking your own Jira or GitLab account** (*Settings → Your accounts*, every signed-in person). A
 linked account can answer questions and approve plans from Jira or GitLab, so the platform never
-takes your word for which account is yours and never matches by email: it **proves** it.
+takes your word for which account is yours and never matches by email: it **proves** it. There is no
+field to type an account id into.
 
-1. Ask for a code. It looks like `agentic-link-7K3Q9VDM2X`, is valid for 30 minutes and is shown
-   **once** — reloading the page asks for a new one, and asking voids the old one. At most five an
-   hour.
+1. **Link an account** shows a code. It looks like `agentic-link-7K3Q9VDM2X`, is valid for 30
+   minutes and is shown **once** — after a reload the page says a code is live but cannot show it
+   again, and offers **Get a new code**; asking voids the old one. At most five an hour: a sixth
+   says so in words.
 2. Write it as a comment **from your own account**: on a ticket of a project you are in (Jira), or on
    a merge request (GitLab — merge requests only, not issues). Do not edit the comment afterwards:
    an edited comment, or one somebody else edited, links nobody.
 3. The platform reads the comment's author from the provider — from the webhook, or, on a project
-   with no webhook, when you name the ticket or merge request (*I wrote it on …*, only for a task of
-   a project where you are a member or above).
-4. It then **asks you**: *Link Jira account Dev One?*, with the provider and the account id beside
-   the name. Only your confirmation links it. The name is the provider's text: check the account id.
+   with no webhook, when you name the ticket or merge request under **I wrote it on …** (a project,
+   *A ticket* or *A merge request*, and its key or number; only for a task of a project where you
+   are a member or above). The page asks again every few seconds while the code is live, so the
+   match appears by itself.
+4. It then **asks you**: *Link Jira account Dev One?*, with the account id and the connection that
+   read it beside the name. Only **Link this account** links it; **Not mine — get a new code** starts
+   again. The name is the provider's text: check the account id. Once linked, the page says what
+   follows — *You now own 2 tasks assigned to you in Jira* when the link made tasks yours — and that
+   you can delete the comment now.
+
+A code that stopped says why — it expired, someone else wrote it too, or the account that wrote it
+is linked to another person — and offers a new one.
 
 If somebody else writes your code too — anyone who can read the ticket can copy it — the code links
 nobody, and you are told someone else used it: ask for a new one and post it where fewer people can
@@ -2036,7 +2053,6 @@ In one place, so it is not spread across thirteen sections:
 | Moving a ticket to a *deployed* status once a deploy is seen (the *Done* slot moves it at the merge) | ticket lifecycle, New project step 1 |
 | A ticket lifecycle for a project with two ticket trackers bound (the form says the pipeline applies one only with exactly one) | ticket lifecycle, project settings |
 | Showing and changing a task's owner on the task page and the board (the platform records it and the API serves it) | task detail, board |
-| *Settings → Your accounts* — linking your own Jira or GitLab account in the browser (the server half is built, S-26.6; the screen is S-26.8a) | settings |
 | Choosing which tasks a machine takes on the Workers screen (the machine's own page has it; the Workers screen still shows the projects only, S-26.8a) | Workers screen |
 | The card's warning *Unassigned tasks in Autix have nowhere to run.* on the Workers screen (the machine's own page says it since BACKLOG 1456) | Workers screen |
 

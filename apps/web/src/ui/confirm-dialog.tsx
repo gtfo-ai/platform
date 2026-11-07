@@ -39,6 +39,7 @@ export const ConfirmDialog = ({
   pending = false,
   error,
   errorTitle = 'That was refused.',
+  errorDetail,
   onConfirm,
 }: {
   readonly open: boolean;
@@ -58,6 +59,8 @@ export const ConfirmDialog = ({
   /** The last refusal, shown with its reason; `undefined` or `null` while there is none. */
   readonly error?: unknown;
   readonly errorTitle?: string;
+  /** The refusal in the screen's own words, when it has them; else `errorSentence`'s. */
+  readonly errorDetail?: string | undefined;
   /** The typed reason, trimmed (empty when there is no field or nothing was typed). */
   readonly onConfirm: (reason: string) => void;
 }): ReactElement => {
@@ -120,7 +123,11 @@ export const ConfirmDialog = ({
             </div>
           )}
           {error === undefined || error === null ? null : (
-            <ErrorNotice title={errorTitle} error={error} />
+            <ErrorNotice
+              title={errorTitle}
+              error={error}
+              {...(errorDetail === undefined ? {} : { detail: errorDetail })}
+            />
           )}
         </div>
       )}
