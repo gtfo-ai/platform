@@ -664,6 +664,88 @@ export const WAITING_CLOSED_REASON_WORDS: Readonly<Record<WaitingClosedReason, s
   server_first: 'the platform server goes first, and its head start has not ended yet',
 };
 
+// ── A task's owner (S-26.8b, the M26 UX spec §§ 2–3) ─────────────────────────
+
+/**
+ * A tracker's name as a person says it, for *Assigned in Jira to …* and *also assigns DEMO-1 in
+ * Jira*. The ticket's `provider` is the binding's provider id (`jira-cloud`), or a fixture's
+ * shorter spelling; one this build does not name is *the tracker*, never the raw id.
+ */
+const TRACKER_NAME: Readonly<Record<string, string>> = {
+  'jira-cloud': 'Jira',
+  jira: 'Jira',
+  gitlab: 'GitLab',
+  github: 'GitHub',
+  linear: 'Linear',
+};
+
+export const trackerName = (provider: string): string => TRACKER_NAME[provider] ?? 'the tracker';
+
+/** The board's owner filter (`?owner=`): *Everyone* is the absence of one. */
+export type BoardOwnerFilter = 'all' | 'me' | 'none';
+
+/**
+ * **The owner's words** (the M26 UX spec § 2, S-26.8b's keys). The person-facing word is
+ * *machine*, never *claim*, *offer* or *seat* (§ 4). A name is passed in already sanitised by the
+ * caller where it lands in an attribute or a dialog title; where it is rendered as a node, the
+ * caller renders the parts around an `UntrustedText` (`assigned_in_tracker_unlinked`).
+ */
+export const OWNER_WORDS = {
+  'owner.unassigned': 'Unassigned',
+  /** "Assigned in Jira to *Jan Novák* (not linked to a platform account)", around the name. */
+  'owner.assigned_in_tracker_unlinked': {
+    before: (tracker: string): string => `Assigned in ${tracker} to `,
+    /** The tracker sent no display name. */
+    nameless: 'someone',
+    after: ' (not linked to a platform account)',
+  },
+  'owner.took': 'Assigned to you. Your machine picks it up at the next stage.',
+  'owner.assigned': (name: string): string =>
+    `Assigned to ${name}. Their machine picks it up at the next stage.`,
+  'owner.unassigned_done':
+    'Unassigned. A machine that takes unassigned tasks picks it up at the next stage.',
+  /** The header's line: "Owner: Vojtěch". */
+  'owner.label': (name: string): string => `Owner: ${name}`,
+  /** The owner is the reader. */
+  'owner.you': ' (you)',
+  /** An owner whose account has no name. */
+  'owner.nameless': 'a person with no name',
+  /** *Take it* on a task somebody else owns (§ 2): the confirmation names them. */
+  'owner.take_from': {
+    title: (ticketKey: string, owner: string): string => `Take ${ticketKey} from ${owner}?`,
+    consequence: (ticketKey: string, writesBack: boolean, tracker: string): string =>
+      writesBack
+        ? `Their machine stops getting it, and this also assigns ${ticketKey} in ${tracker}.`
+        : 'Their machine stops getting it.',
+    confirm: (owner: string): string => `Take it from ${owner}`,
+    keep: 'Cancel',
+  },
+  'owner.action.take': 'Take it',
+  'owner.action.assign': 'Assign…',
+  'owner.action.unassign': 'Unassign',
+  'owner.action.link': 'Link account…',
+  /** The person picker (§ 2's *Assign…*). */
+  'owner.picker': {
+    title: (ticketKey: string): string => `Assign ${ticketKey}`,
+    description: 'Their machine picks it up at the next stage.',
+    label: 'Person',
+    confirm: 'Assign',
+    empty: 'Nobody else in this project can own it.',
+    current: ' (owner now)',
+  },
+  /** The board's segmented control (§ 3), and what an empty filtered board says. */
+  'owner.filter': {
+    label: 'Whose tasks',
+    all: 'Everyone',
+    me: 'Mine',
+    none: 'Unassigned',
+    empty_me: 'No task here is assigned to you.',
+    empty_none: 'Every task here has an owner.',
+  },
+  /** The card's avatar: its accessible name and its tooltip. */
+  'owner.card': (name: string): string => `Owner: ${name}`,
+} as const;
+
 // ── Settings, knowledge, budgets and the audit log (S-23.11b) ────────────────
 
 /** A project's state (`projects.status`), beside its name in the header and the list (S-25.5). */

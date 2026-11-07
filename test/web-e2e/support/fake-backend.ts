@@ -50,6 +50,7 @@ import {
   retryStageRequestSchema,
   returnToStageRequestSchema,
   reworkRequestSchema,
+  setTaskOwnerRequestSchema,
   steerRunRequestSchema,
   submitFeedbackRequestSchema,
   takeOverRequestSchema,
@@ -76,6 +77,8 @@ const TASK_COMMAND_SCHEMAS = {
   // WP-44: the take-over pair. Their answers are parsed by the client, so they get real ones below.
   'take-over': takeOverRequestSchema,
   'hand-back': handBackRequestSchema,
+  // S-26.8b: *Take it* and *Unassign*. The client parses the answer (`taskCommandResponseSchema`).
+  owner: setTaskOwnerRequestSchema,
 } as const;
 
 /**
@@ -99,6 +102,9 @@ const commandAnswer = (path: string, command: string | undefined): unknown => {
   }
   if (command === 'hand-back') {
     return { task_id: taskId, state: 'active', current_stage: 'code_review', performed: true };
+  }
+  if (command === 'owner') {
+    return { task_id: taskId, state: 'active', current_stage: 'implementation', performed: true };
   }
   if (command === 'retry-stage') {
     // Backlog 494: the client parses `retryStageResponseSchema` and shows what the retry did.
@@ -724,9 +730,18 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         '/api/integrations': fixtures.integrations,
         '/api/integrations/providers': fixtures.integrationProviders,
         '/api/projects': fixtures.projectsPage,
+        // S-26.8b: the board's owner filter is the server's (`?owner=me|none`), so the fake applies
+        // it: `me` is the signed-in operator, `none` a task nobody owns.
         [`/api/projects/${fixtures.IDS.project}/tasks`]: {
           ...fixtures.tasksPage,
-          items: [...fixtures.tasksPage.items, ...extraTasks],
+          items: [...fixtures.tasksPage.items, ...extraTasks].filter((item) => {
+            const owner = url.searchParams.get('owner');
+            return owner === 'me'
+              ? item.owner?.user_id === fixtures.IDS.user
+              : owner === 'none'
+                ? (item.owner ?? null) === null
+                : true;
+          }),
         },
         [`/api/projects/${fixtures.IDS.project}/config`]: fixtures.effectiveConfig,
         [`/api/projects/${fixtures.IDS.project}/budgets`]: fixtures.budgets,

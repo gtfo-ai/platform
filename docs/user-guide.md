@@ -782,9 +782,23 @@ account owns nothing. **The latest change wins**: a change of assignee in the tr
 on the platform stays until somebody changes the tracker. A member may take a task nobody owns (and
 nobody holds elsewhere) or give back their own; a maintainer may give any task to any member, or to
 nobody. Nothing is written to the tracker. The owner's computer gets the head start on the task's
-runs (*Settings → Execution*, below). The page and the board do not show the owner yet; the API does
-(`owner` on every task, `POST /api/tasks/:id/owner`, and `?owner=me` or `?owner=none` on a
-project's task list).
+runs (*Settings → Execution*, below).
+
+**The owner on the page** (since S-26.8b): beside the ticket's links, the owner's initials and
+*Owner: Vojtěch* (*(you)* when it is you), *Unassigned* in grey, or — for a tracker assignee the
+platform cannot link — *Assigned in Jira to Jan Novák (not linked to a platform account)*, with
+*Link account…* (Settings → Linked accounts) for an administrator. One button by that line, and the
+`···` menu, offer **Take it** and **Unassign** — only what your role may do: a member takes a task
+nobody owns or gives back their own, a maintainer either on anybody's task. Taking a task somebody
+else owns asks first — *Take DEMO-1 from Vojtěch? Their machine stops getting it.* — and, when the
+project writes the assignment back to the tracker, says that it also assigns the ticket there. A line
+then says what follows: *Assigned to you. Your machine picks it up at the next stage.* **Assign…**
+(choosing another person) is not offered yet: it waits for a list of exactly the people the
+platform accepts as the owner. On the **board**, a card shows its owner's initials at its top right
+(the name in its tooltip), and *Everyone* · *Mine* · *Unassigned* filters the board and the list
+(`?owner=me` or `?owner=none` in the URL); the board remembers your choice in this browser. The API
+has the same: `owner` on every task, `POST /api/tasks/:id/owner`, and `?owner=` on a project's task
+list.
 
 - **The header** is the ticket's title with its key after it in grey (the key alone when the
   platform never read the title), the task's state as a label with its icon — *Needs you* whenever

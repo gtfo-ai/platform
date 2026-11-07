@@ -21,6 +21,11 @@
  * Dialogs (a human's destructive or multi-field action, research/19 § 3.9); Pause and Resume are one
  * press. *Open ticket* and *Open merge request* are `ActionMenuLinkItem`s, so their `href` is `safeHref`'s.
  *
+ * **The owner** (S-26.8b, the M26 UX spec § 3): the owner's avatar only — initials, with *Owner:
+ * Vojtěch* as its accessible name and its tooltip — at the card's top right beside the menu (and in
+ * the row's trailing slot). A card nobody owns shows nothing: an empty slot is not noise. The ◆ and
+ * the *Needs you* column do not change with the owner.
+ *
  * The card is **not** wrapped in a link: the title is the link into the task, and the menu carries
  * its own items — an anchor inside an anchor is invalid HTML. The title is the card's (and the
  * row's) stretched link instead (S-23.26, `ui/row-link.ts`): a click anywhere on either opens the
@@ -54,10 +59,11 @@ import {
   activityOf,
   type LatestEntry,
 } from '../ui/activity.js';
+import { Avatar } from '../ui/avatar.js';
 import { Counter } from '../ui/counter.js';
 import { cx } from '../ui/cx.js';
 import { Dialog } from '../ui/dialog.js';
-import { loopRoundLabel, stageLabel, titleCase } from '../ui/humanize.js';
+import { loopRoundLabel, OWNER_WORDS, stageLabel, titleCase } from '../ui/humanize.js';
 import { Badge, Button, ErrorNotice, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
 import { ROW_LINK_HOST, rowLink } from '../ui/row-link.js';
@@ -720,6 +726,26 @@ const WorkingDot = ({ agent }: { readonly agent: AgentEntry | undefined }): Reac
     <StatusIcon status="running" size={12} label="An agent is working on it" />
   ) : null;
 
+/**
+ * The owner's avatar, or nothing. The name is a person's own text, so the tooltip — a native
+ * `title=`, which the row link's lift keeps hoverable — is sanitised like every other on the card.
+ */
+export const OwnerAvatar = ({ task }: { readonly task: TaskListItem }): ReactElement | null => {
+  const owner = task.owner ?? null;
+  if (owner === null) {
+    return null;
+  }
+  const name = sanitiseUntrusted(
+    owner.name.trim() === '' ? OWNER_WORDS['owner.nameless'] : owner.name,
+  );
+  const label = OWNER_WORDS['owner.card'](name);
+  return (
+    <span data-card-owner={owner.user_id} title={label} className="inline-flex">
+      <Avatar name={name} size={20} label={label} />
+    </span>
+  );
+};
+
 export const TaskCard = ({ task, projectKey, projectId, may, agent, nowMs }: TaskViewProps) => {
   const commands = useTaskCommands(task.id);
   return (
@@ -739,6 +765,7 @@ export const TaskCard = ({ task, projectKey, projectId, may, agent, nowMs }: Tas
         <span className="-mt-1 -mr-1 flex shrink-0 items-center gap-1.5">
           <WorkingDot agent={agent} />
           <NeedsYouMarker task={task} />
+          <OwnerAvatar task={task} />
           <TaskMenu task={task} projectId={projectId} may={may} commands={commands} />
         </span>
       </div>
@@ -790,6 +817,7 @@ export const TaskRow = ({ task, projectKey, projectId, may, agent, nowMs }: Task
       <span className="flex shrink-0 items-center gap-1.5">
         <WorkingDot agent={agent} />
         <NeedsYouMarker task={task} />
+        <OwnerAvatar task={task} />
         <TaskMenu task={task} projectId={projectId} may={may} commands={commands} />
       </span>
     </li>

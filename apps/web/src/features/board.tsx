@@ -13,15 +13,35 @@
  * The agents read (`useAgents`, one request for the organisation) says which tasks an agent is
  * working on, and what it is doing.
  *
+ * **Whose tasks** (S-26.8b, the M26 UX spec § 3): a segmented control — *Everyone* · *Mine* ·
+ * *Unassigned* — in the list box's header (and, on the board view, beside the view toggle, which is
+ * the board's only header row). It is `?owner=me|none`, which the **server** applies (S-26.1), so
+ * both views read the filtered page; it is remembered per person (`./board-owner-filter.ts`). A card
+ * shows its owner's avatar (`./board-card.tsx`); the *Needs you* rule does not change with it.
+ *
  * Drag is not supported by design: the pipeline owns state (product/10).
  */
 import { createTaskRequestSchema, type TaskListItem, type TaskState } from '@platform/contracts';
 import { ListUnorderedIcon } from '@primer/octicons-react/ListUnorderedIcon';
 import { ProjectIcon } from '@primer/octicons-react/ProjectIcon';
 import { Link, useLocation, useNavigate, useSearch } from '@tanstack/react-router';
-import { type ReactElement, type RefObject, useEffect, useId, useRef, useState } from 'react';
+import {
+  type ReactElement,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react';
 import { START_TICKET_ANCHOR, useStartTicketRequests } from '../app/project-frame.js';
-import { useAgents, useProjectByKey, useProjectTasks, useStartTask } from '../app/queries.js';
+import {
+  useAgents,
+  useProjectByKey,
+  useProjectTasks,
+  useSession,
+  useStartTask,
+} from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import { Blankslate } from '../ui/blankslate.js';
@@ -30,7 +50,7 @@ import { buttonClassName } from '../ui/button.js';
 import { Counter } from '../ui/counter.js';
 import { cx, FOCUS_RING } from '../ui/cx.js';
 import { Dialog } from '../ui/dialog.js';
-import { TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
+import { type BoardOwnerFilter, OWNER_WORDS, TASK_STATE_LABEL, titleCase } from '../ui/humanize.js';
 import { Button, EmptyState, ErrorNotice, Field } from '../ui/kit.js';
 import { ListBox, ListBoxHeader } from '../ui/list-box.js';
 import { Select } from '../ui/select.js';
@@ -43,6 +63,13 @@ import {
   TaskCard,
   TaskRow,
 } from './board-card.js';
+import {
+  boardOwnerFilter,
+  ownerSearchValue,
+  readStoredOwnerFilter,
+  storeOwnerFilter,
+  type UrlOwnerFilter,
+} from './board-owner-filter.js';
 
 /**
  * The columns, in pipeline order, and the column each state belongs to when nothing waits on a
@@ -253,10 +280,14 @@ const StartTicketDialog = ({
 const ViewToggle = ({
   projectKey,
   view,
+  owner,
 }: {
   readonly projectKey: string;
   readonly view: BoardView;
+  /** The owner filter in the URL, kept across the toggle (S-26.8b). */
+  readonly owner: UrlOwnerFilter | undefined;
 }): ReactElement => {
+  const ownerSearch = owner === undefined ? {} : { owner };
   const item = (current: boolean): string =>
     cx(
       'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium',
@@ -268,7 +299,7 @@ const ViewToggle = ({
       <Link
         to="/projects/$key"
         params={{ key: projectKey }}
-        search={{}}
+        search={ownerSearch}
         activeOptions={{ exact: true, includeSearch: true }}
         aria-current={view === 'board' ? 'page' : undefined}
         className={item(view === 'board')}
@@ -279,7 +310,7 @@ const ViewToggle = ({
       <Link
         to="/projects/$key"
         params={{ key: projectKey }}
-        search={{ view: 'list' }}
+        search={{ view: 'list', ...ownerSearch }}
         activeOptions={{ exact: true, includeSearch: true }}
         aria-current={view === 'list' ? 'page' : undefined}
         className={item(view === 'list')}
@@ -290,6 +321,62 @@ const ViewToggle = ({
     </nav>
   );
 };
+
+/** The board's search with its owner filter set to `value`, or dropped for *Everyone*. */
+const withOwner = (
+  previous: Record<string, unknown>,
+  value: UrlOwnerFilter | undefined,
+): Record<string, unknown> => {
+  const { owner: _dropped, ...rest } = previous;
+  return value === undefined ? rest : { ...rest, owner: value };
+};
+
+const OWNER_FILTERS: readonly BoardOwnerFilter[] = ['all', 'me', 'none'];
+
+/**
+ * *Everyone* · *Mine* · *Unassigned* (S-26.8b, the M26 UX spec § 3): three pressed-state buttons
+ * in one `<fieldset>` named by its legend, the view toggle's look. A press remembers the choice and moves the URL.
+ */
+export const OwnerFilterControl = ({
+  value,
+  onChange,
+}: {
+  readonly value: BoardOwnerFilter;
+  readonly onChange: (next: BoardOwnerFilter) => void;
+}): ReactElement => {
+  const words = OWNER_WORDS['owner.filter'];
+  return (
+    <fieldset
+      data-owner-filter={value}
+      className="m-0 inline-flex min-w-0 gap-0.5 rounded-lg border-0 bg-subtle p-0.5"
+    >
+      <legend className="sr-only">{words.label}</legend>
+      {OWNER_FILTERS.map((filter) => (
+        <button
+          key={filter}
+          type="button"
+          aria-pressed={value === filter}
+          className={cx(
+            'inline-flex h-7 items-center rounded-md px-2.5 text-sm font-medium',
+            value === filter
+              ? 'bg-default text-fg shadow-sm ring-1 ring-line'
+              : 'text-fg-muted hover:text-fg',
+            FOCUS_RING,
+          )}
+          onClick={() => {
+            onChange(filter);
+          }}
+        >
+          {words[filter]}
+        </button>
+      ))}
+    </fieldset>
+  );
+};
+
+/** What a board filtered to *Mine* or *Unassigned* says when it holds nothing. */
+export const ownerFilterEmpty = (filter: Exclude<BoardOwnerFilter, 'all'>): string =>
+  filter === 'me' ? OWNER_WORDS['owner.filter'].empty_me : OWNER_WORDS['owner.filter'].empty_none;
 
 interface ViewProps {
   readonly items: readonly TaskListItem[];
@@ -360,7 +447,11 @@ const ListView = ({
   may,
   agents,
   nowMs,
-}: ViewProps): ReactElement => {
+  ownerControl,
+}: ViewProps & {
+  /** The owner filter, in the list box's header (S-26.8b). */
+  readonly ownerControl: ReactNode;
+}): ReactElement => {
   const [filters, setFilters] = useState<BoardFilters>(NO_FILTERS);
   const shown = filterTasks(items, filters);
   const templates = [...new Set(items.map((task) => task.template))].sort();
@@ -386,6 +477,7 @@ const ListView = ({
               label={`${shown.length} of ${items.length} tasks shown`}
             />
           </span>
+          {ownerControl}
           <span className="inline-flex items-center gap-1.5">
             <label htmlFor={stateId} className="text-fg-muted">
               State
@@ -458,11 +550,44 @@ const ListView = ({
 
 export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
   const { project, isPending, isError, error } = useProjectByKey(projectKey);
-  const tasks = useProjectTasks(project?.id ?? null);
+  const search = useSearch({ strict: false }) as {
+    readonly view?: string;
+    readonly owner?: string;
+  };
+  // S-26.8b: the owner filter — the URL's, else this person's last choice, else *Everyone* — is
+  // the server's `?owner=`, so both views read the filtered page.
+  const session = useSession();
+  const userId = session.data?.user.id ?? null;
+  const stored = readStoredOwnerFilter(globalThis.localStorage, userId);
+  const owner = boardOwnerFilter(search.owner, stored);
+  const tasks = useProjectTasks(project?.id ?? null, undefined, ownerSearchValue(owner), true);
   const agents = useAgents();
   const { now } = useServices();
-  const search = useSearch({ strict: false }) as { readonly view?: string };
   const view: BoardView = search.view === 'list' ? 'list' : 'board';
+  const navigate = useNavigate();
+  const ownerInUrl = search.owner === 'me' || search.owner === 'none' ? search.owner : undefined;
+  // A board URL with no filter opens this person's last one, and says so in the URL.
+  useEffect(() => {
+    if (ownerInUrl === undefined && stored !== null) {
+      void navigate({
+        to: '/projects/$key',
+        params: { key: projectKey },
+        search: (previous: Record<string, unknown>) => withOwner(previous, stored),
+        // Keep `#start-ticket`: the start dialog opens on it once the page is read.
+        hash: true,
+        replace: true,
+      });
+    }
+  }, [ownerInUrl, stored, navigate, projectKey]);
+  const chooseOwner = (next: BoardOwnerFilter): void => {
+    storeOwnerFilter(globalThis.localStorage, userId, next);
+    void navigate({
+      to: '/projects/$key',
+      params: { key: projectKey },
+      search: (previous: Record<string, unknown>) => withOwner(previous, ownerSearchValue(next)),
+      hash: true,
+    });
+  };
   useTopics(project === null ? [] : [`project:${project.id}`]);
 
   // The header's *Start a ticket* and the `+` menu's land on `#start-ticket`; keyed on the press
@@ -494,6 +619,7 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
 
   const nowMs = now();
   const items = tasks.data?.items ?? [];
+  const ownerControl = <OwnerFilterControl value={owner} onChange={chooseOwner} />;
   // The live run per task; the read is the organisation's, so a run of another project is ignored.
   const live = new Map<string, AgentEntry>();
   for (const entry of agents.data?.items ?? []) {
@@ -521,7 +647,9 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
       {/* The project's name, its sections and *Start a ticket* are the project frame's header and
           tabs (`app/project-frame.tsx`); the board is the frame's index page. */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <ViewToggle projectKey={project.key} view={view} />
+        <ViewToggle projectKey={project.key} view={view} owner={ownerSearchValue(owner)} />
+        {/* On the list view the filter is in the list box's header; the board has no such row. */}
+        {view === 'board' ? ownerControl : null}
       </div>
 
       {tasks.isError ? (
@@ -529,7 +657,14 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
       ) : null}
       {tasks.isPending ? <Skeleton label="Loading tasks…" lines={3} /> : null}
 
-      {tasks.isSuccess && items.length === 0 ? (
+      {/* A filtered board with nothing in it is not an empty project: the filter says so. */}
+      {tasks.isSuccess && items.length === 0 && owner !== 'all' && view === 'board' ? (
+        <p data-board-owner-empty={owner} className="text-sm text-fg-muted">
+          {ownerFilterEmpty(owner)}
+        </p>
+      ) : null}
+
+      {tasks.isSuccess && items.length === 0 && owner === 'all' ? (
         <Blankslate
           size="spacious"
           icon={<Bot pose="sleeping" scale={2} />}
@@ -556,12 +691,12 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
         />
       ) : null}
 
-      {tasks.isSuccess && items.length > 0 ? (
+      {tasks.isSuccess && (items.length > 0 || owner !== 'all') ? (
         view === 'list' ? (
-          <ListView {...viewProps} />
-        ) : (
+          <ListView {...viewProps} ownerControl={ownerControl} />
+        ) : items.length > 0 ? (
           <Columns {...viewProps} />
-        )
+        ) : null
       ) : null}
 
       {canStart ? (
