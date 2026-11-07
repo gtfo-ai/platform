@@ -8,6 +8,7 @@
  */
 import { expect, test } from '@playwright/test';
 import {
+  AUT_6655_JOB_URL,
   failedJobs,
   HOSTILE,
   IDS,
@@ -1034,6 +1035,59 @@ test('a task CI sent back says why and what happens next; a timed-out CI check n
   await expect(needs.getByText(/Start or finish it there, then retry the stage\./)).toBeVisible();
   await expect(needs.getByRole('button', { name: 'Retry stage…' })).toBeVisible();
   await expect(needs.getByText(/CI failed/)).toHaveCount(0);
+});
+
+/**
+ * S-25.12 (product/10's Task detail amendments of 2026-11-07), AUT-6655's shape: GitLab holds a
+ * draft merge request's pipeline at the manual job `sentry-release-commit`, 60 minutes allowed.
+ * While the CI check waits, the page says what it waits for and is *Needs you* at once, with the job
+ * as its one next step; once the wait timed out, it says it did not finish within 60 minutes, from
+ * the read — never a failure, and never the recorded sentence's internal words.
+ */
+test('a CI check held at a manual job says what it waits for, and its timeout from the read (S-25.12)', async ({
+  page,
+}) => {
+  await page.goto(`/tasks/${IDS.taskCiHeld}`);
+  await expect(
+    page.getByRole('heading', { level: 1, name: /Release the Sentry commit/ }),
+  ).toBeVisible();
+  const needs = page.getByRole('region', { name: 'Needs you' });
+  await expect(
+    needs.getByText(
+      'CI is waiting for someone to start the manual job sentry-release-commit in GitLab. Start it there and the task continues.',
+    ),
+  ).toBeVisible();
+  await expect(needs.getByRole('link', { name: 'sentry-release-commit' })).toHaveAttribute(
+    'href',
+    AUT_6655_JOB_URL,
+  );
+  await expect(needs.getByText(/\d+ min so far; the task gives up after 60/)).toBeVisible();
+  // The platform keeps the merge request a draft: the note links the readiness panel.
+  await expect(needs.getByRole('link', { name: 'Discovery & readiness' })).toHaveAttribute(
+    'href',
+    `/projects/${PROJECT_KEY}/settings/discovery`,
+  );
+  // Needs you at once: the header's state, its Now line and its one primary.
+  await expect(page.locator('[data-state-label="needs_you"]').first()).toHaveText('Needs you');
+  await expect(
+    page.getByText('Now: CI waits for someone to start the manual job sentry-release-commit'),
+  ).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Start the job in GitLab' })).toHaveAttribute(
+    'href',
+    AUT_6655_JOB_URL,
+  );
+
+  await page.goto(`/tasks/${IDS.taskCiHeldTimedOut}`);
+  const parked = page.getByRole('region', { name: 'Needs you' });
+  await expect(
+    parked.getByText(
+      'CI did not finish within 60 minutes: pipeline 3038234623 was still held at the manual job sentry-release-commit.',
+    ),
+  ).toBeVisible();
+  await expect(parked.getByText('Start the job in GitLab, then Retry.')).toBeVisible();
+  await expect(parked.getByRole('button', { name: 'Retry stage…' })).toBeVisible();
+  await expect(parked.getByText(/What the platform saw last/)).toHaveCount(0);
+  await expect(parked.getByText(/poll-only|ci_timeout_minutes|CI failed/)).toHaveCount(0);
 });
 
 test('the epic split’s breakdown panel accepts a chosen child with one request (WP-44)', async ({

@@ -25,6 +25,16 @@
  * which round it is (`./setback.ts`), as information with no action. And a task that stopped after
  * going back says which way it stopped — the rounds used up, the same failure again, or a check that
  * got no answer (nothing failed; the sentence the platform recorded follows) — and the next step.
+ *
+ * **While the CI check waits, it says what it waits for** (S-25.12, the read's `gate_wait`,
+ * `./gate-wait.tsx`): a pipeline **held at a manual job** is a sixth reason the callout is there —
+ * *Needs you* at once, with the job linked and "Start it there and the task continues" — and a
+ * pipeline still running is said in the slot as information ("CI is running (pipeline n, 12 min so
+ * far; the task gives up after 60)"). A CI check that stopped with no answer is worded from the
+ * attempt's `last_gate_wait` when it recorded one ("CI did not finish within 60 minutes: pipeline n
+ * was still held at the manual job X."; "…so Retry did not wait again."); only an attempt with no
+ * read (before the worker session's #89) quotes the recorded sentence after *What the platform saw
+ * last:*.
  */
 import type {
   ApprovalView,
@@ -40,6 +50,7 @@ import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd } from '../
 import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { ApprovalCard } from './approval-card.js';
 import { BreakdownPanel } from './breakdown-panel.js';
+import { CiWaitStop, GateWaitNotice, gateWaitHeld } from './gate-wait.js';
 import { openReturn, returnWords, stopWords } from './setback.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
 import { latestStageRow } from './task-checks-text.js';
@@ -208,9 +219,13 @@ export const calloutReasons = (input: {
   readonly pendingApprovals: number;
   readonly breakdownWaiting: boolean;
   readonly pausedReason?: TaskRecord['paused_reason'];
-}): readonly ('question' | 'approval' | 'escalation' | 'budget' | 'breakdown')[] => [
+  /** The CI check waits on a pipeline held at a manual job (S-25.12, `gateWaitHeld`). */
+  readonly ciHeld?: boolean;
+}): readonly ('question' | 'approval' | 'ci_held' | 'escalation' | 'budget' | 'breakdown')[] => [
   ...(input.openQuestions > 0 ? (['question'] as const) : []),
   ...(input.pendingApprovals > 0 ? (['approval'] as const) : []),
+  // A held manual job only a person can start (`ui/task-status.ts`' needs-you, `ci_held`).
+  ...(input.ciHeld === true ? (['ci_held'] as const) : []),
   ...(input.state === 'needs_human' ? (['escalation'] as const) : []),
   // A budget pause waits on whoever may raise the cap (`ui/task-status.ts`' needs-you).
   ...(input.state === 'paused' && input.pausedReason === 'budget' ? (['budget'] as const) : []),
@@ -233,6 +248,8 @@ const calloutTitle = (
         ? `The ${APPROVAL_KIND_LABEL[approval.kind].toLowerCase()} is waiting for you`
         : `${approvals.length} approvals are waiting for you`;
     }
+    case 'ci_held':
+      return 'CI is waiting for a person';
     case 'escalation':
       return 'This task needs a person';
     case 'budget':
@@ -250,6 +267,7 @@ export const TaskCallout = ({
   breakdownWaiting,
   commands,
   onOpen,
+  nowMs,
 }: {
   readonly detail: TaskDetailResponse;
   /** The board's key, when the projects read has it: a reason's *how to stop being asked* links. */
@@ -260,8 +278,12 @@ export const TaskCallout = ({
   readonly breakdownWaiting: boolean;
   readonly commands: TaskCommands;
   readonly onOpen: (dialog: TaskDialog) => void;
+  /** The page's clock, for the minutes a CI wait has run; the read's own instant without it. */
+  readonly nowMs?: number;
 }): ReactElement | null => {
   const { task, stages } = detail;
+  const gateWait = detail.gate_wait;
+  const provider = task.mr_ref?.provider ?? null;
   const openQuestions = detail.questions.filter((question) => question.status === 'open');
   const pendingApprovals = detail.approvals.filter((approval) => approval.status === 'pending');
   const reasons = calloutReasons({
@@ -270,9 +292,25 @@ export const TaskCallout = ({
     pendingApprovals: pendingApprovals.length,
     breakdownWaiting,
     pausedReason: task.paused_reason,
+    ciHeld: gateWaitHeld(gateWait),
   });
   const [first] = reasons;
   if (first === undefined) {
+    if (gateWait !== null) {
+      // S-25.12: CI is still running — information, no action; nothing is asked of the reader.
+      return (
+        <section aria-label="What happens next" data-testid="gate-wait-notice">
+          <Flash tone="info">
+            <GateWaitNotice
+              wait={gateWait}
+              provider={provider}
+              projectKey={projectKey}
+              nowMs={nowMs}
+            />
+          </Flash>
+        </section>
+      );
+    }
     const open = openReturn(task, stages, detail.returns.at(-1) ?? null);
     if (open === null) {
       return null;
@@ -294,6 +332,12 @@ export const TaskCallout = ({
   const reason =
     reasons.includes('escalation') && stop === null ? escalationReason(task, stages) : null;
   const stopped = stop === null ? null : stopWords(stop, detail.loop_limits);
+  // S-25.12: a CI check that got no answer, worded from the attempt's structured read when it
+  // recorded one; the recorded sentence is only the fallback for an attempt with none.
+  const lastRead =
+    stop !== null && stop.cause === 'no_answer' && stop.stage === 'ci_gate'
+      ? detail.last_gate_wait
+      : null;
   return (
     <section aria-label="Needs you" data-testid="needs-you-callout">
       <Flash tone="beacon" title={calloutTitle(first, openQuestions.length, pendingApprovals)}>
@@ -333,6 +377,14 @@ export const TaskCallout = ({
               ) : null}
             </div>
           )}
+          {reasons.includes('ci_held') && gateWait !== null ? (
+            <GateWaitNotice
+              wait={gateWait}
+              provider={provider}
+              projectKey={projectKey}
+              nowMs={nowMs}
+            />
+          ) : null}
           {reasons.includes('escalation') ? (
             <div className="flex flex-col gap-2">
               <EscalationText
@@ -340,7 +392,9 @@ export const TaskCallout = ({
                 maySendBack={detail.can_return || detail.can_rework}
                 mayResume={detail.can_resume}
               />
-              {stop === null || stopped === null ? null : (
+              {stop !== null && lastRead !== null ? (
+                <CiWaitStop stop={stop} read={lastRead} provider={provider} />
+              ) : stop === null || stopped === null ? null : (
                 <div className="flex flex-col gap-1" data-stop={stop.cause}>
                   <p data-stop-sentence="">
                     <UntrustedText value={stopped.sentence} />

@@ -111,6 +111,8 @@ const detail = (over: Partial<TaskDetailResponse> = {}, task: Partial<TaskRecord
     gate_feedback: null,
     returns: [],
     stop: null,
+    gate_wait: null,
+    last_gate_wait: null,
     loop_limits: null,
     human_time: {
       total_minutes: 0,
@@ -129,6 +131,41 @@ const detail = (over: Partial<TaskDetailResponse> = {}, task: Partial<TaskRecord
     runs: [],
     ...over,
   }) satisfies TaskDetailResponse;
+
+/**
+ * S-25.12: the CI check's open read, AUT-6655's shape — held at the manual job
+ * `sentry-release-commit` on a draft merge request, 60 minutes allowed. Twelve and a half minutes
+ * in, by the page's own clock.
+ */
+const JOB_URL = 'https://git.example.invalid/acme/api/-/jobs/977';
+const GITLAB_MR = {
+  provider: 'gitlab',
+  project_path: 'acme/api',
+  iid: 7,
+  url: 'https://git.example.invalid/acme/api/-/merge_requests/7',
+};
+const heldWait = (): NonNullable<TaskDetailResponse['gate_wait']> => ({
+  pipeline_id: '3038234623',
+  pipeline_url: 'https://git.example.invalid/acme/api/-/pipelines/3038234623',
+  status: 'manual',
+  held_job: 'sentry-release-commit',
+  held_job_url: JOB_URL,
+  draft: true,
+  checked_at: new Date(Date.now() - 60_000).toISOString(),
+  waiting_since: new Date(Date.now() - 12.5 * 60_000).toISOString(),
+  timeout_minutes: 60,
+});
+const atCi = (wait: NonNullable<TaskDetailResponse['gate_wait']>) =>
+  detail(
+    {
+      gate_wait: wait,
+      stages: [
+        stage('implementation', 1, 'completed', 'approve'),
+        stage('ci_gate', 1, 'running', null),
+      ],
+    },
+    { state: 'active', current_stage: 'ci_gate', mr_ref: GITLAB_MR },
+  );
 
 const QUESTION_ROW: TaskDetailResponse['questions'][number] = {
   id: QUESTION,
@@ -396,6 +433,13 @@ describe('one primary action per state', () => {
     ],
     ['an escalated task', detail({}, { state: 'needs_human' }), ['Resume']],
     ['a running task', detail(), []],
+    // S-25.12: the one next step is the held job, a link to its page.
+    ['a CI check held at a manual job', atCi(heldWait()), ['Start the job in GitLab']],
+    [
+      'a CI check still running',
+      atCi({ ...heldWait(), status: 'running', held_job: null, held_job_url: null }),
+      [],
+    ],
   ];
 
   it.each(cases)('%s', async (_name, task, expected) => {
@@ -428,6 +472,65 @@ describe('one primary action per state', () => {
         pendingApprovals: 0,
       }),
     ).toBeNull();
+    // S-25.12: a held manual job comes after the cap, before a resume; a question still wins.
+    expect(
+      taskPrimaryAction({
+        state: 'active',
+        canHandBack: false,
+        openQuestions: 0,
+        pendingApprovals: 0,
+        ciHeldLink: true,
+      }),
+    ).toBe('start_job');
+    expect(
+      taskPrimaryAction({
+        state: 'active',
+        canHandBack: false,
+        openQuestions: 1,
+        pendingApprovals: 0,
+        ciHeldLink: true,
+      }),
+    ).toBe('answer');
+  });
+});
+
+/**
+ * S-25.12 (product/10's 2026-11-07 amendments): while the CI check waits, the header says what it
+ * waits for, and a pipeline held at a manual job is *Needs you* at once — the header's state, its
+ * *Now* line, its one primary and the callout, from the read's `gate_wait`.
+ */
+describe('a waiting CI check (S-25.12)', () => {
+  it('makes a held manual job Needs you at once, with the job as the one next step', async () => {
+    start(atCi(heldWait()), `/tasks/${TASK}`, [PROJECT_ROW]);
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    await waitFor(() => {
+      expect(document.querySelector('[data-state-label="needs_you"]')?.textContent).toBe(
+        'Needs you',
+      );
+    });
+    expect(screen.getByRole('main').textContent).toContain(
+      'Now: CI waits for someone to start the manual job sentry-release-commit',
+    );
+    const primary = screen.getByRole('link', { name: 'Start the job in GitLab' });
+    expect(primary.getAttribute('href')).toBe(JOB_URL);
+    expect(
+      within(callout).getByRole('link', { name: 'sentry-release-commit' }).getAttribute('href'),
+    ).toBe(JOB_URL);
+    // The draft note links the readiness panel's CI-rules warning.
+    const readiness = await within(callout).findByRole('link', { name: 'Discovery & readiness' });
+    expect(readiness.getAttribute('href')).toBe(`/projects/${PROJECT_ROW.key}/settings/discovery`);
+    expect(within(callout).getByText(/12 min so far; the task gives up after 60/)).toBeTruthy();
+  });
+
+  it('says a running pipeline on the Now line and in the slot, and asks nothing', async () => {
+    start(atCi({ ...heldWait(), status: 'running', held_job: null, held_job_url: null }));
+    const notice = await screen.findByRole('region', { name: 'What happens next' });
+    expect(notice.querySelector('[data-gate-wait="running"]')?.textContent).toBe(
+      'CI is running (pipeline 3038234623, 12 min so far; the task gives up after 60).',
+    );
+    expect(screen.getByRole('main').textContent).toContain('Now: CI running · 12 min of 60');
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
+    expect(document.querySelector('[data-state-label="needs_you"]')).toBeNull();
   });
 });
 

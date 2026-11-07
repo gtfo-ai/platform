@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { NEEDS_YOU_LABEL, needsYou, taskStateLabel, taskStatus } from '../ui/task-status.js';
 import { boardColumnOf, columnFor, NEEDS_YOU_COLUMN } from './board.js';
 import { needsYou as cardNeedsYou, cardStateLabel } from './board-card.js';
+import { gateWaitHeld } from './gate-wait.js';
 
 type Item = 'none' | 'question' | 'approval';
 type PausedReason = TaskListItem['paused_reason'];
@@ -98,6 +99,44 @@ describe('one needs-you rule for the column, the card and the header', () => {
       expect(cardStateLabel(row)).not.toBe(NEEDS_YOU_LABEL);
     },
   );
+
+  /**
+   * S-25.12 (product/10's 2026-11-07 amendment): a CI check held at a manual job waits for a
+   * person, so it is *Needs you* at once — not after the wait times out. The task page knows it from
+   * `gate_wait` (`gateWaitHeld`); the board's item does not carry the read (BACKLOG 1300).
+   */
+  it.each(taskStateSchema.options)(
+    'puts a %s task whose CI check is held at a manual job in Needs you unless it has ended',
+    (state) => {
+      const header = { state, paused_reason: null, open_asks: 0, ci_held: true };
+      const want = !TERMINAL_STATES.has(state);
+      expect(needsYou(header)).toBe(want);
+      expect(taskStatus(header) === 'needs_you').toBe(want);
+      if (want && !WAITING_STATES.has(state) && state !== 'paused') {
+        expect(taskStateLabel(header)).toBe(NEEDS_YOU_LABEL);
+      }
+    },
+  );
+
+  it('reads a CI check that is running, not held, as no reason at all', () => {
+    expect(needsYou({ state: 'active', paused_reason: null, open_asks: 0, ci_held: false })).toBe(
+      false,
+    );
+    expect(gateWaitHeld(null)).toBe(false);
+    expect(
+      gateWaitHeld({
+        pipeline_id: '41',
+        pipeline_url: null,
+        status: 'running',
+        held_job: null,
+        held_job_url: null,
+        draft: true,
+        checked_at: '2026-11-07T10:05:00.000Z',
+        waiting_since: '2026-11-07T10:00:00.000Z',
+        timeout_minutes: 60,
+      }),
+    ).toBe(false);
+  });
 
   it('moves an Active task with an open question and a pending approval to Needs you', () => {
     // research/21 S03's own example, both items at once.

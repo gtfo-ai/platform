@@ -112,10 +112,10 @@ callout's slot carry one sentence. It names the cause, who acts, and how many tr
 *S-25.11's wording (2026-11-07).* The examples above say **round**, not *try*: the vocabulary census retires "try N" for
 *Attempt N* (S-23.23), and the board's loop badge already calls this counter a round ("CI fix round 2 of 3"). The
 repeated failure is **three** identical CI failures in a row, which is what the pipeline counts (product/04 S4,
-`ciConvergence`), not two. Until the platform records the failing job's URL, the pipeline's id and the CI timeout apart
-from the return's prose, the page links the merge request, and a timed-out check says it "did not finish in the time the
-platform waits for it" followed by the sentence the platform recorded (BACKLOG 1295). The waiting gate's own sentence
-waits for its pending read to be recorded (BACKLOG 1293).
+`ciConvergence`), not two. A CI failure's return still links the merge request rather than the failing job, whose URL
+the return's row does not record. A timed-out check whose attempt recorded no read (before #89) still says it "did not
+finish in the time the platform waits for it", followed by the sentence the platform recorded; since S-25.12 every
+other waiting or timed-out check is worded from its read, as above.
 
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.

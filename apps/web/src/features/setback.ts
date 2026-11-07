@@ -16,6 +16,11 @@
  *   (nothing failed: the recorded sentence follows, as untrusted text). The next step follows it.
  * - **not recorded** — a return whose row holds no reason, or no target, says so.
  *
+ * A CI check that got no answer (`no_answer`) is worded here only for the board card and for an
+ * attempt with no structured read (before the worker session's #89); with `last_gate_wait` the
+ * task page words it from the read instead (`./gate-wait.tsx`' `CiWaitStop`, S-25.12), and a Retry
+ * that found the same held pipeline (`ci_ending: 'ci_held_unchanged'`) says so in both.
+ *
  * The words are the platform's plain ones (product/10's *Plain words* rule, the vocabulary census):
  * a *round*, never a loop; *CI*, never a gate; no signature. "Round" is the board's word for the
  * same counter (`loopRoundLabel`'s *CI fix round 2 of 3*) — the census retires "try N" for
@@ -228,6 +233,20 @@ export const stopWords = (stop: TaskStop, limits: Limits): StopWords => {
         recordedLead: null,
       };
     case 'no_answer':
+      // S-25.12: a Retry whose first read found the same held pipeline stopped at once. The
+      // structured words (the job named and linked) are `./gate-wait.tsx`' `CiWaitStop`, from the
+      // task read's `last_gate_wait`; these are the card's and a read-less attempt's.
+      if (isCi(stop) && stop.ci_ending === 'ci_held_unchanged') {
+        return {
+          sentence: 'The pipeline is still held at a manual job, so Retry did not wait again.',
+          next: 'Start the job on the merge request’s pipeline, or change its rule, then Retry.',
+          short: 'CI held at a manual job',
+          recordedLead:
+            stop.recorded === null
+              ? 'What the platform saw last was not recorded.'
+              : 'What the platform saw last:',
+        };
+      }
       return {
         sentence: isCi(stop)
           ? 'CI did not finish in the time the platform waits for it. Nothing failed.'
