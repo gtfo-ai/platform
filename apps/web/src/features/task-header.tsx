@@ -70,9 +70,16 @@ import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
 import { StateLabel } from '../ui/status.js';
 import { taskStateLabel, taskStatus } from '../ui/task-status.js';
 import { DownloadLink, ExternalLink, UntrustedText } from '../ui/untrusted.js';
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { approvalCardId } from './approval-card.js';
 import { reviewVerb } from './approval-text.js';
-import { gateWaitHeld, gateWaitJobUrl, gateWaitShort, providerName } from './gate-wait.js';
+import {
+  gateWaitHeld,
+  gateWaitJobUrl,
+  gateWaitShort,
+  openGateWait,
+  providerName,
+} from './gate-wait.js';
 import { liveStageRun } from './live-stage.js';
 import { setbackShort } from './setback.js';
 import { takeOverFinished } from './take-over.js';
@@ -174,7 +181,8 @@ export const TaskHeader = ({
     task.paused_reason === 'budget' &&
     task.paused_budget_scope === 'task';
   // S-25.12: a pipeline held at a manual job waits for a person, and the one next step is the job.
-  const gateWait = detail.gate_wait;
+  // Only while the task is active: a paused task's CI check is not checking (review of PR #101).
+  const gateWait = openGateWait(detail);
   const ciHeld = gateWaitHeld(gateWait);
   const heldJobUrl = gateWait !== null && ciHeld ? gateWaitJobUrl(gateWait) : null;
   const primary = taskPrimaryAction({
@@ -207,7 +215,8 @@ export const TaskHeader = ({
   const setback =
     gateWait === null
       ? setbackShort(task, stages, detail.returns.at(-1) ?? null, detail.stop, detail.loop_limits)
-      : gateWaitShort(gateWait, nowMs);
+      : // Provider text (the job's name) on its way into a string prop: bidi and controls removed.
+        sanitiseUntrusted(gateWaitShort(gateWait, nowMs));
   const currentStage = task.current_stage ?? null;
   // A task that has entered no stage has no strip to draw; the Overview says it has none.
   const phase = phaseStagesFor(null, stages, currentStage);

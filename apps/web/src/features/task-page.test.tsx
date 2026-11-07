@@ -522,6 +522,24 @@ describe('a waiting CI check (S-25.12)', () => {
     expect(within(callout).getByText(/12 min so far; the task gives up after 60/)).toBeTruthy();
   });
 
+  it('reads a task paused by hand at a held job as paused, with Resume, not Needs you (review of PR #101)', async () => {
+    const paused = atCi(heldWait());
+    start({ ...paused, task: { ...paused.task, state: 'paused', paused_reason: 'manual' } });
+    await screen.findByRole('heading', { level: 1 });
+    await screen.findByText('Checks');
+    await waitFor(() => {
+      expect(primaries()).toEqual(['Resume']);
+    });
+    expect(document.querySelector('[data-state-label="paused"]')?.textContent).toBe('Paused');
+    expect(document.querySelector('[data-state-label="needs_you"]')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Start the job in GitLab' })).toBeNull();
+    const main = screen.getByRole('main').textContent ?? '';
+    expect(main).not.toContain('Start it there and the task continues');
+    expect(main).not.toContain('Now: CI waits');
+    expect(main).not.toContain('Now: CI running');
+  });
+
   it('says a running pipeline on the Now line and in the slot, and asks nothing', async () => {
     start(atCi({ ...heldWait(), status: 'running', held_job: null, held_job_url: null }));
     const notice = await screen.findByRole('region', { name: 'What happens next' });

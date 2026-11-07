@@ -22,7 +22,9 @@ import {
   gateWaitJobUrl,
   gateWaitMinutes,
   gateWaitShort,
+  gateWaitStaleMinutes,
   gateWaitTime,
+  openGateWait,
   providerName,
 } from './gate-wait.js';
 
@@ -110,6 +112,30 @@ describe('a pipeline still running', () => {
       'CI is queued (pipeline 41, 11 min so far; the task gives up after 60).',
     );
     expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('never counts past the timeout, and says when a stale read was taken (review of PR #101)', () => {
+    // The read stopped being refreshed at 11.5 min; the page's clock is 75 min in.
+    const late = Date.parse(SINCE) + 75 * 60_000;
+    expect(gateWaitMinutes(running(), late)).toBe(60);
+    expect(gateWaitStaleMinutes(running(), late)).toBe(63);
+    expect(gateWaitTime(running(), late)).toBe(
+      '60 min so far; the task gives up after 60; last checked 63 min ago',
+    );
+    expect(gateWaitShort(running(), late)).toBe('CI running · 60 min of 60');
+    // A fresh read (a minute old) says nothing about when it was taken; no clock, nothing either.
+    expect(gateWaitStaleMinutes(running(), NOW)).toBeNull();
+    expect(gateWaitStaleMinutes(running())).toBeNull();
+    // With no timeout there is nothing to cap at.
+    expect(gateWaitMinutes(running({ timeout_minutes: null }), late)).toBe(75);
+  });
+
+  it('is open only while the task is active (review of PR #101)', () => {
+    expect(openGateWait({ task: { state: 'active' }, gate_wait: held() })).toEqual(held());
+    for (const state of ['paused', 'needs_human', 'waiting_answers', 'cancelled'] as const) {
+      expect(openGateWait({ task: { state }, gate_wait: held() }), state).toBeNull();
+    }
+    expect(openGateWait({ task: { state: 'active' }, gate_wait: null })).toBeNull();
   });
 
   it('never counts a negative wait, and has a short form for the header', () => {

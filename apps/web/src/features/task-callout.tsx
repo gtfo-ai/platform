@@ -50,7 +50,7 @@ import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd } from '../
 import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { ApprovalCard } from './approval-card.js';
 import { BreakdownPanel } from './breakdown-panel.js';
-import { CiWaitStop, GateWaitNotice, gateWaitHeld } from './gate-wait.js';
+import { CiWaitStop, GateWaitNotice, gateWaitHeld, openGateWait } from './gate-wait.js';
 import { openReturn, returnWords, stopWords } from './setback.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
 import { latestStageRow } from './task-checks-text.js';
@@ -282,7 +282,8 @@ export const TaskCallout = ({
   readonly nowMs?: number;
 }): ReactElement | null => {
   const { task, stages } = detail;
-  const gateWait = detail.gate_wait;
+  // Only while the task is active: a paused task's CI check is not checking (review of PR #101).
+  const gateWait = openGateWait(detail);
   const provider = task.mr_ref?.provider ?? null;
   const openQuestions = detail.questions.filter((question) => question.status === 'open');
   const pendingApprovals = detail.approvals.filter((approval) => approval.status === 'pending');

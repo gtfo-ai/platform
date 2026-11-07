@@ -29,7 +29,7 @@
  * The words live here rather than in `ui/humanize.ts`, which the remote worker's page imports too
  * (BACKLOG 1299): this module is the task page's only, so its sentences cost that page nothing.
  */
-import type { GateWait, TaskStop } from '@platform/contracts';
+import type { GateWait, TaskState, TaskStop } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement, ReactNode } from 'react';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
@@ -55,20 +55,59 @@ export const gateWaitJobUrl = (wait: GateWait): string | null =>
   wait.held_job_url ?? wait.pipeline_url;
 
 /**
+ * The CI wait the page may say is **open**: the read's `gate_wait`, but only while the task is
+ * `active` (review of PR #101). The server publishes `gate_wait` for any task whose CI attempt is
+ * open, and a pause closes no attempt — yet the CI check stops checking a paused task, so a held
+ * job is then not what the task waits on ("Start it there and the task continues" would be false),
+ * and a manual pause waits on nobody (`ui/task-status.ts`). The header, the callout, the *Now* line
+ * and the needs-you rule all read this one value. That the server should say so itself is BACKLOG
+ * 1301.
+ */
+export const openGateWait = (detail: {
+  readonly task: { readonly state: TaskState };
+  readonly gate_wait: GateWait | null;
+}): GateWait | null => (detail.task.state === 'active' ? detail.gate_wait : null);
+
+/**
  * Whole minutes the check has waited: from `waiting_since` (the attempt's entry, which the CI
- * timeout counts from) to `nowMs`, or to the read's own `checked_at` when no clock is given.
+ * timeout counts from) to `nowMs`, or to the read's own `checked_at` when no clock is given —
+ * never past `timeout_minutes`, because a read that stopped being refreshed would otherwise go on
+ * counting ("75 min so far; the task gives up after 60").
  */
 export const gateWaitMinutes = (wait: GateWait, nowMs?: number): number => {
   const until = nowMs ?? Date.parse(wait.checked_at);
   const since = Date.parse(wait.waiting_since);
-  return Number.isFinite(until) && Number.isFinite(since)
-    ? Math.max(0, Math.floor((until - since) / 60_000))
-    : 0;
+  const minutes =
+    Number.isFinite(until) && Number.isFinite(since)
+      ? Math.max(0, Math.floor((until - since) / 60_000))
+      : 0;
+  return wait.timeout_minutes === null ? minutes : Math.min(minutes, wait.timeout_minutes);
 };
 
-/** "12 min so far; the task gives up after 60" — no second half when the wait has no timeout. */
-export const gateWaitTime = (wait: GateWait, nowMs?: number): string =>
-  `${gateWaitMinutes(wait, nowMs)} min so far${wait.timeout_minutes === null ? '' : `; the task gives up after ${wait.timeout_minutes}`}`;
+/** A read older than this, by the page's clock, says when it was taken. */
+export const GATE_WAIT_STALE_MINUTES = 3;
+
+/** Whole minutes since the read was taken, when that is over {@link GATE_WAIT_STALE_MINUTES}. */
+export const gateWaitStaleMinutes = (wait: GateWait, nowMs?: number): number | null => {
+  if (nowMs === undefined) {
+    return null;
+  }
+  const checked = Date.parse(wait.checked_at);
+  if (!Number.isFinite(checked)) {
+    return null;
+  }
+  const minutes = Math.floor((nowMs - checked) / 60_000);
+  return minutes > GATE_WAIT_STALE_MINUTES ? minutes : null;
+};
+
+/**
+ * "12 min so far; the task gives up after 60" — no second half when the wait has no timeout, and
+ * "; last checked 9 min ago" when the read is stale.
+ */
+export const gateWaitTime = (wait: GateWait, nowMs?: number): string => {
+  const stale = gateWaitStaleMinutes(wait, nowMs);
+  return `${gateWaitMinutes(wait, nowMs)} min so far${wait.timeout_minutes === null ? '' : `; the task gives up after ${wait.timeout_minutes}`}${stale === null ? '' : `; last checked ${stale} min ago`}`;
+};
 
 /** The pipeline's state as the running sentence says it. */
 const runningWord = (wait: GateWait): string => (wait.status === 'pending' ? 'queued' : 'running');
