@@ -818,6 +818,44 @@ describe('CI', () => {
     }
   });
 
+  /**
+   * Backlog 1078: a held manual job's own page reaches the CI gate, so the task page can link to
+   * where a person starts it. "List pipeline jobs" documents `web_url` on every job
+   * (`test/fixtures/http/gitlab/pipelines.json`); a job without one maps to `null`, never a guess.
+   */
+  it('maps each job’s own page, and none for a job the payload gives none', async () => {
+    const { port } = build({
+      [`GET /projects/${P}/pipelines?sha=${pipeline.sha}&order_by=id&sort=desc&per_page=1`]: {
+        status: 200,
+        body: [{ id: 900, sha: pipeline.sha, status: 'manual' }],
+      },
+      [`GET /projects/${P}/pipelines/900`]: {
+        status: 200,
+        body: { ...pipeline, status: 'manual', finished_at: null },
+      },
+      [`GET /projects/${P}/pipelines/900/jobs?per_page=100&page=1`]: {
+        status: 200,
+        body: [
+          {
+            id: 9003,
+            name: 'sentry-release-commit',
+            stage: 'release',
+            status: 'manual',
+            allow_failure: false,
+            web_url: `${HOST}/acme/api/-/jobs/9003`,
+          },
+          { id: 9004, name: 'lint', stage: 'test', status: 'success', allow_failure: false },
+        ],
+      },
+    });
+    const status = await port.getPipelineStatus(PROJECT, pipeline.sha);
+    expect(status?.status).toBe('manual');
+    expect(status?.jobs.map((job) => [job.name, job.status, job.web_url])).toEqual([
+      ['sentry-release-commit', 'manual', `${HOST}/acme/api/-/jobs/9003`],
+      ['lint', 'success', null],
+    ]);
+  });
+
   it('rejects a log ref that is not a GitLab job id before making a request', async () => {
     const { port, calls } = build({});
     await expect(port.getJobLog(PROJECT, 'log:9002')).rejects.toBeInstanceOf(IntegrationError);

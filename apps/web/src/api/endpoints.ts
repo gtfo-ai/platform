@@ -114,6 +114,7 @@ import {
   setAutonomyRequestSchema,
   setDefaultBranchRequestSchema,
   setDefaultBranchResponseSchema,
+  setTaskOwnerRequestSchema,
   setupGuideResponseSchema,
   shadowBatchesResponseSchema,
   shadowBatchResponseSchema,
@@ -303,7 +304,13 @@ export interface Endpoints {
   ) => Promise<z.output<typeof startTaskResponseSchema>>;
   readonly projectTasks: (
     projectId: string,
-    query?: { readonly state?: string; readonly limit?: number; readonly cursor?: string },
+    query?: {
+      readonly state?: string;
+      readonly limit?: number;
+      readonly cursor?: string;
+      /** S-26.1's owner filter, the board's *Mine* and *Unassigned* (S-26.8b). */
+      readonly owner?: 'me' | 'none';
+    },
   ) => Promise<z.output<typeof tasksResponseSchema>>;
   readonly task: (taskId: string) => Promise<z.output<typeof taskDetailResponseSchema>>;
   /**
@@ -582,6 +589,16 @@ export interface Endpoints {
    * `POST /api/tasks/:id/hand-back`. The key is **required** by the route: a hand-back creates a
    * stage attempt and a run, so a double-clicked button would start two.
    */
+  /**
+   * `POST /api/tasks/:id/owner` (S-26.1; S-26.8b's *Take it* and *Unassign*). The key is
+   * **required** by the route: an assignment is a decision made once, and the caller's per-intent
+   * key (`app/idempotency.ts`) makes a retry answer from the attempt that performed it.
+   */
+  readonly setTaskOwner: (
+    taskId: string,
+    body: z.input<typeof setTaskOwnerRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof taskCommandResponseSchema>>;
   readonly handBackTask: (
     taskId: string,
     body: z.input<typeof handBackRequestSchema>,
@@ -1028,6 +1045,12 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.command(`/api/tasks/${seg(taskId)}/take-over`, {
         schema: takeOverResponseSchema,
         body: takeOverRequestSchema.parse(body),
+        idempotencyKey,
+      }),
+    setTaskOwner: (taskId, body, idempotencyKey) =>
+      client.command(`/api/tasks/${seg(taskId)}/owner`, {
+        schema: taskCommandResponseSchema,
+        body: setTaskOwnerRequestSchema.parse(body),
         idempotencyKey,
       }),
     handBackTask: (taskId, body, idempotencyKey) =>

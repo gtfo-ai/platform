@@ -242,6 +242,18 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > release on another queue; and the stored claim records **why** it is stale (`stale_cause`:
 > `stopped`, `rework`, `human_return`), so a claim stale because its task stopped between the assign
 > and the record is a first claim whether or not its release ran.
+> *As built at S-26.2 (BD-031's 2026-11-06 amendment 2, TD-031's 2026-11-06 amendment item 5):*
+> **every** claim — first, re-claim after a human return, shadow, and one on a binding with
+> `take_assigned_tickets` — reads the assignee before it writes and syncs the task's owner from that
+> read. An assignee who maps to a **linked member** (`member` or above) of the project keeps the
+> ticket: no assign, no re-read, the ticket still moves to `in_progress`, and the claim records
+> `held_by: 'member'` (on `tasks.ticket_claim` and `ticket.claimed`); the release then never
+> unassigns it. Intake takes such a ticket whatever `take_assigned_tickets` says. Everybody else (an
+> unlinked account, a person below `member`, a machine) keeps the rules above; `take_assigned_tickets`
+> now re-assigns only those. A claim that does assign writes the binding's account into
+> `tasks.ticket_assignee` in its record transaction, and a release that unassigns writes `null`
+> there, so the next owner sync reads no change (`claimPreReadDecision`, `recordPlatformAssign`,
+> `recordPlatformUnassign` in the domain).
 
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns (and since WP-174 the optional `qa` stage has the same two, spending the same two loops) — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 
@@ -420,6 +432,39 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > and code, never its message — called it a stage that had *"never started"*. Code:
 > `packages/application/src/pipeline/gate-outage.ts`.
 >
+> **Amended 2026-11-07 (backlog 1078): the CI gate's pending read is recorded, and a Retry on an
+> unchanged held pipeline does not wait again.** AUT-6655's pipeline was held at a manual job on a
+> draft merge request; `ci_gate` waited out its sixty-minute timeout, the person pressed Retry, and
+> the second attempt waited another sixty minutes on the **same** pipeline. Two changes, no new
+> state and no new words in any existing reason or brief:
+>
+> - **every pending read of the head pipeline** — one neither passed nor failed, on a poll-only
+>   binding and on one a webhook reaches — is written on the open `ci_gate` attempt as
+>   `task_stages.ci_pending_read` (technical/03): the pipeline's id and page, the live head it was
+>   read for, its status, the held manual job's name and page (only for a pipeline whose own status
+>   is `manual`; redacted, then cut at 100 characters), the draft flag, the read's instant and the
+>   CI timeout bounding the wait (`null` on a webhook binding). A pending read that found no
+>   pipeline writes `null`; a closed attempt keeps its last read. `GET /api/tasks/:id` serves the
+>   open attempt's as `gate_wait` (technical/08). A pending read never parks a task by itself;
+> - **a retry nobody acted on escalates at once**: when an attempt's **first** read (the one made
+>   while the attempt has no read recorded yet — not its first check by count, which a
+>   stranded-stage re-enqueue starts again) shows the same pipeline, on the same head, still
+>   `manual` at the same job, as the previous `ci_gate` attempt's last read, the task is escalated
+>   `undecided` immediately with a brief saying the pipeline is still held at that job — start the
+>   job on the provider (named as people know it, `GitLab`), or change the job's rule, then Retry.
+>   Any other status (the person started the job, so it is `running`), another pipeline, another
+>   head or another held job waits as before;
+> - **the two endings are marked on the row**: the poll-only timeout and the held retry record
+>   `task_stages.ci_ending` (`ci_timed_out`, `ci_held_unchanged`) in the settling transaction, so
+>   the task read words the stop (`stop.ci_ending`) and serves the parked attempt's last read
+>   (`last_gate_wait`) without parsing `return_reason`, whose words are unchanged;
+> - **job names in the gate's sentences are redacted**, then cut at 100 characters, as the
+>   recorded read's are: the held job in the pending detail, the failing jobs in the failure
+>   detail and its log labels (review of #89).
+>
+> Code: `packages/application/src/pipeline/ci-pending-read.ts`, applied in `jobs.ts`
+> (`recordCiRead`).
+>
 > **`retro → retro` was added at WP-18b**, when the librarian stage went back into the shipped
 > templates (technical/12's example has always carried it). The retrospective phase now has **two**
 > stages — the facilitator's report and the Librarian's curation of the proposals it produced — and
@@ -565,7 +610,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `ticket.updated` | task-management adapter (WP-60; emitted **beside** `ticket.matched`/`ticket.status.changed`, never instead) | ticket ref, the provider's `updated_at`, the changed field names (bounded, `truncated`), actor | Snapshot freshness (10, `pipeline.ticket.signal` — Q61 (b); since WP-145 it reaches a task by the ticket's stable id first and by the key only for a task with none, and moves a live task whose id it carries under another key to that key, appending `task.ticket.rekeyed`); bug re-trace (120, `pipeline.bug.retrace`, WP-90 — a ticket whose defect trace is not `linked` is traced again, PROGRESS backlog 192); re-lint on edit is **not** built (it waits on a measurement of update frequency); the owner sync (120, `pipeline.owner.sync`, S-26.1 — wakes the `owner_sync` duty for the ticket's live task, which re-reads the ticket only while its snapshot is older than the newest signal, so a burst costs one read, and follows its assignee); product/18:60's *"edited within 48 h"* is a statistics read over this event (WP-61, `lintEdits`), not a consumer; the human-return window (10, `pipeline.review.comment`, WP-178) — armed for a task at `qa` or `ready_for_merge` when the changed fields name the status, **or are empty or truncated**: a polled edit names no field, and on a binding that only polls it is the one signal a ticket comment or a status move produces |
 | `ticket.comment.added` | adapter | ticket, comment id, author identity, text | The human-return window (10, `pipeline.review.comment`, WP-178): arms it for a task at `qa` or `ready_for_merge`, unless the comment opens with a platform marker; Question answering (20), Feedback intake (30) |
 | `ticket.status.changed` | adapter (Jira's webhook since WP-60; declared unconsumed until WP-178) | ticket, from, to, actor | The human-return window (10, `pipeline.review.comment`, BD-031, since WP-178): it arms the window only for a task at `qa` or `ready_for_merge`, and the window decides between return and pass — a pass needs a recorded change whose `from` is the `qa` slot (`leftQa`, WP-178 criterion (14)); at an agent stage the event is logged and nothing else |
-| `ticket.claimed` | the claim (`ensureTicketClaim`, WP-177) | task, ticket, the binding's own account id, `in_progress` written or not, `shadow` | — (the record is the row, `tasks.ticket_claim`; `GET /api/tasks/:id` publishes it from WP-181, criterion 6, and not before) |
+| `ticket.claimed` | the claim (`ensureTicketClaim`, WP-177) | task, ticket, the binding's own account id, `in_progress` written or not, `shadow`, and `held_by: 'member'` when a linked member holds the ticket and nothing was assigned (S-26.2) | — (the record is the row, `tasks.ticket_claim`; `GET /api/tasks/:id` publishes it from WP-181, criterion 6, and not before) |
 | `ticket.claim.refused` | the claim | task, ticket, reason (`ticket_assigned_elsewhere` \| `ticket_claim_failed`), the assignee's identity when known | — (the escalation it causes is `task.escalated`) |
 | `ticket.released` | the `ticket_release` duty (WP-177) | task, ticket, unassigned or not, `pick_up_from` written or not, cause (`cancelled` \| `rework` \| `stopped`, the last when the task stopped between the claim's assign and its record) | — |
 | `ticket.intake.skipped` | intake (`runIntakeCheck`, WP-177) | project, ticket, reason (`assigned`) | — (audit only) |
@@ -587,7 +632,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `task.lint.posted` | Ticket readiness linter (WP-25) | task, ticket, score, missing elements, questions posted, the ticket's `updated_at` | stats (230) |
 | `task.rebase.checked` | Rebase gate (WP-26) | task, mr, conflicts, attempt, outcome (`clean`/`resolved`/`conflicted`/`exhausted`) | stats (230) |
 | `task.conflict.warned` | Rebase gate (WP-26); since WP-59 appended on **both** tasks' streams when the gate finds an overlap (PROGRESS backlog 65) | task, mr, the other task and its ticket key, overlapping paths, how many, whether the comparison was cut | stats (230) |
-| `task.owner.changed` | the owner decisions (`owner-sync.ts`, S-26.1, TD-031's 2026-11-06 amendment item 1), on the **task** stream in the transaction that wrote `tasks.owner_user_id` through `saveOwner`: intake's sync (in the insert's transaction), a stage's re-read and the `owner_sync` duty (`via: tracker_sync`), `POST /api/tasks/:id/owner` (`command`, the person as actor), a link adopting the owner (`link`, S-26.6's hook) and, from S-26.4, a pick (`pick`) | task, `owner_user_id` and `previous_owner_user_id` (either `null`), `source` (`tracker` \| `platform`), `via`, and since S-26.3 `owner_changed_at` (the instant the same write stored; optional, absent on an event written before it); a read that only replaces an unmapped assignee changes no owner and records nothing | Owner write-back (120, `pipeline.ticket.owner_assign`, S-26.3, TD-031's amendment item 4): a `source: platform` change naming somebody, on a binding whose `lifecycle.assign_owner` is `true`, enqueues the `pipeline.outbound` duty `ticket_owner_assign`, which re-validates the owner and `owner_changed_at` on fire, presets `ticket_assignee` to the owner's `person` identity, calls `assignTo` through the executor (`would_have` in shadow mode) and puts the previous value back on a refusal; a release, a tracker sync, an owner with no identity for the provider and a switched-off binding call nothing |
+| `task.owner.changed` | the owner decisions (`owner-sync.ts`, S-26.1, TD-031's 2026-11-06 amendment item 1), on the **task** stream in the transaction that wrote `tasks.owner_user_id` through `saveOwner`: intake's sync (in the insert's transaction), a stage's re-read, the claim's pre-read (S-26.2) and the `owner_sync` duty (`via: tracker_sync`), `POST /api/tasks/:id/owner` (`command`, the person as actor), a link adopting the owner (`link`, S-26.6's hook) and, from S-26.4, a pick (`pick`) | task, `owner_user_id` and `previous_owner_user_id` (either `null`), `source` (`tracker` \| `platform`), `via`, and since S-26.3 `owner_changed_at` (the instant the same write stored; optional, absent on an event written before it); a read that only replaces an unmapped assignee changes no owner and records nothing | Owner write-back (120, `pipeline.ticket.owner_assign`, S-26.3, TD-031's amendment item 4): a `source: platform` change naming somebody, on a binding whose `lifecycle.assign_owner` is `true`, enqueues the `pipeline.outbound` duty `ticket_owner_assign`, which re-validates the owner and `owner_changed_at` on fire, presets `ticket_assignee` to the owner's `person` identity, calls `assignTo` through the executor (`would_have` in shadow mode) and puts the previous value back on a refusal; a release, a tracker sync, an owner with no identity for the provider and a switched-off binding call nothing |
 | `task.ticket.rekeyed` | `pipeline.ticket.signal` (WP-145, PROGRESS backlog 437), on the **task** stream, system actor, in the handler's transaction after `rekeyTicket` | task, the ticket ref it holds now, the key and URL it held before; the branch (`agentic/<old key>`) and the merge request keep the old key | — (an audit record; nothing reacts to it) |
 | `task.mr.measured` | Merge measure duty (WP-61), on the **project** stream, after a merge request the platform made merged | task, mr, the provider's diff stats from `getMergeRequestDiffStats` — `null` when it answered none, never zeros, and never the merge event's own field (GitLab sends `null` there) | — (read at request time by the statistics query, first measurement per cause `mr.merged`, so a redelivered job counts once). Since WP-90 a lost project-stream sequence race is retried in the duty with the provider's answer held, never a second read (PROGRESS backlog 193) |
 | `ticket.bug.traced` | Bug trace duty (WP-61), on the **project** stream, for a ticket whose issue type the project routes to the `bug` template — and since WP-90 again on a `ticket.updated` for a ticket whose trace is `no_link`/`unreadable` (PROGRESS backlog 192) | ticket, the `ticket.created` instant, outcome (`linked`/`no_link`/`unreadable`), how the merge request was found (`ticket_link` only — never a title scan, never adjacency), the merge request and the platform task owning it | Bug re-trace (120 on `ticket.updated`, reads it through `PipelineStore.bugTraces`); read at request time by the statistics query's defect escape — the ticket's latest trace, `linked` final — which joins it to the deliveries (Q87) |

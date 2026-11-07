@@ -13,7 +13,7 @@
  * breakdown rejects) — it is theirs, sent as typed, and `required` disables the act until it is not
  * blank, the way the commands' published schemas require it.
  */
-import { type ReactElement, useId, useState } from 'react';
+import { type ReactElement, type ReactNode, useId, useState } from 'react';
 import { Button } from './button.js';
 import { Dialog } from './dialog.js';
 import { ErrorNotice } from './kit.js';
@@ -45,8 +45,11 @@ export const ConfirmDialog = ({
   readonly onOpenChange: (open: boolean) => void;
   /** The act, as a question: "Reject this plan?". */
   readonly title: string;
-  /** One sentence: what happens, and whether it can be undone. */
-  readonly consequence: string;
+  /**
+   * One sentence: what happens, and whether it can be undone. A node when part of it is somebody
+   * else's text, rendered through `UntrustedText` (S-26.8b's tracker assignee).
+   */
+  readonly consequence: ReactNode;
   /** The act's own verb: "Reject", "Replace the classes". */
   readonly confirmLabel: string;
   readonly keepLabel?: string;

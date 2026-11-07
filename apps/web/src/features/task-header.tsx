@@ -34,6 +34,11 @@
  * past an open question or a pending approval would skip it, so the page never offers it (BACKLOG
  * 854 has the server half).
  *
+ * **The owner** (S-26.8b, the M26 UX spec § 2, `./task-owner.tsx`): beside the ticket's links, the
+ * owner's avatar and name, *Unassigned*, or the tracker assignee the platform cannot link; and the
+ * one **secondary** owner button — *Take it* or *Unassign*, as the read's `can_take` /
+ * `can_unassign` allow — with every owner action in the `···` menu too. Never the primary.
+ *
  * **And only what the caller's role may do** (S-23.23): the read carries `can_pause`, `can_resume`,
  * `can_cancel`, `can_return`, `can_rework` and `can_decide_approval` — each the command route's own
  * permission over the caller's effective role — and a command whose flag is false is not offered
@@ -66,6 +71,7 @@ import { setbackShort } from './setback.js';
 import { takeOverFinished } from './take-over.js';
 import { answerInputId } from './task-callout.js';
 import type { TaskDialog } from './task-dialogs.js';
+import { OwnerFeedback, OwnerLine, OwnerMenuItems, useOwnerControl } from './task-owner.js';
 import { TicketClaimAndQa } from './ticket-claim.js';
 
 /** The header's one primary action. */
@@ -139,6 +145,7 @@ export const TaskHeader = ({
   readonly onOpen: (dialog: TaskDialog) => void;
 }): ReactElement => {
   const { task, stages, runs, questions, approvals, taken_over: takenOver } = detail;
+  const owner = useOwnerControl(detail);
   const openQuestions = questions.filter((question) => question.status === 'open');
   const pendingApprovals = approvals.filter((approval) => approval.status === 'pending');
   // The task entered `merged_gate` (WP-152's test, the server's own fact): since WP-165 the server
@@ -264,7 +271,9 @@ export const TaskHeader = ({
     ) : null;
 
   // A finished task with nothing to download has nothing in the menu, so it draws no `···`.
+  const commandItems = canPause || (canResume && primary !== 'resume') || canTakeOver;
   const anyItem =
+    owner.offers.length > 0 ||
     canPause ||
     canResume ||
     canTakeOver ||
@@ -274,6 +283,9 @@ export const TaskHeader = ({
     canCancel;
   const menu = !anyItem ? null : (
     <ActionMenu label="Task actions">
+      {/* S-26.8b: the owner's actions first, as the line's one button offers the first of them. */}
+      <OwnerMenuItems control={owner} />
+      {owner.offers.length > 0 && commandItems ? <ActionMenuSeparator /> : null}
       {canPause ? (
         <ActionMenuItem
           disabled={commands.pause.isPending}
@@ -424,12 +436,16 @@ export const TaskHeader = ({
                 />
               )}
             </span>
+            {/* S-26.8b: who owns it, beside the ticket, and the one secondary owner control. */}
+            <span aria-hidden="true">·</span>
+            <OwnerLine detail={detail} control={owner} />
             <span>{`· ${titleCase(task.template)}`}</span>
             {currentStage === null ? null : <span>{`· ${stageLabel(currentStage)}`}</span>}
             <span>{`· ${formatUsd(task.cost_actual_usd)} so far`}</span>
             <span>{`· opened ${formatElapsed(task.created_at, nowMs)} ago`}</span>
             {task.mode === 'shadow' ? <Badge tone="warning">shadow</Badge> : null}
           </p>
+          <OwnerFeedback detail={detail} control={owner} />
           {/* WP-182 ruling (c): the ticket claim and the human QA stage (BD-031 rulings 3 and 5). */}
           <TicketClaimAndQa task={task} />
           {phase.length === 0 ? null : (

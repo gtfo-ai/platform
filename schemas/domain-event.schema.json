@@ -485,6 +485,12 @@
             },
             "shadow": {
               "type": "boolean"
+            },
+            "held_by": {
+              "type": "string",
+              "enum": [
+                "member"
+              ]
             }
           },
           "required": [

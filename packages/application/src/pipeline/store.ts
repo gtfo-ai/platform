@@ -28,6 +28,7 @@ import type {
   ApprovalReason,
   ArtifactType,
   BudgetApprovalSubjectDetail,
+  CiGateEnding,
   ContextPackRecord,
   EstimateBasis,
   HistorySample,
@@ -77,6 +78,7 @@ import type {
 import type { PromptsWithheld } from '../config/repository-config.js';
 import type { ConcurrencyConflict } from '../events/concurrency.js';
 import type { Transaction } from '../ports/transaction.js';
+import type { CiPendingRead } from './ci-pending-read.js';
 import type { RunSettingsSnapshot } from './settings-snapshot.js';
 
 /**
@@ -1212,6 +1214,49 @@ export interface TaskRepository {
     stage: Slug,
     attempt: number,
   ): Promise<{ readonly open: boolean; readonly enteredAt: IsoDateTime } | null>;
+  /**
+   * Records the CI gate's last pending read on `stage`'s attempt `attempt` — `null` for a pending
+   * read that found no pipeline to wait on (backlog 1078, migration 0107). Writes **only an open
+   * row** (`state = 'running'` and never exited), so a job of an attempt somebody left cannot move a
+   * closed attempt's last read, and answers whether it wrote. A narrow write of one column of
+   * `task_stages`, never the task row: the gate's poll runs beside the stage executor.
+   */
+  recordCiPendingRead(
+    tx: Transaction,
+    entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
+    read: CiPendingRead | null,
+  ): Promise<boolean>;
+  /**
+   * `stage`'s attempt `attempt`'s own last pending read, or `null` when it has none recorded (or
+   * no row) — what tells the gate whether a read is the attempt's first (backlog 1078).
+   */
+  ciPendingReadOf(
+    tx: Transaction,
+    taskId: Id,
+    stage: Slug,
+    attempt: number,
+  ): Promise<CiPendingRead | null>;
+  /**
+   * Records how the CI gate's own wait ended `stage`'s attempt `attempt` (`task_stages.ci_ending`,
+   * backlog 1078) — in the settling transaction, before the escalation closes the row, and **only
+   * while the row is open**; answers whether it wrote. The task read words the stop from it.
+   */
+  recordCiEnding(
+    tx: Transaction,
+    entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
+    ending: CiGateEnding,
+  ): Promise<boolean>;
+  /**
+   * The last pending read of `stage`'s latest attempt **before** `attempt` — what a retry's first
+   * read compares itself with (backlog 1078 criterion 3) — or `null` when there is no earlier
+   * attempt or it recorded none. A stored value that does not parse is refused, never defaulted.
+   */
+  previousCiPendingRead(
+    tx: Transaction,
+    taskId: Id,
+    stage: Slug,
+    attempt: number,
+  ): Promise<CiPendingRead | null>;
   /** The last `limit` signatures at `stage`, oldest first — the order `hasIdenticalFailureStreak` wants. */
   recentStageSignatures(
     tx: Transaction,

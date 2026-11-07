@@ -51,6 +51,11 @@ const CODE_SENTENCE: Readonly<Record<string, string>> = {
   no_gate_feedback: 'There is no check failure to attach.',
   model_not_listed: 'That model is not one this project may use.',
   take_in_progress: 'Someone is already taking this over.',
+  // S-26.1's owner command (`POST /api/tasks/:id/owner`), said for S-26.8b's controls.
+  owner_change_not_permitted:
+    'Your role does not allow this change of owner. Reload to see who owns it now.',
+  owner_not_project_member: 'That person is not a member of this project, so they cannot own it.',
+  task_finished: 'The task has finished, so its owner no longer changes.',
   policy_violation: 'A project policy does not allow this.',
   integration_host_not_permitted: 'That address is on a host this instance does not allow.',
   secret_name_not_permitted: 'That environment variable is not one this instance allows.',

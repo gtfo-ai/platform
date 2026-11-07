@@ -165,6 +165,7 @@ describe('stopOf', () => {
       cause: 'tries_spent',
       loop: 'ci_fix',
       ci_failure: { status: 'failed', jobs: 'unit' },
+      ci_ending: null,
       recorded: null,
       recorded_cut: false,
     });
@@ -197,9 +198,54 @@ describe('stopOf', () => {
       cause: 'no_answer',
       loop: null,
       ci_failure: null,
+      ci_ending: null,
       recorded,
       recorded_cut: false,
     });
+  });
+
+  /**
+   * Backlog 1078: the CI gate's own wait endings are worded from the row's `ci_ending`, never from
+   * `return_reason` — and only at `ci_gate`, and only for a no-answer stop.
+   */
+  it('names the CI gate’s wait ending a no-answer stop records, and none elsewhere', () => {
+    for (const ending of ['ci_timed_out', 'ci_held_unchanged'] as const) {
+      const rows = [
+        row({
+          stage: 'ci_gate',
+          state: 'failed',
+          outcome: 'undecided',
+          returnReason: 'the recorded sentence, unchanged',
+          ciEnding: ending,
+        }),
+      ];
+      expect(stopOf(parked, rows), ending).toMatchObject({
+        cause: 'no_answer',
+        ci_ending: ending,
+        recorded: 'the recorded sentence, unchanged',
+      });
+    }
+    // A no-answer with no ending recorded (the five checks, a provider outage) names none.
+    expect(
+      stopOf(parked, [row({ stage: 'ci_gate', state: 'failed', outcome: 'undecided' })])?.ci_ending,
+    ).toBeNull();
+    // A converged row with a stray ending is still a repeated failure, with no ending.
+    expect(
+      stopOf(parked, [
+        row({ stage: 'ci_gate', state: 'failed', outcome: 'converged', ciEnding: 'ci_timed_out' }),
+      ]),
+    ).toMatchObject({ cause: 'same_failure', ci_ending: null });
+    // Another stage never carries one.
+    expect(
+      stopOf({ state: 'needs_human', currentStage: 'rebase_gate' }, [
+        row({
+          stage: 'rebase_gate',
+          state: 'failed',
+          outcome: 'undecided',
+          ciEnding: 'ci_timed_out',
+        }),
+      ])?.ci_ending,
+    ).toBeNull();
   });
 
   it('cuts a long recorded sentence at the cap, and says so', () => {

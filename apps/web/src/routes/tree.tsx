@@ -382,10 +382,15 @@ const projectPage = <TPath extends string>(
 
 /**
  * `?view=list` — the board's Issues-style list (S-23.9a); anything else, or nothing, is the board.
- * A value outside the two is caught to `undefined` rather than a router error: it reaches no
- * attribute, and the screen reads it as the board.
+ * `?owner=me|none` — the board's *Mine* / *Unassigned* (S-26.8b, the M26 UX spec § 3); nothing is
+ * *Everyone*, or the filter this person last chose (`features/board-owner-filter.ts`). A value
+ * outside either set is caught to `undefined` rather than a router error: it reaches no attribute,
+ * and the screen reads it as the default.
  */
-const boardSearchSchema = z.object({ view: z.enum(['board', 'list']).optional().catch(undefined) });
+const boardSearchSchema = z.object({
+  view: z.enum(['board', 'list']).optional().catch(undefined),
+  owner: z.enum(['me', 'none']).optional().catch(undefined),
+});
 
 /** The board is the project's index: `/projects/$key` itself. Full width, as GitHub's project board. */
 const boardRoute = createRoute({
