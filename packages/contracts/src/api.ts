@@ -2458,6 +2458,115 @@ export const identityCandidateListSchema = z.strictObject({
   items: z.array(identityCandidateSchema),
 });
 
+// ── A person links their own account, proven by the provider (S-26.6) ───────
+
+/**
+ * The self-service link code — `agentic-link-` and ten Crockford base32 characters, 50 bits (TD-031's
+ * 2026-11-06 amendment item 9). Answered **once**, by `POST /api/me/identity-links`; the platform
+ * stores only its SHA-256, so no read answers it again.
+ */
+export const LINK_CODE_SHAPE = /^agentic-link-[0-9A-HJKMNP-TV-Z]{10}$/;
+
+export const identityLinkCodeIssuedSchema = z.strictObject({
+  id: idSchema,
+  code: z.string().regex(LINK_CODE_SHAPE),
+  expires_at: isoDateTimeSchema,
+});
+
+/** Why a code stopped before its expiry. */
+export const identityLinkVoidReasonSchema = z.enum([
+  'replaced',
+  'second_author',
+  'identity_linked_elsewhere',
+]);
+
+/**
+ * One provider account a comment carrying the person's code proved — **a proposal, never a link**:
+ * only `POST …/matches/:match_id/confirm` links it. `display_name` is the provider's untrusted text
+ * (BD-022), shown beside `provider` and `external_id`, never resolved by.
+ */
+export const identityLinkMatchSchema = z.strictObject({
+  id: idSchema,
+  provider: nonEmptyStringSchema,
+  external_id: nonEmptyStringSchema,
+  display_name: z.string().nullable(),
+  integration_id: idSchema,
+  /** The integration's name (`integrations.name`), or `null` when it is gone. */
+  integration_name: z.string().nullable(),
+  matched_at: isoDateTimeSchema,
+  confirmed_at: isoDateTimeSchema.nullable(),
+});
+
+/**
+ * `GET /api/me/identity-links`: the person's newest code — never the code itself — and what it
+ * matched. `status` is `live` until it is confirmed (`consumed`), voided or past `expires_at`.
+ */
+export const identityLinkStateSchema = z.strictObject({
+  code: z
+    .strictObject({
+      id: idSchema,
+      created_at: isoDateTimeSchema,
+      expires_at: isoDateTimeSchema,
+      status: z.enum(['live', 'expired', 'voided', 'consumed']),
+      /** Set for `voided`: `second_author` is *someone else used this code* — issue a new one. */
+      void_reason: identityLinkVoidReasonSchema.nullable(),
+    })
+    .nullable(),
+  matches: z.array(identityLinkMatchSchema),
+});
+
+/**
+ * `POST /api/me/identity-links/read` — *I wrote it on …*: the ticket key, or the merge request's
+ * iid, of a task in a project where the caller is `member` or above.
+ */
+export const identityLinkThreadRequestSchema = z.union([
+  z.strictObject({ project_id: idSchema, ticket_key: nonEmptyStringSchema.max(255) }),
+  z.strictObject({ project_id: idSchema, merge_request_iid: z.int().positive() }),
+]);
+
+export const identityLinkThreadResponseSchema = z.strictObject({
+  /** How many comments the read answered. */
+  comments: z.int().nonnegative(),
+  /** How many of them carried a link code. */
+  carried_code: z.int().nonnegative(),
+  /** How many new matches were recorded — `0` also when a match was already there. */
+  matched: z.int().nonnegative(),
+  state: identityLinkStateSchema,
+});
+
+/** `POST /api/me/identity-links/matches/:match_id/confirm` — the link it wrote. */
+export const identityLinkConfirmedSchema = z.strictObject({
+  provider: nonEmptyStringSchema,
+  external_id: nonEmptyStringSchema,
+  display_name: z.string().nullable(),
+  user_id: idSchema,
+  /** `false` for a retry of a confirmation already performed. */
+  performed: z.boolean(),
+});
+
+/** One of the caller's own linked accounts (`GET /api/me/identities`). */
+export const myIdentitySchema = z.strictObject({
+  provider: nonEmptyStringSchema,
+  external_id: nonEmptyStringSchema,
+  display_name: z.string().nullable(),
+  created_at: isoDateTimeSchema,
+});
+
+export const myIdentityListSchema = z.strictObject({
+  items: z.array(myIdentitySchema),
+});
+
+/** The answer of both unlinks — the person's own and an admin's. */
+export const identityUnlinkedSchema = z.strictObject({
+  provider: nonEmptyStringSchema,
+  external_id: nonEmptyStringSchema,
+});
+
+export const identityAccountParamsSchema = z.strictObject({
+  provider: nonEmptyStringSchema.max(64),
+  external_id: nonEmptyStringSchema.max(255),
+});
+
 /**
  * One inbound delivery that produced no event, or was partly refused — `GET
  * /api/integrations/:integration_id/refused-deliveries` (WP-44, PROGRESS backlog 198).
@@ -3607,6 +3716,13 @@ export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
 export type TaskDetailRecord = Omit<TaskDetailResponse, TaskCallerFactKey>;
 export type TakenOver = z.infer<typeof takenOverSchema>;
 export type IdentityCandidate = z.infer<typeof identityCandidateSchema>;
+export type IdentityLinkCodeIssued = z.infer<typeof identityLinkCodeIssuedSchema>;
+export type IdentityLinkMatch = z.infer<typeof identityLinkMatchSchema>;
+export type IdentityLinkState = z.infer<typeof identityLinkStateSchema>;
+export type IdentityLinkThreadRequest = z.infer<typeof identityLinkThreadRequestSchema>;
+export type IdentityLinkThreadResponse = z.infer<typeof identityLinkThreadResponseSchema>;
+export type IdentityLinkConfirmed = z.infer<typeof identityLinkConfirmedSchema>;
+export type MyIdentity = z.infer<typeof myIdentitySchema>;
 export type RefusedDelivery = z.infer<typeof refusedDeliverySchema>;
 export type HumanTimeSummary = z.infer<typeof humanTimeSummarySchema>;
 export type HumanTimeByUser = z.infer<typeof humanTimeByUserSchema>;

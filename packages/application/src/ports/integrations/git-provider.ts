@@ -89,6 +89,11 @@ export const discussionNoteSchema = z.strictObject({
   author: externalIdentitySchema,
   body: z.string(),
   created_at: isoDateTimeSchema,
+  /**
+   * The note's last edit, when the provider says (S-26.6): a link code in an edited note proves
+   * nothing about its author (TD-031's amendment item 9 (c)). Absent or `null` is "not stated".
+   */
+  updated_at: isoDateTimeSchema.nullish(),
   /** Set on a diff note; `null` on a plain thread. */
   path: nonEmptyStringSchema.nullish(),
   line: z.int().positive().nullish(),

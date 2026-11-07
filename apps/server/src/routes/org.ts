@@ -37,9 +37,11 @@ import {
   agentsResponseSchema,
   apiErrorSchema,
   createIdentityMappingRequestSchema,
+  identityAccountParamsSchema,
   identityCandidateListSchema,
   identityMappingListSchema,
   identityMappingSchema,
+  identityUnlinkedSchema,
   inboxResponseSchema,
   orgAuditQuerySchema,
   orgAuditResponseSchema,
@@ -101,6 +103,14 @@ export interface IdentityQueries {
     readonly displayName: string | null;
   }) => Promise<IdentityMappingRecord>;
   readonly listMappings: () => Promise<readonly IdentityMappingRecord[]>;
+  /**
+   * Removes the mapping — a person's or a machine's (S-26.6: *unlink works for the person and for
+   * an admin*). The row it removed, or `null` when there was none.
+   */
+  readonly unlinkMapping: (input: {
+    readonly provider: string;
+    readonly externalId: string;
+  }) => Promise<{ readonly kind: 'person' | 'machine'; readonly user_id: string | null } | null>;
   /**
    * Accounts refused as `unmapped_identity` that nobody has mapped since — the candidates the
    * identities screen offers (WP-44, PROGRESS backlog 198). A read, never a write.
@@ -372,6 +382,41 @@ export const registerOrgRoutes = async (
         taskId: null,
       });
       return toWireIdentityMapping(row);
+    },
+  );
+
+  typed.delete(
+    '/api/org/identities/:provider/:external_id',
+    {
+      preValidation: requirePermission(guard, 'org.users.manage'),
+      schema: {
+        summary: 'Unlink a provider account — a person’s or a machine’s',
+        description:
+          'The admin half of S-26.6’s *unlink works for the person and for an admin*: deletes the `user_identities` row, whoever linked it (this mapping, or the person’s own confirmed link code). `404 identity_not_found` when there is none. An owner a link adopted changes at the ticket’s next sync (BACKLOG 1083). One `human_actions` row `org.identity.unmap`, naming the user the row named.',
+        tags: ['org'],
+        params: identityAccountParamsSchema,
+        response: { 200: identityUnlinkedSchema, 404: apiErrorSchema },
+      },
+    },
+    async (request) => {
+      const actor = actorOf(request);
+      const { provider, external_id: externalId } = request.params;
+      const removed = await options.identities.unlinkMapping({ provider, externalId });
+      if (removed === null) {
+        throw new HttpError(404, 'identity_not_found', 'no mapping exists for that account');
+      }
+      await options.identities.recordAction({
+        userId: actor.userId,
+        action: 'org.identity.unmap',
+        params: {
+          provider,
+          external_id: externalId,
+          kind: removed.kind,
+          user_id: removed.user_id,
+        },
+        taskId: null,
+      });
+      return { provider, external_id: externalId };
     },
   );
 

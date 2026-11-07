@@ -97,6 +97,7 @@ import {
   reportingLogHook,
   sentryClientFactory,
 } from './error-reporting.js';
+import { createIdentityLinkCommands } from './identity-links.js';
 import { composeInboundConnections } from './inbound-connections.js';
 import {
   composeKnowledgeIndexing,
@@ -1081,6 +1082,27 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           })
         : null;
 
+    /**
+     * A person's own account link (S-26.6): every process that serves the API composes it; the
+     * *I wrote it on …* read goes through the process's one executor, and an API process with no
+     * integration stack answers that one route by name.
+     */
+    const identityLinks = capabilities.api
+      ? createIdentityLinkCommands({
+          pool: database.pool,
+          unitOfWork: eventing.unitOfWork,
+          integrations:
+            stack === null
+              ? null
+              : createProjectIntegrationsPort({
+                  pool: database.pool,
+                  secretKey: config.secretKey,
+                  stack,
+                }),
+          logger: loggerPort,
+        })
+      : null;
+
     const knowledgeCommands = capabilities.api
       ? createKnowledgeCommands({
           pool: database.pool,
@@ -1365,6 +1387,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       taskStart,
       projectConfig,
       ticketStatuses,
+      identityLinks,
       shadowGate,
       // WP-157 (a): one broken organisation chat account, named once on the integration list.
       organisationCredentials: createOrganisationAccountCredentials(

@@ -111,6 +111,10 @@
  * 17. **Different — `matchTickets` never calls `onSearches`** (WP-223). A fake read is one request
  *     at most, which the port lets a provider leave unreported: the caller counts one. Jira reports
  *     every page and refused search of a `keys` read, and every page of any other rule (WP-233).
+ * 18. **Stricter — a comment states no edit unless its seed does** (S-26.6). Jira always answers
+ *     `updated` (equal to `created` until an edit) and `updateAuthor`; a seeded comment answers
+ *     `updated_at: null` and no `update_author` unless the seed names `updatedAt` /
+ *     `updateAuthorId`, so a link code in it is refused as `edit_state_unknown` — never kinder.
  */
 import {
   type AssignResult,
@@ -207,6 +211,13 @@ export interface FakeCommentSeed {
   readonly authorId: string;
   readonly body: string;
   readonly createdAt: string;
+  /**
+   * The comment's last edit (S-26.6). Absent is `updated_at: null` — **stricter** than Jira, which
+   * always states it, so a link code in an unseeded comment is refused as `edit_state_unknown`.
+   */
+  readonly updatedAt?: string;
+  /** Who last edited it (Jira's `updateAuthor`, S-26.6). Absent is not stated. */
+  readonly updateAuthorId?: string;
 }
 
 /** The account a fake binding acts as when the caller names none (divergence 16). */
@@ -284,6 +295,8 @@ interface StoredComment {
   body: string;
   created_at: string;
   updated_at: string | null;
+  /** S-26.6: who last edited it, when a seed says so. */
+  update_author?: ExternalIdentity;
   marker_id: string | null;
   url: string;
 }
@@ -525,7 +538,13 @@ export const createFakeTaskManagement = (
         author: identityOf(comment.authorId),
         body: comment.body,
         created_at: ticketCommentSchema.shape.created_at.parse(comment.createdAt),
-        updated_at: null,
+        updated_at:
+          comment.updatedAt === undefined
+            ? null
+            : ticketCommentSchema.shape.created_at.parse(comment.updatedAt),
+        ...(comment.updateAuthorId === undefined
+          ? {}
+          : { update_author: identityOf(comment.updateAuthorId) }),
         marker_id: null,
         url: `${stored.url}#comment-${commentCounter}`,
       });

@@ -268,6 +268,9 @@
  *     commit half, pinned by a unit test that throws it from a stub; the GitLab adapter's own unit
  *     tests (`provider.test.ts`) hold the refusal. To exercise it here, use
  *     `core.script.failWhile('list_commits', …)`.
+ * 35. **Stricter — a note states no edit unless `addHumanDiscussion` names one** (S-26.6). GitLab
+ *     answers `updated_at` on every note; this fake answers it only for an `updatedAt` seed, so a
+ *     link code in an unseeded note is refused as `edit_state_unknown`.
  */
 import {
   type BranchPushProtection,
@@ -407,6 +410,8 @@ interface StoredNote {
   author: ExternalIdentity;
   body: string;
   created_at: string;
+  /** S-26.6: set only when `addHumanDiscussion` names one (divergence: stricter than GitLab). */
+  updated_at?: string;
   path: string | null;
   line: number | null;
   system: boolean;
@@ -743,6 +748,11 @@ export interface FakeGitProvider extends GitProviderPort {
      * notes written after the task entered Ready — states the instant instead.
      */
     readonly createdAt?: string;
+    /**
+     * The note's last edit (S-26.6). Absent answers no `updated_at` — stricter than GitLab, which
+     * always states it — so a link code in the note is refused as `edit_state_unknown`.
+     */
+    readonly updatedAt?: string;
     /**
      * A provider **system** note — *"changed the description"*, *"added 1 commit"* — rather than a
      * person's (WP-123). GitLab writes one as an individual, non-resolvable note, and so does this.
@@ -2235,6 +2245,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
             author: identityOf(input.authorId),
             body: input.text,
             created_at: input.createdAt ?? core.clock.now(),
+            ...(input.updatedAt === undefined ? {} : { updated_at: input.updatedAt }),
             path: input.path ?? null,
             line: input.line ?? null,
             system: input.system === true,

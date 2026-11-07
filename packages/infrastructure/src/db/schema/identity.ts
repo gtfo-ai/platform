@@ -112,6 +112,41 @@ export const userIdentities = pgTable(
   (table) => [primaryKey({ columns: [table.provider, table.externalId] })],
 );
 
+/**
+ * A person's self-service account link codes (migration 0105, S-26.6, TD-031's 2026-11-06 amendment
+ * item 9): the SHA-256 of `agentic-link-` plus ten Crockford base32 characters, never the code.
+ */
+export const identityLinkCodes = pgTable('identity_link_codes', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id').notNull(),
+  codeHash: text('code_hash').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  consumedMatchId: uuid('consumed_match_id'),
+  voidedAt: timestamp('voided_at', { withTimezone: true }),
+  voidReason: text('void_reason').$type<
+    'replaced' | 'second_author' | 'identity_linked_elsewhere'
+  >(),
+});
+
+/**
+ * What a comment carrying a link code proved (migration 0105): the provider account that wrote it
+ * and the comment's id — never its text (BD-022). `match` is a proposal the person confirms.
+ */
+export const identityLinkMatches = pgTable('identity_link_matches', {
+  id: uuid('id').primaryKey(),
+  outcome: text('outcome').$type<'match' | 'miss' | 'ignored'>().notNull(),
+  codeId: uuid('code_id'),
+  integrationId: uuid('integration_id').notNull(),
+  provider: text('provider').notNull(),
+  externalId: text('external_id').notNull(),
+  displayName: text('display_name'),
+  commentId: text('comment_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+});
+
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().default(uuidv7),
   orgId: uuid('org_id').notNull(),

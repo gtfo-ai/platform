@@ -58,6 +58,16 @@
  * webhook secret as plain text in `X-Gitlab-Token`. Redaction happens **after** `verify` (which
  * needs the bytes as they were signed) and **after** the key (which the adapter redacts itself),
  * and the summed count goes on the row — see migration 0014.
+ *
+ * ## A comment carrying a link code (S-26.6)
+ *
+ * A normaliser that met a comment carrying a self-service link code returns it as a
+ * `NormalisedDelivery.linkClaims` entry (the code's hashes and the authenticated author, never the
+ * text). They are recorded **in the transaction that writes the `inbox` row**, after it lands, by
+ * the `IdentityLinkRecorder` (`identity/identity-links.ts`): so a redelivery deduplicated by the
+ * row records nothing twice, and a delivery that failed `verify` — which writes no row and reaches
+ * no normaliser — records nothing at all. A match is never a link: only the person's confirmation
+ * writes `user_identities`.
  */
 import type {
   Actor,
@@ -70,6 +80,7 @@ import type {
 import { domainEventSchemasByType } from '@platform/contracts';
 import { StreamConflictError } from '../errors.js';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
+import type { IdentityLinkRecorder, LinkRecordSummary } from '../identity/identity-links.js';
 import { enqueueApprovalRefused } from '../pipeline/jobs.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type {
@@ -243,6 +254,12 @@ export interface WebhookIngressOptions {
    * refusal still on the `inbox` row — is a choice a composition writes down (standing rule 31).
    */
   readonly jobs: Jobs | null;
+  /**
+   * Where a comment carrying a self-service link code is recorded (S-26.6): matches and misses in
+   * the delivery's transaction. **Required**, so `null` — a link code is never matched on this
+   * ingress — is a choice a composition writes down (standing rule 31).
+   */
+  readonly identityLinks: IdentityLinkRecorder | null;
 }
 
 export interface WebhookIngress {
@@ -401,6 +418,11 @@ export interface InboundRecorderOptions {
   readonly mergeRequests: MergeRequestLifecycleReader;
   readonly logger?: Logger;
   readonly maxSequenceAttempts?: number;
+  /**
+   * The link-code recorder (S-26.6). Only the webhook ingress passes one: a poll carries no
+   * comments. Absent (or `null`) with a delivery that carries claims records none and says so.
+   */
+  readonly identityLinks?: IdentityLinkRecorder | null;
 }
 
 /**
@@ -431,6 +453,8 @@ export type NormalisedDeliveryRecordOutcome =
       readonly replies: readonly InboundRefusalReply[];
       /** Merge-request lifecycle drafts dropped as repeats of what the log already says (WP-110). */
       readonly repeated: number;
+      /** What the delivery's link-code comments recorded (S-26.6); `null` when it carried none. */
+      readonly links: LinkRecordSummary | null;
       readonly failure: { readonly text: string | null; readonly count: number };
     }
   | { readonly kind: 'duplicate' };
@@ -573,6 +597,22 @@ export const recordNormalisedDelivery = async (
         if (events.length > 0) {
           await scope.events.append(events);
         }
+        // S-26.6: after the row landed, so a lost race rolls these back with everything else.
+        const claims = record.normalised.flatMap((result) => result.linkClaims ?? []);
+        let links: LinkRecordSummary | null = null;
+        if (claims.length > 0) {
+          if (options.identityLinks === undefined || options.identityLinks === null) {
+            logger.info(
+              { integration_id: record.integrationId, claims: claims.length },
+              'a delivery carried link codes and this ingress records none',
+            );
+          } else {
+            links = await options.identityLinks.record(scope.tx, {
+              integrationId: record.integrationId,
+              claims,
+            });
+          }
+        }
         if (repeated > 0) {
           logger.info(
             { integration_id: record.integrationId, repeated },
@@ -586,6 +626,7 @@ export const recordNormalisedDelivery = async (
           refused: refusals.length,
           replies,
           repeated,
+          links,
         };
       });
     } catch (error) {
@@ -954,6 +995,7 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
           mergeRequests: options.mergeRequests,
           logger,
           maxSequenceAttempts: maxAttempts,
+          identityLinks: options.identityLinks,
         },
         {
           provider,

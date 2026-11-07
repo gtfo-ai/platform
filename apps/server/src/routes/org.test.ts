@@ -167,6 +167,16 @@ describe('the identity routes (WP-31 round 2)', () => {
           return row;
         },
         listMappings: async () => world.mappings,
+        unlinkMapping: async (input) => {
+          const found = world.mappings.find(
+            (entry) => entry.provider === input.provider && entry.external_id === input.externalId,
+          );
+          if (found === undefined) {
+            return null;
+          }
+          world.mappings = world.mappings.filter((entry) => entry !== found);
+          return { kind: found.kind, user_id: found.user_id };
+        },
         listCandidates: async () => world.candidates,
         recordAction: async (input) => {
           actions.push({ ...input });
@@ -193,6 +203,46 @@ describe('the identity routes (WP-31 round 2)', () => {
     return async () => {
       await world.app.close();
     };
+  });
+
+  it('lets an admin unlink a person’s account, with one audit row, and 404s an unknown one (S-26.6)', async () => {
+    const created = await world.app.inject({
+      method: 'POST',
+      url: '/api/org/identities',
+      payload: mapping(),
+    });
+    expect(created.statusCode).toBe(200);
+    const before = world.actions.length;
+    const removed = await world.app.inject({
+      method: 'DELETE',
+      url: '/api/org/identities/jira-cloud/acct-ada',
+    });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toEqual({ provider: 'jira-cloud', external_id: 'acct-ada' });
+    expect(world.mappings).toHaveLength(0);
+    expect(world.actions.slice(before)).toEqual([
+      {
+        userId: ADMIN,
+        action: 'org.identity.unmap',
+        params: { provider: 'jira-cloud', external_id: 'acct-ada', kind: 'person', user_id: USER },
+        taskId: null,
+      },
+    ]);
+    const again = await world.app.inject({
+      method: 'DELETE',
+      url: '/api/org/identities/jira-cloud/acct-ada',
+    });
+    expect(again.statusCode).toBe(404);
+    expect(world.actions.slice(before)).toHaveLength(1);
+  });
+
+  it('refuses the admin unlink to a member (S-26.6)', async () => {
+    world.role = 'member';
+    const removed = await world.app.inject({
+      method: 'DELETE',
+      url: '/api/org/identities/jira-cloud/acct-ada',
+    });
+    expect(removed.statusCode).toBe(403);
   });
 
   it('serves the unmapped candidates to an admin only, as the read returned them (WP-44)', async () => {
