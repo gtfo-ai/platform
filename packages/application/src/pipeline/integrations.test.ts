@@ -128,6 +128,9 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // WP-110's merge-request poller: WP-87's two — one resolution per poll of a git binding, one more
   // when a failed poll re-reads the plan to re-arm itself.
   'mr-poll.ts': 2,
+  // S-26.3's `ticket_owner_assign` duty: one resolution for the owner write-back's `assignTo`, in a
+  // job, outside every transaction and outside any run.
+  'owner-write-back.ts': 1,
   // WP-79's `ready_head_check` duty: one resolution for the merge request's live head, read outside
   // every transaction and outside any run, so no minted credential.
   'ready-head.ts': 1,

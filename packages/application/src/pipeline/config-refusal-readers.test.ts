@@ -133,6 +133,11 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
     reason:
       'the lifecycle handler and its duty (WP-177), and the entry move the `stage.execute` job performs before the plan (WP-184), read only `ticketLifecycle` — the task-management binding’s block, which no configuration document carries — and move the ticket, never the task',
   },
+  'packages/application/src/pipeline/owner-write-back.ts': {
+    count: 2,
+    reason:
+      'the owner write-back’s handler and its duty (S-26.3) read only `ticketLifecycle.slots.assign_owner` — the task-management binding’s block, which no configuration document carries — and assign the ticket, never move the task',
+  },
   'packages/application/src/pipeline/ticket-release.ts': {
     count: 1,
     reason:
