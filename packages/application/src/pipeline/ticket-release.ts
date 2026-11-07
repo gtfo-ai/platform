@@ -22,7 +22,9 @@
  * **A linked member's ticket is never unassigned** (S-26.2, TD-031's 2026-11-06 amendment item 5):
  * a claim recorded `held_by: 'member'` assigned nothing, so its release makes **no** `unassign`
  * call at all — the port's own rule (it unassigns only the binding's own account) would already
- * leave that person alone, and this does not depend on it. When the release did take the binding's
+ * leave that person alone, and this does not depend on it. A claim recorded `held_by:
+ * 'platform_owner'` (a take or an assignment over somebody else's ticket) assigned nothing either,
+ * and is released the same way. When the release did take the binding's
  * account off the ticket, `ticket_assignee` becomes nobody in the release's transaction
  * (`recordReleaseUnassign`), so the next owner sync reads no change and a platform-set owner
  * survives a *Rework*.
@@ -93,9 +95,10 @@ export const releaseTicket = async (
     noRunScopedSecrets(),
   );
   const shadow = task.mode === 'shadow';
-  // A member-held claim assigned nothing: there is nothing of the platform's to take off (S-26.2).
+  // A kept claim — member-held (S-26.2) or platform-owned — assigned nothing: there is nothing of
+  // the platform's to take off.
   const unassigned =
-    claim.held_by !== 'member' &&
+    claim.held_by === undefined &&
     (await failingOpen(logger, taskId, 'unassign', async () => {
       const result = await ticketWrites(integrations).unassign(task.ticket, {
         ...writeContext,

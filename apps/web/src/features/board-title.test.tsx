@@ -87,6 +87,7 @@ const task = (overrides: Partial<TaskListItem>): TaskListItem =>
     gate_wait: null,
     latest_return: null,
     stop: null,
+    escalation_reason: null,
     ...overrides,
   }) as TaskListItem;
 

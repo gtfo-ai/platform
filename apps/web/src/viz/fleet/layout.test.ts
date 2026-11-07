@@ -32,6 +32,7 @@ const fleet = fleetOf({
     questions: [question(70, uuid(9), 'q')],
     approvals: [approval(71, uuid(9))],
     ci_held: [],
+    escalated: [],
   },
   now: NOW,
 });

@@ -251,6 +251,7 @@ describe('fixing: the agent is on it', () => {
       gate_wait: null,
       latest_return: ciReturn(),
       stop: null,
+      escalation_reason: null,
     } satisfies TaskListItem;
     expect(cardSetback(card)).toBe('CI failed · fixing, round 2/3');
     expect(cardSetback({ ...card, latest_return: null })).toBeNull();
@@ -288,6 +289,7 @@ describe('fixing: the agent is on it', () => {
       gate_wait: null,
       latest_return: null,
       stop: stop({ cause: 'no_answer', ci_failure: null, ci_ending: 'ci_held_unchanged' }),
+      escalation_reason: null,
     } satisfies TaskListItem;
     expect(cardSetback(card)).toBe('CI held at a manual job');
     expect(

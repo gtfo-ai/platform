@@ -95,6 +95,7 @@ const INBOX = {
   questions: [question(70, uuid(1009), 'Three or five?\nmore')],
   approvals: [],
   ci_held: [],
+  escalated: [],
 };
 
 const TASKS = new Map<string, TaskDetailResponse>([
@@ -353,7 +354,10 @@ describe('the Agents page', () => {
             : { kind: 'tool', tool_name: 'Read', at: at(5_000) },
       }),
     );
-    const state = backend({ items: many }, { questions: [], approvals: [], ci_held: [] });
+    const state = backend(
+      { items: many },
+      { questions: [], approvals: [], ci_held: [], escalated: [] },
+    );
     start('/agents?view=list', state, true);
     const user = userEvent.setup();
     const expected = [
@@ -377,7 +381,7 @@ describe('the Agents page', () => {
     media(1280);
     const state = backend(
       { items: [agentItem(1), agentItem(2), agentItem(3)] },
-      { questions: [], approvals: [], ci_held: [] },
+      { questions: [], approvals: [], ci_held: [], escalated: [] },
     );
     const app = start('/agents?view=list', state, true);
     await waitFor(() => {
@@ -671,6 +675,7 @@ describe('the list', () => {
     const inbox = {
       questions: [],
       ci_held: [],
+      escalated: [],
       approvals: [
         {
           id: uuid(1101),
@@ -736,7 +741,7 @@ describe('on a platform with no server runner (S-23.20, S-23.24)', () => {
 
   it('waits for a worker, with the way to add one, when no worker is registered', async () => {
     media(1280);
-    const nobody = { questions: [], approvals: [], ci_held: [] };
+    const nobody = { questions: [], approvals: [], ci_held: [], escalated: [] };
     const state = {
       ...backend({ items: [] }, nobody),
       serverClaimant: 'none' as const,
@@ -768,7 +773,7 @@ describe('on a platform with no server runner (S-23.20, S-23.24)', () => {
 
   it('says nobody can take the work, and why, when the workers there are can’t take it', async () => {
     media(1280);
-    const nobody = { questions: [], approvals: [], ci_held: [] };
+    const nobody = { questions: [], approvals: [], ci_held: [], escalated: [] };
     start('/agents', {
       ...backend({ items: [] }, nobody),
       serverClaimant: 'none',
@@ -800,7 +805,7 @@ describe('on a platform with no server runner (S-23.20, S-23.24)', () => {
 
   it('says nothing of the kind once a worker is connected, or where the server runs agent work', async () => {
     media(1280);
-    const nobody = { questions: [], approvals: [], ci_held: [] };
+    const nobody = { questions: [], approvals: [], ci_held: [], escalated: [] };
     for (const state of [
       // A worker is connected (seen a minute ago)…
       { ...backend({ items: [] }, nobody), serverClaimant: 'none' as const },
@@ -820,7 +825,7 @@ describe('on a platform with no server runner (S-23.20, S-23.24)', () => {
 describe('with nothing running', () => {
   it('teaches on the map and the list, and the office shows everyone asleep under the same words', async () => {
     media(1280);
-    const nobody = { questions: [], approvals: [], ci_held: [] };
+    const nobody = { questions: [], approvals: [], ci_held: [], escalated: [] };
     start('/agents', backend({ items: [] }, nobody));
     expect(await screen.findByRole('heading', { name: 'No agent is working' })).toBeDefined();
     expect(screen.getByRole('link', { name: 'Choose a board' }).getAttribute('href')).toBe(

@@ -193,9 +193,15 @@ describe('each run’s activity', () => {
       questions: [question(70, taskId, 'Three or five?')],
       approvals: [],
       ci_held: [],
+      escalated: [],
     };
     expect(one({ agents: [agentItem(1)], inbox: asked })?.activity.activity).toBe('needs_you');
-    const approving = { questions: [], approvals: [approval(71, taskId)], ci_held: [] };
+    const approving = {
+      questions: [],
+      approvals: [approval(71, taskId)],
+      ci_held: [],
+      escalated: [],
+    };
     expect(one({ agents: [agentItem(1)], inbox: approving })?.activity.activity).toBe('needs_you');
     const waiting = new Map([[taskId, facts('DEMO-1', { state: 'waiting_answers' })]]);
     expect(one({ agents: [agentItem(1)], tasks: waiting })?.activity.activity).toBe('needs_you');
@@ -300,7 +306,12 @@ describe('the runs that ended while the page watched', () => {
     const taskId = uuid(1001);
     const fleet = fleetOf(
       base({
-        inbox: { questions: [question(70, taskId, 'Three or five?')], approvals: [], ci_held: [] },
+        inbox: {
+          questions: [question(70, taskId, 'Three or five?')],
+          approvals: [],
+          ci_held: [],
+          escalated: [],
+        },
         tasks: new Map([[taskId, facts('DEMO-1', { state: 'needs_human' })]]),
         endings: [
           {
@@ -345,6 +356,7 @@ describe('what needs a person', () => {
           questions: [question(70, uuid(2001), `First line ${HOSTILE}\nsecond line`)],
           approvals: [approval(71, uuid(2002))],
           ci_held: [],
+          escalated: [],
         },
         tasks: new Map([[uuid(2001), facts('DEMO-7', { projectId: runRecord(1).project_id })]]),
         projectKeys: new Map([[runRecord(1).project_id, 'demo']]),
@@ -363,7 +375,11 @@ describe('what needs a person', () => {
     const answered = { ...question(70, uuid(1), 'q'), status: 'answered' as const };
     const decided = { ...approval(71, uuid(1)), status: 'approved' as const };
     expect(
-      fleetOf(base({ inbox: { questions: [answered], approvals: [decided], ci_held: [] } })).needs,
+      fleetOf(
+        base({
+          inbox: { questions: [answered], approvals: [decided], ci_held: [], escalated: [] },
+        }),
+      ).needs,
     ).toEqual([]);
   });
 });

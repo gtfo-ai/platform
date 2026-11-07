@@ -17,7 +17,10 @@
  * taken at intake whatever `take_assigned_tickets` says, and no claim — first or re-claim — refuses
  * or re-assigns their ticket. Whether an assignee is such a member is the caller's live answer
  * (`TaskOwnerDirectory.classifyAssignee`), handed in as a boolean. Everybody else — an unlinked
- * account, a linked person below `member`, a machine — keeps the rules below unchanged.
+ * account, a linked person below `member`, a machine — keeps the rules below unchanged, **unless a
+ * person on the platform took or assigned the task** (a platform-sourced owner who may own in the
+ * project, TD-031's amendment item 5 as amended for a take): then the claim keeps the ticket as it
+ * is too, neither refusing nor re-assigning it ({@link claimPreReadDecision}).
  */
 import {
   type ExternalIdentity,
@@ -74,20 +77,36 @@ export const intakeSkipsAssignedTicket = (input: {
 
 /**
  * What the claim does with the assignee it read **before** it writes (TD-029 decision 5's WP-177
- * amendment (a), narrowed by S-26.2) — asked of **every** claim, a re-claim and a shadow claim
- * included, because a linked member's ticket is kept by all of them:
+ * amendment (a), narrowed by S-26.2 and by TD-031's amendment item 5 as amended for a take) —
+ * asked of **every** claim, a re-claim and a shadow claim included, because a ticket the platform
+ * must not take is left alone by all of them:
  *
- *  - `keep` — the holder is a linked member of the project: no assign is written, the claim is
- *    recorded `held_by: 'member'`, and the ticket still moves to `in_progress`;
+ *  - `keep` — the claim writes **no** assign, never refuses, and the ticket still moves to
+ *    `in_progress`. Two holders are kept, in this order:
+ *     - `held_by: 'member'` — the holder is a linked member of the project (S-26.2);
+ *     - `held_by: 'platform_owner'` — somebody else holds the ticket (anybody but nobody and the
+ *       binding's own account) **and the task has a platform-sourced owner who may own in the
+ *       project** (`owner_source: platform`, set by the owner command or a pick — a maintainer's
+ *       *Take it* or *Assign…*). A person on the platform already decided who works the task, so
+ *       the claim neither refuses it again nor writes the binding's account over the tracker's
+ *       assignee: the tracker keeps showing that assignee until the owner write-back (S-26.3, when
+ *       `assign_owner` is on) or a person changes it;
  *  - `refuse` — a **first** claim of a normal task finds somebody else holding the ticket (an
- *    unlinked account, a person below `member`, a machine, another binding's account) and the
- *    binding does not take assigned tickets: `ticket_assigned_elsewhere`, without the assign;
+ *    unlinked account, a person below `member`, a machine, another binding's account), the task
+ *    has no such platform owner, and the binding does not take assigned tickets:
+ *    `ticket_assigned_elsewhere`, without the assign;
  *  - `assign` — everything else: an unassigned ticket, one the binding's own account holds, a
  *    re-claim after a human return (it takes the ticket back from a person who is not a linked
- *    member), `take_assigned_tickets`, and a shadow claim, whose writes are `would_have` anyway.
+ *    member, on a task nobody on the platform owns), `take_assigned_tickets`, and a shadow claim,
+ *    whose writes are `would_have` anyway. A platform owner does not stop the assign over **nobody**
+ *    (it overwrites nobody, and it is what tells the tracker's people the ticket is taken) nor over
+ *    the binding's own account.
+ *
+ * A tracker-sourced owner is not a fact here: such an owner is the mapped holder, which
+ * `holderIsLinkedMember` already answers.
  */
 export type ClaimPreReadDecision =
-  | { readonly kind: 'keep' }
+  | { readonly kind: 'keep'; readonly heldBy: 'member' | 'platform_owner' }
   | { readonly kind: 'refuse'; readonly assignee: ExternalIdentity }
   | { readonly kind: 'assign' };
 
@@ -95,6 +114,12 @@ export const claimPreReadDecision = (input: {
   readonly self: ExternalIdentity;
   readonly holder: ExternalIdentity | null;
   readonly holderIsLinkedMember: boolean;
+  /**
+   * The task has an owner whose `owner_source` is `platform` and who may own in the project
+   * (`member` or above, not disabled) — the caller's live answer, read after the claim's own owner
+   * sync, so a tracker change since the take (latest change wins) has already cleared it.
+   */
+  readonly platformOwner: boolean;
   /** {@link ticketClaimIsFirst} of the claim the task holds. */
   readonly first: boolean;
   readonly shadow: boolean;
@@ -104,14 +129,15 @@ export const claimPreReadDecision = (input: {
     return { kind: 'assign' };
   }
   if (input.holderIsLinkedMember) {
-    return { kind: 'keep' };
+    return { kind: 'keep', heldBy: 'member' };
   }
-  if (
-    input.first &&
-    !input.shadow &&
-    !input.takeAssignedTickets &&
-    !sameAccount(input.self, input.holder)
-  ) {
+  if (sameAccount(input.self, input.holder)) {
+    return { kind: 'assign' };
+  }
+  if (input.platformOwner) {
+    return { kind: 'keep', heldBy: 'platform_owner' };
+  }
+  if (input.first && !input.shadow && !input.takeAssignedTickets) {
     return { kind: 'refuse', assignee: input.holder };
   }
   return { kind: 'assign' };

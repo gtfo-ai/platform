@@ -175,7 +175,8 @@ const fetchFor = (task: TaskDetailResponse | (() => TaskDetailResponse), sent: S
     if (url.endsWith('/api/projects')) return json({ items: [] });
     // A command refreshes the inbox: answered, so the refresh — which the dialog's close follows —
     // is not held behind a retried 404.
-    if (url.endsWith('/api/org/inbox')) return json({ questions: [], approvals: [], ci_held: [] });
+    if (url.endsWith('/api/org/inbox'))
+      return json({ questions: [], approvals: [], ci_held: [], escalated: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
 

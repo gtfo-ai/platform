@@ -2282,12 +2282,23 @@ export const escalationFor = async (
     .orderBy(desc(events.occurredAt), desc(events.position))
     .limit(1);
   const row = rows[0];
-  const payload = (row?.payload ?? {}) as {
+  return row === undefined ? null : escalationOfRow(row);
+};
+
+/**
+ * One `task.escalated` row as {@link taskEscalationSchema} publishes it — `null` for a payload
+ * missing either string rather than half a reason. The one reading {@link escalationFor} and
+ * {@link escalationsFor} share, so the task page, the board's page and the Inbox say one reason.
+ */
+const escalationOfRow = (row: {
+  readonly occurredAt: Date;
+  readonly payload: unknown;
+}): TaskEscalation | null => {
+  const payload = (row.payload ?? {}) as {
     readonly reason?: unknown;
     readonly blocker_brief?: unknown;
   };
   if (
-    row === undefined ||
     typeof payload.reason !== 'string' ||
     payload.reason === '' ||
     typeof payload.blocker_brief !== 'string' ||
@@ -2302,6 +2313,42 @@ export const escalationFor = async (
     brief: brief.slice(0, NOTIFICATION_DETAIL_MAX),
     brief_original_chars: brief.length > NOTIFICATION_DETAIL_MAX ? brief.length : null,
   };
+};
+
+/**
+ * {@link escalationFor} for many tasks at once (backlog 1360): the newest `task.escalated` of each
+ * stream in **one** statement (`distinct on`, the same order — newest instant, then position), read
+ * the same way. The caller passes only its `needs_human` tasks, for the reason
+ * {@link escalationFor} gives; a task absent from the map has no escalation with both strings.
+ */
+export const escalationsFor = async (
+  database: Database,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, TaskEscalation>> => {
+  if (taskIds.length === 0) {
+    return new Map();
+  }
+  const rows = await database
+    .selectDistinctOn([events.streamId], {
+      streamId: events.streamId,
+      occurredAt: events.occurredAt,
+      payload: events.payload,
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.streamType, 'task'),
+        eq(events.type, 'task.escalated'),
+        inArray(events.streamId, [...taskIds]),
+      ),
+    )
+    .orderBy(events.streamId, desc(events.occurredAt), desc(events.position));
+  return new Map(
+    rows.flatMap((row) => {
+      const escalation = escalationOfRow(row);
+      return escalation === null ? [] : [[row.streamId, escalation] as const];
+    }),
+  );
 };
 
 /**
@@ -2398,7 +2445,7 @@ export const listRunningAgents = async (
  * served as they were stored, because `questions` is append-only and nothing may rewrite them.
  */
 export const listInbox = async (database: Database): Promise<InboxResponse> => {
-  const [questionRows, approvalRows, ciHeld] = await Promise.all([
+  const [questionRows, approvalRows, ciHeld, escalated] = await Promise.all([
     database
       .select()
       .from(questions)
@@ -2410,13 +2457,50 @@ export const listInbox = async (database: Database): Promise<InboxResponse> => {
       .where(eq(approvals.status, 'pending'))
       .orderBy(asc(approvals.requestedAt)),
     listCiHeld(database),
+    listEscalated(database),
   ]);
   return {
     questions: questionRows.map(toQuestionRecord),
     // The task read's shape (TD-035), so Home and the Inbox name the plan an approval is about.
     approvals: await approvalViewsFor(database, approvalRows),
     ci_held: ciHeld,
+    escalated,
   };
+};
+
+/**
+ * **The tasks escalated to a person** (backlog 1360, S-25.14): the inbox's `escalated`. Three
+ * statements however many there are — the `needs_human` rows, their newest escalations
+ * ({@link escalationsFor}) and their owner views (`ownerViewsFor`, which `tracker_assignee` and
+ * `unlinked_assignee` are projected from exactly as on the task record) — oldest escalation first,
+ * as the inbox is a queue.
+ */
+const listEscalated = async (
+  database: Database,
+): Promise<NonNullable<InboxResponse['escalated']>> => {
+  const rows = await database.select().from(tasks).where(eq(tasks.state, 'needs_human'));
+  const ids = rows.map((row) => row.id);
+  const [escalations, owners] = await Promise.all([
+    escalationsFor(database, ids),
+    ownerViewsFor(database, ids),
+  ]);
+  return rows
+    .map((row) => {
+      const escalation = escalations.get(row.id) ?? null;
+      const owner = ownerFieldsOf(row, owners.get(row.id));
+      return {
+        task_id: row.id as Id,
+        project_id: row.projectId as Id,
+        ticket: { provider: row.ticketProvider, key: row.ticketKey, url: row.ticketUrl },
+        ticket_title: ticketTitleOf(row.ticketSnapshot),
+        current_stage: row.currentStage ?? null,
+        reason: escalation?.reason ?? null,
+        at: escalation?.at ?? isoRequired(row.updatedAt),
+        tracker_assignee: owner.tracker_assignee,
+        unlinked_assignee: owner.unlinked_assignee,
+      };
+    })
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.task_id.localeCompare(b.task_id));
 };
 
 /**
@@ -2599,42 +2683,56 @@ export const listProjectTasks = async (
   // this answer has anywhere to put.
   // S-23.9a: the card's glance — its stage rows and what waits on a person — over the same ids.
   // S-26.5: and why each one's run waits; backlog 1300: its CI wait, off the same stage rows.
-  const [conflicts, estimated, unmeasured, pausedReasons, stageRows, asks, owners, waiting] =
-    await Promise.all([
-      conflictsFor(
-        database,
-        page.map((row) => row.task.id),
-      ),
-      estimatedSpendFor(
-        database,
-        page.map((row) => row.task.id),
-      ),
-      unmeasuredRunsFor(
-        database,
-        page.map((row) => row.task.id),
-      ),
-      pausedReasonsFor(
-        database,
-        page.filter((row) => row.task.state === 'paused').map((row) => row.task.id),
-      ),
-      stageRowsFor(
-        database,
-        page.map((row) => row.task.id),
-      ),
-      openAsksFor(
-        database,
-        page.map((row) => row.task.id),
-      ),
-      ownerViewsFor(
-        database,
-        page.map((row) => row.task.id),
-      ),
-      waitingForTasks(
-        database,
-        page.map((row) => row.task.id),
-        options.coreDigests ?? null,
-      ),
-    ]);
+  const [
+    conflicts,
+    estimated,
+    unmeasured,
+    pausedReasons,
+    stageRows,
+    asks,
+    owners,
+    waiting,
+    escalations,
+  ] = await Promise.all([
+    conflictsFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
+    estimatedSpendFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
+    unmeasuredRunsFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
+    pausedReasonsFor(
+      database,
+      page.filter((row) => row.task.state === 'paused').map((row) => row.task.id),
+    ),
+    stageRowsFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
+    openAsksFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
+    ownerViewsFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
+    waitingForTasks(
+      database,
+      page.map((row) => row.task.id),
+      options.coreDigests ?? null,
+    ),
+    // Backlog 1360: why each `needs_human` task of the page waits, as a key — one statement.
+    escalationsFor(
+      database,
+      page.filter((row) => row.task.state === 'needs_human').map((row) => row.task.id),
+    ),
+  ]);
   return {
     items: page.map((row) => ({
       ...toTaskRecord(
@@ -2651,6 +2749,8 @@ export const listProjectTasks = async (
         returnsOf(stageRows.get(row.task.id)?.setback ?? [], compiledPipelineOf(row.task)).at(-1) ??
         null,
       stop: stopOf(row.task, stageRows.get(row.task.id)?.setback ?? []),
+      escalation_reason:
+        row.task.state === 'needs_human' ? (escalations.get(row.task.id)?.reason ?? null) : null,
       open_questions: asks.questions.get(row.task.id) ?? 0,
       pending_approvals: asks.approvals.get(row.task.id) ?? 0,
       loop_limits: frozenLimits(row.task.iterationLimits),

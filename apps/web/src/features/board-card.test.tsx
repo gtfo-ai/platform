@@ -104,6 +104,7 @@ const task = (n: number, overrides: Partial<TaskListItem>): TaskListItem =>
     gate_wait: null,
     latest_return: null,
     stop: null,
+    escalation_reason: null,
     ...overrides,
   }) as TaskListItem;
 
@@ -128,6 +129,7 @@ const BUSY = task(1, {
   gate_wait: null,
   latest_return: null,
   stop: null,
+  escalation_reason: null,
   mr_ref: {
     provider: 'gitlab',
     project_path: 'acme/api',

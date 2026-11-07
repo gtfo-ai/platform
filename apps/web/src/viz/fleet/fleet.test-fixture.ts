@@ -116,7 +116,12 @@ export const facts = (key: string, overrides: Partial<FleetTaskFacts> = {}): Fle
   ...overrides,
 });
 
-export const EMPTY_INBOX: InboxResponse = { questions: [], approvals: [], ci_held: [] };
+export const EMPTY_INBOX: InboxResponse = {
+  questions: [],
+  approvals: [],
+  ci_held: [],
+  escalated: [],
+};
 
 export const question = (n: number, taskId: string, text: string) =>
   ({

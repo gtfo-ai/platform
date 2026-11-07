@@ -27,7 +27,7 @@ import {
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
 import type { BindingLifecycle } from './binding-lifecycle.js';
-import { cancelTaskCommand, reworkStageCommand } from './commands.js';
+import { cancelTaskCommand, handBackTaskCommand, reworkStageCommand } from './commands.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import { setTaskOwnerCommand } from './owner-sync.js';
 import { staticProjectSettings } from './settings.js';
@@ -65,6 +65,13 @@ interface TrackerOptions {
   readonly beforeUnassign?: () => Promise<void>;
   /** The first this many reads answer no ticket — a port that answered nothing. */
   readonly nullReads?: number;
+  /**
+   * Somebody takes the ticket in the tracker just before the first claim reads it — on the claim's
+   * first `selfIdentity`, which intake never asks for an unassigned ticket (AUT-6676's shape).
+   */
+  readonly takenBeforeTheClaimBy?: string;
+  /** The port declares `assignOthers` and answers `assignTo` — the owner write-back (S-26.3). */
+  readonly assignsOthers?: boolean;
 }
 
 /** One ticket's assignee, status and comments, and every lifecycle call made on it, in order. */
@@ -103,9 +110,26 @@ const tracker = (options: TrackerOptions = {}) => {
       };
     },
     selfIdentity: async () => {
+      if (options.takenBeforeTheClaimBy !== undefined && !calls.includes('selfIdentity')) {
+        state.assignee = options.takenBeforeTheClaimBy;
+      }
       calls.push('selfIdentity');
       return identity(SELF_ID);
     },
+    ...(options.assignsOthers === true
+      ? {
+          capabilities: () =>
+            ({ commentsRead: false, assignOthers: true }) as ReturnType<
+              TaskManagementPort['capabilities']
+            >,
+          assignTo: async (_ref: TicketRefInput, assignee: ExternalIdentity) => {
+            calls.push(`assignTo:${assignee.external_id}`);
+            const changed = state.assignee !== assignee.external_id;
+            state.assignee = assignee.external_id;
+            return { changed, assignee };
+          },
+        }
+      : {}),
     assignToSelf: async () => {
       calls.push('assignToSelf');
       if (options.forbidAssign === true) {
@@ -1523,5 +1547,211 @@ describe('S-26.2 — the claim keeps a member’s ticket (BD-031 amendment 2, TD
       ownerSource: 'platform',
       ticketAssignee: { external_id: SELF_ID, platform: true },
     });
+  });
+});
+
+// ── A take unblocks the claim (TD-031's amendment item 5, as amended for a take) ──────────────
+
+/** The maintainer who takes the task on the platform — Bob, a member of the project. */
+const takeAs = async (harness: PipelineHarness, taskId: Id): Promise<void> => {
+  await setTaskOwnerCommand(
+    {
+      unitOfWork: harness.commands.unitOfWork,
+      store: harness.store,
+      ids: harness.ids,
+      clock: harness.clock,
+    },
+    { taskId, actorUserId: BOB, actorRole: 'maintainer', targetUserId: BOB },
+  );
+};
+
+/** AUT-6676's shape: unassigned at intake, then Jane — linked to nobody — takes it in Jira. */
+const janeTakesBeforeTheClaim = (options: TrackerOptions = {}) =>
+  tracker({ takenBeforeTheClaimBy: 'jane', ...options });
+
+describe('a take unblocks the claim (TD-031 amendment item 5 as amended for a take, AUT-6676)', () => {
+  it.each([
+    ['a maintainer takes the task', true],
+    ['nobody takes it (canary)', false],
+  ])('the claim refuses Jane’s ticket, then the hand-back: %s', async (_label, take) => {
+    const ticket = janeTakesBeforeTheClaim();
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+    const taskId = taskOf(harness).task.id;
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(eventsOf(harness, 'ticket.claim.refused')).toHaveLength(1);
+    expect(runsCreated(harness)).toBe(0);
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: null,
+      ticketAssignee: { external_id: 'jane', platform: false },
+    });
+
+    if (take) {
+      await takeAs(harness, taskId);
+      expect(harness.store.ownershipOf(taskId)).toMatchObject({
+        ownerUserId: BOB,
+        ownerSource: 'platform',
+      });
+    }
+    await handBackTaskCommand(harness.humanCommands, {
+      taskId,
+      userId: USER,
+      stage: 'refinement' as Slug,
+      summary: 'Bob works this one',
+    });
+    await harness.drain();
+
+    // Jane keeps the ticket in the tracker either way: the platform never writes over her.
+    expect(assigns(ticket)).toBe(0);
+    expect(harness.audit.entriesFor('assign_to_self')).toHaveLength(0);
+    expect(ticket.state.assignee).toBe('jane');
+    if (!take) {
+      // Before the amendment this was the taken task's fate too: refused again, escalated again.
+      expect(taskOf(harness).task.state).toBe('needs_human');
+      expect(eventsOf(harness, 'ticket.claim.refused')).toHaveLength(2);
+      expect(eventsOf(harness, 'task.escalated')).toHaveLength(2);
+      expect(runsCreated(harness)).toBe(0);
+      return;
+    }
+    expect(eventsOf(harness, 'ticket.claim.refused')).toHaveLength(1);
+    expect(eventsOf(harness, 'task.escalated')).toHaveLength(1);
+    expect(runsCreated(harness)).toBeGreaterThan(0);
+    expect(harness.specs.map((spec) => spec.stage)).toContain('refinement');
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(ticket.calls).toContain('transition:Doing');
+    expect(await claimOf(harness)).toMatchObject({
+      account_id: SELF_ID,
+      status: 'confirmed',
+      held_by: 'platform_owner',
+      stale: false,
+    });
+    expect(eventsOf(harness, 'ticket.claimed').map((entry) => entry.payload)).toEqual([
+      expect.objectContaining({ held_by: 'platform_owner', in_progress_written: true }),
+    ]);
+    // The owner the take set survives every read of Jane since.
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'platform',
+      ticketAssignee: { external_id: 'jane', platform: false },
+    });
+
+    // The release of a kept claim makes no unassign call: the platform assigned nothing.
+    await cancelTaskCommand(harness.humanCommands, { taskId, userId: USER });
+    await harness.drain();
+    expect(ticket.calls).not.toContain('unassign');
+    expect(ticket.state.assignee).toBe('jane');
+    expect(eventsOf(harness, 'ticket.released').at(-1)?.payload).toMatchObject({
+      unassigned: false,
+      cause: 'cancelled',
+    });
+  });
+
+  it('a re-claim after a human return keeps Jane’s ticket on a taken task, and assigns it on one nobody took', async () => {
+    for (const take of [true, false]) {
+      const ticket = tracker({ assignee: 'jane' });
+      const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+      const stored = await insertTask(harness);
+      const taskId = stored.task.id;
+      await harness.memory.transaction(async (scope) => {
+        await harness.store.tasks.saveTicketClaim(scope.tx, taskId, {
+          account_id: SELF_ID,
+          claimed_at: '2026-06-01T08:00:00.000Z' as StoredTicketClaim['claimed_at'],
+          status: 'confirmed',
+          in_progress_written: true,
+          stale: true,
+          released_at: null,
+          release_cause: null,
+          stale_cause: 'human_return',
+        });
+        // The platform last read Jane (the human return's own read), as on a live task.
+        const written = await harness.store.tasks.saveOwner(scope.tx, taskId, {
+          expected: { ownerUserId: null, ticketAssignee: null },
+          next: {
+            ownerUserId: null,
+            ownerSource: null,
+            ownerChangedAt: null,
+            ticketAssignee: {
+              provider: 'fake-jira',
+              external_id: 'jane',
+              display_name: null,
+              platform: false,
+            },
+          },
+        });
+        expect(written).toBe(true);
+      });
+      if (take) {
+        await takeAs(harness, taskId);
+      }
+      const outcome = await ensureTicketClaim(claimOptions(harness), stored, {
+        taskId,
+        ...REFINEMENT_1,
+      });
+      expect(outcome, String(take)).toEqual({ kind: 'proceed' });
+      if (take) {
+        // No assign and no re-read: the platform wrote nothing, so there is no race to decide.
+        expect(ticket.calls).toEqual(['selfIdentity', 'transition:Doing']);
+        expect(ticket.state.assignee).toBe('jane');
+        expect(await claimRecordOf(harness, taskId)).toMatchObject({
+          held_by: 'platform_owner',
+          stale: false,
+          stale_cause: null,
+        });
+      } else {
+        // Canary: a re-claim takes the ticket back from anybody else when nobody took the task.
+        expect(assigns(ticket)).toBe(1);
+        expect(ticket.state.assignee).toBe(SELF_ID);
+        expect((await claimRecordOf(harness, taskId))?.held_by).toBeUndefined();
+      }
+    }
+  });
+
+  it('a platform owner who may no longer own the project’s tasks keeps nothing: the claim refuses as before', async () => {
+    const ticket = janeTakesBeforeTheClaim();
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+    const taskId = taskOf(harness).task.id;
+    await takeAs(harness, taskId);
+    // Bob leaves the project after the take (`mayOwn` answers false).
+    harness.store.unseedProjectMember(PROJECT, BOB);
+    await handBackTaskCommand(harness.humanCommands, {
+      taskId,
+      userId: USER,
+      stage: 'refinement' as Slug,
+      summary: 'Bob works this one',
+    });
+    await harness.drain();
+    expect(eventsOf(harness, 'ticket.claim.refused')).toHaveLength(2);
+    expect(assigns(ticket)).toBe(0);
+  });
+
+  it('with the owner write-back on, the take assigns Bob in the tracker and the claim keeps him as a member: no fight', async () => {
+    const ticket = janeTakesBeforeTheClaim({ assignsOthers: true });
+    const harness = memberHarnessFor(
+      ticket,
+      lifecycle({ in_progress: 'Doing', assign_owner: true }),
+    );
+    harness.store.seedIdentity('fake-jira', 'bob', BOB);
+    await harness.publish([ticketMatched()]);
+    const taskId = taskOf(harness).task.id;
+    expect(eventsOf(harness, 'ticket.claim.refused')).toHaveLength(1);
+
+    await takeAs(harness, taskId);
+    await harness.drain();
+    expect(ticket.state.assignee).toBe('bob');
+    await handBackTaskCommand(harness.humanCommands, {
+      taskId,
+      userId: USER,
+      stage: 'refinement' as Slug,
+      summary: 'Bob works this one',
+    });
+    await harness.drain();
+
+    expect(ticket.calls.filter((call) => call.startsWith('assignTo:'))).toEqual(['assignTo:bob']);
+    expect(assigns(ticket)).toBe(0);
+    expect(ticket.state.assignee).toBe('bob');
+    expect(await claimOf(harness)).toMatchObject({ held_by: 'member', stale: false });
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({ ownerUserId: BOB });
   });
 });

@@ -11,6 +11,8 @@ import {
   eventsQuerySchema,
   exportProjectConfigRequestSchema,
   exportProjectConfigResponseSchema,
+  inboxEscalatedSchema,
+  inboxResponseSchema,
   integrationsResponseSchema,
   kbHealthResponseSchema,
   lifecycleErrorCodeSchema,
@@ -809,6 +811,8 @@ describe('the list envelopes and the KB health report', () => {
       // S-25.11: the newest return and the stop, `null` when the rows record none.
       latest_return: null,
       stop: null,
+      // Backlog 1360: the escalation's reason key, `null` for a task that is not `needs_human`.
+      escalation_reason: null,
     };
     expect(
       tasksResponseSchema.parse({
@@ -886,11 +890,14 @@ describe('the list envelopes and the KB health report', () => {
       'loop_limits',
       'latest_return',
       'stop',
+      'escalation_reason',
     ] as const) {
       const { [key]: _dropped, ...without } = task;
       expect(page(without).success, key).toBe(false);
     }
     expect(page({ ...task, loop_limits: null }).success).toBe(true);
+    expect(page({ ...task, escalation_reason: 'ticket_assigned_elsewhere' }).success).toBe(true);
+    expect(page({ ...task, escalation_reason: '' }).success).toBe(false);
     expect(page({ ...task, open_questions: -1 }).success).toBe(false);
     expect(page({ ...task, stages: [{ ...task.stages[0], state: 'sideways' }] }).success).toBe(
       false,
@@ -1292,5 +1299,48 @@ describe('ticket statuses', () => {
     for (const code of lifecycleErrorCodeSchema.options) {
       expect(apiErrorSchema.safeParse({ error: { code, message: 'x' } }).success).toBe(true);
     }
+  });
+});
+
+/** Backlog 1360 (S-25.14): the Inbox's escalated tasks — required, strict, snake_case. */
+describe('the inbox lists escalated tasks', () => {
+  const row = {
+    task_id: uuid(1),
+    project_id: uuid(2),
+    ticket: {
+      provider: 'fake-jira',
+      key: 'ACME-1',
+      url: 'https://jira.example.test/browse/ACME-1',
+    },
+    ticket_title: 'Show the totals',
+    current_stage: 'refinement',
+    reason: 'ticket_assigned_elsewhere',
+    at: AT,
+    tracker_assignee: { display_name: 'Jane Example', user_id: null },
+    unlinked_assignee: { display_name: 'Jane Example' },
+  };
+
+  it('parses a row, and every fact a row may not hold is nullable, never optional', () => {
+    expect(inboxEscalatedSchema.parse(row)).toEqual(row);
+    for (const key of [
+      'ticket_title',
+      'current_stage',
+      'reason',
+      'tracker_assignee',
+      'unlinked_assignee',
+    ] as const) {
+      expect(inboxEscalatedSchema.safeParse({ ...row, [key]: null }).success, key).toBe(true);
+      const { [key]: _dropped, ...without } = row;
+      expect(inboxEscalatedSchema.safeParse(without).success, key).toBe(false);
+    }
+    expect(inboxEscalatedSchema.safeParse({ ...row, reason: '' }).success).toBe(false);
+    expect(inboxEscalatedSchema.safeParse({ ...row, brief: 'the words' }).success).toBe(false);
+  });
+
+  it('requires the list on the inbox response', () => {
+    const inbox = { questions: [], approvals: [], ci_held: [], escalated: [row] };
+    expect(inboxResponseSchema.parse(inbox).escalated).toEqual([row]);
+    const { escalated: _dropped, ...without } = inbox;
+    expect(inboxResponseSchema.safeParse(without).success).toBe(false);
   });
 });

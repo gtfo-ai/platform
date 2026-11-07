@@ -353,6 +353,7 @@ const fetchFor = (world: World) =>
         questions: world.questions,
         approvals: world.approvals,
         ci_held: world.ciHeld ?? [],
+        escalated: [],
       });
     }
     // The server refuses both below admin (`org.dead_letters.manage`); the fake does too.
@@ -428,6 +429,7 @@ const fetchFor = (world: World) =>
               gate_wait: null,
               latest_return: null,
               stop: null,
+              escalation_reason: null,
             })),
           next_cursor: null,
           can_start_task: true,

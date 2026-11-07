@@ -823,6 +823,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
           questions: fixtures.inbox.questions.filter((item) => !answeredQuestions.has(item.id)),
           approvals: fixtures.inbox.approvals,
           ci_held: waitingOpen ? fixtures.inboxCiHeld : fixtures.inbox.ci_held,
+          escalated: fixtures.inbox.escalated,
         },
         '/api/integrations': fixtures.integrations,
         '/api/integrations/providers': fixtures.integrationProviders,

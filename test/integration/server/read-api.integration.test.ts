@@ -21,6 +21,7 @@ import { RUN_TRANSCRIPT_TOPIC, runTopic, type Transaction } from '@platform/appl
 import type { ContextPackRecord, Id, IsoDateTime, TranscriptEvent } from '@platform/contracts';
 import {
   acceptanceVerdictDataSchema,
+  inboxResponseSchema,
   MAX_RUN_COMMANDS,
   MAX_TASK_STOP_RECORDED_CHARS,
   runRecordSchema,
@@ -1062,6 +1063,138 @@ describe('the task projection', () => {
     const briefless = await taskAt('ESC-3', 'needs_human');
     await escalated(briefless, 1, '2026-11-05T13:00:00Z', { reason: 'the approval expired' });
     expect((await findTaskDetail(drizzled, briefless))?.escalation).toBeNull();
+  });
+
+  /**
+   * **The escalation's reason key on the board's page and in the Inbox** (backlog 1360, S-25.14):
+   * the same newest `task.escalated` the task read answers, for the whole page in one statement.
+   * Both directions (rule 42): a task that is not `needs_human` publishes `null` on its card and is
+   * not in the Inbox; a briefless escalation is no reason in either; the Inbox row carries the task
+   * record's own `tracker_assignee` and `unlinked_assignee`.
+   */
+  it('publishes the escalation reason on the board’s page and lists escalated tasks in the Inbox', async () => {
+    const one = async <T extends Record<string, unknown>>(text: string, values: unknown[] = []) =>
+      (await pool.query<T>(text, values)).rows[0] as T;
+    const org = await one<{ id: string }>(
+      "insert into organizations (name) values ('escalation-reason') returning id",
+    );
+    const project = await one<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'escreason', 'Escalation reason', 'https://git.example.test/acme/escreason.git')
+       returning id`,
+      [org.id],
+    );
+    const taskAt = async (key: string, state: string, assignee: unknown = null) =>
+      (
+        await one<{ id: string }>(
+          `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                              current_stage, stage_attempts, ticket_assignee)
+           values ($1, 'fake-jira', $2, 'https://jira.example.test/browse/' || $2, 'feature', $3,
+                   'refinement', jsonb_build_object('refinement', 1), $4::jsonb) returning id`,
+          [project.id, key, state, assignee === null ? null : JSON.stringify(assignee)],
+        )
+      ).id;
+    const escalated = async (
+      taskId: string,
+      seq: number,
+      at: string,
+      payload: Record<string, unknown>,
+    ) => {
+      await pool.query(
+        `insert into events (stream_type, stream_id, stream_seq, type, payload, actor, occurred_at)
+         values ('task', $1, $2, 'task.escalated', $3::jsonb,
+                 '{"kind":"system","component":"test"}'::jsonb, $4)`,
+        [taskId, seq, JSON.stringify({ project_id: project.id, task_id: taskId, ...payload }), at],
+      );
+    };
+    const jane = {
+      provider: 'fake-jira',
+      external_id: 'acct-jane-escreason',
+      display_name: 'Jane Example',
+      platform: false,
+    };
+
+    const held = await taskAt('ESR-1', 'needs_human', jane);
+    await escalated(held, 1, '2026-11-05T13:00:00Z', {
+      reason: 'run_failed',
+      blocker_brief: 'The run failed.',
+    });
+    await escalated(held, 2, '2026-11-05T14:00:00Z', {
+      reason: 'ticket_assigned_elsewhere',
+      blocker_brief: 'The ticket is assigned to somebody else.',
+    });
+    const approval = await taskAt('ESR-2', 'needs_human');
+    await escalated(approval, 1, '2026-11-05T12:00:00Z', {
+      reason: 'approval_expired',
+      blocker_brief: 'Nobody decided the plan approval in time.',
+    });
+    // Left the escalation: history, not why it waits.
+    const moving = await taskAt('ESR-3', 'active');
+    await escalated(moving, 1, '2026-11-05T13:00:00Z', {
+      reason: 'run_failed',
+      blocker_brief: 'The run failed.',
+    });
+    // Half a reason is no reason.
+    const briefless = await taskAt('ESR-4', 'needs_human');
+    await escalated(briefless, 1, '2026-11-05T15:00:00Z', { reason: 'run_failed' });
+
+    const page = await listProjectTasks(drizzled, project.id, { limit: 50 });
+    const reasons = new Map(page?.items.map((item) => [item.ticket.key, item.escalation_reason]));
+    expect(Object.fromEntries(reasons)).toEqual({
+      'ESR-1': 'ticket_assigned_elsewhere',
+      'ESR-2': 'approval_expired',
+      'ESR-3': null,
+      'ESR-4': null,
+    });
+    // The card says what the task read says.
+    for (const taskId of [held, approval, moving, briefless]) {
+      const item = page?.items.find((entry) => entry.id === taskId);
+      expect(item?.escalation_reason, taskId).toBe(
+        (await findTaskDetail(drizzled, taskId))?.escalation?.reason ?? null,
+      );
+    }
+    // Home's *Needs you* reads the `needs_human` page: the same keys.
+    const needsHuman = await listProjectTasks(drizzled, project.id, {
+      limit: 50,
+      state: 'needs_human',
+    });
+    expect(needsHuman?.items.map((item) => [item.ticket.key, item.escalation_reason])).toEqual(
+      expect.arrayContaining([
+        ['ESR-1', 'ticket_assigned_elsewhere'],
+        ['ESR-2', 'approval_expired'],
+        ['ESR-4', null],
+      ]),
+    );
+
+    const inbox = inboxResponseSchema.parse(await listInbox(drizzled));
+    const ours = inbox.escalated.filter((row) => row.project_id === project.id);
+    // Oldest escalation first; the briefless one is ordered by the task's own update instead.
+    expect(ours.filter((row) => row.reason !== null).map((row) => row.ticket.key)).toEqual([
+      'ESR-2',
+      'ESR-1',
+    ]);
+    expect(ours.map((row) => row.ticket.key).sort()).toEqual(['ESR-1', 'ESR-2', 'ESR-4']);
+    expect(ours.find((row) => row.task_id === held)).toEqual({
+      task_id: held,
+      project_id: project.id,
+      ticket: {
+        provider: 'fake-jira',
+        key: 'ESR-1',
+        url: 'https://jira.example.test/browse/ESR-1',
+      },
+      ticket_title: null,
+      current_stage: 'refinement',
+      reason: 'ticket_assigned_elsewhere',
+      at: '2026-11-05T14:00:00.000Z',
+      tracker_assignee: { display_name: 'Jane Example', user_id: null },
+      unlinked_assignee: { display_name: 'Jane Example' },
+    });
+    expect(ours.find((row) => row.task_id === approval)).toMatchObject({
+      reason: 'approval_expired',
+      tracker_assignee: null,
+      unlinked_assignee: null,
+    });
+    expect(ours.find((row) => row.task_id === briefless)?.reason).toBeNull();
   });
 
   /**

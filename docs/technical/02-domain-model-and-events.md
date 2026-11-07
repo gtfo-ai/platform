@@ -254,6 +254,20 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > `tasks.ticket_assignee` in its record transaction, and a release that unassigns writes `null`
 > there, so the next owner sync reads no change (`claimPreReadDecision`, `recordPlatformAssign`,
 > `recordPlatformUnassign` in the domain).
+> *As built for a take (TD-031's amendment item 5 as amended for a take, backlog 1360's PR,
+> 2026-11-07):* a task with a **platform-sourced owner** who may own in the project (`owner_source:
+> platform` — the owner command's *Take it* or *Assign…*, or a pick — and `member` or above, not
+> disabled, read live in the claim's sync transaction after the read is applied) **keeps** a ticket
+> somebody else holds — anybody but nobody and the binding's own account — on every claim: no assign, no
+> re-read, no `ticket_assigned_elsewhere`, the ticket still moves to `in_progress`, and the claim records
+> `held_by: 'platform_owner'`, whose release unassigns nothing. So a maintainer's take of a task an
+> unlinked tracker assignee holds unblocks its hand-back, and no re-claim writes the binding's account
+> over that assignee; the tracker shows them until the owner write-back (S-26.3, `assign_owner`) or a
+> person changes it. A linked member holding the ticket is still `held_by: 'member'` (asked first); a
+> platform owner does not stop the assign over **nobody** or over the binding's own account; and a
+> tracker change since the take clears the owner (latest change wins) before the claim decides. With
+> `assign_owner` on, the take's write-back puts the owner on the ticket, so the claim reads a linked
+> member and keeps it as `member` — the two never write the ticket against each other.
 > *As built at S-26.5 (TD-031's 2026-11-06 amendment item 8):* a run waiting for a claimant is a
 > **read**, never a state: no event and no column. The task read, the board and the Agents rows
 > derive `waiting` from the open offer and the claim's own predicates (technical/08, *Why a run
@@ -617,7 +631,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `ticket.updated` | task-management adapter (WP-60; emitted **beside** `ticket.matched`/`ticket.status.changed`, never instead) | ticket ref, the provider's `updated_at`, the changed field names (bounded, `truncated`), actor | Snapshot freshness (10, `pipeline.ticket.signal` — Q61 (b); since WP-145 it reaches a task by the ticket's stable id first and by the key only for a task with none, and moves a live task whose id it carries under another key to that key, appending `task.ticket.rekeyed`); bug re-trace (120, `pipeline.bug.retrace`, WP-90 — a ticket whose defect trace is not `linked` is traced again, PROGRESS backlog 192); re-lint on edit is **not** built (it waits on a measurement of update frequency); the owner sync (120, `pipeline.owner.sync`, S-26.1 — wakes the `owner_sync` duty for the ticket's live task, which re-reads the ticket only while its snapshot is older than the newest signal, so a burst costs one read, and follows its assignee); product/18:60's *"edited within 48 h"* is a statistics read over this event (WP-61, `lintEdits`), not a consumer; the human-return window (10, `pipeline.review.comment`, WP-178) — armed for a task at `qa` or `ready_for_merge` when the changed fields name the status, **or are empty or truncated**: a polled edit names no field, and on a binding that only polls it is the one signal a ticket comment or a status move produces |
 | `ticket.comment.added` | adapter | ticket, comment id, author identity, text | The human-return window (10, `pipeline.review.comment`, WP-178): arms it for a task at `qa` or `ready_for_merge`, unless the comment opens with a platform marker; Question answering (20), Feedback intake (30) |
 | `ticket.status.changed` | adapter (Jira's webhook since WP-60; declared unconsumed until WP-178) | ticket, from, to, actor | The human-return window (10, `pipeline.review.comment`, BD-031, since WP-178): it arms the window only for a task at `qa` or `ready_for_merge`, and the window decides between return and pass — a pass needs a recorded change whose `from` is the `qa` slot (`leftQa`, WP-178 criterion (14)); at an agent stage the event is logged and nothing else |
-| `ticket.claimed` | the claim (`ensureTicketClaim`, WP-177) | task, ticket, the binding's own account id, `in_progress` written or not, `shadow`, and `held_by: 'member'` when a linked member holds the ticket and nothing was assigned (S-26.2) | — (the record is the row, `tasks.ticket_claim`; `GET /api/tasks/:id` publishes it from WP-181, criterion 6, and not before) |
+| `ticket.claimed` | the claim (`ensureTicketClaim`, WP-177) | task, ticket, the binding's own account id, `in_progress` written or not, `shadow`, and `held_by: 'member'` when a linked member holds the ticket and nothing was assigned (S-26.2), or `held_by: 'platform_owner'` when somebody else holds it on a task a person on the platform owns and nothing was assigned (a take) | — (the record is the row, `tasks.ticket_claim`; `GET /api/tasks/:id` publishes it from WP-181, criterion 6, and not before) |
 | `ticket.claim.refused` | the claim | task, ticket, reason (`ticket_assigned_elsewhere` \| `ticket_claim_failed`), the assignee's identity when known | — (the escalation it causes is `task.escalated`) |
 | `ticket.released` | the `ticket_release` duty (WP-177) | task, ticket, unassigned or not, `pick_up_from` written or not, cause (`cancelled` \| `rework` \| `stopped`, the last when the task stopped between the claim's assign and its record) | — |
 | `ticket.intake.skipped` | intake (`runIntakeCheck`, WP-177) | project, ticket, reason (`assigned`) | — (audit only) |

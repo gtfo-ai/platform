@@ -738,9 +738,17 @@ export const taskTicketClaimSchema = z.strictObject({
  *  - `held_by` — `member` when the claim found the ticket assigned to a **linked member** of the
  *    project and kept it with them (S-26.2, TD-031's 2026-11-06 amendment item 5, BD-031's
  *    amendment 2): no assign was written, `account_id` is still the binding's own account (the
- *    claimant), and the release never unassigns the ticket. Absent on a claim that assigned the
- *    ticket to the binding's own account, and on every claim written before S-26.2.
+ *    claimant), and the release never unassigns the ticket. `platform_owner` when the claim found
+ *    the ticket held by somebody else on a task a person on the platform owns (`owner_source:
+ *    platform` — a take, an assignment or a pick; TD-031's amendment item 5 as amended for a take):
+ *    no assign was written either, the tracker keeps its assignee, and the release unassigns
+ *    nothing. Absent on a claim that assigned the ticket to the binding's own account, and on every
+ *    claim written before S-26.2.
  */
+/** Who a claim that assigned nothing left the ticket with — `storedTicketClaimSchema`'s `held_by`. */
+export const ticketClaimHeldBySchema = z.enum(['member', 'platform_owner']);
+export type TicketClaimHeldBy = z.infer<typeof ticketClaimHeldBySchema>;
+
 export const storedTicketClaimSchema = z.strictObject({
   account_id: nonEmptyStringSchema.max(255),
   claimed_at: isoDateTimeSchema,
@@ -750,7 +758,7 @@ export const storedTicketClaimSchema = z.strictObject({
   released_at: isoDateTimeSchema.nullable(),
   release_cause: z.enum(['cancelled', 'rework', 'stopped']).nullable(),
   stale_cause: z.enum(['stopped', 'rework', 'human_return']).nullish(),
-  held_by: z.enum(['member']).optional(),
+  held_by: ticketClaimHeldBySchema.optional(),
 });
 
 export type StoredTicketClaim = z.infer<typeof storedTicketClaimSchema>;

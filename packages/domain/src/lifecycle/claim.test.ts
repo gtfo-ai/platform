@@ -292,6 +292,7 @@ describe('claimPreReadDecision (S-26.2)', () => {
     holder: ExternalIdentity | null,
     overrides: Partial<{
       holderIsLinkedMember: boolean;
+      platformOwner: boolean;
       first: boolean;
       shadow: boolean;
       takeAssignedTickets: boolean;
@@ -301,6 +302,7 @@ describe('claimPreReadDecision (S-26.2)', () => {
       self: SELF,
       holder,
       holderIsLinkedMember: false,
+      platformOwner: false,
       first: true,
       shadow: false,
       takeAssignedTickets: false,
@@ -311,10 +313,18 @@ describe('claimPreReadDecision (S-26.2)', () => {
     for (const first of [true, false]) {
       for (const shadow of [true, false]) {
         for (const takeAssignedTickets of [true, false]) {
-          expect(
-            ask(MEMBER, { holderIsLinkedMember: true, first, shadow, takeAssignedTickets }),
-            JSON.stringify({ first, shadow, takeAssignedTickets }),
-          ).toEqual({ kind: 'keep' });
+          for (const platformOwner of [true, false]) {
+            expect(
+              ask(MEMBER, {
+                holderIsLinkedMember: true,
+                platformOwner,
+                first,
+                shadow,
+                takeAssignedTickets,
+              }),
+              JSON.stringify({ platformOwner, first, shadow, takeAssignedTickets }),
+            ).toEqual({ kind: 'keep', heldBy: 'member' });
+          }
         }
       }
     }
@@ -335,7 +345,50 @@ describe('claimPreReadDecision (S-26.2)', () => {
     expect(ask(SELF)).toEqual({ kind: 'assign' });
   });
 
-  it('property: a linked member is kept, and nothing else is ever kept', () => {
+  /**
+   * TD-031's amendment item 5 as amended for a take: a maintainer's *Take it* or *Assign…* on a task
+   * whose ticket an unlinked person holds (AUT-6676) — the hand-back's claim neither refuses again
+   * nor writes the binding's account over that person.
+   */
+  it('keeps a ticket somebody else holds when the task has a platform owner: first, re-claim, shadow, opted in', () => {
+    for (const first of [true, false]) {
+      for (const shadow of [true, false]) {
+        for (const takeAssignedTickets of [true, false]) {
+          const facts = { platformOwner: true, first, shadow, takeAssignedTickets };
+          expect(ask(PERSON, facts), JSON.stringify(facts)).toEqual({
+            kind: 'keep',
+            heldBy: 'platform_owner',
+          });
+          // Canary: the same claim with no platform owner refuses or assigns, never keeps.
+          expect(ask(PERSON, { ...facts, platformOwner: false }).kind).not.toBe('keep');
+        }
+      }
+    }
+  });
+
+  it('a platform owner still assigns over nobody and over the binding’s own account', () => {
+    for (const first of [true, false]) {
+      expect(ask(null, { platformOwner: true, first })).toEqual({ kind: 'assign' });
+      expect(ask(SELF, { platformOwner: true, first })).toEqual({ kind: 'assign' });
+    }
+  });
+
+  it('the AUT-6676 matrix: an unlinked holder, by platform owner and by first or re-claim', () => {
+    const cases = [
+      { platformOwner: false, first: true, kind: 'refuse' },
+      { platformOwner: false, first: false, kind: 'assign' },
+      { platformOwner: true, first: true, kind: 'keep' },
+      { platformOwner: true, first: false, kind: 'keep' },
+    ] as const;
+    for (const { platformOwner, first, kind } of cases) {
+      expect(
+        ask(PERSON, { platformOwner, first }).kind,
+        JSON.stringify({ platformOwner, first }),
+      ).toBe(kind);
+    }
+  });
+
+  it('property: a linked member, or somebody else on a platform-owned task, is kept — nothing else is', () => {
     const holder = fc.constantFrom<ExternalIdentity | null>(null, SELF, PERSON, MEMBER);
     fc.assert(
       fc.property(
@@ -344,16 +397,26 @@ describe('claimPreReadDecision (S-26.2)', () => {
         fc.boolean(),
         fc.boolean(),
         fc.boolean(),
-        (who, linked, first, shadow, takeAssignedTickets) => {
+        fc.boolean(),
+        (who, linked, platformOwner, first, shadow, takeAssignedTickets) => {
           const decision = ask(who, {
             holderIsLinkedMember: linked,
+            platformOwner,
             first,
             shadow,
             takeAssignedTickets,
           });
-          expect(decision.kind === 'keep').toBe(who !== null && linked);
+          const elsewhere = who !== null && who !== SELF;
+          expect(decision.kind === 'keep').toBe(
+            who !== null && (linked || (elsewhere && platformOwner)),
+          );
+          if (decision.kind === 'keep') {
+            expect(decision.heldBy).toBe(linked ? 'member' : 'platform_owner');
+          }
           if (decision.kind === 'refuse') {
-            expect(first && !shadow && !takeAssignedTickets && !linked).toBe(true);
+            expect(first && !shadow && !takeAssignedTickets && !linked && !platformOwner).toBe(
+              true,
+            );
           }
         },
       ),

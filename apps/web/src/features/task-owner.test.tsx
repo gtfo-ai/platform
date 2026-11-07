@@ -201,7 +201,8 @@ const start = (
       return candidatesAnswer();
     }
     if (path === '/api/projects') return json({ items: [] });
-    if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
+    if (path === '/api/org/inbox')
+      return json({ questions: [], approvals: [], ci_held: [], escalated: [] });
     if (path === `/api/tasks/${TASK}/asks`) return json({ items: [] });
     if (path === `/api/tasks/${TASK}/pipeline`) {
       return json({ error: { code: 'not_found', message: 'no graph in this fake' } }, 404);

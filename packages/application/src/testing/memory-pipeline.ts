@@ -273,6 +273,8 @@ export interface MemoryPipelineStore extends PipelineStore {
   seedIdentity(provider: string, externalId: string, userId: Id | null): void;
   /** The user's effective role in the project is `member` or above (divergence 14). */
   seedProjectMember(projectId: Id, userId: Id): void;
+  /** The user's role in the project drops below `member`, or they leave it (divergence 14). */
+  unseedProjectMember(projectId: Id, userId: Id): void;
   /** A binding of the project acts as this account (`bindings.account_identity`, divergence 14). */
   seedBindingAccount(projectId: Id, provider: string, externalId: string): void;
   /** The task's ownership columns as `saveOwner` left them, for a test without a transaction. */
@@ -2899,6 +2901,9 @@ export const createMemoryPipelineStore = (
     },
     seedProjectMember: (projectId, userId) => {
       projectMembers.add(`${projectId}\0${userId}`);
+    },
+    unseedProjectMember: (projectId, userId) => {
+      projectMembers.delete(`${projectId}\0${userId}`);
     },
     seedBindingAccount: (projectId, provider, externalId) => {
       bindingAccounts.add(`${projectId}\0${identityKey(provider, externalId)}`);

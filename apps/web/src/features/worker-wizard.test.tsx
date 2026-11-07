@@ -98,7 +98,8 @@ const fetchFor = (world: World) =>
     const read = /^\/api\/projects\/([^/]+)\/execution$/.exec(path);
     const found = world.projects.find((entry) => entry.summary.id === read?.[1]);
     if (found !== undefined) return json(found.execution);
-    if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
+    if (path === '/api/org/inbox')
+      return json({ questions: [], approvals: [], ci_held: [], escalated: [] });
     if (path === '/api/org/agents') return json({ items: [] });
     return json({ error: { code: 'not_found', message: `no route ${path}` } }, 404);
   }) as typeof fetch;

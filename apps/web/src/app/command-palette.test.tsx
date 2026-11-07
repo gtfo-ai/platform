@@ -91,6 +91,7 @@ const task = (n: number, key: string, title: string | null, projectId = ACME.id)
     gate_wait: null,
     latest_return: null,
     stop: null,
+    escalation_reason: null,
   }) as TaskListItem;
 
 const TASKS = [task(1, 'ACME-21', HOSTILE_TITLE), task(2, 'ACME-22', null)];
@@ -122,7 +123,8 @@ const fetchFor = (world: World) =>
     if (path === '/events/subscriptions') return json({});
     if (path === '/api/projects') return json({ items: [ACME, BILL] });
     if (path === '/api/org/agents') return json({ items: [] });
-    if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
+    if (path === '/api/org/inbox')
+      return json({ questions: [], approvals: [], ci_held: [], escalated: [] });
     const tasks = /^\/api\/projects\/([^/]+)\/tasks$/.exec(path);
     if (tasks !== null) {
       return json({

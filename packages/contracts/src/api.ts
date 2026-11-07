@@ -1712,10 +1712,21 @@ export const gateWaitSchema = z.strictObject({
  *   ceiling it does not know.
  * - `latest_return` / `stop` (S-25.11): the task's newest {@link taskReturnSchema} and its
  *   {@link taskStopSchema} — what the card's short form says ("CI failed · fixing, round 2/3").
+ * - `escalation_reason` (backlog 1360): the **reason key** of the escalation the task waits on —
+ *   the task read's `escalation.reason` (e.g. `ticket_assigned_elsewhere`), never its brief.
  */
 export const taskListItemSchema = taskRecordSchema.extend({
   latest_return: taskReturnSchema.nullable(),
   stop: taskStopSchema.nullable(),
+  /**
+   * Why a `needs_human` task waits for a person, as a key (backlog 1360, S-25.14): the newest
+   * `task.escalated` event's `reason` — the same event, order and refusal the task read's
+   * {@link taskEscalationSchema} answers, read for the whole page in one statement — so the card,
+   * Home's *Needs you* (which lists a project's `needs_human` page) and the task page word one stop
+   * alike. `null` for a task that is not `needs_human`, and for one whose stream holds no
+   * escalation with both a reason and a brief. Platform text; the brief is never published here.
+   */
+  escalation_reason: nonEmptyStringSchema.nullable(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,
@@ -3340,6 +3351,27 @@ export const inboxCiHeldSchema = z.strictObject({
   gate_wait: gateWaitSchema,
 });
 
+/**
+ * A task **escalated to a person** (`needs_human`; backlog 1360, S-25.14): what the Inbox and Home
+ * say about it at a glance — whose ticket it is, why it stopped, and who holds the ticket in the
+ * tracker — beside the questions, approvals and held CI jobs. `reason` is the escalation's key, the
+ * task read's `escalation.reason` (never its brief: a row is not the callout), or `null` when the
+ * stream holds no escalation with both strings; `at` is that escalation's instant, else the task's
+ * last update. `ticket_title`, `tracker_assignee` and `unlinked_assignee` are the task record's own
+ * fields (untrusted provider text, redacted and bounded at the write).
+ */
+export const inboxEscalatedSchema = z.strictObject({
+  task_id: idSchema,
+  project_id: idSchema,
+  ticket: ticketRefSchema,
+  ticket_title: z.string().nullable(),
+  current_stage: stageIdSchema.nullable(),
+  reason: nonEmptyStringSchema.nullable(),
+  at: isoDateTimeSchema,
+  tracker_assignee: taskRecordSchema.shape.tracker_assignee,
+  unlinked_assignee: taskRecordSchema.shape.unlinked_assignee,
+});
+
 export const inboxResponseSchema = z.strictObject({
   questions: z.array(questionRecordSchema),
   /** The task read's shape (TD-035): Home and the Inbox name the subject an approval is about. */
@@ -3349,6 +3381,12 @@ export const inboxResponseSchema = z.strictObject({
    * Required since S-26.8b part 2 (BACKLOG 1445): the Inbox and Home's *Needs you* list them.
    */
   ci_held: z.array(inboxCiHeldSchema),
+  /**
+   * Every task escalated to a person (backlog 1360), oldest escalation first. A task that also has
+   * an open question or a pending approval is listed here **and** there: the reader decides which
+   * row it shows (Home shows the question or approval).
+   */
+  escalated: z.array(inboxEscalatedSchema),
 });
 
 // `putBudgetRequestSchema` lived here from WP-01 until WP-30, unused, one key different from the

@@ -180,6 +180,7 @@ const task = (overrides: Partial<TaskListItem>): TaskListItem =>
     gate_wait: null,
     latest_return: null,
     stop: null,
+    escalation_reason: null,
     ...overrides,
   }) as TaskListItem;
 
@@ -225,6 +226,7 @@ const fetchFor = (world: World) =>
         questions: Array.from({ length: world.questions ?? 0 }, (_, index) => question(index + 1)),
         approvals: Array.from({ length: world.approvals ?? 0 }, (_, index) => approval(index + 1)),
         ci_held: [],
+        escalated: [],
       });
     }
     if (/^\/api\/projects\/[^/]+\/shadow-batches$/.test(path) && world.trials !== undefined) {

@@ -216,7 +216,7 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
     return json({ items: [] });
   }
   if (url.includes('/api/org/inbox')) {
-    return json({ questions: [], approvals: [], ci_held: [] });
+    return json({ questions: [], approvals: [], ci_held: [], escalated: [] });
   }
   return json({ error: { code: 'not_found', message: 'the fake server has no such route' } }, 404);
 }) as typeof fetch;

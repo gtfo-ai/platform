@@ -20,9 +20,18 @@
  * moves to `in_progress`, and the claim is recorded `held_by: 'member'` — which the release reads,
  * so a cancel or a *Rework* never unassigns that person. Everybody else — an unlinked account, a
  * person below `member`, a machine — keeps the rules of the amendment's (a) and (c) unchanged
- * (`claimPreReadDecision` in the domain). When the claim does assign, the binding's account is
- * written into `tasks.ticket_assignee` in the claim's own transaction, so the next owner sync,
- * which reads that account, changes nothing.
+ * (`claimPreReadDecision` in the domain), **unless a person on the platform took or assigned the
+ * task**: a task whose owner is `owner_source: platform` (the owner command or a pick) and may own
+ * in the project keeps a ticket somebody else holds the same way — no assign, no re-read, no
+ * refusal, `held_by: 'platform_owner'` (TD-031's amendment item 5 as amended for a take). So a
+ * maintainer's *Take it* on a task whose ticket an unlinked person holds unblocks its hand-back, and
+ * no later re-claim writes the binding's account over that person; the tracker keeps showing them
+ * until the owner write-back (S-26.3, `assign_owner`) or a person changes it. With the write-back on,
+ * the take has already assigned the owner in the tracker, so the claim reads a linked member and
+ * keeps it as `member` — the claim and the write-back never write the ticket against each other.
+ *
+ * When the claim does assign, the binding's account is written into `tasks.ticket_assignee` in the
+ * claim's own transaction, so the next owner sync, which reads that account, changes nothing.
  *
  * ## Where it runs, and why there
  *
@@ -67,6 +76,7 @@ import type {
   Id,
   Slug,
   StoredTicketClaim,
+  TicketClaimHeldBy,
 } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import {
@@ -95,7 +105,7 @@ import {
   ticketWrites,
 } from './integrations.js';
 import type { OutboundJobData } from './jobs.js';
-import { recordClaimAssign, syncOwnerOnClaimRead } from './owner-sync.js';
+import { type ClaimReadFacts, recordClaimAssign, syncOwnerOnClaimRead } from './owner-sync.js';
 import { PIPELINE_ACTOR, type StoredTask } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
 import { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
@@ -119,6 +129,9 @@ export interface TicketClaimRequest {
 }
 
 const PROCEED: TicketClaimOutcome = { kind: 'proceed' };
+
+/** The claim's facts for a pre-read that answered no ticket: no holder, so nothing to keep. */
+const NO_HOLDER: ClaimReadFacts = { holder: null, platformOwner: false };
 
 /** The permission the brief names when the provider declares none (`TaskManagementBinding`). */
 const GENERIC_ASSIGN_PERMISSION = 'the permission to assign tickets';
@@ -277,8 +290,11 @@ interface ClaimAttempt {
   readonly inProgressWritten: boolean;
   readonly shadow: boolean;
   readonly readback: ClaimReadback;
-  /** `member`: a linked member holds the ticket and nothing was assigned (S-26.2). */
-  readonly heldBy: 'member' | null;
+  /**
+   * `member`: a linked member holds the ticket (S-26.2); `platform_owner`: somebody else holds it
+   * on a task a person on the platform owns. Either way nothing was assigned.
+   */
+  readonly heldBy: TicketClaimHeldBy | null;
   /** The binding's account display name, redacted — what `ticket_assignee` stores after an assign. */
   readonly selfDisplayName: string | null;
 }
@@ -322,6 +338,9 @@ const claim = async (
    * answers whether the holder is a linked member of the project, live.
    *
    *  - A **linked member** keeps the ticket: no assign, no re-read, `held_by: 'member'`.
+   *  - A task with a **platform owner** (a take, an assignment, a pick — read in the same
+   *    transaction, after the sync, so a tracker change since the take has already cleared it)
+   *    keeps a ticket somebody else holds the same way: `held_by: 'platform_owner'`.
    *  - **A first claim never overwrites anybody else** (amendment (a), BD-031 ruling 5): somebody
    *    else holding the ticket refuses without writing, unless the binding takes assigned tickets.
    *  - A re-claim (a stale claim after a human return) takes the ticket back from anybody else,
@@ -335,9 +354,10 @@ const claim = async (
    */
   const before = await ticketReads(integrations).ticket(task.ticket, context);
   const holder = before?.assignee ?? null;
-  const holderClass =
+  // A read that answered no ticket names no holder, so there is nothing to sync and nothing to keep.
+  const facts =
     before === null
-      ? null
+      ? NO_HOLDER
       : await retryOnTaskConflict(
           {
             taskId: task.id,
@@ -357,7 +377,8 @@ const claim = async (
   const decision = claimPreReadDecision({
     self,
     holder,
-    holderIsLinkedMember: holderClass?.kind === 'member',
+    holderIsLinkedMember: facts.holder?.kind === 'member',
+    platformOwner: facts.platformOwner,
     first,
     shadow,
     takeAssignedTickets: lifecycle.slots.take_assigned_tickets === true,
@@ -375,8 +396,9 @@ const claim = async (
     };
   }
   if (decision.kind === 'keep') {
-    // The member's ticket stays theirs: no assign, and no re-read — the platform wrote nothing,
-    // so there is no race of its own to decide. The `in_progress` move is still the claim's.
+    // The holder keeps the ticket — a linked member, or anybody on a platform-owned task: no
+    // assign, and no re-read — the platform wrote nothing, so there is no race of its own to
+    // decide. The `in_progress` move is still the claim's.
     const inProgressWritten = await moveToInProgress(
       options,
       integrations,
@@ -389,7 +411,7 @@ const claim = async (
       inProgressWritten,
       shadow,
       readback: { kind: 'held' },
-      heldBy: 'member',
+      heldBy: decision.heldBy,
       selfDisplayName: null,
     };
   }
@@ -517,8 +539,8 @@ const recordClaim = async (
           { task_id: task.id, stage: request.stage, shadow: attempt.shadow },
           'the task stopped while the ticket was being claimed; no claim is held, and a real assign is released',
         );
-        // A shadow claim assigned nothing; a member-held one assigned nothing either, so there is
-        // nothing to give back and no release to owe.
+        // A shadow claim assigned nothing; a kept one (member-held, platform-owned) assigned
+        // nothing either, so there is nothing to give back and no release to owe.
         if (!assigned) {
           return null;
         }

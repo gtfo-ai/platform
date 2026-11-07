@@ -396,11 +396,28 @@ export const ownerSyncOnRead =
   };
 
 /**
+ * What the claim decides its pre-read with ({@link syncOwnerOnClaimRead}): what the platform says
+ * about the holder, and whether the task — **after** the read's sync — has a platform-sourced owner
+ * who may own in the project (TD-031's amendment item 5 as amended for a take).
+ */
+export interface ClaimReadFacts {
+  /** `member` is the linked member whose ticket the claim keeps; `null` for an unassigned ticket. */
+  readonly holder: AssigneeClass | null;
+  /**
+   * The owner's `owner_source` is `platform` (the owner command or a pick) and `mayOwn` answers
+   * them a `member`-or-above of the project who is not disabled — read live, in the sync's own
+   * transaction, so a tracker change the read just applied (latest change wins) has already
+   * cleared the owner, and a demoted or disabled owner keeps nothing.
+   */
+  readonly platformOwner: boolean;
+}
+
+/**
  * **The claim's pre-read, synced** (S-26.2, TD-031's amendment item 2, closing backlog 1087): the
  * assignee the claim read before it writes is applied to the task's owner, in the caller's
  * transaction (its own, between the read and the claim's writes), and the answer is what the
- * platform says about that assignee **now** — `member` is the linked member whose ticket the claim
- * keeps. `null` for an unassigned ticket.
+ * platform says **now** — about that assignee, and about the task's owner ({@link ClaimReadFacts}).
+ * No provider is asked: only rows, in this transaction.
  */
 export const syncOwnerOnClaimRead = async (
   options: OwnerSyncOptions,
@@ -412,7 +429,7 @@ export const syncOwnerOnClaimRead = async (
     /** Already through the binding's redactor (BD-022). */
     readonly assigneeDisplayName: string | null;
   },
-): Promise<AssigneeClass | null> => {
+): Promise<ClaimReadFacts> => {
   await applyOnTaskStream(options, scope, {
     projectId: input.projectId,
     taskId: input.taskId,
@@ -430,7 +447,16 @@ export const syncOwnerOnClaimRead = async (
         ownership,
       ),
   });
-  return classifyRead(options.store, scope.tx, input.projectId, input.assignee);
+  const holder = await classifyRead(options.store, scope.tx, input.projectId, input.assignee);
+  const ownership = await options.store.tasks.ownership(scope.tx, input.taskId);
+  const platformOwner =
+    ownership.ownerSource === 'platform' &&
+    ownership.ownerUserId !== null &&
+    (await options.store.owners.mayOwn(scope.tx, {
+      projectId: input.projectId,
+      userId: ownership.ownerUserId,
+    }));
+  return { holder, platformOwner };
 };
 
 /**

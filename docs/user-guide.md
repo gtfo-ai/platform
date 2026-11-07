@@ -274,6 +274,16 @@ member — and the switch **Also start tickets already assigned to a person** no
 Because a broad pick-up rule (*every To Do ticket*) now starts members' assigned tickets too, a team
 whose tracker assigns everything narrows intake with a pick-up label.
 
+**Taking the task unblocks the claim.** When a task stopped because its ticket is *assigned
+elsewhere* — to somebody the platform cannot link — a maintainer can **Take it** or **Assign…** it
+on the platform and then **Hand back**: the claim then leaves the ticket with the person who holds it
+in the tracker, writes no assignment, still moves the ticket to *In progress*, and the run starts. No
+later claim (after a return either) writes the integration's own account over that person. The
+tracker keeps showing them until the project writes owners back (*Assign the owner in the tracker*,
+which then assigns the ticket to the new owner when you take it) or somebody changes it there. A
+change in the tracker after your take wins as usual: it replaces the owner, and the next claim
+follows the rules above again. A cancel or a rework of such a task unassigns nobody.
+
 **Save the ticket lifecycle** checks every name against the tracker's statuses before anything is
 written. A name the tracker does not list is refused, the slot that names it is marked, and nothing
 is saved; if the tracker cannot be read at that moment, the form says the statuses could not be
@@ -941,8 +951,8 @@ a member or above. A viewer is not offered it; the export would refuse them.
 **The claim and the QA stage** show under the header's meta line when there is something to show (the
 project's ticket lifecycle, step 1). *ticket claimed* means the platform assigned the ticket to its
 own account and the tracker confirmed it — or, for a ticket a linked member of the project holds,
-that the platform took the task and left the ticket assigned to that member (the page does not yet
-tell the two apart); *Trial run* means a trial's task (section 8, *Trial*)
+that the platform took the task and left the ticket assigned to that member, or to whoever holds it
+on a task somebody on the platform took (the page does not yet tell these apart); *Trial run* means a trial's task (section 8, *Trial*)
 recorded what it would have assigned and assigned nothing; *claim released* means the claim was given back — on a cancel, a
 rework, or a task that stopped between the assignment and its record — and the ticket is no longer
 the platform's. Each says when. A task that never claimed (no lifecycle saved, or a task older than
@@ -1375,6 +1385,12 @@ no row approves in one click. A task whose CI check waits on a manual job somebo
 row too (*CI waits for someone to start the manual job deploy*), under **All** and its project, and
 **Open** takes you to the task, where *Start the job in GitLab* is the button. With nothing
 pending the page says *Nothing needs you*.
+
+The Inbox read also lists **every task waiting for a person** (`escalated` on `GET /api/org/inbox`:
+the task, its ticket and title, the stop's reason key — *assigned elsewhere* is
+`ticket_assigned_elsewhere` — and who holds the ticket in the tracker), and every board item carries
+the same key (`escalation_reason`), so the card, Home's *Needs you* and the Inbox can say why a task
+stopped; the screens word it from S-25.14.
 
 A question the agent asks may also arrive in Slack, and all channels are equivalent — **the first
 answer wins**. An approval arrives in Slack with what it is about: for a plan, its version, size,

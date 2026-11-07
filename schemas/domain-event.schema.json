@@ -489,7 +489,8 @@
             "held_by": {
               "type": "string",
               "enum": [
-                "member"
+                "member",
+                "platform_owner"
               ]
             }
           },

@@ -319,7 +319,8 @@ const start = (
     if (path === `/api/tasks/${TASK}`) return json(task);
     if (path === '/api/projects') return json({ items: projects });
     // A command refreshes the inbox too; answered, so the next command is not held behind retries.
-    if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
+    if (path === '/api/org/inbox')
+      return json({ questions: [], approvals: [], ci_held: [], escalated: [] });
     // Every read a command's refresh re-asks is answered (never left to retry), so a second command
     // is not held disabled behind the first one's refresh.
     if (path === `/api/tasks/${TASK}/asks`) return json({ items: [] });

@@ -996,6 +996,7 @@ const waitingGlance = {
   gate_wait: null,
   latest_return: null,
   stop: null,
+  escalation_reason: null,
 } as const;
 
 export const waitingOfflineTask = taskRecordSchema.parse(
@@ -1536,6 +1537,7 @@ export const inbox = inboxResponseSchema.parse({
   questions: [question],
   approvals: [approval],
   ci_held: [],
+  escalated: [],
 });
 
 export const audit = orgAuditResponseSchema.parse({
@@ -2009,6 +2011,7 @@ export const featureListItem = taskListItemSchema.parse({
   gate_wait: null,
   latest_return: null,
   stop: null,
+  escalation_reason: null,
 });
 
 export const bugListItem = taskListItemSchema.parse({
@@ -2020,6 +2023,7 @@ export const bugListItem = taskListItemSchema.parse({
   gate_wait: null,
   latest_return: null,
   stop: null,
+  escalation_reason: null,
 });
 
 export const tasksPage = {
