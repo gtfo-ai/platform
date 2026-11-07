@@ -1095,10 +1095,12 @@ describe('the task projection', () => {
       (
         await one<{ id: string }>(
           `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
-                              current_stage, stage_attempts, ticket_assignee, ticket_snapshot)
+                              current_stage, stage_attempts, ticket_assignee, ticket_snapshot,
+                              ticket_snapshot_at)
            values ($1, 'fake-jira', $2, 'https://jira.example.test/browse/' || $2, 'feature', $3,
                    'refinement', jsonb_build_object('refinement', 1), $4::jsonb,
-                   case when $5::text is null then null else jsonb_build_object('title', $5::text) end)
+                   case when $5::text is null then null else jsonb_build_object('title', $5::text) end,
+                   case when $5::text is null then null else now() end)
            returning id`,
           [project.id, key, state, assignee === null ? null : JSON.stringify(assignee), title],
         )
