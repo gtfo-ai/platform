@@ -649,11 +649,13 @@ export const setTaskOwnerCommand = async (
  * above of the task's project.
  * **No provider call**: the identity was read already; this asks only the rows. One transaction per
  * task, each on the conflict bound, so one busy task never holds back the rest. Answers the tasks
- * whose owner it set.
+ * whose owner it set. `onAdopted` (S-26.6) is told each one **as its transaction commits**, so a
+ * caller still knows what was adopted when a later task throws and the answer is never returned.
  */
 export const adoptOwnersOnLink = async (
   deps: TaskOwnerCommandDependencies,
   link: { readonly userId: Id; readonly provider: string; readonly externalId: string },
+  onAdopted?: (taskId: Id) => void,
 ): Promise<readonly Id[]> => {
   const options: OwnerSyncOptions = {
     store: deps.store,
@@ -704,6 +706,7 @@ export const adoptOwnersOnLink = async (
     );
     if (change !== null) {
       adopted.push(candidate.taskId);
+      onAdopted?.(candidate.taskId);
     }
   }
   return adopted;

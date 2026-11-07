@@ -476,13 +476,16 @@ describe('a link made later adopts the owner, with no provider call (the hook S-
     const ERIN = '00000000-0000-4000-8000-0000000000e7' as Id;
     harness.store.seedIdentity('fake-jira', 'acct-erin', ERIN);
     harness.store.seedProjectMember(PROJECT, ERIN);
-    const adopted = await adoptOwnersOnLink(commandDeps(harness), {
-      userId: ERIN,
-      provider: 'fake-jira',
-      externalId: 'acct-erin',
-    });
+    // S-26.6: each adopted task is reported as its transaction commits, beside the answer.
+    const reported: Id[] = [];
+    const adopted = await adoptOwnersOnLink(
+      commandDeps(harness),
+      { userId: ERIN, provider: 'fake-jira', externalId: 'acct-erin' },
+      (adoptedTaskId) => reported.push(adoptedTaskId),
+    );
 
     expect(adopted).toEqual([taskId]);
+    expect(reported).toEqual([taskId]);
     expect(ticket.reads()).toBe(reads);
     expect(harness.store.ownershipOf(taskId)).toMatchObject({
       ownerUserId: ERIN,

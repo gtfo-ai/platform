@@ -85,6 +85,8 @@ const ingressFor = () =>
     rateLimit: null,
     // S-25.9: no refused chat approval is answered in a thread from this test's ingress.
     jobs: null,
+    // S-26.6: no link code is matched on this test's ingress (`identity-links.integration.test.ts`).
+    identityLinks: null,
     loader: createInboundIntegrationLoader({
       repository: secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf),
       secrets: secretAdapters.createPostgresSecretStore({

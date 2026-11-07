@@ -1642,7 +1642,34 @@ administrator; anybody else who opens one of their addresses lands where *Settin
   window the server refuses says so under its own field.
 - **Users** — everybody with an account, with their role and whether they are active.
 - **Linked accounts** (*Provider identities* before) — which Slack, Jira or GitLab account is which
-  person, without which a decision made in those tools is refused as unmapped.
+  person, without which a decision made in those tools is refused as unmapped. An administrator can
+  also **unlink** an account here (the server half since S-26.6; the button comes with S-26.8a).
+
+**Linking your own Jira or GitLab account** (the server half since S-26.6; the *Your accounts*
+section of Settings is S-26.8a's, so today it is the API, technical/08's *Your accounts* row). A
+linked account can answer questions and approve plans from Jira or GitLab, so the platform never
+takes your word for which account is yours and never matches by email: it **proves** it.
+
+1. Ask for a code. It looks like `agentic-link-7K3Q9VDM2X`, is valid for 30 minutes and is shown
+   **once** — reloading the page asks for a new one, and asking voids the old one. At most five an
+   hour.
+2. Write it as a comment **from your own account**: on a ticket of a project you are in (Jira), or on
+   a merge request (GitLab — merge requests only, not issues). Do not edit the comment afterwards:
+   an edited comment, or one somebody else edited, links nobody.
+3. The platform reads the comment's author from the provider — from the webhook, or, on a project
+   with no webhook, when you name the ticket or merge request (*I wrote it on …*, only for a task of
+   a project where you are a member or above).
+4. It then **asks you**: *Link Jira account Dev One?*, with the provider and the account id beside
+   the name. Only your confirmation links it. The name is the provider's text: check the account id.
+
+If somebody else writes your code too — anyone who can read the ticket can copy it — the code links
+nobody, and you are told someone else used it: ask for a new one and post it where fewer people can
+see it. A comment written by the integration's own account, by an account an administrator declared
+a machine, or carrying the platform's own marker never links anybody, and an account already linked
+to another person is refused. Once linked, every task in progress that the tracker assigns to that
+account and that nobody owns becomes yours. You can unlink your own account at any time (tasks you
+own through it keep you as owner until the ticket's assignee changes); you can delete the comment
+once you are linked.
 - **Stuck events** (*Dead letters* before) — events the platform stopped retrying after their handler
   failed every attempt, each with a **Try again** button for once the fault is fixed (the operator
   guide's §9 says what a re-queue does and does not do). The newest come first, and **Show older**
@@ -1924,6 +1951,7 @@ In one place, so it is not spread across thirteen sections:
 | Moving a ticket to a *deployed* status once a deploy is seen (the *Done* slot moves it at the merge) | ticket lifecycle, New project step 1 |
 | A ticket lifecycle for a project with two ticket trackers bound (the form says the pipeline applies one only with exactly one) | ticket lifecycle, project settings |
 | Showing and changing a task's owner on the task page and the board (the platform records it and the API serves it) | task detail, board |
+| *Settings → Your accounts* — linking your own Jira or GitLab account in the browser (the server half is built, S-26.6; the screen is S-26.8a) | settings |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`

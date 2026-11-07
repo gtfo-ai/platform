@@ -14,6 +14,7 @@
 import type { Id, IsoDateTime, JsonObject } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { StreamConflictError } from '../errors.js';
+import { EMPTY_LINK_RECORD, type IdentityLinkRecorder } from '../identity/identity-links.js';
 import type { RedactionOutcome, SecretRedactor } from '../ports/integrations/audit.js';
 import type {
   InboundContext,
@@ -313,6 +314,8 @@ const build = (options: {
   readonly threads?: InboundThreadDirectory;
   /** S-25.9: where a refused chat approval's thread reply is enqueued; `null` when not asked. */
   readonly jobs?: Jobs | null;
+  /** S-26.6: where a delivery's link-code comments are recorded; `null` when not asked. */
+  readonly identityLinks?: IdentityLinkRecorder | null;
 }) => {
   let nextId = 0;
   const loader: InboundIntegrationLoader = eagerInboundLoader(async () => options.resolved ?? null);
@@ -365,6 +368,7 @@ const build = (options: {
   return createWebhookIngress({
     rateLimit: options.rateLimit ?? null,
     jobs: options.jobs ?? null,
+    identityLinks: options.identityLinks ?? null,
     loader,
     inbox: options.inbox.store,
     audit: options.audit.log,
@@ -395,6 +399,7 @@ const harnessFor = (
     readonly decisions?: InboundDecisionApplier;
     readonly threads?: InboundThreadDirectory;
     readonly jobs?: (inbox: ReturnType<typeof inboxDouble>) => Jobs;
+    readonly identityLinks?: IdentityLinkRecorder | null;
   } = {},
 ): IngressHarness => {
   const inbox = inboxDouble();
@@ -413,6 +418,7 @@ const harnessFor = (
     ...(overrides.decisions === undefined ? {} : { decisions: overrides.decisions }),
     ...(overrides.threads === undefined ? {} : { threads: overrides.threads }),
     ...(overrides.jobs === undefined ? {} : { jobs: overrides.jobs(inbox) }),
+    ...(overrides.identityLinks === undefined ? {} : { identityLinks: overrides.identityLinks }),
   });
   return {
     deliver: (delivery = DELIVERY) =>
@@ -565,6 +571,75 @@ describe('the thread lookup a normaliser is handed (WP-88, PROGRESS backlog 195)
 });
 
 // ── 1. Which binding? ────────────────────────────────────────────────────────
+
+// ── A comment carrying a self-service link code (S-26.6) ─────────────────────
+
+describe('a delivery whose comment carried a link code (S-26.6)', () => {
+  const claim = {
+    provider: 'fake',
+    externalId: 'U-7',
+    displayName: 'Dev One',
+    commentId: 'c-1',
+    codeHashes: ['a'.repeat(64)],
+    refusal: null,
+  };
+  const withClaim = (): ResolvedInboundIntegration =>
+    resolvedWith({
+      result: (context) => ({
+        events: [ticketMatched(context.projectId)],
+        ignored: [],
+        linkClaims: [claim],
+      }),
+    });
+  const recorderDouble = (rows: () => number) => {
+    const calls: { tx: Transaction; claims: readonly unknown[]; rows: number }[] = [];
+    const recorder: IdentityLinkRecorder = {
+      record: async (tx, input) => {
+        calls.push({ tx, claims: input.claims, rows: rows() });
+        expect(input.integrationId).toBe(INTEGRATION);
+        return { ...EMPTY_LINK_RECORD, matched: 1 };
+      },
+    };
+    return { recorder, calls };
+  };
+
+  it('records the claim once, in the transaction that wrote the inbox row, after the row', async () => {
+    let inboxRows = () => 0;
+    const links = recorderDouble(() => inboxRows());
+    const harness = harnessFor(withClaim(), { identityLinks: links.recorder });
+    inboxRows = () => harness.inbox.rows.size;
+    expect((await harness.deliver()).kind).toBe('accepted');
+    expect(links.calls).toHaveLength(1);
+    expect(links.calls[0]?.claims).toEqual([claim]);
+    // The row was already written in this transaction when the recorder ran.
+    expect(links.calls[0]?.rows).toBe(1);
+  });
+
+  it('records nothing for a redelivery, because the inbox row deduplicates it', async () => {
+    const links = recorderDouble(() => 0);
+    const harness = harnessFor(withClaim(), { identityLinks: links.recorder });
+    await harness.deliver();
+    expect((await harness.deliver()).kind).toBe('duplicate');
+    expect(links.calls).toHaveLength(1);
+  });
+
+  it('records nothing for an unverified delivery: it never reaches a normaliser', async () => {
+    const links = recorderDouble(() => 0);
+    const harness = harnessFor(
+      { ...withClaim(), inbound: normaliserDouble({ verify: false }) },
+      { identityLinks: links.recorder },
+    );
+    expect((await harness.deliver()).kind).toBe('refused');
+    expect(links.calls).toHaveLength(0);
+    expect(harness.inbox.rows.size).toBe(0);
+  });
+
+  it('accepts the delivery and records no claim on an ingress composed with no recorder', async () => {
+    const harness = harnessFor(withClaim(), { identityLinks: null });
+    expect((await harness.deliver()).kind).toBe('accepted');
+    expect(harness.inbox.rows.size).toBe(1);
+  });
+});
 
 describe('an integration nobody has', () => {
   it('writes nothing at all, because there is no row an audit could reference', async () => {
@@ -1375,6 +1450,7 @@ describe('the webhook door’s rate limit (Q60)', () => {
     ]);
     const counted: Id[] = [];
     const ingress = createWebhookIngress({
+      identityLinks: null,
       loader: eagerInboundLoader(async (id) => byId.get(id) ?? null),
       inbox: inboxDouble().store,
       audit: auditDouble().log,
