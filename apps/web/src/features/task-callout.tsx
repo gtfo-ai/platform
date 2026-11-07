@@ -36,6 +36,12 @@
  * was still held at the manual job X."; "…so Retry did not wait again."); only an attempt with no
  * read (before the worker session's #89) quotes the recorded sentence after *What the platform saw
  * last:*.
+ *
+ * **While its run waits for a machine nobody has** (S-26.8b part 2, the M26 UX spec § 4,
+ * `./waiting-notice.tsx`): why, in the long form, and the next steps the reader may take — *Take
+ * it* / *Assign…* through the header's owner control, *Open Workers* for the machine's owner,
+ * *Open Instance* or *Link account…* for an administrator. Information, never *Needs you*: it is
+ * drawn above whatever else the slot says, and nothing for `reason: null`.
  */
 import type {
   ApprovalView,
@@ -56,6 +62,9 @@ import { openReturn, returnWords, stopWords } from './setback.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
 import { latestStageRow } from './task-checks-text.js';
 import type { TaskDialog } from './task-dialogs.js';
+import type { OwnerControl } from './task-owner.js';
+import { WaitingNotice } from './waiting-notice.js';
+import { waitingReason } from './waiting-words.js';
 
 type TaskCommands = ReturnType<typeof useTaskCommands>;
 
@@ -260,19 +269,14 @@ const calloutTitle = (
   }
 };
 
-export const TaskCallout = ({
-  detail,
-  projectKey,
-  merged,
-  hasStages,
-  breakdownWaiting,
-  commands,
-  onOpen,
-  nowMs,
-}: {
+interface TaskCalloutProps {
   readonly detail: TaskDetailResponse;
   /** The board's key, when the projects read has it: a reason's *how to stop being asked* links. */
   readonly projectKey: string | null;
+  /** The header's owner control: the waiting notice's *Take it* / *Assign…*. */
+  readonly owner?: OwnerControl;
+  /** The project's name, for the waiting words' "in Autix". */
+  readonly projectName?: string | null;
   readonly merged: boolean;
   /** Whether the stage commands have a stage to address (the task's own history). */
   readonly hasStages: boolean;
@@ -281,7 +285,36 @@ export const TaskCallout = ({
   readonly onOpen: (dialog: TaskDialog) => void;
   /** The page's clock, for the minutes a CI wait has run; the read's own instant without it. */
   readonly nowMs?: number;
-}): ReactElement | null => {
+}
+
+export const TaskCallout = (props: TaskCalloutProps): ReactElement => {
+  const { detail, owner, projectName = null, nowMs } = props;
+  // S-26.8b part 2: why the run waits for a machine — information, drawn above the rest.
+  return waitingReason(detail.task.waiting) === null ? (
+    <CalloutSlot {...props} />
+  ) : (
+    <>
+      <WaitingNotice
+        detail={detail}
+        owner={owner}
+        projectName={projectName}
+        nowMs={nowMs ?? Date.parse(detail.task.updated_at)}
+      />
+      <CalloutSlot {...props} />
+    </>
+  );
+};
+
+const CalloutSlot = ({
+  detail,
+  projectKey,
+  merged,
+  hasStages,
+  breakdownWaiting,
+  commands,
+  onOpen,
+  nowMs,
+}: TaskCalloutProps): ReactElement | null => {
   const { task, stages } = detail;
   // Only while the task is active: a paused task's CI check is not checking (review of PR #101).
   const gateWait = openGateWait(detail);

@@ -12,7 +12,10 @@
  *   it stopped — in place of the activity's sub-label; and while the CI check waits (S-25.12, the
  *   read's `gate_wait`, `./gate-wait.tsx`), what it waits for: "CI running · 12 min of 60", or
  *   "CI waits for someone to start the manual job X". A held manual job is *Needs you* at once,
- *   through the one rule's `ci_held`.
+ *   through the one rule (`ciHeldNow` over the read's `gate_wait`, active tasks only). And while
+ *   its run waits for a machine nobody has (S-26.8b part 2, `./waiting-words.tsx`), why, in the
+ *   long form: "Waiting for Vojtěch’s machine. It’s offline (last seen 2 h ago)." — the callout
+ *   says it again with the next steps.
  * - **One primary action, chosen by the state** ({@link taskPrimaryAction}): *Hand back…* while a
  *   take-over is in force, *Answer* for an open question (it moves focus into the callout's answer
  *   box), *Review plan* for a pending approval (it moves focus onto the callout's approval card,
@@ -63,7 +66,7 @@ import {
 } from '../ui/action-menu.js';
 import { activityOf } from '../ui/activity.js';
 import { buttonClassName } from '../ui/button.js';
-import { stageLabel, titleCase } from '../ui/humanize.js';
+import { stageLabel, titleCase, trackerName } from '../ui/humanize.js';
 import { Badge, Button, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PageHeader } from '../ui/page-header.js';
 import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
@@ -85,8 +88,9 @@ import { setbackShort } from './setback.js';
 import { takeOverFinished } from './take-over.js';
 import { answerInputId } from './task-callout.js';
 import type { TaskDialog } from './task-dialogs.js';
-import { OwnerFeedback, OwnerLine, OwnerMenuItems, useOwnerControl } from './task-owner.js';
+import { type OwnerControl, OwnerFeedback, OwnerLine, OwnerMenuItems } from './task-owner.js';
 import { TicketClaimAndQa } from './ticket-claim.js';
+import { waitingLong, waitingPlain } from './waiting-words.js';
 
 /** The header's one primary action. */
 export type TaskPrimaryAction =
@@ -154,10 +158,16 @@ export const TaskHeader = ({
   stageOptions,
   commands,
   onOpen,
+  owner,
+  projectName = null,
 }: {
   readonly detail: TaskDetailResponse;
   /** The board's key, when the projects read has it: the back link. */
   readonly projectKey: string | null;
+  /** The page's one owner control (`./task-owner.tsx`), shared with the callout's next steps. */
+  readonly owner: OwnerControl;
+  /** The project's name, for the waiting words' "in Autix". */
+  readonly projectName?: string | null;
   readonly nowMs: number;
   /** Whether the stage commands have a stage to address. */
   readonly stageOptions: number;
@@ -165,7 +175,6 @@ export const TaskHeader = ({
   readonly onOpen: (dialog: TaskDialog) => void;
 }): ReactElement => {
   const { task, stages, runs, questions, approvals, taken_over: takenOver } = detail;
-  const owner = useOwnerControl(detail);
   const openQuestions = questions.filter((question) => question.status === 'open');
   const pendingApprovals = approvals.filter((approval) => approval.status === 'pending');
   // The task entered `merged_gate` (WP-152's test, the server's own fact): since WP-165 the server
@@ -184,6 +193,13 @@ export const TaskHeader = ({
   // Only while the task is active: a paused task's CI check is not checking (review of PR #101).
   const gateWait = openGateWait(detail);
   const ciHeld = gateWaitHeld(gateWait);
+  // S-26.8b part 2: why the run waits for a machine, in the long form.
+  const waiting = waitingLong(task.waiting, {
+    viewerId: owner.viewer?.id ?? null,
+    nowMs,
+    project: projectName,
+    tracker: trackerName(task.ticket.provider),
+  });
   const heldJobUrl = gateWait !== null && ciHeld ? gateWaitJobUrl(gateWait) : null;
   const primary = taskPrimaryAction({
     state: task.state,
@@ -200,7 +216,8 @@ export const TaskHeader = ({
     paused_reason: task.paused_reason,
     open_asks: openQuestions.length + pendingApprovals.length,
     taken_over: takenOver !== null,
-    ci_held: ciHeld,
+    // The one rule reads the open CI wait itself, and only for an active task (`ciHeldNow`).
+    gate_wait: detail.gate_wait,
   };
   const liveRun = liveStageRun(runs);
   const doing = activityOf({
@@ -217,6 +234,9 @@ export const TaskHeader = ({
       ? setbackShort(task, stages, detail.returns.at(-1) ?? null, detail.stop, detail.loop_limits)
       : // Provider text (the job's name) on its way into a string prop: bidi and controls removed.
         sanitiseUntrusted(gateWaitShort(gateWait, nowMs));
+  // The `waiting` activity's sub-label is why (names sanitised: `PhaseTrack` takes a string).
+  const now =
+    setback ?? (doing.activity === 'waiting' && waiting !== null ? waitingPlain(waiting) : null);
   const currentStage = task.current_stage ?? null;
   // A task that has entered no stage has no strip to draw; the Overview says it has none.
   const phase = phaseStagesFor(null, stages, currentStage);
@@ -482,7 +502,7 @@ export const TaskHeader = ({
           {/* WP-182 ruling (c): the ticket claim and the human QA stage (BD-031 rulings 3 and 5). */}
           <TicketClaimAndQa task={task} />
           {phase.length === 0 ? null : (
-            <PhaseTrack stages={phase} activity={doing.activity} detail={setback ?? doing.detail} />
+            <PhaseTrack stages={phase} activity={doing.activity} detail={now ?? doing.detail} />
           )}
         </div>
       }

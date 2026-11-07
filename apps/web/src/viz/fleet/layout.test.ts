@@ -28,7 +28,11 @@ const fleet = fleetOf({
     agentItem(4, { seat: null, run: { status: 'created', started_at: null } }),
   ],
   workers: [worker(30, { concurrency: 8 }), worker(31, { concurrency: 1 })],
-  inbox: { questions: [question(70, uuid(9), 'q')], approvals: [approval(71, uuid(9))] },
+  inbox: {
+    questions: [question(70, uuid(9), 'q')],
+    approvals: [approval(71, uuid(9))],
+    ci_held: [],
+  },
   now: NOW,
 });
 

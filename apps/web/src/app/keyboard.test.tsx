@@ -52,7 +52,7 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   if (path === '/events/subscriptions') return json({});
   if (path === '/api/projects') return json({ items: PROJECTS });
   if (path === '/api/org/agents') return json({ items: [] });
-  if (path === '/api/org/inbox') return json({ questions: [], approvals: [] });
+  if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
   if (/^\/api\/projects\/[^/]+\/tasks$/.test(path)) {
     return json({
       items: [],

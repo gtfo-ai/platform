@@ -794,11 +794,18 @@ describe('the list envelopes and the KB health report', () => {
       // Required since WP-181 (criterion (6)).
       ticket_claim: null,
       qa_stage: false,
+      owner: null,
+      owner_source: null,
+      unlinked_assignee: null,
+      owner_writes_back: false,
+      tracker_assignee: null,
+      waiting: null,
       // The board card's glance (S-23.9a).
       stages: [{ stage: 'refinement', attempt: 1, state: 'running' as const, entered_at: AT }],
       open_questions: 0,
       pending_approvals: 0,
       loop_limits: { code_review: 3 },
+      gate_wait: null,
       // S-25.11: the newest return and the stop, `null` when the rows record none.
       latest_return: null,
       stop: null,

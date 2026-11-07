@@ -114,6 +114,12 @@ const TASK_ROW: TaskRecord = {
   completed_at: null,
   ticket_claim: null,
   qa_stage: false,
+  tracker_assignee: null,
+  owner: null,
+  owner_source: null,
+  unlinked_assignee: null,
+  owner_writes_back: false,
+  waiting: null,
 };
 
 const TASK_DETAIL: TaskDetailResponse = {
@@ -127,6 +133,10 @@ const TASK_DETAIL: TaskDetailResponse = {
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  can_take: false,
+  can_assign: false,
+  can_unassign: false,
+  take_writes_back: false,
   gate_feedback: null,
   returns: [],
   stop: null,

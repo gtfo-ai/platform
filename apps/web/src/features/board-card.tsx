@@ -13,7 +13,13 @@
  *    pulse while an agent is working, the loop badges (*Review round 2 of 3*), the conflict badge;
  *  - for a task that went back, why and what happens next in short form (S-25.11, `./setback.ts`):
  *    *CI failed · fixing, round 2/3* while the agent is on it — the loop badge of that round is then
- *    not drawn a second time — or *CI did not finish* when it stopped.
+ *    not drawn a second time — or *CI did not finish* when it stopped;
+ *  - while its CI check waits on a manual job a person must start (S-26.8b part 2, BACKLOG 1300, the
+ *    item's `gate_wait`), *CI held · start the job* in that slot, and the task is *Needs you* through
+ *    the one rule (`ui/task-status.ts`' `ciHeldNow`, active tasks only);
+ *  - **why it waits** (S-26.8b part 2, the M26 UX spec § 4, `./waiting-words.tsx`): an open offer
+ *    nobody takes now is the `waiting` activity's sub-label in short form — *Waiting · Vojtěch’s
+ *    machine is offline*, *your machine* when it is the reader's — and nothing for `reason: null`.
  *
  * The menu's commands are the task page's, through the same `useTaskCommands` hook, so each sends
  * the same body with the same `Idempotency-Key` semantics: *Pause*, *Resume* and *Cancel* with the
@@ -69,14 +75,16 @@ import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
 import { ROW_LINK_HOST, rowLink } from '../ui/row-link.js';
 import { Select } from '../ui/select.js';
 import { StatusIcon } from '../ui/status.js';
-import { needsYou as needsYouOf, taskStateLabel } from '../ui/task-status.js';
+import { ciHeldNow, needsYou as needsYouOf, taskStateLabel } from '../ui/task-status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 // A tooltip is text the browser renders, not markup — but it is still provider text, and
 // `sanitiseUntrusted` is what strips the bidi overrides and control characters that make a line
 // read backwards (CVE-2021-42574). `ExternalLink`'s own refusal tooltip does the same.
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { BOARD_COST_TITLE, unmeasuredRunsShortText, unmeasuredRunsText } from './cost-text.js';
+import { CI_HELD_SHORT } from './gate-wait-words.js';
 import { openReturn, setbackShort } from './setback.js';
+import { WaitingWords, waitingPlain, waitingShort, waitingTail } from './waiting-words.js';
 
 /** One live run of the agents read, as the card reads it. */
 export type AgentEntry = AgentsResponse['items'][number];
@@ -90,12 +98,18 @@ export const asksOf = (task: TaskListItem): number => task.open_questions + task
  * Whether the task waits on a person — `ui/task-status.ts`' one definition, which the task page
  * reads too, so the card's ◆ and the page's state never disagree.
  */
-export const needsYou = (task: TaskListItem): boolean =>
-  needsYouOf({ state: task.state, paused_reason: task.paused_reason, open_asks: asksOf(task) });
+export const needsYou = (task: TaskListItem): boolean => needsYouOf(needsYouInputOf(task));
+
+/** What the one rule reads off a board item: its state, pause, asks and open CI wait. */
+const needsYouInputOf = (task: TaskListItem) => ({
+  state: task.state,
+  paused_reason: task.paused_reason,
+  open_asks: asksOf(task),
+  gate_wait: task.gate_wait,
+});
 
 /** The state's word on the card and the row — the task header's, from the same rule. */
-export const cardStateLabel = (task: TaskListItem): string =>
-  taskStateLabel({ state: task.state, paused_reason: task.paused_reason, open_asks: asksOf(task) });
+export const cardStateLabel = (task: TaskListItem): string => taskStateLabel(needsYouInputOf(task));
 
 /** "2 open questions and 1 approval waiting" — the count badge's reading. */
 export const asksLabel = (task: TaskListItem): string => {
@@ -139,18 +153,25 @@ export const loopBadges = (task: TaskListItem): readonly { loop: string; text: s
       text: loopRoundLabel(loop, count, task.loop_limits?.[loop]),
     }));
 
-/** The card's short form of a return or a stop (S-25.11), or `null`. */
+/**
+ * The card's short form of a held manual job (S-26.8b part 2), else of a return or a stop
+ * (S-25.11), or `null`.
+ */
 export const cardSetback = (task: TaskListItem): string | null =>
-  setbackShort(task, task.stages, task.latest_return, task.stop, task.loop_limits);
+  ciHeldNow(task)
+    ? CI_HELD_SHORT
+    : setbackShort(task, task.stages, task.latest_return, task.stop, task.loop_limits);
 
 /** The short form's line, or nothing. */
 export const SetbackLine = ({ task }: { readonly task: TaskListItem }): ReactElement | null => {
   const text = cardSetback(task);
-  // The fixing line asks nothing of the reader, so it is muted; a stop keeps the attention tone.
-  const fixing = openReturn(task, task.stages, task.latest_return) !== null;
+  const held = ciHeldNow(task);
+  // The fixing line asks nothing of the reader, so it is muted; a stop or a held job keeps the
+  // attention tone.
+  const fixing = !held && openReturn(task, task.stages, task.latest_return) !== null;
   return text === null ? null : (
     <span
-      data-card-setback={fixing ? 'fixing' : 'stopped'}
+      data-card-setback={held ? 'ci_held' : fixing ? 'fixing' : 'stopped'}
       className={cx('text-xs', fixing ? 'text-fg-muted' : 'text-attention')}
     >
       {/* Platform words; a CI failure's job names are not in the short form. */}
@@ -165,8 +186,23 @@ const latestOf = (agent: AgentEntry): LatestEntry | null =>
     ? null
     : { kind: agent.activity.kind, tool_name: agent.activity.tool_name, at: agent.activity.at };
 
-/** What the task is doing: from its live run when an agent holds one, else from its state. */
+/**
+ * What the task is doing: from its live run when an agent holds one, else from its state — and
+ * while it waits for a machine, why (S-26.8b part 2): the `waiting` activity's sub-label is the
+ * short form's tail, every name sanitised (a `PhaseTrack` takes a string).
+ */
 export const cardActivity = (
+  task: TaskListItem,
+  agent: AgentEntry | undefined,
+  nowMs: number,
+  viewerId: string | null = null,
+): ActivityResult => {
+  const doing = baseActivity(task, agent, nowMs);
+  const tail = doing.activity === 'waiting' ? waitingTail(task.waiting, viewerId) : null;
+  return tail === null ? doing : { activity: 'waiting', detail: waitingPlain(tail) };
+};
+
+const baseActivity = (
   task: TaskListItem,
   agent: AgentEntry | undefined,
   nowMs: number,
@@ -406,19 +442,45 @@ const Badges = ({ task }: { readonly task: TaskListItem }): ReactElement | null 
   );
 };
 
+/**
+ * Why the task waits, in short form (the M26 UX spec § 4): "Waiting · Vojtěch’s machine is
+ * offline", every name through `UntrustedText` — or nothing when nothing waits or somebody can
+ * take it now.
+ */
+export const WaitingLine = ({
+  task,
+  viewerId,
+}: {
+  readonly task: TaskListItem;
+  readonly viewerId: string | null;
+}): ReactElement | null => {
+  const parts = waitingShort(task.waiting, viewerId);
+  return parts === null ? null : (
+    <span data-card-waiting={task.waiting?.reason ?? ''} className="text-xs text-fg-muted">
+      <WaitingWords parts={parts} />
+    </span>
+  );
+};
+
 /** The phase strip and, below it, what is happening — or the state's word when no agent is. */
 export const Phase = ({
   task,
   agent,
   nowMs,
+  viewerId = null,
 }: {
   readonly task: TaskListItem;
   readonly agent: AgentEntry | undefined;
   readonly nowMs: number;
+  /** The reader, for *your machine*. */
+  readonly viewerId?: string | null;
 }): ReactElement => {
   const stages = phaseStagesFor(null, task.stages, task.current_stage ?? null);
-  const activity = cardActivity(task, agent, nowMs);
+  const activity = cardActivity(task, agent, nowMs, viewerId);
   const live = agent !== undefined;
+  // The waiting words take the state word's place only when nobody is needed: a task with an
+  // open ask keeps its *Needs you* (the one rule's word) whatever its run waits for.
+  const waiting = !needsYou(task) && waitingShort(task.waiting, viewerId) !== null;
   return (
     <div className="flex min-w-0 flex-col gap-1">
       {stages.length === 0 ? null : (
@@ -431,7 +493,11 @@ export const Phase = ({
       {live ? null : (
         <span data-task-state={task.state} className="inline-flex items-center gap-1 text-xs">
           <StatusIcon status={ACTIVITY_META[activity.activity].icon} decorative size={12} />
-          <span className="text-fg-muted">{cardStateLabel(task)}</span>
+          {waiting ? (
+            <WaitingLine task={task} viewerId={viewerId} />
+          ) : (
+            <span className="text-fg-muted">{cardStateLabel(task)}</span>
+          )}
         </span>
       )}
     </div>
@@ -709,6 +775,8 @@ interface TaskViewProps {
   readonly may: MenuCapabilities;
   readonly agent: AgentEntry | undefined;
   readonly nowMs: number;
+  /** The signed-in person, for *your machine* in the waiting words; `null` reads as nobody's. */
+  readonly viewerId?: string | null;
 }
 
 /** The ticket key, muted, beside the template's icon. */
@@ -746,7 +814,15 @@ export const OwnerAvatar = ({ task }: { readonly task: TaskListItem }): ReactEle
   );
 };
 
-export const TaskCard = ({ task, projectKey, projectId, may, agent, nowMs }: TaskViewProps) => {
+export const TaskCard = ({
+  task,
+  projectKey,
+  projectId,
+  may,
+  agent,
+  nowMs,
+  viewerId = null,
+}: TaskViewProps) => {
   const commands = useTaskCommands(task.id);
   return (
     <article
@@ -772,7 +848,7 @@ export const TaskCard = ({ task, projectKey, projectId, may, agent, nowMs }: Tas
       <p className="text-sm">
         <TitleLink task={task} projectKey={projectKey} />
       </p>
-      <Phase task={task} agent={agent} nowMs={nowMs} />
+      <Phase task={task} agent={agent} nowMs={nowMs} viewerId={viewerId} />
       <SetbackLine task={task} />
       <MetaLine task={task} nowMs={nowMs} />
       <Badges task={task} />
@@ -782,9 +858,17 @@ export const TaskCard = ({ task, projectKey, projectId, may, agent, nowMs }: Tas
 };
 
 /** The same task as an Issues-style row (the list view). */
-export const TaskRow = ({ task, projectKey, projectId, may, agent, nowMs }: TaskViewProps) => {
+export const TaskRow = ({
+  task,
+  projectKey,
+  projectId,
+  may,
+  agent,
+  nowMs,
+  viewerId = null,
+}: TaskViewProps) => {
   const commands = useTaskCommands(task.id);
-  const activity = cardActivity(task, agent, nowMs);
+  const activity = cardActivity(task, agent, nowMs, viewerId);
   return (
     <li
       data-board-row={task.id}
@@ -811,6 +895,7 @@ export const TaskRow = ({ task, projectKey, projectId, may, agent, nowMs }: Task
           </span>
           <MetaLine task={task} nowMs={nowMs} />
         </span>
+        <WaitingLine task={task} viewerId={viewerId} />
         <SetbackLine task={task} />
         <Refusal commands={commands} />
       </div>

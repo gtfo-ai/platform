@@ -40,7 +40,7 @@ Positive, negative, follow-ups (TODO links), what must be verified.
 | [BD-003](business/BD-003-auditability.md) | Everything is auditable and replayable | accepted |
 | [BD-004](business/BD-004-claude-only-provider-modes.md) | Claude only; provider modes `api` and `local`; no claude.ai login in the product | accepted |
 | [BD-005](business/BD-005-pipeline-stages.md) | Default pipeline stages, templates and review independence | accepted |
-| [BD-006](business/BD-006-human-checkpoints.md) | Human checkpoints: questions always, plan approval by size + probation | accepted |
+| [BD-006](business/BD-006-human-checkpoints.md) | Human checkpoints: questions always, plan approval by size + probation (amended 2026-11-07: an approval never expires; bounded reminders) | accepted |
 | [BD-007](business/BD-007-human-merges.md) | A human merges; human MR comments re-enter the pipeline | accepted |
 | [BD-008](business/BD-008-bounded-loops-and-escalation.md) | Every loop is bounded; escalation to `Needs human` | accepted |
 | [BD-009](business/BD-009-single-tenant-instances.md) | One instance per organisation (tenant); many projects per instance | accepted |
@@ -58,7 +58,7 @@ Positive, negative, follow-ups (TODO links), what must be verified.
 | [BD-021](business/BD-021-agent-workspace-isolation.md) | Each task runs in an isolated, disposable workspace with least-privilege tools | accepted |
 | [BD-022](business/BD-022-external-text-is-untrusted.md) | All text from tickets, MRs, logs and web is untrusted data, never instructions | accepted |
 | [BD-023](business/BD-023-workpad-comment.md) | One sticky "workpad" comment per ticket and per MR, edited in place | accepted |
-| [BD-024](business/BD-024-verification-integrity.md) | Verification integrity: protected tests, reproduction gate, CI is the only green | accepted |
+| [BD-024](business/BD-024-verification-integrity.md) | Verification integrity: protected tests, reproduction gate, CI is the only green (amended 2026-11-07: a manual job nobody started is not a check, unless it is a test) | accepted |
 | [BD-025](business/BD-025-config-trust-and-command-policy.md) | Agent configuration is trusted only from the default branch; three-list command policy; no tokens in agent context | accepted |
 | [BD-026](business/BD-026-repository-readiness.md) | Repository readiness is measured, shown and drives conservative defaults; it is not auto-remediated | accepted |
 | [BD-027](business/BD-027-autonomy-dial.md) | One autonomy dial with presets over granular policies | accepted |

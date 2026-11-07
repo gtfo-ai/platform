@@ -77,6 +77,7 @@ const TASK_ROW: TaskRecord = {
   completed_at: null,
   ticket_claim: null,
   qa_stage: false,
+  waiting: null,
   owner: null,
   owner_source: null,
   unlinked_assignee: null,
@@ -100,6 +101,7 @@ const detail = (
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  take_writes_back: false,
   can_take: false,
   can_assign: false,
   can_unassign: false,
@@ -199,7 +201,7 @@ const start = (
       return candidatesAnswer();
     }
     if (path === '/api/projects') return json({ items: [] });
-    if (path === '/api/org/inbox') return json({ questions: [], approvals: [] });
+    if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
     if (path === `/api/tasks/${TASK}/asks`) return json({ items: [] });
     if (path === `/api/tasks/${TASK}/pipeline`) {
       return json({ error: { code: 'not_found', message: 'no graph in this fake' } }, 404);

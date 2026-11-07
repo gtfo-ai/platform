@@ -264,6 +264,11 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
    */
   let linkState: IdentityLinkState = { code: null, matches: [] };
   let myIdentities: MyIdentity[] = [];
+  /**
+   * `POST /__test__/waiting` (S-26.8b part 2): the board also serves three tasks waiting for a
+   * machine and the CI-held one, and the inbox its `ci_held` row.
+   */
+  let waitingOpen = false;
 
   const writeFrame = (stream: Stream, frame: SseFrame, event: string): void => {
     const lines: string[] = [];
@@ -404,6 +409,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       wizardOpen = false;
       linkState = { code: null, matches: [] };
       myIdentities = [];
+      waitingOpen = false;
       json(response, 200, { reset: true });
       return;
     }
@@ -411,6 +417,14 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
     // so its later steps draw rather than their "not open yet" gate.
     if (path === '/__test__/wizard-open' && method === 'POST') {
       wizardOpen = true;
+      json(response, 200, { open: true });
+      return;
+    }
+    if (path === '/__test__/waiting' && method === 'POST') {
+      if (!waitingOpen) {
+        waitingOpen = true;
+        extraTasks.push(...fixtures.waitingListItems, fixtures.ciHeldListItem);
+      }
       json(response, 200, { open: true });
       return;
     }
@@ -808,6 +822,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         '/api/org/inbox': {
           questions: fixtures.inbox.questions.filter((item) => !answeredQuestions.has(item.id)),
           approvals: fixtures.inbox.approvals,
+          ci_held: waitingOpen ? fixtures.inboxCiHeld : fixtures.inbox.ci_held,
         },
         '/api/integrations': fixtures.integrations,
         '/api/integrations/providers': fixtures.integrationProviders,
@@ -865,6 +880,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         [`/api/tasks/${fixtures.IDS.taskCiTimedOut}`]: fixtures.ciTimedOutTaskDetail,
         // S-25.12: AUT-6655 — a CI check waiting on a held manual job, and the same wait timed out.
         [`/api/tasks/${fixtures.IDS.taskCiHeld}`]: fixtures.ciHeldTaskDetail,
+        [`/api/tasks/${fixtures.IDS.taskWaitingOffline}`]: fixtures.waitingOfflineTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskCiHeldTimedOut}`]: fixtures.ciHeldTimedOutTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskFleetWorker}`]: fixtures.fleetWorkerTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskFleetQueued}`]: fixtures.fleetQueuedTaskDetail,

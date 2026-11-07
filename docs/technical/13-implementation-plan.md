@@ -1868,9 +1868,12 @@ after it lands; **the last S-26 slice to start** · risk low · no migration.
 - Files: those four files, `ui/humanize.ts`, `ui/activity.ts`. *Assign…*'s person picker reads
   `GET /api/projects/:id/owner-candidates` (S-26.1's follow-up); its entry in `client-census.test.ts`'s
   `SERVED_BEFORE_ITS_CALLER` goes when the picker calls it.
-- New humanize keys:
+- New words (`waiting.*` was planned as humanize keys; S-26.8b part 2 put them in
+  `features/waiting-words.tsx` instead, an SPA-only module that the worker page never imports, as `waitingLong`,
+  `waitingShort` and `waitingTail` per reason — the owner keys stay in `ui/humanize.ts`):
   - waiting: `waiting.owner_worker_offline`, `waiting.owner_worker_paused`, `waiting.owner_no_worker`,
-    `waiting.owner_pick_only`, `waiting.no_taker`, `waiting.assignee_not_linked`;
+    `waiting.owner_pick_only`, `waiting.no_taker`, `waiting.assignee_not_linked`,
+    `waiting.owner_worker_cannot_take` (S-26.5's seventh reason, worded in the UX spec §4);
   - owner: `owner.unassigned`, `owner.assigned_in_tracker_unlinked`, `owner.took`, `owner.assigned`,
     `owner.unassigned_done`.
 
@@ -1968,18 +1971,43 @@ Principles, as in M25:
   card's top-right next to the menu. An unassigned card shows nothing; an empty slot isn't noise. The *Needs you* column
   rule (S-25.4) doesn't change with ownership. *Needs you* means a person must act, and the callout says who.
 
-**4. Waiting words** (humanize keys; the sub-label of the `waiting` activity)
+**4. Waiting words** (the sub-label of the `waiting` activity; `features/waiting-words.tsx` since S-26.8b part 2,
+not humanize keys)
 - `waiting.owner_worker_offline`: "Waiting for Vojtěch's machine. It's offline (last seen 2 h ago)."
 - `waiting.owner_worker_paused`: "Waiting for Vojtěch's machine. It's paused."
 - `waiting.owner_no_worker`: "Waiting for Vojtěch. They have no machine that takes this project."
 - `waiting.owner_pick_only`: "Waiting for Vojtěch to pick it on their machine."
 - `waiting.no_taker`: "Waiting: no machine takes unassigned tasks in Autix."
 - `waiting.assignee_not_linked`: "Waiting for a machine that takes everyone's tasks. It's assigned in Jira to *Jan
-  Novák*, who isn't linked to a platform account." The name is UntrustedText. Next steps: for a maintainer, *Link
-  account…* (opens Settings → Linked accounts, prefilled) and *Assign…*; for anyone allowed, *Take it*. Short form for
+  Novák*, who isn't linked to a platform account." The name is UntrustedText. Next steps: for an administrator, *Link
+  account…* (opens Settings → Linked accounts, which is admin-only); for a maintainer, *Assign…*; for anyone
+  allowed, *Take it*. Short form for
   Agents/Home rows: "Waiting · assigned to Jan Novák (not linked)".
+- `waiting.owner_worker_cannot_take` `[added at S-26.8b part 2: S-26.5's seventh reason]`: the owner's machine is
+  connected and not paused by its owner, and still can't take this task. `blockers` is sorted most-fundamental-first,
+  and the words name the **first** one only:
+
+  | First blocker | Long form (task page) | Short form (board, Agents/Home rows) | The machine's owner's next step |
+  |---|---|---|---|
+  | `images_outdated`, `protocol_outdated` | "Waiting for Vojtěch's machine. It's online but needs an update before it can take this task." | "Waiting · Vojtěch's machine needs an update" | *Open Workers*, and "Update it from its page." |
+  | `images_missing` | "Waiting for Vojtěch's machine. It's online but is still getting its run images." | "Waiting · Vojtěch's machine is still setting up" | *Open Workers* |
+  | `draining` | "Waiting for Vojtěch's machine. It's finishing its current run and taking nothing new." | "Waiting · Vojtěch's machine is finishing a run" | none |
+  | `usage_limited` | "Waiting for Vojtěch's machine. It has reached its Claude usage limit and resumes when the limit resets." | "Waiting · Vojtěch's machine is at its usage limit" | none |
+  | `platform_images_unresolved` | "Waiting for Vojtěch's machine. It can't take this task until the platform's run images are fixed." | "Waiting · Vojtěch's machine waits on the platform" | none (no Update step); an administrator gets *Open Instance* |
+  | any other blocker | "Waiting for Vojtěch's machine. It's online but can't take this task (\<the blocker in the Workers screen's words\>)." | "Waiting · Vojtěch's machine can't take it" | *Open Workers* |
+  | none (the refusal is the offer's or the project's) | "Waiting for Vojtěch's machine. It's online but can't take this task now." | "Waiting · Vojtěch's machine can't take it now" | none |
+
+  `draining` is set by an update **or** by the owner's own *Drain*, so its words never say "update". "Any other
+  blocker" falls to the Workers screen's vocabulary (`WORKER_CLAIM_BLOCKER_WORDS`), so the type system covers every
+  key.
+- **The reader is the person the reason is about** (`waiting.user` is the reader): every form says *your machine* (and
+  *you* for `owner_no_worker` and `owner_pick_only`) instead of the name. `reason: null` means a machine or the server
+  can take it now, and the page says nothing more; `waiting: null` means nothing waits.
 - **Next step:** each one offers *Take it* or *Assign…* to the people allowed to, plus *Open Workers* for the machine-side
-  ones. These go in the task callout and on Agents/Home rows.
+  ones. These go in the task callout and on Agents/Home rows. `[S-26.8b part 2: the callout carries them; an
+  Agents or Home row has one link, which opens the task, so a row shows the short form and the step is on the page it
+  opens. *Open Workers* goes to the machine's owner only, and an administrator gets *Open Instance* for
+  `platform_images_unresolved`. Neither is ever the amber primary.]`
 - *Machine* is the user-facing word, as on the Workers screen. Never say *claim*, *offer* or *seat*.
 
 **5. Linking your own tracker and git accounts**
@@ -2019,6 +2047,33 @@ Principles, as in M25:
   `[architect: the core's codes are `409 task_taken_by_another` (the first sentence) and `task_owned_by_another` (the
   second), TD-031's amendment item 7. A pick never reassigns, a maintainer's included.]`
 - **A run owned by you** reads *Run it here*, with no assignment line.
+
+## Milestone M27 — an approval waits for a person, and a manual job nobody started is not a check (architect, session 23)
+
+The product owner made two decisions on 2026-11-07, after seeing stuck tasks on the Autix install:
+- AUT-6639's plan approval expired after 24 h and the task stopped. The decision is **BD-006's 2026-11-07
+  amendment**.
+- AUT-6655's pipeline was held at an optional release job and the CI gate waited out its timeout. The decision is
+  **BD-024's 2026-11-07 amendment** and **TD-036**.
+
+product/04 and the user and operator guides carry the amendments. The guides' *until S-27.n is deployed* notes are
+removed by the slice that builds the behaviour.
+
+Rules:
+- **No test runs locally**: CI is the verdict.
+- Backlog findings take **1476–1479**.
+- **Migration 0109** is reserved for S-27.2 (0106 stays S-26.4's).
+- A slice's PR fixes the docs it makes false: technical/02, 03, 06, 08 and 12, and the guides.
+- The two slices share only the docs and possibly `packages/application/src/notify/`, so they run in parallel, and
+  whichever lands second rebases.
+
+| Slice | Title | Depends | Decision(s) | Acceptance | Risk |
+|---|---|---|---|---|---|
+| **S-27.1** | An approval waits until a person decides it | — | BD-006 2026-11-07 amendment; BACKLOG 1470, 854 | (1) Both approval gates (`pipeline/saga.ts`) create an approval with **no deadline**. The approval expiry command (`pipeline/commands.ts`), the approval use of `deadline-rules.ts` and the approval halves of `recovery/deadline.ts` (overdue sweep and backfill) are deleted. Proved by an integration test: a pending approval with an old, past `deadline_at` stays `pending` through a `deadline.sweep` fire and a recovery pass, and so does a new one with none. (2) A queued `approval_timeout` job still parses and ends `settled` with a named log line (`deadlines.test.ts`). Questions still expire and are reminded about exactly as before (the existing question tests stay green, unchanged). (3) **Reminders:** the *n*-th comes at *(n − ½)* question timeouts after the request, on the working calendar, with at most five. `deadlineSweepDataSchema` stays strict and gains no index: *n* is `approvals.reminders_sent + 1`, read when the job fires. The next reminder is armed only **after** the current one's count has committed, because the timer's singleton key (`deadlineKey`, `approval:<id>:approval_reminder`) is still held by the running job. Each reminder is one notification, with cause `reminder:approval:<id>` for the first (unchanged) and `…:<n>` after it. The reminder recovery row finds an approval whose next reminder is a grace overdue. Unit tests cover the schedule (including a Friday-afternoon request and the cap), the arming order, and the notify duty withholding a decided approval; an integration test covers the recovery row. (4) **API and screen:** every approval's DTO `deadline_at` is `null` (`queries/approval-views.ts`, `pipeline-queries.ts`; a query test). The Inbox row reads *requested … · waits for a maintainer*, and its *Learn more* no longer says an approval expires (`inbox.test.tsx`). Words go through `humanize`. (5) **Endings and proof:** the `deadline.sweep` row of `JOB_EXHAUSTION` states its new loss, and its census test stays green. A fake-Claude e2e moves the clock past three working days and finds the task `waiting_approval`, its approval pending and five reminders recorded. technical/02's approval lifecycle and technical/06:297 are corrected, and the user guide's *until S-27.1* note is removed. (6) **A resume never bypasses a pending approval** (closes BACKLOG 854). `task.resume` of a `waiting_approval` task with a pending approval is refused, as `409` naming the approval, for every role (`RESUMABLE_TASK_STATES`/`humanEnter` in `packages/domain`). Only the approval's own decision moves the task. Proved by a domain unit test and a route test through `commands.test.ts`. | high (removes an escalation; recovery rows; who decides what) |
+| **S-27.2** | A manual job nobody started is not a check, unless it is a test | — | BD-024 2026-11-07 amendment; TD-036; BACKLOG 1471 | (1) **The rule** (TD-036 decisions 1–2): `pipelineJobSchema` gains `stage: string \| null`, filled by GitLab from the jobs API and kept in the fake and its contract suite. WP-143's `counted` (`ci-rules.ts`) becomes one exported domain predicate used by both readers. A table of unit tests in `gates.test.ts` covers the cases. These pass: AUT-6655's shape (a `manual` pipeline held at `sentry-release-commit` in a non-`test` stage, with the other jobs green), and a pipeline whose `test` stage has no unstarted manual job. These wait: an unstarted blocking manual job in stage `test`, a job with a `null` stage, a job queued behind the held one, a pipeline where no job succeeded, and a still-running job. A `failed` or `canceled` job without `allow_failure` fails the gate. The held-retry escalation is not reached on a passing read, and the tamper check runs on the pass. A property test holds that the gate never passes a pipeline with a pending or running job, a disallowed failure, or an unstarted manual test job under the default. (2) **Config:** `pipeline.ci.required_manual_jobs` (absent, `[]`, `all`, or exact names; strict) in `packages/contracts/src/config.ts`, with `schemas/` regenerated and technical/12 updated. Unit tests: absent gives the default; `[]` passes a held test job; `all` reproduces the wait from before this decision; a named job waits even on a `success` pipeline; a named job that failed fails the gate; an absent name is not waited for; an unknown key is refused. (3) **`mr_pipeline` asks the same question** (TD-036 decision 4): a unit test in `merge-request-ready.test.ts` shows that a head held only at `sentry-release-commit` requests **no** fresh pipeline, while a head held at a manual test job still requests one, once per head. (4) **Record and webhooks:** migration **0109** `task_stages.ci_manual_not_run` (additive, one writer, in the settling transaction) is held by the Drizzle parity test and `data-model:check`, and `ci_manual_not_run` on the task-detail DTO by a contract test and a `pipeline-queries` integration test. GitLab maps a `manual` pipeline hook to `ci.pipeline.held`, which has its own payload schema while `terminalCiStatus` still excludes `manual`. The proof is a fixture in `test/fixtures/http/gitlab/` with its `source` block, the GitLab contract test, the fake's suite, and a CI-settle unit test on the live head's latest pipeline. (5) **Words:** the Checks item and the workpad line read *CI passed — the manual job X was not run* (the name as untrusted text, the URL through `safeHref`). When the latest pipeline was blocked, the Ready callout, the Ready chat notification and the workpad carry TD-036 decision 7's sentence naming that pipeline, and nothing says *can be merged*. Proved by a ui test, a notify render unit test and a workpad unit test. (6) A fake-Claude e2e with fake GitLab: a task whose only pipeline is held at a release-stage manual job reaches Ready without the timeout and with one pipeline per head. A held manual test job waits as today. The user guide's *until S-27.2* note is removed, and product/10's held-job words are checked. | high (the gate decides what is green) |
+
+**Order.** S-27.1 and S-27.2 run in parallel. When both are on `main`, the worker session deploys them to Autix
+(AUT-6639's task stays expired and is retried by hand).
 
 ## Suggested agent team for the orchestrator
 - **Architect (this role, read-only)** for questions about decisions; **Backend developer** (domain/application/infrastructure), **Integrations developer** (providers + contract tests), **Runner/security developer** (SDK runner, launcher, isolation), **Frontend developer** (SPA), **Prompt engineer** (roles, evals), **Reviewer** (fresh context, security checklist), **Docs writer**. Sequence M1 WPs by dependencies; WP-13 early because the whole runner path depends on it.

@@ -318,7 +318,13 @@ const TASK_RECORD: TaskRecord = {
   completed_at: null,
   ticket_claim: null,
   qa_stage: false,
-} as TaskRecord;
+  tracker_assignee: null,
+  owner: null,
+  owner_source: null,
+  unlinked_assignee: null,
+  owner_writes_back: false,
+  waiting: null,
+};
 
 const RUN_RECORD = (settingsHash: string | null): RunRecord => ({
   id: RUN,
@@ -367,6 +373,10 @@ const DETAIL: TaskDetailResponse = taskDetailResponseSchema.parse({
   can_return: false,
   can_rework: false,
   can_decide_approval: false,
+  can_take: false,
+  can_assign: false,
+  can_unassign: false,
+  take_writes_back: false,
   gate_feedback: null,
   returns: [],
   stop: null,

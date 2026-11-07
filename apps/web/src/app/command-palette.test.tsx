@@ -78,10 +78,17 @@ const task = (n: number, key: string, title: string | null, projectId = ACME.id)
     completed_at: null,
     ticket_claim: null,
     qa_stage: false,
+    tracker_assignee: null,
+    owner: null,
+    owner_source: null,
+    unlinked_assignee: null,
+    owner_writes_back: false,
+    waiting: null,
     stages: [],
     open_questions: 0,
     pending_approvals: 0,
     loop_limits: null,
+    gate_wait: null,
     latest_return: null,
     stop: null,
   }) as TaskListItem;
@@ -115,7 +122,7 @@ const fetchFor = (world: World) =>
     if (path === '/events/subscriptions') return json({});
     if (path === '/api/projects') return json({ items: [ACME, BILL] });
     if (path === '/api/org/agents') return json({ items: [] });
-    if (path === '/api/org/inbox') return json({ questions: [], approvals: [] });
+    if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
     const tasks = /^\/api\/projects\/([^/]+)\/tasks$/.exec(path);
     if (tasks !== null) {
       return json({

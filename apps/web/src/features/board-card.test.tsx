@@ -24,7 +24,15 @@ import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import { ROW_LINK_ATTRIBUTE, ROW_LINK_HOST } from '../ui/row-link.js';
 import { filterTasks, NO_FILTERS } from './board.js';
-import { asksLabel, loopBadges, menuCommandsFor, needsYou, stageEnteredAt } from './board-card.js';
+import {
+  type AgentEntry,
+  asksLabel,
+  cardActivity,
+  loopBadges,
+  menuCommandsFor,
+  needsYou,
+  stageEnteredAt,
+} from './board-card.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const NOW = Date.parse('2026-06-01T12:00:00.000Z');
@@ -83,10 +91,17 @@ const task = (n: number, overrides: Partial<TaskListItem>): TaskListItem =>
     completed_at: null,
     ticket_claim: null,
     qa_stage: false,
+    tracker_assignee: null,
+    owner: null,
+    owner_source: null,
+    unlinked_assignee: null,
+    owner_writes_back: false,
+    waiting: null,
     stages: [],
     open_questions: 0,
     pending_approvals: 0,
     loop_limits: null,
+    gate_wait: null,
     latest_return: null,
     stop: null,
     ...overrides,
@@ -110,6 +125,7 @@ const BUSY = task(1, {
   ],
   iteration_counters: { code_review: 2, ci_fix: 0 },
   loop_limits: { code_review: 3, ci_fix: 3 },
+  gate_wait: null,
   latest_return: null,
   stop: null,
   mr_ref: {
@@ -167,6 +183,7 @@ const AGENTS = {
       role: 'reviewer',
       last_output_at: '2026-06-01T11:59:30.000Z',
       seat: null,
+      waiting: null,
       activity: { kind: 'tool', tool_name: 'Read', at: '2026-06-01T11:59:30.000Z' },
     },
   ],
@@ -784,5 +801,112 @@ describe('a pause that waits on a person (needs you)', () => {
         row.getAttribute('data-board-row'),
       ),
     ).toEqual([BUDGET.id, TAKEN.id]);
+  });
+});
+
+/**
+ * S-26.8b part 2: why a task waits, in short form (the M26 UX spec § 4), and a CI check held at a
+ * manual job — the board item's `gate_wait` (BACKLOG 1300) — which is *Needs you* through the one
+ * rule, for an active task only.
+ */
+describe('a card that waits for a machine, or for a person to start a CI job', () => {
+  const OWNER = '00000000-0000-4000-8000-00000000a001';
+  const HELD_WAIT = {
+    pipeline_id: '41',
+    pipeline_url: null,
+    status: 'manual',
+    held_job: 'deploy',
+    held_job_url: null,
+    draft: false,
+    checked_at: '2026-06-01T11:58:00.000Z',
+    waiting_since: '2026-06-01T11:30:00.000Z',
+    timeout_minutes: 60,
+  } as const;
+  const waiting = (over: Partial<NonNullable<TaskListItem['waiting']>>) => ({
+    reason: 'owner_worker_offline' as const,
+    user: { user_id: OWNER, name: 'Vojtěch' },
+    last_seen_at: '2026-06-01T10:00:00.000Z',
+    assignee_name: null,
+    blockers: [],
+    ...over,
+  });
+  const HELD = task(5, { state: 'active', current_stage: 'ci_gate', gate_wait: HELD_WAIT });
+  const HELD_PAUSED = task(6, {
+    state: 'paused',
+    paused_reason: 'manual',
+    current_stage: 'ci_gate',
+    gate_wait: HELD_WAIT,
+  });
+  const OFFLINE = task(7, { current_stage: 'implementation', waiting: waiting({}) });
+  const MINE = task(8, {
+    current_stage: 'implementation',
+    waiting: waiting({
+      reason: 'owner_worker_paused',
+      user: { user_id: '00000000-0000-4000-8000-000000000001', name: 'Fake Operator' },
+    }),
+  });
+  const ASKING = task(10, {
+    current_stage: 'implementation',
+    open_questions: 1,
+    waiting: waiting({}),
+  });
+  const FREE = task(9, {
+    current_stage: 'implementation',
+    waiting: waiting({ reason: null, user: null, last_seen_at: null }),
+  });
+
+  it('says CI held · start the job on an active task, puts it in Needs you, and not a paused one', async () => {
+    open({ items: [HELD, HELD_PAUSED], agents: false });
+    const held = await card('ACME-5');
+    expect(held.querySelector('[data-card-setback="ci_held"]')?.textContent).toBe(
+      'CI held · start the job',
+    );
+    expect(held.querySelector('[data-needs-you]')).not.toBeNull();
+    expect(held.closest('[data-column]')?.getAttribute('data-column')).toBe('waiting');
+    const paused = await card('ACME-6');
+    expect(paused.querySelector('[data-card-setback]')).toBeNull();
+    expect(paused.querySelector('[data-needs-you]')).toBeNull();
+    expect(needsYou(HELD)).toBe(true);
+    expect(needsYou(HELD_PAUSED)).toBe(false);
+  });
+
+  it('says why it waits in short form, "your machine" to its owner, and nothing when it can be taken', async () => {
+    open({ items: [OFFLINE, MINE, FREE], agents: false });
+    const offline = await card('ACME-7');
+    await waitFor(() => {
+      expect(offline.querySelector('[data-card-waiting]')?.textContent).toBe(
+        'Waiting · Vojtěch’s machine is offline',
+      );
+    });
+    expect(offline.querySelector('[data-needs-you]')).toBeNull();
+    expect((await card('ACME-8')).querySelector('[data-card-waiting]')?.textContent).toBe(
+      'Waiting · your machine is paused',
+    );
+    const free = await card('ACME-9');
+    expect(free.querySelector('[data-card-waiting]')).toBeNull();
+    expect(free.querySelector('[data-task-state="active"]')?.textContent).toBe('Active');
+  });
+
+  it('keeps Needs you on a waiting task with an open ask, rather than the waiting words', async () => {
+    open({ items: [ASKING], agents: false });
+    const asking = await card('ACME-10');
+    await waitFor(() => {
+      expect(asking.querySelector('[data-task-state="active"]')?.textContent).toBe('Needs you');
+    });
+    expect(asking.querySelector('[data-card-waiting]')).toBeNull();
+    expect(asking.querySelector('[data-needs-you]')).not.toBeNull();
+  });
+
+  it('makes the waiting activity’s sub-label the reason while a run waits to start', () => {
+    const created = {
+      ...AGENTS.items[0],
+      run: runRecord({ ...AGENTS.items[0]?.run, status: 'created', started_at: null }),
+      waiting: OFFLINE.waiting,
+    } as unknown as AgentEntry;
+    expect(cardActivity(OFFLINE, created, NOW)).toEqual({
+      activity: 'waiting',
+      detail: 'Vojtěch’s machine is offline',
+    });
+    expect(cardActivity(FREE, created, NOW).detail).toBe('Starting');
   });
 });

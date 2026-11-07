@@ -102,7 +102,8 @@ export const useFrameCounts = (): FrameCounts => {
     inbox:
       inbox.data === undefined
         ? undefined
-        : inbox.data.questions.length + inbox.data.approvals.length,
+        : // S-26.8b part 2: a CI job held for a person is a row of the inbox too (BACKLOG 1300).
+          inbox.data.questions.length + inbox.data.approvals.length + inbox.data.ci_held.length,
     running: agents.data?.items.length,
   };
 };

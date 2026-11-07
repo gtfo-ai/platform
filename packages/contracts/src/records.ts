@@ -1015,13 +1015,12 @@ export const taskRecordSchema = z.strictObject({
   qa_stage: z.boolean(),
   /**
    * **The task's owner** (S-26.1, TD-031's 2026-11-06 amendment item 3): the platform user who owns
-   * it, or `null` for nobody. The four ownership fields are optional on the wire for one reason —
-   * the SPA's fixtures predate them (its owner UI is S-26.8b) — and this build's server always sends
-   * them.
+   * it, or `null` for nobody. Required since S-26.8b part 2 (BACKLOG 1445), as every other
+   * ownership field is: every fixture names them, and this build's server always sends them.
    */
-  owner: taskOwnerViewSchema.nullable().optional(),
+  owner: taskOwnerViewSchema.nullable(),
   /** Who made the last owner change (`tasks.owner_source`); `null` when nothing ever changed it. */
-  owner_source: taskOwnerSourceSchema.nullable().optional(),
+  owner_source: taskOwnerSourceSchema.nullable(),
   /**
    * The tracker assignee who **holds the ticket elsewhere** — a person the platform cannot map to a
    * `member`-or-above user of the project (unlinked, or linked below `member`) — or `null` when the
@@ -1030,7 +1029,7 @@ export const taskRecordSchema = z.strictObject({
    * `null` when the provider gave none. Non-null exactly when the task is *held elsewhere*, the
    * predicate the owner command, the claim and the pick share.
    */
-  unlinked_assignee: z.strictObject({ display_name: z.string().nullable() }).nullable().optional(),
+  unlinked_assignee: z.strictObject({ display_name: z.string().nullable() }).nullable(),
   /**
    * Whether **the current owner** is (or was, when the platform set them) written back to the
    * tracker (S-26.3): the project's binding sets `lifecycle.assign_owner`, the task names a provider
@@ -1039,14 +1038,13 @@ export const taskRecordSchema = z.strictObject({
    * about somebody *else* taking the task: that is the task read's per-caller `take_writes_back` and
    * the owner candidates' `writes_back`.
    */
-  owner_writes_back: z.boolean().optional(),
+  owner_writes_back: z.boolean(),
   /**
    * **Why the task's run waits** (S-26.5): its current stage's open offer as
    * {@link offerWaitingSchema} reads it, or `null` when the task has no open stage offer (nothing
-   * waits). Optional on the wire because the SPA's fixtures predate it (S-26.8b reads it); the
-   * task read and the board's page always send it.
+   * waits). Required since S-26.8b part 2 (BACKLOG 1445), which words it.
    */
-  waiting: offerWaitingSchema.nullable().optional(),
+  waiting: offerWaitingSchema.nullable(),
   /**
    * **Who the tracker shows as the ticket's assignee** (S-26.8b's follow-up, the review of PR
    * #103), as the platform last read it (`tasks.ticket_assignee`), or `null` when the ticket is
@@ -1060,13 +1058,11 @@ export const taskRecordSchema = z.strictObject({
    * and `userMayOwnInProjectSql` — so a disabled user or one below `member` in the project is
    * `null`), or `null` for anybody else: the reader treats a `null` as *someone else*.
    * `display_name` is untrusted provider text, redacted and bounded at the write, and `null` when
-   * the provider gave none. Optional on the wire like the other owner fields; this build's server
-   * always sends it.
+   * the provider gave none. Required since S-26.8b part 2, like the other owner fields.
    */
   tracker_assignee: z
     .strictObject({ display_name: z.string().nullable(), user_id: idSchema.nullable() })
-    .nullable()
-    .optional(),
+    .nullable(),
 });
 
 /** A `sha256` digest as lowercase hex — what `runs.settings_hash` stores (WP-91). */

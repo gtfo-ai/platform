@@ -78,6 +78,12 @@ const TASK_ROW: TaskRecord = {
   completed_at: null,
   ticket_claim: null,
   qa_stage: false,
+  tracker_assignee: null,
+  owner: null,
+  owner_source: null,
+  unlinked_assignee: null,
+  owner_writes_back: false,
+  waiting: null,
 };
 
 type StageRow = TaskDetailResponse['stages'][number];
@@ -108,6 +114,10 @@ const detail = (over: Partial<TaskDetailResponse> = {}, task: Partial<TaskRecord
     can_return: true,
     can_rework: true,
     can_decide_approval: true,
+    can_take: false,
+    can_assign: false,
+    can_unassign: false,
+    take_writes_back: false,
     gate_feedback: null,
     returns: [],
     stop: null,
@@ -309,7 +319,7 @@ const start = (
     if (path === `/api/tasks/${TASK}`) return json(task);
     if (path === '/api/projects') return json({ items: projects });
     // A command refreshes the inbox too; answered, so the next command is not held behind retries.
-    if (path === '/api/org/inbox') return json({ questions: [], approvals: [] });
+    if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
     // Every read a command's refresh re-asks is answered (never left to retry), so a second command
     // is not held disabled behind the first one's refresh.
     if (path === `/api/tasks/${TASK}/asks`) return json({ items: [] });
@@ -550,6 +560,140 @@ describe('a waiting CI check (S-25.12)', () => {
     expect(screen.getByRole('main').textContent).toContain('Now: CI running · 12 min of 60');
     expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
     expect(document.querySelector('[data-state-label="needs_you"]')).toBeNull();
+  });
+});
+
+describe('a run that waits for a machine (S-26.8b part 2, the M26 UX spec § 4)', () => {
+  const VOJTECH = '00000000-0000-4000-8000-00000000a001';
+  const offline = {
+    reason: 'owner_worker_offline' as const,
+    user: { user_id: VOJTECH, name: 'Vojtěch' },
+    last_seen_at: null,
+    assignee_name: null,
+    blockers: [],
+  };
+  const LONG = 'Waiting for Vojtěch’s machine. It’s offline and has never connected.';
+
+  it('says why on the Now line and in the callout, with the read’s owner steps as secondaries', async () => {
+    start(
+      detail(
+        { can_take: true, can_assign: true },
+        {
+          state: 'active',
+          current_stage: 'implementation',
+          owner: { user_id: VOJTECH, name: 'Vojtěch' },
+          owner_source: 'platform',
+          waiting: offline,
+        },
+      ),
+      `/tasks/${TASK}`,
+      [PROJECT_ROW],
+    );
+    const notice = await screen.findByRole('region', { name: 'Why it waits' });
+    expect(notice.querySelector('[data-waiting]')?.textContent).toBe(LONG);
+    expect(screen.getByRole('main').textContent).toContain(`Now: ${LONG}`);
+    // Information, never Needs you; and its steps are never the page's amber primary.
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
+    const take = within(notice).getByRole('button', { name: 'Take it' });
+    expect(primaries()).not.toContain('Take it');
+    // An admin reading somebody else's machine is offered no Open Workers.
+    expect(within(notice).queryByRole('link', { name: 'Open Workers' })).toBeNull();
+    // The header's own control: Take it from somebody else asks first, naming them.
+    await userEvent.setup().click(take);
+    expect(
+      await screen.findByRole('dialog', { name: 'Take ACME-12 from Vojtěch?' }, { timeout: 5000 }),
+    ).toBeTruthy();
+  });
+
+  it('sends the callout’s Take it and Assign… through the header’s one owner control', async () => {
+    const jan = { display_name: 'Jan Novák', user_id: null };
+    const { sent } = start(
+      detail(
+        { can_take: true, can_assign: true, take_writes_back: true },
+        {
+          state: 'active',
+          current_stage: 'implementation',
+          unlinked_assignee: { display_name: 'Jan Novák' },
+          tracker_assignee: jan,
+          waiting: {
+            ...offline,
+            reason: 'assignee_not_linked',
+            user: null,
+            assignee_name: 'Jan Novák',
+          },
+        },
+      ),
+      `/tasks/${TASK}`,
+      [PROJECT_ROW],
+    );
+    const user = userEvent.setup();
+    const notice = await screen.findByRole('region', { name: 'Why it waits' });
+    // Take it writes back, replacing whom the tracker shows: #103's confirmation, asked once.
+    await user.click(within(notice).getByRole('button', { name: 'Take it' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Take ACME-12?' }, { timeout: 5000 });
+    expect(confirm.textContent).toContain(
+      'This also assigns ACME-12 in Jira to you, replacing Jan Novák.',
+    );
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    await user.click(within(confirm).getByRole('button', { name: 'Take it and assign in Jira' }));
+    await waitFor(() => {
+      expect(sent).toContainEqual({
+        path: `/api/tasks/${TASK}/owner`,
+        body: { user_id: SESSION.user.id },
+      });
+    });
+    // The header's own status line says what followed: the control is the header's.
+    expect(
+      await screen.findByText('Assigned to you. Your machine picks it up at the next stage.'),
+    ).toBeTruthy();
+    // Assign… opens #103's person picker — the one the header's own Assign… opens.
+    await user.click(within(notice).getByRole('button', { name: 'Assign…' }));
+    expect(
+      await screen.findByRole('dialog', { name: 'Assign ACME-12' }, { timeout: 5000 }),
+    ).toBeTruthy();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  });
+
+  it('says "your machine" to the machine’s owner, with Open Workers', async () => {
+    start(
+      detail(
+        {},
+        {
+          state: 'active',
+          current_stage: 'implementation',
+          owner: { user_id: SESSION.user.id, name: 'Fake Operator' },
+          owner_source: 'platform',
+          waiting: { ...offline, user: { user_id: SESSION.user.id, name: 'Fake Operator' } },
+        },
+      ),
+    );
+    const notice = await screen.findByRole('region', { name: 'Why it waits' });
+    await waitFor(() => {
+      expect(notice.querySelector('[data-waiting]')?.textContent).toBe(
+        'Waiting for your machine. It’s offline and has never connected.',
+      );
+    });
+    expect(
+      (await within(notice).findByRole('link', { name: 'Open Workers' })).getAttribute('href'),
+    ).toBe('/workers');
+  });
+
+  it('says nothing more when somebody can take it now', async () => {
+    start(
+      detail(
+        {},
+        {
+          state: 'active',
+          current_stage: 'implementation',
+          waiting: { ...offline, reason: null, user: null },
+        },
+      ),
+    );
+    await screen.findByRole('heading', { level: 1 });
+    await screen.findByText('Checks');
+    expect(screen.queryByRole('region', { name: 'Why it waits' })).toBeNull();
+    expect(document.querySelector('[data-waiting]')).toBeNull();
+    expect(screen.getByRole('main').textContent).not.toContain('machine. It’s');
   });
 });
 
@@ -960,6 +1104,10 @@ describe('only what the caller may do', () => {
     can_return: false,
     can_rework: false,
     can_decide_approval: false,
+    can_take: false,
+    can_assign: false,
+    can_unassign: false,
+    take_writes_back: false,
   } as const;
   const VIEWER = { ...MEMBER, can_pause: false, can_resume: false } as const;
 

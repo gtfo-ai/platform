@@ -130,6 +130,12 @@ const detail = (over: Partial<TaskDetailResponse> = {}): TaskDetailResponse => (
     completed_at: null,
     ticket_claim: null,
     qa_stage: false,
+    tracker_assignee: null,
+    owner: null,
+    owner_source: null,
+    unlinked_assignee: null,
+    owner_writes_back: false,
+    waiting: null,
   },
   taken_over: null,
   can_raise_budget: false,
@@ -140,6 +146,10 @@ const detail = (over: Partial<TaskDetailResponse> = {}): TaskDetailResponse => (
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  can_take: false,
+  can_assign: false,
+  can_unassign: false,
+  take_writes_back: false,
   gate_feedback: null,
   returns: [],
   stop: null,
@@ -215,7 +225,7 @@ const fetchFor = (
     if (url.endsWith('/api/projects')) return json({ items: [] });
     // A command refreshes the inbox: answered, so the refresh — which the dialog's close follows —
     // is not held behind a retried 404.
-    if (url.endsWith('/api/org/inbox')) return json({ questions: [], approvals: [] });
+    if (url.endsWith('/api/org/inbox')) return json({ questions: [], approvals: [], ci_held: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
 

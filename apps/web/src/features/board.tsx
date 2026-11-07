@@ -385,9 +385,19 @@ interface ViewProps {
   readonly may: MenuCapabilities;
   readonly agents: ReadonlyMap<string, AgentEntry>;
   readonly nowMs: number;
+  /** The signed-in person: *your machine* in a card's waiting words (S-26.8b part 2). */
+  readonly viewerId: string | null;
 }
 
-const Columns = ({ items, projectKey, projectId, may, agents, nowMs }: ViewProps): ReactElement => (
+const Columns = ({
+  items,
+  projectKey,
+  projectId,
+  may,
+  agents,
+  nowMs,
+  viewerId,
+}: ViewProps): ReactElement => (
   // It scrolls sideways below `xl`. Not a tab stop of its own: every card holds a link and a menu
   // button, and focusing one scrolls its column into view. `relative`, so the screen-reader-only
   // counts (`sr-only` is `position: absolute`) of a column scrolled out of view are clipped by this
@@ -432,6 +442,7 @@ const Columns = ({ items, projectKey, projectId, may, agents, nowMs }: ViewProps
               may={may}
               agent={agents.get(task.id)}
               nowMs={nowMs}
+              viewerId={viewerId}
             />
           ))}
         </section>
@@ -447,6 +458,7 @@ const ListView = ({
   may,
   agents,
   nowMs,
+  viewerId,
   ownerControl,
 }: ViewProps & {
   /** The owner filter, in the list box's header (S-26.8b). */
@@ -541,6 +553,7 @@ const ListView = ({
             may={may}
             agent={agents.get(task.id)}
             nowMs={nowMs}
+            viewerId={viewerId}
           />
         ))
       )}
@@ -647,6 +660,7 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
     },
     agents: live,
     nowMs,
+    viewerId: userId,
   };
 
   return (

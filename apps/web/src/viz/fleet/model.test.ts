@@ -138,6 +138,38 @@ describe('the seats', () => {
 describe('each run’s activity', () => {
   const one = (input: Partial<FleetInput>) => fleetOf(base(input)).runs[0];
 
+  it('says why a run nobody takes yet waits, "your machine" to its owner (S-26.8b part 2)', () => {
+    const owner = uuid(4001);
+    const waiting = agentItem(1, {
+      seat: null,
+      activity: null,
+      run: { status: 'created', started_at: null },
+      waiting: {
+        reason: 'owner_worker_cannot_take',
+        user: { user_id: owner, name: `Vojtěch${HOSTILE}` },
+        last_seen_at: null,
+        assignee_name: null,
+        blockers: ['images_outdated'],
+      },
+    });
+    const seen = one({ agents: [waiting] });
+    expect(seen?.activity).toEqual({
+      activity: 'waiting',
+      detail: `Vojtěch${HOSTILE}’s machine needs an update`,
+    });
+    expect(one({ agents: [waiting], viewerId: owner })?.activity.detail).toBe(
+      'your machine needs an update',
+    );
+    // Somebody can take it now: the activity's own words, nothing invented.
+    const free = agentItem(2, {
+      seat: null,
+      activity: null,
+      run: { status: 'created', started_at: null },
+      waiting: { reason: null, user: null, last_seen_at: null, assignee_name: null, blockers: [] },
+    });
+    expect(one({ agents: [free] })?.activity).toEqual({ activity: 'waiting', detail: 'Starting' });
+  });
+
   it('reads the agents read’s newest entry: a tool is working, with its words', () => {
     const run = one({ agents: [agentItem(1)] });
     expect(run?.activity).toEqual({ activity: 'working', detail: 'Reading files' });
@@ -157,9 +189,13 @@ describe('each run’s activity', () => {
 
   it('is "needs you" for the task’s open question, approval or state — and only for its stage run', () => {
     const taskId = uuid(1001);
-    const asked = { questions: [question(70, taskId, 'Three or five?')], approvals: [] };
+    const asked = {
+      questions: [question(70, taskId, 'Three or five?')],
+      approvals: [],
+      ci_held: [],
+    };
     expect(one({ agents: [agentItem(1)], inbox: asked })?.activity.activity).toBe('needs_you');
-    const approving = { questions: [], approvals: [approval(71, taskId)] };
+    const approving = { questions: [], approvals: [approval(71, taskId)], ci_held: [] };
     expect(one({ agents: [agentItem(1)], inbox: approving })?.activity.activity).toBe('needs_you');
     const waiting = new Map([[taskId, facts('DEMO-1', { state: 'waiting_answers' })]]);
     expect(one({ agents: [agentItem(1)], tasks: waiting })?.activity.activity).toBe('needs_you');
@@ -264,7 +300,7 @@ describe('the runs that ended while the page watched', () => {
     const taskId = uuid(1001);
     const fleet = fleetOf(
       base({
-        inbox: { questions: [question(70, taskId, 'Three or five?')], approvals: [] },
+        inbox: { questions: [question(70, taskId, 'Three or five?')], approvals: [], ci_held: [] },
         tasks: new Map([[taskId, facts('DEMO-1', { state: 'needs_human' })]]),
         endings: [
           {
@@ -308,6 +344,7 @@ describe('what needs a person', () => {
         inbox: {
           questions: [question(70, uuid(2001), `First line ${HOSTILE}\nsecond line`)],
           approvals: [approval(71, uuid(2002))],
+          ci_held: [],
         },
         tasks: new Map([[uuid(2001), facts('DEMO-7', { projectId: runRecord(1).project_id })]]),
         projectKeys: new Map([[runRecord(1).project_id, 'demo']]),
@@ -325,9 +362,9 @@ describe('what needs a person', () => {
   it('skips answered questions and decided approvals', () => {
     const answered = { ...question(70, uuid(1), 'q'), status: 'answered' as const };
     const decided = { ...approval(71, uuid(1)), status: 'approved' as const };
-    expect(fleetOf(base({ inbox: { questions: [answered], approvals: [decided] } })).needs).toEqual(
-      [],
-    );
+    expect(
+      fleetOf(base({ inbox: { questions: [answered], approvals: [decided], ci_held: [] } })).needs,
+    ).toEqual([]);
   });
 });
 

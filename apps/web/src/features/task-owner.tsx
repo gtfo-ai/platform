@@ -80,7 +80,7 @@ const ACTION_LABEL: Readonly<Record<OwnerAction, string>> = {
  * server's own flags, nothing derived — a flag that is absent (an older server) offers nothing.
  */
 export const ownerOffers = (
-  detail: Pick<TaskDetailResponse, 'can_take' | 'can_assign' | 'can_unassign'>,
+  detail: Partial<Pick<TaskDetailResponse, 'can_take' | 'can_assign' | 'can_unassign'>>,
 ): readonly OwnerAction[] => [
   ...(detail.can_take === true ? (['take'] as const) : []),
   ...(detail.can_assign === true ? (['assign'] as const) : []),

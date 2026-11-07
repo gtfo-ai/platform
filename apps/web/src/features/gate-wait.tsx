@@ -13,9 +13,10 @@
  *
  * - **{@link GateWaitNotice}** — the open wait, in the callout's slot: a pipeline **held at a manual
  *   job** ("CI is waiting for someone to start the manual job X in GitLab. Start it there and the
- *   task continues.") — *Needs you* at once, through `ui/task-status.ts`' one rule
- *   ({@link gateWaitHeld} is its input) — or a pipeline **still running** ("CI is running (pipeline
- *   n, 12 min so far; the task gives up after 60)"), which asks nothing;
+ *   task continues.") — *Needs you* at once, through `ui/task-status.ts`' one rule (`ciHeldNow`,
+ *   which the board's card reads too, saying `./gate-wait-words.ts`' `CI_HELD_SHORT`) — or a
+ *   pipeline **still running** ("CI is running (pipeline n, 12 min so far; the task gives up
+ *   after 60)"), which asks nothing;
  * - **{@link gateWaitShort}** — the header's *Now* line, in short form;
  * - **{@link CiWaitStop}** — the parked wait: a timeout ("CI did not finish within 60 minutes:
  *   pipeline n was still held at the manual job X.") or a Retry that found the same held pipeline
@@ -33,6 +34,7 @@ import type { GateWait, TaskState, TaskStop } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement, ReactNode } from 'react';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
+import { ciHeldSentence } from './gate-wait-words.js';
 
 /** The provider's display name; one this build does not name is said generically. */
 const PROVIDER_LABEL: Readonly<Record<string, string>> = { gitlab: 'GitLab', github: 'GitHub' };
@@ -44,8 +46,8 @@ export const providerName = (provider: string | null | undefined): string =>
     : 'the git provider';
 
 /**
- * A pipeline held at a manual job waits for a person, and only for a person — the input
- * `ui/task-status.ts`' `needsYou` reads as `ci_held`.
+ * A pipeline held at a manual job waits for a person, and only for a person — what
+ * `ui/task-status.ts`' `ciHeldNow` asks of an active task's `gate_wait`.
  */
 export const gateWaitHeld = (wait: GateWait | null | undefined): boolean =>
   wait !== null && wait !== undefined && wait.status === 'manual';
@@ -118,9 +120,7 @@ const runningWord = (wait: GateWait): string => (wait.status === 'pending' ? 'qu
  */
 export const gateWaitShort = (wait: GateWait, nowMs?: number): string => {
   if (gateWaitHeld(wait)) {
-    return wait.held_job === null
-      ? 'CI waits for someone to start a manual job'
-      : `CI waits for someone to start the manual job ${wait.held_job}`;
+    return ciHeldSentence(wait.held_job);
   }
   const minutes = gateWaitMinutes(wait, nowMs);
   return `CI ${runningWord(wait)} · ${minutes} min${wait.timeout_minutes === null ? '' : ` of ${wait.timeout_minutes}`}`;

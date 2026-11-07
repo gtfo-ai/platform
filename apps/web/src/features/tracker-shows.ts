@@ -19,7 +19,9 @@ import type { TaskRecord } from '@platform/contracts';
 export type TrackerShows = { readonly name: string | null; readonly userId: string | null } | null;
 
 export const trackerShowsFor = (
-  task: Pick<TaskRecord, 'tracker_assignee' | 'unlinked_assignee'>,
+  // `tracker_assignee` is required on the wire since S-26.8b part 2; absent, it reads as an older
+  // server's answer, so the fallback below stays.
+  task: Pick<TaskRecord, 'unlinked_assignee'> & Partial<Pick<TaskRecord, 'tracker_assignee'>>,
 ): TrackerShows => {
   if (task.tracker_assignee !== undefined) {
     const shown = task.tracker_assignee;

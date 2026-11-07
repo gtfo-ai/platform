@@ -106,6 +106,12 @@ const TASK: TaskRecord = {
   completed_at: null,
   ticket_claim: null,
   qa_stage: false,
+  tracker_assignee: null,
+  owner: null,
+  owner_source: null,
+  unlinked_assignee: null,
+  owner_writes_back: false,
+  waiting: null,
 };
 
 const detail = (
@@ -122,6 +128,10 @@ const detail = (
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  can_take: false,
+  can_assign: false,
+  can_unassign: false,
+  take_writes_back: false,
   gate_feedback: null,
   returns: [ciReturn()],
   stop: null,
@@ -238,6 +248,7 @@ describe('fixing: the agent is on it', () => {
       open_questions: 0,
       pending_approvals: 0,
       loop_limits: LIMITS,
+      gate_wait: null,
       latest_return: ciReturn(),
       stop: null,
     } satisfies TaskListItem;
@@ -274,6 +285,7 @@ describe('fixing: the agent is on it', () => {
       open_questions: 0,
       pending_approvals: 0,
       loop_limits: LIMITS,
+      gate_wait: null,
       latest_return: null,
       stop: stop({ cause: 'no_answer', ci_failure: null, ci_ending: 'ci_held_unchanged' }),
     } satisfies TaskListItem;

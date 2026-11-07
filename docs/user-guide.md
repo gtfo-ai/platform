@@ -91,8 +91,8 @@ do, and the project's name scrolls away; on a phone only the top bar stays, so t
 - **+** — **New project** (for an admin: creating a project is an admin's), and inside a project you
   may start tickets in, **Start a ticket…**, which opens the board's *Start a ticket* dialog (below); with
   neither, there is no **+**;
-- the **inbox** button, with the number of questions and approvals waiting for you (Home's *Needs
-  you* also counts tasks that stopped for a person, so the two numbers can differ);
+- the **inbox** button, with the number of questions, approvals and held CI jobs waiting for you
+  (Home's *Needs you* also counts tasks that stopped for a person, so the two numbers can differ);
 - your avatar (below).
 
 Screens that show live data subscribe to a server-sent event stream, so agent counts, task states
@@ -831,19 +831,28 @@ has the same: `owner` on every task, `POST /api/tasks/:id/owner`, `GET
 /api/projects/:id/owner-candidates?task_id=` for the people a maintainer may assign, and `?owner=` on
 a project's task list.
 
-**Why a run waits** (since S-26.5, read only — the words on the page come with S-26.8b): while a
-task's run waits for a machine or the server to start it, the task, its board card and its row on
-*Agents* carry `waiting` — why nobody takes it now: its owner's machine is offline (with when it was
-last seen) or paused, the owner's machine is on but cannot take it (another build's images, no images
-yet, a usage limit, a drain — `waiting.blockers` says which, in the Workers screen's words), the owner
-has no machine that takes this project or only picks runs by hand,
-no machine takes unassigned tasks in this project, or the tracker assigns it to somebody who is not
-linked to a platform account, so only a machine that takes everyone's tasks can run it. A task that
-somebody gave back is unassigned, whatever the tracker still shows. `waiting.reason` is empty when a
-machine or the server can take the run now. *Settings → Execution* also says, without naming
-anybody's machine, whether the server or another person's machine takes this project's unassigned
-tasks by itself (`others_take_unassigned`) — so a machine set to *Only my tasks* can tell whether
-unassigned tasks would have nowhere to run.
+**Why a run waits** (S-26.5; in words since S-26.8b part 2): while a task's run waits for a machine
+or the server to start it, the page says why nobody takes it now. The task page's *Now* line and a
+note above the tabs say it in full — *Waiting for Vojtěch’s machine. It’s offline (last seen 2 h
+ago).* — and a board card, its row on *Agents* and on Home's *Running now* in short — *Waiting ·
+Vojtěch’s machine is offline*. The reasons: the owner's machine is offline (with when it was last
+seen) or paused; it is online and still cannot take it — it *needs an update*, it is *still setting
+up* (getting its run images), it is *finishing a run* and taking nothing new (an update or its
+owner's own *Drain*), it is *at its usage limit* and resumes when the limit resets, it *waits on the
+platform* (the platform's run images need fixing), or another reason in the Workers screen's words;
+the owner has no machine that takes this project, or only picks runs by hand; no machine takes
+unassigned tasks in this project; or the tracker assigns it to somebody who is not linked to a
+platform account (*Waiting · assigned to Jan Novák (not linked)*), so only a machine that takes
+everyone's tasks can run it. When the machine is yours, the words say *your machine*. The note offers
+the next step you may take, never as the page's main button: *Take it* and *Assign…* when your role
+allows them, *Open Workers* to the machine's owner (with *Update it from its page* when it needs an
+update), *Open Instance* to an administrator when the platform's images are the reason, and *Link
+account…* to an administrator for an unlinked assignee; everyone else sees the sentence alone. A task
+somebody gave back is unassigned, whatever the tracker still shows. Nothing is said when a machine or
+the server can take the run now. *Settings → Execution* also says, without naming anybody's machine,
+whether the server or another person's machine takes this project's unassigned tasks by itself
+(`others_take_unassigned`) — so a machine set to *Only my tasks* can tell whether unassigned tasks
+would have nowhere to run.
 
 - **The header** is the ticket's title with its key after it in grey (the key alone when the
   platform never read the title), the task's state as a label with its icon — *Needs you* whenever
@@ -1026,11 +1035,20 @@ merge request from an `agentic/` branch. If its rules skip or hold jobs for a `D
 check waits and the task page says what it waits for, from the first check: *"CI is waiting for
 someone to start the manual job sentry-release-commit in GitLab. Start it there and the task
 continues."*, with the job linked, a note that links the readiness panel's CI-rules warning (which
-names the rule it understood), and *Start the job in GitLab* as the page's one button. A held job is
-*Needs you* at once on the task page; the board's card does not show it until the check stops — the
-board's list and the inbox carry the check's read since S-26.5 (`gate_wait` on each task, and the
-inbox's `ci_held` list of tasks held at a manual job), and the board, Home and the Inbox do not show
-it yet. A paused task shows no CI wait: the check stops while it is paused. While the pipeline is simply running, the page
+names the rule it understood), and *Start the job in GitLab* as the page's one button.
+**A manual job nobody started is not a check** (BD-024's 2026-11-07 amendment, built by S-27.2; until
+that is deployed, the check waits for every held job). When every job that ran is green and only
+manual jobs are left, CI passes and the task's CI check says *CI passed — the manual job
+sentry-release-commit was not run*. That holds unless one of the manual jobs is a **test job**, one
+in stage `test`: a test is never skipped. The check also waits when a job is queued behind the held one
+(a build step your tests need, say). To set your own rule, use `pipeline.ci.required_manual_jobs` in
+`.agentic/config.yml`: `[]` passes every manual job, `all` waits for every one, and a list of job
+names waits for exactly those. At **Ready for merge**, a task whose pipeline GitLab still shows as blocked says so: if
+your project requires pipelines to succeed, GitLab won't merge until that job has run, so start it
+there. The waiting described next applies to a required job. A held job is
+*Needs you* at once: on the task page, on the board — its card says *CI held · start the job* and
+sits under *Needs you* — and as a row of the Inbox and of Home's *Needs you* (*CI waits for someone
+to start the manual job …*), which opens the task. A paused task shows no CI wait: the check stops while it is paused. While the pipeline is simply running, the page
 says *"CI is running (pipeline n, 12 min so far; the task gives up after 60)"* and asks nothing. If
 the wait runs out, the page says *"CI did not finish within 60 minutes: pipeline n was still held at
 the manual job …"* — never that CI failed — and the next step, *Start the job in GitLab, then
@@ -1350,10 +1368,12 @@ place — laid out like GitHub's notifications. The left column filters the list
 **Questions**, **Approvals**, or one project, each with its count. Each row starts with the
 *needs you* bell, then the question's first line (or what the approval is about — *Plan v2 · size L ·
 6 files*), and under it
-where it is — project · ticket · stage — how long ago it was asked and when it is due. Click a
+where it is — project · ticket · stage — how long ago it was asked and, for a question, when it is due. Click a
 question's line and the row opens in place: the whole question, a **Your answer** box and **Answer**.
 An approval's row links to the task, where it is decided with the plan on screen (**Review plan**);
-no row approves in one click. With nothing
+no row approves in one click. A task whose CI check waits on a manual job somebody must start is a
+row too (*CI waits for someone to start the manual job deploy*), under **All** and its project, and
+**Open** takes you to the task, where *Start the job in GitLab* is the button. With nothing
 pending the page says *Nothing needs you*.
 
 A question the agent asks may also arrive in Slack, and all channels are equivalent — **the first
@@ -1394,14 +1414,20 @@ reminder**: halfway through the working time to the deadline, the project's chat
 message saying the question is still unanswered, which names the task page (it has no buttons). A
 question answered before then is not reminded about.
 
-Approvals work the same way: the plan-approval gate is what the **Supervised** autonomy level turns
-on above a certain task size, and any maintainer can decide it. An approval nobody decides expires on
-the same calendar and at the same timeout as a question, and moves the task to needing a human too
-— with the same one reminder halfway there.
+Approvals are different: **an approval never expires** (BD-006's 2026-11-07 amendment, built by
+S-27.1; until that is deployed, an approval still expires like a question). The plan-approval gate is what
+the **Supervised** autonomy level turns on above a certain task size, and any maintainer can decide
+it. A plan or budget approval waits until somebody approves or rejects it. Meanwhile the task reads
+*Waiting for approval*, is in *Needs you* and the inbox (*requested 3 h ago · waits for a
+maintainer*, with no due time), and the project's chat channel gets at most **five reminders**: the
+first halfway through the question timeout, then one per question timeout (half a working day after
+the request, then once a working day, by default). After that the chat goes quiet, but the item stays
+in *Needs you*. An approval that expired before the change stays expired, and its task is retried or
+handed back from the task page as before.
 
-Once an approval is decided — here, on the task page, or with a button — or expires, its Slack
+Once an approval is decided — here, on the task page, or with a button — its Slack
 message is **edited**: the buttons are removed and the message says how it was settled (approved,
-changes requested, or expired), naming the decider by role; the task page names the person. A chat
+changes requested, or, for one that expired before approvals stopped expiring, expired), naming the decider by role; the task page names the person. A chat
 provider that cannot edit a message keeps the buttons, and a late press is refused by the approval
 rather than recorded.
 

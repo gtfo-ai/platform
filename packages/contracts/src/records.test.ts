@@ -120,6 +120,12 @@ describe('records', () => {
       completed_at: null,
       ticket_claim: null,
       qa_stage: false,
+      owner: null,
+      owner_source: null,
+      unlinked_assignee: null,
+      owner_writes_back: false,
+      tracker_assignee: null,
+      waiting: null,
     };
     expect(taskRecordSchema.parse(task)).toEqual(task);
     expect(taskRecordSchema.safeParse({ ...task, state: 'thinking' }).success).toBe(false);
