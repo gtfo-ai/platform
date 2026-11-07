@@ -117,6 +117,7 @@ describe('every paginated GitLab read says what a cut list means (WP-220)', () =
       'listMergeRequests',
       'listDiscussions',
       'pipelineJobs',
+      'pipelineBridges',
     ]);
     expect(undeclaredCuts(CLIENT)).toEqual([]);
   });

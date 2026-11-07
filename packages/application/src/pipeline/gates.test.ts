@@ -1179,6 +1179,40 @@ describe('a manual job nobody started (S-27.2, TD-036)', () => {
     );
   });
 
+  /**
+   * The security review of #114: GitLab lists **trigger jobs** (bridges) apart from the pipeline's
+   * jobs, and the adapter reads both into `jobs`. A pipeline held at `sentry-release-commit` that
+   * also has an unstarted manual trigger for `e2e` in stage `test` (no log of its own) must wait:
+   * passing it would skip the e2e child pipeline.
+   */
+  it('waits on a pipeline also held at an unstarted manual trigger job in stage test', async () => {
+    const trigger = { ...job('e2e', 'manual', false, 'test'), log_ref: null };
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      held([...AUT_6655, trigger]),
+    );
+    expect(result.kind).toBe('pending');
+    expect((result as { detail: string }).detail).toContain('held at manual job "e2e"');
+    expect(result).not.toHaveProperty('manualNotRun');
+  });
+
+  /**
+   * The coordinator's ruling on #114: a `success` pipeline keeps the behaviour before TD-036. GitLab
+   * lists `created` jobs on a green pipeline whose jobs `needs:` an optional manual one.
+   */
+  it('passes a success pipeline that lists a created job, as before', async () => {
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getPipelineStatus: async () =>
+        pipelineStatus('success', [
+          job('unit', 'success', false, 'test'),
+          job('preview', 'manual', true, 'deploy'),
+          job('preview-smoke', 'pending', false, 'deploy'),
+        ]),
+    });
+    expect(result).toMatchObject({ kind: 'settled', passed: true });
+  });
+
   it('names the test job it waits for, not the release step it is also held at', async () => {
     const result = await evaluate(
       templateStage('ci_gate'),

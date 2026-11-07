@@ -272,6 +272,13 @@ export const gitlabReplayContext = (
     pipelineSha: SHA_MR7,
     failingJobName: FAILING_JOB,
     // S-27.2: `pipelines-manual.json` records pipeline 907 held at `sentry-release-commit`.
+    // The security review of #114: `pipelines-trigger.json` records pipeline 908, whose manual
+    // trigger `e2e` is served only by the bridges list.
+    triggerPipeline: {
+      sha: '8888888888888888888888888888888888888888',
+      releaseJob: HELD_RELEASE_JOB,
+      triggerJob: 'e2e',
+    },
     heldPipeline: {
       sha: SHA_HELD,
       releaseJob: HELD_RELEASE_JOB,

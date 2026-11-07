@@ -1336,10 +1336,21 @@ export const createMemoryPipelineStore = (
       return true;
     },
     latestCiManualNotRun: async (_tx, taskId, stage) => {
-      const passed = stages
-        .filter((row) => row.taskId === taskId && row.stage === stage && row.state === 'completed')
+      const newest = stages
+        .filter((row) => row.taskId === taskId && row.stage === stage)
         .sort((a, b) => b.attempt - a.attempt)[0];
-      const value = passed?.ciManualNotRun ?? null;
+      if (newest === undefined || newest.state !== 'completed' || newest.exitedAt === null) {
+        return null;
+      }
+      const passedAt = newest.exitedAt;
+      const sentBack = stages.some(
+        (row) =>
+          row.taskId === taskId &&
+          row.state === 'returned' &&
+          row.exitedAt !== null &&
+          row.exitedAt > passedAt,
+      );
+      const value = sentBack ? null : (newest.ciManualNotRun ?? null);
       return value === null ? null : ciManualNotRunSchema.parse(value);
     },
     previousCiPendingRead: async (_tx, taskId, stage, attempt) => {

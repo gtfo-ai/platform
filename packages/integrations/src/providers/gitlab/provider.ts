@@ -1377,11 +1377,15 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       if (latest === null) {
         return null;
       }
-      const [full, listed] = await Promise.all([
+      // The security review of #114: trigger jobs (bridges) are not in "List all jobs by
+      // pipeline", so a manual trigger in stage `test` would be invisible to the CI gate's rule.
+      const [full, listed, bridges] = await Promise.all([
         client.pipeline(project, latest.id),
         client.pipelineJobs(project, latest.id),
+        client.pipelineBridges(project, latest.id),
       ]);
-      const jobs = listed.jobs;
+      const bridgeIds = new Set(bridges.jobs.map((bridge) => bridge.id));
+      const jobs = [...listed.jobs, ...bridges.jobs];
       return {
         id: String(full.id),
         head_sha: full.sha,
@@ -1396,7 +1400,8 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
           stage:
             job.stage === undefined || job.stage === null || job.stage === '' ? null : job.stage,
           // Every GitLab job has a trace endpoint; whether it holds anything is a 404 at read time.
-          log_ref: String(job.id),
+          // A trigger job (bridge) runs no script and keeps no log of its own.
+          log_ref: bridgeIds.has(job.id) ? null : String(job.id),
           allow_failure: job.allow_failure ?? false,
           // The job's own page ("List pipeline jobs" publishes `web_url`; backlog 1078): where a
           // person starts a held manual job. Absent on an older payload, which reads as none.
@@ -1405,7 +1410,7 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         coverage_pct: full.coverage ?? null,
         finished_at: toIsoDateTimeOrNull(full.finished_at, 'get_pipeline_status'),
         // BACKLOG 1490: a list cut at `max_pages` says so, and the CI gate does not pass on it.
-        ...(listed.truncated ? { jobs_truncated: true } : {}),
+        ...(listed.truncated || bridges.truncated ? { jobs_truncated: true } : {}),
       };
     },
 

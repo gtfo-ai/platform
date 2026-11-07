@@ -274,7 +274,9 @@
  * 36. **Stricter — a job's `stage` is what the seed says, and absent reads as `null`** (S-27.2,
  *     TD-036). GitLab names a stage on every job (`test` when the CI file names none); a seed that
  *     names none here answers `null` — the port's *provider with no stages*, which the CI gate's
- *     manual-job rule counts as a test, so an unseeded stage keeps a held pipeline waiting. `emitPipelineFinished` for a stored `manual` pipeline normalises to
+ *     manual-job rule counts as a test, so an unseeded stage keeps a held pipeline waiting. It keeps
+ *     **one** job list: a trigger job, which GitLab serves from a list of its own (bridges), is
+ *     seeded as one of the jobs — the port's shape, which the GitLab adapter builds from both. `emitPipelineFinished` for a stored `manual` pipeline normalises to
  *     `ci.pipeline.held`, as GitLab's `manual` Pipeline Hook does; a `pending`/`running` one is
  *     still reported `failed` (`terminalStatus`), which GitLab drops — **different**, and no test
  *     emits one.

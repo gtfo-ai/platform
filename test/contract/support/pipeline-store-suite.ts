@@ -2115,16 +2115,37 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           await store.tasks.recordCiManualNotRun(tx, entry(1), { ...value, pipeline_id: '1' }),
         ).toBe(false);
 
-        // A later attempt that is open, then passes with nothing left: the read follows it.
+        // A send-back after the pass (the code review returned the task): the pass is no longer
+        // the task's current one, so the workpad says nothing about it (the security review of #114).
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'code_review',
+          attempt: 1,
+          causedByEventId: null,
+        });
+        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toEqual(
+          value,
+        );
+        await store.tasks.recordStageExited(tx, {
+          taskId: stored.task.id,
+          stage: 'code_review',
+          attempt: 1,
+          state: 'returned',
+          outcome: 'returned',
+          returnReason: 'requested changes',
+          returnedTo: 'implementation',
+        });
+        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toBeNull();
+        // A later attempt that is open: not the pass either; then it passes with nothing left.
         await store.tasks.recordStageEntered(tx, {
           taskId: stored.task.id,
           stage: 'ci_gate',
           attempt: 2,
           causedByEventId: null,
         });
-        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toEqual(
-          value,
-        );
+        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toBeNull();
+        const second = { ...value, pipeline_id: '3038234624' };
+        expect(await store.tasks.recordCiManualNotRun(tx, entry(2), second)).toBe(true);
         await store.tasks.recordStageExited(tx, {
           taskId: stored.task.id,
           stage: 'ci_gate',
@@ -2134,7 +2155,10 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           returnReason: null,
           returnedTo: null,
         });
-        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toBeNull();
+        // The new pass, after the send-back, is the current one again.
+        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toEqual(
+          second,
+        );
         // A value outside the schema is refused at the write.
         await store.tasks.recordStageEntered(tx, {
           taskId: stored.task.id,

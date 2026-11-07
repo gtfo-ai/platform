@@ -109,6 +109,18 @@
         "kind": "documented-adapted",
         "note": "\"List pipeline jobs\" example fields (id, name, stage, status, allow_failure, web_url), three jobs in AUT-6655's shape: a build and a test job that succeeded and the release job sentry-release-commit waiting at manual with allow_failure false, the default for when: manual inside rules (https://docs.gitlab.com/ci/jobs/job_control/). The runner, artifacts and user members the adapter never reads are removed."
       }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines/907/bridges?per_page=100&page=1",
+      "status": 200,
+      "body": [],
+      "source": {
+        "url": "https://docs.gitlab.com/api/jobs/",
+        "retrieved": "2026-11-07",
+        "kind": "inferred",
+        "note": "\"List all trigger jobs by pipeline\" (the bridges route, deprecated in GitLab 19.2 for trigger_jobs and still served). A pipeline with no trigger job answers an empty list; the page documents a list and does not publish the empty case."
+      }
     }
   ]
 }

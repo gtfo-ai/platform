@@ -362,6 +362,16 @@ export interface GitProviderContractContext {
   emitMerged(): WebhookDelivery;
   emitReviewComment(text: string): WebhookDelivery;
   emitPipelineFinished(): WebhookDelivery;
+  /**
+   * The security review of #114: a pipeline held at the release step **and** at an unstarted manual
+   * **trigger** job (a downstream e2e pipeline) in stage `test`. A provider that lists trigger jobs
+   * apart from its jobs (GitLab's bridges) must still report it in `jobs`.
+   */
+  readonly triggerPipeline: {
+    readonly sha: string;
+    readonly releaseJob: string;
+    readonly triggerJob: string;
+  };
   /** S-27.2 (TD-036 decision 6): the provider's delivery for {@link heldPipeline}'s status change. */
   emitPipelineHeld(): WebhookDelivery;
   readonly projectId: Id;
@@ -1136,6 +1146,21 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
             job.stage === null || (typeof job.stage === 'string' && job.stage.length > 0),
           ).toBe(true);
         }
+      });
+
+      /**
+       * The security review of #114: a manual trigger job in stage `test` holds the pipeline as
+       * a manual test job does, so the port must list it — with its stage, its status and its
+       * `allow_failure` — wherever the provider keeps trigger jobs.
+       */
+      it('reports a held pipeline’s manual trigger job among its jobs, with stage and allow_failure', async () => {
+        const held = context.triggerPipeline;
+        const pipeline = await port.getPipelineStatus(context.project, held.sha);
+        expect(pipeline?.status).toBe('manual');
+        expect(pipeline?.jobs.find((job) => job.name === held.releaseJob)?.status).toBe('manual');
+        const trigger = pipeline?.jobs.find((job) => job.name === held.triggerJob);
+        expect(trigger).toMatchObject({ status: 'manual', stage: 'test', allow_failure: false });
+        expect(pipeline?.jobs_truncated ?? false).toBe(false);
       });
 
       it('returns null when no pipeline ran for a commit', async () => {

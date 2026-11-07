@@ -127,6 +127,20 @@ runGitProviderContract({
       ],
     });
 
+    // The security review of #114: held at the release step and at a manual trigger in stage
+    // test. The fake keeps no separate trigger list, so the job is one of its jobs.
+    const TRIGGER_SHA = 'd'.repeat(40);
+    port.setPipeline({
+      project: PROJECT,
+      headSha: TRIGGER_SHA,
+      status: 'manual',
+      jobs: [
+        { name: 'phpstan', status: 'success', stage: 'test' },
+        { name: 'sentry-release-commit', status: 'manual', stage: 'release' },
+        { name: 'e2e', status: 'manual', stage: 'test' },
+      ],
+    });
+
     // Three more merge requests, one per mergeability state. The seeded `null` is the one the
     // rebase gate (WP-26) turns on, and the fake can only reach it through `setMergeability`.
     const openOn = async (branch: string) =>
@@ -402,6 +416,11 @@ runGitProviderContract({
       },
       pipelineSha: existing.head_sha,
       failingJobName: FAILING_JOB,
+      triggerPipeline: {
+        sha: TRIGGER_SHA,
+        releaseJob: 'sentry-release-commit',
+        triggerJob: 'e2e',
+      },
       heldPipeline: {
         sha: HELD_SHA,
         releaseJob: 'sentry-release-commit',

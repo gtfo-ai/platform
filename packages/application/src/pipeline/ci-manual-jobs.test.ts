@@ -285,6 +285,42 @@ describe('what the rule cannot see, and what never runs (BACKLOG 1490, 1493)', (
   });
 });
 
+/**
+ * The coordinator's ruling on #114: a pipeline whose own status is `success` keeps the behaviour
+ * before TD-036. GitLab lists `created` jobs on a green pipeline (a job that `needs:` an optional
+ * manual job); waiting on them would hold the task until its CI timeout.
+ */
+describe('a success pipeline keeps the behaviour before TD-036', () => {
+  const green = pipeline('success', [
+    job('unit', 'success', 'test'),
+    { ...job('preview', 'manual', 'deploy', true) },
+    job('preview-smoke', 'pending', 'deploy'),
+    job('flaky', 'failed', 'test'),
+  ]);
+
+  it('passes a green pipeline that lists a created job, under every policy without names', () => {
+    for (const policy of [
+      DEFAULT_MANUAL_JOB_POLICY,
+      { kind: 'none' } as const,
+      { kind: 'all' } as const,
+    ]) {
+      expect(judgeCiPipeline(green, policy).kind, policy.kind).toBe('passed');
+    }
+  });
+
+  it('asks it only the named jobs, and only when names are configured', () => {
+    expect(judgeCiPipeline(green, NAMED('e2e')).kind, 'a name it does not contain').toBe('passed');
+    expect(judgeCiPipeline(green, NAMED('preview')), 'a named job still manual').toMatchObject({
+      kind: 'waiting',
+      cause: 'manual_required',
+    });
+    expect(judgeCiPipeline(green, NAMED('flaky')), 'a named job that failed').toMatchObject({
+      kind: 'failed',
+      required: true,
+    });
+  });
+});
+
 describe('manualJobsHolding — the question mr_pipeline shares (TD-036 decision 4)', () => {
   it('does not hold for a release step, holds for a test job, also inside a running pipeline', () => {
     expect(manualJobsHolding(AUT_6655, DEFAULT_MANUAL_JOB_POLICY).holds).toBe(false);
@@ -322,7 +358,7 @@ describe('the gate never passes what it must not', () => {
     log_ref: fc.constant(null),
     allow_failure: fc.boolean(),
   });
-  const pipelineArb = fc.record({
+  const randomPipelineArb = fc.record({
     status: fc.constantFrom(
       'success',
       'failed',
@@ -335,6 +371,26 @@ describe('the gate never passes what it must not', () => {
     jobs: fc.array(jobArb, { maxLength: 8 }),
     jobs_truncated: fc.boolean(),
   });
+  /**
+   * AUT-6655's shape with arbitrary extra jobs — a test job that ran green and a blocking manual
+   * release step — so the generator reaches the passing held pipelines the properties are about
+   * (counted below), not only the random ones that almost never pass.
+   */
+  const heldReleaseArb = fc
+    .record({
+      extra: fc.array(jobArb, { maxLength: 3 }),
+      jobs_truncated: fc.boolean(),
+    })
+    .map(({ extra, jobs_truncated }) => ({
+      status: 'manual' as PipelineStatus['status'],
+      jobs: [
+        job('unit', 'success', 'test'),
+        job('sentry-release-commit', 'manual', 'release'),
+        ...extra,
+      ],
+      jobs_truncated,
+    }));
+  const pipelineArb = fc.oneof(randomPipelineArb, heldReleaseArb);
   const policyArb: fc.Arbitrary<ManualJobPolicy> = fc.oneof(
     fc.constant(DEFAULT_MANUAL_JOB_POLICY),
     fc.constant<ManualJobPolicy>({ kind: 'none' }),
@@ -344,13 +400,22 @@ describe('the gate never passes what it must not', () => {
       .map((names): ManualJobPolicy => ({ kind: 'named', names: new Set(names) })),
   );
 
-  it('never passes a pipeline with a pending or running job, or a failure that is not allowed', () => {
+  /**
+   * Over **held** pipelines: a `success` pipeline keeps the behaviour before TD-036 (the
+   * coordinator's ruling on #114), so its listed jobs are not judged by (a) or (b). The count holds
+   * the generator to the case: a property whose passing branch never ran asserts nothing.
+   */
+  it('never passes a held pipeline with a pending or running job, or a failure that is not allowed', () => {
+    let heldPasses = 0;
     fc.assert(
       fc.property(pipelineArb, policyArb, (judgedPipeline, policy) => {
-        if (judgeCiPipeline(judgedPipeline, policy).kind !== 'passed') return;
+        const verdict = judgeCiPipeline(judgedPipeline, policy).kind;
+        if (verdict !== 'passed') return;
         expect(judgedPipeline.status === 'success' || judgedPipeline.status === 'manual').toBe(
           true,
         );
+        if (judgedPipeline.status !== 'manual') return;
+        heldPasses += 1;
         expect(
           judgedPipeline.jobs.some(
             (each) => each.status === 'pending' || each.status === 'running',
@@ -365,12 +430,16 @@ describe('the gate never passes what it must not', () => {
       }),
       { numRuns: 2_000 },
     );
+    expect(heldPasses, 'the generator produced passing held pipelines').toBeGreaterThan(0);
   });
 
-  it('never passes, under the default, a pipeline with an unstarted blocking manual test job', () => {
+  it('never passes, under the default, a held pipeline with an unstarted blocking manual test job', () => {
+    let heldPasses = 0;
     fc.assert(
       fc.property(pipelineArb, (judgedPipeline) => {
+        if (judgedPipeline.status !== 'manual') return;
         if (judgeCiPipeline(judgedPipeline, DEFAULT_MANUAL_JOB_POLICY).kind !== 'passed') return;
+        heldPasses += 1;
         const anyTestStage = judgedPipeline.jobs.some((each) => each.stage === 'test');
         const heldTest = judgedPipeline.jobs.some(
           (each) =>
@@ -381,6 +450,7 @@ describe('the gate never passes what it must not', () => {
       }),
       { numRuns: 2_000 },
     );
+    expect(heldPasses, 'the generator produced passing held pipelines').toBeGreaterThan(0);
   });
 
   it('never passes a held pipeline on a job list the provider cut (BACKLOG 1490)', () => {
@@ -394,15 +464,18 @@ describe('the gate never passes what it must not', () => {
   });
 
   it('passes a held pipeline only when a job succeeded and it shows what holds it', () => {
+    let heldPasses = 0;
     fc.assert(
       fc.property(pipelineArb, policyArb, (judgedPipeline, policy) => {
         if (judgedPipeline.status !== 'manual') return;
         if (judgeCiPipeline(judgedPipeline, policy).kind !== 'passed') return;
+        heldPasses += 1;
         expect(judgedPipeline.jobs.some((each) => each.status === 'success')).toBe(true);
         expect(judgedPipeline.jobs.some(isBlockingManualJob)).toBe(true);
         expect(policy.kind).not.toBe('all');
       }),
       { numRuns: 2_000 },
     );
+    expect(heldPasses, 'the generator produced passing held pipelines').toBeGreaterThan(0);
   });
 });

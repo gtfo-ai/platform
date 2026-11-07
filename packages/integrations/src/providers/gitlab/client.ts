@@ -326,6 +326,21 @@ export interface GitLabClient {
     project: string,
     pipelineId: number,
   ): Promise<{ readonly jobs: z.output<typeof gitlabJobSchema>[]; readonly truncated: boolean }>;
+  /**
+   * <https://docs.gitlab.com/api/jobs/> § "List all trigger jobs by pipeline" — the pipeline's
+   * **trigger jobs** (bridges), which "List all jobs by pipeline" does not list (the security review
+   * of #114: a manual trigger for an `e2e` child pipeline in stage `test` was invisible to the CI
+   * gate's manual-job rule). Read through `/pipelines/:id/bridges`, the route every supported
+   * instance serves; GitLab 19.2 added `/trigger_jobs` and deprecated `bridges` (BACKLOG 1495). With
+   * `truncated` when the walk stopped at the binding's `max_pages`, which the adapter hands to the
+   * port as `jobs_truncated` beside the jobs' own.
+   *
+   * Every page is read: a manual trigger job can be on any page, as a manual job can.
+   */
+  pipelineBridges(
+    project: string,
+    pipelineId: number,
+  ): Promise<{ readonly jobs: z.output<typeof gitlabJobSchema>[]; readonly truncated: boolean }>;
   /** § "Retrieve a job log file" (`GET /projects/:id/jobs/:job_id/trace`). */
   jobTrace(project: string, jobId: number): Promise<string | null>;
   /** <https://docs.gitlab.com/api/repository_files/> § "Retrieve a raw file from a repository". */
@@ -747,6 +762,21 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         {
           method: 'GET',
           path: `/projects/${encodeProjectId(project)}/pipelines/${pipelineId}/jobs`,
+          action: 'get_pipeline_status',
+        },
+        100,
+      );
+      return {
+        jobs: parse(z.array(gitlabJobSchema), pages.items, 'get_pipeline_status'),
+        truncated: pages.truncated,
+      };
+    },
+
+    pipelineBridges: async (project, pipelineId) => {
+      const pages = await http.paginate(
+        {
+          method: 'GET',
+          path: `/projects/${encodeProjectId(project)}/pipelines/${pipelineId}/bridges`,
           action: 'get_pipeline_status',
         },
         100,

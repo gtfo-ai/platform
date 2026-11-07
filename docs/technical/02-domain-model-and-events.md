@@ -487,8 +487,12 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 >   succeeded and (d) no unstarted blocking manual job is a **test job** (`isTestJob` in
 >   `@platform/domain`, WP-143's `counted` made one predicate: stage `test` when the pipeline has
 >   one, otherwise every job; a `null` stage counts). It also waits on a `manual` pipeline whose
->   read shows no blocking manual job. A `success` pipeline is held to (a), (b) and the project's
->   list too; `pending`/`running` wait and `failed`/`canceled`/`skipped` fail exactly as before.
+>   read shows no blocking manual job. A `success` pipeline keeps the behaviour before TD-036 (the
+>   coordinator's ruling on #114: GitLab lists `created` jobs on a green pipeline whose jobs
+>   `needs:` an optional manual one) and is asked only the project's named jobs; `pending`/`running`
+>   wait and `failed`/`canceled`/`skipped` fail exactly as before. The jobs include GitLab's
+>   **trigger jobs** (bridges), which its API lists apart — a manual trigger for a downstream e2e
+>   pipeline in stage `test` holds the gate as a manual test job does (the security review of #114).
 > - `pipeline.ci.required_manual_jobs` (technical/12) replaces (d): `[]` drops it, `all` waits on
 >   every held pipeline (before TD-036), a list of exact names waits for exactly those — still
 >   `manual` waits even on a `success` pipeline, ran and failed fails, **skipped by the pipeline's

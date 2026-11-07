@@ -1260,9 +1260,12 @@ export interface TaskRepository {
     value: CiManualNotRun,
   ): Promise<boolean>;
   /**
-   * What the latest **passed** attempt of `stage` left unstarted (S-27.2): the newest attempt closed
-   * `completed`, and its `ci_manual_not_run` — `null` when it recorded none or none has passed. A
-   * stored value that does not parse is refused, never defaulted. The workpad reads it.
+   * What `stage`'s **current pass** left unstarted (S-27.2, the security review of #114): the
+   * `ci_manual_not_run` of the stage's **newest** attempt, only when that attempt closed `completed`
+   * and no stage of the task was sent back (`returned`) after it closed — `null` while a later
+   * attempt is open, after a send-back, when it recorded none or none has passed. A stored value
+   * that does not parse is refused, never defaulted. The workpad reads it, so its CI line is never
+   * about a pass the task has since moved away from.
    */
   latestCiManualNotRun(tx: Transaction, taskId: Id, stage: Slug): Promise<CiManualNotRun | null>;
   /**

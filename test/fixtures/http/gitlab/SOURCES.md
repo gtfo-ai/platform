@@ -77,6 +77,17 @@ carrying its own date.
   job `sentry-release-commit` waits at `manual` with `allow_failure: false`, each job naming its
   `stage`. All three interactions are `documented-adapted`: the shapes are the pages', the values
   and the number of jobs are this corpus's own.
+- `https://docs.gitlab.com/api/jobs/` § "List all trigger jobs by pipeline" (retrieved
+  **2026-11-07**, the security review of #114) — a pipeline's **trigger jobs** (bridges) are their
+  own list: "Lists all trigger jobs for a specified pipeline". The page documents the route as
+  `/pipelines/:pipeline_id/trigger_jobs`, *"introduced in GitLab 19.2"*, with *"`bridges` route
+  deprecated in GitLab 19.2. Use `trigger_jobs` instead"*; the adapter reads `/bridges`, which
+  every instance it supports serves (BACKLOG 1495). The "List all jobs by pipeline" section does
+  not say in words that it leaves trigger jobs out — it documents them under their own section —
+  so the fixtures state that reading in their notes rather than quote it. `pipelines-trigger.json`
+  is the review's case: pipeline 908 held at `sentry-release-commit` with an unstarted manual
+  trigger `e2e` in stage `test`, served only by the bridges list. The empty bridges lists in
+  `pipelines.json` and `pipelines-manual.json` are `inferred` (the empty case is not published).
 - `https://docs.gitlab.com/api/repository_files/` — the raw-file endpoint the CODEOWNERS read uses,
   including its `ref` parameter. The page does not state the status for a missing file, so both
   `404`s here are `inferred` from the REST status table. The **second** `200`, on

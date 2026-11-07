@@ -1039,7 +1039,7 @@ names the rule it understood), and *Start the job in GitLab* as the page's one b
 **A manual job nobody started is not a check** (BD-024's 2026-11-07 amendment). When every job
 that ran is green and only manual jobs are left, CI passes and the task's CI check says *CI passed —
 the manual job sentry-release-commit was not run*, with the job linked. That holds unless one of the
-manual jobs is a **test job** — one in stage `test`, or any job when the pipeline has no `test`
+manual jobs — a manual trigger for another pipeline included — is a **test job** — one in stage `test`, or any job when the pipeline has no `test`
 stage, or a job with no stage at all: a test is never skipped. The check also waits when a job is
 queued behind the held one (a build step your tests need, say), when no job has run yet, and when a
 job that is not allowed to fail failed — which fails the check, as a red pipeline does. To set your

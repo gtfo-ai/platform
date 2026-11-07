@@ -1501,9 +1501,13 @@ export const createPostgresPipelineStore = (
 
     latestCiManualNotRun: async (tx, taskId, stage) => {
       const { rows } = await sqlOf(tx).query<{ ci_manual_not_run: unknown }>(
-        `select ci_manual_not_run from task_stages
-          where task_id = $1 and stage = $2 and state = 'completed'
-          order by attempt desc limit 1`,
+        `select s.ci_manual_not_run from task_stages s
+          where s.task_id = $1 and s.stage = $2 and s.state = 'completed'
+            and s.attempt = (select max(attempt) from task_stages
+                              where task_id = $1 and stage = $2)
+            and not exists (select 1 from task_stages r
+                             where r.task_id = $1 and r.state = 'returned'
+                               and r.exited_at > s.exited_at)`,
         [taskId, stage],
       );
       const value = rows[0]?.ci_manual_not_run ?? null;
