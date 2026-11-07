@@ -29,6 +29,7 @@ import {
 import type { BindingLifecycle } from './binding-lifecycle.js';
 import { cancelTaskCommand, reworkStageCommand } from './commands.js';
 import { staticPipelineIntegrations } from './integrations.js';
+import { setTaskOwnerCommand } from './owner-sync.js';
 import { staticProjectSettings } from './settings.js';
 import { INITIAL_TASK_VERSION, type StoredTask } from './store.js';
 import { CLAIM_REFUSED_COMMENT, ensureTicketClaim } from './ticket-claim.js';
@@ -62,6 +63,8 @@ interface TrackerOptions {
   readonly afterAssign?: () => Promise<void>;
   /** Runs before the platform's unassign reads the assignee — a release racing a re-claim. */
   readonly beforeUnassign?: () => Promise<void>;
+  /** The first this many reads answer no ticket — a port that answered nothing. */
+  readonly nullReads?: number;
 }
 
 /** One ticket's assignee, status and comments, and every lifecycle call made on it, in order. */
@@ -77,6 +80,10 @@ const tracker = (options: TrackerOptions = {}) => {
   const port: Partial<TaskManagementPort> = {
     readTicket: async (ref: TicketRefInput) => {
       reads.push(ref.key);
+      if (reads.length <= (options.nullReads ?? 0)) {
+        // The port's type promises a ticket; `ticketReads.ticket` answers `null` past it.
+        return null as never;
+      }
       return {
         ref,
         issue_type: 'Story',
@@ -1193,5 +1200,328 @@ describe('the release and the claim agree about who holds the ticket (WP-178 (17
     ).toEqual({ kind: 'refused', reason: 'ticket_assigned_elsewhere' });
     expect(ticket.calls.filter((call) => call === 'assignToSelf')).toHaveLength(assignsBefore);
     expect(ticket.state.assignee).toBe('jane');
+  });
+});
+
+// ── S-26.2: the claim keeps a member's ticket ───────────────────────────────
+
+/** A linked member of the project (S-26.2), a linked person below member, and a platform-set owner. */
+const ALICE = '00000000-0000-4000-8000-00000000a11c' as Id;
+const VIEWER = '00000000-0000-4000-8000-0000000000c0' as Id;
+const BOB = '00000000-0000-4000-8000-0000000000b0' as Id;
+
+/**
+ * {@link harnessFor}, with the owner directory seeded (the memory store's divergence 14): `alice`
+ * is a linked member, `viewer` is linked to a user below `member`, `jane` is linked to nobody, and
+ * the binding acts as `agentic-bot`.
+ */
+const memberHarnessFor = (
+  ticket: ReturnType<typeof tracker>,
+  ticketLifecycle: BindingLifecycle | null,
+  options: HarnessOptions = {},
+): PipelineHarness => {
+  const harness = harnessFor(ticket, ticketLifecycle, options);
+  harness.store.seedIdentity('fake-jira', 'alice', ALICE);
+  harness.store.seedIdentity('fake-jira', 'viewer', VIEWER);
+  harness.store.seedProjectMember(PROJECT, ALICE);
+  harness.store.seedProjectMember(PROJECT, BOB);
+  harness.store.seedBindingAccount(PROJECT, 'fake-jira', SELF_ID);
+  return harness;
+};
+
+const assigns = (ticket: ReturnType<typeof tracker>): number =>
+  ticket.calls.filter((call) => call === 'assignToSelf').length;
+
+const ticketUpdated = () =>
+  event('ticket.updated', {
+    project_id: PROJECT,
+    ticket: { ...TICKET },
+    updated_at: '2026-06-01T10:00:00.000Z',
+    changed_fields: ['assignee'],
+    truncated: false,
+  });
+
+describe('S-26.2 — the claim keeps a member’s ticket (BD-031 amendment 2, TD-031 amendment item 5)', () => {
+  it('(1) intake takes a linked member’s ticket with take_assigned_tickets false; an unlinked person or a non-member is still skipped', async () => {
+    for (const [assignee, taken] of [
+      ['alice', true],
+      ['jane', false],
+      ['viewer', false],
+    ] as const) {
+      const ticket = tracker({ assignee });
+      const harness = memberHarnessFor(
+        ticket,
+        lifecycle({ in_progress: 'Doing', take_assigned_tickets: false }),
+        { runsAgents: false },
+      );
+      await harness.publish([ticketMatched()]);
+      expect(harness.store.snapshot().length, assignee).toBe(taken ? 1 : 0);
+      expect(eventsOf(harness, 'ticket.intake.skipped').length, assignee).toBe(taken ? 0 : 1);
+      if (taken) {
+        expect(harness.store.ownershipOf(taskOf(harness).task.id).ownerUserId).toBe(ALICE);
+      }
+      // Intake writes nothing to the tracker either way.
+      expect(assigns(ticket), assignee).toBe(0);
+    }
+  });
+
+  it('(2) the first claim of a member-held ticket writes no assign, records held_by member, moves to in_progress and runs', async () => {
+    const ticket = tracker({ assignee: 'alice' });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    // Canary: before S-26.2 intake skipped this ticket, and with take_assigned_tickets the claim
+    // re-assigned it to the binding's own account.
+    expect(assigns(ticket)).toBe(0);
+    expect(harness.audit.entriesFor('assign_to_self')).toHaveLength(0);
+    expect(ticket.state.assignee).toBe('alice');
+    expect(ticket.calls).toContain('transition:Doing');
+    expect(await claimOf(harness)).toMatchObject({
+      account_id: SELF_ID,
+      status: 'confirmed',
+      in_progress_written: true,
+      held_by: 'member',
+      stale: false,
+    });
+    const claimed = eventsOf(harness, 'ticket.claimed');
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]?.payload).toMatchObject({ held_by: 'member', in_progress_written: true });
+    expect(eventsOf(harness, 'ticket.claim.refused')).toHaveLength(0);
+    expect(runsCreated(harness)).toBeGreaterThan(1);
+    expect(harness.store.ownershipOf(taskOf(harness).task.id).ownerUserId).toBe(ALICE);
+  });
+
+  it('(2) a re-claim after a human return reads the holder first and keeps a linked member’s ticket', async () => {
+    const ticket = tracker({ assignee: 'alice' });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    const stored = await insertTask(harness);
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.tasks.saveTicketClaim(scope.tx, stored.task.id, {
+        account_id: SELF_ID,
+        claimed_at: '2026-06-01T08:00:00.000Z' as StoredTicketClaim['claimed_at'],
+        status: 'confirmed',
+        in_progress_written: true,
+        stale: true,
+        released_at: null,
+        release_cause: null,
+        stale_cause: 'human_return',
+      });
+    });
+    const reads = ticket.reads.length;
+    const outcome = await ensureTicketClaim(claimOptions(harness), stored, {
+      taskId: stored.task.id,
+      ...REFINEMENT_1,
+    });
+    expect(outcome).toEqual({ kind: 'proceed' });
+    // The pre-read a re-claim skipped before S-26.2, and no re-read: the platform wrote nothing.
+    expect(ticket.reads.length - reads).toBe(1);
+    expect(ticket.calls).toEqual(['selfIdentity', 'transition:Doing']);
+    expect(ticket.state.assignee).toBe('alice');
+    expect(await claimRecordOf(harness, stored.task.id)).toMatchObject({
+      held_by: 'member',
+      stale: false,
+      stale_cause: null,
+    });
+    // The pre-read synced the owner (backlog 1087).
+    expect(harness.store.ownershipOf(stored.task.id)).toMatchObject({
+      ownerUserId: ALICE,
+      ownerSource: 'tracker',
+      ticketAssignee: { external_id: 'alice', platform: false },
+    });
+  });
+
+  it('(3) a non-member holder keeps ticket_assigned_elsewhere and its marked comment, with no assign', async () => {
+    const ticket = tracker({ assignee: 'viewer' });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    const stored = await insertTask(harness);
+    const outcome = await ensureTicketClaim(claimOptions(harness), stored, {
+      taskId: stored.task.id,
+      ...REFINEMENT_1,
+    });
+    expect(outcome).toEqual({ kind: 'refused', reason: 'ticket_assigned_elsewhere' });
+    expect(ticket.calls).toEqual(['selfIdentity']);
+    expect(ticket.state.assignee).toBe('viewer');
+    expect(ticket.state.comments.map((comment) => comment.markerId)).toEqual([
+      `agentic:claim-refused:${stored.task.id}`,
+    ]);
+    expect(await claimRecordOf(harness, stored.task.id)).toBeNull();
+  });
+
+  it('(3) take_assigned_tickets re-assigns only a holder who is not a linked member', async () => {
+    for (const [holder, reassigned] of [
+      ['jane', true],
+      ['viewer', true],
+      ['alice', false],
+    ] as const) {
+      const ticket = tracker({ assignee: holder });
+      const harness = memberHarnessFor(
+        ticket,
+        lifecycle({ in_progress: 'Doing', take_assigned_tickets: true }),
+      );
+      const stored = await insertTask(harness);
+      const outcome = await ensureTicketClaim(claimOptions(harness), stored, {
+        taskId: stored.task.id,
+        ...REFINEMENT_1,
+      });
+      expect(outcome, holder).toEqual({ kind: 'proceed' });
+      expect(assigns(ticket), holder).toBe(reassigned ? 1 : 0);
+      expect(ticket.state.assignee, holder).toBe(reassigned ? SELF_ID : holder);
+      const record = await claimRecordOf(harness, stored.task.id);
+      expect(record?.held_by, holder).toBe(reassigned ? undefined : 'member');
+    }
+  });
+
+  it('(4) the claim’s assign sets ticket_assignee in its transaction, and the next owner_sync changes nothing', async () => {
+    const ticket = tracker();
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    const stored = await insertTask(harness);
+    const taskId = stored.task.id;
+    // A maintainer gives the task to Bob on the platform before its first claim.
+    await setTaskOwnerCommand(
+      {
+        unitOfWork: harness.commands.unitOfWork,
+        store: harness.store,
+        ids: harness.ids,
+        clock: harness.clock,
+      },
+      { taskId, actorUserId: VIEWER, actorRole: 'maintainer', targetUserId: BOB },
+    );
+    await ensureTicketClaim(claimOptions(harness), stored, { taskId, ...REFINEMENT_1 });
+    expect(ticket.state.assignee).toBe(SELF_ID);
+    const afterClaim = harness.store.ownershipOf(taskId);
+    expect(afterClaim).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'platform',
+      ticketAssignee: {
+        provider: 'fake-jira',
+        external_id: SELF_ID,
+        display_name: null,
+        platform: true,
+      },
+    });
+    const ownerChanges = eventsOf(harness, 'task.owner.changed').length;
+
+    // The tracker announces the edit the claim made; the duty reads the binding's own account.
+    const reads = ticket.reads.length;
+    await harness.publish([ticketUpdated()]);
+    expect(ticket.reads.length - reads).toBe(1);
+    expect(harness.store.ownershipOf(taskId)).toEqual(afterClaim);
+    expect(eventsOf(harness, 'task.owner.changed')).toHaveLength(ownerChanges);
+  });
+
+  it('a claim whose pre-read answers no ticket syncs nothing: the tracker owner is kept', async () => {
+    // The pre-read answers `null`; the re-read after the assign finds the ticket.
+    const ticket = tracker({ nullReads: 1 });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    const stored = await insertTask(harness);
+    const taskId = stored.task.id;
+    const alice = {
+      provider: 'fake-jira',
+      external_id: 'alice',
+      display_name: null,
+      platform: false,
+    };
+    await harness.memory.transaction(async (scope) => {
+      const written = await harness.store.tasks.saveOwner(scope.tx, taskId, {
+        expected: { ownerUserId: null, ticketAssignee: null },
+        next: {
+          ownerUserId: ALICE,
+          ownerSource: 'tracker',
+          ownerChangedAt: '2026-06-01T08:00:00.000Z' as StoredTicketClaim['claimed_at'],
+          ticketAssignee: alice,
+        },
+      });
+      expect(written).toBe(true);
+    });
+    const outcome = await ensureTicketClaim(claimOptions(harness), stored, {
+      taskId,
+      ...REFINEMENT_1,
+    });
+    expect(outcome).toEqual({ kind: 'proceed' });
+    expect(ticket.reads).toHaveLength(2);
+    // Canary: syncing the null read cleared Alice as a `tracker_sync`.
+    expect(eventsOf(harness, 'task.owner.changed')).toHaveLength(0);
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: ALICE,
+      ownerSource: 'tracker',
+    });
+  });
+
+  it('(5) a cancel never unassigns a member-held ticket', async () => {
+    const ticket = tracker({ assignee: 'alice' });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+    await cancelTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+    });
+    await harness.drain();
+
+    expect(ticket.calls).not.toContain('unassign');
+    expect(harness.audit.entriesFor('unassign')).toHaveLength(0);
+    expect(ticket.state.assignee).toBe('alice');
+    expect(eventsOf(harness, 'ticket.released')[0]?.payload).toMatchObject({
+      unassigned: false,
+      cause: 'cancelled',
+    });
+  });
+
+  it('(5) a Rework never unassigns a member-held ticket, and its re-claim keeps it with them', async () => {
+    const ticket = tracker({ assignee: 'alice' });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    await reworkStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'implementation' as Slug,
+      instructions: 'take the other approach',
+    });
+    await harness.drain();
+
+    expect(ticket.calls).not.toContain('unassign');
+    expect(assigns(ticket)).toBe(0);
+    expect(ticket.state.assignee).toBe('alice');
+    expect(eventsOf(harness, 'ticket.released').at(-1)?.payload).toMatchObject({
+      unassigned: false,
+      cause: 'rework',
+    });
+    expect(await claimOf(harness)).toMatchObject({ held_by: 'member', stale: false });
+    expect(eventsOf(harness, 'ticket.claimed')).toHaveLength(2);
+  });
+
+  it('a Rework’s unassign is recorded as the last-seen assignee, so a platform-set owner survives the re-claim’s read', async () => {
+    const ticket = tracker();
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    await harness.publish([ticketMatched()]);
+    const taskId = taskOf(harness).task.id;
+    await setTaskOwnerCommand(
+      {
+        unitOfWork: harness.commands.unitOfWork,
+        store: harness.store,
+        ids: harness.ids,
+        clock: harness.clock,
+      },
+      { taskId, actorUserId: VIEWER, actorRole: 'maintainer', targetUserId: BOB },
+    );
+    await reworkStageCommand(harness.humanCommands, {
+      taskId,
+      userId: USER,
+      stage: 'implementation' as Slug,
+      instructions: 'take the other approach',
+    });
+    await harness.drain();
+
+    // The release unassigned the binding's account and the re-claim assigned it again.
+    expect(ticket.calls.filter((call) => call === 'unassign')).toHaveLength(1);
+    expect(ticket.state.assignee).toBe(SELF_ID);
+    // Canary: without the release's record, the re-claim's read (nobody) differs from the stored
+    // binding account and costs Bob the task.
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: BOB,
+      ownerSource: 'platform',
+      ticketAssignee: { external_id: SELF_ID, platform: true },
+    });
   });
 });

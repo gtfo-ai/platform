@@ -19,6 +19,14 @@
  * It lives apart from `ticket-lifecycle.ts` because the claim calls it, and importing that module
  * from `ticket-claim.ts` closes a cycle through `jobs.ts`.
  *
+ * **A linked member's ticket is never unassigned** (S-26.2, TD-031's 2026-11-06 amendment item 5):
+ * a claim recorded `held_by: 'member'` assigned nothing, so its release makes **no** `unassign`
+ * call at all — the port's own rule (it unassigns only the binding's own account) would already
+ * leave that person alone, and this does not depend on it. When the release did take the binding's
+ * account off the ticket, `ticket_assignee` becomes nobody in the release's transaction
+ * (`recordReleaseUnassign`), so the next owner sync reads no change and a platform-set owner
+ * survives a *Rework*.
+ *
  * Each provider step fails open with a `warn`; what happened is recorded either way. A `rework` or
  * `stopped` release acts only while the claim is still **stale** — the stale mark is the token, and
  * a re-claim clears it — so a release that finds the claim held again does nothing.
@@ -29,6 +37,7 @@ import { TransactionOpenError } from '../events/open-transaction.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import { integrationsForProject, noRunScopedSecrets, ticketWrites } from './integrations.js';
+import { recordReleaseUnassign } from './owner-sync.js';
 import { PIPELINE_ACTOR } from './store.js';
 import { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
 
@@ -84,13 +93,16 @@ export const releaseTicket = async (
     noRunScopedSecrets(),
   );
   const shadow = task.mode === 'shadow';
-  const unassigned = await failingOpen(logger, taskId, 'unassign', async () => {
-    const result = await ticketWrites(integrations).unassign(task.ticket, {
-      ...writeContext,
-      idempotencyKey: `ticket_release_unassign:${taskId}:${request.keySuffix}`,
-    });
-    return result?.changed === true && !shadow;
-  });
+  // A member-held claim assigned nothing: there is nothing of the platform's to take off (S-26.2).
+  const unassigned =
+    claim.held_by !== 'member' &&
+    (await failingOpen(logger, taskId, 'unassign', async () => {
+      const result = await ticketWrites(integrations).unassign(task.ticket, {
+        ...writeContext,
+        idempotencyKey: `ticket_release_unassign:${taskId}:${request.keySuffix}`,
+      });
+      return result?.changed === true && !shadow;
+    }));
   const pickUpFromWritten =
     pickUpFrom !== null &&
     (await failingOpen(logger, taskId, 'pick_up_from', async () => {
@@ -122,6 +134,13 @@ export const releaseTicket = async (
       released_at: options.clock.now() as IsoDateTime,
       release_cause: cause,
     });
+    if (unassigned) {
+      // The platform's own unassign is the last-seen assignee (S-26.2): the next read is no change.
+      await recordReleaseUnassign(options, scope.tx, {
+        taskId,
+        self: { provider: task.ticket.provider, external_id: claim.account_id },
+      });
+    }
     const event = domainEventSchemasByType['ticket.released'].parse({
       id: options.ids.next(),
       stream_type: 'task',

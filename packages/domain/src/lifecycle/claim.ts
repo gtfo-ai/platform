@@ -11,6 +11,13 @@
  * authenticated as a person's own account cannot tell the platform's claim from that person's own
  * assignment (Q118), and two installations sharing one account both see themselves as the assignee
  * (PROGRESS backlog 538). Both residuals are TD-029's, stated there.
+ *
+ * **A linked member's ticket is never taken** (S-26.2, BD-031's 2026-11-06 amendment 2, TD-031's
+ * 2026-11-06 amendment item 5): an assignee who maps to a `member`-or-above person of the project is
+ * taken at intake whatever `take_assigned_tickets` says, and no claim — first or re-claim — refuses
+ * or re-assigns their ticket. Whether an assignee is such a member is the caller's live answer
+ * (`TaskOwnerDirectory.classifyAssignee`), handed in as a boolean. Everybody else — an unlinked
+ * account, a linked person below `member`, a machine — keeps the rules below unchanged.
  */
 import {
   type ExternalIdentity,
@@ -45,21 +52,69 @@ export const sameAccount = (a: ExternalIdentity, b: ExternalIdentity): boolean =
 /**
  * Intake's question (TD-029 decision 5): on a **claiming** binding, a ticket assigned to somebody
  * who is neither nobody nor the binding's own account creates no task — unless
- * `take_assigned_tickets` is true. An unknown assignee (the ticket could not be read) is not a
- * reason to skip: the claim before the first run asks again and refuses by name.
+ * `take_assigned_tickets` is true, **or the assignee is a linked member of the project** (S-26.2:
+ * their ticket is taken, and stays theirs). An unknown assignee (the ticket could not be read) is
+ * not a reason to skip: the claim before the first run asks again and refuses by name.
  */
 export const intakeSkipsAssignedTicket = (input: {
   readonly lifecycle: TicketLifecycle | null | undefined;
   readonly self: ExternalIdentity | null;
   readonly assignee: ExternalIdentity | null;
+  /** The directory's live answer: the assignee maps to a `member`-or-above person of the project. */
+  readonly assigneeIsLinkedMember: boolean;
 }): boolean => {
   if (!lifecycleClaims(input.lifecycle) || input.lifecycle?.take_assigned_tickets === true) {
     return false;
   }
-  if (input.assignee === null) {
+  if (input.assignee === null || input.assigneeIsLinkedMember) {
     return false;
   }
   return input.self === null || !sameAccount(input.self, input.assignee);
+};
+
+/**
+ * What the claim does with the assignee it read **before** it writes (TD-029 decision 5's WP-177
+ * amendment (a), narrowed by S-26.2) — asked of **every** claim, a re-claim and a shadow claim
+ * included, because a linked member's ticket is kept by all of them:
+ *
+ *  - `keep` — the holder is a linked member of the project: no assign is written, the claim is
+ *    recorded `held_by: 'member'`, and the ticket still moves to `in_progress`;
+ *  - `refuse` — a **first** claim of a normal task finds somebody else holding the ticket (an
+ *    unlinked account, a person below `member`, a machine, another binding's account) and the
+ *    binding does not take assigned tickets: `ticket_assigned_elsewhere`, without the assign;
+ *  - `assign` — everything else: an unassigned ticket, one the binding's own account holds, a
+ *    re-claim after a human return (it takes the ticket back from a person who is not a linked
+ *    member), `take_assigned_tickets`, and a shadow claim, whose writes are `would_have` anyway.
+ */
+export type ClaimPreReadDecision =
+  | { readonly kind: 'keep' }
+  | { readonly kind: 'refuse'; readonly assignee: ExternalIdentity }
+  | { readonly kind: 'assign' };
+
+export const claimPreReadDecision = (input: {
+  readonly self: ExternalIdentity;
+  readonly holder: ExternalIdentity | null;
+  readonly holderIsLinkedMember: boolean;
+  /** {@link ticketClaimIsFirst} of the claim the task holds. */
+  readonly first: boolean;
+  readonly shadow: boolean;
+  readonly takeAssignedTickets: boolean;
+}): ClaimPreReadDecision => {
+  if (input.holder === null) {
+    return { kind: 'assign' };
+  }
+  if (input.holderIsLinkedMember) {
+    return { kind: 'keep' };
+  }
+  if (
+    input.first &&
+    !input.shadow &&
+    !input.takeAssignedTickets &&
+    !sameAccount(input.self, input.holder)
+  ) {
+    return { kind: 'refuse', assignee: input.holder };
+  }
+  return { kind: 'assign' };
 };
 
 /**
@@ -82,7 +137,9 @@ export const ticketClaimNeeded = (claim: StoredTicketClaim | null): boolean =>
  *    meanwhile — after an exhausted release, or before a pending one — is never overwritten.
  *
  * Only a claim stale for a **human return** (or one written before `stale_cause` existed) is a
- * re-claim, which takes the ticket back: the person who returned it may well hold it.
+ * re-claim, which takes the ticket back: the person who returned it may well hold it — unless that
+ * person is a linked member of the project, whose ticket no claim takes (S-26.2,
+ * {@link claimPreReadDecision}).
  */
 export const ticketClaimIsFirst = (claim: StoredTicketClaim | null): boolean =>
   claim === null || claim.released_at !== null || (claim.stale && claim.stale_cause === 'stopped');
