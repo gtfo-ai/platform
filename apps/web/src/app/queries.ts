@@ -259,25 +259,6 @@ export const useProjectExecution = (projectId: string | null) => {
   });
 };
 
-/**
- * {@link useProjectExecution} for several projects at once, asked only while `enabled` — the
- * Workers screen's consequence line (S-26.8a, the M26 UX spec § 1) reads each project's
- * `others_take_unassigned` once its owner opens *Change*, never on the page's load. The keys are
- * {@link useProjectExecution}'s, so a project already read elsewhere is answered from the cache
- * (a disabled query still returns what is cached) and none is read twice.
- */
-export const useProjectsExecution = (projectIds: readonly string[], enabled: boolean) => {
-  const { endpoints } = useServices();
-  return useQueries({
-    queries: projectIds.map((projectId) => ({
-      queryKey: queryKeys.projectExecution(projectId),
-      queryFn: () => endpoints.projectExecution(projectId),
-      enabled,
-      ...FOREVER,
-    })),
-  });
-};
-
 export const useProjectBudgets = (projectId: string | null) => {
   const { endpoints } = useServices();
   return useQuery({

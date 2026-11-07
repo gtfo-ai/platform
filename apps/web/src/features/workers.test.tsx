@@ -650,7 +650,7 @@ describe('the Workers screen', () => {
       claim_projects: [],
     });
     // Somebody else's machine, read only: a stored project the reader cannot see is named by its
-    // key, and one that no longer exists as the card's words for it.
+    // key, and one that no longer exists as *a removed project* (WP-293's words, kept).
     const named = worker({
       id: '00000000-0000-4000-8000-0000000002c2',
       name: 'hana-desktop',
@@ -678,7 +678,7 @@ describe('the Workers screen', () => {
       'This machine takes nothing by itself. You pick runs on its page.',
     );
     expect(sentenceOf(named.id)).toBe(
-      'This machine takes every task, in ACME and a project you left.',
+      'This machine takes every task, in ACME and a removed project.',
     );
     expect(container.querySelector('[data-claim-scope]')).toBeNull();
     expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);

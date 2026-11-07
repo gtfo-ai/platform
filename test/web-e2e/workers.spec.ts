@@ -2,10 +2,11 @@
  * **What this machine takes, on the Workers screen** (S-26.8a, the M26 UX spec § 1), in the built
  * bundle against the fake backend: the signed-in operator (an administrator) owns `jan-mbp` and
  * `night-owl`, and `POST /__test__/workers-others` adds Vojtěch's `vojta-mbp`. The operator changes
- * their own machine through `PUT /api/workers/:id/claim-policy` — the consequence line naming the
- * project whose unassigned tasks nobody else takes, the request in the server's log, *Saved*, and
- * the sentence the stored answer gives — and reads Vojtěch's machine with nothing to press, with
- * his name and the runs its policy leaves for others.
+ * their own machine through `PUT /api/workers/:id/claim-policy` — the request in the server's log,
+ * *Saved*, and the sentence the stored answer gives — and reads Vojtěch's machine with nothing to
+ * press, with his name and the runs its policy leaves for others. The consequence line is **not
+ * said** on this screen yet (BACKLOG 1350), though the project's execution read here says nobody
+ * else takes its unassigned tasks: no execution read is made, and no line is drawn.
  */
 import { expect, test } from '@playwright/test';
 import { HOSTILE, IDS } from './support/fixtures.js';
@@ -24,6 +25,13 @@ test('Workers: the owner changes what their machine takes; somebody else’s rea
   page,
   request,
 }) => {
+  const executionReads: string[] = [];
+  page.on('request', (sent) => {
+    if (/\/api\/projects\/[^/]+\/execution$/.test(new URL(sent.url()).pathname)) {
+      executionReads.push(sent.url());
+    }
+  });
+  // From before the page's load: the screen asks no project's execution, on load or on Change.
   await page.goto('/workers');
   await expect(page.getByRole('heading', { level: 1, name: 'Workers' })).toBeVisible();
 
@@ -36,12 +44,9 @@ test('Workers: the owner changes what their machine takes; somebody else’s rea
 
   await mine.getByRole('button', { name: 'Change' }).click();
   await mine.getByRole('radio', { name: 'Only my tasks' }).check();
-  // The project's execution read says nobody else takes its unassigned tasks: a warning, named as
-  // text (the project's name is hostile).
-  const nowhere = mine.getByText(/have nowhere to run\.$/);
-  await expect(nowhere).toHaveText(
-    `Unassigned tasks in Demo service ${HOSTILE.image} have nowhere to run.`,
-  );
+  await expect(mine.getByRole('radio', { name: 'Only my tasks' })).toBeChecked();
+  // BACKLOG 1350: not said here yet, and nothing asked for it.
+  await expect(mine.getByText(/nowhere to run/)).toHaveCount(0);
   await expect(mine.locator('img')).toHaveCount(0);
 
   await mine.getByRole('radio', { name: 'Only these:' }).check();
@@ -71,4 +76,6 @@ test('Workers: the owner changes what their machine takes; somebody else’s rea
   await expect(theirs.locator('[data-policy-skipped]')).toHaveText(
     'Skipped 3 runs this machine doesn’t take',
   );
+  await expect(page.getByText(/nowhere to run/)).toHaveCount(0);
+  expect(executionReads).toEqual([]);
 });

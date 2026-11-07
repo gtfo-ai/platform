@@ -25,11 +25,10 @@
  * else — an administrator reading every machine — reads the sentence with the owner's name
  * ("Vojtěch’s tasks"), and the server refuses them regardless. A refused save is said in words:
  * `422 claim_scope_empty` here, `403`/`404`/`project_not_eligible` by the card's own words. The
- * card's consequence line ("Unassigned tasks in Autix have nowhere to run.") reads each project's
- * `others_take_unassigned` from its execution read, which is one read per project: they are asked
- * only once the owner presses *Change* — never on the page's load — and a project already read
- * elsewhere is answered from the cache. Until then, and for a read-only card, the line is unknown
- * and says nothing.
+ * card's consequence line ("Unassigned tasks in Autix have nowhere to run.") is **not shown here
+ * yet**: the execution read's `others_take_unassigned` excludes every machine of the reader, so it
+ * would be false for an owner whose other machine takes unassigned work; the card is given no
+ * answer (unknown, so hidden) and no project's execution is asked (BACKLOG 1350).
  *
  * **It refreshes by itself**: no event announces a heartbeat, a handshake or a new worker, so the
  * list is asked again every {@link WORKERS_REFRESH_MS} while the page is open (and in the
@@ -60,11 +59,10 @@ import type { WorkerClaimBlocker, WorkerSummary } from '@platform/contracts';
 import { WORKER_USER_CODE_ALPHABET } from '@platform/contracts';
 import { ServerIcon } from '@primer/octicons-react/ServerIcon';
 import { Link } from '@tanstack/react-router';
-import { type ReactElement, useEffect, useRef, useState } from 'react';
+import { type ReactElement, useEffect, useState } from 'react';
 import { ApiError } from '../api/http.js';
 import {
   useProjects,
-  useProjectsExecution,
   useSession,
   useSettingsCommands,
   useWorkerDevice,
@@ -264,8 +262,8 @@ export const claimPolicySaveRefusal = (error: unknown): string => {
 /**
  * The projects a row's card names. The owner's card offers what the project list answers and
  * nothing else (a chip for a project they cannot see would be refused); a read-only card also
- * names a stored project the reader cannot see by its key, so the sentence never calls a project
- * somebody else still works in "a project you left".
+ * names a stored project the reader cannot see by its key, and one that no longer exists (`key:
+ * null`) as *a removed project* — never the card's *a project you left*, which is the owner's word.
  */
 const cardProjectsOf = (
   worker: WorkerSummary,
@@ -277,17 +275,22 @@ const cardProjectsOf = (
     : [
         ...projects,
         ...(worker.claim_projects ?? []).flatMap((stored) =>
-          stored.key === null || projects.some((project) => project.id === stored.id)
+          projects.some((project) => project.id === stored.id)
             ? []
-            : [{ id: stored.id, name: '', key: stored.key }],
+            : [
+                stored.key === null
+                  ? { id: stored.id, name: WORKERS_POLICY_WORDS.removedProject }
+                  : { id: stored.id, name: '', key: stored.key },
+              ],
         ),
       ];
 
 /**
- * A row's *What this machine takes*. The consequence line's evidence (`others_take_unassigned`, one
- * execution read per project) is asked only once *Change* is pressed — the card is the shared one
- * and says nothing about its disclosure, so the press is observed on the card's own *Change*
- * button (`data-claim-policy-change`) — and a read already in the cache answers before that.
+ * A row's *What this machine takes*. **No consequence line here yet**: the execution read's
+ * `others_take_unassigned` excludes **every** machine of the reader, so an owner whose other
+ * machine takes unassigned work would be told *nowhere to run* falsely. Until the read can exclude
+ * only the machine being edited (the worker session's fix), the card gets no `unassignedHasTaker`
+ * — unknown, so the line is hidden — and nothing is asked (BACKLOG 1350).
  */
 const WorkerPolicy = ({
   worker,
@@ -302,34 +305,13 @@ const WorkerPolicy = ({
   /** The machine's owner only. */
   readonly onSave: ((next: ClaimPolicyValue) => Promise<void>) | null;
 }): ReactElement => {
-  const host = useRef<HTMLDivElement>(null);
-  const [asked, setAsked] = useState(false);
   const editable = onSave !== null;
-  useEffect(() => {
-    const element = host.current;
-    if (element === null || !editable) return;
-    const listener = (event: Event): void => {
-      if (event.target instanceof Element && event.target.closest('[data-claim-policy-change]')) {
-        setAsked(true);
-      }
-    };
-    element.addEventListener('click', listener, true);
-    return () => element.removeEventListener('click', listener, true);
-  }, [editable]);
-  const ids = editable ? projects.map((project) => project.id) : [];
-  const executions = useProjectsExecution(ids, asked);
-  const unassignedHasTaker: Record<string, boolean> = {};
-  ids.forEach((id, index) => {
-    const known = executions[index]?.data?.others_take_unassigned;
-    if (known !== undefined) unassignedHasTaker[id] = known;
-  });
   const skipped = worker.policy_skipped_offers ?? 0;
   return (
-    <div ref={host} className="flex flex-col gap-1" data-worker-policy="">
+    <div className="flex flex-col gap-1" data-worker-policy="">
       <ClaimPolicyCard
         stored={storedClaimPolicyOf(worker)}
         projects={cardProjectsOf(worker, projects, editable)}
-        unassignedHasTaker={unassignedHasTaker}
         surface="workers"
         headingLevel="h2"
         framed={false}

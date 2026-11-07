@@ -1938,10 +1938,8 @@ machine takes** says the machine's setting in the same sentence as its own page 
 takes*, below): on your own machine with **Change**, the same two choices and **Save**; on somebody
 else's — an administrator sees every machine — with their name (*This machine takes **only Vojtěch's
 tasks**, in **all their projects**.*) and nothing to press, because only a machine's owner changes it.
-Under *Only my tasks* the card warns *Unassigned tasks in Autix have nowhere to run.* for a project
-where neither the platform server nor another person's machine takes unassigned tasks; the screen asks
-each project once you press **Change**, so before that, and on somebody else's machine, it says
-nothing. A muted *Skipped 3 runs this machine doesn't take* counts the waiting runs its choice leaves
+The card's warning *Unassigned tasks in Autix have nowhere to run.* is not shown here yet (see section
+13). A muted *Skipped 3 runs this machine doesn't take* counts the waiting runs its choice leaves
 for others. **Details**
 holds when it was registered and last seen, its worker version and the image digests it
 reported. The header counts *2 ready · 1 can't take work · 1 revoked*. The page refreshes by itself

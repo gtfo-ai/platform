@@ -3,8 +3,8 @@
  * `createApp` with a fake server so the real router, query client and endpoint parsers are in the
  * path: per role (the owner changes it, an administrator reads somebody else's with their name, a
  * member is offered nothing on somebody else's), the save's request and its refusals in words, the
- * muted *Skipped …* line, and the consequence line — its evidence (one execution read per project)
- * asked only once *Change* is pressed, and nothing said while it is unknown.
+ * muted *Skipped …* line, and the consequence line — not said here yet, and nothing asked for it
+ * (BACKLOG 1350: the execution read's answer excludes every machine of the reader).
  */
 import type {
   ProjectSummary,
@@ -323,31 +323,31 @@ describe('the runs a policy leaves for others (S-26.8a)', () => {
   });
 });
 
-describe('the consequence line on the Workers screen (S-26.8a)', () => {
-  it('asks the projects’ execution only once Change is pressed, and names the project nobody else takes', async () => {
+describe('the consequence line on the Workers screen (S-26.8a, BACKLOG 1350)', () => {
+  // `others_take_unassigned` excludes every machine of the reader, so the screen does not say the
+  // line yet: it asks no project's execution and gives the card no answer, whatever the read says.
+  it('asks no project’s execution, on load or on Change, and says no line under Only my tasks', async () => {
     const state = world();
     renderWorkers(state);
     const card = await policyOf(MINE);
-    // The page's load asks no project anything (never one read per project per row).
     expect(state.executionReads).toEqual([]);
     const user = userEvent.setup();
     await user.click(within(card).getByRole('button', { name: MACHINE_TAKES_WORDS.change }));
-    await waitFor(() => expect([...state.executionReads].sort()).toEqual([AUTIX, FONTAI].sort()));
-    // The default policy says nothing; *Only my tasks* names Autix, whose unassigned tasks have
-    // no other taker — and not Fontai, which has one.
-    expect(card.textContent).not.toContain('nowhere to run');
     await user.click(within(card).getByRole('radio', { name: 'Only my tasks' }));
-    expect(
-      await within(card).findByText('Unassigned tasks in Autix have nowhere to run.'),
-    ).toBeTruthy();
+    // The controls are open and the draft is *Only my tasks*, and Autix's read would say false.
+    expect(within(card).getByRole('radio', { name: 'Only my tasks' })).toHaveProperty(
+      'checked',
+      true,
+    );
+    expect(card.textContent).not.toContain('nowhere to run');
+    expect(state.executionReads).toEqual([]);
   });
 
-  it('says nothing while it is unknown: a read without the answer, or a read-only card', async () => {
+  it('says no line for a stored Only my tasks, mine or somebody else’s', async () => {
     const state = world({
       role: 'admin',
-      othersTake: { [AUTIX]: undefined, [FONTAI]: undefined },
       workers: [
-        workerFixture({ id: MINE, claim_policy: 'mine_and_unassigned' }),
+        workerFixture({ id: MINE, claim_policy: 'mine' }),
         workerFixture({
           id: THEIRS,
           name: 'vojta-mbp',
@@ -357,15 +357,10 @@ describe('the consequence line on the Workers screen (S-26.8a)', () => {
       ],
     });
     renderWorkers(state);
-    const mine = await policyOf(MINE);
-    const user = userEvent.setup();
-    await user.click(within(mine).getByRole('button', { name: MACHINE_TAKES_WORDS.change }));
-    await user.click(within(mine).getByRole('radio', { name: 'Only my tasks' }));
-    await waitFor(() => expect(state.executionReads.length).toBe(2));
-    expect(mine.textContent).not.toContain('nowhere to run');
-    // Somebody else's `mine` machine, read only: no evidence is asked for it, so nothing is said.
-    expect((await policyOf(THEIRS)).textContent).not.toContain('nowhere to run');
+    await policyOf(MINE);
+    await policyOf(THEIRS);
     expect(screen.queryByText(/nowhere to run/)).toBeNull();
+    expect(state.executionReads).toEqual([]);
   });
 });
 

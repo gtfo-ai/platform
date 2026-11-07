@@ -1563,9 +1563,10 @@ export const projectExecution = projectExecutionResponseSchema.parse({
 
 /**
  * S-26.8a: the same project with no server claimant and no other person's machine taking its
- * unassigned tasks — served with {@link workersWithOthers}, so the Workers screen's consequence
- * line names the project once an owner chooses *Only my tasks*. (`vojta-mbp` takes only its
- * owner's tasks, so it is not such a machine.)
+ * unassigned tasks — served with {@link workersWithOthers}. The Workers screen must still say no
+ * consequence line (BACKLOG 1350: the read excludes every machine of the reader, so the screen does
+ * not use it yet), and `workers.spec.ts` holds that against this answer. (`vojta-mbp` takes only
+ * its owner's tasks, so it is not such a machine.)
  */
 export const projectExecutionNoTaker = projectExecutionResponseSchema.parse({
   ...projectExecution,
