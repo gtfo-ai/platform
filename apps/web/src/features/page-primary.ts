@@ -21,8 +21,10 @@
  *
  * The order, the first that applies: the take-over to hand back, the agent's question, an approval
  * the reader may decide, the task's own cap, a manual CI job only a person can start, then the
- * stop's own way out — *Take it* for a ticket somebody else holds (S-25.14, nothing at all when the
- * reader may not take it), *Retry stage…* for a structured stop with no approval pending — and a
+ * stop's own way out — for a ticket somebody else holds, *Take it* while nobody owns the task and
+ * the reader may take it (S-25.14), *Give it back to the agent* once an owner is set and the reader
+ * may resume (S-25.15 part B: the claim keeps the ticket for that owner, TD-031 item 5), nothing
+ * otherwise — *Retry stage…* for a structured stop with no approval pending — and a
  * resume last. A stop beside a pending approval keeps the rule before S-25.15 (review of #118):
  * *Review plan* for a reader who may decide it, else *Resume*, which re-enters that approval's wait
  * rather than running the stage past it, else none.
@@ -33,8 +35,9 @@ import type { OwnerAction } from './task-owner.js';
 import { heldElsewhereStop } from './ticket-held-words.js';
 
 /**
- * The page's one primary action. The header draws `hand_back` … `start_job` and `resume`; `take`
- * and `retry_stage` are the callout's own buttons, drawn amber there.
+ * The page's one primary action. The header draws `hand_back` … `start_job` and `resume`; `take`,
+ * `give_back` (the held-elsewhere box's *Give it back to the agent*, a resume) and `retry_stage`
+ * are the callout's own buttons, drawn amber there — and the header's *Resume* is then a menu item.
  */
 export type TaskPrimaryAction =
   | 'hand_back'
@@ -43,6 +46,7 @@ export type TaskPrimaryAction =
   | 'raise_budget'
   | 'start_job'
   | 'take'
+  | 'give_back'
   | 'retry_stage'
   | 'resume'
   | null;
@@ -67,11 +71,15 @@ export interface PrimaryFacts {
   readonly ciHeldLink?: boolean;
   /**
    * The task stopped because its ticket is somebody else's (S-25.14, `heldElsewhereStop`): a
-   * resume would only stop it again, so the primary is the callout's *Take it*, or none.
+   * resume before anybody owns it would stop it again, so the primary is the callout's *Take it*
+   * while nobody does, its *Give it back to the agent* once somebody does (S-25.15 part B, the
+   * claim keeps the ticket for them), or none.
    */
   readonly heldElsewhere?: boolean;
   /** Nobody owns the task and the reader may take it (the owner control's `take` offer). */
   readonly canTake?: boolean;
+  /** Somebody owns the task (`task.owner`): with `heldElsewhere`, the box offers the hand-back. */
+  readonly owned?: boolean;
   /**
    * The task waits for a person after a structured stop whose next step is "retry the stage", and
    * the callout draws *Retry stage…* (the task has a stage to address and was not merged).
@@ -95,11 +103,11 @@ export const taskPrimaryAction = (input: PrimaryFacts): TaskPrimaryAction => {
   if (input.ciHeldLink === true) {
     return 'start_job';
   }
-  if (input.heldElsewhere === true) {
-    return input.canTake === true ? 'take' : null;
-  }
   const resumable =
     input.canResume !== false && (input.state === 'paused' || input.state === 'needs_human');
+  if (input.heldElsewhere === true) {
+    return input.canTake === true ? 'take' : input.owned === true && resumable ? 'give_back' : null;
+  }
   // `retry-stage` and `resume` are the same role on the server (`task.retry_stage` and
   // `task.resume` are both a member's) and both admit `needs_human`; the read carries the second.
   // Review of #118: never over a pending approval (one the reader may not decide reaches here) —
@@ -148,6 +156,7 @@ export const taskPagePrimary = (
     ciHeldLink: gateWait !== null && gateWaitHeld(gateWait) && gateWaitJobUrl(gateWait) !== null,
     heldElsewhere: heldElsewhereStop(detail),
     canTake: (task.owner ?? null) === null && context.ownerOffers.includes('take'),
+    owned: (task.owner ?? null) !== null,
     stopRetry: detail.stop !== null && context.stageOptions > 0 && !context.merged,
   });
 };

@@ -261,7 +261,7 @@ that they aren't a linked member of this project when the platform cannot hand t
 **Take it** or **Assign…** (the same confirmation as the header's, which says when Jira is assigned too),
 **Link account…** for an administrator, **Open in Jira** and **Cancel task…** — and the header's owner line then
 reads *Unassigned* with no buttons of its own, so there is one **Take it** on the page. Once the task has an owner,
-**Give it back to the agent** runs the stage again: the claim keeps the ticket for that owner even while Jira still
+**Give it back to the agent** (then the page's amber button) runs the stage again: the claim keeps the ticket for that owner even while Jira still
 shows the other person, and the callout says so (*"Jira still shows Vojtěch Kaizr, which doesn't stop the agent."*,
 or that the owner is being assigned in Jira when the project writes owners back). The platform's own account of the
 stop is under *Details* (since S-25.14). On the board card, Home's *Needs you* and the Inbox the stop reads

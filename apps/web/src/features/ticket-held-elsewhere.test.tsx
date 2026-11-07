@@ -471,6 +471,12 @@ describe('the ways out, by role', () => {
     };
     expect(taskPrimaryAction(base)).toBe('resume');
     expect(taskPrimaryAction({ ...base, heldElsewhere: true })).toBeNull();
+    expect(taskPrimaryAction({ ...base, heldElsewhere: true, canTake: true })).toBe('take');
+    // S-25.15 part B: once an owner is set, the box's hand-back — for a reader who may resume.
+    expect(taskPrimaryAction({ ...base, heldElsewhere: true, owned: true })).toBe('give_back');
+    expect(
+      taskPrimaryAction({ ...base, heldElsewhere: true, owned: true, canResume: false }),
+    ).toBeNull();
     // A take-over to hand back still comes first.
     expect(taskPrimaryAction({ ...base, canHandBack: true, heldElsewhere: true })).toBe(
       'hand_back',
@@ -547,7 +553,8 @@ describe('taking it, and what follows', () => {
     const back = await within(held).findByRole('button', { name: 'Give it back to the agent' });
     expect(within(held).queryByRole('button', { name: 'Take it' })).toBeNull();
     expect(within(held).queryByRole('button', { name: 'Assign…' })).toBeNull();
-    expect(primaryLabels(screen.getByRole('main'))).toEqual([]);
+    // The page's one amber primary (S-25.15 part B), and the header's Resume gives way to it.
+    expect(primaryLabels(screen.getByRole('main'))).toEqual(['Give it back to the agent']);
     await user.click(back);
     await waitFor(() => {
       expect(sent.map((entry) => entry.path)).toEqual([`/api/tasks/${TASK}/resume`]);
@@ -558,6 +565,8 @@ describe('taking it, and what follows', () => {
     start(detail(AS.member, OWNED_AND_WRITTEN_BACK), 'member');
     const held = await box();
     await within(held).findByRole('link', { name: 'Open in Jira' });
+    // Nothing amber at all: the hand-back is the primary only for a reader who may resume.
+    expect(primaryLabels(screen.getByRole('main'))).toEqual([]);
     expect(held.querySelector('[data-held-owned="ready"]')).not.toBeNull();
     expect(within(held).queryByRole('button', { name: 'Give it back to the agent' })).toBeNull();
   });
@@ -603,6 +612,26 @@ describe('taking it, and what follows', () => {
     await waitFor(() => {
       expect(sent.map((entry) => entry.path)).toEqual([`/api/tasks/${TASK}/resume`]);
     });
+  });
+
+  // The coordinator's decision on #120: once an owner is set, the hand-back is the amber primary.
+  it.each([
+    ['the write-back is under way', { owner_writes_back: true }],
+    ['Jira still shows somebody else', { owner_writes_back: false }],
+    ['nobody else holds the ticket', OWNED_AND_WRITTEN_BACK],
+  ] as const)('draws exactly one amber button once the task is taken — %s', async (_name, over) => {
+    start(
+      detail(AS.maintainer, { owner: { user_id: ME, name: 'Fake Operator' }, ...over }),
+      'maintainer',
+    );
+    const held = await box();
+    const back = await within(held).findByRole('button', { name: 'Give it back to the agent' });
+    await waitFor(() => {
+      expect(primaryLabels(screen.getByRole('main'))).toEqual(['Give it back to the agent']);
+    });
+    expect(back.className).toContain('border-primary-line');
+    // The header draws no Resume beside it: it is in the ··· menu.
+    expect(within(screen.getByRole('main')).queryByRole('button', { name: 'Resume' })).toBeNull();
   });
 
   it('offers no hand-back before anybody owns the task', async () => {

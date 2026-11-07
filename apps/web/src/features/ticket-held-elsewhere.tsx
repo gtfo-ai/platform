@@ -23,9 +23,10 @@
  * - *Cancel task…* — the existing cancel confirmation (`can_cancel`).
  *
  * **One amber primary** (`./page-primary.ts`, the page's one decision, passed in as `primary`):
- * *Take it*, when the reader may take it and nothing else on the page is the primary; otherwise
- * none — the header's *Resume* gives way to it, because resuming before somebody owns the task
- * only stops it again. The escalation's brief is kept under a collapsed *Details*, as for every
+ * *Take it* while nobody owns the task and the reader may take it; once an owner is set, *Give it
+ * back to the agent* when the reader may resume (S-25.15 part B); otherwise none. The header's
+ * *Resume* gives way to either (it is a menu item then), because a resume stops the task again
+ * before anybody owns it. The escalation's brief is kept under a collapsed *Details*, as for every
  * structured stop (the review of #111).
  */
 import type { TaskDetailResponse } from '@platform/contracts';
@@ -149,6 +150,7 @@ export const HeldElsewhere = ({
         {mayHandBack ? (
           <Button
             size="sm"
+            tone={primary === 'give_back' ? 'primary' : 'default'}
             data-held-action="hand_back"
             disabled={commands.resume.isPending}
             onClick={() => {

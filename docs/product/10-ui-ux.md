@@ -133,8 +133,8 @@ ticket is someone else's says whose it is, and offers the ways out in the box.**
   - *Link account…* (administrators, unlinked person only);
   - *Open in Jira*;
   - *Cancel task*.
-  After an owner is set, the next step is *Hand back*. One amber primary: *Take it* when the reader may take it,
-  otherwise none.
+  After an owner is set, the next step is *Hand back*. One amber primary: *Take it* while nobody owns it and the reader may
+  take it; once an owner is set, *Give it back to the agent* (if the reader may resume); otherwise none.
 - On the board card, and on Home and the Inbox rows, the short form is "Waiting for: Vojtěch Kaizr's Jira ticket".
 
 *S-25.14's wording (review of #115, 2026-11-07).* The read cannot tell a person with no linked account from a linked
@@ -142,7 +142,7 @@ one below *member* (both have no `user_id`), so the added sentence is "*Vojtěch
 project.", which is true of both. *Hand back* is the existing *Resume*, worded *Give it back to the agent*. Since S-25.15 (part B) it
 is offered as soon as the task has an owner and the reader may resume it: the claim **keeps** the ticket for an owner
 set on the platform even while the tracker still names somebody else (TD-031's 2026-11-07 amendment, item 5), so the
-hand-back no longer waits for the tracker. The box says "It has an owner now. Give it back to the agent and it runs
+hand-back no longer waits for the tracker. It is then the page's amber primary, and the header's *Resume* is in the `···` menu. The box says "It has an owner now. Give it back to the agent and it runs
 the stage it stopped at again.", and adds what the tracker shows only while it is still somebody else: "Jira is being
 assigned to *Petra*." when owners are written back, otherwise "Jira still shows *Vojtěch Kaizr*, which doesn't stop
 the agent." While the box offers *Take it* / *Assign…*, the header's owner line reads *Unassigned* with no buttons of

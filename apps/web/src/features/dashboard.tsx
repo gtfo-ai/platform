@@ -377,6 +377,11 @@ const NeedsYouBox = ({
     'needs_human',
   );
 
+  // When each stopped task stopped (the Inbox read's `escalated`, S-25.15 part B): the row's time,
+  // as the Inbox's is — the task's last update only for one the read does not list.
+  const stoppedAt = new Map(
+    (inbox.data?.escalated ?? []).map((row) => [row.task_id, row.at] as const),
+  );
   const inboxTasks = new Set([
     ...(inbox.data?.questions ?? []).map((question) => question.task_id),
     ...(inbox.data?.approvals ?? []).map((approval) => approval.task_id),
@@ -435,7 +440,7 @@ const NeedsYouBox = ({
             ticket: task.ticket.key,
             stage: task.current_stage ?? null,
             text: task.ticket_title ?? 'Waiting for a person to decide what happens next',
-            at: task.updated_at,
+            at: stoppedAt.get(task.id) ?? task.updated_at,
             // The meta line names the stage, so the generic form does not say it twice.
             stop: escalationShort({ ...task, reason: task.escalation_reason }, { stage: false }),
           }),

@@ -575,7 +575,7 @@ export const InboxScreen = (): ReactElement => {
               size="spacious"
               icon={<BellIcon size={24} />}
               title="Nothing needs you"
-              hint="Questions an agent cannot answer itself, and approvals a maintainer owes, land here — and in the ticket and in chat at the same time. The first answer anywhere wins."
+              hint="Questions an agent cannot answer itself, approvals a maintainer owes, CI jobs only a person can start and tasks stopped for a person land here. Questions and approvals reach the ticket and chat at the same time, and the first answer anywhere wins."
             />
           ) : null}
           {settled && total > 0 && (shown > 0 || shownEscalated.length === 0) ? (
