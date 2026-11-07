@@ -31,23 +31,11 @@ import {
   claimBlockerLines,
   configFieldLabel,
   GATE_LABEL,
-  INTEGRATION_CURRENT_HEALTH_LABEL,
-  INTEGRATION_HEALTH_LABEL,
-  INTEGRATION_ROLE_GROUPS,
-  INTEGRATION_TYPE_LABEL,
-  INTEGRATION_TYPE_PURPOSE,
   isUpdating,
-  LOOP_LABEL,
-  LOOP_ROUND_LABEL,
   leadingClaimBlocker,
-  loopLabel,
-  loopRoundLabel,
-  ordinal,
   QUESTION_STATUS_LABEL,
-  READINESS_CRITERION_LABEL,
   ROLE_LABEL,
   RUN_STATUS_LABEL,
-  readinessCriterionLabel,
   runSubject,
   STAGE_LABEL,
   STAGE_STATE_LABEL,
@@ -60,6 +48,15 @@ import {
   WORKER_CLAIM_BLOCKER_WORDS,
   WORKER_PAUSE_REASON_LABEL,
 } from './humanize.js';
+import {
+  INTEGRATION_CURRENT_HEALTH_LABEL,
+  INTEGRATION_HEALTH_LABEL,
+  INTEGRATION_ROLE_GROUPS,
+  INTEGRATION_TYPE_LABEL,
+  INTEGRATION_TYPE_PURPOSE,
+} from './words/integrations.js';
+import { LOOP_LABEL, LOOP_ROUND_LABEL, loopLabel, loopRoundLabel, ordinal } from './words/loops.js';
+import { READINESS_CRITERION_LABEL, readinessCriterionLabel } from './words/readiness-criteria.js';
 
 const VOCABULARIES = [
   ['task state', taskStateSchema.options, TASK_STATE_LABEL],

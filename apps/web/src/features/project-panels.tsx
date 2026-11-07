@@ -39,16 +39,7 @@ import { Button } from '../ui/button.js';
 import { ConfirmDialog } from '../ui/confirm-dialog.js';
 import { DetailsDisclosure } from '../ui/details.js';
 import { Flash } from '../ui/flash.js';
-import {
-  BUDGET_SCOPE_LABEL,
-  BUDGET_WINDOW_LABEL,
-  KNOWLEDGE_PROPOSAL_KIND_LABEL,
-  KNOWLEDGE_PROPOSAL_SOURCE_LABEL,
-  KNOWLEDGE_PROPOSAL_STATUS_LABEL,
-  KNOWLEDGE_PROPOSAL_TYPE_LABEL,
-  REPOSITORY_STATUS_LABEL,
-  stageLabel,
-} from '../ui/humanize.js';
+import { REPOSITORY_STATUS_LABEL, stageLabel } from '../ui/humanize.js';
 import {
   Badge,
   Card,
@@ -67,6 +58,14 @@ import { Skeleton } from '../ui/skeleton.js';
 import { StatusIcon } from '../ui/status.js';
 import { CodeText, JsonView, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import {
+  BUDGET_SCOPE_LABEL,
+  BUDGET_WINDOW_LABEL,
+  KNOWLEDGE_PROPOSAL_KIND_LABEL,
+  KNOWLEDGE_PROPOSAL_SOURCE_LABEL,
+  KNOWLEDGE_PROPOSAL_STATUS_LABEL,
+  KNOWLEDGE_PROPOSAL_TYPE_LABEL,
+} from '../ui/words/settings.js';
 import { PipelineFlow } from '../viz/flow/flow-view.js';
 import { ProjectBudgets } from './operating-mode.js';
 

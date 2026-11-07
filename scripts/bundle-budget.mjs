@@ -45,9 +45,9 @@
  *
  * ## And what must not be in it at all
  *
- * A library TD-033 makes lazy (`LAZY_ONLY`, today `@xyflow/react`) is refused in any initial asset
- * by a marker string of its own, whatever the total — a budget with room to spare would otherwise
- * absorb it silently.
+ * A library TD-033 makes lazy (`LAZY_ONLY`, today `@xyflow/react` — and, since S-25.13, Base UI's
+ * Menu) is refused in any initial asset by a marker string of its own, whatever the total — a
+ * budget with room to spare would otherwise absorb it silently.
  *
  * ## Two pages, two budgets (WP-292)
  *
@@ -119,7 +119,14 @@ export const initialAssets = (html) => {
  * budget still holds. A marker that stopped matching would make this check pass vacuously, which
  * `scripts/bundle-budget.test.ts` covers by planting it.
  */
-export const LAZY_ONLY = [{ name: '@xyflow/react', marker: 'react-flow__' }];
+export const LAZY_ONLY = [
+  { name: '@xyflow/react', marker: 'react-flow__' },
+  // Base UI's Menu (S-25.13): 21 kB of the initial graph until `ui/action-menu.tsx` loaded it with
+  // `import()` (`ui/action-menu-base.tsx`). Its root and positioner ask whether the parent is a
+  // `menubar`, a word nothing else in the application's built code carries (measured over every
+  // chunk) — so a static import of `@base-ui/react/menu` from an eager module fails here by name.
+  { name: "@base-ui/react's Menu", marker: 'menubar' },
+];
 
 /** `[library, asset]` for every lazy-only library found in an initial asset. */
 export const lazyOnlyViolations = (contents) => {

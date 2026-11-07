@@ -11,7 +11,7 @@
  *
  * Plain data and no React, so it is tested alone.
  */
-import type { BoardOwnerFilter } from '../ui/humanize.js';
+import type { BoardOwnerFilter } from '../ui/words/owners.js';
 
 /** The URL's filter: `me` or `none`; `undefined` is no filter in the URL. */
 export type UrlOwnerFilter = Exclude<BoardOwnerFilter, 'all'>;

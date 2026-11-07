@@ -42,12 +42,7 @@ import { ActionMenu, ActionMenuItem, ActionMenuSeparator } from '../ui/action-me
 import { ForAdministrators } from '../ui/admin-notes.js';
 import { Button, IconButton } from '../ui/button.js';
 import { Dialog } from '../ui/dialog.js';
-import {
-  choiceLabel,
-  configFieldLabel,
-  INTEGRATION_CURRENT_HEALTH_LABEL,
-  type IntegrationCurrentHealthStatus,
-} from '../ui/humanize.js';
+import { choiceLabel, configFieldLabel } from '../ui/humanize.js';
 import { ErrorNotice, Field, formatDateTime } from '../ui/kit.js';
 import { ListBox, ListRow } from '../ui/list-box.js';
 import { Select } from '../ui/select.js';
@@ -55,6 +50,10 @@ import { Skeleton } from '../ui/skeleton.js';
 import type { Status } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import {
+  INTEGRATION_CURRENT_HEALTH_LABEL,
+  type IntegrationCurrentHealthStatus,
+} from '../ui/words/integrations.js';
 
 export type ConfigField = IntegrationProvider['config_fields'][number];
 

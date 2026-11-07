@@ -36,17 +36,16 @@ import { type ReactElement, useId, useState } from 'react';
 import { useProjectBindings, useProjectExecution, useSettingsCommands } from '../app/queries.js';
 import { buttonClassName } from '../ui/button.js';
 import { DetailsDisclosure } from '../ui/details.js';
-import {
-  leadingClaimBlocker,
-  PROJECT_WORKER_REASON_WORDS,
-  WAITING_CLOSED_REASON_WORDS,
-  type WaitingClosedReason,
-  wordInSentence,
-} from '../ui/humanize.js';
+import { leadingClaimBlocker, wordInSentence } from '../ui/humanize.js';
 import { Button, Card, ErrorNotice, Field } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { StatusIcon } from '../ui/status.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import {
+  PROJECT_WORKER_REASON_WORDS,
+  WAITING_CLOSED_REASON_WORDS,
+  type WaitingClosedReason,
+} from '../ui/words/project-execution.js';
 
 type Mode = 'server_only' | 'workers_only' | 'hybrid';
 type Prefer = 'server' | 'workers';

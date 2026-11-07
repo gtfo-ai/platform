@@ -39,13 +39,14 @@ import { Avatar } from '../ui/avatar.js';
 import { Blankslate } from '../ui/blankslate.js';
 import { Button } from '../ui/button.js';
 import { DetailsDisclosure } from '../ui/details.js';
-import { AUDIT_ENTITY_FILTER_LABEL, auditEntityLabel, configFieldLabel } from '../ui/humanize.js';
+import { configFieldLabel } from '../ui/humanize.js';
 import { ErrorNotice, formatDateTime, formatInteger } from '../ui/kit.js';
 import { ListBox, ListBoxHeader, ListRow } from '../ui/list-box.js';
 import { PageHeader } from '../ui/page-header.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { JsonView, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { AUDIT_ENTITY_FILTER_LABEL, auditEntityLabel } from '../ui/words/settings.js';
 
 /** The filter's value for "every type". */
 const ALL = 'all';

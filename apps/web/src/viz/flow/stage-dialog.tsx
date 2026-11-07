@@ -35,17 +35,11 @@ import { useTopics } from '../../realtime/provider.js';
 import { ACTIVITY_META } from '../../ui/activity.js';
 import { Button } from '../../ui/button.js';
 import { Dialog } from '../../ui/dialog.js';
-import {
-  ARTIFACT_TYPE_LABEL,
-  eventPhrase,
-  LOOP_DEFINITION,
-  loopLabel,
-  ROLE_LABEL,
-  stageLabel,
-} from '../../ui/humanize.js';
+import { ARTIFACT_TYPE_LABEL, eventPhrase, ROLE_LABEL, stageLabel } from '../../ui/humanize.js';
 import { formatElapsed, formatRunCost } from '../../ui/kit.js';
 import { StateLabel, type Status } from '../../ui/status.js';
 import { TerminalLines, UntrustedText } from '../../ui/untrusted.js';
+import { LOOP_DEFINITION, loopLabel } from '../../ui/words/loops.js';
 import { ActivityList } from './activity-list.js';
 import { activityRows, logLines } from './activity-rows.js';
 import type { FlowGraph, FlowNode, FlowState } from './model.js';

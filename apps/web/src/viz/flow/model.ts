@@ -26,8 +26,9 @@ import type {
 } from '@platform/contracts';
 import { latestRunOf } from '../../features/stage-timeline.js';
 import { type ActivityResult, activityOf, type LatestEntry } from '../../ui/activity.js';
-import { loopLabel, stageLabel } from '../../ui/humanize.js';
+import { stageLabel } from '../../ui/humanize.js';
 import { type PhaseState, phaseStagesFor } from '../../ui/phase-track.js';
+import { loopLabel } from '../../ui/words/loops.js';
 
 /** A stage's state on the canvas: `PhaseTrack`'s six, plus a stage the pipeline walks over. */
 export type FlowState = PhaseState | 'disabled';

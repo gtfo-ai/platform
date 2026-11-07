@@ -69,7 +69,7 @@ import {
 } from '../ui/action-menu.js';
 import { activityOf } from '../ui/activity.js';
 import { buttonClassName } from '../ui/button.js';
-import { stageLabel, titleCase, trackerName } from '../ui/humanize.js';
+import { stageLabel, titleCase } from '../ui/humanize.js';
 import { Badge, Button, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PageHeader } from '../ui/page-header.js';
 import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
@@ -77,6 +77,7 @@ import { StateLabel } from '../ui/status.js';
 import { taskStateLabel, taskStatus } from '../ui/task-status.js';
 import { DownloadLink, ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { trackerName } from '../ui/words/owners.js';
 import { approvalCardId } from './approval-card.js';
 import { reviewVerb } from './approval-text.js';
 import {

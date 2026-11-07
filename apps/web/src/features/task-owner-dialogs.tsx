@@ -32,11 +32,11 @@ import { useOwnerCandidates } from '../app/queries.js';
 import { Button } from '../ui/button.js';
 import { ConfirmDialog } from '../ui/confirm-dialog.js';
 import { Dialog } from '../ui/dialog.js';
-import { OWNER_WORDS } from '../ui/humanize.js';
 import { ErrorNotice } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { OWNER_WORDS } from '../ui/words/owners.js';
 import { ASSIGN_WORDS } from './owner-assign-words.js';
 import { showsSomeoneElse, type TrackerShows, trackerShowsFor } from './tracker-shows.js';
 

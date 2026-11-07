@@ -163,6 +163,7 @@ const MIRROR_OWN_FILES: readonly string[] = [
 const MIRROR_SUPPORT_FILES: readonly string[] = [
   'test/support/property-seed.ts',
   'test/support/git-environment.ts',
+  'test/support/web-lazy-chunks.ts',
   'test/integration/support/global-setup.ts',
 ];
 
