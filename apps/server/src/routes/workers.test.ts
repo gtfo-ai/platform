@@ -567,7 +567,7 @@ describe('GET /api/workers and DELETE /api/workers/:id', () => {
 
   describe('what a machine takes: PUT /api/workers/:id/claim-policy (S-26.4)', () => {
     const OTHER_PROJECT = '00000000-0000-4000-8000-0000002315b3';
-    const put = (instance: FastifyInstance, workerId: string, payload: unknown) =>
+    const put = (instance: FastifyInstance, workerId: string, payload: Record<string, unknown>) =>
       instance.inject({ method: 'PUT', url: `/api/workers/${workerId}/claim-policy`, payload });
     const policyAudits = (store: MemoryWorkerStore) =>
       store.audit.filter((row) => row.action === 'worker.claim_policy');

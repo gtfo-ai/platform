@@ -15,7 +15,8 @@
  *     user's head start, for an excluded worker, while paused by a usage limit or by its owner; and
  *     admitted outside the scope.
  *  4. **The list is the claim**: `claimable` over one fixture set equals the set a pick admits —
- *     every listed offer claimable, every unlisted open offer refused (each pick rolled back).
+ *     every listed offer claimable, every unlisted open offer refused (each pick rolled back) —
+ *     inside the worker's project list, which narrows the list since S-26.4 (a pick ignores it).
  *  5. **One winner**: a pick racing the server claimant and a second worker over one offer — exactly
  *     one claims it, over 200 iterations.
  *  6. **Routing (§5)**: an assignee whose worker is pick-only, or whose scope leaves the project out,
@@ -482,15 +483,23 @@ describe('the list is the claim (WP-293, the claim-scope amendment §4)', () => 
         routing: workersRouting({ workersFrom: null, serverFrom: PAST }),
       }),
     ];
+    // S-26.4 (TD-031's 2026-11-06 amendment item 7): the list is narrowed by the project list,
+    // and the pick still ignores it — so inside the scope the list is the claim, and B's offer is
+    // admitted by a pick without being listed.
     const list = await listed(w);
-    expect(list.map((offer) => offer.runId)).toEqual([fixtures[1], fixtures[0]]);
-    expect(list.map((offer) => offer.automatic)).toEqual([false, true]);
+    expect(list.map((offer) => offer.runId)).toEqual([fixtures[0]]);
+    expect(list.map((offer) => offer.automatic)).toEqual([true]);
     expect(list[0]).toMatchObject({ kind: 'stage', stage: 'implementation', role: 'developer' });
     const admitted: Id[] = [];
     for (const runId of fixtures) {
       if ((await pick(w, runId, false)) !== null) admitted.push(runId);
     }
-    expect(new Set(admitted)).toEqual(new Set(list.map((offer) => offer.runId)));
+    expect(new Set(admitted)).toEqual(new Set([fixtures[0], fixtures[1]]));
+    // Every project: the list and the pick agree over the whole fixture set.
+    await setScope(w, null);
+    const everyProject = await listed(w);
+    expect(everyProject.map((offer) => offer.runId)).toEqual([fixtures[1], fixtures[0]]);
+    expect(new Set(admitted)).toEqual(new Set(everyProject.map((offer) => offer.runId)));
     // Probes only: every fixture is still open.
     for (const runId of fixtures) expect(await offerState(runId)).toBe('open');
   });

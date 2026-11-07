@@ -245,25 +245,29 @@ const own = async (
   assignee: { readonly externalId: string; readonly platform?: boolean } | null = null,
   changedAt: IsoDateTime = PAST,
 ): Promise<void> => {
-  await sql(
-    `update tasks set owner_user_id = $2, owner_source = case when $2::uuid is null then null else 'platform' end,
-                      owner_changed_at = case when $2::uuid is null then null else $4::timestamptz end,
-                      ticket_assignee = $3::jsonb
-      where id = $1`,
-    [
-      taskId,
-      owner,
-      assignee === null
-        ? null
-        : JSON.stringify({
-            provider: PROVIDER,
-            external_id: assignee.externalId,
-            display_name: 'Assignee',
-            platform: assignee.platform ?? false,
-          }),
-      changedAt,
-    ],
-  );
+  // Through the one owner writer (`saveOwner`), never a statement of this file's own: the
+  // column-ownership census reads every statement that writes the table, tests included.
+  const written = await inTx(async (tx) => {
+    const current = await store.tasks.ownership(tx, taskId);
+    return store.tasks.saveOwner(tx, taskId, {
+      expected: { ownerUserId: current.ownerUserId, ticketAssignee: current.ticketAssignee },
+      next: {
+        ownerUserId: owner,
+        ownerSource: owner === null ? null : 'platform',
+        ownerChangedAt: owner === null ? null : changedAt,
+        ticketAssignee:
+          assignee === null
+            ? null
+            : {
+                provider: PROVIDER,
+                external_id: assignee.externalId,
+                display_name: 'Assignee',
+                platform: assignee.platform ?? false,
+              },
+      },
+    });
+  });
+  expect(written).toBe(true);
 };
 
 /** Open to workers since an hour ago, the server never (`workers_only`). */
@@ -830,8 +834,12 @@ describe('the list and the count (S-26.4, criterion 5)', () => {
     await own(mineTask, me);
     const theirsTask = await task(projectId);
     await own(theirsTask, other);
-    const mineRun = await offered(projectId, mineTask);
-    const theirsRun = await offered(projectId, theirsTask);
+    // Open to workers long before the database's own clock: the count asks `now()`, not `NOW`.
+    const longOpen = {
+      routing: workersRouting({ workersFrom: '2020-01-01T00:00:00.000Z' as IsoDateTime }),
+    };
+    const mineRun = await offered(projectId, mineTask, longOpen);
+    const theirsRun = await offered(projectId, theirsTask, longOpen);
     const w = await worker(me, { policy: 'mine' });
     const list = await listed(w);
     expect(list.find((offer) => offer.runId === mineRun)).toMatchObject({
