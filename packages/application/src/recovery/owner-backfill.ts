@@ -24,26 +24,30 @@
  * (`./offer-timeout.ts`) routes offers written before WP-278, and `deadline` (`./deadline.ts`)
  * arms questions written before deadlines existed.
  *
- * ## The marker: a new column, `tasks.owner_backfill_at` (migration 0110)
+ * ## The marker: new columns, `tasks.owner_backfill_*` (migration 0110)
  *
  * No existing field says "this task has had an owner-sync read". `ticket_assignee` is null both for
  * *never read* and for *read, unassigned* (migration 0104 says so), so it alone would re-read an
  * unassigned ticket at every pass, for ever. `ticket_snapshot_at` is written by reads made before
  * S-26.1 too, so it cannot tell a pre-S-26.1 snapshot from one the owner sync applied. And stamping
  * a marker at every sync path would put a write into intake's insert and the claim's transactions
- * (S-26.2's, and PR #117's) for a column whose only reader is this pass. So: one nullable column,
- * written by one conditional statement (`markOwnerBackfill`, `… where owner_backfill_at is null`)
- * **before** the wake-up is enqueued — the ordering `./stranded.ts` gives every attempt mark (PROGRESS
- * backlog 105: a mark the duty wrote would leave a row whose duty never fired to be re-enqueued at
- * every pass). It is the **attempt**, not the read's success:
+ * (S-26.2's, and PR #117's) for columns whose only reader is this pass. So the pass keeps its own
+ * three, each with one writer:
  *
- *  - a ticket that is genuinely unassigned reads `null` again and is never asked for twice;
- *  - a read that fails (`readTicketForTask` fails open) spends the attempt too — the task is then
- *    exactly as it was before this row, and the next `ticket.updated` or stage re-read still syncs
- *    it; a process that dies between the mark and the enqueue loses the read the same way;
+ *  - **an attempt is claimed before the wake-up is enqueued** (`claimOwnerBackfillAttempt`:
+ *    `owner_backfill_attempts + 1` and `owner_backfill_retry_at`, one conditional statement) — the
+ *    ordering `./stranded.ts` gives every attempt mark (PROGRESS backlog 105: a mark the duty wrote
+ *    would leave a row whose duty never fired to be re-enqueued at every pass). An enqueue that is
+ *    lost is therefore retried after the same wait, and counted;
+ *  - **the duty settles it** (`settleOwnerBackfill`, `owner_backfill_at`) when the provider answered
+ *    definitively — the ticket, an **unassigned one included**, which is then never asked for
+ *    again; a 404; a permission refusal — and leaves it owed after a **transient** failure (an
+ *    outage, a 429, a 401, a binding that will not load: BACKLOG 1511), so a later pass tries again
+ *    15 minutes and then 2 hours later; after {@link OWNER_BACKFILL_MAX_ATTEMPTS} attempts it
+ *    settles it anyway and logs that it stopped (`settleOwnerBackfillRead`, `pipeline/owner-sync.ts`);
  *  - a task created since S-26.1 whose ticket was unassigned at intake is also found once and costs
- *    one read. That is the price of a marker no sync path writes, and it is bounded by the same
- *    mark: one single-issue read per such task, ever.
+ *    one read (BACKLOG 1512). That is the price of a marker no sync path writes, and it is bounded
+ *    the same way.
  *
  * ## The bound
  *
@@ -60,9 +64,12 @@
  * when a linked member holds the ticket, and the platform-account guard of `syncOwnerFromTracker`.
  * The one difference is `ensureTicketSnapshot`'s `read: 'always'`: the snapshot of an idle task is
  * fresh, and the ordinary duty would read nothing.
+ * And afterwards it settles the backfill, or leaves it owed, by the read's outcome
+ * (`classifyTicketReadError`, `settleOwnerBackfillRead`).
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { enqueueOutbound } from '../pipeline/jobs.js';
+import { OWNER_BACKFILL_MAX_ATTEMPTS, ownerBackfillRetryAt } from '../pipeline/owner-sync.js';
 import type { TaskRepository } from '../pipeline/store.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -84,12 +91,13 @@ export const OWNER_BACKFILL_SITE = 'owner_backfill';
 export const OWNER_BACKFILL_PER_PASS = 20;
 
 export interface OwnerBackfillRecoverySite {
-  readonly tasks: Pick<TaskRepository, 'ownerBackfillDue' | 'markOwnerBackfill'>;
+  readonly tasks: Pick<TaskRepository, 'ownerBackfillDue' | 'claimOwnerBackfillAttempt'>;
 }
 
 /**
- * One pass: read the tasks still owed a backfill read, then for each spend its mark in a
- * transaction of its own and — only when the mark was this pass's — enqueue the `owner_sync` duty.
+ * One pass: read the tasks whose next backfill attempt may be claimed now, then for each claim it
+ * in a transaction of its own and — only when the claim was this pass's — enqueue the `owner_sync`
+ * duty with the attempt's number.
  */
 export const recoverOwnerBackfill = async (
   options: { readonly unitOfWork: UnitOfWork; readonly jobs: Jobs; readonly logger?: Logger },
@@ -100,16 +108,23 @@ export const recoverOwnerBackfill = async (
   const due = await options.unitOfWork.transaction(async (scope) =>
     site.tasks.ownerBackfillDue(scope.tx, {
       olderThan: input.olderThan,
+      now: input.now,
+      maxAttempts: OWNER_BACKFILL_MAX_ATTEMPTS,
       limit: Math.max(0, Math.min(input.limit, OWNER_BACKFILL_PER_PASS)),
     }),
   );
   const enqueued: Id[] = [];
   for (const row of due) {
-    const marked = await options.unitOfWork.transaction(async (scope) =>
-      site.tasks.markOwnerBackfill(scope.tx, row.taskId, input.now),
+    const attempt = await options.unitOfWork.transaction(async (scope) =>
+      site.tasks.claimOwnerBackfillAttempt(scope.tx, row.taskId, {
+        now: input.now,
+        expectedAttempts: row.attempts,
+        // The wait after the attempt this claim makes, which is the row's count plus one.
+        retryAt: ownerBackfillRetryAt(input.now, row.attempts + 1),
+      }),
     );
-    if (!marked) {
-      // Another pass spent it first; that pass enqueued the read.
+    if (attempt === null) {
+      // Another pass claimed it first; that pass enqueued the read.
       continue;
     }
     await enqueueOutbound(options.jobs, {
@@ -120,13 +135,14 @@ export const recoverOwnerBackfill = async (
       // none (`runOwnerSync`). The task id names what woke it.
       cause_event_id: row.taskId,
       owner_backfill: true,
+      owner_backfill_attempt: attempt,
     });
     enqueued.push(row.taskId);
   }
   if (enqueued.length > 0) {
     logger.info(
       { enqueued: enqueued.length, task_ids: enqueued },
-      'live tasks with no tracker assignee on record had their ticket read once, so a task created before task ownership names who holds its ticket (BACKLOG 1510)',
+      'live tasks with no tracker assignee on record had their ticket read, so a task created before task ownership names who holds its ticket (BACKLOG 1510)',
     );
   }
   return { found: due.length, enqueued: enqueued.length };

@@ -104,6 +104,7 @@ import { isPlatformWord } from '@platform/domain';
 import { TransactionOpenError } from '../events/open-transaction.js';
 import type { InboundIdentityDirectory } from '../integrations/inbound.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { IntegrationError } from '../ports/integrations/common.js';
 import type {
   Ticket,
   TicketComment,
@@ -361,6 +362,40 @@ export type TicketReadHook = (
 ) => Promise<void>;
 
 /**
+ * Why a read answered no ticket (BACKLOG 1511) — what the owner backfill decides its retry by.
+ *
+ *  - **`definitive`**: the provider, or the platform, has answered and asking again would answer
+ *    the same — the project has no task-management binding, the ticket is not a provider ticket, or
+ *    the provider refused it as `not_found` (a 404) or `forbidden` (a permission refusal).
+ *  - **`transient`**: everything else — `unavailable` (5xx, network), `rate_limited`,
+ *    `unauthorised` (a credential that may be rotated back), `invalid_response`, a binding that
+ *    will not load, an error that is not an `IntegrationError` at all. A later read may answer.
+ *
+ * `reason` is a code (the `IntegrationError.code`, or the platform's own word), never provider
+ * text, so it may be logged.
+ */
+export type TicketReadFailure =
+  | {
+      readonly kind: 'definitive';
+      readonly reason: 'no_binding' | 'not_a_provider_ticket' | 'not_found' | 'forbidden';
+    }
+  | { readonly kind: 'transient'; readonly reason: string };
+
+/** {@link TicketReadFailure} for an error a read threw. */
+export const classifyTicketReadError = (error: unknown): TicketReadFailure => {
+  if (error instanceof IntegrationError) {
+    if (error.code === 'not_found' || error.code === 'forbidden') {
+      return { kind: 'definitive', reason: error.code };
+    }
+    return { kind: 'transient', reason: error.code };
+  }
+  return {
+    kind: 'transient',
+    reason: error instanceof Error && error.name.length > 0 ? error.name : 'unknown',
+  };
+};
+
+/**
  * Reads the ticket through the executor and bounds it, or answers `null`.
  *
  * `null` for every reason a ticket's text can be unavailable — no task-management binding, a
@@ -382,6 +417,8 @@ export const readTicketForTask = async (
   options: TicketSnapshotOptions,
   request: TicketSnapshotRequest,
   integrations?: PipelineIntegrations,
+  /** Told why a read answered `null` (BACKLOG 1511, {@link TicketReadFailure}); never on a read. */
+  onFailure?: (failure: TicketReadFailure) => void,
 ): Promise<TicketRead | null> => {
   const logger = options.logger ?? silentLogger;
   try {
@@ -390,6 +427,7 @@ export const readTicketForTask = async (
       integrations ??
       (await integrationsForProject(options.integrations, request.projectId, noRunScopedSecrets()));
     if (resolved.taskManagement === null) {
+      onFailure?.({ kind: 'definitive', reason: 'no_binding' });
       return null;
     }
     const ticket = await ticketReads(resolved).ticket(request.ticket, {
@@ -397,6 +435,7 @@ export const readTicketForTask = async (
       taskId: request.taskId,
     });
     if (ticket === null) {
+      onFailure?.({ kind: 'definitive', reason: 'not_a_provider_ticket' });
       return null;
     }
     const assignee = ticket.assignee ?? null;
@@ -428,6 +467,7 @@ export const readTicketForTask = async (
     if (error instanceof TransactionOpenError) {
       throw error;
     }
+    onFailure?.(classifyTicketReadError(error));
     logger.warn(
       {
         project_id: request.projectId,
@@ -576,15 +616,19 @@ export const isTicketSnapshotStale = (stored: StoredTask): boolean => {
  *    task whose intake read failed, or whose reporter was mapped after intake, gains the reviewer
  *    fallback at its next re-read, and a task that already names somebody keeps them.
  *  - `read: 'always'` (BACKLOG 1510) skips the staleness check and nothing else: the owner
- *    backfill's one read of a task whose snapshot is fresh but whose assignee was never stored.
+ *    backfill's read of a task whose snapshot is fresh but whose assignee was never stored.
  *    The freshness race inside the write transaction still decides, so a forced read never puts
- *    its snapshot or its assignee over a read that started after it.
+ *    its snapshot or its assignee over a read that started after it. `onFailure` (BACKLOG 1511) is
+ *    told why a read answered nothing, so the backfill can tell a refusal from an outage.
  */
 export const ensureTicketSnapshot = async (
   options: EnsureTicketSnapshotOptions,
   stored: StoredTask,
   onRead?: TicketReadHook,
-  when: { readonly read?: 'when_stale' | 'always' } = {},
+  when: {
+    readonly read?: 'when_stale' | 'always';
+    readonly onFailure?: (failure: TicketReadFailure) => void;
+  } = {},
 ): Promise<TicketSnapshot | null> => {
   const taskId = stored.task.id;
   if (when.read !== 'always' && !isTicketSnapshotStale(stored)) {
@@ -592,11 +636,16 @@ export const ensureTicketSnapshot = async (
   }
   // The read's **start**, which is what the snapshot is as fresh as (see the module docblock).
   const readAt = options.clock.now() as IsoDateTime;
-  const read = await readTicketForTask(options, {
-    projectId: stored.task.projectId,
-    taskId: stored.task.id,
-    ticket: stored.task.ticket,
-  });
+  const read = await readTicketForTask(
+    options,
+    {
+      projectId: stored.task.projectId,
+      taskId: stored.task.id,
+      ticket: stored.task.ticket,
+    },
+    undefined,
+    when.onFailure,
+  );
   if (read === null) {
     return stored.ticketSnapshot;
   }

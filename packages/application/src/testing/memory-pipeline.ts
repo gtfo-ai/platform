@@ -23,7 +23,7 @@
  * | 12 | `tasks.ticketStatusChangesSinceEntry` (WP-178) reads the **committed** log through {@link MemoryPipelineStoreOptions.committedLog}, ordered by `position`; PostgreSQL's query also sees the calling transaction's own staged appends. Unwired, it answers `[]`. | **same, when wired** | Its one caller, the human-return window, asks in a job's own transaction about events earlier transactions committed (the task's entry into `qa`, a webhook's status change); the predicate — the newest entry, the project stream, the ticket by id or key — is the SQL's, and the contract suite drives it against both stores. |
  * | 14 | The **owner directory** (S-26.1, `owners`) answers from {@link MemoryPipelineStore.seedIdentity}, {@link MemoryPipelineStore.seedProjectMember} and {@link MemoryPipelineStore.seedBindingAccount} where PostgreSQL joins `user_identities`, `users`, `project_members` and `bindings.account_identity`. Unseeded, every assignee is a `person` and nobody may own a task. `personIdentity` (S-26.3) answers the first seeded link, where the SQL orders by `created_at`. | **same** on the predicate, **stricter** unseeded | The SQL's order — a linked member first, then a machine, then a binding's account — is the one {@link classify} applies; that the effective role is the higher of the organisation role and a membership, and that a disabled user (`users.status`) may own nothing, is the SQL's alone, asserted by `test/integration/pipeline/task-owner.integration.test.ts`. |
  * | 13 | A **remote worker's claim** (WP-281) asks {@link MemoryPipelineStoreOptions.remoteWorkers} and {@link MemoryPipelineStoreOptions.runCredentialSource} where the SQL claim joins `workers`, `users`, `project_members`, `bindings` and `integrations` in its one statement; the same callback fences `finish`, `renewLease` and the spawn marker of a run a worker holds (backlog 714's `runHolderUsableSql`). Unwired, no worker is eligible and a worker-held run's fence never holds. | **same** on the predicates, **stricter** unwired | That the predicates are asked **in the committing statement** — a revoke that commits between a request's authentication and its write is seen — is PostgreSQL's isolation, asserted by `test/integration/pipeline/remote-claim.integration.test.ts`; divergence 4 is why it cannot be shown here. |
- * | 16 | `tasks.ownerBackfillDue` (BACKLOG 1510) orders the most recently **created** first, then by id; the SQL orders by `updated_at` descending, which this store does not keep. The predicate (live, `normal`, no stored assignee, no mark, created before `olderThan`) and the `limit` are the SQL's, and `markOwnerBackfill` is the same conditional write (only while unmarked, answering whether it wrote). | **different (order only)** | No column of `StoredTask` is an update time, and adding one to every writer for one query's order would be a second clock to keep honest. The shared suite asserts the predicate, the mark and the bound, and orders only tasks created and touched in the same order, so it holds both stores. |
+ * | 16 | `tasks.ownerBackfillDue` (BACKLOG 1510) orders the most recently **created** first, then by id; the SQL orders by `updated_at` descending, which this store does not keep. The predicate (live, `normal`, no stored assignee, unsettled, under the attempt cap, no retry time after `now`, created before `olderThan`) and the `limit` are the SQL's, and `claimOwnerBackfillAttempt` and `settleOwnerBackfill` are the same conditional writes (BACKLOG 1511). | **different (order only)** | No column of `StoredTask` is an update time, and adding one to every writer for one query's order would be a second clock to keep honest. The shared suite asserts the predicate, the mark and the bound, and orders only tasks created and touched in the same order, so it holds both stores. |
  * | 15 | A worker's **claim policy** (S-26.4) is the domain's `claimPolicyTakes` over this store's ownership map and directory, as the SQL's `workerPolicyTakesSql`; an **ask's** "mine" is read off the offer's assignee — the asker, which the ask executor always writes there — where the SQL reads `task_asks.asked_by_user_id`, and the offers list and the pick refusal name an owner with an empty `name` (no `users` here). | **same** on the predicate, **kinder** on an ask whose offer named no assignee | The policy × task matrix, the ask's asker and the owner's name are asserted against PostgreSQL in `test/integration/pipeline/claim-policy.integration.test.ts`. |
  */
 import type {
@@ -193,6 +193,16 @@ const ticketSignalReaches = (
   return stored.task.ticket.key === signal.ticketKey;
 };
 
+/** The owner-backfill columns of one task (migration 0110, BACKLOG 1510/1511). */
+export interface OwnerBackfillState {
+  /** `owner_backfill_at`: the backfill ended (a definitive read, or the last attempt failed). */
+  readonly settledAt: IsoDateTime | null;
+  readonly attempts: number;
+  readonly retryAt: IsoDateTime | null;
+}
+
+const NO_OWNER_BACKFILL: OwnerBackfillState = { settledAt: null, attempts: 0, retryAt: null };
+
 /**
  * An ended run nobody measured — the SQL adapter's `unmeasuredEndedRunSql` over this store's rows:
  * terminal, and no figure (`cost` null is both columns null, `finish` writing one or the other).
@@ -284,8 +294,8 @@ export interface MemoryPipelineStore extends PipelineStore {
   seedBindingAccount(projectId: Id, provider: string, externalId: string): void;
   /** The task's ownership columns as `saveOwner` left them, for a test without a transaction. */
   ownershipOf(taskId: Id): TaskOwnership;
-  /** `tasks.owner_backfill_at` as `markOwnerBackfill` left it (BACKLOG 1510), `null` when owed. */
-  ownerBackfillOf(taskId: Id): IsoDateTime | null;
+  /** The three owner-backfill columns (migration 0110, BACKLOG 1510/1511), for a test without a transaction. */
+  ownerBackfillOf(taskId: Id): OwnerBackfillState;
   /** The holders of a fresh `server_claimants` row, as the claimant renewed them (WP-278). */
   serverClaimantHolders(): readonly string[];
   /**
@@ -437,8 +447,17 @@ export const createMemoryPipelineStore = (
   const ticketClaims = new Map<Id, StoredTicketClaim>();
   // S-26.1: the four ownership columns, kept off `StoredTask` as the claim is, and the directory.
   const ownerships = new Map<Id, TaskOwnership>();
-  /** `tasks.owner_backfill_at` (migration 0110, BACKLOG 1510): kept off `StoredTask` like the owner. */
-  const ownerBackfills = new Map<Id, IsoDateTime>();
+  /** The owner-backfill columns (migration 0110, BACKLOG 1510/1511): kept off `StoredTask` like the owner. */
+  const ownerBackfills = new Map<Id, OwnerBackfillState>();
+  const backfillOf = (taskId: Id): OwnerBackfillState =>
+    ownerBackfills.get(taskId) ?? NO_OWNER_BACKFILL;
+  const backfillClaimable = (
+    state: OwnerBackfillState,
+    query: { readonly now: IsoDateTime; readonly maxAttempts: number },
+  ): boolean =>
+    state.settledAt === null &&
+    state.attempts < query.maxAttempts &&
+    (state.retryAt === null || Date.parse(state.retryAt) <= Date.parse(query.now));
   const ownerIdentities = new Map<string, Id | null>();
   const projectMembers = new Set<string>();
   const bindingAccounts = new Set<string>();
@@ -1086,7 +1105,7 @@ export const createMemoryPipelineStore = (
       [...tasks.values()]
         .filter(
           (stored) =>
-            !ownerBackfills.has(stored.task.id) &&
+            backfillClaimable(backfillOf(stored.task.id), query) &&
             (ownerships.get(stored.task.id) ?? UNOWNED).ticketAssignee === null &&
             stored.task.mode === 'normal' &&
             !isTerminalTaskState(stored.task.state) &&
@@ -1096,12 +1115,31 @@ export const createMemoryPipelineStore = (
           (a, b) => b.createdAt.localeCompare(a.createdAt) || a.task.id.localeCompare(b.task.id),
         )
         .slice(0, query.limit)
-        .map((stored) => ({ taskId: stored.task.id, projectId: stored.task.projectId })),
-    markOwnerBackfill: async (_tx, taskId, at) => {
-      if (!tasks.has(taskId) || ownerBackfills.has(taskId)) {
+        .map((stored) => ({
+          taskId: stored.task.id,
+          projectId: stored.task.projectId,
+          attempts: backfillOf(stored.task.id).attempts,
+        })),
+    claimOwnerBackfillAttempt: async (_tx, taskId, claim) => {
+      const state = backfillOf(taskId);
+      if (
+        !tasks.has(taskId) ||
+        state.settledAt !== null ||
+        state.attempts !== claim.expectedAttempts ||
+        (state.retryAt !== null && Date.parse(state.retryAt) > Date.parse(claim.now))
+      ) {
+        return null;
+      }
+      const attempts = state.attempts + 1;
+      ownerBackfills.set(taskId, { ...state, attempts, retryAt: claim.retryAt });
+      return attempts;
+    },
+    settleOwnerBackfill: async (_tx, taskId, at) => {
+      const state = backfillOf(taskId);
+      if (!tasks.has(taskId) || state.settledAt !== null) {
         return false;
       }
-      ownerBackfills.set(taskId, at);
+      ownerBackfills.set(taskId, { ...state, settledAt: at });
       return true;
     },
     budgetCap: async (_tx, taskId) => {
@@ -2973,7 +3011,7 @@ export const createMemoryPipelineStore = (
       bindingAccounts.add(`${projectId}\0${identityKey(provider, externalId)}`);
     },
     ownershipOf: (taskId) => structuredClone(ownerships.get(taskId) ?? UNOWNED),
-    ownerBackfillOf: (taskId) => ownerBackfills.get(taskId) ?? null,
+    ownerBackfillOf: (taskId) => ({ ...backfillOf(taskId) }),
     runCommandRows: () => [...runCommandRows.values()].map((row) => clone(row)),
     offerRows: () => [...offers.values()].map((row) => clone(row)),
     leaseEpochOf: (runId) => epochs.get(runId) ?? 0,

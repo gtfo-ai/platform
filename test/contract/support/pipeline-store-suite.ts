@@ -387,13 +387,14 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
-       * BACKLOG 1510 (migration 0110): the owner backfill's query and its one mark. Due is live,
-       * `normal`, no stored assignee, unmarked and created before `olderThan`; the mark writes only
-       * while unmarked. The PostgreSQL store sets `created_at` itself and the in-memory one keeps
+       * BACKLOG 1510/1511 (migration 0110): the owner backfill's query, its claim and its settle.
+       * Due is live, `normal`, no stored assignee, unsettled, under the cap, past its retry time and
+       * created before `olderThan`; the claim is a compare-and-set on the count, the settle writes
+       * only while unsettled. The PostgreSQL store sets `created_at` itself and the in-memory one keeps
        * the fixture's, so `olderThan` is far on either side of both; and other suites' rows may
        * share the database, so only this case's own tasks are compared.
        */
-      it('finds the tasks owed an owner-backfill read, and marks each once (BACKLOG 1510)', async () => {
+      it('finds the tasks owed an owner-backfill read, claims each attempt once and settles once (BACKLOG 1510, 1511)', async () => {
         const due = task({}, 'ACME-BACKFILL-1');
         const dueToo = task({}, 'ACME-BACKFILL-2');
         const assigned = task({}, 'ACME-BACKFILL-3');
@@ -427,29 +428,70 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         });
 
         const future = '2999-01-01T00:00:00.000Z' as IsoDateTime;
-        const owed = async (olderThan: IsoDateTime, limit = 10_000) =>
-          (await store.tasks.ownerBackfillDue(tx, { olderThan, limit })).filter((row) =>
-            mine.has(row.taskId),
-          );
+        const now = '2026-06-02T09:00:00.000Z' as IsoDateTime;
+        const owed = async (olderThan: IsoDateTime, at: IsoDateTime = now, limit = 10_000) =>
+          (await store.tasks.ownerBackfillDue(tx, { olderThan, now: at, maxAttempts: 3, limit }))
+            .filter((row) => mine.has(row.taskId))
+            .map((row) => ({ taskId: row.taskId, attempts: row.attempts }));
         // Inserted and touched in the same order and instant: the order is by id in both stores.
         expect(await owed(future)).toEqual(
           [due, dueToo]
-            .map((stored) => ({ taskId: stored.task.id, projectId }))
+            .map((stored) => ({ taskId: stored.task.id, attempts: 0 }))
             .sort((a, b) => a.taskId.localeCompare(b.taskId)),
         );
         // Created after `olderThan`: not yet.
         expect(await owed('2000-01-01T00:00:00.000Z' as IsoDateTime)).toEqual([]);
 
-        const at = '2026-06-02T09:00:00.000Z' as IsoDateTime;
-        expect(await store.tasks.markOwnerBackfill(tx, due.task.id, at)).toBe(true);
-        // A second mark of the same task writes nothing: two passes enqueue one read between them.
-        expect(await store.tasks.markOwnerBackfill(tx, due.task.id, at)).toBe(false);
-        expect(await owed(future)).toEqual([{ taskId: dueToo.task.id, projectId }]);
-        expect(await store.tasks.markOwnerBackfill(tx, nextId(), at)).toBe(false);
-        // The mark is not the aggregate's: a whole-row save over an older snapshot keeps it.
-        const loadedDue = (await store.tasks.load(tx, due.task.id)) as StoredTask;
-        await store.tasks.save(tx, { ...loadedDue, branch: 'agentic/acme-backfill-1' });
-        expect(await owed(future)).toEqual([{ taskId: dueToo.task.id, projectId }]);
+        // A claim is a compare-and-set on the count: the second claim of the same attempt loses.
+        const retryAt = '2026-06-02T09:15:00.000Z' as IsoDateTime;
+        const claim = (expectedAttempts: number, at: IsoDateTime = now) =>
+          store.tasks.claimOwnerBackfillAttempt(tx, due.task.id, {
+            now: at,
+            expectedAttempts,
+            retryAt,
+          });
+        expect(await claim(0)).toBe(1);
+        expect(await claim(0)).toBeNull();
+        // Before its retry time the task is not due and cannot be claimed; at it, it is both.
+        expect(await owed(future)).toEqual([{ taskId: dueToo.task.id, attempts: 0 }]);
+        expect(await claim(1)).toBeNull();
+        expect(await owed(future, retryAt)).toContainEqual({ taskId: due.task.id, attempts: 1 });
+        expect(await claim(1, retryAt)).toBe(2);
+        // At the cap it is never due again.
+        expect(
+          (
+            await store.tasks.ownerBackfillDue(tx, {
+              olderThan: future,
+              now: future,
+              maxAttempts: 2,
+              limit: 10_000,
+            })
+          ).map((row) => row.taskId),
+        ).not.toContain(due.task.id);
+        expect(
+          await store.tasks.claimOwnerBackfillAttempt(tx, nextId(), {
+            now,
+            expectedAttempts: 0,
+            retryAt,
+          }),
+        ).toBeNull();
+
+        // Settled: never due, never claimed, settled once.
+        expect(await store.tasks.settleOwnerBackfill(tx, dueToo.task.id, now)).toBe(true);
+        expect(await store.tasks.settleOwnerBackfill(tx, dueToo.task.id, now)).toBe(false);
+        expect(await owed(future, future)).toEqual([{ taskId: due.task.id, attempts: 2 }]);
+        expect(
+          await store.tasks.claimOwnerBackfillAttempt(tx, dueToo.task.id, {
+            now: future,
+            expectedAttempts: 0,
+            retryAt,
+          }),
+        ).toBeNull();
+        expect(await store.tasks.settleOwnerBackfill(tx, nextId(), now)).toBe(false);
+        // The columns are not the aggregate's: a whole-row save over an older snapshot keeps them.
+        const loadedToo = (await store.tasks.load(tx, dueToo.task.id)) as StoredTask;
+        await store.tasks.save(tx, { ...loadedToo, branch: 'agentic/acme-backfill-2' });
+        expect(await owed(future, future)).toEqual([{ taskId: due.task.id, attempts: 2 }]);
       });
 
       /**

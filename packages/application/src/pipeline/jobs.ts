@@ -416,13 +416,18 @@ export interface PipelineOutboundData {
   readonly owner_user_id?: string;
   readonly owner_changed_at?: string;
   /**
-   * `owner_sync` only (BACKLOG 1510): the recovery pass's one **owner-backfill** read of a live task
+   * `owner_sync` only (BACKLOG 1510): the recovery pass's **owner-backfill** read of a live task
    * with no stored assignee (`recovery/owner-backfill.ts`) — read whatever the snapshot's freshness,
    * and only while the task still has no stored assignee when the duty fires. Absent is the
    * `ticket.updated` wake-up, unchanged. A build before it ignores the field and reads only a stale
    * snapshot, which is the behaviour this row exists to add, never a wrong read.
    */
   readonly owner_backfill?: true;
+  /**
+   * `owner_sync` with `owner_backfill` only (BACKLOG 1511): which attempt (1-based) the pass claimed,
+   * so the duty knows a transient failure on the last one ends the backfill.
+   */
+  readonly owner_backfill_attempt?: number;
   /** `ticket_release` only (WP-177): why the ticket is given back. */
   readonly release_cause?: 'cancelled' | 'rework' | 'stopped';
   /** `ask_answer` only (WP-31): which ask was answered. The row holds everything else. */

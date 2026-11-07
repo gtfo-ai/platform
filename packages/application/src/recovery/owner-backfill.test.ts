@@ -1,6 +1,7 @@
 /**
- * BACKLOG 1510 — the owner backfill: a live task with no stored tracker assignee is read once by
- * the recovery pass, even though its ticket never changes, and never again.
+ * BACKLOG 1510 and 1511 — the owner backfill: a live task with no stored tracker assignee is read by
+ * the recovery pass even though its ticket never changes — once on a definitive answer, and at most
+ * three times across passes when the provider fails transiently.
  *
  * "Before S-26.1" is made the one way this build can make it: intake reads the ticket while it is
  * **unassigned**, and the ticket is assigned afterwards with no `ticket.updated` — so the task's
@@ -13,8 +14,10 @@ import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor, secretPlaceholder } from '../integrations/redaction.js';
 import { enqueueOutbound } from '../pipeline/jobs.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { IntegrationError, type IntegrationErrorCode } from '../ports/integrations/common.js';
 import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/task-management.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import type { Logger } from '../ports/logger.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import {
   OWNER_BACKFILL_PER_PASS,
@@ -34,13 +37,35 @@ const identity = (account: string): ExternalIdentity => ({
   verified: false,
 });
 
-/** Every ticket's assignee (one for all of them), and every read of any of them. */
+/** A provider failure the double throws: an `IntegrationError` code, or a plain error. */
+type Failure = IntegrationErrorCode | 'plain_error';
+
+const failureOf = (failure: Failure): Error =>
+  failure === 'plain_error'
+    ? new TypeError('fetch failed')
+    : new IntegrationError(failure, 'fake-jira', `the read failed: ${failure}`, {
+        action: 'read_ticket',
+      });
+
+/**
+ * Every ticket's assignee (one for all of them), and every read of any of them. `failNext` fails
+ * the next calls in order; `failAlways` fails every call while it is set.
+ */
 const tracker = (assignee: string | null, displayName?: string) => {
-  const state = { assignee, displayName };
+  const state: {
+    assignee: string | null;
+    displayName: string | undefined;
+    failNext: Failure[];
+    failAlways: Failure | null;
+  } = { assignee, displayName, failNext: [], failAlways: null };
   const reads: string[] = [];
   const port: Partial<TaskManagementPort> = {
     readTicket: async (ref: TicketRefInput) => {
       reads.push(ref.key);
+      const failure = state.failNext.shift() ?? state.failAlways;
+      if (failure !== null) {
+        throw failureOf(failure);
+      }
       return {
         ref,
         issue_type: 'Story',
@@ -73,6 +98,7 @@ const tracker = (assignee: string | null, displayName?: string) => {
 const harnessFor = (
   ticket: ReturnType<typeof tracker>,
   ticketRedactor?: SecretRedactor,
+  logger?: Logger,
 ): PipelineHarness => {
   const harness = createPipelineHarness({
     projectId: PROJECT,
@@ -80,6 +106,7 @@ const harnessFor = (
     runsAgents: false,
     taskManagement: ticket.port,
     ...(ticketRedactor === undefined ? {} : { ticketRedactor }),
+    ...(logger === undefined ? {} : { logger }),
   });
   harness.store.seedIdentity('fake-jira', 'acct-alice', ALICE);
   harness.store.seedProjectMember(PROJECT, ALICE);
@@ -161,7 +188,11 @@ describe('the owner backfill (BACKLOG 1510)', () => {
     const afterIntake = ticket.reads();
     expect(afterIntake).toBe(1);
     expect(harness.store.ownershipOf(taskId as Id).ticketAssignee).toBeNull();
-    expect(harness.store.ownerBackfillOf(taskId as Id)).toBeNull();
+    expect(harness.store.ownerBackfillOf(taskId as Id)).toEqual({
+      settledAt: null,
+      attempts: 0,
+      retryAt: null,
+    });
 
     // The ordinary duty reads nothing for this task: its snapshot is fresh. That is the gap.
     await enqueueOutbound(harness.jobs, {
@@ -187,7 +218,10 @@ describe('the owner backfill (BACKLOG 1510)', () => {
         platform: false,
       },
     });
-    expect(harness.store.ownerBackfillOf(taskId as Id)).not.toBeNull();
+    expect(harness.store.ownerBackfillOf(taskId as Id)).toMatchObject({
+      settledAt: expect.any(String),
+      attempts: 1,
+    });
     // Through `IntegrationActionExecutor`, for this task, like every other provider read.
     const audited = harness.audit.entriesFor('read_ticket');
     expect(audited).toHaveLength(1);
@@ -360,6 +394,125 @@ describe('the owner backfill (BACKLOG 1510)', () => {
     expect(ticket.reads()).toBe(reads);
     expect(harness.store.ownershipOf(first as Id).ticketAssignee?.external_id).toBe('acct-erin');
   });
+
+  it('leaves the backfill owed after a transient failure, and reads it on the first pass after the wait (BACKLOG 1511)', async () => {
+    const ticket = tracker(null);
+    const harness = harnessFor(ticket);
+    const [taskId] = await idleTasks(harness, ticket, ['AUT-6676'], 'vojtech');
+    const afterIntake = ticket.reads();
+
+    // A 401 is not retried by the executor, so this attempt is exactly one provider call.
+    ticket.state.failNext = ['unauthorised'];
+    const failedAt = harness.clock.now();
+    expect(await pass(harness)).toEqual({ found: 1, enqueued: 1 });
+    expect(ticket.reads()).toBe(afterIntake + 1);
+    expect(harness.store.ownershipOf(taskId as Id).ticketAssignee).toBeNull();
+    expect(harness.store.ownerBackfillOf(taskId as Id)).toEqual({
+      settledAt: null,
+      attempts: 1,
+      retryAt: new Date(Date.parse(failedAt) + 15 * 60_000).toISOString(),
+    });
+
+    // Inside the wait: not yet.
+    harness.clock.advance(GRACE_MS);
+    expect(await pass(harness)).toEqual({ found: 0, enqueued: 0 });
+    expect(ticket.reads()).toBe(afterIntake + 1);
+
+    // Past it: the second attempt reads, stores the assignee and ends the backfill.
+    harness.clock.advance(15 * 60_000);
+    expect(await pass(harness)).toEqual({ found: 1, enqueued: 1 });
+    expect(ticket.reads()).toBe(afterIntake + 2);
+    expect(harness.store.ownershipOf(taskId as Id).ticketAssignee?.external_id).toBe(
+      'acct-vojtech',
+    );
+    expect(harness.store.ownerBackfillOf(taskId as Id)).toMatchObject({
+      settledAt: expect.any(String),
+      attempts: 2,
+    });
+    harness.clock.advance(3 * 60 * 60_000);
+    expect(await pass(harness)).toEqual({ found: 0, enqueued: 0 });
+    expect(ticket.reads()).toBe(afterIntake + 2);
+  });
+
+  it.each([
+    'unavailable',
+    'rate_limited',
+    'unauthorised',
+    'invalid_response',
+    'plain_error',
+  ] as const)(
+    'tries three times across passes after %s, then stops and says so (BACKLOG 1511)',
+    async (failure) => {
+      const warnings: string[] = [];
+      const logger: Logger = {
+        debug: () => {},
+        info: () => {},
+        warn: (_fields, message) => {
+          warnings.push(message);
+        },
+        error: () => {},
+      };
+      const ticket = tracker(null);
+      const harness = harnessFor(ticket, undefined, logger);
+      const [taskId] = await idleTasks(harness, ticket, ['ACME-20'], 'vojtech');
+      ticket.state.failAlways = failure;
+      const gaveUp = (message: string) => message.includes('in any of its attempts');
+
+      expect(await pass(harness)).toEqual({ found: 1, enqueued: 1 });
+      expect(harness.store.ownerBackfillOf(taskId as Id)).toMatchObject({
+        settledAt: null,
+        attempts: 1,
+      });
+      harness.clock.advance(15 * 60_000);
+      expect(await pass(harness)).toEqual({ found: 1, enqueued: 1 });
+      expect(harness.store.ownerBackfillOf(taskId as Id)).toMatchObject({
+        settledAt: null,
+        attempts: 2,
+      });
+      // The second wait is longer: a pass an hour later still finds nothing.
+      harness.clock.advance(60 * 60_000);
+      expect(await pass(harness)).toEqual({ found: 0, enqueued: 0 });
+      expect(warnings.filter(gaveUp)).toEqual([]);
+
+      harness.clock.advance(60 * 60_000);
+      expect(await pass(harness)).toEqual({ found: 1, enqueued: 1 });
+      expect(harness.store.ownerBackfillOf(taskId as Id)).toMatchObject({
+        settledAt: expect.any(String),
+        attempts: 3,
+      });
+      expect(warnings.filter(gaveUp)).toHaveLength(1);
+
+      // Stopped: no later pass asks again, even once the provider is back.
+      ticket.state.failAlways = null;
+      const reads = ticket.reads();
+      harness.clock.advance(6 * 60 * 60_000);
+      expect(await pass(harness)).toEqual({ found: 0, enqueued: 0 });
+      expect(ticket.reads()).toBe(reads);
+      expect(harness.store.ownershipOf(taskId as Id).ticketAssignee).toBeNull();
+    },
+  );
+
+  it.each(['not_found', 'forbidden'] as const)(
+    'ends the backfill on a %s at the first attempt: a definitive answer is not retried (BACKLOG 1511)',
+    async (failure) => {
+      const ticket = tracker(null);
+      const harness = harnessFor(ticket);
+      const [taskId] = await idleTasks(harness, ticket, ['ACME-21'], 'vojtech');
+      ticket.state.failAlways = failure;
+      const before = ticket.reads();
+
+      expect(await pass(harness)).toEqual({ found: 1, enqueued: 1 });
+      expect(ticket.reads()).toBe(before + 1);
+      expect(harness.store.ownerBackfillOf(taskId as Id)).toMatchObject({
+        settledAt: expect.any(String),
+        attempts: 1,
+      });
+      ticket.state.failAlways = null;
+      harness.clock.advance(6 * 60 * 60_000);
+      expect(await pass(harness)).toEqual({ found: 0, enqueued: 0 });
+      expect(ticket.reads()).toBe(before + 1);
+    },
+  );
 
   it('is a row of the stranded pass, reported as owner_backfill', async () => {
     const ticket = tracker(null);

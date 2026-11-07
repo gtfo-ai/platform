@@ -829,8 +829,11 @@ the task's runs (*Settings → Execution*, below). **A task that existed before 
 live task whose ticket assignee the platform has never stored — has its ticket read **once** by the
 recovery pass, about a minute after the upgrade, up to twenty tasks a pass, the most recently
 touched first; so a task stopped because its ticket is assigned to someone else names that person
-without anybody touching the ticket. An unassigned ticket is read that once and not again, and a
-read that fails is not retried until the ticket changes or the task's next stage reads it.
+without anybody touching the ticket. An unassigned ticket is read that once and not again, and so is
+a ticket Jira says is gone or that the platform's account may not see. A read that fails because
+Jira is down, slow or refusing the credential is tried again 15 minutes later and then two hours
+after that; after the third failure the platform stops, logs it, and the task waits for its ticket
+to change or for its next stage to read it.
 
 **The owner on the page** (since S-26.8b): beside the ticket's links, the owner's initials and
 *Owner: Vojtěch* (*(you)* when it is you), *Unassigned* in grey, or — for a tracker assignee the

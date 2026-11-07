@@ -561,12 +561,19 @@ describe('the board’s owner filter and the DTO’s four fields (criterion 6)',
   });
 });
 
-describe('the owner backfill’s query and mark (BACKLOG 1510, migration 0110)', () => {
+describe('the owner backfill’s query, claim and settle (BACKLOG 1510, 1511, migration 0110)', () => {
   const FUTURE = '2999-01-01T00:00:00.000Z' as IsoDateTime;
-  const owed = async (limit: number, olderThan: IsoDateTime = FUTURE) =>
-    (await within((tx) => store.tasks.ownerBackfillDue(tx, { olderThan, limit }))).map(
-      (row) => row.taskId,
-    );
+  const owed = async (
+    limit: number,
+    olderThan: IsoDateTime = FUTURE,
+    now: IsoDateTime = NOW,
+  ): Promise<Id[]> =>
+    (
+      await within((tx) =>
+        store.tasks.ownerBackfillDue(tx, { olderThan, now, maxAttempts: 3, limit }),
+      )
+    ).map((row) => row.taskId);
+  const settle = (taskId: Id) => within((tx) => store.tasks.settleOwnerBackfill(tx, taskId, NOW));
   /** A whole-row write through the aggregate's own `save` — which moves `updated_at`. */
   const saveState = async (taskId: Id, state?: 'done') =>
     within(async (tx) => {
@@ -580,10 +587,10 @@ describe('the owner backfill’s query and mark (BACKLOG 1510, migration 0110)',
 
   // No `update tasks` here: `tasks-column-ownership.test.ts` counts tests' statements as writers
   // too, so every write below is the store's own.
-  it('answers the live unassigned unmarked tasks most recently touched first, bounded, and each once', async () => {
-    // Every earlier case's task is due too: spend their marks first, so this case sees its own.
+  it('answers the live unassigned unsettled tasks most recently touched first, bounded, and claims each attempt once', async () => {
+    // Every earlier case's task is due too: settle them first, so this case sees its own.
     for (const taskId of await owed(10_000)) {
-      expect(await within((tx) => store.tasks.markOwnerBackfill(tx, taskId, NOW))).toBe(true);
+      expect(await settle(taskId)).toBe(true);
     }
     expect(await owed(10_000)).toEqual([]);
 
@@ -623,21 +630,46 @@ describe('the owner backfill’s query and mark (BACKLOG 1510, migration 0110)',
       'select updated_at from tasks where id = $1',
       [first],
     );
-    expect(await within((tx) => store.tasks.markOwnerBackfill(tx, first, NOW))).toBe(true);
-    expect(await within((tx) => store.tasks.markOwnerBackfill(tx, first, NOW))).toBe(false);
+    // A claimed attempt waits for its retry time, and the claim is a compare-and-set on the count.
+    const retryAt = '2026-11-07T09:15:00.000Z' as IsoDateTime;
+    const claim = (taskId: Id, expectedAttempts: number, now: IsoDateTime = NOW) =>
+      within((tx) =>
+        store.tasks.claimOwnerBackfillAttempt(tx, taskId, { now, expectedAttempts, retryAt }),
+      );
+    expect(await claim(first, 0)).toBe(1);
+    expect(await claim(first, 0)).toBeNull();
     expect(await owed(2)).toEqual([third, second]);
-    // The mark is the column alone: `updated_at`, and therefore the order, stays where it was.
-    const [after] = await query<{ owner_backfill_at: Date; updated_at: Date }>(
-      'select owner_backfill_at, updated_at from tasks where id = $1',
+    expect(await claim(first, 1)).toBeNull();
+    expect(await owed(10_000, FUTURE, retryAt)).toEqual([first, third, second]);
+    expect(await claim(first, 1, retryAt)).toBe(2);
+    expect(await claim(first, 2, FUTURE)).toBe(3);
+    // Three attempts claimed: never due again, whatever the time.
+    expect(await owed(10_000, FUTURE, FUTURE)).toEqual([third, second]);
+    // The claim and the settle write their columns alone: `updated_at`, and so the order, stays.
+    expect(await settle(first)).toBe(true);
+    expect(await settle(first)).toBe(false);
+    const [after] = await query<{
+      owner_backfill_at: Date;
+      owner_backfill_attempts: number;
+      owner_backfill_retry_at: Date;
+      updated_at: Date;
+    }>(
+      `select owner_backfill_at, owner_backfill_attempts, owner_backfill_retry_at, updated_at
+         from tasks where id = $1`,
       [first],
     );
     expect(after?.owner_backfill_at.toISOString()).toBe(NOW);
+    expect(after?.owner_backfill_attempts).toBe(3);
+    expect(after?.owner_backfill_retry_at.toISOString()).toBe(retryAt);
     expect(after?.updated_at.toISOString()).toBe(before?.updated_at.toISOString());
 
-    // A finished task is never owed.
+    // Settled: never due, and never claimed. A finished task is never owed either.
+    expect(await settle(third)).toBe(true);
+    expect(await claim(third, 0)).toBeNull();
     await saveState(second, 'done');
-    expect(await owed(10_000)).toEqual([third]);
-    expect(await within((tx) => store.tasks.markOwnerBackfill(tx, nextId(), NOW))).toBe(false);
+    expect(await owed(10_000, FUTURE, FUTURE)).toEqual([]);
+    expect(await claim(nextId(), 0)).toBeNull();
+    expect(await settle(nextId())).toBe(false);
   });
 
   it('answers the query from the partial index migration 0110 created', async () => {

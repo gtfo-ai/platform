@@ -1810,7 +1810,7 @@ export const composePipeline = async (
       unroutedOffers: { store: store.offers, execution: store.execution },
       /**
        * BACKLOG 1510: a live task with no stored tracker assignee — one created before S-26.1 whose
-       * ticket never changed — gets the `owner_sync` duty once, under `tasks.owner_backfill_at`;
+       * ticket never changed — gets the `owner_sync` duty, up to three attempts (BACKLOG 1511);
        * `packages/application/src/recovery/owner-backfill.ts`.
        */
       ownerBackfill: { tasks: store.tasks },

@@ -215,9 +215,14 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     'owner_source',
     'owner_changed_at',
     'ticket_assignee',
-    // `markOwnerBackfill` — the recovery pass's one owner-backfill read per task (BACKLOG 1510,
-    // migration 0110), written only while it is null and before the `owner_sync` duty is enqueued;
-    // the shape of the recovery marks above, on the pipeline store because the pass reads it there.
+    // `claimOwnerBackfillAttempt` — the recovery pass's owner-backfill attempt and the instant the
+    // next may be (BACKLOG 1510/1511, migration 0110), a compare-and-set on the count, before the
+    // `owner_sync` duty is enqueued; the shape of the recovery marks above, on the pipeline store
+    // because the pass reads them there.
+    'owner_backfill_attempts',
+    'owner_backfill_retry_at',
+    // `settleOwnerBackfill` — the backfill ended (a definitive read, or the last attempt failed),
+    // written by the duty only while null.
     'owner_backfill_at',
     // `save` — the aggregate's own columns, plus the token that guards them
     'state',

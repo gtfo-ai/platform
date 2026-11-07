@@ -26,9 +26,11 @@
  *
  *  - **the owner backfill** (BACKLOG 1510): the same duty with `owner_backfill: true`, enqueued by
  *    the recovery pass's `owner_backfill` row (`recovery/owner-backfill.ts`) for a live task that
- *    has no stored assignee and has not had its one backfill read — a task created before S-26.1
+ *    has no stored assignee and whose backfill is not settled — a task created before S-26.1
  *    whose ticket nobody has touched since, which no other read here reaches. It reads **whatever
- *    the snapshot's freshness** (`ensureTicketSnapshot`'s `read: 'always'`), once per task.
+ *    the snapshot's freshness** (`ensureTicketSnapshot`'s `read: 'always'`); a definitive answer
+ *    ends the backfill, and a transient failure leaves it owed for the next attempt, at most
+ *    {@link OWNER_BACKFILL_MAX_ATTEMPTS} (BACKLOG 1511, {@link settleOwnerBackfillRead}).
  *
  *  - **the claim's pre-read** (`ticket-claim.ts`, S-26.2) — {@link syncOwnerOnClaimRead}, in a
  *    transaction of its own between the read and the claim's writes, which also answers what the
@@ -90,6 +92,7 @@ import {
   type EnsureTicketSnapshotOptions,
   ensureTicketSnapshot,
   type TicketRead,
+  type TicketReadFailure,
   type TicketReadHook,
 } from './ticket-snapshot.js';
 
@@ -530,6 +533,76 @@ export interface OwnerSyncDutyOptions extends EnsureTicketSnapshotOptions, Owner
 }
 
 /**
+ * Owner-backfill attempts per task, in total (BACKLOG 1511): the first, and two more after a
+ * transient failure — a provider outage, a 429, a credential being rotated — before the platform
+ * stops and logs it. A definitive answer ends it at any attempt.
+ */
+export const OWNER_BACKFILL_MAX_ATTEMPTS = 3;
+
+/**
+ * How long after claiming attempt `n` the next may be claimed: 15 minutes after the first, 2 hours
+ * after the second — so the three attempts span more than two hours of a provider's outage rather
+ * than three consecutive passes of one. Written at the **claim**, so an enqueue that is lost is
+ * retried after the same wait, and counted.
+ */
+export const ownerBackfillRetryAt = (now: IsoDateTime, attempt: number): IsoDateTime =>
+  new Date(
+    Date.parse(now) + (attempt <= 1 ? 15 * 60_000 : 2 * 60 * 60_000),
+  ).toISOString() as IsoDateTime;
+
+/**
+ * What one backfill read's outcome writes (BACKLOG 1511): a read, or a `definitive` failure (no
+ * binding, not a provider ticket, a 404, a permission refusal), **settles** the backfill —
+ * `owner_backfill_at`, so the task is never asked for again, an unassigned ticket included. A
+ * `transient` failure writes nothing — the claim already counted the attempt and set the retry
+ * time, so a later pass tries again — unless this was the last attempt, which settles it and says
+ * so in a warn line. Answers what it did.
+ */
+export const settleOwnerBackfillRead = async (
+  options: Pick<OwnerSyncDutyOptions, 'unitOfWork' | 'store' | 'clock' | 'logger'>,
+  input: {
+    readonly taskId: Id;
+    readonly projectId: Id;
+    readonly attempt: number;
+    readonly failure: TicketReadFailure | null;
+  },
+): Promise<'settled' | 'retry' | 'gave_up'> => {
+  const logger = options.logger ?? silentLogger;
+  const fields = {
+    project_id: input.projectId,
+    task_id: input.taskId,
+    attempt: input.attempt,
+    max_attempts: OWNER_BACKFILL_MAX_ATTEMPTS,
+    failure: input.failure?.reason ?? null,
+  };
+  const settle = async () =>
+    options.unitOfWork.transaction(async (scope) =>
+      options.store.tasks.settleOwnerBackfill(
+        scope.tx,
+        input.taskId,
+        options.clock.now() as IsoDateTime,
+      ),
+    );
+  if (input.failure === null || input.failure.kind === 'definitive') {
+    await settle();
+    return 'settled';
+  }
+  if (input.attempt >= OWNER_BACKFILL_MAX_ATTEMPTS) {
+    await settle();
+    logger.warn(
+      fields,
+      'the owner backfill could not read this task’s ticket in any of its attempts, so it stops: the task names no tracker assignee until its ticket changes or its next stage reads it (BACKLOG 1511)',
+    );
+    return 'gave_up';
+  }
+  logger.info(
+    fields,
+    'the owner backfill could not read this task’s ticket; a later recovery pass tries again (BACKLOG 1511)',
+  );
+  return 'retry';
+};
+
+/**
  * `pipeline.outbound` duty **owner_sync** (TD-031's amendment item 2): re-validates on fire (TD-004)
  * — the task must still exist and be live — then re-reads the ticket only while its snapshot is
  * stale, and applies the read's assignee. **One read per burst** (the module's § Where the tracker
@@ -539,8 +612,9 @@ export interface OwnerSyncDutyOptions extends EnsureTicketSnapshotOptions, Owner
  * With `owner_backfill: true` (BACKLOG 1510) it also re-validates that the task **still has no
  * stored assignee** — a `ticket.updated` or a stage's re-read may have filled it since the pass
  * found the row, and then the read is no longer owed — and reads whatever the snapshot's
- * freshness. A backfill names no cause event (the pass is not one), so its `task.owner.changed`
- * carries `cause_event_id: null`.
+ * freshness, then settles or leaves the backfill owed by the read's outcome
+ * ({@link settleOwnerBackfillRead}, BACKLOG 1511). A backfill names no cause event (the pass is not
+ * one), so its `task.owner.changed` carries `cause_event_id: null`.
  */
 export const runOwnerSync = async (
   options: OwnerSyncDutyOptions,
@@ -577,12 +651,31 @@ export const runOwnerSync = async (
     );
     return;
   }
-  await ensureTicketSnapshot(
-    options,
-    stored,
-    ownerSyncOnRead(options, backfill ? null : ((data.cause_event_id ?? null) as Id | null)),
-    { read: backfill ? 'always' : 'when_stale' },
-  );
+  if (!backfill) {
+    await ensureTicketSnapshot(
+      options,
+      stored,
+      ownerSyncOnRead(options, (data.cause_event_id ?? null) as Id | null),
+    );
+    return;
+  }
+  const outcome: { failure: TicketReadFailure | null } = { failure: null };
+  await ensureTicketSnapshot(options, stored, ownerSyncOnRead(options, null), {
+    read: 'always',
+    onFailure: (failure) => {
+      outcome.failure = failure;
+    },
+  });
+  await settleOwnerBackfillRead(options, {
+    taskId,
+    projectId: stored.task.projectId,
+    // A payload without it (none is written) is read as the last attempt: it never retries past the cap.
+    attempt:
+      typeof data.owner_backfill_attempt === 'number'
+        ? data.owner_backfill_attempt
+        : OWNER_BACKFILL_MAX_ATTEMPTS,
+    failure: outcome.failure,
+  });
 };
 
 /**

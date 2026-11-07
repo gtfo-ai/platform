@@ -158,10 +158,13 @@ export const tasks = pgTable('tasks', {
   ownerChangedAt: timestamp('owner_changed_at', { withTimezone: true }),
   ticketAssignee: jsonb('ticket_assignee').$type<TicketAssignee>(),
   /**
-   * BACKLOG 1510, migration 0110: when the recovery pass spent this task's one owner-backfill read
-   * (`recovery/owner-backfill.ts`); `null` is owed. Written only by `TaskRepository.markOwnerBackfill`.
+   * BACKLOG 1510/1511, migration 0110 (`recovery/owner-backfill.ts`): when the owner backfill ended
+   * (`settleOwnerBackfill`; `null` is owed), and the attempts claimed with the instant the next may
+   * be (`claimOwnerBackfillAttempt`).
    */
   ownerBackfillAt: timestamp('owner_backfill_at', { withTimezone: true }),
+  ownerBackfillAttempts: integer('owner_backfill_attempts').notNull().default(0),
+  ownerBackfillRetryAt: timestamp('owner_backfill_retry_at', { withTimezone: true }),
   configSnapshotHash: text('config_snapshot_hash'),
   branch: text('branch'),
   mrRef: jsonb('mr_ref').$type<MergeRequestRef>(),

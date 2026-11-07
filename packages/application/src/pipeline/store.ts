@@ -724,23 +724,47 @@ export interface TaskRepository {
     identity: { readonly provider: string; readonly externalId: string },
   ): Promise<readonly { readonly taskId: Id; readonly projectId: Id }[]>;
   /**
-   * The tasks still **owed an owner-backfill read** (BACKLOG 1510, migration 0110,
-   * `recovery/owner-backfill.ts`): live (not `done`, not `cancelled`), mode `normal`, no stored
-   * tracker assignee (`ticket_assignee is null`), `owner_backfill_at` null, and created before
-   * `olderThan` — the most recently touched first (`updated_at` descending, then id), at most
-   * `limit`.
+   * The tasks still **owed an owner-backfill read** whose next attempt may be claimed now (BACKLOG
+   * 1510/1511, migration 0110, `recovery/owner-backfill.ts`): live (not `done`, not `cancelled`),
+   * mode `normal`, no stored tracker assignee (`ticket_assignee is null`), `owner_backfill_at` null,
+   * fewer than `maxAttempts` attempts claimed, `owner_backfill_retry_at` null or not after `now`,
+   * and created before `olderThan` — the most recently touched first (`updated_at` descending, then
+   * id), at most `limit` — each with the attempts claimed so far, which the claim compares against.
    */
   ownerBackfillDue(
     tx: Transaction,
-    query: { readonly olderThan: IsoDateTime; readonly limit: number },
-  ): Promise<readonly { readonly taskId: Id; readonly projectId: Id }[]>;
+    query: {
+      readonly olderThan: IsoDateTime;
+      readonly now: IsoDateTime;
+      readonly maxAttempts: number;
+      readonly limit: number;
+    },
+  ): Promise<readonly { readonly taskId: Id; readonly projectId: Id; readonly attempts: number }[]>;
   /**
-   * Spends a task's one owner-backfill read: writes `owner_backfill_at = at` **only while it is
-   * null** (one statement, the column's only writer) and answers whether it did — so two passes
-   * that found the same row enqueue one read between them. No version bump: `save` does not name
-   * the column. `false` for a task that does not exist.
+   * Claims a task's next owner-backfill attempt: `owner_backfill_attempts + 1` and
+   * `owner_backfill_retry_at = retryAt`, in one statement and **only while** the row is unsettled,
+   * still at `expectedAttempts` (the count {@link ownerBackfillDue} read) and its retry time is not
+   * after `now` — a compare-and-set, so two passes that found the same row claim one attempt
+   * between them, and the retry time is the one for the attempt actually claimed. Answers
+   * the attempt's number (1-based), or `null` when nothing was claimed (no such task included).
+   * No version bump and no `updated_at`: `save` does not name the columns, and the pass's order
+   * must not move under its own writes.
    */
-  markOwnerBackfill(tx: Transaction, taskId: Id, at: IsoDateTime): Promise<boolean>;
+  claimOwnerBackfillAttempt(
+    tx: Transaction,
+    taskId: Id,
+    claim: {
+      readonly now: IsoDateTime;
+      readonly expectedAttempts: number;
+      readonly retryAt: IsoDateTime;
+    },
+  ): Promise<number | null>;
+  /**
+   * Ends a task's owner backfill: `owner_backfill_at = at` **only while it is null** — a definitive
+   * read, or the last attempt failed too. Answers whether it wrote; `false` for a task that does
+   * not exist. One statement, the column's only writer; no `updated_at`.
+   */
+  settleOwnerBackfill(tx: Transaction, taskId: Id, at: IsoDateTime): Promise<boolean>;
   /**
    * Fills `requested_by_user_id` when it is still `null` — the column's first `update` writer
    * (WP-79, PROGRESS backlog 243).
