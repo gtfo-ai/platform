@@ -34,9 +34,11 @@ import {
 } from '../ui/activity.js';
 import type { BotPhase } from '../ui/bot/bot.js';
 import type { ClaimPolicyValue } from '../ui/claim-policy-card.js';
-import { ROLE_LABEL, stageLabel, WORKER_CLAIM_BLOCKER_WORDS } from '../ui/humanize.js';
 import type { Status } from '../ui/status.js';
 import { usagePauseWords } from '../ui/usage-pause.js';
+import { ROLE_LABEL } from '../ui/words/roles.js';
+import { stageLabel } from '../ui/words/stages.js';
+import { WORKER_CLAIM_BLOCKER_WORDS } from '../ui/words/worker-blockers.js';
 
 /**
  * The worker's own state, in a person's words. `blocked` (S-22.19) is a connected worker that is

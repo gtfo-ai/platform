@@ -33,6 +33,7 @@ import {
   type RunPackage,
   runPackageSchema,
   WORKER_API_PREFIX,
+  WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
   WORKER_PATHS,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_VERSION,
@@ -189,7 +190,8 @@ export interface CoreClient {
   ): Promise<z.output<typeof workerClaimScopeSetResponseSchema>>;
   /**
    * The open offers this worker could take now, in its projects (WP-293; S-26.4: each with its
-   * `owner` and `mine`, beside the list's `as_of` and `policy_skipped_offers`).
+   * `owner` and `mine`, beside the list's `as_of` and `policy_skipped_offers`; S-26.7: asked with
+   * `?fields=held_elsewhere`, so each says whether a pick would claim it without assigning).
    */
   offers(credential: string): Promise<z.output<typeof workerOffersResponseSchema>>;
   /**
@@ -482,7 +484,8 @@ export const createCoreClient = (options: CoreClientOptions): CoreClient => {
       expect(
         {
           method: 'GET',
-          verb: WORKER_PATHS.offers,
+          // S-26.7: each entry's `held_elsewhere`, by name — a core before it ignores the query.
+          verb: `${WORKER_PATHS.offers}?${WORKER_OFFERS_HELD_ELSEWHERE_QUERY}`,
           bearer: credential,
           body: null,
           runScoped: false,

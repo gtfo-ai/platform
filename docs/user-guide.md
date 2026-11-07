@@ -1987,8 +1987,8 @@ owner; if they took it while the list was open, the press says *Vojtěch took DE
 another.*, and if it was already theirs, *DEMO-1 is Vojtěch's. A maintainer can reassign it on the task
 page.* A question asked on a task is listed as a question, never with its text, and picking it makes
 nobody its owner; one you asked reads *Your question*. A run whose ticket is held by somebody the
-platform cannot match is taken without making it yours. A pick is a choice of order inside what the
-machine may already take, not a priority: it never jumps the platform's own turn on a project whose
+platform cannot match reads **Take this one** with no *Assigns* line: it is taken without making it
+yours. A pick is a choice of order inside what the machine may already take, not a priority: it never jumps the platform's own turn on a project whose
 administrator prefers the server, nor another person's head start on their own run — so on such a
 project the list is usually empty, and a run that is not listed is not yours to take yet. If another
 machine or the platform takes a run first, the press says so and the list refreshes. A machine set to

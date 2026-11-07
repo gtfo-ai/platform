@@ -716,7 +716,13 @@ a save that names its policy is answered the same way. For an **older cached pag
 the page an earlier image served) the worker keeps mapping protocol 3's vocabulary as the core maps a
 version-3 worker (`remote-worker/page-scope.ts`): a save of `[]` with no policy is sent as `pick_only`
 over every project, a list saved while the policy reads `pick_only` leaves it for `mine_and_unassigned`,
-and a `pick_only` worker reads back as `[]` without the query. Its `POST /api/local/offers/:id/take`
+and a `pick_only` worker reads back as `[]` without the query. `GET offers?fields=held_elsewhere` (S-26.7) adds each entry's `held_elsewhere` — its task's tracker
+assignee is a person the platform cannot match to a member (S-26.1's *held elsewhere*), so a pick claims
+it **without** assigning. It is an **opt-in** rather than a protocol bump because the field is an
+answer's: the worker parses `GET offers` strictly, so a worker built before the field is never sent it
+(it never asks), and a worker that asks an older core gets no field, which the page reads as unknown and
+promises no assignment. The worker asks for it, and its page shows *Take this one* with no *Assigns …
+to you.* line for such a task. Its `POST /api/local/offers/:id/take`
 takes `as_of`, and a `409 task_taken_by_another` / `task_owned_by_another` carries the owner the core
 named as the local envelope's `error.owner` `{user_id, name}` (the name through the worker's redactor),
 so the page says *Vojtěch took DEMO-1 a moment ago* without parsing a message. The project's execution

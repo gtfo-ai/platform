@@ -1953,6 +1953,7 @@ export const createMemoryPipelineStore = (
             // Divergence 15: no `users` here, so the owner's name is not known.
             owner: owner === null ? null : { userId: owner, name: '' },
             mine: userId !== undefined && offerIsMine(candidate, userId),
+            heldElsewhere: heldElsewhereOf(candidate.taskId, candidate.projectId),
           };
         }),
     pickOwnerRefusal: async (_tx, input) => {

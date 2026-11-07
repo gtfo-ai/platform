@@ -3,8 +3,10 @@
  *
  * Every vocabulary the screens print is a `Record` over the contract's own enum, so a value added to
  * `@platform/contracts` fails `typecheck` here until it has a word — the same mechanism as
- * `STATUS_LOOK` in `./status.tsx`. The imports are **types only**: this module has no runtime
- * dependency, so the worker's local page (TD-031's 120 kB entry) can import it as freely as the SPA.
+ * `STATUS_LOOK` in `./status.tsx`. Its only runtime imports are its own `./words/*` modules, which
+ * hold the maps the worker's local page shows: that page (TD-031's 120 kB entry) imports those
+ * modules and **never this one**, so the SPA's other words stay out of its bundle (BACKLOG 1455,
+ * `worker/import-graph.test.ts`). Every name is still exported from here, unchanged.
  *
  * Stage ids are the one open vocabulary: a project's `.agentic/pipeline.yml` may declare a stage of
  * its own (`security_scan`), so `stageLabel` names every stage the platform ships and title-cases
@@ -16,7 +18,6 @@ import type {
   ApprovalStatus,
   ArtifactType,
   AutonomyLevel,
-  BUILTIN_STAGE_IDS,
   BudgetScope,
   BudgetWindow,
   BuiltinGateStageId,
@@ -39,17 +40,33 @@ import type {
   TaskState,
   UserRole,
   WorkerClaimBlocker,
-  WorkerClaimPolicy,
   WorkerSummary,
 } from '@platform/contracts';
+import { ROLE_LABEL } from './words/roles.js';
+import { STAGE_LABEL, stageLabel, titleCase } from './words/stages.js';
+import { TERMINAL_REASON_LABEL } from './words/terminal-reasons.js';
+import {
+  type ClaimBlockerWords,
+  UPDATER_FIX,
+  WORKER_CLAIM_BLOCKER_WORDS,
+} from './words/worker-blockers.js';
 
-/** The ticket flow's stages plus the four the one-off templates add (discovery, lint, history, spike). */
-export type ShippedStageId =
-  | (typeof BUILTIN_STAGE_IDS)[number]
-  | 'discovery'
-  | 'ticket_lint'
-  | 'history_mining'
-  | 'human_review';
+// The word maps the worker's local page shows live in the `./words` modules (BACKLOG 1455) and
+// are re-exported here unchanged, so every screen keeps importing them from this module.
+export {
+  type ClaimPolicyOptionWords,
+  MACHINE_TAKES_WORDS,
+  PICK_WORDS,
+  projectListWords,
+} from './words/claim-policy.js';
+export { ROLE_LABEL } from './words/roles.js';
+export { type ShippedStageId, STAGE_LABEL, stageLabel, titleCase } from './words/stages.js';
+export { TERMINAL_REASON_LABEL } from './words/terminal-reasons.js';
+export {
+  type ClaimBlockerWords,
+  UPDATER_FIX,
+  WORKER_CLAIM_BLOCKER_WORDS,
+} from './words/worker-blockers.js';
 
 export const TASK_STATE_LABEL: Readonly<Record<TaskState, string>> = {
   queued: 'Queued',
@@ -66,49 +83,11 @@ export const TASK_STATE_LABEL: Readonly<Record<TaskState, string>> = {
   cancelled: 'Cancelled',
 };
 
-export const STAGE_LABEL: Readonly<Record<ShippedStageId, string>> = {
-  intake: 'Intake',
-  refinement: 'Refinement',
-  investigation: 'Investigation',
-  architecture: 'Architecture',
-  implementation: 'Implementation',
-  conflict_resolution: 'Conflict resolution',
-  ci_gate: 'CI',
-  code_review: 'Code review',
-  business_review: 'Business review',
-  rebase_gate: 'Up-to-date check',
-  qa: 'QA',
-  ready_for_merge: 'Ready to merge',
-  merged_gate: 'Merge check',
-  retrospective: 'Retrospective',
-  librarian: 'Librarian',
-  done: 'Done',
-  discovery: 'Discovery',
-  ticket_lint: 'Ticket check',
-  history_mining: 'History mining',
-  human_review: 'Human review',
-};
-
 /** The gates the platform evaluates itself — the same words as their stages. */
 export const GATE_LABEL: Readonly<Record<BuiltinGateStageId, string>> = {
   ci_gate: STAGE_LABEL.ci_gate,
   rebase_gate: STAGE_LABEL.rebase_gate,
   merged_gate: STAGE_LABEL.merged_gate,
-};
-
-export const ROLE_LABEL: Readonly<Record<AgentRole, string>> = {
-  triager: 'Triager',
-  product_manager: 'Product manager',
-  investigator: 'Investigator',
-  architect: 'Architect',
-  developer: 'Developer',
-  reviewer: 'Reviewer',
-  acceptance_tester: 'Acceptance tester',
-  facilitator: 'Facilitator',
-  librarian: 'Librarian',
-  discovery: 'Discovery',
-  ask: 'Ask',
-  historian: 'Historian',
 };
 
 export const RUN_STATUS_LABEL: Readonly<Record<RunStatus, string>> = {
@@ -121,22 +100,6 @@ export const RUN_STATUS_LABEL: Readonly<Record<RunStatus, string>> = {
   budget_exceeded: 'Over budget',
   timed_out: 'Timed out',
   stalled: 'Stalled',
-};
-
-export const TERMINAL_REASON_LABEL: Readonly<Record<RunTerminalReason, string>> = {
-  success: 'Succeeded',
-  error_max_turns: 'Ran out of turns',
-  error_max_budget_usd: 'Hit its budget',
-  error_max_structured_output_retries: 'Could not produce a valid result',
-  error_during_execution: 'Failed while running',
-  permission_denied: 'Permission denied',
-  cancelled: 'Cancelled',
-  stalled: 'Stalled',
-  timed_out: 'Timed out',
-  crash: 'Crashed',
-  lease_expired: 'Lost its worker',
-  shutdown: 'Handed back on shutdown',
-  rate_limited: 'Hit a usage limit',
 };
 
 /**
@@ -207,18 +170,6 @@ export const QUESTION_STATUS_LABEL: Readonly<Record<QuestionStatus, string>> = {
   expired: 'Expired',
   escalated: 'Handed to a person',
 };
-
-/** `foo_bar-baz` → `Foo Bar Baz`: a project's own stage slug, never printed raw. */
-export const titleCase = (slug: string): string =>
-  slug
-    .split(/[_-]+/)
-    .filter((word) => word.length > 0)
-    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
-    .join(' ');
-
-/** A stage's human name: the shipped word, or the slug title-cased for a project's own stage. */
-export const stageLabel = (id: string): string =>
-  Object.hasOwn(STAGE_LABEL, id) ? STAGE_LABEL[id as ShippedStageId] : titleCase(id);
 
 /**
  * The events a sentence can name — a human stage's `on:` transition, the event that closed an
@@ -479,89 +430,6 @@ export type WorkerPauseReason = NonNullable<WorkerSummary['paused_reason']>;
 
 export const WORKER_PAUSE_REASON_LABEL: Readonly<Record<WorkerPauseReason, string>> = {
   usage_limited: 'Hit a usage limit',
-};
-
-/** A claim blocker in a person's words: a short `word` for a row, and the `fix` beside it. */
-export interface ClaimBlockerWords {
-  readonly word: string;
-  readonly fix: string;
-}
-
-/**
- * What an outdated worker's owner does: nothing. Its updater checks when it starts and every minute
- * after, drains the worker and brings it up to date by itself. Re-running the installer is a repair
- * that never changes images, and a hand-edited compose file skips the updater's verification, so
- * neither is advice (S-23.27).
- */
-export const UPDATER_FIX =
-  'Its updater is bringing it up to date. Nothing to do; this usually takes a minute or two.';
-
-/**
- * **Why a worker takes no work**, in one set of words for the Workers screen, a project's execution
- * panel and the worker's own local page (TD-031's 2026-11-05 blocker-vocabulary amendment, S-22.19).
- * Each sentence names *the worker* or *it*, so it reads the same on the platform and on the machine.
- */
-export const WORKER_CLAIM_BLOCKER_WORDS: Readonly<Record<WorkerClaimBlocker, ClaimBlockerWords>> = {
-  not_set_up: {
-    word: 'Not set up yet',
-    fix: 'Finish the steps on the worker’s page: choose this platform, sign in to Claude and approve the machine.',
-  },
-  revoked: {
-    word: 'Removed from the platform',
-    fix: 'To use this computer again, approve it again from the worker’s page.',
-  },
-  owner_disabled: {
-    word: 'Its owner’s account is disabled',
-    fix: 'An administrator re-enables the owner’s account in Settings, under Users; the worker then takes work again.',
-  },
-  offline: {
-    word: 'Not connected to the platform',
-    fix: 'Start the worker on that computer (“docker compose up -d” in its folder) and check that it reaches the platform.',
-  },
-  protocol_outdated: {
-    word: 'Needs an update',
-    fix: `It speaks an older version than this platform accepts. ${UPDATER_FIX}`,
-  },
-  platform_images_unresolved: {
-    word: 'The platform can’t name its run images',
-    fix: 'An administrator makes the platform’s images public in their registry, or pins the worker image versions in the platform’s configuration (the operator guide names the setting); until then no worker can take work.',
-  },
-  claude_rejected: {
-    word: 'Claude refused its sign-in',
-    fix: 'Sign in to Claude again on the worker’s page.',
-  },
-  paused: {
-    word: 'Paused by its owner',
-    fix: 'Resume it on the worker’s page.',
-  },
-  draining: {
-    word: 'Draining: finishing its runs, taking nothing new',
-    fix: 'Resume it on the worker’s page, or restart the worker.',
-  },
-  usage_limited: {
-    word: 'Paused: Claude usage limit',
-    fix: 'It resumes by itself when the limit resets.',
-  },
-  launcher_unreachable: {
-    word: 'Its launcher isn’t answering',
-    fix: 'The worker checks again before each claim. On that computer, “docker compose ps” must show the launcher running; “docker compose up -d” starts it.',
-  },
-  images_missing: {
-    word: 'It has no run images',
-    fix: 'Its launcher isn’t answering, or the images are still downloading. On that computer, run “docker compose up -d” and let the download finish.',
-  },
-  images_outdated: {
-    word: 'It has an older build than this platform',
-    fix: UPDATER_FIX,
-  },
-  no_eligible_project: {
-    word: 'No project gives it work',
-    fix: 'An administrator lets workers run a project’s stages in the project’s settings, under Execution; the worker’s page chooses which of those it takes by itself.',
-  },
-  pick_only: {
-    word: 'Takes only runs its owner picks',
-    fix: 'Its owner chooses on the worker’s page which projects it takes by itself; a run picked there still starts.',
-  },
 };
 
 /** The two blockers an update clears: an older protocol, an older build. */
@@ -892,113 +760,3 @@ export const AUDIT_ENTITY_FILTER_LABEL: Readonly<Record<string, string>> = {
 
 export const auditEntityLabel = (type: string): string =>
   Object.hasOwn(AUDIT_ENTITY_LABEL, type) ? (AUDIT_ENTITY_LABEL[type] as string) : titleCase(type);
-
-// ── What a machine takes, and picks on its page (the M26 UX spec § 1 and § 6, S-26.7) ──────────
-
-/** One option of *Which tasks*: its outcome as the label, and one line of help. */
-export interface ClaimPolicyOptionWords {
-  readonly label: string;
-  readonly help: string;
-}
-
-/**
- * Project names in a sentence: up to three ("Autix", "Autix and Fontai", "Autix, Fontai and
- * Kiwi"), then two and the rest counted ("Autix, Fontai +2") — the spec's example, which never shows
- * more than three items. The names are untrusted: the caller renders the result as text.
- */
-export const projectListWords = (names: readonly string[]): string =>
-  names.length > 3
-    ? `${names[0]}, ${names[1]} +${names.length - 2}`
-    : names.length > 1
-      ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
-      : (names[0] ?? '');
-
-/**
- * **What this machine takes** (the M26 UX spec § 1): the card's words, the four options in the
- * spec's order (the default first), and the sentence's pieces. The person-facing word is
- * *machine*, never *claim*, *offer* or *seat*. A function's argument is untrusted text (project
- * names): its result is rendered through `UntrustedText`.
- */
-export const MACHINE_TAKES_WORDS = {
-  title: 'What this machine takes',
-  change: 'Change',
-  cancel: 'Cancel',
-  save: 'Save',
-  saved: 'Saved · applies to the next run',
-  /** A refused save's title, the page's own words for a refusal. */
-  refused: 'That did not work',
-  whichTasks: 'Which tasks',
-  whichProjects: 'In which projects',
-  projectsAll: 'All projects you can see',
-  projectsSome: 'Only these:',
-  noneChosen: 'Choose at least one project.',
-  noProjects: 'Ask an administrator to add you to a project.',
-  /** In the spec's order: the default first. */
-  options: {
-    mine_and_unassigned: {
-      label: 'My tasks and unassigned ones',
-      help: 'Runs tasks assigned to you, and tasks nobody owns yet.',
-    },
-    mine: {
-      label: 'Only my tasks',
-      help: 'Runs only tasks assigned to you. Unassigned tasks wait for another machine or the server.',
-    },
-    everything: {
-      label: 'Everything',
-      help: 'Runs any task in the projects below, including tasks assigned to someone else.',
-    },
-    pick_only: {
-      label: 'Only what I pick',
-      help: 'Takes nothing by itself. You choose each run on this page, and choosing one assigns the task to you.',
-    },
-  } satisfies Readonly<Record<WorkerClaimPolicy, ClaimPolicyOptionWords>>,
-  /** The sentence's emphasised half: what the machine takes. */
-  what: {
-    mine_and_unassigned: 'your tasks and unassigned ones',
-    mine: 'only your tasks',
-    everything: 'every task',
-    pick_only: 'nothing by itself',
-  } satisfies Readonly<Record<WorkerClaimPolicy, string>>,
-  /** "This machine takes **…**, in **…**." */
-  start: 'This machine takes ',
-  in: ', in ',
-  allProjects: 'all your projects',
-  end: '.',
-  /** *Only what I pick*: "… **nothing by itself**. You pick runs on its page (**Autix** only)." */
-  pick: '. You pick runs on its page',
-  pickIn: ' (',
-  pickOnly: ' only)',
-  /** A stored project the person can no longer see. */
-  projectLeft: 'a project you left',
-  /** The consequence line. */
-  nowhere: (projects: string): string => `Unassigned tasks in ${projects} have nowhere to run.`,
-} as const;
-
-/**
- * **Picking on the machine's page** (the M26 UX spec § 6). A pick of a task nobody owns assigns it
- * to the reader; a task somebody else owns is not offered; the core's two refusals
- * (`task_taken_by_another`, `task_owned_by_another`) name the owner. A function's arguments are
- * untrusted text (a person's name, a ticket key): its result is rendered through `UntrustedText`.
- */
-export const PICK_WORDS = {
-  heading: 'Runs waiting for a machine',
-  take: 'Take this one',
-  runHere: 'Run it here',
-  assigns: (ticket: string): string => `Assigns ${ticket} to you.`,
-  takenAssigned: 'Assigned to you · starting on this machine…',
-  taken: 'Starting on this machine…',
-  /** "Vojtěch’s task": nothing to press. */
-  someones: (name: string): string => `${name}’s task`,
-  /** An ask this machine's person asked (BACKLOG 1432: an ask is labelled by its asker). */
-  yourQuestion: ' · Your question',
-  automatic: ' · this machine would take it by itself',
-  takenByAnother: (name: string, ticket: string): string =>
-    `${name} took ${ticket} a moment ago. Pick another.`,
-  ownedByAnother: (name: string, ticket: string): string =>
-    `${ticket} is ${name}’s. A maintainer can reassign it on the task page.`,
-  /** The refusal named nobody (a person with no name, or an answer without its owner). */
-  namelessStart: 'Another person',
-  nameless: 'another person',
-  thisTask: 'this task',
-  noLonger: 'That run is no longer this machine’s to take.',
-} as const;

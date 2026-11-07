@@ -821,8 +821,25 @@ export const workerOfferSchema = z.strictObject({
    * or an ask they asked — an ask's "mine" is its asker, never the task's owner. Absent below 4.
    */
   mine: z.boolean().optional(),
+  /**
+   * The task's tracker assignee is a person the platform cannot match to a member of the project
+   * (S-26.1's *held elsewhere*: unlinked, or linked to a non-member), so a pick claims it **without**
+   * assigning (TD-031's amendment item 7). Sent only when the worker asks for it —
+   * `GET offers?fields=held_elsewhere` ({@link WORKER_OFFERS_HELD_ELSEWHERE_QUERY}, S-26.7) — so a
+   * worker built before the field, whose strict parse refuses an unknown key, is never sent it, and
+   * a worker that asks an older core gets no field: **absent is unknown**, and the page then promises
+   * no assignment.
+   */
+  held_elsewhere: z.boolean().optional(),
 });
 export type WorkerOffer = z.infer<typeof workerOfferSchema>;
+
+/**
+ * The query a worker adds to `GET offers` to be sent each entry's `held_elsewhere` (S-26.7): an
+ * opt-in rather than a protocol bump, because the field is an answer's — the worker asks for it by
+ * name, an older worker never asks, and an older core ignores a query it does not read.
+ */
+export const WORKER_OFFERS_HELD_ELSEWHERE_QUERY = 'fields=held_elsewhere';
 
 /** `GET offers` → at most {@link WORKER_OFFERS_LIST_MAX}, oldest first. */
 export const workerOffersResponseSchema = z.strictObject({

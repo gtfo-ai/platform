@@ -28,9 +28,11 @@ import { type ReactElement, useCallback, useEffect, useRef, useState } from 'rea
 import { Button } from '../ui/button.js';
 import { ClaimPolicyCard, type ClaimPolicyValue } from '../ui/claim-policy-card.js';
 import { Flash } from '../ui/flash.js';
-import { MACHINE_TAKES_WORDS, PICK_WORDS as P, ROLE_LABEL, stageLabel } from '../ui/humanize.js';
 import { Skeleton } from '../ui/skeleton.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { MACHINE_TAKES_WORDS, PICK_WORDS as P } from '../ui/words/claim-policy.js';
+import { ROLE_LABEL } from '../ui/words/roles.js';
+import { stageLabel } from '../ui/words/stages.js';
 import { LocalCallError, type LocalClient } from './client.js';
 import { storedClaimPolicyOf } from './model.js';
 
@@ -50,7 +52,9 @@ const workOf = (offer: WorkerOffer): string =>
 /**
  * What a row offers (the spec § 6):
  * - `take` — nobody owns the task (or the core said nothing of owners): *Take this one*, and for a
- *   stage of a task the core said nobody owns, "Assigns DEMO-1 to you.";
+ *   stage of a task the core said nobody owns **and** is not held elsewhere, "Assigns DEMO-1 to
+ *   you." — a task its tracker assigns to a person the platform cannot match is claimed without
+ *   assigning, and a core that does not say (`held_elsewhere` absent) gets no promise;
  * - `run_here` — the reader's own task, or an ask they asked: *Run it here*;
  * - `someones` — a stage of a task another person owns: their name, nothing to press.
  */
@@ -64,8 +68,11 @@ export const offerActionOf = (offer: WorkerOffer): OfferAction => {
   // An ask's owner is its task's, not its asker (BACKLOG 1432): a pick of one is never refused for
   // it and assigns nothing.
   if (offer.kind === 'ask') return { kind: 'take', assigns: false };
-  if (offer.owner === undefined) return { kind: 'take', assigns: false };
-  if (offer.owner === null) return { kind: 'take', assigns: true };
+  // Nobody owns it: a pick assigns it only when it is not held elsewhere (its tracker assignee a
+  // person the platform cannot match, TD-031's amendment item 7) — and only when the core said so.
+  if (offer.owner === null || offer.owner === undefined) {
+    return { kind: 'take', assigns: offer.owner === null && offer.held_elsewhere === false };
+  }
   return { kind: 'someones', name: offer.owner.name.trim() || null };
 };
 

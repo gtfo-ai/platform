@@ -47,6 +47,7 @@ import {
   runPackageSchema,
   type UserRole,
   WORKER_API_PREFIX,
+  WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
   WORKER_PATHS,
   WORKER_PROTOCOL_VERSION,
   workerApprovalResponseSchema,
@@ -2304,6 +2305,54 @@ describe('the worker protocol (S-26.4): protocol 4, the claim policy and a pick 
     await ownedByBob(w);
     const owned = workerOffersResponseSchema.parse(await offers(w)).offers[0];
     expect(owned).toMatchObject({ owner: { user_id: BOB }, mine: false, automatic: false });
+  });
+
+  it('sends held_elsewhere only to a worker that asks for it, and says it of a ticket an unlinked person holds (S-26.7)', async () => {
+    const w = await world();
+    const heldQuery = `${url(WORKER_PATHS.offers)}?${WORKER_OFFERS_HELD_ELSEWHERE_QUERY}`;
+    const list = async (path: string, headers = bearer(w.alice.credential)) => {
+      const response = await w.app.inject({ method: 'GET', url: path, headers });
+      expect(response.statusCode).toBe(200);
+      return response.json();
+    };
+    await offers(w);
+    // A worker built before the field parses strictly and never asks: it is never sent the key.
+    const strictBefore = workerOffersResponseSchema.extend({
+      offers: workerOffersResponseSchema.shape.offers.element
+        .omit({ held_elsewhere: true })
+        .array(),
+    });
+    expect(strictBefore.safeParse(await list(url(WORKER_PATHS.offers))).success).toBe(true);
+    // Nor at protocol 3, asked or not.
+    const v3 = await list(heldQuery, { authorization: `Bearer ${w.alice.credential}`, ...V3 });
+    expect(v3.offers[0]).not.toHaveProperty('held_elsewhere');
+    // Asked: nobody holds the ticket yet.
+    expect(workerOffersResponseSchema.parse(await list(heldQuery)).offers[0]).toMatchObject({
+      run_id: w.runId,
+      owner: null,
+      held_elsewhere: false,
+    });
+    // The tracker assigns it to a person the platform cannot match: held elsewhere, still no owner.
+    await w.harness.memory.transaction(async (scope) =>
+      w.harness.store.tasks.saveOwner(scope.tx, taskOf(w), {
+        expected: { ownerUserId: null, ticketAssignee: null },
+        next: {
+          ownerUserId: null,
+          ownerSource: null,
+          ownerChangedAt: null,
+          ticketAssignee: {
+            provider: 'jira',
+            external_id: 'acct-unlinked',
+            display_name: 'Jan Novák',
+            platform: false,
+          },
+        },
+      }),
+    );
+    expect(workerOffersResponseSchema.parse(await list(heldQuery)).offers[0]).toMatchObject({
+      owner: null,
+      held_elsewhere: true,
+    });
   });
 
   it('refuses a pick of another person’s task by its as_of, naming the owner — and offer_not_claimable at protocol 3', async () => {

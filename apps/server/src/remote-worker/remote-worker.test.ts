@@ -36,6 +36,7 @@ import type { PlatformToolContext, RunProgressRecorder } from '@platform/applica
 import {
   type RunPackage,
   runPackageSchema,
+  WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
   WORKER_PROTOCOL_HEADER,
   WORKER_PROTOCOL_VERSION,
   WORKER_REMOTE_LEASE_RENEW_MS,
@@ -306,6 +307,8 @@ const limitedScript = (resetsInMs: number): runnerAdapters.FakeCliScript => [
 
 interface Captured {
   readonly verb: string;
+  /** The query, `''` for none (S-26.7: `GET offers` asks for `held_elsewhere`). */
+  readonly search: string;
   readonly headers: Record<string, string>;
   readonly body: string;
 }
@@ -357,7 +360,7 @@ const fakeCore = (options: {
     const verb = new URL(url).pathname.replace('/api/worker/v1/', '').replace(RUN_ID, ':id');
     const headers = init.headers as Record<string, string>;
     const body = String(init.body ?? '');
-    captured.push({ verb, headers, body });
+    captured.push({ verb, search: new URL(url).search, headers, body });
     // A `GET` sends no body (WP-293's reads).
     const parsed = (body === '' ? {} : JSON.parse(body)) as Record<string, unknown>;
     const method = init.method ?? 'POST';
@@ -1705,6 +1708,10 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       }
       expect(core.captured.find((call) => call.verb === 'offers')?.headers.authorization).toBe(
         `Bearer ${WORKER_CREDENTIAL}`,
+      );
+      // S-26.7: the worker asks for each entry's `held_elsewhere` by name.
+      expect(core.captured.find((call) => call.verb === 'offers')?.search).toBe(
+        `?${WORKER_OFFERS_HELD_ELSEWHERE_QUERY}`,
       );
 
       // The scope: read, set to pick only through the core's PUT, read back.

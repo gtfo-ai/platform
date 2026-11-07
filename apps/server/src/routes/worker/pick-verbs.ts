@@ -50,6 +50,7 @@ import {
   parseWorkerProtocolHeader,
   type RunDisplay,
   runPackageSchema,
+  WORKER_OFFERS_HELD_ELSEWHERE_QUERY,
   WORKER_OFFERS_LIST_MAX,
   WORKER_PATHS,
   WORKER_PROTOCOL_CLAIM_POLICY,
@@ -116,6 +117,19 @@ const unauthenticated = (what: string): HttpError =>
 const speaksClaimPolicy = (request: FastifyRequest): boolean =>
   (parseWorkerProtocolHeader(request.headers[WORKER_PROTOCOL_HEADER]) ?? WORKER_PROTOCOL_VERSION) >=
   WORKER_PROTOCOL_CLAIM_POLICY;
+
+/** The `fields` value a worker sends to be told each offer's `held_elsewhere` (S-26.7). */
+const HELD_ELSEWHERE_FIELD = new URLSearchParams(WORKER_OFFERS_HELD_ELSEWHERE_QUERY).get('fields');
+
+/**
+ * Whether the request asked for `held_elsewhere` (S-26.7): an opt-in, so a worker built before the
+ * field — whose strict parse refuses an unknown key — is never sent it. The route declares no
+ * querystring schema, so any other query is ignored, as it always was.
+ */
+const asksHeldElsewhere = (request: FastifyRequest): boolean => {
+  const fields = (request.query as Record<string, unknown> | undefined)?.fields;
+  return typeof fields === 'string' && fields.split(',').includes(HELD_ELSEWHERE_FIELD ?? '');
+};
 
 /**
  * The scope a version-3 worker is shown (S-26.4): `[]` — its own *pick only* — when the policy
@@ -274,7 +288,7 @@ export const registerWorkerPickVerbs = (
       schema: {
         summary: 'The open offers this worker could take now, in its projects (WP-293, S-26.4)',
         description:
-          'Worker credential, protocol ≥ 3. At most 50 open offers, oldest first, that a pick would admit for this worker now — the claim’s own eligibility text, against the image digests the worker last reported, **narrowed by its project list** (S-26.4; a pick of an offer outside it is still admitted) — each with whether its claim scope and policy take it automatically (`automatic`). Protocol ≥ 4: each entry’s `owner` (the task’s, `null` for nobody) and `mine` (a task its user owns, or an ask they asked), and the list’s `as_of` and `policy_skipped_offers`. The ticket key and the title come from the redacted ticket snapshot and are untrusted text; an ask carries its task and stage, never the question’s text. `426` below protocol 3; `503 digests_unresolved` while the core cannot name its images.',
+          'Worker credential, protocol ≥ 3. At most 50 open offers, oldest first, that a pick would admit for this worker now — the claim’s own eligibility text, against the image digests the worker last reported, **narrowed by its project list** (S-26.4; a pick of an offer outside it is still admitted) — each with whether its claim scope and policy take it automatically (`automatic`). Protocol ≥ 4: each entry’s `owner` (the task’s, `null` for nobody) and `mine` (a task its user owns, or an ask they asked), and the list’s `as_of` and `policy_skipped_offers`; with `?fields=held_elsewhere` (S-26.7) each entry adds `held_elsewhere` — its task’s tracker assignee is a person the platform cannot match to a member, so a pick claims it without assigning — an opt-in, so a worker built before the field is never sent it. The ticket key and the title come from the redacted ticket snapshot and are untrusted text; an ask carries its task and stage, never the question’s text. `426` below protocol 3; `503 digests_unresolved` while the core cannot name its images.',
         tags: ['worker'],
         response: {
           200: workerOffersResponseSchema,
@@ -291,6 +305,7 @@ export const registerWorkerPickVerbs = (
         throw options.unresolved();
       }
       const v4 = speaksClaimPolicy(request);
+      const heldElsewhere = v4 && asksHeldElsewhere(request);
       const asOf = isoNow();
       const offers = await options.remote.offers({
         workerId,
@@ -334,6 +349,7 @@ export const registerWorkerPickVerbs = (
                   mine: offer.mine,
                 }
               : {}),
+            ...(heldElsewhere ? { held_elsewhere: offer.heldElsewhere } : {}),
           };
         }),
         ...(v4 ? { as_of: asOf, policy_skipped_offers: skipped } : {}),

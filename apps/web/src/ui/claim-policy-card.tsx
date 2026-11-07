@@ -27,8 +27,8 @@ import type { WorkerClaimPolicy } from '@platform/contracts';
 import { type ReactElement, useId, useState } from 'react';
 import { Button } from './button.js';
 import { Flash } from './flash.js';
-import { projectListWords, MACHINE_TAKES_WORDS as W } from './humanize.js';
 import { UntrustedText } from './untrusted.js';
+import { projectListWords, MACHINE_TAKES_WORDS as W } from './words/claim-policy.js';
 
 /** A project the machine's person may take tasks in: its name is the chip's and the sentence's. */
 export interface ClaimPolicyProject {

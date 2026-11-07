@@ -64,6 +64,7 @@ const offer = (overrides: Partial<WorkerOffer> = {}): WorkerOffer => ({
   automatic: false,
   owner: null,
   mine: false,
+  held_elsewhere: false,
   ...overrides,
 });
 
@@ -276,8 +277,16 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
       ),
     ).toEqual({ kind: 'run_here' });
     // A core that said nothing of owners: a take, and no promise of an assignment.
-    const { owner: _owner, mine: _mine, ...older } = offer();
+    const { owner: _owner, mine: _mine, held_elsewhere: _held, ...older } = offer();
     expect(offerActionOf(older)).toEqual({ kind: 'take', assigns: false });
+    // Nobody owns it but the tracker holds it for somebody the platform cannot match (S-26.7), or
+    // the core did not say: a take that promises nothing.
+    expect(offerActionOf(offer({ held_elsewhere: true }))).toEqual({
+      kind: 'take',
+      assigns: false,
+    });
+    const { held_elsewhere: _unsaid, ...unsaid } = offer();
+    expect(offerActionOf(unsaid)).toEqual({ kind: 'take', assigns: false });
   });
 
   it('takes a task nobody owns: Assigns ACME-7 to you, the list’s as_of, then Assigned to you', async () => {
@@ -297,6 +306,17 @@ describe('picking a run (the M26 UX spec § 6, S-26.7 (3))', () => {
     ).not.toBeNull();
     await waitFor(() => expect(container.querySelector(`[data-offer="${RUN_A}"]`)).toBeNull());
     expect(screen.getByText('Nothing is waiting.')).toBeTruthy();
+  });
+
+  it('takes a task held elsewhere without promising an assignment (S-26.7, backlog 1457)', async () => {
+    const client = fakeClient({ offers: [offer({ held_elsewhere: true })] });
+    const { container } = renderPick(client);
+    const row = await rowOf(container, RUN_A);
+    expect(row.textContent).not.toContain('Assigns');
+    await userEvent.click(screen.getByRole('button', { name: 'Take this one' }));
+    await waitFor(() => expect(client.take).toHaveBeenCalledWith(RUN_A, AS_OF));
+    expect(await screen.findByText('Starting on this machine…')).toBeTruthy();
+    expect(screen.queryByText('Assigned to you · starting on this machine…')).toBeNull();
   });
 
   it('reads Run it here on your own task, with no assignment line', async () => {
