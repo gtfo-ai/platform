@@ -3836,7 +3836,8 @@ describe('a human’s way into Ready (WP-79)', () => {
     expect(count(/kind: 'enter'/g), 'stage entries').toBe(1);
     expect(count(/\bapplyDecision\(/g), 'applyDecision calls').toBe(1);
     expect(count(/\bmarkReadyForMerge\(/g), 'markReadyForMerge calls').toBe(1);
-    expect(count(/\btasks\s*\.\s*save\(/g), 'whole-row saves').toBe(4);
+    // 5 since S-27.1 (BACKLOG 1480): the resume of a task paused out of an approval wait.
+    expect(count(/\btasks\s*\.\s*save\(/g), 'whole-row saves').toBe(5);
     // The domain commands it imports are the complete list of state changes it can make; each task
     // command's target state is named, and none is `ready_for_merge` except through `humanEnter`.
     // A new import (`enterStage`, `recordMerge`, `startRetrospective`, …) fails here first.
@@ -3873,6 +3874,7 @@ describe('a human’s way into Ready (WP-79)', () => {
         'READY_FOR_MERGE_STAGE',
         'recordFeedback', // no state change
         'resetAgentIterations', // pure
+        'resumeIntoApprovalWait', // paused → waiting_approval (S-27.1, BACKLOG 1480)
         'stageOf', // pure
         'steerRun', // no state change
         'TaskMergedError', // a refusal (WP-152)

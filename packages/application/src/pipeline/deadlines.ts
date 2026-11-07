@@ -45,7 +45,7 @@
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
-import { escalateTask, isBefore } from '@platform/domain';
+import { APPROVAL_REMINDER_LIMIT, escalateTask, isBefore } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -56,6 +56,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { reminderTimeOf, type WorkingCalendar } from '../scheduling/working-calendar.js';
+import { interruptedApproval } from './approval-wait.js';
 import {
   type DeadlineOutcome,
   expireTaskQuestion,
@@ -69,6 +70,7 @@ import {
 } from './deadline-timer.js';
 import {
   approvalReminderAt,
+  approvalReminderDueAt,
   approvalReminderTimeout,
   remindWaitingAggregate,
 } from './reminders.js';
@@ -110,6 +112,8 @@ export const declareDeadlineQueue = async (jobs: Jobs): Promise<void> => {
 export interface DeadlineArmingOptions {
   readonly jobs: Jobs;
   readonly calendar: WorkingCalendar;
+  /** What the resume back into an approval wait reads its approval and pauses from (BACKLOG 1480). */
+  readonly store: PipelineStore;
   /** Where an approval's first reminder reads its pace, the project's `question_timeout` (S-27.1). */
   readonly settings: ProjectSettingsPort;
   readonly logger?: Logger;
@@ -141,7 +145,13 @@ export const DEADLINE_ARMING_PRIORITY = 15;
 export const deadlineArmingHandler = (options: DeadlineArmingOptions): EventHandler => ({
   name: 'pipeline.deadlines',
   priority: DEADLINE_ARMING_PRIORITY,
-  eventTypes: ['task.question.asked', 'task.approval.requested', 'task.taken_over'],
+  eventTypes: [
+    'task.question.asked',
+    'task.approval.requested',
+    'task.taken_over',
+    // BACKLOG 1480: a resume back into an approval wait arms that approval's next reminder.
+    'task.resumed',
+  ],
   handle: async (context) => {
     const logger = options.logger ?? silentLogger;
     const event = context.event.event;
@@ -205,6 +215,39 @@ export const deadlineArmingHandler = (options: DeadlineArmingOptions): EventHand
           { aggregate: 'task', id: event.payload.task_id, kind: 'take_over_inactivity' },
           takeOverDeadline(options.calendar, event.occurred_at),
         );
+        return;
+      }
+      case 'task.resumed': {
+        // Only a resume back into an approval wait (BACKLOG 1480): no reminder went out while the
+        // task was paused, so the next one is armed here, at its instant with the pause taken out.
+        const tx = context.scope.tx;
+        const stored = await options.store.tasks.load(tx, event.payload.task_id);
+        if (stored === null || stored.task.state !== 'waiting_approval') {
+          return;
+        }
+        const interrupted = await interruptedApproval(options.store, tx, stored.task.id);
+        const approval = interrupted?.approval ?? null;
+        if (
+          approval === null ||
+          approval.status !== 'pending' ||
+          approval.remindersSent >= APPROVAL_REMINDER_LIMIT
+        ) {
+          return;
+        }
+        const timeout = await approvalReminderTimeout(options.settings, approval.projectId, tx);
+        if (timeout === null) {
+          return;
+        }
+        const at = approvalReminderDueAt(
+          options.calendar,
+          approval,
+          timeout,
+          approval.remindersSent + 1,
+          await options.store.tasks.pauses(tx, stored.task.id),
+        );
+        if (at !== null) {
+          arm({ aggregate: 'approval', id: approval.id, kind: 'approval_reminder' }, at);
+        }
         return;
       }
       default:

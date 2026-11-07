@@ -157,7 +157,7 @@ export const runNotification = async (
   const waitingOn = waitingAggregateOf(notificationClass, data);
   if (waitingOn !== null) {
     const waiting = await options.unitOfWork.transaction(async (scope) =>
-      isStillWaiting(options.store, scope.tx, waitingOn),
+      isStillWaiting(options.store, scope.tx, waitingOn, notificationClass),
     );
     if (!waiting) {
       // `info`, not `debug`: this line is the only trace an operator has of why nobody was told

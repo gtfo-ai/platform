@@ -207,6 +207,10 @@ export const decideApproval = (
  * `waiting_approval` task with **no** pending approval — its approval decided, and the saga's move
  * lost — is still resumable: that is the rescue `RESUMABLE_TASK_STATES` keeps the state for.
  *
+ * **A `paused` task is asked too** (BACKLOG 1480): `pending` is then the approval the pause
+ * interrupted, still pending, and a retry-stage or retry-run of it is refused the same way. A
+ * *resume* of such a task is not refused — it goes back to the wait (`resumeIntoApprovalWait`).
+ *
  * @throws {ApprovalPendingError} naming the approval.
  */
 export const assertNoPendingApproval = (
@@ -214,7 +218,11 @@ export const assertNoPendingApproval = (
   pending: Pick<Approval, 'id' | 'kind' | 'status'> | null,
   entry: { readonly stage: string; readonly move: string },
 ): void => {
-  if (task.state !== 'waiting_approval' || pending === null || pending.status !== 'pending') {
+  if (
+    (task.state !== 'waiting_approval' && task.state !== 'paused') ||
+    pending === null ||
+    pending.status !== 'pending'
+  ) {
     return;
   }
   throw new ApprovalPendingError({
@@ -222,5 +230,6 @@ export const assertNoPendingApproval = (
     approvalKind: pending.kind,
     stage: entry.stage,
     move: entry.move,
+    from: task.state,
   });
 };

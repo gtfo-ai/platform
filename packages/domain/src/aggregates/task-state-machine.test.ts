@@ -61,8 +61,9 @@ const EXPECTED_TASK_EDGES = {
   waiting_approval: ['active', 'paused', 'needs_human', 'cancelled'],
   // "paused(budget|manual|taken_over) ─► active | ready_for_merge | merged" — the last two since
   // WP-73 (backlog 244, Q104): a pause at `ready_for_merge` resumes there, and a provider merge
-  // during it ends it.
-  paused: ['active', 'ready_for_merge', 'merged', 'needs_human', 'cancelled'],
+  // during it ends it; "─► waiting_approval" since S-27.1 (BACKLOG 1480): a pause out of a wait for
+  // an approval resumes into that wait.
+  paused: ['active', 'ready_for_merge', 'merged', 'needs_human', 'cancelled', 'waiting_approval'],
   // "needs_human ─► active | cancelled | retro" — the last since WP-152 (technical/02's M9
   // amendment, backlog 497): a task escalated after its merge finishes its retrospective. The
   // aggregate narrows it to a merged task and a person's command.

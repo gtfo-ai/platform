@@ -26,6 +26,11 @@
  *    (`deadlineSweepDataSchema` stays strict and gains no index): it is `reminders_sent + 1`, read
  *    when the job fires, and the timeout is the project's `question_timeout` read then too — there
  *    is no `approval_timeout` key (the Q95 amendment refused a dial cell, and that still holds).
+ *  - **Not while its task is paused** (BACKLOG 1480): an approval is reminded about only while its
+ *    task is `waiting_approval`. A timer that fires during a pause settles; the resume back into the
+ *    wait arms the next reminder (`pipeline.deadlines` on `task.resumed`), and every instant is
+ *    shifted by the working time the task spent paused since the request
+ *    ({@link approvalReminderDueAt}), so the schedule resumes rather than bursting to catch up.
  *
  * ## What it does, in this order, and why the order
  *
@@ -83,12 +88,14 @@ import {
   resolveDeadline,
   type WorkingCalendar,
 } from '../scheduling/working-calendar.js';
+import { shiftedByPauses } from './approval-wait.js';
 import type { DeadlineOutcome } from './commands.js';
 import { questionTimeoutOf } from './deadline-rules.js';
 import { enqueueDeadline } from './deadline-timer.js';
 import type { DeadlineSweepOptions } from './deadlines.js';
 import { enqueueOutbound } from './jobs.js';
 import type { ProjectSettingsPort } from './settings.js';
+import type { TaskPause } from './store.js';
 
 /** Which aggregate a reminder is about. */
 export type RemindedAggregate = 'question' | 'approval';
@@ -138,6 +145,23 @@ export const approvalReminderAt = (
   }
   const at = reminderTimeOf(calendar, from, resolveDeadline(calendar, from, timeout));
   return at === null ? null : (at.toISOString() as IsoDateTime);
+};
+
+/**
+ * When the `ordinal`-th reminder of this approval is due **with its task's pauses taken out**
+ * (BACKLOG 1480): {@link approvalReminderAt}, moved later by the working time the task spent paused
+ * since the request (`shiftedByPauses`), so the schedule resumes after a pause rather than catching
+ * up with a burst. `null` where `approvalReminderAt` is.
+ */
+export const approvalReminderDueAt = (
+  calendar: WorkingCalendar,
+  approval: { readonly requestedAt: IsoDateTime },
+  timeout: string,
+  ordinal: number,
+  pauses: readonly TaskPause[],
+): IsoDateTime | null => {
+  const at = approvalReminderAt(calendar, approval.requestedAt, timeout, ordinal);
+  return at === null ? null : shiftedByPauses(calendar, at, pauses, approval.requestedAt);
 };
 
 /**
@@ -238,7 +262,11 @@ const planApproval = async (
     // task's end (BD-006's 2026-11-07 amendment, item 5).
     return SETTLED;
   }
-  if (await taskFinished(options, tx, approval.taskId)) {
+  // Only while its task waits for it (BACKLOG 1480): a paused task is not reminded about — the
+  // timer settles, and the resume back into the wait arms the next one. A finished task is the
+  // same answer.
+  const task = await options.store.tasks.load(tx, approval.taskId);
+  if (task === null || task.task.state !== 'waiting_approval') {
     return SETTLED;
   }
   const timeout = await approvalReminderTimeout(options.settings, approval.projectId, tx);
@@ -250,7 +278,8 @@ const planApproval = async (
     return SETTLED;
   }
   const ordinal = approval.remindersSent + 1;
-  const dueAt = approvalReminderAt(options.calendar, approval.requestedAt, timeout, ordinal);
+  const pauses = await options.store.tasks.pauses(tx, approval.taskId);
+  const dueAt = approvalReminderDueAt(options.calendar, approval, timeout, ordinal, pauses);
   if (dueAt === null) {
     return SETTLED;
   }
@@ -265,7 +294,7 @@ const planApproval = async (
     sent: approval.remindersSent,
     // Platform text keyed by the kind, as the approval's own notification carries.
     detail: `Still waiting for a decision: ${APPROVAL_DETAIL[approval.kind]} Decide on the task page.`,
-    next: approvalReminderAt(options.calendar, approval.requestedAt, timeout, ordinal + 1),
+    next: approvalReminderDueAt(options.calendar, approval, timeout, ordinal + 1, pauses),
   };
 };
 

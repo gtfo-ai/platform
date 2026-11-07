@@ -42,6 +42,8 @@ import {
   cancelTaskCommand,
   decideTaskApproval,
   handBackTaskCommand,
+  pauseTaskCommand,
+  resumeTaskCommand,
   retryStageCommand,
   returnToStageCommand,
   takeOverTaskCommand,
@@ -352,6 +354,7 @@ describe('a question’s deadline (BD-006, PROGRESS backlog 74)', () => {
       calendar: createWorkingCalendar(),
       // A take-over reads no settings; only an approval's first reminder does (S-27.1).
       settings: {} as never,
+      store: {} as never,
     });
     const deferred: (() => Promise<void>)[] = [];
     await handler.handle({
@@ -394,6 +397,7 @@ describe('a question’s deadline (BD-006, PROGRESS backlog 74)', () => {
       jobs: {} as never,
       calendar: createWorkingCalendar(),
       settings: {} as never,
+      store: {} as never,
       logger: {
         warn: (_fields: unknown, message: string) => {
           warnings.push(message);
@@ -951,6 +955,118 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
     moveTo(harness, '2026-06-09T12:00:00.000Z');
     await harness.drain();
     expect(reminderMessages(harness)).toHaveLength(0);
+  });
+
+  /**
+   * BACKLOG 1480, the coordinator's ruling: no reminder while the task is paused, a resume goes back
+   * to the wait (never past it), the schedule resumes with the pause taken out, and a decision made
+   * during the pause is followed when the task is resumed.
+   */
+  describe('while the task is paused (BACKLOG 1480)', () => {
+    const MONDAY_1000 = '2026-06-08T10:00:00.000Z';
+    const TUESDAY_1000 = '2026-06-09T10:00:00.000Z';
+    const TUESDAY_1200 = '2026-06-09T12:00:00.000Z';
+    const sentOf = async (harness: PipelineHarness, id: Id) =>
+      (await harness.store.approvals.load({} as never, id))?.approval.remindersSent;
+
+    it('sends no reminder while paused, resumes into the wait, and resumes the schedule with the pause taken out', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const taskId = taskOf(harness).task.id;
+      moveTo(harness, MONDAY_1000);
+      await pauseTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      expect(taskOf(harness).task.state).toBe('paused');
+
+      // The first reminder's instant passes while the task is paused: the timer settles, silent.
+      moveTo(harness, MONDAY_1200);
+      await harness.drain();
+      expect(reminderMessages(harness)).toHaveLength(0);
+      expect(await sentOf(harness, approval.id)).toBe(0);
+      expect(deadlineJobs(harness)).toEqual([]);
+
+      // A whole working day later, a resume: back to the wait, the stage not entered.
+      moveTo(harness, TUESDAY_1000);
+      const runsBefore = harness.specs.length;
+      await resumeTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('waiting_approval');
+      expect(harness.specs.length).toBe(runsBefore);
+      expect((await harness.store.approvals.load({} as never, approval.id))?.approval.status).toBe(
+        'pending',
+      );
+      // Monday 12:00 plus the eight working hours the task spent paused (Mon 10–17, Tue 9–10).
+      expect(deadlineJobs(harness).map((job) => [job.data, job.startAfter?.toISOString()])).toEqual(
+        [[{ aggregate: 'approval', id: approval.id, kind: 'approval_reminder' }, TUESDAY_1200]],
+      );
+
+      moveTo(harness, '2026-06-09T11:59:59.999Z');
+      await harness.drain();
+      expect(reminderMessages(harness)).toHaveLength(0);
+      moveTo(harness, TUESDAY_1200);
+      await harness.drain();
+      expect(reminderMessages(harness)).toHaveLength(1);
+      expect(await sentOf(harness, approval.id)).toBe(1);
+      // The count is what was sent, so the cap is still five: the next is the second, a day on.
+      expect(deadlineJobs(harness)[0]?.startAfter?.toISOString()).toBe('2026-06-10T12:00:00.000Z');
+    });
+
+    it('withholds a reminder raised just before the pause, when it would be posted', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const taskId = taskOf(harness).task.id;
+      moveTo(harness, MONDAY_1200);
+      // The timer fires and enqueues the notification; the pause lands before the duty runs.
+      await harness.jobs.handlers.get(JOB_QUEUES.deadlineSweep)?.({
+        id: 'approval-reminder-before-pause',
+        queue: JOB_QUEUES.deadlineSweep,
+        data: { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' },
+        signal: AbortSignal.abort(),
+      });
+      await pauseTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      await harness.drain();
+      expect(await sentOf(harness, approval.id)).toBe(1);
+      expect(reminderMessages(harness)).toHaveLength(0);
+      expect(reminders(harness)).toHaveLength(0);
+    });
+
+    it('follows a decision made while the task was paused, when it is resumed', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const taskId = taskOf(harness).task.id;
+      moveTo(harness, MONDAY_1000);
+      await pauseTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      moveTo(harness, '2026-06-08T11:00:00.000Z');
+      await decideTaskApproval(harness.commands, {
+        approvalId: approval.id,
+        decision: 'approved',
+        userId: USER,
+        role: 'maintainer',
+        subjectArtifactId: await shownPlanOf(harness, approval.id),
+      });
+      await harness.drain();
+      // Decided, but the task was not waiting: nothing moved yet.
+      expect(taskOf(harness).task.state).toBe('paused');
+      expect(harness.specs.some((spec) => spec.stage === 'implementation')).toBe(false);
+
+      moveTo(harness, '2026-06-08T11:30:00.000Z');
+      await resumeTaskCommand(harness.humanCommands, { taskId, userId: USER });
+      await harness.drain();
+      expect(taskOf(harness).task.state).not.toBe('waiting_approval');
+      expect(taskOf(harness).task.state).not.toBe('paused');
+      expect(harness.specs.some((spec) => spec.stage === 'implementation')).toBe(true);
+    });
+
+    it('refuses a retry of the stage while paused, naming the approval', async () => {
+      const { harness, approval } = await planApprovalOnFriday();
+      const task = taskOf(harness).task;
+      moveTo(harness, MONDAY_1000);
+      await pauseTaskCommand(harness.humanCommands, { taskId: task.id, userId: USER });
+      await expect(
+        retryStageCommand(harness.humanCommands, {
+          taskId: task.id,
+          userId: USER,
+          stage: task.currentStage as Slug,
+        }),
+      ).rejects.toThrow(approval.id);
+      expect(taskOf(harness).task.state).toBe('paused');
+    });
   });
 
   it('reminds nobody about an approval a maintainer decided first', async () => {

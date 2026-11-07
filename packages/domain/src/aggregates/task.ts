@@ -602,6 +602,31 @@ export const pauseTask = (
   return { aggregate: { ...next, sequence: recorder.sequence }, events: recorder.events };
 };
 
+/**
+ * **A resume back into the approval wait a pause interrupted** (S-27.1, BACKLOG 1480; BD-006's
+ * 2026-11-07 amendment). A task paused while it waited for an approval does not proceed past that
+ * approval when it is resumed: it goes back to `waiting_approval`, so only the approval's own
+ * decision moves it on — and an approval decided while the task was paused is applied by the saga
+ * on the `task.resumed` this appends. `paused → waiting_approval` is an edge for this command alone.
+ */
+export const resumeIntoApprovalWait = (
+  task: Task,
+  input: { readonly approvalId: Id },
+  context: CommandContext,
+): TaskDecision => {
+  if (task.state !== 'paused') {
+    throw new IllegalTransitionError('Task', task.state, 'waiting_approval');
+  }
+  const next = withState(task, 'waiting_approval');
+  const recorder = recorderFor(task, context);
+  recorder.emit('task.resumed', {
+    project_id: task.projectId,
+    task_id: task.id,
+    reason: `back to waiting for approval ${input.approvalId}`,
+  });
+  return { aggregate: { ...next, sequence: recorder.sequence }, events: recorder.events };
+};
+
 /** Park the task in `Needs human` with a blocker brief (product/04, BD-008). */
 export const escalateTask = (
   task: Task,

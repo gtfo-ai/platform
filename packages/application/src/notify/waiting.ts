@@ -47,12 +47,28 @@ export const asksSomebody = (notificationClass: NotificationClass): boolean =>
   notificationClass === 'reminder' ||
   notificationClass === 'approval';
 
-/** Still open (a question) or still pending (an approval), read inside the caller's transaction. */
+/**
+ * Still open (a question) or still pending (an approval), read inside the caller's transaction.
+ *
+ * **A reminder about an approval also needs its task still waiting for it** (S-27.1, BACKLOG 1480):
+ * an approval is not reminded about while its task is paused, so a reminder raised just before a
+ * pause is withheld when it would be posted, and the resume back into the wait arms the next one.
+ */
 export const isStillWaiting = async (
-  store: Pick<PipelineStore, 'questions' | 'approvals'>,
+  store: Pick<PipelineStore, 'questions' | 'approvals' | 'tasks'>,
   tx: Transaction,
   waiting: WaitingAggregate,
-): Promise<boolean> =>
-  waiting.aggregate === 'approval'
-    ? (await store.approvals.load(tx, waiting.id))?.approval.status === 'pending'
-    : (await store.questions.load(tx, waiting.id))?.status === 'open';
+  notificationClass?: NotificationClass,
+): Promise<boolean> => {
+  if (waiting.aggregate === 'question') {
+    return (await store.questions.load(tx, waiting.id))?.status === 'open';
+  }
+  const stored = await store.approvals.load(tx, waiting.id);
+  if (stored?.approval.status !== 'pending') {
+    return false;
+  }
+  if (notificationClass !== 'reminder') {
+    return true;
+  }
+  return (await store.tasks.load(tx, stored.approval.taskId))?.task.state === 'waiting_approval';
+};

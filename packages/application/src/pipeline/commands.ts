@@ -56,6 +56,7 @@ import {
   READY_FOR_MERGE_STAGE,
   recordFeedback,
   resetAgentIterations,
+  resumeIntoApprovalWait,
   stageOf,
   steerRun,
   TaskMergedError,
@@ -69,6 +70,7 @@ import type { Logger } from '../ports/logger.js';
 import type { RunTakeOverExport } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import { interruptedApproval } from './approval-wait.js';
 import { MEASURED_ZERO_COST, NO_RUN_USAGE, stoppedBeforeCliSpawn } from './cli-spawn.js';
 import {
   enqueueOutbound,
@@ -703,6 +705,18 @@ const humanEnter = async (
       await pendingApprovalOf(deps.store, scope.tx, stored.task.id),
       { stage: entry.stage, move: entry.via.replaceAll('_', '-') },
     );
+  } else if (
+    stored.task.state === 'paused' &&
+    (entry.via === 'retry_stage' || entry.via === 'retry_run')
+  ) {
+    // BACKLOG 1480: a retry of a task paused out of an approval wait would skip the approval just
+    // the same. A resume goes back to the wait instead (above), and a hand-back is the take-over's
+    // own way back to a stage the person chose.
+    assertNoPendingApproval(
+      stored.task,
+      (await interruptedApproval(deps.store, scope.tx, stored.task.id))?.approval ?? null,
+      { stage: entry.stage, move: entry.via.replaceAll('_', '-') },
+    );
   }
   if (entry.stage === READY_FOR_MERGE_STAGE) {
     markReadyForMerge(stored.task, context);
@@ -976,6 +990,22 @@ export const resumeTaskCommand = async (
     deps,
     { ...input, what: 'resuming the task' },
     async (scope, stored, context) => {
+      // BACKLOG 1480 (S-27.1): a task paused while it waited for an approval goes back to that
+      // wait — never past it. A decision made during the pause is applied by the saga on the
+      // `task.resumed` this appends (`approval-wait.ts`).
+      if (stored.task.state === 'paused') {
+        const interrupted = await interruptedApproval(deps.store, scope.tx, stored.task.id);
+        if (interrupted !== null) {
+          const decision = resumeIntoApprovalWait(
+            stored.task,
+            { approvalId: interrupted.approval.id },
+            context,
+          );
+          await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
+          await scope.events.append(decision.events);
+          return { result: undefined, work: null };
+        }
+      }
       const stage = resumeTargetOf(stored, currentStageOrThrow(stored, 'resume'));
       const work = await humanEnter(deps, scope, stored, context, {
         stage,

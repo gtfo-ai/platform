@@ -97,8 +97,14 @@ export class ApprovalPendingError extends IllegalTransitionError {
     readonly approvalKind: string;
     readonly stage: string;
     readonly move: string;
+    /** The task's state: `waiting_approval`, or `paused` out of that wait (BACKLOG 1480). */
+    readonly from?: string;
   }) {
-    super('Task', 'waiting_approval', `${input.stage} (approval ${input.approvalId} is pending)`);
+    super(
+      'Task',
+      input.from ?? 'waiting_approval',
+      `${input.stage} (approval ${input.approvalId} is pending)`,
+    );
     this.approvalId = input.approvalId;
     this.approvalKind = input.approvalKind;
     this.message =

@@ -1531,6 +1531,50 @@ describe('a resume never moves a task past its pending approval (S-27.1, BACKLOG
     });
   }
 
+  /**
+   * BACKLOG 1480: a resume of a task paused while it waited for an approval puts it back into the
+   * wait (`resumeIntoApprovalWait`, `human-commands`/`deadlines` tests hold the command) — the route
+   * answers where the task is after it, `waiting_approval` at the same stage, never past it, and
+   * audits the resume once; a retry of it is the same `409 approval_pending` as from the wait.
+   */
+  it('answers a resume of a task paused out of the wait with the wait it went back to, audited once', async () => {
+    const holder: { world?: World } = {};
+    const paused = await build({
+      taskPosition: async () =>
+        (holder.world?.calls.length ?? 0) > 0
+          ? { state: 'waiting_approval', currentStage: 'architecture' }
+          : { state: 'paused', currentStage: 'architecture' },
+    });
+    holder.world = paused;
+    paused.role = 'member';
+    const reply = await post(paused, `/api/tasks/${TASK}/resume`, {}, 'resume-paused-wait-1');
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    expect(reply.body).toMatchObject({
+      performed: true,
+      state: 'waiting_approval',
+      current_stage: 'architecture',
+    });
+    expect(paused.calls.map((call) => call.name)).toEqual(['resume']);
+    expect(paused.actions.map((action) => action.action)).toEqual(['task.resume']);
+
+    paused.throws = new ApprovalPendingError({
+      approvalId: APPROVAL,
+      approvalKind: 'plan',
+      stage: 'architecture',
+      move: 'retry-stage',
+      from: 'paused',
+    });
+    const retried = await post(
+      paused,
+      `/api/tasks/${TASK}/retry-stage`,
+      { stage: 'architecture' },
+      'retry-paused-wait-1',
+    );
+    expect(`${retried.status} ${retried.body.error?.code ?? ''}`).toBe('409 approval_pending');
+    expect(retried.body.error?.message).toContain(APPROVAL);
+    expect(paused.actions).toHaveLength(1);
+  });
+
   it('refuses a viewer before the command, by role', async () => {
     const waiting = await waitingWorld();
     waiting.role = 'viewer';

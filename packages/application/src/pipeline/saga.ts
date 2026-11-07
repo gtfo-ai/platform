@@ -84,6 +84,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { WorkingCalendar } from '../scheduling/working-calendar.js';
+import { interruptedApproval } from './approval-wait.js';
 import { escalateForConfigRefusalInHandler } from './config-refusal.js';
 import type { TaskDutyLeaseOptions } from './duty-lease.js';
 import { humanReturnStageOf } from './human-stage.js';
@@ -115,7 +116,7 @@ import {
   spikeRefusal,
   templateForIssueType,
 } from './settings.js';
-import type { PipelineStore, StoredTask } from './store.js';
+import type { PipelineStore, StoredApproval, StoredTask } from './store.js';
 import { DefaultBranchChangedError, INITIAL_TASK_VERSION, PIPELINE_ACTOR } from './store.js';
 import { type RequesterOptions, readTicketForTask, resolveRequester } from './ticket-snapshot.js';
 import {
@@ -1537,6 +1538,140 @@ const questionHandler = (options: PipelineSagaOptions): EventHandler => ({
   },
 });
 
+/**
+ * What a decided approval does to the task waiting for it — the body of {@link approvalHandler},
+ * shared since S-27.1 with {@link approvalResumedHandler} (BACKLOG 1480): a decision made while
+ * the task was paused is applied when the task is resumed back into the wait, by this same code.
+ */
+const applyApprovalDecision = async (
+  options: PipelineSagaOptions,
+  context: HandlerContext,
+  stored: StoredTask,
+  record: StoredApproval | null,
+  decision: {
+    readonly decision: 'approved' | 'rejected' | 'expired';
+    readonly reason: string | null | undefined;
+    readonly causeEventId: Id;
+  },
+): Promise<void> => {
+  const stage = record?.stage ?? stored.task.currentStage;
+  if (stage === null) {
+    return;
+  }
+  const commandContext = contextFor(options, stored.task.id, decision.causeEventId);
+
+  if (decision.decision === 'approved') {
+    // Re-ask the interpreter the question the approval interrupted. The approval row now exists
+    // and is decided, so `planApprovalGate` lets it through this time.
+    await step(options, context, stored, {
+      kind: 'stage_completed',
+      stage,
+      verdict: 'approve',
+    });
+    return;
+  }
+
+  if (decision.decision === 'rejected' && record?.approval.kind === 'budget') {
+    // **A rejected budget is not a rejected plan, and it does not go round the loop again.**
+    //
+    // Rejecting a plan is a statement about *this plan*, so product/04 S2 sends the task back to
+    // Architecture to write a better one. Rejecting a spend is a statement about *the task*: the
+    // estimate is written once and a second refinement round would produce the same number, so
+    // resuming the stage would walk straight back into a gate that is already keyed as asked and
+    // spend the money the maintainer just refused. The task stops and says why — `needs_human`,
+    // which is the existing vocabulary rather than a state of its own (Q59).
+    const refused = escalateTask(
+      stored.task,
+      {
+        reason: 'a maintainer rejected the cost estimate for this task',
+        blockerBrief:
+          `The estimated cost of ${stored.task.ticket.key} was not approved${
+            typeof decision.reason === 'string' && decision.reason.length > 0
+              ? `: ${decision.reason}`
+              : ''
+          }. ` +
+          'Nothing has been spent on Implementation. Either raise the project’s budget-approval ' +
+          'threshold and hand the task back at the stage it should resume from, or cancel it.',
+      },
+      commandContext,
+    );
+    await options.store.tasks.save(context.scope.tx, { ...stored, task: refused.aggregate });
+    await closeParkedStageRow(options.store, context.scope.tx, refused, 'budget.rejected');
+    await context.emit(refused.events);
+    return;
+  }
+
+  if (decision.decision === 'rejected') {
+    // product/04 S2: a rejected plan goes back to Architecture with the human's reasoning — a
+    // new attempt with its own `task_stages` row, the parked attempt closed as a return to its
+    // own stage carrying the reason, which is the next architect run's `return_feedback`
+    // (PROGRESS backlog 495). The reason was redacted where the command stored it.
+    const reason =
+      typeof decision.reason === 'string' && decision.reason.length > 0
+        ? decision.reason
+        : 'the plan was rejected';
+    const resumed = await resumeAtStage(
+      options.store,
+      context.scope.tx,
+      stored.task,
+      {
+        stage,
+        loop: returnLoopFor(stage) ?? 'architecture_revisions',
+        reason,
+        escalationBrief:
+          `The plan for ${stored.task.ticket.key} has been rejected as many times as its limit allows` +
+          ` (the last time: ${reason}). ` +
+          'Write what the plan should say instead, and hand the task back at Architecture.',
+        sentBack: { reason, outcome: 'plan.rejected' },
+      },
+      commandContext,
+      decision.causeEventId,
+    );
+    await options.store.tasks.save(context.scope.tx, { ...stored, task: resumed.aggregate });
+    await emitAndSchedule(
+      options,
+      context,
+      resumed.events,
+      resumed.aggregate.state === 'active'
+        ? {
+            taskId: stored.task.id,
+            projectId: stored.task.projectId,
+            stage,
+            attempt: resumed.aggregate.stageAttempts[stage] ?? 1,
+          }
+        : null,
+    );
+    return;
+  }
+
+  // `expired`: nothing on this build produces it (BD-006's 2026-11-07 amendment, S-27.1). The
+  // branch stays for an `expired` decision an earlier build appended and this one dispatches —
+  // an upgrade with one still queued, or a replay — whose task must still end where it said.
+  const escalated = escalateTask(
+    stored.task,
+    {
+      reason: 'the approval expired',
+      // Names only what is accepted now (WP-56 round 2, backlog 163): an `expired` approval has
+      // no transitions, so "approve or reject it" was refused. A return is accepted since backlog
+      // 483 but is not offered: the approval is the question here. Retrying the stage the approval interrupted
+      // is accepted on the `needs_human` task; for a **budget** approval it carries
+      // on without asking again (`latestOfKind` finds the expired one), which the sentence says,
+      // because a maintainer who retries is making the spend decision.
+      blockerBrief:
+        `Nobody decided the ${record?.approval.kind ?? 'plan'} approval for ${stored.task.ticket.key} in time, ` +
+        'and an expired approval can no longer be approved or rejected. To go on, ' +
+        (record?.approval.kind === 'budget'
+          ? `retry "${stage}" from the task page — the task then carries on without asking for the budget again, so retrying is the approval — `
+          : `retry "${stage}" from the task page to have the plan written and asked for again — `) +
+        'or cancel the task.',
+    },
+    commandContext,
+  );
+  await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
+  await closeParkedStageRow(options.store, context.scope.tx, escalated, 'approval.expired');
+  await context.emit(escalated.events);
+};
+
 const approvalHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.approval',
   priority: 10,
@@ -1551,122 +1686,44 @@ const approvalHandler = (options: PipelineSagaOptions): EventHandler => ({
       return;
     }
     const record = await options.store.approvals.load(context.scope.tx, event.payload.approval_id);
-    const stage = record?.stage ?? stored.task.currentStage;
-    if (stage === null) {
+    await applyApprovalDecision(options, context, stored, record, {
+      decision: event.payload.decision,
+      reason: event.payload.reason,
+      causeEventId: event.id,
+    });
+  },
+});
+
+/**
+ * **A decision made while the task was paused** (S-27.1, BACKLOG 1480). {@link approvalHandler}
+ * acts only on a task still `waiting_approval`, so a decision on a paused task moved nothing then;
+ * the resume puts the task back into the wait (`resumeIntoApprovalWait`) and appends
+ * `task.resumed`, and this applies the decision the pause held — once: whichever of the two
+ * handlers runs second finds the task no longer waiting (each loads it in its own transaction, and
+ * `save` is versioned). A pending approval is left to its own decision.
+ */
+const approvalResumedHandler = (options: PipelineSagaOptions): EventHandler => ({
+  name: 'pipeline.approval.resumed',
+  priority: 10,
+  eventTypes: ['task.resumed'],
+  handle: async (context) => {
+    const event = context.event.event;
+    if (event.type !== 'task.resumed') {
       return;
     }
-    const commandContext = contextFor(options, stored.task.id, event.id);
-
-    if (event.payload.decision === 'approved') {
-      // Re-ask the interpreter the question the approval interrupted. The approval row now exists
-      // and is decided, so `planApprovalGate` lets it through this time.
-      await step(options, context, stored, {
-        kind: 'stage_completed',
-        stage,
-        verdict: 'approve',
-      });
+    const stored = await loadTask(options, context, event.payload.task_id);
+    if (stored === null || stored.task.state !== 'waiting_approval') {
       return;
     }
-
-    if (event.payload.decision === 'rejected' && record?.approval.kind === 'budget') {
-      // **A rejected budget is not a rejected plan, and it does not go round the loop again.**
-      //
-      // Rejecting a plan is a statement about *this plan*, so product/04 S2 sends the task back to
-      // Architecture to write a better one. Rejecting a spend is a statement about *the task*: the
-      // estimate is written once and a second refinement round would produce the same number, so
-      // resuming the stage would walk straight back into a gate that is already keyed as asked and
-      // spend the money the maintainer just refused. The task stops and says why — `needs_human`,
-      // which is the existing vocabulary rather than a state of its own (Q59).
-      const refused = escalateTask(
-        stored.task,
-        {
-          reason: 'a maintainer rejected the cost estimate for this task',
-          blockerBrief:
-            `The estimated cost of ${stored.task.ticket.key} was not approved${
-              typeof event.payload.reason === 'string' && event.payload.reason.length > 0
-                ? `: ${event.payload.reason}`
-                : ''
-            }. ` +
-            'Nothing has been spent on Implementation. Either raise the project’s budget-approval ' +
-            'threshold and hand the task back at the stage it should resume from, or cancel it.',
-        },
-        commandContext,
-      );
-      await options.store.tasks.save(context.scope.tx, { ...stored, task: refused.aggregate });
-      await closeParkedStageRow(options.store, context.scope.tx, refused, 'budget.rejected');
-      await context.emit(refused.events);
+    const record = await interruptedApproval(options.store, context.scope.tx, stored.task.id);
+    if (record === null || record.approval.status === 'pending') {
       return;
     }
-
-    if (event.payload.decision === 'rejected') {
-      // product/04 S2: a rejected plan goes back to Architecture with the human's reasoning — a
-      // new attempt with its own `task_stages` row, the parked attempt closed as a return to its
-      // own stage carrying the reason, which is the next architect run's `return_feedback`
-      // (PROGRESS backlog 495). The reason was redacted where the command stored it.
-      const reason =
-        typeof event.payload.reason === 'string' && event.payload.reason.length > 0
-          ? event.payload.reason
-          : 'the plan was rejected';
-      const resumed = await resumeAtStage(
-        options.store,
-        context.scope.tx,
-        stored.task,
-        {
-          stage,
-          loop: returnLoopFor(stage) ?? 'architecture_revisions',
-          reason,
-          escalationBrief:
-            `The plan for ${stored.task.ticket.key} has been rejected as many times as its limit allows` +
-            ` (the last time: ${reason}). ` +
-            'Write what the plan should say instead, and hand the task back at Architecture.',
-          sentBack: { reason, outcome: 'plan.rejected' },
-        },
-        commandContext,
-        event.id,
-      );
-      await options.store.tasks.save(context.scope.tx, { ...stored, task: resumed.aggregate });
-      await emitAndSchedule(
-        options,
-        context,
-        resumed.events,
-        resumed.aggregate.state === 'active'
-          ? {
-              taskId: stored.task.id,
-              projectId: stored.task.projectId,
-              stage,
-              attempt: resumed.aggregate.stageAttempts[stage] ?? 1,
-            }
-          : null,
-      );
-      return;
-    }
-
-    // `expired`: nothing on this build produces it (BD-006's 2026-11-07 amendment, S-27.1). The
-    // branch stays for an `expired` decision an earlier build appended and this one dispatches —
-    // an upgrade with one still queued, or a replay — whose task must still end where it said.
-    const escalated = escalateTask(
-      stored.task,
-      {
-        reason: 'the approval expired',
-        // Names only what is accepted now (WP-56 round 2, backlog 163): an `expired` approval has
-        // no transitions, so "approve or reject it" was refused. A return is accepted since backlog
-        // 483 but is not offered: the approval is the question here. Retrying the stage the approval interrupted
-        // is accepted on the `needs_human` task; for a **budget** approval it carries
-        // on without asking again (`latestOfKind` finds the expired one), which the sentence says,
-        // because a maintainer who retries is making the spend decision.
-        blockerBrief:
-          `Nobody decided the ${record?.approval.kind ?? 'plan'} approval for ${stored.task.ticket.key} in time, ` +
-          'and an expired approval can no longer be approved or rejected. To go on, ' +
-          (record?.approval.kind === 'budget'
-            ? `retry "${stage}" from the task page — the task then carries on without asking for the budget again, so retrying is the approval — `
-            : `retry "${stage}" from the task page to have the plan written and asked for again — `) +
-          'or cancel the task.',
-      },
-      commandContext,
-    );
-    await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
-    await closeParkedStageRow(options.store, context.scope.tx, escalated, 'approval.expired');
-    await context.emit(escalated.events);
+    await applyApprovalDecision(options, context, stored, record, {
+      decision: record.approval.status,
+      reason: record.approval.reason,
+      causeEventId: event.id,
+    });
   },
 });
 
@@ -2133,6 +2190,7 @@ export const pipelineHandlers = (options: PipelineSagaOptions): readonly EventHa
   stageCompletedHandler(options),
   questionHandler(options),
   approvalHandler(options),
+  approvalResumedHandler(options),
   ciHandler(options),
   mergeRequestHandler(options),
   reviewCommentHandler(options),

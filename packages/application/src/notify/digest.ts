@@ -231,7 +231,7 @@ const deliverDigest = async (
       if (waitingOn === null || waitingOn === 'unknown') {
         continue;
       }
-      if (!(await isStillWaiting(options.store, scope.tx, waitingOn))) {
+      if (!(await isStillWaiting(options.store, scope.tx, waitingOn, row.notificationClass))) {
         settled.push(row.id);
       }
     }

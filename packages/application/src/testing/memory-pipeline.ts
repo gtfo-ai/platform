@@ -110,9 +110,11 @@ import type {
 import {
   DefaultBranchChangedError,
   LeaseLostError,
+  PAUSE_ENDING_EVENTS,
   STOPPING_RUN_COMMAND_KINDS,
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
+  type TaskPause,
 } from '../pipeline/store.js';
 import type { StoredEvent } from '../ports/event-store.js';
 import type {
@@ -977,6 +979,20 @@ export const createMemoryPipelineStore = (
       );
     },
     /** The SQL store's read over the harness's log: the newest `task.paused` decides. */
+    pauses: async (_tx, taskId) => {
+      const events = options.taskEvents?.(taskId) ?? [];
+      const pauses: TaskPause[] = [];
+      for (const [index, event] of events.entries()) {
+        if (event.type !== 'task.paused') {
+          continue;
+        }
+        const ending = events
+          .slice(index + 1)
+          .find((later) => (PAUSE_ENDING_EVENTS as readonly string[]).includes(later.type));
+        pauses.push({ pausedAt: event.occurred_at, endedAt: ending?.occurred_at ?? null });
+      }
+      return pauses;
+    },
     pausedBudgetScope: async (_tx, taskId) => {
       const newest = (options.taskEvents?.(taskId) ?? [])
         .filter((event) => event.type === 'task.paused')
@@ -2722,7 +2738,7 @@ export const createMemoryPipelineStore = (
         if (
           approval.status === 'pending' &&
           approval.remindersSent < query.limitSent &&
-          unfinished(approval.taskId) &&
+          tasks.get(approval.taskId)?.task.state === 'waiting_approval' &&
           approval.requestedAt < query.requestedBefore
         ) {
           rows.push({

@@ -20,7 +20,7 @@
  * | a paused task still taken over whose five working days of inactivity passed more than a grace ago | the same | a take-over has no stored deadline; it is recomputed from the holder's last activity (the take-over, or a later `human_actions` row of theirs — WP-44) on the calendar, as the job does |
  * | an open question with **no** deadline | writes one **counted from now**, then arms it | below |
  * | an open question **never reminded** whose reminder time passed more than a grace ago and whose deadline has **not** passed (WP-108, backlog **291**) | {@link remindWaitingAggregate} — the reminder timer's own path, re-validating | below |
- * | a pending approval with reminders left whose **next** reminder ({@link approvalReminderAt}, ordinal `reminders_sent + 1`) is more than a grace overdue (S-27.1) | the same | below |
+ * | a pending approval with reminders left whose **next** reminder ({@link approvalReminderDueAt}, ordinal `reminders_sent + 1`) is more than a grace overdue, while its task waits for it (S-27.1) | the same | below |
  *
  * **Counted from the backfill, not from `asked_at`** (the refiner's recommendation, taken). A
  * deadline computed from when a question was asked would expire every question an instance had
@@ -79,7 +79,7 @@ import {
   settleDeadline,
 } from '../pipeline/deadlines.js';
 import {
-  approvalReminderAt,
+  approvalReminderDueAt,
   approvalReminderTimeout,
   remindWaitingAggregate,
 } from '../pipeline/reminders.js';
@@ -163,7 +163,8 @@ export interface DeadlineRecoveryStore {
     },
   ): Promise<readonly UnremindedAggregate[]>;
   /**
-   * Pending approvals of an unfinished task with `reminders_sent` below `limitSent` and a
+   * Pending approvals of a `waiting_approval` task (a paused one is not reminded about, BACKLOG
+   * 1480) with `reminders_sent` below `limitSent` and a
    * `requested_at` before `requestedBefore` (every reminder lies strictly after it), oldest request
    * first, at most `limit` (S-27.1). Whether the next reminder is due is the caller's question, for
    * the reason {@link unreminded} gives.
@@ -398,7 +399,8 @@ const questionReminderOverdue = (
 
 /**
  * The approval reminder row's predicate (S-27.1): its **next** reminder — ordinal
- * `reminders_sent + 1`, at {@link approvalReminderAt} over the project's `question_timeout` — is
+ * `reminders_sent + 1`, at {@link approvalReminderDueAt} over the project's `question_timeout`, its
+ * task's pauses taken out — is
  * more than the grace ago. An unreadable project configuration times nothing (the pace is that
  * document's), so the row is skipped and asked again on the next pass.
  */
@@ -411,11 +413,16 @@ const approvalReminderOverdue = async (
   if (timeout === null) {
     return false;
   }
-  const at = approvalReminderAt(
+  // The live timer's instant, the task's pauses taken out (BACKLOG 1480): the same arithmetic.
+  const pauses = await site.sweep.unitOfWork.transaction(async (scope) =>
+    site.sweep.store.tasks.pauses(scope.tx, row.taskId),
+  );
+  const at = approvalReminderDueAt(
     site.sweep.calendar,
-    row.requestedAt,
+    row,
     timeout,
     row.remindersSent + 1,
+    pauses,
   );
   return at !== null && Date.parse(at) < Date.parse(dueBefore);
 };

@@ -221,8 +221,25 @@ describe('a human entry never moves a task past a pending approval (BACKLOG 854)
     expect(() => assertNoPendingApproval({ state: 'waiting_approval' }, null, entry)).not.toThrow();
   });
 
+  it('refuses a retry of a task paused out of the wait, naming the approval (BACKLOG 1480)', () => {
+    let refused: unknown;
+    try {
+      assertNoPendingApproval({ state: 'paused' }, pending(), {
+        stage: 'architecture',
+        move: 'retry-stage',
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(ApprovalPendingError);
+    expect((refused as ApprovalPendingError).from).toBe('paused');
+    expect((refused as Error).message).toContain(APPROVAL_ID);
+  });
+
   it('asks nothing of a task in any other state', () => {
-    for (const state of taskStateSchema.options.filter((state) => state !== 'waiting_approval')) {
+    for (const state of taskStateSchema.options.filter(
+      (state) => state !== 'waiting_approval' && state !== 'paused',
+    )) {
       expect(() => assertNoPendingApproval({ state }, pending(), entry), state).not.toThrow();
     }
   });

@@ -1005,6 +1005,14 @@ export interface TaskRepository {
    */
   pausedBudgetScope(tx: Transaction, taskId: Id): Promise<PausedBudgetScope | null>;
   /**
+   * Every pause on the task's stream, oldest first (S-27.1, BACKLOG 1480): the `task.paused`
+   * instant, and the instant the pause ended — the first `task.resumed` or `task.stage.entered`
+   * after it — or `null` while it lasts. What finds the approval wait a pause interrupted (an
+   * approval requested before the newest pause and pending, or decided, after it) and what shifts an
+   * approval's reminders by the working time its task spent paused (`reminders.ts`).
+   */
+  pauses(tx: Transaction, taskId: Id): Promise<readonly TaskPause[]>;
+  /**
    * **Raises** the task's cap to `capUsd`, and only raises it: answers `raised: false` with the cap
    * in force when `capUsd` is not above it (`defaultCapUsd` when the task has no override), and
    * writes nothing then. The one writer of `tasks.budget_cap_usd`, narrow like `addSpend` (standing
@@ -1377,6 +1385,16 @@ export const TAKE_OVER_BOUNDARY_EVENTS = [
   'task.completed',
   'task.cancelled',
 ] as const;
+
+/** One pause of a task, as {@link TaskRepository.pauses} reads it off the task's stream. */
+export interface TaskPause {
+  readonly pausedAt: IsoDateTime;
+  /** The first `task.resumed` or `task.stage.entered` after it; `null` while the task is paused. */
+  readonly endedAt: IsoDateTime | null;
+}
+
+/** The events that end a pause, for {@link TaskRepository.pauses} — one list for both stores. */
+export const PAUSE_ENDING_EVENTS = ['task.resumed', 'task.stage.entered'] as const;
 
 /** A take-over in force, as `task.taken_over` recorded it (product/19 §19, WP-27). */
 export interface TakeOverRecord {

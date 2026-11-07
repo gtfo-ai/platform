@@ -1422,7 +1422,10 @@ maintainer*, with no due time), and the project's chat channel gets at most **fi
 first halfway through the question timeout, then one per question timeout (half a working day after
 the request, then once a working day, by default). After that the chat goes quiet, but the item stays
 in *Needs you*. Resuming or retrying the task does not get round a pending approval — whoever asks,
-the platform refuses it and names the approval, because only its decision moves the task. An approval
+the platform refuses it and names the approval, because only its decision moves the task. Pausing does
+not either: a paused task gets no reminders, and resuming it puts it back to *Waiting for approval*
+(or, if the approval was decided while it was paused, carries on from that decision), with the
+reminders picking up where they left off. An approval
 that expired before the change stays expired, and its task is retried or handed back from the task page
 as before.
 

@@ -117,7 +117,7 @@ export const createPostgresDeadlineRecoveryStore = (): DeadlineRecoveryStore => 
   },
   /**
    * The fourth row's read for an approval (S-27.1): pending, reminders left, requested before the
-   * grace. Whether its next reminder is due is the working calendar's question, asked by the caller.
+   * grace, and its task **waiting for it** — a paused task is not reminded about (BACKLOG 1480). Whether its next reminder is due is the working calendar's question, asked by the caller.
    * `approvals_status_deadline_idx`'s leading `status` column serves the `pending` predicate.
    */
   remindableApprovals: async (tx, query) => {
@@ -131,7 +131,7 @@ export const createPostgresDeadlineRecoveryStore = (): DeadlineRecoveryStore => 
       `select a.id, t.project_id, a.task_id, a.requested_at, a.reminders_sent
          from approvals a join tasks t on t.id = a.task_id
         where a.status = 'pending' and a.reminders_sent < $1
-          and t.state not in ('done', 'cancelled') and a.requested_at < $2
+          and t.state = 'waiting_approval' and a.requested_at < $2
         order by a.requested_at, a.id limit $3`,
       [query.limitSent, query.requestedBefore, query.limit],
     );
