@@ -704,23 +704,51 @@ export const OWNER_WORDS = {
     `Assigned to ${name}. Their machine picks it up at the next stage.`,
   /** The title of a refused owner change, wherever it is shown. */
   'owner.refused': 'The owner was not changed.',
-  'owner.unassigned_done':
-    'Unassigned. A machine that takes unassigned tasks picks it up at the next stage.',
+  /**
+   * After *Unassign*. Unassigning **never** writes to the tracker (TD-031's amendment item 4), so
+   * the words never claim a tracker change; where the project writes assignments back
+   * (`owner_writes_back`), they say the ticket keeps its assignee there.
+   */
+  'owner.unassigned_done': (trackerKeeps: string | null): string =>
+    trackerKeeps === null
+      ? 'Unassigned. A machine that takes unassigned tasks picks it up at the next stage.'
+      : `Unassigned. The ticket stays assigned in ${trackerKeeps}. A machine that takes unassigned tasks picks it up at the next stage.`,
   /** The header's line: "Owner: Vojtěch". */
   'owner.label': (name: string): string => `Owner: ${name}`,
   /** The owner is the reader. */
   'owner.you': ' (you)',
   /** An owner whose account has no name. */
   'owner.nameless': 'a person with no name',
-  /** *Take it* on a task somebody else owns (§ 2): the confirmation names them. */
+  /**
+   * *Take it* on a task somebody else owns (§ 2): the confirmation names them. Its sentence is
+   * built in parts, because a tracker assignee it replaces is provider text the caller renders
+   * through `UntrustedText`: *Their machine stops getting it*, then — when the project writes the
+   * assignment back — *, and this also assigns DEMO-1 in Jira*, then *, replacing Jan Novák* when
+   * the tracker shows somebody the platform cannot link, then the full stop.
+   */
   'owner.take_from': {
     title: (ticketKey: string, owner: string): string => `Take ${ticketKey} from ${owner}?`,
-    consequence: (ticketKey: string, writesBack: boolean, tracker: string): string =>
-      writesBack
-        ? `Their machine stops getting it, and this also assigns ${ticketKey} in ${tracker}.`
-        : 'Their machine stops getting it.',
+    stops: 'Their machine stops getting it',
+    also: (ticketKey: string, tracker: string): string =>
+      `, and this also assigns ${ticketKey} in ${tracker}`,
+    replacing: ', replacing ',
+    end: '.',
     confirm: (owner: string): string => `Take it from ${owner}`,
     keep: 'Cancel',
+  },
+  /**
+   * *Take it* on a task nobody owns that the tracker assigns to a person the platform cannot link,
+   * when the project writes the assignment back (S-26.3): taking it reassigns the ticket there.
+   * "Take DEMO-2? This also assigns DEMO-2 in Jira to you, replacing *Jan Novák*."
+   */
+  'owner.take_held': {
+    title: (ticketKey: string): string => `Take ${ticketKey}?`,
+    before: (ticketKey: string, tracker: string): string =>
+      `This also assigns ${ticketKey} in ${tracker} to you, replacing `,
+    /** The tracker sent no display name. */
+    nameless: 'its current assignee there',
+    end: '.',
+    confirm: (tracker: string): string => `Take it and assign in ${tracker}`,
   },
   'owner.action.take': 'Take it',
   'owner.action.assign': 'Assign…',

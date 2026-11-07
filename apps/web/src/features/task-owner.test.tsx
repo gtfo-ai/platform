@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
 import { primaryLabels } from '../ui/primary-census.js';
-import { ownerOffers, takeFromWhom } from './task-owner.js';
+import { ownerOffers, takeConfirmFor } from './task-owner.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
@@ -409,11 +409,105 @@ describe('taking a task', () => {
     expect(sent).toHaveLength(0);
   });
 
-  it('confirms against the owner only when it is somebody else', () => {
-    expect(takeFromWhom(null, ME)).toBeNull();
-    expect(takeFromWhom({ user_id: ME, name: 'Fake Operator' }, ME)).toBeNull();
-    expect(takeFromWhom({ user_id: VOJTECH, name: 'Vojtěch' }, ME)).toBe('Vojtěch');
-    expect(takeFromWhom({ user_id: VOJTECH, name: ' ' }, ME)).toBe('a person with no name');
+  it('confirms against an owner who is somebody else, and a held ticket only when it writes back', () => {
+    const none = { owner: null, unlinked_assignee: null, owner_writes_back: false };
+    const held = { display_name: 'Jan Novák' };
+    expect(takeConfirmFor(none, ME)).toBeNull();
+    expect(
+      takeConfirmFor({ ...none, owner: { user_id: ME, name: 'Fake Operator' } }, ME),
+    ).toBeNull();
+    expect(takeConfirmFor({ ...none, owner: { user_id: VOJTECH, name: 'Vojtěch' } }, ME)).toEqual({
+      kind: 'owner',
+      ownerName: 'Vojtěch',
+      replacing: null,
+    });
+    expect(takeConfirmFor({ ...none, owner: { user_id: VOJTECH, name: ' ' } }, ME)).toEqual({
+      kind: 'owner',
+      ownerName: 'a person with no name',
+      replacing: null,
+    });
+    expect(
+      takeConfirmFor(
+        {
+          owner: { user_id: VOJTECH, name: 'Vojtěch' },
+          unlinked_assignee: held,
+          owner_writes_back: true,
+        },
+        ME,
+      ),
+    ).toEqual({ kind: 'owner', ownerName: 'Vojtěch', replacing: 'Jan Novák' });
+    // Held only by the tracker's unlinked assignee: asked only when the assignment is written back.
+    expect(takeConfirmFor({ ...none, unlinked_assignee: held }, ME)).toBeNull();
+    expect(
+      takeConfirmFor({ ...none, unlinked_assignee: held, owner_writes_back: true }, ME),
+    ).toEqual({ kind: 'held', assignee: 'Jan Novák' });
+  });
+
+  it('asks before taking a ticket the tracker assigns to somebody, when it writes back', async () => {
+    const { sent } = start(
+      detail(
+        { can_take: true },
+        { unlinked_assignee: { display_name: `Jan Novák ${HOSTILE}` }, owner_writes_back: true },
+      ),
+      'maintainer',
+    );
+    const line = await ownerLine();
+    const user = userEvent.setup();
+    await user.click(await within(line).findByRole('button', { name: 'Take it' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Take ACME-12?' }, { timeout: 5000 });
+    const describedBy = dialog.getAttribute('aria-describedby') ?? '';
+    expect(document.getElementById(describedBy)?.textContent).toBe(
+      `This also assigns ACME-12 in Jira to you, replacing Jan Novák ${HOSTILE}.`,
+    );
+    expect(dialog.querySelector('img')).toBeNull();
+    expect(sent).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Take it and assign in Jira' }));
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(sent[0]?.body).toEqual({ user_id: ME });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  it('takes a ticket the tracker assigns to somebody at once when nothing is written back', async () => {
+    const { sent } = start(
+      detail({ can_take: true }, { unlinked_assignee: { display_name: 'Jan Novák' } }),
+      'maintainer',
+    );
+    const line = await ownerLine();
+    await userEvent.setup().click(await within(line).findByRole('button', { name: 'Take it' }));
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(await ownerDone()).toBe('Assigned to you. Your machine picks it up at the next stage.');
+  });
+
+  it('names the tracker assignee a take from an owner replaces, when it writes back', async () => {
+    start(
+      detail(
+        { can_take: true },
+        {
+          ...OWNED_BY_VOJTECH,
+          unlinked_assignee: { display_name: 'Jan Novák' },
+          owner_writes_back: true,
+        },
+      ),
+      'maintainer',
+    );
+    const line = await ownerLine();
+    await userEvent.setup().click(await within(line).findByRole('button', { name: 'Take it' }));
+    const dialog = await screen.findByRole(
+      'dialog',
+      { name: 'Take ACME-12 from Vojtěch?' },
+      { timeout: 5000 },
+    );
+    const describedBy = dialog.getAttribute('aria-describedby') ?? '';
+    expect(document.getElementById(describedBy)?.textContent).toBe(
+      'Their machine stops getting it, and this also assigns ACME-12 in Jira, replacing Jan Novák.',
+    );
   });
 });
 
@@ -430,6 +524,24 @@ describe('unassigning, and a refusal', () => {
     expect(await ownerDone()).toBe(
       'Unassigned. A machine that takes unassigned tasks picks it up at the next stage.',
     );
+  });
+
+  it('never claims a tracker change: it says the ticket stays assigned there when it writes back', async () => {
+    start(detail({ can_unassign: true }, { ...OWNED_BY_ME, owner_writes_back: true }));
+    let line = await ownerLine();
+    await userEvent.setup().click(await within(line).findByRole('button', { name: 'Unassign' }));
+    const written = await ownerDone();
+    expect(written).toBe(
+      'Unassigned. The ticket stays assigned in Jira. A machine that takes unassigned tasks picks it up at the next stage.',
+    );
+    // Unassign never writes to the tracker (TD-031 item 4): no word of a change made there.
+    expect(written).not.toMatch(/\b(?:assigns|unassigns|unassigned in|removes|removed|cleared)\b/i);
+
+    cleanup();
+    start(detail({ can_unassign: true }, OWNED_BY_ME));
+    line = await ownerLine();
+    await userEvent.setup().click(await within(line).findByRole('button', { name: 'Unassign' }));
+    expect(await ownerDone()).not.toContain('Jira');
   });
 
   it('says a 403 in words, and nothing was done', async () => {

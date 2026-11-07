@@ -22,9 +22,16 @@
  *   read of exactly the people it accepts is not served yet (BACKLOG 1297 wires it).
  * - **Taking a task somebody else owns asks first**, naming them: *Take DEMO-1 from Vojtěch? Their
  *   machine stops getting it.*, confirmed by *Take it from Vojtěch*; when the project writes the
- *   assignment back to the tracker (`owner_writes_back`) it adds *also assigns DEMO-1 in Jira*, and
- *   says nothing of the tracker otherwise. The dialog is a lazy chunk, fetched the first time it
- *   opens.
+ *   assignment back to the tracker (`owner_writes_back`) it adds *also assigns DEMO-1 in Jira*
+ *   (*, replacing Jan Novák* when the tracker shows a person the platform cannot link), and says
+ *   nothing of the tracker otherwise. **Taking a task nobody owns that the tracker assigns to such
+ *   a person** asks only when the assignment is written back — *Take DEMO-2? This also assigns
+ *   DEMO-2 in Jira to you, replacing Jan Novák.*, *Take it and assign in Jira* — and is taken at
+ *   once when it is not ({@link takeConfirmFor}). The dialog is a lazy chunk, fetched the first
+ *   time it opens.
+ * - **Unassign never writes to the tracker** (TD-031's amendment item 4): its words never claim a
+ *   tracker change, and where assignments are written back they say the ticket stays assigned
+ *   there.
  * - **What follows is said once it is done**, in a polite status line: *Assigned to you. Your
  *   machine picks it up at the next stage.* A refusal (`403 owner_change_not_permitted`,
  *   `409 task_finished`, `422 owner_not_project_member`) is said in words (`api/read-error.ts`).
@@ -42,12 +49,15 @@ import { Button, ErrorNotice } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { isOrgSectionFor } from './settings-sections.js';
+import type { TakeConfirm } from './task-owner-dialogs.js';
 
 /** A task's owner as the read publishes it. */
 export type TaskOwnerView = NonNullable<TaskRecord['owner']>;
 
 const loadDialogs = () => import('./task-owner-dialogs.js');
-const TakeFromDialog = lazy(async () => ({ default: (await loadDialogs()).TakeFromDialog }));
+const TakeConfirmDialog = lazy(async () => ({
+  default: (await loadDialogs()).TakeConfirmDialog,
+}));
 
 /** An owner action the page may offer. *Assign…* joins when its read is served (BACKLOG 1297). */
 export type OwnerAction = 'take' | 'unassign';
@@ -73,14 +83,31 @@ export const ownerName = (owner: TaskOwnerView): string =>
   owner.name.trim() === '' ? OWNER_WORDS['owner.nameless'] : owner.name;
 
 /**
- * The name *Take it* must confirm against: the owner's, when somebody **other than the reader**
- * owns the task. `null` — no owner, or the reader — takes it at once.
+ * What *Take it* must confirm, or `null` to take it at once:
+ *
+ * - somebody **other than the reader** owns the task — confirmed against their name, with the
+ *   tracker assignee it would replace when the tracker shows a person the platform cannot link
+ *   (the dialog says it only when the assignment is written back);
+ * - nobody owns it, the tracker assigns it to such a person, **and** the project writes the
+ *   assignment back (`owner_writes_back`, S-26.3) — taking it reassigns the ticket in the tracker,
+ *   so it asks; when nothing is written back, taking it changes nothing there and asks nothing;
+ * - otherwise (nobody owns it and nobody holds it, or the reader owns it) — at once.
  */
-export const takeFromWhom = (
-  owner: TaskOwnerView | null | undefined,
+export const takeConfirmFor = (
+  task: Pick<TaskRecord, 'owner' | 'unlinked_assignee' | 'owner_writes_back'>,
   viewerId: string | null,
-): string | null =>
-  owner === null || owner === undefined || owner.user_id === viewerId ? null : ownerName(owner);
+): TakeConfirm | null => {
+  const owner = task.owner ?? null;
+  const unlinked = task.unlinked_assignee ?? null;
+  if (owner !== null) {
+    return owner.user_id === viewerId
+      ? null
+      : { kind: 'owner', ownerName: ownerName(owner), replacing: unlinked?.display_name ?? null };
+  }
+  return unlinked !== null && task.owner_writes_back === true
+    ? { kind: 'held', assignee: unlinked.display_name }
+    : null;
+};
 
 /** The page's owner control: what is offered, what was done, and the confirmation's state. */
 export const useOwnerControl = (detail: TaskDetailResponse) => {
@@ -93,7 +120,7 @@ export const useOwnerControl = (detail: TaskDetailResponse) => {
   const [done, setDone] = useState<string | null>(null);
   // No session read yet: nobody to take it for, so nothing is offered.
   const offers = viewer === null ? [] : ownerOffers(detail);
-  const takeFrom = takeFromWhom(detail.task.owner, viewer?.id ?? null);
+  const takeConfirm = takeConfirmFor(detail.task, viewer?.id ?? null);
 
   const send = (userId: string | null, words: string): void => {
     setDone(null);
@@ -111,8 +138,15 @@ export const useOwnerControl = (detail: TaskDetailResponse) => {
   };
   const run = (action: OwnerAction): void => {
     if (action === 'unassign') {
-      send(null, OWNER_WORDS['owner.unassigned_done']);
-    } else if (takeFrom !== null) {
+      // Unassigning never writes to the tracker: where assignments are written back, the ticket
+      // keeps its assignee there, and the words say so rather than claim a change.
+      send(
+        null,
+        OWNER_WORDS['owner.unassigned_done'](
+          detail.task.owner_writes_back === true ? trackerName(detail.task.ticket.provider) : null,
+        ),
+      );
+    } else if (takeConfirm !== null) {
       command.reset();
       setLoaded(true);
       setConfirming(true);
@@ -120,7 +154,18 @@ export const useOwnerControl = (detail: TaskDetailResponse) => {
       take();
     }
   };
-  return { viewer, offers, takeFrom, run, take, confirming, setConfirming, loaded, done, command };
+  return {
+    viewer,
+    offers,
+    takeConfirm,
+    run,
+    take,
+    confirming,
+    setConfirming,
+    loaded,
+    done,
+    command,
+  };
 };
 
 export type OwnerControl = ReturnType<typeof useOwnerControl>;
@@ -216,13 +261,13 @@ export const OwnerFeedback = ({
       {control.command.isError && !control.confirming ? (
         <ErrorNotice title={OWNER_WORDS['owner.refused']} error={control.command.error} />
       ) : null}
-      {!control.loaded || control.takeFrom === null ? null : (
+      {!control.loaded || control.takeConfirm === null ? null : (
         <Suspense fallback={null}>
-          <TakeFromDialog
+          <TakeConfirmDialog
             open={control.confirming}
             onOpenChange={control.setConfirming}
             ticketKey={task.ticket.key}
-            ownerName={control.takeFrom}
+            confirm={control.takeConfirm}
             writesBack={task.owner_writes_back === true}
             tracker={trackerName(task.ticket.provider)}
             pending={control.command.isPending}

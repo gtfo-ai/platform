@@ -791,7 +791,11 @@ platform cannot link — *Assigned in Jira to Jan Novák (not linked to a platfo
 `···` menu, offer **Take it** and **Unassign** — only what your role may do: a member takes a task
 nobody owns or gives back their own, a maintainer either on anybody's task. Taking a task somebody
 else owns asks first — *Take DEMO-1 from Vojtěch? Their machine stops getting it.* — and, when the
-project writes the assignment back to the tracker, says that it also assigns the ticket there. A line
+project writes the assignment back to the tracker, says that it also assigns the ticket there (and
+whom it replaces, when the tracker shows a person the platform cannot link). Taking a task nobody
+owns that the tracker assigns to such a person asks only when the assignment is written back: *Take
+DEMO-2? This also assigns DEMO-2 in Jira to you, replacing Jan Novák.* **Unassign** never changes
+the tracker: where assignments are written back, the ticket stays assigned there. A line
 then says what follows: *Assigned to you. Your machine picks it up at the next stage.* **Assign…**
 (choosing another person) is not offered yet: it waits for a list of exactly the people the
 platform accepts as the owner. On the **board**, a card shows its owner's initials at its top right

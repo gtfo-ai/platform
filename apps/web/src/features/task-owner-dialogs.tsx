@@ -2,10 +2,15 @@
  * The owner control's two dialogs (S-26.8b, the M26 UX spec § 2) — a **lazy chunk**, fetched the
  * first time one opens, so neither is in the initial graph (TD-013's budget).
  *
- * - {@link TakeFromDialog}: *Take it* on a task somebody else owns. It names them — *Take DEMO-1
- *   from Vojtěch?* — says what follows (*Their machine stops getting it.*, and *also assigns DEMO-1
- *   in Jira* only when the project writes the assignment back), and its act reads *Take it from
- *   Vojtěch*. `ConfirmDialog`'s one shape: a refusal stays in it, beside the button.
+ * - {@link TakeConfirmDialog}: *Take it* when it costs somebody the task. On a task somebody else
+ *   owns it names them — *Take DEMO-1 from Vojtěch?* — says what follows (*Their machine stops
+ *   getting it.*, and *also assigns DEMO-1 in Jira* only when the project writes the assignment
+ *   back, *replacing Jan Novák* when the tracker shows a person the platform cannot link), and its
+ *   act reads *Take it from Vojtěch*. On a task nobody owns that the tracker assigns to such a
+ *   person, and only when the assignment is written back: *Take DEMO-2? This also assigns DEMO-2 in
+ *   Jira to you, replacing Jan Novák.*, *Take it and assign in Jira*. The tracker's assignee is
+ *   provider text, rendered through `UntrustedText`. `ConfirmDialog`'s one shape: a refusal stays
+ *   in it, beside the button.
  * - {@link OwnerPicker}: *Assign…*, a person picker over the candidates it is **given** — the
  *   people the owner command accepts. No read of exactly those people is served yet (the org's
  *   user list includes non-members and disabled users), so nothing renders it: BACKLOG 1297 wires
@@ -22,13 +27,26 @@ import { Dialog } from '../ui/dialog.js';
 import { OWNER_WORDS } from '../ui/humanize.js';
 import { ErrorNotice } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
+import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 
-export const TakeFromDialog = ({
+/**
+ * What *Take it* must confirm (`takeConfirmFor` in `./task-owner.tsx`):
+ *
+ * - `owner` — somebody else owns the task. `replacing` is the tracker assignee the platform cannot
+ *   link, when the tracker shows one with a name, said only when the assignment is written back.
+ * - `held` — nobody owns it, the tracker assigns it to a person the platform cannot link, and the
+ *   project writes the assignment back: taking it reassigns the ticket there (S-26.3).
+ */
+export type TakeConfirm =
+  | { readonly kind: 'owner'; readonly ownerName: string; readonly replacing: string | null }
+  | { readonly kind: 'held'; readonly assignee: string | null };
+
+export const TakeConfirmDialog = ({
   open,
   onOpenChange,
   ticketKey,
-  ownerName,
+  confirm,
   writesBack,
   tracker,
   pending,
@@ -38,8 +56,7 @@ export const TakeFromDialog = ({
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly ticketKey: string;
-  /** The current owner's name, as the page says it. */
-  readonly ownerName: string;
+  readonly confirm: TakeConfirm;
   /** `owner_writes_back`: the assignment is also written to the tracker. */
   readonly writesBack: boolean;
   /** The tracker's name (`trackerName`). */
@@ -48,17 +65,56 @@ export const TakeFromDialog = ({
   readonly error: unknown;
   readonly onConfirm: () => void;
 }): ReactElement => {
-  const words = OWNER_WORDS['owner.take_from'];
   const key = sanitiseUntrusted(ticketKey);
-  const name = sanitiseUntrusted(ownerName);
+  const shown =
+    confirm.kind === 'owner'
+      ? (() => {
+          const words = OWNER_WORDS['owner.take_from'];
+          const name = sanitiseUntrusted(confirm.ownerName);
+          return {
+            title: words.title(key, name),
+            consequence: (
+              <>
+                {words.stops}
+                {writesBack ? words.also(key, tracker) : null}
+                {writesBack && confirm.replacing !== null ? (
+                  <>
+                    {words.replacing}
+                    <UntrustedText value={confirm.replacing} />
+                  </>
+                ) : null}
+                {words.end}
+              </>
+            ),
+            act: words.confirm(name),
+          };
+        })()
+      : (() => {
+          const words = OWNER_WORDS['owner.take_held'];
+          return {
+            title: words.title(key),
+            consequence: (
+              <>
+                {words.before(key, tracker)}
+                {confirm.assignee === null ? (
+                  words.nameless
+                ) : (
+                  <UntrustedText value={confirm.assignee} />
+                )}
+                {words.end}
+              </>
+            ),
+            act: words.confirm(tracker),
+          };
+        })();
   return (
     <ConfirmDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={words.title(key, name)}
-      consequence={words.consequence(key, writesBack, tracker)}
-      confirmLabel={words.confirm(name)}
-      keepLabel={words.keep}
+      title={shown.title}
+      consequence={shown.consequence}
+      confirmLabel={shown.act}
+      keepLabel={OWNER_WORDS['owner.take_from'].keep}
       pending={pending}
       error={error}
       errorTitle={OWNER_WORDS['owner.refused']}
