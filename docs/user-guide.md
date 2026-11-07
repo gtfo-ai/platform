@@ -1425,8 +1425,9 @@ in *Needs you*. Resuming or retrying the task does not get round a pending appro
 the platform refuses it and names the approval, because only its decision moves the task. Pausing does
 not either: a paused task gets no reminders, and resuming it puts it back to *Waiting for approval*
 (or, if the approval was decided while it was paused, carries on from that decision), with the
-reminders picking up where they left off. Taking the task over and handing it back is refused the same
-way while the approval is pending, and cancelling the task withdraws the approval, so it leaves the
+reminders picking up where they left off. Taking the task over and handing it back, or sending it back to an
+earlier stage, is refused the same way while the approval is pending — a maintainer decides the
+approval instead, and rejecting it sends the task back — and cancelling the task withdraws the approval, so it leaves the
 inbox. An approval
 that expired before the change stays expired, and its task is retried or handed back from the task page
 as before.

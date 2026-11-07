@@ -210,6 +210,22 @@ describe('a human entry never moves a task past a pending approval (BACKLOG 854)
     }
   });
 
+  it('refuses a return-to-stage or a rework the same way, for every role (BACKLOG 1481)', () => {
+    for (const move of ['return-to-stage', 'rework']) {
+      for (const state of ['waiting_approval', 'needs_human', 'paused'] as const) {
+        let refused: unknown;
+        try {
+          assertNoPendingApproval({ state }, pending(), { stage: 'architecture', move });
+        } catch (error) {
+          refused = error;
+        }
+        expect(refused, `${move} from ${state}`).toBeInstanceOf(ApprovalPendingError);
+        expect((refused as Error).message).toContain(`a ${move} cannot move it`);
+        expect((refused as Error).message).toContain(APPROVAL_ID);
+      }
+    }
+  });
+
   it('lets the task move once the approval is decided, or when there is none (the rescue)', () => {
     const shared = world();
     const decided = decideApproval(

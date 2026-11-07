@@ -232,8 +232,12 @@ export const notificationBody = (draft: NotificationDraft): MessageBody => ({
   ]),
 });
 
-/** How an approval was settled, as the approval aggregate records it. */
-export type SettledApprovalOutcome = 'approved' | 'rejected' | 'expired';
+/**
+ * How an approval was settled, as the approval aggregate records it — and `withdrawn` for an
+ * `expired` row whose reason is a cancelled task's (`withdrawApproval`, S-27.1), which no deadline
+ * ended.
+ */
+export type SettledApprovalOutcome = 'approved' | 'rejected' | 'expired' | 'withdrawn';
 
 /** The longest decider name the edited message carries; a person's name, not a paragraph. */
 export const SETTLED_APPROVAL_DECIDER_MAX = 80;
@@ -256,6 +260,8 @@ const settledApprovalText = (outcome: SettledApprovalOutcome, decider: string | 
         : `Changes requested by ${decider}.`;
     case 'expired':
       return 'Expired: nobody decided before the deadline, so the deadline did.';
+    case 'withdrawn':
+      return 'Withdrawn: the task was cancelled, so there is nothing left to decide.';
   }
 };
 

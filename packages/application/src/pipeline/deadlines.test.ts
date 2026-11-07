@@ -47,6 +47,7 @@ import {
   resumeTaskCommand,
   retryStageCommand,
   returnToStageCommand,
+  reworkStageCommand,
   takeOverTaskCommand,
 } from './commands.js';
 import { TAKE_OVER_INACTIVITY_TIMEOUT, takeOverDeadline } from './deadline-rules.js';
@@ -1111,6 +1112,24 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
           summary: 'carry on',
         }),
       ).rejects.toThrow(ApprovalPendingError);
+      // BACKLOG 1481: a return or a rework is no way round it either.
+      await expect(
+        returnToStageCommand(harness.humanCommands, {
+          taskId,
+          userId: USER,
+          stage: 'refinement' as Slug,
+          reason: 'start again',
+        }),
+      ).rejects.toThrow(ApprovalPendingError);
+      await expect(
+        reworkStageCommand(harness.humanCommands, {
+          taskId,
+          userId: USER,
+          stage: 'refinement' as Slug,
+          instructions: 'start again',
+        }),
+      ).rejects.toThrow(ApprovalPendingError);
+      expect(taskOf(harness).task.state).toBe('needs_human');
       await resumeTaskCommand(harness.humanCommands, { taskId, userId: USER });
       await harness.drain();
       expect(taskOf(harness).task.state).toBe('waiting_approval');

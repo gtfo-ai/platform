@@ -1575,6 +1575,49 @@ describe('a resume never moves a task past its pending approval (S-27.1, BACKLOG
     expect(paused.actions).toHaveLength(1);
   });
 
+  /**
+   * BACKLOG 1481 (S-27.1): a return or a rework is no way round a pending approval either — the
+   * same `409 approval_pending` for every role the route admits, nothing audited. A maintainer
+   * moves the task on by deciding the approval itself.
+   */
+  for (const route of [
+    {
+      name: 'return-to-stage',
+      body: { stage: 'architecture', reason: 'write another plan' },
+      move: 'return-to-stage',
+    },
+    {
+      name: 'rework',
+      body: { stage: 'architecture', instructions: 'another approach' },
+      move: 'rework',
+    },
+  ]) {
+    for (const role of ['maintainer', 'admin'] as const) {
+      it(`answers 409 approval_pending to ${route.name} by a ${role}, and audits nothing`, async () => {
+        const waiting = await waitingWorld();
+        waiting.role = role;
+        waiting.throws = new ApprovalPendingError({
+          approvalId: APPROVAL,
+          approvalKind: 'plan',
+          stage: 'architecture',
+          move: route.move,
+          from: 'needs_human',
+        });
+        const reply = await post(
+          waiting,
+          `/api/tasks/${TASK}/${route.name}`,
+          route.body,
+          `${route.name}-pending-${role}`,
+        );
+        expect(`${reply.status} ${reply.body.error?.code ?? ''}`).toBe('409 approval_pending');
+        expect(reply.body.error?.message).toContain(APPROVAL);
+        expect(reply.body.error?.message).toContain(`a ${route.move} cannot move it`);
+        expect(waiting.calls.map((call) => call.name)).toEqual([route.name]);
+        expect(waiting.actions).toEqual([]);
+      });
+    }
+  }
+
   it('refuses a viewer before the command, by role', async () => {
     const waiting = await waitingWorld();
     waiting.role = 'viewer';

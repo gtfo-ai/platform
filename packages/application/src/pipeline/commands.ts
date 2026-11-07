@@ -1421,6 +1421,13 @@ export const returnToStageCommand = async (
     deps,
     { ...input, what: 'returning the task to a stage' },
     async (scope, stored, context) => {
+      // BACKLOG 1481 (S-27.1): a return is no way round a pending approval either, for any role —
+      // a maintainer decides the approval itself, and a reject rewinds the task as it should.
+      assertNoPendingApproval(
+        stored.task,
+        await pendingApprovalOf(deps.store, scope.tx, stored.task.id),
+        { stage: input.stage, move: 'return-to-stage' },
+      );
       const from = currentStageOrThrow(stored, 'return');
       assertReturnTarget(stored, from, input.stage);
       assertNotBeforeTheMerge(stored, input.stage);
@@ -1496,6 +1503,13 @@ export const reworkStageCommand = async (
     deps,
     { ...input, what: 'reworking a stage' },
     async (scope, stored, context) => {
+      // BACKLOG 1481 (S-27.1): a rework is no way round a pending approval either, for any role —
+      // a maintainer decides the approval itself, and a reject rewinds the task as it should.
+      assertNoPendingApproval(
+        stored.task,
+        await pendingApprovalOf(deps.store, scope.tx, stored.task.id),
+        { stage: input.stage, move: 'rework' },
+      );
       const from = currentStageOrThrow(stored, 'rework');
       assertReturnTarget(stored, from, input.stage);
       assertNotBeforeTheMerge(stored, input.stage);
