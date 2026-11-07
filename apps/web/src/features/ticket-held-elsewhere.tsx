@@ -11,9 +11,13 @@
  * - *Link account…* — Settings → Linked accounts, for a reader who may open it (an administrator),
  *   and only when the person is not linked;
  * - *Open in Jira* — the ticket's own page, through `ExternalLink` (`safeHref`);
- * - *Give it back to the agent* — once an owner is set, the existing `resume` command (`can_resume`):
- *   the task re-enters the stage it stopped at. It is this page's word for product/10's *Hand
- *   back*; the take-over's hand-back is a different command that needs a take-over in force;
+ * - *Give it back to the agent* — once an owner is set **and** the tracker no longer shows
+ *   somebody else (`unlinked_assignee` is `null`, the claim's own *held elsewhere* test), the
+ *   existing `resume` command (`can_resume`): the task re-enters the stage it stopped at. Before
+ *   that the claim would refuse again, so the box says what must happen first instead
+ *   (`heldElsewhereOwnedWords`: the write-back landing, or a change in the tracker). It is this
+ *   page's word for product/10's *Hand back*; the take-over's hand-back is a different command that
+ *   needs a take-over in force;
  * - *Cancel task…* — the existing cancel confirmation (`can_cancel`).
  *
  * **One amber primary** ({@link heldElsewhereTakeLeads}): *Take it*, when the reader may take it and
@@ -33,7 +37,13 @@ import { ExternalLink, UntrustedProse } from '../ui/untrusted.js';
 import { isOrgSectionFor } from './settings-sections.js';
 import type { TaskDialog } from './task-dialogs.js';
 import type { OwnerAction, OwnerControl } from './task-owner.js';
-import { HELD_ELSEWHERE_WORDS, heldElsewhereWords, ticketHolder } from './ticket-held-words.js';
+import { ownerName } from './task-owner.js';
+import {
+  HELD_ELSEWHERE_WORDS,
+  heldElsewhereOwnedWords,
+  heldElsewhereWords,
+  ticketHolder,
+} from './ticket-held-words.js';
 import { WaitingWords } from './waiting-words.js';
 
 const STEP = buttonClassName('default', 'sm');
@@ -74,13 +84,24 @@ export const HeldElsewhere = ({
   const tracker = trackerName(task.ticket.provider);
   const holder = ticketHolder(task);
   const words = heldElsewhereWords(task.ticket.key, tracker, holder);
-  const owned = (task.owner ?? null) !== null;
+  const taskOwner = task.owner ?? null;
+  const owned = taskOwner !== null;
+  const afterOwner =
+    taskOwner === null
+      ? null
+      : heldElsewhereOwnedWords({
+          tracker,
+          ownerName: ownerName(taskOwner),
+          holder,
+          unlinkedAssignee: (task.unlinked_assignee ?? null) !== null,
+          ownerWritesBack: task.owner_writes_back,
+        });
   const offers = owned
     ? []
     : (owner?.offers ?? []).filter((action) => BOX_ACTIONS.includes(action));
   const takeLeads = owner !== undefined && heldElsewhereTakeLeads(detail, offers);
   const mayLink = holder.unlinked && isOrgSectionFor('identities', owner?.viewer?.role);
-  const mayHandBack = owned && detail.can_resume;
+  const mayHandBack = afterOwner?.kind === 'ready' && detail.can_resume;
   const pending = owner?.command.isPending === true;
   return (
     <div
@@ -100,7 +121,11 @@ export const HeldElsewhere = ({
           </>
         )}
       </p>
-      {owned ? <p data-held-owned="">{HELD_ELSEWHERE_WORDS.owned}</p> : null}
+      {afterOwner === null ? null : (
+        <p data-held-owned={afterOwner.kind}>
+          <WaitingWords parts={afterOwner.words} />
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-2" data-held-steps="">
         {offers.map((action) => (
           <Button

@@ -1195,7 +1195,7 @@ test('a ticket someone else holds says whose it is, with the ways out in the box
   ).toBeVisible();
   const needs = page.getByRole('region', { name: 'Needs you' });
   await expect(needs.locator('[data-held-sentence]')).toHaveText(
-    `AUT-6676 is assigned in Jira to ${HELD_ELSEWHERE_ASSIGNEE}, so no agent started on it. ${HELD_ELSEWHERE_ASSIGNEE} has no linked platform account.`,
+    `AUT-6676 is assigned in Jira to ${HELD_ELSEWHERE_ASSIGNEE}, so no agent started on it. ${HELD_ELSEWHERE_ASSIGNEE} isn’t a linked member of this project.`,
   );
   // The ways out, for an administrator: the owner control's two, Link account…, the ticket, Cancel.
   const steps = needs.locator('[data-held-steps]');

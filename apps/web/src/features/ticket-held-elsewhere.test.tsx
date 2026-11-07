@@ -12,7 +12,8 @@
  * brief under a collapsed *Details*; the ways out per role, both directions; *Take it* as the page's
  * one amber primary only when the reader may take it, and the header's *Resume* giving way; *Take
  * it* with `take_writes_back` confirming once, through the shared control; *Give it back to the
- * agent* once an owner is set; *Cancel task…* opening the existing confirmation.
+ * agent* once an owner is set and nobody else holds the ticket — and, until then, what must happen
+ * first (the write-back landing, or a change in Jira); *Cancel task…* opening the existing confirmation.
  */
 import type { TaskDetailResponse, TaskRecord } from '@platform/contracts';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
@@ -158,9 +159,13 @@ const detail = (flags: Flags = {}, task: Partial<TaskRecord> = {}): TaskDetailRe
   ...flags,
 });
 
-/** What each role is offered on this unassigned task, as the server's matrix says. */
+/**
+ * What each role is offered on this unassigned task the tracker gives to somebody else: the
+ * server's `ownerChangePermitted` refuses a member's take of a task held elsewhere, so the read
+ * sends a member `can_take: false` (`apps/server/src/routes/tasks.ts`).
+ */
 const AS: Readonly<Record<Role, Flags>> = {
-  member: { can_take: true, can_assign: false, can_cancel: false, can_resume: false },
+  member: { can_take: false, can_assign: false, can_cancel: false, can_resume: false },
   maintainer: { can_take: true, can_assign: true, can_cancel: true, can_resume: true },
   admin: { can_take: true, can_assign: true, can_cancel: true, can_resume: true },
 };
@@ -236,12 +241,12 @@ beforeEach(() => {
 });
 
 describe('whose ticket it is', () => {
-  it('names an unlinked person, and says they have no linked platform account', async () => {
+  it('names an unlinked person, and says they aren’t a linked member of this project', async () => {
     start(detail());
     const held = await box();
     expect(held.getAttribute('data-held-elsewhere')).toBe('unlinked');
     expect(held.querySelector('[data-held-sentence]')?.textContent).toBe(
-      `AUT-6676 is assigned in Jira to ${VOJTECH}, so no agent started on it. ${VOJTECH} has no linked platform account.`,
+      `AUT-6676 is assigned in Jira to ${VOJTECH}, so no agent started on it. ${VOJTECH} isn’t a linked member of this project.`,
     );
   });
 
@@ -382,11 +387,22 @@ describe('whose ticket it is', () => {
 });
 
 describe('the ways out, by role', () => {
-  it('offers a member Take it as the page’s one primary, Open in Jira, and nothing else', async () => {
+  it('offers a member only Open in Jira, and no amber primary — no Resume either', async () => {
     start(detail(AS.member), 'member');
     const held = await box();
-    expect(await steps(held, 'Take it')).toEqual(['Take it', 'Open in Jira']);
-    expect(primaryLabels(screen.getByRole('main'))).toEqual(['Take it']);
+    await within(held).findByRole('link', { name: 'Open in Jira' });
+    // `can_take` is false, so nothing is offered before the session is read or after it.
+    const row = held.querySelector('[data-held-steps]') as HTMLElement;
+    expect([...row.querySelectorAll('button, a')].map((element) => element.textContent)).toEqual([
+      'Open in Jira',
+    ]);
+    expect(primaryLabels(screen.getByRole('main'))).toEqual([]);
+  });
+
+  it('offers a member Cancel task… beside it when the read allows it', async () => {
+    start(detail({ ...AS.member, can_cancel: true }), 'member');
+    const held = await box();
+    expect(await steps(held, 'Cancel task…')).toEqual(['Open in Jira', 'Cancel task…']);
   });
 
   it('offers a maintainer Take it, Assign…, Open in Jira and Cancel task…, but no Link account…', async () => {
@@ -436,12 +452,10 @@ describe('the ways out, by role', () => {
     expect(open.getAttribute('rel')).toContain('noopener');
   });
 
-  it('draws no amber primary — and no Resume — for a reader who may not take it', async () => {
-    start(detail({ ...AS.member, can_take: false }), 'member');
+  it('draws no amber primary — and no Resume — for a maintainer who may not take it', async () => {
+    start(detail({ ...AS.maintainer, can_take: false }), 'maintainer');
     const held = await box();
-    await within(held).findByRole('link', { name: 'Open in Jira' });
-    // `can_take` is false, so nothing is offered before the session is read or after it.
-    expect(within(held).queryByRole('button', { name: 'Take it' })).toBeNull();
+    expect(await steps(held, 'Assign…')).toEqual(['Assign…', 'Open in Jira', 'Cancel task…']);
     expect(primaryLabels(screen.getByRole('main'))).toEqual([]);
   });
 
@@ -509,17 +523,22 @@ describe('taking it, and what follows', () => {
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
   });
 
-  it('offers Give it back to the agent once an owner is set, and sends the resume', async () => {
+  /** The task once the reader owns it and the write-back to Jira landed: nobody else holds it. */
+  const OWNED_AND_WRITTEN_BACK = {
+    owner: { user_id: ME, name: 'Fake Operator' },
+    owner_writes_back: true,
+    unlinked_assignee: null,
+    tracker_assignee: { display_name: 'Fake Operator', user_id: ME },
+  } as const;
+
+  it('offers Give it back to the agent once nobody else holds the ticket, and sends the resume', async () => {
     const user = userEvent.setup();
     const { sent } = start(
-      detail(
-        { ...AS.maintainer, can_unassign: true },
-        { owner: { user_id: ME, name: 'Fake Operator' } },
-      ),
+      detail({ ...AS.maintainer, can_unassign: true }, OWNED_AND_WRITTEN_BACK),
       'maintainer',
     );
     const held = await box();
-    expect(held.querySelector('[data-held-owned]')?.textContent).toBe(
+    expect(held.querySelector('[data-held-owned="ready"]')?.textContent).toBe(
       'It has an owner now. Give it back to the agent and it runs the stage it stopped at again.',
     );
     const back = await within(held).findByRole('button', { name: 'Give it back to the agent' });
@@ -533,12 +552,43 @@ describe('taking it, and what follows', () => {
   });
 
   it('offers no hand-back to a reader who may not resume', async () => {
+    start(detail(AS.member, OWNED_AND_WRITTEN_BACK), 'member');
+    const held = await box();
+    await within(held).findByRole('link', { name: 'Open in Jira' });
+    expect(held.querySelector('[data-held-owned="ready"]')).not.toBeNull();
+    expect(within(held).queryByRole('button', { name: 'Give it back to the agent' })).toBeNull();
+  });
+
+  // Review of #115: a take does not change the tracker's assignee (`decideOwnerCommand` rule 1), so
+  // while `unlinked_assignee` is set the claim refuses again — a resume would only stop the task.
+  it('waits for the write-back before offering the hand-back, and says so', async () => {
     start(
-      detail({ ...AS.member, can_take: false }, { owner: { user_id: PETRA, name: 'Petra' } }),
-      'member',
+      detail(AS.maintainer, {
+        owner: { user_id: ME, name: 'Fake Operator' },
+        owner_writes_back: true,
+      }),
+      'maintainer',
     );
     const held = await box();
     await within(held).findByRole('link', { name: 'Open in Jira' });
+    expect(held.querySelector('[data-held-owned="writing_back"]')?.textContent).toBe(
+      'Jira is being assigned to Fake Operator; give it back to the agent once it is.',
+    );
     expect(within(held).queryByRole('button', { name: 'Give it back to the agent' })).toBeNull();
+  });
+
+  it('says the ticket must change in Jira first when nothing writes the owner back', async () => {
+    start(
+      detail(AS.maintainer, { owner: { user_id: PETRA, name: 'Petra' }, owner_writes_back: false }),
+      'maintainer',
+    );
+    const held = await box();
+    await within(held).findByRole('link', { name: 'Open in Jira' });
+    const said = held.querySelector('[data-held-owned="held"]');
+    expect(said?.textContent).toBe(
+      `Jira still shows ${VOJTECH}: assign or unassign the ticket there first, or the agent stops again.`,
+    );
+    expect(within(held).queryByRole('button', { name: 'Give it back to the agent' })).toBeNull();
+    expect(within(held).queryByRole('button', { name: 'Take it' })).toBeNull();
   });
 });

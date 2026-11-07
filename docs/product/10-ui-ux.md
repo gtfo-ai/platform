@@ -134,6 +134,15 @@ ticket is someone else's says whose it is, and offers the ways out in the box.**
   otherwise none.
 - On the board card, and on Home and the Inbox rows, the short form is "Waiting for: Vojtěch Kaizr's Jira ticket".
 
+*S-25.14's wording (review of #115, 2026-11-07).* The read cannot tell a person with no linked account from a linked
+one below *member* (both have no `user_id`), so the added sentence is "*Vojtěch Kaizr* isn't a linked member of this
+project.", which is true of both. *Hand back* is the existing *Resume*, worded *Give it back to the agent*, and it is
+offered only once the tracker no longer shows the other person (`unlinked_assignee` is empty): taking or assigning the
+task does not change the ticket's assignee by itself, and the claim reads it again, so a hand-back before then stops
+the task again. Until then the box says what must happen first: "Jira is being assigned to *Petra*; give it back to
+the agent once it is." when owners are written back, otherwise "Jira still shows *Vojtěch Kaizr*: assign or unassign
+the ticket there first, or the agent stops again."
+
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.
 - *Amended 2026-11-06 (M25).* While a run is live, watching is the job: *Cancel run* is a danger secondary, never the
