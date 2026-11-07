@@ -327,25 +327,33 @@ const claim = async (
    *  - A re-claim (a stale claim after a human return) takes the ticket back from anybody else,
    *    because the person who returned it may well hold it. A shadow task never refuses: it writes
    *    nothing anyway, and shadow mode runs beside the person who holds the ticket.
+   *
+   * A read that answered **no ticket** (`null`) syncs nothing: it says nothing about the assignee,
+   * so it must not clear an owner as a `tracker_sync` — intake and `ensureTicketSnapshot` both skip
+   * the sync on a read they did not get. (A provider's 404 throws `not_found` instead, which is the
+   * `ticket_claim_failed` path below and syncs nothing either.)
    */
   const before = await ticketReads(integrations).ticket(task.ticket, context);
   const holder = before?.assignee ?? null;
-  const holderClass = await retryOnTaskConflict(
-    {
-      taskId: task.id,
-      what: 'syncing the owner from the claim’s read',
-      ...(options.logger === undefined ? {} : { logger: options.logger }),
-    },
-    async () =>
-      options.unitOfWork.transaction(async (scope) =>
-        syncOwnerOnClaimRead(options, scope, {
-          projectId: task.projectId,
-          taskId: task.id,
-          assignee: holder,
-          assigneeDisplayName: redactedName(holder),
-        }),
-      ),
-  );
+  const holderClass =
+    before === null
+      ? null
+      : await retryOnTaskConflict(
+          {
+            taskId: task.id,
+            what: 'syncing the owner from the claim’s read',
+            ...(options.logger === undefined ? {} : { logger: options.logger }),
+          },
+          async () =>
+            options.unitOfWork.transaction(async (scope) =>
+              syncOwnerOnClaimRead(options, scope, {
+                projectId: task.projectId,
+                taskId: task.id,
+                assignee: holder,
+                assigneeDisplayName: redactedName(holder),
+              }),
+            ),
+        );
   const decision = claimPreReadDecision({
     self,
     holder,

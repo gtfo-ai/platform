@@ -63,6 +63,8 @@ interface TrackerOptions {
   readonly afterAssign?: () => Promise<void>;
   /** Runs before the platform's unassign reads the assignee — a release racing a re-claim. */
   readonly beforeUnassign?: () => Promise<void>;
+  /** The first this many reads answer no ticket — a port that answered nothing. */
+  readonly nullReads?: number;
 }
 
 /** One ticket's assignee, status and comments, and every lifecycle call made on it, in order. */
@@ -78,6 +80,10 @@ const tracker = (options: TrackerOptions = {}) => {
   const port: Partial<TaskManagementPort> = {
     readTicket: async (ref: TicketRefInput) => {
       reads.push(ref.key);
+      if (reads.length <= (options.nullReads ?? 0)) {
+        // The port's type promises a ticket; `ticketReads.ticket` answers `null` past it.
+        return null as never;
+      }
       return {
         ref,
         issue_type: 'Story',
@@ -1402,6 +1408,44 @@ describe('S-26.2 — the claim keeps a member’s ticket (BD-031 amendment 2, TD
     expect(ticket.reads.length - reads).toBe(1);
     expect(harness.store.ownershipOf(taskId)).toEqual(afterClaim);
     expect(eventsOf(harness, 'task.owner.changed')).toHaveLength(ownerChanges);
+  });
+
+  it('a claim whose pre-read answers no ticket syncs nothing: the tracker owner is kept', async () => {
+    // The pre-read answers `null`; the re-read after the assign finds the ticket.
+    const ticket = tracker({ nullReads: 1 });
+    const harness = memberHarnessFor(ticket, lifecycle({ in_progress: 'Doing' }));
+    const stored = await insertTask(harness);
+    const taskId = stored.task.id;
+    const alice = {
+      provider: 'fake-jira',
+      external_id: 'alice',
+      display_name: null,
+      platform: false,
+    };
+    await harness.memory.transaction(async (scope) => {
+      const written = await harness.store.tasks.saveOwner(scope.tx, taskId, {
+        expected: { ownerUserId: null, ticketAssignee: null },
+        next: {
+          ownerUserId: ALICE,
+          ownerSource: 'tracker',
+          ownerChangedAt: '2026-06-01T08:00:00.000Z' as StoredTicketClaim['claimed_at'],
+          ticketAssignee: alice,
+        },
+      });
+      expect(written).toBe(true);
+    });
+    const outcome = await ensureTicketClaim(claimOptions(harness), stored, {
+      taskId,
+      ...REFINEMENT_1,
+    });
+    expect(outcome).toEqual({ kind: 'proceed' });
+    expect(ticket.reads).toHaveLength(2);
+    // Canary: syncing the null read cleared Alice as a `tracker_sync`.
+    expect(eventsOf(harness, 'task.owner.changed')).toHaveLength(0);
+    expect(harness.store.ownershipOf(taskId)).toMatchObject({
+      ownerUserId: ALICE,
+      ownerSource: 'tracker',
+    });
   });
 
   it('(5) a cancel never unassigns a member-held ticket', async () => {
