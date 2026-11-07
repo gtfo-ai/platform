@@ -670,6 +670,7 @@ describe('the list', () => {
     media(1280);
     const inbox = {
       questions: [],
+      ci_held: [],
       approvals: [
         {
           id: uuid(1101),
