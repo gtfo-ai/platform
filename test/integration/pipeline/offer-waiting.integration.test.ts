@@ -710,7 +710,10 @@ describe('the execution read: does anybody else take unassigned tasks (criterion
       [projectId],
     );
     expect(await othersTakeUnassigned(drizzled, projectId, reader)).toBe(true);
-    await pool.query('update workers set revoked_at = now() where user_id = $1', [other]);
+    await pool.query(
+      "update workers set revoked_at = now(), state = 'revoked' where user_id = $1",
+      [other],
+    );
     // Workers-only and only the reader's own machine left: nobody else.
     expect(await othersTakeUnassigned(drizzled, projectId, reader)).toBe(false);
     await claimantPresent(false);
