@@ -26,14 +26,21 @@ const CANDIDATES: readonly OwnerCandidate[] = [
   { user_id: '00000000-0000-4000-8000-0000000026c3' as Id, name: 'Bo' },
 ];
 
+const TASK = '00000000-0000-4000-8000-0000000026d1';
+const ELSEWHERE_TASK = '00000000-0000-4000-8000-0000000026d2';
+/** S-26.3: the candidates whose assignment would reach the tracker — Ada only. */
+const WRITES_BACK = new Set<string>(['00000000-0000-4000-8000-0000000026c2']);
+
 let app: FastifyInstance | undefined;
 let candidateReads: string[] = [];
+let writeBackReads: { projectId: string; taskId: string | null; userIds: readonly string[] }[] = [];
 
 const serve = async (input: {
   readonly actor: Pick<Actor, 'role'> | null;
   readonly membership: UserRole | null;
 }): Promise<FastifyInstance> => {
   candidateReads = [];
+  writeBackReads = [];
   const server = fastify();
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
@@ -60,14 +67,20 @@ const serve = async (input: {
         candidateReads.push(projectId);
         return projectId === PROJECT ? CANDIDATES : null;
       },
+      writeBack: async (query, userIds) => {
+        writeBackReads.push({ ...query, userIds });
+        // A task of another project answers nothing: the route's 404.
+        if (query.taskId === ELSEWHERE_TASK) return null;
+        return new Map(userIds.map((userId) => [userId, WRITES_BACK.has(userId)]));
+      },
     },
   });
   app = server;
   return server;
 };
 
-const get = async (server: FastifyInstance, projectId = PROJECT) =>
-  server.inject({ method: 'GET', url: `/api/projects/${projectId}/owner-candidates` });
+const get = async (server: FastifyInstance, projectId = PROJECT, query = '') =>
+  server.inject({ method: 'GET', url: `/api/projects/${projectId}/owner-candidates${query}` });
 
 afterEach(async () => {
   await app?.close();
@@ -109,7 +122,11 @@ describe('GET /api/projects/:id/owner-candidates', () => {
       const response = await get(server);
       expect(response.statusCode, `${orgRole}/${membership}`).toBe(200);
       expect(response.json()).toEqual({
-        items: CANDIDATES.map(({ user_id, name }) => ({ user_id, name })),
+        items: CANDIDATES.map(({ user_id, name }) => ({
+          user_id,
+          name,
+          writes_back: WRITES_BACK.has(user_id),
+        })),
       });
       expect(candidateReads).toEqual([PROJECT]);
       await server.close();
@@ -122,5 +139,38 @@ describe('GET /api/projects/:id/owner-candidates', () => {
     expect(missing.statusCode).toBe(404);
     expect(missing.json().error.code).toBe('not_found');
     expect((await get(server, 'not-a-uuid')).statusCode).toBe(400);
+  });
+
+  it('answers each candidate’s writes_back, of the task ?task_id= names or of the project (S-26.3)', async () => {
+    const server = await serve({ actor: { role: 'maintainer' }, membership: null });
+    const plain = await get(server);
+    expect(plain.statusCode, plain.body).toBe(200);
+    expect(
+      (plain.json() as { items: { writes_back: boolean }[] }).items.map((i) => i.writes_back),
+    ).toEqual([true, false, false]);
+    expect(writeBackReads.at(-1)).toEqual({
+      projectId: PROJECT,
+      taskId: null,
+      userIds: CANDIDATES.map((candidate) => candidate.user_id),
+    });
+    const ofTask = await get(server, PROJECT, `?task_id=${TASK}`);
+    expect(ofTask.statusCode, ofTask.body).toBe(200);
+    expect(writeBackReads.at(-1)?.taskId).toBe(TASK);
+  });
+
+  it('answers 404 for a task that is not the project’s, 400 for a task id that is not a uuid', async () => {
+    const server = await serve({ actor: { role: 'admin' }, membership: null });
+    const elsewhere = await get(server, PROJECT, `?task_id=${ELSEWHERE_TASK}`);
+    expect(elsewhere.statusCode).toBe(404);
+    expect(elsewhere.json().error.code).toBe('not_found');
+    expect((await get(server, PROJECT, '?task_id=not-a-uuid')).statusCode).toBe(400);
+    // A key the query does not declare is refused, not dropped (strict boundary).
+    expect((await get(server, PROJECT, '?owner=me')).statusCode).toBe(400);
+  });
+
+  it('asks nothing about a task for a member it refuses', async () => {
+    const server = await serve({ actor: { role: 'member' }, membership: null });
+    expect((await get(server, PROJECT, `?task_id=${TASK}`)).statusCode).toBe(403);
+    expect(writeBackReads).toEqual([]);
   });
 });

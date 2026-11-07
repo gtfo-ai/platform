@@ -141,6 +141,7 @@ import {
   findTaskPosition,
   listRunMessages,
   listTaskEvents,
+  ownerCandidateWriteBack,
   ownerWriteBackFor,
 } from './queries/pipeline-queries.js';
 import {
@@ -784,6 +785,9 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
         candidates: async (projectId) => findOwnerCandidates(options.database, projectId),
+        // S-26.3: each candidate's `writes_back`, over the write-back duty's own predicate.
+        writeBack: async (input, userIds) =>
+          ownerCandidateWriteBack(options.database, input, userIds),
       },
     });
     // WP-63: the configuration export and the repository re-read (Q94). The database reads and writes

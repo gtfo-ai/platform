@@ -1419,6 +1419,44 @@ export const ownerWriteBackFor = async (
   );
 };
 
+/**
+ * `writes_back` for the owner candidates (S-26.3): {@link ownerWriteBackFor} over the task the
+ * picker names — `null` when that task is not the project's (the route's 404) — or, with no task,
+ * over the project's one live task-management binding's provider as a normal task (no binding, or
+ * two, writes nothing back: the loader refuses that project's every call).
+ */
+export const ownerCandidateWriteBack = async (
+  database: Database,
+  input: { readonly projectId: string; readonly taskId: string | null },
+  userIds: readonly string[],
+): Promise<ReadonlyMap<string, boolean> | null> => {
+  if (input.taskId !== null) {
+    const { rows } = await database.execute<{ ticket_provider: string; mode: string }>(sql`
+      select t.ticket_provider, t.mode from tasks t
+       where t.id = ${input.taskId}::uuid and t.project_id = ${input.projectId}::uuid`);
+    const task = rows[0];
+    return task === undefined
+      ? null
+      : ownerWriteBackFor(
+          database,
+          { projectId: input.projectId, ticketProvider: task.ticket_provider, mode: task.mode },
+          userIds,
+        );
+  }
+  const { rows } = await database.execute<TicketLifecycleBindingRow & Record<string, unknown>>(
+    ticketLifecycleBindingsQuery(input.projectId),
+  );
+  const binding = rows.length === 1 ? rows[0] : undefined;
+  if (binding === undefined) {
+    return new Map(userIds.map((userId) => [userId, false]));
+  }
+  return ownerWriteBackFor(
+    database,
+    { projectId: input.projectId, ticketProvider: binding.provider, mode: 'normal' },
+    userIds,
+  );
+};
+
 /** Which of `projectIds` have a task-management binding that sets `lifecycle.assign_owner`. */
 const projectsAssigningOwners = async (
   database: Database,

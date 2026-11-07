@@ -2202,7 +2202,24 @@ export const setTaskOwnerRequestSchema = z.strictObject({
  * text, rendered as text.
  */
 export const ownerCandidatesResponseSchema = z.strictObject({
-  items: z.array(taskOwnerViewSchema),
+  items: z.array(
+    taskOwnerViewSchema.extend({
+      /**
+       * Whether assigning **this** person would also assign the ticket in the tracker (S-26.3, the
+       * owner write-back): the binding sets `lifecycle.assign_owner` and the person has a `person`
+       * identity for the provider — `ownerWriteBackReachesTracker`, the `ticket_owner_assign`
+       * duty's own predicate. Asked of the task named by `?task_id=` (a shadow or platform-issued
+       * task reads `false`), else of the project's task-management binding's provider. Optional on
+       * the wire like the other M26 fields; this build always sends it.
+       */
+      writes_back: z.boolean().optional(),
+    }),
+  ),
+});
+
+/** `GET /api/projects/:id/owner-candidates`' query: the task the picker was opened from (S-26.3). */
+export const ownerCandidatesQuerySchema = z.strictObject({
+  task_id: idSchema.optional(),
 });
 export type OwnerCandidatesResponse = z.infer<typeof ownerCandidatesResponseSchema>;
 

@@ -26,6 +26,7 @@ import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   listProjectTasks,
+  ownerCandidateWriteBack,
   ownerWriteBackFor,
 } from '../../../apps/server/src/queries/pipeline-queries.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -290,5 +291,29 @@ describe('whether a Take or an Assign… would write back, per person (take_writ
     ]) {
       expect(Object.fromEntries(nobody)).toEqual({ [users.bob]: false, [users.dora]: false });
     }
+  });
+});
+
+describe('the owner candidates’ writes_back, of the project or of a task (S-26.3, review of #97)', () => {
+  it('answers per candidate, refines from the task, and refuses a task of another project', async () => {
+    const drizzled = drizzle(pool, { schema: db.schema });
+    const ask = (projectId: Id, taskId: Id | null) =>
+      ownerCandidateWriteBack(drizzled, { projectId, taskId }, [users.bob, users.dora]);
+    const both = (bob: boolean, dora: boolean) => ({ [users.bob]: bob, [users.dora]: dora });
+
+    // No task: the project's binding (Jira Cloud) — Bob has a Jira account, Dora does not.
+    expect(Object.fromEntries((await ask(optedIn, null)) ?? [])).toEqual(both(true, false));
+    expect(Object.fromEntries((await ask(optedOut, null)) ?? [])).toEqual(both(false, false));
+    // A normal task of the project answers as the project does; shadow and platform-issued read false.
+    const normal = await ownedTask(optedIn, null);
+    const shadow = await ownedTask(optedIn, null, { mode: 'shadow' });
+    const platform = await ownedTask(optedIn, null, { provider: 'platform' });
+    expect(Object.fromEntries((await ask(optedIn, normal)) ?? [])).toEqual(both(true, false));
+    expect(Object.fromEntries((await ask(optedIn, shadow)) ?? [])).toEqual(both(false, false));
+    expect(Object.fromEntries((await ask(optedIn, platform)) ?? [])).toEqual(both(false, false));
+    // A task of another project, or one that does not exist: no answer (the route's 404).
+    const theirs = await ownedTask(optedOut, null);
+    expect(await ask(optedIn, theirs)).toBeNull();
+    expect(await ask(optedIn, nextId())).toBeNull();
   });
 });

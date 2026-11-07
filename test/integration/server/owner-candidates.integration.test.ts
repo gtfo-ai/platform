@@ -29,6 +29,7 @@ import type { Actor } from '../../../apps/server/src/auth/rbac.js';
 import { toApiError } from '../../../apps/server/src/errors.js';
 import { findProjectRole } from '../../../apps/server/src/queries/identity-queries.js';
 import { findOwnerCandidates } from '../../../apps/server/src/queries/owner-candidate-queries.js';
+import { ownerCandidateWriteBack } from '../../../apps/server/src/queries/pipeline-queries.js';
 import { registerOwnerCandidateRoutes } from '../../../apps/server/src/routes/owner-candidates.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient, createTestPool } from '../support/postgres.js';
@@ -154,6 +155,9 @@ beforeAll(async () => {
     queries: {
       projectRole: async (project, userId) => findProjectRole(drizzled, project, userId),
       candidates: async (project) => findOwnerCandidates(drizzled, project),
+      // S-26.3: each candidate's `writes_back`; this project has no binding, so every one is false
+      // (the opted-in cases are `test/integration/pipeline/task-owner-write-back.integration.test.ts`).
+      writeBack: async (input, userIds) => ownerCandidateWriteBack(drizzled, input, userIds),
     },
   });
 }, 120_000);
@@ -170,7 +174,11 @@ const candidates = async () =>
 /** The fixtures the owner command takes, as the route must list them: by name, then by id. */
 const expectedItems = () =>
   FIXTURES.filter((fixture) => fixture.owns)
-    .map((fixture) => ({ user_id: idOf(fixture.key), name: users.get(fixture.key)?.name ?? '' }))
+    .map((fixture) => ({
+      user_id: idOf(fixture.key),
+      name: users.get(fixture.key)?.name ?? '',
+      writes_back: false,
+    }))
     .sort((a, b) =>
       a.name === b.name ? (a.user_id < b.user_id ? -1 : 1) : a.name < b.name ? -1 : 1,
     );
