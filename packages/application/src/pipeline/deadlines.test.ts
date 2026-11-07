@@ -651,7 +651,7 @@ describe('an approval waits until a person decides it (BD-006’s 2026-11-07 ame
       }),
     ).resolves.toBeUndefined();
     expect(lines.map((line) => line.message)).toContain(
-      'deadline.sweep: an approval_timeout an earlier build armed was settled: approvals no longer expire (BD-006, 2026-11-07)',
+      'deadline.sweep: an approval_timeout an earlier build armed was settled: approvals no longer expire',
     );
     expect(lines.map((line) => line.message)).not.toContain(
       'deadline.sweep: a wake-up this build cannot read was skipped',

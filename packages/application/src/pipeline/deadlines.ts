@@ -368,7 +368,7 @@ export const settleDeadline = async (
     // finds nothing to do, and says so once, by name, rather than failing into its retries.
     logger.info(
       { ...data },
-      'deadline.sweep: an approval_timeout an earlier build armed was settled: approvals no longer expire (BD-006, 2026-11-07)',
+      'deadline.sweep: an approval_timeout an earlier build armed was settled: approvals no longer expire',
     );
     return { kind: 'settled' };
   }

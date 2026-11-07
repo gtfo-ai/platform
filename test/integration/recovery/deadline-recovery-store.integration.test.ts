@@ -251,7 +251,7 @@ describe('the deadline recovery store (WP-56, backlog 161 and 162)', () => {
     expect(row?.lastActivityAt).toBe('2026-06-10T11:00:00.000Z');
   });
 
-  it('finds the never-reminded questions whose deadline is ahead, and nothing reminded, overdue or finished (WP-108, backlog 291)', async () => {
+  it('finds the never-reminded rows whose deadline is ahead, and nothing reminded, overdue or finished (WP-108, backlog 291)', async () => {
     const waiting = await seedTask('waiting_answers');
     const due = await seedQuestion(waiting, 'open', '2026-06-08T16:00:00Z');
     const reminded = await seedQuestion(waiting, 'open', '2026-06-08T16:00:00Z');
