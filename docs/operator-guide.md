@@ -877,6 +877,10 @@ pick list of the statuses `GET /api/projects/<id>/ticket-statuses` reads from th
 the binding (a maintainer's read, one provider call per load), and the save checks every name
 against the same read — `422 lifecycle_status_unknown` naming the slot, or `503
 lifecycle_statuses_unavailable` when the tracker cannot be read, with nothing written in either case.
+The block's `assign_owner` switch (S-26.3, default off, Jira Cloud only) writes an owner set on the
+platform back to the ticket's assignee; it has no control on these screens yet, so set it through
+`PUT /api/projects/<id>/bindings` (saving the lifecycle screen keeps it as stored), and give the
+binding's account *Assign Issues* (the Jira setup guide, step 2).
 
 ### The five providers that ship
 

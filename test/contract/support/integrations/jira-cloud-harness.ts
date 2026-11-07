@@ -270,6 +270,14 @@ const throughOneExecutorCall = (
           assignee: { provider: adapter.ref.provider, external_id: 'would-have', verified: false },
         }),
       ),
+    // S-26.3: the owner write-back, a mutation like the claim — `would_have` in shadow mode.
+    assignTo: (ref, assignee) =>
+      mutate(
+        'assign_to',
+        { ticket_key: ref.key, account_id: assignee.external_id },
+        () => adapter.assignTo(ref, assignee),
+        () => ({ changed: false, assignee }),
+      ),
     unassign: (ref) =>
       mutate(
         'unassign',

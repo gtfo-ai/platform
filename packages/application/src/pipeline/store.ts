@@ -698,7 +698,8 @@ export interface TaskRepository {
    * back. A caller that also appends `task.owner.changed` from outside the task's own transactions
    * bumps the version first (`bumpVersion`), as every stream appender does. Its callers are the
    * owner decisions in `owner-sync.ts` (intake's sync, a stage's re-read, the `owner_sync` duty, the
-   * command, the link adoption).
+   * command, the link adoption) and the write-back's preset and restore of `ticket_assignee` in
+   * `owner-write-back.ts` (S-26.3).
    *
    * @throws when the task does not exist.
    */
@@ -2962,6 +2963,16 @@ export interface TaskOwnerDirectory {
    * disabled (`users.status`) — who may own a task.
    */
   mayOwn(tx: Transaction, input: { readonly projectId: Id; readonly userId: Id }): Promise<boolean>;
+  /**
+   * The user's **`person`** identity for `provider` — what the owner write-back assigns the ticket
+   * to (S-26.3, TD-031's 2026-11-06 amendment item 4) — or `null` when they have none. A `machine`
+   * identity is never one (it has no user). A user linked to two accounts of one provider answers
+   * the **oldest** link (`created_at`, then the account id), so one owner always names one account.
+   */
+  personIdentity(
+    tx: Transaction,
+    input: { readonly userId: Id; readonly provider: string },
+  ): Promise<{ readonly externalId: string } | null>;
 }
 
 /** Everything the pipeline needs to name a ticket it has not created a task for yet. */

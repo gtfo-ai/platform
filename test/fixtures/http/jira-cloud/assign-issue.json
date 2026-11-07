@@ -1,0 +1,21 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "PUT /rest/api/3/issue/{issueIdOrKey}/assignee (assignIssue)",
+    "spec_version": "1001.0.0-SNAPSHOT-30f301faa123fbef7f33006c52a9db372ad7afa7 (info.version)",
+    "retrieved": "2026-11-07",
+    "evidence": "documented",
+    "note": "Research/15 J4, recorded for S-26.3's owner write-back. The request is Atlassian's own example, {\"accountId\": \"5b10ac8d82e05b22cc7d4ef5\"}, with the account id replaced by this corpus's developer (`user-search.json`) and the issue key by the contract suite's ticket. The response is the documented 204, 'Returned if the request is successful', which has no body. The operation requires 'Browse Projects and Assign Issues project permission for the project that the issue is in' and documents 400 for 'the user is not found', 403 for 'the user does not have the necessary permission' and 404 for 'the issue is not found'; `-1` assigns the project's default assignee and `null` unassigns, which is why `assignTo` refuses `-1` before any request."
+  },
+  "request": {
+    "method": "PUT",
+    "path": "issue/ACME-1/assignee",
+    "body": {
+      "accountId": "557058:00000000-0000-4000-8000-00000000d0c1"
+    }
+  },
+  "response": {
+    "status": 204,
+    "headers": {}
+  }
+}

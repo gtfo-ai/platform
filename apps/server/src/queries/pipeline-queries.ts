@@ -49,7 +49,7 @@
  * the client never sees.
  */
 
-import { TAKE_OVER_BOUNDARY_EVENTS } from '@platform/application';
+import { PLATFORM_TICKET_PROVIDER, TAKE_OVER_BOUNDARY_EVENTS } from '@platform/application';
 import type {
   AgentsResponse,
   ArtifactBodyResponse,
@@ -122,6 +122,12 @@ import {
   sum,
 } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
+import {
+  appliedTicketLifecycle,
+  type TicketLifecycleBindingRow,
+  ticketLifecycleBindingsQuery,
+  ticketLifecycleOfRows,
+} from '../ticket-lifecycle.js';
 import { approvalViewsFor } from './approval-views.js';
 import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
@@ -1320,13 +1326,39 @@ const unmeasuredRunsFor = async (
  * owner's display name, and whether the ticket is **held elsewhere** — asked through
  * `taskHeldElsewhereSql`, the predicate the owner command, the claim and the pick share, read live
  * through `user_identities` so a link made since the last tracker read counts here at once.
+ *
+ * And since S-26.3, **whether a platform assignment writes back** (`owner_writes_back`, item 4):
+ * the project's task-management binding sets `lifecycle.assign_owner` — read through the reading
+ * the pipeline itself applies (`ticketLifecycleOfRows`, `ticket-lifecycle.ts`), so the page and the
+ * duty cannot disagree about the switch — **and** the task's owner has a `person` identity for the
+ * ticket's provider, the account the duty would assign. A task that names no provider ticket, and a
+ * **shadow** task (whose call is a `would_have` that writes nothing), publish `false`: the
+ * confirmation's *"also assigns … in Jira"* would be untrue for either.
  */
 interface OwnerView {
   readonly ownerName: string | null;
   readonly heldElsewhere: boolean;
+  readonly writesBack: boolean;
 }
 
 const HELD_ELSEWHERE = sql.raw(pipelineAdapters.taskHeldElsewhereSql('t'));
+
+/** Which of `projectIds` have a task-management binding that sets `lifecycle.assign_owner`. */
+const projectsAssigningOwners = async (
+  database: Database,
+  projectIds: readonly string[],
+): Promise<ReadonlySet<string>> => {
+  const assigning = new Set<string>();
+  for (const projectId of new Set(projectIds)) {
+    const { rows } = await database.execute<TicketLifecycleBindingRow & Record<string, unknown>>(
+      ticketLifecycleBindingsQuery(projectId),
+    );
+    if (appliedTicketLifecycle(ticketLifecycleOfRows(rows))?.slots.assign_owner === true) {
+      assigning.add(projectId);
+    }
+  }
+  return assigning;
+};
 
 const ownerViewsFor = async (
   database: Database,
@@ -1337,20 +1369,41 @@ const ownerViewsFor = async (
   }
   const { rows } = await database.execute<{
     id: string;
+    project_id: string;
+    ticket_provider: string;
+    mode: string;
     owner_name: string | null;
     held_elsewhere: boolean;
+    owner_has_identity: boolean;
   }>(sql`
-    select t.id, u.name as owner_name, ${HELD_ELSEWHERE} as held_elsewhere
+    select t.id, t.project_id, t.ticket_provider, t.mode, u.name as owner_name,
+           ${HELD_ELSEWHERE} as held_elsewhere,
+           exists (select 1 from user_identities ui
+                    where ui.user_id = t.owner_user_id
+                      and ui.provider = t.ticket_provider
+                      and ui.kind = 'person') as owner_has_identity
       from tasks t
       left join users u on u.id = t.owner_user_id
      where t.id in (${sql.join(
        taskIds.map((taskId) => sql`${taskId}::uuid`),
        sql`, `,
      )})`);
+  const assigning = await projectsAssigningOwners(
+    database,
+    rows.filter((row) => row.owner_has_identity === true).map((row) => row.project_id),
+  );
   return new Map(
     rows.map((row) => [
       row.id,
-      { ownerName: row.owner_name, heldElsewhere: row.held_elsewhere === true },
+      {
+        ownerName: row.owner_name,
+        heldElsewhere: row.held_elsewhere === true,
+        writesBack:
+          row.owner_has_identity === true &&
+          row.mode !== 'shadow' &&
+          row.ticket_provider !== PLATFORM_TICKET_PROVIDER &&
+          assigning.has(row.project_id),
+      },
     ]),
   );
 };
@@ -1377,8 +1430,8 @@ const ownerFieldsOf = (
       view?.heldElsewhere === true && assignee.data !== null
         ? { display_name: assignee.data.display_name }
         : null,
-    // The write-back is S-26.3's opt-in, which no binding can set in this build.
-    owner_writes_back: false,
+    // S-26.3: the binding's switch and the owner's account for the provider ({@link OwnerView}).
+    owner_writes_back: row.ownerUserId !== null && view?.writesBack === true,
   };
 };
 

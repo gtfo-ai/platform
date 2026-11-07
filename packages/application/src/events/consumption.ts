@@ -360,9 +360,9 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // that appended it, so nothing is left for a consumer to do.
   'task.ticket.rekeyed': 'unconsumed',
   // S-26.1 (TD-031's 2026-11-06 amendment item 1): an owner change, recorded in the transaction
-  // that wrote `tasks.owner_user_id`. An audit record in this build; S-26.3's write-back duty
-  // (`ticket_owner_assign`) is the consumer it waits for.
-  'task.owner.changed': 'unconsumed',
+  // that wrote `tasks.owner_user_id`. S-26.3's `pipeline.ticket.owner_assign` consumes it: a change
+  // the platform made enqueues the write-back duty (`ticket_owner_assign`) on a binding that opts in.
+  'task.owner.changed': 'handled',
   // WP-61, PROGRESS backlog 114, Q87: the defect-escape trace. **Read, not handled** — the
   // statistics query joins it to `stats_task_delivery` at request time, because "within thirty days
   // of the merge" is a comparison between this event and a delivery that a fold of one event at a
@@ -425,7 +425,6 @@ export const UNCONSUMED_OWNERS: Readonly<Partial<Record<DomainEventType, `WP-${s
     'integration.action.failed': null,
     'task.mr.measured': null,
     'task.ticket.rekeyed': null,
-    'task.owner.changed': null,
     'ticket.bug.traced': null,
   };
 

@@ -190,7 +190,10 @@ const trackerDecision = async (
   });
 };
 
-/** `task.owner.changed`, on the task's stream at `streamSeq`. */
+/**
+ * `task.owner.changed`, on the task's stream at `streamSeq`, carrying the `owner_changed_at` the
+ * same write stored (S-26.3: what the write-back duty re-validates against on fire).
+ */
 const ownerChangedEvent = (
   options: OwnerSyncOptions,
   input: {
@@ -198,6 +201,7 @@ const ownerChangedEvent = (
     readonly taskId: Id;
     readonly streamSeq: number;
     readonly change: OwnerChange;
+    readonly changedAt: IsoDateTime | null;
     readonly actor: DomainEvent['actor'];
     readonly causeEventId: Id | null;
   },
@@ -219,6 +223,7 @@ const ownerChangedEvent = (
       previous_owner_user_id: input.change.previousOwnerUserId,
       source: input.change.source,
       via: input.change.via,
+      ...(input.changedAt === null ? {} : { owner_changed_at: input.changedAt }),
     },
   }) as DomainEvent;
 
@@ -284,6 +289,7 @@ const applyOnTaskStream = async (
       taskId: input.taskId,
       streamSeq: loaded.task.sequence,
       change: decision.change,
+      changedAt: decision.next.ownerChangedAt,
       actor: input.actor,
       causeEventId: input.causeEventId,
     }),
@@ -327,12 +333,14 @@ export const syncOwnerAtIntake = async (
     return null;
   }
   const change = decision.change;
+  const changedAt = decision.next.ownerChangedAt;
   return (streamSeq) =>
     ownerChangedEvent(options, {
       projectId: input.projectId,
       taskId: input.taskId,
       streamSeq,
       change,
+      changedAt,
       actor: PIPELINE_ACTOR,
       causeEventId: input.causeEventId,
     });

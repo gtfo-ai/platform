@@ -209,7 +209,8 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // last read (S-26.1, migration 0104, TD-031's 2026-11-06 amendment item 1). One statement, a
     // compare-and-set on the owner and the assignee the decision was made over; its callers (the
     // owner sync at intake, a stage's re-read and the `owner_sync` duty, the owner command, the
-    // link adoption) run beside the stage executor, so it is narrow and never `save`'s.
+    // link adoption, and S-26.3's write-back preset and restore of `ticket_assignee`) run beside
+    // the stage executor, so it is narrow and never `save`'s.
     'owner_user_id',
     'owner_source',
     'owner_changed_at',

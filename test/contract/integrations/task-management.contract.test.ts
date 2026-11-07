@@ -155,8 +155,15 @@ const fakeHarness: TaskManagementContractHarness = {
           Finished: 'done',
         },
         assignElsewhere: async () => {
-          port.assignTo('FAKE-1', 'user-2');
+          port.assignInTracker('FAKE-1', 'user-2');
           return 'user-2';
+        },
+        // S-26.3: a person the fake holds (divergence 18), for `assignTo`.
+        person: {
+          provider: port.ref.provider,
+          external_id: 'user-2',
+          display_name: 'PM Two',
+          verified: false,
         },
       },
       composition: composition(),

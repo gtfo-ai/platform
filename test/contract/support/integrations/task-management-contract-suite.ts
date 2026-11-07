@@ -149,6 +149,11 @@ export interface TaskManagementLifecycleContext {
    * band; answers that person's provider id.
    */
   assignElsewhere(): Promise<string>;
+  /**
+   * A **person** account the tracker holds, other than the binding's own — whom `assignTo` (S-26.3,
+   * the owner write-back) hands the ticket to. The harness's own invented account.
+   */
+  readonly person: ExternalIdentity;
 }
 
 export interface TaskManagementContractHarness {
@@ -203,6 +208,12 @@ const callMember = (
       return port.unassign(ticket);
     case 'listComments':
       return port.listComments(ticket, { limit: 10 });
+    case 'assignTo':
+      return port.assignTo(ticket, {
+        provider: port.ref.provider,
+        external_id: 'contract-person',
+        verified: false,
+      });
   }
 };
 
@@ -319,6 +330,36 @@ export const checkUnassignLeavesOthers = async (
     changed: false,
   });
   expect((await context.port.readTicket(context.ticket)).assignee?.external_id).toBe(other);
+};
+
+/**
+ * `assignTo` (S-26.3, the owner write-back): the person named holds the ticket afterwards, shown by
+ * `readTicket`; a second call writes nothing; and an account the tracker does not hold is refused
+ * `invalid_request` — never written as somebody else — leaving the ticket as it was.
+ */
+export const checkAssignTo = async (context: TaskManagementContractContext): Promise<void> => {
+  const { port, ticket } = context;
+  const { person } = lifecycleOf(context);
+  const self = await port.selfIdentity().catch(() => null);
+  expect(person.external_id, 'the harness names somebody other than the binding').not.toBe(
+    self?.external_id,
+  );
+  const first = assignResultSchema.parse(await port.assignTo(ticket, person));
+  expect(first.changed, 'an unassigned ticket is assigned to the person').toBe(true);
+  expect(first.assignee.external_id).toBe(person.external_id);
+  expect((await port.readTicket(ticket)).assignee?.external_id, 'the ticket shows them').toBe(
+    person.external_id,
+  );
+  expect(assignResultSchema.parse(await port.assignTo(ticket, person)).changed, 'idempotent').toBe(
+    false,
+  );
+  await expectIntegrationError(
+    () => port.assignTo(ticket, { ...person, external_id: 'nobody-the-tracker-holds' }),
+    'invalid_request',
+  );
+  expect((await port.readTicket(ticket)).assignee?.external_id, 'left as it was').toBe(
+    person.external_id,
+  );
 };
 
 /** `listComments`: only comments created after `since`, newest first, bounded by `limit`. */
@@ -464,6 +505,7 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
             'transitionsRead',
             'assign',
             'commentsRead',
+            'assignOthers',
           ]),
         );
       });
@@ -866,6 +908,10 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
 
       it('lists only the comments newer than `since`, newest first', async () => {
         await eitherBranch(context, ['listComments'], checkListComments);
+      });
+
+      it('assigns the ticket to a person the tracker holds, and refuses one it does not (S-26.3)', async () => {
+        await eitherBranch(context, ['assignTo'], checkAssignTo);
       });
     });
 

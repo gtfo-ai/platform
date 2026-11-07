@@ -781,7 +781,13 @@ task from the person who owns it, so the platform claiming the ticket keeps its 
 account owns nothing. **The latest change wins**: a change of assignee in the tracker replaces an owner set on the platform, and an owner set
 on the platform stays until somebody changes the tracker. A member may take a task nobody owns (and
 nobody holds elsewhere) or give back their own; a maintainer may give any task to any member, or to
-nobody. Nothing is written to the tracker. The owner's computer gets the head start on the task's
+nobody. By default nothing is written to the tracker. **A project can opt in to writing the owner
+back** (since S-26.3; the tracker binding's `lifecycle.assign_owner`, Jira only): then an owner set on
+the platform — by a maintainer, or by a person picking the task on their own machine — is also
+assigned the ticket in Jira, through their linked Jira account. Giving a task back writes nothing (the
+platform never unassigns a person), an owner with no linked Jira account gets no write, a change made
+in Jira before the write wins over it, and a shadow task's write is only recorded. The task's
+`owner_writes_back` says whether a platform assignment of it will reach Jira. The owner's computer gets the head start on the task's
 runs (*Settings → Execution*, below). The page and the board do not show the owner yet; the API does
 (`owner` on every task, `POST /api/tasks/:id/owner`, and `?owner=me` or `?owner=none` on a
 project's task list).

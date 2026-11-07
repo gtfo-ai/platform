@@ -169,6 +169,13 @@ const createJiraContext = async (): Promise<TaskManagementContractContext> => {
         binding.replay.assign(JIRA_TICKET.key, DEV_ACCOUNT_ID);
         return DEV_ACCOUNT_ID;
       },
+      // S-26.3: the directory's developer (`user-search.json`), whom the write-back assigns.
+      person: {
+        provider: 'jira-cloud',
+        external_id: DEV_ACCOUNT_ID,
+        display_name: 'Dev One',
+        verified: true,
+      },
     },
     /**
      * WP-236 (backlog 637): Jira reports every search through `onSearches`. 45 labelled tickets
@@ -258,6 +265,18 @@ describe('jira-cloud — reaching the provider', () => {
         run: (bound) => bound.port.assignToSelf(JIRA_TICKET),
       },
       {
+        // S-26.3: the owner write-back. ACME-1 is the developer's in the fixture, so it is handed
+        // to the binding's own account here — one `PUT …/assignee` in normal mode, none in shadow.
+        name: 'assignTo',
+        action: 'assign_to',
+        run: (bound) =>
+          bound.port.assignTo(JIRA_TICKET, {
+            provider: 'jira-cloud',
+            external_id: '557058:00000000-0000-4000-8000-0000000b0701',
+            verified: true,
+          }),
+      },
+      {
         name: 'createTicket',
         action: 'create_ticket',
         run: (bound) =>
@@ -298,6 +317,29 @@ describe('jira-cloud — reaching the provider', () => {
         ).toEqual(['would_have']);
       });
     }
+  });
+
+  describe('the owner write-back’s request is J4’s documented one (S-26.3)', () => {
+    it('sends assign-issue.json’s request and reads the person back as the assignee', async () => {
+      const fixture = loadJiraFixture('assign-issue.json');
+      const request = fixture.request;
+      if (request === undefined) {
+        throw new Error('the J4 fixture records the request it documents');
+      }
+      const accountId = (request.body as { accountId: string }).accountId;
+      // ACME-1 is the developer's in the issue fixture: released first, so the write is made.
+      binding.replay.assign(JIRA_TICKET.key, null);
+      const result = await binding.port.assignTo(JIRA_TICKET, {
+        provider: 'jira-cloud',
+        external_id: accountId,
+        verified: true,
+      });
+      expect(result.changed).toBe(true);
+      const writes = binding.replay.requests.filter((recorded) => recorded.method !== 'GET');
+      expect(writes.map(({ method, path, body }) => ({ method, path, body }))).toEqual([request]);
+      expect((await binding.port.readTicket(JIRA_TICKET)).assignee?.external_id).toBe(accountId);
+      expect(binding.audit.entriesFor('assign_to').map((entry) => entry.status)).toEqual(['ok']);
+    });
   });
 
   describe('every error carrying provider text leaves through the executor', () => {

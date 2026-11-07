@@ -81,6 +81,7 @@ import { mergeRequestReadyHandlers } from './merge-request-ready.js';
 import { type PipelineOutboundOptions, pipelineOutboundHandler } from './outbound.js';
 import { performOwedDuties } from './owed-duties.js';
 import { ownerSyncHandlers } from './owner-sync.js';
+import { ownerWriteBackHandlers } from './owner-write-back.js';
 import { providerSignalHandlers } from './provider-signals.js';
 import { resolveOnMergeHandler } from './resolve-on-merge.js';
 import { reviewConversationHandlers } from './review-conversation.js';
@@ -478,6 +479,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       // S-26.1 (TD-031's 2026-11-06 amendment item 2): an edited ticket's live task follows its
       // assignee — the decision here, the read in the `owner_sync` duty.
       ...ownerSyncHandlers(options),
+      // S-26.3 (TD-031's 2026-11-06 amendment item 4): an owner the platform set is written back
+      // to the tracker on a binding that opts in — the decision here, the call in the duty.
+      ...ownerWriteBackHandlers(options),
       // WP-61: the size of a merge the platform made, and the defect trace of a bug ticket — two
       // measurements the delivery metrics need and no event carried (PROGRESS backlog 179, 114).
       ...deliveryMeasureHandlers(options),

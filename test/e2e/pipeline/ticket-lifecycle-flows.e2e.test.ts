@@ -869,7 +869,7 @@ describe('the ticket lifecycle and the review conversation, end to end (WP-183)'
 
     const taskId = await atHumanStage(pipeline, 'qa', 1);
     // The QA person takes the ticket, tests, and writes one general, non-resolvable note.
-    pipeline.tickets.assignTo(TICKET_KEY, QA_PERSON);
+    pipeline.tickets.assignInTracker(TICKET_KEY, QA_PERSON);
     const horizon = await moveHorizonBack(pipeline, taskId);
     await generalNote(
       pipeline,

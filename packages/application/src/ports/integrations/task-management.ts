@@ -306,8 +306,9 @@ export const ticketTransitionSchema = z.strictObject({
 });
 
 /**
- * What {@link TaskManagementPort.assignToSelf} did. `changed: false` means the binding's own account
- * already held the ticket; `assignee` is the account that holds it afterwards — the binding's own.
+ * What {@link TaskManagementPort.assignToSelf} and {@link TaskManagementPort.assignTo} did.
+ * `changed: false` means the account asked for already held the ticket; `assignee` is the account
+ * that holds it afterwards — the binding's own for `assignToSelf`, the person named for `assignTo`.
  */
 export const assignResultSchema = z.strictObject({
   changed: z.boolean(),
@@ -344,10 +345,11 @@ export const commentPageSchema = z.strictObject({
 });
 
 /**
- * The six lifecycle members (WP-171 ruling (a)) and the capability flag that declares each. An
- * adapter whose flag is `false` throws `IntegrationUnsupportedError` (`unsupported_capability`)
- * **naming the member** — `action` is the member's name — and never answers an empty list in its
- * place (BD-017). The shared contract suite runs both branches from this table.
+ * The six lifecycle members (WP-171 ruling (a)), S-26.3's `assignTo`, and the capability flag that
+ * declares each. An adapter whose flag is `false` throws `IntegrationUnsupportedError`
+ * (`unsupported_capability`) **naming the member** — `action` is the member's name — and never
+ * answers an empty list in its place (BD-017). The shared contract suite runs both branches from
+ * this table.
  */
 export const LIFECYCLE_MEMBER_CAPABILITY = {
   listStatuses: 'lifecycleStatuses',
@@ -356,6 +358,7 @@ export const LIFECYCLE_MEMBER_CAPABILITY = {
   assignToSelf: 'assign',
   unassign: 'assign',
   listComments: 'commentsRead',
+  assignTo: 'assignOthers',
 } as const satisfies Record<string, keyof TaskManagementCapabilities>;
 
 export type LifecycleMember = keyof typeof LIFECYCLE_MEMBER_CAPABILITY;
@@ -404,6 +407,13 @@ export interface TaskManagementCapabilities {
   readonly transitionsRead: boolean;
   /** `selfIdentity`, `assignToSelf` and `unassign` — the claim (WP-171, TD-029 decision 5). */
   readonly assign: boolean;
+  /**
+   * `assignTo` — the ticket assigned to a **person** the platform names, the owner write-back
+   * (S-26.3, TD-031's 2026-11-06 amendment item 4). Its own flag, not `assign`'s: a tracker whose
+   * credential may take a ticket for itself need not be able to hand one to somebody else, and the
+   * write-back is offered only where it is declared.
+   */
+  readonly assignOthers: boolean;
   /** `listComments` — the human-return window's re-read (WP-171, TD-029). */
   readonly commentsRead: boolean;
 }
@@ -562,6 +572,20 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
    * `{changed: false}`. A mutation, through the executor.
    */
   readonly assignToSelf: (ref: TicketRefInput) => Promise<AssignResult>;
+
+  /**
+   * Assigns the ticket to `assignee`, a **person** account of this provider the platform maps to
+   * the task's owner — the owner write-back (S-26.3, TD-031's 2026-11-06 amendment item 4), whose
+   * caller re-validates on fire and stores the identity as the ticket's last-seen assignee before
+   * it calls. Idempotent: already held by that account is `{changed: false}` and nothing is
+   * written. An identity of another provider, or one the tracker does not know, is refused
+   * (`invalid_request`), never written as something else. Declared by `assignOthers`. A mutation,
+   * through the executor.
+   */
+  readonly assignTo: (
+    ref: TicketRefInput,
+    assignee: ExternalIdentityValue,
+  ) => Promise<AssignResult>;
 
   /**
    * Unassigns the ticket **only when the binding's own account holds it**; anybody else's

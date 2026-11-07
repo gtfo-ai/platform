@@ -34,9 +34,10 @@ describe('normaliseStatusCategory (WP-171 ruling (b), research/15 J1a, J3)', () 
 });
 
 describe('the lifecycle members', () => {
-  it('declares each of the six members by one of the four flags, and every flag is used', () => {
+  it('declares each of the seven members by one of the five flags, and every flag is used', () => {
     expect(Object.keys(LIFECYCLE_MEMBER_CAPABILITY).toSorted()).toEqual(
       [
+        'assignTo',
         'assignToSelf',
         'listComments',
         'listStatuses',
@@ -46,8 +47,10 @@ describe('the lifecycle members', () => {
       ].toSorted(),
     );
     expect([...new Set(Object.values(LIFECYCLE_MEMBER_CAPABILITY))].toSorted()).toEqual(
-      ['assign', 'commentsRead', 'lifecycleStatuses', 'transitionsRead'].toSorted(),
+      ['assign', 'assignOthers', 'commentsRead', 'lifecycleStatuses', 'transitionsRead'].toSorted(),
     );
+    // S-26.3: the owner write-back has a flag of its own, never the claim's.
+    expect(LIFECYCLE_MEMBER_CAPABILITY.assignTo).toBe('assignOthers');
   });
 
   it('bounds a comment page request at one provider page', () => {

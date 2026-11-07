@@ -1093,6 +1093,8 @@ const JIRA_SCENARIOS: Readonly<Record<string, string>> = {
   assign_to_self: 'assignToSelf',
   unassign: 'unassign',
   list_comments: 'listComments',
+  // S-26.3: the owner write-back, one more `PUT …/assignee`.
+  assign_to: 'assignTo',
   verify_delivery: 'inbound.verify',
   delivery_key: 'inbound.deliveryKey',
   normalise_delivery: 'inbound.normalise',
@@ -1158,6 +1160,12 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
     emitted.assign_to_self = await port.assignToSelf(ref);
     emitted.unassign = await port.unassign(ref);
     emitted.list_comments = await port.listComments(ref, { limit: 10 });
+    // S-26.3: a person the script's ticket is not assigned to, so the read and the `PUT` both run.
+    emitted.assign_to = await port.assignTo(ref, {
+      provider: 'jira-cloud',
+      external_id: '557058:00000000-0000-4000-8000-00000000b0b0',
+      verified: true,
+    });
     emitted.link_merge_request = await port.linkMergeRequest(
       ref,
       // The MR url is the platform's own text, and it is published to the ticket as a remote link.

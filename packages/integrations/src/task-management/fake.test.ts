@@ -376,6 +376,28 @@ describe('the ticket lifecycle (WP-171, divergences 12–16)', () => {
     expect((await port.readTicket(REF)).assignee?.external_id).toBe('agentic-bot');
   });
 
+  it('assigns a person it holds, idempotently, and refuses one it does not (S-26.3, divergence 18)', async () => {
+    const port = lifecycle({
+      identities: [{ providerUserId: 'user-1', email: 'dev@example.test', displayName: 'Dev One' }],
+    });
+    const person = { provider: port.ref.provider, external_id: 'user-1', verified: true };
+    expect(await port.assignTo(REF, person)).toMatchObject({
+      changed: true,
+      assignee: { external_id: 'user-1' },
+    });
+    expect((await port.readTicket(REF)).assignee?.external_id).toBe('user-1');
+    expect((await port.assignTo(REF, person)).changed).toBe(false);
+    for (const stranger of [
+      { ...person, external_id: 'user-404' },
+      { ...person, provider: 'another-tracker' },
+    ]) {
+      await expect(port.assignTo(REF, stranger)).rejects.toMatchObject({
+        code: 'invalid_request',
+      });
+    }
+    expect((await port.readTicket(REF)).assignee?.external_id).toBe('user-1');
+  });
+
   it('dates seeded comments, keeps only those strictly after `since`, newest first (divergence 15)', async () => {
     const port = lifecycle({
       tickets: [
@@ -414,6 +436,7 @@ describe('the ticket lifecycle (WP-171, divergences 12–16)', () => {
     ['assign', 'unassign'],
     ['assign', 'selfIdentity'],
     ['commentsRead', 'listComments'],
+    ['assignOthers', 'assignTo'],
   ] as const)('refuses by name with %s off: %s', async (flag, member) => {
     const port = lifecycle({ capabilities: { [flag]: false } });
     const call = {
@@ -423,6 +446,12 @@ describe('the ticket lifecycle (WP-171, divergences 12–16)', () => {
       unassign: () => port.unassign(REF),
       selfIdentity: () => port.selfIdentity(),
       listComments: () => port.listComments(REF, { limit: 1 }),
+      assignTo: () =>
+        port.assignTo(REF, {
+          provider: port.ref.provider,
+          external_id: 'user-1',
+          verified: true,
+        }),
     }[member];
     const error = await call().then(
       () => null,

@@ -326,7 +326,12 @@ export interface PipelineOutboundData {
      * S-26.1 (TD-031's 2026-11-06 amendment item 2): re-read a live task's ticket after a
      * `ticket.updated` and follow its assignee — one read per burst (`owner-sync.ts`).
      */
-    | 'owner_sync';
+    | 'owner_sync'
+    /**
+     * S-26.3 (TD-031's 2026-11-06 amendment item 4): assign the ticket to the owner the platform
+     * set, on a binding with `lifecycle.assign_owner` (`owner-write-back.ts`).
+     */
+    | 'ticket_owner_assign';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -388,6 +393,13 @@ export interface PipelineOutboundData {
    * `ReviewVerdict` or an `ImplementationNotes` — re-read when the job fires.
    */
   readonly artifact_id?: string;
+  /**
+   * `ticket_owner_assign` only (S-26.3): the owner the `task.owner.changed` named and the
+   * `owner_changed_at` its write stored — what the duty re-validates against on fire (TD-004), so a
+   * later change of owner, or the same owner set again, is never written back by this wake-up.
+   */
+  readonly owner_user_id?: string;
+  readonly owner_changed_at?: string;
   /** `ticket_release` only (WP-177): why the ticket is given back. */
   readonly release_cause?: 'cancelled' | 'rework' | 'stopped';
   /** `ask_answer` only (WP-31): which ask was answered. The row holds everything else. */

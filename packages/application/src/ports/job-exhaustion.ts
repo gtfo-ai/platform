@@ -45,9 +45,9 @@
  *    effect, or what is lost is a notification (rule 20). The workpad, the status and
  *    `notify.digest` are the ruling's examples.
  *
- * `pipeline.outbound` carries thirty-nine duties of all three shapes since S-26.1's `owner_sync` (this
- * sentence said thirty-two through three additions, and thirty-seven past two more), so it is the one
- * queue whose
+ * `pipeline.outbound` carries forty duties of all three shapes since S-26.3's `ticket_owner_assign`
+ * (this sentence said thirty-two through three additions, thirty-seven past two more, and
+ * thirty-nine at S-26.1's `owner_sync`), so it is the one queue whose
  * shape is **`per_duty`**: {@link OUTBOUND_DUTY_EXHAUSTION} declares each, and it is typed as a
  * record over the duty union, so a duty added to `OutboundJobData` without a row fails the build.
  *
@@ -359,6 +359,10 @@ export const OUTBOUND_DUTY_EXHAUSTION: Readonly<
   owner_sync: {
     shape: 'notification_shaped',
     why: 'one re-read of a live task’s ticket to follow its assignee (S-26.1); a lost read leaves the owner as it was until the next `ticket.updated` or the next agent stage’s re-read, which apply the same assignee — the snapshot stays stale, so the next one reads',
+  },
+  ticket_owner_assign: {
+    shape: 'notification_shaped',
+    why: 'one assign of the ticket to the owner the platform set, on a binding with `lifecycle.assign_owner` (S-26.3); the platform’s owner stands whether or not the tracker shows it, a refused call puts the stored assignee back and is logged, and a lost wake-up leaves the tracker as it was until the next owner change, which writes back again',
   },
   ticket_release: {
     shape: 'notification_shaped',

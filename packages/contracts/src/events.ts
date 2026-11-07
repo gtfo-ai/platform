@@ -631,8 +631,14 @@ export const taskTicketRekeyedEvent = defineEvent('task.ticket.rekeyed', {
  * (`POST /api/tasks/:id/owner`), `pick` (a worker's pick, S-26.4) or `link` (a newly linked identity
  * adopting the owner, S-26.6). A tracker read that changes only the stored assignee — an unlinked
  * person replaced by another — changes no owner and records nothing. The actor is the person for a
- * command or a pick and the pipeline otherwise. An audit record today; S-26.3's write-back duty is
- * its first consumer.
+ * command or a pick and the pipeline otherwise.
+ *
+ * `owner_changed_at` (S-26.3) is the `tasks.owner_changed_at` the same write stored — the identity
+ * of this change on the row, which the write-back duty `ticket_owner_assign` compares on fire with
+ * `owner_user_id` (TD-031's amendment item 4, TD-004: a job cannot be cancelled), so a later change,
+ * even back to the same person, is never mistaken for this one. **Optional**: an event written
+ * before S-26.3 has none, and a consumer then reads the row's own instant while it still names this
+ * owner as the platform's. Its consumer is that duty's handler (`owner-write-back.ts`).
  */
 export const taskOwnerChangedEvent = defineEvent('task.owner.changed', {
   ...taskScoped,
@@ -640,6 +646,7 @@ export const taskOwnerChangedEvent = defineEvent('task.owner.changed', {
   previous_owner_user_id: idSchema.nullable(),
   source: taskOwnerSourceSchema,
   via: taskOwnerViaSchema,
+  owner_changed_at: isoDateTimeSchema.optional(),
 });
 
 /**

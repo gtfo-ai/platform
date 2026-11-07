@@ -28,7 +28,7 @@
  * its `perform`: an error carrying provider text (a refused transition quoting the workflow's status
  * names) is scrubbed there, after the adapter's own redactor has already scrubbed the transport's
  * text (`client.ts`). A member that *resolves* before it writes — `transition`, `upsertWorkpad`,
- * `setLabels`, `assignToSelf`, `unassign` — makes its read and its write inside that one call, so a
+ * `setLabels`, `assignToSelf`, `assignTo`, `unassign` — makes its read and its write inside that one call, so a
  * caller that refuses a shadow task's mutation refuses the read with it.
  *
  * ## Idempotency lives in the provider, not in a store
@@ -416,6 +416,8 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     transitionsRead: true,
     assign: true,
     commentsRead: true,
+    // S-26.3: the owner write-back — the same J4 `PUT …/assignee`, with a person's `accountId`.
+    assignOthers: true,
   };
 
   const logger = options.logger ?? silentLogger;
@@ -1278,7 +1280,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     return { assignee: accountId === undefined ? null : accountId, self };
   };
 
-  /** The one write both assign members make — research/15 **J4**, with ruling (d)'s 403. */
+  /** The one write every assign member makes — research/15 **J4**, with ruling (d)'s 403. */
   const putAssignee = async (key: string, accountId: string | null, action: string) => {
     try {
       await client.send({
@@ -1305,6 +1307,38 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     }
     await putAssignee(key, held.self.external_id, 'assign_to_self');
     return { changed: true, assignee: held.self };
+  };
+
+  /**
+   * `assignTo` — the owner write-back (S-26.3, TD-031's 2026-11-06 amendment item 4): J4's `PUT
+   * …/assignee` with the person's `accountId`, after a read, so a ticket that person already holds
+   * is `{changed: false}` with no `PUT`. Refused before any request: an identity of another provider,
+   * and J4's two special values — `"-1"` (the project's default assignee) and an empty id — which
+   * would assign somebody nobody named. An account Jira does not know answers J4's `400`
+   * (`invalid_request`); a credential without *Assign Issues* answers `403`, named by
+   * {@link assignRefusal}.
+   */
+  const assignTo = async (
+    ticketRef: TicketRefInput,
+    assignee: ExternalIdentity,
+  ): Promise<AssignResult> => {
+    const key = ticketRef.key;
+    const accountId = assignee.external_id;
+    if (assignee.provider !== PROVIDER_ID || accountId.trim() === '' || accountId === '-1') {
+      throw new IntegrationError(
+        'invalid_request',
+        PROVIDER_ID,
+        `assignTo names an identity that is not a Jira account id, so ${key} is not assigned`,
+        { action: 'assign_to' },
+      );
+    }
+    // The issue's assignee alone: unlike the claim, the write-back has no use for `GET /myself`.
+    const issue = await fetchIssue(key, 'assignee', jiraIssueSchema, 'read_assignee');
+    if (issue.fields.assignee?.accountId === assignee.external_id) {
+      return { changed: false, assignee };
+    }
+    await putAssignee(key, assignee.external_id, 'assign_to');
+    return { changed: true, assignee };
   };
 
   /**
@@ -1434,6 +1468,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     listTransitions,
     selfIdentity,
     assignToSelf,
+    assignTo,
     unassign,
     listComments,
     // One guard, not two (standing rule 9). Round 1 wrapped `verify` in `capabilities.webhooks &&`

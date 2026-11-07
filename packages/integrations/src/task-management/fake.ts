@@ -111,6 +111,12 @@
  * 17. **Different — `matchTickets` never calls `onSearches`** (WP-223). A fake read is one request
  *     at most, which the port lets a provider leave unreported: the caller counts one. Jira reports
  *     every page and refused search of a `keys` read, and every page of any other rule (WP-233).
+ * 18. **Same — `assignTo` refuses an account it does not hold** (S-26.3): a person the fake was not
+ *     seeded with (`identities`), or an identity of another provider, is `invalid_request`, as Jira's
+ *     J4 answers `400` for a user it cannot find. The binding's own account is held, as every
+ *     tracker holds its credential's. A test that puts somebody on a ticket out of band uses the
+ *     control `assignInTracker`, which checks nothing — a person in the tracker's UI is not a port
+ *     call.
  */
 import {
   type AssignResult,
@@ -370,9 +376,10 @@ export interface FakeTaskManagement extends TaskManagementPort {
   peek(key: string): StoredTicket | undefined;
   /**
    * Somebody assigns the ticket in the tracker (WP-171): a provider user id, or `null` to clear it.
-   * A test control, not a port call — the platform's own writes are `assignToSelf` and `unassign`.
+   * A test control, not a port call — the platform's own writes are `assignToSelf`, `assignTo` and
+   * `unassign`. (Named `assignTo` until S-26.3 gave the port a member of that name.)
    */
-  assignTo(key: string, providerUserId: string | null): void;
+  assignInTracker(key: string, providerUserId: string | null): void;
   emitCommentAdded(input: {
     readonly ticketKey: string;
     readonly authorId: string;
@@ -468,6 +475,7 @@ export const createFakeTaskManagement = (
     transitionsRead: true,
     assign: true,
     commentsRead: true,
+    assignOthers: true,
     ...options.capabilities,
   };
 
@@ -838,6 +846,32 @@ export const createFakeTaskManagement = (
       return assignResultSchema.parse({ changed, assignee: { ...self } });
     },
 
+    assignTo: async (
+      ticketRef: TicketRefInput,
+      assignee: ExternalIdentity,
+    ): Promise<AssignResult> => {
+      enterLifecycle('assignTo', 'assign_to');
+      const ticket = requireTicket('assign_to', ticketRef.key);
+      // Divergence 18: only an account the fake holds, of this provider.
+      const held =
+        assignee.provider === PROVIDER &&
+        (identities.has(assignee.external_id) || assignee.external_id === self.external_id);
+      if (!held) {
+        throw new IntegrationError(
+          'invalid_request',
+          PROVIDER,
+          'the fake tracker has no account with that id, so the ticket is not assigned',
+          { action: 'assign_to' },
+        );
+      }
+      const changed = ticket.assignee !== assignee.external_id;
+      if (changed) {
+        ticket.assignee = assignee.external_id;
+        ticket.updated_at = core.clock.now();
+      }
+      return assignResultSchema.parse({ changed, assignee: identityOf(assignee.external_id) });
+    },
+
     unassign: async (ticketRef: TicketRefInput): Promise<UnassignResult> => {
       enterLifecycle('unassign', 'unassign');
       const ticket = requireTicket('unassign', ticketRef.key);
@@ -1042,7 +1076,7 @@ export const createFakeTaskManagement = (
 
     seedTicket,
     peek: (key) => tickets.get(key),
-    assignTo: (key, providerUserId) => {
+    assignInTracker: (key, providerUserId) => {
       const ticket = requireTicket(ACTION, key);
       ticket.assignee = providerUserId;
       ticket.updated_at = core.clock.now();

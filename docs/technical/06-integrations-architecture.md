@@ -19,8 +19,9 @@ linkMergeRequest(ref, mrUrl)
 createTicket(draft) -> TicketRef                     # scope-creep valve, epic split
 resolveIdentity(providerUserId|email) -> UserIdentity
 inbound: InboundNormaliser                           # see below; ticket.matched|comment.added|status.changed
-capabilities() -> {webhooks, epics, links, customFields, adf, createTicket, attachments, lifecycleStatuses, transitionsRead, assign, commentsRead}   # the last four: WP-171, below
+capabilities() -> {webhooks, epics, links, customFields, adf, createTicket, attachments, lifecycleStatuses, transitionsRead, assign, commentsRead, assignOthers}   # lifecycleStatuses…commentsRead: WP-171, below; assignOthers: S-26.3
 listStatuses() ; listTransitions(ref) ; selfIdentity() ; assignToSelf(ref) ; unassign(ref) ; listComments(ref, {since?, limit})   # WP-171: the M10-head amendment below
+assignTo(ref, identity) -> {changed, assignee}       # S-26.3: the owner write-back (mutation, executor); declared by assignOthers
 testConnection() -> HealthProbe                      # read-only probe (product/08 § Health and setup)
 ```
 Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) lives in the provider module.
@@ -121,6 +122,24 @@ Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) 
 > **The binding's `lifecycle` block** (TD-029 decision 1) is part of every task-management provider's
 > binding schema. It is defined once in `packages/contracts`, and `pickup_status` is its `pick_up_from`.
 > `PUT /api/projects/:id/bindings` validates it against `listStatuses()`, read through the executor.
+
+> **S-26.3 (TD-031's 2026-11-06 amendment item 4): the owner write-back.** The port gains one member,
+> `assignTo(ref, identity) -> {changed, assignee}` — the ticket assigned to a **person** account the
+> platform maps to the task's owner — declared by a flag of its own, `assignOthers`, rather than by
+> `assign`, because a credential that may take a ticket for itself need not be able to hand one to
+> somebody else. It joins `LIFECYCLE_MEMBER_CAPABILITY`, so the shared suite runs it both ways: the
+> fake and Jira assign the harness's person, read them back, answer a repeat `{changed: false}` and
+> refuse an account the tracker does not hold `invalid_request`; the refusing stub refuses it by name.
+> **Jira Cloud** implements it with J4 (`PUT issue/{key}/assignee {"accountId": …}`) after a
+> `fields=assignee` read, so a ticket the person already holds sends no `PUT`; it refuses another
+> provider's identity and J4's special values (`"-1"`, the default assignee, and a blank id) before any
+> request. The fixture is `test/fixtures/http/jira-cloud/assign-issue.json` (`documented`), and the
+> contract runner holds `assignTo`'s request to it. **GitLab gets no member**: it is a git provider
+> here, not a task-management one, so there is nothing to declare. The pipeline calls it only through
+> `ticketWrites.assignTo` (`assign_to` on the audit row, the account id in its payload, never a display
+> name), from the `ticket_owner_assign` duty (`pipeline/owner-write-back.ts`), and only on a binding
+> whose `lifecycle.assign_owner` is `true` (default `false`); the duty's re-validation and its preset
+> and restore of `tasks.ticket_assignee` are technical/02's.
 
 ### GitProvider
 ```

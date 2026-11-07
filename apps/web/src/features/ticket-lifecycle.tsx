@@ -21,6 +21,9 @@
  * - **The `claim` and `take_assigned_tickets` switches** are the block's own keys. `claim` is seeded
  *   from the stored block, or **on** when there is none, because that is what the block means once
  *   it is saved (`ticketLifecycleSchema`'s docblock): the switch shows what saving puts in force.
+ * - **`assign_owner` is kept as it is stored** (S-26.3, the owner write-back): this form has no
+ *   control for it — S-26.8a's switch is its screen — so saving the slots carries the stored value
+ *   through rather than dropping the person's opt-in.
  * - **Saving writes the block as the form shows it**, through `PUT …/bindings` with the **whole**
  *   stored set and every other binding's configuration unchanged (the notifications control's shape,
  *   `operating-mode.tsx`), so this button cannot lose a channel or unbind anything.
@@ -178,7 +181,7 @@ export const lifecycleOverlayOf = (
   draft: LifecycleDraft,
   accountPickupStatus: string | null,
 ): Record<string, unknown> => {
-  const { pickup_status: _pickup, lifecycle: _lifecycle, ...rest } = stored ?? {};
+  const { pickup_status: _pickup, lifecycle: storedLifecycle, ...rest } = stored ?? {};
   const lifecycle: Record<string, unknown> = {};
   for (const slot of LIFECYCLE_SINGLE_SLOTS) {
     if (draft.names[slot] !== '') {
@@ -190,6 +193,11 @@ export const lifecycleOverlayOf = (
   }
   lifecycle.claim = draft.claim;
   lifecycle.take_assigned_tickets = draft.takeAssignedTickets;
+  // S-26.3: the write-back switch is not this form's; the stored value survives a save of the slots.
+  const storedBlock = storedLifecycle as Readonly<Record<string, unknown>> | null | undefined;
+  if (typeof storedBlock?.assign_owner === 'boolean') {
+    lifecycle.assign_owner = storedBlock.assign_owner;
+  }
   const pickup = draft.names.pick_up_from;
   return {
     ...rest,

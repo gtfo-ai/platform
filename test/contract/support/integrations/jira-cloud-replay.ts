@@ -77,6 +77,12 @@ const FIXTURE_DIR = new URL('../../../fixtures/http/jira-cloud/', import.meta.ur
 
 interface FixtureFile {
   readonly source: Record<string, unknown>;
+  /** The request a write fixture documents (S-26.3's `assign-issue.json`): path below `/rest/api/3/`. */
+  readonly request?: {
+    readonly method: string;
+    readonly path: string;
+    readonly body?: unknown;
+  };
   readonly response?: {
     readonly status: number;
     readonly headers?: Record<string, string>;

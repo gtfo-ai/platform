@@ -90,6 +90,8 @@ describe('createJiraCloudRegistration', () => {
       transitionsRead: true,
       assign: true,
       commentsRead: true,
+      // S-26.3: the owner write-back (J4 with a person's account id).
+      assignOthers: true,
     });
   });
 

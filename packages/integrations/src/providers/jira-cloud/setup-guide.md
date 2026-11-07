@@ -12,6 +12,7 @@
 | Moves a ticket to a status **you** mapped, and only when it is not already there | Invents a status or creates a workflow |
 | Adds and removes the labels your configuration names | Touches a label it was not told about |
 | Links the merge request it opened | Transitions or comments on a ticket in another project |
+| Assigns a ticket to the person you made its owner on the platform — **only if you switch it on** (`lifecycle.assign_owner`, step 6) | Unassigns a person, or assigns anyone the platform cannot map to a linked account |
 
 In **shadow mode** it does none of the writes: they are recorded as `would_have` and you can read
 them in the audit before you trust the platform with the real thing.
@@ -48,7 +49,7 @@ In the project's **Project settings → People / Permissions**, the account need
 | Permission | Used by |
 |---|---|
 | Browse projects | reading tickets, and searching them — the poll (step 5) and the history bootstrap — and reading the project's statuses (step 6) |
-| Assign issues | the claim: assigning a ticket to this account when work starts, and unassigning it only if this account still holds it |
+| Assign issues | the claim: assigning a ticket to this account when work starts, and unassigning it only if this account still holds it; and, with `lifecycle.assign_owner` on, **writing the owner back**: assigning the ticket to the person a maintainer or a pick made its owner on the platform |
 | Add comments | the workpad and questions |
 | Edit issues | labels |
 | Transition issues | status changes; without it Jira lists no transitions at all |
@@ -57,7 +58,8 @@ In the project's **Project settings → People / Permissions**, the account need
 
 The first four — *Browse Projects*, *Assign Issues*, *Transition Issues* and *Add Comments* — are
 what the ticket lifecycle (step 6) needs. A missing *Assign Issues* is reported by name the first time
-the platform claims a ticket (`forbidden`, naming the permission), not as a bare `403`.
+the platform claims a ticket (`forbidden`, naming the permission), not as a bare `403` — and the same
+for the owner write-back, whose refusal is logged and leaves the platform's owner in place.
 
 Nothing here needs Jira administration rights: the platform reads a project's statuses through the
 endpoint any account with *Browse Projects* may call, never the administrators' status search. If you would rather not grant *Create issues*, leave
@@ -189,6 +191,23 @@ so no other slot may name the same status (compared ignoring case); the binding 
 does. The platform reads the statuses it may name from Jira itself — the union of every issue type's
 statuses in each project of `project_keys` — so **a binding that maps a lifecycle needs
 `project_keys`**: with none, there is no project to read statuses from and the read is refused.
+
+**Writing the owner back (opt-in).** A task has an owner on the platform: the linked person the
+ticket is assigned to, or whoever a maintainer (or a person's pick on their own machine) makes the
+owner. By default that choice stays on the platform. Set `lifecycle.assign_owner: true` and the
+platform also **assigns the Jira ticket** to that person — through their linked Jira account, with
+the binding's *Assign Issues* permission (step 2) — so the board in Jira and the platform agree. It is
+not a status slot, so it changes nothing else in the block; add `claim: false` beside it if you want
+the write-back without the claim. What it does and does not do:
+- it writes only an owner the **platform** set; an owner the platform read from Jira is already there;
+- **unassigning on the platform writes nothing** — the platform never unassigns a person in Jira;
+- an owner with **no linked Jira account** gets no write (the reason is logged), and the task page
+  says nothing about Jira for that task;
+- if somebody changes the assignee in Jira before the write happens, the write is skipped — the latest
+  change wins, wherever it was made;
+- in **shadow mode** the write is recorded as `would_have` and Jira is not touched;
+- if Jira refuses (a missing *Assign Issues*, an account it does not know), the platform's owner
+  stands, the refusal is logged and audited, and nothing is retried until the next owner change.
 
 **QA by status, with or without the webhook.** With a `qa` slot mapped, a task waits at the human QA
 stage after the agent's review, and it passes QA when somebody moves the ticket **out of** the `qa`

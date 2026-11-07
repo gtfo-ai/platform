@@ -33,6 +33,8 @@ const REF = { provider: 'jira-cloud', key: KEY, url: `${SITE}/browse/${KEY}` } a
 const NOW = '2026-10-08T10:00:00.000Z';
 const SELF = '557058:00000000-0000-4000-8000-0000000b0701';
 const SOMEONE = '557058:00000000-0000-4000-8000-00000000d0c1';
+/** The person the owner write-back assigns (S-26.3): neither the binding nor the current holder. */
+const PERSON = '557058:00000000-0000-4000-8000-00000000b0b0';
 
 const status = (id: string, name: string, key?: string): JiraStatus => ({
   id,
@@ -335,6 +337,48 @@ describe('the claim’s read and write (WP-172 ruling (b))', () => {
     expect(error).toBeInstanceOf(IntegrationError);
     expect((error as IntegrationError).code).toBe('forbidden');
     expect((error as IntegrationError).message).toContain('Assign Issues');
+  });
+
+  it('assignTo sends the person’s accountId over somebody else’s assignment (S-26.3)', async () => {
+    const { port, calls } = adapter(assignedTo(SOMEONE));
+    const person = { provider: 'jira-cloud', external_id: PERSON, verified: true };
+    expect(await port.assignTo(REF, person)).toEqual({ changed: true, assignee: person });
+    expect(puts(calls).map((call) => [call.path, call.body])).toEqual([
+      [`issue/${KEY}/assignee`, { accountId: PERSON }],
+    ]);
+  });
+
+  it('assignTo on a ticket the person already holds writes nothing', async () => {
+    const { port, calls } = adapter(assignedTo(PERSON));
+    const person = { provider: 'jira-cloud', external_id: PERSON, verified: true };
+    expect((await port.assignTo(REF, person)).changed).toBe(false);
+    expect(puts(calls)).toEqual([]);
+  });
+
+  it.each([
+    ['another provider’s identity', { provider: 'gitlab', external_id: PERSON }],
+    ['J4’s default-assignee value', { provider: 'jira-cloud', external_id: '-1' }],
+    ['a blank account id', { provider: 'jira-cloud', external_id: ' ' }],
+  ])('assignTo refuses %s before any request', async (_label, identity) => {
+    const { port, calls } = adapter(assignedTo(SOMEONE));
+    await expect(port.assignTo(REF, { ...identity, verified: true })).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('assignTo’s 403 is forbidden, naming the Assign Issues permission', async () => {
+    const { port } = adapter({
+      ...assignedTo(SOMEONE),
+      [`PUT issue/${KEY}/assignee`]: () =>
+        json({ errorMessages: ['You do not have permission to assign issues.'], errors: {} }, 403),
+    });
+    await expect(
+      port.assignTo(REF, { provider: 'jira-cloud', external_id: PERSON, verified: true }),
+    ).rejects.toMatchObject({
+      code: 'forbidden',
+      message: expect.stringContaining('Assign Issues'),
+    });
   });
 
   it('refuses to claim when Jira will not say who the binding is', async () => {

@@ -9,6 +9,9 @@
  * (`bindings.account_identity`, migration 0090). Only by the provider-issued account id: never an
  * email, never a display name (BD-022, Q10).
  *
+ * `personIdentity` (S-26.3) answers the owner write-back's question — which account of the tracker
+ * a user is — from the same table, `person` links only.
+ *
  * The order is the port's: a `person` linked to a member wins (a person's own token, Q118 (a), is
  * that person's), then a `machine`, then a binding's own account; anything else is a `person` the
  * platform cannot map.
@@ -54,5 +57,17 @@ export const createPostgresTaskOwnerDirectory = (): TaskOwnerDirectory => ({
       [input.projectId, input.userId],
     );
     return rows[0]?.may === true;
+  },
+  // S-26.3: the account the owner write-back assigns — a `person` link only, the oldest first.
+  personIdentity: async (tx, input) => {
+    const { rows } = await sqlOf(tx).query<{ external_id: string }>(
+      `select external_id from user_identities
+        where user_id = $1::uuid and provider = $2 and kind = 'person'
+        order by created_at, external_id
+        limit 1`,
+      [input.userId, input.provider],
+    );
+    const row = rows[0];
+    return row === undefined ? null : { externalId: row.external_id };
   },
 });

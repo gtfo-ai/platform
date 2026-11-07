@@ -1,7 +1,7 @@
 /**
  * The **refusing stub** of the TaskManagement contract (WP-171 ruling (c)): a provider that
- * implements none of the six lifecycle members, built the way BD-017 says such a provider must be —
- * its four lifecycle flags `false`, and each member throwing `IntegrationUnsupportedError`
+ * implements none of the six lifecycle members nor S-26.3's `assignTo`, built the way BD-017 says
+ * such a provider must be — its five lifecycle flags `false`, and each member throwing `IntegrationUnsupportedError`
  * (`unsupported_capability`) **naming the member**.
  *
  * The shared suite runs against it in `test/contract/integrations/task-management.contract.test.ts`,
@@ -27,8 +27,14 @@ const refuse = (member: LifecycleMember) => async (): Promise<never> => {
 
 const NO_LIFECYCLE: Pick<
   TaskManagementCapabilities,
-  'lifecycleStatuses' | 'transitionsRead' | 'assign' | 'commentsRead'
-> = { lifecycleStatuses: false, transitionsRead: false, assign: false, commentsRead: false };
+  'lifecycleStatuses' | 'transitionsRead' | 'assign' | 'commentsRead' | 'assignOthers'
+> = {
+  lifecycleStatuses: false,
+  transitionsRead: false,
+  assign: false,
+  commentsRead: false,
+  assignOthers: false,
+};
 
 export const refusingLifecycleStub = (
   port: TaskManagementPort,
@@ -57,6 +63,7 @@ export const refusingLifecycleStub = (
             transitionsRead: true,
             assign: true,
             commentsRead: true,
+            assignOthers: true,
           }
         : NO_LIFECYCLE),
     }),
@@ -66,5 +73,6 @@ export const refusingLifecycleStub = (
     assignToSelf: member('assignToSelf') as TaskManagementPort['assignToSelf'],
     unassign: member('unassign') as TaskManagementPort['unassign'],
     listComments: member('listComments') as TaskManagementPort['listComments'],
+    assignTo: member('assignTo') as TaskManagementPort['assignTo'],
   };
 };

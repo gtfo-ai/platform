@@ -1717,6 +1717,41 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
   },
 
   /**
+   * The owner write-back (S-26.3, TD-031's 2026-11-06 amendment item 4): assigns the ticket to the
+   * task owner's `person` identity, a mutation through the executor — a shadow task assigns nothing
+   * and is answered `{changed: false, assignee}`, recorded `would_have` (BD-021). `null`, with no
+   * call and no audit row, for no binding, a platform-issued reference, or a provider that does not
+   * declare `assignOthers` (the port's rule: the caller checks the flag before asking). The audit
+   * payload names the ticket and the provider's account id, never a display name.
+   * `idempotencyKey` is the caller's: the task and the owner change being written back.
+   */
+  assignTo: async (
+    ticket: TicketRefInput,
+    assignee: ExternalIdentity,
+    context: TicketWriteContext & { readonly idempotencyKey: string },
+  ): Promise<AssignResult | null> => {
+    const binding = integrations.taskManagement;
+    if (
+      binding === null ||
+      !namesAProviderTicket(ticket) ||
+      binding.port.capabilities().assignOthers !== true
+    ) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      binding.ref,
+      'assign_to',
+      { ticket_key: ticket.key, account_id: assignee.external_id },
+      context,
+      async () => binding.port.assignTo(ticket, assignee),
+      () => ({ changed: false, assignee }),
+      (result) => ({ changed: result.changed }),
+      replayable<AssignResult>(context.idempotencyKey),
+    );
+  },
+
+  /**
    * The release's write (WP-177): unassigns the ticket **only while the binding's own account
    * holds it** — the port's own contract, so another person's assignment is answered
    * `{changed: false}` and left alone. A shadow task writes nothing.

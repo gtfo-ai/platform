@@ -656,6 +656,18 @@ describe('the lifecycle helpers', () => {
     );
   });
 
+  it('carries a stored assign_owner through a save of the slots (S-26.3)', () => {
+    const stored = { lifecycle: { claim: false, assign_owner: true } };
+    const { draft } = lifecycleDraftOf(stored, STATUSES);
+    expect(lifecycleOverlayOf(stored, draft, null)).toEqual({
+      lifecycle: { claim: false, take_assigned_tickets: false, assign_owner: true },
+    });
+    // Not stored, not written: the form never switches the write-back on by itself.
+    expect(lifecycleOverlayOf({}, lifecycleDraftOf({}, STATUSES).draft, null)).toEqual({
+      lifecycle: { claim: true, take_assigned_tickets: false },
+    });
+  });
+
   it('maps each 422 detail path onto its slot', () => {
     expect(slotOfDetailPath('pickup_status')).toBe('pick_up_from');
     expect(slotOfDetailPath('lifecycle.qa')).toBe('qa');
