@@ -262,6 +262,17 @@ claiming, a ticket already assigned to a person is not started at all, unless yo
 tickets already assigned to a person**. On cancel or rework the platform unassigns itself (and moves
 the ticket back to *Pick up from*, if mapped).
 
+**A ticket assigned to a member of the project stays theirs** (since S-26.2). When the assignee is a
+tracker account linked to a member (or above) of the project (*Settings → Linked accounts*), the
+ticket is started even with **Also start tickets already assigned to a person** unticked, the task's
+owner is that member, and no claim — the first, or the one after a return — reassigns it: the
+platform writes no assignment, still moves the ticket to *In progress*, and runs. A cancel or a
+rework never unassigns that person. *Assigned to a person* in the rules above therefore means a
+person the platform cannot link to a member — an unlinked account, or a linked person below
+member — and the switch **Also start tickets already assigned to a person** now takes only those.
+Because a broad pick-up rule (*every To Do ticket*) now starts members' assigned tickets too, a team
+whose tracker assigns everything narrows intake with a pick-up label.
+
 **Save the ticket lifecycle** checks every name against the tracker's statuses before anything is
 written. A name the tracker does not list is refused, the slot that names it is marked, and nothing
 is saved; if the tracker cannot be read at that moment, the form says the statuses could not be
@@ -777,7 +788,8 @@ follows the ticket's assignee when that assignee is a tracker account linked to 
 project (*Settings → Linked accounts*, an administrator's mapping); an assignee the platform cannot link —
 an unlinked account, or a linked person below member — is kept as *assigned elsewhere* and the task
 has no owner, and the platform's own account or a machine account is nobody — it never takes a
-task from the person who owns it, so the platform claiming the ticket keeps its owner. A disabled
+task from the person who owns it, so the platform claiming the ticket keeps its owner. A ticket a
+linked member holds is never claimed from them at all (step 1, *The ticket lifecycle*). A disabled
 account owns nothing. **The latest change wins**: a change of assignee in the tracker replaces an owner set on the platform, and an owner set
 on the platform stays until somebody changes the tracker. A member may take a task nobody owns (and
 nobody holds elsewhere) or give back their own; a maintainer may give any task to any member, or to
@@ -872,7 +884,9 @@ a member or above. A viewer is not offered it; the export would refuse them.
 
 **The claim and the QA stage** show under the header's meta line when there is something to show (the
 project's ticket lifecycle, step 1). *ticket claimed* means the platform assigned the ticket to its
-own account and the tracker confirmed it; *Trial run* means a trial's task (section 8, *Trial*)
+own account and the tracker confirmed it — or, for a ticket a linked member of the project holds,
+that the platform took the task and left the ticket assigned to that member (the page does not yet
+tell the two apart); *Trial run* means a trial's task (section 8, *Trial*)
 recorded what it would have assigned and assigned nothing; *claim released* means the claim was given back — on a cancel, a
 rework, or a task that stopped between the assignment and its record — and the ticket is no longer
 the platform's. Each says when. A task that never claimed (no lifecycle saved, or a task older than

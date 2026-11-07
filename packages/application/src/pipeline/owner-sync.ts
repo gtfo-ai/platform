@@ -24,8 +24,14 @@
  *    nothing stale. A signal that arrives while the read is in flight is newer than it, and the next
  *    duty reads again.
  *
- * The claim's pre-read (`ticket-claim.ts`) is S-26.2's, with the claim's own `assignToSelf`
- * writing `ticket_assignee` in its transaction.
+ *  - **the claim's pre-read** (`ticket-claim.ts`, S-26.2) — {@link syncOwnerOnClaimRead}, in a
+ *    transaction of its own between the read and the claim's writes, which also answers what the
+ *    platform says about the holder (a linked member's ticket is kept, never assigned).
+ *
+ * And the platform's **own** tracker writes are recorded as the last-seen assignee in the
+ * transaction that records them, so their read-back is never a change (S-26.2): the claim's
+ * `assignToSelf` ({@link recordClaimAssign}) and the release's `unassign`
+ * ({@link recordReleaseUnassign}).
  *
  * ## The stream
  *
@@ -37,8 +43,8 @@
  * it too, so a concurrent owner command is serialised behind it rather than failing it.
  *
  * **A platform assignee is never an owner change** (the domain's `syncOwnerFromTracker`, the review
- * of PR #92): until S-26.2 stops the claim's `assignToSelf`, every read after a first claim names
- * the binding's own account, and the owner a person set before the claim is kept.
+ * of PR #92): a read that names the binding's own account — a claim recorded before S-26.2, or one
+ * whose record this read raced — keeps the owner a person set.
  */
 import type { DomainEvent, ExternalIdentity, Id, IsoDateTime, UserRole } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
@@ -372,6 +378,104 @@ export const ownerSyncOnRead =
         ),
     });
   };
+
+/**
+ * **The claim's pre-read, synced** (S-26.2, TD-031's amendment item 2, closing backlog 1087): the
+ * assignee the claim read before it writes is applied to the task's owner, in the caller's
+ * transaction (its own, between the read and the claim's writes), and the answer is what the
+ * platform says about that assignee **now** — `member` is the linked member whose ticket the claim
+ * keeps. `null` for an unassigned ticket.
+ */
+export const syncOwnerOnClaimRead = async (
+  options: OwnerSyncOptions,
+  scope: Pick<TransactionScope, 'tx' | 'events'>,
+  input: {
+    readonly projectId: Id;
+    readonly taskId: Id;
+    readonly assignee: ExternalIdentity | null;
+    /** Already through the binding's redactor (BD-022). */
+    readonly assigneeDisplayName: string | null;
+  },
+): Promise<AssigneeClass | null> => {
+  await applyOnTaskStream(options, scope, {
+    projectId: input.projectId,
+    taskId: input.taskId,
+    actor: PIPELINE_ACTOR,
+    causeEventId: null,
+    decide: async (ownership) =>
+      trackerDecision(
+        options,
+        scope.tx,
+        {
+          projectId: input.projectId,
+          assignee: input.assignee,
+          assigneeDisplayName: input.assigneeDisplayName,
+        },
+        ownership,
+      ),
+  });
+  return classifyRead(options.store, scope.tx, input.projectId, input.assignee);
+};
+
+/**
+ * **The claim's `assignToSelf`, recorded** (S-26.2, TD-031's amendment item 2): `ticket_assignee`
+ * becomes the binding's own account in the claim's transaction — the caller holds the row lock
+ * (`bumpVersion`) — so the next sync, which reads that account, changes nothing. The owner is
+ * kept. A compare-and-set that lost throws {@link TaskOwnerConflictError}, which the caller's
+ * conflict bound re-runs.
+ */
+export const recordClaimAssign = async (
+  options: OwnerSyncOptions,
+  tx: Transaction,
+  input: {
+    readonly projectId: Id;
+    readonly taskId: Id;
+    readonly self: ExternalIdentity;
+    /** Already through the binding's redactor (BD-022). */
+    readonly selfDisplayName: string | null;
+  },
+): Promise<void> => {
+  const current = await options.store.tasks.ownership(tx, input.taskId);
+  const selfClass = await classifyRead(options.store, tx, input.projectId, input.self);
+  const assignee = ticketAssigneeOf(
+    {
+      provider: input.self.provider,
+      externalId: input.self.external_id,
+      redactedDisplayName: input.selfDisplayName,
+    },
+    selfClass,
+  );
+  if (assignee === null) {
+    return;
+  }
+  await writeDecision(
+    options.store,
+    tx,
+    input.taskId,
+    current,
+    recordPlatformAssign(current, assignee),
+  );
+};
+
+/**
+ * **The release's `unassign`, recorded** (S-26.2): `ticket_assignee` becomes nobody in the
+ * release's transaction while it still names the binding's own account, so a platform-set owner
+ * survives the read that follows a *Rework*. The caller holds the row lock.
+ */
+export const recordReleaseUnassign = async (
+  options: OwnerSyncOptions,
+  tx: Transaction,
+  input: { readonly taskId: Id; readonly self: { provider: string; external_id: string } },
+): Promise<void> => {
+  const current = await options.store.tasks.ownership(tx, input.taskId);
+  await writeDecision(
+    options.store,
+    tx,
+    input.taskId,
+    current,
+    recordPlatformUnassign(current, input.self),
+  );
+};
 
 export interface OwnerSyncDutyOptions extends EnsureTicketSnapshotOptions, OwnerSyncOptions {
   readonly unitOfWork: UnitOfWork;

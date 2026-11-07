@@ -716,6 +716,11 @@ export const taskTicketClaimSchema = z.strictObject({
  *    or `human_return` (the human-return window: the next claim takes the ticket back). Optional
  *    because a claim written before WP-178 has none, and reads exactly as it did: stale with no
  *    cause. `null` on a claim that is not stale. No migration: the column is `jsonb`.
+ *  - `held_by` — `member` when the claim found the ticket assigned to a **linked member** of the
+ *    project and kept it with them (S-26.2, TD-031's 2026-11-06 amendment item 5, BD-031's
+ *    amendment 2): no assign was written, `account_id` is still the binding's own account (the
+ *    claimant), and the release never unassigns the ticket. Absent on a claim that assigned the
+ *    ticket to the binding's own account, and on every claim written before S-26.2.
  */
 export const storedTicketClaimSchema = z.strictObject({
   account_id: nonEmptyStringSchema.max(255),
@@ -726,6 +731,7 @@ export const storedTicketClaimSchema = z.strictObject({
   released_at: isoDateTimeSchema.nullable(),
   release_cause: z.enum(['cancelled', 'rework', 'stopped']).nullable(),
   stale_cause: z.enum(['stopped', 'rework', 'human_return']).nullish(),
+  held_by: z.enum(['member']).optional(),
 });
 
 export type StoredTicketClaim = z.infer<typeof storedTicketClaimSchema>;

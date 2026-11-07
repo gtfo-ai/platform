@@ -369,7 +369,8 @@ describe('the owner_sync duty (S-26.1 criterion 4)', () => {
   it('keeps a member’s owner when the claim’s own assign reads back, and follows a real change after it (review of #92)', async () => {
     // The ticket is unassigned at intake; Alice takes the task on the platform before its first
     // claim; the claim's `assignToSelf` then puts the binding's own account on the ticket, and the
-    // webhook says so. Until S-26.2 stops that re-assignment, this read must not cost Alice the task.
+    // webhook says so. Since S-26.2 the claim records that assign itself; a read of it that the
+    // record did not see (a claim made before S-26.2) must still not cost Alice the task.
     const ticket = tracker(null);
     const harness = harnessFor(ticket);
     await harness.publish([ticketMatched()]);

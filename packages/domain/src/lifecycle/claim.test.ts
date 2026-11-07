@@ -9,6 +9,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { PLATFORM_COMMENT_MARKERS } from '../ask/ask.js';
 import {
+  claimPreReadDecision,
   claimReadback,
   claimRefusedCommentMarker,
   intakeSkipsAssignedTicket,
@@ -28,6 +29,9 @@ const identity = (external_id: string, provider = 'fake-task-management'): Exter
 
 const SELF = identity('agentic-bot');
 const PERSON = identity('jane');
+const MEMBER = identity('acct-alice');
+/** The directory's answer for an assignee who is not a linked member. */
+const UNLINKED = { assigneeIsLinkedMember: false } as const;
 
 const claim = (overrides: Partial<StoredTicketClaim> = {}): StoredTicketClaim => ({
   account_id: 'agentic-bot',
@@ -97,14 +101,18 @@ describe('intakeSkipsAssignedTicket (TD-029 decision 5)', () => {
   const block: TicketLifecycle = { in_progress: 'Doing' };
 
   it('skips a ticket assigned to somebody else on a claiming binding', () => {
-    expect(intakeSkipsAssignedTicket({ lifecycle: block, self: SELF, assignee: PERSON })).toBe(
-      true,
-    );
+    expect(
+      intakeSkipsAssignedTicket({ lifecycle: block, self: SELF, assignee: PERSON, ...UNLINKED }),
+    ).toBe(true);
   });
 
   it('takes an unassigned ticket, and one assigned to the binding’s own account', () => {
-    expect(intakeSkipsAssignedTicket({ lifecycle: block, self: SELF, assignee: null })).toBe(false);
-    expect(intakeSkipsAssignedTicket({ lifecycle: block, self: SELF, assignee: SELF })).toBe(false);
+    expect(
+      intakeSkipsAssignedTicket({ lifecycle: block, self: SELF, assignee: null, ...UNLINKED }),
+    ).toBe(false);
+    expect(
+      intakeSkipsAssignedTicket({ lifecycle: block, self: SELF, assignee: SELF, ...UNLINKED }),
+    ).toBe(false);
   });
 
   it('takes an assigned ticket when the project opts in, and on a binding that does not claim', () => {
@@ -113,18 +121,84 @@ describe('intakeSkipsAssignedTicket (TD-029 decision 5)', () => {
         lifecycle: { ...block, take_assigned_tickets: true },
         self: SELF,
         assignee: PERSON,
+        ...UNLINKED,
       }),
     ).toBe(false);
-    expect(intakeSkipsAssignedTicket({ lifecycle: undefined, self: SELF, assignee: PERSON })).toBe(
-      false,
-    );
+    expect(
+      intakeSkipsAssignedTicket({
+        lifecycle: undefined,
+        self: SELF,
+        assignee: PERSON,
+        ...UNLINKED,
+      }),
+    ).toBe(false);
     expect(
       intakeSkipsAssignedTicket({
         lifecycle: { ...block, claim: false },
         self: SELF,
         assignee: PERSON,
+        ...UNLINKED,
       }),
     ).toBe(false);
+  });
+
+  /**
+   * S-26.2 criterion 1 (BD-031's 2026-11-06 amendment 2): the matrix — claiming or not, opted in
+   * or not, and every kind of assignee. A linked member is never skipped; an unlinked person or a
+   * non-member (a linked person below `member`: the directory answers *not a linked member* for
+   * both) is skipped exactly as before.
+   */
+  it('S-26.2 (1): takes a linked member’s ticket even with take_assigned_tickets false; still skips an unlinked person or a non-member', () => {
+    const lifecycles: readonly (TicketLifecycle | undefined)[] = [
+      undefined,
+      block,
+      { ...block, take_assigned_tickets: false },
+      { ...block, take_assigned_tickets: true },
+      { ...block, claim: false },
+    ];
+    const assignees = [
+      { name: 'nobody', assignee: null, linkedMember: false },
+      { name: 'the binding’s own account', assignee: SELF, linkedMember: false },
+      { name: 'a linked member', assignee: MEMBER, linkedMember: true },
+      { name: 'an unlinked person', assignee: PERSON, linkedMember: false },
+      { name: 'a linked non-member', assignee: identity('acct-viewer'), linkedMember: false },
+    ] as const;
+    for (const lifecycle of lifecycles) {
+      const skipsOthers = lifecycleClaims(lifecycle) && lifecycle?.take_assigned_tickets !== true;
+      for (const row of assignees) {
+        const expected =
+          skipsOthers &&
+          row.assignee !== null &&
+          !row.linkedMember &&
+          !sameAccount(SELF, row.assignee);
+        expect(
+          intakeSkipsAssignedTicket({
+            lifecycle,
+            self: SELF,
+            assignee: row.assignee,
+            assigneeIsLinkedMember: row.linkedMember,
+          }),
+          `${JSON.stringify(lifecycle)} / ${row.name}`,
+        ).toBe(expected);
+      }
+    }
+    // The member rows, spelled out: never skipped, whatever the switch says.
+    expect(
+      intakeSkipsAssignedTicket({
+        lifecycle: { ...block, take_assigned_tickets: false },
+        self: SELF,
+        assignee: MEMBER,
+        assigneeIsLinkedMember: true,
+      }),
+    ).toBe(false);
+    expect(
+      intakeSkipsAssignedTicket({
+        lifecycle: { ...block, take_assigned_tickets: false },
+        self: SELF,
+        assignee: PERSON,
+        ...UNLINKED,
+      }),
+    ).toBe(true);
   });
 
   it('compares accounts by provider and id, never by name', () => {
@@ -206,5 +280,83 @@ describe('the claim record', () => {
     const marker = claimRefusedCommentMarker('task-1');
     expect(marker).toBe('agentic:claim-refused:task-1');
     expect(PLATFORM_COMMENT_MARKERS.some((prefix) => marker.startsWith(prefix))).toBe(true);
+  });
+});
+
+/**
+ * S-26.2 (TD-031's 2026-11-06 amendment item 5): what every claim does with the assignee it read
+ * before it writes — criteria 2 and 3 at the domain tier.
+ */
+describe('claimPreReadDecision (S-26.2)', () => {
+  const ask = (
+    holder: ExternalIdentity | null,
+    overrides: Partial<{
+      holderIsLinkedMember: boolean;
+      first: boolean;
+      shadow: boolean;
+      takeAssignedTickets: boolean;
+    }> = {},
+  ) =>
+    claimPreReadDecision({
+      self: SELF,
+      holder,
+      holderIsLinkedMember: false,
+      first: true,
+      shadow: false,
+      takeAssignedTickets: false,
+      ...overrides,
+    });
+
+  it('(2) keeps a linked member’s ticket on every claim: first, re-claim, shadow, opted in', () => {
+    for (const first of [true, false]) {
+      for (const shadow of [true, false]) {
+        for (const takeAssignedTickets of [true, false]) {
+          expect(
+            ask(MEMBER, { holderIsLinkedMember: true, first, shadow, takeAssignedTickets }),
+            JSON.stringify({ first, shadow, takeAssignedTickets }),
+          ).toEqual({ kind: 'keep' });
+        }
+      }
+    }
+  });
+
+  it('(3) refuses a first claim of a person who is not a linked member, and re-assigns only them when opted in', () => {
+    expect(ask(PERSON)).toEqual({ kind: 'refuse', assignee: PERSON });
+    expect(ask(PERSON, { takeAssignedTickets: true })).toEqual({ kind: 'assign' });
+    // A re-claim after a human return takes the ticket back from them, as before S-26.2.
+    expect(ask(PERSON, { first: false })).toEqual({ kind: 'assign' });
+    // A shadow claim writes nothing anyway, and never refuses.
+    expect(ask(PERSON, { shadow: true })).toEqual({ kind: 'assign' });
+  });
+
+  it('assigns an unassigned ticket and one the binding’s own account holds', () => {
+    expect(ask(null)).toEqual({ kind: 'assign' });
+    expect(ask(null, { first: false })).toEqual({ kind: 'assign' });
+    expect(ask(SELF)).toEqual({ kind: 'assign' });
+  });
+
+  it('property: a linked member is kept, and nothing else is ever kept', () => {
+    const holder = fc.constantFrom<ExternalIdentity | null>(null, SELF, PERSON, MEMBER);
+    fc.assert(
+      fc.property(
+        holder,
+        fc.boolean(),
+        fc.boolean(),
+        fc.boolean(),
+        fc.boolean(),
+        (who, linked, first, shadow, takeAssignedTickets) => {
+          const decision = ask(who, {
+            holderIsLinkedMember: linked,
+            first,
+            shadow,
+            takeAssignedTickets,
+          });
+          expect(decision.kind === 'keep').toBe(who !== null && linked);
+          if (decision.kind === 'refuse') {
+            expect(first && !shadow && !takeAssignedTickets && !linked).toBe(true);
+          }
+        },
+      ),
+    );
   });
 });

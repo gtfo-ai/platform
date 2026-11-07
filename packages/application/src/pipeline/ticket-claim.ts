@@ -10,6 +10,20 @@
  * `agentic:claim-refused:<task>`; a refused claim write escalates with `ticket_claim_failed` and a
  * brief naming the permission the assign needs. **No run row exists** after either refusal.
  *
+ * ## A linked member's ticket is kept (S-26.2)
+ *
+ * Every claim — a first claim, a re-claim after a human return, a shadow claim and one on a binding
+ * that takes assigned tickets — reads the ticket's assignee **before** it writes, and syncs the
+ * task's owner from that read (TD-031's 2026-11-06 amendment items 2 and 5, BD-031's amendment 2).
+ * An assignee who maps to a `member`-or-above person of the project keeps the ticket: **no assign
+ * is written**, nothing is re-read (there is no race of the platform's to decide), the ticket still
+ * moves to `in_progress`, and the claim is recorded `held_by: 'member'` — which the release reads,
+ * so a cancel or a *Rework* never unassigns that person. Everybody else — an unlinked account, a
+ * person below `member`, a machine — keeps the rules of the amendment's (a) and (c) unchanged
+ * (`claimPreReadDecision` in the domain). When the claim does assign, the binding's account is
+ * written into `tasks.ticket_assignee` in the claim's own transaction, so the next owner sync,
+ * which reads that account, changes nothing.
+ *
  * ## Where it runs, and why there
  *
  * In the `stage.execute` job, between its transactions, beside `ensureTicketSnapshot` and before
@@ -57,6 +71,7 @@ import type {
 import { domainEventSchemasByType } from '@platform/contracts';
 import {
   type ClaimReadback,
+  claimPreReadDecision,
   claimReadback,
   claimRefusedCommentMarker,
   compilePipeline,
@@ -80,7 +95,9 @@ import {
   ticketWrites,
 } from './integrations.js';
 import type { OutboundJobData } from './jobs.js';
+import { recordClaimAssign, syncOwnerOnClaimRead } from './owner-sync.js';
 import { PIPELINE_ACTOR, type StoredTask } from './store.js';
+import { retryOnTaskConflict } from './task-conflict.js';
 import { inTaskTransaction, type TaskTransactionOptions } from './task-transaction.js';
 import { releaseTicket } from './ticket-release.js';
 import { applyDecision } from './transitions.js';
@@ -162,8 +179,9 @@ export const ensureTicketClaim = async (
     );
   }
   /**
-   * A first claim reads before it writes (the amendment's (a)); only a claim stale for a **human
-   * return** takes the ticket back. A claim the platform **released** (a Rework, a cancellation)
+   * Every claim reads before it writes (S-26.2; a first claim since the amendment's (a)); only a
+   * claim stale for a **human return** takes the ticket back from a person who is not a linked
+   * member. A claim the platform **released** (a Rework, a cancellation)
    * counts as first (the amendment's (c)): the release put the ticket back in the pick-up pool, so a
    * person who holds it afterwards took it from there and is never overwritten — and so, since
    * WP-178, does a claim stale because its task **stopped** between the assign and the record,
@@ -259,11 +277,15 @@ interface ClaimAttempt {
   readonly inProgressWritten: boolean;
   readonly shadow: boolean;
   readonly readback: ClaimReadback;
+  /** `member`: a linked member holds the ticket and nothing was assigned (S-26.2). */
+  readonly heldBy: 'member' | null;
+  /** The binding's account display name, redacted — what `ticket_assignee` stores after an assign. */
+  readonly selfDisplayName: string | null;
 }
 
 /**
- * The steps of TD-029 decision 5: who am I (and, on a **first** claim, who holds the ticket now —
- * the WP-177 amendment (a)), assign, `in_progress`, re-read.
+ * The steps of TD-029 decision 5: who am I and who holds the ticket now (every claim since S-26.2;
+ * a first claim since the WP-177 amendment (a)), assign, `in_progress`, re-read.
  */
 const claim = async (
   options: TaskTransactionOptions,
@@ -287,27 +309,82 @@ const claim = async (
       { action: 'self_identity' },
     );
   }
+  const redactor = integrations.taskManagement?.redactor;
+  const redactedName = (identity: ExternalIdentity | null): string | null => {
+    const name = identity?.display_name ?? null;
+    return name === null || name.length === 0 || redactor === undefined
+      ? null
+      : redactor.redactText(name).value;
+  };
   /**
-   * **A first claim never overwrites a person** (amendment (a), BD-031 ruling 5): the assignee is
-   * read before the assign, and somebody else holding the ticket refuses without writing — unless
-   * the binding takes assigned tickets. A re-claim (a stale claim after a human return) takes the
-   * ticket back, because the person who returned it may well hold it. A shadow task skips the
-   * question: it writes nothing anyway, and shadow mode runs beside the person who holds the ticket.
+   * **Who holds the ticket now** — asked of every claim (S-26.2, TD-031's amendment item 5), and
+   * the read syncs the task's owner (item 2, backlog 1087) in a transaction of its own, which also
+   * answers whether the holder is a linked member of the project, live.
+   *
+   *  - A **linked member** keeps the ticket: no assign, no re-read, `held_by: 'member'`.
+   *  - **A first claim never overwrites anybody else** (amendment (a), BD-031 ruling 5): somebody
+   *    else holding the ticket refuses without writing, unless the binding takes assigned tickets.
+   *  - A re-claim (a stale claim after a human return) takes the ticket back from anybody else,
+   *    because the person who returned it may well hold it. A shadow task never refuses: it writes
+   *    nothing anyway, and shadow mode runs beside the person who holds the ticket.
    */
-  if (first && !shadow && lifecycle.slots.take_assigned_tickets !== true) {
-    const before = await ticketReads(integrations).ticket(task.ticket, context);
-    const holder = before?.assignee ?? null;
-    if (holder !== null && claimReadback(self, holder).kind === 'elsewhere') {
-      return {
-        self,
-        inProgressWritten: false,
-        shadow,
-        readback: { kind: 'elsewhere', assignee: holder },
-      };
-    }
-  }
+  const before = await ticketReads(integrations).ticket(task.ticket, context);
+  const holder = before?.assignee ?? null;
+  const holderClass = await retryOnTaskConflict(
+    {
+      taskId: task.id,
+      what: 'syncing the owner from the claim’s read',
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+    },
+    async () =>
+      options.unitOfWork.transaction(async (scope) =>
+        syncOwnerOnClaimRead(options, scope, {
+          projectId: task.projectId,
+          taskId: task.id,
+          assignee: holder,
+          assigneeDisplayName: redactedName(holder),
+        }),
+      ),
+  );
+  const decision = claimPreReadDecision({
+    self,
+    holder,
+    holderIsLinkedMember: holderClass?.kind === 'member',
+    first,
+    shadow,
+    takeAssignedTickets: lifecycle.slots.take_assigned_tickets === true,
+  });
   // One key per stage entry: a redelivered job replays the write, a later entry claims afresh.
   const entry = `${task.id}:${request.stage}:${String(request.attempt)}`;
+  if (decision.kind === 'refuse') {
+    return {
+      self,
+      inProgressWritten: false,
+      shadow,
+      readback: { kind: 'elsewhere', assignee: decision.assignee },
+      heldBy: null,
+      selfDisplayName: null,
+    };
+  }
+  if (decision.kind === 'keep') {
+    // The member's ticket stays theirs: no assign, and no re-read — the platform wrote nothing,
+    // so there is no race of its own to decide. The `in_progress` move is still the claim's.
+    const inProgressWritten = await moveToInProgress(
+      options,
+      integrations,
+      stored,
+      lifecycle,
+      `ticket_claim_in_progress:${entry}`,
+    );
+    return {
+      self,
+      inProgressWritten,
+      shadow,
+      readback: { kind: 'held' },
+      heldBy: 'member',
+      selfDisplayName: null,
+    };
+  }
   const writeContext = { ...context, mode: task.mode, causeEventId: null };
   await ticketWrites(integrations).assignToSelf(task.ticket, {
     ...writeContext,
@@ -322,7 +399,14 @@ const claim = async (
     `ticket_claim_in_progress:${entry}`,
   );
   if (shadow) {
-    return { self, inProgressWritten, shadow, readback: { kind: 'held' } };
+    return {
+      self,
+      inProgressWritten,
+      shadow,
+      readback: { kind: 'held' },
+      heldBy: null,
+      selfDisplayName: null,
+    };
   }
   const reread = await ticketReads(integrations).ticket(task.ticket, context);
   return {
@@ -330,6 +414,8 @@ const claim = async (
     inProgressWritten,
     shadow,
     readback: claimReadback(self, reread?.assignee ?? null),
+    heldBy: null,
+    selfDisplayName: redactedName(self),
   };
 };
 
@@ -385,7 +471,10 @@ const recordClaim = async (
     released_at: null,
     release_cause: null,
     stale_cause: null,
+    ...(attempt.heldBy === null ? {} : { held_by: attempt.heldBy }),
   };
+  /** Whether the binding's account now holds the ticket because of this claim's assign. */
+  const assigned = !attempt.shadow && attempt.heldBy === null;
   const stopped = await inTaskTransaction(
     options,
     task.id,
@@ -405,12 +494,24 @@ const recordClaim = async (
        * `stopped`) is enqueued after this commit; it unassigns only while the ticket is still the
        * binding's own, and does nothing once a resumed task has claimed again.
        */
+      if (assigned) {
+        // S-26.2 (TD-031's amendment item 2): the platform's own assign is the last-seen assignee,
+        // so the next owner sync — which reads the binding's account — changes nothing.
+        await recordClaimAssign(options, scope.tx, {
+          projectId: task.projectId,
+          taskId: task.id,
+          self: attempt.self,
+          selfDisplayName: attempt.selfDisplayName,
+        });
+      }
       if (!(await canStillRun(options, scope.tx, request))) {
         (options.logger ?? silentLogger).warn(
           { task_id: task.id, stage: request.stage, shadow: attempt.shadow },
           'the task stopped while the ticket was being claimed; no claim is held, and a real assign is released',
         );
-        if (attempt.shadow) {
+        // A shadow claim assigned nothing; a member-held one assigned nothing either, so there is
+        // nothing to give back and no release to owe.
+        if (!assigned) {
           return null;
         }
         // `stale_cause: 'stopped'` (WP-178, backlog 543): the next claim is a first claim even if
@@ -440,6 +541,7 @@ const recordClaim = async (
           account_id: record.account_id,
           in_progress_written: record.in_progress_written,
           shadow: attempt.shadow,
+          ...(attempt.heldBy === null ? {} : { held_by: attempt.heldBy }),
         },
       }) as DomainEvent;
       await scope.events.append([event]);
