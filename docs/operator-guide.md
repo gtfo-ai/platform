@@ -1610,9 +1610,10 @@ start with a message naming the variable, not the value. What is reported, and w
 **OpenTelemetry export is not built**: no source reads `OTEL_EXPORTER_OTLP_ENDPOINT` (backlog 885).
 
 `APP_WORKING_DAYS`, `APP_WORKING_HOURS` and `APP_HOLIDAYS`, read in `TZ`, are the **working calendar**
-every deadline the platform holds a person to is counted on (WP-56): a blocking question and a plan
-or budget approval expire after the project's `pipeline.limits.question_timeout` (default
-`1 working day`, BD-006) and move the task to needing a human, and a taken-over task escalates after
+every deadline the platform holds a person to is counted on (WP-56): a blocking question expires after
+the project's `pipeline.limits.question_timeout` (default `1 working day`, BD-006) and moves the task
+to needing a human; a plan or budget approval never expires (BD-006's 2026-11-07 amendment, S-27.1),
+and its at most five chat reminders are paced by the same timeout on the same calendar; and a taken-over task escalates after
 **5 working days with no command from the person holding it** (product/19 §19; since WP-44 a command
 they issue on the task restarts the count, while another user's command and a push to the branch do
 not — the normaliser does not yet carry who pushed, though GitLab's hook names them). So a question asked at 16:00 on a

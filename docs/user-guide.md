@@ -1025,7 +1025,16 @@ merge request from an `agentic/` branch. If its rules skip or hold jobs for a `D
 check waits and the task page says what it waits for, from the first check: *"CI is waiting for
 someone to start the manual job sentry-release-commit in GitLab. Start it there and the task
 continues."*, with the job linked, a note that links the readiness panel's CI-rules warning (which
-names the rule it understood), and *Start the job in GitLab* as the page's one button. A held job is
+names the rule it understood), and *Start the job in GitLab* as the page's one button.
+**A manual job nobody started is not a check** (BD-024's 2026-11-07 amendment, built by S-27.2; until
+that is deployed, the check waits for every held job). When every job that ran is green and only
+manual jobs are left, CI passes and the task's CI check says *CI passed — the manual job
+sentry-release-commit was not run*. The check still waits when a job is queued behind the held one
+(a build step your tests need, say), or when the project requires that job: list the manual jobs that
+must run under `pipeline.ci.required_manual_jobs` in `.agentic/config.yml`, or write `all` to wait
+for every one. At **Ready for merge**, a task whose pipeline GitLab still shows as blocked says so: if
+your project requires pipelines to succeed, GitLab won't merge until that job has run, so start it
+there. The waiting described next applies to a required job. A held job is
 *Needs you* at once on the task page; the board's card does not show it until the check stops — the
 board's list and the inbox carry the check's read since S-26.5 (`gate_wait` on each task, and the
 inbox's `ci_held` list of tasks held at a manual job), and the board, Home and the Inbox do not show
@@ -1349,7 +1358,7 @@ place — laid out like GitHub's notifications. The left column filters the list
 **Questions**, **Approvals**, or one project, each with its count. Each row starts with the
 *needs you* bell, then the question's first line (or what the approval is about — *Plan v2 · size L ·
 6 files*), and under it
-where it is — project · ticket · stage — how long ago it was asked and when it is due. Click a
+where it is — project · ticket · stage — how long ago it was asked and, for a question, when it is due. Click a
 question's line and the row opens in place: the whole question, a **Your answer** box and **Answer**.
 An approval's row links to the task, where it is decided with the plan on screen (**Review plan**);
 no row approves in one click. With nothing
@@ -1393,14 +1402,20 @@ reminder**: halfway through the working time to the deadline, the project's chat
 message saying the question is still unanswered, which names the task page (it has no buttons). A
 question answered before then is not reminded about.
 
-Approvals work the same way: the plan-approval gate is what the **Supervised** autonomy level turns
-on above a certain task size, and any maintainer can decide it. An approval nobody decides expires on
-the same calendar and at the same timeout as a question, and moves the task to needing a human too
-— with the same one reminder halfway there.
+Approvals are different: **an approval never expires** (BD-006's 2026-11-07 amendment, built by
+S-27.1; until that is deployed, an approval still expires like a question). The plan-approval gate is what
+the **Supervised** autonomy level turns on above a certain task size, and any maintainer can decide
+it. A plan or budget approval waits until somebody approves or rejects it. Meanwhile the task reads
+*Waiting for approval*, is in *Needs you* and the inbox (*requested 3 h ago · waits for a
+maintainer*, with no due time), and the project's chat channel gets at most **five reminders**: the
+first halfway through the question timeout, then one per question timeout (half a working day after
+the request, then once a working day, by default). After that the chat goes quiet, but the item stays
+in *Needs you*. An approval that expired before the change stays expired, and its task is retried or
+handed back from the task page as before.
 
-Once an approval is decided — here, on the task page, or with a button — or expires, its Slack
+Once an approval is decided — here, on the task page, or with a button — its Slack
 message is **edited**: the buttons are removed and the message says how it was settled (approved,
-changes requested, or expired), naming the decider by role; the task page names the person. A chat
+changes requested, or, for one that expired before approvals stopped expiring, expired), naming the decider by role; the task page names the person. A chat
 provider that cannot edit a message keeps the buttons, and a late press is refused by the approval
 rather than recorded.
 
