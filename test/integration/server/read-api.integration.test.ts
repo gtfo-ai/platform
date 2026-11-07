@@ -1086,14 +1086,21 @@ describe('the task projection', () => {
        returning id`,
       [org.id],
     );
-    const taskAt = async (key: string, state: string, assignee: unknown = null) =>
+    const taskAt = async (
+      key: string,
+      state: string,
+      assignee: unknown = null,
+      title: string | null = null,
+    ) =>
       (
         await one<{ id: string }>(
           `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
-                              current_stage, stage_attempts, ticket_assignee)
+                              current_stage, stage_attempts, ticket_assignee, ticket_snapshot)
            values ($1, 'fake-jira', $2, 'https://jira.example.test/browse/' || $2, 'feature', $3,
-                   'refinement', jsonb_build_object('refinement', 1), $4::jsonb) returning id`,
-          [project.id, key, state, assignee === null ? null : JSON.stringify(assignee)],
+                   'refinement', jsonb_build_object('refinement', 1), $4::jsonb,
+                   case when $5::text is null then null else jsonb_build_object('title', $5::text) end)
+           returning id`,
+          [project.id, key, state, assignee === null ? null : JSON.stringify(assignee), title],
         )
       ).id;
     const escalated = async (
@@ -1116,13 +1123,8 @@ describe('the task projection', () => {
       platform: false,
     };
 
-    const held = await taskAt('ESR-1', 'needs_human', jane);
     // The title the platform read, so one row's `ticket_title` is the snapshot's and not `null`.
-    await pool.query(
-      `update tasks set ticket_snapshot = jsonb_build_object('title', 'Log in with a passkey')
-        where id = $1`,
-      [held],
-    );
+    const held = await taskAt('ESR-1', 'needs_human', jane, 'Log in with a passkey');
     await escalated(held, 1, '2026-11-05T13:00:00Z', {
       reason: 'run_failed',
       blocker_brief: 'The run failed.',
