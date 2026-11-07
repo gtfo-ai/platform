@@ -96,18 +96,26 @@ callout's slot carry one sentence. It names the cause, who acts, and how many tr
     readiness panel's CI-rules warning;
   - a pipeline still running: "CI is running (pipeline *n*, 12 min so far; the task gives up after 60)".
   This is *Needs you* the moment a person's action is the only way forward (a held manual job is that), with the one
-  next step. It is not *Needs you* after the timeout.
+  next step. It does not wait for the timeout to become *Needs you* (a task the timeout parked stays *Needs you* too).
 - **A timed-out wait says it timed out**, with the last read: "CI did not finish within 60 minutes: pipeline *n* was
   still held at the manual job *sentry-release-commit*." The next step is *Start the job in GitLab, then Retry*. The
   task page never reads as a failed check when nothing failed.
+- **A Retry on a pipeline that is still held does not wait again.** It stops at once and says why: "The pipeline is
+  still held at the manual job *sentry-release-commit*, so Retry did not wait again. Start the job in GitLab, or change
+  its rule, then Retry." This is the worker session's #89, `ci_held_unchanged`.
+- *Amended 2026-11-07 (S-25.12).* All of the above is built from the gate's **structured read**, never from its
+  recorded sentence: the pipeline and its link, the held job and its link, the draft flag, minutes waited, the
+  timeout. That means `gate_wait` while the wait is open, and `last_gate_wait` on the attempt an escalation came from.
+  A task whose read was never recorded (any attempt before #89) falls back to the recorded sentence, introduced as
+  "What the platform saw last:".
 
 *S-25.11's wording (2026-11-07).* The examples above say **round**, not *try*: the vocabulary census retires "try N" for
 *Attempt N* (S-23.23), and the board's loop badge already calls this counter a round ("CI fix round 2 of 3"). The
 repeated failure is **three** identical CI failures in a row, which is what the pipeline counts (product/04 S4,
-`ciConvergence`), not two. Until the platform records the failing job's URL, the pipeline's id and the CI timeout apart
-from the return's prose, the page links the merge request, and a timed-out check says it "did not finish in the time the
-platform waits for it" followed by the sentence the platform recorded (BACKLOG 1295). The waiting gate's own sentence
-waits for its pending read to be recorded (BACKLOG 1293).
+`ciConvergence`), not two. A CI failure's return still links the merge request rather than the failing job, whose URL
+the return's row does not record. A timed-out check whose attempt recorded no read (before #89) still says it "did not
+finish in the time the platform waits for it", followed by the sentence the platform recorded; since S-25.12 every
+other waiting or timed-out check is worded from its read, as above.
 
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.

@@ -925,8 +925,13 @@ describe('the list envelopes and the KB health report', () => {
       ci_failure: null,
       recorded: 'the CI gate on a poll-only gitlab binding timed out',
       recorded_cut: false,
+      ci_ending: 'ci_timed_out',
     };
     expect(taskStopSchema.parse(stop)).toEqual(stop);
+    // S-25.12 (backlog 1099): the CI ending is required and nullable, never absent.
+    expect(taskStopSchema.safeParse({ ...stop, ci_ending: null }).success).toBe(true);
+    const { ci_ending: _ending, ...noEnding } = stop;
+    expect(taskStopSchema.safeParse(noEnding).success).toBe(false);
     expect(taskStopSchema.safeParse({ ...stop, cause: 'failed' }).success).toBe(false);
     expect(
       taskStopSchema.safeParse({ ...stop, recorded: 'x'.repeat(MAX_TASK_STOP_RECORDED_CHARS) })
@@ -937,7 +942,8 @@ describe('the list envelopes and the KB health report', () => {
         .success,
     ).toBe(false);
     // The task read carries the returns, the stop and the limits, each required.
-    for (const key of ['returns', 'stop', 'loop_limits'] as const) {
+    // S-25.12 (backlog 1099): so are the CI wait's two reads.
+    for (const key of ['returns', 'stop', 'loop_limits', 'gate_wait', 'last_gate_wait'] as const) {
       expect(taskDetailResponseSchema.shape[key].safeParse(undefined).success, key).toBe(false);
     }
   });

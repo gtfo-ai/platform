@@ -777,6 +777,9 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         // S-25.11: a task CI sent back, and one whose CI check timed out.
         [`/api/tasks/${fixtures.IDS.taskCiFixing}`]: fixtures.ciFixingTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskCiTimedOut}`]: fixtures.ciTimedOutTaskDetail,
+        // S-25.12: AUT-6655 — a CI check waiting on a held manual job, and the same wait timed out.
+        [`/api/tasks/${fixtures.IDS.taskCiHeld}`]: fixtures.ciHeldTaskDetail,
+        [`/api/tasks/${fixtures.IDS.taskCiHeldTimedOut}`]: fixtures.ciHeldTimedOutTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskFleetWorker}`]: fixtures.fleetWorkerTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskFleetQueued}`]: fixtures.fleetQueuedTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskEpic}/breakdown`]: fixtures.epicBreakdown,

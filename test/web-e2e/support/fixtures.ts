@@ -104,6 +104,9 @@ export const IDS = {
   // S-25.11: a task CI sent back that the Developer is fixing, and one whose CI check timed out.
   taskCiFixing: id(26),
   taskCiTimedOut: id(27),
+  // S-25.12: AUT-6655 — the CI check waiting on a held manual job, and the same wait timed out.
+  taskCiHeld: id(28),
+  taskCiHeldTimedOut: id(29),
   // S-26.8b: the person who owns DEMO-1 — not the signed-in operator, so *Take it* asks first.
   ownerVojtech: id(95),
 } as const;
@@ -547,6 +550,8 @@ export const taskDetail = taskDetailResponseSchema.parse({
   gate_feedback: null,
   returns: [],
   stop: null,
+  gate_wait: null,
+  last_gate_wait: null,
   loop_limits: null,
   /**
    * WP-29's minutes, with the per-user breakdown **on** — which is not this project's default and
@@ -628,6 +633,8 @@ export const bugTaskDetail = taskDetailResponseSchema.parse({
   gate_feedback: null,
   returns: [],
   stop: null,
+  gate_wait: null,
+  last_gate_wait: null,
   loop_limits: null,
   // Nothing recorded, and the breakdown off — the shipped default (product/18:32). `by_user: null`
   // and an empty list are different answers, and this is the first.
@@ -676,6 +683,8 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
   gate_feedback: null,
   returns: [],
   stop: null,
+  gate_wait: null,
+  last_gate_wait: null,
   loop_limits: null,
   taken_over: {
     at: now,
@@ -781,6 +790,9 @@ export const ciTimedOutTaskDetail = taskDetailResponseSchema.parse({
     recorded:
       'the CI gate on a poll-only gitlab binding timed out: the merge request was still manual (pipeline 41) after 60 minutes (pipeline.limits.ci_timeout_minutes = 60); the last read: pipeline 41 is held at manual job "sentry-release-commit": nothing runs until somebody starts it on the provider',
     recorded_cut: false,
+    // Before the worker session's #89 the row recorded no ending and no read: the page quotes the
+    // sentence after "What the platform saw last:" (S-25.12's fallback).
+    ci_ending: null,
   },
   stages: [
     {
@@ -789,6 +801,115 @@ export const ciTimedOutTaskDetail = taskDetailResponseSchema.parse({
       state: 'failed',
       entered_at: '2026-06-01T10:00:00.000Z',
       exited_at: '2026-06-01T11:00:00.000Z',
+      outcome: 'undecided',
+    },
+  ],
+});
+
+/**
+ * S-25.12, AUT-6655 as the worker session's #89 records it: GitLab holds the draft merge request's
+ * pipeline at the manual job `sentry-release-commit`, and the CI check is waiting — its open read
+ * is `gate_wait`, 60 minutes allowed, twelve minutes in by the browser's clock. The page says what
+ * it waits for, and it is *Needs you* at once.
+ */
+const AUT_6655_MR = {
+  provider: 'gitlab',
+  project_path: 'demo/service',
+  iid: 11,
+  url: 'https://git.example.invalid/demo/service/-/merge_requests/11',
+} as const;
+export const AUT_6655_JOB_URL = 'https://git.example.invalid/demo/service/-/jobs/9003';
+const aut6655Read = (waitingSince: string, checkedAt: string) => ({
+  pipeline_id: '3038234623',
+  pipeline_url: 'https://git.example.invalid/demo/service/-/pipelines/3038234623',
+  status: 'manual',
+  held_job: 'sentry-release-commit',
+  held_job_url: AUT_6655_JOB_URL,
+  draft: true,
+  checked_at: checkedAt,
+  waiting_since: waitingSince,
+  timeout_minutes: 60,
+});
+const minutesAgo = (minutes: number): string =>
+  new Date(Date.now() - minutes * 60_000).toISOString();
+
+export const ciHeldTaskDetail = taskDetailResponseSchema.parse({
+  ...bugTaskDetail,
+  task: {
+    ...featureTask,
+    id: IDS.taskCiHeld,
+    ticket: { provider: 'jira', key: 'DEMO-8', url: HOSTILE.safeUrl },
+    ticket_title: 'Release the Sentry commit',
+    mr_ref: AUT_6655_MR,
+    state: 'active',
+    current_stage: 'ci_gate',
+    iteration_counters: {},
+  },
+  returns: [],
+  stop: null,
+  gate_wait: aut6655Read(minutesAgo(12.5), minutesAgo(0.5)),
+  last_gate_wait: null,
+  stages: [
+    {
+      stage: 'implementation',
+      attempt: 1,
+      state: 'completed',
+      entered_at: '2026-06-01T09:00:00.000Z',
+      exited_at: '2026-06-01T09:28:00.000Z',
+      outcome: null,
+    },
+    {
+      stage: 'ci_gate',
+      attempt: 1,
+      state: 'running',
+      entered_at: minutesAgo(12.5),
+      exited_at: null,
+      outcome: null,
+    },
+  ],
+});
+
+/**
+ * S-25.12: the same wait after its 60 minutes — parked at `ci_gate` with the ending `ci_timed_out`
+ * and the attempt's last read as `last_gate_wait`. The page words it from the read, never from the
+ * recorded sentence, and never as a failure.
+ */
+export const ciHeldTimedOutTaskDetail = taskDetailResponseSchema.parse({
+  ...ciHeldTaskDetail,
+  task: {
+    ...ciHeldTaskDetail.task,
+    id: IDS.taskCiHeldTimedOut,
+    ticket: { provider: 'jira', key: 'DEMO-9', url: HOSTILE.safeUrl },
+    state: 'needs_human',
+  },
+  stop: {
+    stage: 'ci_gate',
+    attempt: 1,
+    cause: 'no_answer',
+    loop: null,
+    ci_failure: null,
+    recorded:
+      'the CI gate on a poll-only gitlab binding timed out after 60 minutes (pipeline.limits.ci_timeout_minutes = 60)',
+    recorded_cut: false,
+    ci_ending: 'ci_timed_out',
+  },
+  gate_wait: null,
+  last_gate_wait: aut6655Read('2026-06-01T09:28:00.000Z', '2026-06-01T10:27:30.000Z'),
+  stages: [
+    {
+      stage: 'implementation',
+      attempt: 1,
+      state: 'completed',
+      entered_at: '2026-06-01T09:00:00.000Z',
+      exited_at: '2026-06-01T09:28:00.000Z',
+      outcome: null,
+    },
+    {
+      stage: 'ci_gate',
+      attempt: 1,
+      state: 'failed',
+      entered_at: '2026-06-01T09:28:00.000Z',
+      exited_at: '2026-06-01T10:28:00.000Z',
       outcome: 'undecided',
     },
   ],
@@ -1821,6 +1942,8 @@ export const taskPipelines: Readonly<Record<string, unknown>> = {
   [IDS.taskFleetQueued]: graphOf('bug', {}),
   [IDS.taskCiFixing]: featurePipeline,
   [IDS.taskCiTimedOut]: featurePipeline,
+  [IDS.taskCiHeld]: featurePipeline,
+  [IDS.taskCiHeldTimedOut]: featurePipeline,
 };
 
 export const projectPipelines = { items: [featurePipeline, graphOf('bug', {})] };

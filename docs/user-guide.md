@@ -1001,8 +1001,18 @@ for an agent stage again — your review comments sent it back, a conflict is be
 returned it — the merge request goes back to draft until the task is Ready again; a gate re-check
 (the default branch moved) leaves it ready. So your project's CI has to run its tests on a **draft**
 merge request from an `agentic/` branch. If its rules skip or hold jobs for a `Draft:` title, the CI
-gate waits and says so — *"the merge request is a draft and pipeline … is held at manual job …"* —
-and the readiness panel's CI-rules warning names the rule it understood.
+check waits and the task page says what it waits for, from the first check: *"CI is waiting for
+someone to start the manual job sentry-release-commit in GitLab. Start it there and the task
+continues."*, with the job linked, a note that links the readiness panel's CI-rules warning (which
+names the rule it understood), and *Start the job in GitLab* as the page's one button. A held job is
+*Needs you* at once on the task page; the board's card does not show it until the check stops (the
+board's list does not carry the check's read yet). While the pipeline is simply running, the page
+says *"CI is running (pipeline n, 12 min so far; the task gives up after 60)"* and asks nothing. If
+the wait runs out, the page says *"CI did not finish within 60 minutes: pipeline n was still held at
+the manual job …"* — never that CI failed — and the next step, *Start the job in GitLab, then
+Retry*; a Retry on a pipeline that is still held stops at once and says so rather than waiting the
+hour again. A task that stopped before the platform recorded these reads shows the sentence it did
+record, after *What the platform saw last:*.
 
 ### QA, and sending a task back from QA or Ready
 
