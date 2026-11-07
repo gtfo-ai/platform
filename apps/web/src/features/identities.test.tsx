@@ -7,7 +7,7 @@
  * it renders a provider's strings as text (BD-022).
  */
 import type { IdentityCandidate, IdentityMapping, UserSummary } from '@platform/contracts';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -54,11 +54,28 @@ const fetchFor = (options: {
   readonly identities?: IdentityMapping[] | 'forbidden';
   readonly onMap?: (body: unknown, headers: Headers) => void;
   readonly candidates?: IdentityCandidate[];
+  /** S-26.8a: every admin unlink's path, and what it answers (200 and the row removed by default). */
+  readonly onUnlink?: (path: string) => Response | undefined;
 }) => {
-  const identities = options.identities ?? [MAPPED];
+  const identities = options.identities ?? [{ ...MAPPED }];
   return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url.includes('/api/auth/get-session')) return json(SESSION);
+    const unlink = /\/api\/org\/identities\/([^/]+)\/([^/]+)$/.exec(url);
+    if (unlink !== null && init?.method === 'DELETE') {
+      const path = new URL(url, 'http://localhost').pathname;
+      const answer = options.onUnlink?.(path);
+      if (answer !== undefined) return answer;
+      const provider = decodeURIComponent(unlink[1] ?? '');
+      const externalId = decodeURIComponent(unlink[2] ?? '');
+      if (Array.isArray(identities)) {
+        const at = identities.findIndex(
+          (row) => row.provider === provider && row.external_id === externalId,
+        );
+        if (at >= 0) identities.splice(at, 1);
+      }
+      return json({ provider, external_id: externalId });
+    }
     if (url.endsWith('/api/org/identities/candidates')) {
       return json({ items: options.candidates ?? [] });
     }
@@ -219,7 +236,7 @@ describe('the refused accounts nobody has mapped (WP-44, PROGRESS backlog 198)',
         realtime: false,
       }).element,
     );
-    await screen.findByText('Refused accounts nobody has mapped');
+    await screen.findByText('Accounts nobody has linked');
     // The provider's id is text (BD-022).
     expect(container.textContent).toContain('U0FAKE<i>NEW</i>');
     expect(container.querySelector('li i')).toBeNull();
@@ -229,5 +246,123 @@ describe('the refused accounts nobody has mapped (WP-44, PROGRESS backlog 198)',
     );
     // Proposing, never writing: choosing a candidate posted nothing.
     expect(posted).toEqual([]);
+  });
+});
+
+describe('an administrator unlinks an account (S-26.8a)', () => {
+  it('asks first, naming the account and the person, then sends the DELETE and re-reads the list', async () => {
+    const unlinked: string[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({
+        fetchImpl: fetchFor({
+          onUnlink: (path) => {
+            unlinked.push(path);
+            return undefined;
+          },
+        }),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByText('U0FAKEDANA');
+    await user.click(screen.getByRole('button', { name: 'Unlink' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Unlink Slack account <b>dana</b> from Dana (dana@example.invalid)?',
+    });
+    // Nothing is sent until the act itself is pressed.
+    expect(unlinked).toEqual([]);
+    expect(dialog.textContent).toContain('stop counting as Dana (dana@example.invalid)’s');
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    await waitFor(() => {
+      expect(unlinked).toEqual(['/api/org/identities/slack/U0FAKEDANA']);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText('U0FAKEDANA')).toBeNull();
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('says a machine is a machine in the confirmation', async () => {
+    const user = userEvent.setup();
+    render(
+      createApp({
+        fetchImpl: fetchFor({
+          identities: [
+            { ...MAPPED, kind: 'machine', user_id: null, external_id: '4242', display_name: null },
+          ],
+        }),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByText('4242');
+    await user.click(screen.getByRole('button', { name: 'Unlink' }));
+    expect(
+      await screen.findByRole('dialog', { name: 'Unlink the Slack machine account 4242?' }),
+    ).toBeTruthy();
+  });
+
+  it('keeps the dialog open with the refusal in words when the account is already gone', async () => {
+    const user = userEvent.setup();
+    render(
+      createApp({
+        fetchImpl: fetchFor({
+          onUnlink: () =>
+            json(
+              {
+                error: {
+                  code: 'identity_not_found',
+                  message: 'no mapping exists for that account',
+                },
+              },
+              404,
+            ),
+        }),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByText('U0FAKEDANA');
+    await user.click(screen.getByRole('button', { name: 'Unlink' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await within(dialog).findByText('The account was not unlinked.')).toBeTruthy();
+  });
+});
+
+describe('the unlinked assignees of live tasks (S-26.6, S-26.8a)', () => {
+  it('says how many tasks the tracker assigns them, never "0 refused", with the name as text', async () => {
+    const { container } = render(
+      createApp({
+        fetchImpl: fetchFor({
+          identities: [],
+          candidates: [
+            {
+              provider: 'jira-cloud',
+              external_id: '5b10ac8d82e05b22cc7d4ef5',
+              deliveries: 0,
+              assigned_tasks: 3,
+              display_name: 'Jan <b>Novák</b>',
+              last_seen_at: '2026-11-07T09:00:00.000Z',
+            },
+            {
+              provider: 'slack',
+              external_id: 'U0FAKEREFUSED',
+              deliveries: 2,
+              last_seen_at: '2026-11-07T09:00:00.000Z',
+            },
+          ],
+        }),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByText('Accounts nobody has linked');
+    const rows = within(
+      screen.getByRole('list', { name: 'Unmapped provider accounts' }),
+    ).getAllByRole('listitem');
+    expect(rows[0]?.textContent).toContain('assigned to 3 tasks');
+    expect(rows[0]?.textContent).toContain('Jan <b>Novák</b>');
+    expect(rows[0]?.textContent).not.toContain('refused');
+    expect(container.querySelector('li b')).toBeNull();
+    expect(rows[1]?.textContent).toContain('2 refused');
+    expect(rows[1]?.textContent).not.toContain('assigned to');
   });
 });

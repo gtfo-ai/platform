@@ -19,8 +19,9 @@
  * background jobs* (`org.dead_letters.manage`) and *Linked accounts* (`org.users.manage`) are the
  * administrator's on the server, *Integrations* (`integration.read`) and the *Audit log*
  * (`org.audit.read`) a maintainer's, so for anybody below they are absent from the NavList and
- * their settings paths redirect. *Instance* reads the public `GET /api/version` and *Workers* lists
- * the caller's own machines, so both are everybody's. The gating is a convenience, as the
+ * their settings paths redirect. *Instance* reads the public `GET /api/version`, *Workers* lists
+ * the caller's own machines and *Your accounts* (S-26.8a) the caller's own linked accounts, so all
+ * three are everybody's. The gating is a convenience, as the
  * authenticated route's guard is: the server refuses every one of those reads to a lower role
  * regardless, and the screens still name that refusal.
  *
@@ -92,6 +93,9 @@ export const ORG_SETTINGS_GROUPS = [
     sections: [
       { id: 'session', label: 'Session' },
       { id: 'keyboard', label: 'Keyboard shortcuts', changeableFrom: 'viewer' },
+      // S-26.8a: a person's own Jira and GitLab accounts (`identity.link`, any signed-in user).
+      // Last, so `/settings` still lands a member on Keyboard shortcuts (`firstOrgSection`).
+      { id: 'accounts', label: 'Your accounts', changeableFrom: 'viewer' },
     ],
   },
 ] as const satisfies readonly SettingsGroup[];

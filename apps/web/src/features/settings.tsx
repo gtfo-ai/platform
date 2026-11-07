@@ -15,9 +15,11 @@
  *  - **Operations**, the administrator's only — *Stuck events* (`features/dead-letters.tsx`, WP-95:
  *    the events the dispatcher gave up on, and the re-queue), *Failed background jobs*
  *    (`features/failed-jobs.tsx`, WP-108) and *Instance* (the version and build);
- *  - **Personal** — *Session* (who is signed in, with which role) and *Keyboard shortcuts* (whether
- *    single-key shortcuts are on — this browser's own choice, `app/shortcuts.ts`); there is no
- *    *Appearance*, since the application has one dark theme (TD-033's 2026-11-05 amendment).
+ *  - **Personal** — *Session* (who is signed in, with which role), *Keyboard shortcuts* (whether
+ *    single-key shortcuts are on — this browser's own choice, `app/shortcuts.ts`) and *Your
+ *    accounts* (the person's own Jira and GitLab accounts, linked by a provider-proven code —
+ *    `features/your-accounts.tsx`, S-26.8a, a lazy chunk of its own); there is no *Appearance*,
+ *    since the application has one dark theme (TD-033's 2026-11-05 amendment).
  *
  * `/settings` opens the first section the caller's role may change (S-25.6, research/21 S13):
  * *Policies* for an administrator, *Budgets* for a maintainer, *Keyboard shortcuts* for anybody else.
@@ -31,7 +33,7 @@
  * A **project's** settings are `features/project-settings.tsx`, which mirrors the whole wizard.
  */
 import { Link } from '@tanstack/react-router';
-import type { ReactElement } from 'react';
+import { lazy, type ReactElement, Suspense } from 'react';
 import { readErrorDetail } from '../api/read-error.js';
 import {
   useOrgBudgets,
@@ -58,6 +60,14 @@ import { Budgets } from './operating-mode.js';
 import { OrganisationNotifications, OrganisationPolicies } from './org-settings.js';
 import { SettingsFrame, SettingsSectionHeader } from './settings-frame.js';
 import { type OrgSettingsSectionId, orgSettingsGroupsFor } from './settings-sections.js';
+
+/**
+ * *Your accounts* (S-26.8a) is its own chunk: the link flow is read by a person once or twice, and
+ * keeping it out of this module keeps the settings chunk — and anything that preloads it — small.
+ */
+const YourAccounts = lazy(async () => ({
+  default: (await import('./your-accounts.js')).YourAccounts,
+}));
 
 const KeyboardShortcuts = (): ReactElement => {
   const enabled = useShortcutsEnabled();
@@ -258,6 +268,11 @@ const Instance = (): ReactElement => {
 const SECTION: Readonly<Record<OrgSettingsSectionId, () => ReactElement>> = {
   keyboard: KeyboardShortcuts,
   session: Session,
+  accounts: () => (
+    <Suspense fallback={<Loading label="Loading your accounts…" />}>
+      <YourAccounts />
+    </Suspense>
+  ),
   policies: () => (
     <>
       <SettingsSectionHeader

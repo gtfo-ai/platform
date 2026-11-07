@@ -5,8 +5,10 @@
  * invalidation signal (`realtime/query-bridge.ts`), and a background refetch interval on top of it
  * would hide a broken stream behind data that happens to be fresh — the failure that is hardest to
  * notice and worst to debug. If the stream is down, the connection badge in the header says so.
- * The one exception is a read no event announces: the *Add a worker* wizard asks for the workers
- * every 5 s while the person waits for a machine (`features/worker-wizard.tsx` says why).
+ * The exceptions are reads no event announces: the *Add a worker* wizard asks for the workers
+ * every 5 s while the person waits for a machine (`features/worker-wizard.tsx` says why), and
+ * *Your accounts* asks for its link code's state every 3 s while the code is live
+ * ({@link useIdentityLinkState}).
  */
 import type { BudgetWindow, BusinessInterviewRequest } from '@platform/contracts';
 import {
@@ -756,6 +758,80 @@ export const useIdentityCandidates = (enabled: boolean) => {
     enabled,
     retry: false,
   });
+};
+
+/** How often *Your accounts* asks whether a comment carried the live code (S-26.8a). */
+export const LINK_STATE_POLL_MS = 3_000;
+
+/** `GET /api/me/identities` (S-26.6): the caller's own linked accounts — every signed-in user's. */
+export const useMyIdentities = () => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.myIdentities],
+    queryFn: () => endpoints.myIdentities(),
+    ...FOREVER,
+  });
+};
+
+/**
+ * `GET /api/me/identity-links` (S-26.6): the newest code's status and its matches — never the code.
+ * No event announces a match (it is recorded from an inbound delivery the stream does not carry),
+ * so while the code is **live** the read is repeated every {@link LINK_STATE_POLL_MS}, and stops
+ * the moment it is expired, voided or used. That is the "page updates live" of the M26 UX spec § 5.
+ */
+export const useIdentityLinkState = () => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.identityLinkState],
+    queryFn: () => endpoints.identityLinkState(),
+    refetchInterval: (query) =>
+      query.state.data?.code?.status === 'live' ? LINK_STATE_POLL_MS : false,
+    retry: false,
+  });
+};
+
+/**
+ * *Your accounts*' commands (S-26.8a): issue a code, *I wrote it on …*, confirm a match (one
+ * `Idempotency-Key` per match, released on success) and unlink one's own account.
+ */
+export const useYourAccountsCommands = (mint?: MintKey) => {
+  const { endpoints } = useServices();
+  const queryClient = useQueryClient();
+  const intents = useIntentKeys(mint);
+  return {
+    issue: useMutation({
+      mutationFn: () => endpoints.issueIdentityLinkCode(),
+      onSettled: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.identityLinkState] });
+      },
+    }),
+    readThread: useMutation({
+      mutationFn: (body: Parameters<typeof endpoints.readIdentityLinkThread>[0]) =>
+        endpoints.readIdentityLinkThread(body),
+      // The answer carries the state it produced, so the match shows without a second read.
+      onSuccess: (result) => {
+        queryClient.setQueryData([...queryKeys.identityLinkState], result.state);
+      },
+    }),
+    confirm: useMutation({
+      mutationFn: (matchId: string) =>
+        endpoints.confirmIdentityLink(matchId, intents.keyFor(['identity.link', matchId])),
+      onSuccess: (_result, matchId) => {
+        intents.release(['identity.link', matchId]);
+      },
+      onSettled: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.identityLinkState] });
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.myIdentities] });
+      },
+    }),
+    unlink: useMutation({
+      mutationFn: (account: { readonly provider: string; readonly externalId: string }) =>
+        endpoints.unlinkMyIdentity(account.provider, account.externalId),
+      onSettled: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.myIdentities] });
+      },
+    }),
+  };
 };
 
 /**
@@ -1596,6 +1672,19 @@ export const useSettingsCommands = (mint?: MintKey) => {
         endpoints.mapIdentity(input),
       onSuccess: async () => {
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.orgIdentities] });
+      },
+    }),
+    /**
+     * `DELETE /api/org/identities/:provider/:external_id` (S-26.6): an administrator unlinks an
+     * account. Re-read either way — a `404` means somebody else unlinked it first. The prefix
+     * refreshes the candidates too, where an unlinked assignee reappears.
+     */
+    unlinkIdentity: useMutation({
+      mutationFn: (account: { readonly provider: string; readonly externalId: string }) =>
+        endpoints.unlinkOrgIdentity(account.provider, account.externalId),
+      onSettled: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.orgIdentities] });
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.myIdentities] });
       },
     }),
     /**

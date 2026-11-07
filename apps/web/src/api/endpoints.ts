@@ -58,8 +58,14 @@ import {
   handBackRequestSchema,
   historyBootstrapsResponseSchema,
   identityCandidateListSchema,
+  identityLinkCodeIssuedSchema,
+  identityLinkConfirmedSchema,
+  identityLinkStateSchema,
+  identityLinkThreadRequestSchema,
+  identityLinkThreadResponseSchema,
   identityMappingListSchema,
   identityMappingSchema,
+  identityUnlinkedSchema,
   inboxResponseSchema,
   integrationProvidersResponseSchema,
   integrationSummarySchema,
@@ -68,6 +74,7 @@ import {
   kbHealthResponseSchema,
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
+  myIdentityListSchema,
   orgAuditResponseSchema,
   orgModelsResponseSchema,
   orgSettingsResponseSchema,
@@ -173,6 +180,40 @@ export interface Endpoints {
    * write.
    */
   readonly identityCandidates: () => Promise<z.output<typeof identityCandidateListSchema>>;
+  /**
+   * `DELETE /api/org/identities/:provider/:external_id` (S-26.6) — an administrator unlinks a
+   * provider account, a person's or a machine's, whoever linked it.
+   */
+  readonly unlinkOrgIdentity: (
+    provider: string,
+    externalId: string,
+  ) => Promise<z.output<typeof identityUnlinkedSchema>>;
+  /**
+   * *Settings → Your accounts* (S-26.6's routes, S-26.8a's screen): a person links their own
+   * tracker or git account, proven by the provider's authenticated comment author and confirmed by
+   * them — never typed, never matched by email.
+   *
+   * `POST /api/me/identity-links` answers the one-time code **once**; `GET` answers its status and
+   * matches, never the code.
+   */
+  readonly issueIdentityLinkCode: () => Promise<z.output<typeof identityLinkCodeIssuedSchema>>;
+  readonly identityLinkState: () => Promise<z.output<typeof identityLinkStateSchema>>;
+  /** `POST /api/me/identity-links/read` — *I wrote it on …*: read that ticket's or merge request's comments now. */
+  readonly readIdentityLinkThread: (
+    body: z.input<typeof identityLinkThreadRequestSchema>,
+  ) => Promise<z.output<typeof identityLinkThreadResponseSchema>>;
+  /** `POST /api/me/identity-links/matches/:match_id/confirm` — the link; needs an `Idempotency-Key`. */
+  readonly confirmIdentityLink: (
+    matchId: string,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof identityLinkConfirmedSchema>>;
+  /** `GET /api/me/identities` — the caller's own linked accounts. */
+  readonly myIdentities: () => Promise<z.output<typeof myIdentityListSchema>>;
+  /** `DELETE /api/me/identities/:provider/:external_id` — the caller unlinks one of their own. */
+  readonly unlinkMyIdentity: (
+    provider: string,
+    externalId: string,
+  ) => Promise<z.output<typeof identityUnlinkedSchema>>;
   /**
    * `GET /api/org/dead-letters` — events whose dispatch spent its attempt bound (WP-95, backlog
    * 126). Admin only; `error` arrives redacted and bounded, and is rendered as text.
@@ -699,6 +740,31 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     orgIdentities: () => client.get('/api/org/identities', { schema: identityMappingListSchema }),
     identityCandidates: () =>
       client.get('/api/org/identities/candidates', { schema: identityCandidateListSchema }),
+    unlinkOrgIdentity: (provider, externalId) =>
+      client.command(`/api/org/identities/${seg(provider)}/${seg(externalId)}`, {
+        method: 'DELETE',
+        schema: identityUnlinkedSchema,
+      }),
+    issueIdentityLinkCode: () =>
+      client.command('/api/me/identity-links', { schema: identityLinkCodeIssuedSchema }),
+    identityLinkState: () =>
+      client.get('/api/me/identity-links', { schema: identityLinkStateSchema }),
+    readIdentityLinkThread: (body) =>
+      client.command('/api/me/identity-links/read', {
+        schema: identityLinkThreadResponseSchema,
+        body: identityLinkThreadRequestSchema.parse(body),
+      }),
+    confirmIdentityLink: (matchId, idempotencyKey) =>
+      client.command(`/api/me/identity-links/matches/${seg(matchId)}/confirm`, {
+        schema: identityLinkConfirmedSchema,
+        idempotencyKey,
+      }),
+    myIdentities: () => client.get('/api/me/identities', { schema: myIdentityListSchema }),
+    unlinkMyIdentity: (provider, externalId) =>
+      client.command(`/api/me/identities/${seg(provider)}/${seg(externalId)}`, {
+        method: 'DELETE',
+        schema: identityUnlinkedSchema,
+      }),
     refusedDeliveries: (integrationId) =>
       client.get(`/api/integrations/${seg(integrationId)}/refused-deliveries`, {
         schema: refusedDeliveriesResponseSchema,

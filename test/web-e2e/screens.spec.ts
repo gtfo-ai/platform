@@ -13,6 +13,9 @@ import {
   failedJobs,
   HOSTILE,
   IDS,
+  identityLinkIssued,
+  identityLinkMatch,
+  LINK_ACCOUNT,
   OWNER_NAME,
   PROJECT_KEY,
   UNLINKED_ASSIGNEE,
@@ -381,6 +384,84 @@ test('org settings lists the provider identities and offers the mapping form (WP
   // The display name is provider text: its markup is on the screen as characters, not an element.
   await expect(page.getByText('<img src=x onerror=alert(1)>operator')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save mapping' })).toBeVisible();
+});
+
+test('Settings → Your accounts: a code, the account the provider proved, the confirmation, and unlink (S-26.8a)', async ({
+  page,
+  request,
+}) => {
+  await page.goto('/settings/accounts');
+  await expect(page.getByRole('heading', { name: 'Your accounts' })).toBeVisible();
+  await expect(page.getByText('No account is linked to you yet')).toBeVisible();
+  await page.getByRole('button', { name: 'Link an account' }).click();
+  await expect(page.getByLabel('Your link code')).toHaveValue(identityLinkIssued.code);
+  await expect(
+    page.getByText(
+      'Write this code as a comment on any ticket of a project you are in (Jira), from your own account.',
+    ),
+  ).toBeVisible();
+
+  // The fake records the comment's author at once: the page asks before it links anything.
+  const match = page.locator(`[data-link-match="${identityLinkMatch.id}"]`);
+  await expect(match.getByRole('heading')).toHaveText(`Link Jira account ${LINK_ACCOUNT.name}?`);
+  await expect(match.getByText(LINK_ACCOUNT.id)).toBeVisible();
+  // The provider's name is characters on the screen, never an element.
+  await expect(match.locator('img')).toHaveCount(0);
+  expect((await commandLog(request)).filter((entry) => entry.path.endsWith('/confirm'))).toEqual(
+    [],
+  );
+
+  await match.getByRole('button', { name: 'Link this account' }).click();
+  await expect(page.getByText('You now own 2 tasks assigned to you in Jira.')).toBeVisible();
+  await expect(page.getByText('You can delete the comment with the code now.')).toBeVisible();
+  const list = page.getByRole('list', { name: 'Your linked accounts' });
+  await expect(list.getByText(LINK_ACCOUNT.id)).toBeVisible();
+
+  await list.getByRole('button', { name: 'Unlink' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText(
+    'Answers and approvals from this Jira account stop counting as yours.',
+  );
+  await dialog.getByRole('button', { name: 'Unlink' }).click();
+  await expect(page.getByText('No account is linked to you yet')).toBeVisible();
+  await expect
+    .poll(async () =>
+      (await commandLog(request))
+        .map((entry) => entry.path)
+        .filter((path) => path.startsWith('/api/me/')),
+    )
+    .toEqual([
+      '/api/me/identity-links',
+      `/api/me/identity-links/matches/${identityLinkMatch.id}/confirm`,
+      `/api/me/identities/jira-cloud/${LINK_ACCOUNT.id}`,
+    ]);
+});
+
+test('Linked accounts: Unlink asks first and names the person, and an unlinked assignee says its tasks (S-26.8a)', async ({
+  page,
+  request,
+}) => {
+  await page.goto('/settings/identities');
+  const candidates = page.getByRole('list', { name: 'Unmapped provider accounts' });
+  await expect(candidates.getByText('assigned to 3 tasks', { exact: false })).toBeVisible();
+  await expect(candidates.getByText(`Eva Malá ${HOSTILE.image}`)).toBeVisible();
+
+  await page
+    .getByRole('list', { name: 'Mapped provider accounts' })
+    .getByRole('button', { name: 'Unlink' })
+    .click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText(
+    'Unlink Slack account <img src=x onerror=alert(1)>operator from',
+  );
+  await dialog.getByRole('button', { name: 'Unlink' }).click();
+  await expect
+    .poll(async () =>
+      (await commandLog(request))
+        .map((entry) => entry.path)
+        .filter((path) => path.startsWith('/api/org/identities/')),
+    )
+    .toEqual(['/api/org/identities/slack/U0FAKEOPERATOR']);
 });
 
 test('org settings shows the organisation document and saves a section through PATCH /api/org (WP-93)', async ({

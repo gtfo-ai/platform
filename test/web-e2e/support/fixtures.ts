@@ -31,6 +31,10 @@ import {
   effectiveConfigResponseSchema,
   failedJobsResponseSchema,
   historyBootstrapsResponseSchema,
+  identityCandidateListSchema,
+  identityLinkCodeIssuedSchema,
+  identityLinkConfirmedSchema,
+  identityLinkMatchSchema,
   identityMappingListSchema,
   inboxResponseSchema,
   integrationProvidersResponseSchema,
@@ -1482,6 +1486,69 @@ export const orgIdentities = identityMappingListSchema.parse({
       user_id: IDS.user,
       display_name: '<img src=x onerror=alert(1)>operator',
       created_at: now,
+    },
+  ],
+});
+
+// ── Your accounts and the unlinked assignees (S-26.8a) ────────────────────────
+
+/** The operator's Jira account the fake's comment proves — its id and its (hostile) name. */
+export const LINK_ACCOUNT = {
+  id: '5b10fakeaccount0001',
+  name: `Jan Novák ${HOSTILE.image}`,
+} as const;
+
+/** `POST /api/me/identity-links` — the code, answered once. */
+export const identityLinkIssued = identityLinkCodeIssuedSchema.parse({
+  id: id(110),
+  code: 'agentic-link-7K3Q9VDM2X',
+  expires_at: '2099-01-01T10:30:00.000Z',
+});
+
+/**
+ * The match the fake records the moment a code is issued — as if the operator's comment had already
+ * arrived — so the browser sees the confirmation without waiting for a poll.
+ */
+export const identityLinkMatch = identityLinkMatchSchema.parse({
+  id: id(111),
+  provider: 'jira-cloud',
+  external_id: LINK_ACCOUNT.id,
+  display_name: LINK_ACCOUNT.name,
+  integration_id: IDS.integration,
+  integration_name: 'Jira (fake)',
+  matched_at: now,
+  confirmed_at: null,
+});
+
+/** `POST …/matches/:id/confirm` — the link, and the two live tasks it made the operator's. */
+export const identityLinkConfirmed = identityLinkConfirmedSchema.parse({
+  provider: 'jira-cloud',
+  external_id: LINK_ACCOUNT.id,
+  display_name: LINK_ACCOUNT.name,
+  user_id: IDS.user,
+  performed: true,
+  adopted_task_ids: [IDS.taskFeature, IDS.taskBug],
+});
+
+/**
+ * `GET /api/org/identities/candidates` — an unlinked tracker assignee of three live tasks (S-26.6,
+ * `deliveries: 0`) and an account the platform refused a decision from.
+ */
+export const identityCandidates = identityCandidateListSchema.parse({
+  items: [
+    {
+      provider: 'jira-cloud',
+      external_id: '5b10fakeassignee0002',
+      deliveries: 0,
+      assigned_tasks: 3,
+      display_name: `Eva Malá ${HOSTILE.image}`,
+      last_seen_at: now,
+    },
+    {
+      provider: 'slack',
+      external_id: 'U0FAKEREFUSED',
+      deliveries: 2,
+      last_seen_at: now,
     },
   ],
 });

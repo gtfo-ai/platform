@@ -104,6 +104,9 @@ const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise
     return json({ items: [] });
   }
   if (path === '/api/org/users' || path === '/api/integrations') return json({ items: [] });
+  // S-26.8a: Your accounts' two reads — nothing linked, no code asked for.
+  if (path === '/api/me/identities') return json({ items: [] });
+  if (path === '/api/me/identity-links') return json({ code: null, matches: [] });
   return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
 }) as typeof fetch;
 
@@ -243,6 +246,8 @@ describe('the org settings sub-routes', () => {
       'Instance',
       'Session',
       'Keyboard shortcuts',
+      // S-26.8a: a person's own accounts, everybody's.
+      'Your accounts',
     ]);
     expect(world.requested).not.toContain('/api/org/dead-letters');
     // Linked accounts is the administrator's on the server (`org.users.manage`) too.
@@ -356,6 +361,7 @@ describe('the org settings sub-routes', () => {
     ['instance', (scope: Scope) => scope.findByText('0.0.0-dev')],
     ['session', (scope: Scope) => scope.findByText('Role: Administrator')],
     ['keyboard', (scope: Scope) => scope.findByRole('checkbox')],
+    ['accounts', (scope: Scope) => scope.findByRole('button', { name: 'Link an account' })],
   ] as const)(
     'draws the %s section’s content inside a card, never on the page canvas (S-25.10b)',
     async (section, content) => {
@@ -454,7 +460,7 @@ describe('the section tables', () => {
       ['People', ['users']],
       ['Admin', ['integrations', 'workers', 'audit']],
       ['Operations', ['instance']],
-      ['Personal', ['session', 'keyboard']],
+      ['Personal', ['session', 'keyboard', 'accounts']],
     ]);
     for (const role of ['member', 'viewer', undefined] as const) {
       expect(groups(role)).toEqual([
@@ -462,7 +468,7 @@ describe('the section tables', () => {
         ['People', ['users']],
         ['Admin', ['workers']],
         ['Operations', ['instance']],
-        ['Personal', ['session', 'keyboard']],
+        ['Personal', ['session', 'keyboard', 'accounts']],
       ]);
     }
     expect(
