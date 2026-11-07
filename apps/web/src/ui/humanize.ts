@@ -648,6 +648,44 @@ export const OWNER_WORDS = {
   'owner.card': (name: string): string => `Owner: ${name}`,
 } as const;
 
+/**
+ * **What a machine takes, on the Workers screen** (S-26.8a, the M26 UX spec § 1): the words the
+ * screen adds around the shared card (`MACHINE_TAKES_WORDS`) — the muted line for the runs its
+ * policy leaves for others, and the refusals the card's own words do not cover. *Machine*, never
+ * *claim*, *offer* or *seat*.
+ */
+export const WORKERS_POLICY_WORDS = {
+  /** `policy_skipped_offers` above zero: "Skipped 3 runs this machine doesn’t take". */
+  skipped: (count: number, formatted: string): string =>
+    count === 1
+      ? `Skipped ${formatted} run this machine doesn’t take`
+      : `Skipped ${formatted} runs this machine doesn’t take`,
+  /** `422 claim_scope_empty`: an empty project list (*Only what I pick* is the option for none). */
+  refusedEmpty:
+    'Choose at least one project, or all of them. To take nothing by itself, choose Only what I pick.',
+  /** A refusal none of the card's words name: the platform's sentence, never the server's text. */
+  refusedOther: 'What this machine takes was not changed. Try again.',
+  /** Until the project names are known: the row says nothing it would have to take back. */
+  loading: 'Loading what this machine takes…',
+  /** A stored project that no longer exists, on somebody else's machine (the card says *you left*). */
+  removedProject: 'a removed project',
+} as const;
+
+/**
+ * **Assign the owner in the tracker** (S-26.8a, product/06's M26 amendment): the ticket lifecycle's
+ * third switch, the write-back S-26.3 performs. `help` takes the tracker binding's `provider` id and
+ * names the tracker as {@link trackerName} does — *the tracker* for one this build does not name.
+ */
+export const ASSIGN_OWNER_WORDS = {
+  label: 'Assign the owner in the tracker',
+  help: (provider: string): string => {
+    const name = Object.hasOwn(TRACKER_NAME, provider) ? TRACKER_NAME[provider] : undefined;
+    return name === undefined
+      ? 'When someone takes or is assigned a task here, also assign the ticket to them in the tracker. Only people who linked their tracker account are assigned there.'
+      : `When someone takes or is assigned a task here, also assign the ticket to them in ${name}. Only people who linked their ${name} account are assigned there.`;
+  },
+} as const;
+
 // ── Settings, knowledge, budgets and the audit log (S-23.11b) ────────────────
 
 /** A project's state (`projects.status`), beside its name in the header and the list (S-25.5). */

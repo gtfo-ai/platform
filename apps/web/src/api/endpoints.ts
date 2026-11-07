@@ -147,6 +147,8 @@ import {
   ticketStatusesResponseSchema,
   updateProjectConfigRequestSchema,
   versionResponseSchema,
+  workerClaimPolicyRequestSchema,
+  workerClaimPolicyResponseSchema,
   workerDeviceDecisionRequestSchema,
   workerDeviceDecisionResponseSchema,
   workerDeviceLookupRequestSchema,
@@ -255,6 +257,15 @@ export interface Endpoints {
   readonly decideWorkerDevice: (
     body: z.input<typeof workerDeviceDecisionRequestSchema>,
   ) => Promise<z.output<typeof workerDeviceDecisionResponseSchema>>;
+  /**
+   * `PUT /api/workers/:id/claim-policy` — what the machine takes (S-26.4, the M26 UX spec § 1):
+   * its own user only (`403 claim_policy_owner_only` for an administrator, `404` for anybody
+   * else); `422 claim_scope_empty` / `project_not_eligible`. A repeat answers `performed: false`.
+   */
+  readonly setWorkerClaimPolicy: (
+    workerId: string,
+    body: z.input<typeof workerClaimPolicyRequestSchema>,
+  ) => Promise<z.output<typeof workerClaimPolicyResponseSchema>>;
   /** `DELETE /api/workers/:id` — revoke; a repeat answers `performed: false`. */
   readonly revokeWorker: (workerId: string) => Promise<z.output<typeof revokeWorkerResponseSchema>>;
   /** The newest refused or ignored inbound deliveries of one integration (WP-44, backlog 198). */
@@ -527,9 +538,15 @@ export interface Endpoints {
    * `PUT /api/projects/:id/default-branch` — a maintainer changes the branch runs check out and
    * merge requests target (WP-139); `409 project_has_live_tasks` while a task is not finished.
    */
-  /** WP-278: where the project's agent runs execute (TD-031 decision 8). */
+  /**
+   * WP-278: where the project's agent runs execute (TD-031 decision 8). With `workerId` (BACKLOG
+   * 1456, the Workers screen's consequence line) `others_take_unassigned` is asked **for that
+   * machine**: the server or any other machine, its owner's others included; `404` for a worker the
+   * workers read does not list to the caller.
+   */
   readonly projectExecution: (
     projectId: string,
+    workerId?: string,
   ) => Promise<z.output<typeof projectExecutionResponseSchema>>;
   readonly setProjectExecution: (
     projectId: string,
@@ -797,6 +814,12 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         schema: workerDeviceDecisionResponseSchema,
         body: workerDeviceDecisionRequestSchema.parse(body),
       }),
+    setWorkerClaimPolicy: (workerId, body) =>
+      client.command(`/api/workers/${seg(workerId)}/claim-policy`, {
+        method: 'PUT',
+        schema: workerClaimPolicyResponseSchema,
+        body: workerClaimPolicyRequestSchema.parse(body),
+      }),
     revokeWorker: (workerId) =>
       client.command(`/api/workers/${seg(workerId)}`, {
         method: 'DELETE',
@@ -1030,9 +1053,10 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.get(`/api/projects/${seg(projectId)}/repository`, {
         schema: projectRepositoryResponseSchema,
       }),
-    projectExecution: (projectId) =>
+    projectExecution: (projectId, workerId) =>
       client.get(`/api/projects/${seg(projectId)}/execution`, {
         schema: projectExecutionResponseSchema,
+        ...(workerId === undefined ? {} : { query: { worker_id: workerId } }),
       }),
     setProjectExecution: (projectId, body, idempotencyKey) =>
       client.command(`/api/projects/${seg(projectId)}/execution`, {

@@ -35,7 +35,12 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { IdentityLinkState, MyIdentity, SseFrame } from '@platform/contracts';
+import type {
+  IdentityLinkState,
+  MyIdentity,
+  SseFrame,
+  WorkerClaimPolicy,
+} from '@platform/contracts';
 import {
   cancelRunRequestSchema,
   cancelTaskRequestSchema,
@@ -54,6 +59,7 @@ import {
   steerRunRequestSchema,
   submitFeedbackRequestSchema,
   takeOverRequestSchema,
+  workerClaimPolicyRequestSchema,
 } from '@platform/contracts';
 import { CONTENT_SECURITY_POLICY } from '../../../apps/server/src/web/csp.js';
 import * as fixtures from './fixtures.js';
@@ -269,6 +275,70 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
    * machine and the CI-held one, and the inbox its `ci_held` row.
    */
   let waitingOpen = false;
+  /**
+   * `POST /__test__/workers-others` (S-26.8a): the workers read carries another person's machine,
+   * and the project has no server claimant (`?worker_id=` is answered by {@link executionFor}).
+   */
+  let workersOthers = false;
+  /**
+   * What `PUT /api/workers/:id/claim-policy` stored, per worker: the workers read answers it, so
+   * the card's sentence — built from the stored setting — says the new one after a save.
+   */
+  const claimPolicies = new Map<
+    string,
+    { readonly claim_policy: WorkerClaimPolicy; readonly claim_project_ids: string[] | null }
+  >();
+
+  /** `GET /api/workers`: the fixture list (with another person's machine on request), each stored policy applied. */
+  const workersRead = () => {
+    const base = workersOthers ? fixtures.workersWithOthers : fixtures.workers;
+    return {
+      ...base,
+      items: base.items.map((item) => {
+        const stored = claimPolicies.get(item.id);
+        return stored === undefined
+          ? item
+          : {
+              ...item,
+              claim_policy: stored.claim_policy,
+              claim_projects:
+                stored.claim_project_ids?.map((projectId) => ({
+                  id: projectId,
+                  key: projectId === fixtures.IDS.project ? fixtures.PROJECT_KEY : null,
+                })) ?? null,
+            };
+      }),
+    };
+  };
+
+  /**
+   * `GET …/execution?worker_id=` (BACKLOG 1456, the Workers screen's consequence line), as the
+   * server asks it (`othersTakeUnassigned`): `others_take_unassigned` is the server claimant
+   * running, or **another** listed machine than `worker_id` — the owner's others included — that is
+   * active, takes the project and whose policy admits unassigned tasks; a `worker_id` the workers
+   * read does not list is `404`.
+   */
+  const executionFor = (workerId: string): { status: number; body: unknown } => {
+    const listed = workersRead().items;
+    if (!listed.some((item) => item.id === workerId)) {
+      return {
+        status: 404,
+        body: { error: { code: 'not_found', message: `worker ${workerId}` } },
+      };
+    }
+    const base = workersOthers ? fixtures.projectExecutionNoTaker : fixtures.projectExecution;
+    const others =
+      base.server_claimant === 'running' ||
+      listed.some(
+        (item) =>
+          item.id !== workerId &&
+          item.state === 'active' &&
+          (item.claim_policy === 'everything' || item.claim_policy === 'mine_and_unassigned') &&
+          (item.claim_projects === null ||
+            item.claim_projects.some((project) => project.id === fixtures.IDS.project)),
+      );
+    return { status: 200, body: { ...base, others_take_unassigned: others } };
+  };
 
   const writeFrame = (stream: Stream, frame: SseFrame, event: string): void => {
     const lines: string[] = [];
@@ -410,6 +480,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       linkState = { code: null, matches: [] };
       myIdentities = [];
       waitingOpen = false;
+      workersOthers = false;
+      claimPolicies.clear();
       json(response, 200, { reset: true });
       return;
     }
@@ -426,6 +498,11 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         extraTasks.push(...fixtures.waitingListItems, fixtures.ciHeldListItem);
       }
       json(response, 200, { open: true });
+      return;
+    }
+    if (path === '/__test__/workers-others' && method === 'POST') {
+      workersOthers = true;
+      json(response, 200, { others: true });
       return;
     }
     if (path === '/__test__/setup-state' && method === 'POST') {
@@ -699,6 +776,46 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       json(response, 200, { provider, external_id: externalId });
       return;
     }
+    // S-26.8a: what a machine takes, parsed with the published schema and logged like every
+    // command. Only the machine's own user may write it, as on the server: the signed-in operator's
+    // machines are theirs, and another person's answers `403 claim_policy_owner_only` (the operator
+    // is an administrator); `[]` is `422 claim_scope_empty`.
+    const claimPolicyMatch = /^\/api\/workers\/([^/]+)\/claim-policy$/.exec(path);
+    if (claimPolicyMatch !== null && method === 'PUT') {
+      const parsed = workerClaimPolicyRequestSchema.safeParse(await readBody(request));
+      if (!parsed.success) {
+        problem(response, 400, 'invalid_request', parsed.error.issues[0]?.message ?? 'invalid');
+        return;
+      }
+      const workerId = claimPolicyMatch[1] ?? '';
+      const target = fixtures.workersWithOthers.items.find((item) => item.id === workerId);
+      if (target === undefined) {
+        problem(response, 404, 'not_found', `worker ${workerId}`);
+        return;
+      }
+      if (target.user.id !== fixtures.IDS.user) {
+        problem(response, 403, 'claim_policy_owner_only', 'only the machine’s person');
+        return;
+      }
+      if (parsed.data.claim_project_ids?.length === 0) {
+        problem(response, 422, 'claim_scope_empty', 'choose at least one project');
+        return;
+      }
+      commands.push({ path, body: parsed.data });
+      const ids =
+        parsed.data.claim_project_ids === null ? null : [...parsed.data.claim_project_ids].sort();
+      claimPolicies.set(workerId, {
+        claim_policy: parsed.data.claim_policy,
+        claim_project_ids: ids,
+      });
+      json(response, 200, {
+        worker_id: workerId,
+        claim_policy: parsed.data.claim_policy,
+        claim_project_ids: ids,
+        performed: true,
+      });
+      return;
+    }
     // WP-93: `PATCH /api/org`, parsed with the published schema and logged like every command.
     if (path === '/api/org' && method === 'PATCH') {
       const parsed = patchOrgSettingsRequestSchema.safeParse(await readBody(request));
@@ -793,6 +910,16 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       return;
     }
 
+    const executionWorker = url.searchParams.get('worker_id');
+    if (
+      method === 'GET' &&
+      path === `/api/projects/${fixtures.IDS.project}/execution` &&
+      executionWorker !== null
+    ) {
+      const answer = executionFor(executionWorker);
+      json(response, answer.status, answer.body);
+      return;
+    }
     if (method === 'GET') {
       const withAnswers = {
         ...fixtures.taskDetail,
@@ -815,7 +942,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
               : { ...item, activity: { ...item.activity, at: new Date().toISOString() } },
           ),
         },
-        '/api/workers': fixtures.workers,
+        // S-26.8a: with another person's machine on request, and each stored claim policy applied.
+        '/api/workers': workersRead(),
         [`/api/runs/${fixtures.IDS.runWorker}/messages`]: fixtures.emptyRunMessages,
         [`/api/runs/${fixtures.IDS.runQueued}/messages`]: fixtures.emptyRunMessages,
         '/api/org/models': fixtures.orgModels,
@@ -859,7 +987,9 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         '/api/org/stats': fixtures.orgStats,
         [`/api/projects/${fixtures.IDS.project}/autonomy`]: fixtures.autonomy,
         // S-23.20: the execution read Home, the Agents page and the worker wizard ask.
-        [`/api/projects/${fixtures.IDS.project}/execution`]: fixtures.projectExecution,
+        [`/api/projects/${fixtures.IDS.project}/execution`]: workersOthers
+          ? fixtures.projectExecutionNoTaker
+          : fixtures.projectExecution,
         [`/api/projects/${fixtures.IDS.project}/rediscovery`]: fixtures.rediscoveryGate,
         [`/api/projects/${fixtures.IDS.project}/audit`]: fixtures.projectAudit,
         [`/api/projects/${fixtures.IDS.project}/kb/tree`]: fixtures.kbTree,

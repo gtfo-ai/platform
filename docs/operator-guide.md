@@ -887,9 +887,9 @@ the binding (a maintainer's read, one provider call per load), and the save chec
 against the same read — `422 lifecycle_status_unknown` naming the slot, or `503
 lifecycle_statuses_unavailable` when the tracker cannot be read, with nothing written in either case.
 The block's `assign_owner` switch (S-26.3, default off, Jira Cloud only) writes an owner set on the
-platform back to the ticket's assignee; it has no control on these screens yet, so set it through
-`PUT /api/projects/<id>/bindings` (saving the lifecycle screen keeps it as stored), and give the
-binding's account *Assign Issues* (the Jira setup guide, step 2).
+platform back to the ticket's assignee; it is the lifecycle form's third switch, **Assign the owner in
+the tracker** (S-26.8a, a maintainer's, saved with the lifecycle), and the binding's account needs
+*Assign Issues* (the Jira setup guide, step 2).
 
 ### The five providers that ship
 
