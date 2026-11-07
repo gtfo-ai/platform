@@ -2086,6 +2086,11 @@ export const lastGateWaitOf = (
  */
 export interface WaitingReadOptions {
   readonly coreDigests?: RunImageDigests | null;
+  /**
+   * `false` skips the `waiting` statement and leaves the key off the task record — for a reader
+   * that never shows it (`get_task_context`, an agent's tool). Absent or `true`: it is read.
+   */
+  readonly waiting?: boolean;
 }
 
 /** `GET /api/tasks/:task_id` — the task with its stages, artifacts, questions, approvals and runs. */
@@ -2159,7 +2164,9 @@ export const findTaskDetail = async (
     pausedReasonsFor(database, task.state === 'paused' ? [taskId] : []),
     ownerViewsFor(database, [taskId]),
     // S-26.5: why the current stage's run waits, off the claim's own predicates.
-    waitingForTasks(database, [taskId], options.coreDigests ?? null),
+    options.waiting === false
+      ? null
+      : waitingForTasks(database, [taskId], options.coreDigests ?? null),
   ]);
 
   const setbackRows = stageRows.map(setbackRowOf);
@@ -2173,7 +2180,7 @@ export const findTaskDetail = async (
         pausedReasons.get(task.id),
         owners.get(task.id),
       ),
-      waiting: waiting.get(task.id) ?? null,
+      ...(waiting === null ? {} : { waiting: waiting.get(task.id) ?? null }),
     },
     taken_over: takenOver,
     human_time: humanTime,

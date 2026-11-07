@@ -18,29 +18,55 @@
  *   (`workerScopeTakesSql`) and the policy (`workerPolicyTakesSql`).
  *
  * When neither does, the reason is about **the person the offer is "mine" of** — the task's owner,
- * or an ask's asker (`offerIsMineSql`'s rule) — and their machines that would take it (not revoked,
- * their user able to run in the project, its project list taking it, its policy admitting it):
- * none and one that only picks → `owner_pick_only`; none → `owner_no_worker`; none connected →
- * `owner_worker_offline` (with the newest `last_seen_at`); every connected one paused →
- * `owner_worker_paused`; a connected running one that the claim still refuses (its images, an
- * exclusion, the project's mode or credential, a head start) is the residual and reads
- * `owner_no_worker`, which the Workers screen and the execution read then explain. With no such
- * person, a task **held elsewhere** (`taskHeldElsewhereSql`, the claim's fragment) is
- * `assignee_not_linked` and any other — a task a linked member released included, since it is
- * unassigned — `no_taker`.
+ * or an ask's asker (`offerIsMineSql`'s rule) — and each of their machines (not revoked) is given a
+ * reason of its own ({@link machineWaitingOf}): one whose user may not run in the project or whose
+ * project list leaves it out is `owner_no_worker`; otherwise the Workers screen's own blockers
+ * (`coreClaimBlockersOf`, the function `claim_blockers` is) decide, by {@link reasonOfBlockers}.
+ * The person's reason is the machine reason nearest to taking the run (`owner_worker_cannot_take`,
+ * then `owner_worker_paused`, `owner_worker_offline`, `owner_pick_only`, `owner_no_worker`; none
+ * at all is `owner_no_worker`), with the newest contact of the offline ones and the blockers of the
+ * ones that cannot take it. With no such person, a task **held elsewhere** (`taskHeldElsewhereSql`,
+ * the claim's fragment) is `assignee_not_linked` and any other — a task a linked member released
+ * included, since it is unassigned — `no_taker`.
  *
  * **One statement per page**: the reads take every run or task id of the answer at once.
  */
-import type { Id, OfferWaiting, OfferWaitingReason } from '@platform/contracts';
+import {
+  type Id,
+  type OfferWaiting,
+  type OfferWaitingReason,
+  orderClaimBlockers,
+  type WorkerClaimBlocker,
+} from '@platform/contracts';
 import {
   ACTIVE_RUN_STATUSES,
+  coreClaimBlockersOf,
   DEFAULT_EXECUTION_MODE,
   type RunImageDigests,
 } from '@platform/domain';
 import { pipeline as pipelineAdapters } from '@platform/infrastructure';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Database } from './identity-queries.js';
-import { WORKER_CONNECTED_SECONDS } from './worker-queries.js';
+import { holdOf, WORKER_CONNECTED_SECONDS } from './worker-queries.js';
+
+/** One of the person's machines (not revoked), as the claim facts the Workers screen reads. */
+export interface WaitingMachineFacts {
+  /** Its user may run in the project and its project list takes it. */
+  readonly here: boolean;
+  /** Its claim policy admits this offer (`workerPolicyTakesSql`); `false` is *pick only*. */
+  readonly policyTakes: boolean;
+  /** Its user is not disabled and under no ban in force (`USER_MAY_ACT_SQL`). */
+  readonly ownerMayAct: boolean;
+  /** Seen within the online window, on the database's clock. */
+  readonly online: boolean;
+  readonly protocolVersion: number | null;
+  /** The owner's hold: `paused`, a drain's, or none (`holdOf`). */
+  readonly hold: 'paused' | 'draining' | null;
+  /** A usage limit's pause still ahead. */
+  readonly usagePaused: boolean;
+  readonly heldDigests: readonly string[];
+  readonly lastSeenAt: string | null;
+}
 
 /** What the statement answers about one open offer — the facts {@link waitingReasonOf} decides on. */
 export interface OfferWaitingFacts {
@@ -54,42 +80,141 @@ export interface OfferWaitingFacts {
   readonly heldElsewhere: boolean;
   /** The held assignee's display name (provider text, redacted at the write), or `null`. */
   readonly assigneeName: string | null;
-  /** The person's machines that would take the offer by themselves. */
-  readonly takers: number;
-  /** The person has a machine whose project list takes the project and whose policy only picks. */
-  readonly pickOnly: boolean;
-  /** One of the takers is connected and not paused. */
-  readonly takerReady: boolean;
-  /** One of the takers is connected and paused (by its owner or by a usage limit). */
-  readonly takerPaused: boolean;
-  /** The newest `last_seen_at` among the takers. */
-  readonly takersLastSeenAt: string | null;
+  /** The person's machines (not revoked). */
+  readonly machines: readonly WaitingMachineFacts[];
+  /** The core's current run and egress digests, or `null` while it cannot name them. */
+  readonly coreDigests: RunImageDigests | null;
 }
+
+/**
+ * The blockers `owner_worker_cannot_take` may carry: the core-known ones that are not a reason of
+ * their own. The local-only ones (`not_set_up`, `claude_rejected`, `launcher_unreachable`) never
+ * come from the core's half.
+ */
+export const CANNOT_TAKE_BLOCKERS: ReadonlySet<WorkerClaimBlocker> = new Set<WorkerClaimBlocker>([
+  'protocol_outdated',
+  'platform_images_unresolved',
+  'draining',
+  'usage_limited',
+  'images_missing',
+  'images_outdated',
+]);
+
+/** A machine's reason and, for `owner_worker_cannot_take`, the blockers that explain it. */
+export interface MachineWaiting {
+  readonly reason: Extract<OfferWaitingReason, `owner_${string}`>;
+  readonly blockers: readonly WorkerClaimBlocker[];
+}
+
+/**
+ * **The mapping from a machine's blockers to its reason** — the one place it is decided, pinned by
+ * `offer-waiting.test.ts`: `revoked`, `owner_disabled` and `no_eligible_project` are
+ * `owner_no_worker`; then `pick_only` (the owner's choice outranks a state) is `owner_pick_only`;
+ * otherwise the first in the vocabulary's order decides — `offline` is `owner_worker_offline`,
+ * `paused` is `owner_worker_paused`, and any of {@link CANNOT_TAKE_BLOCKERS} is
+ * `owner_worker_cannot_take` carrying those of them it has. No blocker at all on a machine that
+ * still did not take the run (its exclusion from the offer, a head start, the project's mode or
+ * run credential) is `owner_worker_cannot_take` with none: the execution read names the rest.
+ */
+export const reasonOfBlockers = (blockers: readonly WorkerClaimBlocker[]): MachineWaiting => {
+  if (
+    blockers.some((b) => b === 'revoked' || b === 'owner_disabled' || b === 'no_eligible_project')
+  ) {
+    return { reason: 'owner_no_worker', blockers: [] };
+  }
+  if (blockers.includes('pick_only')) {
+    return { reason: 'owner_pick_only', blockers: [] };
+  }
+  const first = orderClaimBlockers(blockers).find(
+    (b) => b === 'offline' || b === 'paused' || CANNOT_TAKE_BLOCKERS.has(b),
+  );
+  if (first === 'offline') return { reason: 'owner_worker_offline', blockers: [] };
+  if (first === 'paused') return { reason: 'owner_worker_paused', blockers: [] };
+  return {
+    reason: 'owner_worker_cannot_take',
+    blockers: orderClaimBlockers(blockers.filter((b) => CANNOT_TAKE_BLOCKERS.has(b))),
+  };
+};
+
+/** One machine's reason: not here is no machine for the project; else its claim blockers decide. */
+export const machineWaitingOf = (
+  machine: WaitingMachineFacts,
+  coreDigests: RunImageDigests | null,
+): MachineWaiting =>
+  !machine.here
+    ? { reason: 'owner_no_worker', blockers: [] }
+    : reasonOfBlockers(
+        coreClaimBlockersOf({
+          revoked: false,
+          ownerMayAct: machine.ownerMayAct,
+          online: machine.online,
+          protocolVersion: machine.protocolVersion,
+          hold: machine.hold,
+          usagePaused: machine.usagePaused,
+          heldDigests: machine.heldDigests,
+          coreDigests,
+          // This project's question is `here`; the worker's count of projects is not asked.
+          eligibleProjects: null,
+          pickOnly: !machine.policyTakes,
+        }),
+      );
+
+/** The person's reasons, nearest to taking the run first. */
+const MACHINE_REASON_RANK: readonly MachineWaiting['reason'][] = [
+  'owner_worker_cannot_take',
+  'owner_worker_paused',
+  'owner_worker_offline',
+  'owner_pick_only',
+  'owner_no_worker',
+];
 
 /**
  * The reason, or `null` when somebody can take the offer now. Pure, and the only place a fact
  * becomes a key: every value it returns is one of the contract's `OFFER_WAITING_REASONS`.
  */
-export const waitingReasonOf = (facts: OfferWaitingFacts): OfferWaitingReason | null => {
+export const waitingReasonOf = (facts: OfferWaitingFacts): OfferWaitingReason | null =>
+  personWaitingOf(facts)?.reason ?? null;
+
+interface PersonWaiting {
+  readonly reason: OfferWaitingReason;
+  readonly blockers: readonly WorkerClaimBlocker[];
+  readonly lastSeenAt: string | null;
+}
+
+const personWaitingOf = (facts: OfferWaitingFacts): PersonWaiting | null => {
   if (facts.serverTakes || facts.workerTakes) {
     return null;
   }
-  if (facts.person !== null) {
-    if (facts.takers === 0) {
-      return facts.pickOnly ? 'owner_pick_only' : 'owner_no_worker';
-    }
-    if (facts.takerReady) {
-      // The residual: the owner's machine is up and running, and the claim refuses it anyway.
-      return 'owner_no_worker';
-    }
-    return facts.takerPaused ? 'owner_worker_paused' : 'owner_worker_offline';
+  if (facts.person === null) {
+    return {
+      reason: facts.heldElsewhere ? 'assignee_not_linked' : 'no_taker',
+      blockers: [],
+      lastSeenAt: null,
+    };
   }
-  return facts.heldElsewhere ? 'assignee_not_linked' : 'no_taker';
+  const each = facts.machines.map((machine) => ({
+    machine,
+    waiting: machineWaitingOf(machine, facts.coreDigests),
+  }));
+  const reason =
+    MACHINE_REASON_RANK.find((rank) => each.some((entry) => entry.waiting.reason === rank)) ??
+    'owner_no_worker';
+  const chosen = each.filter((entry) => entry.waiting.reason === reason);
+  const seen = chosen
+    .map((entry) => entry.machine.lastSeenAt)
+    .filter((value): value is string => value !== null)
+    .sort();
+  return {
+    reason,
+    blockers: orderClaimBlockers(chosen.flatMap((entry) => entry.waiting.blockers)),
+    lastSeenAt: reason === 'owner_worker_offline' ? (seen.at(-1) ?? null) : null,
+  };
 };
 
-/** The DTO's `waiting`: the reason, and the one person, instant or name it is about. */
+/** The DTO's `waiting`: the reason, and the one person, instant, name or blockers it is about. */
 export const offerWaitingOf = (facts: OfferWaitingFacts): OfferWaiting => {
-  const reason = waitingReasonOf(facts);
+  const waiting = personWaitingOf(facts);
+  const reason = waiting?.reason ?? null;
   const aboutPerson = reason?.startsWith('owner_') === true;
   return {
     reason,
@@ -97,8 +222,9 @@ export const offerWaitingOf = (facts: OfferWaitingFacts): OfferWaiting => {
       aboutPerson && facts.person !== null
         ? { user_id: facts.person.userId as Id, name: facts.person.name }
         : null,
-    last_seen_at: reason === 'owner_worker_offline' ? facts.takersLastSeenAt : null,
+    last_seen_at: reason === 'owner_worker_offline' ? (waiting?.lastSeenAt ?? null) : null,
     assignee_name: reason === 'assignee_not_linked' ? facts.assigneeName : null,
+    blockers: reason === 'owner_worker_cannot_take' ? [...(waiting?.blockers ?? [])] : [],
   };
 };
 
@@ -109,11 +235,6 @@ const ACTIVE_STATUSES = `array[${ACTIVE_RUN_STATUSES.map((status) => `'${status}
 const connectedSql = (alias: string): string =>
   `(${alias}.last_seen_at is not null
      and ${alias}.last_seen_at > now() - make_interval(secs => ${WORKER_CONNECTED_SECONDS}))`;
-
-/** The `workers` row `alias` is paused — by its owner, or by a usage limit still ahead. */
-const pausedSql = (alias: string): string =>
-  `(${alias}.manually_paused_at is not null
-     or (${alias}.paused_until is not null and ${alias}.paused_until > now()))`;
 
 /** The server claimant takes offer `o` now. */
 const SERVER_TAKES = `(exists (select 1 from server_claimants sc where sc.expires_at > now())
@@ -150,21 +271,47 @@ const PERSON_OF_OFFER = `(case when o.kind = 'ask'
               limit 1)
        else t.owner_user_id end)`;
 
-/** The person's machines, each: does it take the project's runs by itself, only by a pick, and how. */
-const PERSON_MACHINES = `(
-  select count(*) filter (where f.here and f.policy_takes)::int as takers,
-         coalesce(bool_or(f.here and not f.policy_takes), false) as pick_only,
-         coalesce(bool_or(f.here and f.policy_takes and f.connected and not f.paused), false) as ready,
-         coalesce(bool_or(f.here and f.policy_takes and f.connected and f.paused), false) as paused,
-         max(f.last_seen_at) filter (where f.here and f.policy_takes) as last_seen_at
-    from (select pw.last_seen_at,
-                 (${pipelineAdapters.userMayRunInProjectSql('pw.user_id', 'o.project_id')}
-                  and ${pipelineAdapters.projectListTakesSql('pw', 'o.project_id')}) as here,
-                 ${pipelineAdapters.workerPolicyTakesSql('pw.id')} as policy_takes,
-                 ${connectedSql('pw')} as connected,
-                 ${pausedSql('pw')} as paused
-            from workers pw
-           where pw.user_id = person.user_id and pw.revoked_at is null) f)`;
+/**
+ * The person's machines (not revoked), each as the claim facts the Workers screen reads
+ * (`worker-queries.ts`'s `CLAIM_FACTS_OF_WORKER_ROW`: the online window, `USER_MAY_ACT_SQL`, the
+ * newest `worker.pause` row's `via`, a usage pause still ahead) and whether it is **here** — its
+ * user may run in the project and its project list takes it — and its policy admits the offer.
+ */
+const PERSON_MACHINES = `coalesce((
+  select json_agg(json_build_object(
+           'here', (${pipelineAdapters.userMayRunInProjectSql('pw.user_id', 'o.project_id')}
+                    and ${pipelineAdapters.projectListTakesSql('pw', 'o.project_id')}),
+           'policy_takes', ${pipelineAdapters.workerPolicyTakesSql('pw.id')},
+           'owner_may_act', ${pipelineAdapters.USER_MAY_ACT_SQL},
+           'online', ${connectedSql('pw')},
+           'protocol_version', pw.protocol_version,
+           'manually_paused', pw.manually_paused_at is not null,
+           'hold_via', case when pw.manually_paused_at is null then null
+                            else (select h.params ->> 'via'
+                                    from human_actions h
+                                   where h.action = 'worker.pause'
+                                     and h.params ->> 'worker_id' = pw.id::text
+                                   order by h.created_at desc, h.id desc
+                                   limit 1) end,
+           'usage_paused', (pw.paused_until is not null and pw.paused_until > now()),
+           'held', pw.image_digests,
+           'last_seen_at', pw.last_seen_at) order by pw.id)
+    from workers pw
+    join users u on u.id = pw.user_id
+   where pw.user_id = person.user_id and pw.revoked_at is null), '[]'::json)`;
+
+interface MachineRow {
+  readonly here: boolean;
+  readonly policy_takes: boolean;
+  readonly owner_may_act: boolean;
+  readonly online: boolean;
+  readonly protocol_version: number | null;
+  readonly manually_paused: boolean;
+  readonly hold_via: string | null;
+  readonly usage_paused: boolean;
+  readonly held: unknown;
+  readonly last_seen_at: string | null;
+}
 
 interface WaitingRow extends Record<string, unknown> {
   readonly run_id: string;
@@ -175,27 +322,37 @@ interface WaitingRow extends Record<string, unknown> {
   readonly person_name: string | null;
   readonly held_elsewhere: boolean;
   readonly assignee_name: string | null;
-  readonly takers: number | null;
-  readonly pick_only: boolean | null;
-  readonly ready: boolean | null;
-  readonly paused: boolean | null;
-  readonly last_seen_at: Date | string | null;
+  readonly machines: readonly MachineRow[];
 }
 
 const isoOf = (value: Date | string | null): string | null =>
   value === null ? null : new Date(value).toISOString();
 
-export const factsOf = (row: WaitingRow): OfferWaitingFacts => ({
+const machineFactsOf = (row: MachineRow): WaitingMachineFacts => ({
+  here: row.here === true,
+  policyTakes: row.policy_takes === true,
+  ownerMayAct: row.owner_may_act === true,
+  online: row.online === true,
+  protocolVersion: row.protocol_version ?? null,
+  hold: holdOf(row.manually_paused === true, row.hold_via ?? null),
+  usagePaused: row.usage_paused === true,
+  heldDigests: Array.isArray(row.held)
+    ? row.held.filter((digest): digest is string => typeof digest === 'string')
+    : [],
+  lastSeenAt: isoOf(row.last_seen_at ?? null),
+});
+
+export const factsOf = (
+  row: WaitingRow,
+  coreDigests: RunImageDigests | null,
+): OfferWaitingFacts => ({
   serverTakes: row.server_takes === true,
   workerTakes: row.worker_takes === true,
   person: row.person_id === null ? null : { userId: row.person_id, name: row.person_name ?? '' },
   heldElsewhere: row.held_elsewhere === true,
   assigneeName: row.assignee_name ?? null,
-  takers: Number(row.takers ?? 0),
-  pickOnly: row.pick_only === true,
-  takerReady: row.ready === true,
-  takerPaused: row.paused === true,
-  takersLastSeenAt: isoOf(row.last_seen_at ?? null),
+  machines: (row.person_id === null ? [] : (row.machines ?? [])).map(machineFactsOf),
+  coreDigests,
 });
 
 /** The statement, over the open offers of live runs that `filter` selects. */
@@ -212,7 +369,7 @@ const waitingRows = async (
            (o.kind = 'stage' and t.owner_user_id is null
             and ${sql.raw(pipelineAdapters.taskHeldElsewhereSql('t'))}) as held_elsewhere,
            t.ticket_assignee ->> 'display_name' as assignee_name,
-           pm.takers, pm.pick_only, pm.ready, pm.paused, pm.last_seen_at
+           ${sql.raw(PERSON_MACHINES)} as machines
       from run_offers o
       join runs r on r.id = o.run_id
       join tasks t on t.id = o.task_id
@@ -220,7 +377,6 @@ const waitingRows = async (
                          ${coreDigests?.egress ?? null}::text as egress) cd
       cross join lateral (select ${sql.raw(PERSON_OF_OFFER)} as user_id) person
       left join users pu on pu.id = person.user_id
-      left join lateral ${sql.raw(PERSON_MACHINES)} pm on true
      where o.state = 'open'
        and r.status = any(${sql.raw(ACTIVE_STATUSES)})
        and ${filter}`);
@@ -243,7 +399,7 @@ export const waitingForRuns = async (
     return new Map();
   }
   const rows = await waitingRows(database, sql`o.run_id in (${uuidList(runIds)})`, coreDigests);
-  return new Map(rows.map((row) => [row.run_id, offerWaitingOf(factsOf(row))]));
+  return new Map(rows.map((row) => [row.run_id, offerWaitingOf(factsOf(row, coreDigests))]));
 };
 
 /**
@@ -264,7 +420,7 @@ export const waitingForTasks = async (
     sql`o.kind = 'stage' and o.task_id in (${uuidList(taskIds)})`,
     coreDigests,
   );
-  return new Map(rows.map((row) => [row.task_id, offerWaitingOf(factsOf(row))]));
+  return new Map(rows.map((row) => [row.task_id, offerWaitingOf(factsOf(row, coreDigests))]));
 };
 
 /**

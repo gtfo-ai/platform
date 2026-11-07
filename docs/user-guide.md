@@ -826,7 +826,9 @@ list.
 **Why a run waits** (since S-26.5, read only — the words on the page come with S-26.8b): while a
 task's run waits for a machine or the server to start it, the task, its board card and its row on
 *Agents* carry `waiting` — why nobody takes it now: its owner's machine is offline (with when it was
-last seen) or paused, the owner has no machine that takes this project or only picks runs by hand,
+last seen) or paused, the owner's machine is on but cannot take it (another build's images, no images
+yet, a usage limit, a drain — `waiting.blockers` says which, in the Workers screen's words), the owner
+has no machine that takes this project or only picks runs by hand,
 no machine takes unassigned tasks in this project, or the tracker assigns it to somebody who is not
 linked to a platform account, so only a machine that takes everyone's tasks can run it. A task that
 somebody gave back is unassigned, whatever the tracker still shows. `waiting.reason` is empty when a

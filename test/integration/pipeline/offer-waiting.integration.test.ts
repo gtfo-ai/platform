@@ -147,7 +147,11 @@ const identity = async (userId: Id | null): Promise<string> => {
   return externalId;
 };
 
-type MachineState = 'connected' | 'offline' | 'paused' | 'stale';
+/**
+ * A machine's state: connected and taking; seen two hours ago; paused by its owner; holding another
+ * build's images; holding none; paused by a usage limit still ahead.
+ */
+type MachineState = 'connected' | 'offline' | 'paused' | 'stale' | 'missing' | 'usage_limited';
 
 const machine = async (
   userId: Id,
@@ -156,13 +160,16 @@ const machine = async (
   scope: readonly Id[] | null = null,
 ): Promise<{ readonly id: Id; readonly held: readonly string[]; readonly connected: boolean }> => {
   const id = nextId();
-  const held = state === 'stale' ? STALE : HELD;
+  const held = state === 'stale' ? STALE : state === 'missing' ? [] : HELD;
   await pool.query(
     `insert into workers (id, user_id, name, credential_hash, last_seen_at, claim_project_ids,
-                          claim_policy, image_digests, manually_paused_at)
+                          claim_policy, image_digests, manually_paused_at, paused_until,
+                          paused_reason)
      values ($1, $2, 'laptop', $3,
              case when $4 then now() - interval '2 hours' else now() end,
-             $5::uuid[], $6, $7::jsonb, case when $8 then now() end)`,
+             $5::uuid[], $6, $7::jsonb, case when $8 then now() end,
+             case when $9 then now() + interval '1 hour' end,
+             case when $9 then 'usage_limited' end)`,
     [
       id,
       userId,
@@ -172,6 +179,7 @@ const machine = async (
       policy,
       JSON.stringify(held),
       state === 'paused',
+      state === 'usage_limited',
     ],
   );
   return { id, held, connected: state !== 'offline' };
@@ -224,30 +232,49 @@ const own = async (
   expect(written).toBe(true);
 };
 
-type Routing = 'workers' | 'server';
+/**
+ * Open to workers an hour ago (server never); to the server an hour ago (workers never); or inside
+ * the assignee's **head start** — workers and the server from an hour ahead, the assignee now.
+ */
+type Routing = 'workers' | 'server' | 'headstart';
 
 const routingOf = (routing: Routing, assignee: Id | null): OfferRouting =>
-  routing === 'workers'
+  routing === 'headstart'
     ? {
         assigneeUserId: assignee,
-        assigneeUntil: null,
-        serverFrom: null,
-        workersFrom: at(-60),
+        assigneeUntil: at(60),
+        serverFrom: at(60),
+        workersFrom: at(60),
         expiresAt: at(60 * 24),
       }
-    : {
-        assigneeUserId: assignee,
-        assigneeUntil: null,
-        serverFrom: at(-60),
-        workersFrom: null,
-        expiresAt: at(60 * 24),
-      };
+    : routing === 'workers'
+      ? {
+          assigneeUserId: assignee,
+          assigneeUntil: null,
+          serverFrom: null,
+          workersFrom: at(-60),
+          expiresAt: at(60 * 24),
+        }
+      : {
+          assigneeUserId: assignee,
+          assigneeUntil: null,
+          serverFrom: at(-60),
+          workersFrom: null,
+          expiresAt: at(60 * 24),
+        };
 
 /** A `created` run of `taskId` with an `open` offer; an ask's names its asker. */
 const offered = async (
   projectId: Id,
   taskId: Id,
-  options: { readonly routing?: Routing; readonly askedBy?: Id } = {},
+  options: {
+    readonly routing?: Routing;
+    readonly askedBy?: Id;
+    /** The head start's assignee; an ask's is its asker. */
+    readonly assignee?: Id;
+    /** Workers the offer is not for (a lost run's exclusion, TD-031 §12). */
+    readonly excluded?: readonly Id[];
+  } = {},
 ): Promise<Id> => {
   const runId = nextId();
   const kind = options.askedBy === undefined ? 'stage' : 'ask';
@@ -289,7 +316,8 @@ const offered = async (
     attempt: 1,
     kind,
     offeredAt: at(-1),
-    routing: routingOf(options.routing ?? 'workers', options.askedBy ?? null),
+    routing: routingOf(options.routing ?? 'workers', options.assignee ?? options.askedBy ?? null),
+    ...(options.excluded === undefined ? {} : { excludedWorkerIds: options.excluded }),
   });
   if (options.askedBy !== undefined) {
     const ask = await one<{ id: string }>(
@@ -366,13 +394,17 @@ type OwnerCase = 'mine' | 'another' | 'unowned' | 'released' | 'held' | 'ask';
 
 /**
  * One fixture: a project with Alice (and Bob, the other owner), a task in the given owner case,
- * Alice's one machine (or none), and an open offer routed as given.
+ * Alice's machine (or none, and any `extra` ones), and an open offer routed as given — a head start
+ * goes to **Bob** (the owner before a reassignment, TD-031's amendment item 6), and `exclude` makes
+ * the offer not for Alice's first machine.
  */
 const fixture = async (input: {
   readonly owner: OwnerCase;
   readonly policy: WorkerClaimPolicy | null;
   readonly state: MachineState;
   readonly routing: Routing;
+  readonly extra?: readonly { readonly policy: WorkerClaimPolicy; readonly state: MachineState }[];
+  readonly exclude?: boolean;
 }) => {
   const projectId = await project();
   const alice = await member(projectId, 'Alice');
@@ -388,9 +420,15 @@ const fixture = async (input: {
     await own(taskId, null, { externalId: await identity(null), name: 'Jan Novák' });
   }
   const machines = input.policy === null ? [] : [await machine(alice, input.policy, input.state)];
+  for (const extra of input.extra ?? []) {
+    machines.push(await machine(alice, extra.policy, extra.state));
+  }
+  const first = machines[0];
   const runId = await offered(projectId, taskId, {
     routing: input.routing,
     ...(input.owner === 'ask' ? { askedBy: alice } : {}),
+    ...(input.routing === 'headstart' ? { assignee: bob } : {}),
+    ...(input.exclude === true && first !== undefined ? { excluded: [first.id] } : {}),
   });
   return { projectId, taskId, runId, alice, bob, machines };
 };
@@ -409,6 +447,7 @@ describe('each reason from a fixture, and null when somebody can take it now (cr
       reason: 'owner_worker_offline',
       user: { user_id: offline.alice, name: 'Alice' },
       assignee_name: null,
+      blockers: [],
     });
     const lastSeen = Date.parse(read?.last_seen_at ?? '');
     expect(Math.abs(lastSeen - (Date.now() - 2 * 3_600_000))).toBeLessThan(5 * 60_000);
@@ -424,6 +463,7 @@ describe('each reason from a fixture, and null when somebody can take it now (cr
       user: { user_id: paused.alice, name: 'Alice' },
       last_seen_at: null,
       assignee_name: null,
+      blockers: [],
     });
 
     const none = await fixture({
@@ -474,6 +514,7 @@ describe('each reason from a fixture, and null when somebody can take it now (cr
       user: null,
       last_seen_at: null,
       assignee_name: null,
+      blockers: [],
     });
     const held = await fixture({
       owner: 'held',
@@ -486,6 +527,7 @@ describe('each reason from a fixture, and null when somebody can take it now (cr
       user: null,
       last_seen_at: null,
       assignee_name: 'Jan Novák',
+      blockers: [],
     });
   });
 
@@ -502,6 +544,7 @@ describe('each reason from a fixture, and null when somebody can take it now (cr
       user: null,
       last_seen_at: null,
       assignee_name: null,
+      blockers: [],
     });
     const serverRouted = await fixture({
       owner: 'mine',
@@ -568,6 +611,146 @@ describe('each reason from a fixture, and null when somebody can take it now (cr
   });
 });
 
+describe('the owner’s machine is up and the claim refuses it (review of #105)', () => {
+  it('names the Workers screen’s blockers: outdated, missing, a usage limit, unresolved images', async () => {
+    await claimantPresent(false);
+    const cases: readonly [MachineState, readonly string[]][] = [
+      ['stale', ['images_outdated']],
+      ['missing', ['images_missing']],
+      ['usage_limited', ['usage_limited']],
+    ];
+    for (const [state, blockers] of cases) {
+      const entry = await fixture({ owner: 'mine', policy: 'mine', state, routing: 'workers' });
+      expect(await waitingOfRun(entry.runId), state).toEqual({
+        reason: 'owner_worker_cannot_take',
+        user: { user_id: entry.alice, name: 'Alice' },
+        last_seen_at: null,
+        assignee_name: null,
+        blockers,
+      });
+    }
+    // The core cannot name its own images: every machine's claim is refused for it.
+    const unresolved = await fixture({
+      owner: 'mine',
+      policy: 'mine',
+      state: 'connected',
+      routing: 'workers',
+    });
+    expect(
+      (await waitingForRuns(drizzled, [unresolved.runId], null)).get(unresolved.runId),
+    ).toMatchObject({
+      reason: 'owner_worker_cannot_take',
+      blockers: ['platform_images_unresolved'],
+    });
+  });
+
+  it('reads a disabled owner’s machine as no machine', async () => {
+    await claimantPresent(false);
+    const entry = await fixture({
+      owner: 'mine',
+      policy: 'everything',
+      state: 'connected',
+      routing: 'workers',
+    });
+    expect((await waitingOfRun(entry.runId))?.reason).toBeNull();
+    await pool.query("update users set status = 'disabled' where id = $1", [entry.alice]);
+    expect(await admitted(entry.runId, false, entry.machines)).toBe(false);
+    expect(await waitingOfRun(entry.runId)).toMatchObject({
+      reason: 'owner_no_worker',
+      blockers: [],
+    });
+  });
+
+  /**
+   * One parity case each for what the matrix's single machine cannot show: a head start, an
+   * excluded worker, and an owner with two machines — each checked against the claim's probes.
+   */
+  it('holds the parity for a head start, an excluded worker and an owner with two machines', async () => {
+    await claimantPresent(false);
+    const check = async (
+      entry: Awaited<ReturnType<typeof fixture>>,
+      expected: { readonly reason: string | null; readonly blockers?: readonly string[] },
+    ) => {
+      const read = await waitingOfRun(entry.runId);
+      expect(read?.reason === null).toBe(await admitted(entry.runId, false, entry.machines));
+      expect(read).toMatchObject({ reason: expected.reason, blockers: expected.blockers ?? [] });
+    };
+    // The head start is Bob's (the owner before a reassignment): Alice's machine waits it out.
+    await check(
+      await fixture({ owner: 'mine', policy: 'mine', state: 'connected', routing: 'headstart' }),
+      {
+        reason: 'owner_worker_cannot_take',
+      },
+    );
+    // An unowned task in Bob's head start: Alice's machine takes everything, and still waits.
+    await check(
+      await fixture({
+        owner: 'unowned',
+        policy: 'everything',
+        state: 'connected',
+        routing: 'headstart',
+      }),
+      { reason: 'no_taker' },
+    );
+    // The offer is not for Alice's machine (it lost the run before).
+    await check(
+      await fixture({
+        owner: 'mine',
+        policy: 'mine',
+        state: 'connected',
+        routing: 'workers',
+        exclude: true,
+      }),
+      { reason: 'owner_worker_cannot_take' },
+    );
+    // …but her second machine takes it.
+    await check(
+      await fixture({
+        owner: 'mine',
+        policy: 'mine',
+        state: 'connected',
+        routing: 'workers',
+        exclude: true,
+        extra: [{ policy: 'mine', state: 'connected' }],
+      }),
+      { reason: null },
+    );
+    // Two machines: one offline, one paused — the paused one is nearer to taking it.
+    await check(
+      await fixture({
+        owner: 'mine',
+        policy: 'mine',
+        state: 'offline',
+        routing: 'workers',
+        extra: [{ policy: 'everything', state: 'paused' }],
+      }),
+      { reason: 'owner_worker_paused' },
+    );
+    // Two machines: one paused, one on another build — the build is what to fix.
+    await check(
+      await fixture({
+        owner: 'mine',
+        policy: 'mine',
+        state: 'paused',
+        routing: 'workers',
+        extra: [{ policy: 'mine', state: 'stale' }],
+      }),
+      { reason: 'owner_worker_cannot_take', blockers: ['images_outdated'] },
+    );
+    // Two machines: one only picks, one offline — the offline one would take it.
+    await check(
+      await fixture({
+        owner: 'mine',
+        policy: 'pick_only',
+        state: 'connected',
+        routing: 'workers',
+        extra: [{ policy: 'mine', state: 'offline' }],
+      }),
+      { reason: 'owner_worker_offline' },
+    );
+  });
+});
+
 describe('the parity: a null reason ⇔ some claimant’s predicates admit the offer now (criterion 2)', () => {
   it('agrees with the claim itself over the matrix, and reaches every reason', async () => {
     const OWNERS: readonly OwnerCase[] = ['mine', 'another', 'unowned', 'released', 'held', 'ask'];
@@ -578,8 +761,15 @@ describe('the parity: a null reason ⇔ some claimant’s predicates admit the o
       'mine',
       'pick_only',
     ];
-    const STATES: readonly MachineState[] = ['connected', 'offline', 'paused', 'stale'];
-    const ROUTINGS: readonly Routing[] = ['workers', 'server'];
+    const STATES: readonly MachineState[] = [
+      'connected',
+      'offline',
+      'paused',
+      'stale',
+      'missing',
+      'usage_limited',
+    ];
+    const ROUTINGS: readonly Routing[] = ['workers', 'server', 'headstart'];
     const cases: Awaited<ReturnType<typeof fixture>>[] = [];
     const labels: string[] = [];
     for (const owner of OWNERS) {
