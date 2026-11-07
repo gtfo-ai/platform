@@ -306,6 +306,13 @@ export const taskStages = pgTable('task_stages', {
    */
   ciEnding: text('ci_ending'),
   /**
+   * What a CI **pass** left unstarted (S-27.2, TD-036 decision 5, migration 0109):
+   * `ciManualNotRunSchema`'s object, written once by `recordCiManualNotRun` in the settling
+   * transaction while the row is open; null on every other row. Typed `unknown` because every reader
+   * parses it with that schema.
+   */
+  ciManualNotRun: jsonb('ci_manual_not_run').$type<unknown>(),
+  /**
    * The ticket's status when the human-return window first read it during this entry into a human
    * stage (WP-178 review, migration 0089, TD-029 decision 7's amendment (a)). Null on every other
    * row. Written once (`coalesce`) by `observeHumanStageStatus`.

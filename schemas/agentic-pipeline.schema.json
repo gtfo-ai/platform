@@ -178,6 +178,7 @@
         "mr.approved",
         "mr.review.comment",
         "ci.pipeline.finished",
+        "ci.pipeline.held",
         "default_branch.moved",
         "budget.threshold.reached",
         "budget.exhausted",

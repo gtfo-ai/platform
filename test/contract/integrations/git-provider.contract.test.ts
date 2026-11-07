@@ -113,6 +113,20 @@ runGitProviderContract({
       coveragePct: 81.5,
     });
 
+    // S-27.2: AUT-6655's shape — a pipeline held at a blocking manual release job, on a head of
+    // its own; the build and the test job succeeded.
+    const HELD_SHA = 'e'.repeat(40);
+    port.setPipeline({
+      project: PROJECT,
+      headSha: HELD_SHA,
+      status: 'manual',
+      jobs: [
+        { name: 'build_composer', status: 'success', stage: 'build' },
+        { name: 'phpstan', status: 'success', stage: 'test' },
+        { name: 'sentry-release-commit', status: 'manual', stage: 'release' },
+      ],
+    });
+
     // Three more merge requests, one per mergeability state. The seeded `null` is the one the
     // rebase gate (WP-26) turns on, and the fake can only reach it through `setMergeability`.
     const openOn = async (branch: string) =>
@@ -388,6 +402,12 @@ runGitProviderContract({
       },
       pipelineSha: existing.head_sha,
       failingJobName: FAILING_JOB,
+      heldPipeline: {
+        sha: HELD_SHA,
+        releaseJob: 'sentry-release-commit',
+        releaseStage: 'release',
+        testJob: 'phpstan',
+      },
       missingJobLogRef: 'log:does-not-exist',
       // The fake writes `rev-<n>`; this one is shaped like a handle it issues and was never
       // issued. (The fake identifies a credential by its value, so the foreign *value* the suite
@@ -432,6 +452,7 @@ runGitProviderContract({
         }),
       emitPipelineFinished: () =>
         port.emitPipelineFinished({ project: PROJECT, headSha: existing.head_sha }),
+      emitPipelineHeld: () => port.emitPipelineFinished({ project: PROJECT, headSha: HELD_SHA }),
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,
       cleanup: async () => {},

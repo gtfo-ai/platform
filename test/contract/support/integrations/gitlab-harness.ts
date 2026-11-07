@@ -24,6 +24,8 @@ import {
   FOREIGN_TOKEN_ID,
   GITLAB_HOST,
   GITLAB_PROJECT,
+  HELD_RELEASE_JOB,
+  heldPipelineHookBody,
   MERGEABLE_IID,
   MISSING_JOB_LOG_REF,
   MISSING_MR_IID,
@@ -31,6 +33,7 @@ import {
   mergedHookBody,
   pipelineHookBody,
   reviewCommentHookBody,
+  SHA_HELD,
   SHA_MR7,
   signedDelivery,
   UNKNOWN_IID,
@@ -268,6 +271,13 @@ export const gitlabReplayContext = (
     },
     pipelineSha: SHA_MR7,
     failingJobName: FAILING_JOB,
+    // S-27.2: `pipelines-manual.json` records pipeline 907 held at `sentry-release-commit`.
+    heldPipeline: {
+      sha: SHA_HELD,
+      releaseJob: HELD_RELEASE_JOB,
+      releaseStage: 'release',
+      testJob: 'phpstan',
+    },
     // Provider-shaped: GitLab's log handle is the numeric job id, not the fake's `log:<id>`.
     missingJobLogRef: MISSING_JOB_LOG_REF,
     // GitLab's handle is the whole revocation address, `<project>#<token_id>`. Token 59 is the
@@ -298,6 +308,7 @@ export const gitlabReplayContext = (
     emitMerged: () => signedDelivery('Merge Request Hook', mergedHookBody()),
     emitReviewComment: (text) => signedDelivery('Note Hook', reviewCommentHookBody(text)),
     emitPipelineFinished: () => signedDelivery('Pipeline Hook', pipelineHookBody()),
+    emitPipelineHeld: () => signedDelivery('Pipeline Hook', heldPipelineHookBody()),
     projectId: GITLAB_PROJECT_ID,
     integrationId: GITLAB_INTEGRATION_ID,
     cleanup: async () => {},

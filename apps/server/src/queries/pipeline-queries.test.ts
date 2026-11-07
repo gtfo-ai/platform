@@ -21,6 +21,7 @@ import { runStatusSchema, taskStageStateSchema, taskStateSchema } from '@platfor
 import { describe, expect, it } from 'vitest';
 import {
   CLOSED_TASK_STATES,
+  ciManualNotRunOf,
   gateWaitOf,
   lastGateWaitOf,
   latestProgressOfRow,
@@ -438,5 +439,47 @@ describe('gate_wait on the task detail', () => {
       expect(failure, JSON.stringify(corrupt)).toBeInstanceOf(UnprojectableRowError);
       expect((failure as Error).message).toContain('task_stages.ci_pending_read');
     }
+  });
+});
+
+describe('ci_manual_not_run on the task detail (S-27.2, TD-036 decision 5)', () => {
+  type Row = Parameters<typeof ciManualNotRunOf>[0][number];
+  const TASK = '00000000-0000-4000-8000-000000006655';
+  const NOT_RUN = {
+    pipeline_id: '3038234623',
+    pipeline_url: 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
+    pipeline_status: 'manual',
+    jobs: [{ name: 'sentry-release-commit', stage: 'release', url: null }],
+    checked_at: '2026-11-07T09:00:00.000Z',
+  };
+  const row = (over: Partial<Row> = {}): Row =>
+    ({
+      taskId: TASK,
+      stage: 'ci_gate',
+      attempt: 1,
+      state: 'completed',
+      ciManualNotRun: NOT_RUN,
+      ...over,
+    }) as unknown as Row;
+
+  it('serves the newest passed ci_gate attempt’s value, and null when it recorded none', () => {
+    expect(ciManualNotRunOf([row()])).toEqual(NOT_RUN);
+    expect(ciManualNotRunOf([row(), row({ attempt: 2, ciManualNotRun: null })])).toBeNull();
+    // An open or failed later attempt is not a pass: the passed one is still the answer.
+    expect(
+      ciManualNotRunOf([row(), row({ attempt: 2, state: 'running', ciManualNotRun: null })]),
+    ).toEqual(NOT_RUN);
+    expect(ciManualNotRunOf([row({ state: 'returned' })])).toBeNull();
+    expect(ciManualNotRunOf([row({ stage: 'rebase_gate' })])).toBeNull();
+    expect(ciManualNotRunOf([])).toBeNull();
+  });
+
+  it('refuses a stored value that does not parse, by name, never as null', () => {
+    expect(() => ciManualNotRunOf([row({ ciManualNotRun: { ...NOT_RUN, extra: true } })])).toThrow(
+      UnprojectableRowError,
+    );
+    expect(() => ciManualNotRunOf([row({ ciManualNotRun: { ...NOT_RUN, jobs: [] } })])).toThrow(
+      /ci_manual_not_run/,
+    );
   });
 });

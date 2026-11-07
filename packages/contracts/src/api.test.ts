@@ -4,6 +4,7 @@ import {
   apiErrorSchema,
   auditEntrySchema,
   businessInterviewRequestSchema,
+  ciManualNotRunSchema,
   createProjectRequestSchema,
   createTaskRequestSchema,
   decideApprovalRequestSchema,
@@ -15,6 +16,7 @@ import {
   kbHealthResponseSchema,
   lifecycleErrorCodeSchema,
   listTasksQuerySchema,
+  MAX_CI_MANUAL_NOT_RUN_JOBS,
   MAX_TASK_STOP_RECORDED_CHARS,
   MAX_TICKET_KEY_CHARS,
   orgAuditQuerySchema,
@@ -960,6 +962,48 @@ describe('the list envelopes and the KB health report', () => {
     ] as const) {
       expect(taskDetailResponseSchema.shape[key].safeParse(undefined).success, key).toBe(false);
     }
+  });
+
+  it('publishes what a CI pass left unstarted strictly and bounded, or null (S-27.2, TD-036 decision 5)', () => {
+    const notRun = {
+      pipeline_id: '3038234623',
+      pipeline_url: 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
+      pipeline_status: 'manual',
+      jobs: [
+        {
+          name: 'sentry-release-commit',
+          stage: 'release',
+          url: 'https://gitlab.example.test/acme/api/-/jobs/9003',
+        },
+      ],
+      checked_at: AT,
+    };
+    expect(ciManualNotRunSchema.parse(notRun)).toEqual(notRun);
+    const field = taskDetailResponseSchema.shape.ci_manual_not_run;
+    expect(field.safeParse(notRun).success).toBe(true);
+    expect(field.safeParse(null).success).toBe(true);
+    // Optional on the wire because the SPA's fixtures predate it; the task read always sends it.
+    expect(field.safeParse(undefined).success).toBe(true);
+    const job = notRun.jobs[0] as (typeof notRun.jobs)[number];
+    for (const refused of [
+      { ...notRun, extra: true },
+      { ...notRun, jobs: [] },
+      { ...notRun, jobs: Array.from({ length: MAX_CI_MANUAL_NOT_RUN_JOBS + 1 }, () => job) },
+      { ...notRun, jobs: [{ ...job, name: 'x'.repeat(101) }] },
+      { ...notRun, jobs: [{ ...job, url: 'javascript:alert(1)' }] },
+      { ...notRun, jobs: [{ ...job, extra: 1 }] },
+      { ...notRun, pipeline_url: 'javascript:alert(1)' },
+      { ...notRun, pipeline_id: 'x'.repeat(256) },
+      { ...notRun, pipeline_status: 'blocked' },
+    ]) {
+      expect(field.safeParse(refused).success, JSON.stringify(refused).slice(0, 80)).toBe(false);
+    }
+    expect(
+      ciManualNotRunSchema.safeParse({
+        ...notRun,
+        jobs: Array.from({ length: MAX_CI_MANUAL_NOT_RUN_JOBS }, () => ({ ...job, stage: null })),
+      }).success,
+    ).toBe(true);
   });
 
   it('publishes one health report, with its findings bounded to the kinds the domain computes', () => {

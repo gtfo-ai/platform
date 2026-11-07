@@ -36,6 +36,7 @@ const job = (
   id: '9003',
   name: 'sentry-release-commit',
   status: 'manual',
+  stage: 'release',
   log_ref: '9003',
   allow_failure: false,
   web_url: 'https://gitlab.example.test/acme/api/-/jobs/9003',

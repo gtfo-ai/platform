@@ -147,6 +147,27 @@
             }
           },
           "additionalProperties": false
+        },
+        "ci": {
+          "type": "object",
+          "properties": {
+            "required_manual_jobs": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "all"
+                },
+                {
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/anon_fb7dd855"
+                  }
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -868,6 +889,11 @@
         "pipeline",
         "none"
       ]
+    },
+    "anon_fb7dd855": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
     }
   }
 }

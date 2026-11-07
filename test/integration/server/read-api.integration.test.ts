@@ -1328,6 +1328,45 @@ describe('the task projection', () => {
       (item) => item.id === timedOut,
     );
     expect(parkedCard?.stop).toEqual(parked?.stop);
+
+    // S-27.2 (TD-036 decision 5): a CI pass over AUT-6655's held pipeline names what it left
+    // unstarted, off the newest passed attempt — the task at Ready, the attempt closed `completed`.
+    const ready = await taskAt('BACK-4', 'ready_for_merge', 'ready_for_merge');
+    await stageRow(ready, {
+      stage: 'ci_gate',
+      attempt: 1,
+      state: 'completed',
+      outcome: 'protected_paths_clean',
+      reason: null,
+      returnedTo: null,
+      signature: null,
+      exited: '2026-11-07T12:00:00.000Z',
+    });
+    expect((await findTaskDetail(drizzled, ready))?.ci_manual_not_run).toBeNull();
+    const NOT_RUN = {
+      pipeline_id: '3038234623',
+      pipeline_url: 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
+      pipeline_status: 'manual',
+      jobs: [
+        {
+          name: 'sentry-release-commit',
+          stage: 'release',
+          url: 'https://gitlab.example.test/acme/api/-/jobs/9003',
+        },
+      ],
+      checked_at: '2026-11-07T11:59:30.000Z',
+    };
+    await pool.query(
+      `update task_stages set ci_manual_not_run = $2::jsonb where task_id = $1 and stage = 'ci_gate'`,
+      [ready, JSON.stringify(NOT_RUN)],
+    );
+    expect((await findTaskDetail(drizzled, ready))?.ci_manual_not_run).toEqual(NOT_RUN);
+    // A stored value the schema refuses is refused by name, never served as null.
+    await pool.query(
+      `update task_stages set ci_manual_not_run = $2::jsonb where task_id = $1 and stage = 'ci_gate'`,
+      [ready, JSON.stringify({ ...NOT_RUN, pipeline_url: 'javascript:alert(1)' })],
+    );
+    await expect(findTaskDetail(drizzled, ready)).rejects.toThrow(/ci_manual_not_run/);
   });
 
   /**

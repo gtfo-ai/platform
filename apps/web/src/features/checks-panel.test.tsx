@@ -584,6 +584,46 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     );
   });
 
+  /**
+   * S-27.2 (TD-036 decision 5): a CI pass over a pipeline held at a release step says which manual
+   * job was not run — the item's value, from `ci_manual_not_run` — and a pass that left none, or a
+   * gate that has not passed, says what it said before.
+   */
+  it('reads CI passed — the manual job X was not run off the latest pass (S-27.2)', async () => {
+    const notRun = {
+      pipeline_id: '3038234623',
+      pipeline_url: null,
+      pipeline_status: 'manual' as const,
+      jobs: [{ name: 'sentry-release-commit', stage: 'release', url: null }],
+      checked_at: '2026-09-12T10:00:00.000Z',
+    };
+    const passed = await render$(
+      detailWith({
+        stages: [stage('ci_gate', 1, 'completed', 'protected_paths_clean')],
+        artifacts: [],
+        ci_manual_not_run: notRun,
+      }),
+    );
+    await waitFor(() => expect(passed.text()).toContain('CI status'));
+    expect(passed.text()).toContain(
+      'CI statusCI passed — the manual job sentry-release-commit was not run',
+    );
+    cleanup();
+    const checking = await render$(
+      detailWith({
+        stages: [
+          stage('ci_gate', 1, 'completed', 'protected_paths_clean'),
+          stage('ci_gate', 2, 'running', null),
+        ],
+        artifacts: [],
+        ci_manual_not_run: notRun,
+      }),
+    );
+    await waitFor(() => expect(checking.text()).toContain('CI status'));
+    expect(checking.text()).toContain('CI statuschecking');
+    expect(checking.text()).not.toContain('was not run');
+  });
+
   it('does not call an escalated gate a person sent the task back from red (backlog 483)', async () => {
     const view = await render$(
       detailWith({ stages: [stage('ci_gate', 1, 'returned', 'escalated')], artifacts: [] }),

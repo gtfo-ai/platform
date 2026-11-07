@@ -2057,6 +2057,99 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         ).toBeNull();
       });
 
+      /**
+       * S-27.2 (TD-036 decision 5): `ci_manual_not_run` has one writer, which writes only the
+       * stage's open row — of the named attempt, or whichever is open for a pipeline's event — and
+       * the read answers the latest **passed** attempt's value.
+       */
+      it('records what a CI pass left unstarted on the open row only, and reads the latest passed attempt’s (S-27.2)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const value = {
+          pipeline_id: '3038234623',
+          pipeline_url: 'https://gitlab.example.test/acme/api/-/pipelines/3038234623',
+          pipeline_status: 'manual' as const,
+          jobs: [
+            {
+              name: 'sentry-release-commit',
+              stage: 'release',
+              url: 'https://gitlab.example.test/acme/api/-/jobs/9003',
+            },
+          ],
+          checked_at: '2026-11-07T09:00:00.000Z',
+        };
+        const entry = (attempt?: number) => ({
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          ...(attempt === undefined ? {} : { attempt }),
+        });
+        // No row: nothing written, nothing read.
+        expect(await store.tasks.recordCiManualNotRun(tx, entry(1), value)).toBe(false);
+        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toBeNull();
+
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          causedByEventId: null,
+        });
+        // Another attempt's number does not reach the open row; no attempt (an event) does.
+        expect(await store.tasks.recordCiManualNotRun(tx, entry(2), value)).toBe(false);
+        expect(await store.tasks.recordCiManualNotRun(tx, entry(), value)).toBe(true);
+        // Open: not a passed attempt yet.
+        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toBeNull();
+        await store.tasks.recordStageExited(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          state: 'completed',
+          outcome: 'protected_paths_clean',
+          returnReason: null,
+          returnedTo: null,
+        });
+        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toEqual(
+          value,
+        );
+        // Closed: a late write is refused and the value kept.
+        expect(
+          await store.tasks.recordCiManualNotRun(tx, entry(1), { ...value, pipeline_id: '1' }),
+        ).toBe(false);
+
+        // A later attempt that is open, then passes with nothing left: the read follows it.
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 2,
+          causedByEventId: null,
+        });
+        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toEqual(
+          value,
+        );
+        await store.tasks.recordStageExited(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 2,
+          state: 'completed',
+          outcome: 'protected_paths_clean',
+          returnReason: null,
+          returnedTo: null,
+        });
+        expect(await store.tasks.latestCiManualNotRun(tx, stored.task.id, 'ci_gate')).toBeNull();
+        // A value outside the schema is refused at the write.
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 3,
+          causedByEventId: null,
+        });
+        await expect(
+          store.tasks.recordCiManualNotRun(tx, entry(3), {
+            ...value,
+            pipeline_url: 'javascript:alert(1)',
+          }),
+        ).rejects.toThrow();
+      });
+
       it('refuses to record a CI read its schema does not admit (backlog 1078)', async () => {
         const stored = task();
         await store.tasks.insert(tx, stored);

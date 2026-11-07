@@ -1390,6 +1390,10 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
           id: String(job.id),
           name: job.name,
           status: mapPipelineStatus(job.status, 'get_pipeline_status'),
+          // TD-036: the stage the CI gate's manual-job rule reads ("List pipeline jobs" publishes
+          // it on every job). An absent or empty one reads as none, which the rule counts as a test.
+          stage:
+            job.stage === undefined || job.stage === null || job.stage === '' ? null : job.stage,
           // Every GitLab job has a trace endpoint; whether it holds anything is a 404 at read time.
           log_ref: String(job.id),
           allow_failure: job.allow_failure ?? false,

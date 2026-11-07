@@ -472,6 +472,35 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > Code: `packages/application/src/pipeline/ci-pending-read.ts`, applied in `jobs.ts`
 > (`recordCiRead`).
 >
+> **Amended 2026-11-07 (S-27.2, BD-024's amendment of that date, TD-036): a manual job nobody
+> started is not a check, unless it is a test.** The CI gate reads the live head's **latest**
+> pipeline as before, and judges it by one pure rule (`ci-manual-jobs.ts`, `judgeCiPipeline`) on
+> the poll, on a pipeline's event (`ci_settle`) and — through `manualJobsHolding` — in
+> `mr_pipeline`. The port's meanings (`pipelineJobSchema`): a job `manual` does not run until a
+> person starts it; `allow_failure: false` counts it toward the pipeline, so such a manual job is
+> **blocking**; `stage` is the provider's stage or `null`; a pipeline `manual` is held at a blocking
+> manual job (GitLab's *blocked*).
+>
+> - A `manual` pipeline **passes** when (a) no job is `pending` or `running` (a job queued behind the
+>   held one is `created`, mapped to `pending`), (b) no job is `failed`/`canceled` unless it may
+>   fail — otherwise the gate **fails**, a return spending `ci_fix` —, (c) at least one job
+>   succeeded and (d) no unstarted blocking manual job is a **test job** (`isTestJob` in
+>   `@platform/domain`, WP-143's `counted` made one predicate: stage `test` when the pipeline has
+>   one, otherwise every job; a `null` stage counts). It also waits on a `manual` pipeline whose
+>   read shows no blocking manual job. A `success` pipeline is held to (a), (b) and the project's
+>   list too; `pending`/`running` wait and `failed`/`canceled`/`skipped` fail exactly as before.
+> - `pipeline.ci.required_manual_jobs` (technical/12) replaces (d): `[]` drops it, `all` waits on
+>   every held pipeline (before TD-036), a list of exact names waits for exactly those — still
+>   `manual` waits even on a `success` pipeline, ran and failed fails, absent is not waited for.
+> - The pass is judged **before** the job's held-retry comparison (`recordCiRead` reads only a
+>   pending answer), so a passing read never reaches `ci_held_unchanged`, and it settles through
+>   `judgeCiSettlement` like a `success`, so the tamper check runs on it. A pass that left blocking
+>   manual jobs unstarted records `task_stages.ci_manual_not_run` (migration 0109, technical/03) in
+>   the settling transaction, which the task read serves (technical/08) and the workpad says.
+> - A held pipeline's webhook is `ci.pipeline.held` (catalogue below); a wait it cannot settle is
+>   the poll's, as before. A pending read names the job the wait is for: the test job before a
+>   release step it is also held at.
+>
 > **`retro → retro` was added at WP-18b**, when the librarian stage went back into the shipped
 > templates (technical/12's example has always carried it). The retrospective phase now has **two**
 > stages — the facilitator's report and the Librarian's curation of the proposals it produced — and
@@ -657,6 +686,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `mr.approved` | git adapter (WP-60; GitLab's `approval` action only) | mr ref, approver identity, the provider's instant (`null` before GitLab 18.10) | Human time (230, the review window's *"approval"* anchor — PROGRESS backlog 90) |
 | `mr.review.comment` | git adapter | mr, thread id, author identity, text, resolved | Batching/debounce (10) — the human-return window, at `qa` or `ready_for_merge` since WP-178, whatever the note's `resolvable`, feedback intake (30), review-thread refresh (120 on `resolved: true`, WP-90 — the count only), human time (230, WP-29) |
 | `ci.pipeline.finished` | git adapter | mr, head sha, status, failed jobs, log refs, coverage | CI gate (10 decides, and since WP-60 review round 2 the `ci_settle` duty settles **only** a pipeline that ran on the merge request's live head, read from the provider outside the transaction), flaky detector (15) |
+| `ci.pipeline.held` | git adapter (S-27.2, TD-036 decision 6; GitLab maps a Pipeline Hook whose status is `manual`, its UI's *blocked*) | project, mr, head sha, pipeline id — its **own** payload, no status and no failed jobs, so `ci.pipeline.finished` stays terminal (`terminalCiStatus` still excludes `manual`) | CI gate (10 decides; the `ci_settle` duty does not judge from the event but re-reads the live head's **latest** pipeline and asks the manual-job rule, `ci-manual-jobs.ts`, settling a pass or a failure and leaving a wait to the gate's poll) |
 | `default_branch.moved` | git adapter | project, new head | Rebase gate (10), KB index (40) |
 | `budget.threshold.reached` / `budget.exhausted` / `budget.reset` | Budget projection | scope, window, pct | Scheduler (10), Slack (210, WP-32 — `reset` excepted: a window rolling over is not news; an **organisation** window, which has no project, goes to the organisation's own chat account's channel since WP-65 — the flagged one, `notifications.organisation_default`, when there are several, and inside the organisation's quiet hours a threshold waits for the organisation's digest while an exhaustion does not, since WP-93) |
 | `feedback.received` | Feedback | feedback | Feedback intake agent (30) |

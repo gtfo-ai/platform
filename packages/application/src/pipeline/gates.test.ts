@@ -183,10 +183,13 @@ const job = (
   name: string,
   status: PipelineStatus['status'],
   allowFailure = false,
+  /** S-27.2: the job's stage; `null` (a provider with no stages) counts as a test job. */
+  stage: string | null = null,
 ): PipelineStatus['jobs'][number] => ({
   id: `job-${name}`,
   name,
   status,
+  stage,
   log_ref: `log:${name}`,
   allow_failure: allowFailure,
 });
@@ -349,6 +352,8 @@ const evaluation = (
     readonly repositoryFiles?: RepositoryFileSource | null;
     /** WP-136: `pipeline.limits.ci_timeout_minutes`. */
     readonly ciTimeoutMinutes?: number;
+    /** S-27.2: `pipeline.ci.required_manual_jobs`. @default absent — TD-036's default. */
+    readonly requiredManualJobs?: 'all' | readonly string[];
   } = {},
 ) =>
   createGateEvaluator({
@@ -358,16 +363,30 @@ const evaluation = (
     integrations: staticPipelineIntegrations(integrationsWith(git)),
     settings: staticProjectSettings((projectId) =>
       defaultProjectSettings(projectId, {
-        ...(world.protectedPaths === undefined && world.ciTimeoutMinutes === undefined
+        ...(world.protectedPaths === undefined &&
+        world.ciTimeoutMinutes === undefined &&
+        world.requiredManualJobs === undefined
           ? {}
           : {
               config: {
                 ...(world.protectedPaths === undefined
                   ? {}
                   : { policies: { protected_paths: [...world.protectedPaths] } }),
-                ...(world.ciTimeoutMinutes === undefined
-                  ? {}
-                  : { pipeline: { limits: { ci_timeout_minutes: world.ciTimeoutMinutes } } }),
+                pipeline: {
+                  ...(world.ciTimeoutMinutes === undefined
+                    ? {}
+                    : { limits: { ci_timeout_minutes: world.ciTimeoutMinutes } }),
+                  ...(world.requiredManualJobs === undefined
+                    ? {}
+                    : {
+                        ci: {
+                          required_manual_jobs:
+                            world.requiredManualJobs === 'all'
+                              ? ('all' as const)
+                              : [...world.requiredManualJobs],
+                        },
+                      }),
+                },
               },
             }),
         ...(world.configRefusal === undefined ? {} : { configRefusal: world.configRefusal }),
@@ -1032,6 +1051,238 @@ describe('the CI gate', () => {
       kind: 'pending',
       detail: 'pipeline pipeline-1 is running',
       ciRead: runningRead('c'.repeat(40)),
+    });
+  });
+});
+
+/**
+ * **A manual job nobody started is not a check, unless it is a test** (S-27.2, BD-024's 2026-11-07
+ * amendment, TD-036 decisions 2–3) — the cases through the evaluator, each with the pipeline the
+ * provider reports. The rule's own branches and its property are `ci-manual-jobs.test.ts`.
+ */
+describe('a manual job nobody started (S-27.2, TD-036)', () => {
+  const held = (jobs: PipelineStatus['jobs']) => ({
+    getPipelineStatus: async () => ({
+      ...pipelineStatus('manual', jobs),
+      url: 'https://git.example.test/acme/api/-/pipelines/1',
+      finished_at: null,
+    }),
+  });
+  /** AUT-6655's pipeline 3038234623: green build and tests, held at the release step. */
+  const AUT_6655 = [
+    job('build_composer', 'success', false, 'build'),
+    job('phpstan', 'success', false, 'test'),
+    {
+      ...job('sentry-release-commit', 'manual', false, 'release'),
+      web_url: 'https://git.example.test/acme/api/-/jobs/9',
+    },
+  ];
+
+  it('passes AUT-6655’s shape — held at sentry-release-commit in a release stage, the rest green', async () => {
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), held(AUT_6655));
+    expect(result).toMatchObject({
+      kind: 'settled',
+      passed: true,
+      headSha: HEAD_SHA,
+      // The tamper check ran on the pass, and found nothing.
+      outcome: 'protected_paths_clean',
+    });
+    // A settled answer carries no pending read, so the job's held-retry comparison is never asked.
+    expect(result).not.toHaveProperty('ciRead');
+    expect(result.kind === 'settled' && result.manualNotRun).toEqual({
+      pipeline_id: 'pipeline-1',
+      pipeline_url: 'https://git.example.test/acme/api/-/pipelines/1',
+      pipeline_status: 'manual',
+      jobs: [
+        {
+          name: 'sentry-release-commit',
+          stage: 'release',
+          url: 'https://git.example.test/acme/api/-/jobs/9',
+        },
+      ],
+      checked_at: '2026-06-01T09:00:00.000Z',
+    });
+    expect(result.kind === 'settled' ? result.detail : '').toContain(
+      'the manual job "sentry-release-commit" was not run',
+    );
+  });
+
+  it('passes a pipeline whose test stage has no unstarted manual job, and lists no optional one', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      held([
+        job('unit', 'success', false, 'test'),
+        job('deploy', 'manual', false, 'deploy'),
+        job('preview', 'manual', true, 'deploy'),
+      ]),
+    );
+    expect(result).toMatchObject({ kind: 'settled', passed: true });
+    expect(
+      result.kind === 'settled' ? result.manualNotRun?.jobs.map((each) => each.name) : null,
+    ).toEqual(['deploy']);
+  });
+
+  it.each([
+    [
+      'an unstarted blocking manual job in stage test',
+      [job('build', 'success', false, 'build'), job('e2e', 'manual', false, 'test')],
+      'e2e',
+    ],
+    [
+      'a job with no stage',
+      [job('build', 'success', false, 'build'), job('verify', 'manual', false, null)],
+      'verify',
+    ],
+    [
+      'a job queued behind the held one',
+      [job('build_composer', 'manual', false, 'build'), job('phpstan', 'pending', false, 'test')],
+      'build_composer',
+    ],
+    [
+      'a pipeline in which no job succeeded',
+      [job('sentry-release-commit', 'manual', false, 'release')],
+      'sentry-release-commit',
+    ],
+    [
+      'a still-running job',
+      [
+        job('phpstan', 'running', false, 'test'),
+        job('sentry-release-commit', 'manual', false, 'release'),
+      ],
+      'sentry-release-commit',
+    ],
+  ] as const)('waits on %s, and records the held read', async (_case, jobs, heldJob) => {
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), held([...jobs]));
+    expect(result.kind).toBe('pending');
+    const read = (result as { ciRead?: { pipeline: { status: string; held_job: string | null } } })
+      .ciRead;
+    expect(read?.pipeline).toMatchObject({ status: 'manual', held_job: heldJob });
+    expect((result as { detail: string }).detail).toContain(`held at manual job "${heldJob}"`);
+  });
+
+  it('names the test job it waits for, not the release step it is also held at', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      held([...AUT_6655, job('e2e', 'manual', false, 'test')]),
+    );
+    expect(result.kind).toBe('pending');
+    expect((result as { detail: string }).detail).toContain('held at manual job "e2e"');
+  });
+
+  it.each(['failed', 'canceled'] as const)(
+    'fails the gate on a held pipeline with a %s job that is not allowed to fail',
+    async (status) => {
+      const result = await evaluate(
+        templateStage('ci_gate'),
+        storedTask(MR),
+        held([...AUT_6655, job('lint', status, false, 'test')]),
+      );
+      expect(result).toMatchObject({ kind: 'settled', passed: false });
+      expect(result).not.toHaveProperty('manualNotRun');
+      expect(result.kind === 'settled' ? result.detail : '').toContain('lint');
+      expect(result.kind === 'settled' ? result.ciSignature : '').toBe(
+        `ci:failed:lint@${HEAD_SHA}`,
+      );
+    },
+  );
+
+  it('runs the tamper check on the pass: a protected path changed fails the held pipeline’s pass', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      {
+        ...held(AUT_6655),
+        getMergeRequestDiff: async () => [ORDINARY_FILE, changed('src/totals.test.ts')],
+      },
+      {
+        artifacts: [
+          artifact('ImplementationPlan', PLAN([])),
+          artifact('ImplementationNotes', NOTES),
+        ],
+      },
+    );
+    expect(result).toMatchObject({
+      kind: 'settled',
+      passed: false,
+      outcome: 'protected_paths_changed',
+    });
+    expect(result).not.toHaveProperty('manualNotRun');
+  });
+
+  describe('pipeline.ci.required_manual_jobs (TD-036 decision 3)', () => {
+    const heldTest = [job('build', 'success', false, 'build'), job('e2e', 'manual', false, 'test')];
+
+    it('absent gives the default: the release step passes, a held test job waits', async () => {
+      expect((await evaluate(templateStage('ci_gate'), storedTask(MR), held(AUT_6655))).kind).toBe(
+        'settled',
+      );
+      expect((await evaluate(templateStage('ci_gate'), storedTask(MR), held(heldTest))).kind).toBe(
+        'pending',
+      );
+    });
+
+    it('[] passes a held test job', async () => {
+      const result = await evaluate(templateStage('ci_gate'), storedTask(MR), held(heldTest), {
+        requiredManualJobs: [],
+      });
+      expect(result).toMatchObject({ kind: 'settled', passed: true });
+      expect(
+        result.kind === 'settled' ? result.manualNotRun?.jobs.map((each) => each.name) : null,
+      ).toEqual(['e2e']);
+    });
+
+    it('all reproduces the wait from before this decision', async () => {
+      const result = await evaluate(templateStage('ci_gate'), storedTask(MR), held(AUT_6655), {
+        requiredManualJobs: 'all',
+      });
+      expect(result.kind).toBe('pending');
+      expect((result as { detail: string }).detail).toBe(
+        'pipeline pipeline-1 is held at manual job "sentry-release-commit": nothing runs until somebody starts it on the provider',
+      );
+    });
+
+    it('a named job waits even on a success pipeline', async () => {
+      const result = await evaluate(
+        templateStage('ci_gate'),
+        storedTask(MR),
+        {
+          getPipelineStatus: async () =>
+            pipelineStatus('success', [
+              job('unit', 'success', false, 'test'),
+              job('smoke', 'manual', true, 'deploy'),
+            ]),
+        },
+        { requiredManualJobs: ['smoke'] },
+      );
+      expect(result.kind).toBe('pending');
+    });
+
+    it('a named job that failed fails the gate', async () => {
+      const result = await evaluate(
+        templateStage('ci_gate'),
+        storedTask(MR),
+        {
+          getPipelineStatus: async () =>
+            pipelineStatus('success', [
+              job('unit', 'success', false, 'test'),
+              job('smoke', 'failed', true, 'deploy'),
+            ]),
+        },
+        { requiredManualJobs: ['smoke'] },
+      );
+      expect(result).toMatchObject({ kind: 'settled', passed: false });
+      expect(result.kind === 'settled' ? result.detail : '').toContain(
+        'a manual job the project requires (pipeline.ci.required_manual_jobs) ran and did not succeed: smoke',
+      );
+    });
+
+    it('an absent name is not waited for', async () => {
+      const result = await evaluate(templateStage('ci_gate'), storedTask(MR), held(AUT_6655), {
+        requiredManualJobs: ['e2e'],
+      });
+      expect(result).toMatchObject({ kind: 'settled', passed: true });
     });
   });
 });

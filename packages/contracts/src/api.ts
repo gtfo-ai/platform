@@ -1696,6 +1696,46 @@ export const gateWaitSchema = z.strictObject({
   timeout_minutes: z.int().positive().nullable(),
 });
 
+/** The most jobs `ci_manual_not_run` lists (TD-036 decision 5). */
+export const MAX_CI_MANUAL_NOT_RUN_JOBS = 20;
+/** The longest pipeline id `ci_manual_not_run` records — an identity, never cut. */
+export const MAX_CI_MANUAL_NOT_RUN_ID_CHARS = 255;
+
+/**
+ * **The manual jobs a CI pass left unstarted** (TD-036 decision 5, S-27.2) — `task_stages
+ * .ci_manual_not_run` (migration 0109), written once, by the settling transaction of a `ci_gate`
+ * pass whose pipeline still had **blocking** manual jobs nobody started (optional ones held
+ * nothing and are not listed). The task-detail DTO serves the latest passed `ci_gate` attempt's.
+ *
+ * Every string but the instant is the **provider's** text (BD-022), stored as `gate_wait`'s is:
+ * job names and stages through the git binding's redactor, then cut at
+ * {@link MAX_GATE_WAIT_HELD_JOB_CHARS}; the pipeline id recorded only as the provider sent it
+ * (a pass whose id would need cutting or redacting records nothing); the URLs only as an `http(s)`
+ * URL with no credentials that the redactor leaves unchanged, else `null`. A reader still renders
+ * the names as untrusted text and the URLs through `safeHref`.
+ *
+ * `pipeline_status` is the passed pipeline's own status: `manual` when the provider still holds it
+ * — GitLab shows it *blocked*, and the Ready callout, the Ready notification and the workpad say
+ * so (decision 7) — or `success`.
+ */
+export const ciManualNotRunSchema = z.strictObject({
+  pipeline_id: nonEmptyStringSchema.max(MAX_CI_MANUAL_NOT_RUN_ID_CHARS),
+  pipeline_url: httpUrlSchema.nullable(),
+  pipeline_status: ciPipelineStatusSchema,
+  jobs: z
+    .array(
+      z.strictObject({
+        name: nonEmptyStringSchema.max(MAX_GATE_WAIT_HELD_JOB_CHARS),
+        stage: nonEmptyStringSchema.max(MAX_GATE_WAIT_HELD_JOB_CHARS).nullable(),
+        url: httpUrlSchema.nullable(),
+      }),
+    )
+    .min(1)
+    .max(MAX_CI_MANUAL_NOT_RUN_JOBS),
+  checked_at: isoDateTimeSchema,
+});
+export type CiManualNotRun = z.infer<typeof ciManualNotRunSchema>;
+
 /**
  * One task of the board's page (S-23.9a): the {@link taskRecordSchema} record plus what a card says
  * at a glance — which phase, for how long, and whether it waits on a person. Read over the page's
@@ -2048,6 +2088,13 @@ export const taskDetailResponseSchema = z.strictObject({
    * read; `null` otherwise. `waiting_since` is that attempt's entry. Required, as `gate_wait` is.
    */
   last_gate_wait: gateWaitSchema.nullable(),
+  /**
+   * The manual jobs the latest **passed** `ci_gate` attempt left unstarted (S-27.2, TD-036
+   * decision 5) — {@link ciManualNotRunSchema}; `null` when that attempt recorded none, or no
+   * attempt has passed. Optional on the wire because the SPA's fixtures predate it, as the board
+   * item's `gate_wait` is; the task read always sends it.
+   */
+  ci_manual_not_run: ciManualNotRunSchema.nullable().optional(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,

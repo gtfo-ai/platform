@@ -37,6 +37,11 @@
  *    `prompt_append` (WP-92): a project prompt reaches the model inside a data block, adds to the
  *    role prompt and never replaces it, and grants no tool, command or path — and the file it names
  *    is repository content that merge rights could already write under `.agentic/prompts/` anyway.
+ *    `pipeline.ci` (S-27.2, TD-036 decision 3 — the key lives in this file by that decision) is
+ *    operational for the same reason: `required_manual_jobs` names which of the project's **own**
+ *    manual jobs the CI gate waits for, and the CI file that makes a job manual is repository
+ *    content merge rights already control (the agent cannot change it: it is a protected path, and
+ *    the tamper check fails a change to it). `[]` passes nothing the provider did not run green.
  *    A value that names a file outside that directory is dropped and reported
  *    (`projectPromptValueNotApplied`), so it cannot shadow a settings value that resolves.
  */
@@ -75,6 +80,7 @@ export const REPOSITORY_KEY_GRADES: Readonly<Record<string, RepositoryKeyGrade>>
   'pipeline.limits.ci_timeout_minutes': 'operational',
   'pipeline.limits.question_timeout': 'not_applied',
   'pipeline.wip': 'tighten_only',
+  'pipeline.ci': 'operational',
   'stages.*.model': 'operational',
   'stages.*.effort': 'operational',
   'stages.*.max_turns': 'operational',

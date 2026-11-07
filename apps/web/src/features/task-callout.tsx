@@ -57,6 +57,7 @@ import { Badge, Button, Card, ErrorNotice, formatDateTime, formatUsd } from '../
 import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { ApprovalCard } from './approval-card.js';
 import { BreakdownPanel } from './breakdown-panel.js';
+import { ReadyBlockedNotice, readyBlockedPipeline } from './ci-manual-not-run.js';
 import { CiWaitStop, GateWaitNotice, gateWaitHeld, openGateWait } from './gate-wait.js';
 import { openReturn, returnWords, stopWords } from './setback.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
@@ -342,6 +343,17 @@ const CalloutSlot = ({
               projectKey={projectKey}
               nowMs={nowMs}
             />
+          </Flash>
+        </section>
+      );
+    }
+    // S-27.2 (TD-036 decision 7): Ready over a pipeline the provider still shows blocked.
+    const blocked = readyBlockedPipeline(detail);
+    if (blocked !== null) {
+      return (
+        <section aria-label="What happens next" data-testid="ready-blocked-notice">
+          <Flash tone="info">
+            <ReadyBlockedNotice notRun={blocked} provider={provider} />
           </Flash>
         </section>
       );

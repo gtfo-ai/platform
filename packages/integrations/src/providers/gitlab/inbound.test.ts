@@ -525,7 +525,7 @@ describe('pipeline hooks', () => {
     );
   });
 
-  it.each(['running', 'pending', 'created', 'manual'])(
+  it.each(['running', 'pending', 'created'])(
     'drops a %s pipeline, because the event is ci.pipeline.finished',
     async (status) => {
       const result = await normalise(pipelineHook({ status }));
@@ -533,6 +533,22 @@ describe('pipeline hooks', () => {
       expect(result.ignored[0]?.reason).toBe('unsupported_event');
     },
   );
+
+  /**
+   * S-27.2 (TD-036 decision 6): GitLab's `manual` — the UI's *blocked* — was dropped like a
+   * running pipeline, so a webhook binding's CI gate ran its five checks out on AUT-6655's
+   * pipeline. It is `ci.pipeline.held` now, with its own payload; `.finished` stays terminal.
+   */
+  it('maps a manual pipeline to ci.pipeline.held, with no status and no failed jobs', async () => {
+    const result = await normalise(pipelineHook({ status: 'manual', finished_at: null }));
+    expect(result.events.map((event) => event.type)).toEqual(['ci.pipeline.held']);
+    const payload = catalogued(result, 'ci.pipeline.held');
+    expect(payload.head_sha).toBe(SHA);
+    expect(payload.pipeline_id).toBe('31');
+    expect((payload.mr as { iid: number } | null)?.iid).toBe(16);
+    expect(Object.hasOwn(payload, 'status')).toBe(false);
+    expect(Object.hasOwn(payload, 'failed_jobs')).toBe(false);
+  });
 
   it.each(['success', 'canceled', 'skipped'])('accepts terminal status %s', async (status) => {
     const payload = catalogued(await normalise(pipelineHook({ status })), 'ci.pipeline.finished');

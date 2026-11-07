@@ -856,6 +856,40 @@ describe('CI', () => {
     ]);
   });
 
+  /**
+   * S-27.2 (TD-036 decision 1): the jobs API's `stage` reaches the port — the CI gate passes a held
+   * release step only because it knows the stage — and an absent or empty stage maps to `null`
+   * (a provider with no stages, which the gate counts as a test), never to a guessed `test`.
+   */
+  it('maps each job’s stage, and null for a job the payload gives none', async () => {
+    const { port } = build({
+      [`GET /projects/${P}/pipelines?sha=${pipeline.sha}&order_by=id&sort=desc&per_page=1`]: {
+        status: 200,
+        body: [{ id: 900, sha: pipeline.sha, status: 'manual' }],
+      },
+      [`GET /projects/${P}/pipelines/900`]: {
+        status: 200,
+        body: { ...pipeline, status: 'manual', finished_at: null },
+      },
+      [`GET /projects/${P}/pipelines/900/jobs?per_page=100&page=1`]: {
+        status: 200,
+        body: [
+          { id: 9003, name: 'sentry-release-commit', stage: 'release', status: 'manual' },
+          { id: 9004, name: 'lint', stage: 'test', status: 'success', allow_failure: false },
+          { id: 9005, name: 'no-stage', status: 'success', allow_failure: false },
+          { id: 9006, name: 'empty-stage', stage: '', status: 'success', allow_failure: false },
+        ],
+      },
+    });
+    const status = await port.getPipelineStatus(PROJECT, pipeline.sha);
+    expect(status?.jobs.map((job) => [job.name, job.stage, job.allow_failure])).toEqual([
+      ['sentry-release-commit', 'release', false],
+      ['lint', 'test', false],
+      ['no-stage', null, false],
+      ['empty-stage', null, false],
+    ]);
+  });
+
   it('rejects a log ref that is not a GitLab job id before making a request', async () => {
     const { port, calls } = build({});
     await expect(port.getJobLog(PROJECT, 'log:9002')).rejects.toBeInstanceOf(IntegrationError);

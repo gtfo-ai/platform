@@ -121,6 +121,17 @@ describe('the keys a file may not apply', () => {
     ]);
   });
 
+  it('applies pipeline.ci as the file states it — the project names its own manual jobs (S-27.2)', () => {
+    expect(REPOSITORY_KEY_GRADES['pipeline.ci']).toBe('operational');
+    for (const required of [[], 'all', ['sentry-release-commit']] as const) {
+      const { values, notApplied } = withoutNotAppliedKeys({
+        pipeline: { ci: { required_manual_jobs: required as string[] | 'all' } },
+      });
+      expect(values).toEqual({ pipeline: { ci: { required_manual_jobs: required } } });
+      expect(notApplied).toEqual([]);
+    }
+  });
+
   it('applies both prompt keys when they name a prompt file, and drops one that names another path (WP-92)', () => {
     expect(REPOSITORY_KEY_GRADES['stages.*.prompt']).toBe('operational');
     expect(REPOSITORY_KEY_GRADES['stages.*.prompt_append']).toBe('operational');

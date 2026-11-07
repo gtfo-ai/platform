@@ -29,6 +29,7 @@ import type {
   ArtifactType,
   BudgetApprovalSubjectDetail,
   CiGateEnding,
+  CiManualNotRun,
   ContextPackRecord,
   EstimateBasis,
   HistorySample,
@@ -1246,6 +1247,24 @@ export interface TaskRepository {
     entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt: number },
     ending: CiGateEnding,
   ): Promise<boolean>;
+  /**
+   * Records what a CI **pass** left unstarted on `stage`'s open attempt
+   * (`task_stages.ci_manual_not_run`, migration 0109, S-27.2, TD-036 decision 5) — in the settling
+   * transaction, before the pass closes the row, and **only while the row is open**; answers
+   * whether it wrote. The one writer. `attempt` is the settling job's, or absent for a pipeline's
+   * event (`ci-settle.ts`), which settles whatever attempt is open — at most one per stage.
+   */
+  recordCiManualNotRun(
+    tx: Transaction,
+    entry: { readonly taskId: Id; readonly stage: Slug; readonly attempt?: number },
+    value: CiManualNotRun,
+  ): Promise<boolean>;
+  /**
+   * What the latest **passed** attempt of `stage` left unstarted (S-27.2): the newest attempt closed
+   * `completed`, and its `ci_manual_not_run` — `null` when it recorded none or none has passed. A
+   * stored value that does not parse is refused, never defaulted. The workpad reads it.
+   */
+  latestCiManualNotRun(tx: Transaction, taskId: Id, stage: Slug): Promise<CiManualNotRun | null>;
   /**
    * The last pending read of `stage`'s latest attempt **before** `attempt` — what a retry's first
    * read compares itself with (backlog 1078 criterion 3) — or `null` when there is no earlier

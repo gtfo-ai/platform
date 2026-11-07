@@ -27,6 +27,7 @@
  */
 import type {
   CiGateEnding,
+  CiManualNotRun,
   DomainEvent,
   Id,
   Slug,
@@ -430,6 +431,15 @@ export interface PipelineOutboundData {
   readonly head_sha?: string;
   /** `ci_settle` only: the finished pipeline's status and its failing jobs, from the event. */
   readonly ci_status?: string;
+  /**
+   * `ci_settle` only (S-27.2, TD-036 decision 6): the wake-up is a **held** pipeline's
+   * (`ci.pipeline.held`), so the duty re-reads the live head's latest pipeline and judges it by the
+   * manual-job rule. It carries no `ci_status`, so a build before S-27.2 that fires it logs a
+   * wake-up without its payload and settles nothing, rather than reading `manual` as a failure.
+   */
+  readonly ci_held?: boolean;
+  /** `ci_settle` on a held pipeline only: the provider's pipeline id, for the log line. */
+  readonly ci_pipeline_id?: string;
   readonly failed_jobs?: readonly string[];
   /**
    * `ci_settle` only (WP-81): each failing job's name with the log reference the event carried, so a
@@ -1051,6 +1061,12 @@ export type GateSettlement =
        * the return reason so the next run's `return_feedback` marker announces the cut.
        */
       readonly detailOriginalChars?: number;
+      /**
+       * What a passing CI settlement left unstarted (S-27.2, TD-036 decision 5): recorded on the
+       * attempt's row as `task_stages.ci_manual_not_run` in the settling transaction, before the
+       * pass closes it. Present only on a pass that left blocking manual jobs nobody started.
+       */
+      readonly manualNotRun?: CiManualNotRun;
     }
   | {
       readonly kind: 'escalate';
@@ -1090,6 +1106,7 @@ export const gateSettlementOf = (
   ...(result.detailOriginalChars === undefined
     ? {}
     : { detailOriginalChars: result.detailOriginalChars }),
+  ...(result.manualNotRun === undefined ? {} : { manualNotRun: result.manualNotRun }),
 });
 
 /**
@@ -1440,6 +1457,22 @@ const settle = async (
           headSha: signal.passed ? (signal.headSha ?? null) : null,
           excusedPaths: signal.passed ? (signal.excusedPaths ?? []) : [],
         });
+        /**
+         * **What the pass left unstarted** (S-27.2, TD-036 decision 5): the column's one write, on
+         * the attempt's open row before `applyDecision` closes it — the job's attempt, or for a
+         * pipeline's event (no attempt) whichever attempt of the stage is open.
+         */
+        if (signal.passed && signal.manualNotRun !== undefined) {
+          await options.store.tasks.recordCiManualNotRun(
+            scope.tx,
+            {
+              taskId: request.taskId,
+              stage: request.stage,
+              ...(request.attempt === undefined ? {} : { attempt: request.attempt }),
+            },
+            signal.manualNotRun,
+          );
+        }
       }
       /**
        * **Ready only for a head CI passed** (WP-79 review round 2, backlog 275). A passing rebase

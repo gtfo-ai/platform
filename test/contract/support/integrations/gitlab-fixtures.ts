@@ -239,6 +239,48 @@ export const pipelineHookBody = (): string =>
     ],
   });
 
+/** S-27.2: the head of `pipelines-manual.json`'s pipeline 907, held at a blocking manual job. */
+export const SHA_HELD = '7777777777777777777777777777777777777777';
+export const HELD_RELEASE_JOB = 'sentry-release-commit';
+
+/**
+ * `X-Gitlab-Event: Pipeline Hook` for pipeline 907 when GitLab holds it at `sentry-release-commit`
+ * (status `manual`; S-27.2, TD-036 decision 6). The hook's shape is the documented Pipeline Hook's.
+ */
+export const heldPipelineHookBody = (): string =>
+  JSON.stringify({
+    object_kind: 'pipeline',
+    project: projectBlock,
+    object_attributes: {
+      id: 907,
+      iid: 19,
+      name: 'Pipeline for branch: agentic/task-held',
+      ref: 'agentic/task-held',
+      tag: false,
+      sha: SHA_HELD,
+      source: 'merge_request_event',
+      status: 'manual',
+      detailed_status: 'blocked',
+      stages: ['build', 'test', 'release'],
+      created_at: '2026-06-01 07:20:00 UTC',
+      finished_at: null,
+      duration: null,
+      url: `${GITLAB_WEB}/-/pipelines/907`,
+    },
+    merge_request: null,
+    builds: [
+      { id: 9071, stage: 'build', name: 'build_composer', status: 'success', allow_failure: false },
+      { id: 9072, stage: 'test', name: 'phpstan', status: 'success', allow_failure: false },
+      {
+        id: 9073,
+        stage: 'release',
+        name: HELD_RELEASE_JOB,
+        status: 'manual',
+        allow_failure: false,
+      },
+    ],
+  });
+
 /** `X-Gitlab-Event: Push Hook` onto the default branch. */
 export const pushHookBody = (ref = 'refs/heads/main', after = SHA_MAIN): string =>
   JSON.stringify({

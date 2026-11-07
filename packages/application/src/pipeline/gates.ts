@@ -69,7 +69,7 @@
  * `CI_TERMINAL_FAIL` as `passed: true` left the whole unit+contract tier green, and a task
  * advanced to code review on red CI. This is a guard, and an untested guard fails open in silence.
  */
-import type { Id, TaskStageOutcome } from '@platform/contracts';
+import type { CiManualNotRun, Id, TaskStageOutcome } from '@platform/contracts';
 import {
   DEFAULT_CI_TIMEOUT_MINUTES,
   isBuiltinGateStageId,
@@ -87,13 +87,20 @@ import {
 import { IntegrationError } from '../ports/integrations/common.js';
 import type { CiConfigLocation, PipelineStatus } from '../ports/integrations/git-provider.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { type FailingJobLogs, type FailingJobRef, readFailingJobLogs } from './ci-log.js';
 import {
-  type FailingJobLogs,
-  type FailingJobRef,
-  failingJobs,
-  readFailingJobLogs,
-} from './ci-log.js';
-import { type CiPipelineRead, ciPipelineReadOf, heldManualJob } from './ci-pending-read.js';
+  type CiPipelineJudgement,
+  DEFAULT_MANUAL_JOB_POLICY,
+  judgeCiPipeline,
+  type ManualJobPolicy,
+  manualJobPolicyOf,
+} from './ci-manual-jobs.js';
+import {
+  type CiPipelineRead,
+  ciManualNotRunOf,
+  ciPipelineReadOf,
+  heldManualJob,
+} from './ci-pending-read.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
 import { type TransientProviderCode, transientProviderFailure } from './gate-outage.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
@@ -145,6 +152,12 @@ export type GateResult =
        * and tail (WP-81). Stored beside the return reason so the prompt's marker announces the cut.
        */
       readonly detailOriginalChars?: number;
+      /**
+       * A CI **pass** that left blocking manual jobs nobody started (S-27.2, TD-036 decision 5):
+       * what the settlement records on the attempt as `task_stages.ci_manual_not_run`. Absent on
+       * every other settlement.
+       */
+      readonly manualNotRun?: CiManualNotRun;
     }
   /**
    * The answer is not available yet; the job asks again. `ciWait` is present exactly when the CI
@@ -428,7 +441,12 @@ export const ciConfigOnDefaultBranch = async (
 export type CiReading =
   /** product/04 S4: *"If the project has no CI, the gate is skipped"* — the tamper check is not. */
   | { readonly kind: 'no_pipeline' }
-  | { readonly kind: 'passed'; readonly detail: string }
+  | {
+      readonly kind: 'passed';
+      readonly detail: string;
+      /** S-27.2: the blocking manual jobs the pass leaves unstarted, as the attempt records them. */
+      readonly manualNotRun?: CiManualNotRun;
+    }
   | {
       readonly kind: 'failed';
       readonly status: string;
@@ -586,6 +604,11 @@ export const judgeCiSettlement = async (
         : {}),
     };
   }
+  // S-27.2: a pass over a held pipeline names what it left unstarted, on both kinds of pass.
+  const notRun =
+    reading.kind === 'passed' && reading.manualNotRun !== undefined
+      ? { manualNotRun: reading.manualNotRun }
+      : {};
   if (verdict.kind === 'awaiting_review') {
     const excused = verdict.paths.map(redact);
     return {
@@ -595,6 +618,7 @@ export const judgeCiSettlement = async (
       outcome: 'protected_paths_awaiting_review',
       excusedPaths: excused,
       detail: `${ciDetail}; the tamper check (BD-024) excused declared protected paths until the Code review confirms them, and the rebase gate checks the confirmation before Ready: ${excused.join(', ')}`,
+      ...notRun,
     };
   }
   return {
@@ -603,6 +627,7 @@ export const judgeCiSettlement = async (
     headSha,
     outcome: 'protected_paths_clean',
     detail: ciDetail,
+    ...notRun,
   };
 };
 
@@ -673,9 +698,6 @@ const withCiWait = async (
   };
 };
 
-const CI_TERMINAL_PASS = new Set(['success']);
-const CI_TERMINAL_FAIL = new Set(['failed', 'canceled', 'skipped']);
-
 /**
  * The CI gate's pending detail for a pipeline that is neither green nor red — and, for one **held
  * at a manual job**, a plain sentence about why (backlog 486). The merge request stays a draft
@@ -697,12 +719,14 @@ export const pendingPipelineDetail = (
   status: Pick<PipelineStatus, 'id' | 'status' | 'jobs'>,
   draft: boolean,
   redact: (text: string) => string,
+  /** S-27.2: the manual-job rule's `heldAt`, so the job named is the one the wait is for. */
+  heldAt: readonly PipelineStatus['jobs'][number][] = [],
 ): string => {
   if (status.status !== 'manual') {
     return `pipeline ${status.id} is ${status.status}`;
   }
   // The same job the recorded read names as `held_job` (backlog 1078, `heldManualJob`).
-  const job = heldManualJob(status);
+  const job = heldManualJob(status, heldAt);
   // Review of #89: the name is provider text in the gate's reason — redacted, then bounded.
   const held =
     job === undefined
@@ -712,6 +736,92 @@ export const pendingPipelineDetail = (
     ? `the merge request is a draft and pipeline ${status.id} is held at ${held} — the project's CI rules may skip or hold jobs for drafts, and the platform keeps its merge request a draft until Ready; see the readiness panel's CI-rules warning`
     : `pipeline ${status.id} is held at ${held}: nothing runs until somebody starts it on the provider`;
 };
+
+/** The pass's detail when manual jobs were left: the platform's sentence, the names bounded. */
+const passedWithManualDetail = (
+  status: Pick<PipelineStatus, 'id' | 'status'>,
+  notRun: readonly PipelineStatus['jobs'][number][],
+  redact: (text: string) => string,
+): string =>
+  `pipeline ${status.id} ${status.status === 'success' ? 'succeeded' : 'passed with every job that ran green'}; the manual ${notRun.length === 1 ? 'job' : 'jobs'} ${notRun.map((job) => JSON.stringify(boundedJobName(job.name, redact))).join(', ')} ${notRun.length === 1 ? 'was' : 'were'} not run, and the CI gate does not require ${notRun.length === 1 ? 'it' : 'them'} (BD-024, TD-036)`;
+
+/** What {@link ciVerdictOf} answers: a reading the settlement judges, or the gate's wait. */
+export type CiVerdict =
+  | { readonly kind: 'reading'; readonly reading: CiReading }
+  | {
+      readonly kind: 'waiting';
+      readonly judgement: Extract<CiPipelineJudgement, { kind: 'waiting' }>;
+    };
+
+/**
+ * **The CI gate's question of one pipeline** (S-27.2, TD-036 decision 2) — for the poll below and
+ * for a held pipeline's event (`ci-settle.ts`), so both settle by the one rule. A pass and a failure
+ * become the {@link CiReading} {@link judgeCiSettlement} takes, so the tamper check runs on a pass
+ * of a held pipeline exactly as on a `success`; a wait is the caller's to word and record.
+ */
+export const ciVerdictOf = (
+  status: PipelineStatus,
+  policy: ManualJobPolicy,
+  facts: { readonly redact: (text: string) => string; readonly checkedAt: string },
+): CiVerdict => {
+  const { redact } = facts;
+  const judged = judgeCiPipeline(status, policy);
+  if (judged.kind === 'waiting') {
+    return { kind: 'waiting', judgement: judged };
+  }
+  if (judged.kind === 'failed') {
+    const failed = judged.failing.map((job) => job.name);
+    const failingStatus =
+      status.status === 'success' || status.status === 'manual' ? 'failed' : status.status;
+    // Review of #89: each failing job's name is provider text on its way into the return reason —
+    // redacted, then bounded, as the held job's is.
+    const names = failed.map((name) => boundedJobName(name, redact)).join(', ');
+    return {
+      kind: 'reading',
+      reading: {
+        kind: 'failed',
+        status: failingStatus,
+        failingJobs: failed,
+        logJobs: judged.failing.map((job) => ({ name: job.name, logRef: job.log_ref ?? null })),
+        detail: judged.required
+          ? `pipeline ${status.id} is ${status.status}, but a manual job the project requires (pipeline.ci.required_manual_jobs) ran and did not succeed: ${names}`
+          : status.status === 'manual'
+            ? `pipeline ${status.id} is held at a manual job and a job that is not allowed to fail did not succeed: ${names}`
+            : failed.length === 0
+              ? `pipeline ${status.id} ${status.status}`
+              : `pipeline ${status.id} ${status.status}: ${names}`,
+      },
+    };
+  }
+  if (judged.notRun.length === 0) {
+    return {
+      kind: 'reading',
+      reading: { kind: 'passed', detail: `pipeline ${status.id} succeeded` },
+    };
+  }
+  const record = ciManualNotRunOf(status, judged.notRun, facts);
+  return {
+    kind: 'reading',
+    reading: {
+      kind: 'passed',
+      detail: passedWithManualDetail(status, judged.notRun, redact),
+      ...(record === null ? {} : { manualNotRun: record }),
+    },
+  };
+};
+
+/**
+ * The project's manual-job policy, read only when the pipeline's status lets it matter (`success`
+ * under a list of names, `manual` always) — a running or red pipeline costs no settings read.
+ */
+export const manualJobPolicyFor = async (
+  options: Pick<CiGateOptions, 'settings'>,
+  projectId: Id,
+  status: Pick<PipelineStatus, 'status'>,
+): Promise<ManualJobPolicy> =>
+  status.status === 'success' || status.status === 'manual'
+    ? manualJobPolicyOf(await options.settings.forProject(projectId))
+    : DEFAULT_MANUAL_JOB_POLICY;
 
 export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
   const { integrations } = options;
@@ -842,37 +952,31 @@ export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
               };
             }
             seenPipeline = { id: status.id, status: status.status };
-            if (CI_TERMINAL_PASS.has(status.status)) {
-              return judgeCiSettlement(options, bindings, stored, headSha, {
-                kind: 'passed',
-                detail: `pipeline ${status.id} succeeded`,
-              });
+            /**
+             * **A manual job nobody started is not a check, unless it is a test** (S-27.2,
+             * TD-036 decision 2): a held pipeline whose every job that ran is green passes — and
+             * is judged **here, before** the job's held-retry comparison (`recordCiRead` reads
+             * only a pending answer), through `judgeCiSettlement` like a `success`, so the tamper
+             * check runs on it. A wait is recorded and worded as before.
+             */
+            const policy = await manualJobPolicyFor(options, stored.task.projectId, status);
+            const verdict = ciVerdictOf(status, policy, {
+              redact,
+              checkedAt: options.clock.now(),
+            });
+            if (verdict.kind === 'reading') {
+              return judgeCiSettlement(options, bindings, stored, headSha, verdict.reading);
             }
-            if (CI_TERMINAL_FAIL.has(status.status)) {
-              const failed = status.jobs
-                .filter((job) => job.status === 'failed' && !job.allow_failure)
-                .map((job) => job.name);
-              return judgeCiSettlement(options, bindings, stored, headSha, {
-                kind: 'failed',
-                status: status.status,
-                failingJobs: failed,
-                logJobs: failingJobs(status.jobs),
-                // Review of #89: each failing job's name is provider text on its way into the
-                // return reason — redacted, then bounded, as the held job's is.
-                detail:
-                  failed.length === 0
-                    ? `pipeline ${status.id} ${status.status}`
-                    : `pipeline ${status.id} ${status.status}: ${failed.map((name) => boundedJobName(name, redact)).join(', ')}`,
-              });
-            }
+            const { heldAt } = verdict.judgement;
             pendingRead = ciPipelineReadOf(status, {
               headSha,
               draft: live?.draft === true,
               redact,
+              heldAt,
             });
             return {
               kind: 'pending',
-              detail: pendingPipelineDetail(status, live?.draft === true, redact),
+              detail: pendingPipelineDetail(status, live?.draft === true, redact, heldAt),
             };
           };
           const result = await read();

@@ -69,6 +69,14 @@ carrying its own date.
   `null`.
 - `https://docs.gitlab.com/api/jobs/` — "List pipeline jobs" and "Retrieve a job log file", both
   the `200` that serves the log and the documented "404: Job not found or no log file".
+- `https://docs.gitlab.com/ci/jobs/job_control/` (retrieved **2026-11-07**, S-27.2) — what a
+  `manual` pipeline is: a manual job with `allow_failure: false`, the default for `when: manual`
+  inside `rules`, blocks the pipeline, and *"merge requests in projects with Pipelines must succeed
+  enabled can't be merged with a blocked pipeline"*. `pipelines-manual.json` is AUT-6655's shape on
+  the two API pages above: a `manual` pipeline whose build and test jobs succeeded and whose release
+  job `sentry-release-commit` waits at `manual` with `allow_failure: false`, each job naming its
+  `stage`. All three interactions are `documented-adapted`: the shapes are the pages', the values
+  and the number of jobs are this corpus's own.
 - `https://docs.gitlab.com/api/repository_files/` — the raw-file endpoint the CODEOWNERS read uses,
   including its `ref` parameter. The page does not state the status for a missing file, so both
   `404`s here are `inferred` from the REST status table. The **second** `200`, on

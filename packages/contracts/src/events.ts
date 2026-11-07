@@ -1071,6 +1071,25 @@ export const ciPipelineFinishedEvent = defineEvent('ci.pipeline.finished', {
   coverage_pct: coveragePctSchema.nullish(),
 });
 
+/**
+ * **A pipeline the provider holds at a blocking manual job** (TD-036 decision 6, S-27.2) — GitLab's
+ * *blocked*, a pipeline hook whose status is `manual`.
+ *
+ * Its **own** payload rather than a fifth status on `ci.pipeline.finished`: a held pipeline has not
+ * finished, `terminalCiStatus` keeps excluding `manual`, and a consumer of `.finished` keeps reading
+ * only terminal outcomes. It carries no status and no failed jobs, because the CI-settle duty does
+ * not judge from it: it re-reads the live head's **latest** pipeline and asks the gate's manual-job
+ * rule (`ci-manual-jobs.ts`), so a held hook for an older pipeline settles nothing it should not.
+ */
+export const ciPipelineHeldEvent = defineEvent('ci.pipeline.held', {
+  ...projectScoped,
+  task_id: idSchema.nullish(),
+  mr: mergeRequestRefSchema.nullish(),
+  head_sha: shaSchema,
+  /** The provider's pipeline id, as text (GitLab's numeric id). For the log; never judged by. */
+  pipeline_id: nonEmptyStringSchema.max(255),
+});
+
 export const defaultBranchMovedEvent = defineEvent('default_branch.moved', {
   ...projectScoped,
   branch: nonEmptyStringSchema,
@@ -1261,6 +1280,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   mrApprovedEvent,
   mrReviewCommentEvent,
   ciPipelineFinishedEvent,
+  ciPipelineHeldEvent,
   defaultBranchMovedEvent,
   budgetThresholdReachedEvent,
   budgetExhaustedEvent,

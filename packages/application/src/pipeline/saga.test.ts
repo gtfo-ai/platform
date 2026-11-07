@@ -2196,6 +2196,106 @@ describe('the CI gate', () => {
       },
     });
 
+  /**
+   * S-27.2 (TD-036 decision 6): a held pipeline's event wakes `ci_settle`, which does not judge
+   * from the event — it carries no jobs — but re-reads the live head's **latest** pipeline and
+   * judges it by the manual-job rule, as the poll does.
+   */
+  describe('a held pipeline’s event (S-27.2)', () => {
+    const job = (
+      name: string,
+      status: PipelineStatus['jobs'][number]['status'],
+      stage: string,
+    ): PipelineStatus['jobs'][number] => ({
+      id: `job-${name}`,
+      name,
+      status,
+      stage,
+      log_ref: null,
+      allow_failure: false,
+    });
+    const withHeldCi = () => {
+      const world = {
+        jobs: [] as PipelineStatus['jobs'],
+        status: 'running' as PipelineStatus['status'],
+        reads: [] as string[],
+      };
+      const harness = harnessWith({
+        git: {
+          getPipelineStatus: async (_project: string, sha: string) => {
+            world.reads.push(sha);
+            return {
+              id: 'pipeline-7',
+              head_sha: 'b'.repeat(40),
+              status: world.status,
+              url: null,
+              jobs: world.jobs,
+              coverage_pct: null,
+              finished_at: null,
+            };
+          },
+          getMergeRequest: async () => mergeRequest(false),
+        },
+      });
+      return { harness, world };
+    };
+    const held = (task: string, headSha = 'b'.repeat(40)) =>
+      event('ci.pipeline.held', {
+        project_id: PROJECT,
+        task_id: task,
+        mr: mergeRequest(false).ref,
+        head_sha: headSha,
+        pipeline_id: 'pipeline-7',
+      });
+
+    it('passes the gate on the live head’s latest pipeline held only at a release step', async () => {
+      const { harness, world } = withHeldCi();
+      await harness.publish([ticketMatched()]);
+      expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+      world.status = 'manual';
+      world.jobs = [
+        job('phpstan', 'success', 'test'),
+        job('sentry-release-commit', 'manual', 'release'),
+      ];
+      const before = world.reads.length;
+      await harness.publish([held(taskOf(harness).task.id)]);
+      expect(world.reads.length, 'the duty re-read the head’s pipeline').toBeGreaterThan(before);
+      const row = harness.store.stageRows.find((each) => each.stage === 'ci_gate');
+      expect(row).toMatchObject({ state: 'completed', outcome: 'protected_paths_clean' });
+      expect(row?.ciManualNotRun).toMatchObject({
+        pipeline_id: 'pipeline-7',
+        pipeline_status: 'manual',
+        jobs: [{ name: 'sentry-release-commit', stage: 'release', url: null }],
+      });
+      expect(taskOf(harness).task.currentStage).not.toBe('ci_gate');
+    });
+
+    it('settles nothing when the re-read pipeline is held at a manual test job', async () => {
+      const { harness, world } = withHeldCi();
+      await harness.publish([ticketMatched()]);
+      world.status = 'manual';
+      world.jobs = [job('build', 'success', 'build'), job('e2e', 'manual', 'test')];
+      await harness.publish([held(taskOf(harness).task.id)]);
+      expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+      expect(harness.store.stageRows.find((each) => each.stage === 'ci_gate')).toMatchObject({
+        state: 'running',
+        exitedAt: null,
+      });
+    });
+
+    it('ignores a held pipeline for a revision that is not the merge request’s head', async () => {
+      const { harness, world } = withHeldCi();
+      await harness.publish([ticketMatched()]);
+      world.status = 'manual';
+      world.jobs = [
+        job('phpstan', 'success', 'test'),
+        job('sentry-release-commit', 'manual', 'release'),
+      ];
+      await harness.publish([held(taskOf(harness).task.id, 'c'.repeat(40))]);
+      expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+    });
+  });
+
   it('waits at the gate while the pipeline is still running', async () => {
     const harness = withPendingCi();
     await harness.publish([ticketMatched()]);
@@ -2427,6 +2527,7 @@ describe('the CI gate', () => {
           id: 'job-1',
           name: 'test:unit',
           status: 'failed' as const,
+          stage: 'test',
           log_ref: 'log:1',
           allow_failure: false,
         },
@@ -3532,6 +3633,9 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
           id: '77',
           name: 'sentry-release-commit',
           status: 'manual' as const,
+          // S-27.2: no stage (a provider with none), and no job that ran — a hold the CI gate's
+          // manual-job rule still waits on, which is what these cases are about.
+          stage: null,
           log_ref: null,
           allow_failure: false,
           web_url: HELD_JOB_URL,
@@ -3666,6 +3770,72 @@ describe('the CI gate on a poll-only binding (WP-136)', () => {
       expect(ciEndings(harness)).toEqual([
         [1, 'ci_timed_out'],
         [2, 'ci_held_unchanged'],
+      ]);
+    });
+
+    /**
+     * S-27.2 (TD-036 decision 2): a passing read never reaches the held-retry escalation. Attempt
+     * 1 times out on pipeline-9 held at `sentry-release-commit` with nothing run; by the Retry the
+     * same pipeline, on the same head, is still held at the same job — exactly what
+     * `isUnchangedHeldRetry` escalates — but its test job has run green, so the rule passes it
+     * first, and the pass records what it left unstarted on the attempt it closes.
+     */
+    it('passes a Retry whose held pipeline the manual-job rule passes, instead of escalating it unchanged', async () => {
+      let status: ReturnType<typeof pipeline> = held();
+      const harness = waiting(() => status, { timeoutMinutes: 10 });
+      await harness.publish([ticketMatched()]);
+      while (taskOf(harness).task.state === 'active') {
+        await nextCheck(harness);
+      }
+      expect(ciEndings(harness)).toEqual([[1, 'ci_timed_out']]);
+      status = {
+        ...held(),
+        jobs: [
+          {
+            id: '76',
+            name: 'phpstan',
+            status: 'success' as const,
+            stage: 'test',
+            log_ref: null,
+            allow_failure: false,
+          },
+          { ...(held().jobs[0] as PipelineStatus['jobs'][number]), stage: 'release' },
+        ],
+      };
+      await retryStageCommand(harness.humanCommands, {
+        taskId: taskOf(harness).task.id,
+        userId: USER,
+        stage: 'ci_gate' as Slug,
+      });
+      await harness.drain();
+      expect(taskOf(harness).task.currentStage).not.toBe('ci_gate');
+      expect(
+        harness.events().filter((entry) => entry.type === 'task.escalated'),
+        'only attempt 1’s timeout escalated',
+      ).toHaveLength(1);
+      expect(ciRows(harness)).toEqual([
+        [1, 'failed', 'undecided'],
+        [2, 'completed', 'protected_paths_clean'],
+      ]);
+      expect(ciEndings(harness)).toEqual([
+        [1, 'ci_timed_out'],
+        [2, null],
+      ]);
+      const recorded = harness.store.stageRows
+        .filter((row) => row.stage === 'ci_gate')
+        .map((row) => [row.attempt, row.ciManualNotRun ?? null]);
+      expect(recorded).toEqual([
+        [1, null],
+        [
+          2,
+          {
+            pipeline_id: 'pipeline-9',
+            pipeline_url: 'https://git.example.test/acme/api/-/pipelines/pipeline-9',
+            pipeline_status: 'manual',
+            jobs: [{ name: 'sentry-release-commit', stage: 'release', url: HELD_JOB_URL }],
+            checked_at: new Date(harness.clock.epochMs).toISOString(),
+          },
+        ],
       ]);
     });
 

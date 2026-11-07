@@ -46,11 +46,13 @@ import { questionSettledKey, runQuestionSettled } from './question-settled.js';
 import {
   boundText,
   boundUrl,
+  manualNotRunSentence,
   NOTIFICATION_DETAIL_MAX,
   NOTIFICATION_TITLE_MAX,
   NOTIFICATION_URL_MAX,
   notificationBody,
   notificationDraft,
+  readyBlockedSentence,
   unlabelledLinks,
 } from './render.js';
 
@@ -2151,5 +2153,47 @@ describe('which recorded row a retried wake-up still delivers', () => {
     ).toBe(false);
     expect(awaitsImmediateRetry(row({ plannedDelivery: 'digest' }))).toBe(false);
     expect(awaitsImmediateRetry(null)).toBe(false);
+  });
+});
+
+/**
+ * S-27.2 (TD-036 decisions 5 and 7): the CI sentences the workpad says — and any notification that
+ * says Ready (this build has no Ready notification class; BACKLOG 1491). Platform words around the
+ * provider's names, quoted and unlabelled; never *can be merged*.
+ */
+describe('the manual-job sentences (S-27.2)', () => {
+  it('says what the pass left unstarted, in the singular and the plural', () => {
+    expect(manualNotRunSentence(['sentry-release-commit'])).toBe(
+      'CI passed — the manual job "sentry-release-commit" was not run',
+    );
+    expect(manualNotRunSentence(['sentry-release-commit', 'deploy'])).toBe(
+      'CI passed — the manual jobs "sentry-release-commit", "deploy" were not run',
+    );
+  });
+
+  it('says GitLab may not merge a pipeline it shows blocked, and names the job to start', () => {
+    const sentence = readyBlockedSentence({
+      provider: 'GitLab',
+      pipelineId: '3038234623',
+      jobs: ['sentry-release-commit'],
+    });
+    expect(sentence).toBe(
+      'GitLab shows pipeline 3038234623, the latest for this commit, as blocked at the manual job "sentry-release-commit". ' +
+        'If this project requires pipelines to succeed, GitLab won\'t merge it until "sentry-release-commit" has run: start it on GitLab.',
+    );
+    expect(sentence).not.toMatch(/can be merged/i);
+    expect(
+      readyBlockedSentence({ provider: 'GitLab', pipelineId: '1', jobs: ['a', 'b'] }),
+    ).toContain('until "a", "b" have run: start them on GitLab.');
+  });
+
+  it('unlabels a markdown link planted in a job name or the pipeline id', () => {
+    const sentence = readyBlockedSentence({
+      provider: 'GitLab',
+      pipelineId: '[1](https://evil.example.test)',
+      jobs: ['[Start](https://evil.example.test)'],
+    });
+    expect(sentence).not.toMatch(/\[[^\]]*\]\(/);
+    expect(manualNotRunSentence(['[x](https://evil.example.test)'])).not.toContain('[x]');
   });
 });
