@@ -73,6 +73,7 @@ import {
   orgSettingsResponseSchema,
   orgStatsResponseSchema,
   orgUsersResponseSchema,
+  ownerCandidatesResponseSchema,
   patchIntegrationRequestSchema,
   patchOrgSettingsRequestSchema,
   patchOrgSettingsResponseSchema,
@@ -369,6 +370,15 @@ export interface Endpoints {
   readonly ticketStatuses: (
     projectId: string,
   ) => Promise<z.output<typeof ticketStatusesResponseSchema>>;
+  /**
+   * `GET /api/projects/:id/owner-candidates?task_id=` — the people *Assign…* offers (S-26.1's
+   * follow-up, S-26.8b's picker): exactly those the owner command accepts, by name, each with
+   * `writes_back` for that task. A maintainer's read: a member is `403`.
+   */
+  readonly ownerCandidates: (
+    projectId: string,
+    taskId: string,
+  ) => Promise<z.output<typeof ownerCandidatesResponseSchema>>;
 
   /**
    * The onboarding wizard's commands (WP-21, product/06).
@@ -852,6 +862,11 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     ticketStatuses: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/ticket-statuses`, {
         schema: ticketStatusesResponseSchema,
+      }),
+    ownerCandidates: (projectId, taskId) =>
+      client.get(`/api/projects/${seg(projectId)}/owner-candidates`, {
+        schema: ownerCandidatesResponseSchema,
+        query: { task_id: taskId },
       }),
 
     // The wizard's commands. The three that **create** carry an `Idempotency-Key` (technical/08 §

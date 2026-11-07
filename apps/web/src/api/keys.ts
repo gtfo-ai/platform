@@ -55,6 +55,12 @@ export const queryKeys = {
     integrationId === undefined
       ? (['project', id, 'ticket-statuses'] as const)
       : (['project', id, 'ticket-statuses', integrationId] as const),
+  /**
+   * S-26.8b: the people *Assign…* offers, per task (each candidate's `writes_back` is that task's),
+   * under the project's prefix so a `project:<id>` frame refreshes them.
+   */
+  ownerCandidates: (id: string, taskId: string) =>
+    ['project', id, 'owner-candidates', taskId] as const,
   /** WP-139: the stored default branch beside the git provider's answer. */
   projectRepository: (id: string) => ['project', id, 'repository'] as const,
   projectExecution: (id: string) => ['project', id, 'execution'] as const,

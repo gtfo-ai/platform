@@ -1,11 +1,14 @@
 /**
  * The owner control's dialogs (S-26.8b, the M26 UX spec § 2), rendered alone.
  *
- * - `OwnerPicker` (*Assign…*) is built ahead of its read (BACKLOG 1297): it lists the candidates it
- *   is given, marks the current owner and does not let them be chosen, holds *Assign* until somebody
- *   is chosen, hands back who, and says so when nobody else can own the task. Names are text.
+ * - `OwnerPicker` (*Assign…*): it lists the candidates it is given, marks the current owner and
+ *   does not let them be chosen, holds *Assign* until somebody is chosen, hands back who, and says
+ *   why when nobody else can own tasks, or that the people are being read or could not be. Once
+ *   somebody is chosen it says what follows, both ways on each fact: the current owner's machine
+ *   (or the reader's), the tracker reassigned only on that candidate's `writes_back` (replacing whom
+ *   the tracker shows), and *Jira still shows …* when it does not write back. Names are text.
  * - `TakeConfirmDialog` names the owner in its title and its act, and mentions the tracker only when
- *   the project writes the assignment back — with the tracker assignee it replaces, as text, when
+ *   the take writes the assignment back — with the tracker assignee it replaces, as text, when
  *   the tracker shows one; on a task held only by such an assignee it says the ticket is
  *   reassigned to the reader in the tracker, named from the ticket's provider.
  */
@@ -16,8 +19,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   type OwnerCandidate,
   OwnerPicker,
+  type PickerOwner,
   type TakeConfirm,
   TakeConfirmDialog,
+  type TrackerShows,
+  trackerShowsFor,
 } from './task-owner-dialogs.js';
 
 const ADA = '00000000-0000-4000-8000-000000000011';
@@ -30,13 +36,17 @@ afterEach(() => {
 
 const Picker = ({
   candidates,
-  currentOwnerId = null,
+  currentOwner = null,
+  trackerShows = null,
   assigned,
+  readError = null,
   error,
 }: {
-  readonly candidates: readonly OwnerCandidate[];
-  readonly currentOwnerId?: string | null;
+  readonly candidates: readonly OwnerCandidate[] | null;
+  readonly currentOwner?: PickerOwner | null;
+  readonly trackerShows?: TrackerShows;
   readonly assigned: [string, string][];
+  readonly readError?: unknown;
   readonly error?: unknown;
 }) => {
   const [open, setOpen] = useState(true);
@@ -45,8 +55,11 @@ const Picker = ({
       open={open}
       onOpenChange={setOpen}
       ticketKey="ACME-12"
+      tracker="Jira"
       candidates={candidates}
-      currentOwnerId={currentOwnerId}
+      readError={readError}
+      currentOwner={currentOwner}
+      trackerShows={trackerShows}
       pending={false}
       error={error ?? null}
       onAssign={(userId, name) => {
@@ -54,6 +67,15 @@ const Picker = ({
       }}
     />
   );
+};
+
+const VOJTECH_OWNS: PickerOwner = { user_id: VOJTECH, name: 'Vojtěch', you: false };
+
+/** Choose `userId` in the open picker and answer what it says will follow. */
+const chooseAndRead = async (userId: string): Promise<string> => {
+  const dialog = await screen.findByRole('dialog', { name: 'Assign ACME-12' });
+  await userEvent.setup().selectOptions(within(dialog).getByLabelText('Person'), userId);
+  return dialog.querySelector('[data-owner-assign-consequence]')?.textContent ?? '';
 };
 
 describe('the person picker (Assign…)', () => {
@@ -65,7 +87,7 @@ describe('the person picker (Assign…)', () => {
           { user_id: VOJTECH, name: 'Vojtěch' },
           { user_id: ADA, name: `Ada ${HOSTILE}` },
         ]}
-        currentOwnerId={VOJTECH}
+        currentOwner={VOJTECH_OWNS}
         assigned={assigned}
       />,
     );
@@ -78,6 +100,8 @@ describe('the person picker (Assign…)', () => {
       [`Ada ${HOSTILE}`, false],
     ]);
     expect(dialog.querySelector('img')).toBeNull();
+    // Nothing is said of what follows until somebody is chosen.
+    expect(dialog.querySelector('[data-owner-assign-consequence]')).toBeNull();
     const assign = within(dialog).getByRole('button', { name: 'Assign' });
     expect((assign as HTMLButtonElement).disabled).toBe(true);
     const user = userEvent.setup();
@@ -87,21 +111,35 @@ describe('the person picker (Assign…)', () => {
     expect(assigned).toEqual([[ADA, `Ada ${HOSTILE}`]]);
   });
 
-  it('says so when nobody else can own it, and offers nothing to assign', async () => {
-    const assigned: [string, string][] = [];
-    render(
-      <Picker
-        candidates={[{ user_id: VOJTECH, name: 'Vojtěch' }]}
-        currentOwnerId={VOJTECH}
-        assigned={assigned}
-      />,
+  it('says why when nobody else can own tasks, and offers nothing to assign', async () => {
+    for (const candidates of [[], [{ user_id: VOJTECH, name: 'Vojtěch' }]]) {
+      cleanup();
+      render(<Picker candidates={candidates} currentOwner={VOJTECH_OWNS} assigned={[]} />);
+      const dialog = await screen.findByRole('dialog', { name: 'Assign ACME-12' });
+      expect(dialog.querySelector('[data-owner-picker-empty]')?.textContent).toBe(
+        'Nobody else in this project can own tasks: owning one takes the member role or above here.',
+      );
+      expect(within(dialog).queryByLabelText('Person')).toBeNull();
+      expect(
+        (within(dialog).getByRole('button', { name: 'Assign' }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    }
+  });
+
+  it('says it is reading the people, and says so when they could not be read', async () => {
+    render(<Picker candidates={null} assigned={[]} />);
+    let dialog = await screen.findByRole('dialog', { name: 'Assign ACME-12' });
+    expect(dialog.querySelector('[data-owner-picker-loading]')?.textContent).toBe(
+      'Reading who can own it…',
     );
-    const dialog = await screen.findByRole('dialog', { name: 'Assign ACME-12' });
-    expect(within(dialog).getByText('Nobody else in this project can own it.')).toBeTruthy();
+    expect(dialog.querySelector('[data-owner-picker-empty]')).toBeNull();
+
+    cleanup();
+    render(<Picker candidates={null} readError={new Error('unreadable')} assigned={[]} />);
+    dialog = await screen.findByRole('dialog', { name: 'Assign ACME-12' });
+    expect(within(dialog).getByText('The people who can own it could not be read.')).toBeTruthy();
+    expect(dialog.querySelector('[data-owner-picker-loading]')).toBeNull();
     expect(within(dialog).queryByLabelText('Person')).toBeNull();
-    expect(
-      (within(dialog).getByRole('button', { name: 'Assign' }) as HTMLButtonElement).disabled,
-    ).toBe(true);
   });
 
   it('shows a refusal inside the dialog, and Cancel closes it', async () => {
@@ -120,6 +158,115 @@ describe('the person picker (Assign…)', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
     expect(assigned).toEqual([]);
+  });
+});
+
+describe('what choosing a person says (the candidate’s writes_back, the owner, the tracker)', () => {
+  const ada = (writesBack: boolean): OwnerCandidate => ({
+    user_id: ADA,
+    name: 'Ada',
+    writes_back: writesBack,
+  });
+
+  it('asks only the question when nobody owns it and nothing reaches or shows in the tracker', async () => {
+    render(<Picker candidates={[ada(false)]} assigned={[]} />);
+    expect(await chooseAndRead(ADA)).toBe('Assign ACME-12 to Ada?');
+  });
+
+  it('names the current owner whose machine stops getting it, and says “your” to the reader', async () => {
+    render(<Picker candidates={[ada(false)]} currentOwner={VOJTECH_OWNS} assigned={[]} />);
+    expect(await chooseAndRead(ADA)).toBe(
+      'Assign ACME-12 to Ada? Vojtěch’s machine stops getting it.',
+    );
+
+    cleanup();
+    render(
+      <Picker
+        candidates={[ada(false)]}
+        currentOwner={{ user_id: VOJTECH, name: 'Fake Operator', you: true }}
+        assigned={[]}
+      />,
+    );
+    expect(await chooseAndRead(ADA)).toBe('Assign ACME-12 to Ada? Your machine stops getting it.');
+  });
+
+  it('says it also assigns the ticket in the tracker only when that candidate writes back', async () => {
+    render(
+      <Picker
+        candidates={[ada(true)]}
+        currentOwner={VOJTECH_OWNS}
+        trackerShows={{ name: `Jan Novák ${HOSTILE}` }}
+        assigned={[]}
+      />,
+    );
+    expect(await chooseAndRead(ADA)).toBe(
+      `Assign ACME-12 to Ada? Vojtěch’s machine stops getting it. This also assigns ACME-12 in Jira to Ada, replacing Jan Novák ${HOSTILE}.`,
+    );
+    expect(document.querySelector('img')).toBeNull();
+
+    cleanup();
+    render(<Picker candidates={[ada(true)]} assigned={[]} />);
+    expect(await chooseAndRead(ADA)).toBe(
+      'Assign ACME-12 to Ada? This also assigns ACME-12 in Jira to Ada.',
+    );
+
+    cleanup();
+    render(<Picker candidates={[ada(true)]} trackerShows={{ name: null }} assigned={[]} />);
+    expect(await chooseAndRead(ADA)).toBe(
+      'Assign ACME-12 to Ada? This also assigns ACME-12 in Jira to Ada, replacing its current assignee there.',
+    );
+  });
+
+  it('says plainly that the tracker still shows somebody else when the candidate does not write back', async () => {
+    render(
+      <Picker
+        candidates={[ada(false)]}
+        currentOwner={VOJTECH_OWNS}
+        trackerShows={{ name: 'Jan Novák' }}
+        assigned={[]}
+      />,
+    );
+    const said = await chooseAndRead(ADA);
+    expect(said).toBe(
+      'Assign ACME-12 to Ada? Vojtěch’s machine stops getting it. Jira still shows Jan Novák.',
+    );
+    expect(said).not.toContain('assigns');
+
+    cleanup();
+    // An older server that sends no writes_back is read as not writing back.
+    render(
+      <Picker
+        candidates={[{ user_id: ADA, name: 'Ada' }]}
+        trackerShows={{ name: null }}
+        assigned={[]}
+      />,
+    );
+    expect(await chooseAndRead(ADA)).toBe('Assign ACME-12 to Ada? Jira still shows someone else.');
+  });
+
+  it('reads who the tracker shows off the task: its unlinked assignee, else a tracker-set or written-back owner', () => {
+    const none = {
+      owner: null,
+      owner_source: null,
+      unlinked_assignee: null,
+      owner_writes_back: false,
+    };
+    const owner = { user_id: VOJTECH, name: 'Vojtěch' };
+    expect(trackerShowsFor(none)).toBeNull();
+    expect(trackerShowsFor({ ...none, unlinked_assignee: { display_name: 'Jan Novák' } })).toEqual({
+      name: 'Jan Novák',
+    });
+    expect(trackerShowsFor({ ...none, unlinked_assignee: { display_name: null } })).toEqual({
+      name: null,
+    });
+    // A platform-set owner the tracker was never told about: the read does not know who it shows.
+    expect(trackerShowsFor({ ...none, owner, owner_source: 'platform' })).toBeNull();
+    expect(
+      trackerShowsFor({ ...none, owner, owner_source: 'platform', owner_writes_back: true }),
+    ).toEqual({ name: 'Vojtěch' });
+    expect(trackerShowsFor({ ...none, owner, owner_source: 'tracker' })).toEqual({
+      name: 'Vojtěch',
+    });
   });
 });
 

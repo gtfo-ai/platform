@@ -77,7 +77,8 @@ const TASK_COMMAND_SCHEMAS = {
   // WP-44: the take-over pair. Their answers are parsed by the client, so they get real ones below.
   'take-over': takeOverRequestSchema,
   'hand-back': handBackRequestSchema,
-  // S-26.8b: *Take it* and *Unassign*. The client parses the answer (`taskCommandResponseSchema`).
+  // S-26.8b: *Take it*, *Assign…* and *Unassign*. The client parses the answer
+  // (`taskCommandResponseSchema`).
   owner: setTaskOwnerRequestSchema,
 } as const;
 
@@ -749,6 +750,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         // WP-182: the tracker binding and its statuses, which the lifecycle pick lists read.
         [`/api/projects/${fixtures.IDS.project}/bindings`]: fixtures.projectBindings,
         [`/api/projects/${fixtures.IDS.project}/ticket-statuses`]: fixtures.ticketStatuses,
+        // S-26.8b's follow-up: the people *Assign…* offers (the fake ignores `?task_id=`).
+        [`/api/projects/${fixtures.IDS.project}/owner-candidates`]: fixtures.ownerCandidates,
         '/api/org/budgets': fixtures.orgBudgets,
         '/api/org': fixtures.orgSettings,
         '/api/org/identities': fixtures.orgIdentities,

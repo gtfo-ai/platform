@@ -806,22 +806,28 @@ the task's runs (*Settings → Execution*, below).
 **The owner on the page** (since S-26.8b): beside the ticket's links, the owner's initials and
 *Owner: Vojtěch* (*(you)* when it is you), *Unassigned* in grey, or — for a tracker assignee the
 platform cannot link — *Assigned in Jira to Jan Novák (not linked to a platform account)*, with
-*Link account…* (Settings → Linked accounts) for an administrator. One button by that line, and the
-`···` menu, offer **Take it** and **Unassign** — only what your role may do: a member takes a task
-nobody owns or gives back their own, a maintainer either on anybody's task. Taking a task somebody
-else owns asks first — *Take DEMO-1 from Vojtěch? Their machine stops getting it.* — and, when the
-project writes the assignment back to the tracker, says that it also assigns the ticket there (and
-whom it replaces, when the tracker shows a person the platform cannot link). Taking a task nobody
-owns that the tracker assigns to such a person asks only when the assignment is written back: *Take
-DEMO-2? This also assigns DEMO-2 in Jira to you, replacing Jan Novák.* **Unassign** never changes
-the tracker: where assignments are written back, the ticket stays assigned there. A line
-then says what follows: *Assigned to you. Your machine picks it up at the next stage.* **Assign…**
-(choosing another person) is not offered yet: it waits for a list of exactly the people the
-platform accepts as the owner. On the **board**, a card shows its owner's initials at its top right
+*Link account…* (Settings → Linked accounts) for an administrator. Buttons by that line, and the
+`···` menu, offer **Take it**, **Assign…** and **Unassign** — only what your role may do: a member
+takes a task nobody owns or gives back their own, a maintainer any of the three on anybody's task.
+Taking a task somebody else owns asks first — *Take DEMO-1 from Vojtěch? Their machine stops
+getting it.* — and, when your taking it writes the assignment back to the tracker (the project
+writes owners back and your account is linked there), says that it also assigns the ticket there
+(and whom it replaces, when the tracker shows a person the platform cannot link). Taking a task
+nobody owns that the tracker assigns to such a person asks only when your taking it is written
+back: *Take DEMO-2? This also assigns DEMO-2 in Jira to you, replacing Jan Novák.* **Assign…**
+opens a list of exactly the people the platform accepts as the owner (a member or above in the
+project, with an active account); choosing one says what follows before you press *Assign* —
+*Assign DEMO-1 to Petra? Vojtěch’s machine stops getting it.*, then *This also assigns DEMO-1 in
+Jira to Petra, replacing Jan Novák.* when that person's assignment is written back, or *Jira still
+shows Jan Novák.* when it is not. **Unassign** never changes the tracker: where assignments are
+written back, the ticket stays assigned there. A line then says what follows: *Assigned to you.
+Your machine picks it up at the next stage.* or *Assigned to Petra. Their machine picks it up at the
+next stage.* On the **board**, a card shows its owner's initials at its top right
 (the name in its tooltip), and *Everyone* · *Mine* · *Unassigned* filters the board and the list
 (`?owner=me` or `?owner=none` in the URL); the board remembers your choice in this browser. The API
-has the same: `owner` on every task, `POST /api/tasks/:id/owner`, and `?owner=` on a project's task
-list.
+has the same: `owner` on every task, `POST /api/tasks/:id/owner`, `GET
+/api/projects/:id/owner-candidates?task_id=` for the people a maintainer may assign, and `?owner=` on
+a project's task list.
 
 **Why a run waits** (since S-26.5, read only — the words on the page come with S-26.8b): while a
 task's run waits for a machine or the server to start it, the task, its board card and its row on

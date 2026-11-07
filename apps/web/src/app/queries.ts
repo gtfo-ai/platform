@@ -215,6 +215,21 @@ export const useTicketStatuses = (projectId: string | null, trackerId: string | 
   });
 };
 
+/**
+ * `GET /api/projects/:id/owner-candidates?task_id=` (S-26.8b's *Assign…*) — asked only while the
+ * picker is open, so a reader who never opens it costs the server nothing. **Not retried**: a `403`
+ * or `404` is an answer, said in the picker.
+ */
+export const useOwnerCandidates = (projectId: string, taskId: string, enabled: boolean) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.ownerCandidates(projectId, taskId),
+    queryFn: () => endpoints.ownerCandidates(projectId, taskId),
+    enabled,
+    retry: false,
+  });
+};
+
 /** `GET /api/projects/:id/repository` — the stored default branch and the provider's (WP-139). */
 export const useProjectRepository = (projectId: string | null) => {
   const { endpoints } = useServices();

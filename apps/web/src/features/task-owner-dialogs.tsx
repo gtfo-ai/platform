@@ -11,16 +11,23 @@
  *   Jira to you, replacing Jan Novák.*, *Take it and assign in Jira*. The tracker's assignee is
  *   provider text, rendered through `UntrustedText`. `ConfirmDialog`'s one shape: a refusal stays
  *   in it, beside the button.
- * - {@link OwnerPicker}: *Assign…*, a person picker over the candidates it is **given** — the
- *   people the owner command accepts. No read of exactly those people is served yet (the org's
- *   user list includes non-members and disabled users), so nothing renders it: BACKLOG 1297 wires
- *   it to `GET /api/projects/:id/owner-candidates` when that lands.
+ * - {@link AssignDialog}: *Assign…*, the {@link OwnerPicker} over
+ *   `GET /api/projects/:id/owner-candidates?task_id=` — exactly the people the owner command
+ *   accepts, each with whether assigning them writes to the tracker (`writes_back`, per candidate
+ *   for this task). Choosing somebody says what follows before *Assign* is pressed: *Assign DEMO-1
+ *   to Petra?*, *Vojtěch’s machine stops getting it.* when somebody owns it now, *This also assigns
+ *   DEMO-1 in Jira to Petra, replacing Jan Novák.* only on that candidate's `writes_back`, and
+ *   *Jira still shows Jan Novák.* when it is false and the tracker shows somebody
+ *   ({@link trackerShowsFor}). An empty list says why; a read that fails says so. The words are
+ *   `./owner-assign-words.ts`, never `ui/humanize.ts` (it ships on the worker's page).
  *
  * A ticket key and a person's name are text somebody else wrote: a dialog's title is a string, so
  * both are passed through `sanitiseUntrusted` (the bidi overrides and control characters, as the
  * board's *Cancel ACME-1?* does), and the picker's options are text nodes.
  */
-import { type ReactElement, useId, useState } from 'react';
+import type { TaskRecord } from '@platform/contracts';
+import { type ReactElement, type ReactNode, useId, useState } from 'react';
+import { useOwnerCandidates } from '../app/queries.js';
 import { Button } from '../ui/button.js';
 import { ConfirmDialog } from '../ui/confirm-dialog.js';
 import { Dialog } from '../ui/dialog.js';
@@ -29,14 +36,16 @@ import { ErrorNotice } from '../ui/kit.js';
 import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
+import { ASSIGN_WORDS } from './owner-assign-words.js';
 
 /**
  * What *Take it* must confirm (`takeConfirmFor` in `./task-owner.tsx`):
  *
  * - `owner` — somebody else owns the task. `replacing` is the tracker assignee the platform cannot
  *   link, when the tracker shows one with a name, said only when the assignment is written back.
- * - `held` — nobody owns it, the tracker assigns it to a person the platform cannot link, and the
- *   project writes the assignment back: taking it reassigns the ticket there (S-26.3).
+ * - `held` — nobody owns it, the tracker assigns it to a person the platform cannot link, and
+ *   taking it by this reader writes the assignment back (`take_writes_back`): taking it reassigns
+ *   the ticket there (S-26.3).
  */
 export type TakeConfirm =
   | { readonly kind: 'owner'; readonly ownerName: string; readonly replacing: string | null }
@@ -57,7 +66,10 @@ export const TakeConfirmDialog = ({
   readonly onOpenChange: (open: boolean) => void;
   readonly ticketKey: string;
   readonly confirm: TakeConfirm;
-  /** `owner_writes_back`: the assignment is also written to the tracker. */
+  /**
+   * `take_writes_back` (S-26.3, per caller): *Take it* by **this reader** also assigns the ticket
+   * in the tracker. Not `owner_writes_back`, which is about the current owner.
+   */
   readonly writesBack: boolean;
   /** The tracker's name (`trackerName`). */
   readonly tracker: string;
@@ -125,22 +137,117 @@ export const TakeConfirmDialog = ({
   );
 };
 
-/** A person the owner command accepts for this task. */
+/** A person the owner command accepts for this task, and whether assigning them writes back. */
 export interface OwnerCandidate {
   readonly user_id: string;
   readonly name: string;
+  /** Assigning this person also assigns the ticket in the tracker (S-26.3); absent reads false. */
+  readonly writes_back?: boolean;
+}
+
+/** The task's current owner as the picker names them; `you` when it is the reader. */
+export interface PickerOwner {
+  readonly user_id: string;
+  readonly name: string;
+  readonly you: boolean;
 }
 
 /**
- * The person picker of *Assign…*. The current owner is listed, marked, and not choosable (choosing
- * them changes nothing); *Assign* stays disabled until somebody else is chosen.
+ * Who the tracker shows as the ticket's assignee, as far as the task read says, or `null` when it
+ * says nobody or does not know: a person the platform cannot link (`unlinked_assignee`, whose name
+ * may be `null`), else the owner when the tracker set them (`owner_source: tracker`) or the
+ * platform wrote them back (`owner_writes_back`).
+ */
+export type TrackerShows = { readonly name: string | null } | null;
+
+/** A person's name as a sentence says it; an account with no name is said so, never blank. */
+const nameOf = (name: string): string =>
+  name.trim() === '' ? OWNER_WORDS['owner.nameless'] : name;
+
+export const trackerShowsFor = (
+  task: Pick<TaskRecord, 'owner' | 'owner_source' | 'unlinked_assignee' | 'owner_writes_back'>,
+): TrackerShows => {
+  const unlinked = task.unlinked_assignee ?? null;
+  if (unlinked !== null) {
+    return { name: unlinked.display_name };
+  }
+  const owner = task.owner ?? null;
+  return owner !== null && (task.owner_source === 'tracker' || task.owner_writes_back === true)
+    ? { name: nameOf(owner.name) }
+    : null;
+};
+
+/** What choosing `candidate` does, in sentences — names as text, each sentence one node. */
+const assignConsequence = (
+  ticketKey: string,
+  tracker: string,
+  candidate: OwnerCandidate,
+  owner: PickerOwner | null,
+  shows: TrackerShows,
+): ReactNode[] => {
+  const name = nameOf(candidate.name);
+  const sentences: ReactNode[] = [
+    <span key="ask">
+      {ASSIGN_WORDS.ask.before(ticketKey)}
+      <UntrustedText value={name} />
+      {ASSIGN_WORDS.ask.end}
+    </span>,
+  ];
+  if (owner !== null) {
+    sentences.push(
+      owner.you ? (
+        <span key="stops">{ASSIGN_WORDS.stops.you}</span>
+      ) : (
+        <span key="stops">
+          <UntrustedText value={nameOf(owner.name)} />
+          {ASSIGN_WORDS.stops.after}
+        </span>
+      ),
+    );
+  }
+  if (candidate.writes_back === true) {
+    const also = ASSIGN_WORDS.also;
+    sentences.push(
+      <span key="tracker" data-assign-tracker="writes">
+        {also.before(ticketKey, tracker)}
+        <UntrustedText value={name} />
+        {shows === null ? null : (
+          <>
+            {also.replacing}
+            {shows.name === null ? also.nameless : <UntrustedText value={shows.name} />}
+          </>
+        )}
+        {also.end}
+      </span>,
+    );
+  } else if (shows !== null) {
+    const untouched = ASSIGN_WORDS.untouched;
+    sentences.push(
+      <span key="tracker" data-assign-tracker="untouched">
+        {untouched.before(tracker)}
+        {shows.name === null ? untouched.nameless : <UntrustedText value={shows.name} />}
+        {untouched.end}
+      </span>,
+    );
+  }
+  return sentences.flatMap((sentence, index) => (index === 0 ? [sentence] : [' ', sentence]));
+};
+
+/**
+ * The person picker of *Assign…*, over the candidates it is given (`null` while they are read).
+ * The current owner is listed, marked, and not choosable (choosing them changes nothing); *Assign*
+ * stays disabled until somebody else is chosen, and once somebody is, the consequence is said
+ * above it. A refusal of the read or of the command is said in the dialog.
  */
 export const OwnerPicker = ({
   open,
   onOpenChange,
   ticketKey,
+  tracker,
   candidates,
-  currentOwnerId,
+  readError,
+  currentOwner,
+  trackerShows,
   pending,
   error,
   onAssign,
@@ -148,8 +255,13 @@ export const OwnerPicker = ({
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly ticketKey: string;
-  readonly candidates: readonly OwnerCandidate[];
-  readonly currentOwnerId: string | null;
+  /** The tracker's name (`trackerName`). */
+  readonly tracker: string;
+  readonly candidates: readonly OwnerCandidate[] | null;
+  /** Why the candidates could not be read, or `null`. */
+  readonly readError?: unknown;
+  readonly currentOwner: PickerOwner | null;
+  readonly trackerShows: TrackerShows;
   readonly pending: boolean;
   readonly error: unknown;
   /** The chosen person's id, and their name for the status line. */
@@ -158,8 +270,12 @@ export const OwnerPicker = ({
   const words = OWNER_WORDS['owner.picker'];
   const fieldId = useId();
   const [chosen, setChosen] = useState('');
-  const choosable = candidates.filter((candidate) => candidate.user_id !== currentOwnerId);
+  const currentOwnerId = currentOwner?.user_id ?? null;
+  const key = sanitiseUntrusted(ticketKey);
+  const listed = candidates ?? [];
+  const choosable = listed.filter((candidate) => candidate.user_id !== currentOwnerId);
   const picked = choosable.find((candidate) => candidate.user_id === chosen) ?? null;
+  const unreadable = readError !== undefined && readError !== null;
   return (
     <Dialog
       open={open}
@@ -169,7 +285,7 @@ export const OwnerPicker = ({
         }
         onOpenChange(next);
       }}
-      title={words.title(sanitiseUntrusted(ticketKey))}
+      title={words.title(key)}
       description={words.description}
       footer={
         <>
@@ -187,7 +303,7 @@ export const OwnerPicker = ({
             disabled={pending || picked === null}
             onClick={() => {
               if (picked !== null) {
-                onAssign(picked.user_id, picked.name);
+                onAssign(picked.user_id, nameOf(picked.name));
               }
             }}
           >
@@ -197,9 +313,15 @@ export const OwnerPicker = ({
       }
     >
       <div className="flex flex-col gap-2">
-        {choosable.length === 0 ? (
+        {unreadable ? (
+          <ErrorNotice title={ASSIGN_WORDS.unreadable} error={readError} />
+        ) : candidates === null ? (
+          <p data-owner-picker-loading="" className="text-sm text-fg-muted">
+            {ASSIGN_WORDS.loading}
+          </p>
+        ) : choosable.length === 0 ? (
           <p data-owner-picker-empty="" className="text-sm text-fg-muted">
-            {words.empty}
+            {ASSIGN_WORDS.empty}
           </p>
         ) : (
           <div className="flex flex-col gap-1">
@@ -216,13 +338,13 @@ export const OwnerPicker = ({
               <option value="" disabled>
                 —
               </option>
-              {candidates.map((candidate) => (
+              {listed.map((candidate) => (
                 <option
                   key={candidate.user_id}
                   value={candidate.user_id}
                   disabled={candidate.user_id === currentOwnerId}
                 >
-                  {`${sanitiseUntrusted(candidate.name)}${
+                  {`${sanitiseUntrusted(nameOf(candidate.name))}${
                     candidate.user_id === currentOwnerId ? words.current : ''
                   }`}
                 </option>
@@ -230,10 +352,71 @@ export const OwnerPicker = ({
             </Select>
           </div>
         )}
+        {picked === null ? null : (
+          <p data-owner-assign-consequence="" className="text-sm">
+            {assignConsequence(ticketKey, tracker, picked, currentOwner, trackerShows)}
+          </p>
+        )}
         {error === undefined || error === null ? null : (
           <ErrorNotice title={OWNER_WORDS['owner.refused']} error={error} />
         )}
       </div>
     </Dialog>
+  );
+};
+
+/**
+ * *Assign…* on the task page: the picker over `GET /api/projects/:id/owner-candidates?task_id=`,
+ * read only while it is open (`useOwnerCandidates`). The current owner, the tracker's assignee and
+ * the tracker's name come off the task read.
+ */
+export const AssignDialog = ({
+  open,
+  onOpenChange,
+  task,
+  viewerId,
+  tracker,
+  pending,
+  error,
+  onAssign,
+}: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly task: Pick<
+    TaskRecord,
+    | 'id'
+    | 'project_id'
+    | 'ticket'
+    | 'owner'
+    | 'owner_source'
+    | 'unlinked_assignee'
+    | 'owner_writes_back'
+  >;
+  readonly viewerId: string | null;
+  readonly tracker: string;
+  readonly pending: boolean;
+  readonly error: unknown;
+  readonly onAssign: (userId: string, name: string) => void;
+}): ReactElement => {
+  const read = useOwnerCandidates(task.project_id, task.id, open);
+  const owner = task.owner ?? null;
+  return (
+    <OwnerPicker
+      open={open}
+      onOpenChange={onOpenChange}
+      ticketKey={task.ticket.key}
+      tracker={tracker}
+      candidates={read.data?.items ?? null}
+      readError={read.isError ? read.error : null}
+      currentOwner={
+        owner === null
+          ? null
+          : { user_id: owner.user_id, name: owner.name, you: owner.user_id === viewerId }
+      }
+      trackerShows={trackerShowsFor(task)}
+      pending={pending}
+      error={error}
+      onAssign={onAssign}
+    />
   );
 };

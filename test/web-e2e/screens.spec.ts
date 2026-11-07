@@ -9,6 +9,7 @@
 import { expect, test } from '@playwright/test';
 import {
   AUT_6655_JOB_URL,
+  CANDIDATE_NAME,
   failedJobs,
   HOSTILE,
   IDS,
@@ -1132,9 +1133,9 @@ test('the run screen counts only admitted documents and marks the one that was n
 });
 
 /**
- * S-26.8b (the M26 UX spec §§ 2–3): the owner on the task page — a task somebody else owns, one the
- * tracker assigns to a person the platform cannot link, and one nobody owns — and on the board: the
- * card's avatar, and *Everyone* · *Mine* · *Unassigned* in the URL, in the request (the fake applies
+ * S-26.8b (the M26 UX spec §§ 2–3): the owner on the task page — a task somebody else owns (taken,
+ * then assigned through *Assign…*'s picker over the owner candidates read), one the tracker assigns
+ * to a person the platform cannot link, and one nobody owns — and on the board: the card's avatar, and *Everyone* · *Mine* · *Unassigned* in the URL, in the request (the fake applies
  * `?owner=` as the server does) and remembered for the next visit.
  */
 test('the owner on the task page and the board, with the board’s filter remembered (S-26.8b)', async ({
@@ -1160,6 +1161,27 @@ test('the owner on the task page and the board, with the board’s filter rememb
   const taken = (await commandLog(request)).filter((entry) => entry.path.endsWith('/owner'));
   expect(taken).toEqual([
     { path: `/api/tasks/${IDS.taskFeature}/owner`, body: { user_id: IDS.user } },
+  ]);
+
+  // *Assign…* (S-26.8b's follow-up): the people the server accepts, and what choosing one does —
+  // Petra's assignment is written back, replacing the tracker's assignee (DEMO-1's owner came from
+  // the tracker). Her name is her own text, rendered as text.
+  await owned.getByRole('button', { name: 'Assign…' }).click();
+  const picker = page.getByRole('dialog', { name: 'Assign DEMO-1' });
+  await picker.getByLabel('Person').selectOption(IDS.ownerPetra);
+  await expect(picker.locator('[data-owner-assign-consequence]')).toHaveText(
+    `Assign DEMO-1 to ${CANDIDATE_NAME}? ${OWNER_NAME}’s machine stops getting it. This also assigns DEMO-1 in Jira to ${CANDIDATE_NAME}, replacing ${OWNER_NAME}.`,
+  );
+  await expect(picker.locator('script')).toHaveCount(0);
+  await picker.getByRole('button', { name: 'Assign', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('[data-owner-done]')).toHaveText(
+    `Assigned to ${CANDIDATE_NAME}. Their machine picks it up at the next stage.`,
+  );
+  const assigned = (await commandLog(request)).filter((entry) => entry.path.endsWith('/owner'));
+  expect(assigned).toEqual([
+    { path: `/api/tasks/${IDS.taskFeature}/owner`, body: { user_id: IDS.user } },
+    { path: `/api/tasks/${IDS.taskFeature}/owner`, body: { user_id: IDS.ownerPetra } },
   ]);
 
   // DEMO-2: the tracker's assignee, unlinked — their name is text, and an administrator may link.

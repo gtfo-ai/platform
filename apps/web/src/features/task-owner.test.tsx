@@ -6,10 +6,13 @@
  *
  * Per role, both directions (standing rule 42): a member is offered *Take it* on an unassigned task
  * and *Unassign* on their own, and nothing on somebody else's; a maintainer is offered both on
- * anybody's — each exactly as the read's `can_take` / `can_unassign` say, because the server holds
- * the same rule. *Assign…* is offered to nobody yet (BACKLOG 1297), even with `can_assign`. Taking
- * somebody else's task asks first and names them, and mentions the tracker only when the project
- * writes the assignment back. The owner control is never the page's amber primary.
+ * anybody's, with *Assign…* — each exactly as the read's `can_take` / `can_assign` /
+ * `can_unassign` say, because the server holds the same rule. Taking somebody else's task asks
+ * first and names them, and mentions the tracker only when *this reader's* take writes the
+ * assignment back (`take_writes_back`, never `owner_writes_back`). *Assign…* reads its people from
+ * `GET /api/projects/:id/owner-candidates?task_id=`, says what choosing one does, sends their id
+ * and says what follows; its refusals are said in words. The owner control is never the page's
+ * amber primary.
  */
 import type { TaskDetailResponse, TaskRecord } from '@platform/contracts';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
@@ -24,6 +27,7 @@ const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
 const ME = '00000000-0000-4000-8000-000000000001';
 const VOJTECH = '00000000-0000-4000-8000-000000000009';
+const PETRA = '00000000-0000-4000-8000-00000000000a';
 const AT = '2026-09-13T04:00:00.000Z';
 const HOSTILE = '<img src=x onerror=alert(1)>';
 
@@ -80,7 +84,9 @@ const TASK_ROW: TaskRecord = {
 };
 
 const detail = (
-  flags: Partial<Pick<TaskDetailResponse, 'can_take' | 'can_assign' | 'can_unassign'>>,
+  flags: Partial<
+    Pick<TaskDetailResponse, 'can_take' | 'can_assign' | 'can_unassign' | 'take_writes_back'>
+  >,
   task: Partial<TaskRecord> = {},
 ): TaskDetailResponse => ({
   task: { ...TASK_ROW, ...task },
@@ -138,14 +144,27 @@ interface Sent {
   readonly key: string | null;
 }
 
+/** The people `GET /api/projects/:id/owner-candidates` answers by default, by name. */
+const CANDIDATES = {
+  items: [
+    { user_id: ME, name: 'Fake Operator', writes_back: false },
+    { user_id: PETRA, name: 'Petra', writes_back: true },
+    { user_id: VOJTECH, name: 'Vojtěch', writes_back: true },
+  ],
+};
+
 const start = (
   task: TaskDetailResponse,
   role: 'member' | 'maintainer' | 'admin' = 'member',
   /** What the owner command answers; accepted by default. */
   ownerAnswer: () => Response = () =>
     json({ task_id: TASK, state: 'active', current_stage: 'implementation', performed: true }),
+  /** What the owner candidates read answers. */
+  candidatesAnswer: () => Response = () => json(CANDIDATES),
 ) => {
   const sent: Sent[] = [];
+  /** The query string of every owner candidates read. */
+  const candidateReads: string[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     const path = new URL(url, 'http://localhost').pathname;
@@ -161,6 +180,10 @@ const start = (
         : json({ task_id: TASK, state: 'active', current_stage: null, performed: true });
     }
     if (path === `/api/tasks/${TASK}`) return json(task);
+    if (path === `/api/projects/${PROJECT}/owner-candidates`) {
+      candidateReads.push(new URL(url, 'http://localhost').search);
+      return candidatesAnswer();
+    }
     if (path === '/api/projects') return json({ items: [] });
     if (path === '/api/org/inbox') return json({ questions: [], approvals: [] });
     if (path === `/api/tasks/${TASK}/asks`) return json({ items: [] });
@@ -172,7 +195,7 @@ const start = (
   }) as typeof fetch;
   window.history.pushState({}, '', `/tasks/${TASK}`);
   const view = render(createApp({ fetchImpl, realtime: false }).element);
-  return { view, sent };
+  return { view, sent, candidateReads };
 };
 
 /** The header's owner line, once the read and the session are in. */
@@ -283,11 +306,12 @@ describe('the owner line', () => {
 });
 
 describe('what each role is offered (the read’s can_* flags)', () => {
-  it('offers a member Take it on an unassigned task, and nothing else', async () => {
+  it('offers a member Take it on an unassigned task, and nothing else — no Assign…', async () => {
     start(detail({ can_take: true }));
     const line = await ownerLine();
     expect(await within(line).findByRole('button', { name: 'Take it' })).toBeTruthy();
     expect(within(line).queryByRole('button', { name: 'Unassign' })).toBeNull();
+    expect(within(line).queryByRole('button', { name: 'Assign…' })).toBeNull();
     expect(await menuOwnerItems()).toEqual(['Take it']);
   });
 
@@ -307,17 +331,30 @@ describe('what each role is offered (the read’s can_* flags)', () => {
     expect(await menuOwnerItems()).toEqual([]);
   });
 
-  it('offers a maintainer Take it and Unassign on somebody else’s task, and no Assign… yet', async () => {
+  it('offers a maintainer Take it, Assign… and Unassign on somebody else’s task', async () => {
     start(
       detail({ can_take: true, can_assign: true, can_unassign: true }, OWNED_BY_VOJTECH),
       'maintainer',
     );
     const line = await ownerLine();
-    // One secondary button by the line: the first action that applies.
+    // By the line: the first of Take it and Unassign that applies, and Assign… beside it.
     expect(await within(line).findByRole('button', { name: 'Take it' })).toBeTruthy();
+    expect(
+      within(line)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['Take it', 'Assign…']);
+    expect(await menuOwnerItems()).toEqual(['Take it', 'Assign…', 'Unassign']);
+    // Never the page's amber primary.
+    expect(primaryLabels(screen.getByRole('main'))).not.toContain('Assign…');
+  });
+
+  it('offers Assign… by itself where it is the only owner action', async () => {
+    start(detail({ can_assign: true }), 'maintainer');
+    const line = await ownerLine();
+    expect(await within(line).findByRole('button', { name: 'Assign…' })).toBeTruthy();
     expect(within(line).getAllByRole('button')).toHaveLength(1);
-    // BACKLOG 1297: the picker has no read of its candidates yet, so it is offered to nobody.
-    expect(await menuOwnerItems()).toEqual(['Take it', 'Unassign']);
+    expect(await menuOwnerItems()).toEqual(['Assign…']);
   });
 
   it('never makes the owner control the page’s amber primary', async () => {
@@ -331,6 +368,12 @@ describe('what each role is offered (the read’s can_* flags)', () => {
     expect(ownerOffers({})).toEqual([]);
     expect(ownerOffers({ can_take: true, can_unassign: true })).toEqual(['take', 'unassign']);
     expect(ownerOffers({ can_take: false, can_unassign: true })).toEqual(['unassign']);
+    expect(ownerOffers({ can_take: true, can_assign: true, can_unassign: true })).toEqual([
+      'take',
+      'assign',
+      'unassign',
+    ]);
+    expect(ownerOffers({ can_assign: false })).toEqual([]);
   });
 });
 
@@ -380,11 +423,8 @@ describe('taking a task', () => {
     expect(await ownerDone()).toBe('Assigned to you. Your machine picks it up at the next stage.');
   });
 
-  it('says the tracker is assigned too when the project writes it back', async () => {
-    start(
-      detail({ can_take: true }, { ...OWNED_BY_VOJTECH, owner_writes_back: true }),
-      'maintainer',
-    );
+  it('says the tracker is assigned too when this reader’s take writes it back', async () => {
+    start(detail({ can_take: true, take_writes_back: true }, OWNED_BY_VOJTECH), 'maintainer');
     const line = await ownerLine();
     await userEvent.setup().click(await within(line).findByRole('button', { name: 'Take it' }));
     const dialog = await screen.findByRole(
@@ -396,6 +436,34 @@ describe('taking a task', () => {
     expect(document.getElementById(describedBy)?.textContent).toBe(
       'Their machine stops getting it, and this also assigns ACME-12 in Jira.',
     );
+  });
+
+  it('says nothing of the tracker when the owner is written back but this reader’s take is not', async () => {
+    // owner_writes_back is about Vojtěch; the reader has no linked account, so the take writes nothing.
+    start(
+      detail(
+        { can_take: true, take_writes_back: false },
+        {
+          ...OWNED_BY_VOJTECH,
+          unlinked_assignee: { display_name: 'Jan Novák' },
+          owner_writes_back: true,
+        },
+      ),
+      'maintainer',
+    );
+    const line = await ownerLine();
+    await userEvent.setup().click(await within(line).findByRole('button', { name: 'Take it' }));
+    const dialog = await screen.findByRole(
+      'dialog',
+      { name: 'Take ACME-12 from Vojtěch?' },
+      { timeout: 5000 },
+    );
+    const describedBy = dialog.getAttribute('aria-describedby') ?? '';
+    expect(document.getElementById(describedBy)?.textContent).toBe(
+      'Their machine stops getting it.',
+    );
+    expect(dialog.textContent).not.toContain('Jira');
+    expect(dialog.textContent).not.toContain('Jan Novák');
   });
 
   it('keeps the dialog open and Cancel sends nothing', async () => {
@@ -411,45 +479,43 @@ describe('taking a task', () => {
     expect(sent).toHaveLength(0);
   });
 
-  it('confirms against an owner who is somebody else, and a held ticket only when it writes back', () => {
-    const none = { owner: null, unlinked_assignee: null, owner_writes_back: false };
+  it('confirms against an owner who is somebody else, and a held ticket only when the take writes back', () => {
+    const none = { owner: null, unlinked_assignee: null };
     const held = { display_name: 'Jan Novák' };
-    expect(takeConfirmFor(none, ME)).toBeNull();
+    expect(takeConfirmFor(none, ME, false)).toBeNull();
+    expect(takeConfirmFor(none, ME, true)).toBeNull();
     expect(
-      takeConfirmFor({ ...none, owner: { user_id: ME, name: 'Fake Operator' } }, ME),
+      takeConfirmFor({ ...none, owner: { user_id: ME, name: 'Fake Operator' } }, ME, true),
     ).toBeNull();
-    expect(takeConfirmFor({ ...none, owner: { user_id: VOJTECH, name: 'Vojtěch' } }, ME)).toEqual({
-      kind: 'owner',
-      ownerName: 'Vojtěch',
-      replacing: null,
-    });
-    expect(takeConfirmFor({ ...none, owner: { user_id: VOJTECH, name: ' ' } }, ME)).toEqual({
+    expect(
+      takeConfirmFor({ ...none, owner: { user_id: VOJTECH, name: 'Vojtěch' } }, ME, false),
+    ).toEqual({ kind: 'owner', ownerName: 'Vojtěch', replacing: null });
+    expect(takeConfirmFor({ ...none, owner: { user_id: VOJTECH, name: ' ' } }, ME, false)).toEqual({
       kind: 'owner',
       ownerName: 'a person with no name',
       replacing: null,
     });
     expect(
       takeConfirmFor(
-        {
-          owner: { user_id: VOJTECH, name: 'Vojtěch' },
-          unlinked_assignee: held,
-          owner_writes_back: true,
-        },
+        { owner: { user_id: VOJTECH, name: 'Vojtěch' }, unlinked_assignee: held },
         ME,
+        true,
       ),
     ).toEqual({ kind: 'owner', ownerName: 'Vojtěch', replacing: 'Jan Novák' });
-    // Held only by the tracker's unlinked assignee: asked only when the assignment is written back.
-    expect(takeConfirmFor({ ...none, unlinked_assignee: held }, ME)).toBeNull();
-    expect(
-      takeConfirmFor({ ...none, unlinked_assignee: held, owner_writes_back: true }, ME),
-    ).toEqual({ kind: 'held', assignee: 'Jan Novák' });
+    // Held only by the tracker's unlinked assignee: asked only when this reader's take writes back.
+    expect(takeConfirmFor({ ...none, unlinked_assignee: held }, ME, false)).toBeNull();
+    expect(takeConfirmFor({ ...none, unlinked_assignee: held }, ME, true)).toEqual({
+      kind: 'held',
+      assignee: 'Jan Novák',
+    });
   });
 
-  it('asks before taking a ticket the tracker assigns to somebody, when it writes back', async () => {
+  it('asks before taking a ticket the tracker assigns to somebody, when the take writes back', async () => {
+    // Nobody owns it, so owner_writes_back is false; the reader is linked, so the take writes back.
     const { sent } = start(
       detail(
-        { can_take: true },
-        { unlinked_assignee: { display_name: `Jan Novák ${HOSTILE}` }, owner_writes_back: true },
+        { can_take: true, take_writes_back: true },
+        { unlinked_assignee: { display_name: `Jan Novák ${HOSTILE}` }, owner_writes_back: false },
       ),
       'maintainer',
     );
@@ -473,9 +539,13 @@ describe('taking a task', () => {
     });
   });
 
-  it('takes a ticket the tracker assigns to somebody at once when nothing is written back', async () => {
+  it('takes a ticket the tracker assigns to somebody at once when the take writes nothing back', async () => {
     const { sent } = start(
-      detail({ can_take: true }, { unlinked_assignee: { display_name: 'Jan Novák' } }),
+      detail(
+        { can_take: true, take_writes_back: false },
+        // Even where the project writes owners back: this reader's take does not.
+        { unlinked_assignee: { display_name: 'Jan Novák' }, owner_writes_back: true },
+      ),
       'maintainer',
     );
     const line = await ownerLine();
@@ -487,14 +557,14 @@ describe('taking a task', () => {
     expect(await ownerDone()).toBe('Assigned to you. Your machine picks it up at the next stage.');
   });
 
-  it('names the tracker assignee a take from an owner replaces, when it writes back', async () => {
+  it('names the tracker assignee a take from an owner replaces, when the take writes back', async () => {
     start(
       detail(
-        { can_take: true },
+        { can_take: true, take_writes_back: true },
         {
           ...OWNED_BY_VOJTECH,
           unlinked_assignee: { display_name: 'Jan Novák' },
-          owner_writes_back: true,
+          owner_writes_back: false,
         },
       ),
       'maintainer',
@@ -572,5 +642,150 @@ describe('unassigning, and a refusal', () => {
     expect(await ownerRefusal()).toContain(
       'The task has finished, so its owner no longer changes.',
     );
+  });
+});
+
+/** Open *Assign…* from the owner line and answer the picker once its people are read. */
+const openPicker = async (): Promise<HTMLElement> => {
+  const line = await ownerLine();
+  await userEvent.setup().click(await within(line).findByRole('button', { name: 'Assign…' }));
+  return screen.findByRole('dialog', { name: 'Assign ACME-12' }, { timeout: 5000 });
+};
+
+/** Choose `userId` in the open picker and answer what it says will follow. */
+const choose = async (dialog: HTMLElement, userId: string): Promise<string> => {
+  const field = await within(dialog).findByLabelText('Person');
+  await userEvent.setup().selectOptions(field, userId);
+  return dialog.querySelector('[data-owner-assign-consequence]')?.textContent ?? '';
+};
+
+describe('assigning a task (Assign…)', () => {
+  it('reads the people for this task, says what follows, sends their id and says it is done', async () => {
+    const { sent, candidateReads } = start(
+      detail(
+        { can_take: true, can_assign: true, can_unassign: true },
+        { ...OWNED_BY_VOJTECH, unlinked_assignee: { display_name: `Jan Novák ${HOSTILE}` } },
+      ),
+      'maintainer',
+    );
+    const dialog = await openPicker();
+    // Petra writes back: the tracker is reassigned to her, replacing who it shows.
+    expect(await choose(dialog, PETRA)).toBe(
+      `Assign ACME-12 to Petra? Vojtěch’s machine stops getting it. This also assigns ACME-12 in Jira to Petra, replacing Jan Novák ${HOSTILE}.`,
+    );
+    expect(dialog.querySelector('img')).toBeNull();
+    expect(candidateReads).toEqual([`?task_id=${TASK}`]);
+    // Nothing is sent until the person presses Assign.
+    expect(sent).toHaveLength(0);
+    await userEvent.setup().click(within(dialog).getByRole('button', { name: 'Assign' }));
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(sent[0]?.path).toBe(`/api/tasks/${TASK}/owner`);
+    expect(sent[0]?.body).toEqual({ user_id: PETRA });
+    expect(sent[0]?.key).not.toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(await ownerDone()).toBe(
+      'Assigned to Petra. Their machine picks it up at the next stage.',
+    );
+  });
+
+  it('says the tracker still shows its assignee when the chosen person is not written back', async () => {
+    start(
+      detail(
+        { can_assign: true },
+        { ...OWNED_BY_VOJTECH, owner_source: 'tracker', owner_writes_back: false },
+      ),
+      'maintainer',
+      undefined,
+      () => json({ items: [{ user_id: PETRA, name: 'Petra', writes_back: false }] }),
+    );
+    const dialog = await openPicker();
+    const said = await choose(dialog, PETRA);
+    expect(said).toBe(
+      'Assign ACME-12 to Petra? Vojtěch’s machine stops getting it. Jira still shows Vojtěch.',
+    );
+    expect(said).not.toContain('assigns');
+  });
+
+  it('says nothing of the tracker when nobody owns it, nobody holds it and the person is not written back', async () => {
+    start(detail({ can_assign: true }), 'maintainer', undefined, () =>
+      json({ items: [{ user_id: PETRA, name: 'Petra', writes_back: false }] }),
+    );
+    const dialog = await openPicker();
+    expect(await choose(dialog, PETRA)).toBe('Assign ACME-12 to Petra?');
+  });
+
+  it('says the reader’s own machine stops getting it when they own it now', async () => {
+    const { sent } = start(
+      detail({ can_assign: true, can_unassign: true }, OWNED_BY_ME),
+      'maintainer',
+    );
+    const dialog = await openPicker();
+    expect(await choose(dialog, PETRA)).toBe(
+      'Assign ACME-12 to Petra? Your machine stops getting it. This also assigns ACME-12 in Jira to Petra.',
+    );
+    await userEvent.setup().click(within(dialog).getByRole('button', { name: 'Assign' }));
+    await waitFor(() => {
+      expect(sent[0]?.body).toEqual({ user_id: PETRA });
+    });
+  });
+
+  it('says why when nobody else in the project can own tasks', async () => {
+    start(detail({ can_assign: true }, OWNED_BY_VOJTECH), 'maintainer', undefined, () =>
+      json({ items: [{ user_id: VOJTECH, name: 'Vojtěch', writes_back: true }] }),
+    );
+    const dialog = await openPicker();
+    await waitFor(() => {
+      expect(dialog.querySelector('[data-owner-picker-empty]')?.textContent).toBe(
+        'Nobody else in this project can own tasks: owning one takes the member role or above here.',
+      );
+    });
+    expect(
+      (within(dialog).getByRole('button', { name: 'Assign' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('says so when the people could not be read', async () => {
+    start(detail({ can_assign: true }), 'maintainer', undefined, () =>
+      json({ error: { code: 'forbidden', message: 'not a maintainer here' } }, 403),
+    );
+    const dialog = await openPicker();
+    expect(
+      await within(dialog).findByText('The people who can own it could not be read.'),
+    ).toBeTruthy();
+    expect(within(dialog).queryByLabelText('Person')).toBeNull();
+  });
+
+  it('says each refusal in words inside the picker, and nothing was done', async () => {
+    const refusals = [
+      [
+        403,
+        'owner_change_not_permitted',
+        'Your role does not allow this change of owner. Reload to see who owns it now.',
+      ],
+      [409, 'task_finished', 'The task has finished, so its owner no longer changes.'],
+      [
+        422,
+        'owner_not_project_member',
+        'That person is not a member of this project, so they cannot own it.',
+      ],
+    ] as const;
+    for (const [status, code, words] of refusals) {
+      cleanup();
+      start(detail({ can_assign: true }), 'maintainer', () =>
+        json({ error: { code, message: 'refused' } }, status),
+      );
+      const dialog = await openPicker();
+      await choose(dialog, PETRA);
+      await userEvent.setup().click(within(dialog).getByRole('button', { name: 'Assign' }));
+      const title = await within(dialog).findByText('The owner was not changed.');
+      expect(title.closest('[data-flash]')?.textContent).toContain(words);
+      // The picker stays open with the refusal beside its button; no status line claims a change.
+      expect(screen.getByRole('dialog', { name: 'Assign ACME-12' })).toBeTruthy();
+      expect(document.querySelector('[data-owner-done]')).toBeNull();
+    }
   });
 });

@@ -10,25 +10,26 @@
  *   Linked accounts for a reader who may open it (an administrator; the screen's `minRole`, so a
  *   maintainer below that is not offered a link that would redirect — self-service linking is
  *   S-26.8a's).
- * - **The actions** are *Take it* and *Unassign*, each offered only when the read's `can_take` /
- *   `can_unassign` says so — the domain's `ownerCapabilities`, the matrix the route decides with —
- *   so a member sees *Take it* on an unassigned task and *Unassign* on their own, and a maintainer
- *   both on anybody's. The first that applies is the **one secondary button** by the line; every
- *   one is in the header's `···` menu ({@link OwnerMenuItems}). Neither is ever the page's amber
- *   primary: that stays the callout's (TD-033).
- * - *Assign…* (a person picker, maintainers) is built — `OwnerPicker` in `./task-owner-dialogs.tsx`,
- *   which takes its candidates as a prop — and **not offered yet**: the only read of people,
- *   `GET /api/org/users`, includes non-members and disabled users, which the command refuses, and the
- *   read of exactly the people it accepts is not served yet (BACKLOG 1297 wires it).
+ * - **The actions** are *Take it*, *Assign…* and *Unassign*, each offered only when the read's
+ *   `can_take` / `can_assign` / `can_unassign` says so — the domain's `ownerCapabilities`, the
+ *   matrix the route decides with — so a member sees *Take it* on an unassigned task and *Unassign*
+ *   on their own, and a maintainer all three on anybody's. The first of *Take it* and *Unassign*
+ *   that applies is a secondary button by the line, with *Assign…* beside it; every one is in the
+ *   header's `···` menu ({@link OwnerMenuItems}). None is ever the page's amber primary: that stays
+ *   the callout's (TD-033).
+ * - *Assign…* opens the person picker (`AssignDialog` in `./task-owner-dialogs.tsx`, a lazy chunk)
+ *   over `GET /api/projects/:id/owner-candidates?task_id=`, exactly the people the command accepts;
+ *   the tracker is mentioned per candidate (`writes_back`), and the toast is *Assigned to Petra.
+ *   Their machine picks it up at the next stage.*
  * - **Taking a task somebody else owns asks first**, naming them: *Take DEMO-1 from Vojtěch? Their
- *   machine stops getting it.*, confirmed by *Take it from Vojtěch*; when the project writes the
- *   assignment back to the tracker (`owner_writes_back`) it adds *also assigns DEMO-1 in Jira*
+ *   machine stops getting it.*, confirmed by *Take it from Vojtěch*; when *Take it* by this reader
+ *   writes the assignment back to the tracker (`take_writes_back`, per caller — not
+ *   `owner_writes_back`, which is about the current owner) it adds *also assigns DEMO-1 in Jira*
  *   (*, replacing Jan Novák* when the tracker shows a person the platform cannot link), and says
  *   nothing of the tracker otherwise. **Taking a task nobody owns that the tracker assigns to such
- *   a person** asks only when the assignment is written back — *Take DEMO-2? This also assigns
- *   DEMO-2 in Jira to you, replacing Jan Novák.*, *Take it and assign in Jira* — and is taken at
- *   once when it is not ({@link takeConfirmFor}). The dialog is a lazy chunk, fetched the first
- *   time it opens.
+ *   a person** asks only when the take writes back — *Take DEMO-2? This also assigns DEMO-2 in
+ *   Jira to you, replacing Jan Novák.*, *Take it and assign in Jira* — and is taken at once when it
+ *   does not ({@link takeConfirmFor}). The dialog is a lazy chunk, fetched the first time it opens.
  * - **Unassign never writes to the tracker** (TD-031's amendment item 4): its words never claim a
  *   tracker change, and where assignments are written back they say the ticket stays assigned
  *   there.
@@ -36,7 +37,8 @@
  *   machine picks it up at the next stage.* A refusal (`403 owner_change_not_permitted`,
  *   `409 task_finished`, `422 owner_not_project_member`) is said in words (`api/read-error.ts`).
  *
- * Every word is `ui/humanize.ts`' `OWNER_WORDS`.
+ * Every word on this module's own surface is `ui/humanize.ts`' `OWNER_WORDS`; the picker's are
+ * `./owner-assign-words.ts`, in the lazy chunk.
  */
 import type { TaskDetailResponse, TaskRecord } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
@@ -58,12 +60,16 @@ const loadDialogs = () => import('./task-owner-dialogs.js');
 const TakeConfirmDialog = lazy(async () => ({
   default: (await loadDialogs()).TakeConfirmDialog,
 }));
+const AssignDialog = lazy(async () => ({
+  default: (await loadDialogs()).AssignDialog,
+}));
 
-/** An owner action the page may offer. *Assign…* joins when its read is served (BACKLOG 1297). */
-export type OwnerAction = 'take' | 'unassign';
+/** An owner action the page may offer. */
+export type OwnerAction = 'take' | 'assign' | 'unassign';
 
 const ACTION_LABEL: Readonly<Record<OwnerAction, string>> = {
   take: OWNER_WORDS['owner.action.take'],
+  assign: OWNER_WORDS['owner.action.assign'],
   unassign: OWNER_WORDS['owner.action.unassign'],
 };
 
@@ -72,9 +78,10 @@ const ACTION_LABEL: Readonly<Record<OwnerAction, string>> = {
  * server's own flags, nothing derived — a flag that is absent (an older server) offers nothing.
  */
 export const ownerOffers = (
-  detail: Pick<TaskDetailResponse, 'can_take' | 'can_unassign'>,
+  detail: Pick<TaskDetailResponse, 'can_take' | 'can_assign' | 'can_unassign'>,
 ): readonly OwnerAction[] => [
   ...(detail.can_take === true ? (['take'] as const) : []),
+  ...(detail.can_assign === true ? (['assign'] as const) : []),
   ...(detail.can_unassign === true ? (['unassign'] as const) : []),
 ];
 
@@ -87,15 +94,17 @@ export const ownerName = (owner: TaskOwnerView): string =>
  *
  * - somebody **other than the reader** owns the task — confirmed against their name, with the
  *   tracker assignee it would replace when the tracker shows a person the platform cannot link
- *   (the dialog says it only when the assignment is written back);
- * - nobody owns it, the tracker assigns it to such a person, **and** the project writes the
- *   assignment back (`owner_writes_back`, S-26.3) — taking it reassigns the ticket in the tracker,
- *   so it asks; when nothing is written back, taking it changes nothing there and asks nothing;
+ *   (the dialog says it only when the take writes back);
+ * - nobody owns it, the tracker assigns it to such a person, **and** *Take it* by this reader
+ *   writes the assignment back (`take_writes_back`, S-26.3, the read's per-caller answer) — taking
+ *   it reassigns the ticket in the tracker, so it asks; when it does not, taking it changes nothing
+ *   there and asks nothing;
  * - otherwise (nobody owns it and nobody holds it, or the reader owns it) — at once.
  */
 export const takeConfirmFor = (
-  task: Pick<TaskRecord, 'owner' | 'unlinked_assignee' | 'owner_writes_back'>,
+  task: Pick<TaskRecord, 'owner' | 'unlinked_assignee'>,
   viewerId: string | null,
+  takeWritesBack: boolean,
 ): TakeConfirm | null => {
   const owner = task.owner ?? null;
   const unlinked = task.unlinked_assignee ?? null;
@@ -104,7 +113,7 @@ export const takeConfirmFor = (
       ? null
       : { kind: 'owner', ownerName: ownerName(owner), replacing: unlinked?.display_name ?? null };
   }
-  return unlinked !== null && task.owner_writes_back === true
+  return unlinked !== null && takeWritesBack
     ? { kind: 'held', assignee: unlinked.display_name }
     : null;
 };
@@ -117,10 +126,17 @@ export const useOwnerControl = (detail: TaskDetailResponse) => {
   const [confirming, setConfirming] = useState(false);
   // The confirmation is a lazy chunk, mounted on first use and kept.
   const [loaded, setLoaded] = useState(false);
+  // The picker likewise: its chunk and its candidates read only once somebody opens it.
+  const [assigning, setAssigning] = useState(false);
+  const [pickerLoaded, setPickerLoaded] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   // No session read yet: nobody to take it for, so nothing is offered.
   const offers = viewer === null ? [] : ownerOffers(detail);
-  const takeConfirm = takeConfirmFor(detail.task, viewer?.id ?? null);
+  const takeConfirm = takeConfirmFor(
+    detail.task,
+    viewer?.id ?? null,
+    detail.take_writes_back === true,
+  );
 
   const send = (userId: string | null, words: string): void => {
     setDone(null);
@@ -128,6 +144,7 @@ export const useOwnerControl = (detail: TaskDetailResponse) => {
       onSuccess: () => {
         setDone(words);
         setConfirming(false);
+        setAssigning(false);
       },
     });
   };
@@ -135,6 +152,13 @@ export const useOwnerControl = (detail: TaskDetailResponse) => {
     if (viewer !== null) {
       send(viewer.id, OWNER_WORDS['owner.took']);
     }
+  };
+  /** The picker's choice: the reader picking themself is told what *Take it* would say. */
+  const assign = (userId: string, name: string): void => {
+    send(
+      userId,
+      userId === viewer?.id ? OWNER_WORDS['owner.took'] : OWNER_WORDS['owner.assigned'](name),
+    );
   };
   const run = (action: OwnerAction): void => {
     if (action === 'unassign') {
@@ -146,6 +170,10 @@ export const useOwnerControl = (detail: TaskDetailResponse) => {
           detail.task.owner_writes_back === true ? trackerName(detail.task.ticket.provider) : null,
         ),
       );
+    } else if (action === 'assign') {
+      command.reset();
+      setPickerLoaded(true);
+      setAssigning(true);
     } else if (takeConfirm !== null) {
       command.reset();
       setLoaded(true);
@@ -160,9 +188,13 @@ export const useOwnerControl = (detail: TaskDetailResponse) => {
     takeConfirm,
     run,
     take,
+    assign,
     confirming,
     setConfirming,
     loaded,
+    assigning,
+    setAssigning,
+    pickerLoaded,
     done,
     command,
   };
@@ -183,7 +215,9 @@ export const OwnerLine = ({
   const unlinked = task.unlinked_assignee ?? null;
   const tracker = trackerName(task.ticket.provider);
   const words = OWNER_WORDS['owner.assigned_in_tracker_unlinked'];
-  const [first] = control.offers;
+  // The first of *Take it* and *Unassign* that applies, with *Assign…* beside it.
+  const first = control.offers.find((action) => action !== 'assign');
+  const offersAssign = control.offers.includes('assign');
   const canLink = isOrgSectionFor('identities', control.viewer?.role);
   return (
     <span
@@ -234,14 +268,26 @@ export const OwnerLine = ({
           {ACTION_LABEL[first]}
         </Button>
       )}
+      {offersAssign ? (
+        <Button
+          size="sm"
+          data-owner-action="assign"
+          disabled={control.command.isPending}
+          onClick={() => {
+            control.run('assign');
+          }}
+        >
+          {ACTION_LABEL.assign}
+        </Button>
+      ) : null}
     </span>
   );
 };
 
 /**
- * What the last owner change did, or why it was refused — under the header's meta line — and the
- * confirmation *Take it* opens on somebody else's task. A refusal while the confirmation is open
- * stays in it, beside its button.
+ * What the last owner change did, or why it was refused — under the header's meta line — the
+ * confirmation *Take it* opens on somebody else's task, and *Assign…*'s picker. A refusal while
+ * either is open stays in it, beside its button.
  */
 export const OwnerFeedback = ({
   detail,
@@ -255,10 +301,10 @@ export const OwnerFeedback = ({
     <>
       {control.done === null ? null : (
         <p role="status" data-owner-done="" className="text-sm text-fg-muted">
-          {control.done}
+          <UntrustedText value={control.done} />
         </p>
       )}
-      {control.command.isError && !control.confirming ? (
+      {control.command.isError && !control.confirming && !control.assigning ? (
         <ErrorNotice title={OWNER_WORDS['owner.refused']} error={control.command.error} />
       ) : null}
       {!control.loaded || control.takeConfirm === null ? null : (
@@ -268,11 +314,25 @@ export const OwnerFeedback = ({
             onOpenChange={control.setConfirming}
             ticketKey={task.ticket.key}
             confirm={control.takeConfirm}
-            writesBack={task.owner_writes_back === true}
+            writesBack={detail.take_writes_back === true}
             tracker={trackerName(task.ticket.provider)}
             pending={control.command.isPending}
             error={control.command.isError ? control.command.error : null}
             onConfirm={control.take}
+          />
+        </Suspense>
+      )}
+      {!control.pickerLoaded ? null : (
+        <Suspense fallback={null}>
+          <AssignDialog
+            open={control.assigning}
+            onOpenChange={control.setAssigning}
+            task={task}
+            viewerId={control.viewer?.id ?? null}
+            tracker={trackerName(task.ticket.provider)}
+            pending={control.command.isPending}
+            error={control.assigning && control.command.isError ? control.command.error : null}
+            onAssign={control.assign}
           />
         </Suspense>
       )}

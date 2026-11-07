@@ -43,6 +43,7 @@ import {
   orgSettingsResponseSchema,
   orgStatsResponseSchema,
   orgUsersResponseSchema,
+  ownerCandidatesResponseSchema,
   pipelineGraphSchema,
   projectAuditResponseSchema,
   projectBindingsResponseSchema,
@@ -109,6 +110,8 @@ export const IDS = {
   taskCiHeldTimedOut: id(29),
   // S-26.8b: the person who owns DEMO-1 — not the signed-in operator, so *Take it* asks first.
   ownerVojtech: id(95),
+  // S-26.8b's follow-up: a person *Assign…* offers, linked to the tracker.
+  ownerPetra: id(96),
 } as const;
 
 /** S-26.8b: DEMO-1's owner, as the task DTO publishes them. */
@@ -169,6 +172,9 @@ export const HOSTILE = {
  * `unlinked_assignee`). Provider text, so the corpus makes it hostile (BD-022).
  */
 export const UNLINKED_ASSIGNEE = `Jan Novák ${HOSTILE.script}`;
+
+/** S-26.8b's follow-up: a person *Assign…* offers, whose assignment is written back. */
+export const CANDIDATE_NAME = `Petra ${HOSTILE.script}`;
 
 const now = '2026-09-10T09:00:00.000Z';
 
@@ -1893,6 +1899,19 @@ export const shadowBatches = shadowBatchesResponseSchema.parse({
   items: [],
   can_start: true,
   blocked_reason: null,
+});
+
+/**
+ * `GET /api/projects/:id/owner-candidates` (S-26.1's follow-up, S-26.8b's *Assign…*): by name, the
+ * operator (not written back), Petra (written back — her name carries the hostile script, since a
+ * person's name is their own text) and DEMO-1's owner, who the picker marks and does not offer.
+ */
+export const ownerCandidates = ownerCandidatesResponseSchema.parse({
+  items: [
+    { user_id: IDS.user, name: 'Fake Operator', writes_back: false },
+    { user_id: IDS.ownerPetra, name: CANDIDATE_NAME, writes_back: true },
+    { user_id: IDS.ownerVojtech, name: OWNER_NAME, writes_back: true },
+  ],
 });
 
 /**

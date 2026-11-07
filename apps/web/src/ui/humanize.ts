@@ -623,13 +623,16 @@ export const OWNER_WORDS = {
   'owner.action.assign': 'Assign…',
   'owner.action.unassign': 'Unassign',
   'owner.action.link': 'Link account…',
-  /** The person picker (§ 2's *Assign…*). */
+  /**
+   * The person picker (§ 2's *Assign…*). Its other words — what choosing a person does, the empty
+   * list, the read — are `features/owner-assign-words.ts`, which only the SPA's lazy owner dialogs
+   * import (this module also ships on the worker's local page, BACKLOG 1299).
+   */
   'owner.picker': {
     title: (ticketKey: string): string => `Assign ${ticketKey}`,
     description: 'Their machine picks it up at the next stage.',
     label: 'Person',
     confirm: 'Assign',
-    empty: 'Nobody else in this project can own it.',
     current: ' (owner now)',
   },
   /** The board's segmented control (§ 3), and what an empty filtered board says. */
