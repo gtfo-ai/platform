@@ -255,8 +255,13 @@ moved at that point, and the stage still runs.
 Two switches sit under the slots. **Claim the ticket before the first run** (on unless you switch it
 off): before a task's first run the platform assigns the ticket to the tracker integration's own
 account, moves it to *In progress* if that slot is mapped, and reads the ticket again. If somebody
-else holds the ticket, the task stops in **Needs you** with the reason *assigned elsewhere* (its callout
-says who holds it and what to do, under *Why it stopped*), no run
+else holds the ticket, the task stops in **Needs you** with the reason *assigned elsewhere* — its callout
+says whose ticket it is (*"AUT-6676 is assigned in Jira to Vojtěch Kaizr, so no agent started on it."*, and
+that they have no linked platform account when they have none) and offers the ways out in the box:
+**Take it** or **Assign…** (the same confirmation as the header's, which says when Jira is assigned too),
+**Link account…** for an administrator, **Open in Jira** and **Cancel task…**; once the task has an owner,
+**Give it back to the agent** runs the stage again. The platform's own account of the stop is under
+*Details* (since S-25.14). No run
 starts, and the platform posts one comment on the ticket — *"The agent did not start work on this
 ticket: it is assigned to somebody else. A maintainer has been asked who should take it."* While
 claiming, a ticket already assigned to a person is not started at all, unless you tick **Also start

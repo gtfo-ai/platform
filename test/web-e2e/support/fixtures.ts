@@ -123,6 +123,8 @@ export const IDS = {
   taskWaitingOffline: id(32),
   taskWaitingMine: id(33),
   taskWaitingUnlinked: id(34),
+  // S-25.14: AUT-6676 — stopped because its Jira ticket is assigned to somebody else.
+  taskHeldElsewhere: id(35),
 } as const;
 
 /** S-26.8b: DEMO-1's owner, as the task DTO publishes them. */
@@ -1084,6 +1086,63 @@ export const waitingOfflineTaskDetail = taskDetailResponseSchema.parse({
       entered_at: now,
       exited_at: null,
       outcome: null,
+    },
+  ],
+});
+
+/** S-25.14: the person AUT-6676's Jira ticket is assigned to — not linked to a platform account. */
+export const HELD_ELSEWHERE_ASSIGNEE = 'Vojtěch Kaizr';
+
+/** S-25.14: the ticket's own page, which *Open in Jira* links. */
+export const AUT_6676_URL = 'https://tickets.example.invalid/browse/AUT-6676';
+
+/**
+ * S-25.14 (product/10's Task detail amendment of 2026-11-07), AUT-6676's shape: the first agent
+ * stage's claim read the ticket, found it assigned to Vojtěch Kaizr — a person the platform cannot
+ * link — and stopped with `ticket_assigned_elsewhere`; no run started. The brief is the claim's own,
+ * and names nobody: the callout's sentence comes from `tracker_assignee`. Nobody owns the task, the
+ * operator (an administrator) may take or assign it, and their take writes the assignment back.
+ */
+export const heldElsewhereTaskDetail = taskDetailResponseSchema.parse({
+  ...bugTaskDetail,
+  task: {
+    ...featureTask,
+    id: IDS.taskHeldElsewhere,
+    ticket: { provider: 'jira', key: 'AUT-6676', url: AUT_6676_URL },
+    ticket_title: 'Export invoices as CSV',
+    state: 'needs_human',
+    current_stage: 'refinement',
+    owner: null,
+    owner_source: null,
+    unlinked_assignee: { display_name: HELD_ELSEWHERE_ASSIGNEE },
+    tracker_assignee: { display_name: HELD_ELSEWHERE_ASSIGNEE, user_id: null },
+    owner_writes_back: false,
+    mr_ref: null,
+    waiting: null,
+  },
+  can_take: true,
+  can_assign: true,
+  can_unassign: false,
+  take_writes_back: true,
+  returns: [],
+  stop: null,
+  gate_wait: null,
+  last_gate_wait: null,
+  escalation: {
+    at: '2026-11-05T13:22:12.114Z',
+    reason: 'ticket_assigned_elsewhere',
+    brief:
+      'The platform did not start the "refinement" stage of AUT-6676: the ticket is assigned to somebody other than the account this project’s tracker binding uses. Unassign the ticket or assign it to the binding’s account, then hand the task back.',
+    brief_original_chars: null,
+  },
+  stages: [
+    {
+      stage: 'refinement',
+      attempt: 1,
+      state: 'failed',
+      entered_at: now,
+      exited_at: now,
+      outcome: 'ticket_assigned_elsewhere',
     },
   ],
 });
@@ -2238,6 +2297,7 @@ export const taskPipelines: Readonly<Record<string, unknown>> = {
   [IDS.taskCiTimedOut]: featurePipeline,
   [IDS.taskCiHeld]: featurePipeline,
   [IDS.taskCiHeldTimedOut]: featurePipeline,
+  [IDS.taskHeldElsewhere]: featurePipeline,
 };
 
 export const projectPipelines = { items: [featurePipeline, graphOf('bug', {})] };

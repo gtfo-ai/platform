@@ -1012,6 +1012,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         [`/api/tasks/${fixtures.IDS.taskCiHeld}`]: fixtures.ciHeldTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskWaitingOffline}`]: fixtures.waitingOfflineTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskCiHeldTimedOut}`]: fixtures.ciHeldTimedOutTaskDetail,
+        // S-25.14: AUT-6676 — its Jira ticket is assigned to somebody the platform cannot link.
+        [`/api/tasks/${fixtures.IDS.taskHeldElsewhere}`]: fixtures.heldElsewhereTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskFleetWorker}`]: fixtures.fleetWorkerTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskFleetQueued}`]: fixtures.fleetQueuedTaskDetail,
         [`/api/tasks/${fixtures.IDS.taskEpic}/breakdown`]: fixtures.epicBreakdown,
