@@ -1942,7 +1942,7 @@ export const taskDetailResponseSchema = z.strictObject({
   /**
    * The current stage's open CI wait (backlog 1078) — see {@link gateWaitSchema}; `null` when there
    * is none. The server always sends it; the key is optional only so the web app's fixtures need
-   * not name it until a UI slice reads it (`BACKLOG.md` 1087 makes it required).
+   * not name it until a UI slice reads it (`BACKLOG.md` 1090 makes it required).
    */
   gate_wait: gateWaitSchema.nullable().optional(),
   stages: z.array(
