@@ -1698,6 +1698,9 @@ new task writer, intake) · migration **0104** · TD-031 amendment items 1–3 a
      test on `routeNewOffer`). Execution settings' *head start* hint is now true (backlog **945**).
   6. `GET …/tasks?owner=me|none` filters, and the task DTO carries `owner`, `owner_source`, the unlinked assignee's
      display name and `owner_writes_back`. `client-census` and `data-model:check` stay green.
+- Follow-up (a PR of its own, no migration): `GET /api/projects/:id/owner-candidates`, the *Assign…* picker's
+  people — exactly whom the owner command accepts (`userMayOwnInProjectSql`), `task.owner.assign` at the guard,
+  sorted by name then id (technical/08). Its caller is S-26.8b's picker.
 
 **S-26.2 — The claim keeps a member's ticket** · depends S-26.1 · risk **high** (writes to real tickets) · no
 migration · TD-031 amendment item 5, BD-031 amendment 2.
@@ -1858,7 +1861,9 @@ S-26.6, S-26.3 · risk low · no migration.
 **S-26.8b — The owner on the task page and the board, and the waiting words** (SPA) · depends S-26.1, S-26.5, and
 **S-25.4 on `main`** (it rewrites `task-header.tsx`, `board.tsx`, `board-card.tsx`, `task-overview.tsx`); branch
 after it lands; **the last S-26 slice to start** · risk low · no migration.
-- Files: those four files, `ui/humanize.ts`, `ui/activity.ts`.
+- Files: those four files, `ui/humanize.ts`, `ui/activity.ts`. *Assign…*'s person picker reads
+  `GET /api/projects/:id/owner-candidates` (S-26.1's follow-up); its entry in `client-census.test.ts`'s
+  `SERVED_BEFORE_ITS_CALLER` goes when the picker calls it.
 - New humanize keys:
   - waiting: `waiting.owner_worker_offline`, `waiting.owner_worker_paused`, `waiting.owner_no_worker`,
     `waiting.owner_pick_only`, `waiting.no_taker`, `waiting.assignee_not_linked`;

@@ -114,6 +114,8 @@ const SERVED_BEFORE_ITS_CALLER: Readonly<Record<string, string>> = {
   '/api/me/identities': 'S-26.8a — Your accounts: the linked list',
   '/api/me/identities/{}/{}': 'S-26.8a — Your accounts: *Unlink*',
   '/api/org/identities/{}/{}': 'S-26.8a — Linked accounts (admin): *Unlink*',
+  // S-26.1's follow-up: the *Assign…* picker's people, read before S-26.8b's picker calls it.
+  '/api/projects/{}/owner-candidates': 'S-26.8b',
 };
 
 /**
