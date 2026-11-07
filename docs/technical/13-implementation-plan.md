@@ -1870,7 +1870,8 @@ after it lands; **the last S-26 slice to start** · risk low · no migration.
   `SERVED_BEFORE_ITS_CALLER` goes when the picker calls it.
 - New humanize keys:
   - waiting: `waiting.owner_worker_offline`, `waiting.owner_worker_paused`, `waiting.owner_no_worker`,
-    `waiting.owner_pick_only`, `waiting.no_taker`, `waiting.assignee_not_linked`;
+    `waiting.owner_pick_only`, `waiting.no_taker`, `waiting.assignee_not_linked`,
+    `waiting.owner_worker_cannot_take` (S-26.5's seventh reason, worded in the UX spec §4);
   - owner: `owner.unassigned`, `owner.assigned_in_tracker_unlinked`, `owner.took`, `owner.assigned`,
     `owner.unassigned_done`.
 
@@ -1978,8 +1979,31 @@ Principles, as in M25:
   Novák*, who isn't linked to a platform account." The name is UntrustedText. Next steps: for a maintainer, *Link
   account…* (opens Settings → Linked accounts, prefilled) and *Assign…*; for anyone allowed, *Take it*. Short form for
   Agents/Home rows: "Waiting · assigned to Jan Novák (not linked)".
+- `waiting.owner_worker_cannot_take` `[added at S-26.8b part 2: S-26.5's seventh reason]`: the owner's machine is
+  connected and not paused by its owner, and still can't take this task. `blockers` is sorted most-fundamental-first,
+  and the words name the **first** one only:
+
+  | First blocker | Long form (task page) | Short form (board, Agents/Home rows) | The machine's owner's next step |
+  |---|---|---|---|
+  | `images_outdated`, `protocol_outdated` | "Waiting for Vojtěch's machine. It's online but needs an update before it can take this task." | "Waiting · Vojtěch's machine needs an update" | *Open Workers*, and "Update it from its page." |
+  | `images_missing` | "Waiting for Vojtěch's machine. It's online but is still getting its run images." | "Waiting · Vojtěch's machine is still setting up" | *Open Workers* |
+  | `draining` | "Waiting for Vojtěch's machine. It's finishing its current run and taking nothing new." | "Waiting · Vojtěch's machine is finishing a run" | none |
+  | `usage_limited` | "Waiting for Vojtěch's machine. It has reached its Claude usage limit and resumes when the limit resets." | "Waiting · Vojtěch's machine is at its usage limit" | none |
+  | `platform_images_unresolved` | "Waiting for Vojtěch's machine. It can't take this task until the platform's run images are fixed." | "Waiting · Vojtěch's machine waits on the platform" | none (no Update step); an administrator gets *Open Instance* |
+  | any other blocker | "Waiting for Vojtěch's machine. It's online but can't take this task (\<the blocker in the Workers screen's words\>)." | "Waiting · Vojtěch's machine can't take it" | *Open Workers* |
+  | none (the refusal is the offer's or the project's) | "Waiting for Vojtěch's machine. It's online but can't take this task now." | "Waiting · Vojtěch's machine can't take it now" | none |
+
+  `draining` is set by an update **or** by the owner's own *Drain*, so its words never say "update". "Any other
+  blocker" falls to the Workers screen's vocabulary (`WORKER_CLAIM_BLOCKER_WORDS`), so the type system covers every
+  key.
+- **The reader is the person the reason is about** (`waiting.user` is the reader): every form says *your machine* (and
+  *you* for `owner_no_worker` and `owner_pick_only`) instead of the name. `reason: null` means a machine or the server
+  can take it now, and the page says nothing more; `waiting: null` means nothing waits.
 - **Next step:** each one offers *Take it* or *Assign…* to the people allowed to, plus *Open Workers* for the machine-side
-  ones. These go in the task callout and on Agents/Home rows.
+  ones. These go in the task callout and on Agents/Home rows. `[S-26.8b part 2: the callout carries them; an
+  Agents or Home row has one link, which opens the task, so a row shows the short form and the step is on the page it
+  opens. *Open Workers* goes to the machine's owner only, and an administrator gets *Open Instance* for
+  `platform_images_unresolved`. Neither is ever the amber primary.]`
 - *Machine* is the user-facing word, as on the Workers screen. Never say *claim*, *offer* or *seat*.
 
 **5. Linking your own tracker and git accounts**
