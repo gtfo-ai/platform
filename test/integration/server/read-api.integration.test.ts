@@ -997,6 +997,79 @@ describe('the task projection', () => {
    * the three facts the command's default reads. Both directions (rule 42): an agent stage holding a
    * return reason, a running task at the gate, and an escalation's `failed` close publish nothing.
    */
+  /**
+   * **Why a task waits, in the escalation's own words** (BACKLOG 850): the newest `task.escalated`
+   * event's reason and brief, only while the task is `needs_human`, the brief cut at 1 000 with its
+   * length before the cut. Both directions (rule 42): an older escalation is replaced by the newer,
+   * a task that is not `needs_human` publishes none, and a payload missing its brief publishes none.
+   */
+  it('publishes a needs-human task’s newest escalation brief, and nothing for any other task', async () => {
+    const one = async <T extends Record<string, unknown>>(text: string, values: unknown[] = []) =>
+      (await pool.query<T>(text, values)).rows[0] as T;
+    const org = await one<{ id: string }>(
+      "insert into organizations (name) values ('escalation-brief') returning id",
+    );
+    const project = await one<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'escbrief', 'Escalation brief', 'https://git.example.test/acme/escbrief.git')
+       returning id`,
+      [org.id],
+    );
+    const taskAt = async (key: string, state: string) =>
+      (
+        await one<{ id: string }>(
+          `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                              current_stage, stage_attempts)
+           values ($1, 'fake-jira', $2, 'https://jira.example.test/browse/' || $2, 'feature', $3,
+                   'refinement', jsonb_build_object('refinement', 1)) returning id`,
+          [project.id, key, state],
+        )
+      ).id;
+    const escalated = async (
+      taskId: string,
+      seq: number,
+      at: string,
+      payload: Record<string, unknown>,
+    ) => {
+      await pool.query(
+        `insert into events (stream_type, stream_id, stream_seq, type, payload, actor, occurred_at)
+         values ('task', $1, $2, 'task.escalated', $3::jsonb,
+                 '{"kind":"system","component":"test"}'::jsonb, $4)`,
+        [taskId, seq, JSON.stringify({ project_id: project.id, task_id: taskId, ...payload }), at],
+      );
+    };
+
+    const stuck = await taskAt('ESC-1', 'needs_human');
+    await escalated(stuck, 1, '2026-11-05T13:00:00Z', {
+      reason: 'the approval expired',
+      blocker_brief: 'Nobody decided the plan approval in time.',
+    });
+    const long = `The ticket is assigned to somebody else. ${'x'.repeat(1_200)}`;
+    await escalated(stuck, 2, '2026-11-05T14:00:00Z', {
+      reason: 'ticket_assigned_elsewhere',
+      blocker_brief: long,
+    });
+    expect((await findTaskDetail(drizzled, stuck))?.escalation).toEqual({
+      at: '2026-11-05T14:00:00.000Z',
+      reason: 'ticket_assigned_elsewhere',
+      brief: long.slice(0, 1_000),
+      brief_original_chars: long.length,
+    });
+
+    // A task that left the escalation (resumed, retried) is not waiting on it.
+    const moving = await taskAt('ESC-2', 'active');
+    await escalated(moving, 1, '2026-11-05T13:00:00Z', {
+      reason: 'the approval expired',
+      blocker_brief: 'Nobody decided the plan approval in time.',
+    });
+    expect((await findTaskDetail(drizzled, moving))?.escalation).toBeNull();
+
+    // Half a reason is no reason: an escalation written with no brief publishes none.
+    const briefless = await taskAt('ESC-3', 'needs_human');
+    await escalated(briefless, 1, '2026-11-05T13:00:00Z', { reason: 'the approval expired' });
+    expect((await findTaskDetail(drizzled, briefless))?.escalation).toBeNull();
+  });
+
   it('publishes the parked gate’s failure as a length, and nothing where a return could not attach it', async () => {
     const one = async <T extends Record<string, unknown>>(text: string, values: unknown[] = []) =>
       (await pool.query<T>(text, values)).rows[0] as T;

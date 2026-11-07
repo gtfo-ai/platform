@@ -1043,6 +1043,25 @@ export const startDiscoveryResponseSchema = z.strictObject({
 });
 
 /**
+ * Why a task waits for a person (WP-155; BACKLOG 850): its newest `task.escalated` event's `reason`
+ * and `blocker_brief`, with the instant — published only while the task is `needs_human`, `null`
+ * otherwise. The task page's needs-you callout and the onboarding wizard's discovery step show it.
+ * The brief is platform text that can quote a provider or a run's own words, so a reader renders it
+ * as untrusted text (BD-022). It is **bounded at 1 000 characters** (UTF-16 code units;
+ * `NOTIFICATION_DETAIL_MAX`, the chat notification's bound on the same brief — WP-168): the read
+ * cuts a longer one with no marker, and `brief_original_chars` is its length before the cut, `null`
+ * when nothing was cut. `reason` is the event's own: a key (`ticket_assigned_elsewhere`) or a
+ * sentence, as the producer wrote it.
+ */
+export const taskEscalationSchema = z.strictObject({
+  at: isoDateTimeSchema,
+  reason: nonEmptyStringSchema,
+  brief: nonEmptyStringSchema.max(1_000),
+  brief_original_chars: z.int().positive().nullable(),
+});
+export type TaskEscalation = z.infer<typeof taskEscalationSchema>;
+
+/**
  * `GET /api/projects/:id/rediscovery` — whether a maintainer may run discovery again, and what it
  * may cost (WP-94, PROGRESS backlog 230, Q107 (a)).
  *
@@ -1091,14 +1110,7 @@ export const rediscoveryGateResponseSchema = z.strictObject({
        * on the same brief — WP-168, PROGRESS backlog 525): the read cuts a longer one with no marker,
        * and `brief_original_chars` is its length before the cut, `null` when nothing was cut.
        */
-      escalation: z
-        .strictObject({
-          at: isoDateTimeSchema,
-          reason: nonEmptyStringSchema,
-          brief: nonEmptyStringSchema.max(1_000),
-          brief_original_chars: z.int().positive().nullable(),
-        })
-        .nullable(),
+      escalation: taskEscalationSchema.nullable(),
     })
     .nullable(),
 });
@@ -2012,6 +2024,13 @@ export const taskDetailResponseSchema = z.strictObject({
   returns: z.array(taskReturnSchema),
   /** Why the task stopped for a person, when the row says so: {@link taskStopSchema}. */
   stop: taskStopSchema.nullable(),
+  /**
+   * The escalation's own words while the task is `needs_human` (BACKLOG 850): {@link
+   * taskEscalationSchema}. The callout leads with its brief — what stopped the task and the way out,
+   * as the platform wrote it when it stopped — and `null` for every other task, or a `needs_human`
+   * task whose stream holds no escalation with both strings.
+   */
+  escalation: taskEscalationSchema.nullable(),
   /**
    * The task's frozen iteration limits over the defaults — the board's {@link taskListItemSchema}
    * `loop_limits`, so the page can say *round 2 of 3*. `null` when the stored limits do not parse.

@@ -52,6 +52,7 @@
 import {
   CI_GATE_STAGE,
   ciPendingReadSchema,
+  NOTIFICATION_DETAIL_MAX,
   PLATFORM_TICKET_PROVIDER,
   TAKE_OVER_BOUNDARY_EVENTS,
   toGateWait,
@@ -80,6 +81,7 @@ import type {
   TaskConflict,
   TaskDetailRecord,
   TaskDetailResponse,
+  TaskEscalation,
   TaskListItem,
   TaskRecord,
   TaskStageOutcome,
@@ -2169,6 +2171,7 @@ export const findTaskDetail = async (
     pausedReasons,
     owners,
     waiting,
+    escalation,
   ] = await Promise.all([
     modelUsageFor(
       database,
@@ -2191,6 +2194,7 @@ export const findTaskDetail = async (
     options.waiting === false
       ? null
       : waitingForTasks(database, [taskId], options.coreDigests ?? null),
+    escalationFor(database, task),
   ]);
 
   const setbackRows = stageRows.map(setbackRowOf);
@@ -2214,6 +2218,7 @@ export const findTaskDetail = async (
     // S-25.11: the returns and the stop, off the same rows.
     returns: returnsOf(setbackRows, compiledPipelineOf(task)),
     stop: stopOf(task, setbackRows),
+    escalation,
     loop_limits: frozenLimits(task.iterationLimits),
     stages: stageRows.map((row) => ({
       stage: row.stage,
@@ -2239,6 +2244,62 @@ export const findTaskDetail = async (
     runs: runRows.map((row) =>
       toRunRecord(row, usage.get(row.id) ?? [], progress.get(row.id) ?? null),
     ),
+  };
+};
+
+/**
+ * Why a `needs_human` task waits for a person, in the escalation's own words (BACKLOG 850): its
+ * newest `task.escalated` event's `reason` and `blocker_brief`, with the instant. Every production
+ * escalation writes a brief that names what stopped the task and the way out — *the ticket is
+ * assigned to somebody else…*, *nobody decided the plan approval in time…*, *pipeline n is held at
+ * a manual job…* — and until this read the task page published none of it, so every stuck task said
+ * only that it needed a person (five on the Autix core on 2026-11-07, none of them explained).
+ *
+ * The twin of the onboarding wizard's `createDiscoveryEscalationRead` (`../onboarding.ts`): the same
+ * event, the same order (newest instant, then position, so a second escalation replaces the first),
+ * the same cut at {@link NOTIFICATION_DETAIL_MAX} with the pre-cut length, and `null` for a payload
+ * missing either string rather than half a reason. Read only for a `needs_human` task: an escalation
+ * the task has since left (a hand-back, a retry) is history, not why it waits.
+ */
+export const escalationFor = async (
+  database: Database,
+  task: { readonly id: string; readonly state: string },
+): Promise<TaskEscalation | null> => {
+  if (task.state !== 'needs_human') {
+    return null;
+  }
+  const rows = await database
+    .select({ occurredAt: events.occurredAt, payload: events.payload })
+    .from(events)
+    .where(
+      and(
+        eq(events.streamType, 'task'),
+        eq(events.streamId, task.id),
+        eq(events.type, 'task.escalated'),
+      ),
+    )
+    .orderBy(desc(events.occurredAt), desc(events.position))
+    .limit(1);
+  const row = rows[0];
+  const payload = (row?.payload ?? {}) as {
+    readonly reason?: unknown;
+    readonly blocker_brief?: unknown;
+  };
+  if (
+    row === undefined ||
+    typeof payload.reason !== 'string' ||
+    payload.reason === '' ||
+    typeof payload.blocker_brief !== 'string' ||
+    payload.blocker_brief === ''
+  ) {
+    return null;
+  }
+  const brief = payload.blocker_brief;
+  return {
+    at: isoRequired(row.occurredAt),
+    reason: payload.reason,
+    brief: brief.slice(0, NOTIFICATION_DETAIL_MAX),
+    brief_original_chars: brief.length > NOTIFICATION_DETAIL_MAX ? brief.length : null,
   };
 };
 

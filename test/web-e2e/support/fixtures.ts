@@ -565,6 +565,7 @@ export const taskDetail = taskDetailResponseSchema.parse({
   stop: null,
   gate_wait: null,
   last_gate_wait: null,
+  escalation: null,
   loop_limits: null,
   /**
    * WP-29's minutes, with the per-user breakdown **on** — which is not this project's default and
@@ -648,6 +649,7 @@ export const bugTaskDetail = taskDetailResponseSchema.parse({
   stop: null,
   gate_wait: null,
   last_gate_wait: null,
+  escalation: null,
   loop_limits: null,
   // Nothing recorded, and the breakdown off — the shipped default (product/18:32). `by_user: null`
   // and an empty list are different answers, and this is the first.
@@ -699,6 +701,7 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
   stop: null,
   gate_wait: null,
   last_gate_wait: null,
+  escalation: null,
   loop_limits: null,
   taken_over: {
     at: now,
@@ -863,6 +866,7 @@ export const ciHeldTaskDetail = taskDetailResponseSchema.parse({
   stop: null,
   gate_wait: aut6655Read(minutesAgo(12.5), minutesAgo(0.5)),
   last_gate_wait: null,
+  escalation: null,
   stages: [
     {
       stage: 'implementation',
@@ -909,6 +913,7 @@ export const ciHeldTimedOutTaskDetail = taskDetailResponseSchema.parse({
   },
   gate_wait: null,
   last_gate_wait: aut6655Read('2026-06-01T09:28:00.000Z', '2026-06-01T10:27:30.000Z'),
+  escalation: null,
   stages: [
     {
       stage: 'implementation',

@@ -99,6 +99,7 @@ const TASK_DETAIL: TaskDetailResponse = {
   stop: null,
   gate_wait: null,
   last_gate_wait: null,
+  escalation: null,
   loop_limits: null,
   // WP-29: required and always present, so a server that forgot to project it fails here rather
   // than rendering a task page with no human-time line.

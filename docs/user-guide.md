@@ -255,7 +255,8 @@ moved at that point, and the stage still runs.
 Two switches sit under the slots. **Claim the ticket before the first run** (on unless you switch it
 off): before a task's first run the platform assigns the ticket to the tracker integration's own
 account, moves it to *In progress* if that slot is mapped, and reads the ticket again. If somebody
-else holds the ticket, the task stops in **Needs you** with the reason *assigned elsewhere*, no run
+else holds the ticket, the task stops in **Needs you** with the reason *assigned elsewhere* (its callout
+says who holds it and what to do, under *Why it stopped*), no run
 starts, and the platform posts one comment on the ticket — *"The agent did not start work on this
 ticket: it is assigned to somebody else. A maintainer has been asked who should take it."* While
 claiming, a ticket already assigned to a person is not started at all, unless you tick **Also start

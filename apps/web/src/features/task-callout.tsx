@@ -12,8 +12,9 @@
  *   who may decide them (`can_decide_approval`); anyone else is told a maintainer decides;
  * - **the task waiting for a person** (`needs_human`) — what stopped it, as the stage row's own
  *   outcome sentence, and the three ways out (return, rework, retry), which open the same dialogs as
- *   the header's `···` menu. The sentence is the escalated attempt's recorded word, not the
- *   escalation's brief: the task projection does not publish the brief (BACKLOG 850);
+ *   the header's `···` menu. It leads with **the escalation's own brief** (the read's
+ *   `escalation`, BACKLOG 850) — what stopped the task and the way out, as the platform wrote it
+ *   when it stopped — and falls back to the escalated attempt's recorded word when there is none;
  * - **a budget pause** — whose cap is spent, and where it is raised (the header's primary raises
  *   a task's own cap);
  * - **a proposed breakdown waiting for a maintainer** — the epic split's panel, with its decision.
@@ -330,8 +331,13 @@ export const TaskCallout = ({
     );
   }
   const stop = reasons.includes('escalation') ? detail.stop : null;
+  // BACKLOG 850: the escalation's own brief leads when the read has one; the row's recorded word
+  // is the fallback for a task whose stream holds none (an escalation written before briefs).
+  const escalation = reasons.includes('escalation') ? detail.escalation : null;
   const reason =
-    reasons.includes('escalation') && stop === null ? escalationReason(task, stages) : null;
+    reasons.includes('escalation') && stop === null && escalation === null
+      ? escalationReason(task, stages)
+      : null;
   const stopped = stop === null ? null : stopWords(stop, detail.loop_limits);
   // S-25.12: a CI check that got no answer, worded from the attempt's structured read when it
   // recorded one; the recorded sentence is only the fallback for an attempt with none.
@@ -388,6 +394,16 @@ export const TaskCallout = ({
           ) : null}
           {reasons.includes('escalation') ? (
             <div className="flex flex-col gap-2">
+              {escalation === null ? null : (
+                <p data-escalation-brief="">
+                  <span className="font-medium">
+                    Why it stopped ({formatDateTime(escalation.at)}):
+                  </span>{' '}
+                  {/* Platform words that may quote a provider or a run (BD-022). */}
+                  <UntrustedText value={escalation.brief} />
+                  {escalation.brief_original_chars === null ? null : ' (shortened)'}
+                </p>
+              )}
               <EscalationText
                 merged={merged}
                 maySendBack={detail.can_return || detail.can_rework}

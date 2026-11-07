@@ -787,6 +787,13 @@ gains `ci_held` — `[{task_id, project_id, ticket, gate_wait}]`, the `active` t
 held at a manual job, oldest wait first (BACKLOG 1300); `gate_wait` is `null` unless the task is `active`,
 so a paused task is served no wait (BACKLOG 1301; `last_gate_wait` keeps its `needs_human` rule).
 
+**Why a task waits for a person, in the escalation's words** (BACKLOG 850, 2026-11-07): `GET /api/tasks/:id`
+carries `escalation` — `{at, reason, brief, brief_original_chars}` (`taskEscalationSchema`, the shape the
+rediscovery read's `last_discovery.escalation` already had), the newest `task.escalated` event's reason and
+`blocker_brief`, the brief cut at 1 000 characters with its pre-cut length — while the task is
+`needs_human`, `null` otherwise or when the event lacks either string. Required. The task page's callout
+leads with it (*Why it stopped (time): …*) and falls back to the stage row's word only without one.
+
 **Why a worker takes nothing** (S-22.19, TD-031's 2026-11-05 blocker-vocabulary amendment): one
 vocabulary, `WORKER_CLAIM_BLOCKERS` (`packages/contracts/src/worker-claim-blockers.ts`), most fundamental
 first, worded once (`WORKER_CLAIM_BLOCKER_WORDS`, `apps/web/src/ui/humanize.ts`). `GET /api/workers`

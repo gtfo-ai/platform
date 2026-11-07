@@ -942,8 +942,15 @@ describe('the list envelopes and the KB health report', () => {
         .success,
     ).toBe(false);
     // The task read carries the returns, the stop and the limits, each required.
-    // S-25.12 (backlog 1099): so are the CI wait's two reads.
-    for (const key of ['returns', 'stop', 'loop_limits', 'gate_wait', 'last_gate_wait'] as const) {
+    // S-25.12 (backlog 1099): so are the CI wait's two reads — and (BACKLOG 850) the escalation.
+    for (const key of [
+      'returns',
+      'stop',
+      'loop_limits',
+      'gate_wait',
+      'last_gate_wait',
+      'escalation',
+    ] as const) {
       expect(taskDetailResponseSchema.shape[key].safeParse(undefined).success, key).toBe(false);
     }
   });

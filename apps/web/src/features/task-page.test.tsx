@@ -113,6 +113,7 @@ const detail = (over: Partial<TaskDetailResponse> = {}, task: Partial<TaskRecord
     stop: null,
     gate_wait: null,
     last_gate_wait: null,
+    escalation: null,
     loop_limits: null,
     human_time: {
       total_minutes: 0,
@@ -698,6 +699,57 @@ describe('the needs-you callout', () => {
     expect(callout.querySelector('[data-escalation-reason]')?.textContent).toBe(
       'Needs you: the check could not decide in the tries it is allowed.',
     );
+  });
+
+  // BACKLOG 850: five tasks stuck on the Autix core said only that they needed a person, while each
+  // escalation had written what stopped it and the way out.
+  it('leads with the escalation’s own brief, instead of the row’s word, when the read has one', async () => {
+    const brief =
+      'The platform did not start the "refinement" stage of AUT-6676: the ticket is assigned to ' +
+      'somebody other than the account this project’s tracker binding uses. Unassign the ticket ' +
+      'or assign it to the binding’s account, then hand the task back. <b>not markup</b>';
+    start(
+      detail(
+        {
+          stages: [stage('refinement', 1, 'failed', 'undecided')],
+          escalation: {
+            at: '2026-11-05T13:22:12.114Z',
+            reason: 'ticket_assigned_elsewhere',
+            brief,
+            brief_original_chars: null,
+          },
+        },
+        { state: 'needs_human', current_stage: 'refinement' },
+      ),
+    );
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    const shown = callout.querySelector('[data-escalation-brief]');
+    expect(shown?.textContent).toContain('Why it stopped');
+    expect(shown?.textContent).toContain(brief);
+    // Untrusted text, never markup (BD-022).
+    expect(shown?.querySelector('b')).toBeNull();
+    expect(shown?.textContent).not.toContain('(shortened)');
+    // The brief replaces the generic outcome sentence rather than sitting under it.
+    expect(callout.querySelector('[data-escalation-reason]')).toBeNull();
+  });
+
+  it('says a cut brief was shortened', async () => {
+    start(
+      detail(
+        {
+          stages: [stage('ci_gate', 1, 'failed', 'undecided')],
+          escalation: {
+            at: '2026-11-06T22:53:34.691Z',
+            reason: 'ci timed out',
+            brief: 'x'.repeat(1_000),
+            brief_original_chars: 1_400,
+          },
+        },
+        { state: 'needs_human', current_stage: 'ci_gate' },
+      ),
+    );
+    const callout = await screen.findByRole('region', { name: 'Needs you' });
+    expect(callout.querySelector('[data-escalation-brief]')?.textContent).toContain('(shortened)');
   });
 
   it('states a budget pause, and where the cap that stopped it is raised', async () => {

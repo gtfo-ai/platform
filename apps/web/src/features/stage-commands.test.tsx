@@ -98,6 +98,7 @@ const escalatedAtCi = (state: TaskDetailResponse['task']['state']): TaskDetailRe
   stop: null,
   gate_wait: null,
   last_gate_wait: null,
+  escalation: null,
   loop_limits: null,
   human_time: {
     total_minutes: 0,
