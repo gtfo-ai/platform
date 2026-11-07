@@ -1376,6 +1376,14 @@ no comments (`ticket-poll.ts:97`), and GitLab notes are normalised only on merge
    it"). From now on every claim reads the assignee first, and a linked member holding the ticket gets no assign write. The claim records it
    `held` (`ticket_claim.held_by: 'member'`, an optional key) and still moves the status to `in_progress`. Unmapped
    persons and non-members keep today's rule (`take_assigned_tickets`, `ticket_assigned_elsewhere`).
+   - **A platform owner keeps it too** (orchestrator, 2026-11-07, on S-25.14 and BACKLOG 1360). Suppose a person took
+     or was assigned the task on the platform (`owner_source: platform`, via the owner command or a pick) and may own
+     in the project, while the tracker still names somebody else, for example an unlinked assignee with write-back off.
+     Then the claim **keeps** the ticket: `held_by: 'platform_owner'`, no assign write, no refusal. Otherwise *Take it*
+     followed by *Hand back* would stop again on `ticket_assigned_elsewhere`, and a later re-claim would overwrite the
+     tracker with the platform's own account. The tracker keeps its assignee until write-back (item 4, when switched
+     on) or a person changes it. A ticket nobody holds, or one the platform's own account already holds, is assigned as
+     before. A cancel or a *Rework* unassigns nobody on a kept ticket.
 6. **A worker's claim policy** (migration **0106**, additive): `workers.claim_policy text` (`everything` |
    `mine_and_unassigned` | `mine` | `pick_only`, check `not valid` + validate). The column is nullable with no default:
    `null` reads as `pick_only` when `claim_project_ids = '{}'` and otherwise as `everything`, so existing workers keep
