@@ -57,6 +57,7 @@ const DEFAULTS = {
   effective_fallback_after_seconds: 15,
   stored: false,
   server_claimant: 'none',
+  others_take_unassigned: false,
   notice:
     'No server runner is running on this instance, so this project is treated as workers only: workers may take its runs at once.',
   workers: [],

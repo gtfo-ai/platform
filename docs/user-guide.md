@@ -91,8 +91,8 @@ do, and the project's name scrolls away; on a phone only the top bar stays, so t
 - **+** — **New project** (for an admin: creating a project is an admin's), and inside a project you
   may start tickets in, **Start a ticket…**, which opens the board's *Start a ticket* dialog (below); with
   neither, there is no **+**;
-- the **inbox** button, with the number of questions and approvals waiting for you (Home's *Needs
-  you* also counts tasks that stopped for a person, so the two numbers can differ);
+- the **inbox** button, with the number of questions, approvals and held CI jobs waiting for you
+  (Home's *Needs you* also counts tasks that stopped for a person, so the two numbers can differ);
 - your avatar (below).
 
 Screens that show live data subscribe to a server-sent event stream, so agent counts, task states
@@ -830,19 +830,28 @@ has the same: `owner` on every task, `POST /api/tasks/:id/owner`, `GET
 /api/projects/:id/owner-candidates?task_id=` for the people a maintainer may assign, and `?owner=` on
 a project's task list.
 
-**Why a run waits** (since S-26.5, read only — the words on the page come with S-26.8b): while a
-task's run waits for a machine or the server to start it, the task, its board card and its row on
-*Agents* carry `waiting` — why nobody takes it now: its owner's machine is offline (with when it was
-last seen) or paused, the owner's machine is on but cannot take it (another build's images, no images
-yet, a usage limit, a drain — `waiting.blockers` says which, in the Workers screen's words), the owner
-has no machine that takes this project or only picks runs by hand,
-no machine takes unassigned tasks in this project, or the tracker assigns it to somebody who is not
-linked to a platform account, so only a machine that takes everyone's tasks can run it. A task that
-somebody gave back is unassigned, whatever the tracker still shows. `waiting.reason` is empty when a
-machine or the server can take the run now. *Settings → Execution* also says, without naming
-anybody's machine, whether the server or another person's machine takes this project's unassigned
-tasks by itself (`others_take_unassigned`) — so a machine set to *Only my tasks* can tell whether
-unassigned tasks would have nowhere to run.
+**Why a run waits** (S-26.5; in words since S-26.8b part 2): while a task's run waits for a machine
+or the server to start it, the page says why nobody takes it now. The task page's *Now* line and a
+note above the tabs say it in full — *Waiting for Vojtěch’s machine. It’s offline (last seen 2 h
+ago).* — and a board card, its row on *Agents* and on Home's *Running now* in short — *Waiting ·
+Vojtěch’s machine is offline*. The reasons: the owner's machine is offline (with when it was last
+seen) or paused; it is online and still cannot take it — it *needs an update*, it is *still setting
+up* (getting its run images), it is *finishing a run* and taking nothing new (an update or its
+owner's own *Drain*), it is *at its usage limit* and resumes when the limit resets, it *waits on the
+platform* (the platform's run images need fixing), or another reason in the Workers screen's words;
+the owner has no machine that takes this project, or only picks runs by hand; no machine takes
+unassigned tasks in this project; or the tracker assigns it to somebody who is not linked to a
+platform account (*Waiting · assigned to Jan Novák (not linked)*), so only a machine that takes
+everyone's tasks can run it. When the machine is yours, the words say *your machine*. The note offers
+the next step you may take, never as the page's main button: *Take it* and *Assign…* when your role
+allows them, *Open Workers* to the machine's owner (with *Update it from its page* when it needs an
+update), *Open Instance* to an administrator when the platform's images are the reason, and *Link
+account…* to an administrator for an unlinked assignee; everyone else sees the sentence alone. A task
+somebody gave back is unassigned, whatever the tracker still shows. Nothing is said when a machine or
+the server can take the run now. *Settings → Execution* also says, without naming anybody's machine,
+whether the server or another person's machine takes this project's unassigned tasks by itself
+(`others_take_unassigned`) — so a machine set to *Only my tasks* can tell whether unassigned tasks
+would have nowhere to run.
 
 - **The header** is the ticket's title with its key after it in grey (the key alone when the
   platform never read the title), the task's state as a label with its icon — *Needs you* whenever
@@ -1036,10 +1045,9 @@ in stage `test`: a test is never skipped. The check also waits when a job is que
 names waits for exactly those. At **Ready for merge**, a task whose pipeline GitLab still shows as blocked says so: if
 your project requires pipelines to succeed, GitLab won't merge until that job has run, so start it
 there. The waiting described next applies to a required job. A held job is
-*Needs you* at once on the task page; the board's card does not show it until the check stops — the
-board's list and the inbox carry the check's read since S-26.5 (`gate_wait` on each task, and the
-inbox's `ci_held` list of tasks held at a manual job), and the board, Home and the Inbox do not show
-it yet. A paused task shows no CI wait: the check stops while it is paused. While the pipeline is simply running, the page
+*Needs you* at once: on the task page, on the board — its card says *CI held · start the job* and
+sits under *Needs you* — and as a row of the Inbox and of Home's *Needs you* (*CI waits for someone
+to start the manual job …*), which opens the task. A paused task shows no CI wait: the check stops while it is paused. While the pipeline is simply running, the page
 says *"CI is running (pipeline n, 12 min so far; the task gives up after 60)"* and asks nothing. If
 the wait runs out, the page says *"CI did not finish within 60 minutes: pipeline n was still held at
 the manual job …"* — never that CI failed — and the next step, *Start the job in GitLab, then
@@ -1362,7 +1370,9 @@ place — laid out like GitHub's notifications. The left column filters the list
 where it is — project · ticket · stage — how long ago it was asked and, for a question, when it is due. Click a
 question's line and the row opens in place: the whole question, a **Your answer** box and **Answer**.
 An approval's row links to the task, where it is decided with the plan on screen (**Review plan**);
-no row approves in one click. With nothing
+no row approves in one click. A task whose CI check waits on a manual job somebody must start is a
+row too (*CI waits for someone to start the manual job deploy*), under **All** and its project, and
+**Open** takes you to the task, where *Start the job in GitLab* is the button. With nothing
 pending the page says *Nothing needs you*.
 
 A question the agent asks may also arrive in Slack, and all channels are equivalent — **the first

@@ -72,7 +72,7 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   if (path.startsWith('/api/auth/get-session')) return json(session(role));
   if (path === '/events/subscriptions') return json({});
   if (path === '/api/projects') return json({ items: [], can_create: role === 'admin' });
-  if (path === '/api/org/inbox') return json({ questions: [], approvals: [] });
+  if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
   if (path === '/api/org/agents') return json({ items: [] });
   if (path === '/api/integrations') return json({ items: [], can_write: role === 'admin' });
   if (path === '/api/workers') {

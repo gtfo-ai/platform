@@ -166,11 +166,18 @@ const task = (overrides: Partial<TaskListItem>): TaskListItem =>
     completed_at: null,
     ticket_claim: null,
     qa_stage: false,
+    tracker_assignee: null,
+    owner: null,
+    owner_source: null,
+    unlinked_assignee: null,
+    owner_writes_back: false,
+    waiting: null,
     // The card's glance (S-23.9a).
     stages: [],
     open_questions: 0,
     pending_approvals: 0,
     loop_limits: null,
+    gate_wait: null,
     latest_return: null,
     stop: null,
     ...overrides,
@@ -207,6 +214,7 @@ const fetchFor = (world: World) =>
             last_output_at: null,
             // S-23.15: required on the wire; not claimed yet and no entry, which the frame ignores.
             seat: null,
+            waiting: null,
             activity: null,
           };
         }),
@@ -216,6 +224,7 @@ const fetchFor = (world: World) =>
       return json({
         questions: Array.from({ length: world.questions ?? 0 }, (_, index) => question(index + 1)),
         approvals: Array.from({ length: world.approvals ?? 0 }, (_, index) => approval(index + 1)),
+        ci_held: [],
       });
     }
     if (/^\/api\/projects\/[^/]+\/shadow-batches$/.test(path) && world.trials !== undefined) {

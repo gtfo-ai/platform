@@ -1607,7 +1607,7 @@ const toTaskRecord = (
   unmeasuredRuns: number,
   paused: PausedWhy | undefined,
   owner: OwnerView | undefined,
-): TaskRecord => ({
+): Omit<TaskRecord, 'waiting'> => ({
   id: row.id as Id,
   project_id: row.projectId as Id,
   ticket: { provider: row.ticketProvider, key: row.ticketKey, url: row.ticketUrl },
@@ -2111,8 +2111,9 @@ export const lastGateWaitOf = (
 export interface WaitingReadOptions {
   readonly coreDigests?: RunImageDigests | null;
   /**
-   * `false` skips the `waiting` statement and leaves the key off the task record — for a reader
-   * that never shows it (`get_task_context`, an agent's tool). Absent or `true`: it is read.
+   * `false` skips the `waiting` statement and answers `waiting: null` — for a reader that never
+   * shows or reads it (`get_task_context`, an agent's tool, whose sections name no such field).
+   * Absent or `true`: it is read.
    */
   readonly waiting?: boolean;
 }
@@ -2204,7 +2205,7 @@ export const findTaskDetail = async (
         pausedReasons.get(task.id),
         owners.get(task.id),
       ),
-      ...(waiting === null ? {} : { waiting: waiting.get(task.id) ?? null }),
+      waiting: waiting === null ? null : (waiting.get(task.id) ?? null),
     },
     taken_over: takenOver,
     human_time: humanTime,

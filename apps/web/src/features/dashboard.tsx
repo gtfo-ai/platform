@@ -78,6 +78,7 @@ import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { ApprovalSummary } from './approval-summary.js';
 import { reviewVerb } from './approval-text.js';
+import { ciHeldSentence } from './gate-wait-words.js';
 import {
   type BlockedWorker,
   type HomeSetup,
@@ -92,6 +93,7 @@ import {
   setupProjectOf,
 } from './home-setup.js';
 import { ReadinessLabel } from './readiness-label.js';
+import { WaitingWords, waitingTail } from './waiting-words.js';
 import { useWorkerNeed, useWorkersWhen } from './worker-need.js';
 import { isReadyToWork, workerReadinessOf } from './worker-readiness.js';
 
@@ -274,7 +276,8 @@ const Where = ({
 
 interface NeedsYouItem {
   readonly id: string;
-  readonly kind: 'question' | 'approval' | 'task';
+  /** `ci_held`: a CI check held at a manual job a person must start (BACKLOG 1300). */
+  readonly kind: 'question' | 'approval' | 'task' | 'ci_held';
   /** For an approval row: the approval, so the row names its subject and its verb (S-25.1). */
   readonly approval?: ApprovalView;
   readonly taskId: string;
@@ -373,6 +376,7 @@ const NeedsYouBox = ({
   const inboxTasks = new Set([
     ...(inbox.data?.questions ?? []).map((question) => question.task_id),
     ...(inbox.data?.approvals ?? []).map((approval) => approval.task_id),
+    ...(inbox.data?.ci_held ?? []).map((held) => held.task_id),
   ]);
   const items: NeedsYouItem[] = [
     ...(inbox.data?.questions ?? []).map(
@@ -398,6 +402,20 @@ const NeedsYouBox = ({
         stage: null,
         text: `${APPROVAL_KIND_LABEL[approval.kind]} is waiting for you`,
         at: approval.requested_at,
+      }),
+    ),
+    // S-26.8b part 2: a CI check held at a manual job — only a person can start it (BACKLOG 1300).
+    ...(inbox.data?.ci_held ?? []).map(
+      (held): NeedsYouItem => ({
+        id: `c:${held.task_id}`,
+        kind: 'ci_held',
+        taskId: held.task_id,
+        projectId: held.project_id,
+        ticket: held.ticket.key,
+        stage: 'ci_gate',
+        // The job's name is provider text: the row renders it through `UntrustedText`.
+        text: ciHeldSentence(held.gate_wait.held_job),
+        at: held.gate_wait.waiting_since,
       }),
     ),
     // An escalated task that already has a question or approval above is that row, not a second one.
@@ -557,7 +575,13 @@ type AgentEntry = NonNullable<ReturnType<typeof useAgents>['data']>['items'][num
  * transcript entry — what a person needing to act looks like is Home's *Needs you* box above.
  */
 const homeActivityWords = (entry: AgentEntry, now: number): string => {
-  const { activity, detail } = activityOf({
+  const { activity, detail } = homeActivity(entry, now);
+  const word = ACTIVITY_META[activity].label;
+  return detail === null ? word : `${word}: ${detail}`;
+};
+
+const homeActivity = (entry: AgentEntry, now: number) =>
+  activityOf({
     run: {
       status: entry.run.status,
       terminal_reason: entry.run.terminal_reason ?? null,
@@ -571,12 +595,36 @@ const homeActivityWords = (entry: AgentEntry, now: number): string => {
     role: entry.role,
     now,
   });
-  const word = ACTIVITY_META[activity].label;
-  return detail === null ? word : `${word}: ${detail}`;
+
+/**
+ * The row's activity — and while the run waits for a machine nobody has (S-26.8b part 2, the M26
+ * UX spec § 4), why, in short form: "Waiting: Vojtěch’s machine is offline", every name through
+ * `UntrustedText`; *your machine* when it is the reader's.
+ */
+const HomeActivity = ({
+  entry,
+  now,
+  viewerId,
+}: {
+  readonly entry: AgentEntry;
+  readonly now: number;
+  readonly viewerId: string | null;
+}): ReactElement => {
+  const tail =
+    homeActivity(entry, now).activity === 'waiting' ? waitingTail(entry.waiting, viewerId) : null;
+  return tail === null ? (
+    <>{homeActivityWords(entry, now)}</>
+  ) : (
+    <span data-home-waiting={entry.waiting?.reason ?? ''}>
+      {`${ACTIVITY_META.waiting.label}: `}
+      <WaitingWords parts={tail} />
+    </span>
+  );
 };
 
 const RunningBox = ({ projects }: { readonly projects: readonly ProjectItem[] }) => {
   const agents = useAgents();
+  const viewerId = useSession().data?.user.id ?? null;
   const { now } = useServices();
   const nowMs = now();
   const items = agents.data?.items ?? [];
@@ -650,7 +698,9 @@ const RunningBox = ({ projects }: { readonly projects: readonly ProjectItem[] })
                     <Dot />
                     {/* What it is doing, in the one activity vocabulary — never a model id
                         (research/21 § 4, BACKLOG 1262). */}
-                    <span data-home-activity="">{homeActivityWords(entry, nowMs)}</span>
+                    <span data-home-activity="">
+                      <HomeActivity entry={entry} now={nowMs} viewerId={viewerId} />
+                    </span>
                   </span>
                   {entry.run.latest_progress === null ? null : (
                     <span data-home-progress="" className="text-fg">

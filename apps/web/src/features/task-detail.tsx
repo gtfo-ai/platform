@@ -19,6 +19,7 @@
  * a query of its own (`GET /api/tasks/:id/asks`) rather than a field of the task DTO: an ask is
  * answered by a run that takes a minute, on its own schedule.
  */
+import type { TaskDetailResponse } from '@platform/contracts';
 import { Link, useSearch } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
 import {
@@ -47,6 +48,7 @@ import {
 } from './task-dialogs.js';
 import { TaskHeader } from './task-header.js';
 import { TaskOverview } from './task-overview.js';
+import { useOwnerControl } from './task-owner.js';
 import { TaskRuns } from './task-runs.js';
 import {
   currentTaskTab,
@@ -55,6 +57,75 @@ import {
   type TaskSearch,
   taskTabSearch,
 } from './task-tab.js';
+
+/**
+ * The header, what a command just did, and the callout — one component so the owner control is
+ * one (S-26.8b part 2): the callout's *Take it* / *Assign…* open the header's confirmation and
+ * picker, never a second copy of them.
+ */
+const TaskTop = ({
+  detail,
+  projectKey,
+  projectName,
+  nowMs,
+  stageOptions,
+  commands,
+  onOpen,
+  merged,
+  breakdownWaiting,
+}: {
+  readonly detail: TaskDetailResponse;
+  readonly projectKey: string | null;
+  readonly projectName: string | null;
+  readonly nowMs: number;
+  readonly stageOptions: number;
+  readonly commands: ReturnType<typeof useTaskCommands>;
+  readonly onOpen: (dialog: TaskDialog) => void;
+  readonly merged: boolean;
+  readonly breakdownWaiting: boolean;
+}): ReactElement => {
+  const owner = useOwnerControl(detail);
+  return (
+    <>
+      <TaskHeader
+        detail={detail}
+        projectKey={projectKey}
+        projectName={projectName}
+        nowMs={nowMs}
+        stageOptions={stageOptions}
+        commands={commands}
+        onOpen={onOpen}
+        owner={owner}
+      />
+
+      {commands.pause.isError || commands.resume.isError ? (
+        <ErrorNotice
+          title="That command was refused."
+          error={commands.pause.error ?? commands.resume.error}
+        />
+      ) : null}
+      {/* Backlog 494: what a retry did, announced rather than only drawn. */}
+      {commands.retryStage.data === undefined ? null : (
+        <p role="status" className="text-sm text-fg-muted">
+          {retryOutcomeText(commands.retryStage.data)}
+        </p>
+      )}
+
+      <TaskCallout
+        detail={detail}
+        projectKey={projectKey}
+        projectName={projectName}
+        merged={merged}
+        hasStages={stageOptions > 0}
+        breakdownWaiting={breakdownWaiting}
+        commands={commands}
+        onOpen={onOpen}
+        nowMs={nowMs}
+        owner={owner}
+      />
+    </>
+  );
+};
 
 export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): ReactElement => {
   useTopics([`task:${taskId}`]);
@@ -86,8 +157,8 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
   const { task, stages, artifacts, runs, taken_over: takenOver } = detail.data;
   // The route may be entered without a project key (from the inbox or the agents view), so the
   // link back to the board is resolved from the task's own project rather than from the URL.
-  const projectKey =
-    projects.data?.items.find((project) => project.id === task.project_id)?.key ?? null;
+  const project = projects.data?.items.find((entry) => entry.id === task.project_id);
+  const projectKey = project?.key ?? null;
   const nowMs = now();
   const artifactIds = artifacts.map((artifact) => artifact.id);
   const tab = currentTaskTab(search, artifactIds);
@@ -108,37 +179,16 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <TaskHeader
+      <TaskTop
         detail={detail.data}
         projectKey={projectKey}
+        projectName={project?.name ?? null}
         nowMs={nowMs}
         stageOptions={form.options.length}
         commands={commands}
         onOpen={setDialog}
-      />
-
-      {commands.pause.isError || commands.resume.isError ? (
-        <ErrorNotice
-          title="That command was refused."
-          error={commands.pause.error ?? commands.resume.error}
-        />
-      ) : null}
-      {/* Backlog 494: what a retry did, announced rather than only drawn. */}
-      {commands.retryStage.data === undefined ? null : (
-        <p role="status" className="text-sm text-fg-muted">
-          {retryOutcomeText(commands.retryStage.data)}
-        </p>
-      )}
-
-      <TaskCallout
-        detail={detail.data}
-        projectKey={projectKey}
         merged={merged}
-        hasStages={form.options.length > 0}
         breakdownWaiting={breakdownWaiting}
-        commands={commands}
-        onOpen={setDialog}
-        nowMs={nowMs}
       />
 
       {takenOver !== null ? (

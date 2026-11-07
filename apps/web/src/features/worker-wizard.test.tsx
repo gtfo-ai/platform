@@ -53,6 +53,7 @@ const execution = (mode: ProjectExecutionResponse['mode']): ProjectExecutionResp
   effective_fallback_after_seconds: 15,
   stored: true,
   server_claimant: 'none',
+  others_take_unassigned: false,
   notice: null,
   workers: [],
   waiting: {
@@ -97,7 +98,7 @@ const fetchFor = (world: World) =>
     const read = /^\/api\/projects\/([^/]+)\/execution$/.exec(path);
     const found = world.projects.find((entry) => entry.summary.id === read?.[1]);
     if (found !== undefined) return json(found.execution);
-    if (path === '/api/org/inbox') return json({ questions: [], approvals: [] });
+    if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
     if (path === '/api/org/agents') return json({ items: [] });
     return json({ error: { code: 'not_found', message: `no route ${path}` } }, 404);
   }) as typeof fetch;

@@ -10,17 +10,35 @@
  * open. Each case asks all three readers and the expected answer
  * written out independently, so a reader that drifts from the rule fails here by name.
  */
-import { type TaskListItem, type TaskState, taskStateSchema } from '@platform/contracts';
+import {
+  type GateWait,
+  type TaskListItem,
+  type TaskState,
+  taskStateSchema,
+} from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { NEEDS_YOU_LABEL, needsYou, taskStateLabel, taskStatus } from '../ui/task-status.js';
 import { boardColumnOf, columnFor, NEEDS_YOU_COLUMN } from './board.js';
-import { needsYou as cardNeedsYou, cardStateLabel } from './board-card.js';
+import { needsYou as cardNeedsYou, cardSetback, cardStateLabel } from './board-card.js';
 import { gateWaitHeld } from './gate-wait.js';
 
 type Item = 'none' | 'question' | 'approval';
 type PausedReason = TaskListItem['paused_reason'];
 
 const ITEMS: readonly Item[] = ['none', 'question', 'approval'];
+
+/** A pipeline held at the manual job `deploy` — the read only a person can end. */
+const HELD: GateWait = {
+  pipeline_id: '41',
+  pipeline_url: null,
+  status: 'manual',
+  held_job: 'deploy',
+  held_job_url: null,
+  draft: false,
+  checked_at: '2026-11-07T10:05:00.000Z',
+  waiting_since: '2026-11-07T10:00:00.000Z',
+  timeout_minutes: 60,
+};
 const PAUSED_REASONS: readonly PausedReason[] = [null, 'manual', 'budget', 'taken_over'];
 
 /** Written out rather than derived from the module under test. */
@@ -102,24 +120,37 @@ describe('one needs-you rule for the column, the card and the header', () => {
 
   /**
    * S-25.12 (product/10's 2026-11-07 amendment): a CI check held at a manual job waits for a
-   * person, so it is *Needs you* at once — not after the wait times out. The task page knows it from
-   * `gate_wait` (`gateWaitHeld`); the board's item does not carry the read (BACKLOG 1300).
+   * person, so it is *Needs you* at once — not after the wait times out — and only while the task
+   * is `active` (review of PR #101: a paused task's CI check is not checking). Since S-26.8b part 2
+   * the board's item carries `gate_wait` too (BACKLOG 1300), so the card, the column and the header
+   * all read it through the one rule.
    */
   it.each(taskStateSchema.options)(
-    'puts a %s task whose CI check is held at a manual job in Needs you unless it has ended',
+    'puts a %s task whose CI check is held at a manual job in Needs you only while it is active',
     (state) => {
-      const header = { state, paused_reason: null, open_asks: 0, ci_held: true };
-      const want = !TERMINAL_STATES.has(state);
+      const header = { state, paused_reason: null, open_asks: 0, gate_wait: HELD };
+      const row = { ...listItem(state, null, 'none'), gate_wait: HELD };
+      const want = state === 'active' || expected(state, null, 'none');
       expect(needsYou(header)).toBe(want);
       expect(taskStatus(header) === 'needs_you').toBe(want);
-      if (want && !WAITING_STATES.has(state) && state !== 'paused') {
+      expect(cardNeedsYou(row), 'the card’s ◆').toBe(want);
+      expect(boardColumnOf(row) === NEEDS_YOU_COLUMN, 'the board column').toBe(want);
+      expect(cardStateLabel(row)).toBe(taskStateLabel(header));
+      if (state === 'active') {
         expect(taskStateLabel(header)).toBe(NEEDS_YOU_LABEL);
+        // The card's short form of the held job (S-26.8b part 2), in the setback's slot.
+        expect(cardSetback(row)).toBe('CI held · start the job');
       }
     },
   );
 
   it('reads a CI check that is running, not held, as no reason at all', () => {
-    expect(needsYou({ state: 'active', paused_reason: null, open_asks: 0, ci_held: false })).toBe(
+    const running = { ...HELD, status: 'running' as const, held_job: null, held_job_url: null };
+    expect(
+      needsYou({ state: 'active', paused_reason: null, open_asks: 0, gate_wait: running }),
+    ).toBe(false);
+    expect(cardNeedsYou({ ...listItem('active', null, 'none'), gate_wait: running })).toBe(false);
+    expect(needsYou({ state: 'active', paused_reason: null, open_asks: 0, gate_wait: null })).toBe(
       false,
     );
     expect(gateWaitHeld(null)).toBe(false);

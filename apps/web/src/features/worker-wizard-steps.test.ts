@@ -115,6 +115,7 @@ describe('projectTakesWorkers', () => {
     effective_fallback_after_seconds: 15,
     stored: false,
     server_claimant: 'running',
+    others_take_unassigned: false,
     notice: null,
     workers: [],
     waiting: {

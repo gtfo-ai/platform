@@ -99,6 +99,12 @@ const taskRecord = (id: string, key: string): TaskRecord => ({
   completed_at: null,
   ticket_claim: null,
   qa_stage: false,
+  tracker_assignee: null,
+  owner: null,
+  owner_source: null,
+  unlinked_assignee: null,
+  owner_writes_back: false,
+  waiting: null,
 });
 
 const detail = (record: TaskRecord): TaskDetailResponse => ({
@@ -112,6 +118,10 @@ const detail = (record: TaskRecord): TaskDetailResponse => ({
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  can_take: false,
+  can_assign: false,
+  can_unassign: false,
+  take_writes_back: false,
   gate_feedback: null,
   returns: [],
   stop: null,
@@ -240,21 +250,21 @@ const renderInbox = async (fetchImpl: typeof fetch): Promise<HTMLElement> => {
 
 describe('the approval row', () => {
   it('prints the approval’s due time, as the question row does', async () => {
-    inbox = { questions: [], approvals: [approval(DUE)] };
+    inbox = { questions: [], approvals: [approval(DUE)], ci_held: [] };
     const container = await renderInbox(fakeServer().fetchImpl);
     expect(container.textContent).toContain(`· due ${formatDateTime(DUE)}`);
     expect(container.textContent).toContain('requested 5 m ago');
   });
 
   it('prints no due time for an approval that has none', async () => {
-    inbox = { questions: [], approvals: [approval(null)] };
+    inbox = { questions: [], approvals: [approval(null)], ci_held: [] };
     const container = await renderInbox(fakeServer().fetchImpl);
     expect(container.textContent).toContain('requested 5 m ago');
     expect(container.textContent).not.toContain(' · due ');
   });
 
   it('links to the task with Review plan, and says the plan was not recorded when it was not', async () => {
-    inbox = { questions: [], approvals: [approval(DUE)] };
+    inbox = { questions: [], approvals: [approval(DUE)], ci_held: [] };
     await renderInbox(fakeServer().fetchImpl);
     expect(screen.getByRole('link', { name: 'Review plan' }).getAttribute('href')).toBe(
       `/tasks/${TASK}`,
@@ -277,6 +287,7 @@ describe('the approval row', () => {
   it('names the plan it is about — version, size and files — read off the plan itself', async () => {
     inbox = {
       questions: [],
+      ci_held: [],
       approvals: [
         {
           ...approval(DUE),
@@ -307,7 +318,7 @@ describe('the approval row', () => {
 describe('what the inbox says about an item that expired', () => {
   // The title PROGRESS cites (frozen history); the line it opens with is S-25.5's, below.
   it('says an expired item leaves the list and names where its task is retried', async () => {
-    inbox = { questions: [], approvals: [approval(DUE)] };
+    inbox = { questions: [], approvals: [approval(DUE)], ci_held: [] };
     const container = await renderInbox(fakeServer().fetchImpl);
     const note = container.querySelector('[data-inbox-expiry-note]');
     expect(note?.textContent).toContain('expires leaves this list');
@@ -318,7 +329,7 @@ describe('what the inbox says about an item that expired', () => {
   });
 
   it('leads with what the list is, before what an expired item does (S-25.5, F16)', async () => {
-    inbox = { questions: [], approvals: [approval(DUE)] };
+    inbox = { questions: [], approvals: [approval(DUE)], ci_held: [] };
     const container = await renderInbox(fakeServer().fetchImpl);
     const note = container.querySelector('[data-inbox-expiry-note]');
     expect(note?.querySelector('p')?.textContent).toBe(
@@ -328,7 +339,7 @@ describe('what the inbox says about an item that expired', () => {
   });
 
   it('says it on an empty inbox too, under an informational blankslate', async () => {
-    inbox = { questions: [], approvals: [] };
+    inbox = { questions: [], approvals: [], ci_held: [] };
     const { container } = render(
       createApp({ fetchImpl: fakeServer().fetchImpl, realtime: false }).element,
     );
@@ -340,7 +351,7 @@ describe('what the inbox says about an item that expired', () => {
 
 describe('the filters', () => {
   it('counts and filters by kind and by project, the project read off each item’s task', async () => {
-    inbox = { questions: [question()], approvals: [approval(DUE)] };
+    inbox = { questions: [question()], approvals: [approval(DUE)], ci_held: [] };
     const { fetchImpl } = fakeServer({ [OTHER_TASK]: 'ACME-12' });
     await renderInbox(fetchImpl);
     const filters = screen.getByRole('navigation', { name: 'Inbox filters' });
@@ -372,7 +383,7 @@ describe('the filters', () => {
 
 describe('a question row', () => {
   it('shows the first line, expands in place, and Answer sends the command', async () => {
-    inbox = { questions: [question()], approvals: [] };
+    inbox = { questions: [question()], approvals: [], ci_held: [] };
     const { sent, fetchImpl } = fakeServer();
     await renderInbox(fetchImpl);
     const toggle = screen.getByRole('button', {
@@ -410,7 +421,7 @@ describe('a question row', () => {
   });
 
   it('says the answer was refused when the server answers 409, and keeps the question', async () => {
-    inbox = { questions: [question()], approvals: [] };
+    inbox = { questions: [question()], approvals: [], ci_held: [] };
     const { sent, fetchImpl } = fakeServer({}, { refuseAnswers: true });
     await renderInbox(fetchImpl);
     const user = userEvent.setup();
@@ -430,6 +441,7 @@ describe('a question row', () => {
     inbox = {
       questions: [question({ text: '<img src=x onerror="window.__pwned=1"> retry?' })],
       approvals: [],
+      ci_held: [],
     };
     const container = await renderInbox(fakeServer().fetchImpl);
     expect(container.textContent).toContain('<img src=x');
@@ -441,5 +453,61 @@ describe('firstLine', () => {
   it('is the first non-empty line, trimmed', () => {
     expect(firstLine('\n  Why three?  \nBecause.')).toBe('Why three?');
     expect(firstLine('   ')).toBe('   ');
+  });
+});
+
+/**
+ * S-26.8b part 2 (BACKLOG 1300): a CI check held at a manual job needs a person now, so the read's
+ * `ci_held` list is a row of its own — the job named as provider text, where it is (the read
+ * carries the project and the ticket), and *Open*, which opens the task.
+ */
+describe('a CI check held at a manual job', () => {
+  const held = (job: string | null): InboxResponse['ci_held'][number] => ({
+    task_id: TASK,
+    project_id: PROJECT,
+    ticket: { provider: 'jira', key: 'ACME-9', url: 'https://tickets.example.invalid/ACME-9' },
+    gate_wait: {
+      pipeline_id: '41',
+      pipeline_url: null,
+      status: 'manual',
+      held_job: job,
+      held_job_url: null,
+      draft: false,
+      checked_at: '2026-09-29T09:04:00.000Z',
+      waiting_since: '2026-09-29T09:00:00.000Z',
+      timeout_minutes: 60,
+    },
+  });
+
+  it('lists it beside the questions, counts it, and opens the task', async () => {
+    inbox = { questions: [question()], approvals: [], ci_held: [held('deploy <b>prod</b>')] };
+    const container = await renderInbox(fakeServer().fetchImpl);
+    const row = await screen.findByText(
+      'CI waits for someone to start the manual job deploy <b>prod</b>',
+    );
+    expect(row.closest('[data-inbox-ci-held]')?.getAttribute('data-inbox-ci-held')).toBe(TASK);
+    // Provider text, rendered as text.
+    expect(container.querySelector('main b')).toBeNull();
+    expect(container.textContent).toContain('2 waiting for you');
+    // Where it is, from the read itself: project · ticket · stage.
+    await waitFor(() => {
+      expect(row.closest('li')?.querySelector('[data-inbox-where]')?.textContent).toBe(
+        'acme·ACME-9·CI',
+      );
+    });
+    expect(container.textContent).toContain('waiting since 5 m ago');
+    const open = screen.getByRole('link', { name: 'Open ACME-9' });
+    expect(open.getAttribute('href')).toBe(`/tasks/${TASK}`);
+    expect(screen.queryByText('Nothing needs you')).toBeNull();
+  });
+
+  it('says a manual job the read could not name, and keeps it out of the Questions filter', async () => {
+    inbox = { questions: [], approvals: [], ci_held: [held(null)] };
+    const container = await renderInbox(fakeServer().fetchImpl);
+    await screen.findByText('CI waits for someone to start a manual job');
+    const filters = screen.getByRole('navigation', { name: 'Inbox filters' });
+    expect(within(filters).getByRole('button', { name: /^All/ }).textContent).toContain('1');
+    await userEvent.setup().click(within(filters).getByRole('button', { name: /^Questions/ }));
+    expect(container.querySelector('[data-inbox-ci-held]')).toBeNull();
   });
 });

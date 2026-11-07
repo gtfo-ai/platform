@@ -41,6 +41,7 @@ import type {
   TaskState,
   WorkerSummary,
 } from '@platform/contracts';
+import { waitingPlain, waitingTail } from '../../features/waiting-words.js';
 import {
   ACTIVITY_META,
   type Activity,
@@ -92,6 +93,8 @@ export interface FleetInput {
   /** Run id → the live transcript's newest entry; used when newer than the agents read's. */
   readonly latest?: ReadonlyMap<string, LatestEntry>;
   readonly endings?: readonly FleetEnding[];
+  /** The signed-in person: *your machine* in a waiting run's words (S-26.8b part 2). */
+  readonly viewerId?: string | null;
 }
 
 export type SeatState = 'active' | 'paused' | 'revoked';
@@ -262,6 +265,7 @@ export const fleetOf = (input: FleetInput): Fleet => {
   const projectKeys = input.projectKeys ?? new Map<string, string>();
   const workers = input.workers ?? [];
   const workerById = new Map(workers.map((worker) => [worker.id, worker]));
+  const viewer = input.viewerId ?? null;
 
   const openAsks = new Map<string, number>();
   for (const question of input.inbox?.questions ?? []) {
@@ -290,7 +294,7 @@ export const fleetOf = (input: FleetInput): Fleet => {
     // that run; a question to the task (no stage) runs beside the pipeline, and a run that already
     // ended is not the one a person is waiting on — neither is read as "needs you" for the task.
     const current = !ended && run.stage !== null;
-    const activity = activityOf({
+    const doing = activityOf({
       run: {
         status: run.status,
         terminal_reason: run.terminal_reason ?? null,
@@ -306,6 +310,11 @@ export const fleetOf = (input: FleetInput): Fleet => {
       lease_late: false,
       now,
     });
+    // S-26.8b part 2: a run nobody takes yet says why — the short form's tail as the `waiting`
+    // activity's sub-label ("Vojtěch’s machine is offline"), every name sanitised.
+    const tail = !ended && doing.activity === 'waiting' ? waitingTail(entry.waiting, viewer) : null;
+    const activity =
+      tail === null ? doing : { activity: doing.activity, detail: waitingPlain(tail) };
     return {
       id: run.id,
       run,

@@ -12,7 +12,9 @@
  * dashboard this replaces.
  */
 import type {
+  AgentsResponse,
   ApprovalView,
+  InboxResponse,
   IntegrationSummary,
   QuestionRecord,
   RunRecord,
@@ -132,6 +134,12 @@ const task = (n: number, over: Partial<TaskRecord> = {}): TaskRecord => ({
   completed_at: null,
   ticket_claim: null,
   qa_stage: false,
+  tracker_assignee: null,
+  owner: null,
+  owner_source: null,
+  unlinked_assignee: null,
+  owner_writes_back: false,
+  waiting: null,
   ...over,
 });
 
@@ -146,6 +154,10 @@ const detail = (record: TaskRecord): TaskDetailResponse => ({
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  can_take: false,
+  can_assign: false,
+  can_unassign: false,
+  take_writes_back: false,
   gate_feedback: null,
   returns: [],
   stop: null,
@@ -242,6 +254,10 @@ interface World {
   projects: ReturnType<typeof project>[];
   questions: QuestionRecord[];
   approvals: ApprovalView[];
+  /** S-26.8b part 2: the inbox read's `ci_held` (BACKLOG 1300); absent, none. */
+  ciHeld?: InboxResponse['ci_held'];
+  /** S-26.8b part 2: each agents row's `waiting`, by run id; absent, `null`. */
+  waiting?: Readonly<Record<string, NonNullable<AgentsResponse['items'][number]['waiting']>>>;
   /** Every project's tasks; the fake filters by `state` the way the server does. */
   tasks: TaskRecord[];
   runs: RunRecord[];
@@ -307,6 +323,7 @@ const fetchFor = (world: World) =>
         effective_fallback_after_seconds: 15,
         stored: false,
         server_claimant: world.serverClaimant,
+        others_take_unassigned: false,
         notice: null,
         workers: [],
         waiting: {
@@ -324,13 +341,18 @@ const fetchFor = (world: World) =>
           role: entry.role,
           last_output_at: null,
           seat: null,
+          waiting: world.waiting?.[entry.id] ?? null,
           // S-25.7: the row shows the activity, so the fake carries the latest entry.
           activity: { kind: 'tool', tool_name: 'Read', at: minutesAgo(1) },
         })),
       });
     }
     if (path === '/api/org/inbox') {
-      return json({ questions: world.questions, approvals: world.approvals });
+      return json({
+        questions: world.questions,
+        approvals: world.approvals,
+        ci_held: world.ciHeld ?? [],
+      });
     }
     // The server refuses both below admin (`org.dead_letters.manage`); the fake does too.
     for (const [read, total] of [
@@ -402,6 +424,7 @@ const fetchFor = (world: World) =>
               open_questions: 0,
               pending_approvals: 0,
               loop_limits: null,
+              gate_wait: null,
               latest_return: null,
               stop: null,
             })),
@@ -538,6 +561,43 @@ describe('the greeting', () => {
 });
 
 describe('Home, needs you first', () => {
+  it('lists a CI check held at a manual job, which only a person can start (S-26.8b part 2)', async () => {
+    const world = newWorld({
+      ciHeld: [
+        {
+          task_id: TASK(7),
+          project_id: PROJECT(1),
+          ticket: {
+            provider: 'jira',
+            key: 'ACME-7',
+            url: 'https://tickets.example.invalid/ACME-7',
+          },
+          gate_wait: {
+            pipeline_id: '41',
+            pipeline_url: null,
+            status: 'manual',
+            held_job: 'deploy',
+            held_job_url: null,
+            draft: false,
+            checked_at: minutesAgo(1),
+            waiting_since: minutesAgo(20),
+            timeout_minutes: 60,
+          },
+        },
+      ],
+    });
+    start(world);
+    const needs = await screen.findByRole('list', { name: 'Needs you' });
+    await waitFor(() => {
+      expect(needs.textContent).toContain('CI waits for someone to start the manual job deploy');
+    });
+    expect(needs.textContent).toContain('ACME-7');
+    expect(needs.textContent).toContain('CI');
+    const link = within(needs).getByRole('link');
+    expect(link.textContent).toContain('Open');
+    expect(link.getAttribute('href')).toBe(`/tasks/${TASK(7)}`);
+  });
+
   it('names the plan an approval is about — version, size, files — and its verb is Review plan', async () => {
     const world = newWorld({
       approvals: [
@@ -682,6 +742,31 @@ describe('Home, running now', () => {
     expect(row.textContent).not.toContain('then the tests');
     expect(row.querySelector('script')).toBeNull();
     expect(within(box('Running now')).getByRole('link', { name: 'Agents →' })).toBeTruthy();
+  });
+
+  it('says why a run waits for a machine, and "your machine" to its owner (S-26.8b part 2)', async () => {
+    const offline = {
+      reason: 'owner_worker_offline' as const,
+      user: { user_id: '00000000-0000-4000-8000-00000000a001', name: 'Vojtěch' },
+      last_seen_at: minutesAgo(120),
+      assignee_name: null,
+      blockers: [],
+    };
+    start(
+      newWorld({
+        runs: [run({ status: 'created', started_at: null })],
+        waiting: { [RUN]: offline },
+      }),
+    );
+    const list = await screen.findByRole('list', { name: 'Running now' });
+    await waitFor(() => {
+      expect(list.querySelector('[data-home-activity]')?.textContent).toBe(
+        'Waiting: Vojtěch’s machine is offline',
+      );
+    });
+    expect(list.querySelector('[data-home-waiting]')?.getAttribute('data-home-waiting')).toBe(
+      'owner_worker_offline',
+    );
   });
 
   it('says so when no agent is running', async () => {

@@ -28,7 +28,7 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   if (path.startsWith('/api/auth/get-session')) return json(SESSION);
   if (path === '/api/workers') return json({ items: [], scope: 'own', timezone: 'UTC' });
   if (path === '/api/projects') return json({ items: [] });
-  if (path === '/api/org/inbox') return json({ questions: [], approvals: [] });
+  if (path === '/api/org/inbox') return json({ questions: [], approvals: [], ci_held: [] });
   if (path === '/api/org/agents') return json({ items: [] });
   return new Response(JSON.stringify({ error: { code: 'not_found', message: path } }), {
     status: 404,

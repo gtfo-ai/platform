@@ -69,6 +69,7 @@ export const agentItem = (
     role: run.role,
     last_output_at: null,
     seat: { kind: 'server', worker_id: null, worker_name: null },
+    waiting: null,
     activity: { kind: 'tool', tool_name: 'Read', at: '2026-11-05T16:44:00.000Z' },
     ...rest,
   };
@@ -115,7 +116,7 @@ export const facts = (key: string, overrides: Partial<FleetTaskFacts> = {}): Fle
   ...overrides,
 });
 
-export const EMPTY_INBOX: InboxResponse = { questions: [], approvals: [] };
+export const EMPTY_INBOX: InboxResponse = { questions: [], approvals: [], ci_held: [] };
 
 export const question = (n: number, taskId: string, text: string) =>
   ({
@@ -192,6 +193,12 @@ export const taskDetail = (
     completed_at: null,
     ticket_claim: null,
     qa_stage: false,
+    tracker_assignee: null,
+    owner: null,
+    owner_source: null,
+    unlinked_assignee: null,
+    owner_writes_back: false,
+    waiting: null,
     ...overrides,
   },
   taken_over: null,
@@ -203,6 +210,10 @@ export const taskDetail = (
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  can_take: false,
+  can_assign: false,
+  can_unassign: false,
+  take_writes_back: false,
   gate_feedback: null,
   returns: [],
   stop: null,

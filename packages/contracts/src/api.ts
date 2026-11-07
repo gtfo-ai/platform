@@ -960,10 +960,9 @@ export const projectExecutionResponseSchema = putProjectExecutionRequestSchema.e
    * its project list taking the project, its claim policy `everything` or `mine_and_unassigned`,
    * the project's mode and run credential letting workers in. A setting-level answer: such a
    * machine counts whether or not it is connected now. It names no machine — a member sees only
-   * their own (`workers`). Optional on the wire because the SPA's fixtures predate it; the server
-   * always sends it.
+   * their own (`workers`). Required since S-26.8b part 2 (BACKLOG 1445).
    */
-  others_take_unassigned: z.boolean().optional(),
+  others_take_unassigned: z.boolean(),
 });
 
 /**
@@ -1719,10 +1718,10 @@ export const taskListItemSchema = taskRecordSchema.extend({
   /**
    * The current stage's open CI wait (backlog 1300) — the task read's `gate_wait`, the same
    * projection over the page's stage rows: `null` unless the task is `active` at `ci_gate` with an
-   * open attempt that recorded a read. Optional on the wire because the SPA's fixtures predate it;
-   * the board's page always sends it.
+   * open attempt that recorded a read. Required since S-26.8b part 2 (BACKLOG 1445): the card's
+   * *CI held* and the board's *Needs you* read it.
    */
-  gate_wait: gateWaitSchema.nullable().optional(),
+  gate_wait: gateWaitSchema.nullable(),
 });
 export type TaskListItem = z.infer<typeof taskListItemSchema>;
 
@@ -1942,14 +1941,14 @@ export const taskCallerFactsShape = {
  * *Assign…* and *Unassign*. Not role-only like {@link taskCallerFactsShape} — each is the domain's
  * `ownerCapabilities` over the caller, the task's owner and whether its ticket is held elsewhere,
  * the same matrix `POST /api/tasks/:id/owner` decides with (`packages/domain/src/tasks/owner.ts`).
- * A shape of its own for one reason: these are optional on the wire, because the SPA's fixtures
- * predate them (its owner UI is S-26.8b), where every role-only fact is required. This build's
- * server always sends all three, and the export drops them like every other caller fact.
+ * A shape of its own because they are per caller *and* per task, where every other fact is
+ * role-only. Required since S-26.8b part 2 (BACKLOG 1445); the export drops them like every other
+ * caller fact.
  */
 export const taskOwnerCallerFactsShape = {
-  can_take: z.boolean().optional(),
-  can_assign: z.boolean().optional(),
-  can_unassign: z.boolean().optional(),
+  can_take: z.boolean(),
+  can_assign: z.boolean(),
+  can_unassign: z.boolean(),
   /**
    * Whether *Take it* by **this caller** would also assign the ticket in the tracker (S-26.3, the
    * owner write-back): the binding sets `lifecycle.assign_owner`, the task names a provider ticket
@@ -1959,7 +1958,7 @@ export const taskOwnerCallerFactsShape = {
    * only by an unlinked tracker assignee has no owner, yet a linked caller's *Take it* replaces that
    * assignee in the tracker, which is what a confirmation must say.
    */
-  take_writes_back: z.boolean().optional(),
+  take_writes_back: z.boolean(),
 } as const;
 
 /** The keys of {@link taskOwnerCallerFactsShape}, which the export omits too. */
@@ -3244,10 +3243,9 @@ export const agentsResponseSchema = z.strictObject({
       activity: runActivitySchema.nullable(),
       /**
        * **Why the run waits** (S-26.5): its open offer as {@link offerWaitingSchema} reads it, or
-       * `null` when it has none (it was claimed). Optional on the wire because the SPA's fixtures
-       * predate it; the server always sends it.
+       * `null` when it has none (it was claimed). Required since S-26.8b part 2 (BACKLOG 1445).
        */
-      waiting: offerWaitingSchema.nullable().optional(),
+      waiting: offerWaitingSchema.nullable(),
     }),
   ),
 });
@@ -3329,9 +3327,9 @@ export const inboxResponseSchema = z.strictObject({
   approvals: z.array(approvalViewSchema),
   /**
    * The tasks waiting for a person to start a held CI job (backlog 1300), oldest wait first.
-   * Optional on the wire because the SPA's fixtures predate it; the server always sends it.
+   * Required since S-26.8b part 2 (BACKLOG 1445): the Inbox and Home's *Needs you* list them.
    */
-  ci_held: z.array(inboxCiHeldSchema).optional(),
+  ci_held: z.array(inboxCiHeldSchema),
 });
 
 // `putBudgetRequestSchema` lived here from WP-01 until WP-30, unused, one key different from the
@@ -3889,7 +3887,10 @@ export type StartTaskResponse = z.infer<typeof startTaskResponseSchema>;
 export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
 export type GateWait = z.infer<typeof gateWaitSchema>;
 /** The task read before the route adds what it says about the caller. */
-export type TaskDetailRecord = Omit<TaskDetailResponse, TaskCallerFactKey>;
+export type TaskDetailRecord = Omit<
+  TaskDetailResponse,
+  TaskCallerFactKey | (typeof TASK_OWNER_CALLER_FACT_KEYS)[number]
+>;
 export type TakenOver = z.infer<typeof takenOverSchema>;
 export type IdentityCandidate = z.infer<typeof identityCandidateSchema>;
 export type IdentityLinkCodeIssued = z.infer<typeof identityLinkCodeIssuedSchema>;

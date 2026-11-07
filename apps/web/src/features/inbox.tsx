@@ -17,8 +17,13 @@
  * uses, so opening a row reads nothing twice) — the same answer Home gives. Until a task answers,
  * its row shows only the stage, and it is counted under *All* and its kind but under no project.
  *
- * Every string an agent or a provider wrote — the question, the ticket key, a project's name —
- * renders through `ui/untrusted.tsx`.
+ * **A CI check held at a manual job** (S-26.8b part 2, BACKLOG 1300, the read's `ci_held`) is a
+ * row too: only a person can start the job, so it needs somebody now, exactly as the task page's
+ * *Needs you* says. Its row names the job, where it is (the read carries the project and the
+ * ticket), how long it has waited, and opens the task, whose primary action starts the job.
+ *
+ * Every string an agent or a provider wrote — the question, the ticket key, a project's name, a
+ * job's name — renders through `ui/untrusted.tsx`.
  */
 import { BellIcon } from '@primer/octicons-react/BellIcon';
 import { ChevronRightIcon } from '@primer/octicons-react/ChevronRightIcon';
@@ -44,10 +49,12 @@ import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { ApprovalSummary } from './approval-summary.js';
 import { reviewVerb } from './approval-text.js';
+import { ciHeldSentence } from './gate-wait-words.js';
 
 type Inbox = NonNullable<ReturnType<typeof useInbox>['data']>;
 type Question = Inbox['questions'][number];
 type Approval = Inbox['approvals'][number];
+type CiHeld = Inbox['ci_held'][number];
 
 /** The filter the NavList holds: a kind, or one project by id. */
 type Filter =
@@ -283,6 +290,44 @@ const ApprovalRow = ({
   />
 );
 
+/** A task whose CI check waits on a manual job somebody must start (BACKLOG 1300). */
+const CiHeldRow = ({
+  held,
+  where,
+  nowMs,
+}: {
+  readonly held: CiHeld;
+  readonly where: Where;
+  readonly nowMs: number;
+}): ReactElement => (
+  <ListRow
+    leading={<StatusIcon status="needs_you" label="CI held" />}
+    title={
+      <span data-inbox-ci-held={held.task_id}>
+        {/* The job's name is provider text. */}
+        <UntrustedText value={ciHeldSentence(held.gate_wait.held_job)} />
+      </span>
+    }
+    meta={
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        <WhereLine where={where} stage="ci_gate" />
+        <Dot />
+        <span>{timeLine('waiting since', held.gate_wait.waiting_since, null, nowMs)}</span>
+      </span>
+    }
+    actions={
+      <Link
+        to="/tasks/$taskId"
+        params={{ taskId: held.task_id }}
+        {...rowLink(buttonClassName('default', 'sm'))}
+      >
+        Open
+        <span className="sr-only">{` ${sanitiseUntrusted(held.ticket.key)}`}</span>
+      </Link>
+    }
+  />
+);
+
 /**
  * PROGRESS backlog 163's inbox half, closed by decision at WP-95 rather than built: this list is
  * what a person can still act on **here**, and an expired question or approval can no longer be
@@ -314,6 +359,7 @@ export const InboxScreen = (): ReactElement => {
 
   const questions = inbox.data?.questions ?? [];
   const approvals = inbox.data?.approvals ?? [];
+  const ciHeld = inbox.data?.ci_held ?? [];
   const taskIds = [...new Set([...questions, ...approvals].map((item) => item.task_id))];
   const reads = useTasks(taskIds);
   const whereOf = new Map<string, Where>();
@@ -328,6 +374,14 @@ export const InboxScreen = (): ReactElement => {
       });
     }
   });
+  // A held CI job's row carries its project and ticket itself.
+  for (const held of ciHeld) {
+    whereOf.set(held.task_id, {
+      projectId: held.project_id,
+      project: projects.data?.items.find((entry) => entry.id === held.project_id)?.key ?? null,
+      ticket: held.ticket.key,
+    });
+  }
   const where = (taskId: string): Where =>
     whereOf.get(taskId) ?? { projectId: null, project: null, ticket: null };
 
@@ -348,9 +402,17 @@ export const InboxScreen = (): ReactElement => {
         : false,
   );
 
+  const shownCiHeld = ciHeld.filter((held) =>
+    filter.kind === 'all'
+      ? true
+      : filter.kind === 'project'
+        ? held.project_id === filter.projectId
+        : false,
+  );
+
   // A project is listed once one of its items is known to be in it.
   const projectCounts = new Map<string, number>();
-  for (const item of [...questions, ...approvals]) {
+  for (const item of [...questions, ...approvals, ...ciHeld]) {
     const projectId = where(item.task_id).projectId;
     if (projectId !== null) {
       projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + 1);
@@ -368,8 +430,8 @@ export const InboxScreen = (): ReactElement => {
     };
   });
 
-  const total = questions.length + approvals.length;
-  const shown = shownQuestions.length + shownApprovals.length;
+  const total = questions.length + approvals.length + ciHeld.length;
+  const shown = shownQuestions.length + shownApprovals.length + shownCiHeld.length;
   const settled = inbox.isSuccess;
 
   return (
@@ -449,6 +511,14 @@ export const InboxScreen = (): ReactElement => {
                   key={approval.id}
                   approval={approval}
                   where={where(approval.task_id)}
+                  nowMs={nowMs}
+                />
+              ))}
+              {shownCiHeld.map((held) => (
+                <CiHeldRow
+                  key={held.task_id}
+                  held={held}
+                  where={where(held.task_id)}
                   nowMs={nowMs}
                 />
               ))}

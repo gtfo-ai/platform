@@ -20,7 +20,7 @@ import {
   PROJECT_KEY,
   UNLINKED_ASSIGNEE,
 } from './support/fixtures.js';
-import { commandLog, resetBackend, signIn } from './support/harness.js';
+import { commandLog, openWaiting, resetBackend, signIn } from './support/harness.js';
 
 test.beforeEach(async ({ page, request }) => {
   await resetBackend(request);
@@ -1310,4 +1310,41 @@ test('the owner on the task page and the board, with the board’s filter rememb
   await whose.getByRole('button', { name: 'Everyone' }).click();
   await expect(page).toHaveURL(`/projects/${PROJECT_KEY}`);
   await expect(page.getByRole('article', { name: 'DEMO-1' })).toBeVisible();
+});
+
+test('why a task waits, on the board, the task page and the inbox (S-26.8b part 2)', async ({
+  page,
+  request,
+}) => {
+  await openWaiting(request);
+  await page.goto(`/projects/${PROJECT_KEY}`);
+  // The short form, every name as text; "your machine" to the machine's owner.
+  await expect(
+    page.getByRole('article', { name: 'DEMO-20' }).locator('[data-card-waiting]'),
+  ).toHaveText(`Waiting · ${OWNER_NAME}’s machine is offline`);
+  await expect(
+    page.getByRole('article', { name: 'DEMO-21' }).locator('[data-card-waiting]'),
+  ).toHaveText('Waiting · your machine needs an update');
+  const unlinked = page.getByRole('article', { name: 'DEMO-22' }).locator('[data-card-waiting]');
+  await expect(unlinked).toHaveText(`Waiting · assigned to ${UNLINKED_ASSIGNEE} (not linked)`);
+  await expect(unlinked.locator('script')).toHaveCount(0);
+  // A CI check held at a manual job: its short form, and Needs you.
+  const held = page.locator('[data-column="waiting"]').getByRole('article', { name: 'DEMO-8' });
+  await expect(held.locator('[data-card-setback="ci_held"]')).toHaveText('CI held · start the job');
+  await expect(held.locator('[data-needs-you]')).toHaveCount(1);
+
+  // The task page: the long form, and the read's Take it as a secondary step.
+  await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskWaitingOffline}`);
+  const notice = page.getByRole('region', { name: 'Why it waits' });
+  await expect(notice.locator('[data-waiting]')).toHaveText(
+    `Waiting for ${OWNER_NAME}’s machine. It’s offline (last seen 2 h ago).`,
+  );
+  await expect(notice.getByRole('button', { name: 'Take it' })).toBeVisible();
+  await expect(notice.getByRole('button', { name: 'Assign…' })).toBeVisible();
+
+  // The inbox: the held job is a row of its own.
+  await page.goto('/inbox');
+  await expect(page.locator(`[data-inbox-ci-held="${IDS.taskCiHeld}"]`)).toHaveText(
+    'CI waits for someone to start the manual job sentry-release-commit',
+  );
 });

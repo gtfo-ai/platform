@@ -116,6 +116,10 @@ export const IDS = {
   ownerVojtech: id(95),
   // S-26.8b's follow-up: a person *Assign…* offers, linked to the tracker.
   ownerPetra: id(96),
+  // S-26.8b part 2: tasks whose run waits for a machine nobody has (`waiting`, S-26.5).
+  taskWaitingOffline: id(32),
+  taskWaitingMine: id(33),
+  taskWaitingUnlinked: id(34),
 } as const;
 
 /** S-26.8b: DEMO-1's owner, as the task DTO publishes them. */
@@ -327,6 +331,12 @@ const baseTask = {
   completed_at: null,
   ticket_claim: null,
   qa_stage: false,
+  tracker_assignee: null,
+  owner: null,
+  owner_source: null,
+  unlinked_assignee: null,
+  owner_writes_back: false,
+  waiting: null,
 } as const;
 
 export const featureTask = taskRecordSchema.parse({
@@ -556,6 +566,7 @@ export const taskDetail = taskDetailResponseSchema.parse({
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  take_writes_back: false,
   // S-26.8b: the operator is an administrator — every owner action the matrix allows.
   can_take: true,
   can_assign: true,
@@ -639,6 +650,7 @@ export const bugTaskDetail = taskDetailResponseSchema.parse({
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  take_writes_back: false,
   // S-26.8b: nobody owns it, so nothing to unassign; an administrator may take it.
   can_take: true,
   can_assign: true,
@@ -694,6 +706,10 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
   can_return: true,
   can_rework: true,
   can_decide_approval: true,
+  can_take: false,
+  can_assign: false,
+  can_unassign: false,
+  take_writes_back: false,
   gate_feedback: null,
   returns: [],
   stop: null,
@@ -737,6 +753,7 @@ export const ciFixingTaskDetail = taskDetailResponseSchema.parse({
     iteration_counters: { ci_fix: 2 },
   },
   loop_limits: resolveIterationLimits(),
+  gate_wait: null,
   returns: [
     {
       from_stage: 'ci_gate',
@@ -930,6 +947,139 @@ export const ciHeldTimedOutTaskDetail = taskDetailResponseSchema.parse({
 });
 
 /** An epic-split task with a queue of two proposed children (WP-44, PROGRESS backlog 108). */
+/**
+ * S-26.8b part 2 (the M26 UX spec § 4): three tasks whose implementation run waits for a machine
+ * nobody has — Vojtěch's machine offline, the operator's own machine needing an update, and a
+ * tracker assignee the platform cannot link — and the AUT-6655 task as the board's item, held at a
+ * manual job. Served once `POST /__test__/waiting` opens them, so no other screen's board changes.
+ */
+const waitingTask = (
+  n: number,
+  taskId: string,
+  waiting: Record<string, unknown>,
+  over: Record<string, unknown> = {},
+) => ({
+  ...featureTask,
+  id: taskId,
+  ticket: { provider: 'jira', key: `DEMO-${n}`, url: HOSTILE.safeUrl },
+  ticket_title: `Waiting task ${n}`,
+  state: 'active',
+  current_stage: 'implementation',
+  owner: null,
+  owner_source: null,
+  unlinked_assignee: null,
+  tracker_assignee: null,
+  waiting: {
+    reason: 'owner_worker_offline',
+    user: { user_id: IDS.ownerVojtech, name: OWNER_NAME },
+    last_seen_at: null,
+    assignee_name: null,
+    blockers: [],
+    ...waiting,
+  },
+  ...over,
+});
+
+const waitingGlance = {
+  stages: [
+    { stage: 'refinement', attempt: 1, state: 'completed', entered_at: now },
+    { stage: 'implementation', attempt: 1, state: 'running', entered_at: now },
+  ],
+  open_questions: 0,
+  pending_approvals: 0,
+  loop_limits: null,
+  gate_wait: null,
+  latest_return: null,
+  stop: null,
+} as const;
+
+export const waitingOfflineTask = taskRecordSchema.parse(
+  waitingTask(
+    20,
+    IDS.taskWaitingOffline,
+    { last_seen_at: minutesAgo(120) },
+    { owner: { user_id: IDS.ownerVojtech, name: OWNER_NAME }, owner_source: 'platform' },
+  ),
+);
+
+export const waitingListItems = [
+  waitingOfflineTask,
+  taskRecordSchema.parse(
+    waitingTask(
+      21,
+      IDS.taskWaitingMine,
+      {
+        reason: 'owner_worker_cannot_take',
+        user: { user_id: IDS.user, name: 'Fake Operator' },
+        blockers: ['images_outdated'],
+      },
+      { owner: { user_id: IDS.user, name: 'Fake Operator' }, owner_source: 'platform' },
+    ),
+  ),
+  taskRecordSchema.parse(
+    waitingTask(
+      22,
+      IDS.taskWaitingUnlinked,
+      { reason: 'assignee_not_linked', user: null, assignee_name: UNLINKED_ASSIGNEE },
+      {
+        unlinked_assignee: { display_name: UNLINKED_ASSIGNEE },
+        tracker_assignee: { display_name: UNLINKED_ASSIGNEE, user_id: null },
+      },
+    ),
+  ),
+].map((task) => taskListItemSchema.parse({ ...task, ...waitingGlance }));
+
+/** AUT-6655 on the board: active at the CI check, its pipeline held at a manual job. */
+export const ciHeldListItem = taskListItemSchema.parse({
+  ...ciHeldTaskDetail.task,
+  ...waitingGlance,
+  stages: [
+    { stage: 'implementation', attempt: 1, state: 'completed', entered_at: now },
+    { stage: 'ci_gate', attempt: 1, state: 'running', entered_at: now },
+  ],
+  gate_wait: ciHeldTaskDetail.gate_wait,
+});
+
+/** The inbox's `ci_held` row for the same task (backlog 1300). */
+export const inboxCiHeld = inboxResponseSchema.shape.ci_held.parse([
+  {
+    task_id: IDS.taskCiHeld,
+    project_id: IDS.project,
+    ticket: ciHeldTaskDetail.task.ticket,
+    gate_wait: ciHeldTaskDetail.gate_wait,
+  },
+]);
+
+/** DEMO-20's own read: the task page says why it waits, and offers *Take it*. */
+export const waitingOfflineTaskDetail = taskDetailResponseSchema.parse({
+  ...bugTaskDetail,
+  task: waitingOfflineTask,
+  can_take: true,
+  can_assign: true,
+  returns: [],
+  stop: null,
+  gate_wait: null,
+  last_gate_wait: null,
+  stages: [
+    {
+      stage: 'refinement',
+      attempt: 1,
+      state: 'completed',
+      entered_at: now,
+      exited_at: now,
+      outcome: null,
+    },
+    {
+      stage: 'implementation',
+      attempt: 1,
+      state: 'running',
+      entered_at: now,
+      exited_at: null,
+      outcome: null,
+    },
+  ],
+});
+
 export const epicTaskDetail = taskDetailResponseSchema.parse({
   ...bugTaskDetail,
   task: {
@@ -1271,6 +1421,7 @@ export const agents = agentsResponseSchema.parse({
       role: 'developer',
       last_output_at: now,
       seat: { kind: 'server', worker_id: null, worker_name: null },
+      waiting: null,
       activity: { kind: 'tool', tool_name: 'Read', at: now },
     },
     {
@@ -1280,6 +1431,7 @@ export const agents = agentsResponseSchema.parse({
       role: 'investigator',
       last_output_at: now,
       seat: { kind: 'worker', worker_id: IDS.worker, worker_name: 'jan-mbp' },
+      waiting: null,
       activity: { kind: 'thinking', tool_name: null, at: now },
     },
     {
@@ -1289,6 +1441,7 @@ export const agents = agentsResponseSchema.parse({
       role: 'product_manager',
       last_output_at: null,
       seat: null,
+      waiting: null,
       activity: null,
     },
   ],
@@ -1362,6 +1515,7 @@ export const projectExecution = projectExecutionResponseSchema.parse({
   effective_fallback_after_seconds: 15,
   stored: false,
   server_claimant: 'running',
+  others_take_unassigned: false,
   notice: null,
   workers: [],
   waiting: {
@@ -1376,6 +1530,7 @@ export const emptyRunMessages = runMessagesResponseSchema.parse({ items: [], nex
 export const inbox = inboxResponseSchema.parse({
   questions: [question],
   approvals: [approval],
+  ci_held: [],
 });
 
 export const audit = orgAuditResponseSchema.parse({
@@ -1846,6 +2001,7 @@ export const featureListItem = taskListItemSchema.parse({
   open_questions: 1,
   pending_approvals: 1,
   loop_limits: null,
+  gate_wait: null,
   latest_return: null,
   stop: null,
 });
@@ -1856,6 +2012,7 @@ export const bugListItem = taskListItemSchema.parse({
   open_questions: 0,
   pending_approvals: 0,
   loop_limits: null,
+  gate_wait: null,
   latest_return: null,
   stop: null,
 });

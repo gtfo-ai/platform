@@ -77,6 +77,12 @@ export const addTask = async (request: APIRequestContext): Promise<void> => {
   expect(response.ok()).toBe(true);
 };
 
+/** S-26.8b part 2: the board and the inbox also serve the tasks that wait (the fixtures' own). */
+export const openWaiting = async (request: APIRequestContext): Promise<void> => {
+  const response = await request.post('/__test__/waiting');
+  expect(response.ok()).toBe(true);
+};
+
 /**
  * Waits until the fake backend has an open stream that carries `topic`.
  *

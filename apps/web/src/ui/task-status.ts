@@ -12,7 +12,7 @@
  * Types only from the contracts, and the words from `humanize.ts` (which has no runtime dependency
  * either), so any surface can import it.
  */
-import type { TaskRecord, TaskState } from '@platform/contracts';
+import type { GateWait, TaskRecord, TaskState } from '@platform/contracts';
 import { TASK_STATE_LABEL } from './humanize.js';
 import type { Status } from './status.js';
 
@@ -48,13 +48,21 @@ export interface NeedsYouInput {
   /** A take-over is in force (the task page knows it beside the state). */
   readonly taken_over?: boolean;
   /**
-   * The CI check waits on a pipeline held at a manual job, which only a person can start (S-25.12,
-   * product/10's 2026-11-07 amendment). The task page knows it from the read's `gate_wait`
-   * (`features/gate-wait.tsx`' `gateWaitHeld`); the board's list item does not carry the read
-   * (BACKLOG 1300), so the board cannot ask it yet.
+   * The current stage's open CI wait — the task read's `gate_wait`, and since S-26.8b part 2 the
+   * board item's too (BACKLOG 1300). A pipeline **held at a manual job** waits on a person only
+   * (S-25.12, product/10's 2026-11-07 amendment), and only while the task is `active`:
+   * {@link ciHeldNow}.
    */
-  readonly ci_held?: boolean;
+  readonly gate_wait?: GateWait | null;
 }
+
+/**
+ * Whether the CI check waits on a manual job somebody must start — read only for an `active` task
+ * (review of PR #101, `features/gate-wait.tsx`' `openGateWait`): a pause closes no attempt, but the
+ * CI check stops checking, so a held job is then not what the task waits on.
+ */
+export const ciHeldNow = (task: Pick<NeedsYouInput, 'state' | 'gate_wait'>): boolean =>
+  task.state === 'active' && task.gate_wait?.status === 'manual';
 
 /** The states a task never leaves: nothing that is left open on one can move it again. */
 const TERMINAL: ReadonlySet<TaskState> = new Set<TaskState>(['done', 'cancelled']);
@@ -72,7 +80,7 @@ export const needsYou = (task: NeedsYouInput): boolean =>
   (WAITING_ON_A_PERSON.has(task.state) ||
     task.open_asks > 0 ||
     task.taken_over === true ||
-    task.ci_held === true ||
+    ciHeldNow(task) ||
     (task.state === 'paused' &&
       (task.paused_reason === 'budget' || task.paused_reason === 'taken_over')));
 

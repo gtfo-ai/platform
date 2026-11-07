@@ -25,6 +25,7 @@ import {
   useAgents,
   useInbox,
   useProjects,
+  useSession,
   useTaskPipelines,
   useTasks,
   useWorkers,
@@ -186,6 +187,7 @@ export const useFleet = (): FleetState => {
   const workers = useWorkers();
   const inbox = useInbox();
   const projects = useProjects();
+  const session = useSession();
   const items = agents.data?.items;
   const endings = useEndings(items, nowMs);
 
@@ -226,6 +228,8 @@ export const useFleet = (): FleetState => {
     (projects.data?.items ?? []).map((project) => [project.id, project.key]),
   );
 
+  // S-26.8b part 2: *your machine* in a waiting run's words.
+  const viewerId = session.data?.user.id ?? null;
   // Which runs to follow is decided from the reads alone, so following one cannot reorder the set.
   const base = fleetOf({
     agents: items ?? [],
@@ -250,6 +254,7 @@ export const useFleet = (): FleetState => {
     projectKeys,
     latest,
     endings,
+    viewerId,
   });
   return { fleet, now: nowMs, agents, workers, inbox, followed };
 };
