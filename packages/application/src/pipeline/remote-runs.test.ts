@@ -172,7 +172,12 @@ const world = async (
       : {
           takeAudit: {
             record: async (_tx, entry) => {
-              options.takes?.push({ ...entry });
+              // The pick's own row; whether it assigned (S-26.4) is the integration tier's.
+              options.takes?.push({
+                workerId: entry.workerId,
+                runId: entry.runId,
+                taskId: entry.taskId,
+              });
             },
           },
         }),

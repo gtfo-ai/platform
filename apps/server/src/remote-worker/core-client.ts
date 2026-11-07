@@ -170,18 +170,29 @@ export interface CoreClient {
   ): Promise<z.output<typeof workerManualPauseResponseSchema>>;
   /** A usage limit's pause (WP-285, TD-031 §11): `{ until, reason, estimated? }`, `204`. */
   pause(credential: string, body: unknown): Promise<void>;
-  /** The claim scope and the projects it may name (WP-293, protocol 3). */
+  /**
+   * The claim scope and the projects it may name (WP-293, protocol 3) — and, at protocol 4
+   * (S-26.4), the claim policy and `policy_skipped_offers`.
+   */
   claimScope(credential: string): Promise<z.output<typeof workerClaimScopeResponseSchema>>;
-  /** Set the claim scope (WP-293): `{ claim_project_ids }`, a state assertion. */
+  /**
+   * Set the claim scope (WP-293): `{ claim_project_ids, claim_policy? }`, a state assertion; the
+   * core refuses `[]` at protocol 4 (`422 claim_scope_empty`: *pick only* is `claim_policy`).
+   */
   setClaimScope(
     credential: string,
     body: unknown,
   ): Promise<z.output<typeof workerClaimScopeSetResponseSchema>>;
-  /** The open offers this worker could claim now, its scope ignored (WP-293). */
+  /**
+   * The open offers this worker could take now, in its projects (WP-293; S-26.4: each with its
+   * `owner` and `mine`, beside the list's `as_of` and `policy_skipped_offers`).
+   */
   offers(credential: string): Promise<z.output<typeof workerOffersResponseSchema>>;
   /**
-   * *Take this one* (WP-293): the package, or a `refused` error with `code: offer_not_claimable`. An
-   * answer that does not parse is `refused` with `package_unreadable`, as `claim`'s is.
+   * *Take this one* (WP-293): `{ image_digests, as_of? }` → the package, or a `refused` error with
+   * `code: offer_not_claimable` — or, since protocol 4 (S-26.4), `task_taken_by_another` /
+   * `task_owned_by_another` for a task another person owns. An answer that does not parse is
+   * `refused` with `package_unreadable`, as `claim`'s is.
    */
   takeOffer(credential: string, runId: string, body: unknown): Promise<RunPackage>;
   forRun(runId: string, runToken: string): RunScopedClient;

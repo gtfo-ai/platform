@@ -26,6 +26,11 @@
  *     carries `via: worker_ui` and the worker's user.
  * 10. **Pick only and *Take this one*** (WP-293 (5)): the page sets the scope to pick only, lists
  *     the waiting offer, takes it, and the run settles on that worker; nothing is claimed by itself.
+ *     Since S-26.4 *pick only* is the claim policy, and the take makes the worker's user the task's
+ *     owner (`via: pick`).
+ * 11. **A version-3 worker still claims** (S-26.4, protocol 4 accepted `[3, 4]`): a worker that
+ *     announces protocol 3 on every request runs a stage to completion through the core's
+ *     version-3 shapes.
  */
 import { createPublicKey, verify } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -872,9 +877,23 @@ describe('a pick-only worker and take this one (WP-293)', () => {
     await pipeline.waitFor('the worker to be connected', async () => {
       return laptop.runtime.state().connection === 'connected';
     });
+    // S-26.4: the page in this build still says *pick only* as `[]`. The worker sends the core the
+    // policy — `pick_only` over every project, never the `[]` a protocol-4 core refuses — and the
+    // page reads it back as its own `[]`.
     const scope = await page('POST', '/api/local/claim-scope', { claim_project_ids: [] });
     expect(scope.status, scope.body).toBe(200);
-    expect(JSON.parse(scope.body)).toMatchObject({ claim_project_ids: [] });
+    expect(JSON.parse(scope.body)).toMatchObject({
+      claim_project_ids: [],
+      claim_policy: 'pick_only',
+    });
+    const [stored] = await pipeline.query<{ claim_policy: string; claim_project_ids: unknown }>(
+      'select claim_policy, claim_project_ids from workers where id = $1',
+      [laptop.workerId],
+    );
+    expect(stored).toEqual({ claim_policy: 'pick_only', claim_project_ids: null });
+    // The page's state carries the policy as the core last said it.
+    const local = await page('GET', '/api/local/state');
+    expect(JSON.parse(local.body)).toMatchObject({ claim_policy: 'pick_only' });
 
     await pipeline.publish([ticketMatched(pipeline)]);
     const offeredRun = async (): Promise<string | null> => {
@@ -916,13 +935,33 @@ describe('a pick-only worker and take this one (WP-293)', () => {
     expect(claimed).toEqual({ worker_id: laptop.workerId, claimant_kind: 'worker' });
     const audits = await pipeline.query<{ action: string; user_id: string; params: JsonObject }>(
       `select action, user_id, params from human_actions
-        where action in ('worker.take_offer', 'worker.claim_scope') order by created_at`,
+        where action in ('worker.take_offer', 'worker.claim_scope', 'worker.claim_policy',
+                         'task.owner')
+        order by created_at, action`,
     );
     expect(audits).toEqual([
       {
-        action: 'worker.claim_scope',
+        action: 'worker.claim_policy',
         user_id: laptop.userId,
-        params: { worker_id: laptop.workerId, project_ids: [], via: 'worker_ui' },
+        params: {
+          worker_id: laptop.workerId,
+          claim_policy: 'pick_only',
+          project_ids: null,
+          via: 'worker_ui',
+        },
+      },
+      // S-26.4: the unassigned task became the picker's, in the claim's transaction.
+      {
+        action: 'task.owner',
+        user_id: laptop.userId,
+        params: {
+          user_id: laptop.userId,
+          via: 'pick',
+          worker_id: laptop.workerId,
+          run_id: runId,
+          changed: true,
+          owner_user_id: laptop.userId,
+        },
       },
       {
         action: 'worker.take_offer',
@@ -930,6 +969,11 @@ describe('a pick-only worker and take this one (WP-293)', () => {
         params: { worker_id: laptop.workerId, run_id: runId, via: 'worker_ui' },
       },
     ]);
+    const [owned] = await pipeline.query<{ owner_user_id: string | null; owner_source: string }>(
+      'select t.owner_user_id, t.owner_source from tasks t join runs r on r.task_id = t.id where r.id = $1',
+      [runId],
+    );
+    expect(owned).toEqual({ owner_user_id: laptop.userId, owner_source: 'platform' });
     // The next stage is offered and stays open: pick only takes nothing by itself.
     await pipeline.waitFor('the next stage to be offered', async () => {
       const next = await offeredRun();
@@ -942,6 +986,39 @@ describe('a pick-only worker and take this one (WP-293)', () => {
       [next],
     );
     expect(still?.state).toBe('open');
+  }, 300_000);
+});
+
+/**
+ * **A version-3 worker still claims** (S-26.4, criterion 6): protocol 4 is accepted beside 3, so a
+ * worker one release behind — every request it sends announcing `X-Worker-Protocol: 3` — handshakes,
+ * claims the first stage by itself (its row has no policy, which reads `everything`) and settles it.
+ * The core records the protocol it spoke.
+ */
+describe('a worker one protocol behind (S-26.4)', () => {
+  it('claims and settles a run at protocol 3', async () => {
+    const topology = await core('worker-protocol-3');
+    const { pipeline } = topology;
+    const laptop = await worker(topology, { name: 'v3-laptop', protocol: 3 });
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await pipeline.waitFor('the v3 worker to settle a run it claimed', async () => {
+      const rows = await pipeline.query<{ status: string }>(
+        `select r.status::text as status from run_offers o join runs r on r.id = o.run_id
+          where o.worker_id = $1 and r.status = 'completed'`,
+        [laptop.workerId],
+      );
+      return rows.length > 0;
+    });
+    const sent = topology.captured.filter((request) => request.worker === 'v3-laptop');
+    expect(sent.map((request) => request.verb)).toEqual(
+      expect.arrayContaining(['handshake', 'claims']),
+    );
+    expect(sent.every((request) => request.headers['x-worker-protocol'] === '3')).toBe(true);
+    const [row] = await pipeline.query<{ protocol_version: number }>(
+      'select protocol_version from workers where id = $1',
+      [laptop.workerId],
+    );
+    expect(row?.protocol_version).toBe(3);
   }, 300_000);
 });
 

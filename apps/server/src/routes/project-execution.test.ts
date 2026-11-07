@@ -69,6 +69,7 @@ const workerRow = (overrides: Partial<ProjectWorkerRow> = {}): ProjectWorkerRow 
   pausedUntilEstimated: false,
   manuallyPausedAt: null,
   claimProjects: null,
+  claimPolicy: 'everything',
   concurrency: 1,
   running: [],
   claimFacts: {
@@ -321,10 +322,22 @@ describe('who would run this project, and what waits (S-22.19, N2)', () => {
       projectWorkerOf(workerRow({ claimProjects: [{ id: PROJECT, key: 'ACME' }] }), input).takes,
     ).toBe('automatically');
     // Pick only, and a scope that names another project: the owner may still pick its runs.
-    for (const claimProjects of [[], [{ id: OTHER_USER, key: 'OPS' }]]) {
-      expect(projectWorkerOf(workerRow({ claimProjects }), input)).toMatchObject({
+    // A legacy `[]` reads as the policy `pick_only` (S-26.4); a policy of its own does the same.
+    for (const row of [
+      { claimProjects: [], claimPolicy: 'pick_only' as const },
+      { claimProjects: null, claimPolicy: 'pick_only' as const },
+      { claimProjects: [{ id: OTHER_USER, key: 'OPS' }] },
+    ]) {
+      expect(projectWorkerOf(workerRow(row), input)).toMatchObject({
         takes: 'picked_only',
         project_reason: 'scope_excludes',
+      });
+    }
+    // A policy narrower than everything still takes the project by itself: which tasks is per task.
+    for (const claimPolicy of ['mine', 'mine_and_unassigned'] as const) {
+      expect(projectWorkerOf(workerRow({ claimPolicy }), input)).toMatchObject({
+        takes: 'automatically',
+        project_reason: null,
       });
     }
     expect(projectWorkerOf(workerRow({ mayRunInProject: false }), input)).toMatchObject({

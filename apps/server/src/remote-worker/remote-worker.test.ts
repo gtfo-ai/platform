@@ -335,6 +335,8 @@ const fakeCore = (options: {
   const claims = [...(options.claims ?? [])];
   const takes = [...(options.takes ?? [])];
   let claimProjectIds: string[] | null = null;
+  /** The claim policy once one was written (S-26.4); a core before it answers none. */
+  let claimPolicy: string | null = null;
   let manuallyPausedAt: string | null = null;
   /** Approvals opened and not yet delivered: the next beat answers each `deny`, once. */
   const opened: string[] = [];
@@ -488,13 +490,21 @@ const fakeCore = (options: {
         if (method === 'PUT') {
           const request = workerClaimScopeRequestSchema.parse(parsed);
           const next = request.claim_project_ids === null ? null : [...request.claim_project_ids];
-          const performed = JSON.stringify(next) !== JSON.stringify(claimProjectIds);
+          const nextPolicy = request.claim_policy ?? claimPolicy;
+          const performed =
+            JSON.stringify(next) !== JSON.stringify(claimProjectIds) || nextPolicy !== claimPolicy;
           claimProjectIds = next;
-          return answer(200, { claim_project_ids: claimProjectIds, performed });
+          claimPolicy = nextPolicy;
+          return answer(200, {
+            claim_project_ids: claimProjectIds,
+            ...(claimPolicy === null ? {} : { claim_policy: claimPolicy }),
+            performed,
+          });
         }
         return answer(200, {
           claim_project_ids: claimProjectIds,
           projects: options.scopeProjects ?? [],
+          ...(claimPolicy === null ? {} : { claim_policy: claimPolicy }),
         });
       }
       case 'offers':
@@ -1710,8 +1720,54 @@ describe('the worker’s local page (WP-292 (1), (2), (4), (5))', () => {
       });
       expect(set.status).toBe(200);
       expect(workerLocalClaimScopeSchema.parse(JSON.parse(set.text)).claim_project_ids).toEqual([]);
+      // S-26.4: the page's `[]` reaches the core as the policy, never as the `[]` it refuses — and
+      // the page reads *pick only* back as its own `[]` (asserted above).
       const put = core.captured.find((call) => call.verb === 'claim-scope' && call.body !== '');
-      expect(JSON.parse(put?.body ?? '{}')).toEqual({ claim_project_ids: [] });
+      expect(JSON.parse(put?.body ?? '{}')).toEqual({
+        claim_project_ids: null,
+        claim_policy: 'pick_only',
+      });
+      // A list saved while *pick only* leaves it: the page is never trapped there.
+      const leave = await request(port, {
+        method: 'POST',
+        path: '/api/local/claim-scope',
+        headers: { ...auth, ...origin },
+        body: { claim_project_ids: [PROJECT.id] },
+      });
+      expect(leave.status).toBe(200);
+      expect(workerLocalClaimScopeSchema.parse(JSON.parse(leave.text))).toMatchObject({
+        claim_project_ids: [PROJECT.id],
+        claim_policy: 'mine_and_unassigned',
+      });
+      const left = core.captured.filter((call) => call.verb === 'claim-scope' && call.body !== '');
+      expect(JSON.parse(left.at(-1)?.body ?? '{}')).toEqual({
+        claim_project_ids: [PROJECT.id],
+        claim_policy: 'mine_and_unassigned',
+      });
+      // S-26.4: the page's policy reaches the core's PUT as `claim_policy`, and the state carries
+      // the policy and the count as the core last said them (nothing said yet: null).
+      const withPolicy = await request(port, {
+        method: 'POST',
+        path: '/api/local/claim-scope',
+        headers: { ...auth, ...origin },
+        body: { claim_project_ids: null, claim_policy: 'pick_only' },
+      });
+      expect(withPolicy.status).toBe(200);
+      const puts = core.captured.filter((call) => call.verb === 'claim-scope' && call.body !== '');
+      expect(JSON.parse(puts.at(-1)?.body ?? '{}')).toEqual({
+        claim_project_ids: null,
+        claim_policy: 'pick_only',
+      });
+      expect(
+        (
+          await request(port, {
+            method: 'POST',
+            path: '/api/local/claim-scope',
+            headers: { ...auth, ...origin },
+            body: { claim_project_ids: null, claim_policy: 'sometimes' },
+          })
+        ).status,
+      ).toBe(400);
 
       // A take the core refuses: its code, nothing started.
       const lost = await request(port, {

@@ -1813,9 +1813,11 @@ export interface RemoteClaimant {
   /**
    * **A pick** — *take this one* from the worker's local page (WP-293, TD-031's 2026-11-05
    * claim-scope amendment, decision 3): the claim names its run ({@link RunOfferEligibility.runId},
-   * required) and **ignores the worker's claim scope and nothing else** — `workers_from`, another
-   * user's head start, the exclusions and both pauses still hold. Absent or `false`: an automatic
-   * claim, which the scope narrows.
+   * required) and **ignores the worker's claim scope and its claim policy and nothing else** —
+   * `workers_from`, another user's head start, the exclusions and both pauses still hold — and, for
+   * a **stage** offer, admits only a task nobody owns or the worker's user owns (S-26.4, TD-031's
+   * 2026-11-06 amendment item 7: a pick never takes another person's task). Absent or `false`: an
+   * automatic claim, which the scope and the policy narrow.
    */
   readonly pick?: boolean;
 }
@@ -1826,9 +1828,16 @@ export interface RemoteClaimant {
  */
 export type RemoteListing = Pick<RemoteClaimant, 'workerId' | 'heldImageDigests' | 'images'>;
 
+/** A task's owner as the worker's offers list and a pick's refusal name them (S-26.4). */
+export interface OfferOwner {
+  readonly userId: Id;
+  readonly name: string;
+}
+
 /**
- * One open offer a remote worker could claim now (WP-293): the claim's own eligibility with the
- * claim scope ignored, and `automatic` — whether the scope takes it by itself.
+ * One open offer a remote worker could claim now (WP-293): the claim's own eligibility, narrowed by
+ * the worker's project list (S-26.4; a legacy `[]` narrows nothing), and `automatic` — whether its
+ * claim policy takes it by itself.
  */
 export interface ClaimableRunOffer {
   readonly runId: Id;
@@ -1839,6 +1848,10 @@ export interface ClaimableRunOffer {
   readonly role: AgentRole;
   readonly offeredAt: IsoDateTime;
   readonly automatic: boolean;
+  /** The task's owner, `null` for nobody — whatever the offer's kind (S-26.4). */
+  readonly owner: OfferOwner | null;
+  /** A stage offer of a task the worker's user owns, or an ask they asked (S-26.4). */
+  readonly mine: boolean;
 }
 
 /**
@@ -1885,6 +1898,11 @@ export interface ClaimedRunOffer {
   readonly owner: string | null;
   /** The images the offer names after the claim — `null` for a server claim of an offer naming none. */
   readonly images?: { readonly run: string; readonly egress: string } | null;
+  /**
+   * A worker claim's worker's user, read in the claim's own statement (S-26.4) — the person a pick
+   * assigns. Absent for a server claim.
+   */
+  readonly workerUserId?: Id | null;
 }
 
 /** What {@link RunOfferRepository.release} answers (WP-281, TD-031 decision 6 as amended §4). */
@@ -1962,6 +1980,16 @@ export interface RunOfferRepository {
     tx: Transaction,
     input: { readonly worker: RemoteListing; readonly now: IsoDateTime; readonly limit: number },
   ): Promise<readonly ClaimableRunOffer[]>;
+  /**
+   * **Why a pick claimed nothing, when it is ownership** (S-26.4, TD-031's 2026-11-06 amendment
+   * item 7): the run's offer is an open **stage** offer of a live run that the worker's eligibility
+   * admits now, and its task is owned by another person — that owner and when the owner last
+   * changed; `null` for every other reason, so the one refusal still names no other. Locks nothing.
+   */
+  pickOwnerRefusal(
+    tx: Transaction,
+    input: { readonly runId: Id; readonly worker: RemoteListing; readonly now: IsoDateTime },
+  ): Promise<{ readonly owner: OfferOwner; readonly ownerChangedAt: IsoDateTime | null } | null>;
   load(tx: Transaction, runId: Id): Promise<StoredRunOffer | null>;
   /**
    * **The withdrawal** (WP-276, TD-031 decision 3): **one conditional statement**, `update run_offers

@@ -11,10 +11,12 @@ import { describe, expect, it } from 'vitest';
 import {
   adoptOwnerOnLink,
   decideOwnerCommand,
+  decidePickOwner,
   type OwnerTarget,
   ownerCapabilities,
   ownerChangePermitted,
   ownerTargetOf,
+  pickRefusalOf,
   recordPlatformAssign,
   recordPlatformUnassign,
   sameTicketAssignee,
@@ -381,6 +383,55 @@ describe('a link adopts the owner (the hook S-26.6 calls)', () => {
       'unchanged',
     );
     expect(adoptOwnerOnLink(owned(null, null), link).kind).toBe('unchanged');
+  });
+});
+
+describe('a pick assigns (S-26.4, TD-031 amendment item 7)', () => {
+  const pick = (current: TaskOwnership, heldElsewhere = false, pickerMayOwn = true) =>
+    decidePickOwner(current, { pickerUserId: ME, heldElsewhere, pickerMayOwn, at: AT });
+
+  it('makes the picker the owner of an unassigned task — platform, via pick — and leaves the assignee', () => {
+    const assignee = {
+      provider: 'jira',
+      external_id: 'acc-1',
+      display_name: 'Jan',
+      platform: false,
+    } satisfies TicketAssignee;
+    expect(pick({ ...UNOWNED, ticketAssignee: assignee })).toEqual({
+      kind: 'write',
+      next: {
+        ownerUserId: ME,
+        ownerSource: 'platform',
+        ownerChangedAt: AT,
+        ticketAssignee: assignee,
+      },
+      change: { ownerUserId: ME, previousOwnerUserId: null, source: 'platform', via: 'pick' },
+    });
+  });
+
+  it('claims a task held elsewhere, or by a picker who may not own it, without assigning', () => {
+    expect(pick(UNOWNED, true)).toEqual({ kind: 'unchanged' });
+    expect(pick(UNOWNED, false, false)).toEqual({ kind: 'unchanged' });
+  });
+
+  it('changes nothing on the picker’s own task, and refuses another person’s', () => {
+    const mine = { ...UNOWNED, ownerUserId: ME, ownerSource: 'tracker' as const };
+    expect(pick(mine)).toEqual({ kind: 'unchanged' });
+    const theirs = { ...UNOWNED, ownerUserId: OTHER, ownerSource: 'platform' as const };
+    expect(pick(theirs)).toEqual({ kind: 'refused', ownerUserId: OTHER });
+    // Held elsewhere or not, another person's task is never taken by a pick.
+    expect(pick(theirs, true)).toEqual({ kind: 'refused', ownerUserId: OTHER });
+  });
+
+  it('names the refusal by the list’s as_of: taken after it, or already someone’s', () => {
+    const before = '2026-11-07T08:59:59.000Z' as IsoDateTime;
+    const after = '2026-11-07T09:00:01.000Z' as IsoDateTime;
+    expect(pickRefusalOf(AT, before)).toBe('task_taken_by_another');
+    expect(pickRefusalOf(AT, after)).toBe('task_owned_by_another');
+    // The boundary: the same instant is not after it.
+    expect(pickRefusalOf(AT, AT)).toBe('task_owned_by_another');
+    expect(pickRefusalOf(AT, null)).toBe('task_owned_by_another');
+    expect(pickRefusalOf(null, before)).toBe('task_owned_by_another');
   });
 });
 

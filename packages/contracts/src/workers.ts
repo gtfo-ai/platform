@@ -10,13 +10,17 @@
  *   POST   /api/workers/device/approve      approve (naming the machine) or deny a code
  *   GET    /api/workers                     the caller's workers; every worker for an administrator
  *   DELETE /api/workers/:id                 revoke (own; any for an administrator)
+ *   PUT    /api/workers/:id/claim-policy    what the machine takes (its owner only, S-26.4)
  */
 import * as z from 'zod';
 import { idSchema, isoDateTimeSchema, nonEmptyStringSchema } from './common.js';
 import {
   coreImageDigestsSchema,
   imageDigestSchema,
+  policySkippedOffersSchema,
   WORKER_CLAIM_SCOPE_MAX_PROJECTS,
+  workerClaimPolicySchema,
+  workerClaimScopeSchema,
   workerPauseReasonSchema,
   workerUpdateResultSchema,
   workerUserCodeSchema,
@@ -120,9 +124,10 @@ export const workerSummarySchema = z.strictObject({
   manually_paused_at: isoDateTimeSchema.nullable(),
   concurrency: z.int().positive().max(64),
   /**
-   * The worker's claim scope, set by its owner from the worker's local page (WP-293), read only
-   * here: `null` — every project; `[]` — *pick only*; otherwise those projects, each with its key
-   * (`null` for a project that no longer exists, which matches nothing).
+   * The worker's claim scope, set by its owner (WP-293; on this screen since S-26.4): `null` —
+   * every project; otherwise those projects, each with its key (`null` for a project that no
+   * longer exists, which matches nothing). A legacy `[]` — *pick only* before the policy — is
+   * published as stored: it narrows no project, and `claim_policy` reads `pick_only` for it.
    */
   claim_projects: z
     .array(z.strictObject({ id: idSchema, key: z.string().max(64).nullable() }))
@@ -133,6 +138,21 @@ export const workerSummarySchema = z.strictObject({
    * run's offer, or `runs.worker_id`. Ids only — the run itself is `GET /api/runs/:id`.
    */
   running: z.array(z.strictObject({ run_id: idSchema, task_id: idSchema, project_id: idSchema })),
+  /**
+   * What the machine takes by itself (S-26.4, TD-031's 2026-11-06 amendment item 6): the stored
+   * policy, or what a `null` reads as — `pick_only` for a legacy `[]` scope, `everything`
+   * otherwise. Set by the worker's own user only (`PUT /api/workers/:id/claim-policy`, or the
+   * machine's page); an administrator reads it. **Optional on the wire for one reason** — the SPA's
+   * fixtures predate it (its card is S-26.8a), as S-26.1's owner fields are — and this build's
+   * server always sends it and `policy_skipped_offers`.
+   */
+  claim_policy: workerClaimPolicySchema.optional(),
+  /**
+   * Open offers its eligibility and scope admit now and its policy leaves for others — a `mine`
+   * machine with nothing of its own is idle by choice, which is not a blocker (`claim_blockers`
+   * stays empty). `null` while the core cannot name its images.
+   */
+  policy_skipped_offers: policySkippedOffersSchema.optional(),
   /** The last update its updater reported (WP-287 (4)), or `null`. */
   last_update: workerLastUpdateSchema.nullable(),
   /**
@@ -164,6 +184,32 @@ export const workersResponseSchema = z.strictObject({
 });
 
 export const workerParamsSchema = z.strictObject({ id: idSchema });
+
+/**
+ * `PUT /api/workers/:id/claim-policy` (S-26.4, the M26 UX spec § 1's card) — a **state assertion**
+ * of both of the card's controls: *which tasks* (`claim_policy`) and *in which projects*
+ * (`claim_project_ids`, `null` for every project the user may see). `[]` is refused `422
+ * claim_scope_empty` (*pick only* is a policy), an id that is not a project where the user is
+ * `member`+ now `422 project_not_eligible`. Only the worker's own user may write it: an
+ * administrator is `403 claim_policy_owner_only`, anybody else `404`.
+ */
+export const workerClaimPolicyRequestSchema = z.strictObject({
+  claim_policy: workerClaimPolicySchema,
+  claim_project_ids: workerClaimScopeSchema,
+});
+export type WorkerClaimPolicyRequest = z.infer<typeof workerClaimPolicyRequestSchema>;
+
+/**
+ * The stored pair (ids distinct and sorted) and whether this call changed it: a repeat writes no
+ * `human_actions` row. A run in flight is never moved — the policy applies to the next claim.
+ */
+export const workerClaimPolicyResponseSchema = z.strictObject({
+  worker_id: idSchema,
+  claim_policy: workerClaimPolicySchema,
+  claim_project_ids: workerClaimScopeSchema,
+  performed: z.boolean(),
+});
+export type WorkerClaimPolicyResponse = z.infer<typeof workerClaimPolicyResponseSchema>;
 
 /**
  * `DELETE /api/workers/:id`. `performed: false` is a worker that was already revoked (a replay);

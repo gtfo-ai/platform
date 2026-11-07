@@ -392,7 +392,7 @@ A second authenticated surface, `/api/worker/v1/*`, for remote workers: device f
 late-cost, cancel}`, `pause`, `manual-pause`, `claim-scope` (`GET`/`PUT`), `offers`, `offers/:id/claim`, `release` (digests + protocol range; the updater verifies attestations itself), `compose.yml` (first install only), `update-report`. Device-flow rate limits key on `APP_TRUSTED_CLIENT_IP_HEADER` only from a peer the widened `APP_TRUST_PROXY` (an address/CIDR list) trusts. Auth: a per-machine worker credential (`wkr_…`,
 stored SHA-256) or a per-run token; header `X-Worker-Protocol`; `426 upgrade_required` outside `[N-1,
 N]`; `409 lease_lost` on a stale epoch; `Cache-Control: no-store`. No request is held longer than 25 s, so
-the surface works through a CDN proxy (research/17 § 8). For people: `GET/DELETE /api/workers[/:id]`
+the surface works through a CDN proxy (research/17 § 8). For people: `PUT /api/workers/:id/claim-policy` (S-26.4: what the machine takes, by its own user only — below, *Protocol 4*), `GET/DELETE /api/workers[/:id]`
 (own; all for `org.admin`; **S-23.15**: each listed worker's `running` — `[{run_id, task_id, project_id}]`, the live runs it holds through `runs.worker_id` or its claimed offer's `run_offers.worker_id`, the same columns the agents list's `seat` reads), `POST /api/workers/device/approve` (session, CSRF), `GET/PUT
 /api/projects/:id/execution` (`project.settings.write`), `GET /api/org/updates` (admin). Full contract:
 TD-031 decision 9.
@@ -640,7 +640,7 @@ retry` (not when connected). Each answers the state; a value from the environmen
 set_in_environment`; no answer carries the token, the code or the credential.
 
 **Protocol 3 — what a worker picks up (WP-293, TD-031's 2026-11-05 claim-scope amendment, Q127 (a)).**
-`WORKER_PROTOCOL_VERSION = 3`, accepted `[2, 3]` (so a version-1 worker is `426` at the protocol check).
+`WORKER_PROTOCOL_VERSION = 3`, accepted `[2, 3]` at WP-293 (so a version-1 worker was `426` at the protocol check; protocol 4 below).
 Four verbs, all worker credential and all `426` below protocol 3 before the credential is read, and one
 key a version-2 worker is never sent: the handshake's `worker.claim_project_ids`.
 `GET claim-scope` answers `{claim_project_ids, projects}` — the stored scope (`null` every project, `[]`
@@ -668,6 +668,55 @@ worker_ui}` in the claim's transaction. The page proxies them as `GET`/`POST /ap
 on the worker (`409 no_free_slot` there, before the core is asked). `GET /api/workers` publishes each
 worker's `claim_projects` (`null`, `[]`, or `[{id, key}]`), which the Workers screen shows read only.
 
+**Protocol 4 — what a machine takes, and a pick that assigns (S-26.4, TD-031's 2026-11-06 amendment
+items 6–7, BD-032's 2026-11-06 amendment).** `WORKER_PROTOCOL_VERSION = 4`, accepted `[3, 4]` (a
+version-2 worker is now `426` at the protocol check). No new verb: a worker's **claim policy**
+(`workers.claim_policy`, migration 0108) — `everything`, `mine_and_unassigned` (the default a new worker is
+written with), `mine` or `pick_only` — is the second axis of what its **automatic** claims take,
+orthogonal to the claim scope, which stays the project axis. A `null` policy (every worker before 0108)
+reads `pick_only` over the legacy scope `[]` and `everything` otherwise, and the legacy `[]` narrows **no**
+project once read through the policy. The claim's own statement asks `workerPolicyTakesSql` beside the
+scope and the eligibility, read live from the offer's task: `mine` is a stage offer whose task the worker's
+user owns, or an ask they asked (an ask's "mine" is its asker, never the task's owner); `mine_and_unassigned`
+adds a stage task with no owner that is **not held elsewhere** (`taskHeldElsewhereSql`, the one fragment
+the owner command, the pick and the waiting read share — a task a linked member released is unassigned).
+No policy admits what the eligibility refuses, and a reassignment applies to an open offer at once. The
+**online assignee** is the task's owner only when the owner's worker policy is not `pick_only` and its
+scope takes the project; the head start is fixed at offer time, so a reassignment leaves the open offer's
+window with the previous owner, whose `mine` machine still cannot claim it. At protocol 4 the handshake's
+`worker` carries `claim_policy`; `GET claim-scope` adds `claim_policy` and `policy_skipped_offers` (open
+offers its eligibility and scope admit now and its policy leaves for others — no blocker: a `mine` machine
+with nothing of its own is idle by choice); `PUT claim-scope {claim_project_ids, claim_policy?}` writes the
+policy beside the scope (absent leaves it), refuses `[]` with `422 claim_scope_empty` (*pick only* is the
+policy) and records one `human_actions` row per change — `worker.claim_policy` `{worker_id, claim_policy,
+project_ids, via}` when the policy moved, `worker.claim_scope` otherwise. A **version-3** `PUT` with `[]` is
+stored as `pick_only` over every project, any other version-3 write leaves the policy as it was, and a
+version-3 worker whose policy reads `pick_only` is answered `[]` — its own spelling. `GET offers` is now
+**narrowed by the project list** (the pick still ignores it), `automatic` is the scope's and the policy's
+answer, and at protocol 4 each entry adds `owner` (`{user_id, name}` of the task's owner, `null` for nobody)
+and `mine`, beside the list's `as_of` and `policy_skipped_offers`. **A pick assigns**: `POST
+offers/:id/claim {image_digests, as_of?}` of a stage offer whose task is unassigned makes the worker's user
+its owner **in the claim's transaction** (`task.owner.changed`, `source: platform`, `via: pick`; a second
+`human_actions` row `task.owner` `{user_id, via: pick, worker_id, run_id, changed, owner_user_id}` beside
+`worker.take_offer`); a task held elsewhere is claimed without assigning; an ask assigns nothing; and a
+stage task another person owns is never taken, a maintainer's included — `409 task_taken_by_another`
+when its owner changed after the body's `as_of`, else `409 task_owned_by_another`, each naming the owner
+(`details`: `owner.user_id`, `owner.name`), answered only to a worker the eligibility admits now. A
+version-3 worker is answered `offer_not_claimable` for both. The session's `PUT
+/api/workers/:id/claim-policy {claim_policy, claim_project_ids}` is the same state assertion from the
+Workers screen (`via: workers_screen`), **by the worker's own user only**: an administrator is `403
+claim_policy_owner_only` (they read it), anybody else's worker `404`; `[]` is `422 claim_scope_empty`, a
+project the user may not run in `422 project_not_eligible`; it answers `{worker_id, claim_policy,
+claim_project_ids, performed}`. `GET /api/workers` adds `claim_policy` (as it reads) and
+`policy_skipped_offers` (`null` while the core cannot name its images); the local page's state adds the two
+as its core last said them, its `POST /api/local/claim-scope` takes `claim_policy` — and, until S-26.7
+rewrites the page, maps the page's protocol-3 vocabulary as the core maps a version-3 worker
+(`remote-worker/page-scope.ts`): a save of `[]` with no policy is sent as `pick_only` over every project,
+a list saved while the policy reads `pick_only` leaves it for `mine_and_unassigned`, and a `pick_only`
+worker reads back as `[]` — and its `POST
+/api/local/offers/:id/take` takes `as_of`. The project's execution read reports a `pick_only` policy as
+`picked_only` under `scope_excludes`.
+
 **Why a worker takes nothing** (S-22.19, TD-031's 2026-11-05 blocker-vocabulary amendment): one
 vocabulary, `WORKER_CLAIM_BLOCKERS` (`packages/contracts/src/worker-claim-blockers.ts`), most fundamental
 first, worded once (`WORKER_CLAIM_BLOCKER_WORDS`, `apps/web/src/ui/humanize.ts`). `GET /api/workers`
@@ -678,7 +727,7 @@ digests_unresolved`), `paused`/`draining` (the hold, told apart by its newest `w
 `via`), `usage_limited`, `images_missing` (none reported), `images_outdated` (not the core's current run
 and egress digests), `no_eligible_project` (no project its user may run in, whose mode is not
 `server_only` and whose run credential may reach a worker, inside its scope — *pick only* counts every
-project), `pick_only` (it claims nothing by itself) — `can_claim` (an **automatic** claim would be
+project), `pick_only` (its claim policy reads `pick_only`, so it claims nothing by itself; S-26.4) — `can_claim` (an **automatic** claim would be
 admitted) when the list is empty, and `last_claimed_at` (`run_offers.claimed_at`); the two are held to
 the claim statement by `remote-claim.integration.test.ts`'s parity cases. The project's `workers` list
 holds at most 500. `GET /api/projects/:id/execution`
@@ -701,8 +750,8 @@ token travels in the package and a deploy key never does (the package carries th
 key; the worker signs through `ssh-sign`).
 
 **The contract is code since WP-273** (WP-280 and WP-281 serve the verbs above, WP-282 the run-scoped calls, WP-284 `release` and `compose.yml`, WP-285 `pause`, WP-287 `update-report` — one `human_actions` row `worker.update` under the worker's user, the newest shown as the Workers screen's `last_update`):
-`packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (3 since WP-293), `ACCEPTED_WORKER_PROTOCOLS`
-(`[N-1, N]`, today `[2, 3]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
+`packages/contracts/src/worker.ts` holds `WORKER_PROTOCOL_VERSION` (4 since S-26.4), `ACCEPTED_WORKER_PROTOCOLS`
+(`[N-1, N]`, today `[3, 4]`; `pnpm protocol:check` holds a bump to TD-032 decision 7), the header name, the
 paths, the bounds, and a strict zod schema for every request and response body of TD-031 §9. Two
 spellings, each stated there: the **HTTP DTOs are snake_case**, the house rule; the **run package**
 (`runPackageSchema`, the `200` of `claims`, published as `schemas/worker-run-package.schema.json`) is

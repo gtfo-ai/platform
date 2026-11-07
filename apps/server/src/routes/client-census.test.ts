@@ -1042,6 +1042,9 @@ describe('the client’s endpoint list against the server’s router', () => {
       ['POST', '/api/workers/device/lookup'],
       ['POST', '/api/workers/device/approve'],
       ['DELETE', `/api/workers/${PROBE_ID}`],
+      // S-26.4: the claim policy's session write. No screen calls it yet (the Workers screen's
+      // card is S-26.8a's), so it is asked here rather than read off the client.
+      ['PUT', `/api/workers/${PROBE_ID}/claim-policy`],
     ] as const) {
       const response = await app.inject({ method, url });
       const body = response.json() as ApiErrorBody;

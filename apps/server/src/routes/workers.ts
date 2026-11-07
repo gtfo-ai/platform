@@ -6,6 +6,7 @@
  *   POST   /api/workers/device/approve      approve (naming the machine) or deny a code
  *   GET    /api/workers                     own workers; every worker for an administrator
  *   DELETE /api/workers/:id                 revoke (own; any for an administrator)
+ *   PUT    /api/workers/:id/claim-policy    what the machine takes — its own user only (S-26.4)
  *
  * Session-authenticated and, being mutations, behind the CSRF hook (`auth/plugin.ts`). The device
  * pair and the list are `worker.register` (any signed-in active user — TD-031 §10c: "the approver
@@ -35,6 +36,16 @@
  * `revoked_at` is set, the credential stops authenticating, and the worker's live runs get
  * `lease_expires_at = now()` in the same transaction and nothing else (TD-031 §7) — the lease sweep
  * ends them. A second revoke answers `200` with `performed: false`.
+ *
+ * ## What a machine takes (S-26.4, TD-031's 2026-11-06 amendment item 6)
+ *
+ * `PUT /api/workers/:id/claim-policy` is the M26 UX spec § 1's card from a session: the policy and
+ * the project list, a state assertion, **by the worker's own user only** — an administrator, who
+ * sees every worker here, is `403 claim_policy_owner_only` (they read it, BD-032's amendment 2),
+ * and anybody else's worker is `404` as for the revoke. One `human_actions` row
+ * `worker.claim_policy` per change, none for a repeat. The list carries `claim_policy` and
+ * `policy_skipped_offers`; a policy other than `pick_only` is **no blocker** — a *mine* machine
+ * with nothing of its own is idle by choice, which `policy_skipped_offers` says instead.
  */
 import {
   apiErrorSchema,
@@ -42,6 +53,8 @@ import {
   imageDigestSchema,
   revokeWorkerResponseSchema,
   type WorkerSummary,
+  workerClaimPolicyRequestSchema,
+  workerClaimPolicyResponseSchema,
   workerDeviceDecisionRequestSchema,
   workerDeviceDecisionResponseSchema,
   workerDeviceLookupRequestSchema,
@@ -113,7 +126,8 @@ export const claimFactsOf = (
     heldDigests: z.array(imageDigestSchema).parse(row.imageDigests),
     coreDigests,
     eligibleProjects: facts?.eligibleProjects ?? null,
-    pickOnly: row.claimProjects !== null && row.claimProjects.length === 0,
+    // S-26.4: *pick only* is the policy now — a legacy `[]` scope reads as it (`claimPolicy`).
+    pickOnly: row.claimPolicy === 'pick_only',
   };
 };
 
@@ -158,6 +172,8 @@ const toWireWorkerRow = (
     task_id: run.taskId,
     project_id: run.projectId,
   })),
+  claim_policy: row.claimPolicy,
+  policy_skipped_offers: row.policySkippedOffers ?? null,
   last_update:
     row.lastUpdate === undefined || row.lastUpdate === null
       ? null
@@ -302,7 +318,7 @@ export const registerWorkerRoutes = async (
       schema: {
         summary: 'Registered workers: your own, or every one for an administrator',
         description:
-          'Machine, user, created and last seen, protocol, image digests, state, paused until (and whether that instant is the default pause of a usage limit that named no reset, `paused_until_estimated`, WP-285), and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280). `timezone` is the organisation’s, which a usage pause’s time is shown in. **Why it takes no work** (S-22.19): `claim_blockers` — the claim’s own predicates minus the per-offer ones, in the vocabulary’s order (`revoked`, `owner_disabled`, `offline`, `protocol_outdated`, `platform_images_unresolved` while this core cannot name its own digests and so answers every claim 503, `paused`, `draining`, `usage_limited`, `images_missing`, `images_outdated` against this core’s current run and egress digests, `no_eligible_project`, `pick_only`) — `can_claim` (an automatic claim would be admitted) when it is empty, and `last_claimed_at`.',
+          'Machine, user, created and last seen, protocol, image digests, state, `claim_policy` (what the machine takes by itself, S-26.4: the stored policy, or what a worker connected before it reads as) and `policy_skipped_offers` (open offers its eligibility and scope admit now and its policy leaves for others; `null` while this core cannot name its images), paused until (and whether that instant is the default pause of a usage limit that named no reset, `paused_until_estimated`, WP-285), and `running`: the ids of the live runs the worker holds (S-23.15). `scope` is `all` for an administrator (`org.workers.manage`) and `own` otherwise. Newest first (WP-280). `timezone` is the organisation’s, which a usage pause’s time is shown in. **Why it takes no work** (S-22.19): `claim_blockers` — the claim’s own predicates minus the per-offer ones, in the vocabulary’s order (`revoked`, `owner_disabled`, `offline`, `protocol_outdated`, `platform_images_unresolved` while this core cannot name its own digests and so answers every claim 503, `paused`, `draining`, `usage_limited`, `images_missing`, `images_outdated` against this core’s current run and egress digests, `no_eligible_project`, `pick_only`) — `can_claim` (an automatic claim would be admitted) when it is empty, and `last_claimed_at`.',
         tags: ['workers'],
         response: { 200: workersResponseSchema },
       },
@@ -310,8 +326,8 @@ export const registerWorkerRoutes = async (
     async (request): Promise<z.output<typeof workersResponseSchema>> => {
       const actor = actorOf(request);
       const all = can(actor.role, 'org.workers.manage');
-      const rows = await options.store.listWorkers(all ? null : actor.userId);
       const digests = options.coreDigests?.() ?? null;
+      const rows = await options.store.listWorkers(all ? null : actor.userId, digests);
       const at = now();
       return {
         items: rows.map((row) => toWireWorker(row, digests, at)),
@@ -351,6 +367,66 @@ export const registerWorkerRoutes = async (
         revoked_at: iso(result.revokedAt),
         expired_runs: result.expiredRuns,
       };
+    },
+  );
+
+  typed.put(
+    '/api/workers/:id/claim-policy',
+    {
+      preValidation: requirePermission(guard, 'worker.register'),
+      schema: {
+        summary: 'Set what your machine takes: which tasks, in which projects (S-26.4)',
+        description:
+          'A state assertion of both controls of *What this machine takes* (the M26 UX spec § 1): `claim_policy` — `mine_and_unassigned` (your tasks and unassigned ones), `mine` (only your tasks), `everything`, or `pick_only` (nothing by itself: a run starts when you pick it on the machine’s page, which assigns it to you) — and `claim_project_ids`, `null` for every project you may run in or those projects, stored distinct and sorted. It applies to the next claim; a run in flight is never moved. **Only the worker’s own user** may change it: an administrator is `403 claim_policy_owner_only`, and somebody else’s worker is `404` to anybody else. `422 claim_scope_empty` for `[]` (*pick only* is a policy), `422 project_not_eligible` naming the ids that are not a project where you are `member`+ now; nothing is written for either. One `human_actions` row `worker.claim_policy` `{worker_id, claim_policy, project_ids, via: workers_screen}` per change; a repeat of the stored pair is `performed: false` and writes none.',
+        tags: ['workers'],
+        params: workerParamsSchema,
+        body: workerClaimPolicyRequestSchema,
+        response: {
+          200: workerClaimPolicyResponseSchema,
+          403: apiErrorSchema,
+          404: apiErrorSchema,
+          422: apiErrorSchema,
+        },
+      },
+    },
+    async (request): Promise<z.output<typeof workerClaimPolicyResponseSchema>> => {
+      const actor = actorOf(request);
+      const result = await options.store.setClaimPolicy({
+        workerId: request.params.id,
+        actorUserId: actor.userId,
+        canSeeAll: can(actor.role, 'org.workers.manage'),
+        projectIds: request.body.claim_project_ids,
+        policy: request.body.claim_policy,
+      });
+      switch (result.status) {
+        case 'set':
+          return {
+            worker_id: request.params.id,
+            claim_policy: result.claimPolicy,
+            claim_project_ids: result.claimProjectIds === null ? null : [...result.claimProjectIds],
+            performed: result.performed,
+          };
+        case 'not_found':
+          throw new NotFoundError(`worker ${request.params.id}`);
+        case 'not_owner':
+          throw new HttpError(
+            403,
+            'claim_policy_owner_only',
+            'only the person whose machine this is can change what it takes',
+          );
+        case 'empty_scope':
+          throw new HttpError(
+            422,
+            'claim_scope_empty',
+            'choose at least one project, or every project; to take nothing by itself, choose only what you pick',
+          );
+        case 'invalid':
+          throw new HttpError(
+            422,
+            'project_not_eligible',
+            `the list names ${result.projectIds.length} project(s) you may not take a run of: ${result.projectIds.join(', ')}`,
+          );
+      }
     },
   );
 };

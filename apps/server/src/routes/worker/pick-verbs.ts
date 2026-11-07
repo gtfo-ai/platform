@@ -24,17 +24,38 @@
  *   the claim's transaction.
  *
  * **Below protocol 3 each is `426`**: the verbs do not exist there.
+ *
+ * ## Protocol 4: the claim policy, and a pick that assigns (S-26.4, TD-031's 2026-11-06 amendment
+ * items 6–7)
+ *
+ * - `claim-scope` reads and writes `claim_policy` beside the project list, and the read counts
+ *   `policy_skipped_offers`. A version-4 `[]` is `422 claim_scope_empty` (*pick only* is the policy
+ *   `pick_only`); a version-3 `[]` is stored as `pick_only` over every project, any other version-3
+ *   write leaves the policy as it was, and a version-3 worker whose policy reads `pick_only` is
+ *   answered `[]` — its own spelling of it.
+ * - `offers` is **narrowed by the project list** (a legacy `[]` narrows nothing), `automatic` is
+ *   the policy's answer, and at protocol 4 each entry names the task's `owner` and whether it is
+ *   `mine`, beside the list's `as_of` and `policy_skipped_offers`.
+ * - `offers/:id/claim` of an unassigned stage offer makes the picker the task's owner in the claim's
+ *   transaction (a second `human_actions` row `task.owner {via: pick}`), claims a task held
+ *   elsewhere without assigning, assigns nothing for an ask, and refuses another person's task:
+ *   `409 task_taken_by_another` when its owner changed after the body's `as_of`, else `409
+ *   task_owned_by_another`, both naming the owner — and `offer_not_claimable` to a version-3 worker.
  */
 import type { RemoteRuns } from '@platform/application';
 import {
   apiErrorSchema,
   type Id,
   type IsoDateTime,
+  parseWorkerProtocolHeader,
   type RunDisplay,
   runPackageSchema,
   WORKER_OFFERS_LIST_MAX,
   WORKER_PATHS,
+  WORKER_PROTOCOL_CLAIM_POLICY,
   WORKER_PROTOCOL_CLAIM_SCOPE,
+  WORKER_PROTOCOL_HEADER,
+  WORKER_PROTOCOL_VERSION,
   type WorkerUpgradeRequiredBody,
   workerClaimScopeRequestSchema,
   workerClaimScopeResponseSchema,
@@ -91,6 +112,40 @@ const runParamsSchema = z.strictObject({ id: z.uuid() });
 const unauthenticated = (what: string): HttpError =>
   new HttpError(401, 'unauthenticated', `${what} (TD-031 §7)`);
 
+/** Whether the request speaks protocol 4 or later — the claim policy's shapes (S-26.4). */
+const speaksClaimPolicy = (request: FastifyRequest): boolean =>
+  (parseWorkerProtocolHeader(request.headers[WORKER_PROTOCOL_HEADER]) ?? WORKER_PROTOCOL_VERSION) >=
+  WORKER_PROTOCOL_CLAIM_POLICY;
+
+/**
+ * The scope a version-3 worker is shown (S-26.4): `[]` — its own *pick only* — when the policy
+ * reads `pick_only`, else the list as stored.
+ */
+const scopeForV3 = (
+  claimProjectIds: readonly string[] | null,
+  claimPolicy: string,
+): string[] | null =>
+  claimPolicy === 'pick_only' ? [] : claimProjectIds === null ? null : [...claimProjectIds];
+
+/** A pick's ownership refusal as the API says it: the owner by name, and their id in `details`. */
+const ownedRefusal = (
+  refusal: 'task_taken_by_another' | 'task_owned_by_another',
+  owner: { readonly userId: string; readonly name: string },
+): HttpError => {
+  const who = owner.name.length > 0 ? owner.name : 'another person';
+  return new HttpError(
+    409,
+    refusal,
+    refusal === 'task_taken_by_another'
+      ? `${who} took this task a moment ago; pick another`
+      : `this task is ${who}'s; a maintainer can reassign it on the task page`,
+    [
+      { path: 'owner.user_id', message: owner.userId },
+      { path: 'owner.name', message: owner.name },
+    ],
+  );
+};
+
 /** The digests a stored worker row holds, as `recordContact` kept them — what `offers` reads. */
 export const storedDigestsOf = (value: unknown): readonly string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -104,19 +159,30 @@ export const registerWorkerPickVerbs = (
     requireWorkerProtocol(options.upgradeBody, verb, WORKER_PROTOCOL_CLAIM_SCOPE);
   const isoNow = (): IsoDateTime => options.now().toISOString() as IsoDateTime;
 
-  const readScope = async (workerId: Id) => {
-    const scope = await options.store.claimScope(workerId);
+  const readScope = async (workerId: Id, v4: boolean) => {
+    const release = options.release();
+    const scope = await options.store.claimScope(
+      workerId,
+      release === null
+        ? null
+        : { run: release.digests.platform_runtime, egress: release.digests.platform_egress },
+    );
     if (scope.status === 'not_found') {
       throw unauthenticated('the worker credential names no worker');
     }
-    return {
-      claim_project_ids: scope.claimProjectIds === null ? null : [...scope.claimProjectIds],
-      projects: scope.projects.map((project) => ({
-        id: project.id,
-        key: project.key,
-        name: project.name,
-      })),
-    };
+    const projects = scope.projects.map((project) => ({
+      id: project.id,
+      key: project.key,
+      name: project.name,
+    }));
+    return v4
+      ? {
+          claim_project_ids: scope.claimProjectIds === null ? null : [...scope.claimProjectIds],
+          projects,
+          claim_policy: scope.claimPolicy,
+          policy_skipped_offers: scope.policySkippedOffers,
+        }
+      : { claim_project_ids: scopeForV3(scope.claimProjectIds, scope.claimPolicy), projects };
   };
 
   typed.get(
@@ -126,7 +192,7 @@ export const registerWorkerPickVerbs = (
       schema: {
         summary: 'The worker’s claim scope and the projects it may name (WP-293)',
         description:
-          'Worker credential, protocol ≥ 3. `claim_project_ids`: `null` every project, `[]` pick only, otherwise those projects; `projects`: the projects where the worker’s user’s effective role is `member` or above now — the claim’s own predicate — by key. `426` below protocol 3.',
+          'Worker credential, protocol ≥ 3. `claim_project_ids`: `null` every project, otherwise those projects; `projects`: the projects where the worker’s user’s effective role is `member` or above now — the claim’s own predicate — by key. Protocol ≥ 4 (S-26.4): `claim_policy` — what the worker takes by itself — and `policy_skipped_offers`, the open offers its eligibility and scope admit now and its policy leaves for others (`null` while the core cannot name its images). A version-3 worker is answered `[]` for a policy that reads `pick_only`. `426` below protocol 3.',
         tags: ['worker'],
         response: {
           200: workerClaimScopeResponseSchema,
@@ -137,7 +203,7 @@ export const registerWorkerPickVerbs = (
     },
     async (request): Promise<z.output<typeof workerClaimScopeResponseSchema>> => {
       const { workerId } = await options.workerOf(request, null);
-      return readScope(workerId);
+      return readScope(workerId, speaksClaimPolicy(request));
     },
   );
 
@@ -148,7 +214,7 @@ export const registerWorkerPickVerbs = (
       schema: {
         summary: 'Set what the worker’s automatic claims take — its owner, from the local page',
         description:
-          'Worker credential, protocol ≥ 3. A state assertion over `workers.claim_project_ids` (WP-293, TD-031’s claim-scope amendment §2): `null` every project, `[]` pick only, otherwise those projects, stored distinct and sorted. A conjunct of an automatic claim only — it can only narrow, and a pick ignores it. `422 project_not_eligible` names the ids that are not a project where the user is `member`+ now; nothing is written. One `human_actions` row `worker.claim_scope` `{worker_id, project_ids, via: worker_ui}` per change, the worker’s user; a repeat of the stored value is `performed: false` and writes none. `426` below protocol 3.',
+          'Worker credential, protocol ≥ 3. A state assertion over `workers.claim_project_ids` (WP-293, TD-031’s claim-scope amendment §2): `null` every project, otherwise those projects, stored distinct and sorted — and, protocol ≥ 4 (S-26.4), `claim_policy` (absent leaves it as it was). A conjunct of an automatic claim only — it can only narrow, and a pick ignores it. At protocol 4 `[]` is `422 claim_scope_empty` (*pick only* is `claim_policy: pick_only`); a version-3 worker’s `[]` is stored as `pick_only` over every project. `422 project_not_eligible` names the ids that are not a project where the user is `member`+ now; nothing is written. One `human_actions` row per change, the worker’s user — `worker.claim_policy` `{worker_id, claim_policy, project_ids, via: worker_ui}` when the policy moved, else `worker.claim_scope` `{worker_id, project_ids, via: worker_ui}`; a repeat of the stored pair is `performed: false` and writes none. `426` below protocol 3.',
         tags: ['worker'],
         body: workerClaimScopeRequestSchema,
         response: {
@@ -161,12 +227,25 @@ export const registerWorkerPickVerbs = (
     },
     async (request): Promise<z.output<typeof workerClaimScopeSetResponseSchema>> => {
       const { workerId } = await options.workerOf(request, null);
+      const v4 = speaksClaimPolicy(request);
+      const ids = request.body.claim_project_ids;
+      // S-26.4: a version-3 worker's `[]` is its *pick only* — the policy over every project.
+      const legacyPickOnly = !v4 && ids !== null && ids.length === 0;
+      const policy = legacyPickOnly ? 'pick_only' : request.body.claim_policy;
       const result = await options.store.setClaimScope({
         workerId,
-        projectIds: request.body.claim_project_ids,
+        projectIds: legacyPickOnly ? null : ids,
+        ...(policy === undefined ? {} : { policy }),
       });
-      if (result.status === 'not_found') {
+      if (result.status === 'not_found' || result.status === 'not_owner') {
         throw unauthenticated('the worker credential names no worker');
+      }
+      if (result.status === 'empty_scope') {
+        throw new HttpError(
+          422,
+          'claim_scope_empty',
+          'choose at least one project, or every project; to take nothing by itself, set claim_policy to pick_only',
+        );
       }
       if (result.status === 'invalid') {
         throw new HttpError(
@@ -175,10 +254,16 @@ export const registerWorkerPickVerbs = (
           `the scope names ${result.projectIds.length} project(s) where this worker’s user may not take a run: ${result.projectIds.join(', ')}`,
         );
       }
-      return {
-        claim_project_ids: result.claimProjectIds === null ? null : [...result.claimProjectIds],
-        performed: result.performed,
-      };
+      return v4
+        ? {
+            claim_project_ids: result.claimProjectIds === null ? null : [...result.claimProjectIds],
+            claim_policy: result.claimPolicy,
+            performed: result.performed,
+          }
+        : {
+            claim_project_ids: scopeForV3(result.claimProjectIds, result.claimPolicy),
+            performed: result.performed,
+          };
     },
   );
 
@@ -187,9 +272,9 @@ export const registerWorkerPickVerbs = (
     {
       preValidation: [gate(WORKER_PATHS.offers), options.authenticateWorker],
       schema: {
-        summary: 'The open offers this worker could claim now — its scope ignored (WP-293)',
+        summary: 'The open offers this worker could take now, in its projects (WP-293, S-26.4)',
         description:
-          'Worker credential, protocol ≥ 3. At most 50 open offers, oldest first, that the claim would admit for this worker now — the claim’s own eligibility text with the claim scope ignored, against the image digests the worker last reported — each with whether the scope takes it automatically (`automatic`). The ticket key and the title come from the redacted ticket snapshot and are untrusted text; an ask carries its task and stage, never the question’s text. `426` below protocol 3; `503 digests_unresolved` while the core cannot name its images.',
+          'Worker credential, protocol ≥ 3. At most 50 open offers, oldest first, that a pick would admit for this worker now — the claim’s own eligibility text, against the image digests the worker last reported, **narrowed by its project list** (S-26.4; a pick of an offer outside it is still admitted) — each with whether its claim scope and policy take it automatically (`automatic`). Protocol ≥ 4: each entry’s `owner` (the task’s, `null` for nobody) and `mine` (a task its user owns, or an ask they asked), and the list’s `as_of` and `policy_skipped_offers`. The ticket key and the title come from the redacted ticket snapshot and are untrusted text; an ask carries its task and stage, never the question’s text. `426` below protocol 3; `503 digests_unresolved` while the core cannot name its images.',
         tags: ['worker'],
         response: {
           200: workerOffersResponseSchema,
@@ -205,6 +290,8 @@ export const registerWorkerPickVerbs = (
       if (release === null) {
         throw options.unresolved();
       }
+      const v4 = speaksClaimPolicy(request);
+      const asOf = isoNow();
       const offers = await options.remote.offers({
         workerId,
         heldImageDigests: imageDigests,
@@ -212,9 +299,15 @@ export const registerWorkerPickVerbs = (
           run: release.digests.platform_runtime,
           egress: release.digests.platform_egress,
         },
-        now: isoNow(),
+        now: asOf,
         limit: WORKER_OFFERS_LIST_MAX,
       });
+      const skipped = v4
+        ? await options.store.policySkippedOffers(workerId, {
+            run: release.digests.platform_runtime,
+            egress: release.digests.platform_egress,
+          })
+        : null;
       const displays =
         options.displays === null || offers.length === 0
           ? new Map<string, RunDisplay>()
@@ -232,8 +325,18 @@ export const registerWorkerPickVerbs = (
             role: offer.role,
             offered_at: offer.offeredAt,
             automatic: offer.automatic,
+            ...(v4
+              ? {
+                  owner:
+                    offer.owner === null
+                      ? null
+                      : { user_id: offer.owner.userId, name: offer.owner.name },
+                  mine: offer.mine,
+                }
+              : {}),
           };
         }),
+        ...(v4 ? { as_of: asOf, policy_skipped_offers: skipped } : {}),
       };
     },
   );
@@ -244,9 +347,9 @@ export const registerWorkerPickVerbs = (
       preValidation: [gate(WORKER_PATHS.offerClaim), options.authenticateWorker],
       schema: {
         summary:
-          '*Take this one*: claim one listed offer — its scope ignored, nothing else (WP-293)',
+          '*Take this one*: claim one listed offer — scope and policy ignored; an unassigned task becomes yours (WP-293, S-26.4)',
         description:
-          'Worker credential, protocol ≥ 3, not held. The one claim with its run named: the worker’s eligibility in the statement exactly as `claims` asks it — `workers_from` (a pick never jumps a server-preferred project’s head start, Q127 (a)), another user’s head start, the exclusions and both pauses — with the claim scope ignored. `200` with the run package exactly as `claims` answers it; `409 offer_not_claimable` for every reason nothing was claimed, which names none. One `human_actions` row `worker.take_offer` `{worker_id, run_id, via: worker_ui}` in the claim’s transaction. `426` below protocol 3; `503 digests_unresolved` while the core cannot name its images.',
+          'Worker credential, protocol ≥ 3, not held. The one claim with its run named: the worker’s eligibility in the statement exactly as `claims` asks it — `workers_from` (a pick never jumps a server-preferred project’s head start, Q127 (a)), another user’s head start, the exclusions and both pauses — with the claim scope and policy ignored. `200` with the run package exactly as `claims` answers it. One `human_actions` row `worker.take_offer` `{worker_id, run_id, via: worker_ui}` in the claim’s transaction. **A pick assigns** (S-26.4): a stage offer whose task is unassigned — no owner, not held elsewhere — makes the worker’s user its owner in the same transaction (`task.owner.changed`, `via: pick`; a second row `task.owner` `{via: pick}`); a task held elsewhere is claimed without assigning; an ask assigns nothing. A task another person owns is never taken: `409 task_taken_by_another` when its owner changed after the body’s `as_of`, else `409 task_owned_by_another`, each naming the owner (`details`: `owner.user_id`, `owner.name`) — a version-3 worker is answered `offer_not_claimable` for both. `409 offer_not_claimable` for every other reason nothing was claimed, which names none. `426` below protocol 3; `503 digests_unresolved` while the core cannot name its images.',
         tags: ['worker'],
         params: runParamsSchema,
         body: workerOfferClaimRequestSchema,
@@ -275,7 +378,11 @@ export const registerWorkerPickVerbs = (
         },
         now: isoNow(),
         pick: request.params.id as Id,
+        ...(request.body.as_of === undefined ? {} : { asOf: request.body.as_of }),
       });
+      if (answer.kind === 'owned_by_another' && speaksClaimPolicy(request)) {
+        throw ownedRefusal(answer.refusal, answer.owner);
+      }
       if (answer.kind !== 'claimed') {
         // `not_packaged` too: the run was claimed and settled `not_started` — this worker has
         // nothing to run, which is what the one refusal says.
