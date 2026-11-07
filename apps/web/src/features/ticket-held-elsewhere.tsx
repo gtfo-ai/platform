@@ -20,10 +20,10 @@
  *   needs a take-over in force;
  * - *Cancel task…* — the existing cancel confirmation (`can_cancel`).
  *
- * **One amber primary** ({@link heldElsewhereTakeLeads}): *Take it*, when the reader may take it and
- * nothing else on the page is the primary; otherwise none — the header's *Resume* gives way to it
- * (`taskPrimaryAction`'s `heldElsewhere`), because resuming before somebody owns the task only
- * stops it again. The escalation's brief is kept under a collapsed *Details*, as for every
+ * **One amber primary** (`./page-primary.ts`, the page's one decision, passed in as `primary`):
+ * *Take it*, when the reader may take it and nothing else on the page is the primary; otherwise
+ * none — the header's *Resume* gives way to it, because resuming before somebody owns the task
+ * only stops it again. The escalation's brief is kept under a collapsed *Details*, as for every
  * structured stop (the review of #111).
  */
 import type { TaskDetailResponse } from '@platform/contracts';
@@ -34,6 +34,7 @@ import { buttonClassName } from '../ui/button.js';
 import { Button } from '../ui/kit.js';
 import { ExternalLink, UntrustedProse } from '../ui/untrusted.js';
 import { OWNER_WORDS, trackerName } from '../ui/words/owners.js';
+import type { TaskPrimaryAction } from './page-primary.js';
 import { isOrgSectionFor } from './settings-sections.js';
 import type { TaskDialog } from './task-dialogs.js';
 import type { OwnerAction, OwnerControl } from './task-owner.js';
@@ -51,32 +52,18 @@ const STEP = buttonClassName('default', 'sm');
 /** The owner actions the box offers; *Unassign* would not move the task. */
 const BOX_ACTIONS: readonly OwnerAction[] = ['take', 'assign'];
 
-/**
- * Whether the box's *Take it* is the page's one amber primary: nobody owns the task, the reader
- * may take it, and nothing the header would put first applies — a take-over to hand back, an open
- * question, an approval the reader may decide.
- */
-export const heldElsewhereTakeLeads = (
-  detail: TaskDetailResponse,
-  offers: readonly OwnerAction[],
-): boolean =>
-  (detail.task.owner ?? null) === null &&
-  offers.includes('take') &&
-  (detail.taken_over === null || detail.taken_over.hand_back_stages.length === 0) &&
-  !detail.questions.some((question) => question.status === 'open') &&
-  !(
-    detail.can_decide_approval && detail.approvals.some((approval) => approval.status === 'pending')
-  );
-
 export const HeldElsewhere = ({
   detail,
   owner,
   commands,
   onOpen,
+  primary,
 }: {
   readonly detail: TaskDetailResponse;
   /** The header's owner control; without it no owner action is offered. */
   readonly owner: OwnerControl | undefined;
+  /** The page's one primary (`taskPagePrimary`): `take` draws *Take it* amber. */
+  readonly primary: TaskPrimaryAction;
   readonly commands: ReturnType<typeof useTaskCommands>;
   readonly onOpen: (dialog: TaskDialog) => void;
 }): ReactElement => {
@@ -99,7 +86,7 @@ export const HeldElsewhere = ({
   const offers = owned
     ? []
     : (owner?.offers ?? []).filter((action) => BOX_ACTIONS.includes(action));
-  const takeLeads = owner !== undefined && heldElsewhereTakeLeads(detail, offers);
+  const takeLeads = owner !== undefined && primary === 'take';
   const mayLink = holder.unlinked && isOrgSectionFor('identities', owner?.viewer?.role);
   const mayHandBack = afterOwner?.kind === 'ready' && detail.can_resume;
   const pending = owner?.command.isPending === true;

@@ -63,6 +63,7 @@ import { WIZARD_STEP_IDS } from '../features/onboarding-steps.js';
 import {
   FIRST_PROJECT_SECTION,
   firstOrgSection,
+  isKnownOrgSection,
   isOrgSectionFor,
   isProjectSection,
   type OrgSettingsSectionId,
@@ -214,9 +215,11 @@ const auditRoute = adminPage(
 /**
  * Org settings (S-23.11b): `/settings/<section>`, each section a page of its own beside a NavList
  * (`features/settings-sections.ts`). `/settings` — the URL every link and bookmark already uses —
- * redirects to the first section the caller's role may change (S-25.6), and so does a section that
- * is unknown or that the caller's role is not shown (the Operations group is the administrator's).
- * An Admin entry's id (`/settings/workers`) goes to that screen's own URL.
+ * redirects to the first section the caller's role may change (S-25.6), and so does a section the
+ * caller's role is not shown (the Operations group is the administrator's) or a retired one
+ * (`/settings/appearance`). A section that is no section at all (`/settings/your-accounts`) is a
+ * *not found* page inside Settings (S-25.15), never a silent Policies. An Admin entry's id
+ * (`/settings/workers`) goes to that screen's own URL.
  */
 const orgSettingsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
@@ -253,7 +256,8 @@ const orgSettingsSectionRoute = createRoute({
     if (admin !== null) {
       throw redirect({ to: admin, replace: true });
     }
-    if (!isOrgSectionFor(params.section, role)) {
+    // S-25.15: an unknown section renders *not found*; a known one the role may not see redirects.
+    if (isKnownOrgSection(params.section) && !isOrgSectionFor(params.section, role)) {
       throw redirect({
         to: '/settings/$section',
         params: { section: firstOrgSection(role) },
@@ -263,7 +267,11 @@ const orgSettingsSectionRoute = createRoute({
   },
   component: withPreload(function OrgSettings() {
     const { section } = orgSettingsSectionRoute.useParams();
-    return <SettingsScreen section={section as OrgSettingsSectionId} />;
+    return (
+      <SettingsScreen
+        section={isKnownOrgSection(section) ? (section as OrgSettingsSectionId) : null}
+      />
+    );
   }, SettingsScreen),
 });
 // WP-280: the registered machines, and the device flow's `verification_uri`.

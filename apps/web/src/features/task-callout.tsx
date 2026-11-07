@@ -17,7 +17,9 @@
  *   when it stopped — and falls back to the escalated attempt's recorded word when there is none.
  *   A ticket somebody else holds (S-25.14, the escalation's reason key `ticket_assigned_elsewhere`)
  *   is a structured stop of its own (`./ticket-held-elsewhere.tsx`): whose ticket it is, from the
- *   task's `tracker_assignee`, leads, the ways out are in the box, and the brief is under *Details*;
+ *   task's `tracker_assignee`, leads, the ways out are in the box, and the brief is under *Details*.
+ *   Beside a structured stop (`detail.stop`), whose next step says to retry the stage, the
+ *   *Retry stage…* here is the page's one amber primary (S-25.15, `./page-primary.ts`);
  * - **a budget pause** — whose cap is spent, and where it is raised (the header's primary raises
  *   a task's own cap);
  * - **a proposed breakdown waiting for a maintainer** — the epic split's panel, with its decision.
@@ -69,6 +71,7 @@ import { ApprovalCard } from './approval-card.js';
 import { BreakdownPanel } from './breakdown-panel.js';
 import { ReadyBlockedNotice, readyBlockedPipeline } from './ci-manual-not-run.js';
 import { CiWaitStop, GateWaitNotice, gateWaitHeld, openGateWait } from './gate-wait.js';
+import { type TaskPrimaryAction, taskPagePrimary } from './page-primary.js';
 import { openReturn, returnWords, stopWords } from './setback.js';
 import { stageOutcomeSentence } from './stage-outcome.js';
 import { latestStageRow } from './task-checks-text.js';
@@ -298,6 +301,12 @@ interface TaskCalloutProps {
   readonly onOpen: (dialog: TaskDialog) => void;
   /** The page's clock, for the minutes a CI wait has run; the read's own instant without it. */
   readonly nowMs?: number;
+  /**
+   * The page's one primary (`./page-primary.ts`), asked once by the page and shared with the
+   * header: `retry_stage` draws *Retry stage…* amber, `take` the held-elsewhere box's *Take it*.
+   * Left out (a callout drawn on its own), the same function answers it from these props.
+   */
+  readonly primary?: TaskPrimaryAction;
 }
 
 export const TaskCallout = (props: TaskCalloutProps): ReactElement => {
@@ -328,8 +337,17 @@ const CalloutSlot = ({
   commands,
   onOpen,
   nowMs,
+  primary: given,
 }: TaskCalloutProps): ReactElement | null => {
   const { task, stages } = detail;
+  const primary =
+    given !== undefined
+      ? given
+      : taskPagePrimary(detail, {
+          ownerOffers: owner?.offers ?? [],
+          stageOptions: hasStages ? 1 : 0,
+          merged,
+        });
   // Only while the task is active: a paused task's CI check is not checking (review of PR #101).
   const gateWait = openGateWait(detail);
   const provider = task.mr_ref?.provider ?? null;
@@ -464,7 +482,13 @@ const CalloutSlot = ({
             />
           ) : null}
           {heldElsewhere ? (
-            <HeldElsewhere detail={detail} owner={owner} commands={commands} onOpen={onOpen} />
+            <HeldElsewhere
+              detail={detail}
+              owner={owner}
+              commands={commands}
+              onOpen={onOpen}
+              primary={primary}
+            />
           ) : reasons.includes('escalation') ? (
             <div className="flex flex-col gap-2">
               {!briefLeads || escalation === null ? null : (
@@ -546,7 +570,10 @@ const CalloutSlot = ({
                       Rework…
                     </Button>
                   )}
+                  {/* S-25.15: the stop's next step is "retry the stage", so it is the page's primary. */}
                   <Button
+                    tone={primary === 'retry_stage' ? 'primary' : 'default'}
+                    data-callout-action="retry"
                     onClick={() => {
                       onOpen('retry');
                     }}

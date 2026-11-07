@@ -3,7 +3,8 @@
  *
  * Driven through `createApp` with a fake server, so the real router decides: `/settings` and
  * `/projects/$key/settings` — the URLs every existing link names — redirect to the first section
- * the caller may open, an unknown section does the same, the Operations group is shown only to an
+ * the caller may open, an unknown org section is a not-found page inside Settings (S-25.15) and a
+ * project's unknown one redirects, the Operations group is shown only to an
  * administrator (and its paths redirect for anybody else, before any of its reads is asked), the
  * NavList marks the section in view, and each page has at most one primary action. The organisation
  * budgets' one Save is exercised here with its refusal, as no other test did.
@@ -197,15 +198,32 @@ describe('the org settings sub-routes', () => {
     });
   });
 
-  it('redirects an unknown section to the one /settings opens', async () => {
-    open('/settings/no-such-section');
-    await waitFor(() => {
-      expect(window.location.pathname).toBe('/settings/policies');
-    });
-    expect(await screen.findByRole('heading', { name: 'Policies' })).toBeTruthy();
-  });
+  it.each(['your-accounts', 'no-such-section'])(
+    'says /settings/%s is no settings page, inside Settings, rather than showing Policies (S-25.15)',
+    async (section) => {
+      const user = userEvent.setup();
+      open(`/settings/${section}`);
+      expect(
+        await screen.findByRole('heading', { name: 'There’s no settings page at this address.' }),
+      ).toBeTruthy();
+      // Not redirected, and not another section in its place: the address stays, nothing is current.
+      expect(window.location.pathname).toBe(`/settings/${section}`);
+      expect(screen.queryByRole('heading', { name: 'Policies' })).toBeNull();
+      const nav = screen.getByRole('navigation', { name: 'Settings' });
+      expect(nav.querySelector('[aria-current="page"]')).toBeNull();
+      expect(
+        document.querySelector('[data-settings-section]')?.getAttribute('data-settings-section'),
+      ).toBe('not-found');
+      // The way back is Settings itself, which opens the section the role lands on.
+      await user.click(screen.getByRole('link', { name: 'Open Settings' }));
+      await waitFor(() => {
+        expect(window.location.pathname).toBe('/settings/policies');
+      });
+      expect(await screen.findByRole('heading', { name: 'Policies' })).toBeTruthy();
+    },
+  );
 
-  it('redirects the retired Appearance bookmark like any unknown section, with no theme control anywhere', async () => {
+  it('redirects the retired Appearance bookmark, with no theme control anywhere', async () => {
     open('/settings/appearance');
     await waitFor(() => {
       expect(window.location.pathname).toBe('/settings/policies');

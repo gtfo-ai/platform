@@ -629,7 +629,8 @@ piece that is still **missing**, under *Missing from setup*, with what its absen
 fix it: *Merge requests can't be opened until a git host is connected* (**Connect a git host →**),
 *New tickets can't reach the agents until a tracker is connected*, or — where nothing on the server
 runs the project — that no agent can run its tickets until a worker is connected (or why the one you
-have can't take work yet). With nothing missing, there is no box at all. The checklist follows the
+have can't take work yet; with several, how many can't and why, such as *3 can't take work (2 not
+connected, 1 needs an update)*, with **Open Workers →**). With nothing missing, there is no box at all. The checklist follows the
 oldest project; a later project's steps are the wizard's to show. Every other role, on an instance
 with no project, is told that an admin sets it up.
 
@@ -888,7 +889,11 @@ would have nowhere to run.
   box), *Review plan* when a plan or a budget waits for a maintainer (it takes you to the approval in
   the needs-you box, where the plan is shown), *Raise this task's cap…* when the
   task's own cap paused it and you may raise budgets, *Resume* when the task is paused or waiting
-  for a person — and none when nothing waits on you. Resume is never offered past an open question
+  for a person — and none when nothing waits on you. When the needs-you box below says how the task
+  stopped and that the next step is to retry the stage (the rounds used up, the same failure again,
+  CI that never finished), the box's own **Retry stage…** is the page's one amber button and Resume
+  moves to the `···` menu; from a stop both re-run the stage as a new attempt, and Retry stage also
+  stops a run of it still going. Resume is never offered past an open question
   or a pending approval: answer or decide it instead. Everything else is in the **`···`**
   menu beside it: *Pause*, *Resume*, *Work on it yourself…*, *Retry stage…*, *Return to stage…*, *Rework…*,
   *Raise this task's cap…*, *Download JSON* and *Cancel task…*. A command with fields, or one you
@@ -1178,7 +1183,10 @@ The product defines eleven merge-readiness checks, and the box shows **all eleve
   review's confirmation, so neither review runs twice; then *declared changes confirmed by the code
   review*, or *declared changes not confirmed, sent back* (the developer is told which paths, as
   for an undeclared change); *no unapproved changes* when the check ran and found no protected file changed, or found only changes the plan declared and the code review confirmed; *checking*; or *not
-  reached*. A CI gate whose row carries no record of the check reads *not recorded*: one that
+  reached*. While CI never finished (it timed out, a manual job was never started, or the git host
+  stopped answering) the check was not made and reads *not checked: CI didn't finish*, muted and not
+  counted among the checks that need you — the CI status beside it is the one that does.
+  A CI gate whose row carries no record of the check reads *not recorded*: one that
   settled before WP-105 recorded what its check found (before WP-81 no check was made at all, and
   from WP-81 on a clean check closed its row with the same word), or one a person returned from
   while the task was stopped there, which no check settled — the platform cannot tell these apart
@@ -1750,7 +1758,9 @@ Notifications · Budgets · Users · Linked accounts · Integrations · Workers 
 events · Failed background jobs · Instance · Session · Keyboard shortcuts · Your accounts** — grouped as
 *Organisation*, *People*, *Admin*, *Operations* and *Personal*. **Opening Settings opens the first
 section your role may change**: *Policies* for an administrator, *Budgets* for a maintainer,
-*Keyboard shortcuts* for everybody else. A section that changes something has **one Save** at its
+*Keyboard shortcuts* for everybody else. An address that is no section (a mistyped
+`/settings/your-accounts`, say) says *There's no settings page at this address.* with **Open
+Settings**, rather than showing another section in its place. A section that changes something has **one Save** at its
 foot: it stays disabled (*Nothing has changed.*) until you change something, and it saves only what
 you changed. *Keyboard shortcuts* is the exception — it applies as you pick it, and is kept in this
 browser only. *Linked accounts*, *Stuck events* and *Failed background jobs* are an administrator's

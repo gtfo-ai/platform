@@ -398,7 +398,13 @@ export const gateValueText = (
  *    the check, but until WP-105 a clean one closed its row with the same `pass`/`returned` a
  *    settlement before WP-81 wrote, and the row cannot tell the two apart. The item says so rather
  *    than drawing *clean* for a gate that may never have looked (standing rule 16);
- *  - an escalation — the gate could not decide, which is what it says.
+ *  - an escalation the CI gate closed `undecided` — **not checked** (S-25.15): the check is made
+ *    when the gate settles on a finished pipeline, and this gate never settled (CI timed out, was
+ *    held at a manual job, its provider did not answer, or the changed files were never listed),
+ *    so the item says so, muted, and does not count as a check that needs a person — the CI item
+ *    beside it does. The row cannot say *which* of those it was, so the words name the CI check
+ *    not finishing, which is true of all of them (BACKLOG 1362 asks the server for the field);
+ *  - any other escalation — the gate could not decide, which is what it says.
  *
  * A rebase row entered **before** the CI row belongs to an earlier round and is not read.
  */
@@ -421,9 +427,23 @@ export const tamperValueText = (ci: StageRow | null, rebase: StageRow | null = n
     case 'pass':
       return TAMPER_NOT_RECORDED;
     default:
-      return ci.state === 'returned' ? TAMPER_NOT_RECORDED : needsYouText(ci.outcome);
+      return ci.state === 'returned'
+        ? TAMPER_NOT_RECORDED
+        : tamperNotChecked(ci)
+          ? TAMPER_NOT_CHECKED
+          : needsYouText(ci.outcome);
   }
 };
+
+/** The words for a tamper check its CI gate never got to make (S-25.15). */
+export const TAMPER_NOT_CHECKED = 'not checked: CI didn’t finish';
+
+/**
+ * The CI gate escalated without settling (`failed`, closed `undecided`): the tamper check is made in
+ * the settlement, so it was not made at all — the item is *not checked*, never *needs you*.
+ */
+const tamperNotChecked = (ci: StageRow): boolean =>
+  ci.state === 'failed' && ci.outcome === 'undecided';
 
 /**
  * Why a check stopped and waits for a person, in words (S-25.5, research/21 § 4): the outcome its
@@ -645,7 +665,8 @@ export const tamperStatus = (ci: StageRow | null, rebase: StageRow | null = null
     case 'pass':
       return 'skipped';
     default:
-      return ci.state === 'returned' ? 'skipped' : 'needs_you';
+      // Not checked (S-25.15) is muted like *not recorded*: the CI item is the one that needs you.
+      return ci.state === 'returned' || tamperNotChecked(ci) ? 'skipped' : 'needs_you';
   }
 };
 

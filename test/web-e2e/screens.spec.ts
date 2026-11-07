@@ -1174,6 +1174,11 @@ test('a CI check held at a manual job says what it waits for, and its timeout fr
   ).toBeVisible();
   await expect(parked.getByText('Start the job in GitLab, then Retry.')).toBeVisible();
   await expect(parked.getByRole('button', { name: 'Retry stage…' })).toBeVisible();
+  // S-25.15: that Retry stage… is the page's one amber primary, and the header offers no Resume.
+  const primaries = page.locator('main [class~="border-primary-line"]');
+  await expect(primaries).toHaveCount(1);
+  await expect(primaries).toHaveText('Retry stage…');
+  await expect(page.getByRole('main').getByRole('button', { name: 'Resume' })).toHaveCount(0);
   await expect(parked.getByText(/What the platform saw last/)).toHaveCount(0);
   await expect(parked.getByText(/poll-only|ci_timeout_minutes|CI failed/)).toHaveCount(0);
 });

@@ -295,15 +295,14 @@ describe('homeSetup: once a ticket has run, only a missing piece is named (S-25.
 
   it('names a worker that cannot take work, and resumes its wizard at Ready', () => {
     const blocker = leadingClaimBlocker(['offline']);
-    const [piece] = missingPieces(
-      { tracker: 'done', git: 'done', worker: 'todo' },
+    const [piece] = missingPieces({ tracker: 'done', git: 'done', worker: 'todo' }, [
       {
         name: 'jan-mbp',
         reason: blocker?.word ?? '',
         fix: blocker?.fix ?? '',
         createdAt: '2026-10-01T00:00:00.000Z',
       },
-    );
+    ]);
     expect(piece?.text).toContain('jan-mbp can’t take work');
     expect(piece?.text).toContain(blocker?.fix ?? '∅');
     expect(piece?.destination).toEqual({
@@ -311,5 +310,78 @@ describe('homeSetup: once a ticket has run, only a missing piece is named (S-25.
       step: 'ready',
       since: '2026-10-01T00:00:00.000Z',
     });
+  });
+
+  /**
+   * S-25.15 (the walk of Autix on 2026-11-07): three machines could not take work and the box named
+   * only the newest. One machine is still named, with its fix; several are counted by reason.
+   */
+  const machine = (
+    name: string,
+    blockers: Parameters<typeof leadingClaimBlocker>[0],
+    createdAt: string,
+  ) => {
+    const lead = leadingClaimBlocker(blockers);
+    return {
+      name,
+      reason: lead?.word ?? '',
+      fix: lead?.fix ?? '',
+      updating: lead?.updating ?? false,
+      ...(lead === undefined ? {} : { blocker: lead.blocker }),
+      createdAt,
+    };
+  };
+  const WORKER_TODO = { tracker: 'done', git: 'done', worker: 'todo' } as const;
+
+  it('names the one machine that is the reason, with its fix and its setup', () => {
+    const [piece] = missingPieces(WORKER_TODO, [
+      machine('Tom-MacbookPro', ['offline'], '2026-11-01T00:00:00.000Z'),
+    ]);
+    expect(piece?.text).toBe(
+      `No agent can run this project’s tickets yet: Tom-MacbookPro can’t take work (not connected to the platform). ${leadingClaimBlocker(['offline'])?.fix ?? '∅'}`,
+    );
+    expect(piece?.action).toBe('Open the worker’s setup');
+    expect(piece?.destination).toEqual({
+      to: '/workers/new',
+      step: 'ready',
+      since: '2026-11-01T00:00:00.000Z',
+    });
+  });
+
+  it('counts several machines by reason, the largest group first, and opens Workers', () => {
+    const [piece] = missingPieces(WORKER_TODO, [
+      machine('Tom-MacbookPro', ['protocol_outdated'], '2026-11-03T00:00:00.000Z'),
+      machine('Tom-Studio', ['offline'], '2026-11-02T00:00:00.000Z'),
+      machine('jan-mbp', ['offline', 'protocol_outdated'], '2026-11-01T00:00:00.000Z'),
+    ]);
+    expect(piece).toEqual({
+      id: 'worker',
+      text: 'No machine can take this project’s tickets right now: 3 can’t take work (2 not connected, 1 needs an update).',
+      action: 'Open Workers',
+      destination: { to: '/workers' },
+    });
+    // No machine is named once there are several: the Workers screen lists them.
+    expect(piece?.text).not.toContain('Tom-MacbookPro');
+  });
+
+  it('agrees the verb with the count, and groups two blockers that read the same', () => {
+    const [piece] = missingPieces(WORKER_TODO, [
+      machine('a', ['protocol_outdated'], '2026-11-03T00:00:00.000Z'),
+      machine('b', ['images_outdated'], '2026-11-02T00:00:00.000Z'),
+      machine('c', ['draining', 'protocol_outdated'], '2026-11-01T00:00:00.000Z'),
+    ]);
+    expect(piece?.text).toBe(
+      'No machine can take this project’s tickets right now: 3 can’t take work (2 need an update, 1 updating now).',
+    );
+  });
+
+  it('says several machines without a blocker id in their row words, never a raw id', () => {
+    const [piece] = missingPieces(WORKER_TODO, [
+      { name: 'a', reason: 'Not set up yet', fix: '', createdAt: '2026-11-02T00:00:00.000Z' },
+      { name: 'b', reason: 'Not set up yet', fix: '', createdAt: '2026-11-01T00:00:00.000Z' },
+    ]);
+    expect(piece?.text).toBe(
+      'No machine can take this project’s tickets right now: 2 can’t take work (2 not set up yet).',
+    );
   });
 });
