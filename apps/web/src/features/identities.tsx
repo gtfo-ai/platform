@@ -46,7 +46,11 @@ import {
   useSettingsCommands,
 } from '../app/queries.js';
 import { ConfirmDialog } from '../ui/confirm-dialog.js';
-import { accountProviderName, LINKED_ACCOUNTS_WORDS } from '../ui/humanize-accounts.js';
+import {
+  accountProviderName,
+  LINKED_ACCOUNTS_WORDS,
+  linkRefusal,
+} from '../ui/humanize-accounts.js';
 import {
   Badge,
   Button,
@@ -358,6 +362,7 @@ export const IdentityMappings = (): ReactElement => {
         pending={commands.unlinkIdentity.isPending}
         error={commands.unlinkIdentity.error}
         errorTitle={LINKED_ACCOUNTS_WORDS.unlinkRefused}
+        errorDetail={linkRefusal(commands.unlinkIdentity.error)}
         onConfirm={() => {
           if (unlinking === null) {
             return;

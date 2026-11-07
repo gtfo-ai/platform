@@ -325,6 +325,8 @@ describe('an administrator unlinks an account (S-26.8a)', () => {
     const dialog = await screen.findByRole('dialog');
     await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
     expect(await within(dialog).findByText('The account was not unlinked.')).toBeTruthy();
+    // The refusal in the page's words, not the 404's status sentence.
+    expect(dialog.textContent).toContain('That account is not linked any more.');
   });
 });
 

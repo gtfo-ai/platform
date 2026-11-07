@@ -420,7 +420,7 @@ test('Settings → Your accounts: a code, the account the provider proved, the c
   await list.getByRole('button', { name: 'Unlink' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toContainText(
-    'Answers and approvals from this Jira account stop counting as yours.',
+    'Answers and approvals from this Jira account stop counting as yours, though',
   );
   await dialog.getByRole('button', { name: 'Unlink' }).click();
   await expect(page.getByText('No account is linked to you yet')).toBeVisible();

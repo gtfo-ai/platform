@@ -36,7 +36,6 @@ import type {
   MyIdentity,
 } from '@platform/contracts';
 import { type FormEvent, type ReactElement, useState } from 'react';
-import { ApiError } from '../api/http.js';
 import { readErrorDetail } from '../api/read-error.js';
 import {
   useIdentityLinkState,
@@ -53,6 +52,7 @@ import {
   LINK_REFUSAL_WORDS,
   LINK_VOID_REASON_WORDS,
   type LinkVoidReason,
+  linkRefusal,
   YOUR_ACCOUNTS_WORDS as WORDS,
 } from '../ui/humanize-accounts.js';
 import {
@@ -69,26 +69,6 @@ import { Select } from '../ui/select.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { SettingsSectionHeader } from './settings-frame.js';
-
-const isVoidReason = (value: string | undefined): value is LinkVoidReason =>
-  value !== undefined && Object.hasOwn(LINK_VOID_REASON_WORDS, value);
-
-/**
- * The sentence for one of S-26.6's refusals, or `undefined` for one this table does not hold — the
- * notice then says it from the error's status (`errorSentence`). A voided code is said by its reason.
- */
-export const linkRefusal = (error: unknown): string | undefined => {
-  if (!(error instanceof ApiError)) {
-    return undefined;
-  }
-  if (error.code === 'link_code_voided') {
-    const reason = error.details.find((detail) => detail.path === 'void_reason')?.message;
-    if (isVoidReason(reason)) {
-      return LINK_VOID_REASON_WORDS[reason];
-    }
-  }
-  return Object.hasOwn(LINK_REFUSAL_WORDS, error.code) ? LINK_REFUSAL_WORDS[error.code] : undefined;
-};
 
 /** An `ErrorNotice` that says S-26.6's refusals in this page's words. */
 const LinkRefusal = ({
@@ -198,6 +178,7 @@ const LinkedAccounts = (): ReactElement => {
         pending={commands.unlink.isPending}
         error={commands.unlink.error}
         errorTitle={WORDS.unlinkRefused}
+        errorDetail={linkRefusal(commands.unlink.error)}
         onConfirm={() => {
           if (unlinking === null) {
             return;
@@ -312,7 +293,12 @@ const WroteItOn = (): ReactElement => {
         </div>
         {outcome === undefined ? null : (
           <p role="status" className="text-sm">
-            {WORDS.readOutcome(outcome.comments, outcome.carried_code)}
+            {WORDS.readOutcome(
+              outcome.comments,
+              outcome.carried_code,
+              outcome.matched,
+              outcome.state.matches.some((match) => match.confirmed_at === null),
+            )}
           </p>
         )}
         <LinkRefusal title={WORDS.readRefused} error={commands.readThread.error} />
@@ -460,19 +446,24 @@ export const viewOf = (
 
 const LinkFlow = (): ReactElement => {
   const state = useIdentityLinkState();
-  const commands = useYourAccountsCommands();
   const [issued, setIssued] = useState<IdentityLinkCodeIssued | null>(null);
   const [linked, setLinked] = useState<IdentityLinkConfirmed | null>(null);
+  // Set in the hook's own `onSuccess`, before its re-read of the state lands (review of PR #99).
+  const commands = useYourAccountsCommands({
+    onIssued: (code) => {
+      setIssued(code);
+      setLinked(null);
+    },
+    onConfirmed: (result) => {
+      setLinked(result);
+      setIssued(null);
+    },
+  });
   const view = viewOf(state.data, issued, linked);
 
   const issue = (): void => {
     commands.confirm.reset();
-    commands.issue.mutate(undefined, {
-      onSuccess: (code) => {
-        setIssued(code);
-        setLinked(null);
-      },
-    });
+    commands.issue.mutate();
   };
   /** The page's one amber primary is this button, unless a match is waiting for its *Link*. */
   const issueButton = (label: string, primary = true): ReactElement => (
@@ -556,12 +547,7 @@ const LinkFlow = (): ReactElement => {
                 match={match}
                 pending={commands.confirm.isPending}
                 onConfirm={() => {
-                  commands.confirm.mutate(match.id, {
-                    onSuccess: (result) => {
-                      setLinked(result);
-                      setIssued(null);
-                    },
-                  });
+                  commands.confirm.mutate(match.id);
                 }}
                 onNotMine={issue}
               />

@@ -1,7 +1,8 @@
 /**
  * **humanize, the account-linking half** — *Your accounts* and *Linked accounts*' words (S-26.8a,
  * the M26 UX spec § 5). Every word those two screens say is here, never inline, exactly as for
- * `ui/humanize.ts`.
+ * `ui/humanize.ts`, with `linkRefusal`, which picks the words for one of S-26.6's refusals (both
+ * screens' unlink dialogs use it, so it cannot live in the lazy `features/your-accounts.tsx`).
  *
  * **Why it is not in `humanize.ts` itself (measured, S-26.8a):** `humanize.ts` is imported by the
  * remote worker's local page, so it sits in the chunk `worker.html` loads, which `bundle:check` holds
@@ -10,6 +11,7 @@
  * Imported only by the two settings screens (both lazy), they ship in the settings chunk and in
  * neither entry's initial graph.
  */
+import { ApiError } from '../api/http.js';
 import { titleCase } from './humanize.js';
 
 /**
@@ -61,7 +63,7 @@ export const YOUR_ACCOUNTS_WORDS = {
   unlink: 'Unlink',
   unlinkTitle: (provider: string, name: string): string => `Unlink ${provider} account ${name}?`,
   unlinkConsequence: (provider: string): string =>
-    `Answers and approvals from this ${provider} account stop counting as yours. Tasks you already own stay yours until the ticket’s assignee changes. You can link it again with a new code.`,
+    `Answers and approvals from this ${provider} account stop counting as yours, though tasks you already own stay yours until the ticket’s assignee changes.`,
   unlinkRefused: 'The account was not unlinked.',
   unlinked: 'Unlinked. Answers and approvals from that account no longer count as yours.',
   // The link flow.
@@ -93,14 +95,25 @@ export const YOUR_ACCOUNTS_WORDS = {
   read: 'Read the comments',
   reading: 'Reading…',
   readRefused: 'The comments were not read.',
-  readOutcome: (comments: number, carried: number): string =>
+  /**
+   * What *I wrote it on …* found. `matched` is `0` also when the code's match was already recorded
+   * (`alreadyMatched`, the state carries it); otherwise a comment that carried the code and matched
+   * nothing was refused for its author, which is said rather than left as a silent nothing.
+   */
+  readOutcome: (
+    comments: number,
+    carried: number,
+    matched: number,
+    alreadyMatched: boolean,
+  ): string =>
     carried === 0
       ? `None of the ${count(comments, 'comment', 'comments')} there carries your code. Check that you wrote it from your own account and did not edit it.`
-      : `Read ${count(comments, 'comment', 'comments')}; ${count(carried, 'carries', 'carry')} your code.`,
+      : matched === 0 && !alreadyMatched
+        ? `Read ${count(comments, 'comment', 'comments')}; ${count(carried, 'carries', 'carry')} your code, but its author cannot be linked: the integration’s own account, an account an administrator declared a machine, or an account linked to another person links nobody.`
+        : `Read ${count(comments, 'comment', 'comments')}; ${count(carried, 'carries', 'carry')} your code.`,
   // The confirmation (TD-031's amendment item 9 (a)).
   confirmBefore: (provider: string): string => `Link ${provider} account `,
   confirmAfter: '?',
-  nameless: 'with no name',
   checkTheId: 'The name is what the provider says. Check that the account id is yours.',
   confirm: 'Link this account',
   confirming: 'Linking…',
@@ -117,7 +130,6 @@ export const YOUR_ACCOUNTS_WORDS = {
   linkAnother: 'Link another account',
   // A code that stopped.
   expired: (time: string): string => `This code expired at ${time} without linking an account.`,
-  consumed: 'This code has linked an account, so it cannot be used again.',
 } as const;
 
 /**
@@ -156,7 +168,7 @@ export const LINKED_ACCOUNTS_WORDS = {
   unlinkMachineTitle: (provider: string, name: string): string =>
     `Unlink the ${provider} machine account ${name}?`,
   unlinkPersonConsequence: (person: string): string =>
-    `Answers and approvals from this account stop counting as ${person}’s. Tasks they already own stay theirs until the ticket’s assignee changes. They can link it again themselves.`,
+    `Answers and approvals from this account stop counting as ${person}’s, though tasks they already own stay theirs until the ticket’s assignee changes.`,
   unlinkMachineConsequence:
     'The account is no longer treated as a machine: what it writes is again refused as from an unknown account until somebody links it.',
   unlinkRefused: 'The account was not unlinked.',
@@ -167,3 +179,23 @@ export const LINKED_ACCOUNTS_WORDS = {
   refused: (deliveries: number): string => `${deliveries} refused`,
   lastSeen: (date: string): string => `last ${date}`,
 } as const;
+
+const isVoidReason = (value: string | undefined): value is LinkVoidReason =>
+  value !== undefined && Object.hasOwn(LINK_VOID_REASON_WORDS, value);
+
+/**
+ * The sentence for one of S-26.6's refusals, or `undefined` for one this table does not hold — the
+ * notice then says it from the error's status (`errorSentence`). A voided code is said by its reason.
+ */
+export const linkRefusal = (error: unknown): string | undefined => {
+  if (!(error instanceof ApiError)) {
+    return undefined;
+  }
+  if (error.code === 'link_code_voided') {
+    const reason = error.details.find((detail) => detail.path === 'void_reason')?.message;
+    if (isVoidReason(reason)) {
+      return LINK_VOID_REASON_WORDS[reason];
+    }
+  }
+  return Object.hasOwn(LINK_REFUSAL_WORDS, error.code) ? LINK_REFUSAL_WORDS[error.code] : undefined;
+};

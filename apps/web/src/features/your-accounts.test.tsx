@@ -21,8 +21,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/http.js';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
+import { linkRefusal } from '../ui/humanize-accounts.js';
 import { primaryLabels } from '../ui/primary-census.js';
-import { linkRefusal, viewOf } from './your-accounts.js';
+import { viewOf } from './your-accounts.js';
 
 const USER = '00000000-0000-4000-8000-000000000001';
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
@@ -341,6 +342,39 @@ describe('Your accounts: link an account', () => {
     });
   });
 
+  it('says why a comment that carried the code matched nobody', async () => {
+    const user = userEvent.setup();
+    world.state = liveState();
+    // The code was there, written by an account that links nobody (the integration's own, say).
+    world.read = () => json({ comments: 2, carried_code: 1, matched: 0, state: liveState() });
+    open();
+    await flow();
+    await user.click(await screen.findByText('I wrote it on …', { selector: 'summary' }));
+    await user.selectOptions(screen.getByLabelText('Project'), PROJECT);
+    await user.type(screen.getByLabelText('Ticket key'), 'AUT-6639');
+    await user.click(screen.getByRole('button', { name: 'Read the comments' }));
+    expect(
+      await screen.findByText(
+        /^Read 2 comments; 1 carries your code, but its author cannot be linked: the integration’s own account/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Link this account' })).toBeNull();
+  });
+
+  it('does not explain a nothing when the code’s match was already recorded', async () => {
+    const user = userEvent.setup();
+    world.state = liveState([MATCH]);
+    world.read = () =>
+      json({ comments: 2, carried_code: 1, matched: 0, state: liveState([MATCH]) });
+    open();
+    await flow();
+    await user.click(await screen.findByText('I wrote it on …', { selector: 'summary' }));
+    await user.selectOptions(screen.getByLabelText('Project'), PROJECT);
+    await user.type(screen.getByLabelText('Ticket key'), 'AUT-6639');
+    await user.click(screen.getByRole('button', { name: 'Read the comments' }));
+    expect(await screen.findByText('Read 2 comments; 1 carries your code.')).toBeTruthy();
+  });
+
   it('never offers a field for an account id or an email', async () => {
     world.state = liveState();
     open();
@@ -386,6 +420,33 @@ describe('Your accounts: a code that stopped, and refusals', () => {
     ).toBeTruthy();
     expect(primaryLabels()).toEqual(['Get a new code']);
   });
+
+  it('stops asking for the state once the code has expired', async () => {
+    world.state = liveState();
+    open();
+    await flow();
+    expect(await screen.findByText(/It was shown only once/)).toBeTruthy();
+    // The provider's clock runs out: the next poll reads `expired`.
+    world.state = {
+      code: { ...LIVE_CODE, status: 'expired', expires_at: '2026-11-07T10:30:00.000Z' },
+      matches: [],
+    };
+    expect(
+      await screen.findByText(/This code expired at .* without linking an account\./, undefined, {
+        timeout: 6_000,
+      }),
+    ).toBeTruthy();
+    const reads = (): number =>
+      world.requests.filter(
+        (request) => request.method === 'GET' && request.path === '/api/me/identity-links',
+      ).length;
+    const afterExpiry = reads();
+    // Longer than one poll interval (3 s): a live poll would have asked again by now.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 4_000);
+    });
+    expect(reads()).toBe(afterExpiry);
+  }, 20_000);
 
   it('says a 429 in words, not as a status line', async () => {
     const user = userEvent.setup();
@@ -434,7 +495,7 @@ describe('Your accounts: unlink your own', () => {
       name: 'Unlink Jira account Jan <b>Novák</b>?',
     });
     expect(dialog.textContent).toContain(
-      'Answers and approvals from this Jira account stop counting as yours.',
+      'Answers and approvals from this Jira account stop counting as yours, though tasks you already own stay yours until the ticket’s assignee changes.',
     );
     expect(world.requests.filter((request) => request.method === 'DELETE')).toEqual([]);
     await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));

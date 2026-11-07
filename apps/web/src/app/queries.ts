@@ -10,7 +10,12 @@
  * *Your accounts* asks for its link code's state every 3 s while the code is live
  * ({@link useIdentityLinkState}).
  */
-import type { BudgetWindow, BusinessInterviewRequest } from '@platform/contracts';
+import type {
+  BudgetWindow,
+  BusinessInterviewRequest,
+  IdentityLinkCodeIssued,
+  IdentityLinkConfirmed,
+} from '@platform/contracts';
 import {
   type UseQueryResult,
   useInfiniteQuery,
@@ -793,14 +798,28 @@ export const useIdentityLinkState = () => {
 /**
  * *Your accounts*' commands (S-26.8a): issue a code, *I wrote it on …*, confirm a match (one
  * `Idempotency-Key` per match, released on success) and unlink one's own account.
+ *
+ * `onIssued` and `onConfirmed` are the page's, and run in the **hook's** `onSuccess` — before its
+ * `onSettled` re-reads the state. A `mutate(…, { onSuccess })` callback runs only after that re-read
+ * has finished, so the page drew the new state without the code it had just been given (*"It was
+ * shown only once…"*) for a frame (review of PR #99).
  */
-export const useYourAccountsCommands = (mint?: MintKey) => {
+export const useYourAccountsCommands = (
+  options: {
+    readonly mint?: MintKey;
+    readonly onIssued?: (code: IdentityLinkCodeIssued) => void;
+    readonly onConfirmed?: (linked: IdentityLinkConfirmed) => void;
+  } = {},
+) => {
   const { endpoints } = useServices();
   const queryClient = useQueryClient();
-  const intents = useIntentKeys(mint);
+  const intents = useIntentKeys(options.mint);
   return {
     issue: useMutation({
       mutationFn: () => endpoints.issueIdentityLinkCode(),
+      onSuccess: (code) => {
+        options.onIssued?.(code);
+      },
       onSettled: async () => {
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.identityLinkState] });
       },
@@ -816,8 +835,9 @@ export const useYourAccountsCommands = (mint?: MintKey) => {
     confirm: useMutation({
       mutationFn: (matchId: string) =>
         endpoints.confirmIdentityLink(matchId, intents.keyFor(['identity.link', matchId])),
-      onSuccess: (_result, matchId) => {
+      onSuccess: (result, matchId) => {
         intents.release(['identity.link', matchId]);
+        options.onConfirmed?.(result);
       },
       onSettled: async () => {
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.identityLinkState] });
