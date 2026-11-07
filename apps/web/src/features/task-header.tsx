@@ -9,13 +9,18 @@
  *   stage in words, what it has cost so far and how long ago it was opened; then the `PhaseTrack`.
  *   Its *Now* line says, for a task that went back (S-25.11, `./setback.ts`), the board card's
  *   short form — "CI failed · fixing, round 2/3" while the agent is on it, "CI did not finish" when
- *   it stopped — in place of the activity's sub-label.
+ *   it stopped — in place of the activity's sub-label; and while the CI check waits (S-25.12, the
+ *   read's `gate_wait`, `./gate-wait.tsx`), what it waits for: "CI running · 12 min of 60", or
+ *   "CI waits for someone to start the manual job X". A held manual job is *Needs you* at once,
+ *   through the one rule's `ci_held`.
  * - **One primary action, chosen by the state** ({@link taskPrimaryAction}): *Hand back…* while a
  *   take-over is in force, *Answer* for an open question (it moves focus into the callout's answer
  *   box), *Review plan* for a pending approval (it moves focus onto the callout's approval card,
  *   where the plan is shown open beside *Approve* and *Reject…* — S-25.1; there is no second,
  *   subject-less approve dialog), *Raise this task's cap…* for a task its own cap paused
- *   when the caller may raise it, *Resume* for a paused or escalated task — or none.
+ *   when the caller may raise it, *Start the job in GitLab* — a link to the held job's page (or
+ *   its pipeline's) — while the CI check waits on a manual job (S-25.12), *Resume* for a paused
+ *   or escalated task — or none.
  *   Everything else is in the `···` menu, and a command with fields or no undo opens a dialog
  *   (`./task-dialogs.tsx`).
  *
@@ -57,6 +62,7 @@ import {
   ActionMenuSeparator,
 } from '../ui/action-menu.js';
 import { activityOf } from '../ui/activity.js';
+import { buttonClassName } from '../ui/button.js';
 import { stageLabel, titleCase } from '../ui/humanize.js';
 import { Badge, Button, formatElapsed, formatUsd } from '../ui/kit.js';
 import { PageHeader } from '../ui/page-header.js';
@@ -64,8 +70,16 @@ import { PhaseTrack, phaseStagesFor } from '../ui/phase-track.js';
 import { StateLabel } from '../ui/status.js';
 import { taskStateLabel, taskStatus } from '../ui/task-status.js';
 import { DownloadLink, ExternalLink, UntrustedText } from '../ui/untrusted.js';
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 import { approvalCardId } from './approval-card.js';
 import { reviewVerb } from './approval-text.js';
+import {
+  gateWaitHeld,
+  gateWaitJobUrl,
+  gateWaitShort,
+  openGateWait,
+  providerName,
+} from './gate-wait.js';
 import { liveStageRun } from './live-stage.js';
 import { setbackShort } from './setback.js';
 import { takeOverFinished } from './take-over.js';
@@ -80,13 +94,14 @@ export type TaskPrimaryAction =
   | 'answer'
   | 'approve'
   | 'raise_budget'
+  | 'start_job'
   | 'resume'
   | null;
 
 /**
  * Which action is primary, by what the task is waiting for: the person who holds it, then the
- * agent's question, then a maintainer's approval, then the cap that paused it, then a resume — the
- * first that applies.
+ * agent's question, then a maintainer's approval, then the cap that paused it, then a manual CI job
+ * only a person can start, then a resume — the first that applies.
  */
 export const taskPrimaryAction = (input: {
   readonly state: TaskState;
@@ -103,6 +118,8 @@ export const taskPrimaryAction = (input: {
    */
   readonly canDecide?: boolean;
   readonly canResume?: boolean;
+  /** The CI check waits on a held manual job whose page (or pipeline's) the page can link. */
+  readonly ciHeldLink?: boolean;
 }): TaskPrimaryAction => {
   if (input.canHandBack) {
     return 'hand_back';
@@ -115,6 +132,9 @@ export const taskPrimaryAction = (input: {
   }
   if (input.canRaise === true) {
     return 'raise_budget';
+  }
+  if (input.ciHeldLink === true) {
+    return 'start_job';
   }
   return input.canResume !== false && (input.state === 'paused' || input.state === 'needs_human')
     ? 'resume'
@@ -160,6 +180,11 @@ export const TaskHeader = ({
     task.state === 'paused' &&
     task.paused_reason === 'budget' &&
     task.paused_budget_scope === 'task';
+  // S-25.12: a pipeline held at a manual job waits for a person, and the one next step is the job.
+  // Only while the task is active: a paused task's CI check is not checking (review of PR #101).
+  const gateWait = openGateWait(detail);
+  const ciHeld = gateWaitHeld(gateWait);
+  const heldJobUrl = gateWait !== null && ciHeld ? gateWaitJobUrl(gateWait) : null;
   const primary = taskPrimaryAction({
     state: task.state,
     canHandBack: takenOver !== null && takenOver.hand_back_stages.length > 0,
@@ -168,12 +193,14 @@ export const TaskHeader = ({
     canRaise,
     canDecide: detail.can_decide_approval,
     canResume: detail.can_resume,
+    ciHeldLink: heldJobUrl !== null,
   });
   const needsYouInput = {
     state: task.state,
     paused_reason: task.paused_reason,
     open_asks: openQuestions.length + pendingApprovals.length,
     taken_over: takenOver !== null,
+    ci_held: ciHeld,
   };
   const liveRun = liveStageRun(runs);
   const doing = activityOf({
@@ -183,14 +210,13 @@ export const TaskHeader = ({
     open_asks: openQuestions.length + pendingApprovals.length,
     now: nowMs,
   });
-  // S-25.11: why it went back, or why it stopped, in the board card's words.
-  const setback = setbackShort(
-    task,
-    stages,
-    detail.returns.at(-1) ?? null,
-    detail.stop,
-    detail.loop_limits,
-  );
+  // S-25.12: while the CI check waits, what it waits for; else (S-25.11) why it went back, or
+  // why it stopped, in the board card's words.
+  const setback =
+    gateWait === null
+      ? setbackShort(task, stages, detail.returns.at(-1) ?? null, detail.stop, detail.loop_limits)
+      : // Provider text (the job's name) on its way into a string prop: bidi and controls removed.
+        sanitiseUntrusted(gateWaitShort(gateWait, nowMs));
   const currentStage = task.current_stage ?? null;
   // A task that has entered no stage has no strip to draw; the Overview says it has none.
   const phase = phaseStagesFor(null, stages, currentStage);
@@ -264,6 +290,13 @@ export const TaskHeader = ({
       >
         Raise this task's cap…
       </Button>
+    ) : primary === 'start_job' && heldJobUrl !== null ? (
+      // The held job's own page (or its pipeline's), through `safeHref` inside `ExternalLink`.
+      <ExternalLink
+        url={heldJobUrl}
+        label={`Start the job in ${providerName(task.mr_ref?.provider)}`}
+        className={buttonClassName('primary')}
+      />
     ) : primary === 'resume' ? (
       <Button tone="primary" disabled={commands.resume.isPending} onClick={resume}>
         Resume

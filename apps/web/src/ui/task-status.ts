@@ -47,6 +47,13 @@ export interface NeedsYouInput {
   readonly open_asks: number;
   /** A take-over is in force (the task page knows it beside the state). */
   readonly taken_over?: boolean;
+  /**
+   * The CI check waits on a pipeline held at a manual job, which only a person can start (S-25.12,
+   * product/10's 2026-11-07 amendment). The task page knows it from the read's `gate_wait`
+   * (`features/gate-wait.tsx`' `gateWaitHeld`); the board's list item does not carry the read
+   * (BACKLOG 1300), so the board cannot ask it yet.
+   */
+  readonly ci_held?: boolean;
 }
 
 /** The states a task never leaves: nothing that is left open on one can move it again. */
@@ -54,7 +61,8 @@ const TERMINAL: ReadonlySet<TaskState> = new Set<TaskState>(['done', 'cancelled'
 
 /**
  * Whether the task waits on a person: a waiting state, anything open in its inbox, a take-over in
- * force, or a pause only a person ends — a budget pause (somebody raises the cap) or a take-over
+ * force, a CI check held at a manual job (S-25.12: *Needs you* at once, not after the wait times
+ * out), or a pause only a person ends — a budget pause (somebody raises the cap) or a take-over
  * (the person hands it back). A manual pause is somebody's choice and waits on nobody, and a
  * **done or cancelled** task never needs you, whatever is left open on it (review of PR #80): an
  * answer to a question it left behind would move nothing.
@@ -64,6 +72,7 @@ export const needsYou = (task: NeedsYouInput): boolean =>
   (WAITING_ON_A_PERSON.has(task.state) ||
     task.open_asks > 0 ||
     task.taken_over === true ||
+    task.ci_held === true ||
     (task.state === 'paused' &&
       (task.paused_reason === 'budget' || task.paused_reason === 'taken_over')));
 

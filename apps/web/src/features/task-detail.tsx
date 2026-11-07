@@ -138,6 +138,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
         breakdownWaiting={breakdownWaiting}
         commands={commands}
         onOpen={setDialog}
+        nowMs={nowMs}
       />
 
       {takenOver !== null ? (

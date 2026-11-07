@@ -125,6 +125,8 @@ const detail = (
   gate_feedback: null,
   returns: [ciReturn()],
   stop: null,
+  gate_wait: null,
+  last_gate_wait: null,
   loop_limits: LIMITS,
   human_time: {
     total_minutes: 0,
@@ -167,6 +169,7 @@ const stop = (over: Partial<TaskStop> = {}): TaskStop => ({
   ci_failure: { status: 'failed', jobs: 'unit' },
   recorded: null,
   recorded_cut: false,
+  ci_ending: null,
   ...over,
 });
 
@@ -258,6 +261,28 @@ describe('fixing: the agent is on it', () => {
     const stopped = document.querySelector('[data-card-setback]');
     expect(stopped?.getAttribute('data-card-setback')).toBe('stopped');
     expect(stopped?.className).toContain('text-attention');
+  });
+
+  it('gives the board card the CI wait’s endings from the stop alone (S-25.12)', () => {
+    // The board's item carries no CI read (BACKLOG 1300): the card says what `stop` holds.
+    const card = {
+      ...TASK,
+      state: 'needs_human' as const,
+      current_stage: 'ci_gate',
+      stages: [],
+      open_questions: 0,
+      pending_approvals: 0,
+      loop_limits: LIMITS,
+      latest_return: null,
+      stop: stop({ cause: 'no_answer', ci_failure: null, ci_ending: 'ci_held_unchanged' }),
+    } satisfies TaskListItem;
+    expect(cardSetback(card)).toBe('CI held at a manual job');
+    expect(
+      cardSetback({
+        ...card,
+        stop: stop({ cause: 'no_answer', ci_failure: null, ci_ending: 'ci_timed_out' }),
+      }),
+    ).toBe('CI did not finish');
   });
 
   it('renders the job names the row recorded as text', () => {
@@ -440,6 +465,129 @@ describe('stopped: why the agent stopped, and the one next step', () => {
   });
 });
 
+/**
+ * S-25.12 (product/10's 2026-11-07 amendments): a waiting CI check in the callout's slot, from the
+ * read's `gate_wait` and `last_gate_wait` — and the recorded sentence only for an attempt that has
+ * no read (before the worker session's #89).
+ */
+describe('a waiting CI check, from its structured read (S-25.12)', () => {
+  const JOB_URL = 'https://git.example.invalid/acme/api/-/jobs/977';
+  const read = (
+    over: Partial<NonNullable<TaskDetailResponse['gate_wait']>> = {},
+  ): NonNullable<TaskDetailResponse['gate_wait']> => ({
+    pipeline_id: '3038234623',
+    pipeline_url: 'https://git.example.invalid/acme/api/-/pipelines/3038234623',
+    status: 'manual',
+    held_job: 'sentry-release-commit',
+    held_job_url: JOB_URL,
+    draft: true,
+    checked_at: '2026-11-07T10:12:00.000Z',
+    waiting_since: ENTERED_AFTER,
+    timeout_minutes: 60,
+    ...over,
+  });
+  const waiting = (wait: NonNullable<TaskDetailResponse['gate_wait']>) =>
+    detail(
+      { returns: [], gate_wait: wait, stages: [row('ci_gate', 1, 'running', ENTERED_AFTER)] },
+      { state: 'active', current_stage: 'ci_gate' },
+    );
+  const parked = (value: TaskStop, last: TaskDetailResponse['last_gate_wait']) =>
+    detail(
+      {
+        returns: [],
+        stop: value,
+        last_gate_wait: last,
+        stages: [
+          { ...row('ci_gate', value.attempt, 'failed', ENTERED_AFTER), outcome: 'undecided' },
+        ],
+      },
+      { state: 'needs_human', current_stage: 'ci_gate' },
+    );
+  const timedOut = (over: Partial<TaskStop> = {}) =>
+    stop({
+      cause: 'no_answer',
+      ci_failure: null,
+      attempt: 1,
+      ci_ending: 'ci_timed_out',
+      recorded: 'the CI gate on a poll-only gitlab binding timed out',
+      ...over,
+    });
+
+  it('says a running pipeline in the slot as information, with no action', () => {
+    renderCallout(waiting(read({ status: 'running', held_job: null, held_job_url: null })));
+    expect(screen.getByTestId('gate-wait-notice')).toBeTruthy();
+    expect(document.querySelector('[data-gate-wait="running"]')?.textContent).toMatch(
+      /^CI is running \(pipeline 3038234623, \d+ min so far; the task gives up after 60\)\.$/,
+    );
+    expect(screen.queryByTestId('needs-you-callout')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('puts a held manual job in the needs-you callout at once, with the job linked and the draft note', () => {
+    renderCallout(waiting(read()));
+    const callout = screen.getByTestId('needs-you-callout');
+    expect(callout.textContent).toContain('CI is waiting for a person');
+    expect(document.querySelector('[data-gate-wait-sentence]')?.textContent).toBe(
+      'CI is waiting for someone to start the manual job sentry-release-commit in GitLab. Start it there and the task continues.',
+    );
+    expect(screen.getByRole('link', { name: 'sentry-release-commit' }).getAttribute('href')).toBe(
+      JOB_URL,
+    );
+    expect(document.querySelector('[data-gate-wait-draft]')).not.toBeNull();
+    // Nothing to retry while it waits: the way forward is the job.
+    expect(screen.queryByRole('button', { name: 'Retry stage…' })).toBeNull();
+  });
+
+  it('words a timed-out wait from the read — held at the job — and quotes no recorded sentence', () => {
+    renderCallout(parked(timedOut(), read()));
+    expect(document.querySelector('[data-ci-ending="ci_timed_out"]')).not.toBeNull();
+    expect(document.querySelector('[data-stop-sentence]')?.textContent).toBe(
+      'CI did not finish within 60 minutes: pipeline 3038234623 was still held at the manual job sentry-release-commit.',
+    );
+    expect(document.querySelector('[data-stop-next]')?.textContent).toBe(
+      'Start the job in GitLab, then Retry.',
+    );
+    expect(document.querySelector('[data-stop-recorded]')).toBeNull();
+    expect(document.body.textContent).not.toContain('poll-only');
+    expect(document.body.textContent).not.toMatch(/CI failed/);
+    expect(screen.getByRole('button', { name: 'Retry stage…' })).toBeTruthy();
+  });
+
+  it('words a timed-out wait on a pipeline that was still running', () => {
+    renderCallout(
+      parked(timedOut(), read({ status: 'running', held_job: null, held_job_url: null })),
+    );
+    expect(document.querySelector('[data-stop-sentence]')?.textContent).toBe(
+      'CI did not finish within 60 minutes: pipeline 3038234623 was still running.',
+    );
+  });
+
+  it('says a Retry on the same held pipeline did not wait again', () => {
+    renderCallout(parked(timedOut({ ci_ending: 'ci_held_unchanged', attempt: 2 }), read()));
+    expect(document.querySelector('[data-ci-ending="ci_held_unchanged"]')).not.toBeNull();
+    expect(document.querySelector('[data-stop-sentence]')?.textContent).toBe(
+      'The pipeline is still held at the manual job sentry-release-commit, so Retry did not wait again.',
+    );
+    expect(document.querySelector('[data-stop-next]')?.textContent).toBe(
+      'Start the job in GitLab, or change its rule, then Retry.',
+    );
+    const words = stopWords(timedOut({ ci_ending: 'ci_held_unchanged' }), LIMITS);
+    expect(words.short).toBe('CI held at a manual job');
+  });
+
+  it('falls back to what the platform saw last only for an attempt with no read (before #89)', () => {
+    const recorded = 'the CI gate on a poll-only gitlab binding timed out after 60 minutes';
+    renderCallout(parked(timedOut({ ci_ending: null, recorded }), null));
+    expect(document.querySelector('[data-ci-ending]')).toBeNull();
+    expect(document.querySelector('[data-stop-sentence]')?.textContent).toBe(
+      'CI did not finish in the time the platform waits for it. Nothing failed.',
+    );
+    expect(document.querySelector('[data-stop-recorded]')?.textContent).toBe(
+      `What the platform saw last: ${recorded}`,
+    );
+  });
+});
+
 describe('the words', () => {
   // The census's own retired spellings are `vocabulary-census.test.ts`'s, over every source.
   it('use none of the internal terms (gate, loop, signature, try N)', () => {
@@ -450,6 +598,7 @@ describe('the words', () => {
       ...(['tries_spent', 'same_failure', 'no_answer'] as const).map((cause) =>
         stopWords(stop({ cause, loop: 'ci_fix' }), LIMITS),
       ),
+      stopWords(stop({ cause: 'no_answer', ci_ending: 'ci_held_unchanged' }), LIMITS),
     ].flatMap((words) => Object.values(words).filter((value) => typeof value === 'string'));
     said.push(timelineReturnLine(ciReturn()), timelineReturnLine(ciReturn({ to_stage: null })));
     for (const text of said) {

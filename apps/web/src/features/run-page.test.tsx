@@ -147,6 +147,8 @@ const detail = (over: Partial<TaskDetailResponse> = {}): TaskDetailResponse => (
   gate_feedback: null,
   returns: [],
   stop: null,
+  gate_wait: null,
+  last_gate_wait: null,
   loop_limits: null,
   human_time: {
     total_minutes: 0,
